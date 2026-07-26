@@ -1,109 +1,109 @@
 # PiUI — release readiness checklist
 
-Этот чек-лист является блокирующим для public 1.0. Отметка ставится только при наличии ссылки на автоматический тест, артефакт CI, ADR или подписанный manual-test report.
+This checklist blocks public 1.0. An item may be checked only with a link to an automated test, CI artifact, ADR, or signed manual-test report.
 
 ## 1. Product scope
 
-- [ ] Реализованы только функции, входящие в `docs/01_PRODUCT.md`; scope creep вынесен в extensions или backlog.
-- [ ] Пользователь может добавить существующую папку, создать и продолжить Pi-сессию, закрыть PiUI и открыть ту же историю в CLI Pi.
-- [ ] Проекты и сессии не зависят от облачного аккаунта или сети.
-- [ ] Empty, loading, offline, permission-denied, missing-runtime, crashed-runtime и corrupted-index states имеют явный UX.
-- [ ] Все необратимые действия имеют предупреждение или восстановимый trash flow.
+- [ ] Only features included in `docs/01_PRODUCT.md` are implemented; scope creep is moved to extensions or the backlog.
+- [ ] A user can add an existing folder, create and continue a Pi session, close PiUI, and open the same history in the Pi CLI.
+- [ ] Projects and sessions do not depend on a cloud account or network.
+- [ ] Empty, loading, offline, permission-denied, missing-runtime, crashed-runtime, and corrupted-index states have explicit UX.
+- [ ] Every irreversible action has a warning or recoverable trash flow.
 
-## 2. Pi runtime и совместимость
+## 2. Pi runtime and compatibility
 
-- [ ] Пройдены все Phase 0 spikes из `docs/09_ROADMAP_AND_TASKS.md`.
-- [ ] Зафиксированы минимальная, рекомендуемая и максимальная проверенная версии Pi.
-- [ ] Capability negotiation проверяется интеграционными тестами; версия не используется как единственный источник возможностей.
-- [ ] RPC stdout парсится только как протокол; stderr хранится отдельно и не ломает parser.
-- [ ] Частичные строки, invalid JSON, неизвестные event types и out-of-order completion обрабатываются без падения shell.
-- [ ] Stop, steer, follow-up, compaction, retry и runtime crash проходят recovery tests.
-- [ ] Одновременное открытие одной сессии в CLI и PiUI либо безопасно поддержано, либо явно блокируется lock-механизмом.
-- [ ] Завершение PiUI не оставляет orphaned Pi/tool processes на Windows, Linux и macOS.
+- [ ] All Phase 0 spikes from `docs/09_ROADMAP_AND_TASKS.md` are complete.
+- [ ] Minimum, recommended, and maximum verified Pi versions are recorded.
+- [ ] Capability negotiation is verified by integration tests; version is not used as the only source of capabilities.
+- [ ] RPC stdout is parsed only as a protocol; stderr is kept separate and does not break the parser.
+- [ ] Partial lines, invalid JSON, unknown event types, and out-of-order completion are handled without crashing the shell.
+- [ ] Stop, steer, follow-up, compaction, retry, and runtime crash pass recovery tests.
+- [ ] Simultaneously opening one session in the CLI and PiUI is either safely supported or explicitly blocked by a lock mechanism.
+- [ ] Exiting PiUI leaves no orphaned Pi/tool processes on Windows, Linux, or macOS.
 
-## 3. Данные и сессии
+## 3. Data and sessions
 
-- [ ] Pi JSONL остаётся source of truth; PiUI не переписывает его напрямую.
-- [ ] Удаление SQLite-базы PiUI не удаляет и не повреждает Pi-сессии.
-- [ ] Индекс полностью перестраивается из реестра проектов и session files.
-- [ ] Atomic writes, migrations, backups и rollback migrations покрыты тестами.
-- [ ] Symlink/junction/case-sensitivity/path-length/Unicode edge cases проверены по платформам.
-- [ ] Rename, archive/trash, export и import имеют однозначные semantics и не создают ghost sessions.
-- [ ] Secrets, prompts, tool results и пользовательские пути не попадают в telemetry по умолчанию.
+- [ ] Pi JSONL remains the source of truth; PiUI does not rewrite it directly.
+- [ ] Deleting the PiUI SQLite database does not delete or corrupt Pi sessions.
+- [ ] The index is fully rebuildable from the project registry and session files.
+- [ ] Atomic writes, migrations, backups, and rollback migrations are covered by tests.
+- [ ] Symlink/junction/case-sensitivity/path-length/Unicode edge cases are verified across platforms.
+- [ ] Rename, archive/trash, export, and import have unambiguous semantics and do not create ghost sessions.
+- [ ] Secrets, prompts, tool results, and user paths do not enter telemetry by default.
 
-## 4. Attachments и rendering
+## 4. Attachments and rendering
 
-- [ ] Изображения проходят официальный Pi RPC path и корректно отображаются в истории.
-- [ ] Обычные файлы передаются как явные path/resource references; UI не создаёт ложного впечатления, что Pi получил бинарный upload.
-- [ ] Managed-copy режим, если включён, показывает конечный путь, размер и правила удаления.
-- [ ] Большие изображения, SVG, malformed media, missing files и внешние пути безопасно обрабатываются.
-- [ ] Markdown, code blocks, links, tool cards и extension output защищены от script injection и unsafe URL schemes.
-- [ ] Для неизвестного custom entry/renderer существует универсальный raw-data fallback.
+- [ ] Images follow the official Pi RPC path and render correctly in history.
+- [ ] Ordinary files are passed as explicit path/resource references; the UI does not falsely imply that Pi received a binary upload.
+- [ ] Managed-copy mode, when enabled, shows the destination path, size, and deletion rules.
+- [ ] Large images, SVG, malformed media, missing files, and external paths are handled safely.
+- [ ] Markdown, code blocks, links, tool cards, and extension output are protected against script injection and unsafe URL schemes.
+- [ ] An unknown custom entry/renderer has a universal raw-data fallback.
 
 ## 5. Extension SDK
 
-- [ ] Backend-only Pi extension работает без `piui.manifest.json`.
-- [ ] Manifest валидируется schema до загрузки; несовместимая версия отклоняется с понятной диагностикой.
-- [ ] Declarative contributions проходят deterministic ordering, collision handling и lifecycle tests.
-- [ ] Rich views работают в изоляции и не получают Tauri/shell/filesystem API напрямую.
-- [ ] Каждая host capability выдаётся отдельно, видима пользователю и может быть отозвана.
-- [ ] Project-local UI package не исполняется до trust decision.
-- [ ] Full-shell replacement доступен только доверенному global package.
-- [ ] Safe mode запускается до загрузки extension UI и не может быть скрыт или переопределён расширением.
-- [ ] Crash loop, timeout, memory abuse и invalid messages расширения не роняют core shell.
-- [ ] Reference package из `examples/minimal-piui-package/` проходит contract tests.
+- [ ] A backend-only Pi extension works without `piui.manifest.json`.
+- [ ] The manifest is schema-validated before loading; an incompatible version is rejected with a clear diagnostic.
+- [ ] Declarative contributions pass deterministic ordering, collision handling, and lifecycle tests.
+- [ ] Rich views run in isolation and do not receive the Tauri/shell/filesystem API directly.
+- [ ] Every host capability is granted separately, visible to the user, and revocable.
+- [ ] A project-local UI package does not execute before a trust decision.
+- [ ] Full-shell replacement is available only to a trusted global package.
+- [ ] Safe mode starts before extension UI loads and cannot be hidden or overridden by an extension.
+- [ ] An extension crash loop, timeout, memory abuse, or invalid messages do not crash the core shell.
+- [ ] The reference package from `examples/minimal-piui-package/` passes contract tests.
 
-## 6. Security и privacy
+## 6. Security and privacy
 
-- [ ] Threat model из `docs/07_SECURITY.md` пересмотрен перед release candidate.
-- [ ] Frontend CSP запрещает inline/eval и произвольные remote origins.
-- [ ] Tauri commands allowlisted; argument validation и path authorization находятся в Rust-host.
-- [ ] WebView не имеет общего shell API, unrestricted filesystem или raw process spawning.
-- [ ] Remote content не получает привилегированный origin.
-- [ ] OAuth/login flow не передаёт credentials через DOM, logs или extension messages.
-- [ ] Логи имеют redaction, retention policy и явный export flow.
-- [ ] Dependency/SBOM/license/audit checks проходят в CI.
-- [ ] Update artifacts подписаны; downgrade и compromised-update scenarios протестированы.
-- [ ] Security contact, vulnerability policy и supported-version policy опубликованы.
-- [ ] Clean clone проходит `pnpm repo:check`; source tree и Git history не содержат credentials, Pi sessions, agent artifacts, private paths или generated local state, а `LICENSE`/NOTICE/package metadata согласованы.
+- [ ] The threat model in `docs/07_SECURITY.md` is reviewed before the release candidate.
+- [ ] Frontend CSP prohibits inline/eval and arbitrary remote origins.
+- [ ] Tauri commands are allowlisted; argument validation and path authorization reside in the Rust host.
+- [ ] The WebView has no general shell API, unrestricted filesystem, or raw process spawning.
+- [ ] Remote content receives no privileged origin.
+- [ ] The OAuth/login flow does not pass credentials through the DOM, logs, or extension messages.
+- [ ] Logs have redaction, a retention policy, and an explicit export flow.
+- [ ] Dependency/SBOM/license/audit checks pass in CI.
+- [ ] Update artifacts are signed; downgrade and compromised-update scenarios are tested.
+- [ ] The security contact, vulnerability policy, and supported-version policy are published.
+- [ ] A clean clone passes `pnpm repo:check`; the source tree and Git history contain no credentials, Pi sessions, agent artifacts, private paths, or generated local state, and `LICENSE`/NOTICE/package metadata are aligned.
 
-## 7. Performance и устойчивость
+## 7. Performance and resilience
 
-- [ ] First frame и usable-shell budgets из `docs/08_TESTING_AND_PERFORMANCE.md` пройдены на минимальных reference machines.
-- [ ] Измерены отдельно RSS shell, каждый Pi runtime, extension hosts и tool child processes.
-- [ ] Idle core-shell RSS не превышает release gate; отклонение документировано только ADR и новой базовой линией.
-- [ ] Idle CPU, token-to-paint p95, input latency и scroll jank проходят бюджеты.
-- [ ] 10 000 message blocks не рендерятся одновременно; virtualization подтверждена профилем.
-- [ ] Startup и открытие существующей истории не требуют сети.
-- [ ] Memory leak soak test, rapid session switching, long streaming и repeated extension reload пройдены.
-- [ ] Crash recovery не теряет подтверждённые Pi entries и не дублирует user prompts.
+- [ ] First-frame and usable-shell budgets from `docs/08_TESTING_AND_PERFORMANCE.md` pass on minimum reference machines.
+- [ ] Shell RSS, each Pi runtime, extension hosts, and tool child processes are measured separately.
+- [ ] Idle core-shell RSS does not exceed the release gate; any variance is documented only by an ADR and a new baseline.
+- [ ] Idle CPU, token-to-paint p95, input latency, and scroll jank meet budgets.
+- [ ] 10,000 message blocks are not rendered simultaneously; virtualization is confirmed by a profile.
+- [ ] Startup and opening existing history do not require the network.
+- [ ] Memory-leak soak testing, rapid session switching, long streaming, and repeated extension reload pass.
+- [ ] Crash recovery neither loses confirmed Pi entries nor duplicates user prompts.
 
-## 8. Accessibility и UX quality
+## 8. Accessibility and UX quality
 
-- [ ] Полный основной flow доступен с клавиатуры.
-- [ ] Focus order, focus restoration, dialogs, menus и screen-reader labels проверены.
-- [ ] Contrast, reduced motion, zoom 200%, high-DPI и narrow-window modes пройдены.
-- [ ] Streaming updates не создают неконтролируемых live-region announcements.
-- [ ] Ошибки содержат действие восстановления и diagnostic identifier, но не раскрывают secrets.
-- [ ] Default UI остаётся минимальным: необязательные панели не открыты автоматически.
+- [ ] The complete primary flow is accessible by keyboard.
+- [ ] Focus order, focus restoration, dialogs, menus, and screen-reader labels are verified.
+- [ ] Contrast, reduced motion, 200% zoom, high-DPI, and narrow-window modes pass.
+- [ ] Streaming updates do not create uncontrolled live-region announcements.
+- [ ] Errors include a recovery action and diagnostic identifier but do not disclose secrets.
+- [ ] The default UI remains minimal: optional panels do not open automatically.
 
 ## 9. Platform matrix
 
 - [ ] Windows 10/11: WebView2 bootstrap, installer, paths, Job Object, process termination, updates.
-- [ ] Linux: поддерживаемые distro/WebKitGTK versions, Wayland/X11, packaging, permissions, child cleanup.
-- [ ] macOS: Intel/Apple Silicon при заявленной поддержке, signing/notarization, sandbox/permissions, updates.
-- [ ] На каждой платформе пройдены clean install, upgrade, downgrade rejection, uninstall и user-data preservation.
-- [ ] Runtime discovery проверен для managed Pi, system Pi и custom executable.
-- [ ] Managed Pi artifact имеет зафиксированные upstream origin/version/checksum, target triple, SBOM/provenance и проверенный rollback; приложение не выполняет npm install/update.
-- [ ] Diagnostics bundle сообщает версии Pi/PiUI/WebView/OS без утечки содержимого чатов.
+- [ ] Linux: supported distro/WebKitGTK versions, Wayland/X11, packaging, permissions, child cleanup.
+- [ ] macOS: Intel/Apple Silicon where support is claimed, signing/notarization, sandbox/permissions, updates.
+- [ ] On every platform, clean install, upgrade, downgrade rejection, uninstall, and user-data preservation pass.
+- [ ] Runtime discovery is verified for managed Pi, system Pi, and a custom executable.
+- [ ] The managed Pi artifact has pinned upstream origin/version/checksum, target triple, SBOM/provenance, and verified rollback; the application does not run npm install/update.
+- [ ] The diagnostics bundle reports Pi/PiUI/WebView/OS versions without leaking chat content.
 
-## 10. Release engineering и документация
+## 10. Release engineering and documentation
 
-- [ ] Reproducible build или документированная степень reproducibility подтверждена.
-- [ ] Версии schema, host API и runtime protocol синхронизированы.
-- [ ] Changelog перечисляет breaking changes и migration path.
-- [ ] Public SDK docs содержат permissions, lifecycle, limits, fallback и compatibility examples.
-- [ ] `AGENTS.md`, ADR, open risks и source list актуальны.
-- [ ] User guide объясняет project trust, file semantics, safe mode, backups и CLI interoperability.
-- [ ] Release candidate прошёл dogfood на реальных Pi extensions и существующих session trees.
-- [ ] Go/no-go review подписан владельцами runtime, security, frontend и release engineering.
+- [ ] A reproducible build or documented degree of reproducibility is confirmed.
+- [ ] Schema, host API, and runtime protocol versions are synchronized.
+- [ ] The changelog lists breaking changes and the migration path.
+- [ ] Public SDK docs contain permissions, lifecycle, limits, fallback, and compatibility examples.
+- [ ] `AGENTS.md`, ADRs, open risks, and the source list are current.
+- [ ] The user guide explains project trust, file semantics, safe mode, backups, and CLI interoperability.
+- [ ] The release candidate has undergone dogfooding with real Pi extensions and existing session trees.
+- [ ] Go/no-go review is signed by the runtime, security, frontend, and release-engineering owners.

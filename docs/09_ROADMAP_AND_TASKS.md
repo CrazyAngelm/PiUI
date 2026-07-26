@@ -1,103 +1,103 @@
-# 09. Порядок реализации и инженерные задачи
+# 09. Implementation Order and Engineering Tasks
 
-## 1. Правило исполнения
+## 1. Execution Rule
 
-Реализация идёт через вертикальные проверяемые slices. Нельзя сначала построить весь красивый frontend, а затем «подключить Pi». Самый ранний рабочий slice должен открыть реальную session, отправить prompt, отобразить streaming и пережить crash процесса.
+Implementation proceeds through vertically testable slices. You must not first build the entire attractive frontend and then “connect Pi.” The earliest working slice must open a real session, send a prompt, display streaming, and survive a process crash.
 
-Первый обязательный gate — spikes из Phase 0. Их результаты могут уточнить transport, но не отменяют инвариант: Pi остаётся владельцем agent/session semantics.
+The first mandatory gate is the spikes from Phase 0. Their results may refine the transport, but do not invalidate the invariant: Pi remains the owner of agent/session semantics.
 
-## 2. Рабочие потоки
+## 2. Workstreams
 
-- **W0 Contracts:** schemas, DTO, fixtures, compatibility.
+- **W0 Contracts:** schemas, DTOs, fixtures, compatibility.
 - **W1 Runtime:** Rust supervisor, RPC codec, Pi adapter, process tree.
 - **W2 Data:** project registry, scanner, SQLite index, attachments.
 - **W3 UI:** shell, sidebar, timeline, composer, settings, accessibility.
 - **W4 Extensions:** discovery, standard RPC UI, declarative SDK, sandbox.
-- **W5 Platform/Release:** packaging, updater, diagnostics, perf/security matrices.
+- **W5 Platform/Release:** packaging, updater, diagnostics, performance/security matrices.
 
-После Phase 0 потоки могут идти параллельно через зафиксированные contracts. Изменение contract требует синхронного обновления W0 и dependent fixtures.
+After Phase 0, workstreams may proceed in parallel through frozen contracts. A contract change requires a synchronized update of W0 and dependent fixtures.
 
-## 3. Phase 0 — обязательные технические spikes
+## 3. Phase 0 — mandatory technical spikes
 
-Каждый spike заканчивается маленьким executable harness, captured fixtures и decision note. Скриншот/устное описание не считаются результатом.
+Each spike ends with a small executable harness, captured fixtures, and a decision note. A screenshot/oral description is not considered a result.
 
-### SPIKE-01 — Открытие существующей session без ghost file
+### SPIKE-01 — Opening an existing session without a ghost file
 
-**Вопрос:** как корректно запустить RPC и открыть конкретную Pi session, не создавая лишнюю пустую сессию?
+**Question:** how can RPC be started correctly and a specific Pi session opened without creating an extra empty session?
 
-**Действия:**
+**Actions:**
 
-- проверить supported CLI startup arguments и `switch_session`;
-- записать список файлов до/после каждого варианта;
-- протестировать path с пробелами/Unicode;
-- проверить новую и существующую session;
-- зафиксировать startup events/state.
+- verify supported CLI startup arguments and `switch_session`;
+- record the file list before/after each variant;
+- test paths with spaces/Unicode;
+- verify a new and an existing session;
+- capture startup events/state.
 
-**Pass:** deterministic procedure с stable session identity и без ghost file.
+**Pass:** deterministic procedure with stable session identity and no ghost file.
 
-**Fail/решение:** спроектировать минимальный Pi bridge/upstream request; не обходить прямой записью JSONL.
+**Fail/decision:** design a minimal Pi bridge/upstream request; do not bypass this through direct JSONL writes.
 
-### SPIKE-02 — Graceful shutdown и process tree
+### SPIKE-02 — Graceful shutdown and process tree
 
-**Вопрос:** как RPC process завершает текущую session и descendants?
+**Question:** how does the RPC process terminate the current session and descendants?
 
 - EOF stdin;
 - signal/terminate;
-- documented shutdown command, если есть;
+- documented shutdown command, if one exists;
 - running/idle states;
-- Unix process group и Windows Job Object;
+- Unix process group and Windows Job Object;
 - child tool process fixture.
 
 **Output:** state diagram, timeout values, platform implementation test.
 
 ### SPIKE-03 — Tree navigation
 
-**Вопрос:** можно ли перейти на произвольный existing tree node официальным RPC/SDK способом?
+**Question:** is it possible to navigate to an arbitrary existing tree node through an official RPC/SDK mechanism?
 
-**Output:** supported command/capability или bridge API proposal. До ответа UI tree read-only.
+**Output:** supported command/capability or bridge API proposal. Until answered, the UI tree is read-only.
 
 ### SPIKE-04 — Provider auth
 
-**Вопрос:** можно ли реализовать login/status/logout без полноценного terminal emulator?
+**Question:** can login/status/logout be implemented without a full terminal emulator?
 
 - OAuth/provider interactive flows;
 - API key flow;
-- model refresh после auth;
+- model refresh after auth;
 - secret visibility/logging.
 
-**Output:** выбранный MVP flow и список upstream gaps.
+**Output:** selected MVP flow and a list of upstream gaps.
 
 ### SPIKE-05 — Extension UI Protocol parity
 
-Создать Pi extension fixture, вызывающий все documented `ctx.ui` operations. Зафиксировать RPC events, cancellation и unsupported APIs.
+Create a Pi extension fixture that invokes every documented `ctx.ui` operation. Capture RPC events, cancellation, and unsupported APIs.
 
 **Output:** golden event corpus + mapping table + timeout/cancel behavior.
 
 ### SPIKE-06 — Concurrent access
 
-Открыть одну session в CLI и PiUI harness одновременно, выполнить appends/turns и изучить locking/state behavior.
+Open one session in the CLI and PiUI harness simultaneously, perform appends/turns, and study locking/state behavior.
 
-**Output:** conflict detector criteria и safe UX. Нельзя предполагать multi-writer safety.
+**Output:** conflict detector criteria and safe UX. Multi-writer safety must not be assumed.
 
 ### SPIKE-07 — Managed Pi packaging
 
-Упаковать Pi runtime как Tauri sidecar/app-managed artifact на Windows/Linux test builds. Сначала проверить готовые official standalone Pi release artifacts; затем, только при необходимости, воспроизводимую сборку Bun executable из versioned upstream release source:
+Package the Pi runtime as a Tauri sidecar/app-managed artifact on Windows/Linux test builds. First verify ready-made official standalone Pi release artifacts; then, only if necessary, use a reproducible Bun executable build from versioned upstream release source:
 
-- asset inventory, target triples и bundled runtime assets;
+- asset inventory, target triples, and bundled runtime assets;
 - upstream `SHA256SUMS`/provenance verification;
 - executable naming/architecture;
-- launch permissions, quarantine и antivirus behavior;
-- версия/capability probe;
-- подписанный PiUI runtime manifest;
+- launch permissions, quarantine, and antivirus behavior;
+- version/capability probe;
+- signed PiUI runtime manifest;
 - update/rollback layout;
-- package size и cold-start/RSS overhead;
-- одинаковое чтение `~/.pi/agent` config/packages/sessions в managed и system modes.
+- package size and cold-start/RSS overhead;
+- identical reading of `~/.pi/agent` config/packages/sessions in managed and system modes.
 
-**Output:** packaging ADR amendment, reproducible acquisition/build script, SBOM/provenance record и test artifacts.
+**Output:** packaging ADR amendment, reproducible acquisition/build script, SBOM/provenance record, and test artifacts.
 
 ### SPIKE-08 — WebView baseline
 
-Минимальный Tauri+Svelte shell на reference machines:
+Minimal Tauri+Svelte shell on reference machines:
 
 - cold/warm startup;
 - idle RSS/CPU;
@@ -105,11 +105,11 @@
 - iframe/worker isolation capability;
 - platform rendering differences.
 
-**Pass:** реалистичный путь к hard budgets. Иначе пересмотреть UI stack до product implementation.
+**Pass:** a realistic path to hard budgets. Otherwise, reconsider the UI stack before product implementation.
 
 ### SPIKE-09 — Session scanner compatibility
 
-Прогнать реальный corpus Pi sessions:
+Run a real corpus of Pi sessions:
 
 - format versions;
 - partial lines;
@@ -117,44 +117,44 @@
 - external appends;
 - file roots/config resolution.
 
-**Output:** parser fixtures и unsupported state behavior.
+**Output:** parser fixtures and unsupported-state behavior.
 
 ### SPIKE-10 — Pi version/capability probe
 
-Определить надёжный способ узнать executable version и доступные RPC commands, включая unknown/new fields.
+Determine a reliable way to learn the executable version and available RPC commands, including unknown/new fields.
 
 **Output:** initial `RuntimeCapabilities` contract.
 
-## 4. Gate G0 — разрешение на продуктовую разработку
+## 4. Gate G0 — authorization for product development
 
-G0 проходит, если:
+G0 passes if:
 
-- SPIKE-01/02 имеют безопасный путь;
-- RPC codec/fixtures подтверждены;
-- auth имеет честный MVP fallback;
-- scanner не требует записи session files;
-- Tauri baseline не нарушает hard memory/startup budgets без перспективы;
-- bridge gaps формально описаны и ограничены.
+- SPIKE-01/02 have a safe path;
+- the RPC codec/fixtures are confirmed;
+- auth has an honest MVP fallback;
+- the scanner does not require writing session files;
+- the Tauri baseline does not violate hard memory/startup budgets without a path forward;
+- bridge gaps are formally described and bounded.
 
-При провале транспорт может перейти на in-process Pi SDK adapter, но только после нового ADR с анализом isolation, extension loading и packaging. Frontend contracts сохраняются.
+On failure, transport may move to an in-process Pi SDK adapter, but only after a new ADR analyzing isolation, extension loading, and packaging. Frontend contracts remain intact.
 
-## 5. Phase 1 — каркас и contracts
+## 5. Phase 1 — foundation and contracts
 
 ### FOUNDATION-01 — Monorepo
 
-Создать workspace layout из `03_ARCHITECTURE.md`, pinned toolchains, formatting/lint/typecheck/test commands.
+Create the workspace layout from `03_ARCHITECTURE.md`, pinned toolchains, and formatting/lint/typecheck/test commands.
 
-**Acceptance:** clean clone выполняет все empty quality commands на Windows/Linux CI.
+**Acceptance:** a clean clone runs all empty quality commands on Windows/Linux CI.
 
 ### CONTRACT-01 — Runtime protocol v1
 
-Реализовать schema/source types для commands/events/errors/capabilities.
+Implement schema/source types for commands/events/errors/capabilities.
 
-**Acceptance:** Rust↔TS compatibility tests и generated API docs.
+**Acceptance:** Rust↔TS compatibility tests and generated API docs.
 
 ### CONTRACT-02 — Fake Pi runtime
 
-Scriptable binary с scenarios: stream, tool, UI request, malformed, hang, crash.
+Scriptable binary with scenarios: stream, tool, UI request, malformed, hang, crash.
 
 **Acceptance:** deterministic integration tests without network.
 
@@ -180,7 +180,7 @@ Generated typed bindings, reconnect/snapshot/revision handling.
 
 Vitest, Rust integration, Playwright/Tauri harness, performance result format.
 
-## 6. Phase 2 — read-only projects и history
+## 6. Phase 2 — read-only projects and history
 
 ### PROJECT-01 — Registry
 
@@ -218,7 +218,7 @@ Normalized blocks, Markdown sanitizer, tool/custom generic cards, images, pagina
 
 Name/preview search; FTS body can be deferred to public 1.0.
 
-**Gate G1:** пользователь добавляет папку, видит существующие Pi sessions и безопасно читает их без запуска Pi.
+**Gate G1:** the user adds a folder, sees existing Pi sessions, and safely reads them without starting Pi.
 
 ## 7. Phase 3 — live Pi chat MVP
 
@@ -266,9 +266,9 @@ Enable only supported operations; read-only branch panel fallback.
 
 Pi export where supported, system trash, active-runtime close.
 
-**Gate G2 (internal alpha):** реальная CLI session round-trip, streaming, stop/steer/follow-up, model switch, crash recovery, no JSONL writes.
+**Gate G2 (internal alpha):** real CLI session round-trip, streaming, stop/steer/follow-up, model switch, crash recovery, no JSONL writes.
 
-## 8. Phase 4 — attachments и standard extensions
+## 8. Phase 4 — attachments and standard extensions
 
 ### ATTACH-01 — Images
 
@@ -304,7 +304,7 @@ General/runtime/models-auth/extensions/appearance/keybindings/security/advanced.
 
 ### AUTH-01 — Approved MVP auth flow
 
-Результат SPIKE-04, secret-safe diagnostics.
+SPIKE-04 result, secret-safe diagnostics.
 
 **Gate G3 (feature-complete MVP):** images/files, standard extension UX, settings/auth path, trust and recovery complete.
 
@@ -350,9 +350,9 @@ Validate/dev/pack/inspect permissions, example packages, docs.
 
 Previous fixtures, optional unknown contribution, API deprecation checks.
 
-**Gate G4:** backend-only and dual Pi/PiUI package demonstrably work; declarative v1 frozen for public beta.
+**Gate G4:** backend-only and dual Pi/PiUI packages demonstrably work; declarative v1 is frozen for public beta.
 
-## 10. Phase 6 — rich views и trusted shell
+## 10. Phase 6 — rich views and trusted shell
 
 ### SANDBOX-01 — View broker
 
@@ -384,15 +384,15 @@ Native safe-mode/startup modifier/menu, core fallback and crash-loop detection.
 
 ### SHELL-03 — Reference alternate shell
 
-Минимальный example, доказывающий полный layout replacement и recovery.
+Minimal example proving complete layout replacement and recovery.
 
-**Gate G5:** security tests подтверждают isolation; shell не может отключить recovery.
+**Gate G5:** security tests confirm isolation; the shell cannot disable recovery.
 
 ## 11. Phase 7 — public 1.0 hardening
 
 ### PERF-01 — Instrumentation and baseline
 
-Startup/RSS/CPU/stream/scroll/index harness, fixed physical machine reports.
+Startup/RSS/CPU/stream/scroll/index harness, fixed physical-machine reports.
 
 ### PERF-02 — Optimization pass
 
@@ -438,9 +438,9 @@ Manifest, host API, examples, compatibility/versioning.
 
 All gates from `08_TESTING_AND_PERFORMANCE.md`.
 
-## 12. Не включать в критический путь 1.0
+## 12. Do not include in the 1.0 critical path
 
-Следующие инициативы получают отдельные extensions/ADRs после core release:
+The following initiatives receive separate extensions/ADRs after the core release:
 
 - Git status/diff/review;
 - worktree management;
@@ -455,21 +455,21 @@ All gates from `08_TESTING_AND_PERFORMANCE.md`.
 - collaboration/team policies;
 - mobile/web clients.
 
-Core contracts не должны препятствовать им, но реализация не должна усложнять 1.0.
+Core contracts must not block them, but implementation must not make 1.0 more complex.
 
-## 13. Параллелизация после G0
+## 13. Parallelization after G0
 
-Рекомендуемые независимые lanes:
+Recommended independent lanes:
 
 - Agent A: `piui-runtime` + fake runtime + process lifecycle.
 - Agent B: session scanner/index + fixtures.
 - Agent C: Svelte shell/sidebar/read-only timeline.
 - Agent D: contracts/generation/test harness.
 - Agent E: trust/security/path policy.
-- Agent F после stable normalized blocks: composer/live timeline.
-- Agent G после manifest schema: declarative SDK.
-- Agent H после host API permissions: sandboxed views.
-- Platform agents: Windows и Linux packaging/tests с ранних phases, не в конце.
+- Agent F after stable normalized blocks: composer/live timeline.
+- Agent G after manifest schema: declarative SDK.
+- Agent H after host API permissions: sandboxed views.
+- Platform agents: Windows and Linux packaging/tests from early phases, not at the end.
 
 Merge dependency:
 
@@ -482,9 +482,9 @@ G0 -> Contracts/Fake Runtime
    -> Perf harness across all phases
 ```
 
-## 14. Формат задания coding agent
+## 14. Coding agent task format
 
-Каждое задание должно содержать:
+Each task must contain:
 
 ```text
 Task ID:
@@ -500,37 +500,37 @@ Out of scope:
 Expected artifacts:
 ```
 
-Agent обязан:
+The agent must:
 
-1. прочитать `AGENTS.md` и связанные docs;
-2. проверить assumptions против fixtures/capabilities;
-3. не расширять scope скрыто;
-4. добавить tests вместе с кодом;
-5. сообщить contract/ADR impact;
-6. не заменять неизвестное поведение Pi прямой JSONL-правкой.
+1. read `AGENTS.md` and related docs;
+2. verify assumptions against fixtures/capabilities;
+3. not expand scope implicitly;
+4. add tests with the code;
+5. report contract/ADR impact;
+6. not replace unknown Pi behavior with direct JSONL editing.
 
 ## 15. Pull request gates
 
-- linked Task ID и acceptance criteria;
+- linked Task ID and acceptance criteria;
 - tests green;
 - contract diff reviewed;
 - no new unrestricted Tauri capability;
-- performance report для hot path;
+- performance report for hot path;
 - Windows/Linux consideration;
-- screenshots только дополнение к semantic tests;
+- screenshots are only a supplement to semantic tests;
 - docs/ADR updated;
 - extension generic fallback verified where relevant;
 - safe mode remains bootable.
 
 ## 16. Definition of product completion
 
-PiUI 1.0 завершён не по количеству экранов, а когда:
+PiUI 1.0 is complete not by the number of screens, but when:
 
-- пользовательская история едина с CLI Pi;
-- обязательный MVP workflow устойчив;
-- расширение может добавлять backend behavior и GUI без core patch;
-- полный trusted shell replacement доказан reference package;
-- Windows/Linux проходят security/performance/recovery gates;
-- отсутствие UI extension не ломает Pi extension;
-- known upstream gaps либо закрыты, либо честно ограничивают видимую функцию;
-- core остаётся минимальным и не включает вторую IDE.
+- user history is unified with CLI Pi;
+- the mandatory MVP workflow is resilient;
+- an extension can add backend behavior and GUI without a core patch;
+- complete trusted shell replacement is demonstrated by a reference package;
+- Windows/Linux pass security/performance/recovery gates;
+- absence of a UI extension does not break a Pi extension;
+- known upstream gaps are either closed or honestly constrain the visible feature;
+- the core remains minimal and does not include a second IDE.

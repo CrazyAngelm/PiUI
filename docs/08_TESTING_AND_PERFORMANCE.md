@@ -1,22 +1,22 @@
-# 08. Тестирование, производительность и критерии приёмки
+# 08. Testing, Performance, and Acceptance Criteria
 
-## 1. Цель качества
+## 1. Quality objective
 
-PiUI не считается «лёгким» по выбору Tauri или субъективному впечатлению. Лёгкость и скорость подтверждаются повторяемыми измерениями, где desktop shell и Pi runtime учитываются раздельно.
+PiUI is not considered “lightweight” merely because it uses Tauri or based on subjective impression. Lightness and speed are demonstrated by repeatable measurements that account for the desktop shell and Pi runtime separately.
 
-Performance budgets ниже — критерии проекта, а не уже достигнутые показатели.
+The performance budgets below are project criteria, not metrics already achieved.
 
 ## 2. Reference environments
 
-Минимум три baseline machine profiles:
+At least three baseline machine profiles:
 
 ### Low/mid Windows
 
-- 4 физических/логических производительных cores уровня Intel i5-8250U или близкого;
+- 4 physical/logical high-performance cores comparable to an Intel i5-8250U;
 - 16 GiB RAM;
 - SSD;
-- поддерживаемая Windows 11 x64;
-- system WebView2 stable;
+- supported Windows 11 x64;
+- stable system WebView2;
 - 1920×1080, 100–150% scale.
 
 ### Linux baseline
@@ -24,34 +24,34 @@ Performance budgets ниже — критерии проекта, а не уже
 - 4-core x86-64;
 - 16 GiB RAM;
 - SSD;
-- актуальный поддерживаемый Ubuntu LTS/GNOME и один дополнительный distro family;
-- system WebKitGTK version из release matrix;
-- Wayland и X11 smoke coverage.
+- current supported Ubuntu LTS/GNOME and one additional distro family;
+- system WebKitGTK version from the release matrix;
+- Wayland and X11 smoke coverage.
 
 ### macOS candidate
 
 - Apple M1, 8 GiB RAM;
-- поддерживаемая macOS;
+- supported macOS;
 - system WKWebView.
 
-CI runners полезны для regression, но release performance decision принимается на закреплённых физических машинах.
+CI runners are useful for regression, but release performance decisions are made on dedicated physical machines.
 
 ## 3. Test datasets
 
-Версионированные synthetic/anonymized fixtures:
+Versioned synthetic/anonymized fixtures:
 
 - `empty-project`: 0 sessions;
 - `normal-project`: 50 sessions, 1,000 entries;
 - `large-project`: 500 sessions, 50,000 entries;
 - `long-session`: 10,000 timeline blocks;
-- `tool-heavy`: 2,000 tool calls, большие JSON/text results;
+- `tool-heavy`: 2,000 tool calls, large JSON/text results;
 - `branch-heavy`: ≥2,000 tree nodes, ≥100 leaves;
 - `unicode`: RTL, emoji, combining marks, invalid/partial UTF-8 boundaries;
 - `images`: common formats, large dimensions, corrupt images, SVG;
 - `partial-jsonl`: incomplete last line and chunk boundaries;
 - `corrupt-jsonl`: malformed entry, duplicate IDs, orphan/cycle projection;
 - `extensions`: backend-only, declarative, rich view, broken view, shell crash;
-- `concurrent-writer`: external appends while PiUI active.
+- `concurrent-writer`: external appends while PiUI is active.
 
 Fixtures must not contain real credentials or user chats.
 
@@ -59,9 +59,9 @@ Fixtures must not contain real credentials or user chats.
 
 ### 4.1 Startup
 
-Измерять cold OS cache и warm cache отдельно. Release gate использует минимум 20 runs, reports p50/p95.
+Measure cold OS cache and warm cache separately. The release gate uses at least 20 runs and reports p50/p95.
 
-| Метрика | Budget |
+| Metric | Budget |
 |---|---|
 | process start → first visible core frame, warm | p50 ≤ 0.8 s, p95 ≤ 1.5 s |
 | process start → usable sidebar with cached registry | p50 ≤ 1.5 s, p95 ≤ 2.5 s |
@@ -69,27 +69,27 @@ Fixtures must not contain real credentials or user chats.
 | open cached long session → first viewport | p95 ≤ 0.8 s |
 | network/provider/model lookup on critical first-paint path | 0 blocking calls |
 
-Cold cache target may be up to 2× warm budget but is tracked separately. Splash screen не считается usable frame.
+The cold-cache target may be up to 2× the warm budget but is tracked separately. A splash screen does not count as a usable frame.
 
 ### 4.2 Memory
 
-Resident set измеряется после 60 seconds idle, окно visible, no Pi runtime, normal project loaded.
+Resident set is measured after 60 seconds idle, with the window visible, no Pi runtime, and a normal project loaded.
 
-| Метрика | Budget |
+| Metric | Budget |
 |---|---|
 | Windows/macOS core app RSS | target ≤ 120 MiB, hard gate ≤ 160 MiB |
 | Linux core app RSS | target ≤ 150 MiB, hard gate ≤ 190 MiB |
-| growth после 50 open/close session cycles | ≤ 15 MiB retained после GC/settle |
-| hidden rich view после dispose | ≤ 2 MiB unexplained retained per cycle |
+| growth after 50 open/close session cycles | ≤ 15 MiB retained after GC/settle |
+| hidden rich view after dispose | ≤ 2 MiB unexplained retained per cycle |
 | attachment/image previews after close | no unbounded growth |
 
-Pi process, provider SDK caches и child tools измеряются отдельными рядами. Итоговый user-visible report показывает **Total = PiUI + live Pi runtimes + child processes**, чтобы не скрывать реальное потребление.
+Pi process, provider SDK caches, and child tools are measured in separate series. The final user-visible report shows **Total = PiUI + live Pi runtimes + child processes** so actual consumption is not hidden.
 
-### 4.3 CPU и responsiveness
+### 4.3 CPU and responsiveness
 
-| Метрика | Budget |
+| Metric | Budget |
 |---|---|
-| idle CPU, averaged 60 s | < 0.5% одного core target; <1% hard gate |
+| idle CPU, averaged 60 s | < 0.5% of one core target; <1% hard gate |
 | composer keystroke input latency | p95 < 16 ms |
 | token/event received → painted | p95 < 75 ms, p99 < 150 ms |
 | stream scheduler backlog under 50 events/s | p95 < 100 ms |
@@ -97,19 +97,19 @@ Pi process, provider SDK caches и child tools измеряются отдель
 | sidebar search response on 500 sessions | p95 < 100 ms after index ready |
 | menu/dialog open | p95 < 100 ms |
 
-Animation disabled/reduced-motion path also тестируется.
+The animation-disabled/reduced-motion path is also tested.
 
 ### 4.4 Indexing/I/O
 
-| Метрика | Budget |
+| Metric | Budget |
 |---|---|
 | startup header scan, 500 unchanged sessions | p95 ≤ 1.5 s and non-blocking UI |
 | incremental append visible in sidebar/timeline | p95 ≤ 500 ms after filesystem event |
 | full FTS rebuild 50,000 entries | completes without UI stalls >100 ms |
-| idle indexer CPU | throttled; no sustained >25% one core without visible progress/control |
+| idle indexer CPU | throttled; no sustained >25% of one core without visible progress/control |
 | database size | tracked vs source text; no raw binary attachment duplication |
 
-Absolute FTS duration зависит от storage; release regression gate uses ±15% against baseline plus responsiveness limits.
+Absolute FTS duration depends on storage; the release regression gate uses ±15% against baseline plus responsiveness limits.
 
 ### 4.5 Package
 
@@ -117,7 +117,7 @@ Absolute FTS duration зависит от storage; release regression gate uses 
 - runtime and UI artifact sizes reported separately;
 - no dependency may add >5 MiB compressed without ADR;
 - duplicate JS libraries detected in bundle report;
-- source maps not shipped publicly unless access-controlled policy exists.
+- source maps not shipped publicly unless an access-controlled policy exists.
 
 ## 5. Unit tests
 
@@ -147,9 +147,9 @@ Absolute FTS duration зависит от storage; release regression gate uses 
 - stores do not retain disposed sessions/views;
 - settings validation.
 
-Coverage percentage не заменяет scenario coverage. Critical parsers/state machines require branch-oriented tests and mutation/fuzz where practical.
+Coverage percentage does not replace scenario coverage. Critical parsers/state machines require branch-oriented tests and mutation/fuzz testing where practical.
 
-Для изменений в correctness-sensitive Rust paths (identity/revision checks, LF framing, parser limits, generation/CAS/sweep, trust admission) обязателен targeted mutation-test run через `cargo mutants` до merge. В PR фиксируются examined functions, killed/survived/unviable mutants и обоснование каждого допустимого survivor; mutation tool не добавляется в production dependencies. Репозиторий предоставляет `pnpm mutation:test` для index/catalog-reconciler gate, включая path-free persisted Appearance preference codec, и `pnpm mutation:catalog-state` для freshness/coalescing state machine; более узкий или расширенный `cargo mutants` invocation фиксируется рядом с изменением.
+For changes in correctness-sensitive Rust paths (identity/revision checks, LF framing, parser limits, generation/CAS/sweep, trust admission), a targeted mutation-test run through `cargo mutants` is mandatory before merge. The PR records examined functions, killed/survived/unviable mutants, and the justification for each acceptable survivor; the mutation tool is not added to production dependencies. The repository provides `pnpm mutation:test` for the index/catalog-reconciler gate, including the path-free persisted Appearance preference codec, and `pnpm mutation:catalog-state` for the freshness/coalescing state machine; a narrower or broader `cargo mutants` invocation is recorded alongside the change.
 
 ## 6. Contract tests
 
@@ -173,7 +173,7 @@ CI checks:
 - old extension fixture works on new host within supported major;
 - new optional fields ignored by old parser fixture where required.
 
-## 7. Integration tests с Pi
+## 7. Integration tests with Pi
 
 Use a real pinned Pi runtime in integration CI plus a deterministic fake RPC runtime.
 
@@ -191,7 +191,7 @@ Supports scripted:
 - delayed abort;
 - large payload.
 
-Fake runtime делает tests быстрыми и воспроизводимыми.
+The fake runtime makes tests fast and reproducible.
 
 ### Real Pi matrix
 
@@ -200,11 +200,11 @@ Fake runtime делает tests быстрыми и воспроизводимы
 - oldest supported version;
 - optional development/nightly signal, non-blocking until intentionally supported.
 
-Real tests verify CLI↔PiUI session round-trip, extensions and actual startup/shutdown semantics.
+Real tests verify CLI↔PiUI session round-trip, extensions, and actual startup/shutdown semantics.
 
 ## 8. E2E flows
 
-Обязательные Playwright/Tauri harness scenarios:
+Required Playwright/Tauri harness scenarios:
 
 1. add folder → restricted view → trust → create chat;
 2. open existing CLI session → continue → reopen in CLI fixture;
@@ -264,7 +264,7 @@ Tests should assert host state/data, not only screenshots.
 - file dialogs/trash/keychain;
 - Retina/multiple spaces.
 
-Windows and Linux release blockers имеют одинаковый приоритет.
+Windows and Linux release blockers have equal priority.
 
 ## 10. Accessibility tests
 
@@ -274,18 +274,18 @@ Windows and Linux release blockers имеют одинаковый приори�
 - screen-reader labels for icon buttons;
 - streamed assistant content announced in throttled meaningful chunks, not token-by-token;
 - status changes use appropriate live regions;
-- color contrast core themes and contributed themes;
+- color contrast for core themes and contributed themes;
 - 200% zoom/reflow;
 - reduced motion;
 - high contrast/system theme behavior;
 - tool card/raw JSON navigability;
 - rich view accessibility responsibility documented and auditable.
 
-Manual matrix includes NVDA on Windows and Orca on Linux; VoiceOver for macOS release.
+The manual matrix includes NVDA on Windows and Orca on Linux; VoiceOver for macOS release.
 
 ## 11. Security tests
 
-Использовать checklist из `07_SECURITY.md` плюс:
+Use the checklist from `07_SECURITY.md` plus:
 
 - Tauri capabilities snapshot test;
 - no extension origin can invoke core IPC;
@@ -300,9 +300,9 @@ Manual matrix includes NVDA on Windows and Orca on Linux; VoiceOver for macOS re
 - network redirect revalidation;
 - safe mode independent of shell DOM.
 
-Public release требует targeted external security review extension broker/update boundary.
+Public release requires a targeted external security review of the extension broker/update boundary.
 
-## 12. Fuzz и property-based testing
+## 12. Fuzz and property-based testing
 
 Targets:
 
@@ -315,17 +315,17 @@ Targets:
 - tree projection invariant: no infinite traversal;
 - event reducer invariant: revision monotonicity/idempotence.
 
-Fuzz corpus пополняется каждым production-like parser incident.
+The fuzz corpus is expanded with every production-like parser incident.
 
 ## 13. Chaos/recovery tests
 
-Во время каждого этапа случайно:
+At each stage, randomly:
 
 - kill Pi parent/child;
 - freeze stdout;
 - close stdin;
-- truncate only fixture copy of session file;
-- append from external writer;
+- truncate only the fixture copy of the session file;
+- append from an external writer;
 - reload WebView;
 - revoke project/extension permission;
 - remove project path;
@@ -334,7 +334,7 @@ Fuzz corpus пополняется каждым production-like parser incident.
 - crash rich view/worker;
 - interrupt update.
 
-Assertions: no silent data mutation, shell remains usable or safe recovery appears, diagnostics gives stable error code.
+Assertions: no silent data mutation, the shell remains usable or safe recovery appears, and diagnostics provides a stable error code.
 
 ## 14. Performance harness
 
@@ -359,14 +359,14 @@ Harness records:
 - artifact/bundle sizes;
 - raw result JSON and human report.
 
-CI comments regression; release branch blocks on hard budgets or >15% regression without approved ADR.
+CI comments on regressions; the release branch blocks on hard budgets or >15% regression without an approved ADR.
 
 ## 15. Profiling rules
 
 - measure packaged release build, not only dev server;
 - warmup runs excluded according to fixed method;
 - no unrelated apps/update tasks on physical benchmark machine;
-- GC cannot be manually forced unless same procedure used for baseline and clearly reported;
+- GC cannot be manually forced unless the same procedure is used for the baseline and clearly reported;
 - system WebView version recorded;
 - memory sampled long enough to detect delayed cleanup;
 - active Pi/provider network latency excluded from UI render metric but separately reported;
@@ -383,7 +383,7 @@ Snapshot only stable surfaces:
 - compact/narrow layout;
 - 100/150/200% scale.
 
-Do not snapshot dynamic timestamps/tokens without normalization. Visual diff complements semantic assertions, not replaces them.
+Do not snapshot dynamic timestamps/tokens without normalization. Visual diff complements semantic assertions; it does not replace them.
 
 ## 17. Upgrade/rollback tests
 
@@ -431,8 +431,8 @@ Do not snapshot dynamic timestamps/tokens without normalization. Visual diff com
 ## 19. Severity model
 
 - **P0:** data loss, secret exposure, update compromise, sandbox/IPC escape, inability to recover shell.
-- **P1:** incorrect prompt/tool action, orphan process with effects, session corruption/conflict hidden, app unusable on mandatory platform.
+- **P1:** incorrect prompt/tool action, orphan process with effects, hidden session corruption/conflict, app unusable on mandatory platform.
 - **P2:** major feature broken with workaround, substantial performance/accessibility regression.
 - **P3:** localized UX/visual defect.
 
-P0/P1 block release. Performance hard-gate failure is at least P1 for release, not cosmetic debt.
+P0/P1 block release. A performance hard-gate failure is at least P1 for release, not cosmetic debt.

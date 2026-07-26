@@ -1,77 +1,77 @@
-# AGENTS.md — обязательные правила разработки PiUI
+# AGENTS.md — mandatory PiUI development rules
 
-Этот файл предназначен для coding agents и инженеров, работающих над репозиторием PiUI. Требования ниже выше локального удобства конкретной задачи.
+This file is intended for coding agents and engineers working on the PiUI repository. The requirements below take precedence over the local convenience of any particular task.
 
-## Цель
+## Goal
 
-Создать минимальную, быструю и расширяемую desktop-оболочку над Pi. Не создавать ещё один агентный harness.
+Create a minimal, fast, and extensible desktop shell on top of Pi. Do not create another agent harness.
 
-## Неподлежащие пересмотру правила
+## Non-negotiable rules
 
-- Не реализовывать agent loop, provider clients, compaction, tools или session branching внутри PiUI, когда это уже делает Pi.
-- Все команды активной сессии отправлять через типизированный runtime adapter. Не писать в session JSONL напрямую.
-- Считать JSONL Pi источником истины. База PiUI — только cache/index/UI metadata и должна полностью перестраиваться.
-- Не читать и не изменять `auth.json` во frontend. Не выводить ключи, OAuth tokens, полный environment или prompt content в обычные logs.
-- Не давать WebView общий shell/filesystem доступ. Frontend вызывает только allowlisted Tauri commands с валидируемыми аргументами.
-- Не загружать project-local PiUI JavaScript до явного trust decision.
-- Любой новый core feature сначала проверять на соответствие принципу: «может ли это быть extension contribution?». Если да — держать его вне core.
-- Любой custom renderer обязан иметь generic fallback. Сессия должна оставаться читаемой при отключённом расширении.
-- Не использовать Electron. Не добавлять SSR, cloud backend, telemetry или account system без отдельного ADR.
-- Не вводить второй формат чатов.
-- Не блокировать первый paint проверками сети, каталога моделей или package updates.
+- Do not implement an agent loop, provider clients, compaction, tools, or session branching inside PiUI when Pi already provides them.
+- Send every active-session command through the typed runtime adapter. Do not write to session JSONL directly.
+- Treat Pi JSONL as the source of truth. The PiUI database is only cache/index/UI metadata and must be fully rebuildable.
+- Do not read or modify `auth.json` in the frontend. Do not emit keys, OAuth tokens, the full environment, or prompt content in ordinary logs.
+- Do not give the WebView general shell/filesystem access. The frontend invokes only allowlisted Tauri commands with validated arguments.
+- Do not load project-local PiUI JavaScript before an explicit trust decision.
+- Evaluate every new core feature against this principle first: “could this be an extension contribution?” If so, keep it out of core.
+- Every custom renderer must have a generic fallback. The session must remain readable when its extension is disabled.
+- Do not use Electron. Do not add SSR, a cloud backend, telemetry, or an account system without a separate ADR.
+- Do not introduce a second chat format.
+- Do not block first paint on network checks, model-catalog checks, or package updates.
 
-## Архитектурные слои
+## Architectural layers
 
-1. `ui` — Svelte-компоненты и локальное presentation state.
-2. `host-api` — генерируемые TypeScript bindings к Rust commands/events.
-3. `application` — use cases: проекты, сессии, attachments, extensions.
-4. `runtime` — Pi process supervisor и RPC adapter.
-5. `index` — read-only session scanner и rebuildable SQLite index.
+1. `ui` — Svelte components and local presentation state.
+2. `host-api` — generated TypeScript bindings to Rust commands/events.
+3. `application` — use cases: projects, sessions, attachments, extensions.
+4. `runtime` — Pi process supervisor and RPC adapter.
+5. `index` — read-only session scanner and rebuildable SQLite index.
 6. `platform` — process groups, filesystem watch, trash, notifications, updates.
 
-UI не обращается к слоям `runtime`, `index` или OS напрямую.
+The UI does not access the `runtime`, `index`, or OS layers directly.
 
-## Кодовые соглашения
+## Coding conventions
 
-- Rust: stable toolchain, edition 2024, `cargo fmt`, `clippy -D warnings`, ошибки через typed enums; `unwrap()` запрещён вне tests и доказуемых startup invariants.
-- TypeScript: `strict: true`, без `any` в публичных contracts; discriminated unions для событий; exhaustive `switch` с `never`.
-- Svelte: локальное состояние в компоненте, межэкранное состояние в небольших domain stores; не создавать глобальный store «на всё приложение».
-- CSS: design tokens через custom properties, component-scoped CSS; без utility-class DSL в core UI.
-- IPC: schema-first. Изменение event/command contract требует version bump, compatibility test и обновления `contracts/`.
-- Логи: structured fields; никаких сообщений вроде `console.log(object)` для RPC payloads в production.
+- Rust: stable toolchain, edition 2024, `cargo fmt`, `clippy -D warnings`, errors through typed enums; `unwrap()` is prohibited outside tests and provable startup invariants.
+- TypeScript: `strict: true`, no `any` in public contracts; discriminated unions for events; exhaustive `switch` with `never`.
+- Svelte: local state in the component, cross-screen state in small domain stores; do not create a global store “for the whole application”.
+- CSS: design tokens through custom properties, component-scoped CSS; no utility-class DSL in core UI.
+- IPC: schema-first. Changing an event/command contract requires a version bump, compatibility test, and an update to `contracts/`.
+- Logs: structured fields; no messages such as `console.log(object)` for RPC payloads in production.
 
-## Definition of Done для каждой задачи
+## Definition of Done for every task
 
-- Реализован happy path и минимум один failure path.
-- Добавлены unit tests; для пользовательского потока — integration/E2E test.
-- Нет регрессии в safe mode и generic fallback.
-- Проверены keyboard-only и screen-reader labels для нового интерактивного элемента.
-- Измерено влияние на startup/RSS/rendering, если затронут hot path.
-- Обновлена спецификация или ADR, если поведение изменилось.
-- На Windows и Linux нет platform-specific assumption без отдельной ветки и теста.
+- A happy path and at least one failure path are implemented.
+- Unit tests are added; a user flow has an integration/E2E test.
+- No regression in safe mode or the generic fallback.
+- Keyboard-only operation and screen-reader labels are verified for each new interactive element.
+- The impact on startup/RSS/rendering is measured if a hot path is affected.
+- The specification or ADR is updated if behavior changes.
+- No platform-specific assumption is made on Windows or Linux without a separate branch and test.
 
-## Запрещённые обходы
+## Prohibited shortcuts
 
-- Парсить stdout обычным универсальным line reader, который разделяет Unicode line separators. Pi RPC требует LF-only framing.
-- Убивать только родительский PID и оставлять дочерние tool processes.
-- Скрывать project trust за общей кнопкой «Continue».
-- Автоматически копировать внешние файлы в проект без видимого пользователю решения.
-- Рендерить raw HTML из Markdown, tool output или extension payload.
-- Загружать extension bundle в основной DOM с полными правами по умолчанию.
-- Считать `ctx.hasUI === true` признаком полной TUI-поддержки в RPC.
-- Переименовывать или перемещать session files ради UI-сортировки.
+- Parse stdout with a normal general-purpose line reader that splits on Unicode line separators. Pi RPC requires LF-only framing.
+- Kill only the parent PID while leaving child tool processes.
+- Hide project trust behind a generic “Continue” button.
+- Automatically copy external files into a project without a user-visible decision.
+- Render raw HTML from Markdown, tool output, or an extension payload.
+- Load an extension bundle into the main DOM with full permissions by default.
+- Treat `ctx.hasUI === true` as evidence of full TUI support in RPC.
+- Rename or move session files for UI sorting.
 
-## Приоритеты при конфликте требований
+## Priorities when requirements conflict
 
-1. Сохранность пользовательских файлов и сессий.
-2. Явная модель доверия и отсутствие ложного обещания sandbox.
-3. Совместимость с Pi CLI.
-4. Корректность runtime protocol.
-5. Responsiveness интерфейса.
-6. Расширяемость.
-7. Визуальная полировка.
+1. Preservation of user files and sessions.
+2. An explicit trust model and no false promise of a sandbox.
+3. Compatibility with the Pi CLI.
+4. Correctness of the runtime protocol.
+5. UI responsiveness.
+6. Extensibility.
+7. Visual polish.
 
-## Команды качества, которые должен предоставить репозиторий
+## Quality commands the repository must provide
 
 ```bash
 pnpm check          # TypeScript/Svelte formatting, lint, typecheck
@@ -83,6 +83,6 @@ pnpm contract:test  # schema fixtures and backward compatibility
 pnpm perf:smoke     # startup, idle RSS, long-session scroll, stream batching
 ```
 
-## Перед началом реализации
+## Before implementation begins
 
-Первой задачей выполнить spikes из `docs/12_OPEN_RISKS.md`. Не строить UI поверх предположений о завершении RPC-процесса, initial session creation, OAuth и tree navigation.
+The first task is to complete the spikes in `docs/12_OPEN_RISKS.md`. Do not build UI on assumptions about RPC-process termination, initial session creation, OAuth, or tree navigation.

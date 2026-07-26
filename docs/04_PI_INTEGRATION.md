@@ -1,60 +1,60 @@
-# 04. Интеграция с Pi
+# 04. Pi Integration
 
-## 1. Принцип интеграции
+## 1. Integration principle
 
-PiUI использует Pi как единственный источник поведения агента. Он не вызывает model providers напрямую и не интерпретирует tools вместо Pi. Основной транспорт — официальный RPC mode:
+PiUI uses Pi as the sole source of agent behavior. It does not call model providers directly or interpret tools in place of Pi. The primary transport is the official RPC mode:
 
 ```text
 PiUI Rust host <-> stdin/stdout JSONL <-> pi --mode rpc
 ```
 
-Каждый запуск привязан к конкретному project `cwd` и, когда это поддержано выбранным способом запуска, к существующей или новой Pi session.
+Each launch is bound to a specific project `cwd` and, when supported by the selected launch method, to an existing or new Pi session.
 
-## 2. Что принадлежит Pi, а что PiUI
+## 2. What belongs to Pi and what belongs to PiUI
 
-| Область | Владелец |
+| Area | Owner |
 |---|---|
-| provider authentication и model requests | Pi |
+| provider authentication and model requests | Pi |
 | agent loop, tools, compaction, steering queue | Pi |
-| Pi extensions и их backend lifecycle | Pi |
-| session entries и ветвление | Pi session format/API |
+| Pi extensions and their backend lifecycle | Pi |
+| session entries and branching | Pi session format/API |
 | project/session navigation GUI | PiUI |
 | process lifecycle, recovery, diagnostics | PiUI host |
-| визуальный timeline и composer | PiUI |
-| project registry и UI drafts | PiUI SQLite |
-| generic file-reference UX | PiUI adapter, затем Pi prompt/tools |
+| visual timeline and composer | PiUI |
+| project registry and UI drafts | PiUI SQLite |
+| generic file-reference UX | PiUI adapter, then Pi prompt/tools |
 | PiUI-specific extension surfaces | PiUI Extension SDK |
 
-Никакой PiUI feature не должен становиться вторым каноническим представлением agent state.
+No PiUI feature must become a second canonical representation of agent state.
 
 ### Global extension configuration
 
-PiUI не парсит и не записывает Pi `settings.json`. Extensions settings вызывает короткий typed host adapter, который в offline mode импортирует upstream `SettingsManager` и `DefaultPackageManager`, пропускает установку отсутствующих packages и использует те же setters, что `pi config`. В UI проецируются только global user resources; filesystem paths и package source strings не пересекают IPC. Toggle применяется к будущим runtime starts. Project-local resources остаются вне этого surface и требуют отдельного trusted-project flow.
+PiUI does not parse or write Pi `settings.json`. Extension settings invoke a small typed host adapter which, in offline mode, imports upstream `SettingsManager` and `DefaultPackageManager`, skips installation of missing packages, and uses the same setters as `pi config`. Only global user resources are projected into the UI; filesystem paths and package source strings do not cross IPC. A toggle applies to future runtime starts. Project-local resources remain outside this surface and require a separate trusted-project flow.
 
 ## 3. Protocol framing
 
-### 3.1 Требования codec
+### 3.1 Codec requirements
 
-- одна JSON-команда на строку, завершается LF (`0x0A`);
-- один JSON-response/event на LF-framed строку stdout;
-- CR перед LF допускается только если это подтверждено fixture; codec не использует универсальное Unicode `lines()` поведение;
-- пустые строки игнорируются с diagnostic counter;
-- frame больше конфигурируемого лимита, например 32 MiB, останавливает runtime как protocol violation;
-- невалидный UTF-8 и JSON не подменяются replacement characters без записи причины;
-- stderr не смешивается со stdout;
-- при EOF неполный frame фиксируется отдельно;
-- parser fuzz-тестируется на chunk boundaries.
+- one JSON command per line, terminated by LF (`0x0A`);
+- one JSON response/event per LF-framed stdout line;
+- CR before LF is allowed only if confirmed by a fixture; the codec does not use universal Unicode `lines()` behavior;
+- empty lines are ignored with a diagnostic counter;
+- a frame larger than the configurable limit, for example 32 MiB, stops the runtime as a protocol violation;
+- invalid UTF-8 and JSON are not substituted with replacement characters without recording the reason;
+- stderr is not mixed with stdout;
+- an incomplete frame at EOF is recorded separately;
+- the parser is fuzz-tested on chunk boundaries.
 
 ### 3.2 Correlation
 
-PiUI оборачивает RPC-вызовы внутренним `commandId`, даже если конкретный Pi request/response уже имеет собственный ID. Это нужно для:
+PiUI wraps RPC calls with an internal `commandId`, even if the specific Pi request/response already has its own ID. This is needed for:
 
 - timeout/cancellation;
-- связывания UI action с response;
-- диагностики без логирования payload;
-- повторного snapshot после WebView reload.
+- linking a UI action to a response;
+- diagnostics without logging payloads;
+- repeating a snapshot after WebView reload.
 
-Неизвестный event type сохраняется как `runtime.unknown` и не роняет процесс. Это обеспечивает forward compatibility.
+An unknown event type is retained as `runtime.unknown` and does not crash the process. This ensures forward compatibility.
 
 ## 4. Startup handshake
 
@@ -75,36 +75,36 @@ sequenceDiagram
     H-->>UI: RuntimeSnapshot + capabilities + revision
 ```
 
-Порядок probes должен быть tolerant: отсутствие одной команды не отменяет базовый чат, если `prompt` и state доступны.
+The probe order must be tolerant: the absence of one command does not cancel basic chat if `prompt` and state are available.
 
-## 5. Маппинг базовых возможностей
+## 5. Mapping core capabilities
 
-Точные payloads берутся из текущей Pi RPC schema и фиксируются contract fixtures. Таблица задаёт продуктовый смысл, а не заменяет upstream docs.
+Exact payloads are taken from the current Pi RPC schema and pinned in contract fixtures. The table defines product semantics; it does not replace upstream documentation.
 
-| Pi capability/command | PiUI действие | Fallback |
+| Pi capability/command | PiUI action | Fallback |
 |---|---|---|
-| `prompt` | отправить новый user turn | заблокировать composer с diagnostic error |
-| `steer` | вмешаться в текущий turn | поставить follow-up, если steer недоступен |
-| `follow_up` | добавить следующий turn в очередь | локальный draft, пока текущий turn не завершён |
-| `abort` | Stop | terminate runtime только после timeout и предупреждения |
+| `prompt` | send a new user turn | block the composer with a diagnostic error |
+| `steer` | intervene in the current turn | queue a follow-up if steer is unavailable |
+| `follow_up` | add the next turn to the queue | local draft until the current turn completes |
+| `abort` | Stop | terminate the runtime only after timeout and warning |
 | `get_state` | runtime/session snapshot | read-only JSONL snapshot + reconnect |
-| `get_available_models` | model picker | текущая модель + ссылка в settings/diagnostics |
-| model switch command | смена модели | недоступное действие с причиной |
-| thinking level commands | thinking picker | скрыть picker, не эмулировать prompt text |
-| queue mode commands | Steer/Follow-up semantics | фиксированный безопасный режим |
-| `new_session` | новый чат | новый process/bootstrap path |
-| `switch_session` | открыть существующую session в process | новый process с session selector |
-| `fork` / `clone` | создать ветку/копию | скрыть advanced action |
-| `get_entries` | page timeline | read-only scanner для history, RPC для live state |
-| `get_tree` | показать дерево | read-only tree без navigation action |
-| set session name | Rename | UI alias в cache только как временный fallback, явно маркированный |
-| export | экспорт transcript | host-side generic export только если output идентичен/явно другой |
-| `get_commands` | slash autocomplete | PiUI core commands + найденные extension commands |
+| `get_available_models` | model picker | current model + link in settings/diagnostics |
+| model switch command | change model | unavailable action with a reason |
+| thinking level commands | thinking picker | hide the picker; do not emulate prompt text |
+| queue mode commands | Steer/Follow-up semantics | fixed safe mode |
+| `new_session` | new chat | new process/bootstrap path |
+| `switch_session` | open an existing session in the process | new process with session selector |
+| `fork` / `clone` | create a branch/copy | hide advanced action |
+| `get_entries` | page the timeline | read-only scanner for history, RPC for live state |
+| `get_tree` | show the tree | read-only tree without a navigation action |
+| set session name | Rename | UI alias in cache only as a temporary fallback, explicitly marked |
+| export | export transcript | host-side generic export only if output is identical/explicitly different |
+| `get_commands` | slash autocomplete | PiUI core commands + discovered extension commands |
 | Extension UI Protocol | dialogs/status/widgets | generic native surfaces |
 
 ## 6. Message/event normalization
 
-PiUI не рендерит upstream JSON напрямую. Adapter преобразует его в стабильные внутренние события; raw source остаётся только в Pi JSONL/host и не пересекает WebView IPC:
+PiUI does not render upstream JSON directly. The adapter transforms it into stable internal events; the raw source remains only in Pi JSONL/host and does not cross WebView IPC:
 
 ```ts
 type SessionDelta =
@@ -120,301 +120,301 @@ type SessionDelta =
   | { kind: 'runtime.error'; code: string; recoverable: boolean };
 ```
 
-Правила:
+Rules:
 
-- порядок событий сохраняется внутри одного runtime;
-- host присваивает monotonically increasing `revision`;
-- UI применяет delta только к ожидаемой revision либо запрашивает snapshot;
-- duplicate event после reconnect должен быть idempotent по entry/block ID;
-- persisted projection v2 знает Pi v3 `user`, `assistant`, `thinking`, `toolCall`, `toolResult`, `bashExecution`, `custom_message` и `compaction`;
-- tool call/result коррелируются host-side, tool-only assistant entry не создаёт пустое Pi message;
-- tool result никогда не исполняется как HTML;
-- Markdown превращается в allowlisted AST nodes и никогда не использует raw `{@html}`;
-- неизвестные entries отображаются compact generic compatibility disclosure без raw payload;
-- live blocks и persisted blocks используют один renderer; после turn host rescan заменяет завершённые ephemeral blocks.
+- event order is preserved within one runtime;
+- the host assigns a monotonically increasing `revision`;
+- the UI applies a delta only to the expected revision, or requests a snapshot;
+- a duplicate event after reconnect must be idempotent by entry/block ID;
+- persisted projection v2 knows Pi v3 `user`, `assistant`, `thinking`, `toolCall`, `toolResult`, `bashExecution`, `custom_message`, and `compaction`;
+- tool call/result are correlated host-side; a tool-only assistant entry does not create an empty Pi message;
+- tool result is never executed as HTML;
+- Markdown is converted into allowlisted AST nodes and never uses raw `{@html}`;
+- unknown entries are shown as a compact generic compatibility disclosure without the raw payload;
+- live blocks and persisted blocks use one renderer; after a turn, a host rescan replaces completed ephemeral blocks.
 
-## 7. Streaming и очередь
+## 7. Streaming and queue
 
 ### Composer modes
 
-Пользователь видит явную семантику:
+The user sees explicit semantics:
 
-- **Send** в Ready — обычный `prompt`;
-- **Steer** во время Running — сообщение направляется текущему turn;
-- **Queue next** — follow-up после текущего turn;
+- **Send** in Ready — regular `prompt`;
+- **Steer** during Running — the message directs the current turn;
+- **Queue next** — a follow-up after the current turn;
 - **Stop** — `abort`.
 
-Enter не должен незаметно менять семантику в зависимости от timing. Рекомендуемый default:
+Enter must not silently change semantics based on timing. Recommended default:
 
-- Enter отправляет `prompt` в Ready;
-- во время Running Enter ставит follow-up;
-- отдельная кнопка/shortcut выполняет Steer;
-- tooltip и queue badge показывают выбранный режим.
+- Enter sends `prompt` in Ready;
+- during Running, Enter queues a follow-up;
+- a separate button/shortcut performs Steer;
+- a tooltip and queue badge show the selected mode.
 
-Настройка queue mode синхронизируется через Pi RPC, если capability доступна.
+The queue-mode setting is synchronized through Pi RPC if the capability is available.
 
 ### Abort escalation
 
-1. отправить `abort`;
-2. ждать подтверждение/состояние в пределах timeout;
-3. показать «Agent does not respond»;
-4. разрешить `Force stop runtime`;
-5. завершить process tree;
-6. перечитать JSONL до последней полной entry и предложить reopen.
+1. send `abort`;
+2. wait for confirmation/state within the timeout;
+3. show “Agent does not respond”;
+4. allow `Force stop runtime`;
+5. terminate the process tree;
+6. reread JSONL through the last complete entry and offer reopen.
 
-Force stop не должен автоматически повторять prompt.
+Force stop must not automatically repeat the prompt.
 
-## 8. Модели и thinking level
+## 8. Models and thinking level
 
 Model picker:
 
-- загружается из `get_available_models`, а не из hardcoded registry;
-- показывает provider/model ID и доступные признаки, которые реально вернул Pi;
-- поддерживает search и recent models;
-- текущая модель отмечается даже если исчезла из списка;
-- ошибка provider/auth отображается рядом, не блокируя просмотр истории;
-- переключение выполняется до отправки следующего prompt и подтверждается state/event.
+- is loaded from `get_available_models`, not a hardcoded registry;
+- shows the provider/model ID and available traits actually returned by Pi;
+- supports search and recent models;
+- marks the current model even if it disappears from the list;
+- displays a provider/auth error adjacent to it and does not block history viewing;
+- switching occurs before sending the next prompt and is confirmed by state/event.
 
 Thinking picker:
 
-- строится из capabilities/current state;
-- не обещает уровни, которых нет у выбранной модели/runtime;
-- скрывается, если Pi не сообщает управляемый thinking level;
-- значение сохраняется Pi, а не только UI preference.
+- is built from capabilities/current state;
+- does not promise levels unavailable to the selected model/runtime;
+- is hidden if Pi does not report a controllable thinking level;
+- the value is saved by Pi, not only as a UI preference.
 
 ## 9. Sessions
 
-### 9.1 Обнаружение
+### 9.1 Discovery
 
-Для списка PiUI читает session files через отдельный read-only scanner. Это нужно, чтобы не запускать Pi для каждой строки sidebar. Scanner извлекает:
+For the list, PiUI reads session files through a separate read-only scanner. This is necessary to avoid starting Pi for every sidebar row. The scanner extracts:
 
 - session identifier/path;
 - project/cwd metadata;
 - session name;
 - created/updated time;
-- первая user text preview;
-- последняя complete entry;
+- first user text preview;
+- last complete entry;
 - branch/tree summary;
-- runtime/model metadata, если присутствует;
+- runtime/model metadata, if present;
 - parse health.
 
-PiUI не придумывает новый session ID и не переименовывает файл для сортировки.
+PiUI does not invent a new session ID or rename a file for sorting.
 
-### 9.2 Открытие
+### 9.2 Opening
 
-Предпочтительный путь — документированный Pi startup/session selector или RPC `switch_session`. До реализации обязательно проверить, создаёт ли bare RPC startup пустую session entry/file. Если создаёт, host должен использовать launch option/bridge, исключающий ghost sessions.
+The preferred path is a documented Pi startup/session selector or RPC `switch_session`. Before implementation, it is mandatory to verify whether bare RPC startup creates an empty session entry/file. If it does, the host must use a launch option/bridge that prevents ghost sessions.
 
-### 9.3 Создание
+### 9.3 Creation
 
-`New chat` в системной группе Chats сразу открывает пустой composer; runtime в host-owned neutral CWD запускается лениво при первом Send. Contextual project chat аналогично запускает Pi в выбранном project cwd только при Send. Открытие и быстрое переключение history sessions не создаёт agent process: UI переиспользует bounded display-safe provider/model cache. На первом запуске пользователь может явно выбрать `Load available models…`; этот action активирует текущую session через тот же typed runtime adapter, а не отдельный catalog subprocess. В обоих случаях Pi остаётся единственным writer: empty session может быть in-memory до первого assistant response. Session появляется в sidebar только после появления устойчивого Pi JSONL/file, а не по optimistic fake ID.
+`New chat` in the system Chats group immediately opens an empty composer; the runtime in a host-owned neutral CWD starts lazily on the first Send. A contextual project chat similarly starts Pi in the selected project `cwd` only on Send. Opening and rapidly switching history sessions does not create an agent process: the UI reuses a bounded display-safe provider/model cache. On first launch, the user may explicitly choose `Load available models…`; this action activates the current session through the same typed runtime adapter, not a separate catalog subprocess. In both cases, Pi remains the only writer: an empty session may be in memory until the first assistant response. A session appears in the sidebar only after durable Pi JSONL/file appears, not from an optimistic fake ID.
 
 ### 9.4 Rename
 
-Переименование идёт через Pi command. До подтверждения UI показывает pending state. Локальный display alias не должен выдавать себя за Pi session name; допускается только как временный internal workaround и удаляется после upstream support.
+Renaming proceeds through a Pi command. Until confirmation, the UI shows a pending state. A local display alias must not present itself as a Pi session name; it is permitted only as a temporary internal workaround and is removed after upstream support.
 
-### 9.5 Tree, fork и clone
+### 9.5 Tree, fork, and clone
 
-- `get_tree` используется для чтения branch graph;
-- `fork`/`clone` вызываются через Pi и после ответа scanner обновляет список;
-- PiUI не меняет `parentId` в JSONL;
-- переход на произвольную старую ветвь включается только при наличии документированной capability;
-- до этого tree panel read-only с действиями, которые Pi реально поддерживает.
+- `get_tree` is used to read the branch graph;
+- `fork`/`clone` are called through Pi, and the scanner refreshes the list after the response;
+- PiUI does not change `parentId` in JSONL;
+- navigation to an arbitrary old branch is enabled only when a documented capability is available;
+- until then, the tree panel is read-only with actions Pi actually supports.
 
 ### 9.6 Trash
 
-При неактивной сессии host перемещает весь session file в системную корзину. При активной:
+For an inactive session, the host moves the entire session file to the system recycle bin. For an active session:
 
-1. предупреждает о running state;
-2. abort/stop runtime;
-3. закрывает file handles;
-4. перемещает файл в корзину;
-5. удаляет только rebuildable index rows.
+1. warns about the running state;
+2. aborts/stops the runtime;
+3. closes file handles;
+4. moves the file to the recycle bin;
+5. deletes only rebuildable index rows.
 
-PiUI не реализует permanent delete в основном UX 1.0.
+PiUI does not implement permanent delete in the primary 1.0 UX.
 
-## 10. Стандартный Pi Extension UI Protocol
+## 10. Standard Pi Extension UI Protocol
 
-Pi RPC передаёт часть `ctx.ui`-взаимодействий. PiUI маппит их так:
+Pi RPC conveys some `ctx.ui` interactions. PiUI maps them as follows:
 
 | Extension request/effect | PiUI renderer |
 |---|---|
 | select | searchable native modal/listbox |
-| confirm | modal с точным текстом и безопасным default |
+| confirm | modal with exact text and safe default |
 | input | single-line dialog |
-| editor | multi-line dialog с monospaced option |
+| editor | multi-line dialog with monospaced option |
 | notify | toast + notification center |
 | status | runtime/session status strip |
-| widget | стандартный RPC: безопасные text lines; PiUI SDK: отдельные validated UI nodes |
-| title | session/window title hint, не полный контроль OS title без policy |
-| editor text | composer draft update с visible source indicator |
+| widget | standard RPC: safe text lines; PiUI SDK: separate validated UI nodes |
+| title | session/window title hint, not full OS-title control without policy |
+| editor text | composer draft update with visible source indicator |
 
-Требования:
+Requirements:
 
-- каждый request имеет ID, timeout policy и cancel response;
-- modal очередь принадлежит конкретному runtime;
-- закрытие окна/сессии отвечает cancellation, а не оставляет Pi ждать навсегда;
-- extension name/source видимы пользователю;
-- rich/unknown payload имеет fallback;
-- request не может открыть произвольный URL/path без host permission.
+- every request has an ID, timeout policy, and cancel response;
+- the modal queue belongs to a specific runtime;
+- closing the window/session responds with cancellation rather than leaving Pi waiting forever;
+- the extension name/source is visible to the user;
+- rich/unknown payload has a fallback;
+- a request cannot open an arbitrary URL/path without host permission.
 
-### Неподдерживаемая TUI-паритетность
+### Unsupported TUI parity
 
-RPC не означает полную поддержку всех TUI customizations. PiUI 1.0 не эмулирует через догадки:
+RPC does not mean full support for all TUI customizations. PiUI 1.0 does not emulate by guesswork:
 
 - `ctx.ui.custom()`;
 - custom header/footer;
-- замену TUI editor;
+- TUI editor replacement;
 - TUI themes;
-- прямое управление terminal cells.
+- direct terminal-cell control.
 
-Для них используется PiUI Extension SDK, описанный отдельно.
+PiUI Extension SDK is used for these, as described separately.
 
 ## 11. Slash commands
 
-Autocomplete объединяет:
+Autocomplete combines:
 
 1. PiUI-owned commands: `/new`, `/open`, `/settings`, `/extensions`, `/diagnostics`;
-2. команды из `get_commands`;
-3. declarative PiUI commands из enabled extension manifests.
+2. commands from `get_commands`;
+3. declarative PiUI commands from enabled extension manifests.
 
-Namespace и collision rules:
+Namespace and collision rules:
 
-- PiUI core commands зарезервированы;
-- backend extension command сохраняет имя Pi;
-- UI-only command рекомендуется объявлять как `extensionId.command` и может иметь label;
-- collision не разрешается порядком установки: UI показывает qualified choices;
-- built-in TUI commands, которых нет в RPC, не должны подделываться как Pi commands.
+- PiUI core commands are reserved;
+- a backend extension command retains the Pi name;
+- a UI-only command is recommended to be declared as `extensionId.command` and may have a label;
+- a collision is not resolved by installation order: the UI shows qualified choices;
+- built-in TUI commands absent from RPC must not be faked as Pi commands.
 
 ## 12. Attachments
 
-### 12.1 Изображения
+### 12.1 Images
 
-Изображения — единственный attachment type, который PiUI может передавать через image-aware RPC payload без дополнительной tool convention.
+Images are the only attachment type PiUI may pass through an image-aware RPC payload without an additional tool convention.
 
 Flow:
 
-1. пользователь выбирает/вставляет/drop изображение;
-2. host проверяет MIME по содержимому и размер;
-3. создаёт безопасный preview URL;
-4. при отправке кодирует в формат, который ожидает текущий Pi RPC;
-5. сохраняет provenance reference в PiUI metadata, но не дублирует base64 в SQLite;
-6. timeline отображает thumbnail и open preview;
-7. если модель не поддерживает image input, Send блокируется с точным объяснением или attachment удаляется пользователем.
+1. the user selects/pastes/drops an image;
+2. the host validates MIME by content and size;
+3. creates a safe preview URL;
+4. at send time, encodes it in the format expected by the current Pi RPC;
+5. saves a provenance reference in PiUI metadata but does not duplicate base64 in SQLite;
+6. the timeline displays a thumbnail and open preview;
+7. if the model does not support image input, Send is blocked with an exact explanation or the attachment is removed by the user.
 
-Нужны лимиты количества, индивидуального и суммарного размера.
+Limits are required for quantity, individual size, and total size.
 
-### 12.2 Файл внутри проекта
+### 12.2 File inside the project
 
-По умолчанию PiUI прикладывает **структурированную ссылку на относительный путь**, а не читает весь файл в prompt:
+By default, PiUI attaches a **structured reference to a relative path**, rather than reading the entire file into the prompt:
 
 ```text
 Attachment: project://src/lib/parser.ts
 Resolved path: <project root>/src/lib/parser.ts
 ```
 
-Фактический prompt encoding должен быть стабильным и документированным, например human-readable fenced attachment references. Pi/tools решают, когда читать файл. UI показывает, что это path reference, а не загрузка содержимого модели.
+The actual prompt encoding must be stable and documented, for example human-readable fenced attachment references. Pi/tools decide when to read the file. The UI shows that this is a path reference, not an upload of contents to the model.
 
-### 12.3 Внешний файл
+### 12.3 External file
 
-Пользователь выбирает один из режимов:
+The user selects one of the modes:
 
-- **Reference original:** абсолютный путь передаётся как controlled file reference; он может перестать существовать.
-- **Copy to managed attachments:** host копирует файл в app-managed storage, считает hash и хранит provenance. Он не помещает файл в repository без отдельного действия.
+- **Reference original:** the absolute path is passed as a controlled file reference; it may cease to exist.
+- **Copy to managed attachments:** the host copies the file to app-managed storage, computes a hash, and retains provenance. It does not put the file in the repository without a separate action.
 
-Никакого автоматического копирования в project root.
+No automatic copying to the project root.
 
-### 12.4 PDF и office-документы
+### 12.4 PDF and office documents
 
-PiUI показывает имя/type/size и передаёт path reference. Он не обещает встроенное понимание PDF/DOCX. Обработку выполняет Pi tool/extension/skill. Preview может быть отдельным расширением.
+PiUI shows name/type/size and passes a path reference. It does not promise built-in understanding of PDF/DOCX. Processing is performed by a Pi tool/extension/skill. Preview may be a separate extension.
 
-### 12.5 Drag-and-drop текста и директорий
+### 12.5 Drag-and-drop text and directories
 
-- выделенный текст вставляется в composer;
-- директория превращается в path reference только после подтверждения;
-- рекурсивное прикладывание содержимого директории запрещено по умолчанию;
-- symlink resolution выполняется host и проверяется path policy.
+- selected text is inserted into the composer;
+- a directory becomes a path reference only after confirmation;
+- recursive attachment of directory contents is prohibited by default;
+- symlink resolution is performed by the host and checked against path policy.
 
-## 13. Authentication и provider setup
+## 13. Authentication and provider setup
 
-Pi владеет auth. PiUI не должен разбирать `auth.json` ради собственного provider client.
+Pi owns auth. PiUI must not parse `auth.json` for its own provider client.
 
-MVP варианты в порядке предпочтения:
+MVP options in order of preference:
 
-1. официальный headless auth API, если появится;
-2. controlled interactive Pi subprocess в dedicated terminal-like modal для `/login`;
-3. инструкции по запуску `pi` в системном терминале и автоматическое обнаружение обновлённого auth state;
-4. API key environment/config flow только через официально поддержанный Pi механизм.
+1. an official headless auth API, if it becomes available;
+2. a controlled interactive Pi subprocess in a dedicated terminal-like modal for `/login`;
+3. instructions to run `pi` in the system terminal and automatic detection of updated auth state;
+4. API key environment/config flow only through the officially supported Pi mechanism.
 
 Dedicated auth subprocess:
 
-- не является общим terminal emulator;
-- запускается только для allowlisted auth action;
-- отображает stdin/stdout интерактивно;
-- не записывает transcript в обычный log;
-- после завершения запускает capability/model refresh.
+- is not a general terminal emulator;
+- launches only for an allowlisted auth action;
+- displays stdin/stdout interactively;
+- does not record the transcript in ordinary logs;
+- runs a capability/model refresh after completion.
 
-До spike нельзя обещать бесшовный OAuth GUI.
+Before the spike, seamless OAuth GUI must not be promised.
 
 ## 14. Settings mapping
 
-PiUI settings делятся на:
+PiUI settings are divided into:
 
 - **Pi-owned:** runtime config, models/providers, queue/thinking settings, extension/package behavior;
 - **PiUI-owned:** layout, fonts, notifications, project registry, runtime executable choice, performance, UI extensions;
-- **Derived:** фактические capabilities и resolved paths.
+- **Derived:** actual capabilities and resolved paths.
 
-Pi-owned settings изменяются только через официальный API/CLI или атомарный config adapter, документированный Pi. Frontend не редактирует произвольный JSON текст. При отсутствии headless API показывается read-only state + controlled action.
+Pi-owned settings are changed only through an official API/CLI or an atomic config adapter documented by Pi. The frontend does not edit arbitrary JSON text. If a headless API is absent, show read-only state + controlled action.
 
-## 15. История и совместимость CLI ↔ PiUI
+## 15. History and CLI ↔ PiUI compatibility
 
-Обязательные round-trip tests:
+Required round-trip tests:
 
-1. создать session в CLI, продолжить в PiUI, снова открыть в CLI;
-2. создать в PiUI, branch/fork в CLI, увидеть дерево в PiUI;
-3. выполнить backend extension command в обоих интерфейсах;
-4. отключить PiUI custom renderer и прочитать custom entry generic card;
-5. compaction/history entries не меняют смысл после UI indexing;
-6. Unicode, large tool output, image entries и interrupted turn сохраняются.
+1. create a session in the CLI, continue it in PiUI, then reopen it in the CLI;
+2. create in PiUI, branch/fork in the CLI, see the tree in PiUI;
+3. run a backend extension command in both interfaces;
+4. disable the PiUI custom renderer and read the custom entry as a generic card;
+5. compaction/history entries do not change meaning after UI indexing;
+6. Unicode, large tool output, image entries, and interrupted turns are preserved.
 
-PiUI никогда не «исправляет» upstream JSONL без отдельной recovery copy и явного пользователя.
+PiUI never “fixes” upstream JSONL without a separate recovery copy and explicit user action.
 
 ## 16. Recovery
 
-После crash или protocol error:
+After a crash or protocol error:
 
-- runtime slot помечается Failed;
-- UI прекращает optimistic streaming;
-- scanner читает session до последней полной строки;
-- незавершённые блоки маркируются Interrupted, а не Complete;
-- пользователь может открыть diagnostics, Reopen runtime или оставить history read-only;
-- Reopen не повторяет последнюю user message;
-- если Pi при reopen добавляет system/session events, они принимаются как authoritative.
+- the runtime slot is marked Failed;
+- the UI stops optimistic streaming;
+- the scanner reads the session through the last complete line;
+- unfinished blocks are marked Interrupted, not Complete;
+- the user can open diagnostics, Reopen runtime, or leave history read-only;
+- Reopen does not repeat the last user message;
+- if Pi adds system/session events on reopen, they are accepted as authoritative.
 
-## 17. Обязательные upstream/bridge gaps
+## 17. Required upstream/bridge gaps
 
-До public 1.0 необходимо либо получить официальную Pi capability, либо реализовать минимальный bridge extension с versioning для:
+Before public 1.0, an official Pi capability must be obtained or a minimal versioned bridge extension implemented for:
 
-| Gap | Почему нужен | Допустимый временный fallback |
+| Gap | Why it is needed | Acceptable temporary fallback |
 |---|---|---|
-| явный open existing session без ghost session | чистая история и sidebar | подтверждённый CLI launch selector |
-| базовая RPC-команда graceful shutdown | сохранность и отсутствие orphan processes; `ctx.shutdown()` существует внутри Pi extension context, но не как самостоятельная RPC-команда | bridge command на `ctx.shutdown()`; иначе EOF + timeout + process group termination |
-| navigate to arbitrary tree node | полный branch UX | read-only tree + fork/clone only |
-| headless provider login/status | нормальный settings flow | controlled interactive auth subprocess |
-| richer attachment descriptors | типизированные file references | stable textual path convention |
+| explicit open of an existing session without a ghost session | clean history and sidebar | confirmed CLI launch selector |
+| basic RPC command for graceful shutdown | integrity and absence of orphan processes; `ctx.shutdown()` exists inside the Pi extension context, but not as a standalone RPC command | bridge command to `ctx.shutdown()`; otherwise EOF + timeout + process group termination |
+| navigate to an arbitrary tree node | complete branch UX | read-only tree + fork/clone only |
+| headless provider login/status | normal settings flow | controlled interactive auth subprocess |
+| richer attachment descriptors | typed file references | stable textual path convention |
 | capability/version endpoint | forward compatibility | probe matrix + executable version |
-| full extension UI parity | TUI custom views не передаются | PiUI SDK + generic fallback |
+| full extension UI parity | TUI custom views are not conveyed | PiUI SDK + generic fallback |
 
-Bridge не должен переопределять agent loop. Его задача — открыть узкие недостающие операции через официальные Pi extension/SDK primitives.
+The bridge must not override the agent loop. Its role is to expose narrow missing operations through official Pi extension/SDK primitives.
 
-## 18. Acceptance criteria интеграции
+## 18. Integration acceptance criteria
 
-- RPC codec проходит fragmented-frame/fuzz fixtures и не делит по Unicode separators.
-- Реальная сессия round-trip совместима с CLI.
-- Model list и thinking не hardcoded.
-- Standard Extension UI requests не зависают при закрытии окна.
-- Images передаются и отображаются; generic files честно обозначены как references.
-- Tree actions включаются только по capabilities.
-- Force stop завершает process tree на Windows/Linux.
-- Crash recovery не повторяет prompt и не пишет JSONL.
-- Unknown RPC event не ломает UI.
-- auth flow не раскрывает secrets в logs/frontend state.
+- The RPC codec passes fragmented-frame/fuzz fixtures and does not split on Unicode separators.
+- A real session is round-trip compatible with the CLI.
+- The model list and thinking are not hardcoded.
+- Standard Extension UI requests do not hang when the window closes.
+- Images are passed and displayed; generic files are honestly identified as references.
+- Tree actions are enabled only by capabilities.
+- Force stop terminates the process tree on Windows/Linux.
+- Crash recovery does not repeat the prompt or write JSONL.
+- An unknown RPC event does not break the UI.
+- The auth flow does not expose secrets in logs/frontend state.

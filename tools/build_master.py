@@ -9,24 +9,24 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "PiUI_MASTER_SPEC.md"
 
 SECTIONS = [
-    ("overview", "Обзор и инварианты", ROOT / "README.md"),
-    ("agents", "Правила для coding agents", ROOT / "AGENTS.md"),
-    ("product", "01. Продуктовая спецификация", ROOT / "docs/01_PRODUCT.md"),
-    ("ux", "02. UX и информационная архитектура", ROOT / "docs/02_UX.md"),
-    ("architecture", "03. Архитектура", ROOT / "docs/03_ARCHITECTURE.md"),
-    ("pi-integration", "04. Интеграция с Pi", ROOT / "docs/04_PI_INTEGRATION.md"),
+    ("overview", "Overview and invariants", ROOT / "README.md"),
+    ("agents", "Rules for coding agents", ROOT / "AGENTS.md"),
+    ("product", "01. Product specification", ROOT / "docs/01_PRODUCT.md"),
+    ("ux", "02. UX and information architecture", ROOT / "docs/02_UX.md"),
+    ("architecture", "03. Architecture", ROOT / "docs/03_ARCHITECTURE.md"),
+    ("pi-integration", "04. Pi integration", ROOT / "docs/04_PI_INTEGRATION.md"),
     ("extension-sdk", "05. PiUI Extension SDK", ROOT / "docs/05_EXTENSION_SDK.md"),
-    ("data", "06. Данные и сессии", ROOT / "docs/06_DATA_AND_SESSIONS.md"),
-    ("security", "07. Безопасность", ROOT / "docs/07_SECURITY.md"),
-    ("testing", "08. Тестирование и производительность", ROOT / "docs/08_TESTING_AND_PERFORMANCE.md"),
-    ("roadmap", "09. Roadmap и инженерные задачи", ROOT / "docs/09_ROADMAP_AND_TASKS.md"),
-    ("adr", "10. Архитектурные решения", ROOT / "docs/10_ADR.md"),
-    ("reuse", "11. Анализ повторного использования", ROOT / "docs/11_REUSE_REVIEW.md"),
-    ("risks", "12. Открытые риски и spikes", ROOT / "docs/12_OPEN_RISKS.md"),
+    ("data", "06. Data and sessions", ROOT / "docs/06_DATA_AND_SESSIONS.md"),
+    ("security", "07. Security", ROOT / "docs/07_SECURITY.md"),
+    ("testing", "08. Testing and performance", ROOT / "docs/08_TESTING_AND_PERFORMANCE.md"),
+    ("roadmap", "09. Roadmap and engineering tasks", ROOT / "docs/09_ROADMAP_AND_TASKS.md"),
+    ("adr", "10. Architecture decisions", ROOT / "docs/10_ADR.md"),
+    ("reuse", "11. Reuse analysis", ROOT / "docs/11_REUSE_REVIEW.md"),
+    ("risks", "12. Open risks and spikes", ROOT / "docs/12_OPEN_RISKS.md"),
     ("release-checklist", "Release readiness checklist", ROOT / "CHECKLIST_RELEASE.md"),
-    ("handoff", "Prompt передачи новой команде", ROOT / "HANDOFF_PROMPT.md"),
-    ("contracts-readme", "Контракты: руководство", ROOT / "contracts/README.md"),
-    ("sources", "Источники", ROOT / "sources/SOURCES.md"),
+    ("handoff", "Handoff prompt for a new team", ROOT / "HANDOFF_PROMPT.md"),
+    ("contracts-readme", "Contracts: guide", ROOT / "contracts/README.md"),
+    ("sources", "Sources", ROOT / "sources/SOURCES.md"),
 ]
 
 LINK_REWRITES = {
@@ -85,11 +85,11 @@ def transform_markdown(text: str) -> str:
 
 def build() -> str:
     parts: list[str] = [
-        "# PiUI — единая продуктовая и техническая спецификация\n\n",
-        "**Статус:** developer preview; production release gates остаются открытыми.\n\n",
-        "**Назначение:** единый self-contained документ для product, UX, runtime, frontend, security, QA и release agents. Машиночитаемые файлы из каталога `contracts/` остаются нормативными при расхождении с текстовыми примерами.\n\n",
-        "> Этот файл сгенерирован из модульных документов. Изменения следует вносить в исходные файлы и затем пересобирать master spec командой `python tools/build_master.py`.\n\n",
-        "## Содержание\n\n",
+        "# PiUI — unified product and technical specification\n\n",
+        "**Status:** developer preview; production release gates remain open.\n\n",
+        "**Purpose:** a single self-contained document for product, UX, runtime, frontend, security, QA, and release agents. Machine-readable files in `contracts/` remain normative where they differ from textual examples.\n\n",
+        "> This file is generated from modular documents. Make changes in the source files, then rebuild the master specification with `python tools/build_master.py`.\n\n",
+        "## Contents\n\n",
     ]
 
     for anchor, title, _ in SECTIONS:
@@ -99,7 +99,7 @@ def build() -> str:
             "- [Manifest schema](#manifest-schema)\n",
             "- [Runtime protocol](#runtime-protocol)\n",
             "- [PiUI Host API](#host-api)\n",
-            "- [Эталонный dual package](#reference-package)\n",
+            "- [Reference dual package](#reference-package)\n",
         ]
     )
 
@@ -107,7 +107,7 @@ def build() -> str:
         if not path.exists():
             raise FileNotFoundError(path)
         parts.append(f'\n---\n\n<a id="{anchor}"></a>\n\n## {title}\n\n')
-        parts.append(f"_Исходный файл: `{path.relative_to(ROOT).as_posix()}`._\n\n")
+        parts.append(f"_Source file: `{path.relative_to(ROOT).as_posix()}`._\n\n")
         parts.append(transform_markdown(path.read_text(encoding="utf-8")))
 
     contracts = [
@@ -117,13 +117,13 @@ def build() -> str:
     ]
     for anchor, title, path, language in contracts:
         parts.append(f'\n---\n\n<a id="{anchor}"></a>\n\n## {title}\n\n')
-        parts.append(f"_Нормативный файл: `{path.relative_to(ROOT).as_posix()}`._\n\n")
+        parts.append(f"_Normative file: `{path.relative_to(ROOT).as_posix()}`._\n\n")
         parts.append(f"```{language}\n{path.read_text(encoding='utf-8').rstrip()}\n```\n")
 
-    parts.append('\n---\n\n<a id="reference-package"></a>\n\n## Эталонный dual package\n\n')
+    parts.append('\n---\n\n<a id="reference-package"></a>\n\n## Reference dual package\n\n')
     parts.append(
-        "Пакет ниже иллюстрирует совместное размещение обычного Pi extension и необязательных PiUI contributions. "
-        "Файлы в каталоге `examples/minimal-piui-package/` являются нормативным исполняемым примером.\n\n"
+        "The package below illustrates colocating a standard Pi extension and optional PiUI contributions. "
+        "Files in `examples/minimal-piui-package/` are the normative executable example.\n\n"
     )
     language_by_suffix = {".md": "md", ".json": "json", ".ts": "ts", ".js": "js"}
     example_dir = ROOT / "examples/minimal-piui-package"

@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Windows x64 release
+    runs-on: windows-latest
+    env:
+      PIUI_REQUIRE_WINDOWS_REPARSE_TEST: "1"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.23.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@1.94.1
+        with:
+          components: rustfmt, clippy
+
+      - name: Verify tag and application versions
+        shell: pwsh
+        run: |
+          $config = Get-Content -Raw apps/desktop/src-tauri/tauri.conf.json | ConvertFrom-Json
+          $expectedTag = "v$($config.version)"
+          if ("${{ github.ref_name }}" -ne $expectedTag) {
+            throw "Tag ${{ github.ref_name }} does not match tauri.conf.json version $($config.version)."
+          }
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm repo:check
+      - run: python tools/validate_spec.py
+      - run: python tools/validate_runtime_evidence.py --check evidence/upstream/npm/earendil-works-pi-coding-agent/0.81.1
+      - run: python -m unittest tools/test_validate_runtime_evidence.py -v
+      - run: pnpm check
+      - run: pnpm test
+      - run: pnpm contract:test
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+      - name: Build NSIS installer and portable executable
+        run: pnpm release:windows
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PiUI-${{ github.ref_name }}-windows-x86_64
+          path: artifacts/*
+          if-no-files-found: error
+
+      - name: Publish GitHub pre-release
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $assets = @(Get-ChildItem artifacts -File | ForEach-Object FullName)
+          $installer = @(Get-ChildItem artifacts -File -Filter "*-setup.exe")
+          if ($assets.Count -lt 3 -or $installer.Count -ne 1) {
+            throw "Expected one installer, one portable executable, and checksums."
+          }
+
+          if (gh release view $tag 2>$null) {
+            gh release upload $tag $assets --clobber
+            exit 0
+          }
+
+          @"
+          Windows x64 developer preview.
+
+          1. Install the official Pi CLI and confirm that ``pi --version`` works.
+          2. Download the NSIS ``setup.exe`` and ``SHA256SUMS.txt`` below.
+          3. In PowerShell, run ``Get-FileHash .\$($installer[0].Name) -Algorithm SHA256`` and compare it with ``Get-Content .\SHA256SUMS.txt``.
+          4. Run the installer and start PiUI from the Start menu.
+
+          The Windows artifacts are not code-signed and PiUI does not auto-update yet. Do not write to the same Pi session from PiUI and the Pi CLI concurrently. See the README and release checklist for all current limitations.
+          "@ | Set-Content -Encoding utf8 release-notes.md
+
+          gh release create $tag $assets `
+            --verify-tag `
+            --prerelease `
+            --notes-file release-notes.md `
+            --title "PiUI $tag — developer preview"

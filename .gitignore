@@ -6,6 +6,7 @@ coverage/
 playwright-report/
 test-results/
 .vite/
+/artifacts/
 
 # Rust and Tauri build output
 /target/

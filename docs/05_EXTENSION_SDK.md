@@ -1,77 +1,77 @@
 # 05. PiUI Extension SDK
 
-## 1. Цель
+## 1. Goal
 
-PiUI должен продолжать философию Pi: минимальное ядро, расширение через пакеты. При этом нельзя считать, что TUI-компоненты автоматически переносимы в desktop GUI. Поэтому один package может содержать две независимые, совместимые части:
+PiUI must continue Pi's philosophy: a minimal core, extended through packages. At the same time, TUI components must not be assumed to transfer automatically to a desktop GUI. Therefore, one package may contain two independent, compatible parts:
 
-- `pi` — backend extension/resources, которые загружает Pi;
-- `piui` — необязательное описание GUI contributions, которое загружает PiUI.
+- `pi` — backend extensions/resources loaded by Pi;
+- `piui` — an optional description of GUI contributions loaded by PiUI.
 
-Отсутствие `piui` никогда не мешает backend extension работать.
+The absence of `piui` must never prevent a backend extension from working.
 
-## 2. Уровни расширяемости
+## 2. Extensibility tiers
 
 ### Tier 0 — Backend-only compatibility
 
-Пакет содержит только обычный Pi extension.
+The package contains only a standard Pi extension.
 
-PiUI обязан:
+PiUI must:
 
-- позволить Pi загрузить extension по обычным правилам;
-- показать зарегистрированные tools и commands, если Pi сообщает их через RPC;
-- обработать стандартный Extension UI Protocol;
-- отрисовать tool/custom entries универсальной карточкой;
-- не требовать изменений package.
+- allow Pi to load the extension under its standard rules;
+- display registered tools and commands if Pi reports them through RPC;
+- handle the standard Extension UI Protocol;
+- render tool/custom entries using a generic card;
+- require no package changes.
 
-Это уровень совместимости по умолчанию.
+This is the default compatibility tier.
 
 ### Tier 1 — Declarative contributions
 
-Пакет содержит `piui.manifest.json`, но не исполняет собственный UI JavaScript. Manifest может добавить:
+The package contains `piui.manifest.json` but does not execute its own UI JavaScript. The manifest may add:
 
-- команды и command palette entries;
+- commands and command palette entries;
 - composer actions;
 - status items;
 - settings schema;
 - project/session context menu actions;
-- sidebar или right-panel views из безопасного UI node tree;
-- tool/message/custom-entry renderers из UI node tree;
-- preview providers, возвращающие безопасную модель preview;
-- themes/design tokens в ограниченной схеме;
-- keybinding defaults.
+- sidebar or right-panel views from a safe UI node tree;
+- tool/message/custom-entry renderers from a UI node tree;
+- preview providers returning a safe preview model;
+- themes/design tokens in a restricted schema;
+- default keybindings.
 
-PiUI создаёт все элементы своими компонентами. Это основной и рекомендуемый extension path.
+PiUI creates all elements using its own components. This is the primary and recommended extension path.
 
 ### Tier 2 — Sandboxed rich views
 
-Пакет предоставляет статический web bundle для сложного представления. Он запускается:
+The package provides a static web bundle for a complex view. It runs:
 
-- в sandboxed iframe/WebView без прямого Tauri API;
-- с отдельным origin или opaque origin;
-- без network по умолчанию;
-- через versioned `postMessage` broker;
-- с capability-based host API;
-- с CSP, запрещающим inline/eval, кроме явно согласованной dev policy;
-- с ограничениями размера bundle, памяти, message rate и payload size.
+- in a sandboxed iframe/WebView without direct Tauri API access;
+- with a separate origin or opaque origin;
+- without network access by default;
+- through a versioned `postMessage` broker;
+- with a capability-based host API;
+- with a CSP that prohibits inline/eval, except under an explicitly agreed development policy;
+- with limits on bundle size, memory, message rate, and payload size.
 
-Rich view подходит для графов, специализированных inspectors, canvas-based previews и сложных interactive tools.
+A rich view is suitable for graphs, specialized inspectors, canvas-based previews, and complex interactive tools.
 
 ### Tier 3 — Trusted shell replacement
 
-Пакет может полностью заменить обычный layout PiUI, если пользователь явно доверил **глобально установленный** пакет как shell.
+A package may fully replace the standard PiUI layout if the user explicitly trusts a **globally installed** package as a shell.
 
-Ограничения:
+Constraints:
 
-- project-local package не может стать shell;
-- shell запускается в отдельной изолированной surface и общается через тот же broker;
-- он не получает raw Tauri `invoke`, shell или filesystem API;
-- выбор shell требует restart и отдельного предупреждения;
-- immutable recovery layer остаётся у host: safe-mode shortcut/menu, crash screen, permission dialogs и update integrity prompts;
-- при crash loop PiUI автоматически возвращается к core shell;
-- одновременно активен только один shell;
-- shell не меняет формат сессий и не заменяет Pi runtime.
+- a project-local package cannot become a shell;
+- the shell runs in a separate isolated surface and communicates through the same broker;
+- it receives no raw Tauri `invoke`, shell, or filesystem API;
+- selecting a shell requires a restart and a separate warning;
+- an immutable recovery layer remains with the host: safe-mode shortcut/menu, crash screen, permission dialogs, and update integrity prompts;
+- on a crash loop, PiUI automatically returns to the core shell;
+- only one shell can be active at a time;
+- the shell does not change the session format or replace the Pi runtime.
 
-Так сохраняется требование полного изменения интерфейса без передачи extension неограниченных прав desktop host.
+This preserves the requirement for a completely changed interface without granting the extension unrestricted desktop-host privileges.
 
 ## 3. Package layout
 
@@ -82,14 +82,14 @@ my-package/
     extension.ts
   piui.manifest.json
   piui/
-    worker.js              # необязательно
+    worker.js              # optional
     views/
-      graph/index.html     # Tier 2, необязательно
+      graph/index.html     # Tier 2, optional
       graph/assets/*
     icons/*
 ```
 
-Пример `package.json`:
+Example `package.json`:
 
 ```json
 {
@@ -105,11 +105,11 @@ my-package/
 }
 ```
 
-PiUI сначала применяет правила discovery Pi packages, затем ищет необязательный `piui.manifest.json`. Он не запускает `postinstall` и не выполняет package code для чтения manifest.
+PiUI first applies Pi package discovery rules, then looks for the optional `piui.manifest.json`. It does not run `postinstall` or execute package code to read the manifest.
 
 ## 4. Manifest
 
-Минимальный manifest:
+Minimal manifest:
 
 ```json
 {
@@ -144,22 +144,22 @@ PiUI сначала применяет правила discovery Pi packages, з�
 }
 ```
 
-Полная JSON Schema находится в `contracts/piui-extension-manifest.schema.json`. Проверка manifest состоит из двух обязательных проходов:
+The complete JSON Schema is in `contracts/piui-extension-manifest.schema.json`. Manifest validation consists of two mandatory passes:
 
-1. JSON Schema проверяет форму, типы, ограничения размеров и structural security invariants: явный массив `permissions`, соответствие `ui.shell` shell-entrypoint, `network` origin allowlist и `ui.richView` views-entrypoint.
-2. Host semantic validator проверяет принадлежность contribution ID namespace расширения, уникальность ID, существование command/handler/view targets, dependency cycles, допустимость slot, trust scope и соответствие фактических Host API вызовов выданным capabilities.
+1. JSON Schema validates shape, types, size constraints, and structural security invariants: an explicit `permissions` array, `ui.shell` matching its shell entrypoint, the `network` origin allowlist, and the `ui.richView` views entrypoint.
+2. The host semantic validator validates that contribution IDs belong to the extension namespace, IDs are unique, command/handler/view targets exist, dependency cycles, permitted slots, trust scope, and that actual Host API calls match granted capabilities.
 
-Прохождение одной JSON Schema не означает, что пакет разрешён к активации. Ошибка второго прохода переводит UI-часть в disabled/backend-only state с диагностикой, но не даёт ей частичный доступ.
+Passing JSON Schema alone does not mean that a package is permitted to activate. A failure in the second pass moves the UI portion to a disabled/backend-only state with diagnostics, without granting it partial access.
 
-### Обязательные поля
+### Required fields
 
-- `schemaVersion`: целое major schema number;
-- `id`: стабильный reverse-domain-like ID, не меняется между версиями;
+- `schemaVersion`: integer major schema number;
+- `id`: stable reverse-domain-like ID that does not change between versions;
 - `name`: user-facing label;
 - `version`: SemVer package version;
-- `engines.piui`: совместимый диапазон PiUI;
-- `contributes`: декларативные contributions;
-- `permissions`: минимально необходимые capabilities.
+- `engines.piui`: compatible PiUI range;
+- `contributes`: declarative contributions;
+- `permissions`: minimum required capabilities.
 
 ### Entry points
 
@@ -175,11 +175,11 @@ PiUI сначала применяет правила discovery Pi packages, з�
 }
 ```
 
-Entry points resolve только внутри package root после canonicalization. `..`, symlink escape и remote URL запрещены.
+Entry points resolve only within the package root after canonicalization. `..`, symlink escapes, and remote URLs are prohibited.
 
 ## 5. Semantic slots
 
-Extensions указывают **смысл**, а не пиксельные координаты. Поддерживаемые slots v1:
+Extensions specify **meaning**, not pixel coordinates. Supported v1 slots:
 
 - `sidebar.project.beforeSessions`
 - `sidebar.project.afterSessions`
@@ -194,7 +194,7 @@ Extensions указывают **смысл**, а не пиксельные ко�
 - `settings.extensions`
 - `status.runtime`
 
-Manifest не задаёт `top: 12px` или прямой selector core DOM. Host решает responsive layout, accessibility и compact mode.
+A manifest does not specify `top: 12px` or a direct selector for the core DOM. The host determines responsive layout, accessibility, and compact mode.
 
 Ordering:
 
@@ -206,15 +206,15 @@ Ordering:
 }
 ```
 
-- меньший `order` идёт раньше;
-- core резервирует диапазон `0–99`;
-- extensions обычно используют `100–999`;
-- одинаковый order сортируется по extension ID;
-- extension не может скрывать contribution другого extension.
+- lower `order` comes first;
+- core reserves the `0–99` range;
+- extensions normally use `100–999`;
+- equal order is sorted by extension ID;
+- an extension cannot hide another extension's contribution.
 
 ## 6. Declarative UI node vocabulary
 
-Tier 1 renderer возвращает сериализуемое дерево из allowlisted узлов:
+A Tier 1 renderer returns a serializable tree of allowlisted nodes:
 
 ```ts
 type UiNode =
@@ -236,16 +236,16 @@ type UiNode =
   | { type: 'empty'; title: string; description?: string; action?: UiAction };
 ```
 
-Запрещены raw HTML, arbitrary CSS, inline scripts, DOM event strings и external image URLs без permission. Markdown проходит PiUI sanitizer; `trusted: true` в v1 отсутствует.
+Raw HTML, arbitrary CSS, inline scripts, DOM event strings, and external image URLs without permission are prohibited. Markdown passes through the PiUI sanitizer; `trusted: true` does not exist in v1.
 
 Limits v1:
 
 - depth ≤ 20;
-- nodes ≤ 2,000 на render result;
-- text ≤ 2 MiB суммарно;
-- table ≤ 1,000 rows до pagination;
-- update rate ≤ 30 messages/s на view;
-- payload > limit отклоняется и заменяется fallback.
+- nodes ≤ 2,000 per render result;
+- total text ≤ 2 MiB;
+- table ≤ 1,000 rows before pagination;
+- update rate ≤ 30 messages/s per view;
+- payloads exceeding the limit are rejected and replaced with a fallback.
 
 ## 7. Contributions
 
@@ -266,42 +266,42 @@ Limits v1:
 
 Handler types:
 
-- `pi-command:<name>` — вызывает command, который уже зарегистрирован backend extension;
-- `host:<allowlisted-action>` — только действия, явно открытые SDK;
-- `worker:<handler>` — вызывает sandboxed extension worker;
-- `view:<viewId>:<message>` — посылает событие rich view.
+- `pi-command:<name>` — invokes a command already registered by the backend extension;
+- `host:<allowlisted-action>` — only actions explicitly exposed by the SDK;
+- `worker:<handler>` — invokes a sandboxed extension worker;
+- `view:<viewId>:<message>` — sends an event to a rich view.
 
-Command не может содержать shell command string.
+A command cannot contain a shell command string.
 
 ### 7.2 Composer actions
 
-Action может:
+An action may:
 
-- вставить текст;
-- добавить structured attachment reference;
-- открыть dialog/view;
-- вызвать command;
-- преобразовать draft через worker после разрешения `composer.read/write`.
+- insert text;
+- add a structured attachment reference;
+- open a dialog/view;
+- invoke a command;
+- transform a draft through a worker after `composer.read/write` is granted.
 
-Он не получает содержимое draft без permission.
+It does not receive draft contents without permission.
 
 ### 7.3 Status items
 
-Status item имеет короткий label, tooltip и command. Host ограничивает ширину и переносит overflow в меню. Extension не может создавать persistent animation без running state.
+A status item has a short label, tooltip, and command. The host constrains width and moves overflow into a menu. An extension cannot create persistent animation without a running state.
 
 ### 7.4 Settings
 
-Extension объявляет JSON-like schema с поддержанными controls:
+An extension declares a JSON-like schema with supported controls:
 
 - boolean;
 - string/password reference;
-- number с min/max;
+- number with min/max;
 - enum;
-- path picker с конкретным access mode;
+- path picker with a specific access mode;
 - keybinding;
 - secret reference.
 
-Секреты хранятся в platform credential store и передаются worker только через opaque token/approved request. Они не попадают в обычный settings JSON.
+Secrets are stored in the platform credential store and passed to a worker only through an opaque token/approved request. They do not enter regular settings JSON.
 
 ### 7.5 Tool renderers
 
@@ -322,34 +322,34 @@ Matcher:
 
 Rules:
 
-- exact extension ID + tool name сильнее wildcard;
-- пользователь может отключить renderer отдельно от backend extension;
-- generic raw view доступен всегда;
-- renderer получает redacted payload в соответствии с permissions;
-- renderer не меняет результат tool execution.
+- exact extension ID + tool name is stronger than a wildcard;
+- the user can disable a renderer independently from the backend extension;
+- a generic raw view is always available;
+- the renderer receives a redacted payload according to permissions;
+- the renderer does not change the tool execution result.
 
 ### 7.6 Message/custom-entry renderers
 
-Matcher использует stable type/namespace, а не произвольную эвристику текста. Если два renderer имеют одинаковый priority, PiUI выбирает точнейший matcher и показывает диагностируемый conflict при равенстве.
+The matcher uses a stable type/namespace, not arbitrary text heuristics. If two renderers have the same priority, PiUI chooses the most specific matcher and shows a diagnosable conflict on a tie.
 
 ### 7.7 Sidebar/right-panel views
 
-Tier 1 view возвращает UiNode и обновляется по явным subscriptions. Tier 2 view указывается через `viewId`. Правую панель можно открыть по команде; extension не должен принудительно держать её открытой после каждого запуска без user preference.
+A Tier 1 view returns a UiNode and updates through explicit subscriptions. A Tier 2 view is specified through `viewId`. The right panel may be opened by command; an extension must not force it to remain open after every launch without a user preference.
 
 ### 7.8 Preview providers
 
-Provider объявляет поддерживаемые URI/MIME и возвращает:
+A provider declares supported URI/MIME and returns:
 
 - text/code preview;
 - image resource;
 - declarative nodes;
 - sandboxed rich view.
 
-Он не ассоциирует executable previewer без отдельной permission и user action.
+It does not associate an executable previewer without separate permission and user action.
 
 ### 7.9 Themes
 
-Theme contribution может переопределять только documented semantic tokens:
+A theme contribution may override only documented semantic tokens:
 
 ```json
 {
@@ -363,11 +363,11 @@ Theme contribution может переопределять только document
 }
 ```
 
-Перед публикацией PiUI проверяет contrast критических пар. Theme не может встраивать CSS/JS в Tier 1. Пользователь всегда может вернуться к System/Light/Dark в safe mode.
+PiUI validates contrast for critical pairs before publication. A theme cannot embed CSS/JS in Tier 1. The user can always return to System/Light/Dark in safe mode.
 
-## 8. Context keys и `when`
+## 8. Context keys and `when`
 
-PiUI предоставляет ограниченный expression language без `eval`:
+PiUI provides a restricted expression language without `eval`:
 
 ```text
 project.trusted && runtime.ready && editor.hasText
@@ -375,45 +375,45 @@ session.running || session.queuedCount > 0
 resource.mime == "image/png"
 ```
 
-Поддерживаются `&&`, `||`, `!`, `==`, `!=`, `<`, `>`, parentheses и membership в literal list. Unknown key evaluates false.
+`&&`, `||`, `!`, `==`, `!=`, `<`, `>`, parentheses, and membership in a literal list are supported. An unknown key evaluates to false.
 
-Основные keys:
+Core keys:
 
 - `platform`: `windows|linux|macos`;
 - `project.open`, `project.trusted`, `project.hasGit`;
 - `session.open`, `session.running`, `session.hasBranches`;
 - `runtime.ready`, `runtime.capability.<name>`;
 - `composer.hasText`, `composer.hasAttachments`;
-- `selection.text` как boolean, не само содержимое;
+- `selection.text` as a boolean, not its contents;
 - `view.<id>.visible`;
 - `safeMode`.
 
-Extension не может создавать глобальный key с чужим namespace.
+An extension cannot create a global key under another namespace.
 
-## 9. Host API и permissions
+## 9. Host API and permissions
 
-Полный TypeScript contract — `contracts/piui-host-api.d.ts`.
+The complete TypeScript contract is `contracts/piui-host-api.d.ts`.
 
 ### Permission groups
 
-| Permission | Возможности |
+| Permission | Capabilities |
 |---|---|
-| `session.read` | metadata/timeline blocks текущей сессии |
-| `session.command` | отправка allowlisted Pi/PiUI commands |
-| `session.prompt` | отправка/steer/follow-up после user-visible action |
-| `composer.read` | чтение draft |
-| `composer.write` | изменение draft/attachments |
-| `project.read` | чтение файлов через scoped API |
-| `project.write` | запись через scoped API и conflict checks |
+| `session.read` | metadata/timeline blocks for the current session |
+| `session.command` | sending allowlisted Pi/PiUI commands |
+| `session.prompt` | send/steer/follow-up after a user-visible action |
+| `composer.read` | reading the draft |
+| `composer.write` | changing the draft/attachments |
+| `project.read` | reading files through a scoped API |
+| `project.write` | writing through a scoped API and conflict checks |
 | `externalFiles.read` | user-picked external handles |
-| `network` | fetch через host proxy для approved origins |
-| `clipboard.read` | только после user gesture |
-| `clipboard.write` | запись clipboard |
+| `network` | fetch through the host proxy for approved origins |
+| `clipboard.read` | only after a user gesture |
+| `clipboard.write` | writing to the clipboard |
 | `notifications` | system notifications |
 | `storage` | namespaced extension storage |
 | `secrets` | opaque credential references |
-| `ui.richView` | запуск Tier 2 view |
-| `ui.shell` | request trusted shell activation |
+| `ui.richView` | launching a Tier 2 view |
+| `ui.shell` | requesting trusted shell activation |
 
 ### Permission decisions
 
@@ -424,32 +424,32 @@ Decision scope:
 - allow for this project;
 - allow globally.
 
-Не все permissions допускают все scopes. `ui.shell` — только global; `externalFiles.read` обычно per handle; `clipboard.read` — per gesture.
+Not all permissions allow every scope. `ui.shell` is global only; `externalFiles.read` is normally per handle; `clipboard.read` is per gesture.
 
-Prompt должен объяснять конкретное действие и extension source. Нельзя просить «полный доступ» одним неразделимым grant.
+A prompt must explain the specific action and extension source. It must not request “full access” as a single indivisible grant.
 
 ### Host API principles
 
 - structured inputs/outputs;
 - cancellable requests;
-- resource handles вместо произвольных paths;
-- origin allowlist для network;
-- max payload и rate limits;
-- permissions проверяются host при каждом вызове, а не только UI;
-- view/worker не видит grants других extensions;
-- API version передаётся при handshake.
+- resource handles instead of arbitrary paths;
+- origin allowlist for network;
+- max payload and rate limits;
+- permissions are checked by the host on every call, not only by the UI;
+- a view/worker cannot see grants for other extensions;
+- the API version is passed during the handshake.
 
 ## 10. Worker model
 
-Tier 1 dynamic handlers исполняются не в main UI realm. Extension worker:
+Tier 1 dynamic handlers do not execute in the main UI realm. An extension worker:
 
-- загружается как module worker в изолированном context;
-- не имеет Tauri globals;
-- получает `initialize(apiVersion, extensionId, grantedCapabilities)`;
-- регистрирует named handlers;
-- возвращает JSON-serializable results;
-- может быть завершён host при timeout/crash loop;
-- не должен хранить authoritative state только в памяти.
+- loads as a module worker in an isolated context;
+- has no Tauri globals;
+- receives `initialize(apiVersion, extensionId, grantedCapabilities)`;
+- registers named handlers;
+- returns JSON-serializable results;
+- may be terminated by the host on timeout/crash loop;
+- must not store authoritative state only in memory.
 
 Recommended handler lifecycle:
 
@@ -460,7 +460,7 @@ export function activate(ctx: PiUiExtensionContext) {
 }
 ```
 
-Фактическая загрузка может быть реализована через bootstrap worker, но public semantics остаётся такой.
+The actual loading may be implemented through a bootstrap worker, but the public semantics remain the same.
 
 ## 11. Rich view protocol
 
@@ -479,23 +479,23 @@ Security:
 - exact `event.source`/channel token validation;
 - opaque per-instance channel secret;
 - no wildcard `postMessage` target where avoidable;
-- iframe sandbox without `allow-same-origin` unless isolated custom scheme demands and security review approves;
+- iframe sandbox without `allow-same-origin` unless an isolated custom scheme requires it and a security review approves it;
 - navigation blocked; external link requests go to host confirmation/policy;
 - downloads blocked by default;
 - popups blocked;
 - CSP generated host-side;
-- clipboard, fullscreen, camera, microphone, geolocation запрещены без future ADR.
+- clipboard, fullscreen, camera, microphone, and geolocation are prohibited without a future ADR.
 
 Lifecycle:
 
 - `mount`, `visibilityChanged`, `themeChanged`, `dispose`;
-- hidden views могут быть suspended;
-- crash/timeout заменяется diagnostic fallback;
-- state persistence идёт через extension storage API.
+- hidden views may be suspended;
+- crash/timeout is replaced with a diagnostic fallback;
+- state persistence goes through the extension storage API.
 
 ## 12. Full shell contract
 
-Shell получает high-level application model и commands:
+The shell receives a high-level application model and commands:
 
 - project/session listing and selection;
 - timeline paging and subscriptions;
@@ -504,20 +504,20 @@ Shell получает high-level application model и commands:
 - extension surfaces;
 - window-safe commands.
 
-Shell **не получает**:
+The shell **does not receive**:
 
 - raw process handles;
 - unrestricted filesystem;
 - secret material;
 - updater signing controls;
 - permission dialog suppression;
-- ability to disable safe mode;
-- direct session JSONL write.
+- the ability to disable safe mode;
+- direct session JSONL writing.
 
 Host overlays/shortcuts:
 
 - launch safe mode;
-- return to core shell;
+- return to the core shell;
 - crash recovery;
 - permission prompt;
 - app quit/force runtime stop;
@@ -532,9 +532,9 @@ Activation flow:
 5. host writes trusted shell selection;
 6. restart;
 7. shell handshake within timeout;
-8. on failure, core shell opens with incident banner.
+8. on failure, core shell opens with an incident banner.
 
-## 13. Discovery и precedence
+## 13. Discovery and precedence
 
 Sources:
 
@@ -543,18 +543,18 @@ Sources:
 3. PiUI built-in packages;
 4. optional user-added development package paths.
 
-Precedence не означает silent override. Duplicate extension IDs:
+Precedence does not mean silent override. Duplicate extension IDs:
 
-- exact same resolved package/version is deduplicated;
-- разные packages с одним ID создают conflict state;
-- пользователь выбирает источник или отключает один;
-- project package не может подменить trusted global shell по ID.
+- an exact same resolved package/version is deduplicated;
+- different packages with the same ID create a conflict state;
+- the user selects a source or disables one;
+- a project package cannot impersonate a trusted global shell by ID.
 
-Manifest parse никогда не исполняет JavaScript. Icons/resources проверяются как files inside package root.
+Manifest parsing never executes JavaScript. Icons/resources are verified as files inside the package root.
 
-## 14. Enablement и dependency
+## 14. Enablement and dependency
 
-Extension может указать optional dependencies:
+An extension may specify optional dependencies:
 
 ```json
 {
@@ -564,7 +564,7 @@ Extension может указать optional dependencies:
 }
 ```
 
-PiUI проверяет presence/version, но не устанавливает автоматически. В v1 нет marketplace resolver. Backend и UI enablement показываются отдельно:
+PiUI verifies presence/version but does not install them automatically. There is no marketplace resolver in v1. Backend and UI enablement are displayed separately:
 
 - Backend enabled by Pi;
 - PiUI contributions enabled;
@@ -572,21 +572,21 @@ PiUI проверяет presence/version, но не устанавливает �
 - Renderer enabled;
 - Shell selected.
 
-Отключение UI renderer не обязано отключать backend tool.
+Disabling a UI renderer does not have to disable the backend tool.
 
 ## 15. Versioning
 
-- Manifest `schemaVersion` — major integer; host поддерживает ограниченный набор.
-- Host API использует SemVer-like `apiVersion` и capability negotiation.
-- Unknown optional contribution игнорируется с warning.
-- Unknown required feature в `requires` отключает UI part целиком, backend остаётся доступен.
-- Contracts backwards-compatible внутри PiUI major.
-- Deprecated API минимум один minor release сообщает warning до удаления в следующем major.
-- Extension должен проверять capabilities, а не парсить PiUI version для поведения.
+- Manifest `schemaVersion` is a major integer; the host supports a limited set.
+- The Host API uses SemVer-like `apiVersion` and capability negotiation.
+- An unknown optional contribution is ignored with a warning.
+- An unknown required feature in `requires` disables the UI part entirely; the backend remains available.
+- Contracts are backwards-compatible within a PiUI major version.
+- A deprecated API reports a warning for at least one minor release before removal in the next major version.
+- An extension must check capabilities rather than parse the PiUI version for behavior.
 
 ## 16. Development experience
 
-Команды будущего SDK:
+Future SDK commands:
 
 ```bash
 piui extension init
@@ -598,47 +598,47 @@ piui extension inspect-permissions
 
 Dev mode:
 
-- требует явного включения в Advanced settings;
-- показывает persistent banner;
-- допускает local package path и hot reload declarative manifest;
-- rich view reload не должен перезапускать Pi runtime;
-- shell hot reload доступен только в отдельном development window;
-- production permission rules по умолчанию сохраняются.
+- requires explicit activation in Advanced settings;
+- displays a persistent banner;
+- allows a local package path and hot reload of a declarative manifest;
+- rich view reload must not restart the Pi runtime;
+- shell hot reload is available only in a separate development window;
+- production permission rules remain in force by default.
 
 ## 17. Generic fallback
 
-Для каждого contribution/render type PiUI имеет fallback:
+PiUI has a fallback for every contribution/render type:
 
-- tool invocation → имя, args, status, text/JSON result;
+- tool invocation → name, args, status, text/JSON result;
 - custom entry → namespace/type + JSON inspector;
-- missing sidebar view → disabled placeholder в extension diagnostics;
+- missing sidebar view → disabled placeholder in extension diagnostics;
 - rich view crash → error card + Open raw data;
-- unsupported UiNode → omitted node + validation notice, не весь timeline crash;
+- unsupported UiNode → omitted node + validation notice, not an entire timeline crash;
 - missing command handler → disabled action;
 - incompatible manifest → backend-only mode.
 
-Raw payload может содержать чувствительные данные, поэтому inspector открывается по действию и использует redaction/notice.
+Raw payload may contain sensitive data, so the inspector opens on action and uses redaction/notice.
 
-## 18. Accessibility и localization
+## 18. Accessibility and localization
 
-- extension label/description должны иметь plain-text fallback;
-- icon-only action требует label;
-- declarative nodes автоматически получают core focus/navigation semantics;
-- rich view отвечает за внутреннюю accessibility и проходит audit для featured packages;
-- extension strings могут указывать locale bundles, но default locale обязателен;
-- host permission prompts не локализуются extension HTML — только structured strings;
-- directionality и reduced motion передаются в view initialization.
+- extension label/description must have a plain-text fallback;
+- an icon-only action requires a label;
+- declarative nodes automatically receive core focus/navigation semantics;
+- a rich view is responsible for internal accessibility and passes an audit for featured packages;
+- extension strings may specify locale bundles, but a default locale is mandatory;
+- host permission prompts are not localized by extension HTML — only by structured strings;
+- directionality and reduced motion are passed during view initialization.
 
-## 19. Acceptance criteria SDK
+## 19. SDK acceptance criteria
 
-- Backend-only Pi extension работает без manifest.
-- Один package одновременно регистрирует Pi tool и PiUI renderer.
-- Project-local rich view не исполняется до trust.
-- Tier 1 manifest не выполняет JavaScript при discovery.
-- Rich view не может вызвать Tauri API напрямую.
-- Network request блокируется без grant и approved origin.
-- Отключение renderer возвращает generic readable card.
-- Duplicate IDs дают conflict, а не silent precedence.
-- Shell crash возвращает core shell.
-- Safe mode запускается даже при сломанном shell/theme.
-- API/schema compatibility проверяется fixtures в CI.
+- A backend-only Pi extension works without a manifest.
+- One package registers both a Pi tool and a PiUI renderer.
+- A project-local rich view does not execute before trust.
+- A Tier 1 manifest does not execute JavaScript during discovery.
+- A rich view cannot invoke the Tauri API directly.
+- A network request is blocked without a grant and approved origin.
+- Disabling a renderer restores a generic readable card.
+- Duplicate IDs produce a conflict, not silent precedence.
+- A shell crash returns to the core shell.
+- Safe mode launches even with a broken shell/theme.
+- API/schema compatibility is checked by fixtures in CI.

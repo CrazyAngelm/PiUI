@@ -1,24 +1,24 @@
-# 07. Безопасность и модель доверия
+# 07. Security and Trust Model
 
-## 1. Основная честная формулировка
+## 1. Core honest statement
 
-Pi и его backend extensions запускаются с правами локального пользователя. Project trust контролирует, какие project-local ресурсы загружаются, но **не превращает Pi в sandbox**. PiUI обязан сообщать это до первого запуска агента в новом проекте.
+Pi and its backend extensions run with the local user's permissions. Project trust controls which project-local resources are loaded, but **does not turn Pi into a sandbox**. PiUI must communicate this before the first agent launch in a new project.
 
-PiUI снижает риск UI и случайных действий, но не может обещать изоляцию malicious Pi tool/extension без отдельной OS/container sandbox architecture.
+PiUI reduces UI and accidental-action risk, but cannot promise isolation from a malicious Pi tool/extension without a separate OS/container sandbox architecture.
 
-## 2. Защищаемые активы
+## 2. Assets to protect
 
-- source code и остальные файлы пользователя;
-- Pi sessions и branch history;
-- provider credentials, OAuth tokens и API keys;
+- source code and the user's other files;
+- Pi sessions and branch history;
+- provider credentials, OAuth tokens, and API keys;
 - environment variables;
 - clipboard;
-- external files, выбранные пользователем;
+- external files selected by the user;
 - extension permission grants;
-- update channel и installed binaries;
-- integrity UI: permission/trust prompts и safe mode;
-- приватность prompt/tool output/logs;
-- availability приложения и отсутствие orphan processes.
+- update channel and installed binaries;
+- UI integrity: permission/trust prompts and safe mode;
+- privacy of prompts/tool output/logs;
+- application availability and absence of orphan processes.
 
 ## 3. Trust boundaries
 
@@ -36,148 +36,148 @@ PiUI снижает риск UI и случайных действий, но н�
                                       [Filesystem/network/providers]
 ```
 
-Отдельные trust decisions:
+Separate trust decisions:
 
-1. доверять проекту для запуска Pi/project-local resources;
-2. включить backend Pi extension;
-3. включить PiUI declarative contributions;
-4. дать permission rich view/worker;
-5. выбрать global shell replacement;
-6. открыть внешний link/file;
-7. передать секрет/clipboard/network access.
+1. trust the project to launch Pi/project-local resources;
+2. enable a backend Pi extension;
+3. enable PiUI declarative contributions;
+4. grant a rich view/worker permission;
+5. select a global shell replacement;
+6. open an external link/file;
+7. provide a secret/clipboard/network access.
 
-Один trust checkbox не заменяет все уровни.
+A single trust checkbox does not replace all levels.
 
-## 4. Threat actors и сценарии
+## 4. Threat actors and scenarios
 
 ### Malicious project
 
-Репозиторий может содержать project-local Pi extension/skill/instructions, которые выполняют команды или убеждают модель сделать опасное действие.
+A repository may contain project-local Pi extensions/skills/instructions that execute commands or persuade the model to take a dangerous action.
 
-Меры:
+Mitigations:
 
-- проект сначала открывается read-only/restricted;
-- до trust не запускается Pi в этом cwd и не загружается project-local executable UI code;
-- dialog перечисляет категории ресурсов, которые могут активироваться;
-- доступны `Open restricted`, `Trust and start`, `Cancel`;
-- trust можно отозвать;
-- смена canonical path/file identity может потребовать повторного решения.
+- the project initially opens read-only/restricted;
+- before trust, Pi is not launched in this cwd and project-local executable UI code is not loaded;
+- the dialog lists resource categories that may become active;
+- `Open restricted`, `Trust and start`, and `Cancel` are available;
+- trust can be revoked;
+- a change to canonical path/file identity may require a new decision.
 
 ### Malicious backend extension/tool
 
-Backend code выполняется внутри Pi environment с правами пользователя.
+Backend code executes inside the Pi environment with user permissions.
 
-Меры PiUI ограничены:
+PiUI mitigations are limited to:
 
-- показывать source/location/version extension;
-- не скрывать tool execution;
-- сохранять generic raw view;
-- позволять отключить package и открыть safe mode;
-- не выдавать backend extension дополнительные PiUI permissions автоматически;
-- не заявлять, что PiUI sandboxed этот код.
+- showing the extension source/location/version;
+- not hiding tool execution;
+- preserving a generic raw view;
+- allowing the package to be disabled and safe mode to be opened;
+- not automatically granting a backend extension additional PiUI permissions;
+- not claiming that PiUI sandboxes this code.
 
-Будущая container/OS sandbox — отдельный проект и ADR.
+A future container/OS sandbox is a separate project and ADR.
 
 ### Malicious PiUI rich view
 
-View может пытаться читать filesystem, вызывать host, красть clipboard/token или делать phishing UI.
+A view may try to read the filesystem, call the host, steal the clipboard/token, or create phishing UI.
 
-Меры:
+Mitigations:
 
 - sandboxed isolated surface;
-- без direct Tauri API;
-- capability broker и host-side checks;
-- network deny by default;
-- visible extension identity в frame/header/permission prompt;
+- no direct Tauri API;
+- capability broker and host-side checks;
+- network denied by default;
+- visible extension identity in the frame/header/permission prompt;
 - no unrestricted overlays above immutable host prompts;
 - rate/payload/time limits;
-- CSP и navigation blocking;
+- CSP and navigation blocking;
 - kill/revoke/crash-loop handling.
 
 ### Prompt/tool output as active content
 
-Markdown может содержать HTML, links, SVG/data payloads или terminal escapes.
+Markdown may contain HTML, links, SVG/data payloads, or terminal escapes.
 
-Меры:
+Mitigations:
 
-- raw HTML disabled or sanitized allowlist;
-- scripts, event attributes, iframes, forms, style injection запрещены;
-- links открываются через host policy;
-- `file:` и custom schemes требуют validation;
-- ANSI escape sequences не передаются terminal emulator; text renderer sanitizes controls;
-- SVG рассматривается как active content: rasterize/sandbox или block inline;
-- code blocks — text only;
-- bidi/control characters могут визуально маркироваться в sensitive paths/code.
+- raw HTML disabled or restricted to a sanitized allowlist;
+- scripts, event attributes, iframes, forms, and style injection prohibited;
+- links opened through host policy;
+- `file:` and custom schemes require validation;
+- ANSI escape sequences are not passed to a terminal emulator; the text renderer sanitizes controls;
+- SVG is treated as active content: rasterize/sandbox it or block it inline;
+- code blocks are text only;
+- bidi/control characters may be visually marked in sensitive paths/code.
 
 ### Compromised update/package source
 
-Меры:
+Mitigations:
 
 - signed desktop updates;
-- HTTPS insufficient alone; verify signature/hash;
-- managed Pi artifacts pinned in signed PiUI release manifest, включая upstream version, target, origin и checksum;
-- предпочитать официальный standalone release artifact либо воспроизводимую сборку из versioned release source; не выполнять runtime `npm install` из приложения;
-- генерировать SBOM/provenance и проверять upstream hash до упаковки;
+- HTTPS alone is insufficient; verify signature/hash;
+- managed Pi artifacts pinned in a signed PiUI release manifest, including upstream version, target, origin, and checksum;
+- prefer an official standalone release artifact or a reproducible build from versioned release source; do not run runtime `npm install` from the application;
+- generate SBOM/provenance and verify the upstream hash before packaging;
 - atomic update + rollback;
-- no install during running turn;
-- extension marketplace отсутствует в 1.0;
-- local package source и fingerprint видимы;
+- no installation during a running turn;
+- no extension marketplace in 1.0;
+- local package source and fingerprint visible;
 - package manifest parsing does not execute scripts;
 - shell selection requires explicit trust and restart.
 
 ## 5. Project trust UX
 
-Рекомендуемый текст по смыслу:
+Recommended wording in substance:
 
-> Pi и расширения этого проекта могут читать и изменять файлы и запускать процессы с вашими пользовательскими правами. Это не песочница.
+> Pi and this project's extensions may read and modify files and run processes with your user permissions. This is not a sandbox.
 
-Dialog показывает:
+The dialog shows:
 
 - canonical project path;
-- найденные project-local Pi resources/packages;
-- выбранный Pi executable;
-- действия `Открыть без запуска`, `Доверять и запустить`, `Отмена`;
-- ссылку на подробности;
-- checkbox «запомнить для этого неизменённого пути/source» только при достаточной identity model.
+- discovered project-local Pi resources/packages;
+- selected Pi executable;
+- `Open without starting`, `Trust and start`, and `Cancel` actions;
+- a link to details;
+- a “remember for this unchanged path/source” checkbox only with a sufficient identity model.
 
-Нельзя использовать только расплывчатое «Этот проект может быть небезопасен».
+Do not use only the vague “This project may be unsafe.”
 
 ### Restricted mode
 
-В restricted mode разрешено:
+Restricted mode permits:
 
-- просматривать проиндексированную историю;
-- просматривать project path и session metadata;
-- экспортировать существующую session;
-- менять глобальные PiUI settings.
+- viewing indexed history;
+- viewing the project path and session metadata;
+- exporting an existing session;
+- changing global PiUI settings.
 
-Запрещено:
+Prohibited:
 
-- запускать Pi в project cwd;
-- загружать project-local backend/UI code;
-- читать произвольные project files через extension API;
-- отправлять prompt, который запустит tools в проекте.
+- launching Pi in the project cwd;
+- loading project-local backend/UI code;
+- reading arbitrary project files through the extension API;
+- sending a prompt that will launch tools in the project.
 
 ## 6. Tauri/WebView boundary
 
-Frontend получает только узкие allowlisted commands. Требования:
+The frontend receives only narrow allowlisted commands. Requirements:
 
-- Tauri capability files минимальны и разделены по window/surface;
-- extension views не наследуют core window capabilities;
-- CSP запрещает remote scripts и `unsafe-eval` в production;
-- devtools отключены в production либо доступны через explicit diagnostic build;
-- custom protocols проверяют origin и canonical path;
-- deep links считаются untrusted input;
+- Tauri capability files are minimal and separated by window/surface;
+- extension views do not inherit core window capabilities;
+- CSP prohibits remote scripts and `unsafe-eval` in production;
+- devtools are disabled in production or available through an explicit diagnostic build;
+- custom protocols validate origin and canonical path;
+- deep links are treated as untrusted input;
 - no generic `execute(command: string)` IPC;
-- no generic `readFile(path: string)` для extension views;
+- no generic `readFile(path: string)` for extension views;
 - IPC DTO size/rate limits;
 - every sensitive command checks current window/view identity.
 
-Core frontend тоже не считается полностью доверенным к OS; проверка всегда повторяется в Rust.
+The core frontend is also not considered fully trusted with the OS; validation is always repeated in Rust.
 
 ## 7. Path policy
 
-Host принимает typed resource references:
+The host accepts typed resource references:
 
 ```ts
 type ResourceRef =
@@ -192,46 +192,46 @@ Rules:
 - canonicalize before policy check;
 - reject traversal after decoding, not only literal `..`;
 - handle symlinks/junctions and TOCTOU where possible;
-- project read/write stays within canonical root unless external handle granted;
-- package resources stay within immutable/resolved package root;
+- project read/write stays within the canonical root unless an external handle is granted;
+- package resources stay within the immutable/resolved package root;
 - Windows reserved devices/alternate data streams tested;
 - file size/type limits before reading into memory;
-- writes use temp + atomic replace and conflict token;
-- extension never receives unrestricted absolute path unless permission contract explicitly requires it and user approves.
+- writes use temp + atomic replace and a conflict token;
+- an extension never receives an unrestricted absolute path unless the permission contract explicitly requires it and the user approves.
 
 ## 8. Process execution
 
-- Pi executable resolved by trusted runtime profile, never project-controlled PATH mutation without display;
-- args constructed as array, not shell string;
+- Pi executable resolved by trusted runtime profile, never by a project-controlled PATH mutation without display;
+- args constructed as an array, not a shell string;
 - shell invocation avoided;
 - working directory validated;
 - environment built from allowlisted inherited variables + Pi-required config;
-- secrets not copied into diagnostic env dump;
+- secrets not copied into diagnostic environment dumps;
 - process group/job object owns descendants;
-- force stop terminates tree;
+- force stop terminates the tree;
 - output frame limits protect memory;
 - stderr ring buffer redacts known secret patterns and paths for export;
 - custom executable mode visibly marked.
 
-Tools launched by Pi may create descendants outside controllable tree; PiUI documents this limitation rather than claiming perfect cleanup.
+Tools launched by Pi may create descendants outside the controllable tree; PiUI documents this limitation rather than claiming perfect cleanup.
 
-## 9. Secrets и authentication
+## 9. Secrets and authentication
 
 - Pi owns provider credentials;
 - PiUI does not mirror secret values in SQLite/frontend stores;
-- platform credential store used only for PiUI extension secrets;
+- the platform credential store is used only for PiUI extension secrets;
 - password inputs disable copy/display by default but permit explicit reveal;
 - auth subprocess transcript is not persisted in normal logs;
 - screenshots/support bundles exclude secret surfaces where technically possible;
 - errors are redacted before crossing IPC;
-- environment variables shown only by name unless explicit diagnostic reveal;
-- clipboard secret copy clears only if platform support and user chooses; no false guarantee.
+- environment variables are shown only by name unless explicitly revealed for diagnostics;
+- clipboard secret copy clears only if platform support exists and the user chooses it; no false guarantee.
 
-Secret redaction is defense-in-depth, not proof that arbitrary tool output cannot echo a key. UI warns before exporting raw logs/tool results.
+Secret redaction is defense in depth, not proof that arbitrary tool output cannot echo a key. The UI warns before exporting raw logs/tool results.
 
 ## 10. Extension permissions
 
-Host checks:
+The host checks:
 
 - extension ID + package fingerprint;
 - source scope (global/project);
@@ -242,49 +242,49 @@ Host checks:
 - requested resource/origin;
 - request rate/size.
 
-Package update/fingerprint change invalidates high-risk grants (`project.write`, `network`, `secrets`, `ui.shell`) unless signature/publisher policy explicitly supports continuity.
+A package update/fingerprint change invalidates high-risk grants (`project.write`, `network`, `secrets`, `ui.shell`) unless signature/publisher policy explicitly supports continuity.
 
-Permission prompts cannot be rendered by extension-controlled HTML. Rich view pauses while host prompt is active.
+Permission prompts cannot be rendered by extension-controlled HTML. The rich view pauses while a host prompt is active.
 
 ## 11. Network policy
 
-Core Pi network belongs to Pi/provider/tool behavior and is outside PiUI rich-view proxy.
+Core Pi network belongs to Pi/provider/tool behavior and is outside the PiUI rich-view proxy.
 
 PiUI extension network:
 
 - denied by default;
 - manifest declares origin patterns;
 - user approves actual origins;
-- requests flow through host proxy;
+- requests flow through the host proxy;
 - schemes limited to HTTPS by default;
-- localhost/private network ranges require separate high-risk grant;
+- localhost/private network ranges require a separate high-risk grant;
 - redirects revalidated;
 - credentials/cookies isolated per extension or absent;
 - response size/time limits;
 - no raw socket/listener API in v1;
-- user-agent identifies PiUI extension request without leaking project path.
+- user-agent identifies a PiUI extension request without leaking the project path.
 
 ## 12. Link/open behavior
 
-- `https:` link: preview domain and open in system browser after policy/user action;
+- `https:` link: preview the domain and open in the system browser after policy/user action;
 - `mailto:`: explicit user action;
-- `file:`: never directly navigate WebView; resolve through host and reveal/open with confirmation;
+- `file:`: never navigate the WebView directly; resolve through the host and reveal/open with confirmation;
 - `project:`: open internal preview/editor integration, not browser navigation;
-- executable file: reveal in folder by default, running it is not a core link action;
-- unknown scheme blocked with diagnostic.
+- executable file: reveal in folder by default; running it is not a core link action;
+- unknown scheme blocked with diagnostics.
 
-Markdown link text cannot hide target domain in confirmation.
+Markdown link text cannot hide the target domain in confirmation.
 
-## 13. Images и media
+## 13. Images and media
 
-- content-sniff MIME, do not trust filename;
+- content-sniff MIME; do not trust filename;
 - decode limits protect against decompression bombs;
 - SVG is not inserted inline as trusted markup;
 - EXIF metadata can contain sensitive data; PiUI does not automatically upload media except through explicit send;
 - thumbnails stored in cache with quota;
 - external image URLs in messages are not fetched automatically by default;
 - data/blob URLs bounded;
-- image preview uses isolated decoder paths available in system WebView; high-risk formats can be blocked.
+- image preview uses isolated decoder paths available in the system WebView; high-risk formats can be blocked.
 
 ## 14. Session integrity
 
@@ -295,9 +295,9 @@ Markdown link text cannot hide target domain in confirmation.
 - concurrent writer detection;
 - corruption repair only to a new copy;
 - session path not accepted from renderer payload without lookup in registry;
-- SQLite cache never overwrites newer file projection based on stale revision.
+- SQLite cache never overwrites a newer file projection based on a stale revision.
 
-## 15. Logging и diagnostics
+## 15. Logging and diagnostics
 
 Production logs include:
 
@@ -312,7 +312,7 @@ Excluded by default:
 - prompt/assistant text;
 - tool args/results;
 - full absolute paths;
-- env values;
+- environment values;
 - auth content;
 - extension storage values;
 - attachment contents;
@@ -322,7 +322,7 @@ Support bundle workflow:
 
 1. build local bundle;
 2. show manifest/size/categories;
-3. let user include optional redacted/raw sections;
+3. let the user include optional redacted/raw sections;
 4. save locally;
 5. PiUI does not upload automatically.
 
@@ -330,35 +330,35 @@ Support bundle workflow:
 
 Safe mode activates when:
 
-- user holds documented startup modifier;
-- CLI flag/environment is passed;
-- previous shell/view caused crash loop;
-- integrity check fails;
-- Settings requests restart in safe mode.
+- the user holds the documented startup modifier;
+- a CLI flag/environment is passed;
+- the previous shell/view caused a crash loop;
+- an integrity check fails;
+- Settings requests a restart in safe mode.
 
 Safe mode:
 
-- uses core theme/shell;
+- uses the core theme/shell;
 - disables all PiUI workers/views/shell packages;
 - disables project-local Pi resources until explicit re-trust/start;
-- can optionally disable all backend extensions via safe runtime profile;
+- can optionally disable all backend extensions via a safe runtime profile;
 - opens diagnostics/extensions management;
 - never edits sessions merely by launching.
 
-Recovery shortcut must work outside extension-controlled DOM, например native menu/global startup handling.
+The recovery shortcut must work outside extension-controlled DOM, for example through native menu/global startup handling.
 
 ## 17. Update security
 
 - platform code signing where available;
 - updater verifies signed metadata and artifact;
 - rollback-safe version metadata;
-- managed runtime manifest binds PiUI compatibility range, hash and source;
+- managed runtime manifest binds PiUI compatibility range, hash, and source;
 - no silent downgrade;
-- update channel stable/beta/dev explicit;
-- dev builds visibly marked and do not consume stable grants blindly;
+- stable/beta/dev update channel explicit;
+- dev builds visibly marked and do not blindly consume stable grants;
 - SBOM and dependency audit generated in CI;
-- reproducible build goals tracked even if full reproducibility is not initially achieved;
-- compromised key response/revocation process documented before public release.
+- reproducible-build goals tracked even if full reproducibility is not initially achieved;
+- compromised-key response/revocation process documented before public release.
 
 ## 18. Security testing
 
@@ -370,7 +370,7 @@ Minimum suite:
 - extension iframe breakout attempts;
 - unauthorized host API calls and forged channel tokens;
 - redirect/private-network checks;
-- permission revocation during active request;
+- permission revocation during an active request;
 - package fingerprint change;
 - shell crash loop and safe-mode recovery;
 - secret redaction snapshots;
@@ -382,14 +382,14 @@ Fuzz targets: RPC codec, session line decoder, manifest parser, UiNode validator
 
 ## 19. Security release gates
 
-Public 1.0 запрещён, пока:
+Public 1.0 is prohibited until:
 
-- trust wording не reviewed на точность;
-- extension views не изолированы от Tauri IPC;
-- arbitrary shell/path IPC отсутствует;
-- signed update path не протестирован;
-- safe mode не работает при broken shell;
-- process tree cleanup не проверен на Windows/Linux;
-- diagnostics не проходит secret-content review;
-- generic renderers безопасно обрабатывают hostile content;
-- high-risk permission grants инвалидируются при package identity change.
+- trust wording has been reviewed for accuracy;
+- extension views are isolated from Tauri IPC;
+- arbitrary shell/path IPC is absent;
+- signed update path has been tested;
+- safe mode works with a broken shell;
+- process-tree cleanup has been verified on Windows/Linux;
+- diagnostics passes secret-content review;
+- generic renderers safely handle hostile content;
+- high-risk permission grants are invalidated on package identity change.

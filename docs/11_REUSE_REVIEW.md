@@ -1,210 +1,210 @@
-# 11. Обзор существующих приложений и стратегия переиспользования
+# 11. Review of Existing Applications and Reuse Strategy
 
-## 1. Вывод
+## 1. Conclusion
 
-PiUI следует создавать в отдельном чистом репозитории. Не форкать целиком Codex App, Hermes Desktop или OpenCovibe. Переиспользование допустимо точечно: небольшие изолированные модули/паттерны после license и architecture review, с attribution, собственными tests и адаптацией к Pi semantics.
+PiUI should be created in a separate clean repository. Do not fork Codex App, Hermes Desktop, or OpenCovibe wholesale. Reuse is permitted selectively: small isolated modules/patterns after license and architecture review, with attribution, dedicated tests, and adaptation to Pi semantics.
 
-Главная причина — не визуальная уникальность, а несовпадение источника истины, protocol и extension philosophy. PiUI должен разделять sessions/config/extensions с Pi, а не унаследовать чужой storage/runtime abstraction.
+The main reason is not visual uniqueness, but a mismatch in the source of truth, protocol, and extension philosophy. PiUI must share sessions/config/extensions with Pi, rather than inherit someone else’s storage/runtime abstraction.
 
-## 2. Критерии оценки
+## 2. Evaluation Criteria
 
-Каждый кандидат оценивается по:
+Each candidate is evaluated by:
 
-1. license и NOTICE obligations;
-2. совместимости Tauri/Svelte/Rust;
+1. license and NOTICE obligations;
+2. Tauri/Svelte/Rust compatibility;
 3. process/session model;
-4. возможности сохранить Pi JSONL как source of truth;
+4. ability to preserve Pi JSONL as the source of truth;
 5. extension/security boundary;
 6. Windows/Linux maturity;
 7. performance/accessibility tests;
-8. объёму лишнего feature scope;
-9. активности/качества кода на момент фактического заимствования;
-10. стоимости дальнейшего ownership.
+8. amount of unnecessary feature scope;
+9. code activity/quality at the time of actual reuse;
+10. cost of ongoing ownership.
 
-Popularity/stars не являются архитектурным критерием.
+Popularity/stars are not an architectural criterion.
 
 ## 3. Codex App
 
-Источник: [официальное описание Codex App](https://openai.com/index/introducing-the-codex-app/).
+Source: [official Codex App description](https://openai.com/index/introducing-the-codex-app/).
 
-### Что полезно как продуктовый reference
+### What is useful as a product reference
 
-- threads, сгруппированные по projects;
-- быстрое переключение между задачами без потери контекста;
-- desktop shell поверх существующей CLI history/config;
-- фокус на supervision, а не IDE chrome;
-- inline progress и действия вокруг текущего thread;
-- модель «sidebar projects/threads + main conversation».
+- threads grouped by projects;
+- fast switching between tasks without losing context;
+- desktop shell over existing CLI history/config;
+- focus on supervision rather than IDE chrome;
+- inline progress and actions around the current thread;
+- the “sidebar projects/threads + main conversation” model.
 
-### Что не переносить в PiUI core
+### What not to bring into the PiUI core
 
 - worktrees;
-- встроенный diff/review;
-- orchestration множества agents как обязательную концепцию;
+- built-in diff/review;
+- orchestration of multiple agents as a required concept;
 - Codex-specific sandbox/model/account semantics;
-- предположение, что task/thread равен Pi session branch.
+- the assumption that a task/thread equals a Pi session branch.
 
-### Решение
+### Decision
 
-Использовать только как UX/reference behavior. Не считать доступным source base и не воспроизводить визуал 1:1. PiUI должен выглядеть самостоятельным и следовать собственным contracts.
+Use only as UX/reference behavior. Do not treat it as an available source base and do not reproduce the visuals 1:1. PiUI must look independent and follow its own contracts.
 
-## 4. Официальный Hermes Desktop
+## 4. Official Hermes Desktop
 
-Источник: [Hermes Agent Desktop guide](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/desktop.md).
+Source: [Hermes Agent Desktop guide](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/desktop.md).
 
-### Полезные продуктовые паттерны
+### Useful product patterns
 
-- CLI и desktop разделяют state: session можно начать в одном интерфейсе и продолжить в другом;
+- CLI and desktop share state: a session can be started in one interface and continued in the other;
 - chat-first layout;
-- session list, search и hygiene по мере роста;
-- model control рядом с активной chat/session;
-- queue editing и visible running state;
-- settings GUI поверх agent configuration;
-- uninstall app без обязательного удаления agent/config/chats;
-- local shell и backend остаются концептуально раздельными.
+- session list, search, and hygiene as the number of sessions grows;
+- model control next to the active chat/session;
+- queue editing and visible running state;
+- settings GUI over agent configuration;
+- uninstalling the app without requiring deletion of the agent/config/chats;
+- local shell and backend remain conceptually separate.
 
-### Не переносить автоматически
+### Do not transfer automatically
 
-- Hermes-specific profiles, YOLO, gateway, memory, schedules и toolsets;
+- Hermes-specific profiles, YOLO, gateway, memory, schedules, and toolsets;
 - remote backend API architecture;
-- широкий dashboard scope;
-- settings fields, которых Pi не предоставляет;
-- безопасность/approval semantics Hermes как замену Pi trust model.
+- broad dashboard scope;
+- settings fields that Pi does not provide;
+- Hermes security/approval semantics as a replacement for the Pi trust model.
 
-### Решение
+### Decision
 
-Использовать для UX flows и совместимости CLI↔desktop. Код официального Hermes Desktop в рамках этого исследования не выбран как implementation base; сначала нужен отдельный repository/license/code audit.
+Use for UX flows and CLI↔desktop compatibility. The official Hermes Desktop code was not selected as an implementation base within this research; a separate repository/license/code audit is required first.
 
 ## 5. OpenCovibe
 
-Источник: [AnyiWang/OpenCovibe](https://github.com/AnyiWang/OpenCovibe).
+Source: [AnyiWang/OpenCovibe](https://github.com/AnyiWang/OpenCovibe).
 
-На дату исследования repository заявляет Tauri v2 + Svelte 5, long-lived per-session process model и Apache License 2.0. Он концептуально близок: локальная desktop-оболочка над coding-agent CLIs.
+At the time of research, the repository declares Tauri v2 + Svelte 5, a long-lived per-session process model, and Apache License 2.0. It is conceptually close: a local desktop shell over coding-agent CLIs.
 
-### Лучший кандидат для точечного code study
+### Best candidate for selective code study
 
-Изучить, но не копировать вслепую:
+Study, but do not copy blindly:
 
 - Tauri process/session actor lifecycle;
-- bidirectional stream decoding и event normalization;
+- bidirectional stream decoding and event normalization;
 - app/window lifecycle;
 - drag-and-drop attachments;
 - long-session rendering/virtualization;
 - platform packaging scripts;
 - diagnostics/testing patterns;
-- handling multiple transports/capabilities.
+- handling of multiple transports/capabilities.
 
-### Что не использовать как PiUI основу
+### What not to use as a PiUI foundation
 
-- собственную run/event storage model;
-- Claude/Codex protocol abstractions как canonical Pi adapter;
+- its own run/event storage model;
+- Claude/Codex protocol abstractions as the canonical Pi adapter;
 - terminal/diff/provider-specific feature scope;
-- SvelteKit/Tailwind только потому, что они уже есть;
-- assumptions, проверенные преимущественно на macOS;
-- весь repository fork с последующим удалением лишних функций.
+- SvelteKit/Tailwind merely because they already exist;
+- assumptions tested primarily on macOS;
+- a full repository fork followed by removal of unnecessary features.
 
-OpenCovibe прямо отмечает, что Windows/Linux функциональны, но тестировались слабее; PiUI не может унаследовать это как достаточную гарантию.
+OpenCovibe explicitly notes that Windows/Linux are functional but less thoroughly tested; PiUI cannot inherit this as a sufficient guarantee.
 
 ### License procedure
 
-При копировании Apache-2.0 code:
+When copying Apache-2.0 code:
 
-- сохранить copyright/license headers;
-- включить требуемые LICENSE/NOTICE;
-- документировать исходный commit/path;
-- перечислить изменения;
-- не смешивать copied module с PiUI-specific code без понятной provenance;
-- провести security/performance review независимо от upstream.
+- preserve copyright/license headers;
+- include the required LICENSE/NOTICE;
+- document the source commit/path;
+- list changes;
+- do not mix a copied module with PiUI-specific code without clear provenance;
+- conduct security/performance review independently of upstream.
 
-### Решение
+### Decision
 
-**Selectively reuse after audit.** Это единственный рассмотренный кандидат, из которого разумно заимствовать небольшие implementation patterns в выбранном стеке.
+**Selectively reuse after audit.** This is the only considered candidate from which it is reasonable to borrow small implementation patterns in the selected stack.
 
 ## 6. Community Hermes Desktop / Hermes One
 
-Источник: [fathah/hermes-desktop](https://github.com/fathah/hermes-desktop).
+Source: [fathah/hermes-desktop](https://github.com/fathah/hermes-desktop).
 
-Repository использует Electron и охватывает значительно более широкий набор экранов: providers, profiles, memory, skills, schedules, gateways, office и т. д.
+The repository uses Electron and covers a significantly broader set of screens: providers, profiles, memory, skills, schedules, gateways, office, and so on.
 
-### Полезно
+### Useful
 
-- визуальные идеи chat/session/settings;
-- examples полнотекстового session search;
+- visual ideas for chat/session/settings;
+- examples of full-text session search;
 - onboarding/provider setup edge cases;
-- UX больших configuration surfaces;
-- tests вокруг streaming/IPC могут дать checklist ideas.
+- UX for large configuration surfaces;
+- tests around streaming/IPC can provide checklist ideas.
 
-### Почему не база
+### Why it is not a foundation
 
-- Electron против требования low footprint;
-- другой backend protocol и storage;
-- очень широкий scope;
-- community project не равен официальному Hermes Desktop;
-- значительная часть UI не относится к минимальному PiUI.
+- Electron conflicts with the low-footprint requirement;
+- different backend protocol and storage;
+- very broad scope;
+- the community project is not equivalent to the official Hermes Desktop;
+- a significant portion of the UI is unrelated to minimal PiUI.
 
-### Решение
+### Decision
 
-Visual/flow research only. Отдельные framework-independent algorithms можно рассмотреть после MIT attribution review, но fork запрещён ADR-020.
+Visual/flow research only. Individual framework-independent algorithms can be considered after MIT attribution review, but a fork is prohibited by ADR-020.
 
 ## 7. Alma
 
-Вероятно, в голосовой расшифровке под «Alama» имелась в виду [Alma](https://alma.now/) — desktop-интерфейс для нескольких AI providers. Это предположение, а не установленный факт.
+Presumably, “Alama” in the voice transcription referred to [Alma](https://alma.now/) — a desktop interface for multiple AI providers. This is an assumption, not an established fact.
 
-### Полезно
+### Useful
 
-- минимальный polished chat shell;
+- minimal polished chat shell;
 - model/provider switching;
 - local-first positioning;
-- аккуратное представление tool use.
+- careful presentation of tool use.
 
-### Почему не база
+### Why it is not a foundation
 
-- provider orchestration не равно Pi agent/session harness;
-- нет подтверждённой совместимости с Pi JSONL/extensions/RPC;
-- extension security и project/session model отличаются;
-- код/license не исследовались как пригодный source base.
+- provider orchestration is not equivalent to a Pi agent/session harness;
+- no confirmed compatibility with Pi JSONL/extensions/RPC;
+- extension security and the project/session model differ;
+- the code/license were not researched as a suitable source base.
 
-### Решение
+### Decision
 
-Visual reference only. Не принимать архитектурные решения на основании Alma.
+Visual reference only. Do not make architectural decisions based on Alma.
 
-## 8. Tauri, Svelte и Bits UI
+## 8. Tauri, Svelte, and Bits UI
 
-Официальные источники:
+Official sources:
 
 - [Tauri 2](https://v2.tauri.app/)
 - [Tauri sidecars](https://v2.tauri.app/develop/sidecar/)
 - [Svelte documentation](https://svelte.dev/docs/svelte/overview)
 - [Bits UI](https://www.bits-ui.com/)
 
-### Что использовать
+### What to use
 
-- Tauri native/system WebView host и Rust commands;
-- sidecar packaging, но process lifecycle в собственном Rust supervisor;
-- Svelte compiler/runtime и TypeScript;
-- выборочные headless accessible primitives для dialogs, listboxes, menus и tooltips.
+- Tauri native/system WebView host and Rust commands;
+- sidecar packaging, but process lifecycle in a dedicated Rust supervisor;
+- Svelte compiler/runtime and TypeScript;
+- selective headless accessible primitives for dialogs, listboxes, menus, and tooltips.
 
-### Что не делать
+### What not to do
 
-- exposing Tauri shell plugin to extension/content UI;
-- импорт всего component kit/theme;
-- превращение Bits UI internals в public PiUI extension contract;
-- зависимость core UX от нестабильных private framework APIs.
+- exposing the Tauri shell plugin to extension/content UI;
+- importing an entire component kit/theme;
+- turning Bits UI internals into a public PiUI extension contract;
+- making core UX depend on unstable private framework APIs.
 
-## 9. Матрица решений
+## 9. Decision Matrix
 
-| Кандидат | UX inspiration | Code study | Selective code reuse | Fork/base |
+| Candidate | UX inspiration | Code study | Selective code reuse | Fork/base |
 |---|---:|---:|---:|---:|
-| Codex App | Да | Нет подтверждённой базы | Нет | Нет |
-| Official Hermes Desktop | Да | После отдельного audit | Возможно | Нет |
-| OpenCovibe | Да | Да | Да, после audit/NOTICE | Нет |
-| Community Hermes Desktop | Да | Ограниченно | Только малые framework-independent части | Нет |
-| Alma | Да | Нет | Нет | Нет |
-| Tauri/Svelte/Bits UI | Да | Да | Через нормальные dependencies | Да, как платформенный stack, не app fork |
+| Codex App | Yes | No confirmed base | No | No |
+| Official Hermes Desktop | Yes | After separate audit | Possibly | No |
+| OpenCovibe | Yes | Yes | Yes, after audit/NOTICE | No |
+| Community Hermes Desktop | Yes | Limited | Only small framework-independent parts | No |
+| Alma | Yes | No | No | No |
+| Tauri/Svelte/Bits UI | Yes | Yes | Through normal dependencies | Yes, as a platform stack, not an app fork |
 
-## 10. Процесс заимствования кода
+## 10. Code Reuse Process
 
-Для каждого candidate module создать `REUSE-REVIEW-<id>.md`:
+For each candidate module, create `REUSE-REVIEW-<id>.md`:
 
 ```text
 Upstream repository/commit/path:
@@ -223,17 +223,17 @@ Decision: copy/adapt/reimplement/reject
 
 Rules:
 
-- pin exact commit, не копировать с moving main без фиксации;
-- prefer reimplementing small generic pattern over importing large dependency tree;
-- no copied session schema/protocol as source of truth;
+- pin the exact commit; do not copy from a moving main branch without pinning;
+- prefer reimplementing a small generic pattern over importing a large dependency tree;
+- no copied session schema/protocol as the source of truth;
 - no dependency solely for one trivial helper;
 - preserve attribution;
-- upstream update не применяется автоматически;
-- copied code проходит PiUI lint/tests/security.
+- upstream updates are not applied automatically;
+- copied code passes PiUI lint/tests/security.
 
-## 11. Кандидаты для собственного open-source release
+## 11. Candidates for an Open-Source Release of Our Own
 
-Чтобы ecosystem мог развиваться без fork core, отдельно публикуются:
+To allow the ecosystem to evolve without forking the core, publish separately:
 
 - `@piui/contracts`;
 - `@piui/extension-sdk`;
@@ -242,4 +242,4 @@ Rules:
 - fake Pi RPC test harness;
 - example dual Pi/PiUI packages.
 
-Desktop host можно открыть целиком, но SDK/fixtures важнее для расширяемости. License PiUI следует выбрать до первого external code import; Apache-2.0 упрощает совместимость с OpenCovibe reuse, MIT проще, но не переносит upstream NOTICE obligations. Решение о license — отдельное юридическое/проектное действие, не сделанное этой спецификацией.
+The desktop host can be opened in full, but the SDK/fixtures are more important for extensibility. The PiUI license should be chosen before the first external code import; Apache-2.0 simplifies compatibility with OpenCovibe reuse, MIT is simpler but does not carry upstream NOTICE obligations. The license decision is a separate legal/project action and is not made by this specification.

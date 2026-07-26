@@ -1,93 +1,149 @@
-# PiUI — единая продуктовая и техническая спецификация
+# PiUI — unified product and technical specification
 
-**Статус:** developer preview; production release gates остаются открытыми.
+**Status:** developer preview; production release gates remain open.
 
-**Назначение:** единый self-contained документ для product, UX, runtime, frontend, security, QA и release agents. Машиночитаемые файлы из каталога `contracts/` остаются нормативными при расхождении с текстовыми примерами.
+**Purpose:** a single self-contained document for product, UX, runtime, frontend, security, QA, and release agents. Machine-readable files in `contracts/` remain normative where they differ from textual examples.
 
-> Этот файл сгенерирован из модульных документов. Изменения следует вносить в исходные файлы и затем пересобирать master spec командой `python tools/build_master.py`.
+> This file is generated from modular documents. Make changes in the source files, then rebuild the master specification with `python tools/build_master.py`.
 
-## Содержание
+## Contents
 
-- [Обзор и инварианты](#overview)
-- [Правила для coding agents](#agents)
-- [01. Продуктовая спецификация](#product)
-- [02. UX и информационная архитектура](#ux)
-- [03. Архитектура](#architecture)
-- [04. Интеграция с Pi](#pi-integration)
+- [Overview and invariants](#overview)
+- [Rules for coding agents](#agents)
+- [01. Product specification](#product)
+- [02. UX and information architecture](#ux)
+- [03. Architecture](#architecture)
+- [04. Pi integration](#pi-integration)
 - [05. PiUI Extension SDK](#extension-sdk)
-- [06. Данные и сессии](#data)
-- [07. Безопасность](#security)
-- [08. Тестирование и производительность](#testing)
-- [09. Roadmap и инженерные задачи](#roadmap)
-- [10. Архитектурные решения](#adr)
-- [11. Анализ повторного использования](#reuse)
-- [12. Открытые риски и spikes](#risks)
+- [06. Data and sessions](#data)
+- [07. Security](#security)
+- [08. Testing and performance](#testing)
+- [09. Roadmap and engineering tasks](#roadmap)
+- [10. Architecture decisions](#adr)
+- [11. Reuse analysis](#reuse)
+- [12. Open risks and spikes](#risks)
 - [Release readiness checklist](#release-checklist)
-- [Prompt передачи новой команде](#handoff)
-- [Контракты: руководство](#contracts-readme)
-- [Источники](#sources)
+- [Handoff prompt for a new team](#handoff)
+- [Contracts: guide](#contracts-readme)
+- [Sources](#sources)
 - [Manifest schema](#manifest-schema)
 - [Runtime protocol](#runtime-protocol)
 - [PiUI Host API](#host-api)
-- [Эталонный dual package](#reference-package)
+- [Reference dual package](#reference-package)
 
 ---
 
 <a id="overview"></a>
 
-## Обзор и инварианты
+## Overview and invariants
 
-_Исходный файл: `README.md`._
+_Source file: `README.md`._
 
 ## PiUI
 
-> A minimal, local desktop interface for browsing and continuing [Pi](https://pi.dev/) sessions.
+<p align="center">
+  A fast, local desktop interface for browsing and continuing <a href="https://pi.dev/">Pi</a> sessions.
+</p>
 
-PiUI is an **early developer preview**, not a production-ready Pi distribution or sandbox. It wraps Pi rather than replacing its agent loop, provider clients, tools, session format, or authentication store.
+<p align="center">
+  <a href="README.md"><strong>English</strong></a> ·
+  <a href="README.ru.md">Русский</a>
+</p>
 
-### What PiUI does today
+<p align="center">
+  <a href="https://github.com/CrazyAngelm/PiUI/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/CrazyAngelm/PiUI/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/CrazyAngelm/PiUI/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/CrazyAngelm/PiUI?include_prereleases"></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+</p>
 
-- registers local project folders behind an explicit trust decision;
-- discovers existing Pi JSONL sessions read-only and renders a bounded, safe timeline;
+> [!IMPORTANT]
+> PiUI is an early developer preview. The current Windows build is unsigned, does not auto-update, and is not a managed Pi distribution or an OS sandbox. Read the [current limitations](#current-limitations) before using it with important sessions.
+
+### Install
+
+#### Windows 10/11 (recommended)
+
+1. Install the official [Pi CLI](https://pi.dev/) and confirm that `pi --version` works in a new terminal.
+2. Open the [PiUI v0.1.0 release](https://github.com/CrazyAngelm/PiUI/releases/tag/v0.1.0).
+3. Download `PiUI_0.1.0_x64-setup.exe` and the matching `SHA256SUMS.txt`.
+4. Verify the checksum, run the installer, and open **PiUI** from the Start menu.
+5. Choose **New chat** for a personal session or **Add project** to register an existing folder.
+
+Verify the installer after downloading both files:
+
+```powershell
+Get-FileHash .\PiUI_0.1.0_x64-setup.exe -Algorithm SHA256
+Get-Content .\SHA256SUMS.txt
+```
+
+The hash printed by `Get-FileHash` must match the installer entry in `SHA256SUMS.txt`.
+
+Because this developer-preview build is not code-signed, Windows may show an unknown-publisher warning. Verify the checksum before running it. If you do not want to run an unsigned binary, [build from source](#build-from-source).
+
+The portable `PiUI_0.1.0_windows_x86_64.exe` asset can be used without an installer. It has the same preview limitations.
+
+#### Linux and macOS
+
+Prebuilt Linux and macOS packages are not published yet. Use the [source build](#build-from-source). Platform packaging, signing, and the complete release matrix remain open work.
+
+#### Updating
+
+PiUI does not silently update itself. Download a newer release from GitHub and install it over the previous version. Pi sessions remain owned by Pi; PiUI's local SQLite database is only a rebuildable cache and UI metadata.
+
+### First run
+
+1. Start PiUI.
+2. Use **New chat** to start without adding a project, or use **Add project** and explicitly review the folder trust prompt.
+3. Select an existing session or create a new one.
+4. Start the local Pi runtime, choose a model, and send a prompt.
+
+Do not write to the same session from PiUI and the Pi CLI at the same time. Concurrent-writer semantics are not yet supported.
+
+### What PiUI does
+
+- discovers existing Pi JSONL sessions without introducing another chat format;
+- renders a safe, bounded transcript with Markdown, reasoning, and grouped tool activity;
+- continues indexed sessions or creates Pi-owned personal chats;
 - starts a locally installed Pi CLI in RPC mode only after an explicit user action;
-- continues an indexed session or starts a Pi-owned personal chat;
-- streams typed user, assistant, reasoning, and tool activity into one transcript;
-- keeps a rebuildable SQLite index separate from Pi JSONL;
-- provides local appearance preferences, including theme, text size, density, motion, and conversation width.
+- streams typed runtime events through a narrow Rust/Tauri host API;
+- keeps a rebuildable SQLite catalog separate from Pi's session files;
+- provides project trust controls and local appearance preferences;
+- supports keyboard navigation, safe generic fallbacks, and reduced motion.
+
+PiUI wraps Pi. It does not replace Pi's agent loop, providers, tools, compaction, authentication store, or session branching.
 
 ### Current limitations
 
-This repository is public because the source is useful for review and contribution. It is **not** a claim that every release gate is complete.
-
-- The live-RPC path is a developer preview, not a managed/runtime-provenance guarantee.
-- Concurrent writes to the same session from PiUI and the Pi CLI are not yet a supported workflow.
+- The local live-RPC path is a preview, not a managed-runtime provenance guarantee.
+- The Windows artifacts are unsigned and the application has no automatic updater.
+- Concurrent Pi CLI/PiUI writes to one session are unsupported.
 - Authentication stays in Pi's standard flow; PiUI does not read or expose `auth.json`.
-- Windows and Linux are target platforms; release packaging, containment, updater, and platform-matrix gates remain open.
+- Packaged browser/Tauri E2E, managed-runtime acquisition, updater, and the full Windows/Linux platform matrix remain release gates.
+- Project-local extension JavaScript stays disabled until its trust and isolation design is complete.
 
-See [Foundation status](docs/13_FOUNDATION_STATUS.md), [open risks](#risks), and the [release checklist](#release-checklist) before treating PiUI as release-ready.
+See [Foundation status](docs/13_FOUNDATION_STATUS.md), [open risks](#risks), and the [release checklist](#release-checklist) for the exact status.
 
-### Privacy and security boundary
-
-PiUI is intentionally local-first:
-
-- Pi JSONL remains the source of truth; PiUI does not write session JSONL directly.
-- The WebView receives only typed, allowlisted host commands and safe display projections.
-- Credentials, raw environment variables, filesystem paths, and agent-session artifacts must not be committed.
-- `.pi/`, `.piui/`, local databases, logs, mutation outputs, build products, and `.env*` files are ignored by default.
-
-If you find a vulnerability or accidentally committed sensitive data, follow [SECURITY.md](SECURITY.md). Do not put secrets, prompts, session files, or local paths in public issues.
-
-### Development
+### Build from source
 
 #### Prerequisites
 
+- Git
 - Node.js 22+
 - pnpm 10.23+
 - Rust 1.94.1 with `rustfmt` and `clippy`
-- Platform prerequisites for [Tauri 2](https://v2.tauri.app/start/prerequisites/)
-- A local Pi CLI only when exercising the live-RPC preview
+- the [Tauri 2 platform prerequisites](https://v2.tauri.app/start/prerequisites/)
+- a local Pi CLI for the live-runtime preview
 
-#### Install and verify
+#### Development build
+
+```bash
+git clone https://github.com/CrazyAngelm/PiUI.git
+cd PiUI
+pnpm install --frozen-lockfile
+pnpm tauri dev
+```
+
+#### Release build
 
 ```bash
 pnpm install --frozen-lockfile
@@ -95,30 +151,33 @@ pnpm repo:check
 pnpm check
 pnpm test
 pnpm contract:test
-pnpm build
-pnpm test:e2e
-pnpm perf:smoke
 cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+pnpm tauri build --no-bundle
 ```
 
-Run the desktop app during development:
+The executable is written to `target/release/`. On Windows, maintainers can create the NSIS installer with:
 
-```bash
-pnpm tauri dev
+```powershell
+pnpm tauri build --bundles nsis --ci
 ```
 
-#### Additional quality gates
+### Quality checks
 
 ```bash
 pnpm repo:check
-pnpm mutation:test
-pnpm mutation:catalog-state
 python tools/validate_spec.py
-python tools/validate_runtime_evidence.py --check evidence/upstream/npm/earendil-works-pi-coding-agent/0.81.1
+pnpm check
+pnpm test
+pnpm contract:test
+pnpm build
+pnpm test:e2e
+pnpm perf:smoke
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
-`pnpm test:e2e` is currently a static UI smoke check, not a packaged desktop E2E suite. The required release-level platform and real-Pi checks are documented in [docs/08_TESTING_AND_PERFORMANCE.md](#testing).
+`pnpm test:e2e` is currently a static UI smoke check rather than a packaged desktop E2E suite.
 
 ### Repository layout
 
@@ -126,118 +185,119 @@ python tools/validate_runtime_evidence.py --check evidence/upstream/npm/earendil
 apps/desktop/           Tauri 2 host and Svelte 5 interface
 crates/piui-contracts/  Safe host/UI DTOs and fixtures
 crates/piui-index/      Rebuildable SQLite index and LF-only session scanner
-crates/piui-runtime/    Pi RPC adapter, lifecycle, and safe stream projection
+crates/piui-runtime/    Pi RPC adapter, lifecycle, and stream projection
 crates/piui-platform/   Native identity and process-containment primitives
 crates/piui-extensions/ Extension manifest validation
 contracts/              Versioned TypeScript contracts
-fixtures/               Synthetic, credential-free test data
-spikes/                 Isolated evidence and experiments; not runtime dependencies
 docs/                   Product, architecture, security, and release documentation
+spikes/                 Isolated evidence and experiments, not runtime dependencies
 ```
-
-### Contributing
-
-Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](#agents), and the [architecture documentation](#architecture) before opening a pull request. Changes to IPC contracts require a version bump, compatibility coverage, and an update under `contracts/`.
 
 ### Documentation
 
-Most detailed project documentation is currently in Russian:
-
-- [Product and scope](#product)
-- [UX and settings](#ux)
+- [Product scope](#product)
+- [UX and information architecture](#ux)
 - [Architecture](#architecture)
 - [Pi integration](#pi-integration)
+- [Extension SDK](#extension-sdk)
+- [Data and sessions](#data)
 - [Security model](#security)
 - [Testing and performance](#testing)
-- [Changelog](CHANGELOG.md)
-- [Sources and provenance notes](#sources)
+- [Roadmap](#roadmap)
+- [Architecture decisions](#adr)
+
+### Contributing and security
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](#agents) before opening a pull request. Changes to IPC contracts require a version bump, compatibility coverage, and an update under `contracts/`.
+
+Report vulnerabilities privately according to [SECURITY.md](SECURITY.md). Never publish credentials, prompts, session files, or local filesystem paths in an issue.
 
 ### License
 
-PiUI is licensed under the [MIT License](LICENSE). Third-party dependencies and cited external materials remain subject to their own licenses and terms.
+PiUI is licensed under the [MIT License](LICENSE). Third-party dependencies and referenced external materials remain subject to their own licenses and terms.
 
 ---
 
 <a id="agents"></a>
 
-## Правила для coding agents
+## Rules for coding agents
 
-_Исходный файл: `AGENTS.md`._
+_Source file: `AGENTS.md`._
 
-## AGENTS.md — обязательные правила разработки PiUI
+## AGENTS.md — mandatory PiUI development rules
 
-Этот файл предназначен для coding agents и инженеров, работающих над репозиторием PiUI. Требования ниже выше локального удобства конкретной задачи.
+This file is intended for coding agents and engineers working on the PiUI repository. The requirements below take precedence over the local convenience of any particular task.
 
-### Цель
+### Goal
 
-Создать минимальную, быструю и расширяемую desktop-оболочку над Pi. Не создавать ещё один агентный harness.
+Create a minimal, fast, and extensible desktop shell on top of Pi. Do not create another agent harness.
 
-### Неподлежащие пересмотру правила
+### Non-negotiable rules
 
-- Не реализовывать agent loop, provider clients, compaction, tools или session branching внутри PiUI, когда это уже делает Pi.
-- Все команды активной сессии отправлять через типизированный runtime adapter. Не писать в session JSONL напрямую.
-- Считать JSONL Pi источником истины. База PiUI — только cache/index/UI metadata и должна полностью перестраиваться.
-- Не читать и не изменять `auth.json` во frontend. Не выводить ключи, OAuth tokens, полный environment или prompt content в обычные logs.
-- Не давать WebView общий shell/filesystem доступ. Frontend вызывает только allowlisted Tauri commands с валидируемыми аргументами.
-- Не загружать project-local PiUI JavaScript до явного trust decision.
-- Любой новый core feature сначала проверять на соответствие принципу: «может ли это быть extension contribution?». Если да — держать его вне core.
-- Любой custom renderer обязан иметь generic fallback. Сессия должна оставаться читаемой при отключённом расширении.
-- Не использовать Electron. Не добавлять SSR, cloud backend, telemetry или account system без отдельного ADR.
-- Не вводить второй формат чатов.
-- Не блокировать первый paint проверками сети, каталога моделей или package updates.
+- Do not implement an agent loop, provider clients, compaction, tools, or session branching inside PiUI when Pi already provides them.
+- Send every active-session command through the typed runtime adapter. Do not write to session JSONL directly.
+- Treat Pi JSONL as the source of truth. The PiUI database is only cache/index/UI metadata and must be fully rebuildable.
+- Do not read or modify `auth.json` in the frontend. Do not emit keys, OAuth tokens, the full environment, or prompt content in ordinary logs.
+- Do not give the WebView general shell/filesystem access. The frontend invokes only allowlisted Tauri commands with validated arguments.
+- Do not load project-local PiUI JavaScript before an explicit trust decision.
+- Evaluate every new core feature against this principle first: “could this be an extension contribution?” If so, keep it out of core.
+- Every custom renderer must have a generic fallback. The session must remain readable when its extension is disabled.
+- Do not use Electron. Do not add SSR, a cloud backend, telemetry, or an account system without a separate ADR.
+- Do not introduce a second chat format.
+- Do not block first paint on network checks, model-catalog checks, or package updates.
 
-### Архитектурные слои
+### Architectural layers
 
-1. `ui` — Svelte-компоненты и локальное presentation state.
-2. `host-api` — генерируемые TypeScript bindings к Rust commands/events.
-3. `application` — use cases: проекты, сессии, attachments, extensions.
-4. `runtime` — Pi process supervisor и RPC adapter.
-5. `index` — read-only session scanner и rebuildable SQLite index.
+1. `ui` — Svelte components and local presentation state.
+2. `host-api` — generated TypeScript bindings to Rust commands/events.
+3. `application` — use cases: projects, sessions, attachments, extensions.
+4. `runtime` — Pi process supervisor and RPC adapter.
+5. `index` — read-only session scanner and rebuildable SQLite index.
 6. `platform` — process groups, filesystem watch, trash, notifications, updates.
 
-UI не обращается к слоям `runtime`, `index` или OS напрямую.
+The UI does not access the `runtime`, `index`, or OS layers directly.
 
-### Кодовые соглашения
+### Coding conventions
 
-- Rust: stable toolchain, edition 2024, `cargo fmt`, `clippy -D warnings`, ошибки через typed enums; `unwrap()` запрещён вне tests и доказуемых startup invariants.
-- TypeScript: `strict: true`, без `any` в публичных contracts; discriminated unions для событий; exhaustive `switch` с `never`.
-- Svelte: локальное состояние в компоненте, межэкранное состояние в небольших domain stores; не создавать глобальный store «на всё приложение».
-- CSS: design tokens через custom properties, component-scoped CSS; без utility-class DSL в core UI.
-- IPC: schema-first. Изменение event/command contract требует version bump, compatibility test и обновления `contracts/`.
-- Логи: structured fields; никаких сообщений вроде `console.log(object)` для RPC payloads в production.
+- Rust: stable toolchain, edition 2024, `cargo fmt`, `clippy -D warnings`, errors through typed enums; `unwrap()` is prohibited outside tests and provable startup invariants.
+- TypeScript: `strict: true`, no `any` in public contracts; discriminated unions for events; exhaustive `switch` with `never`.
+- Svelte: local state in the component, cross-screen state in small domain stores; do not create a global store “for the whole application”.
+- CSS: design tokens through custom properties, component-scoped CSS; no utility-class DSL in core UI.
+- IPC: schema-first. Changing an event/command contract requires a version bump, compatibility test, and an update to `contracts/`.
+- Logs: structured fields; no messages such as `console.log(object)` for RPC payloads in production.
 
-### Definition of Done для каждой задачи
+### Definition of Done for every task
 
-- Реализован happy path и минимум один failure path.
-- Добавлены unit tests; для пользовательского потока — integration/E2E test.
-- Нет регрессии в safe mode и generic fallback.
-- Проверены keyboard-only и screen-reader labels для нового интерактивного элемента.
-- Измерено влияние на startup/RSS/rendering, если затронут hot path.
-- Обновлена спецификация или ADR, если поведение изменилось.
-- На Windows и Linux нет platform-specific assumption без отдельной ветки и теста.
+- A happy path and at least one failure path are implemented.
+- Unit tests are added; a user flow has an integration/E2E test.
+- No regression in safe mode or the generic fallback.
+- Keyboard-only operation and screen-reader labels are verified for each new interactive element.
+- The impact on startup/RSS/rendering is measured if a hot path is affected.
+- The specification or ADR is updated if behavior changes.
+- No platform-specific assumption is made on Windows or Linux without a separate branch and test.
 
-### Запрещённые обходы
+### Prohibited shortcuts
 
-- Парсить stdout обычным универсальным line reader, который разделяет Unicode line separators. Pi RPC требует LF-only framing.
-- Убивать только родительский PID и оставлять дочерние tool processes.
-- Скрывать project trust за общей кнопкой «Continue».
-- Автоматически копировать внешние файлы в проект без видимого пользователю решения.
-- Рендерить raw HTML из Markdown, tool output или extension payload.
-- Загружать extension bundle в основной DOM с полными правами по умолчанию.
-- Считать `ctx.hasUI === true` признаком полной TUI-поддержки в RPC.
-- Переименовывать или перемещать session files ради UI-сортировки.
+- Parse stdout with a normal general-purpose line reader that splits on Unicode line separators. Pi RPC requires LF-only framing.
+- Kill only the parent PID while leaving child tool processes.
+- Hide project trust behind a generic “Continue” button.
+- Automatically copy external files into a project without a user-visible decision.
+- Render raw HTML from Markdown, tool output, or an extension payload.
+- Load an extension bundle into the main DOM with full permissions by default.
+- Treat `ctx.hasUI === true` as evidence of full TUI support in RPC.
+- Rename or move session files for UI sorting.
 
-### Приоритеты при конфликте требований
+### Priorities when requirements conflict
 
-1. Сохранность пользовательских файлов и сессий.
-2. Явная модель доверия и отсутствие ложного обещания sandbox.
-3. Совместимость с Pi CLI.
-4. Корректность runtime protocol.
-5. Responsiveness интерфейса.
-6. Расширяемость.
-7. Визуальная полировка.
+1. Preservation of user files and sessions.
+2. An explicit trust model and no false promise of a sandbox.
+3. Compatibility with the Pi CLI.
+4. Correctness of the runtime protocol.
+5. UI responsiveness.
+6. Extensibility.
+7. Visual polish.
 
-### Команды качества, которые должен предоставить репозиторий
+### Quality commands the repository must provide
 
 ```bash
 pnpm check          # TypeScript/Svelte formatting, lint, typecheck
@@ -249,355 +309,355 @@ pnpm contract:test  # schema fixtures and backward compatibility
 pnpm perf:smoke     # startup, idle RSS, long-session scroll, stream batching
 ```
 
-### Перед началом реализации
+### Before implementation begins
 
-Первой задачей выполнить spikes из `docs/12_OPEN_RISKS.md`. Не строить UI поверх предположений о завершении RPC-процесса, initial session creation, OAuth и tree navigation.
+The first task is to complete the spikes in `docs/12_OPEN_RISKS.md`. Do not build UI on assumptions about RPC-process termination, initial session creation, OAuth, or tree navigation.
 
 ---
 
 <a id="product"></a>
 
-## 01. Продуктовая спецификация
+## 01. Product specification
 
-_Исходный файл: `docs/01_PRODUCT.md`._
+_Source file: `docs/01_PRODUCT.md`._
 
 ## 01. Product Requirements Document
 
-### 1. Назначение
+### 1. Purpose
 
-PiUI — локальная desktop-оболочка над Pi agent harness. Она организует существующие рабочие папки как проекты, показывает связанные с ними Pi-сессии и даёт chat-first интерфейс для продолжения работы. Ядро продукта намеренно невелико: управление проектами и сессиями, чат, отображение agent activity, базовые настройки и точка расширения.
+PiUI is a local desktop shell on top of the Pi agent harness. It organizes existing working folders as projects, shows their associated Pi sessions, and provides a chat-first interface for continuing work. The product core is deliberately small: project and session management, chat, agent activity display, basic settings, and an extension point.
 
-PiUI не конкурирует с Pi и не создаёт альтернативную экосистему. Один Pi package может содержать обычные Pi extensions/skills/prompts/themes и дополнительное UI-описание для PiUI.
+PiUI does not compete with Pi and does not create an alternative ecosystem. A single Pi package can contain standard Pi extensions/skills/prompts/themes and an additional UI description for PiUI.
 
-### 2. Продуктовая формула
+### 2. Product formula
 
-> **Существующий Pi + существующие файлы пользователя + минимальная графическая оболочка + версионированные UI contributions.**
+> **Existing Pi + existing user files + a minimal graphical shell + versioned UI contributions.**
 
-#### 2.1 Почему это соответствует философии Pi
+#### 2.1 Why this aligns with the Pi philosophy
 
-Pi прямо позиционирует себя как набор primitives, а не как заранее заданный workflow. Сессии имеют древовидную историю, расширения могут регистрировать tools, commands, события и TUI-компоненты. Следовательно, PiUI должен добавлять интерфейсные primitives, а не встраивать в core конкретные методологии вроде plan mode, subagents, worktrees или approval framework.
+Pi explicitly positions itself as a set of primitives rather than a predefined workflow. Sessions have a tree-based history, and extensions can register tools, commands, events, and TUI components. Therefore, PiUI must add interface primitives rather than build specific methodologies such as plan mode, subagents, worktrees, or an approval framework into the core.
 
 #### 2.2 Product principles
 
-1. **Local first.** Сессии, настройки и проекты остаются локальными. Модельные providers могут быть удалёнными, но PiUI не имеет собственного cloud backend.
-2. **Same Pi everywhere.** CLI и PiUI разделяют конфигурацию и сессии.
-3. **Progressive disclosure.** На основном экране видны только действия текущей работы; сложные сведения открываются по запросу.
-4. **Fast path first.** Добавить папку → открыть чат → отправить сообщение должно занимать минимум действий.
-5. **Extension over accumulation.** Специализированная функция сначала проектируется как extension contribution.
-6. **Honest security.** Trust не называется sandbox; пользователь видит, что Pi и backend-extensions исполняются с его OS-правами.
-7. **Graceful degradation.** Незнакомые tool calls, custom messages и отключённые UI extensions остаются читаемыми.
-8. **Keyboard and mouse parity.** Основные потоки полностью доступны с клавиатуры, но не требуют запоминания команд.
+1. **Local first.** Sessions, settings, and projects remain local. Model providers may be remote, but PiUI has no cloud backend of its own.
+2. **Same Pi everywhere.** The CLI and PiUI share configuration and sessions.
+3. **Progressive disclosure.** Only actions for the current work are visible on the main screen; complex information is revealed on demand.
+4. **Fast path first.** Add a folder → open a chat → send a message must take the fewest possible actions.
+5. **Extension over accumulation.** A specialized capability is designed first as an extension contribution.
+6. **Honest security.** Trust is not called a sandbox; the user sees that Pi and backend extensions run with their OS permissions.
+7. **Graceful degradation.** Unknown tool calls, custom messages, and disabled UI extensions remain readable.
+8. **Keyboard and mouse parity.** Primary flows are fully accessible by keyboard but do not require memorizing commands.
 
-### 3. Целевые пользователи
+### 3. Target users
 
-#### 3.1 Primary: разработчик, уже использующий Pi
+#### 3.1 Primary: developer already using Pi
 
-Нужен визуальный менеджер нескольких проектов и сессий без потери CLI-конфигурации, tools, extensions и истории.
+Needs a visual manager for multiple projects and sessions without losing CLI configuration, tools, extensions, or history.
 
-#### 3.2 Secondary: пользователь, предпочитающий GUI
+#### 3.2 Secondary: user who prefers a GUI
 
-Хочет работать с Pi без постоянной навигации по terminal TUI, видеть изображения, structured tool activity и легко возвращаться к чатам.
+Wants to use Pi without constantly navigating the terminal TUI, see images and structured tool activity, and easily return to chats.
 
 #### 3.3 Extension author
 
-Хочет одним package расширить поведение Pi и добавить UI: renderer своего tool, кнопку composer, settings, sidebar view или даже альтернативный shell.
+Wants to extend Pi behavior and add UI with one package: a renderer for their tool, a composer button, settings, a sidebar view, or even an alternative shell.
 
 #### 3.4 Maintainer
 
-Нужны узкое ядро, стабильные contracts, воспроизводимые баги, safe mode и возможность обновлять Pi независимо от UI.
+Needs a narrow core, stable contracts, reproducible bugs, safe mode, and the ability to update Pi independently of the UI.
 
 ### 4. Jobs to be done
 
-- Когда у меня несколько рабочих папок, я хочу быстро видеть активные Pi-сессии и их состояние.
-- Когда я продолжаю сессию из CLI, я хочу найти её в PiUI без импорта или конвертации.
-- Когда агент работает долго, я хочу переключиться на другой чат и позже увидеть результат.
-- Когда расширение просит подтверждение или ввод, я хочу ответить нормальным GUI-диалогом.
-- Когда tool возвращает сложный результат, я хочу увидеть удобный renderer, но не потерять raw data.
-- Когда проект незнакомый, я хочу явно решить, загружать ли его extensions/settings.
-- Когда UI extension падает, я хочу продолжать чат без потери сессии.
+- When I have several working folders, I want to quickly see active Pi sessions and their status.
+- When I continue a session from the CLI, I want to find it in PiUI without import or conversion.
+- When the agent runs for a long time, I want to switch to another chat and see the result later.
+- When an extension requests confirmation or input, I want to respond through a normal GUI dialog.
+- When a tool returns a complex result, I want to see a convenient renderer without losing raw data.
+- When a project is unfamiliar, I want to explicitly decide whether to load its extensions/settings.
+- When a UI extension crashes, I want to continue the chat without losing the session.
 
-### 5. Термины
+### 5. Terms
 
-- **Project** — зарегистрированный в PiUI canonical path к существующей папке.
-- **Session** — исходный JSONL-файл Pi и его дерево entries.
-- **Active branch** — путь от корня session tree до текущего `leafId`.
-- **Runtime** — запущенный процесс Pi RPC, обслуживающий одну открытую/работающую сессию.
-- **Dormant session** — сессия без запущенного процесса; её метаданные доступны из индекса.
-- **Pi extension** — TypeScript-модуль, загружаемый самим Pi.
-- **PiUI extension** — UI contribution из того же или отдельного package, загружаемый PiUI.
-- **Package** — распространяемый через npm/git/local Pi package с ключами `pi` и, опционально, `piui`.
-- **Generic fallback** — безопасное стандартное отображение неизвестного payload.
-- **Managed Pi** — закреплённая совместимая поставка Pi, распространяемая вместе с PiUI или его runtime installer.
-- **System Pi** — команда `pi`, установленная пользователем.
+- **Project** — a canonical path to an existing folder registered in PiUI.
+- **Session** — the original Pi JSONL file and its tree of entries.
+- **Active branch** — the path from the session tree root to the current `leafId`.
+- **Runtime** — a running Pi RPC process serving one open/running session.
+- **Dormant session** — a session without a running process; its metadata is available from the index.
+- **Pi extension** — a TypeScript module loaded by Pi itself.
+- **PiUI extension** — a UI contribution from the same or a separate package, loaded by PiUI.
+- **Package** — a Pi package distributed through npm/git/local sources with `pi` and, optionally, `piui` keys.
+- **Generic fallback** — a safe standard display for an unknown payload.
+- **Managed Pi** — a pinned compatible Pi distribution shipped with PiUI or its runtime installer.
+- **System Pi** — the user-installed `pi` command.
 
-### 6. Scope продукта
+### 6. Product scope
 
 #### 6.1 Core 1.0
 
-- Реестр проектов-папок.
-- Список Pi-сессий по проектам.
-- Новый чат, открытие и продолжение существующего.
-- Одновременная работа нескольких сессий с ограничением concurrency.
+- A registry of project folders.
+- Pi session list by project.
+- New chat; open and continue an existing chat.
+- Simultaneous work in several sessions with a concurrency limit.
 - Streaming text/thinking/tool activity.
-- Stop, steer, follow-up и очередь.
-- Выбор provider/model и thinking level из данных Pi.
-- Image input и inline image display.
-- File attachment adapter без выдуманного бинарного протокола.
-- Session rename, export, fork/clone; branch tree — чтение, переход после закрытия RPC-gap.
-- Settings и runtime diagnostics.
+- Stop, steer, follow-up, and queue.
+- Provider/model and thinking-level selection from Pi data.
+- Image input and inline image display.
+- A file-attachment adapter without inventing a binary protocol.
+- Session rename, export, fork/clone; branch tree — read-only, navigation after the RPC gap is closed.
+- Settings and runtime diagnostics.
 - Project trust.
-- Tier 0 и Tier 1/Tier 2 PiUI extensions.
-- Search по локальному перестраиваемому индексу.
-- Safe mode и crash recovery.
-- Windows/Linux packaging; macOS-ready codebase.
+- Tier 0 and Tier 1/Tier 2 PiUI extensions.
+- Search over a local rebuildable index.
+- Safe mode and crash recovery.
+- Windows/Linux packaging; a macOS-ready codebase.
 
-#### 6.2 Намеренно вне core 1.0
+#### 6.2 Intentionally outside core 1.0
 
 - Git status, diffs, commits, worktrees.
-- IDE или полноценный file explorer.
+- An IDE or full file explorer.
 - Embedded terminal.
 - Subagent orchestration dashboard.
 - Plan mode.
-- Permissions framework для действий модели.
+- Permissions framework for model actions.
 - MCP registry.
 - Remote SSH/containers UI.
 - Cloud sync/accounts/teams.
-- Extension marketplace и автоматическая публикация packages.
-- Голосовой режим.
+- Extension marketplace and automatic package publishing.
+- Voice mode.
 
-Эти функции допустимы как extensions; core предоставляет slots и host capabilities.
+These capabilities are allowed as extensions; the core provides slots and host capabilities.
 
 ### 7. Functional requirements
 
 #### 7.1 Project registry
 
-| ID | Требование | Приоритет |
+| ID | Requirement | Priority |
 |---|---|---|
-| PRJ-001 | Пользователь добавляет существующую папку через системный folder picker. | Must |
-| PRJ-002 | Путь canonicalize-ится с учётом symlink/case rules платформы; дубликаты не создаются. | Must |
-| PRJ-003 | Проект можно переименовать только в UI-реестре; имя папки на диске не меняется. | Must |
-| PRJ-004 | Проект можно pin/unpin и скрыть из реестра без удаления папки или Pi-сессий. | Must |
-| PRJ-005 | Недоступный путь показывается как offline/missing; запись не удаляется автоматически. | Must |
-| PRJ-006 | Dragging папки на sidebar предлагает добавить её как project. | Should |
-| PRJ-007 | Project-level Pi resources загружаются только после trust resolution. | Must |
-| PRJ-008 | Пользователь может открыть папку в системном file manager и скопировать путь. | Should |
-| PRJ-009 | Nested projects разрешены как отдельные entries; PiUI предупреждает о пересекающемся trust scope. | Should |
+| PRJ-001 | The user adds an existing folder through the system folder picker. | Must |
+| PRJ-002 | The path is canonicalized with platform symlink/case rules; duplicates are not created. | Must |
+| PRJ-003 | A project can be renamed only in the UI registry; the folder name on disk is not changed. | Must |
+| PRJ-004 | A project can be pinned/unpinned and hidden from the registry without deleting the folder or Pi sessions. | Must |
+| PRJ-005 | An unavailable path is shown as offline/missing; the record is not removed automatically. | Must |
+| PRJ-006 | Dragging a folder onto the sidebar offers to add it as a project. | Should |
+| PRJ-007 | Project-level Pi resources are loaded only after trust resolution. | Must |
+| PRJ-008 | The user can open the folder in the system file manager and copy its path. | Should |
+| PRJ-009 | Nested projects are allowed as separate entries; PiUI warns about overlapping trust scope. | Should |
 
 #### 7.2 Session discovery and lifecycle
 
-| ID | Требование | Приоритет |
+| ID | Requirement | Priority |
 |---|---|---|
-| SES-001 | PiUI обнаруживает существующие Pi session JSONL для canonical project path. | Must |
-| SES-002 | Сессия, созданная/изменённая CLI, появляется после filesystem event или ручного refresh без импорта. | Must |
-| SES-003 | Список содержит display name, fallback title, last activity, runtime status и branch indicator. | Must |
-| SES-004 | Новый чат создаётся через Pi runtime, а не ручное создание JSONL. | Must |
-| SES-005 | Открытие dormant session запускает runtime on demand и загружает нужный session file. | Must |
-| SES-006 | Переключение UI не останавливает выполняющуюся сессию; idle inactive runtime можно выгрузить по TTL. | Must |
-| SES-007 | Session rename использует Pi RPC `set_session_name`. | Must |
-| SES-008 | Delete использует OS trash, после подтверждения и только для выбранного `.jsonl`; permanent delete скрыт в Advanced. | Must |
-| SES-009 | Export использует Pi `export_html`; raw JSONL copy доступен отдельным действием. | Must |
-| SES-010 | Fork/clone используют Pi RPC и отражаются в sidebar. | Must |
-| SES-011 | Full tree view отображает все branches и labels; переход на произвольный node включается только при поддерживаемом runtime capability. | Should/blocked |
-| SES-012 | Crash runtime не повреждает session file; пользователь видит restart/resume. | Must |
-| SES-013 | Header-only/пустые sessions не засоряют список: они группируются или удаляются только по доказуемому ownership rule. | Should |
-| SES-014 | Session list не требует запуска runtime для каждой сессии. | Must |
+| SES-001 | PiUI discovers existing Pi session JSONL files for the canonical project path. | Must |
+| SES-002 | A session created/modified by the CLI appears after a filesystem event or manual refresh without import. | Must |
+| SES-003 | The list contains display name, fallback title, last activity, runtime status, and branch indicator. | Must |
+| SES-004 | A new chat is created through the Pi runtime, not by manually creating JSONL. | Must |
+| SES-005 | Opening a dormant session starts the runtime on demand and loads the required session file. | Must |
+| SES-006 | Switching the UI does not stop a running session; an idle inactive runtime can be unloaded by TTL. | Must |
+| SES-007 | Session rename uses Pi RPC `set_session_name`. | Must |
+| SES-008 | Delete uses the OS trash, after confirmation and only for the selected `.jsonl`; permanent delete is hidden under Advanced. | Must |
+| SES-009 | Export uses Pi `export_html`; raw JSONL copy is available as a separate action. | Must |
+| SES-010 | Fork/clone use Pi RPC and are reflected in the sidebar. | Must |
+| SES-011 | Full tree view displays all branches and labels; navigation to an arbitrary node is enabled only with a supported runtime capability. | Should/blocked |
+| SES-012 | A runtime crash does not corrupt the session file; the user sees restart/resume. | Must |
+| SES-013 | Header-only/empty sessions do not clutter the list: they are grouped or removed only by a provable ownership rule. | Should |
+| SES-014 | The session list does not require starting a runtime for every session. | Must |
 
 #### 7.3 Chat timeline
 
-| ID | Требование | Приоритет |
+| ID | Requirement | Priority |
 |---|---|---|
-| CHT-001 | Отображаются user, assistant, thinking, tool call/result, bash, compaction, retry, error и custom messages. | Must |
-| CHT-002 | Streaming обновляется батчами; UI не пересобирает весь Markdown на каждый token delta. | Must |
-| CHT-003 | Thinking collapsed по умолчанию; пользователь может раскрыть конкретный block. | Must |
-| CHT-004 | Tool call и result визуально объединены в одну карточку с running/success/error/cancelled state. | Must |
-| CHT-005 | Generic tool card показывает tool name, arguments, result summary и raw JSON/text по раскрытию. | Must |
-| CHT-006 | Tool output не исполняет HTML/JS и не открывает ссылки автоматически. | Must |
-| CHT-007 | Custom renderer не может скрыть доступ к raw payload. | Must |
-| CHT-008 | Пользователь может копировать message text, code block, tool output и permalink/entry ID. | Should |
-| CHT-009 | Long conversations virtualize off-screen content без скачка scroll anchor. | Must |
-| CHT-010 | При чтении истории новые streaming events не насильно прокручивают вниз; показывается “New activity”. | Must |
-| CHT-011 | Ошибка provider/retry отображается inline с ясным состоянием, не как исчезающий toast. | Must |
-| CHT-012 | Compaction отображается ненавязчивым разделителем; details доступны по раскрытию. | Should |
-| CHT-013 | Images из message content рендерятся inline с fit/zoom/open/copy path where applicable. | Must |
-| CHT-014 | Неизвестный message/entry type показывается generic inspector, а не теряется. | Must |
+| CHT-001 | User, assistant, thinking, tool call/result, bash, compaction, retry, error, and custom messages are displayed. | Must |
+| CHT-002 | Streaming updates are batched; the UI does not rebuild all Markdown for every token delta. | Must |
+| CHT-003 | Thinking is collapsed by default; the user can expand a specific block. | Must |
+| CHT-004 | Tool call and result are visually combined into one card with running/success/error/cancelled state. | Must |
+| CHT-005 | The generic tool card shows tool name, arguments, result summary, and raw JSON/text on expansion. | Must |
+| CHT-006 | Tool output does not execute HTML/JS or open links automatically. | Must |
+| CHT-007 | A custom renderer cannot hide access to the raw payload. | Must |
+| CHT-008 | The user can copy message text, a code block, tool output, and a permalink/entry ID. | Should |
+| CHT-009 | Long conversations virtualize off-screen content without jumping the scroll anchor. | Must |
+| CHT-010 | While reading history, new streaming events do not forcibly scroll down; “New activity” is shown. | Must |
+| CHT-011 | A provider/retry error is displayed inline with clear state, not as a disappearing toast. | Must |
+| CHT-012 | Compaction is shown as an unobtrusive divider; details are available on expansion. | Should |
+| CHT-013 | Images from message content render inline with fit/zoom/open/copy path where applicable. | Must |
+| CHT-014 | An unknown message/entry type is shown in a generic inspector rather than lost. | Must |
 
 #### 7.4 Composer and queues
 
-| ID | Требование | Приоритет |
+| ID | Requirement | Priority |
 |---|---|---|
-| CMP-001 | Multiline composer поддерживает обычный текст, slash commands, path suggestions и attachments. | Must |
-| CMP-002 | В idle state `Enter` отправляет, `Shift+Enter` создаёт строку; hotkeys настраиваются. | Must |
-| CMP-003 | Во время run пользователь явно выбирает `Steer` или `Follow up`; выбранное поведение видно до отправки. | Must |
-| CMP-004 | Кнопка Send превращается в Stop только для active run; queued composer остаётся доступным. | Must |
-| CMP-005 | Pending queue показывается chips/list, элементы можно удалить до доставки, если Pi capability это допускает; иначе UI честно сообщает ограничение. | Should |
-| CMP-006 | `get_commands` питает autocomplete для extension commands, prompts и skills. | Must |
-| CMP-007 | Built-in TUI commands, недоступные RPC, не предлагаются как исполняемые. | Must |
-| CMP-008 | `set_editor_text` от extension заменяет/вставляет composer content с защитой от случайной потери несохранённого текста. | Must |
-| CMP-009 | Draft сохраняется локально per session и очищается только после принятого prompt. | Must |
-| CMP-010 | Composer не отправляет пустой prompt без attachment/command. | Must |
+| CMP-001 | The multiline composer supports regular text, slash commands, path suggestions, and attachments. | Must |
+| CMP-002 | In idle state, `Enter` sends and `Shift+Enter` creates a line; hotkeys are configurable. | Must |
+| CMP-003 | During a run, the user explicitly chooses `Steer` or `Follow up`; the selected behavior is visible before sending. | Must |
+| CMP-004 | The Send button becomes Stop only for an active run; the queued composer remains available. | Must |
+| CMP-005 | The pending queue is shown as chips/list; items can be removed before delivery if Pi capability permits it; otherwise the UI honestly reports the limitation. | Should |
+| CMP-006 | `get_commands` powers autocomplete for extension commands, prompts, and skills. | Must |
+| CMP-007 | Built-in TUI commands unavailable through RPC are not offered as executable. | Must |
+| CMP-008 | `set_editor_text` from an extension replaces/inserts composer content with protection against accidental loss of unsaved text. | Must |
+| CMP-009 | A draft is saved locally per session and cleared only after an accepted prompt. | Must |
+| CMP-010 | The composer does not send an empty prompt without an attachment/command. | Must |
 
 #### 7.5 Models and thinking
 
-| ID | Требование | Приоритет |
+| ID | Requirement | Priority |
 |---|---|---|
-| MOD-001 | Model picker заполняется через `get_available_models`, не из захардкоженного списка. | Must |
-| MOD-002 | Текущая model/thinking state берётся из `get_state`. | Must |
-| MOD-003 | Switching использует `set_model`; ошибки показываются рядом с picker. | Must |
-| MOD-004 | Thinking options берутся через `get_available_thinking_levels`. | Must |
-| MOD-005 | Picker показывает provider, display name, input modalities и context window, если они доступны. | Should |
-| MOD-006 | Смена model во время несовместимого state блокируется или ставится в очередь согласно фактическому ответу Pi. | Must |
-| MOD-007 | PiUI не создаёт собственный список цен; показывается только cost metadata, полученная от Pi, с пометкой estimate. | Must |
-| MOD-008 | Неавторизованный provider ведёт в Settings/Auth flow, а не к ручному редактированию JSON в основном UI. | Must |
+| MOD-001 | The model picker is populated through `get_available_models`, not from a hardcoded list. | Must |
+| MOD-002 | Current model/thinking state is taken from `get_state`. | Must |
+| MOD-003 | Switching uses `set_model`; errors are shown next to the picker. | Must |
+| MOD-004 | Thinking options are taken through `get_available_thinking_levels`. | Must |
+| MOD-005 | The picker shows provider, display name, input modalities, and context window when available. | Should |
+| MOD-006 | Changing model during an incompatible state is blocked or queued according to Pi's actual response. | Must |
+| MOD-007 | PiUI does not create its own price list; it shows only cost metadata received from Pi, marked as an estimate. | Must |
+| MOD-008 | An unauthorized provider leads to the Settings/Auth flow, not manual JSON editing in the main UI. | Must |
 
 #### 7.6 Attachments
 
-| ID | Требование | Приоритет |
+| ID | Requirement | Priority |
 |---|---|---|
-| ATT-001 | PNG/JPEG/WebP/GIF при поддержке выбранной модели кодируются и передаются через RPC `images`. | Must |
-| ATT-002 | Изображение имеет preview, MIME/size validation и remove action до отправки. | Must |
-| ATT-003 | Файл внутри project root передаётся агенту как canonical relative path в структурированном text preamble; содержимое не дублируется автоматически. | Must |
-| ATT-004 | Внешний файл требует явного выбора: reference original path или copy into managed project attachment area. | Must |
-| ATT-005 | Copy использует content hash, collision-safe filename и provenance metadata; source не удаляется. | Must |
-| ATT-006 | PDF/doc/archive не обещаются как “понятые” моделью: PiUI передаёт path и позволяет Pi/tool/extension прочитать или преобразовать файл. | Must |
-| ATT-007 | Директории не прикрепляются как бинарные объекты; вставляется path reference. | Must |
-| ATT-008 | Attachment size limits настраиваются; oversized image предлагает downscale/cancel без скрытого изменения оригинала. | Should |
-| ATT-009 | При model без image input Send блокируется для image-only prompt и предлагает смену модели или path reference. | Must |
-| ATT-010 | Attachment history в UI восстанавливается из message image blocks и PiUI metadata, но session validity не зависит от metadata. | Must |
+| ATT-001 | PNG/JPEG/WebP/GIF, when supported by the selected model, are encoded and passed through RPC `images`. | Must |
+| ATT-002 | An image has preview, MIME/size validation, and a remove action before sending. | Must |
+| ATT-003 | A file inside the project root is passed to the agent as a canonical relative path in a structured text preamble; its content is not duplicated automatically. | Must |
+| ATT-004 | An external file requires an explicit choice: reference the original path or copy into the managed project attachment area. | Must |
+| ATT-005 | Copy uses a content hash, collision-safe filename, and provenance metadata; the source is not removed. | Must |
+| ATT-006 | PDF/doc/archive files are not promised as “understood” by the model: PiUI passes the path and allows Pi/tool/extension to read or convert the file. | Must |
+| ATT-007 | Directories are not attached as binary objects; a path reference is inserted. | Must |
+| ATT-008 | Attachment size limits are configurable; an oversized image offers downscale/cancel without silently changing the original. | Should |
+| ATT-009 | For a model without image input, Send is blocked for an image-only prompt and offers changing the model or using a path reference. | Must |
+| ATT-010 | Attachment history in the UI is restored from message image blocks and PiUI metadata, but session validity does not depend on metadata. | Must |
 
 #### 7.7 Extension compatibility
 
-| ID | Требование | Приоритет |
+| ID | Requirement | Priority |
 |---|---|---|
-| EXT-001 | Обычный Pi extension загружается самим Pi без переписывания для PiUI. | Must |
-| EXT-002 | `select/confirm/input/editor` отображаются модальными UI и возвращают matching response. | Must |
-| EXT-003 | `notify`, `setStatus`, `setWidget`, `setTitle`, `set_editor_text` имеют определённое отображение. | Must |
-| EXT-004 | TUI-only APIs не симулируются ложными обещаниями; extension diagnostics указывает degradation. | Must |
-| EXT-005 | Pi package может объявить `piui.manifest.json` с contributions и permissions. | Must for 1.0 |
-| EXT-006 | Unknown/missing UI extension не ломает backend Pi extension. | Must |
-| EXT-007 | Declarative contributions не исполняют arbitrary JS. | Must |
-| EXT-008 | Rich views запускаются в sandboxed frame/worker и общаются только через capability host API. | Must |
-| EXT-009 | Full shell replacement разрешён только explicitly trusted global package после restart. | Should for 1.0 |
-| EXT-010 | Safe mode отключает все PiUI packages и project-local Pi resources. | Must |
-| EXT-011 | Extension API имеет semantic version/capability negotiation и compatibility errors. | Must |
-| EXT-012 | Extension can contribute settings, commands, status items, composer actions, sidebar/panel views, tool/message/preview renderers and optional shell. | Must |
-| EXT-013 | Project UI package никогда не получает network/workspace-write/session-command capability без manifest permission и user grant. | Must |
-| EXT-014 | Development mode поддерживает reload UI package без рестарта всей app, кроме shell replacement. | Should |
+| EXT-001 | A standard Pi extension is loaded by Pi itself without rewriting it for PiUI. | Must |
+| EXT-002 | `select/confirm/input/editor` are displayed as modal UI and return a matching response. | Must |
+| EXT-003 | `notify`, `setStatus`, `setWidget`, `setTitle`, and `set_editor_text` have defined displays. | Must |
+| EXT-004 | TUI-only APIs are not simulated with false promises; extension diagnostics indicate degradation. | Must |
+| EXT-005 | A Pi package can declare `piui.manifest.json` with contributions and permissions. | Must for 1.0 |
+| EXT-006 | An unknown/missing UI extension does not break a backend Pi extension. | Must |
+| EXT-007 | Declarative contributions do not execute arbitrary JS. | Must |
+| EXT-008 | Rich views run in a sandboxed frame/worker and communicate only through the capability host API. | Must |
+| EXT-009 | Full shell replacement is allowed only for an explicitly trusted global package after restart. | Should for 1.0 |
+| EXT-010 | Safe mode disables all PiUI packages and project-local Pi resources. | Must |
+| EXT-011 | The extension API has semantic version/capability negotiation and compatibility errors. | Must |
+| EXT-012 | An extension can contribute settings, commands, status items, composer actions, sidebar/panel views, tool/message/preview renderers, and an optional shell. | Must |
+| EXT-013 | A project UI package never receives network/workspace-write/session-command capability without manifest permission and user grant. | Must |
+| EXT-014 | Development mode supports reloading a UI package without restarting the entire app, except shell replacement. | Should |
 
 #### 7.8 Settings and authentication
 
-| ID | Требование | Приоритет |
+| ID | Requirement | Priority |
 |---|---|---|
-| SET-001 | Settings доступны кнопкой в верхней части sidebar и command palette. | Must |
-| SET-002 | Разделы: General, Runtime, Models & Auth, Extensions, Appearance, Keybindings, Security, Advanced/Diagnostics. | Must |
-| SET-003 | PiUI settings хранятся отдельно; Pi settings изменяются только через поддерживаемый adapter с atomic write/validation. | Must |
-| SET-004 | OAuth/subscription login, пока нет headless API, запускается через контролируемый interactive Pi flow; результат остаётся в стандартном Pi auth store. | Must |
-| SET-005 | API key field маскирует значение, никогда не читает существующий secret обратно в UI и записывает его через trusted backend flow. | Must |
-| SET-006 | Runtime page показывает selected mode, path, version, capabilities, stderr diagnostics и “Test runtime”. | Must |
-| SET-007 | Extensions page различает global/project, Pi backend/PiUI frontend, trusted/disabled/error states. | Must |
-| SET-008 | Advanced settings скрыты по умолчанию и имеют reset-to-default. | Must |
-| SET-009 | Theme default следует OS; light/dark и density доступны без перезапуска. | Should |
-| SET-010 | Keybindings обнаруживают conflicts до сохранения. | Should |
+| SET-001 | Settings are available via a button at the top of the sidebar and the command palette. | Must |
+| SET-002 | Sections: General, Runtime, Models & Auth, Extensions, Appearance, Keybindings, Security, Advanced/Diagnostics. | Must |
+| SET-003 | PiUI settings are stored separately; Pi settings are changed only through a supported adapter with atomic write/validation. | Must |
+| SET-004 | OAuth/subscription login, until a headless API exists, is launched through a controlled interactive Pi flow; the result remains in the standard Pi auth store. | Must |
+| SET-005 | The API key field masks the value, never reads an existing secret back into the UI, and writes it through a trusted backend flow. | Must |
+| SET-006 | The Runtime page shows selected mode, path, version, capabilities, stderr diagnostics, and “Test runtime”. | Must |
+| SET-007 | The Extensions page distinguishes global/project, Pi backend/PiUI frontend, trusted/disabled/error states. | Must |
+| SET-008 | Advanced settings are hidden by default and include reset-to-default. | Must |
+| SET-009 | The default theme follows the OS; light/dark and density are available without restart. | Should |
+| SET-010 | Keybindings detect conflicts before saving. | Should |
 
 #### 7.9 Search and navigation
 
-| ID | Требование | Приоритет |
+| ID | Requirement | Priority |
 |---|---|---|
-| NAV-001 | Search находит projects, session names, first user text и message text из локального индекса. | Must for 1.0 |
-| NAV-002 | Search result открывает session и прокручивает к entry, если entry доступен active branch; иначе открывает tree context. | Should |
-| NAV-003 | Command palette открывает project/session/settings/actions. | Must |
-| NAV-004 | Back/forward navigation восстанавливает project/session/panel state, но не управляет runtime history. | Should |
+| NAV-001 | Search finds projects, session names, first user text, and message text from the local index. | Must for 1.0 |
+| NAV-002 | A search result opens the session and scrolls to the entry if the entry is available on the active branch; otherwise it opens tree context. | Should |
+| NAV-003 | The command palette opens project/session/settings/actions. | Must |
+| NAV-004 | Back/forward navigation restores project/session/panel state but does not control runtime history. | Should |
 
 #### 7.10 Notifications and lifecycle
 
-| ID | Требование | Приоритет |
+| ID | Requirement | Priority |
 |---|---|---|
-| LIF-001 | Background session completion помечается badge; OS notification опциональна. | Must |
-| LIF-002 | Closing window при running sessions предлагает оставить app in tray, stop tasks или cancel close. | Should |
-| LIF-003 | App exit корректно завершает owned idle runtimes; running processes не остаются orphaned без явной политики. | Must |
-| LIF-004 | После crash PiUI восстанавливает project/session selection и перечитывает session source of truth. | Must |
-| LIF-005 | Обновление приложения никогда не запускается во время незавершённой записи/миграции без безопасного restart flow. | Must |
+| LIF-001 | Background session completion is marked with a badge; OS notification is optional. | Must |
+| LIF-002 | Closing the window with running sessions offers leaving the app in the tray, stopping tasks, or cancelling close. | Should |
+| LIF-003 | App exit correctly terminates owned idle runtimes; running processes do not remain orphaned without an explicit policy. | Must |
+| LIF-004 | After a PiUI crash, project/session selection is restored and the session source of truth is reread. | Must |
+| LIF-005 | An app update never starts during an unfinished write/migration without a safe restart flow. | Must |
 
 ### 8. Non-functional requirements
 
 #### 8.1 Performance
 
-Целевые бюджеты приведены в testing document. Ключевые требования:
+Target budgets are given in the testing document. Key requirements:
 
-- первый paint не ждёт network/auth/model refresh;
-- dormant sessions не имеют процессов;
-- idle app CPU близок к нулю;
-- timeline virtualized;
-- streaming batched;
-- extension sandbox lazy-loaded;
-- search index обновляется incrementally и имеет backpressure.
+- first paint does not wait for network/auth/model refresh;
+- dormant sessions have no processes;
+- idle app CPU is close to zero;
+- timeline is virtualized;
+- streaming is batched;
+- extension sandbox is lazy-loaded;
+- the search index updates incrementally and has backpressure.
 
 #### 8.2 Reliability
 
-- append-only Pi sessions не модифицируются indexer-ом;
-- partial JSONL line не считается corruption;
-- process crash и extension crash изолированы от WebView;
-- IPC requests имеют IDs, timeout и cancellation;
-- migrations transactional, rollbackable и backed up;
-- capability mismatch даёт actionable error.
+- append-only Pi sessions are not modified by the indexer;
+- a partial JSONL line is not considered corruption;
+- process crash and extension crash are isolated from the WebView;
+- IPC requests have IDs, timeout, and cancellation;
+- migrations are transactional, rollbackable, and backed up;
+- capability mismatch yields an actionable error.
 
 #### 8.3 Accessibility
 
-- WCAG 2.2 AA как целевой уровень;
+- WCAG 2.2 AA as the target level;
 - full keyboard flow;
-- semantic landmarks, focus management, reduced motion, screen-reader live regions для streaming без спама;
-- минимум 44×44 CSS px для touch-target where applicable, но desktop density допускает компактные визуальные размеры при достаточной hit area;
-- status не передаётся только цветом.
+- semantic landmarks, focus management, reduced motion, screen-reader live regions for streaming without spam;
+- minimum 44×44 CSS px for touch targets where applicable, while desktop density permits compact visual sizes with a sufficient hit area;
+- status is not conveyed by color alone.
 
 #### 8.4 Privacy
 
-- telemetry off and absent by default;
-- crash report создаётся локально и отправляется только после preview/consent;
-- logs redacted;
-- extensions декларируют network domains;
-- external links открываются системным browser.
+- telemetry is off and absent by default;
+- a crash report is created locally and sent only after preview/consent;
+- logs are redacted;
+- extensions declare network domains;
+- external links open in the system browser.
 
 #### 8.5 Compatibility
 
-- Windows и Linux — release blockers;
-- macOS code path в CI с раннего этапа;
-- Pi protocol compatibility matrix, не “latest only” без проверки;
-- неизвестные RPC events сохраняются в diagnostics и не валят parser.
+- Windows and Linux are release blockers;
+- macOS code path is in CI from an early stage;
+- Pi protocol compatibility matrix, not “latest only” without verification;
+- unknown RPC events are retained in diagnostics and do not crash the parser.
 
 ### 9. Success metrics
 
-Публичная версия считается успешной, когда:
+A public release is successful when:
 
-1. 95% test fixtures CLI→PiUI→CLI сохраняют ту же active branch и readable history.
-2. Crash-free sessions >99.5% в opt-in aggregate, либо эквивалентная локальная test telemetry для pre-release.
-3. Median time add project → first accepted prompt менее 60 секунд для нового пользователя и менее 15 секунд для настроенного Pi.
-4. Idle RSS и startup соответствуют бюджетам на обеих Tier-1 платформах.
-5. Не менее трёх fixture packages доказывают: generic Pi extension, declarative UI package, sandboxed rich renderer.
-6. Safe mode открывается после намеренно broken shell extension.
-7. Ни один test не требует конвертации session JSONL в proprietary chat file.
+1. 95% of CLI→PiUI→CLI test fixtures retain the same active branch and readable history.
+2. Crash-free sessions are >99.5% in opt-in aggregate, or equivalent local test telemetry for pre-release.
+3. Median time from add project → first accepted prompt is less than 60 seconds for a new user and less than 15 seconds for configured Pi.
+4. Idle RSS and startup meet budgets on both Tier-1 platforms.
+5. At least three fixture packages demonstrate: a generic Pi extension, a declarative UI package, and a sandboxed rich renderer.
+6. Safe mode opens after an intentionally broken shell extension.
+7. No test requires conversion of session JSONL into a proprietary chat file.
 
 ### 10. Release gates
 
-- Все Must requirements имеют тест или документированную manual acceptance procedure.
-- Нет открытых P0/P1 data-loss/security bugs.
-- Runtime compatibility tested с minimum, pinned и latest-supported Pi versions.
-- Windows/Linux installers подписаны там, где инфраструктура позволяет, и проверены clean-machine install/update/uninstall.
-- Third-party licenses/NOTICE собраны автоматически.
-- Threat model reviewed после реализации extension host.
-- Accessibility audit выполнен keyboard-only и минимум одним screen reader на каждой Tier-1 OS family.
+- All Must requirements have a test or a documented manual acceptance procedure.
+- No open P0/P1 data-loss/security bugs.
+- Runtime compatibility tested with minimum, pinned, and latest-supported Pi versions.
+- Windows/Linux installers are signed where infrastructure permits and verified for clean-machine install/update/uninstall.
+- Third-party licenses/NOTICE are collected automatically.
+- Threat model reviewed after implementing the extension host.
+- Accessibility audit performed keyboard-only and with at least one screen reader on each Tier-1 OS family.
 
 ---
 
 <a id="ux"></a>
 
-## 02. UX и информационная архитектура
+## 02. UX and information architecture
 
-_Исходный файл: `docs/02_UX.md`._
+_Source file: `docs/02_UX.md`._
 
-## 02. UX и информационная архитектура
+## 02. UX and Information Architecture
 
-### 1. Базовая композиция окна
+### 1. Basic window composition
 
-PiUI — chat-first приложение с двумя постоянными областями и одной условной:
+PiUI is a chat-first application with two persistent areas and one conditional area:
 
 ```text
 ┌──────────────────────┬──────────────────────────────────────────────┬───────────────┐
@@ -614,28 +674,28 @@ PiUI — chat-first приложение с двумя постоянными о
 └──────────────────────┴──────────────────────────────────────────────┴───────────────┘
 ```
 
-- **Sidebar** постоянный, collapsible, default 272 px.
-- **Workspace/chat** занимает всё оставшееся место.
-- **Context panel** отсутствует по умолчанию и открывается только для tree, artifact/preview, diagnostics или extension view.
-- На узком окне panel overlay, sidebar может становиться drawer.
+- **Sidebar** is persistent, collapsible, and 272 px by default.
+- **Workspace/chat** occupies all remaining space.
+- **Context panel** is absent by default and opens only for the tree, artifact/preview, diagnostics, or an extension view.
+- On a narrow window, the panel is an overlay and the sidebar can become a drawer.
 
-### 2. Визуальный характер
+### 2. Visual character
 
-Вдохновение берётся из Codex App и Hermes Desktop только на уровне паттернов: проекты с threads, chat-first sidebar, background status, structured tools и optional preview. Визуальная копия не требуется.
+Codex App and Hermes Desktop provide inspiration only at the pattern level: projects with threads, a chat-first sidebar, background status, structured tools, and an optional preview. Visual imitation is not required.
 
 #### 2.1 Design principles
 
-- Плоская иерархия, мало декоративных контейнеров.
-- Один accent color; статусы используют icon + text/shape, не только цвет.
-- Сообщения не превращаются в массив одинаковых bubble. User message может иметь compact surface; assistant content читается как документ.
-- Tool cards compact и collapsed по умолчанию после завершения.
-- Максимальная ширина текста 760–880 px, но wide code/tool output может расширяться.
-- Монопространственный шрифт только для code/path/IDs/tool payload.
-- Анимации короткие; streaming не двигает уже прочитанный контент.
+- Flat hierarchy, with few decorative containers.
+- One accent color; statuses use an icon plus text/shape, not color alone.
+- Messages do not become an array of identical bubbles. A user message may have a compact surface; assistant content reads like a document.
+- Tool cards are compact and collapsed by default after completion.
+- Maximum text width is 760–880 px, but wide code/tool output may expand.
+- Monospace font is used only for code/path/IDs/tool payload.
+- Animations are short; streaming does not move content that has already been read.
 
 #### 2.2 Design tokens
 
-Core UI использует CSS custom properties:
+Core UI uses CSS custom properties:
 
 ```css
 --piui-bg;
@@ -656,44 +716,44 @@ Core UI использует CSS custom properties:
 --piui-font-mono;
 ```
 
-Extensions получают только documented semantic tokens; внутренние class names не являются API.
+Extensions receive only documented semantic tokens; internal class names are not an API.
 
 ### 3. Sidebar
 
-#### 3.1 Верхняя зона
+#### 3.1 Top area
 
-Порядок фиксирован:
+The order is fixed:
 
-1. **Settings** — icon + label, всегда доступно.
-2. **New chat** — primary compact action. Всегда открывает personal chat без пользовательской папки; Pi получает host-owned neutral CWD, который не раскрывается WebView и не отображается как проект. Пустой personal chat живёт в памяти Pi и появляется в истории только после первого assistant response, когда Pi сам записывает JSONL.
-3. **Add project** — secondary action для регистрации существующей пользовательской папки.
+1. **Settings** — icon + label, always available.
+2. **New chat** — primary compact action. Always opens a personal chat without a user folder; Pi receives a host-owned neutral CWD that is not exposed to the WebView and is not shown as a project. An empty personal chat lives in Pi memory and appears in history only after the first assistant response, when Pi itself writes JSONL.
+3. **Add project** — secondary action for registering an existing user folder.
 4. Optional command palette/search icon.
 
-Settings расположен слева сверху, как задано исходным требованием. New chat отделён, чтобы settings не выглядел действием проекта.
+Settings is located at the upper left, as required by the original requirement. New chat is separate so that settings does not appear to be a project action.
 
-Settings — не modal overlay. Он заменяет основной workspace, сохраняя глобальный sidebar, и имеет собственную вертикальную навигацию:
+Settings is not a modal overlay. It replaces the main workspace while retaining the global sidebar, and has its own vertical navigation:
 
 - **Appearance** — system/light/dark theme, density, reduced motion, chat text size and a persistent centered conversation-width choice; the default is `Wide`, so the timeline uses the workspace instead of leaving large unused side gutters;
-- **Extensions** — bounded список global Pi extensions и реальные enable/disable switches.
+- **Extensions** — a bounded list of global Pi extensions and real enable/disable switches.
 
-Extension inventory и toggle выполняются через Pi `SettingsManager`/`DefaultPackageManager`, а не через разбор `settings.json` во frontend. WebView получает только opaque id, display name, source class и enabled state; native paths остаются в host. Изменения действуют для следующего запуска chat runtime. Project-local extensions здесь не управляются и остаются за project trust boundary.
+Extension inventory and toggles are performed through Pi `SettingsManager`/`DefaultPackageManager`, not by parsing `settings.json` in the frontend. The WebView receives only an opaque id, display name, source class, and enabled state; native paths remain in the host. Changes take effect on the next chat runtime launch. Project-local extensions are not managed here and remain behind the project trust boundary.
 
-Developer-only fake runtime, legacy probe и foundation disclaimers не показываются в product settings.
+Developer-only fake runtime, legacy probe, and foundation disclaimers are not shown in product settings.
 
-#### 3.2 Chats и projects
+#### 3.2 Chats and projects
 
-Над Projects есть отдельная системная группа **Chats** с personal sessions. Она не является project row: в ней нет пути, trust toggle, rename/pin/remove или project-local resource claims. Выбранный chat обозначен в sidebar, а chat surface показывает literal `No user folder is attached`; это не обещание OS sandbox.
+Above Projects is a separate system group, **Chats**, containing personal sessions. It is not a project row: it has no path, trust toggle, rename/pin/remove controls, or project-local resource claims. The selected chat is indicated in the sidebar, and the chat surface shows the literal `No user folder is attached`; this is not a promise of an OS sandbox.
 
-Project row содержит:
+A project row contains:
 
 - disclosure chevron;
-- user-defined name или folder basename;
+- user-defined name or folder basename;
 - runtime aggregate badge: running/error/unread completion;
 - context menu.
 
-Click по project row toggles expanded state без потери текущей открытой timeline. При первом/ручном refresh список сразу показывает `Scanning local Pi sessions…`, пока bounded host scan не завершится; поздний ответ не должен самовольно раскрыть закрытую пользователем группу.
+Clicking a project row toggles its expanded state without losing the currently open timeline. On the first/manual refresh, the list immediately shows `Scanning local Pi sessions…` until the bounded host scan completes; a late response must not arbitrarily expand a group that the user closed.
 
-Expanded project показывает sessions. Default sorting:
+An expanded project shows sessions. Default sorting:
 
 1. running/waiting-for-input;
 2. pinned;
@@ -702,25 +762,25 @@ Expanded project показывает sessions. Default sorting:
 Session row:
 
 - status glyph;
-- display name или deterministic fallback title;
-- relative last activity при достаточной ширине;
-- branch glyph только если session имеет >1 leaf/path;
+- display name or deterministic fallback title;
+- relative last activity when there is sufficient width;
+- branch glyph only if the session has >1 leaf/path;
 - unread completion dot.
 
-Не показывать model, token count и cost в каждой строке: это перегружает sidebar. Model/thinking доступны рядом с composer; подробности — в соответствующей панели.
+Do not show model, token count, and cost in every row: this overloads the sidebar. Model/thinking are available next to the composer; details are in the corresponding panel.
 
 #### 3.3 Session title fallback
 
-Приоритет:
+Priority:
 
-1. `sessionName` Pi;
-2. первый user message, очищенный до одной строки и ограниченный длиной;
-3. дата/время создания;
-4. короткий session ID.
+1. Pi `sessionName`;
+2. the first user message, cleaned to one line and length-limited;
+3. creation date/time;
+4. short session ID.
 
-Не вызывать дополнительную LLM только ради названия. Rename доступен inline/context menu.
+Do not call an additional LLM just for a title. Rename is available inline/in the context menu.
 
-#### 3.4 Context menu проекта
+#### 3.4 Project context menu
 
 - New chat
 - Open folder
@@ -731,9 +791,9 @@ Session row:
 - Project settings
 - Remove from PiUI
 
-“Remove” не удаляет папку/сессии.
+“Remove” does not delete the folder/sessions.
 
-#### 3.5 Context menu сессии
+#### 3.5 Session context menu
 
 - Open
 - Rename
@@ -744,16 +804,16 @@ Session row:
 - Copy session ID/path
 - Move to trash
 
-Dangerous action отделён separator и требует confirmation с названием сессии.
+The dangerous action is separated by a separator and requires confirmation with the session name.
 
-### 4. Управление workspace
+### 4. Workspace management
 
-Постоянного верхнего header/breadcrumb нет: имя выбранной session уже видно в sidebar, поэтому повтор не отнимает высоту у длинной timeline.
+There is no persistent top header/breadcrumb: the selected session name is already visible in the sidebar, so repetition does not take height from a long timeline.
 
-- Timeline не имеет постоянного toolbar: history и composer занимают доступную высоту без дублирующих controls.
-- Model и thinking находятся рядом с composer, где пользователь принимает решение перед следующим prompt.
-- Для restricted project нижняя chat surface содержит явный `Review trust`; runtime не запускается до отдельного trust decision.
-- Статус runtime показывается у активной chat surface, а не в отдельной дублирующей строке.
+- The timeline has no persistent toolbar: history and composer occupy the available height without duplicate controls.
+- Model and thinking are next to the composer, where the user makes a decision before the next prompt.
+- For a restricted project, the lower chat surface contains an explicit `Review trust`; the runtime does not start until a separate trust decision.
+- Runtime status is shown at the active chat surface, not in a separate duplicate row.
 
 ### 5. Timeline
 
@@ -782,13 +842,13 @@ Dangerous action отделён separator и требует confirmation с на
 
 ##### Tool activity
 
-Tool calls не становятся отдельными chat bubbles. Host semantic projector связывает Pi `toolCall` и `toolResult` по внутреннему call ID и отдаёт WebView одну компактную строку без исходного ID и raw JSON. Последовательные `tool`/`thinking` blocks визуально объединяются в одну activity group:
+Tool calls do not become separate chat bubbles. The host semantic projector links Pi `toolCall` and `toolResult` by internal call ID and gives the WebView one compact row without the original ID and raw JSON. Consecutive `tool`/`thinking` blocks are visually combined into one activity group:
 
 ```text
 ⌄ 8 actions completed · 3 tools · 5 reasoning steps
 ```
 
-При раскрытии группа показывает плотные строки высотой около 28–30 px:
+When expanded, the group shows dense rows approximately 28–30 px high:
 
 ```text
   ✓ Read file
@@ -796,19 +856,19 @@ Tool calls не становятся отдельными chat bubbles. Host sem
   ✓ Reasoning
 ```
 
-- title строится из allowlisted tool name/verb; command, arguments и native path не копируются в DTO;
-- completed activity group collapsed по умолчанию;
-- running/failed/stopped group и соответствующие rows раскрываются автоматически;
-- ручное закрытие пользователем не сбрасывается при live-update той же группы;
-- expanded body показывает только bounded plain-text output в monospace, с переносом длинных строк;
-- tool output можно скопировать, а truncation обозначается нейтральным сообщением, не ошибкой;
-- абсолютные project/home/session paths заменяются host-side display tokens (`<workspace>`, `<external-path>/<leaf>`);
-- неизвестный или unmatched result остаётся читаемым через generic fallback;
-- специализированный renderer может заменить summary, но обязан иметь тот же host-controlled fallback.
+- the title is built from an allowlisted tool name/verb; command, arguments, and native path are not copied into the DTO;
+- a completed activity group is collapsed by default;
+- a running/failed/stopped group and its corresponding rows expand automatically;
+- manually closing a group does not reset on a live update of that same group;
+- the expanded body shows only bounded plain-text output in monospace, with long-line wrapping;
+- tool output can be copied, and truncation is indicated by a neutral message, not an error;
+- absolute project/home/session paths are replaced by host-side display tokens (`<workspace>`, `<external-path>/<leaf>`);
+- an unknown or unmatched result remains readable through the generic fallback;
+- a specialized renderer can replace the summary, but must have the same host-controlled fallback.
 
 ##### Retry/error
 
-Inline status surface with retry attempt and user actions (`Retry now`, `Stop retry`) only when runtime supports them. Toast alone запрещён.
+Inline status surface with retry attempt and user actions (`Retry now`, `Stop retry`) only when runtime supports them. A toast alone is prohibited.
 
 ##### Compaction
 
@@ -820,23 +880,23 @@ Thin divider:
 
 ##### Custom message/entry
 
-- `custom_message` с `display: true` получает generic extension disclosure;
-- `display: false` и state-only `custom` не засоряют conversation timeline;
-- renderer matching `customType` может заменить disclosure, но при его отключении остаётся bounded plain-text fallback;
-- raw extension JSON не передаётся в WebView.
+- `custom_message` with `display: true` receives a generic extension disclosure;
+- `display: false` and state-only `custom` do not clutter the conversation timeline;
+- a renderer matching `customType` can replace the disclosure, but when it is disabled a bounded plain-text fallback remains;
+- raw extension JSON is not passed to the WebView.
 
 #### 5.2 Streaming and scroll
 
-- При первом открытии session viewport ставится на последние сообщения.
-- При достижении верхних 96 px автоматически загружается предыдущая bounded page; после prepend сохраняется визуальный scroll anchor.
-- Отдельной кнопки `Load older entries` нет.
+- When a session is first opened, the viewport is positioned at the latest messages.
+- On reaching the top 96 px, the previous bounded page is loaded automatically; after prepend, the visual scroll anchor is preserved.
+- There is no separate `Load older entries` button.
 - If viewport is within 80 px of bottom, follow streaming.
 - Otherwise keep anchor and show floating `↓ New activity`.
-- Persisted history и live runtime blocks рендерятся одним `Timeline` внутри одного scroll container; отдельного live-output scroller нет.
-- Token deltas coalesce через `requestAnimationFrame`, поэтому Markdown parsing/layout выполняются не чаще одного раза за paint.
-- После `turnCompleted` PiUI перечитывает bounded JSONL page и заменяет только blocks завершённого turn; новая queued activity, пришедшая во время синхронизации, не стирается.
-- Markdown строится через AST и Svelte nodes без `{@html}`; raw HTML отображается как escaped code.
-- Very long tool output has an internal bounded preview with copy action; раскрытие не снимает host byte limit.
+- Persisted history and live runtime blocks are rendered by one `Timeline` inside one scroll container; there is no separate live-output scroller.
+- Token deltas coalesce through `requestAnimationFrame`, so Markdown parsing/layout occurs no more than once per paint.
+- After `turnCompleted`, PiUI rereads the bounded JSONL page and replaces only blocks from the completed turn; newly queued activity that arrived during synchronization is not erased.
+- Markdown is built through AST and Svelte nodes without `{@html}`; raw HTML is displayed as escaped code.
+- Very long tool output has an internal bounded preview with a copy action; expanding does not remove the host byte limit.
 - Activity grouping and path redaction are presentation/projection concerns: Pi JSONL remains unchanged and live/persisted blocks share the same Timeline scroll.
 
 #### 5.3 Empty states
@@ -873,38 +933,38 @@ Clear diagnostic: expected command/path, tested paths, install/select action. Ch
 ╰──────────────────────────────────────────────────────────────╯
 ```
 
-- Composer — одна тихая rounded surface внизу workspace; history получает оставшуюся высоту и скроллится независимо.
-- Model и thinking selectors находятся в нижней строке composer, а не в отдельной верхней панели.
-- Последний display-safe Pi catalog хранится в bounded frontend cache. Переключение session не запускает agent runtime и не сбрасывает controls в `Unavailable`.
-- На абсолютно первом запуске selector предлагает явное `Load available models…`: только это пользовательское действие запускает текущую session через typed runtime adapter и заполняет cache. После этого model/thinking доступны при последующих переключениях и перезапусках без нового process.
-- Выбор, сделанный в dormant composer, применяется к runtime перед первым prompt.
-- Круглая `↑` control отправляет prompt; у неё есть accessible name и tooltip.
-- Attachment, slash autocomplete и recording controls не отображаются, пока соответствующий host feature не реализован: UI не создаёт декоративных неработающих действий.
+- Composer is one quiet rounded surface at the bottom of the workspace; history receives the remaining height and scrolls independently.
+- Model and thinking selectors are in the composer's bottom row, not in a separate top panel.
+- The latest display-safe Pi catalog is stored in a bounded frontend cache. Switching sessions does not start the agent runtime or reset controls to `Unavailable`.
+- On the absolute first launch, the selector offers explicit `Load available models…`: only this user action starts the current session through the typed runtime adapter and fills the cache. Afterwards, model/thinking are available on later switches and restarts without a new process.
+- A selection made in a dormant composer is applied to the runtime before the first prompt.
+- The round `↑` control sends the prompt; it has an accessible name and tooltip.
+- Attachment, slash autocomplete, and recording controls are not shown until the corresponding host feature is implemented: the UI does not create decorative non-working actions.
 
 #### 6.2 Idle state
 
 - `Enter`: Send.
 - `Shift+Enter`: newline.
 - `Ctrl/Cmd+Enter`: configurable alternative Send.
-- `Escape`: close autocomplete/popup, затем blur only on second press.
+- `Escape`: close autocomplete/popup, then blur only on the second press.
 
 #### 6.3 Running state
 
-Круглая primary control заменяет `↑` на square `Stop`, но composer остаётся активным. После остановки runtime возвращается в ready state и control снова отправляет prompt.
+The round primary control replaces `↑` with square `Stop`, but the composer remains active. After stopping, the runtime returns to ready state and the control sends prompts again.
 
-- **Steer** появляется рядом с control, когда во время streaming есть draft.
-- `Enter` отправляет follow-up через Pi's atomic streaming behavior; placeholder явно сообщает это правило.
-- Queue status показывается рядом с нижними model/thinking selectors.
+- **Steer** appears next to the control when there is a draft during streaming.
+- `Enter` sends a follow-up through Pi's atomic streaming behavior; the placeholder explicitly states this rule.
+- Queue status is shown next to the bottom model/thinking selectors.
 
-Extension command отправляется через normal `prompt`, потому что Pi выполняет его немедленно даже во время streaming; UI предупреждает, что он не войдёт в очередь.
+An extension command is sent through normal `prompt`, because Pi executes it immediately even during streaming; the UI warns that it will not enter the queue.
 
 #### 6.4 Draft rules
 
-- draft сохраняется per session после debounce;
-- accepted prompt очищает draft;
-- rejected prompt сохраняет текст/attachments;
-- extension `set_editor_text` при непустом draft открывает non-blocking choice: Replace / Insert / Cancel, если request не помечен safe replacement;
-- session switch не теряет draft.
+- draft is saved per session after debounce;
+- an accepted prompt clears the draft;
+- a rejected prompt preserves text/attachments;
+- extension `set_editor_text` with a non-empty draft opens a non-blocking choice: Replace / Insert / Cancel, unless the request is marked as a safe replacement;
+- session switching does not lose the draft.
 
 ### 7. Attachments UX
 
@@ -918,7 +978,7 @@ Extension command отправляется через normal `prompt`, пото�
 
 #### 7.2 Project file
 
-Chip displays relative path and icon. Hover показывает canonical path. Prompt preamble генерируется host-ом детерминированно, например:
+Chip displays relative path and icon. Hover shows canonical path. The prompt preamble is generated deterministically by the host, for example:
 
 ```text
 Attached project files:
@@ -926,17 +986,17 @@ Attached project files:
 - @docs/spec.pdf
 ```
 
-Точный syntax является internal adapter contract; пользователь видит preview before send.
+The exact syntax is an internal adapter contract; the user sees a preview before send.
 
 #### 7.3 External file
 
 Dialog:
 
-- **Reference original path** — Pi получает абсолютный path; файл остаётся снаружи.
-- **Copy into project attachments** — копия в managed area, видимый destination.
+- **Reference original path** — Pi receives the absolute path; the file remains external.
+- **Copy into project attachments** — a copy in the managed area, with visible destination.
 - Cancel.
 
-Default зависит от security setting; никакого silent copy.
+The default depends on the security setting; there is no silent copy.
 
 #### 7.4 Model without image support
 
@@ -946,7 +1006,7 @@ Inline banner over composer:
 
 ### 8. Model picker
 
-Groups by provider. Search по provider/model name/ID.
+Groups by provider. Search by provider/model name/ID.
 
 Row:
 
@@ -955,17 +1015,17 @@ Claude Sonnet …        Anthropic
 200k context · text/image · reasoning
 ```
 
-Current selection checkmark. Auth issue or unavailable model disabled with reason. No badges “best/fastest” без данных.
+Current selection checkmark. Auth issue or unavailable model disabled with reason. No “best/fastest” badges without data.
 
-Thinking picker показывает только levels, returned by Pi. Unsupported levels not rendered.
+Thinking picker shows only levels returned by Pi. Unsupported levels are not rendered.
 
 ### 9. Branch/tree UX
 
-Tree — secondary workflow, открывается right panel.
+Tree is a secondary workflow and opens in the right panel.
 
 #### 9.1 Default
 
-Timeline показывает active path. В текущем минимальном shell отдельная кнопка tree скрыта; чтение generic active path не зависит от tree renderer.
+Timeline shows the active path. In the current minimal shell, the separate tree button is hidden; reading the generic active path does not depend on a tree renderer.
 
 #### 9.2 Tree panel
 
@@ -978,7 +1038,7 @@ Each node: role/type icon, short text, timestamp, optional label. Current leaf h
 - Set label — only if capability available
 - Copy entry ID
 
-When navigate command unavailable, action disabled with explanation rather than emulation by rewriting file.
+When the navigate command is unavailable, the action is disabled with an explanation rather than emulating it by rewriting the file.
 
 #### 9.3 Edit previous prompt
 
@@ -994,7 +1054,7 @@ Implemented as fork, not mutation. Dialog preloads original text, then creates f
 - `editor` → multiline editor with submit/cancel.
 - timeout → visible countdown only when >1 s; host lets Pi auto-resolve.
 
-Multiple requests queue per runtime; only one modal active per window. Closing session does not silently answer “yes”; it returns cancellation where protocol permits.
+Multiple requests queue per runtime; only one modal active per window. Closing a session does not silently answer “yes”; it returns cancellation where the protocol permits.
 
 #### 10.2 Fire-and-forget
 
@@ -1160,7 +1220,7 @@ Details list exact detected resources and canonical path. Choices:
 | Focus composer | Ctrl+L (configurable) | Cmd+L |
 | Rename session | F2 | Return/F2 |
 
-Conflicts with OS/WebView shortcuts resolved by platform-specific keymap. All shortcuts rebindable except emergency safe-mode startup modifier.
+Conflicts with OS/WebView shortcuts are resolved by a platform-specific keymap. All shortcuts are rebindable except the emergency safe-mode startup modifier.
 
 ### 15. Accessibility details
 
@@ -1193,80 +1253,80 @@ Conflicts with OS/WebView shortcuts resolved by platform-specific keymap. All sh
 
 <a id="architecture"></a>
 
-## 03. Архитектура
+## 03. Architecture
 
-_Исходный файл: `docs/03_ARCHITECTURE.md`._
+_Source file: `docs/03_ARCHITECTURE.md`._
 
-## 03. Архитектура PiUI
+## 03. PiUI Architecture
 
-### 1. Архитектурная цель
+### 1. Architectural goal
 
-PiUI должен быть тонкой desktop-оболочкой, которая:
+PiUI must be a thin desktop shell that:
 
-- запускает официальный Pi runtime без переписывания agent loop;
-- выдерживает падение, зависание или несовместимость отдельной сессии;
-- не держит runtime-процесс для каждого исторического чата;
-- предоставляет расширениям стабильные семантические точки интеграции;
-- остаётся отзывчивой на длинных сессиях и потоковом выводе;
-- одинаково проектируется для Windows, Linux и macOS;
-- может обновлять Pi runtime независимо от UI, но не незаметно нарушать совместимость.
+- launches the official Pi runtime without rewriting the agent loop;
+- withstands the crash, hang, or incompatibility of an individual session;
+- does not keep a runtime process for every historical chat;
+- provides extensions with stable semantic integration points;
+- remains responsive with long sessions and streaming output;
+- is designed consistently for Windows, Linux, and macOS;
+- can update the Pi runtime independently of the UI without silently breaking compatibility.
 
-Архитектура обязана быть **локальной по умолчанию**. Для работы самого Pi могут использоваться внешние model providers, но PiUI не требует собственного сервера, аккаунта или облачной БД.
+The architecture must be **local by default**. Pi itself may use external model providers, but PiUI does not require its own server, account, or cloud database.
 
-### 2. Принятое решение по стеку
+### 2. Adopted stack decision
 
-| Слой | Выбор | Назначение |
+| Layer | Choice | Purpose |
 |---|---|---|
-| Desktop host | Tauri 2 / Rust | окна, IPC, процессы, файловые операции, системная интеграция, updater |
+| Desktop host | Tauri 2 / Rust | windows, IPC, processes, file operations, system integration, updater |
 | UI | Svelte 5 + TypeScript + Vite | chat timeline, sidebar, settings, extension surfaces |
-| UI primitives | собственные токены + выборочные Bits UI primitives | доступные dialog/menu/select/tooltip без готовой визуальной темы |
-| Runtime transport | Pi RPC по JSONL через stdin/stdout | команды сессии и поток событий |
-| Process runtime | `tokio::process::Command` | точный контроль framing, stderr, process group/job object и shutdown |
-| Metadata/index | SQLite через `rusqlite`, FTS5 опционально | проекты, UI metadata и перестраиваемый поиск |
-| File watching | `notify` | инкрементальное обнаружение session files и package changes |
-| Trash | системная корзина через Rust crate/platform adapter | обратимое удаление session files |
-| Tests | Rust tests, Vitest, Playwright + packaged smoke tests | contracts, UI, runtime и платформы |
+| UI primitives | custom tokens + selected Bits UI primitives | accessible dialog/menu/select/tooltip without a prebuilt visual theme |
+| Runtime transport | Pi RPC over JSONL through stdin/stdout | session commands and event streaming |
+| Process runtime | `tokio::process::Command` | precise control of framing, stderr, process group/job object, and shutdown |
+| Metadata/index | SQLite through `rusqlite`, FTS5 optional | projects, UI metadata, and rebuildable search |
+| File watching | `notify` | incremental discovery of session files and package changes |
+| Trash | system recycle bin through a Rust crate/platform adapter | reversible deletion of session files |
+| Tests | Rust tests, Vitest, Playwright + packaged smoke tests | contracts, UI, runtime, and platforms |
 
-#### Почему не Electron
+#### Why not Electron
 
-Electron упрощает Node-интеграцию, но включает отдельный Chromium/Node runtime на окно приложения. Для требования минимального idle footprint это плохой базовый выбор. PiUI не нуждается в Node API во frontend: процессами и файлами всё равно должен владеть доверенный host.
+Electron simplifies Node integration, but includes a separate Chromium/Node runtime for each application window. This is a poor baseline choice for the minimum idle-footprint requirement. PiUI does not need the Node API in the frontend: the trusted host must own processes and files regardless.
 
-#### Почему не Flutter
+#### Why not Flutter
 
-Flutter может дать быстрый native-like UI, однако экосистема Pi и его расширений TypeScript-ориентирована. Svelte/TypeScript позволяет переиспользовать типы manifest и host API, а sandboxed extension views естественно размещаются в WebView/iframe.
+Flutter can provide a fast native-like UI; however, the Pi ecosystem and its extensions are TypeScript-oriented. Svelte/TypeScript enables reuse of manifest and host API types, while sandboxed extension views fit naturally in a WebView/iframe.
 
-#### Почему не Qt
+#### Why not Qt
 
-Qt даёт зрелый desktop stack, но усложняет TypeScript-oriented extension SDK и поставку web-based isolated views. Он остаётся резервной альтернативой, если измерения покажут неприемлемое расхождение системных WebView между платформами.
+Qt provides a mature desktop stack, but complicates the TypeScript-oriented extension SDK and delivery of web-based isolated views. It remains a fallback alternative if measurements show an unacceptable divergence in system WebViews across platforms.
 
-#### Почему Svelte без SvelteKit
+#### Why Svelte without SvelteKit
 
-PiUI — однооконное локальное приложение без SSR, server routes и web deployment. Обычный Vite build уменьшает поверхность конфигурации. Роутинг экранов реализуется локальным state machine, а не URL-first framework.
+PiUI is a single-window local application without SSR, server routes, or web deployment. A regular Vite build reduces the configuration surface. Screen routing is implemented as a local state machine rather than a URL-first framework.
 
-### 3. Контекст системы
+### 3. System context
 
 ```mermaid
 flowchart LR
-    U[Пользователь] --> W[PiUI WebView / Svelte]
+    U[User] --> W[PiUI WebView / Svelte]
     W <--> H[Tauri Host / Rust]
     H <--> DB[(PiUI SQLite cache)]
-    H --> FS[Project files и Pi session JSONL]
+    H --> FS[Project files and Pi session JSONL]
     H <--> P1[Pi RPC process: session A]
     H <--> P2[Pi RPC process: session B]
     P1 --> Providers[Model providers]
     P2 --> Providers
-    P1 --> Tools[Pi tools и extensions]
+    P1 --> Tools[Pi tools and extensions]
     P2 --> Tools
     H <--> EV[Sandboxed extension views]
 ```
 
-Основная граница доверия проходит между WebView/extension views и Rust host. Pi processes запускаются как локальные дочерние процессы с правами пользователя; это не sandbox.
+The primary trust boundary runs between WebView/extension views and the Rust host. Pi processes run as local child processes with user privileges; this is not a sandbox.
 
-### 4. Топология процессов
+### 4. Process topology
 
-#### 4.1 Один процесс на реально активную сессию
+#### 4.1 One process per genuinely active session
 
-Состояния runtime slot:
+Runtime-slot states:
 
 ```text
 Dormant -> Starting -> Ready -> Running -> Ready
@@ -1274,79 +1334,79 @@ Dormant -> Starting -> Ready -> Running -> Ready
 Ready|Running -> Stopping -> Dormant
 ```
 
-- **Dormant:** история доступна из индексатора, Pi process отсутствует.
-- **Starting:** выбран runtime, проверена версия, запущен RPC, выполнен handshake.
-- **Ready:** процесс держит сессию открытой и принимает команды.
-- **Running:** идёт assistant turn/tool execution.
-- **Recovering:** PiUI восстанавливает представление из JSONL и предлагает повторно открыть runtime.
-- **Stopping:** мягкое завершение, затем platform-specific termination fallback.
+- **Dormant:** history is available from the indexer; no Pi process exists.
+- **Starting:** the runtime is selected, its version checked, RPC launched, and the handshake completed.
+- **Ready:** the process keeps the session open and accepts commands.
+- **Running:** an assistant turn/tool execution is in progress.
+- **Recovering:** PiUI restores the view from JSONL and offers to reopen the runtime.
+- **Stopping:** graceful termination, followed by a platform-specific termination fallback.
 
-Исторический список из сотен сессий не должен означать сотни процессов.
+A historical list of hundreds of sessions must not mean hundreds of processes.
 
-#### 4.2 Политика пула
+#### 4.2 Pool policy
 
-Параметры по умолчанию:
+Default parameters:
 
 - `maxLiveRuntimes = 3`;
-- активная вкладка не вытесняется;
-- сессия с незавершённым turn не вытесняется;
-- idle ready-процесс закрывается после 10 минут;
-- при превышении лимита закрывается самый давно неиспользуемый idle runtime;
-- значения доступны в Advanced settings, но core UX не рекламирует параллелизм как отдельную функцию.
+- the active tab is not evicted;
+- a session with an unfinished turn is not evicted;
+- an idle ready process is closed after 10 minutes;
+- when the limit is exceeded, the longest-unused idle runtime is closed;
+- values are available in Advanced settings, but the core UX does not promote parallelism as a separate feature.
 
-Для MVP допустим `maxLiveRuntimes = 1`, если multi-session supervisor не готов. Контракты при этом сразу должны поддерживать несколько runtime IDs.
+For the MVP, `maxLiveRuntimes = 1` is acceptable if the multi-session supervisor is not ready. Contracts must nevertheless support multiple runtime IDs from the outset.
 
-#### 4.3 Управление дочерними процессами
+#### 4.3 Child-process management
 
-Host обязан:
+The host must:
 
-- запускать Pi с явным `cwd` проекта;
-- задавать контролируемое окружение и не логировать секреты;
-- читать stdout побайтно/чанками и разделять только по `0x0A`;
-- ограничивать максимальный размер одного protocol frame;
-- читать stderr отдельно и помещать его в redactable diagnostic ring buffer;
-- на Unix создавать отдельную process group;
-- на Windows использовать Job Object или эквивалент, чтобы завершать дерево процессов;
-- отличать нормальный EOF от crash и protocol corruption;
-- не считать строку stderr RPC-событием;
-- сериализовать команды, для которых Pi требует последовательность, и поддерживать correlation IDs на уровне PiUI adapter.
+- launch Pi with an explicit project `cwd`;
+- set a controlled environment and not log secrets;
+- read stdout byte-by-byte/in chunks and split only on `0x0A`;
+- limit the maximum size of a single protocol frame;
+- read stderr separately and place it in a redactable diagnostic ring buffer;
+- create a separate process group on Unix;
+- use a Job Object or equivalent on Windows to terminate the process tree;
+- distinguish normal EOF from a crash and protocol corruption;
+- not treat a stderr line as an RPC event;
+- serialize commands for which Pi requires ordering, and support correlation IDs at the PiUI adapter level.
 
-Tauri sidecar применяется для упаковки managed runtime, но сам supervisor строится на `tokio::process`, а не на frontend shell plugin.
+The Tauri sidecar is used to package a managed runtime, but the supervisor itself is built on `tokio::process`, not a frontend shell plugin.
 
 ### 5. Runtime modes
 
-PiUI поддерживает три режима, все через один `RuntimeAdapter`:
+PiUI supports three modes, all through a single `RuntimeAdapter`:
 
 #### Managed Pi
 
-PiUI поставляет проверенную версию Pi как sidecar или устанавливает её в app-managed directory. Предпочтительный кандидат — официальный standalone Pi executable с его runtime assets из versioned upstream release; PiUI не выполняет `npm install` при запуске приложения и не требует Node/Bun в системе пользователя. Если готовый upstream artifact недоступен для нужной платформы, допустима воспроизводимая сборка из versioned release source тем же upstream build path, но только после license/provenance review.
+PiUI ships a verified version of Pi as a sidecar or installs it in an app-managed directory. The preferred candidate is the official standalone Pi executable with its runtime assets from a versioned upstream release; PiUI does not run `npm install` at application startup and does not require Node/Bun on the user's system. If a ready upstream artifact is unavailable for the required platform, a reproducible build from versioned release source using the same upstream build path is permitted, but only after license/provenance review.
 
-- рекомендуемый режим public release;
-- версия, target triple, upstream source URL/hash и PiUI compatibility range закреплены в подписанном release manifest;
-- upstream checksum проверяется до переподписания/упаковки артефакта PiUI;
-- обновление runtime отделено от UI update и может быть откатано;
-- package manager пользователя не затрагивается;
-- host показывает фактическую версию, origin, hash и путь;
-- отсутствие managed artifact не блокирует system/custom modes.
+- recommended mode for public releases;
+- version, target triple, upstream source URL/hash, and PiUI compatibility range are pinned in a signed release manifest;
+- the upstream checksum is verified before PiUI artifact re-signing/packaging;
+- runtime updates are separate from UI updates and can be rolled back;
+- the user's package manager is not affected;
+- the host shows the actual version, origin, hash, and path;
+- the absence of a managed artifact does not block system/custom modes.
 
 #### System Pi
 
-Используется `pi` из `PATH`.
+Uses `pi` from `PATH`.
 
-- удобен разработчикам и для внутреннего alpha;
-- PiUI проводит version/capability probe перед запуском;
-- при несовместимости не пытается молча продолжить;
-- пользователь видит, какой executable найден.
+- convenient for developers and internal alpha;
+- PiUI performs a version/capability probe before launch;
+- on incompatibility, it does not attempt to continue silently;
+- the user sees which executable was found.
 
 #### Custom executable
 
-Пользователь выбирает бинарник/launcher вручную.
+The user selects a binary/launcher manually.
 
-- нужен для forks, development builds и Nix-like environments;
-- путь хранится как настройка, но проект не может подменить его сам;
-- такой runtime помечается как custom и не обновляется PiUI.
+- required for forks, development builds, and Nix-like environments;
+- the path is stored as a setting, but a project cannot replace it itself;
+- this runtime is marked as custom and is not updated by PiUI.
 
-#### Требование к adapter
+#### Adapter requirement
 
 ```rust
 trait RuntimeAdapter {
@@ -1358,19 +1418,19 @@ trait RuntimeAdapter {
 }
 ```
 
-UI не знает, managed это executable или system Pi.
+The UI does not know whether the executable is managed or system Pi.
 
 ### 6. Capability negotiation
 
-Версия Pi сама по себе недостаточна. При старте host формирует capability set на основании:
+The Pi version alone is insufficient. At startup, the host forms a capability set based on:
 
-1. версии executable;
-2. успешного ответа на безопасные RPC probes;
-3. доступных команд;
-4. opt-in bridge extension, если он установлен;
-5. PiUI runtime protocol version.
+1. the executable version;
+2. successful responses to safe RPC probes;
+3. available commands;
+4. an opt-in bridge extension, if installed;
+5. the PiUI runtime protocol version.
 
-Пример capabilities:
+Example capabilities:
 
 ```json
 {
@@ -1388,13 +1448,13 @@ UI не знает, managed это executable или system Pi.
 }
 ```
 
-Frontend показывает или отключает действие на основании capability, а не имени версии. Любое отсутствие capability должно приводить к понятному fallback, а не к исключению в UI.
+The frontend shows or disables an action based on a capability, not a version name. Any missing capability must result in a clear fallback, not a UI exception.
 
-### 7. Компоненты Rust host
+### 7. Rust host components
 
 ```text
 src-tauri/src/
-  app/                 use cases и orchestration
+  app/                 use cases and orchestration
   runtime/
     supervisor.rs
     rpc_codec.rs
@@ -1436,22 +1496,22 @@ src-tauri/src/
     bundle.rs
 ```
 
-#### Основные сервисы
+#### Core services
 
 - `ProjectRegistry`: canonical path, display name, ordering, trust state.
-- `SessionScanner`: read-only discovery Pi JSONL, incremental metadata extraction.
+- `SessionScanner`: read-only Pi JSONL discovery, incremental metadata extraction.
 - `SessionIndex`: rebuildable SQLite/FTS index.
-- `RuntimeSupervisor`: lifecycle Pi processes, command queues, crash recovery.
+- `RuntimeSupervisor`: Pi process lifecycle, command queues, crash recovery.
 - `AttachmentResolver`: image encoding, file-reference policy, managed copies.
-- `ExtensionRegistry`: discovery, validation, enablement and permission grants.
-- `ViewBroker`: isolated message channel between extension iframe/worker and host.
+- `ExtensionRegistry`: discovery, validation, enablement, and permission grants.
+- `ViewBroker`: isolated message channel between the extension iframe/worker and host.
 - `DiagnosticsService`: redacted logs and support bundle.
 
-### 8. Компоненты frontend
+### 8. Frontend components
 
 ```text
 src/
-  app/                 shell и screen state machine
+  app/                 shell and screen state machine
   features/
     projects/
     sessions/
@@ -1462,7 +1522,7 @@ src/
     trust/
   components/          PiUI-owned presentation components
   primitives/          thin wrappers over accessible headless primitives
-  stores/              небольшие domain stores
+  stores/              small domain stores
   host-api/            generated bindings/events
   renderers/
     markdown/
@@ -1478,18 +1538,18 @@ src/
 
 #### State ownership
 
-- Rust владеет process state, project trust, filesystem state, extension grants.
-- Frontend владеет selection, scroll anchor, expanded/collapsed blocks, transient menus.
-- Draft текста хранится в SQLite с debounce, но текущая строка остаётся локальной для мгновенного ввода.
-- Timeline cache во frontend ограничен; старые блоки могут выгружаться и запрашиваться страницами.
+- Rust owns process state, project trust, filesystem state, and extension grants.
+- The frontend owns selection, scroll anchor, expanded/collapsed blocks, and transient menus.
+- Text drafts are stored in SQLite with debounce, but the current line remains local for immediate input.
+- The frontend timeline cache is bounded; older blocks may be unloaded and requested in pages.
 
-Не допускается единый глобальный mutable store со всем приложением.
+A single global mutable store containing the entire application is not allowed.
 
-### 9. Typed IPC между Svelte и Rust
+### 9. Typed IPC between Svelte and Rust
 
-#### Команды
+#### Commands
 
-Frontend вызывает только команды вида:
+The frontend calls only commands of the form:
 
 ```ts
 openProject(path)
@@ -1508,17 +1568,17 @@ respondToUiRequest(requestId, value)
 setExtensionGrant(extensionId, permission, decision)
 ```
 
-Каждая команда:
+Each command:
 
-- валидирует IDs и paths на Rust стороне;
-- возвращает typed result с stable error code;
-- не принимает shell string;
-- не возвращает секреты;
-- имеет max payload limits.
+- validates IDs and paths on the Rust side;
+- returns a typed result with a stable error code;
+- does not accept a shell string;
+- does not return secrets;
+- has maximum payload limits.
 
-#### События
+#### Events
 
-Rust публикует discriminated unions:
+Rust publishes discriminated unions:
 
 ```ts
 type HostEvent =
@@ -1531,9 +1591,9 @@ type HostEvent =
   | { type: 'diagnostic'; code: string; safeSummary: string };
 ```
 
-Высокочастотные token events агрегируются host или frontend scheduler в кадры 16–33 ms. Один token не должен означать один full-tree render.
+High-frequency token events are batched by the host or frontend scheduler into 16–33 ms frames. One token must not mean one full-tree render.
 
-### 10. Представление timeline
+### 10. Timeline representation
 
 Pipeline:
 
@@ -1545,7 +1605,7 @@ Pi RPC event / JSONL entry
   -> virtualized timeline
 ```
 
-Нормализованный block не теряет raw payload и source entry ID:
+A normalized block does not lose the raw payload or source entry ID:
 
 ```ts
 interface TimelineBlock {
@@ -1559,94 +1619,94 @@ interface TimelineBlock {
 }
 ```
 
-Renderer registry всегда заканчивается generic JSON/text fallback. Никакой renderer не может сделать запись невидимой без явного фильтра пользователя.
+The renderer registry always ends with a generic JSON/text fallback. No renderer can make an entry invisible without an explicit user filter.
 
 ### 11. Extension architecture
 
-Extension host состоит из трёх независимых механизмов:
+The extension host consists of three independent mechanisms:
 
-1. **Backend compatibility:** Pi сам загружает обычные Pi extensions.
-2. **Declarative contributions:** PiUI читает manifest как данные и отображает собственными компонентами.
-3. **Sandboxed rich views:** изолированный iframe/worker, общающийся через versioned broker.
+1. **Backend compatibility:** Pi itself loads standard Pi extensions.
+2. **Declarative contributions:** PiUI reads the manifest as data and renders it with its own components.
+3. **Sandboxed rich views:** an isolated iframe/worker communicating through a versioned broker.
 
-Trusted shell replacement — отдельный режим, не часть обычного extension loading path.
+Trusted shell replacement is a separate mode, not part of the normal extension loading path.
 
-Project-local UI package не загружается до trust. Backend Pi resources также не должны запускаться до доверия в PiUI-controlled workflow.
+A project-local UI package is not loaded before trust. Backend Pi resources also must not start before trust in a PiUI-controlled workflow.
 
-### 12. Хранение и индекс
+### 12. Storage and index
 
-- Pi session JSONL — authoritative.
-- PiUI SQLite — cache и metadata.
-- Scanner не держит все сообщения всех сессий в памяти.
-- На startup читаются project/session headers и последние metadata; full indexing идёт после usable shell с ограничением I/O.
-- FTS можно отключить.
-- Индекс имеет schema version и generation ID.
-- При несовместимости база переименовывается в backup и перестраивается, а не мигрирует session content.
+- Pi session JSONL is authoritative.
+- PiUI SQLite is cache and metadata.
+- The scanner does not keep all messages from all sessions in memory.
+- At startup, project/session headers and recent metadata are read; full indexing runs after the usable shell with I/O throttling.
+- FTS may be disabled.
+- The index has a schema version and generation ID.
+- On incompatibility, the database is renamed to a backup and rebuilt rather than migrating session content.
 
-### 13. Работа с длинными сессиями
+### 13. Handling long sessions
 
-Обязательные техники:
+Required techniques:
 
-- block virtualization после 200 timeline blocks;
-- измерение высоты и сохранение scroll anchor;
-- windowed loading назад/вперёд;
-- memoized Markdown AST для завершённых сообщений;
-- code highlighting в worker или лениво после viewport entry;
-- collapsed tool output с лимитом initial render;
-- потоковый plaintext/минимальный Markdown, финальный parse после завершения блока;
-- blob/object URLs для локальных изображений вместо повторного base64 в DOM;
-- освобождение preview resources при закрытии.
+- block virtualization after 200 timeline blocks;
+- height measurement and scroll-anchor preservation;
+- windowed loading backward/forward;
+- memoized Markdown AST for completed messages;
+- code highlighting in a worker or lazily after viewport entry;
+- collapsed tool output with an initial-render limit;
+- streaming plaintext/minimal Markdown, final parse after block completion;
+- blob/object URLs for local images instead of repeated base64 in the DOM;
+- release preview resources on close.
 
 ### 14. Startup pipeline
 
-1. Показать окно и shell из локальных настроек.
-2. Открыть SQLite и реестр проектов.
-3. Проверить crash marker/safe mode.
-4. Быстро просканировать session headers для выбранного проекта.
-5. Показать список и последнюю выбранную сессию из read-only данных.
-6. Запустить runtime только при создании/продолжении интерактивной сессии.
-7. В фоне после first usable state: FTS indexing, update check, package validation.
+1. Show the window and shell from local settings.
+2. Open SQLite and the project registry.
+3. Check the crash marker/safe mode.
+4. Quickly scan session headers for the selected project.
+5. Show the list and most recently selected session from read-only data.
+6. Start the runtime only when an interactive session is created or continued.
+7. In the background after the first usable state: FTS indexing, update check, package validation.
 
-Сеть, providers и model list не блокируют шаги 1–5.
+Network, providers, and the model list do not block steps 1–5.
 
 ### 15. Error containment
 
-| Ошибка | Поведение |
+| Error | Behavior |
 |---|---|
-| Один Pi process упал | остальные сессии и shell работают; чат переходит в recoverable state |
-| Некорректный JSON frame | сохранить redacted diagnostics, остановить только этот runtime |
-| Extension renderer упал | заменить generic fallback, отключить renderer после crash loop |
-| SQLite повреждён | закрыть/переименовать cache, перестроить из JSONL |
-| Session JSONL имеет неполную последнюю строку | не считать файл потерянным; дождаться изменения или открыть до последней полной LF |
-| Project path исчез | сохранить реестр, показать missing state и Locate/Remove |
-| Managed Pi несовместим | rollback runtime или явный repair; не менять JSONL |
-| WebView reload | host продолжает контролировать процесс; UI запрашивает snapshot и revision |
+| One Pi process crashes | other sessions and the shell continue working; the chat enters a recoverable state |
+| Invalid JSON frame | retain redacted diagnostics; stop only this runtime |
+| Extension renderer crashes | replace with generic fallback; disable the renderer after a crash loop |
+| SQLite is corrupted | close/rename the cache; rebuild from JSONL |
+| Session JSONL has an incomplete final line | do not consider the file lost; wait for a change or open through the last complete LF |
+| Project path disappears | retain the registry; show missing state and Locate/Remove |
+| Managed Pi is incompatible | roll back the runtime or explicitly repair; do not change JSONL |
+| WebView reload | the host continues controlling the process; the UI requests snapshot and revision |
 
-### 16. Packaging и обновления
+### 16. Packaging and updates
 
 Release artifacts:
 
-- Windows: signed installer, WebView2 bootstrap policy, x64 обязательно; ARM64 после матрицы.
-- Linux: AppImage и/или deb/rpm после distro matrix; system WebKit dependency явно документируется.
-- macOS: signed/notarized universal или разделённые arm64/x64 builds.
+- Windows: signed installer, WebView2 bootstrap policy, x64 mandatory; ARM64 after the matrix.
+- Linux: AppImage and/or deb/rpm after the distro matrix; system WebKit dependency explicitly documented.
+- macOS: signed/notarized universal or separate arm64/x64 builds.
 
-UI update и managed Pi update имеют отдельные версии и compatibility matrix. Автообновление не применяется во время running turn; скачивание может идти, установка — после явного restart.
+UI updates and managed Pi updates have separate versions and a compatibility matrix. Auto-update is not applied during a running turn; downloading may proceed, while installation follows an explicit restart.
 
-### 17. Наблюдаемость без telemetry
+### 17. Observability without telemetry
 
-По умолчанию данные остаются локально:
+By default, data remains local:
 
-- structured rotating logs с redaction;
-- runtime lifecycle metrics в памяти;
-- пользовательская команда «Export diagnostics»;
-- diagnostic bundle перечисляет версии, capabilities, platform, crash codes и последние безопасные stderr lines;
-- prompts, tool arguments, paths и environment исключены по умолчанию либо требуют отдельного opt-in preview.
+- structured rotating logs with redaction;
+- in-memory runtime lifecycle metrics;
+- user-facing “Export diagnostics” command;
+- the diagnostic bundle lists versions, capabilities, platform, crash codes, and recent safe stderr lines;
+- prompts, tool arguments, paths, and environment are excluded by default or require a separate opt-in preview.
 
-Удалённая telemetry отсутствует в 1.0.
+There is no remote telemetry in 1.0.
 
-### 18. Репозиторий
+### 18. Repository
 
-Рекомендуемый monorepo:
+Recommended monorepo:
 
 ```text
 piui/
@@ -1662,87 +1722,87 @@ piui/
   docs/
 ```
 
-`packages/contracts` публикуется независимо только после стабилизации. Внутри репозитория Rust и TS типы генерируются из одного schema source либо проверяются golden fixtures, чтобы избежать drift.
+`packages/contracts` is published independently only after stabilization. Within the repository, Rust and TS types are generated from one schema source or verified with golden fixtures to prevent drift.
 
-### 19. Архитектурные критерии приёмки
+### 19. Architectural acceptance criteria
 
-Архитектура считается подтверждённой, когда:
+The architecture is considered validated when:
 
-- одна и та же session file открывается и продолжается в PiUI и CLI;
-- закрытие idle runtime не меняет историю;
-- crash runtime не падает вместе с desktop shell;
-- удаление SQLite не удаляет и не повреждает ни одной Pi session;
-- WebView не может выполнить произвольную команду или прочитать путь без host policy;
-- extension без PiUI manifest работает backend-only;
-- отключение extension оставляет все записи читаемыми generic renderer;
-- long-session fixture остаётся прокручиваемым в рамках performance budget;
-- Windows/Linux process-tree tests не оставляют orphan tool processes.
+- the same session file opens and continues in PiUI and the CLI;
+- closing an idle runtime does not change history;
+- a runtime crash does not crash the desktop shell with it;
+- deleting SQLite does not delete or corrupt any Pi session;
+- the WebView cannot execute an arbitrary command or read a path without host policy;
+- an extension without a PiUI manifest works backend-only;
+- disabling an extension leaves all entries readable by the generic renderer;
+- the long-session fixture remains scrollable within the performance budget;
+- Windows/Linux process-tree tests leave no orphaned tool processes.
 
 ---
 
 <a id="pi-integration"></a>
 
-## 04. Интеграция с Pi
+## 04. Pi integration
 
-_Исходный файл: `docs/04_PI_INTEGRATION.md`._
+_Source file: `docs/04_PI_INTEGRATION.md`._
 
-## 04. Интеграция с Pi
+## 04. Pi Integration
 
-### 1. Принцип интеграции
+### 1. Integration principle
 
-PiUI использует Pi как единственный источник поведения агента. Он не вызывает model providers напрямую и не интерпретирует tools вместо Pi. Основной транспорт — официальный RPC mode:
+PiUI uses Pi as the sole source of agent behavior. It does not call model providers directly or interpret tools in place of Pi. The primary transport is the official RPC mode:
 
 ```text
 PiUI Rust host <-> stdin/stdout JSONL <-> pi --mode rpc
 ```
 
-Каждый запуск привязан к конкретному project `cwd` и, когда это поддержано выбранным способом запуска, к существующей или новой Pi session.
+Each launch is bound to a specific project `cwd` and, when supported by the selected launch method, to an existing or new Pi session.
 
-### 2. Что принадлежит Pi, а что PiUI
+### 2. What belongs to Pi and what belongs to PiUI
 
-| Область | Владелец |
+| Area | Owner |
 |---|---|
-| provider authentication и model requests | Pi |
+| provider authentication and model requests | Pi |
 | agent loop, tools, compaction, steering queue | Pi |
-| Pi extensions и их backend lifecycle | Pi |
-| session entries и ветвление | Pi session format/API |
+| Pi extensions and their backend lifecycle | Pi |
+| session entries and branching | Pi session format/API |
 | project/session navigation GUI | PiUI |
 | process lifecycle, recovery, diagnostics | PiUI host |
-| визуальный timeline и composer | PiUI |
-| project registry и UI drafts | PiUI SQLite |
-| generic file-reference UX | PiUI adapter, затем Pi prompt/tools |
+| visual timeline and composer | PiUI |
+| project registry and UI drafts | PiUI SQLite |
+| generic file-reference UX | PiUI adapter, then Pi prompt/tools |
 | PiUI-specific extension surfaces | PiUI Extension SDK |
 
-Никакой PiUI feature не должен становиться вторым каноническим представлением agent state.
+No PiUI feature must become a second canonical representation of agent state.
 
 #### Global extension configuration
 
-PiUI не парсит и не записывает Pi `settings.json`. Extensions settings вызывает короткий typed host adapter, который в offline mode импортирует upstream `SettingsManager` и `DefaultPackageManager`, пропускает установку отсутствующих packages и использует те же setters, что `pi config`. В UI проецируются только global user resources; filesystem paths и package source strings не пересекают IPC. Toggle применяется к будущим runtime starts. Project-local resources остаются вне этого surface и требуют отдельного trusted-project flow.
+PiUI does not parse or write Pi `settings.json`. Extension settings invoke a small typed host adapter which, in offline mode, imports upstream `SettingsManager` and `DefaultPackageManager`, skips installation of missing packages, and uses the same setters as `pi config`. Only global user resources are projected into the UI; filesystem paths and package source strings do not cross IPC. A toggle applies to future runtime starts. Project-local resources remain outside this surface and require a separate trusted-project flow.
 
 ### 3. Protocol framing
 
-#### 3.1 Требования codec
+#### 3.1 Codec requirements
 
-- одна JSON-команда на строку, завершается LF (`0x0A`);
-- один JSON-response/event на LF-framed строку stdout;
-- CR перед LF допускается только если это подтверждено fixture; codec не использует универсальное Unicode `lines()` поведение;
-- пустые строки игнорируются с diagnostic counter;
-- frame больше конфигурируемого лимита, например 32 MiB, останавливает runtime как protocol violation;
-- невалидный UTF-8 и JSON не подменяются replacement characters без записи причины;
-- stderr не смешивается со stdout;
-- при EOF неполный frame фиксируется отдельно;
-- parser fuzz-тестируется на chunk boundaries.
+- one JSON command per line, terminated by LF (`0x0A`);
+- one JSON response/event per LF-framed stdout line;
+- CR before LF is allowed only if confirmed by a fixture; the codec does not use universal Unicode `lines()` behavior;
+- empty lines are ignored with a diagnostic counter;
+- a frame larger than the configurable limit, for example 32 MiB, stops the runtime as a protocol violation;
+- invalid UTF-8 and JSON are not substituted with replacement characters without recording the reason;
+- stderr is not mixed with stdout;
+- an incomplete frame at EOF is recorded separately;
+- the parser is fuzz-tested on chunk boundaries.
 
 #### 3.2 Correlation
 
-PiUI оборачивает RPC-вызовы внутренним `commandId`, даже если конкретный Pi request/response уже имеет собственный ID. Это нужно для:
+PiUI wraps RPC calls with an internal `commandId`, even if the specific Pi request/response already has its own ID. This is needed for:
 
 - timeout/cancellation;
-- связывания UI action с response;
-- диагностики без логирования payload;
-- повторного snapshot после WebView reload.
+- linking a UI action to a response;
+- diagnostics without logging payloads;
+- repeating a snapshot after WebView reload.
 
-Неизвестный event type сохраняется как `runtime.unknown` и не роняет процесс. Это обеспечивает forward compatibility.
+An unknown event type is retained as `runtime.unknown` and does not crash the process. This ensures forward compatibility.
 
 ### 4. Startup handshake
 
@@ -1763,36 +1823,36 @@ sequenceDiagram
     H-->>UI: RuntimeSnapshot + capabilities + revision
 ```
 
-Порядок probes должен быть tolerant: отсутствие одной команды не отменяет базовый чат, если `prompt` и state доступны.
+The probe order must be tolerant: the absence of one command does not cancel basic chat if `prompt` and state are available.
 
-### 5. Маппинг базовых возможностей
+### 5. Mapping core capabilities
 
-Точные payloads берутся из текущей Pi RPC schema и фиксируются contract fixtures. Таблица задаёт продуктовый смысл, а не заменяет upstream docs.
+Exact payloads are taken from the current Pi RPC schema and pinned in contract fixtures. The table defines product semantics; it does not replace upstream documentation.
 
-| Pi capability/command | PiUI действие | Fallback |
+| Pi capability/command | PiUI action | Fallback |
 |---|---|---|
-| `prompt` | отправить новый user turn | заблокировать composer с diagnostic error |
-| `steer` | вмешаться в текущий turn | поставить follow-up, если steer недоступен |
-| `follow_up` | добавить следующий turn в очередь | локальный draft, пока текущий turn не завершён |
-| `abort` | Stop | terminate runtime только после timeout и предупреждения |
+| `prompt` | send a new user turn | block the composer with a diagnostic error |
+| `steer` | intervene in the current turn | queue a follow-up if steer is unavailable |
+| `follow_up` | add the next turn to the queue | local draft until the current turn completes |
+| `abort` | Stop | terminate the runtime only after timeout and warning |
 | `get_state` | runtime/session snapshot | read-only JSONL snapshot + reconnect |
-| `get_available_models` | model picker | текущая модель + ссылка в settings/diagnostics |
-| model switch command | смена модели | недоступное действие с причиной |
-| thinking level commands | thinking picker | скрыть picker, не эмулировать prompt text |
-| queue mode commands | Steer/Follow-up semantics | фиксированный безопасный режим |
-| `new_session` | новый чат | новый process/bootstrap path |
-| `switch_session` | открыть существующую session в process | новый process с session selector |
-| `fork` / `clone` | создать ветку/копию | скрыть advanced action |
-| `get_entries` | page timeline | read-only scanner для history, RPC для live state |
-| `get_tree` | показать дерево | read-only tree без navigation action |
-| set session name | Rename | UI alias в cache только как временный fallback, явно маркированный |
-| export | экспорт transcript | host-side generic export только если output идентичен/явно другой |
-| `get_commands` | slash autocomplete | PiUI core commands + найденные extension commands |
+| `get_available_models` | model picker | current model + link in settings/diagnostics |
+| model switch command | change model | unavailable action with a reason |
+| thinking level commands | thinking picker | hide the picker; do not emulate prompt text |
+| queue mode commands | Steer/Follow-up semantics | fixed safe mode |
+| `new_session` | new chat | new process/bootstrap path |
+| `switch_session` | open an existing session in the process | new process with session selector |
+| `fork` / `clone` | create a branch/copy | hide advanced action |
+| `get_entries` | page the timeline | read-only scanner for history, RPC for live state |
+| `get_tree` | show the tree | read-only tree without a navigation action |
+| set session name | Rename | UI alias in cache only as a temporary fallback, explicitly marked |
+| export | export transcript | host-side generic export only if output is identical/explicitly different |
+| `get_commands` | slash autocomplete | PiUI core commands + discovered extension commands |
 | Extension UI Protocol | dialogs/status/widgets | generic native surfaces |
 
 ### 6. Message/event normalization
 
-PiUI не рендерит upstream JSON напрямую. Adapter преобразует его в стабильные внутренние события; raw source остаётся только в Pi JSONL/host и не пересекает WebView IPC:
+PiUI does not render upstream JSON directly. The adapter transforms it into stable internal events; the raw source remains only in Pi JSONL/host and does not cross WebView IPC:
 
 ```ts
 type SessionDelta =
@@ -1808,304 +1868,304 @@ type SessionDelta =
   | { kind: 'runtime.error'; code: string; recoverable: boolean };
 ```
 
-Правила:
+Rules:
 
-- порядок событий сохраняется внутри одного runtime;
-- host присваивает monotonically increasing `revision`;
-- UI применяет delta только к ожидаемой revision либо запрашивает snapshot;
-- duplicate event после reconnect должен быть idempotent по entry/block ID;
-- persisted projection v2 знает Pi v3 `user`, `assistant`, `thinking`, `toolCall`, `toolResult`, `bashExecution`, `custom_message` и `compaction`;
-- tool call/result коррелируются host-side, tool-only assistant entry не создаёт пустое Pi message;
-- tool result никогда не исполняется как HTML;
-- Markdown превращается в allowlisted AST nodes и никогда не использует raw `{@html}`;
-- неизвестные entries отображаются compact generic compatibility disclosure без raw payload;
-- live blocks и persisted blocks используют один renderer; после turn host rescan заменяет завершённые ephemeral blocks.
+- event order is preserved within one runtime;
+- the host assigns a monotonically increasing `revision`;
+- the UI applies a delta only to the expected revision, or requests a snapshot;
+- a duplicate event after reconnect must be idempotent by entry/block ID;
+- persisted projection v2 knows Pi v3 `user`, `assistant`, `thinking`, `toolCall`, `toolResult`, `bashExecution`, `custom_message`, and `compaction`;
+- tool call/result are correlated host-side; a tool-only assistant entry does not create an empty Pi message;
+- tool result is never executed as HTML;
+- Markdown is converted into allowlisted AST nodes and never uses raw `{@html}`;
+- unknown entries are shown as a compact generic compatibility disclosure without the raw payload;
+- live blocks and persisted blocks use one renderer; after a turn, a host rescan replaces completed ephemeral blocks.
 
-### 7. Streaming и очередь
+### 7. Streaming and queue
 
 #### Composer modes
 
-Пользователь видит явную семантику:
+The user sees explicit semantics:
 
-- **Send** в Ready — обычный `prompt`;
-- **Steer** во время Running — сообщение направляется текущему turn;
-- **Queue next** — follow-up после текущего turn;
+- **Send** in Ready — regular `prompt`;
+- **Steer** during Running — the message directs the current turn;
+- **Queue next** — a follow-up after the current turn;
 - **Stop** — `abort`.
 
-Enter не должен незаметно менять семантику в зависимости от timing. Рекомендуемый default:
+Enter must not silently change semantics based on timing. Recommended default:
 
-- Enter отправляет `prompt` в Ready;
-- во время Running Enter ставит follow-up;
-- отдельная кнопка/shortcut выполняет Steer;
-- tooltip и queue badge показывают выбранный режим.
+- Enter sends `prompt` in Ready;
+- during Running, Enter queues a follow-up;
+- a separate button/shortcut performs Steer;
+- a tooltip and queue badge show the selected mode.
 
-Настройка queue mode синхронизируется через Pi RPC, если capability доступна.
+The queue-mode setting is synchronized through Pi RPC if the capability is available.
 
 #### Abort escalation
 
-1. отправить `abort`;
-2. ждать подтверждение/состояние в пределах timeout;
-3. показать «Agent does not respond»;
-4. разрешить `Force stop runtime`;
-5. завершить process tree;
-6. перечитать JSONL до последней полной entry и предложить reopen.
+1. send `abort`;
+2. wait for confirmation/state within the timeout;
+3. show “Agent does not respond”;
+4. allow `Force stop runtime`;
+5. terminate the process tree;
+6. reread JSONL through the last complete entry and offer reopen.
 
-Force stop не должен автоматически повторять prompt.
+Force stop must not automatically repeat the prompt.
 
-### 8. Модели и thinking level
+### 8. Models and thinking level
 
 Model picker:
 
-- загружается из `get_available_models`, а не из hardcoded registry;
-- показывает provider/model ID и доступные признаки, которые реально вернул Pi;
-- поддерживает search и recent models;
-- текущая модель отмечается даже если исчезла из списка;
-- ошибка provider/auth отображается рядом, не блокируя просмотр истории;
-- переключение выполняется до отправки следующего prompt и подтверждается state/event.
+- is loaded from `get_available_models`, not a hardcoded registry;
+- shows the provider/model ID and available traits actually returned by Pi;
+- supports search and recent models;
+- marks the current model even if it disappears from the list;
+- displays a provider/auth error adjacent to it and does not block history viewing;
+- switching occurs before sending the next prompt and is confirmed by state/event.
 
 Thinking picker:
 
-- строится из capabilities/current state;
-- не обещает уровни, которых нет у выбранной модели/runtime;
-- скрывается, если Pi не сообщает управляемый thinking level;
-- значение сохраняется Pi, а не только UI preference.
+- is built from capabilities/current state;
+- does not promise levels unavailable to the selected model/runtime;
+- is hidden if Pi does not report a controllable thinking level;
+- the value is saved by Pi, not only as a UI preference.
 
 ### 9. Sessions
 
-#### 9.1 Обнаружение
+#### 9.1 Discovery
 
-Для списка PiUI читает session files через отдельный read-only scanner. Это нужно, чтобы не запускать Pi для каждой строки sidebar. Scanner извлекает:
+For the list, PiUI reads session files through a separate read-only scanner. This is necessary to avoid starting Pi for every sidebar row. The scanner extracts:
 
 - session identifier/path;
 - project/cwd metadata;
 - session name;
 - created/updated time;
-- первая user text preview;
-- последняя complete entry;
+- first user text preview;
+- last complete entry;
 - branch/tree summary;
-- runtime/model metadata, если присутствует;
+- runtime/model metadata, if present;
 - parse health.
 
-PiUI не придумывает новый session ID и не переименовывает файл для сортировки.
+PiUI does not invent a new session ID or rename a file for sorting.
 
-#### 9.2 Открытие
+#### 9.2 Opening
 
-Предпочтительный путь — документированный Pi startup/session selector или RPC `switch_session`. До реализации обязательно проверить, создаёт ли bare RPC startup пустую session entry/file. Если создаёт, host должен использовать launch option/bridge, исключающий ghost sessions.
+The preferred path is a documented Pi startup/session selector or RPC `switch_session`. Before implementation, it is mandatory to verify whether bare RPC startup creates an empty session entry/file. If it does, the host must use a launch option/bridge that prevents ghost sessions.
 
-#### 9.3 Создание
+#### 9.3 Creation
 
-`New chat` в системной группе Chats сразу открывает пустой composer; runtime в host-owned neutral CWD запускается лениво при первом Send. Contextual project chat аналогично запускает Pi в выбранном project cwd только при Send. Открытие и быстрое переключение history sessions не создаёт agent process: UI переиспользует bounded display-safe provider/model cache. На первом запуске пользователь может явно выбрать `Load available models…`; этот action активирует текущую session через тот же typed runtime adapter, а не отдельный catalog subprocess. В обоих случаях Pi остаётся единственным writer: empty session может быть in-memory до первого assistant response. Session появляется в sidebar только после появления устойчивого Pi JSONL/file, а не по optimistic fake ID.
+`New chat` in the system Chats group immediately opens an empty composer; the runtime in a host-owned neutral CWD starts lazily on the first Send. A contextual project chat similarly starts Pi in the selected project `cwd` only on Send. Opening and rapidly switching history sessions does not create an agent process: the UI reuses a bounded display-safe provider/model cache. On first launch, the user may explicitly choose `Load available models…`; this action activates the current session through the same typed runtime adapter, not a separate catalog subprocess. In both cases, Pi remains the only writer: an empty session may be in memory until the first assistant response. A session appears in the sidebar only after durable Pi JSONL/file appears, not from an optimistic fake ID.
 
 #### 9.4 Rename
 
-Переименование идёт через Pi command. До подтверждения UI показывает pending state. Локальный display alias не должен выдавать себя за Pi session name; допускается только как временный internal workaround и удаляется после upstream support.
+Renaming proceeds through a Pi command. Until confirmation, the UI shows a pending state. A local display alias must not present itself as a Pi session name; it is permitted only as a temporary internal workaround and is removed after upstream support.
 
-#### 9.5 Tree, fork и clone
+#### 9.5 Tree, fork, and clone
 
-- `get_tree` используется для чтения branch graph;
-- `fork`/`clone` вызываются через Pi и после ответа scanner обновляет список;
-- PiUI не меняет `parentId` в JSONL;
-- переход на произвольную старую ветвь включается только при наличии документированной capability;
-- до этого tree panel read-only с действиями, которые Pi реально поддерживает.
+- `get_tree` is used to read the branch graph;
+- `fork`/`clone` are called through Pi, and the scanner refreshes the list after the response;
+- PiUI does not change `parentId` in JSONL;
+- navigation to an arbitrary old branch is enabled only when a documented capability is available;
+- until then, the tree panel is read-only with actions Pi actually supports.
 
 #### 9.6 Trash
 
-При неактивной сессии host перемещает весь session file в системную корзину. При активной:
+For an inactive session, the host moves the entire session file to the system recycle bin. For an active session:
 
-1. предупреждает о running state;
-2. abort/stop runtime;
-3. закрывает file handles;
-4. перемещает файл в корзину;
-5. удаляет только rebuildable index rows.
+1. warns about the running state;
+2. aborts/stops the runtime;
+3. closes file handles;
+4. moves the file to the recycle bin;
+5. deletes only rebuildable index rows.
 
-PiUI не реализует permanent delete в основном UX 1.0.
+PiUI does not implement permanent delete in the primary 1.0 UX.
 
-### 10. Стандартный Pi Extension UI Protocol
+### 10. Standard Pi Extension UI Protocol
 
-Pi RPC передаёт часть `ctx.ui`-взаимодействий. PiUI маппит их так:
+Pi RPC conveys some `ctx.ui` interactions. PiUI maps them as follows:
 
 | Extension request/effect | PiUI renderer |
 |---|---|
 | select | searchable native modal/listbox |
-| confirm | modal с точным текстом и безопасным default |
+| confirm | modal with exact text and safe default |
 | input | single-line dialog |
-| editor | multi-line dialog с monospaced option |
+| editor | multi-line dialog with monospaced option |
 | notify | toast + notification center |
 | status | runtime/session status strip |
-| widget | стандартный RPC: безопасные text lines; PiUI SDK: отдельные validated UI nodes |
-| title | session/window title hint, не полный контроль OS title без policy |
-| editor text | composer draft update с visible source indicator |
+| widget | standard RPC: safe text lines; PiUI SDK: separate validated UI nodes |
+| title | session/window title hint, not full OS-title control without policy |
+| editor text | composer draft update with visible source indicator |
 
-Требования:
+Requirements:
 
-- каждый request имеет ID, timeout policy и cancel response;
-- modal очередь принадлежит конкретному runtime;
-- закрытие окна/сессии отвечает cancellation, а не оставляет Pi ждать навсегда;
-- extension name/source видимы пользователю;
-- rich/unknown payload имеет fallback;
-- request не может открыть произвольный URL/path без host permission.
+- every request has an ID, timeout policy, and cancel response;
+- the modal queue belongs to a specific runtime;
+- closing the window/session responds with cancellation rather than leaving Pi waiting forever;
+- the extension name/source is visible to the user;
+- rich/unknown payload has a fallback;
+- a request cannot open an arbitrary URL/path without host permission.
 
-#### Неподдерживаемая TUI-паритетность
+#### Unsupported TUI parity
 
-RPC не означает полную поддержку всех TUI customizations. PiUI 1.0 не эмулирует через догадки:
+RPC does not mean full support for all TUI customizations. PiUI 1.0 does not emulate by guesswork:
 
 - `ctx.ui.custom()`;
 - custom header/footer;
-- замену TUI editor;
+- TUI editor replacement;
 - TUI themes;
-- прямое управление terminal cells.
+- direct terminal-cell control.
 
-Для них используется PiUI Extension SDK, описанный отдельно.
+PiUI Extension SDK is used for these, as described separately.
 
 ### 11. Slash commands
 
-Autocomplete объединяет:
+Autocomplete combines:
 
 1. PiUI-owned commands: `/new`, `/open`, `/settings`, `/extensions`, `/diagnostics`;
-2. команды из `get_commands`;
-3. declarative PiUI commands из enabled extension manifests.
+2. commands from `get_commands`;
+3. declarative PiUI commands from enabled extension manifests.
 
-Namespace и collision rules:
+Namespace and collision rules:
 
-- PiUI core commands зарезервированы;
-- backend extension command сохраняет имя Pi;
-- UI-only command рекомендуется объявлять как `extensionId.command` и может иметь label;
-- collision не разрешается порядком установки: UI показывает qualified choices;
-- built-in TUI commands, которых нет в RPC, не должны подделываться как Pi commands.
+- PiUI core commands are reserved;
+- a backend extension command retains the Pi name;
+- a UI-only command is recommended to be declared as `extensionId.command` and may have a label;
+- a collision is not resolved by installation order: the UI shows qualified choices;
+- built-in TUI commands absent from RPC must not be faked as Pi commands.
 
 ### 12. Attachments
 
-#### 12.1 Изображения
+#### 12.1 Images
 
-Изображения — единственный attachment type, который PiUI может передавать через image-aware RPC payload без дополнительной tool convention.
+Images are the only attachment type PiUI may pass through an image-aware RPC payload without an additional tool convention.
 
 Flow:
 
-1. пользователь выбирает/вставляет/drop изображение;
-2. host проверяет MIME по содержимому и размер;
-3. создаёт безопасный preview URL;
-4. при отправке кодирует в формат, который ожидает текущий Pi RPC;
-5. сохраняет provenance reference в PiUI metadata, но не дублирует base64 в SQLite;
-6. timeline отображает thumbnail и open preview;
-7. если модель не поддерживает image input, Send блокируется с точным объяснением или attachment удаляется пользователем.
+1. the user selects/pastes/drops an image;
+2. the host validates MIME by content and size;
+3. creates a safe preview URL;
+4. at send time, encodes it in the format expected by the current Pi RPC;
+5. saves a provenance reference in PiUI metadata but does not duplicate base64 in SQLite;
+6. the timeline displays a thumbnail and open preview;
+7. if the model does not support image input, Send is blocked with an exact explanation or the attachment is removed by the user.
 
-Нужны лимиты количества, индивидуального и суммарного размера.
+Limits are required for quantity, individual size, and total size.
 
-#### 12.2 Файл внутри проекта
+#### 12.2 File inside the project
 
-По умолчанию PiUI прикладывает **структурированную ссылку на относительный путь**, а не читает весь файл в prompt:
+By default, PiUI attaches a **structured reference to a relative path**, rather than reading the entire file into the prompt:
 
 ```text
 Attachment: project://src/lib/parser.ts
 Resolved path: <project root>/src/lib/parser.ts
 ```
 
-Фактический prompt encoding должен быть стабильным и документированным, например human-readable fenced attachment references. Pi/tools решают, когда читать файл. UI показывает, что это path reference, а не загрузка содержимого модели.
+The actual prompt encoding must be stable and documented, for example human-readable fenced attachment references. Pi/tools decide when to read the file. The UI shows that this is a path reference, not an upload of contents to the model.
 
-#### 12.3 Внешний файл
+#### 12.3 External file
 
-Пользователь выбирает один из режимов:
+The user selects one of the modes:
 
-- **Reference original:** абсолютный путь передаётся как controlled file reference; он может перестать существовать.
-- **Copy to managed attachments:** host копирует файл в app-managed storage, считает hash и хранит provenance. Он не помещает файл в repository без отдельного действия.
+- **Reference original:** the absolute path is passed as a controlled file reference; it may cease to exist.
+- **Copy to managed attachments:** the host copies the file to app-managed storage, computes a hash, and retains provenance. It does not put the file in the repository without a separate action.
 
-Никакого автоматического копирования в project root.
+No automatic copying to the project root.
 
-#### 12.4 PDF и office-документы
+#### 12.4 PDF and office documents
 
-PiUI показывает имя/type/size и передаёт path reference. Он не обещает встроенное понимание PDF/DOCX. Обработку выполняет Pi tool/extension/skill. Preview может быть отдельным расширением.
+PiUI shows name/type/size and passes a path reference. It does not promise built-in understanding of PDF/DOCX. Processing is performed by a Pi tool/extension/skill. Preview may be a separate extension.
 
-#### 12.5 Drag-and-drop текста и директорий
+#### 12.5 Drag-and-drop text and directories
 
-- выделенный текст вставляется в composer;
-- директория превращается в path reference только после подтверждения;
-- рекурсивное прикладывание содержимого директории запрещено по умолчанию;
-- symlink resolution выполняется host и проверяется path policy.
+- selected text is inserted into the composer;
+- a directory becomes a path reference only after confirmation;
+- recursive attachment of directory contents is prohibited by default;
+- symlink resolution is performed by the host and checked against path policy.
 
-### 13. Authentication и provider setup
+### 13. Authentication and provider setup
 
-Pi владеет auth. PiUI не должен разбирать `auth.json` ради собственного provider client.
+Pi owns auth. PiUI must not parse `auth.json` for its own provider client.
 
-MVP варианты в порядке предпочтения:
+MVP options in order of preference:
 
-1. официальный headless auth API, если появится;
-2. controlled interactive Pi subprocess в dedicated terminal-like modal для `/login`;
-3. инструкции по запуску `pi` в системном терминале и автоматическое обнаружение обновлённого auth state;
-4. API key environment/config flow только через официально поддержанный Pi механизм.
+1. an official headless auth API, if it becomes available;
+2. a controlled interactive Pi subprocess in a dedicated terminal-like modal for `/login`;
+3. instructions to run `pi` in the system terminal and automatic detection of updated auth state;
+4. API key environment/config flow only through the officially supported Pi mechanism.
 
 Dedicated auth subprocess:
 
-- не является общим terminal emulator;
-- запускается только для allowlisted auth action;
-- отображает stdin/stdout интерактивно;
-- не записывает transcript в обычный log;
-- после завершения запускает capability/model refresh.
+- is not a general terminal emulator;
+- launches only for an allowlisted auth action;
+- displays stdin/stdout interactively;
+- does not record the transcript in ordinary logs;
+- runs a capability/model refresh after completion.
 
-До spike нельзя обещать бесшовный OAuth GUI.
+Before the spike, seamless OAuth GUI must not be promised.
 
 ### 14. Settings mapping
 
-PiUI settings делятся на:
+PiUI settings are divided into:
 
 - **Pi-owned:** runtime config, models/providers, queue/thinking settings, extension/package behavior;
 - **PiUI-owned:** layout, fonts, notifications, project registry, runtime executable choice, performance, UI extensions;
-- **Derived:** фактические capabilities и resolved paths.
+- **Derived:** actual capabilities and resolved paths.
 
-Pi-owned settings изменяются только через официальный API/CLI или атомарный config adapter, документированный Pi. Frontend не редактирует произвольный JSON текст. При отсутствии headless API показывается read-only state + controlled action.
+Pi-owned settings are changed only through an official API/CLI or an atomic config adapter documented by Pi. The frontend does not edit arbitrary JSON text. If a headless API is absent, show read-only state + controlled action.
 
-### 15. История и совместимость CLI ↔ PiUI
+### 15. History and CLI ↔ PiUI compatibility
 
-Обязательные round-trip tests:
+Required round-trip tests:
 
-1. создать session в CLI, продолжить в PiUI, снова открыть в CLI;
-2. создать в PiUI, branch/fork в CLI, увидеть дерево в PiUI;
-3. выполнить backend extension command в обоих интерфейсах;
-4. отключить PiUI custom renderer и прочитать custom entry generic card;
-5. compaction/history entries не меняют смысл после UI indexing;
-6. Unicode, large tool output, image entries и interrupted turn сохраняются.
+1. create a session in the CLI, continue it in PiUI, then reopen it in the CLI;
+2. create in PiUI, branch/fork in the CLI, see the tree in PiUI;
+3. run a backend extension command in both interfaces;
+4. disable the PiUI custom renderer and read the custom entry as a generic card;
+5. compaction/history entries do not change meaning after UI indexing;
+6. Unicode, large tool output, image entries, and interrupted turns are preserved.
 
-PiUI никогда не «исправляет» upstream JSONL без отдельной recovery copy и явного пользователя.
+PiUI never “fixes” upstream JSONL without a separate recovery copy and explicit user action.
 
 ### 16. Recovery
 
-После crash или protocol error:
+After a crash or protocol error:
 
-- runtime slot помечается Failed;
-- UI прекращает optimistic streaming;
-- scanner читает session до последней полной строки;
-- незавершённые блоки маркируются Interrupted, а не Complete;
-- пользователь может открыть diagnostics, Reopen runtime или оставить history read-only;
-- Reopen не повторяет последнюю user message;
-- если Pi при reopen добавляет system/session events, они принимаются как authoritative.
+- the runtime slot is marked Failed;
+- the UI stops optimistic streaming;
+- the scanner reads the session through the last complete line;
+- unfinished blocks are marked Interrupted, not Complete;
+- the user can open diagnostics, Reopen runtime, or leave history read-only;
+- Reopen does not repeat the last user message;
+- if Pi adds system/session events on reopen, they are accepted as authoritative.
 
-### 17. Обязательные upstream/bridge gaps
+### 17. Required upstream/bridge gaps
 
-До public 1.0 необходимо либо получить официальную Pi capability, либо реализовать минимальный bridge extension с versioning для:
+Before public 1.0, an official Pi capability must be obtained or a minimal versioned bridge extension implemented for:
 
-| Gap | Почему нужен | Допустимый временный fallback |
+| Gap | Why it is needed | Acceptable temporary fallback |
 |---|---|---|
-| явный open existing session без ghost session | чистая история и sidebar | подтверждённый CLI launch selector |
-| базовая RPC-команда graceful shutdown | сохранность и отсутствие orphan processes; `ctx.shutdown()` существует внутри Pi extension context, но не как самостоятельная RPC-команда | bridge command на `ctx.shutdown()`; иначе EOF + timeout + process group termination |
-| navigate to arbitrary tree node | полный branch UX | read-only tree + fork/clone only |
-| headless provider login/status | нормальный settings flow | controlled interactive auth subprocess |
-| richer attachment descriptors | типизированные file references | stable textual path convention |
+| explicit open of an existing session without a ghost session | clean history and sidebar | confirmed CLI launch selector |
+| basic RPC command for graceful shutdown | integrity and absence of orphan processes; `ctx.shutdown()` exists inside the Pi extension context, but not as a standalone RPC command | bridge command to `ctx.shutdown()`; otherwise EOF + timeout + process group termination |
+| navigate to an arbitrary tree node | complete branch UX | read-only tree + fork/clone only |
+| headless provider login/status | normal settings flow | controlled interactive auth subprocess |
+| richer attachment descriptors | typed file references | stable textual path convention |
 | capability/version endpoint | forward compatibility | probe matrix + executable version |
-| full extension UI parity | TUI custom views не передаются | PiUI SDK + generic fallback |
+| full extension UI parity | TUI custom views are not conveyed | PiUI SDK + generic fallback |
 
-Bridge не должен переопределять agent loop. Его задача — открыть узкие недостающие операции через официальные Pi extension/SDK primitives.
+The bridge must not override the agent loop. Its role is to expose narrow missing operations through official Pi extension/SDK primitives.
 
-### 18. Acceptance criteria интеграции
+### 18. Integration acceptance criteria
 
-- RPC codec проходит fragmented-frame/fuzz fixtures и не делит по Unicode separators.
-- Реальная сессия round-trip совместима с CLI.
-- Model list и thinking не hardcoded.
-- Standard Extension UI requests не зависают при закрытии окна.
-- Images передаются и отображаются; generic files честно обозначены как references.
-- Tree actions включаются только по capabilities.
-- Force stop завершает process tree на Windows/Linux.
-- Crash recovery не повторяет prompt и не пишет JSONL.
-- Unknown RPC event не ломает UI.
-- auth flow не раскрывает secrets в logs/frontend state.
+- The RPC codec passes fragmented-frame/fuzz fixtures and does not split on Unicode separators.
+- A real session is round-trip compatible with the CLI.
+- The model list and thinking are not hardcoded.
+- Standard Extension UI requests do not hang when the window closes.
+- Images are passed and displayed; generic files are honestly identified as references.
+- Tree actions are enabled only by capabilities.
+- Force stop terminates the process tree on Windows/Linux.
+- Crash recovery does not repeat the prompt or write JSONL.
+- An unknown RPC event does not break the UI.
+- The auth flow does not expose secrets in logs/frontend state.
 
 ---
 
@@ -2113,82 +2173,82 @@ Bridge не должен переопределять agent loop. Его зад�
 
 ## 05. PiUI Extension SDK
 
-_Исходный файл: `docs/05_EXTENSION_SDK.md`._
+_Source file: `docs/05_EXTENSION_SDK.md`._
 
 ## 05. PiUI Extension SDK
 
-### 1. Цель
+### 1. Goal
 
-PiUI должен продолжать философию Pi: минимальное ядро, расширение через пакеты. При этом нельзя считать, что TUI-компоненты автоматически переносимы в desktop GUI. Поэтому один package может содержать две независимые, совместимые части:
+PiUI must continue Pi's philosophy: a minimal core, extended through packages. At the same time, TUI components must not be assumed to transfer automatically to a desktop GUI. Therefore, one package may contain two independent, compatible parts:
 
-- `pi` — backend extension/resources, которые загружает Pi;
-- `piui` — необязательное описание GUI contributions, которое загружает PiUI.
+- `pi` — backend extensions/resources loaded by Pi;
+- `piui` — an optional description of GUI contributions loaded by PiUI.
 
-Отсутствие `piui` никогда не мешает backend extension работать.
+The absence of `piui` must never prevent a backend extension from working.
 
-### 2. Уровни расширяемости
+### 2. Extensibility tiers
 
 #### Tier 0 — Backend-only compatibility
 
-Пакет содержит только обычный Pi extension.
+The package contains only a standard Pi extension.
 
-PiUI обязан:
+PiUI must:
 
-- позволить Pi загрузить extension по обычным правилам;
-- показать зарегистрированные tools и commands, если Pi сообщает их через RPC;
-- обработать стандартный Extension UI Protocol;
-- отрисовать tool/custom entries универсальной карточкой;
-- не требовать изменений package.
+- allow Pi to load the extension under its standard rules;
+- display registered tools and commands if Pi reports them through RPC;
+- handle the standard Extension UI Protocol;
+- render tool/custom entries using a generic card;
+- require no package changes.
 
-Это уровень совместимости по умолчанию.
+This is the default compatibility tier.
 
 #### Tier 1 — Declarative contributions
 
-Пакет содержит `piui.manifest.json`, но не исполняет собственный UI JavaScript. Manifest может добавить:
+The package contains `piui.manifest.json` but does not execute its own UI JavaScript. The manifest may add:
 
-- команды и command palette entries;
+- commands and command palette entries;
 - composer actions;
 - status items;
 - settings schema;
 - project/session context menu actions;
-- sidebar или right-panel views из безопасного UI node tree;
-- tool/message/custom-entry renderers из UI node tree;
-- preview providers, возвращающие безопасную модель preview;
-- themes/design tokens в ограниченной схеме;
-- keybinding defaults.
+- sidebar or right-panel views from a safe UI node tree;
+- tool/message/custom-entry renderers from a UI node tree;
+- preview providers returning a safe preview model;
+- themes/design tokens in a restricted schema;
+- default keybindings.
 
-PiUI создаёт все элементы своими компонентами. Это основной и рекомендуемый extension path.
+PiUI creates all elements using its own components. This is the primary and recommended extension path.
 
 #### Tier 2 — Sandboxed rich views
 
-Пакет предоставляет статический web bundle для сложного представления. Он запускается:
+The package provides a static web bundle for a complex view. It runs:
 
-- в sandboxed iframe/WebView без прямого Tauri API;
-- с отдельным origin или opaque origin;
-- без network по умолчанию;
-- через versioned `postMessage` broker;
-- с capability-based host API;
-- с CSP, запрещающим inline/eval, кроме явно согласованной dev policy;
-- с ограничениями размера bundle, памяти, message rate и payload size.
+- in a sandboxed iframe/WebView without direct Tauri API access;
+- with a separate origin or opaque origin;
+- without network access by default;
+- through a versioned `postMessage` broker;
+- with a capability-based host API;
+- with a CSP that prohibits inline/eval, except under an explicitly agreed development policy;
+- with limits on bundle size, memory, message rate, and payload size.
 
-Rich view подходит для графов, специализированных inspectors, canvas-based previews и сложных interactive tools.
+A rich view is suitable for graphs, specialized inspectors, canvas-based previews, and complex interactive tools.
 
 #### Tier 3 — Trusted shell replacement
 
-Пакет может полностью заменить обычный layout PiUI, если пользователь явно доверил **глобально установленный** пакет как shell.
+A package may fully replace the standard PiUI layout if the user explicitly trusts a **globally installed** package as a shell.
 
-Ограничения:
+Constraints:
 
-- project-local package не может стать shell;
-- shell запускается в отдельной изолированной surface и общается через тот же broker;
-- он не получает raw Tauri `invoke`, shell или filesystem API;
-- выбор shell требует restart и отдельного предупреждения;
-- immutable recovery layer остаётся у host: safe-mode shortcut/menu, crash screen, permission dialogs и update integrity prompts;
-- при crash loop PiUI автоматически возвращается к core shell;
-- одновременно активен только один shell;
-- shell не меняет формат сессий и не заменяет Pi runtime.
+- a project-local package cannot become a shell;
+- the shell runs in a separate isolated surface and communicates through the same broker;
+- it receives no raw Tauri `invoke`, shell, or filesystem API;
+- selecting a shell requires a restart and a separate warning;
+- an immutable recovery layer remains with the host: safe-mode shortcut/menu, crash screen, permission dialogs, and update integrity prompts;
+- on a crash loop, PiUI automatically returns to the core shell;
+- only one shell can be active at a time;
+- the shell does not change the session format or replace the Pi runtime.
 
-Так сохраняется требование полного изменения интерфейса без передачи extension неограниченных прав desktop host.
+This preserves the requirement for a completely changed interface without granting the extension unrestricted desktop-host privileges.
 
 ### 3. Package layout
 
@@ -2199,14 +2259,14 @@ my-package/
     extension.ts
   piui.manifest.json
   piui/
-    worker.js              # необязательно
+    worker.js              # optional
     views/
-      graph/index.html     # Tier 2, необязательно
+      graph/index.html     # Tier 2, optional
       graph/assets/*
     icons/*
 ```
 
-Пример `package.json`:
+Example `package.json`:
 
 ```json
 {
@@ -2222,11 +2282,11 @@ my-package/
 }
 ```
 
-PiUI сначала применяет правила discovery Pi packages, затем ищет необязательный `piui.manifest.json`. Он не запускает `postinstall` и не выполняет package code для чтения manifest.
+PiUI first applies Pi package discovery rules, then looks for the optional `piui.manifest.json`. It does not run `postinstall` or execute package code to read the manifest.
 
 ### 4. Manifest
 
-Минимальный manifest:
+Minimal manifest:
 
 ```json
 {
@@ -2261,22 +2321,22 @@ PiUI сначала применяет правила discovery Pi packages, з�
 }
 ```
 
-Полная JSON Schema находится в `contracts/piui-extension-manifest.schema.json`. Проверка manifest состоит из двух обязательных проходов:
+The complete JSON Schema is in `contracts/piui-extension-manifest.schema.json`. Manifest validation consists of two mandatory passes:
 
-1. JSON Schema проверяет форму, типы, ограничения размеров и structural security invariants: явный массив `permissions`, соответствие `ui.shell` shell-entrypoint, `network` origin allowlist и `ui.richView` views-entrypoint.
-2. Host semantic validator проверяет принадлежность contribution ID namespace расширения, уникальность ID, существование command/handler/view targets, dependency cycles, допустимость slot, trust scope и соответствие фактических Host API вызовов выданным capabilities.
+1. JSON Schema validates shape, types, size constraints, and structural security invariants: an explicit `permissions` array, `ui.shell` matching its shell entrypoint, the `network` origin allowlist, and the `ui.richView` views entrypoint.
+2. The host semantic validator validates that contribution IDs belong to the extension namespace, IDs are unique, command/handler/view targets exist, dependency cycles, permitted slots, trust scope, and that actual Host API calls match granted capabilities.
 
-Прохождение одной JSON Schema не означает, что пакет разрешён к активации. Ошибка второго прохода переводит UI-часть в disabled/backend-only state с диагностикой, но не даёт ей частичный доступ.
+Passing JSON Schema alone does not mean that a package is permitted to activate. A failure in the second pass moves the UI portion to a disabled/backend-only state with diagnostics, without granting it partial access.
 
-#### Обязательные поля
+#### Required fields
 
-- `schemaVersion`: целое major schema number;
-- `id`: стабильный reverse-domain-like ID, не меняется между версиями;
+- `schemaVersion`: integer major schema number;
+- `id`: stable reverse-domain-like ID that does not change between versions;
 - `name`: user-facing label;
 - `version`: SemVer package version;
-- `engines.piui`: совместимый диапазон PiUI;
-- `contributes`: декларативные contributions;
-- `permissions`: минимально необходимые capabilities.
+- `engines.piui`: compatible PiUI range;
+- `contributes`: declarative contributions;
+- `permissions`: minimum required capabilities.
 
 #### Entry points
 
@@ -2292,11 +2352,11 @@ PiUI сначала применяет правила discovery Pi packages, з�
 }
 ```
 
-Entry points resolve только внутри package root после canonicalization. `..`, symlink escape и remote URL запрещены.
+Entry points resolve only within the package root after canonicalization. `..`, symlink escapes, and remote URLs are prohibited.
 
 ### 5. Semantic slots
 
-Extensions указывают **смысл**, а не пиксельные координаты. Поддерживаемые slots v1:
+Extensions specify **meaning**, not pixel coordinates. Supported v1 slots:
 
 - `sidebar.project.beforeSessions`
 - `sidebar.project.afterSessions`
@@ -2311,7 +2371,7 @@ Extensions указывают **смысл**, а не пиксельные ко�
 - `settings.extensions`
 - `status.runtime`
 
-Manifest не задаёт `top: 12px` или прямой selector core DOM. Host решает responsive layout, accessibility и compact mode.
+A manifest does not specify `top: 12px` or a direct selector for the core DOM. The host determines responsive layout, accessibility, and compact mode.
 
 Ordering:
 
@@ -2323,15 +2383,15 @@ Ordering:
 }
 ```
 
-- меньший `order` идёт раньше;
-- core резервирует диапазон `0–99`;
-- extensions обычно используют `100–999`;
-- одинаковый order сортируется по extension ID;
-- extension не может скрывать contribution другого extension.
+- lower `order` comes first;
+- core reserves the `0–99` range;
+- extensions normally use `100–999`;
+- equal order is sorted by extension ID;
+- an extension cannot hide another extension's contribution.
 
 ### 6. Declarative UI node vocabulary
 
-Tier 1 renderer возвращает сериализуемое дерево из allowlisted узлов:
+A Tier 1 renderer returns a serializable tree of allowlisted nodes:
 
 ```ts
 type UiNode =
@@ -2353,16 +2413,16 @@ type UiNode =
   | { type: 'empty'; title: string; description?: string; action?: UiAction };
 ```
 
-Запрещены raw HTML, arbitrary CSS, inline scripts, DOM event strings и external image URLs без permission. Markdown проходит PiUI sanitizer; `trusted: true` в v1 отсутствует.
+Raw HTML, arbitrary CSS, inline scripts, DOM event strings, and external image URLs without permission are prohibited. Markdown passes through the PiUI sanitizer; `trusted: true` does not exist in v1.
 
 Limits v1:
 
 - depth ≤ 20;
-- nodes ≤ 2,000 на render result;
-- text ≤ 2 MiB суммарно;
-- table ≤ 1,000 rows до pagination;
-- update rate ≤ 30 messages/s на view;
-- payload > limit отклоняется и заменяется fallback.
+- nodes ≤ 2,000 per render result;
+- total text ≤ 2 MiB;
+- table ≤ 1,000 rows before pagination;
+- update rate ≤ 30 messages/s per view;
+- payloads exceeding the limit are rejected and replaced with a fallback.
 
 ### 7. Contributions
 
@@ -2383,42 +2443,42 @@ Limits v1:
 
 Handler types:
 
-- `pi-command:<name>` — вызывает command, который уже зарегистрирован backend extension;
-- `host:<allowlisted-action>` — только действия, явно открытые SDK;
-- `worker:<handler>` — вызывает sandboxed extension worker;
-- `view:<viewId>:<message>` — посылает событие rich view.
+- `pi-command:<name>` — invokes a command already registered by the backend extension;
+- `host:<allowlisted-action>` — only actions explicitly exposed by the SDK;
+- `worker:<handler>` — invokes a sandboxed extension worker;
+- `view:<viewId>:<message>` — sends an event to a rich view.
 
-Command не может содержать shell command string.
+A command cannot contain a shell command string.
 
 #### 7.2 Composer actions
 
-Action может:
+An action may:
 
-- вставить текст;
-- добавить structured attachment reference;
-- открыть dialog/view;
-- вызвать command;
-- преобразовать draft через worker после разрешения `composer.read/write`.
+- insert text;
+- add a structured attachment reference;
+- open a dialog/view;
+- invoke a command;
+- transform a draft through a worker after `composer.read/write` is granted.
 
-Он не получает содержимое draft без permission.
+It does not receive draft contents without permission.
 
 #### 7.3 Status items
 
-Status item имеет короткий label, tooltip и command. Host ограничивает ширину и переносит overflow в меню. Extension не может создавать persistent animation без running state.
+A status item has a short label, tooltip, and command. The host constrains width and moves overflow into a menu. An extension cannot create persistent animation without a running state.
 
 #### 7.4 Settings
 
-Extension объявляет JSON-like schema с поддержанными controls:
+An extension declares a JSON-like schema with supported controls:
 
 - boolean;
 - string/password reference;
-- number с min/max;
+- number with min/max;
 - enum;
-- path picker с конкретным access mode;
+- path picker with a specific access mode;
 - keybinding;
 - secret reference.
 
-Секреты хранятся в platform credential store и передаются worker только через opaque token/approved request. Они не попадают в обычный settings JSON.
+Secrets are stored in the platform credential store and passed to a worker only through an opaque token/approved request. They do not enter regular settings JSON.
 
 #### 7.5 Tool renderers
 
@@ -2439,34 +2499,34 @@ Matcher:
 
 Rules:
 
-- exact extension ID + tool name сильнее wildcard;
-- пользователь может отключить renderer отдельно от backend extension;
-- generic raw view доступен всегда;
-- renderer получает redacted payload в соответствии с permissions;
-- renderer не меняет результат tool execution.
+- exact extension ID + tool name is stronger than a wildcard;
+- the user can disable a renderer independently from the backend extension;
+- a generic raw view is always available;
+- the renderer receives a redacted payload according to permissions;
+- the renderer does not change the tool execution result.
 
 #### 7.6 Message/custom-entry renderers
 
-Matcher использует stable type/namespace, а не произвольную эвристику текста. Если два renderer имеют одинаковый priority, PiUI выбирает точнейший matcher и показывает диагностируемый conflict при равенстве.
+The matcher uses a stable type/namespace, not arbitrary text heuristics. If two renderers have the same priority, PiUI chooses the most specific matcher and shows a diagnosable conflict on a tie.
 
 #### 7.7 Sidebar/right-panel views
 
-Tier 1 view возвращает UiNode и обновляется по явным subscriptions. Tier 2 view указывается через `viewId`. Правую панель можно открыть по команде; extension не должен принудительно держать её открытой после каждого запуска без user preference.
+A Tier 1 view returns a UiNode and updates through explicit subscriptions. A Tier 2 view is specified through `viewId`. The right panel may be opened by command; an extension must not force it to remain open after every launch without a user preference.
 
 #### 7.8 Preview providers
 
-Provider объявляет поддерживаемые URI/MIME и возвращает:
+A provider declares supported URI/MIME and returns:
 
 - text/code preview;
 - image resource;
 - declarative nodes;
 - sandboxed rich view.
 
-Он не ассоциирует executable previewer без отдельной permission и user action.
+It does not associate an executable previewer without separate permission and user action.
 
 #### 7.9 Themes
 
-Theme contribution может переопределять только documented semantic tokens:
+A theme contribution may override only documented semantic tokens:
 
 ```json
 {
@@ -2480,11 +2540,11 @@ Theme contribution может переопределять только document
 }
 ```
 
-Перед публикацией PiUI проверяет contrast критических пар. Theme не может встраивать CSS/JS в Tier 1. Пользователь всегда может вернуться к System/Light/Dark в safe mode.
+PiUI validates contrast for critical pairs before publication. A theme cannot embed CSS/JS in Tier 1. The user can always return to System/Light/Dark in safe mode.
 
-### 8. Context keys и `when`
+### 8. Context keys and `when`
 
-PiUI предоставляет ограниченный expression language без `eval`:
+PiUI provides a restricted expression language without `eval`:
 
 ```text
 project.trusted && runtime.ready && editor.hasText
@@ -2492,45 +2552,45 @@ session.running || session.queuedCount > 0
 resource.mime == "image/png"
 ```
 
-Поддерживаются `&&`, `||`, `!`, `==`, `!=`, `<`, `>`, parentheses и membership в literal list. Unknown key evaluates false.
+`&&`, `||`, `!`, `==`, `!=`, `<`, `>`, parentheses, and membership in a literal list are supported. An unknown key evaluates to false.
 
-Основные keys:
+Core keys:
 
 - `platform`: `windows|linux|macos`;
 - `project.open`, `project.trusted`, `project.hasGit`;
 - `session.open`, `session.running`, `session.hasBranches`;
 - `runtime.ready`, `runtime.capability.<name>`;
 - `composer.hasText`, `composer.hasAttachments`;
-- `selection.text` как boolean, не само содержимое;
+- `selection.text` as a boolean, not its contents;
 - `view.<id>.visible`;
 - `safeMode`.
 
-Extension не может создавать глобальный key с чужим namespace.
+An extension cannot create a global key under another namespace.
 
-### 9. Host API и permissions
+### 9. Host API and permissions
 
-Полный TypeScript contract — `contracts/piui-host-api.d.ts`.
+The complete TypeScript contract is `contracts/piui-host-api.d.ts`.
 
 #### Permission groups
 
-| Permission | Возможности |
+| Permission | Capabilities |
 |---|---|
-| `session.read` | metadata/timeline blocks текущей сессии |
-| `session.command` | отправка allowlisted Pi/PiUI commands |
-| `session.prompt` | отправка/steer/follow-up после user-visible action |
-| `composer.read` | чтение draft |
-| `composer.write` | изменение draft/attachments |
-| `project.read` | чтение файлов через scoped API |
-| `project.write` | запись через scoped API и conflict checks |
+| `session.read` | metadata/timeline blocks for the current session |
+| `session.command` | sending allowlisted Pi/PiUI commands |
+| `session.prompt` | send/steer/follow-up after a user-visible action |
+| `composer.read` | reading the draft |
+| `composer.write` | changing the draft/attachments |
+| `project.read` | reading files through a scoped API |
+| `project.write` | writing through a scoped API and conflict checks |
 | `externalFiles.read` | user-picked external handles |
-| `network` | fetch через host proxy для approved origins |
-| `clipboard.read` | только после user gesture |
-| `clipboard.write` | запись clipboard |
+| `network` | fetch through the host proxy for approved origins |
+| `clipboard.read` | only after a user gesture |
+| `clipboard.write` | writing to the clipboard |
 | `notifications` | system notifications |
 | `storage` | namespaced extension storage |
 | `secrets` | opaque credential references |
-| `ui.richView` | запуск Tier 2 view |
-| `ui.shell` | request trusted shell activation |
+| `ui.richView` | launching a Tier 2 view |
+| `ui.shell` | requesting trusted shell activation |
 
 #### Permission decisions
 
@@ -2541,32 +2601,32 @@ Decision scope:
 - allow for this project;
 - allow globally.
 
-Не все permissions допускают все scopes. `ui.shell` — только global; `externalFiles.read` обычно per handle; `clipboard.read` — per gesture.
+Not all permissions allow every scope. `ui.shell` is global only; `externalFiles.read` is normally per handle; `clipboard.read` is per gesture.
 
-Prompt должен объяснять конкретное действие и extension source. Нельзя просить «полный доступ» одним неразделимым grant.
+A prompt must explain the specific action and extension source. It must not request “full access” as a single indivisible grant.
 
 #### Host API principles
 
 - structured inputs/outputs;
 - cancellable requests;
-- resource handles вместо произвольных paths;
-- origin allowlist для network;
-- max payload и rate limits;
-- permissions проверяются host при каждом вызове, а не только UI;
-- view/worker не видит grants других extensions;
-- API version передаётся при handshake.
+- resource handles instead of arbitrary paths;
+- origin allowlist for network;
+- max payload and rate limits;
+- permissions are checked by the host on every call, not only by the UI;
+- a view/worker cannot see grants for other extensions;
+- the API version is passed during the handshake.
 
 ### 10. Worker model
 
-Tier 1 dynamic handlers исполняются не в main UI realm. Extension worker:
+Tier 1 dynamic handlers do not execute in the main UI realm. An extension worker:
 
-- загружается как module worker в изолированном context;
-- не имеет Tauri globals;
-- получает `initialize(apiVersion, extensionId, grantedCapabilities)`;
-- регистрирует named handlers;
-- возвращает JSON-serializable results;
-- может быть завершён host при timeout/crash loop;
-- не должен хранить authoritative state только в памяти.
+- loads as a module worker in an isolated context;
+- has no Tauri globals;
+- receives `initialize(apiVersion, extensionId, grantedCapabilities)`;
+- registers named handlers;
+- returns JSON-serializable results;
+- may be terminated by the host on timeout/crash loop;
+- must not store authoritative state only in memory.
 
 Recommended handler lifecycle:
 
@@ -2577,7 +2637,7 @@ export function activate(ctx: PiUiExtensionContext) {
 }
 ```
 
-Фактическая загрузка может быть реализована через bootstrap worker, но public semantics остаётся такой.
+The actual loading may be implemented through a bootstrap worker, but the public semantics remain the same.
 
 ### 11. Rich view protocol
 
@@ -2596,23 +2656,23 @@ Security:
 - exact `event.source`/channel token validation;
 - opaque per-instance channel secret;
 - no wildcard `postMessage` target where avoidable;
-- iframe sandbox without `allow-same-origin` unless isolated custom scheme demands and security review approves;
+- iframe sandbox without `allow-same-origin` unless an isolated custom scheme requires it and a security review approves it;
 - navigation blocked; external link requests go to host confirmation/policy;
 - downloads blocked by default;
 - popups blocked;
 - CSP generated host-side;
-- clipboard, fullscreen, camera, microphone, geolocation запрещены без future ADR.
+- clipboard, fullscreen, camera, microphone, and geolocation are prohibited without a future ADR.
 
 Lifecycle:
 
 - `mount`, `visibilityChanged`, `themeChanged`, `dispose`;
-- hidden views могут быть suspended;
-- crash/timeout заменяется diagnostic fallback;
-- state persistence идёт через extension storage API.
+- hidden views may be suspended;
+- crash/timeout is replaced with a diagnostic fallback;
+- state persistence goes through the extension storage API.
 
 ### 12. Full shell contract
 
-Shell получает high-level application model и commands:
+The shell receives a high-level application model and commands:
 
 - project/session listing and selection;
 - timeline paging and subscriptions;
@@ -2621,20 +2681,20 @@ Shell получает high-level application model и commands:
 - extension surfaces;
 - window-safe commands.
 
-Shell **не получает**:
+The shell **does not receive**:
 
 - raw process handles;
 - unrestricted filesystem;
 - secret material;
 - updater signing controls;
 - permission dialog suppression;
-- ability to disable safe mode;
-- direct session JSONL write.
+- the ability to disable safe mode;
+- direct session JSONL writing.
 
 Host overlays/shortcuts:
 
 - launch safe mode;
-- return to core shell;
+- return to the core shell;
 - crash recovery;
 - permission prompt;
 - app quit/force runtime stop;
@@ -2649,9 +2709,9 @@ Activation flow:
 5. host writes trusted shell selection;
 6. restart;
 7. shell handshake within timeout;
-8. on failure, core shell opens with incident banner.
+8. on failure, core shell opens with an incident banner.
 
-### 13. Discovery и precedence
+### 13. Discovery and precedence
 
 Sources:
 
@@ -2660,18 +2720,18 @@ Sources:
 3. PiUI built-in packages;
 4. optional user-added development package paths.
 
-Precedence не означает silent override. Duplicate extension IDs:
+Precedence does not mean silent override. Duplicate extension IDs:
 
-- exact same resolved package/version is deduplicated;
-- разные packages с одним ID создают conflict state;
-- пользователь выбирает источник или отключает один;
-- project package не может подменить trusted global shell по ID.
+- an exact same resolved package/version is deduplicated;
+- different packages with the same ID create a conflict state;
+- the user selects a source or disables one;
+- a project package cannot impersonate a trusted global shell by ID.
 
-Manifest parse никогда не исполняет JavaScript. Icons/resources проверяются как files inside package root.
+Manifest parsing never executes JavaScript. Icons/resources are verified as files inside the package root.
 
-### 14. Enablement и dependency
+### 14. Enablement and dependency
 
-Extension может указать optional dependencies:
+An extension may specify optional dependencies:
 
 ```json
 {
@@ -2681,7 +2741,7 @@ Extension может указать optional dependencies:
 }
 ```
 
-PiUI проверяет presence/version, но не устанавливает автоматически. В v1 нет marketplace resolver. Backend и UI enablement показываются отдельно:
+PiUI verifies presence/version but does not install them automatically. There is no marketplace resolver in v1. Backend and UI enablement are displayed separately:
 
 - Backend enabled by Pi;
 - PiUI contributions enabled;
@@ -2689,21 +2749,21 @@ PiUI проверяет presence/version, но не устанавливает �
 - Renderer enabled;
 - Shell selected.
 
-Отключение UI renderer не обязано отключать backend tool.
+Disabling a UI renderer does not have to disable the backend tool.
 
 ### 15. Versioning
 
-- Manifest `schemaVersion` — major integer; host поддерживает ограниченный набор.
-- Host API использует SemVer-like `apiVersion` и capability negotiation.
-- Unknown optional contribution игнорируется с warning.
-- Unknown required feature в `requires` отключает UI part целиком, backend остаётся доступен.
-- Contracts backwards-compatible внутри PiUI major.
-- Deprecated API минимум один minor release сообщает warning до удаления в следующем major.
-- Extension должен проверять capabilities, а не парсить PiUI version для поведения.
+- Manifest `schemaVersion` is a major integer; the host supports a limited set.
+- The Host API uses SemVer-like `apiVersion` and capability negotiation.
+- An unknown optional contribution is ignored with a warning.
+- An unknown required feature in `requires` disables the UI part entirely; the backend remains available.
+- Contracts are backwards-compatible within a PiUI major version.
+- A deprecated API reports a warning for at least one minor release before removal in the next major version.
+- An extension must check capabilities rather than parse the PiUI version for behavior.
 
 ### 16. Development experience
 
-Команды будущего SDK:
+Future SDK commands:
 
 ```bash
 piui extension init
@@ -2715,80 +2775,80 @@ piui extension inspect-permissions
 
 Dev mode:
 
-- требует явного включения в Advanced settings;
-- показывает persistent banner;
-- допускает local package path и hot reload declarative manifest;
-- rich view reload не должен перезапускать Pi runtime;
-- shell hot reload доступен только в отдельном development window;
-- production permission rules по умолчанию сохраняются.
+- requires explicit activation in Advanced settings;
+- displays a persistent banner;
+- allows a local package path and hot reload of a declarative manifest;
+- rich view reload must not restart the Pi runtime;
+- shell hot reload is available only in a separate development window;
+- production permission rules remain in force by default.
 
 ### 17. Generic fallback
 
-Для каждого contribution/render type PiUI имеет fallback:
+PiUI has a fallback for every contribution/render type:
 
-- tool invocation → имя, args, status, text/JSON result;
+- tool invocation → name, args, status, text/JSON result;
 - custom entry → namespace/type + JSON inspector;
-- missing sidebar view → disabled placeholder в extension diagnostics;
+- missing sidebar view → disabled placeholder in extension diagnostics;
 - rich view crash → error card + Open raw data;
-- unsupported UiNode → omitted node + validation notice, не весь timeline crash;
+- unsupported UiNode → omitted node + validation notice, not an entire timeline crash;
 - missing command handler → disabled action;
 - incompatible manifest → backend-only mode.
 
-Raw payload может содержать чувствительные данные, поэтому inspector открывается по действию и использует redaction/notice.
+Raw payload may contain sensitive data, so the inspector opens on action and uses redaction/notice.
 
-### 18. Accessibility и localization
+### 18. Accessibility and localization
 
-- extension label/description должны иметь plain-text fallback;
-- icon-only action требует label;
-- declarative nodes автоматически получают core focus/navigation semantics;
-- rich view отвечает за внутреннюю accessibility и проходит audit для featured packages;
-- extension strings могут указывать locale bundles, но default locale обязателен;
-- host permission prompts не локализуются extension HTML — только structured strings;
-- directionality и reduced motion передаются в view initialization.
+- extension label/description must have a plain-text fallback;
+- an icon-only action requires a label;
+- declarative nodes automatically receive core focus/navigation semantics;
+- a rich view is responsible for internal accessibility and passes an audit for featured packages;
+- extension strings may specify locale bundles, but a default locale is mandatory;
+- host permission prompts are not localized by extension HTML — only by structured strings;
+- directionality and reduced motion are passed during view initialization.
 
-### 19. Acceptance criteria SDK
+### 19. SDK acceptance criteria
 
-- Backend-only Pi extension работает без manifest.
-- Один package одновременно регистрирует Pi tool и PiUI renderer.
-- Project-local rich view не исполняется до trust.
-- Tier 1 manifest не выполняет JavaScript при discovery.
-- Rich view не может вызвать Tauri API напрямую.
-- Network request блокируется без grant и approved origin.
-- Отключение renderer возвращает generic readable card.
-- Duplicate IDs дают conflict, а не silent precedence.
-- Shell crash возвращает core shell.
-- Safe mode запускается даже при сломанном shell/theme.
-- API/schema compatibility проверяется fixtures в CI.
+- A backend-only Pi extension works without a manifest.
+- One package registers both a Pi tool and a PiUI renderer.
+- A project-local rich view does not execute before trust.
+- A Tier 1 manifest does not execute JavaScript during discovery.
+- A rich view cannot invoke the Tauri API directly.
+- A network request is blocked without a grant and approved origin.
+- Disabling a renderer restores a generic readable card.
+- Duplicate IDs produce a conflict, not silent precedence.
+- A shell crash returns to the core shell.
+- Safe mode launches even with a broken shell/theme.
+- API/schema compatibility is checked by fixtures in CI.
 
 ---
 
 <a id="data"></a>
 
-## 06. Данные и сессии
+## 06. Data and sessions
 
-_Исходный файл: `docs/06_DATA_AND_SESSIONS.md`._
+_Source file: `docs/06_DATA_AND_SESSIONS.md`._
 
-## 06. Данные, проекты и сессии
+## 06. Data, projects, and sessions
 
-### 1. Источники истины
+### 1. Sources of truth
 
-PiUI использует строгую иерархию:
+PiUI uses a strict hierarchy:
 
-1. **Pi session JSONL** — каноническая история, дерево, persistent extension entries.
-2. **Pi configuration/package locations** — канонический backend runtime configuration.
-3. **Файловая система project folder** — канонические project resources.
-4. **PiUI SQLite** — только UI metadata, registry и rebuildable index.
+1. **Pi session JSONL** — canonical history, tree, persistent extension entries.
+2. **Pi configuration/package locations** — canonical backend runtime configuration.
+3. **Project folder filesystem** — canonical project resources.
+4. **PiUI SQLite** — UI metadata, registry, and rebuildable index only.
 5. **Frontend memory** — transient presentation state.
 
-Удаление пунктов 4–5 не должно уничтожать пункты 1–3.
+Deleting items 4–5 must not destroy items 1–3.
 
 ### 2. Project model
 
-Проект — зарегистрированная существующая директория.
+A project is a registered existing directory.
 
 ```ts
 interface ProjectRecord {
-  id: string;                    // PiUI UUID, не filesystem-derived public ID
+  id: string;                    // PiUI UUID, not a filesystem-derived public ID
   canonicalPath: string;
   displayPath: string;
   name: string;
@@ -2803,31 +2863,31 @@ interface ProjectRecord {
 
 #### Path identity
 
-Host canonicalizes path с platform rules:
+The host canonicalizes paths using platform rules:
 
-- Windows drive letter/case и UNC обрабатываются без string-only сравнения;
-- symlinks/junctions разрешаются для identity, но display path сохраняется;
-- trailing separators нормализуются;
-- одна canonical directory не регистрируется дважды;
-- nested projects допустимы и считаются отдельными projects;
-- project move не определяется автоматически как тот же project без filesystem identity evidence; UI предлагает Locate.
+- Windows drive letter/case and UNC are handled without string-only comparison;
+- symlinks/junctions are resolved for identity, but the display path is retained;
+- trailing separators are normalized;
+- a canonical directory is not registered twice;
+- nested projects are allowed and considered separate projects;
+- a project move is not automatically identified as the same project without filesystem identity evidence; the UI offers Locate.
 
-PiUI не создаёт `.piui` в проекте без отдельного решения/ADR. Все собственные metadata по умолчанию находятся в app data directory.
+PiUI does not create `.piui` in a project without a separate decision/ADR. All of its metadata is in the app data directory by default.
 
 ### 3. Session discovery
 
-#### 3.1 Где искать
+#### 3.1 Where to search
 
-Scanner получает explicit Pi session roots из runtime environment (`PI_CODING_AGENT_SESSION_DIR` имеет приоритет) и рассматривает существующий conventional project-local `<project>/.pi/agent-sessions` как известную directory mapping. Один JSONL читается с жёстким host limit 128 MiB; oversized source сохраняется нетронутым и не выдаётся за проиндексированный. Default global Pi location может использоваться как initial hint. Project settings files не парсятся ради discovery; пути и raw scanner diagnostics не передаются в WebView.
+The scanner receives explicit Pi session roots from the runtime environment (`PI_CODING_AGENT_SESSION_DIR` takes priority) and treats the existing conventional project-local `<project>/.pi/agent-sessions` as a known directory mapping. A single JSONL file is read with a hard host limit of 128 MiB; an oversized source is retained untouched and is not presented as indexed. The default global Pi location may be used as an initial hint. Project settings files are not parsed for discovery; paths and raw scanner diagnostics are not passed to the WebView.
 
-Связь session ↔ project определяется в порядке:
+The session ↔ project association is determined in this order:
 
-1. явный cwd/project metadata session header;
-2. нормализованный path в entries/metadata, если формат Pi это определяет;
-3. известная directory mapping Pi;
-4. user-assisted assignment только как PiUI metadata, без изменения session file.
+1. explicit cwd/project metadata in the session header;
+2. normalized path in entries/metadata, if the Pi format defines it;
+3. known Pi directory mapping;
+4. user-assisted assignment only as PiUI metadata, without changing the session file.
 
-Unassigned sessions доступны в отдельной системной группе только в Advanced/All sessions view, чтобы sidebar проекта не загрязнялся.
+Unassigned sessions are available in a separate system group only in the Advanced/All sessions view, so the project sidebar is not cluttered.
 
 #### 3.2 Scanner pipeline
 
@@ -2842,28 +2902,28 @@ filesystem watcher / explicit refresh / Pi runtime exit / polling hint
   -> versioned opaque host event
 ```
 
-Filesystem traversal, hashing и SQLite commit запускаются через host `spawn_blocking`, поэтому Tauri invoke/event task публикует `refreshStarted` сразу и не блокирует WebView. Только доказанно complete pass становится `current`; incomplete coverage (unavailable candidate/root, limit, CAS mismatch или пустой набор roots без authority) оставляет safe cached rows видимыми, но публикуется как `degraded` и не сбрасывает счётчик periodic integrity scan.
+Filesystem traversal, hashing, and SQLite commit run through host `spawn_blocking`, so the Tauri invoke/event task publishes `refreshStarted` immediately and does not block the WebView. Only a proven complete pass becomes `current`; incomplete coverage (an unavailable candidate/root, limit, CAS mismatch, or an empty set of roots without authority) keeps safe cached rows visible, but is published as `degraded` and does not reset the periodic integrity scan counter.
 
-Catalog fingerprint хранится только host-side и включает path, native file ID/inode, size, mtime, bounded prefix/tail continuity digest и parser version. Mtime или continuity digest не считаются доказательством content revision: они позволяют только пропустить повторный catalog parse. Timeline и mutation admission используют отдельное strong observation с identity-bound full revision verification.
+The catalog fingerprint is stored host-side only and includes path, native file ID/inode, size, mtime, bounded prefix/tail continuity digest, and parser version. Mtime or a continuity digest are not considered proof of a content revision: they only allow a repeated catalog parse to be skipped. Timeline and mutation admission use a separate strong observation with identity-bound full revision verification.
 
-Для первого turn новой Pi-сессии UI сохраняет baseline известных opaque IDs до запуска Pi и не auto-select'ит catalog row, пока не найдёт ровно один новый persisted row. Краткие retries имеют bounded exponential backoff; если JSONL ещё не появился или candidates неоднозначны, visible `Retry discovery` даёт пользователю явный recovery path вместо выбора чужой сессии.
+For the first turn of a new Pi session, the UI stores a baseline of known opaque IDs before launching Pi and does not auto-select a catalog row until it finds exactly one new persisted row. Short retries use bounded exponential backoff; if JSONL has not yet appeared or candidates are ambiguous, visible `Retry discovery` gives the user an explicit recovery path rather than selecting another session.
 
 #### 3.3 Partial writes
 
-Если файл заканчивается без LF:
+If a file ends without LF:
 
-- последняя неполная строка хранится только как scanner tail buffer;
-- она не индексируется как entry;
-- при следующем change bytes дописываются;
-- после длительного отсутствия изменений UI может показать non-destructive warning;
-- никакая repair write не выполняется автоматически.
+- the final incomplete line is kept only as a scanner tail buffer;
+- it is not indexed as an entry;
+- on the next change, bytes are appended;
+- after a prolonged lack of changes, the UI may show a non-destructive warning;
+- no repair write is performed automatically.
 
 #### 3.4 Rotation/move/delete
 
-- rename/move сопоставляется по file ID/hash where possible;
-- trash/delete удаляет index projection, но запись проекта остаётся;
-- появление файла с тем же path и другим identity считается новым scan generation;
-- scanner отменяет устаревшие jobs по generation token.
+- rename/move is matched by file ID/hash where possible;
+- trash/delete removes the index projection, but the project record remains;
+- a file appearing at the same path with a different identity is treated as a new scan generation;
+- the scanner cancels stale jobs by generation token.
 
 ### 4. Session projection
 
@@ -2891,14 +2951,14 @@ interface SessionProjection {
 Title fallback:
 
 1. Pi session name;
-2. первая непустая user message, очищенная и ограниченная длиной;
-3. локализованная дата + короткий ID.
+2. first non-empty user message, sanitized and length-limited;
+3. localized date + short ID.
 
-PiUI не делает скрытый LLM-вызов для генерации title.
+PiUI does not make a hidden LLM call to generate a title.
 
 ### 5. SQLite schema
 
-Рекомендуемые таблицы:
+Recommended tables:
 
 ```sql
 CREATE TABLE projects (
@@ -3000,41 +3060,41 @@ CREATE VIRTUAL TABLE message_fts USING fts5(
 );
 ```
 
-FTS может не индексировать thinking/tool payload по default privacy setting.
+FTS may not index thinking/tool payload under the default privacy setting.
 
-### 6. Миграции
+### 6. Migrations
 
-- App-owned metadata проходит обычные forward migrations.
-- Rebuildable `sessions_index`/FTS имеют independent generation and can be dropped/rebuilt.
-- Перед destructive metadata migration создаётся локальный backup DB.
-- Downgrade не обещается для mutable UI metadata; release rollback умеет восстановить previous backup.
-- Session JSONL никогда не участвует в PiUI DB migration.
-- Migration failure открывает app read-only/safe mode, не блокируя export path.
+- App-owned metadata undergoes normal forward migrations.
+- Rebuildable `sessions_index`/FTS have an independent generation and can be dropped/rebuilt.
+- A local backup DB is created before a destructive metadata migration.
+- Downgrade is not promised for mutable UI metadata; release rollback can restore the previous backup.
+- Session JSONL never participates in a PiUI DB migration.
+- A migration failure opens the app in read-only/safe mode without blocking the export path.
 
 ### 7. Session timeline paging
 
-Для неактивной сессии timeline читается scanner/repository страницами. Для активной:
+For an inactive session, the timeline is read in pages by the scanner/repository. For an active session:
 
-1. initial snapshot сверяется с Pi `get_entries`/state;
-2. historical pages могут приходить из read-only projection;
-3. live deltas идут от RPC;
-4. после append scanner подтверждает file revision;
-5. при расхождении IDs host делает resync, не сливает строки эвристически.
+1. the initial snapshot is reconciled with Pi `get_entries`/state;
+2. historical pages may come from the read-only projection;
+3. live deltas arrive through RPC;
+4. after append, the scanner confirms the file revision;
+5. on ID divergence, the host resynchronizes and does not merge lines heuristically.
 
-Desktop semantic timeline имеет `projectionVersion: 2`. Discovery/index path сохраняет только 120-character previews и не несёт стоимость rich rendering. Только bounded render rescan известной session повторно разбирает allowlisted Pi v3 content:
+The desktop semantic timeline has `projectionVersion: 2`. The discovery/index path retains only 120-character previews and does not bear the cost of rich rendering. Only a bounded render rescan of a known session reparses allowlisted Pi v3 content:
 
-- user/assistant Markdown: до 64 KiB на block;
-- reasoning/tool/custom/compaction: до 16 KiB;
-- суммарный display budget: 4 MiB с сохранением newest content;
-- `toolCall` + `toolResult` коррелируются внутри host и превращаются в один block;
-- call IDs, tool arguments/commands, raw entry JSON и unknown payload не пересекают IPC;
-- display-текст проходит bounded lexical path redaction: project prefix становится `<workspace>`, прочие absolute drive/UNC/POSIX paths — `<external-path>/<leaf>`;
-- runtime tool labels проходят ту же allowlist и неизвестные имена становятся `Tool activity`;
-- превышение budget обозначается `truncated`, а не маскируется как полный ответ.
+- user/assistant Markdown: up to 64 KiB per block;
+- reasoning/tool/custom/compaction: up to 16 KiB;
+- total display budget: 4 MiB while retaining newest content;
+- `toolCall` + `toolResult` are correlated inside the host and converted into one block;
+- call IDs, tool arguments/commands, raw entry JSON, and unknown payloads do not cross IPC;
+- display text passes through bounded lexical-path redaction: the project prefix becomes `<workspace>`, other absolute drive/UNC/POSIX paths become `<external-path>/<leaf>`;
+- runtime tool labels pass through the same allowlist and unknown names become `Tool activity`;
+- exceeding the budget is marked `truncated`, not disguised as a complete response.
 
-Первый latest-page request создаёт один host-private immutable projection cache для пары session/revision. Перед reuse older cursor host делает identity-bound streamed full-revision verification и canonical header attribution; cached blocks не выдаются за current после same-size/mtime rewrite или path replacement. Новый latest request снова наблюдает Pi JSONL и атомарно заменяет bounded cache.
+The first latest-page request creates one host-private immutable projection cache for the session/revision pair. Before reusing an older cursor, the host performs identity-bound streamed full-revision verification and canonical header attribution; cached blocks are not presented as current after a same-size/mtime rewrite or path replacement. A new latest request observes Pi JSONL again and atomically replaces the bounded cache.
 
-Frontend преобразует соседние `tool`/`thinking` blocks в одну activity group. Группа сворачивается после успешного завершения, раскрывается для running/failed/interrupted state и сохраняет ручное состояние при streaming updates. Это не меняет порядок blocks и не добавляет второй формат чатов.
+The frontend converts adjacent `tool`/`thinking` blocks into one activity group. The group collapses after successful completion, expands for a running/failed/interrupted state, and retains its manual state during streaming updates. This does not change block order or introduce a second chat format.
 
 Cursor:
 
@@ -3048,11 +3108,11 @@ interface EntryPageCursor {
 }
 ```
 
-Если file revision изменился, response указывает `staleCursor`, UI сохраняет визуальный anchor и запрашивает новый page.
+If the file revision changed, the response indicates `staleCursor`; the UI retains the visual anchor and requests a new page.
 
 ### 8. Tree representation
 
-Pi session format формирует дерево через entry IDs/parent IDs. PiUI создаёт read-only projection:
+The Pi session format forms a tree through entry IDs/parent IDs. PiUI creates a read-only projection:
 
 ```ts
 interface SessionTreeNode {
@@ -3068,22 +3128,22 @@ interface SessionTreeNode {
 
 Rules:
 
-- orphan node не удаляется; показывается diagnostic root group;
-- cycle считается corruption и разрывается только в projection;
-- порядок siblings берётся из file/event order;
-- current path определяется Pi state, если доступен, иначе последним leaf как heuristic с маркировкой;
-- navigation command никогда не реализуется записью `parentId`.
+- an orphan node is not deleted; it is displayed in a diagnostic root group;
+- a cycle is considered corruption and is broken only in the projection;
+- sibling order is taken from file/event order;
+- the current path is determined by Pi state when available, otherwise by the final leaf as a marked heuristic;
+- a navigation command is never implemented by writing `parentId`.
 
 ### 9. Drafts
 
-- draft сохраняется debounce, например 500–1000 ms, и при blur/window close;
-- один draft на `(project, session|null)`;
-- новый чат имеет `sessionId = null`, затем draft atomically rekeys на созданную session;
-- attachment references сохраняются без base64;
-- после успешной отправки draft очищается только после command accepted;
-- после crash text восстанавливается;
-- sensitive draft не попадает в logs/search index;
-- optional setting полностью отключает persistence drafts.
+- a draft is saved with debounce, for example 500–1000 ms, and on blur/window close;
+- one draft per `(project, session|null)`;
+- a new chat has `sessionId = null`, then the draft is atomically rekeyed to the created session;
+- attachment references are stored without base64;
+- after successful sending, the draft is cleared only after the command is accepted;
+- text is restored after a crash;
+- a sensitive draft does not enter logs/search index;
+- an optional setting fully disables draft persistence.
 
 ### 10. Attachment storage
 
@@ -3093,17 +3153,17 @@ App-managed location:
 <app-data>/attachments/<sha256-prefix>/<sha256>/<sanitized-name>
 ```
 
-Metadata хранит original path и copy time, но UI может скрывать sensitive absolute path в обычном view.
+Metadata retains the original path and copy time, but the UI may hide a sensitive absolute path in the standard view.
 
 Rules:
 
-- copy использует temp file + fsync/atomic rename where supported;
-- hash проверяется после copy;
-- одинаковое содержимое дедуплицируется физически, references остаются отдельными;
-- cleanup удаляет blob только если нет refs и прошло grace period;
-- attachment quota настраивается;
-- session trash не немедленно удаляет managed blob до grace period;
-- внешний файл не считается permanent без managed copy.
+- copy uses a temp file + fsync/atomic rename where supported;
+- the hash is checked after copying;
+- identical content is physically deduplicated; references remain separate;
+- cleanup deletes a blob only if there are no refs and the grace period has elapsed;
+- attachment quota is configurable;
+- session trash does not immediately delete a managed blob before the grace period;
+- an external file is not considered permanent without a managed copy.
 
 ### 11. Search
 
@@ -3119,139 +3179,139 @@ Filters:
 - date range;
 - model/provider where indexed;
 - has image/tool/error;
-- active/trashed not mixed.
+- active/trashed are not mixed.
 
 Privacy defaults:
 
-- raw tool arguments/results не индексируются;
-- thinking не индексируется;
-- excluded paths/session types можно настроить;
-- index can be wiped/rebuilt;
-- search result snippet sanitizes Markdown and paths;
+- raw tool arguments/results are not indexed;
+- thinking is not indexed;
+- excluded paths/session types can be configured;
+- the index can be wiped/rebuilt;
+- a search result snippet sanitizes Markdown and paths;
 - no remote embedding/indexing.
 
 ### 12. File watcher strategy
 
-- watcher создаётся host-side на resolved Pi session roots и на подтверждённые project-local roots, не на каждый file;
-- `notify` events считаются lossy scheduling hints: в WebView приходит только versioned `{ protocol, sequence, kind }`, без path/event/error payload;
-- events coalesced 200 ms; active selected catalog reconciliation получает hint первым;
-- overflow означает complete bounded reconciliation, не потерю cached state;
-- frontend всегда запускает редкий bounded polling через allowlisted catalog refresh command; watcher unavailable лишь убирает ускоряющий hint и никогда не лишает reconciliation fallback;
-- stale/duplicate hints coalesced per project; cached rows не очищаются до successful complete sweep, а incomplete sweep не маркируется `current`;
-- network filesystems и WSL mounts тестируются отдельно;
-- periodic integrity scan остаётся обязательным для same-stat in-place rewrite, который watcher/fingerprint не может доказательно исключить.
+- a watcher is created host-side on resolved Pi session roots and confirmed project-local roots, not for every file;
+- `notify` events are considered lossy scheduling hints: only versioned `{ protocol, sequence, kind }` reaches the WebView, without path/event/error payload;
+- events are coalesced for 200 ms; active selected catalog reconciliation receives the hint first;
+- overflow means complete bounded reconciliation, not loss of cached state;
+- the frontend always runs infrequent bounded polling through the allowlisted catalog refresh command; an unavailable watcher only removes the accelerating hint and never removes the reconciliation fallback;
+- stale/duplicate hints are coalesced per project; cached rows are not cleared before a successful complete sweep, and an incomplete sweep is not marked `current`;
+- network filesystems and WSL mounts are tested separately;
+- a periodic integrity scan remains mandatory for a same-stat in-place rewrite that the watcher/fingerprint cannot conclusively exclude.
 
 ### 13. Concurrent access CLI ↔ PiUI
 
-Возможен одновременный доступ к одной session из CLI и PiUI. До подтверждения upstream locking semantics PiUI применяет осторожную модель:
+Concurrent access to one session from the CLI and PiUI is possible. Until upstream locking semantics are confirmed, PiUI applies a cautious model:
 
-- scanner допускает внешние appends;
-- active runtime сравнивает revision/state;
-- при обнаружении второго writer показывает conflict banner;
-- не пытается merge два running turns;
-- пользователь выбирает: открыть read-only, остановить локальный runtime или создать fork/clone;
-- filesystem lock PiUI не выдаёт за гарантию, если Pi его не соблюдает;
-- data loss prevention важнее seamless multi-writer.
+- the scanner permits external appends;
+- the active runtime compares revision/state;
+- when a second writer is detected, it displays a conflict banner;
+- it does not attempt to merge two running turns;
+- the user chooses: open read-only, stop the local runtime, or create a fork/clone;
+- PiUI does not present a filesystem lock as a guarantee if Pi does not honor it;
+- data-loss prevention is more important than seamless multi-writer operation.
 
-Этот сценарий обязателен для spike и stress tests.
+This scenario is mandatory for spike and stress tests.
 
 ### 14. Export
 
-Приоритет — Pi RPC export. Host предоставляет generic export только как отдельный формат PiUI и не называет его upstream export.
+Pi RPC export has priority. The host provides generic export only as a separate PiUI format and does not call it upstream export.
 
-Форматы:
+Formats:
 
-- Pi-native export через runtime;
+- Pi-native export through runtime;
 - Markdown transcript;
 - JSON diagnostic/raw projection;
-- optional HTML standalone после sanitization.
+- optional standalone HTML after sanitization.
 
-Экспорт:
+Export:
 
-- не изменяет session;
-- явно указывает branch/current path;
-- позволяет исключить thinking/tool raw data;
-- обрабатывает local images как copied assets или data URLs с size warning;
-- пишет temp + atomic rename;
-- не перезаписывает без confirmation.
+- does not change the session;
+- explicitly indicates branch/current path;
+- allows thinking/tool raw data to be excluded;
+- handles local images as copied assets or data URLs with a size warning;
+- writes temp + atomic rename;
+- does not overwrite without confirmation.
 
-### 15. Trash и восстановление
+### 15. Trash and recovery
 
-PiUI использует системную корзину, где возможно. Он хранит tombstone только для UI refresh/undo window, не копию session content.
+PiUI uses the system Trash where possible. It retains a tombstone only for UI refresh/undo window, not a copy of session content.
 
 `Undo`:
 
-- доступен, если platform API вернул recoverable location/handle;
-- иначе UI честно направляет в system Trash;
-- при collision recovery создаёт безопасное имя и затем scanner сопоставляет Pi metadata;
-- активный runtime никогда не остаётся привязан к trashed file.
+- is available if the platform API returned a recoverable location/handle;
+- otherwise the UI honestly directs the user to the system Trash;
+- on recovery collision, it creates a safe name and then the scanner matches Pi metadata;
+- an active runtime never remains attached to a trashed file.
 
-### 16. Backup и recovery
+### 16. Backup and recovery
 
-PiUI не становится backup system, но:
+PiUI does not become a backup system, but:
 
-- перед любым host-side file move проверяет source/destination;
-- diagnostics умеет перечислить recent session paths;
-- corrupted JSONL можно открыть read-only до последней валидной line;
-- optional recovery copy создаётся только по явному действию;
-- repair никогда не переписывает original in place;
-- DB backup не выдаётся за backup chats.
+- before any host-side file move, it checks source/destination;
+- diagnostics can list recent session paths;
+- corrupted JSONL can be opened read-only through the last valid line;
+- an optional recovery copy is created only by explicit action;
+- repair never overwrites the original in place;
+- a DB backup is not presented as a chat backup.
 
 ### 17. Data retention
 
-Настройки:
+Settings:
 
-- logs retention (default короткий, например 7 дней);
+- logs retention (short by default, for example 7 days);
 - attachment cache quota/grace period;
 - thumbnail cache;
-- FTS on/off и clear;
+- FTS on/off and clear;
 - draft persistence on/off;
 - diagnostics bundle preview.
 
-Pi sessions не получают automatic retention policy от PiUI 1.0.
+Pi sessions receive no automatic retention policy from PiUI 1.0.
 
-### 18. Acceptance criteria данных
+### 18. Data acceptance criteria
 
-- Удаление PiUI DB и повторный запуск восстанавливают projects при наличии registry backup/import и полностью перестраивают sessions index; session files неизменны.
-- Scanner корректно обрабатывает partial last line и fragmented UTF-8.
-- Duplicate canonical project path не создаётся на Windows/Linux.
-- External CLI append появляется без app restart.
-- Concurrent writer обнаруживается и не вызывает silent merge.
-- Timeline page сохраняет anchor при reindex.
-- Managed attachment hash/provenance проверяемы.
-- Trash не оставляет active runtime.
-- FTS можно полностью очистить без удаления sessions.
-- Ни один code path не пишет Pi entry/parent ID напрямую.
+- Deleting the PiUI DB and restarting restores projects when a registry backup/import is available and fully rebuilds the sessions index; session files remain unchanged.
+- The scanner correctly handles a partial final line and fragmented UTF-8.
+- No duplicate canonical project path is created on Windows/Linux.
+- An external CLI append appears without an app restart.
+- A concurrent writer is detected and does not cause a silent merge.
+- A timeline page retains its anchor on reindex.
+- Managed attachment hash/provenance is verifiable.
+- Trash does not leave an active runtime.
+- FTS can be completely cleared without deleting sessions.
+- No code path writes a Pi entry/parent ID directly.
 
 ---
 
 <a id="security"></a>
 
-## 07. Безопасность
+## 07. Security
 
-_Исходный файл: `docs/07_SECURITY.md`._
+_Source file: `docs/07_SECURITY.md`._
 
-## 07. Безопасность и модель доверия
+## 07. Security and Trust Model
 
-### 1. Основная честная формулировка
+### 1. Core honest statement
 
-Pi и его backend extensions запускаются с правами локального пользователя. Project trust контролирует, какие project-local ресурсы загружаются, но **не превращает Pi в sandbox**. PiUI обязан сообщать это до первого запуска агента в новом проекте.
+Pi and its backend extensions run with the local user's permissions. Project trust controls which project-local resources are loaded, but **does not turn Pi into a sandbox**. PiUI must communicate this before the first agent launch in a new project.
 
-PiUI снижает риск UI и случайных действий, но не может обещать изоляцию malicious Pi tool/extension без отдельной OS/container sandbox architecture.
+PiUI reduces UI and accidental-action risk, but cannot promise isolation from a malicious Pi tool/extension without a separate OS/container sandbox architecture.
 
-### 2. Защищаемые активы
+### 2. Assets to protect
 
-- source code и остальные файлы пользователя;
-- Pi sessions и branch history;
-- provider credentials, OAuth tokens и API keys;
+- source code and the user's other files;
+- Pi sessions and branch history;
+- provider credentials, OAuth tokens, and API keys;
 - environment variables;
 - clipboard;
-- external files, выбранные пользователем;
+- external files selected by the user;
 - extension permission grants;
-- update channel и installed binaries;
-- integrity UI: permission/trust prompts и safe mode;
-- приватность prompt/tool output/logs;
-- availability приложения и отсутствие orphan processes.
+- update channel and installed binaries;
+- UI integrity: permission/trust prompts and safe mode;
+- privacy of prompts/tool output/logs;
+- application availability and absence of orphan processes.
 
 ### 3. Trust boundaries
 
@@ -3269,148 +3329,148 @@ PiUI снижает риск UI и случайных действий, но н�
                                       [Filesystem/network/providers]
 ```
 
-Отдельные trust decisions:
+Separate trust decisions:
 
-1. доверять проекту для запуска Pi/project-local resources;
-2. включить backend Pi extension;
-3. включить PiUI declarative contributions;
-4. дать permission rich view/worker;
-5. выбрать global shell replacement;
-6. открыть внешний link/file;
-7. передать секрет/clipboard/network access.
+1. trust the project to launch Pi/project-local resources;
+2. enable a backend Pi extension;
+3. enable PiUI declarative contributions;
+4. grant a rich view/worker permission;
+5. select a global shell replacement;
+6. open an external link/file;
+7. provide a secret/clipboard/network access.
 
-Один trust checkbox не заменяет все уровни.
+A single trust checkbox does not replace all levels.
 
-### 4. Threat actors и сценарии
+### 4. Threat actors and scenarios
 
 #### Malicious project
 
-Репозиторий может содержать project-local Pi extension/skill/instructions, которые выполняют команды или убеждают модель сделать опасное действие.
+A repository may contain project-local Pi extensions/skills/instructions that execute commands or persuade the model to take a dangerous action.
 
-Меры:
+Mitigations:
 
-- проект сначала открывается read-only/restricted;
-- до trust не запускается Pi в этом cwd и не загружается project-local executable UI code;
-- dialog перечисляет категории ресурсов, которые могут активироваться;
-- доступны `Open restricted`, `Trust and start`, `Cancel`;
-- trust можно отозвать;
-- смена canonical path/file identity может потребовать повторного решения.
+- the project initially opens read-only/restricted;
+- before trust, Pi is not launched in this cwd and project-local executable UI code is not loaded;
+- the dialog lists resource categories that may become active;
+- `Open restricted`, `Trust and start`, and `Cancel` are available;
+- trust can be revoked;
+- a change to canonical path/file identity may require a new decision.
 
 #### Malicious backend extension/tool
 
-Backend code выполняется внутри Pi environment с правами пользователя.
+Backend code executes inside the Pi environment with user permissions.
 
-Меры PiUI ограничены:
+PiUI mitigations are limited to:
 
-- показывать source/location/version extension;
-- не скрывать tool execution;
-- сохранять generic raw view;
-- позволять отключить package и открыть safe mode;
-- не выдавать backend extension дополнительные PiUI permissions автоматически;
-- не заявлять, что PiUI sandboxed этот код.
+- showing the extension source/location/version;
+- not hiding tool execution;
+- preserving a generic raw view;
+- allowing the package to be disabled and safe mode to be opened;
+- not automatically granting a backend extension additional PiUI permissions;
+- not claiming that PiUI sandboxes this code.
 
-Будущая container/OS sandbox — отдельный проект и ADR.
+A future container/OS sandbox is a separate project and ADR.
 
 #### Malicious PiUI rich view
 
-View может пытаться читать filesystem, вызывать host, красть clipboard/token или делать phishing UI.
+A view may try to read the filesystem, call the host, steal the clipboard/token, or create phishing UI.
 
-Меры:
+Mitigations:
 
 - sandboxed isolated surface;
-- без direct Tauri API;
-- capability broker и host-side checks;
-- network deny by default;
-- visible extension identity в frame/header/permission prompt;
+- no direct Tauri API;
+- capability broker and host-side checks;
+- network denied by default;
+- visible extension identity in the frame/header/permission prompt;
 - no unrestricted overlays above immutable host prompts;
 - rate/payload/time limits;
-- CSP и navigation blocking;
+- CSP and navigation blocking;
 - kill/revoke/crash-loop handling.
 
 #### Prompt/tool output as active content
 
-Markdown может содержать HTML, links, SVG/data payloads или terminal escapes.
+Markdown may contain HTML, links, SVG/data payloads, or terminal escapes.
 
-Меры:
+Mitigations:
 
-- raw HTML disabled or sanitized allowlist;
-- scripts, event attributes, iframes, forms, style injection запрещены;
-- links открываются через host policy;
-- `file:` и custom schemes требуют validation;
-- ANSI escape sequences не передаются terminal emulator; text renderer sanitizes controls;
-- SVG рассматривается как active content: rasterize/sandbox или block inline;
-- code blocks — text only;
-- bidi/control characters могут визуально маркироваться в sensitive paths/code.
+- raw HTML disabled or restricted to a sanitized allowlist;
+- scripts, event attributes, iframes, forms, and style injection prohibited;
+- links opened through host policy;
+- `file:` and custom schemes require validation;
+- ANSI escape sequences are not passed to a terminal emulator; the text renderer sanitizes controls;
+- SVG is treated as active content: rasterize/sandbox it or block it inline;
+- code blocks are text only;
+- bidi/control characters may be visually marked in sensitive paths/code.
 
 #### Compromised update/package source
 
-Меры:
+Mitigations:
 
 - signed desktop updates;
-- HTTPS insufficient alone; verify signature/hash;
-- managed Pi artifacts pinned in signed PiUI release manifest, включая upstream version, target, origin и checksum;
-- предпочитать официальный standalone release artifact либо воспроизводимую сборку из versioned release source; не выполнять runtime `npm install` из приложения;
-- генерировать SBOM/provenance и проверять upstream hash до упаковки;
+- HTTPS alone is insufficient; verify signature/hash;
+- managed Pi artifacts pinned in a signed PiUI release manifest, including upstream version, target, origin, and checksum;
+- prefer an official standalone release artifact or a reproducible build from versioned release source; do not run runtime `npm install` from the application;
+- generate SBOM/provenance and verify the upstream hash before packaging;
 - atomic update + rollback;
-- no install during running turn;
-- extension marketplace отсутствует в 1.0;
-- local package source и fingerprint видимы;
+- no installation during a running turn;
+- no extension marketplace in 1.0;
+- local package source and fingerprint visible;
 - package manifest parsing does not execute scripts;
 - shell selection requires explicit trust and restart.
 
 ### 5. Project trust UX
 
-Рекомендуемый текст по смыслу:
+Recommended wording in substance:
 
-> Pi и расширения этого проекта могут читать и изменять файлы и запускать процессы с вашими пользовательскими правами. Это не песочница.
+> Pi and this project's extensions may read and modify files and run processes with your user permissions. This is not a sandbox.
 
-Dialog показывает:
+The dialog shows:
 
 - canonical project path;
-- найденные project-local Pi resources/packages;
-- выбранный Pi executable;
-- действия `Открыть без запуска`, `Доверять и запустить`, `Отмена`;
-- ссылку на подробности;
-- checkbox «запомнить для этого неизменённого пути/source» только при достаточной identity model.
+- discovered project-local Pi resources/packages;
+- selected Pi executable;
+- `Open without starting`, `Trust and start`, and `Cancel` actions;
+- a link to details;
+- a “remember for this unchanged path/source” checkbox only with a sufficient identity model.
 
-Нельзя использовать только расплывчатое «Этот проект может быть небезопасен».
+Do not use only the vague “This project may be unsafe.”
 
 #### Restricted mode
 
-В restricted mode разрешено:
+Restricted mode permits:
 
-- просматривать проиндексированную историю;
-- просматривать project path и session metadata;
-- экспортировать существующую session;
-- менять глобальные PiUI settings.
+- viewing indexed history;
+- viewing the project path and session metadata;
+- exporting an existing session;
+- changing global PiUI settings.
 
-Запрещено:
+Prohibited:
 
-- запускать Pi в project cwd;
-- загружать project-local backend/UI code;
-- читать произвольные project files через extension API;
-- отправлять prompt, который запустит tools в проекте.
+- launching Pi in the project cwd;
+- loading project-local backend/UI code;
+- reading arbitrary project files through the extension API;
+- sending a prompt that will launch tools in the project.
 
 ### 6. Tauri/WebView boundary
 
-Frontend получает только узкие allowlisted commands. Требования:
+The frontend receives only narrow allowlisted commands. Requirements:
 
-- Tauri capability files минимальны и разделены по window/surface;
-- extension views не наследуют core window capabilities;
-- CSP запрещает remote scripts и `unsafe-eval` в production;
-- devtools отключены в production либо доступны через explicit diagnostic build;
-- custom protocols проверяют origin и canonical path;
-- deep links считаются untrusted input;
+- Tauri capability files are minimal and separated by window/surface;
+- extension views do not inherit core window capabilities;
+- CSP prohibits remote scripts and `unsafe-eval` in production;
+- devtools are disabled in production or available through an explicit diagnostic build;
+- custom protocols validate origin and canonical path;
+- deep links are treated as untrusted input;
 - no generic `execute(command: string)` IPC;
-- no generic `readFile(path: string)` для extension views;
+- no generic `readFile(path: string)` for extension views;
 - IPC DTO size/rate limits;
 - every sensitive command checks current window/view identity.
 
-Core frontend тоже не считается полностью доверенным к OS; проверка всегда повторяется в Rust.
+The core frontend is also not considered fully trusted with the OS; validation is always repeated in Rust.
 
 ### 7. Path policy
 
-Host принимает typed resource references:
+The host accepts typed resource references:
 
 ```ts
 type ResourceRef =
@@ -3425,46 +3485,46 @@ Rules:
 - canonicalize before policy check;
 - reject traversal after decoding, not only literal `..`;
 - handle symlinks/junctions and TOCTOU where possible;
-- project read/write stays within canonical root unless external handle granted;
-- package resources stay within immutable/resolved package root;
+- project read/write stays within the canonical root unless an external handle is granted;
+- package resources stay within the immutable/resolved package root;
 - Windows reserved devices/alternate data streams tested;
 - file size/type limits before reading into memory;
-- writes use temp + atomic replace and conflict token;
-- extension never receives unrestricted absolute path unless permission contract explicitly requires it and user approves.
+- writes use temp + atomic replace and a conflict token;
+- an extension never receives an unrestricted absolute path unless the permission contract explicitly requires it and the user approves.
 
 ### 8. Process execution
 
-- Pi executable resolved by trusted runtime profile, never project-controlled PATH mutation without display;
-- args constructed as array, not shell string;
+- Pi executable resolved by trusted runtime profile, never by a project-controlled PATH mutation without display;
+- args constructed as an array, not a shell string;
 - shell invocation avoided;
 - working directory validated;
 - environment built from allowlisted inherited variables + Pi-required config;
-- secrets not copied into diagnostic env dump;
+- secrets not copied into diagnostic environment dumps;
 - process group/job object owns descendants;
-- force stop terminates tree;
+- force stop terminates the tree;
 - output frame limits protect memory;
 - stderr ring buffer redacts known secret patterns and paths for export;
 - custom executable mode visibly marked.
 
-Tools launched by Pi may create descendants outside controllable tree; PiUI documents this limitation rather than claiming perfect cleanup.
+Tools launched by Pi may create descendants outside the controllable tree; PiUI documents this limitation rather than claiming perfect cleanup.
 
-### 9. Secrets и authentication
+### 9. Secrets and authentication
 
 - Pi owns provider credentials;
 - PiUI does not mirror secret values in SQLite/frontend stores;
-- platform credential store used only for PiUI extension secrets;
+- the platform credential store is used only for PiUI extension secrets;
 - password inputs disable copy/display by default but permit explicit reveal;
 - auth subprocess transcript is not persisted in normal logs;
 - screenshots/support bundles exclude secret surfaces where technically possible;
 - errors are redacted before crossing IPC;
-- environment variables shown only by name unless explicit diagnostic reveal;
-- clipboard secret copy clears only if platform support and user chooses; no false guarantee.
+- environment variables are shown only by name unless explicitly revealed for diagnostics;
+- clipboard secret copy clears only if platform support exists and the user chooses it; no false guarantee.
 
-Secret redaction is defense-in-depth, not proof that arbitrary tool output cannot echo a key. UI warns before exporting raw logs/tool results.
+Secret redaction is defense in depth, not proof that arbitrary tool output cannot echo a key. The UI warns before exporting raw logs/tool results.
 
 ### 10. Extension permissions
 
-Host checks:
+The host checks:
 
 - extension ID + package fingerprint;
 - source scope (global/project);
@@ -3475,49 +3535,49 @@ Host checks:
 - requested resource/origin;
 - request rate/size.
 
-Package update/fingerprint change invalidates high-risk grants (`project.write`, `network`, `secrets`, `ui.shell`) unless signature/publisher policy explicitly supports continuity.
+A package update/fingerprint change invalidates high-risk grants (`project.write`, `network`, `secrets`, `ui.shell`) unless signature/publisher policy explicitly supports continuity.
 
-Permission prompts cannot be rendered by extension-controlled HTML. Rich view pauses while host prompt is active.
+Permission prompts cannot be rendered by extension-controlled HTML. The rich view pauses while a host prompt is active.
 
 ### 11. Network policy
 
-Core Pi network belongs to Pi/provider/tool behavior and is outside PiUI rich-view proxy.
+Core Pi network belongs to Pi/provider/tool behavior and is outside the PiUI rich-view proxy.
 
 PiUI extension network:
 
 - denied by default;
 - manifest declares origin patterns;
 - user approves actual origins;
-- requests flow through host proxy;
+- requests flow through the host proxy;
 - schemes limited to HTTPS by default;
-- localhost/private network ranges require separate high-risk grant;
+- localhost/private network ranges require a separate high-risk grant;
 - redirects revalidated;
 - credentials/cookies isolated per extension or absent;
 - response size/time limits;
 - no raw socket/listener API in v1;
-- user-agent identifies PiUI extension request without leaking project path.
+- user-agent identifies a PiUI extension request without leaking the project path.
 
 ### 12. Link/open behavior
 
-- `https:` link: preview domain and open in system browser after policy/user action;
+- `https:` link: preview the domain and open in the system browser after policy/user action;
 - `mailto:`: explicit user action;
-- `file:`: never directly navigate WebView; resolve through host and reveal/open with confirmation;
+- `file:`: never navigate the WebView directly; resolve through the host and reveal/open with confirmation;
 - `project:`: open internal preview/editor integration, not browser navigation;
-- executable file: reveal in folder by default, running it is not a core link action;
-- unknown scheme blocked with diagnostic.
+- executable file: reveal in folder by default; running it is not a core link action;
+- unknown scheme blocked with diagnostics.
 
-Markdown link text cannot hide target domain in confirmation.
+Markdown link text cannot hide the target domain in confirmation.
 
-### 13. Images и media
+### 13. Images and media
 
-- content-sniff MIME, do not trust filename;
+- content-sniff MIME; do not trust filename;
 - decode limits protect against decompression bombs;
 - SVG is not inserted inline as trusted markup;
 - EXIF metadata can contain sensitive data; PiUI does not automatically upload media except through explicit send;
 - thumbnails stored in cache with quota;
 - external image URLs in messages are not fetched automatically by default;
 - data/blob URLs bounded;
-- image preview uses isolated decoder paths available in system WebView; high-risk formats can be blocked.
+- image preview uses isolated decoder paths available in the system WebView; high-risk formats can be blocked.
 
 ### 14. Session integrity
 
@@ -3528,9 +3588,9 @@ Markdown link text cannot hide target domain in confirmation.
 - concurrent writer detection;
 - corruption repair only to a new copy;
 - session path not accepted from renderer payload without lookup in registry;
-- SQLite cache never overwrites newer file projection based on stale revision.
+- SQLite cache never overwrites a newer file projection based on a stale revision.
 
-### 15. Logging и diagnostics
+### 15. Logging and diagnostics
 
 Production logs include:
 
@@ -3545,7 +3605,7 @@ Excluded by default:
 - prompt/assistant text;
 - tool args/results;
 - full absolute paths;
-- env values;
+- environment values;
 - auth content;
 - extension storage values;
 - attachment contents;
@@ -3555,7 +3615,7 @@ Support bundle workflow:
 
 1. build local bundle;
 2. show manifest/size/categories;
-3. let user include optional redacted/raw sections;
+3. let the user include optional redacted/raw sections;
 4. save locally;
 5. PiUI does not upload automatically.
 
@@ -3563,35 +3623,35 @@ Support bundle workflow:
 
 Safe mode activates when:
 
-- user holds documented startup modifier;
-- CLI flag/environment is passed;
-- previous shell/view caused crash loop;
-- integrity check fails;
-- Settings requests restart in safe mode.
+- the user holds the documented startup modifier;
+- a CLI flag/environment is passed;
+- the previous shell/view caused a crash loop;
+- an integrity check fails;
+- Settings requests a restart in safe mode.
 
 Safe mode:
 
-- uses core theme/shell;
+- uses the core theme/shell;
 - disables all PiUI workers/views/shell packages;
 - disables project-local Pi resources until explicit re-trust/start;
-- can optionally disable all backend extensions via safe runtime profile;
+- can optionally disable all backend extensions via a safe runtime profile;
 - opens diagnostics/extensions management;
 - never edits sessions merely by launching.
 
-Recovery shortcut must work outside extension-controlled DOM, например native menu/global startup handling.
+The recovery shortcut must work outside extension-controlled DOM, for example through native menu/global startup handling.
 
 ### 17. Update security
 
 - platform code signing where available;
 - updater verifies signed metadata and artifact;
 - rollback-safe version metadata;
-- managed runtime manifest binds PiUI compatibility range, hash and source;
+- managed runtime manifest binds PiUI compatibility range, hash, and source;
 - no silent downgrade;
-- update channel stable/beta/dev explicit;
-- dev builds visibly marked and do not consume stable grants blindly;
+- stable/beta/dev update channel explicit;
+- dev builds visibly marked and do not blindly consume stable grants;
 - SBOM and dependency audit generated in CI;
-- reproducible build goals tracked even if full reproducibility is not initially achieved;
-- compromised key response/revocation process documented before public release.
+- reproducible-build goals tracked even if full reproducibility is not initially achieved;
+- compromised-key response/revocation process documented before public release.
 
 ### 18. Security testing
 
@@ -3603,7 +3663,7 @@ Minimum suite:
 - extension iframe breakout attempts;
 - unauthorized host API calls and forged channel tokens;
 - redirect/private-network checks;
-- permission revocation during active request;
+- permission revocation during an active request;
 - package fingerprint change;
 - shell crash loop and safe-mode recovery;
 - secret redaction snapshots;
@@ -3615,45 +3675,45 @@ Fuzz targets: RPC codec, session line decoder, manifest parser, UiNode validator
 
 ### 19. Security release gates
 
-Public 1.0 запрещён, пока:
+Public 1.0 is prohibited until:
 
-- trust wording не reviewed на точность;
-- extension views не изолированы от Tauri IPC;
-- arbitrary shell/path IPC отсутствует;
-- signed update path не протестирован;
-- safe mode не работает при broken shell;
-- process tree cleanup не проверен на Windows/Linux;
-- diagnostics не проходит secret-content review;
-- generic renderers безопасно обрабатывают hostile content;
-- high-risk permission grants инвалидируются при package identity change.
+- trust wording has been reviewed for accuracy;
+- extension views are isolated from Tauri IPC;
+- arbitrary shell/path IPC is absent;
+- signed update path has been tested;
+- safe mode works with a broken shell;
+- process-tree cleanup has been verified on Windows/Linux;
+- diagnostics passes secret-content review;
+- generic renderers safely handle hostile content;
+- high-risk permission grants are invalidated on package identity change.
 
 ---
 
 <a id="testing"></a>
 
-## 08. Тестирование и производительность
+## 08. Testing and performance
 
-_Исходный файл: `docs/08_TESTING_AND_PERFORMANCE.md`._
+_Source file: `docs/08_TESTING_AND_PERFORMANCE.md`._
 
-## 08. Тестирование, производительность и критерии приёмки
+## 08. Testing, Performance, and Acceptance Criteria
 
-### 1. Цель качества
+### 1. Quality objective
 
-PiUI не считается «лёгким» по выбору Tauri или субъективному впечатлению. Лёгкость и скорость подтверждаются повторяемыми измерениями, где desktop shell и Pi runtime учитываются раздельно.
+PiUI is not considered “lightweight” merely because it uses Tauri or based on subjective impression. Lightness and speed are demonstrated by repeatable measurements that account for the desktop shell and Pi runtime separately.
 
-Performance budgets ниже — критерии проекта, а не уже достигнутые показатели.
+The performance budgets below are project criteria, not metrics already achieved.
 
 ### 2. Reference environments
 
-Минимум три baseline machine profiles:
+At least three baseline machine profiles:
 
 #### Low/mid Windows
 
-- 4 физических/логических производительных cores уровня Intel i5-8250U или близкого;
+- 4 physical/logical high-performance cores comparable to an Intel i5-8250U;
 - 16 GiB RAM;
 - SSD;
-- поддерживаемая Windows 11 x64;
-- system WebView2 stable;
+- supported Windows 11 x64;
+- stable system WebView2;
 - 1920×1080, 100–150% scale.
 
 #### Linux baseline
@@ -3661,34 +3721,34 @@ Performance budgets ниже — критерии проекта, а не уже
 - 4-core x86-64;
 - 16 GiB RAM;
 - SSD;
-- актуальный поддерживаемый Ubuntu LTS/GNOME и один дополнительный distro family;
-- system WebKitGTK version из release matrix;
-- Wayland и X11 smoke coverage.
+- current supported Ubuntu LTS/GNOME and one additional distro family;
+- system WebKitGTK version from the release matrix;
+- Wayland and X11 smoke coverage.
 
 #### macOS candidate
 
 - Apple M1, 8 GiB RAM;
-- поддерживаемая macOS;
+- supported macOS;
 - system WKWebView.
 
-CI runners полезны для regression, но release performance decision принимается на закреплённых физических машинах.
+CI runners are useful for regression, but release performance decisions are made on dedicated physical machines.
 
 ### 3. Test datasets
 
-Версионированные synthetic/anonymized fixtures:
+Versioned synthetic/anonymized fixtures:
 
 - `empty-project`: 0 sessions;
 - `normal-project`: 50 sessions, 1,000 entries;
 - `large-project`: 500 sessions, 50,000 entries;
 - `long-session`: 10,000 timeline blocks;
-- `tool-heavy`: 2,000 tool calls, большие JSON/text results;
+- `tool-heavy`: 2,000 tool calls, large JSON/text results;
 - `branch-heavy`: ≥2,000 tree nodes, ≥100 leaves;
 - `unicode`: RTL, emoji, combining marks, invalid/partial UTF-8 boundaries;
 - `images`: common formats, large dimensions, corrupt images, SVG;
 - `partial-jsonl`: incomplete last line and chunk boundaries;
 - `corrupt-jsonl`: malformed entry, duplicate IDs, orphan/cycle projection;
 - `extensions`: backend-only, declarative, rich view, broken view, shell crash;
-- `concurrent-writer`: external appends while PiUI active.
+- `concurrent-writer`: external appends while PiUI is active.
 
 Fixtures must not contain real credentials or user chats.
 
@@ -3696,9 +3756,9 @@ Fixtures must not contain real credentials or user chats.
 
 #### 4.1 Startup
 
-Измерять cold OS cache и warm cache отдельно. Release gate использует минимум 20 runs, reports p50/p95.
+Measure cold OS cache and warm cache separately. The release gate uses at least 20 runs and reports p50/p95.
 
-| Метрика | Budget |
+| Metric | Budget |
 |---|---|
 | process start → first visible core frame, warm | p50 ≤ 0.8 s, p95 ≤ 1.5 s |
 | process start → usable sidebar with cached registry | p50 ≤ 1.5 s, p95 ≤ 2.5 s |
@@ -3706,27 +3766,27 @@ Fixtures must not contain real credentials or user chats.
 | open cached long session → first viewport | p95 ≤ 0.8 s |
 | network/provider/model lookup on critical first-paint path | 0 blocking calls |
 
-Cold cache target may be up to 2× warm budget but is tracked separately. Splash screen не считается usable frame.
+The cold-cache target may be up to 2× the warm budget but is tracked separately. A splash screen does not count as a usable frame.
 
 #### 4.2 Memory
 
-Resident set измеряется после 60 seconds idle, окно visible, no Pi runtime, normal project loaded.
+Resident set is measured after 60 seconds idle, with the window visible, no Pi runtime, and a normal project loaded.
 
-| Метрика | Budget |
+| Metric | Budget |
 |---|---|
 | Windows/macOS core app RSS | target ≤ 120 MiB, hard gate ≤ 160 MiB |
 | Linux core app RSS | target ≤ 150 MiB, hard gate ≤ 190 MiB |
-| growth после 50 open/close session cycles | ≤ 15 MiB retained после GC/settle |
-| hidden rich view после dispose | ≤ 2 MiB unexplained retained per cycle |
+| growth after 50 open/close session cycles | ≤ 15 MiB retained after GC/settle |
+| hidden rich view after dispose | ≤ 2 MiB unexplained retained per cycle |
 | attachment/image previews after close | no unbounded growth |
 
-Pi process, provider SDK caches и child tools измеряются отдельными рядами. Итоговый user-visible report показывает **Total = PiUI + live Pi runtimes + child processes**, чтобы не скрывать реальное потребление.
+Pi process, provider SDK caches, and child tools are measured in separate series. The final user-visible report shows **Total = PiUI + live Pi runtimes + child processes** so actual consumption is not hidden.
 
-#### 4.3 CPU и responsiveness
+#### 4.3 CPU and responsiveness
 
-| Метрика | Budget |
+| Metric | Budget |
 |---|---|
-| idle CPU, averaged 60 s | < 0.5% одного core target; <1% hard gate |
+| idle CPU, averaged 60 s | < 0.5% of one core target; <1% hard gate |
 | composer keystroke input latency | p95 < 16 ms |
 | token/event received → painted | p95 < 75 ms, p99 < 150 ms |
 | stream scheduler backlog under 50 events/s | p95 < 100 ms |
@@ -3734,19 +3794,19 @@ Pi process, provider SDK caches и child tools измеряются отдель
 | sidebar search response on 500 sessions | p95 < 100 ms after index ready |
 | menu/dialog open | p95 < 100 ms |
 
-Animation disabled/reduced-motion path also тестируется.
+The animation-disabled/reduced-motion path is also tested.
 
 #### 4.4 Indexing/I/O
 
-| Метрика | Budget |
+| Metric | Budget |
 |---|---|
 | startup header scan, 500 unchanged sessions | p95 ≤ 1.5 s and non-blocking UI |
 | incremental append visible in sidebar/timeline | p95 ≤ 500 ms after filesystem event |
 | full FTS rebuild 50,000 entries | completes without UI stalls >100 ms |
-| idle indexer CPU | throttled; no sustained >25% one core without visible progress/control |
+| idle indexer CPU | throttled; no sustained >25% of one core without visible progress/control |
 | database size | tracked vs source text; no raw binary attachment duplication |
 
-Absolute FTS duration зависит от storage; release regression gate uses ±15% against baseline plus responsiveness limits.
+Absolute FTS duration depends on storage; the release regression gate uses ±15% against baseline plus responsiveness limits.
 
 #### 4.5 Package
 
@@ -3754,7 +3814,7 @@ Absolute FTS duration зависит от storage; release regression gate uses 
 - runtime and UI artifact sizes reported separately;
 - no dependency may add >5 MiB compressed without ADR;
 - duplicate JS libraries detected in bundle report;
-- source maps not shipped publicly unless access-controlled policy exists.
+- source maps not shipped publicly unless an access-controlled policy exists.
 
 ### 5. Unit tests
 
@@ -3784,9 +3844,9 @@ Absolute FTS duration зависит от storage; release regression gate uses 
 - stores do not retain disposed sessions/views;
 - settings validation.
 
-Coverage percentage не заменяет scenario coverage. Critical parsers/state machines require branch-oriented tests and mutation/fuzz where practical.
+Coverage percentage does not replace scenario coverage. Critical parsers/state machines require branch-oriented tests and mutation/fuzz testing where practical.
 
-Для изменений в correctness-sensitive Rust paths (identity/revision checks, LF framing, parser limits, generation/CAS/sweep, trust admission) обязателен targeted mutation-test run через `cargo mutants` до merge. В PR фиксируются examined functions, killed/survived/unviable mutants и обоснование каждого допустимого survivor; mutation tool не добавляется в production dependencies. Репозиторий предоставляет `pnpm mutation:test` для index/catalog-reconciler gate, включая path-free persisted Appearance preference codec, и `pnpm mutation:catalog-state` для freshness/coalescing state machine; более узкий или расширенный `cargo mutants` invocation фиксируется рядом с изменением.
+For changes in correctness-sensitive Rust paths (identity/revision checks, LF framing, parser limits, generation/CAS/sweep, trust admission), a targeted mutation-test run through `cargo mutants` is mandatory before merge. The PR records examined functions, killed/survived/unviable mutants, and the justification for each acceptable survivor; the mutation tool is not added to production dependencies. The repository provides `pnpm mutation:test` for the index/catalog-reconciler gate, including the path-free persisted Appearance preference codec, and `pnpm mutation:catalog-state` for the freshness/coalescing state machine; a narrower or broader `cargo mutants` invocation is recorded alongside the change.
 
 ### 6. Contract tests
 
@@ -3810,7 +3870,7 @@ CI checks:
 - old extension fixture works on new host within supported major;
 - new optional fields ignored by old parser fixture where required.
 
-### 7. Integration tests с Pi
+### 7. Integration tests with Pi
 
 Use a real pinned Pi runtime in integration CI plus a deterministic fake RPC runtime.
 
@@ -3828,7 +3888,7 @@ Supports scripted:
 - delayed abort;
 - large payload.
 
-Fake runtime делает tests быстрыми и воспроизводимыми.
+The fake runtime makes tests fast and reproducible.
 
 #### Real Pi matrix
 
@@ -3837,11 +3897,11 @@ Fake runtime делает tests быстрыми и воспроизводимы
 - oldest supported version;
 - optional development/nightly signal, non-blocking until intentionally supported.
 
-Real tests verify CLI↔PiUI session round-trip, extensions and actual startup/shutdown semantics.
+Real tests verify CLI↔PiUI session round-trip, extensions, and actual startup/shutdown semantics.
 
 ### 8. E2E flows
 
-Обязательные Playwright/Tauri harness scenarios:
+Required Playwright/Tauri harness scenarios:
 
 1. add folder → restricted view → trust → create chat;
 2. open existing CLI session → continue → reopen in CLI fixture;
@@ -3901,7 +3961,7 @@ Tests should assert host state/data, not only screenshots.
 - file dialogs/trash/keychain;
 - Retina/multiple spaces.
 
-Windows and Linux release blockers имеют одинаковый приоритет.
+Windows and Linux release blockers have equal priority.
 
 ### 10. Accessibility tests
 
@@ -3911,18 +3971,18 @@ Windows and Linux release blockers имеют одинаковый приори�
 - screen-reader labels for icon buttons;
 - streamed assistant content announced in throttled meaningful chunks, not token-by-token;
 - status changes use appropriate live regions;
-- color contrast core themes and contributed themes;
+- color contrast for core themes and contributed themes;
 - 200% zoom/reflow;
 - reduced motion;
 - high contrast/system theme behavior;
 - tool card/raw JSON navigability;
 - rich view accessibility responsibility documented and auditable.
 
-Manual matrix includes NVDA on Windows and Orca on Linux; VoiceOver for macOS release.
+The manual matrix includes NVDA on Windows and Orca on Linux; VoiceOver for macOS release.
 
 ### 11. Security tests
 
-Использовать checklist из `07_SECURITY.md` плюс:
+Use the checklist from `07_SECURITY.md` plus:
 
 - Tauri capabilities snapshot test;
 - no extension origin can invoke core IPC;
@@ -3937,9 +3997,9 @@ Manual matrix includes NVDA on Windows and Orca on Linux; VoiceOver for macOS re
 - network redirect revalidation;
 - safe mode independent of shell DOM.
 
-Public release требует targeted external security review extension broker/update boundary.
+Public release requires a targeted external security review of the extension broker/update boundary.
 
-### 12. Fuzz и property-based testing
+### 12. Fuzz and property-based testing
 
 Targets:
 
@@ -3952,17 +4012,17 @@ Targets:
 - tree projection invariant: no infinite traversal;
 - event reducer invariant: revision monotonicity/idempotence.
 
-Fuzz corpus пополняется каждым production-like parser incident.
+The fuzz corpus is expanded with every production-like parser incident.
 
 ### 13. Chaos/recovery tests
 
-Во время каждого этапа случайно:
+At each stage, randomly:
 
 - kill Pi parent/child;
 - freeze stdout;
 - close stdin;
-- truncate only fixture copy of session file;
-- append from external writer;
+- truncate only the fixture copy of the session file;
+- append from an external writer;
 - reload WebView;
 - revoke project/extension permission;
 - remove project path;
@@ -3971,7 +4031,7 @@ Fuzz corpus пополняется каждым production-like parser incident.
 - crash rich view/worker;
 - interrupt update.
 
-Assertions: no silent data mutation, shell remains usable or safe recovery appears, diagnostics gives stable error code.
+Assertions: no silent data mutation, the shell remains usable or safe recovery appears, and diagnostics provides a stable error code.
 
 ### 14. Performance harness
 
@@ -3996,14 +4056,14 @@ Harness records:
 - artifact/bundle sizes;
 - raw result JSON and human report.
 
-CI comments regression; release branch blocks on hard budgets or >15% regression without approved ADR.
+CI comments on regressions; the release branch blocks on hard budgets or >15% regression without an approved ADR.
 
 ### 15. Profiling rules
 
 - measure packaged release build, not only dev server;
 - warmup runs excluded according to fixed method;
 - no unrelated apps/update tasks on physical benchmark machine;
-- GC cannot be manually forced unless same procedure used for baseline and clearly reported;
+- GC cannot be manually forced unless the same procedure is used for the baseline and clearly reported;
 - system WebView version recorded;
 - memory sampled long enough to detect delayed cleanup;
 - active Pi/provider network latency excluded from UI render metric but separately reported;
@@ -4020,7 +4080,7 @@ Snapshot only stable surfaces:
 - compact/narrow layout;
 - 100/150/200% scale.
 
-Do not snapshot dynamic timestamps/tokens without normalization. Visual diff complements semantic assertions, not replaces them.
+Do not snapshot dynamic timestamps/tokens without normalization. Visual diff complements semantic assertions; it does not replace them.
 
 ### 17. Upgrade/rollback tests
 
@@ -4068,120 +4128,120 @@ Do not snapshot dynamic timestamps/tokens without normalization. Visual diff com
 ### 19. Severity model
 
 - **P0:** data loss, secret exposure, update compromise, sandbox/IPC escape, inability to recover shell.
-- **P1:** incorrect prompt/tool action, orphan process with effects, session corruption/conflict hidden, app unusable on mandatory platform.
+- **P1:** incorrect prompt/tool action, orphan process with effects, hidden session corruption/conflict, app unusable on mandatory platform.
 - **P2:** major feature broken with workaround, substantial performance/accessibility regression.
 - **P3:** localized UX/visual defect.
 
-P0/P1 block release. Performance hard-gate failure is at least P1 for release, not cosmetic debt.
+P0/P1 block release. A performance hard-gate failure is at least P1 for release, not cosmetic debt.
 
 ---
 
 <a id="roadmap"></a>
 
-## 09. Roadmap и инженерные задачи
+## 09. Roadmap and engineering tasks
 
-_Исходный файл: `docs/09_ROADMAP_AND_TASKS.md`._
+_Source file: `docs/09_ROADMAP_AND_TASKS.md`._
 
-## 09. Порядок реализации и инженерные задачи
+## 09. Implementation Order and Engineering Tasks
 
-### 1. Правило исполнения
+### 1. Execution Rule
 
-Реализация идёт через вертикальные проверяемые slices. Нельзя сначала построить весь красивый frontend, а затем «подключить Pi». Самый ранний рабочий slice должен открыть реальную session, отправить prompt, отобразить streaming и пережить crash процесса.
+Implementation proceeds through vertically testable slices. You must not first build the entire attractive frontend and then “connect Pi.” The earliest working slice must open a real session, send a prompt, display streaming, and survive a process crash.
 
-Первый обязательный gate — spikes из Phase 0. Их результаты могут уточнить transport, но не отменяют инвариант: Pi остаётся владельцем agent/session semantics.
+The first mandatory gate is the spikes from Phase 0. Their results may refine the transport, but do not invalidate the invariant: Pi remains the owner of agent/session semantics.
 
-### 2. Рабочие потоки
+### 2. Workstreams
 
-- **W0 Contracts:** schemas, DTO, fixtures, compatibility.
+- **W0 Contracts:** schemas, DTOs, fixtures, compatibility.
 - **W1 Runtime:** Rust supervisor, RPC codec, Pi adapter, process tree.
 - **W2 Data:** project registry, scanner, SQLite index, attachments.
 - **W3 UI:** shell, sidebar, timeline, composer, settings, accessibility.
 - **W4 Extensions:** discovery, standard RPC UI, declarative SDK, sandbox.
-- **W5 Platform/Release:** packaging, updater, diagnostics, perf/security matrices.
+- **W5 Platform/Release:** packaging, updater, diagnostics, performance/security matrices.
 
-После Phase 0 потоки могут идти параллельно через зафиксированные contracts. Изменение contract требует синхронного обновления W0 и dependent fixtures.
+After Phase 0, workstreams may proceed in parallel through frozen contracts. A contract change requires a synchronized update of W0 and dependent fixtures.
 
-### 3. Phase 0 — обязательные технические spikes
+### 3. Phase 0 — mandatory technical spikes
 
-Каждый spike заканчивается маленьким executable harness, captured fixtures и decision note. Скриншот/устное описание не считаются результатом.
+Each spike ends with a small executable harness, captured fixtures, and a decision note. A screenshot/oral description is not considered a result.
 
-#### SPIKE-01 — Открытие существующей session без ghost file
+#### SPIKE-01 — Opening an existing session without a ghost file
 
-**Вопрос:** как корректно запустить RPC и открыть конкретную Pi session, не создавая лишнюю пустую сессию?
+**Question:** how can RPC be started correctly and a specific Pi session opened without creating an extra empty session?
 
-**Действия:**
+**Actions:**
 
-- проверить supported CLI startup arguments и `switch_session`;
-- записать список файлов до/после каждого варианта;
-- протестировать path с пробелами/Unicode;
-- проверить новую и существующую session;
-- зафиксировать startup events/state.
+- verify supported CLI startup arguments and `switch_session`;
+- record the file list before/after each variant;
+- test paths with spaces/Unicode;
+- verify a new and an existing session;
+- capture startup events/state.
 
-**Pass:** deterministic procedure с stable session identity и без ghost file.
+**Pass:** deterministic procedure with stable session identity and no ghost file.
 
-**Fail/решение:** спроектировать минимальный Pi bridge/upstream request; не обходить прямой записью JSONL.
+**Fail/decision:** design a minimal Pi bridge/upstream request; do not bypass this through direct JSONL writes.
 
-#### SPIKE-02 — Graceful shutdown и process tree
+#### SPIKE-02 — Graceful shutdown and process tree
 
-**Вопрос:** как RPC process завершает текущую session и descendants?
+**Question:** how does the RPC process terminate the current session and descendants?
 
 - EOF stdin;
 - signal/terminate;
-- documented shutdown command, если есть;
+- documented shutdown command, if one exists;
 - running/idle states;
-- Unix process group и Windows Job Object;
+- Unix process group and Windows Job Object;
 - child tool process fixture.
 
 **Output:** state diagram, timeout values, platform implementation test.
 
 #### SPIKE-03 — Tree navigation
 
-**Вопрос:** можно ли перейти на произвольный existing tree node официальным RPC/SDK способом?
+**Question:** is it possible to navigate to an arbitrary existing tree node through an official RPC/SDK mechanism?
 
-**Output:** supported command/capability или bridge API proposal. До ответа UI tree read-only.
+**Output:** supported command/capability or bridge API proposal. Until answered, the UI tree is read-only.
 
 #### SPIKE-04 — Provider auth
 
-**Вопрос:** можно ли реализовать login/status/logout без полноценного terminal emulator?
+**Question:** can login/status/logout be implemented without a full terminal emulator?
 
 - OAuth/provider interactive flows;
 - API key flow;
-- model refresh после auth;
+- model refresh after auth;
 - secret visibility/logging.
 
-**Output:** выбранный MVP flow и список upstream gaps.
+**Output:** selected MVP flow and a list of upstream gaps.
 
 #### SPIKE-05 — Extension UI Protocol parity
 
-Создать Pi extension fixture, вызывающий все documented `ctx.ui` operations. Зафиксировать RPC events, cancellation и unsupported APIs.
+Create a Pi extension fixture that invokes every documented `ctx.ui` operation. Capture RPC events, cancellation, and unsupported APIs.
 
 **Output:** golden event corpus + mapping table + timeout/cancel behavior.
 
 #### SPIKE-06 — Concurrent access
 
-Открыть одну session в CLI и PiUI harness одновременно, выполнить appends/turns и изучить locking/state behavior.
+Open one session in the CLI and PiUI harness simultaneously, perform appends/turns, and study locking/state behavior.
 
-**Output:** conflict detector criteria и safe UX. Нельзя предполагать multi-writer safety.
+**Output:** conflict detector criteria and safe UX. Multi-writer safety must not be assumed.
 
 #### SPIKE-07 — Managed Pi packaging
 
-Упаковать Pi runtime как Tauri sidecar/app-managed artifact на Windows/Linux test builds. Сначала проверить готовые official standalone Pi release artifacts; затем, только при необходимости, воспроизводимую сборку Bun executable из versioned upstream release source:
+Package the Pi runtime as a Tauri sidecar/app-managed artifact on Windows/Linux test builds. First verify ready-made official standalone Pi release artifacts; then, only if necessary, use a reproducible Bun executable build from versioned upstream release source:
 
-- asset inventory, target triples и bundled runtime assets;
+- asset inventory, target triples, and bundled runtime assets;
 - upstream `SHA256SUMS`/provenance verification;
 - executable naming/architecture;
-- launch permissions, quarantine и antivirus behavior;
-- версия/capability probe;
-- подписанный PiUI runtime manifest;
+- launch permissions, quarantine, and antivirus behavior;
+- version/capability probe;
+- signed PiUI runtime manifest;
 - update/rollback layout;
-- package size и cold-start/RSS overhead;
-- одинаковое чтение `~/.pi/agent` config/packages/sessions в managed и system modes.
+- package size and cold-start/RSS overhead;
+- identical reading of `~/.pi/agent` config/packages/sessions in managed and system modes.
 
-**Output:** packaging ADR amendment, reproducible acquisition/build script, SBOM/provenance record и test artifacts.
+**Output:** packaging ADR amendment, reproducible acquisition/build script, SBOM/provenance record, and test artifacts.
 
 #### SPIKE-08 — WebView baseline
 
-Минимальный Tauri+Svelte shell на reference machines:
+Minimal Tauri+Svelte shell on reference machines:
 
 - cold/warm startup;
 - idle RSS/CPU;
@@ -4189,11 +4249,11 @@ _Исходный файл: `docs/09_ROADMAP_AND_TASKS.md`._
 - iframe/worker isolation capability;
 - platform rendering differences.
 
-**Pass:** реалистичный путь к hard budgets. Иначе пересмотреть UI stack до product implementation.
+**Pass:** a realistic path to hard budgets. Otherwise, reconsider the UI stack before product implementation.
 
 #### SPIKE-09 — Session scanner compatibility
 
-Прогнать реальный corpus Pi sessions:
+Run a real corpus of Pi sessions:
 
 - format versions;
 - partial lines;
@@ -4201,44 +4261,44 @@ _Исходный файл: `docs/09_ROADMAP_AND_TASKS.md`._
 - external appends;
 - file roots/config resolution.
 
-**Output:** parser fixtures и unsupported state behavior.
+**Output:** parser fixtures and unsupported-state behavior.
 
 #### SPIKE-10 — Pi version/capability probe
 
-Определить надёжный способ узнать executable version и доступные RPC commands, включая unknown/new fields.
+Determine a reliable way to learn the executable version and available RPC commands, including unknown/new fields.
 
 **Output:** initial `RuntimeCapabilities` contract.
 
-### 4. Gate G0 — разрешение на продуктовую разработку
+### 4. Gate G0 — authorization for product development
 
-G0 проходит, если:
+G0 passes if:
 
-- SPIKE-01/02 имеют безопасный путь;
-- RPC codec/fixtures подтверждены;
-- auth имеет честный MVP fallback;
-- scanner не требует записи session files;
-- Tauri baseline не нарушает hard memory/startup budgets без перспективы;
-- bridge gaps формально описаны и ограничены.
+- SPIKE-01/02 have a safe path;
+- the RPC codec/fixtures are confirmed;
+- auth has an honest MVP fallback;
+- the scanner does not require writing session files;
+- the Tauri baseline does not violate hard memory/startup budgets without a path forward;
+- bridge gaps are formally described and bounded.
 
-При провале транспорт может перейти на in-process Pi SDK adapter, но только после нового ADR с анализом isolation, extension loading и packaging. Frontend contracts сохраняются.
+On failure, transport may move to an in-process Pi SDK adapter, but only after a new ADR analyzing isolation, extension loading, and packaging. Frontend contracts remain intact.
 
-### 5. Phase 1 — каркас и contracts
+### 5. Phase 1 — foundation and contracts
 
 #### FOUNDATION-01 — Monorepo
 
-Создать workspace layout из `03_ARCHITECTURE.md`, pinned toolchains, formatting/lint/typecheck/test commands.
+Create the workspace layout from `03_ARCHITECTURE.md`, pinned toolchains, and formatting/lint/typecheck/test commands.
 
-**Acceptance:** clean clone выполняет все empty quality commands на Windows/Linux CI.
+**Acceptance:** a clean clone runs all empty quality commands on Windows/Linux CI.
 
 #### CONTRACT-01 — Runtime protocol v1
 
-Реализовать schema/source types для commands/events/errors/capabilities.
+Implement schema/source types for commands/events/errors/capabilities.
 
-**Acceptance:** Rust↔TS compatibility tests и generated API docs.
+**Acceptance:** Rust↔TS compatibility tests and generated API docs.
 
 #### CONTRACT-02 — Fake Pi runtime
 
-Scriptable binary с scenarios: stream, tool, UI request, malformed, hang, crash.
+Scriptable binary with scenarios: stream, tool, UI request, malformed, hang, crash.
 
 **Acceptance:** deterministic integration tests without network.
 
@@ -4264,7 +4324,7 @@ Generated typed bindings, reconnect/snapshot/revision handling.
 
 Vitest, Rust integration, Playwright/Tauri harness, performance result format.
 
-### 6. Phase 2 — read-only projects и history
+### 6. Phase 2 — read-only projects and history
 
 #### PROJECT-01 — Registry
 
@@ -4302,7 +4362,7 @@ Normalized blocks, Markdown sanitizer, tool/custom generic cards, images, pagina
 
 Name/preview search; FTS body can be deferred to public 1.0.
 
-**Gate G1:** пользователь добавляет папку, видит существующие Pi sessions и безопасно читает их без запуска Pi.
+**Gate G1:** the user adds a folder, sees existing Pi sessions, and safely reads them without starting Pi.
 
 ### 7. Phase 3 — live Pi chat MVP
 
@@ -4350,9 +4410,9 @@ Enable only supported operations; read-only branch panel fallback.
 
 Pi export where supported, system trash, active-runtime close.
 
-**Gate G2 (internal alpha):** реальная CLI session round-trip, streaming, stop/steer/follow-up, model switch, crash recovery, no JSONL writes.
+**Gate G2 (internal alpha):** real CLI session round-trip, streaming, stop/steer/follow-up, model switch, crash recovery, no JSONL writes.
 
-### 8. Phase 4 — attachments и standard extensions
+### 8. Phase 4 — attachments and standard extensions
 
 #### ATTACH-01 — Images
 
@@ -4388,7 +4448,7 @@ General/runtime/models-auth/extensions/appearance/keybindings/security/advanced.
 
 #### AUTH-01 — Approved MVP auth flow
 
-Результат SPIKE-04, secret-safe diagnostics.
+SPIKE-04 result, secret-safe diagnostics.
 
 **Gate G3 (feature-complete MVP):** images/files, standard extension UX, settings/auth path, trust and recovery complete.
 
@@ -4434,9 +4494,9 @@ Validate/dev/pack/inspect permissions, example packages, docs.
 
 Previous fixtures, optional unknown contribution, API deprecation checks.
 
-**Gate G4:** backend-only and dual Pi/PiUI package demonstrably work; declarative v1 frozen for public beta.
+**Gate G4:** backend-only and dual Pi/PiUI packages demonstrably work; declarative v1 is frozen for public beta.
 
-### 10. Phase 6 — rich views и trusted shell
+### 10. Phase 6 — rich views and trusted shell
 
 #### SANDBOX-01 — View broker
 
@@ -4468,15 +4528,15 @@ Native safe-mode/startup modifier/menu, core fallback and crash-loop detection.
 
 #### SHELL-03 — Reference alternate shell
 
-Минимальный example, доказывающий полный layout replacement и recovery.
+Minimal example proving complete layout replacement and recovery.
 
-**Gate G5:** security tests подтверждают isolation; shell не может отключить recovery.
+**Gate G5:** security tests confirm isolation; the shell cannot disable recovery.
 
 ### 11. Phase 7 — public 1.0 hardening
 
 #### PERF-01 — Instrumentation and baseline
 
-Startup/RSS/CPU/stream/scroll/index harness, fixed physical machine reports.
+Startup/RSS/CPU/stream/scroll/index harness, fixed physical-machine reports.
 
 #### PERF-02 — Optimization pass
 
@@ -4522,9 +4582,9 @@ Manifest, host API, examples, compatibility/versioning.
 
 All gates from `08_TESTING_AND_PERFORMANCE.md`.
 
-### 12. Не включать в критический путь 1.0
+### 12. Do not include in the 1.0 critical path
 
-Следующие инициативы получают отдельные extensions/ADRs после core release:
+The following initiatives receive separate extensions/ADRs after the core release:
 
 - Git status/diff/review;
 - worktree management;
@@ -4539,21 +4599,21 @@ All gates from `08_TESTING_AND_PERFORMANCE.md`.
 - collaboration/team policies;
 - mobile/web clients.
 
-Core contracts не должны препятствовать им, но реализация не должна усложнять 1.0.
+Core contracts must not block them, but implementation must not make 1.0 more complex.
 
-### 13. Параллелизация после G0
+### 13. Parallelization after G0
 
-Рекомендуемые независимые lanes:
+Recommended independent lanes:
 
 - Agent A: `piui-runtime` + fake runtime + process lifecycle.
 - Agent B: session scanner/index + fixtures.
 - Agent C: Svelte shell/sidebar/read-only timeline.
 - Agent D: contracts/generation/test harness.
 - Agent E: trust/security/path policy.
-- Agent F после stable normalized blocks: composer/live timeline.
-- Agent G после manifest schema: declarative SDK.
-- Agent H после host API permissions: sandboxed views.
-- Platform agents: Windows и Linux packaging/tests с ранних phases, не в конце.
+- Agent F after stable normalized blocks: composer/live timeline.
+- Agent G after manifest schema: declarative SDK.
+- Agent H after host API permissions: sandboxed views.
+- Platform agents: Windows and Linux packaging/tests from early phases, not at the end.
 
 Merge dependency:
 
@@ -4566,9 +4626,9 @@ G0 -> Contracts/Fake Runtime
    -> Perf harness across all phases
 ```
 
-### 14. Формат задания coding agent
+### 14. Coding agent task format
 
-Каждое задание должно содержать:
+Each task must contain:
 
 ```text
 Task ID:
@@ -4584,576 +4644,576 @@ Out of scope:
 Expected artifacts:
 ```
 
-Agent обязан:
+The agent must:
 
-1. прочитать `AGENTS.md` и связанные docs;
-2. проверить assumptions против fixtures/capabilities;
-3. не расширять scope скрыто;
-4. добавить tests вместе с кодом;
-5. сообщить contract/ADR impact;
-6. не заменять неизвестное поведение Pi прямой JSONL-правкой.
+1. read `AGENTS.md` and related docs;
+2. verify assumptions against fixtures/capabilities;
+3. not expand scope implicitly;
+4. add tests with the code;
+5. report contract/ADR impact;
+6. not replace unknown Pi behavior with direct JSONL editing.
 
 ### 15. Pull request gates
 
-- linked Task ID и acceptance criteria;
+- linked Task ID and acceptance criteria;
 - tests green;
 - contract diff reviewed;
 - no new unrestricted Tauri capability;
-- performance report для hot path;
+- performance report for hot path;
 - Windows/Linux consideration;
-- screenshots только дополнение к semantic tests;
+- screenshots are only a supplement to semantic tests;
 - docs/ADR updated;
 - extension generic fallback verified where relevant;
 - safe mode remains bootable.
 
 ### 16. Definition of product completion
 
-PiUI 1.0 завершён не по количеству экранов, а когда:
+PiUI 1.0 is complete not by the number of screens, but when:
 
-- пользовательская история едина с CLI Pi;
-- обязательный MVP workflow устойчив;
-- расширение может добавлять backend behavior и GUI без core patch;
-- полный trusted shell replacement доказан reference package;
-- Windows/Linux проходят security/performance/recovery gates;
-- отсутствие UI extension не ломает Pi extension;
-- known upstream gaps либо закрыты, либо честно ограничивают видимую функцию;
-- core остаётся минимальным и не включает вторую IDE.
+- user history is unified with CLI Pi;
+- the mandatory MVP workflow is resilient;
+- an extension can add backend behavior and GUI without a core patch;
+- complete trusted shell replacement is demonstrated by a reference package;
+- Windows/Linux pass security/performance/recovery gates;
+- absence of a UI extension does not break a Pi extension;
+- known upstream gaps are either closed or honestly constrain the visible feature;
+- the core remains minimal and does not include a second IDE.
 
 ---
 
 <a id="adr"></a>
 
-## 10. Архитектурные решения
+## 10. Architecture decisions
 
-_Исходный файл: `docs/10_ADR.md`._
+_Source file: `docs/10_ADR.md`._
 
 ## 10. Architecture Decision Records
 
-Дата базовой фиксации: 23 июля 2026 года. Все решения имеют статус **Accepted**, если явно не указано иное. Изменение требует нового ADR, а не тихого отклонения в коде.
+Baseline adoption date: July 23, 2026. All decisions have **Accepted** status unless explicitly stated otherwise. A change requires a new ADR, not a silent deviation in code.
 
 ---
 
-### ADR-001 — PiUI является оболочкой над Pi, а не новым harness
+### ADR-001 — PiUI is a shell over Pi, not a new harness
 
-**Контекст:** Pi уже владеет providers, agent loop, tools, extensions, compaction и sessions.
+**Context:** Pi already owns providers, agent loop, tools, extensions, compaction, and sessions.
 
-**Решение:** PiUI делегирует всё agent behavior Pi и добавляет GUI/process/data adapters.
+**Decision:** PiUI delegates all agent behavior to Pi and adds GUI/process/data adapters.
 
-**Отклонено:** собственный model/provider layer; импорт Pi sessions в новый формат; fork Pi core внутри UI.
+**Rejected:** its own model/provider layer; importing Pi sessions into a new format; forking Pi core within the UI.
 
-**Последствия:** зависимость от RPC/SDK capabilities и необходимость честных fallbacks. Зато CLI/PiUI используют одну историю и ecosystem.
+**Consequences:** dependency on RPC/SDK capabilities and a need for honest fallbacks. In return, CLI/PiUI use one history and ecosystem.
 
-**Пересмотр:** только если Pi перестанет предоставлять пригодный embedding/API и upstream collaboration невозможна.
+**Reconsideration:** only if Pi stops providing a usable embedding/API and upstream collaboration is impossible.
 
 ---
 
 ### ADR-002 — Tauri 2 + Rust + Svelte 5
 
-**Контекст:** обязательны Windows/Linux, низкий footprint, TypeScript-friendly extension UI и надёжное управление процессами.
+**Context:** Windows/Linux, a low footprint, TypeScript-friendly extension UI, and reliable process management are required.
 
-**Решение:** Tauri host на Rust, Svelte 5 frontend, Vite static build.
+**Decision:** Tauri host in Rust, Svelte 5 frontend, Vite static build.
 
-**Отклонено:** Electron (bundled Chromium/Node footprint), Flutter/Qt (хуже web-extension fit), browser-only localhost app (lifecycle/security/distribution), native per-platform UIs (стоимость parity).
+**Rejected:** Electron (bundled Chromium/Node footprint), Flutter/Qt (worse web-extension fit), browser-only localhost app (lifecycle/security/distribution), native per-platform UIs (cost of parity).
 
-**Последствия:** platform WebView differences становятся частью test matrix; Rust boundary требует typed contracts.
+**Consequences:** platform WebView differences become part of the test matrix; the Rust boundary requires typed contracts.
 
-**Пересмотр:** если SPIKE-08 показывает hard budget/platform blocker, который нельзя устранить.
-
----
-
-### ADR-003 — Pi RPC является основным runtime adapter
-
-**Контекст:** RPC официально предназначен для custom UIs и даёт process isolation.
-
-**Решение:** запускать `pi --mode rpc`, читать/писать JSONL через Rust supervisor.
-
-**Отклонено:** embed SDK in desktop host by default; screen-scraping TUI; pseudo-terminal automation.
-
-**Последствия:** несколько TUI APIs недоступны; нужны PiUI SDK/bridge gaps. Crash Pi не обязан падать вместе с shell.
-
-**Пересмотр:** если G0 обнаружит нерешаемые startup/shutdown/session selection проблемы. SDK adapter допускается за тем же interface после отдельного ADR.
+**Reconsideration:** if SPIKE-08 shows a hard budget/platform blocker that cannot be resolved.
 
 ---
 
-### ADR-004 — Один process на live session, dormant history без process
+### ADR-003 — Pi RPC is the primary runtime adapter
 
-**Контекст:** project может иметь сотни sessions; параллельные turns требуют независимого state.
+**Context:** RPC is officially intended for custom UIs and provides process isolation.
 
-**Решение:** process slot только для active/running sessions, capped pool и idle eviction.
+**Decision:** launch `pi --mode rpc`, read/write JSONL through the Rust supervisor.
 
-**Отклонено:** один глобальный Pi process для всего app; один process на каждую session в sidebar; process per turn.
+**Rejected:** embed SDK in desktop host by default; screen-scraping TUI; pseudo-terminal automation.
 
-**Последствия:** supervisor complexity и resource budgets; хорошая fault isolation и multi-session readiness.
+**Consequences:** several TUI APIs are unavailable; PiUI SDK/bridge gaps are needed. A Pi crash does not have to crash the shell with it.
 
-**Пересмотр:** если Pi предлагает официальный multi-session server с эквивалентной isolation/semantics.
-
----
-
-### ADR-005 — Pi JSONL является source of truth
-
-**Контекст:** CLI и PiUI должны продолжать одни sessions.
-
-**Решение:** читать JSONL для discovery/index, изменять active state только через Pi.
-
-**Отклонено:** импорт/экспорт в PiUI chat DB; прямое редактирование entries; копии sessions как authoritative.
-
-**Последствия:** scanner должен выдерживать external writes/format evolution. Удаление PiUI DB безопасно для истории.
-
-**Пересмотр:** не планируется без изменения философии продукта.
+**Reconsideration:** if G0 discovers unresolvable startup/shutdown/session-selection problems. An SDK adapter is permitted behind the same interface after a separate ADR.
 
 ---
 
-### ADR-006 — SQLite только для registry/UI metadata/rebuildable index
+### ADR-004 — One process per live session, dormant history without a process
 
-**Контекст:** быстрый sidebar/search/drafts не должны требовать запуска Pi или полного parse каждый раз.
+**Context:** a project can have hundreds of sessions; parallel turns require independent state.
 
-**Решение:** локальная SQLite, FTS optional; session projection rebuildable.
+**Decision:** a process slot only for active/running sessions, capped pool, and idle eviction.
 
-**Отклонено:** JSON settings-only для всех индексов; storing full authoritative conversation; remote DB.
+**Rejected:** one global Pi process for the entire app; one process for every session in the sidebar; process per turn.
 
-**Последствия:** migrations и reindex flow, но fast queries и corruption isolation.
+**Consequences:** supervisor complexity and resource budgets; good fault isolation and multi-session readiness.
 
-**Пересмотр:** если измерения показывают, что scanner без DB удовлетворяет все масштабы; metadata DB всё равно вероятно остаётся.
-
----
-
-### ADR-007 — Managed, system и custom Pi runtime profiles
-
-**Контекст:** public app нуждается в reproducibility, разработчики — в текущем/fork Pi.
-
-**Решение:** единый adapter с тремя runtime modes; managed рекомендуется public release. Managed runtime в первую очередь использует официальный standalone Pi release artifact с проверенным checksum либо воспроизводимую сборку из versioned upstream source; приложение не запускает npm install/update.
-
-**Отклонено:** только bundled runtime; только PATH; npm install mutation by PiUI.
-
-**Последствия:** compatibility probe, separate update/rollback, clear diagnostics.
-
-**Пересмотр:** если Pi распространяется как stable embeddable library/server с лучшим lifecycle.
+**Reconsideration:** if Pi offers an official multi-session server with equivalent isolation/semantics.
 
 ---
 
-### ADR-008 — Frontend не получает shell/filesystem напрямую
+### ADR-005 — Pi JSONL is the source of truth
 
-**Контекст:** WebView отображает untrusted model/tool/extension content.
+**Context:** CLI and PiUI must continue the same sessions.
 
-**Решение:** only allowlisted typed Tauri IPC; Rust validates paths/permissions.
+**Decision:** read JSONL for discovery/indexing, change active state only through Pi.
 
-**Отклонено:** Tauri shell plugin exposed to UI; generic read/write/exec commands; Node integration.
+**Rejected:** import/export into a PiUI chat DB; direct editing of entries; copies of sessions as authoritative.
 
-**Последствия:** больше host API work, существенно меньшая attack surface.
+**Consequences:** the scanner must withstand external writes/format evolution. Deleting the PiUI DB is safe for history.
 
-**Пересмотр:** не планируется; новые возможности добавляются узкими APIs.
-
----
-
-### ADR-009 — Четыре tiers расширяемости
-
-**Контекст:** нужно одновременно поддержать существующие Pi extensions, простой GUI extension path и полную замену интерфейса.
-
-**Решение:** Tier 0 backend-only; Tier 1 declarative; Tier 2 sandboxed rich views; Tier 3 trusted global shell.
-
-**Отклонено:** произвольный JS в core DOM; требовать UI manifest от каждого Pi extension; запрет полного customization.
-
-**Последствия:** capability broker, schema/versioning и safe mode обязательны.
-
-**Пересмотр:** расширение tiers возможно в major SDK, но isolation principles сохраняются.
+**Reconsideration:** not planned without changing the product philosophy.
 
 ---
 
-### ADR-010 — Semantic slots вместо координат/DOM selectors
+### ADR-006 — SQLite only for registry/UI metadata/rebuildable index
 
-**Контекст:** extensions должны переживать responsive layout и redesign.
+**Context:** fast sidebar/search/drafts must not require starting Pi or fully parsing everything each time.
 
-**Решение:** manifest указывает semantic contribution slot/order/when.
+**Decision:** local SQLite, FTS optional; session projection rebuildable.
 
-**Отклонено:** CSS selectors, pixel coordinates, React/Svelte component injection в core tree.
+**Rejected:** JSON settings-only for all indexes; storing the full authoritative conversation; remote DB.
 
-**Последствия:** не каждый экспериментальный layout возможен в Tier 1; Tier 2/3 покрывают сложные случаи.
+**Consequences:** migrations and a reindex flow, but fast queries and corruption isolation.
 
-**Пересмотр:** slots добавляются совместимо по usage, не раскрывая internal DOM.
-
----
-
-### ADR-011 — Generic fallback и raw inspectability обязательны
-
-**Контекст:** session может содержать entries от отключённого/несовместимого extension.
-
-**Решение:** every custom tool/message/view renderer falls back to safe generic card; raw payload available by action.
-
-**Отклонено:** скрывать unknown entries; error whole timeline; hard dependency on renderer package.
-
-**Последствия:** session remains readable; нужно защищать raw inspector и redact sensitive content.
-
-**Пересмотр:** не планируется.
+**Reconsideration:** if measurements show that the scanner without a DB satisfies every scale; the metadata DB will likely remain anyway.
 
 ---
 
-### ADR-012 — Generic files передаются как references, images — через RPC
+### ADR-007 — Managed, system, and custom Pi runtime profiles
 
-**Контекст:** Pi RPC directly supports image input, но не общий binary attachment abstraction.
+**Context:** the public app needs reproducibility; developers need current/forked Pi.
 
-**Решение:** images encoded through Pi RPC; project/external docs represented as explicit path/resource references, optional managed copy.
+**Decision:** one adapter with three runtime modes; managed is recommended for public release. The managed runtime primarily uses an official standalone Pi release artifact with a verified checksum, or a reproducible build from versioned upstream source; the application does not run npm install/update.
 
-**Отклонено:** читать каждый файл в prompt; обещать native PDF understanding; автоматически копировать в repository.
+**Rejected:** bundled runtime only; PATH only; npm install mutation by PiUI.
 
-**Последствия:** честный UX и малые payloads; tools/extensions отвечают за чтение/обработку документов.
+**Consequences:** compatibility probe, separate update/rollback, clear diagnostics.
 
-**Пересмотр:** когда Pi предоставляет typed general attachment API.
-
----
-
-### ADR-013 — Capability negotiation важнее version checks
-
-**Контекст:** Pi RPC развивается; forks/custom builds могут иметь разные функции.
-
-**Решение:** probe runtime and expose named capabilities; version используется для diagnostics/known compatibility, не для единственного branch logic.
-
-**Отклонено:** `if version >= x` повсюду; optimistic UI с runtime errors.
-
-**Последствия:** initial probe complexity, зато forward/fork compatibility.
-
-**Пересмотр:** если Pi вводит стабильный formal capability endpoint — adapter упрощается, принцип остаётся.
+**Reconsideration:** if Pi is distributed as a stable embeddable library/server with better lifecycle.
 
 ---
 
-### ADR-014 — Svelte/Vite без SvelteKit и без Tailwind в core
+### ADR-008 — Frontend receives no direct shell/filesystem access
 
-**Контекст:** нет SSR/web routes; требуется маленькая и контролируемая design system.
+**Context:** WebView displays untrusted model/tool/extension content.
 
-**Решение:** Svelte 5 + Vite, CSS custom properties/scoped CSS, выборочные headless primitives.
+**Decision:** only allowlisted typed Tauri IPC; Rust validates paths/permissions.
 
-**Отклонено:** SvelteKit adapter-static без нужды; full component kit; utility DSL как public extension contract.
+**Rejected:** Tauri shell plugin exposed to UI; generic read/write/exec commands; Node integration.
 
-**Последствия:** больше собственных component styles, меньше framework surface и stable semantic tokens.
+**Consequences:** more host API work, substantially smaller attack surface.
 
-**Пересмотр:** только если реальная routing/build need оправдывает framework layer.
-
----
-
-### ADR-015 — Git, terminal, worktrees и IDE features не входят в 1.0 core
-
-**Контекст:** вдохновение Codex App легко превращает PiUI в тяжёлую IDE.
-
-**Решение:** core ограничен projects/sessions/chat/runtime/extensions. Остальное — packages.
-
-**Отклонено:** встроить diff/file explorer/terminal «сразу, раз это coding app».
-
-**Последствия:** минимальный продукт; Extension SDK должен иметь достаточно slots/APIs для будущих функций.
-
-**Пересмотр:** после 1.0 на основании usage, через отдельный ADR и performance budget.
+**Reconsideration:** not planned; new capabilities are added through narrow APIs.
 
 ---
 
-### ADR-016 — Safe mode и immutable recovery layer
+### ADR-009 — Four tiers of extensibility
 
-**Контекст:** trusted shell способен полностью изменить UI и может сломаться/быть malicious.
+**Context:** existing Pi extensions, a simple GUI extension path, and full interface replacement must all be supported simultaneously.
 
-**Решение:** host-owned startup shortcut/menu, core shell fallback, permission/integrity dialogs вне extension control.
+**Decision:** Tier 0 backend-only; Tier 1 declarative; Tier 2 sandboxed rich views; Tier 3 trusted global shell.
 
-**Отклонено:** shell extension replaces entire trusted app; recovery only through settings inside shell.
+**Rejected:** arbitrary JS in the core DOM; requiring a UI manifest from every Pi extension; prohibiting full customization.
 
-**Последствия:** небольшая immutable host surface обязательна даже при «полной» замене UI.
+**Consequences:** a capability broker, schema/versioning, and safe mode are mandatory.
 
-**Пересмотр:** не планируется.
-
----
-
-### ADR-017 — Нет remote telemetry/account/cloud backend в 1.0
-
-**Контекст:** local-first tool, sensitive prompts/code/secrets, минимальность.
-
-**Решение:** local structured logs and user-exported diagnostic bundle; no automatic telemetry.
-
-**Отклонено:** default analytics/crash upload; required PiUI account; cloud sync.
-
-**Последствия:** меньше production observability; важны high-quality local diagnostics и opt-in future ADR.
-
-**Пересмотр:** только с explicit privacy model, user control и отдельным product decision.
+**Reconsideration:** tiers may be extended in a major SDK version, but isolation principles remain.
 
 ---
 
-### ADR-018 — Signed UI/runtime updates разделены
+### ADR-010 — Semantic slots instead of coordinates/DOM selectors
 
-**Контекст:** PiUI и Pi могут обновляться с разным cadence; runtime compatibility критична.
+**Context:** extensions must survive responsive layout and redesign.
 
-**Решение:** signed desktop updater и отдельный signed managed Pi manifest/artifact with rollback; manifest фиксирует upstream origin/version/hash, target и compatibility range.
+**Decision:** the manifest specifies semantic contribution slot/order/when.
 
-**Отклонено:** silently run latest PATH Pi; bundle runtime forever with app; npm update on startup.
+**Rejected:** CSS selectors, pixel coordinates, React/Svelte component injection into the core tree.
 
-**Последствия:** release infrastructure сложнее, но reproducibility и rollback лучше.
+**Consequences:** not every experimental layout is possible in Tier 1; Tier 2/3 cover complex cases.
 
-**Пересмотр:** если upstream предоставляет подписанный stable runtime channel/API, который можно безопасно делегировать.
-
----
-
-### ADR-019 — Performance budgets являются release gates
-
-**Контекст:** «лёгкий» невозможно гарантировать архитектурным лозунгом.
-
-**Решение:** измерять packaged builds на fixed hardware; hard budgets block release; PiUI и Pi memory separated and totaled.
-
-**Отклонено:** только bundle size; dev-mode impressions; скрывать child processes.
-
-**Последствия:** performance harness развивается с ранних phases; dependency additions требуют cost awareness.
-
-**Пересмотр:** budgets калибруются только по documented evidence/reference hardware, не ради прохождения текущего build.
+**Reconsideration:** slots are added compatibly based on usage, without exposing the internal DOM.
 
 ---
 
-### ADR-020 — Не делать прямой fork существующего desktop agent UI
+### ADR-011 — Generic fallback and raw inspectability are mandatory
 
-**Контекст:** OpenCovibe/Hermes дают полезные patterns, но имеют другую session/runtime semantics и feature scope.
+**Context:** a session may contain entries from a disabled/incompatible extension.
 
-**Решение:** чистый PiUI repository; selectively port small licensed patterns/components with attribution and tests.
+**Decision:** every custom tool/message/view renderer falls back to a safe generic card; raw payload is available by action.
 
-**Отклонено:** fork Electron Hermes; relabel Codex UI; reuse another app’s session DB/protocol as core.
+**Rejected:** hide unknown entries; error the whole timeline; hard dependency on renderer package.
 
-**Последствия:** больше первоначальной работы, меньше inherited complexity и semantic mismatch.
+**Consequences:** the session remains readable; the raw inspector must be protected and sensitive content redacted.
 
-**Пересмотр:** если найден проект, уже использующий Pi RPC, совместимый license/architecture и подтверждённые quality budgets.
-
----
-
-### ADR-021 — Внешние ecosystem evidence наблюдательны до выбора PiUI-signed release policy
-
-**Контекст:** публичный npm registry может предоставить SRI, registry signature и SLSA source facts, но эти факты относятся к конкретному upstream tarball и не определяют PiUI runtime/channel policy.
-
-**Решение:** PiUI может хранить ограниченный exact-byte locally authored observed summary и offline проверять его внутреннюю согласованность. Пока raw registry signature/key, Sigstore DSSE/certificate и Rekor inclusion material не retained, такая проверка структурная, а не криптографическая upstream verification. Такой packet всегда non-authorizing: npm identity/key не добавляется в production keyring и не конвертируется в bundle, supervisor или launch capability. Только будущая PiUI-signed policy с ролями signer, key roll/revocation, channel/sequence, acquisition, SBOM и rollback может выбрать independently authenticated external evidence как один из входов.
-
-**Отклонено:** использовать npm key как PiUI production key; считать `npm audit signatures` trust root; авторизовать global install, archive или executable по version/SRI/attestation; запускать npm из runtime.
-
-**Последствия:** packet полезен как durable review input и regression fixture, но не закрывает ни один Phase 0 или managed-runtime activation gate.
-
-**Пересмотр:** только вместе с утверждённым signed release policy и handle-bound installation/launch design.
+**Reconsideration:** not planned.
 
 ---
 
-### ADR-022 — Cache-first каталог с инкрементальной сверкой JSONL
+### ADR-012 — Generic files are passed as references, images through RPC
 
-**Контекст:** synchronous full discovery блокировал sidebar на десятки секунд и повторно создавал parser/tree/timeline allocations для уже известных sessions. При этом Pi JSONL обязан остаться source of truth, а stale catalog не должен разрешать mutation.
+**Context:** Pi RPC directly supports image input, but has no general binary attachment abstraction.
 
-**Решение:** sidebar получает last-indexed SQLite catalog сразу через versioned v7 snapshot. Host запускает bounded per-project reconciliation отдельно: no-follow identity, metadata/prefix-tail evidence позволяют пропустить unchanged source; changed source проходит streaming LF metadata parse и strong full revision hash. Scanner commits one generation-stamped batch; deletion разрешено только после complete sweep. Watcher передаёт UI лишь opaque lossy hint, а не path/event payload. Selected timeline и runtime admission используют отдельную strong identity-bound observation, не catalog freshness.
+**Decision:** images encoded through Pi RPC; project/external docs represented as explicit path/resource references, optional managed copy.
 
-**Отклонено:** блокировать list API полным scan; считать mtime/tail hash доказательством revision; хранить authoritative transcript в SQLite; выдавать raw filesystem watcher events WebView; global refresh lock для всех projects.
+**Rejected:** read every file into the prompt; promise native PDF understanding; automatically copy into the repository.
 
-**Последствия:** SQLite migration хранит host-private fingerprint evidence; legacy rows показываются cache-first и backfillятся при следующей сверке. Cold rebuild остаётся read-only и bounded; same-stat rewrite требует full integrity reconciliation/strong observation. IPC v7 имеет snapshot watermark для восстановления после missed/reordered events.
+**Consequences:** honest UX and small payloads; tools/extensions are responsible for reading/processing documents.
 
-**Пересмотр:** если Pi предоставит официальные session-change/revision/lock capabilities с эквивалентной cross-platform semantics.
+**Reconsideration:** when Pi provides a typed general attachment API.
+
+---
+
+### ADR-013 — Capability negotiation is more important than version checks
+
+**Context:** Pi RPC evolves; forks/custom builds may have different features.
+
+**Decision:** probe the runtime and expose named capabilities; version is used for diagnostics/known compatibility, not as the sole branch logic.
+
+**Rejected:** `if version >= x` everywhere; optimistic UI with runtime errors.
+
+**Consequences:** initial probe complexity, but forward/fork compatibility.
+
+**Reconsideration:** if Pi introduces a stable formal capability endpoint — the adapter is simplified, while the principle remains.
+
+---
+
+### ADR-014 — Svelte/Vite without SvelteKit and without Tailwind in the core
+
+**Context:** there are no SSR/web routes; a small, controlled design system is required.
+
+**Decision:** Svelte 5 + Vite, CSS custom properties/scoped CSS, selective headless primitives.
+
+**Rejected:** SvelteKit adapter-static without need; full component kit; utility DSL as a public extension contract.
+
+**Consequences:** more custom component styles, less framework surface, and stable semantic tokens.
+
+**Reconsideration:** only if an actual routing/build need justifies a framework layer.
+
+---
+
+### ADR-015 — Git, terminal, worktrees, and IDE features are outside the 1.0 core
+
+**Context:** Codex App inspiration can easily turn PiUI into a heavy IDE.
+
+**Decision:** the core is limited to projects/sessions/chat/runtime/extensions. Everything else is packages.
+
+**Rejected:** embed diff/file explorer/terminal “immediately, since this is a coding app.”
+
+**Consequences:** a minimal product; the Extension SDK must have enough slots/APIs for future features.
+
+**Reconsideration:** after 1.0 based on usage, through a separate ADR and performance budget.
+
+---
+
+### ADR-016 — Safe mode and immutable recovery layer
+
+**Context:** a trusted shell can completely alter the UI and can fail/be malicious.
+
+**Decision:** host-owned startup shortcut/menu, core shell fallback, permission/integrity dialogs outside extension control.
+
+**Rejected:** shell extension replaces the entire trusted app; recovery only through settings inside the shell.
+
+**Consequences:** a small immutable host surface is mandatory even with “complete” UI replacement.
+
+**Reconsideration:** not planned.
+
+---
+
+### ADR-017 — No remote telemetry/account/cloud backend in 1.0
+
+**Context:** local-first tool, sensitive prompts/code/secrets, minimalism.
+
+**Decision:** local structured logs and a user-exported diagnostic bundle; no automatic telemetry.
+
+**Rejected:** default analytics/crash upload; required PiUI account; cloud sync.
+
+**Consequences:** less production observability; high-quality local diagnostics and an opt-in future ADR are important.
+
+**Reconsideration:** only with an explicit privacy model, user control, and a separate product decision.
+
+---
+
+### ADR-018 — Signed UI/runtime updates are separate
+
+**Context:** PiUI and Pi can update at different cadences; runtime compatibility is critical.
+
+**Decision:** signed desktop updater and separate signed managed Pi manifest/artifact with rollback; the manifest records upstream origin/version/hash, target, and compatibility range.
+
+**Rejected:** silently run the latest PATH Pi; bundle runtime forever with the app; npm update on startup.
+
+**Consequences:** release infrastructure is more complex, but reproducibility and rollback are better.
+
+**Reconsideration:** if upstream provides a signed stable runtime channel/API that can be safely delegated.
+
+---
+
+### ADR-019 — Performance budgets are release gates
+
+**Context:** “lightweight” cannot be guaranteed by an architectural slogan.
+
+**Decision:** measure packaged builds on fixed hardware; hard budgets block release; PiUI and Pi memory are separated and totaled.
+
+**Rejected:** bundle size only; dev-mode impressions; hide child processes.
+
+**Consequences:** the performance harness evolves from early phases; dependency additions require cost awareness.
+
+**Reconsideration:** budgets are calibrated only using documented evidence/reference hardware, not to make the current build pass.
+
+---
+
+### ADR-020 — Do not directly fork an existing desktop agent UI
+
+**Context:** OpenCovibe/Hermes provide useful patterns, but have different session/runtime semantics and feature scope.
+
+**Decision:** a clean PiUI repository; selectively port small licensed patterns/components with attribution and tests.
+
+**Rejected:** fork Electron Hermes; relabel Codex UI; reuse another app’s session DB/protocol as the core.
+
+**Consequences:** more initial work, less inherited complexity and semantic mismatch.
+
+**Reconsideration:** if a project is found that already uses Pi RPC, has a compatible license/architecture, and confirmed quality budgets.
+
+---
+
+### ADR-021 — External ecosystem evidence is observational until PiUI-signed release policy is selected
+
+**Context:** the public npm registry may provide SRI, registry signature, and SLSA source facts, but those facts apply to a specific upstream tarball and do not determine the PiUI runtime/channel policy.
+
+**Decision:** PiUI may retain a limited, exact-byte, locally authored observed summary and verify its internal consistency offline. Until raw registry signature/key, Sigstore DSSE/certificate, and Rekor inclusion material are retained, this verification is structural rather than cryptographic upstream verification. Such a packet is always non-authorizing: the npm identity/key is not added to the production keyring and is not converted into a bundle, supervisor, or launch capability. Only a future PiUI-signed policy with signer roles, key roll/revocation, channel/sequence, acquisition, SBOM, and rollback can select independently authenticated external evidence as one of its inputs.
+
+**Rejected:** use the npm key as a PiUI production key; treat `npm audit signatures` as a trust root; authorize a global install, archive, or executable by version/SRI/attestation; run npm from the runtime.
+
+**Consequences:** the packet is useful as durable review input and a regression fixture, but does not close any Phase 0 or managed-runtime activation gate.
+
+**Reconsideration:** only together with an approved signed release policy and handle-bound installation/launch design.
+
+---
+
+### ADR-022 — Cache-first catalog with incremental JSONL reconciliation
+
+**Context:** synchronous full discovery blocked the sidebar for tens of seconds and repeatedly created parser/tree/timeline allocations for already known sessions. At the same time, Pi JSONL must remain the source of truth, and a stale catalog must not authorize mutation.
+
+**Decision:** the sidebar receives the last-indexed SQLite catalog immediately through a versioned v7 snapshot. The host starts bounded per-project reconciliation separately: no-follow identity and metadata/prefix-tail evidence allow an unchanged source to be skipped; a changed source undergoes streaming LF metadata parsing and a strong full revision hash. The scanner commits one generation-stamped batch; deletion is permitted only after a complete sweep. The watcher sends the UI only an opaque lossy hint, not a path/event payload. The selected timeline and runtime admission use a separate strong identity-bound observation, not catalog freshness.
+
+**Rejected:** block the list API on a full scan; treat mtime/tail hash as revision proof; store the authoritative transcript in SQLite; expose raw filesystem watcher events to the WebView; global refresh lock for all projects.
+
+**Consequences:** the SQLite migration stores host-private fingerprint evidence; legacy rows are shown cache-first and backfilled during the next reconciliation. Cold rebuild remains read-only and bounded; a same-stat rewrite requires full integrity reconciliation/strong observation. IPC v7 has a snapshot watermark for recovery after missed/reordered events.
+
+**Reconsideration:** if Pi provides official session-change/revision/lock capabilities with equivalent cross-platform semantics.
 
 ---
 
 <a id="reuse"></a>
 
-## 11. Анализ повторного использования
+## 11. Reuse analysis
 
-_Исходный файл: `docs/11_REUSE_REVIEW.md`._
+_Source file: `docs/11_REUSE_REVIEW.md`._
 
-## 11. Обзор существующих приложений и стратегия переиспользования
+## 11. Review of Existing Applications and Reuse Strategy
 
-### 1. Вывод
+### 1. Conclusion
 
-PiUI следует создавать в отдельном чистом репозитории. Не форкать целиком Codex App, Hermes Desktop или OpenCovibe. Переиспользование допустимо точечно: небольшие изолированные модули/паттерны после license и architecture review, с attribution, собственными tests и адаптацией к Pi semantics.
+PiUI should be created in a separate clean repository. Do not fork Codex App, Hermes Desktop, or OpenCovibe wholesale. Reuse is permitted selectively: small isolated modules/patterns after license and architecture review, with attribution, dedicated tests, and adaptation to Pi semantics.
 
-Главная причина — не визуальная уникальность, а несовпадение источника истины, protocol и extension philosophy. PiUI должен разделять sessions/config/extensions с Pi, а не унаследовать чужой storage/runtime abstraction.
+The main reason is not visual uniqueness, but a mismatch in the source of truth, protocol, and extension philosophy. PiUI must share sessions/config/extensions with Pi, rather than inherit someone else’s storage/runtime abstraction.
 
-### 2. Критерии оценки
+### 2. Evaluation Criteria
 
-Каждый кандидат оценивается по:
+Each candidate is evaluated by:
 
-1. license и NOTICE obligations;
-2. совместимости Tauri/Svelte/Rust;
+1. license and NOTICE obligations;
+2. Tauri/Svelte/Rust compatibility;
 3. process/session model;
-4. возможности сохранить Pi JSONL как source of truth;
+4. ability to preserve Pi JSONL as the source of truth;
 5. extension/security boundary;
 6. Windows/Linux maturity;
 7. performance/accessibility tests;
-8. объёму лишнего feature scope;
-9. активности/качества кода на момент фактического заимствования;
-10. стоимости дальнейшего ownership.
+8. amount of unnecessary feature scope;
+9. code activity/quality at the time of actual reuse;
+10. cost of ongoing ownership.
 
-Popularity/stars не являются архитектурным критерием.
+Popularity/stars are not an architectural criterion.
 
 ### 3. Codex App
 
-Источник: [официальное описание Codex App](https://openai.com/index/introducing-the-codex-app/).
+Source: [official Codex App description](https://openai.com/index/introducing-the-codex-app/).
 
-#### Что полезно как продуктовый reference
+#### What is useful as a product reference
 
-- threads, сгруппированные по projects;
-- быстрое переключение между задачами без потери контекста;
-- desktop shell поверх существующей CLI history/config;
-- фокус на supervision, а не IDE chrome;
-- inline progress и действия вокруг текущего thread;
-- модель «sidebar projects/threads + main conversation».
+- threads grouped by projects;
+- fast switching between tasks without losing context;
+- desktop shell over existing CLI history/config;
+- focus on supervision rather than IDE chrome;
+- inline progress and actions around the current thread;
+- the “sidebar projects/threads + main conversation” model.
 
-#### Что не переносить в PiUI core
+#### What not to bring into the PiUI core
 
 - worktrees;
-- встроенный diff/review;
-- orchestration множества agents как обязательную концепцию;
+- built-in diff/review;
+- orchestration of multiple agents as a required concept;
 - Codex-specific sandbox/model/account semantics;
-- предположение, что task/thread равен Pi session branch.
+- the assumption that a task/thread equals a Pi session branch.
 
-#### Решение
+#### Decision
 
-Использовать только как UX/reference behavior. Не считать доступным source base и не воспроизводить визуал 1:1. PiUI должен выглядеть самостоятельным и следовать собственным contracts.
+Use only as UX/reference behavior. Do not treat it as an available source base and do not reproduce the visuals 1:1. PiUI must look independent and follow its own contracts.
 
-### 4. Официальный Hermes Desktop
+### 4. Official Hermes Desktop
 
-Источник: [Hermes Agent Desktop guide](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/desktop.md).
+Source: [Hermes Agent Desktop guide](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/desktop.md).
 
-#### Полезные продуктовые паттерны
+#### Useful product patterns
 
-- CLI и desktop разделяют state: session можно начать в одном интерфейсе и продолжить в другом;
+- CLI and desktop share state: a session can be started in one interface and continued in the other;
 - chat-first layout;
-- session list, search и hygiene по мере роста;
-- model control рядом с активной chat/session;
-- queue editing и visible running state;
-- settings GUI поверх agent configuration;
-- uninstall app без обязательного удаления agent/config/chats;
-- local shell и backend остаются концептуально раздельными.
+- session list, search, and hygiene as the number of sessions grows;
+- model control next to the active chat/session;
+- queue editing and visible running state;
+- settings GUI over agent configuration;
+- uninstalling the app without requiring deletion of the agent/config/chats;
+- local shell and backend remain conceptually separate.
 
-#### Не переносить автоматически
+#### Do not transfer automatically
 
-- Hermes-specific profiles, YOLO, gateway, memory, schedules и toolsets;
+- Hermes-specific profiles, YOLO, gateway, memory, schedules, and toolsets;
 - remote backend API architecture;
-- широкий dashboard scope;
-- settings fields, которых Pi не предоставляет;
-- безопасность/approval semantics Hermes как замену Pi trust model.
+- broad dashboard scope;
+- settings fields that Pi does not provide;
+- Hermes security/approval semantics as a replacement for the Pi trust model.
 
-#### Решение
+#### Decision
 
-Использовать для UX flows и совместимости CLI↔desktop. Код официального Hermes Desktop в рамках этого исследования не выбран как implementation base; сначала нужен отдельный repository/license/code audit.
+Use for UX flows and CLI↔desktop compatibility. The official Hermes Desktop code was not selected as an implementation base within this research; a separate repository/license/code audit is required first.
 
 ### 5. OpenCovibe
 
-Источник: [AnyiWang/OpenCovibe](https://github.com/AnyiWang/OpenCovibe).
+Source: [AnyiWang/OpenCovibe](https://github.com/AnyiWang/OpenCovibe).
 
-На дату исследования repository заявляет Tauri v2 + Svelte 5, long-lived per-session process model и Apache License 2.0. Он концептуально близок: локальная desktop-оболочка над coding-agent CLIs.
+At the time of research, the repository declares Tauri v2 + Svelte 5, a long-lived per-session process model, and Apache License 2.0. It is conceptually close: a local desktop shell over coding-agent CLIs.
 
-#### Лучший кандидат для точечного code study
+#### Best candidate for selective code study
 
-Изучить, но не копировать вслепую:
+Study, but do not copy blindly:
 
 - Tauri process/session actor lifecycle;
-- bidirectional stream decoding и event normalization;
+- bidirectional stream decoding and event normalization;
 - app/window lifecycle;
 - drag-and-drop attachments;
 - long-session rendering/virtualization;
 - platform packaging scripts;
 - diagnostics/testing patterns;
-- handling multiple transports/capabilities.
+- handling of multiple transports/capabilities.
 
-#### Что не использовать как PiUI основу
+#### What not to use as a PiUI foundation
 
-- собственную run/event storage model;
-- Claude/Codex protocol abstractions как canonical Pi adapter;
+- its own run/event storage model;
+- Claude/Codex protocol abstractions as the canonical Pi adapter;
 - terminal/diff/provider-specific feature scope;
-- SvelteKit/Tailwind только потому, что они уже есть;
-- assumptions, проверенные преимущественно на macOS;
-- весь repository fork с последующим удалением лишних функций.
+- SvelteKit/Tailwind merely because they already exist;
+- assumptions tested primarily on macOS;
+- a full repository fork followed by removal of unnecessary features.
 
-OpenCovibe прямо отмечает, что Windows/Linux функциональны, но тестировались слабее; PiUI не может унаследовать это как достаточную гарантию.
+OpenCovibe explicitly notes that Windows/Linux are functional but less thoroughly tested; PiUI cannot inherit this as a sufficient guarantee.
 
 #### License procedure
 
-При копировании Apache-2.0 code:
+When copying Apache-2.0 code:
 
-- сохранить copyright/license headers;
-- включить требуемые LICENSE/NOTICE;
-- документировать исходный commit/path;
-- перечислить изменения;
-- не смешивать copied module с PiUI-specific code без понятной provenance;
-- провести security/performance review независимо от upstream.
+- preserve copyright/license headers;
+- include the required LICENSE/NOTICE;
+- document the source commit/path;
+- list changes;
+- do not mix a copied module with PiUI-specific code without clear provenance;
+- conduct security/performance review independently of upstream.
 
-#### Решение
+#### Decision
 
-**Selectively reuse after audit.** Это единственный рассмотренный кандидат, из которого разумно заимствовать небольшие implementation patterns в выбранном стеке.
+**Selectively reuse after audit.** This is the only considered candidate from which it is reasonable to borrow small implementation patterns in the selected stack.
 
 ### 6. Community Hermes Desktop / Hermes One
 
-Источник: [fathah/hermes-desktop](https://github.com/fathah/hermes-desktop).
+Source: [fathah/hermes-desktop](https://github.com/fathah/hermes-desktop).
 
-Repository использует Electron и охватывает значительно более широкий набор экранов: providers, profiles, memory, skills, schedules, gateways, office и т. д.
+The repository uses Electron and covers a significantly broader set of screens: providers, profiles, memory, skills, schedules, gateways, office, and so on.
 
-#### Полезно
+#### Useful
 
-- визуальные идеи chat/session/settings;
-- examples полнотекстового session search;
+- visual ideas for chat/session/settings;
+- examples of full-text session search;
 - onboarding/provider setup edge cases;
-- UX больших configuration surfaces;
-- tests вокруг streaming/IPC могут дать checklist ideas.
+- UX for large configuration surfaces;
+- tests around streaming/IPC can provide checklist ideas.
 
-#### Почему не база
+#### Why it is not a foundation
 
-- Electron против требования low footprint;
-- другой backend protocol и storage;
-- очень широкий scope;
-- community project не равен официальному Hermes Desktop;
-- значительная часть UI не относится к минимальному PiUI.
+- Electron conflicts with the low-footprint requirement;
+- different backend protocol and storage;
+- very broad scope;
+- the community project is not equivalent to the official Hermes Desktop;
+- a significant portion of the UI is unrelated to minimal PiUI.
 
-#### Решение
+#### Decision
 
-Visual/flow research only. Отдельные framework-independent algorithms можно рассмотреть после MIT attribution review, но fork запрещён ADR-020.
+Visual/flow research only. Individual framework-independent algorithms can be considered after MIT attribution review, but a fork is prohibited by ADR-020.
 
 ### 7. Alma
 
-Вероятно, в голосовой расшифровке под «Alama» имелась в виду [Alma](https://alma.now/) — desktop-интерфейс для нескольких AI providers. Это предположение, а не установленный факт.
+Presumably, “Alama” in the voice transcription referred to [Alma](https://alma.now/) — a desktop interface for multiple AI providers. This is an assumption, not an established fact.
 
-#### Полезно
+#### Useful
 
-- минимальный polished chat shell;
+- minimal polished chat shell;
 - model/provider switching;
 - local-first positioning;
-- аккуратное представление tool use.
+- careful presentation of tool use.
 
-#### Почему не база
+#### Why it is not a foundation
 
-- provider orchestration не равно Pi agent/session harness;
-- нет подтверждённой совместимости с Pi JSONL/extensions/RPC;
-- extension security и project/session model отличаются;
-- код/license не исследовались как пригодный source base.
+- provider orchestration is not equivalent to a Pi agent/session harness;
+- no confirmed compatibility with Pi JSONL/extensions/RPC;
+- extension security and the project/session model differ;
+- the code/license were not researched as a suitable source base.
 
-#### Решение
+#### Decision
 
-Visual reference only. Не принимать архитектурные решения на основании Alma.
+Visual reference only. Do not make architectural decisions based on Alma.
 
-### 8. Tauri, Svelte и Bits UI
+### 8. Tauri, Svelte, and Bits UI
 
-Официальные источники:
+Official sources:
 
 - [Tauri 2](https://v2.tauri.app/)
 - [Tauri sidecars](https://v2.tauri.app/develop/sidecar/)
 - [Svelte documentation](https://svelte.dev/docs/svelte/overview)
 - [Bits UI](https://www.bits-ui.com/)
 
-#### Что использовать
+#### What to use
 
-- Tauri native/system WebView host и Rust commands;
-- sidecar packaging, но process lifecycle в собственном Rust supervisor;
-- Svelte compiler/runtime и TypeScript;
-- выборочные headless accessible primitives для dialogs, listboxes, menus и tooltips.
+- Tauri native/system WebView host and Rust commands;
+- sidecar packaging, but process lifecycle in a dedicated Rust supervisor;
+- Svelte compiler/runtime and TypeScript;
+- selective headless accessible primitives for dialogs, listboxes, menus, and tooltips.
 
-#### Что не делать
+#### What not to do
 
-- exposing Tauri shell plugin to extension/content UI;
-- импорт всего component kit/theme;
-- превращение Bits UI internals в public PiUI extension contract;
-- зависимость core UX от нестабильных private framework APIs.
+- exposing the Tauri shell plugin to extension/content UI;
+- importing an entire component kit/theme;
+- turning Bits UI internals into a public PiUI extension contract;
+- making core UX depend on unstable private framework APIs.
 
-### 9. Матрица решений
+### 9. Decision Matrix
 
-| Кандидат | UX inspiration | Code study | Selective code reuse | Fork/base |
+| Candidate | UX inspiration | Code study | Selective code reuse | Fork/base |
 |---|---:|---:|---:|---:|
-| Codex App | Да | Нет подтверждённой базы | Нет | Нет |
-| Official Hermes Desktop | Да | После отдельного audit | Возможно | Нет |
-| OpenCovibe | Да | Да | Да, после audit/NOTICE | Нет |
-| Community Hermes Desktop | Да | Ограниченно | Только малые framework-independent части | Нет |
-| Alma | Да | Нет | Нет | Нет |
-| Tauri/Svelte/Bits UI | Да | Да | Через нормальные dependencies | Да, как платформенный stack, не app fork |
+| Codex App | Yes | No confirmed base | No | No |
+| Official Hermes Desktop | Yes | After separate audit | Possibly | No |
+| OpenCovibe | Yes | Yes | Yes, after audit/NOTICE | No |
+| Community Hermes Desktop | Yes | Limited | Only small framework-independent parts | No |
+| Alma | Yes | No | No | No |
+| Tauri/Svelte/Bits UI | Yes | Yes | Through normal dependencies | Yes, as a platform stack, not an app fork |
 
-### 10. Процесс заимствования кода
+### 10. Code Reuse Process
 
-Для каждого candidate module создать `REUSE-REVIEW-<id>.md`:
+For each candidate module, create `REUSE-REVIEW-<id>.md`:
 
 ```text
 Upstream repository/commit/path:
@@ -5172,17 +5232,17 @@ Decision: copy/adapt/reimplement/reject
 
 Rules:
 
-- pin exact commit, не копировать с moving main без фиксации;
-- prefer reimplementing small generic pattern over importing large dependency tree;
-- no copied session schema/protocol as source of truth;
+- pin the exact commit; do not copy from a moving main branch without pinning;
+- prefer reimplementing a small generic pattern over importing a large dependency tree;
+- no copied session schema/protocol as the source of truth;
 - no dependency solely for one trivial helper;
 - preserve attribution;
-- upstream update не применяется автоматически;
-- copied code проходит PiUI lint/tests/security.
+- upstream updates are not applied automatically;
+- copied code passes PiUI lint/tests/security.
 
-### 11. Кандидаты для собственного open-source release
+### 11. Candidates for an Open-Source Release of Our Own
 
-Чтобы ecosystem мог развиваться без fork core, отдельно публикуются:
+To allow the ecosystem to evolve without forking the core, publish separately:
 
 - `@piui/contracts`;
 - `@piui/extension-sdk`;
@@ -5191,94 +5251,94 @@ Rules:
 - fake Pi RPC test harness;
 - example dual Pi/PiUI packages.
 
-Desktop host можно открыть целиком, но SDK/fixtures важнее для расширяемости. License PiUI следует выбрать до первого external code import; Apache-2.0 упрощает совместимость с OpenCovibe reuse, MIT проще, но не переносит upstream NOTICE obligations. Решение о license — отдельное юридическое/проектное действие, не сделанное этой спецификацией.
+The desktop host can be opened in full, but the SDK/fixtures are more important for extensibility. The PiUI license should be chosen before the first external code import; Apache-2.0 simplifies compatibility with OpenCovibe reuse, MIT is simpler but does not carry upstream NOTICE obligations. The license decision is a separate legal/project action and is not made by this specification.
 
 ---
 
 <a id="risks"></a>
 
-## 12. Открытые риски и spikes
+## 12. Open risks and spikes
 
-_Исходный файл: `docs/12_OPEN_RISKS.md`._
+_Source file: `docs/12_OPEN_RISKS.md`._
 
-## 12. Открытые риски, неизвестные и обязательные проверки
+## 12. Open Risks, Unknowns, and Required Checks
 
-### 1. Статус документа
+### 1. Document Status
 
-Риски ниже не замаскированы под реализованные возможности. До выполнения Phase 0 многие технические детали являются обоснованным проектным решением, но не подтверждённым поведением конкретной версии Pi/OS.
+The risks below are not disguised as implemented capabilities. Until Phase 0 is completed, many technical details are reasoned design decisions, not confirmed behavior of a specific Pi/OS version.
 
-Шкала:
+Scale:
 
-- **Вероятность:** Low / Medium / High.
-- **Влияние:** Medium / High / Critical.
-- **Gate:** этап, до которого риск обязан быть закрыт или формально принят.
+- **Probability:** Low / Medium / High.
+- **Impact:** Medium / High / Critical.
+- **Gate:** the stage by which the risk must be closed or formally accepted.
 
-### 2. Критический риск-регистр
+### 2. Critical Risk Register
 
-| ID | Риск | Вероятность | Влияние | Gate |
+| ID | Risk | Probability | Impact | Gate |
 |---|---|---:|---:|---|
-| R-01 | RPC startup создаёт ghost session при открытии existing chat | Medium | High | G0 |
-| R-02 | Нет корректного graceful shutdown, остаются child tools | Medium | Critical | G0/G2 |
-| R-03 | Нельзя перейти на arbitrary branch node через RPC | High | Medium/High | G0/G4 |
-| R-04 | Provider OAuth/login требует полноценного TTY | High | High | G0/G3 |
-| R-05 | RPC/TUI extension UI parity ограничена сильнее ожидаемого | High | High | G0/G3 |
-| R-06 | Одновременный CLI/PiUI writer повреждает/рассинхронизирует session | Medium | Critical | G0/G2 |
-| R-07 | Session format/root меняется между Pi versions | Medium | High | G1/G4 |
-| R-08 | System WebView footprint/behavior нарушает budgets на Linux/Windows | Medium | High | G0/G6 |
-| R-09 | Tauri sidecar Pi packaging сложен/нестабилен на mandatory platforms | Medium | High | G0/G6 |
-| R-10 | Rich view isolation имеет platform-specific escape/IPC exposure | Medium | Critical | G5 |
-| R-11 | Trusted shell делает recovery недоступным | Low/Medium | Critical | G5 |
-| R-12 | Full-feature UI extension SDK раздувает core и задерживает stable v1 | High | High | G4/G5 |
-| R-13 | Pi executable/backend extensions имеют user permissions; пользователи принимают это за sandbox | High | Critical | G1/G6 |
-| R-14 | Large sessions/tool outputs вызывают memory leak/jank | High | High | G2/G6 |
-| R-15 | Windows process/path semantics дают orphan/traversal bugs | Medium | Critical | G2/G6 |
-| R-16 | Linux WebKitGTK/distro matrix слишком фрагментирована | High | High | G6 |
-| R-17 | Reused external code приносит license/security/architecture debt | Medium | High | До merge |
-| R-18 | Managed runtime и system Pi расходятся по packages/config behavior | Medium | High | G2/G6 |
-| R-19 | Generic file references недостаточно понятны модели/tools | Medium | Medium | G3 |
-| R-20 | Scope creep превращает PiUI в IDE/dashboard | High | High | Все gates |
+| R-01 | RPC startup creates a ghost session when opening an existing chat | Medium | High | G0 |
+| R-02 | No correct graceful shutdown; child tools remain | Medium | Critical | G0/G2 |
+| R-03 | Cannot navigate to an arbitrary branch node through RPC | High | Medium/High | G0/G4 |
+| R-04 | Provider OAuth/login requires a full TTY | High | High | G0/G3 |
+| R-05 | RPC/TUI extension UI parity is more limited than expected | High | High | G0/G3 |
+| R-06 | Concurrent CLI/PiUI writers corrupt/desynchronize a session | Medium | Critical | G0/G2 |
+| R-07 | Session format/root changes between Pi versions | Medium | High | G1/G4 |
+| R-08 | System WebView footprint/behavior violates budgets on Linux/Windows | Medium | High | G0/G6 |
+| R-09 | Tauri sidecar Pi packaging is complex/unstable on mandatory platforms | Medium | High | G0/G6 |
+| R-10 | Rich view isolation has a platform-specific escape/IPC exposure | Medium | Critical | G5 |
+| R-11 | Trusted shell makes recovery inaccessible | Low/Medium | Critical | G5 |
+| R-12 | A full-featured UI extension SDK bloats the core and delays stable v1 | High | High | G4/G5 |
+| R-13 | Pi executable/backend extensions have user permissions; users mistake this for a sandbox | High | Critical | G1/G6 |
+| R-14 | Large sessions/tool outputs cause memory leaks/jank | High | High | G2/G6 |
+| R-15 | Windows process/path semantics produce orphan/traversal bugs | Medium | Critical | G2/G6 |
+| R-16 | The Linux WebKitGTK/distro matrix is too fragmented | High | High | G6 |
+| R-17 | Reused external code introduces license/security/architecture debt | Medium | High | Before merge |
+| R-18 | Managed runtime and system Pi diverge in packages/config behavior | Medium | High | G2/G6 |
+| R-19 | Generic file references are not sufficiently understandable to models/tools | Medium | Medium | G3 |
+| R-20 | Scope creep turns PiUI into an IDE/dashboard | High | High | All gates |
 
-### 3. Детализация и exit criteria
+### 3. Details and Exit Criteria
 
 #### R-01 — Ghost sessions
 
-**Сигнал:** запуск RPC без явного selector создаёт новый JSONL до `switch_session`.
+**Signal:** starting RPC without an explicit selector creates a new JSONL before `switch_session`.
 
 **Mitigation:** supported launch option; deferred session creation; minimal bridge.
 
-**Запрещённый workaround:** удалить ghost file после запуска без подтверждения ownership.
+**Prohibited workaround:** delete the ghost file after startup without ownership confirmation.
 
 **Exit:** automated test proves zero extra files across new/open/crash paths.
 
 #### R-02 — Shutdown/process tree
 
-**Сигнал:** EOF/abort не завершает Pi или descendants; Windows leaves process.
+**Signal:** EOF/abort does not terminate Pi or descendants; Windows leaves a process.
 
 **Mitigation:** graceful command/EOF, timeout escalation, Unix process groups, Windows Job Object.
 
-**Residual:** descendants daemonized outside group may survive; document limits.
+**Residual:** descendants daemonized outside the group may survive; document the limits.
 
 **Exit:** child-process fixture leaves zero owned descendants on Windows/Linux.
 
 #### R-03 — Branch navigation
 
-**Сигнал:** `get_tree` есть, command navigate отсутствует.
+**Signal:** `get_tree` exists, but a navigate command is absent.
 
 **Mitigation:** read-only tree; only fork/clone; upstream/bridge capability.
 
-**Exit:** official/bridge operation with round-trip CLI test, либо explicit 1.0 product limitation accepted.
+**Exit:** official/bridge operation with a round-trip CLI test, or an explicit 1.0 product limitation is accepted.
 
 #### R-04 — Authentication
 
-**Сигнал:** `/login` требует terminal interaction not exposed via RPC/get_commands.
+**Signal:** `/login` requires terminal interaction not exposed via RPC/get_commands.
 
-**Mitigation:** dedicated allowlisted auth subprocess or external terminal instructions; never generic terminal.
+**Mitigation:** dedicated allowlisted auth subprocess or external terminal instructions; never a generic terminal.
 
 **Exit:** provider matrix flow works without secret logs and refreshes models.
 
 #### R-05 — Extension parity
 
-**Сигнал:** `ctx.ui.custom`, header/footer/editor/theme no-op; custom entries lack renderer metadata.
+**Signal:** `ctx.ui.custom`, header/footer/editor/theme are no-ops; custom entries lack renderer metadata.
 
 **Mitigation:** Tier 0 generic fallback + PiUI manifest/SDK; extension UI fixture corpus.
 
@@ -5286,7 +5346,7 @@ _Исходный файл: `docs/12_OPEN_RISKS.md`._
 
 #### R-06 — Concurrent writers
 
-**Сигнал:** CLI and PiUI append divergent turns to same session/current leaf.
+**Signal:** CLI and PiUI append divergent turns to the same session/current leaf.
 
 **Mitigation:** external-write revision detection, conflict state, read-only/fork choice.
 
@@ -5294,7 +5354,7 @@ _Исходный файл: `docs/12_OPEN_RISKS.md`._
 
 #### R-07 — Session format drift
 
-**Сигнал:** unknown headers/entry types/root paths break scanner.
+**Signal:** unknown headers/entry types/root paths break the scanner.
 
 **Mitigation:** tolerant decoder, raw preservation, version/capability probe, pinned managed runtime, fixtures.
 
@@ -5302,25 +5362,25 @@ _Исходный файл: `docs/12_OPEN_RISKS.md`._
 
 #### R-08 — WebView performance/variance
 
-**Сигнал:** baseline RSS/startup over hard gate; long timeline differs across WebKitGTK/WebView2.
+**Signal:** baseline RSS/startup exceeds the hard gate; the long timeline differs across WebKitGTK/WebView2.
 
 **Mitigation:** early SPIKE-08, minimal dependencies, virtualization, platform-specific fixes.
 
-**Fallback:** reconsider Qt/other stack before product coupling, not after 1.0.
+**Fallback:** reconsider Qt/another stack before product coupling, not after 1.0.
 
-**Exit:** physical reference measurements within hard budgets.
+**Exit:** physical reference measurements are within hard budgets.
 
 #### R-09 — Managed runtime packaging
 
-**Сигнал:** executable naming, architecture, permissions, updates or package assets fail.
+**Signal:** executable naming, architecture, permissions, updates, or package assets fail.
 
-**Mitigation:** сначала использовать official standalone Pi release artifacts; проверять upstream checksum/provenance; хранить отдельные sidecar artifacts/manifests; system/custom modes remain fallback; никогда не выполнять npm install/update при startup.
+**Mitigation:** first use official standalone Pi release artifacts; verify upstream checksum/provenance; keep separate sidecar artifacts/manifests; system/custom modes remain fallback; never run npm install/update at startup.
 
 **Exit:** signed/tested install-update-rollback on Windows/Linux.
 
 #### R-10 — Rich view isolation
 
-**Сигнал:** iframe/view can call core Tauri IPC, navigate, fetch secrets or spoof host prompt.
+**Signal:** iframe/view can call core Tauri IPC, navigate, fetch secrets, or spoof a host prompt.
 
 **Mitigation:** separate capability/origin, broker tokens, immutable prompts, CSP, adversarial tests.
 
@@ -5328,140 +5388,140 @@ _Исходный файл: `docs/12_OPEN_RISKS.md`._
 
 #### R-11 — Shell recovery
 
-**Сигнал:** broken shell blocks settings/safe mode.
+**Signal:** a broken shell blocks settings/safe mode.
 
-**Mitigation:** native startup modifier/menu, crash-loop counter, core fallback outside shell.
+**Mitigation:** native startup modifier/menu, crash-loop counter, core fallback outside the shell.
 
-**Exit:** malicious/broken reference shell cannot suppress recovery.
+**Exit:** a malicious/broken reference shell cannot suppress recovery.
 
 #### R-12 — SDK scope
 
-**Сигнал:** v1 tries to support arbitrary layout/CSS/DOM in declarative tier.
+**Signal:** v1 tries to support arbitrary layout/CSS/DOM in the declarative tier.
 
-**Mitigation:** frozen small node vocabulary/slots; complex cases go Tier 2/3; usage-driven additions.
+**Mitigation:** frozen small node vocabulary/slots; complex cases go to Tier 2/3; usage-driven additions.
 
-**Exit:** schema v1 implementable/testable, unknown contributions degrade gracefully.
+**Exit:** schema v1 is implementable/testable; unknown contributions degrade gracefully.
 
 #### R-13 — False sandbox perception
 
-**Сигнал:** users trust project because desktop app looks managed/safe.
+**Signal:** users trust a project because the desktop app looks managed/safe.
 
 **Mitigation:** literal trust wording, restricted mode, extension source visibility, no misleading shields.
 
-**Exit:** security/UX review validates comprehension; docs repeat limitation.
+**Exit:** security/UX review validates comprehension; documentation repeats the limitation.
 
 #### R-14 — Long-session performance
 
-**Сигнал:** entire timeline/Markdown/tool output stays in DOM/memory.
+**Signal:** the entire timeline/Markdown/tool output stays in the DOM/memory.
 
-**Mitigation:** virtualization, paging, lazy parse, output truncation/collapse, leak tests.
+**Mitigation:** virtualization, paging, lazy parsing, output truncation/collapse, leak tests.
 
 **Exit:** 10k-block fixture meets hard budgets after repeated open/close.
 
 #### R-15 — Windows semantics
 
-**Сигнал:** UNC/junction/ADS/long path/process cleanup bugs.
+**Signal:** UNC/junction/ADS/long-path/process-cleanup bugs.
 
 **Mitigation:** Rust platform adapter and Windows-specific corpus/physical CI.
 
-**Exit:** mandatory tests, no POSIX-only assumptions.
+**Exit:** mandatory tests, with no POSIX-only assumptions.
 
 #### R-16 — Linux distribution variance
 
-**Сигнал:** WebKitGTK missing/incompatible; Wayland dialogs/tray; AppImage issues.
+**Signal:** WebKitGTK is missing/incompatible; Wayland dialogs/tray; AppImage issues.
 
 **Mitigation:** narrow declared support matrix, dependency preflight, deb/AppImage choice based on tests.
 
-**Exit:** two distro families and Wayland/X11 smoke; unsupported cases stated.
+**Exit:** smoke testing on two distro families and Wayland/X11; unsupported cases are stated.
 
 #### R-17 — External reuse
 
-**Сигнал:** copied OpenCovibe/Hermes code retains unrelated storage/protocol or misses NOTICE.
+**Signal:** copied OpenCovibe/Hermes code retains unrelated storage/protocol or misses NOTICE.
 
-**Mitigation:** per-module reuse review, exact commit, own tests.
+**Mitigation:** per-module reuse review, exact commit, dedicated tests.
 
-**Exit:** legal/provenance checklist in PR.
+**Exit:** legal/provenance checklist in the PR.
 
 #### R-18 — Runtime profile divergence
 
-**Сигнал:** managed Pi loads packages/config differently from system Pi.
+**Signal:** managed Pi loads packages/config differently from system Pi.
 
-**Mitigation:** same resolved home/config semantics where intended, visible paths, compatibility tests.
+**Mitigation:** use the same resolved home/config semantics where intended, visible paths, compatibility tests.
 
-**Exit:** fixture package/session works in all supported profiles or differences documented.
+**Exit:** fixture package/session works in all supported profiles or differences are documented.
 
 #### R-19 — File references
 
-**Сигнал:** model ignores textual attachment convention; tool cannot resolve managed URI.
+**Signal:** the model ignores the textual attachment convention; the tool cannot resolve the managed URI.
 
 **Mitigation:** stable human-readable path refs, optional bridge/tool resolver, user-visible semantics.
 
-**Exit:** real workflows validate project/external file use; typed Pi API replaces convention when available.
+**Exit:** real workflows validate project/external file use; typed Pi API replaces the convention when available.
 
 #### R-20 — Scope creep
 
-**Сигнал:** core PRs add Git/terminal/diff/subagents before stable chat/extensions.
+**Signal:** core PRs add Git/terminal/diff/subagents before stable chat/extensions.
 
 **Mitigation:** ADR-015, extension-first review, release gates, explicit non-goals.
 
-**Exit:** ongoing; each new core feature requires ADR.
+**Exit:** ongoing; each new core feature requires an ADR.
 
-### 4. Вторичные риски
+### 4. Secondary Risks
 
 - system WebView updates can regress rendering between PiUI releases;
 - model/provider list can be slow/offline;
 - clipboard/image decoder behavior differs by platform;
-- FTS may expose sensitive local text to other local processes with same user rights;
-- project moved through symlink can invalidate trust identity;
+- FTS may expose sensitive local text to other local processes with the same user rights;
+- a project moved through a symlink can invalidate trust identity;
 - permission fatigue may lead users to allow everything;
 - extension package updates can change behavior without publisher signatures;
 - session trash undo differs by OS;
-- full diagnostics may accidentally include prompt/path via third-party error strings;
+- full diagnostics may accidentally include a prompt/path through third-party error strings;
 - screen readers may announce streaming too aggressively;
-- update signing infrastructure itself becomes critical secret;
+- update signing infrastructure itself becomes a critical secret;
 - managed attachment cache can grow silently;
-- app crash during DB migration can lose UI metadata, though not sessions;
-- custom Pi forks may claim version but diverge semantics;
-- anti-virus may quarantine sidecar on Windows;
+- an app crash during DB migration can lose UI metadata, though not sessions;
+- custom Pi forks may claim a version but diverge in semantics;
+- anti-virus may quarantine the sidecar on Windows;
 - WSL/project paths bridge Windows/Linux identity ambiguously.
 
-Каждый должен иметь issue/test до соответствующей feature release.
+Each must have an issue/test before the corresponding feature release.
 
-### 5. Upstream requests к Pi
+### 5. Upstream Requests to Pi
 
-Рекомендуемый минимальный список, без требования превратить Pi в GUI framework:
+Recommended minimum list, without requiring Pi to become a GUI framework:
 
 1. explicit capability/protocol version endpoint;
-2. open existing session at RPC startup without creating another;
+2. open an existing session at RPC startup without creating another;
 3. graceful shutdown RPC command/ack;
-4. navigate current branch/tree node;
+4. navigate the current branch/tree node;
 5. headless auth status/start flow or structured interactive channel;
 6. typed generic attachment/resource references;
 7. richer metadata for custom entries/tool renderers;
 8. documented concurrent access/locking semantics;
 9. complete list of config operations suitable for external UI.
 
-Каждый request должен быть small, generic and useful to any custom UI, not PiUI-specific pixel behavior.
+Each request must be small, generic, and useful to any custom UI, not PiUI-specific pixel behavior.
 
-### 6. Bridge extension fallback
+### 6. Bridge Extension Fallback
 
-Если upstream API недоступен, `@piui/pi-bridge` может:
+If the upstream API is unavailable, `@piui/pi-bridge` may:
 
-- регистрировать минимальные Pi commands/events;
+- register minimal Pi commands/events;
 - expose tree navigation/session selection/auth metadata through supported extension/SDK primitives;
 - translate typed resource references;
 - advertise bridge version/capabilities.
 
-Bridge не должен:
+The bridge must not:
 
-- implement agent loop;
-- introduce second session file;
+- implement an agent loop;
+- introduce a second session file;
 - write JSONL outside Pi APIs;
 - render desktop UI;
 - become mandatory for basic prompt/streaming;
 - hide version incompatibility.
 
-### 7. Go/no-go правила
+### 7. Go/No-Go Rules
 
 - **No-go public rich views:** R-10 unresolved.
 - **No-go trusted shell:** R-11 unresolved.
@@ -5471,17 +5531,17 @@ Bridge не должен:
 - **No-go low-memory claim:** physical hard budgets not measured.
 - **No-go public auto-update:** signing/rollback not verified.
 
-Частичный релиз допустим только с отключённой/скрытой unsupported feature, а не с optimistic broken action.
+A partial release is allowed only with the unsupported feature disabled/hidden, not with an optimistic broken action.
 
-### 8. Risk review cadence
+### 8. Risk Review Cadence
 
-На каждом gate:
+At each gate:
 
-- обновить probability/impact;
-- приложить test/fixture/decision evidence;
-- перевести закрытый риск в ADR/known limitation;
-- не закрывать риск ссылкой на code review без runtime evidence;
-- новые риски добавлять до merge архитектурного изменения.
+- update probability/impact;
+- attach test/fixture/decision evidence;
+- move a closed risk to an ADR/known limitation;
+- do not close a risk by citing code review without runtime evidence;
+- add new risks before merging an architectural change.
 
 ---
 
@@ -5489,254 +5549,254 @@ Bridge не должен:
 
 ## Release readiness checklist
 
-_Исходный файл: `CHECKLIST_RELEASE.md`._
+_Source file: `CHECKLIST_RELEASE.md`._
 
 ## PiUI — release readiness checklist
 
-Этот чек-лист является блокирующим для public 1.0. Отметка ставится только при наличии ссылки на автоматический тест, артефакт CI, ADR или подписанный manual-test report.
+This checklist blocks public 1.0. An item may be checked only with a link to an automated test, CI artifact, ADR, or signed manual-test report.
 
 ### 1. Product scope
 
-- [ ] Реализованы только функции, входящие в `docs/01_PRODUCT.md`; scope creep вынесен в extensions или backlog.
-- [ ] Пользователь может добавить существующую папку, создать и продолжить Pi-сессию, закрыть PiUI и открыть ту же историю в CLI Pi.
-- [ ] Проекты и сессии не зависят от облачного аккаунта или сети.
-- [ ] Empty, loading, offline, permission-denied, missing-runtime, crashed-runtime и corrupted-index states имеют явный UX.
-- [ ] Все необратимые действия имеют предупреждение или восстановимый trash flow.
+- [ ] Only features included in `docs/01_PRODUCT.md` are implemented; scope creep is moved to extensions or the backlog.
+- [ ] A user can add an existing folder, create and continue a Pi session, close PiUI, and open the same history in the Pi CLI.
+- [ ] Projects and sessions do not depend on a cloud account or network.
+- [ ] Empty, loading, offline, permission-denied, missing-runtime, crashed-runtime, and corrupted-index states have explicit UX.
+- [ ] Every irreversible action has a warning or recoverable trash flow.
 
-### 2. Pi runtime и совместимость
+### 2. Pi runtime and compatibility
 
-- [ ] Пройдены все Phase 0 spikes из `docs/09_ROADMAP_AND_TASKS.md`.
-- [ ] Зафиксированы минимальная, рекомендуемая и максимальная проверенная версии Pi.
-- [ ] Capability negotiation проверяется интеграционными тестами; версия не используется как единственный источник возможностей.
-- [ ] RPC stdout парсится только как протокол; stderr хранится отдельно и не ломает parser.
-- [ ] Частичные строки, invalid JSON, неизвестные event types и out-of-order completion обрабатываются без падения shell.
-- [ ] Stop, steer, follow-up, compaction, retry и runtime crash проходят recovery tests.
-- [ ] Одновременное открытие одной сессии в CLI и PiUI либо безопасно поддержано, либо явно блокируется lock-механизмом.
-- [ ] Завершение PiUI не оставляет orphaned Pi/tool processes на Windows, Linux и macOS.
+- [ ] All Phase 0 spikes from `docs/09_ROADMAP_AND_TASKS.md` are complete.
+- [ ] Minimum, recommended, and maximum verified Pi versions are recorded.
+- [ ] Capability negotiation is verified by integration tests; version is not used as the only source of capabilities.
+- [ ] RPC stdout is parsed only as a protocol; stderr is kept separate and does not break the parser.
+- [ ] Partial lines, invalid JSON, unknown event types, and out-of-order completion are handled without crashing the shell.
+- [ ] Stop, steer, follow-up, compaction, retry, and runtime crash pass recovery tests.
+- [ ] Simultaneously opening one session in the CLI and PiUI is either safely supported or explicitly blocked by a lock mechanism.
+- [ ] Exiting PiUI leaves no orphaned Pi/tool processes on Windows, Linux, or macOS.
 
-### 3. Данные и сессии
+### 3. Data and sessions
 
-- [ ] Pi JSONL остаётся source of truth; PiUI не переписывает его напрямую.
-- [ ] Удаление SQLite-базы PiUI не удаляет и не повреждает Pi-сессии.
-- [ ] Индекс полностью перестраивается из реестра проектов и session files.
-- [ ] Atomic writes, migrations, backups и rollback migrations покрыты тестами.
-- [ ] Symlink/junction/case-sensitivity/path-length/Unicode edge cases проверены по платформам.
-- [ ] Rename, archive/trash, export и import имеют однозначные semantics и не создают ghost sessions.
-- [ ] Secrets, prompts, tool results и пользовательские пути не попадают в telemetry по умолчанию.
+- [ ] Pi JSONL remains the source of truth; PiUI does not rewrite it directly.
+- [ ] Deleting the PiUI SQLite database does not delete or corrupt Pi sessions.
+- [ ] The index is fully rebuildable from the project registry and session files.
+- [ ] Atomic writes, migrations, backups, and rollback migrations are covered by tests.
+- [ ] Symlink/junction/case-sensitivity/path-length/Unicode edge cases are verified across platforms.
+- [ ] Rename, archive/trash, export, and import have unambiguous semantics and do not create ghost sessions.
+- [ ] Secrets, prompts, tool results, and user paths do not enter telemetry by default.
 
-### 4. Attachments и rendering
+### 4. Attachments and rendering
 
-- [ ] Изображения проходят официальный Pi RPC path и корректно отображаются в истории.
-- [ ] Обычные файлы передаются как явные path/resource references; UI не создаёт ложного впечатления, что Pi получил бинарный upload.
-- [ ] Managed-copy режим, если включён, показывает конечный путь, размер и правила удаления.
-- [ ] Большие изображения, SVG, malformed media, missing files и внешние пути безопасно обрабатываются.
-- [ ] Markdown, code blocks, links, tool cards и extension output защищены от script injection и unsafe URL schemes.
-- [ ] Для неизвестного custom entry/renderer существует универсальный raw-data fallback.
+- [ ] Images follow the official Pi RPC path and render correctly in history.
+- [ ] Ordinary files are passed as explicit path/resource references; the UI does not falsely imply that Pi received a binary upload.
+- [ ] Managed-copy mode, when enabled, shows the destination path, size, and deletion rules.
+- [ ] Large images, SVG, malformed media, missing files, and external paths are handled safely.
+- [ ] Markdown, code blocks, links, tool cards, and extension output are protected against script injection and unsafe URL schemes.
+- [ ] An unknown custom entry/renderer has a universal raw-data fallback.
 
 ### 5. Extension SDK
 
-- [ ] Backend-only Pi extension работает без `piui.manifest.json`.
-- [ ] Manifest валидируется schema до загрузки; несовместимая версия отклоняется с понятной диагностикой.
-- [ ] Declarative contributions проходят deterministic ordering, collision handling и lifecycle tests.
-- [ ] Rich views работают в изоляции и не получают Tauri/shell/filesystem API напрямую.
-- [ ] Каждая host capability выдаётся отдельно, видима пользователю и может быть отозвана.
-- [ ] Project-local UI package не исполняется до trust decision.
-- [ ] Full-shell replacement доступен только доверенному global package.
-- [ ] Safe mode запускается до загрузки extension UI и не может быть скрыт или переопределён расширением.
-- [ ] Crash loop, timeout, memory abuse и invalid messages расширения не роняют core shell.
-- [ ] Reference package из `examples/minimal-piui-package/` проходит contract tests.
+- [ ] A backend-only Pi extension works without `piui.manifest.json`.
+- [ ] The manifest is schema-validated before loading; an incompatible version is rejected with a clear diagnostic.
+- [ ] Declarative contributions pass deterministic ordering, collision handling, and lifecycle tests.
+- [ ] Rich views run in isolation and do not receive the Tauri/shell/filesystem API directly.
+- [ ] Every host capability is granted separately, visible to the user, and revocable.
+- [ ] A project-local UI package does not execute before a trust decision.
+- [ ] Full-shell replacement is available only to a trusted global package.
+- [ ] Safe mode starts before extension UI loads and cannot be hidden or overridden by an extension.
+- [ ] An extension crash loop, timeout, memory abuse, or invalid messages do not crash the core shell.
+- [ ] The reference package from `examples/minimal-piui-package/` passes contract tests.
 
-### 6. Security и privacy
+### 6. Security and privacy
 
-- [ ] Threat model из `docs/07_SECURITY.md` пересмотрен перед release candidate.
-- [ ] Frontend CSP запрещает inline/eval и произвольные remote origins.
-- [ ] Tauri commands allowlisted; argument validation и path authorization находятся в Rust-host.
-- [ ] WebView не имеет общего shell API, unrestricted filesystem или raw process spawning.
-- [ ] Remote content не получает привилегированный origin.
-- [ ] OAuth/login flow не передаёт credentials через DOM, logs или extension messages.
-- [ ] Логи имеют redaction, retention policy и явный export flow.
-- [ ] Dependency/SBOM/license/audit checks проходят в CI.
-- [ ] Update artifacts подписаны; downgrade и compromised-update scenarios протестированы.
-- [ ] Security contact, vulnerability policy и supported-version policy опубликованы.
-- [ ] Clean clone проходит `pnpm repo:check`; source tree и Git history не содержат credentials, Pi sessions, agent artifacts, private paths или generated local state, а `LICENSE`/NOTICE/package metadata согласованы.
+- [ ] The threat model in `docs/07_SECURITY.md` is reviewed before the release candidate.
+- [ ] Frontend CSP prohibits inline/eval and arbitrary remote origins.
+- [ ] Tauri commands are allowlisted; argument validation and path authorization reside in the Rust host.
+- [ ] The WebView has no general shell API, unrestricted filesystem, or raw process spawning.
+- [ ] Remote content receives no privileged origin.
+- [ ] The OAuth/login flow does not pass credentials through the DOM, logs, or extension messages.
+- [ ] Logs have redaction, a retention policy, and an explicit export flow.
+- [ ] Dependency/SBOM/license/audit checks pass in CI.
+- [ ] Update artifacts are signed; downgrade and compromised-update scenarios are tested.
+- [ ] The security contact, vulnerability policy, and supported-version policy are published.
+- [ ] A clean clone passes `pnpm repo:check`; the source tree and Git history contain no credentials, Pi sessions, agent artifacts, private paths, or generated local state, and `LICENSE`/NOTICE/package metadata are aligned.
 
-### 7. Performance и устойчивость
+### 7. Performance and resilience
 
-- [ ] First frame и usable-shell budgets из `docs/08_TESTING_AND_PERFORMANCE.md` пройдены на минимальных reference machines.
-- [ ] Измерены отдельно RSS shell, каждый Pi runtime, extension hosts и tool child processes.
-- [ ] Idle core-shell RSS не превышает release gate; отклонение документировано только ADR и новой базовой линией.
-- [ ] Idle CPU, token-to-paint p95, input latency и scroll jank проходят бюджеты.
-- [ ] 10 000 message blocks не рендерятся одновременно; virtualization подтверждена профилем.
-- [ ] Startup и открытие существующей истории не требуют сети.
-- [ ] Memory leak soak test, rapid session switching, long streaming и repeated extension reload пройдены.
-- [ ] Crash recovery не теряет подтверждённые Pi entries и не дублирует user prompts.
+- [ ] First-frame and usable-shell budgets from `docs/08_TESTING_AND_PERFORMANCE.md` pass on minimum reference machines.
+- [ ] Shell RSS, each Pi runtime, extension hosts, and tool child processes are measured separately.
+- [ ] Idle core-shell RSS does not exceed the release gate; any variance is documented only by an ADR and a new baseline.
+- [ ] Idle CPU, token-to-paint p95, input latency, and scroll jank meet budgets.
+- [ ] 10,000 message blocks are not rendered simultaneously; virtualization is confirmed by a profile.
+- [ ] Startup and opening existing history do not require the network.
+- [ ] Memory-leak soak testing, rapid session switching, long streaming, and repeated extension reload pass.
+- [ ] Crash recovery neither loses confirmed Pi entries nor duplicates user prompts.
 
-### 8. Accessibility и UX quality
+### 8. Accessibility and UX quality
 
-- [ ] Полный основной flow доступен с клавиатуры.
-- [ ] Focus order, focus restoration, dialogs, menus и screen-reader labels проверены.
-- [ ] Contrast, reduced motion, zoom 200%, high-DPI и narrow-window modes пройдены.
-- [ ] Streaming updates не создают неконтролируемых live-region announcements.
-- [ ] Ошибки содержат действие восстановления и diagnostic identifier, но не раскрывают secrets.
-- [ ] Default UI остаётся минимальным: необязательные панели не открыты автоматически.
+- [ ] The complete primary flow is accessible by keyboard.
+- [ ] Focus order, focus restoration, dialogs, menus, and screen-reader labels are verified.
+- [ ] Contrast, reduced motion, 200% zoom, high-DPI, and narrow-window modes pass.
+- [ ] Streaming updates do not create uncontrolled live-region announcements.
+- [ ] Errors include a recovery action and diagnostic identifier but do not disclose secrets.
+- [ ] The default UI remains minimal: optional panels do not open automatically.
 
 ### 9. Platform matrix
 
 - [ ] Windows 10/11: WebView2 bootstrap, installer, paths, Job Object, process termination, updates.
-- [ ] Linux: поддерживаемые distro/WebKitGTK versions, Wayland/X11, packaging, permissions, child cleanup.
-- [ ] macOS: Intel/Apple Silicon при заявленной поддержке, signing/notarization, sandbox/permissions, updates.
-- [ ] На каждой платформе пройдены clean install, upgrade, downgrade rejection, uninstall и user-data preservation.
-- [ ] Runtime discovery проверен для managed Pi, system Pi и custom executable.
-- [ ] Managed Pi artifact имеет зафиксированные upstream origin/version/checksum, target triple, SBOM/provenance и проверенный rollback; приложение не выполняет npm install/update.
-- [ ] Diagnostics bundle сообщает версии Pi/PiUI/WebView/OS без утечки содержимого чатов.
+- [ ] Linux: supported distro/WebKitGTK versions, Wayland/X11, packaging, permissions, child cleanup.
+- [ ] macOS: Intel/Apple Silicon where support is claimed, signing/notarization, sandbox/permissions, updates.
+- [ ] On every platform, clean install, upgrade, downgrade rejection, uninstall, and user-data preservation pass.
+- [ ] Runtime discovery is verified for managed Pi, system Pi, and a custom executable.
+- [ ] The managed Pi artifact has pinned upstream origin/version/checksum, target triple, SBOM/provenance, and verified rollback; the application does not run npm install/update.
+- [ ] The diagnostics bundle reports Pi/PiUI/WebView/OS versions without leaking chat content.
 
-### 10. Release engineering и документация
+### 10. Release engineering and documentation
 
-- [ ] Reproducible build или документированная степень reproducibility подтверждена.
-- [ ] Версии schema, host API и runtime protocol синхронизированы.
-- [ ] Changelog перечисляет breaking changes и migration path.
-- [ ] Public SDK docs содержат permissions, lifecycle, limits, fallback и compatibility examples.
-- [ ] `AGENTS.md`, ADR, open risks и source list актуальны.
-- [ ] User guide объясняет project trust, file semantics, safe mode, backups и CLI interoperability.
-- [ ] Release candidate прошёл dogfood на реальных Pi extensions и существующих session trees.
-- [ ] Go/no-go review подписан владельцами runtime, security, frontend и release engineering.
+- [ ] A reproducible build or documented degree of reproducibility is confirmed.
+- [ ] Schema, host API, and runtime protocol versions are synchronized.
+- [ ] The changelog lists breaking changes and the migration path.
+- [ ] Public SDK docs contain permissions, lifecycle, limits, fallback, and compatibility examples.
+- [ ] `AGENTS.md`, ADRs, open risks, and the source list are current.
+- [ ] The user guide explains project trust, file semantics, safe mode, backups, and CLI interoperability.
+- [ ] The release candidate has undergone dogfooding with real Pi extensions and existing session trees.
+- [ ] Go/no-go review is signed by the runtime, security, frontend, and release-engineering owners.
 
 ---
 
 <a id="handoff"></a>
 
-## Prompt передачи новой команде
+## Handoff prompt for a new team
 
-_Исходный файл: `HANDOFF_PROMPT.md`._
+_Source file: `HANDOFF_PROMPT.md`._
 
-## PiUI — handoff для coding agents и contributors
+## PiUI — handoff for coding agents and contributors
 
-PiUI — минимальная desktop-оболочка над Pi agent harness. Она не заменяет Pi agent loop, provider clients, tools, compaction, session storage или authentication.
+PiUI is a minimal desktop shell on top of the Pi agent harness. It does not replace the Pi agent loop, provider clients, tools, compaction, session storage, or authentication.
 
-### Перед любой задачей
+### Before any task
 
-Прочитай в таком порядке:
+Read in this order:
 
-1. `README.md`, `CONTRIBUTING.md` и `AGENTS.md`.
-2. `docs/13_FOUNDATION_STATUS.md` и `docs/12_OPEN_RISKS.md`.
-3. Документ затрагиваемой подсистемы и связанные ADR в `docs/`.
-4. `contracts/README.md` и машиночитаемые contracts, если меняется IPC/UI DTO.
+1. `README.md`, `CONTRIBUTING.md`, and `AGENTS.md`.
+2. `docs/13_FOUNDATION_STATUS.md` and `docs/12_OPEN_RISKS.md`.
+3. The document for the affected subsystem and related ADRs in `docs/`.
+4. `contracts/README.md` and machine-readable contracts if IPC/UI DTOs change.
 
-### Неподлежащие пересмотру границы
+### Non-negotiable boundaries
 
-- Не писать Pi JSONL напрямую и не создавать второй формат чата.
-- Не давать WebView общий shell/filesystem/process API.
-- Не читать и не передавать `auth.json`, credentials, полный environment или raw prompts.
-- Не запускать project-local UI/JavaScript до отдельного trust decision.
-- Не выдавать local live-RPC preview за managed runtime, sandbox или release-ready feature.
-- Не добавлять cloud backend, telemetry, account system или Electron без ADR.
-- Для нового core feature сначала проверить extension-first alternative.
+- Do not write to Pi JSONL directly or create a second chat format.
+- Do not give the WebView a general shell/filesystem/process API.
+- Do not read or pass through `auth.json`, credentials, the full environment, or raw prompts.
+- Do not run project-local UI/JavaScript before a separate trust decision.
+- Do not represent the local live-RPC preview as a managed runtime, sandbox, or release-ready feature.
+- Do not add a cloud backend, telemetry, an account system, or Electron without an ADR.
+- For every new core feature, evaluate the extension-first alternative first.
 
-### Текущий статус
+### Current status
 
-Foundation и временный local live-RPC preview реализованы, но public-release gates остаются открытыми. Реальные Pi/runtime/packaging/platform claims должны соответствовать только доказательствам в `docs/13_FOUNDATION_STATUS.md`, `spikes/PHASE0_GATE.md` и `CHECKLIST_RELEASE.md`.
+The foundation and temporary local live-RPC preview are implemented, but public-release gates remain open. Actual Pi/runtime/packaging/platform claims must correspond only to evidence in `docs/13_FOUNDATION_STATUS.md`, `spikes/PHASE0_GATE.md`, and `CHECKLIST_RELEASE.md`.
 
-### Формат работы
+### Work format
 
-В начале задачи зафиксируй:
+At the start of a task, record:
 
-- scope и затронутые acceptance criteria;
-- изменяемые public contracts и migration/compatibility impact;
+- scope and affected acceptance criteria;
+- changed public contracts and migration/compatibility impact;
 - data/security/performance/platform risks;
-- automated и manual validation plan.
+- automated and manual validation plan.
 
-В конце укажи:
+At the end, state:
 
-- реализованное и сознательно не реализованное;
-- команды и результаты проверок;
-- новые assumptions/open risks;
-- нужен ли ADR, schema bump или upstream issue;
-- rollback, если изменение затрагивает user-visible state.
+- what was implemented and intentionally not implemented;
+- verification commands and results;
+- new assumptions/open risks;
+- whether an ADR, schema bump, or upstream issue is needed;
+- rollback if the change affects user-visible state.
 
 ### Definition of done
 
-Изменение не готово только потому, что оно визуально работает. Нужны typed boundaries, happy/failure-path tests, сохранность Pi/CLI compatibility, safe-mode/generic fallback coverage, доступные keyboard/screen-reader labels и обновлённая документация.
+A change is not ready merely because it works visually. It needs typed boundaries, happy/failure-path tests, preservation of Pi/CLI compatibility, safe-mode/generic fallback coverage, accessible keyboard/screen-reader labels, and updated documentation.
 
-Никогда не добавляй в репозиторий session JSONL, prompts, tool output, screenshots реальных сессий, credentials, local paths, usernames, `.env`, `.pi/` state или mutation/build artifacts.
+Never add session JSONL, prompts, tool output, screenshots of real sessions, credentials, local paths, usernames, `.env`, `.pi/` state, or mutation/build artifacts to the repository.
 
 ---
 
 <a id="contracts-readme"></a>
 
-## Контракты: руководство
+## Contracts: guide
 
-_Исходный файл: `contracts/README.md`._
+_Source file: `contracts/README.md`._
 
 ## PiUI contracts
 
-- `piui-extension-manifest.schema.json` — нормативная JSON Schema manifest v1.
-- `piui-host-api.d.ts` — author-facing API для declarative workers и rich views.
-- `runtime-protocol.ts` — внутренний typed IPC между Rust host и core Svelte UI; v3 introduced the local live-runtime surface, v4 adds Pi-reported thinking-level discovery with a bumped event envelope, v5 adds host-owned personal Chats commands and scoped runtime events without exposing a workspace path, v6 versions desktop semantic timeline projection v2 (bounded known Pi content, correlated tools, no raw JSON/tool arguments), v7 adds cache-first session-catalog snapshots plus opaque watcher hints, and v8 versions PiUI-only appearance preferences (font size and centered conversation width). Catalog freshness never authorizes a JSONL mutation.
+- `piui-extension-manifest.schema.json` — normative JSON Schema for manifest v1.
+- `piui-host-api.d.ts` — author-facing API for declarative workers and rich views.
+- `runtime-protocol.ts` — internal typed IPC between the Rust host and core Svelte UI; v3 introduced the local live-runtime surface, v4 adds Pi-reported thinking-level discovery with a bumped event envelope, v5 adds host-owned personal Chats commands and scoped runtime events without exposing a workspace path, v6 versions desktop semantic timeline projection v2 (bounded known Pi content, correlated tools, no raw JSON/tool arguments), v7 adds cache-first session-catalog snapshots plus opaque watcher hints, and v8 versions PiUI-only appearance preferences (font size and centered conversation width). Catalog freshness never authorizes a JSONL mutation.
 
-### Правила
+### Rules
 
-1. Эти файлы versioned и проходят compatibility tests.
-2. Raw Pi RPC types не должны протекать в public PiUI Extension API.
-3. Изменение обязательного поля или значения union требует protocol/schema major bump.
-4. Новое optional поле внутри major должно безопасно игнорироваться старым consumer там, где это заявлено.
-5. Rust DTO генерируются из того же schema source или проверяются golden JSON fixtures.
-6. Example manifest обязан валидироваться этой схемой в CI; негативные fixtures обязаны доказывать, что несовместимые permission/entrypoint-комбинации отклоняются.
-7. JSON Schema проверяет структурные и часть security-инвариантов: `ui.shell` ↔ shell entrypoint, `network` ↔ allowlist origin, `ui.richView` ↔ views entrypoint, rich contribution → `ui.richView`.
-8. Host выполняет второй, семантический проход: уникальность и принадлежность namespace, существование `viewId`/command/handler targets, dependency cycles, slot conflicts, trust level, фактическое соответствие Host API calls выданным permissions и запрет `ui.shell` для project-local/untrusted packages.
-9. API, описанный здесь, является целевым контрактом для реализации; это не утверждение, что SDK уже существует.
+1. These files are versioned and undergo compatibility tests.
+2. Raw Pi RPC types must not leak into the public PiUI Extension API.
+3. Changing a required field or union value requires a protocol/schema major bump.
+4. A new optional field within a major version must be safely ignored by an older consumer where specified.
+5. Rust DTOs are generated from the same schema source or verified by golden JSON fixtures.
+6. The example manifest must validate against this schema in CI; negative fixtures must prove incompatible permission/entrypoint combinations are rejected.
+7. JSON Schema validates structural and some security invariants: `ui.shell` ↔ shell entrypoint, `network` ↔ allowlist origin, `ui.richView` ↔ views entrypoint, rich contribution → `ui.richView`.
+8. The host performs a second, semantic pass: namespace uniqueness and ownership, existence of `viewId`/command/handler targets, dependency cycles, slot conflicts, trust level, actual Host API calls conforming to granted permissions, and prohibition of `ui.shell` for project-local/untrusted packages.
+9. The API described here is the target implementation contract; it does not claim that the SDK already exists.
 
 ---
 
 <a id="sources"></a>
 
-## Источники
+## Sources
 
-_Исходный файл: `sources/SOURCES.md`._
+_Source file: `sources/SOURCES.md`._
 
-## Источники и исследовательская база PiUI
+## PiUI sources and research basis
 
-**Дата проверки:** 23 июля 2026 года.
-**Наблюдаемая версия Pi:** `v0.81.1`; ссылки на `latest` проверялись в тот же день.
+**Verification date:** July 23, 2026.
+**Observed Pi version:** `v0.81.1`; links to `latest` were checked on the same day.
 
-Этот перечень фиксирует внешние материалы, на которых основаны фактические утверждения и архитектурные ограничения спецификации. Источники не становятся runtime-зависимостями PiUI. Перед началом реализации команда обязана повторно проверить документы Pi, если установленная версия отличается от проверенной во время исследования.
+This list records the external materials on which the specification’s factual claims and architectural constraints are based. Sources do not become PiUI runtime dependencies. Before implementation begins, the team must recheck Pi documentation if the installed version differs from the version verified during research.
 
-### Pi: продукт, интеграция и безопасность
+### Pi: product, integration, and security
 
-- [Pi — главная страница](https://pi.dev/) — философия минимального agent harness, способы встраивания и общая модель расширяемости.
-- [Pi quickstart](https://pi.dev/docs/latest/quickstart) — установка, authentication, file references и CLI session selection.
-- [Pi extensions](https://pi.dev/docs/latest/extensions) — tools, commands, events, `ctx.ui`, custom renderers и lifecycle расширений.
-- [Pi RPC mode](https://pi.dev/docs/latest/rpc) — JSONL-протокол, команды, события, prompt/steer/follow-up, изображения и Extension UI Protocol.
-- [Pi session format](https://pi.dev/docs/latest/session-format) — дерево JSONL-сессии, entries и правила восстановления истории.
-- [Pi packages](https://pi.dev/docs/latest/packages) — упаковка и распространение расширений, prompts и themes.
-- [Pi security](https://pi.dev/docs/latest/security) — project trust и отсутствие встроенной полноценной песочницы для инструментов.
-- [Pi SDK](https://pi.dev/docs/latest/sdk) — программное создание agent session, `SessionManager` и методы, отсутствующие или неполные в RPC.
-- [Pi providers](https://pi.dev/docs/latest/providers) — модели, credentials и интерактивные сценарии авторизации.
-- [Официальный репозиторий Pi](https://github.com/earendil-works/pi) — исходный код, версии, issues, standalone Bun binaries/build path и точка проверки реального API перед интеграцией.
+- [Pi — home page](https://pi.dev/) — the philosophy of a minimal agent harness, embedding methods, and the general extensibility model.
+- [Pi quickstart](https://pi.dev/docs/latest/quickstart) — installation, authentication, file references, and CLI session selection.
+- [Pi extensions](https://pi.dev/docs/latest/extensions) — tools, commands, events, `ctx.ui`, custom renderers, and extension lifecycle.
+- [Pi RPC mode](https://pi.dev/docs/latest/rpc) — JSONL protocol, commands, events, prompt/steer/follow-up, images, and Extension UI Protocol.
+- [Pi session format](https://pi.dev/docs/latest/session-format) — JSONL session tree, entries, and history recovery rules.
+- [Pi packages](https://pi.dev/docs/latest/packages) — packaging and distribution of extensions, prompts, and themes.
+- [Pi security](https://pi.dev/docs/latest/security) — project trust and the absence of a built-in full sandbox for tools.
+- [Pi SDK](https://pi.dev/docs/latest/sdk) — programmatic creation of an agent session, `SessionManager`, and methods unavailable or incomplete in RPC.
+- [Pi providers](https://pi.dev/docs/latest/providers) — models, credentials, and interactive authorization flows.
+- [Official Pi repository](https://github.com/earendil-works/pi) — source code, versions, issues, standalone Bun binaries/build path, and the point for verifying the actual API before integration.
 
-### Desktop-стек
+### Desktop stack
 
-- [Tauri 2](https://v2.tauri.app/) — кроссплатформенная desktop-оболочка на системном WebView.
-- [Tauri sidecars](https://v2.tauri.app/develop/sidecar/) — упаковка и управление внешними исполняемыми файлами.
-- [Tauri WebView versions](https://v2.tauri.app/reference/webview-versions/) — платформенные движки WebView и требования к тестовой матрице.
-- [Tauri security](https://v2.tauri.app/security/) — IPC, capabilities, trust boundaries и минимизация доступов frontend.
-- [Svelte overview](https://svelte.dev/docs/svelte/overview) — компилируемая UI-модель.
-- [Svelte lifecycle](https://svelte.dev/docs/svelte/lifecycle-hooks) — render effects и lifecycle semantics Svelte 5.
-- [Bits UI](https://www.bits-ui.com/) — headless accessibility primitives для точечного использования без полного UI-kit.
+- [Tauri 2](https://v2.tauri.app/) — cross-platform desktop shell on the system WebView.
+- [Tauri sidecars](https://v2.tauri.app/develop/sidecar/) — packaging and management of external executables.
+- [Tauri WebView versions](https://v2.tauri.app/reference/webview-versions/) — platform WebView engines and test-matrix requirements.
+- [Tauri security](https://v2.tauri.app/security/) — IPC, capabilities, trust boundaries, and frontend access minimization.
+- [Svelte overview](https://svelte.dev/docs/svelte/overview) — compiled UI model.
+- [Svelte lifecycle](https://svelte.dev/docs/svelte/lifecycle-hooks) — Svelte 5 render effects and lifecycle semantics.
+- [Bits UI](https://www.bits-ui.com/) — headless accessibility primitives for focused use without a full UI kit.
 
-### Продуктовые и UX-ориентиры
+### Product and UX references
 
-- [Introducing the Codex app](https://openai.com/index/introducing-the-codex-app/) — организация threads по проектам и совместная история/config с CLI.
-- [Официальное руководство Hermes Desktop](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/desktop.md) — chat-first desktop UX, sessions, model controls и общие данные с CLI.
-- [OpenCovibe](https://github.com/AnyiWang/OpenCovibe) — Tauri/Svelte-пример desktop coding UI и process/session patterns; годится только для точечного аудита.
-- [Community Hermes Desktop](https://github.com/fathah/hermes-desktop) — широкий Electron-клиент; используется как negative/feature-scope reference, а не как база.
-- [Alma](https://alma.now/) — desktop AI orchestration как визуальный ориентир; не является архитектурной основой PiUI.
+- [Introducing the Codex app](https://openai.com/index/introducing-the-codex-app/) — organizing threads by project and shared history/config with the CLI.
+- [Official Hermes Desktop guide](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/desktop.md) — chat-first desktop UX, sessions, model controls, and shared data with the CLI.
+- [OpenCovibe](https://github.com/AnyiWang/OpenCovibe) — a Tauri/Svelte desktop coding UI example and process/session patterns; suitable only for focused audit.
+- [Community Hermes Desktop](https://github.com/fathah/hermes-desktop) — a broad Electron client; used as a negative/feature-scope reference, not as a foundation.
+- [Alma](https://alma.now/) — desktop AI orchestration as a visual reference; not an architectural foundation for PiUI.
 
-### Правило использования источников
+### Source-use rule
 
-1. Официальные документы и исходный код Pi имеют приоритет над примерами сторонних клиентов.
-2. Любое недокументированное поведение подтверждается spike-тестом на минимальной и целевой версиях Pi.
-3. Копирование стороннего кода допускается только после проверки лицензии, provenance и необходимости; решение фиксируется отдельным ADR.
-4. Ссылки на «latest» не закрепляют API навсегда. Поддерживаемые версии Pi и вычисленные capabilities фиксируются в каждом релизе PiUI.
+1. Official Pi documentation and source code take precedence over examples from third-party clients.
+2. Any undocumented behavior is confirmed by a spike test on the minimum and target Pi versions.
+3. Copying third-party code is permitted only after verifying its license, provenance, and necessity; the decision is recorded in a separate ADR.
+4. Links to “latest” do not pin an API forever. Supported Pi versions and derived capabilities are recorded in every PiUI release.
 
 ---
 
@@ -5744,7 +5804,7 @@ _Исходный файл: `sources/SOURCES.md`._
 
 ## Manifest schema
 
-_Нормативный файл: `contracts/piui-extension-manifest.schema.json`._
+_Normative file: `contracts/piui-extension-manifest.schema.json`._
 
 ```json
 {
@@ -6945,7 +7005,7 @@ _Нормативный файл: `contracts/piui-extension-manifest.schema.json
 
 ## Runtime protocol
 
-_Нормативный файл: `contracts/runtime-protocol.ts`._
+_Normative file: `contracts/runtime-protocol.ts`._
 
 ```ts
 /**
@@ -7785,7 +7845,7 @@ export interface DiagnosticNotice {
 
 ## PiUI Host API
 
-_Нормативный файл: `contracts/piui-host-api.d.ts`._
+_Normative file: `contracts/piui-host-api.d.ts`._
 
 ```ts
 /**
@@ -8230,9 +8290,9 @@ export interface RichViewEventMessage {
 
 <a id="reference-package"></a>
 
-## Эталонный dual package
+## Reference dual package
 
-Пакет ниже иллюстрирует совместное размещение обычного Pi extension и необязательных PiUI contributions. Файлы в каталоге `examples/minimal-piui-package/` являются нормативным исполняемым примером.
+The package below illustrates colocating a standard Pi extension and optional PiUI contributions. Files in `examples/minimal-piui-package/` are the normative executable example.
 
 ### `examples/minimal-piui-package/package.json`
 
@@ -8468,20 +8528,20 @@ export async function activate(ctx) {
 ```md
 # Minimal dual Pi/PiUI package
 
-Этот пример показывает обязательное разделение:
+This example demonstrates the required separation:
 
-- `pi/extension.ts` регистрирует backend command через Pi и работает без PiUI;
-- `piui.manifest.json` описывает GUI contributions как данные;
-- `piui/worker.js` возвращает только declarative `UiNode` и использует capability-limited host API.
+- `pi/extension.ts` registers a backend command through Pi and works without PiUI;
+- `piui.manifest.json` describes GUI contributions as data;
+- `piui/worker.js` returns only declarative `UiNode` and uses a capability-limited host API.
 
-В production package необходимо:
+A production package must:
 
-1. зафиксировать совместимые версии зависимостей и engines;
-2. добавить tests для backend command и render handlers;
-3. не использовать package `private: true` при публикации;
-4. валидировать manifest командой SDK/JSON Schema;
-5. запрашивать только реально необходимые permissions;
-6. предусмотреть generic fallback — PiUI уже покажет custom entry без этого renderer.
+1. pin compatible dependency versions and engines;
+2. add tests for the backend command and render handlers;
+3. not use package `private: true` when publishing;
+4. validate the manifest with the SDK/JSON Schema command;
+5. request only permissions that are actually necessary;
+6. provide a generic fallback — PiUI will already display the custom entry without this renderer.
 
-Manifest намеренно не содержит rich view или trusted shell. Они добавляются только когда declarative nodes недостаточны.
+The manifest intentionally contains no rich view or trusted shell. Add them only when declarative nodes are insufficient.
 ```

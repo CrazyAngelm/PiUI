@@ -1,52 +1,108 @@
 # PiUI
 
-> A minimal, local desktop interface for browsing and continuing [Pi](https://pi.dev/) sessions.
+<p align="center">
+  A fast, local desktop interface for browsing and continuing <a href="https://pi.dev/">Pi</a> sessions.
+</p>
 
-PiUI is an **early developer preview**, not a production-ready Pi distribution or sandbox. It wraps Pi rather than replacing its agent loop, provider clients, tools, session format, or authentication store.
+<p align="center">
+  <a href="README.md"><strong>English</strong></a> ·
+  <a href="README.ru.md">Русский</a>
+</p>
 
-## What PiUI does today
+<p align="center">
+  <a href="https://github.com/CrazyAngelm/PiUI/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/CrazyAngelm/PiUI/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/CrazyAngelm/PiUI/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/CrazyAngelm/PiUI?include_prereleases"></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+</p>
 
-- registers local project folders behind an explicit trust decision;
-- discovers existing Pi JSONL sessions read-only and renders a bounded, safe timeline;
+> [!IMPORTANT]
+> PiUI is an early developer preview. The current Windows build is unsigned, does not auto-update, and is not a managed Pi distribution or an OS sandbox. Read the [current limitations](#current-limitations) before using it with important sessions.
+
+## Install
+
+### Windows 10/11 (recommended)
+
+1. Install the official [Pi CLI](https://pi.dev/) and confirm that `pi --version` works in a new terminal.
+2. Open the [PiUI v0.1.0 release](https://github.com/CrazyAngelm/PiUI/releases/tag/v0.1.0).
+3. Download `PiUI_0.1.0_x64-setup.exe` and the matching `SHA256SUMS.txt`.
+4. Verify the checksum, run the installer, and open **PiUI** from the Start menu.
+5. Choose **New chat** for a personal session or **Add project** to register an existing folder.
+
+Verify the installer after downloading both files:
+
+```powershell
+Get-FileHash .\PiUI_0.1.0_x64-setup.exe -Algorithm SHA256
+Get-Content .\SHA256SUMS.txt
+```
+
+The hash printed by `Get-FileHash` must match the installer entry in `SHA256SUMS.txt`.
+
+Because this developer-preview build is not code-signed, Windows may show an unknown-publisher warning. Verify the checksum before running it. If you do not want to run an unsigned binary, [build from source](#build-from-source).
+
+The portable `PiUI_0.1.0_windows_x86_64.exe` asset can be used without an installer. It has the same preview limitations.
+
+### Linux and macOS
+
+Prebuilt Linux and macOS packages are not published yet. Use the [source build](#build-from-source). Platform packaging, signing, and the complete release matrix remain open work.
+
+### Updating
+
+PiUI does not silently update itself. Download a newer release from GitHub and install it over the previous version. Pi sessions remain owned by Pi; PiUI's local SQLite database is only a rebuildable cache and UI metadata.
+
+## First run
+
+1. Start PiUI.
+2. Use **New chat** to start without adding a project, or use **Add project** and explicitly review the folder trust prompt.
+3. Select an existing session or create a new one.
+4. Start the local Pi runtime, choose a model, and send a prompt.
+
+Do not write to the same session from PiUI and the Pi CLI at the same time. Concurrent-writer semantics are not yet supported.
+
+## What PiUI does
+
+- discovers existing Pi JSONL sessions without introducing another chat format;
+- renders a safe, bounded transcript with Markdown, reasoning, and grouped tool activity;
+- continues indexed sessions or creates Pi-owned personal chats;
 - starts a locally installed Pi CLI in RPC mode only after an explicit user action;
-- continues an indexed session or starts a Pi-owned personal chat;
-- streams typed user, assistant, reasoning, and tool activity into one transcript;
-- keeps a rebuildable SQLite index separate from Pi JSONL;
-- provides local appearance preferences, including theme, text size, density, motion, and conversation width.
+- streams typed runtime events through a narrow Rust/Tauri host API;
+- keeps a rebuildable SQLite catalog separate from Pi's session files;
+- provides project trust controls and local appearance preferences;
+- supports keyboard navigation, safe generic fallbacks, and reduced motion.
+
+PiUI wraps Pi. It does not replace Pi's agent loop, providers, tools, compaction, authentication store, or session branching.
 
 ## Current limitations
 
-This repository is public because the source is useful for review and contribution. It is **not** a claim that every release gate is complete.
-
-- The live-RPC path is a developer preview, not a managed/runtime-provenance guarantee.
-- Concurrent writes to the same session from PiUI and the Pi CLI are not yet a supported workflow.
+- The local live-RPC path is a preview, not a managed-runtime provenance guarantee.
+- The Windows artifacts are unsigned and the application has no automatic updater.
+- Concurrent Pi CLI/PiUI writes to one session are unsupported.
 - Authentication stays in Pi's standard flow; PiUI does not read or expose `auth.json`.
-- Windows and Linux are target platforms; release packaging, containment, updater, and platform-matrix gates remain open.
+- Packaged browser/Tauri E2E, managed-runtime acquisition, updater, and the full Windows/Linux platform matrix remain release gates.
+- Project-local extension JavaScript stays disabled until its trust and isolation design is complete.
 
-See [Foundation status](docs/13_FOUNDATION_STATUS.md), [open risks](docs/12_OPEN_RISKS.md), and the [release checklist](CHECKLIST_RELEASE.md) before treating PiUI as release-ready.
+See [Foundation status](docs/13_FOUNDATION_STATUS.md), [open risks](docs/12_OPEN_RISKS.md), and the [release checklist](CHECKLIST_RELEASE.md) for the exact status.
 
-## Privacy and security boundary
-
-PiUI is intentionally local-first:
-
-- Pi JSONL remains the source of truth; PiUI does not write session JSONL directly.
-- The WebView receives only typed, allowlisted host commands and safe display projections.
-- Credentials, raw environment variables, filesystem paths, and agent-session artifacts must not be committed.
-- `.pi/`, `.piui/`, local databases, logs, mutation outputs, build products, and `.env*` files are ignored by default.
-
-If you find a vulnerability or accidentally committed sensitive data, follow [SECURITY.md](SECURITY.md). Do not put secrets, prompts, session files, or local paths in public issues.
-
-## Development
+## Build from source
 
 ### Prerequisites
 
+- Git
 - Node.js 22+
 - pnpm 10.23+
 - Rust 1.94.1 with `rustfmt` and `clippy`
-- Platform prerequisites for [Tauri 2](https://v2.tauri.app/start/prerequisites/)
-- A local Pi CLI only when exercising the live-RPC preview
+- the [Tauri 2 platform prerequisites](https://v2.tauri.app/start/prerequisites/)
+- a local Pi CLI for the live-runtime preview
 
-### Install and verify
+### Development build
+
+```bash
+git clone https://github.com/CrazyAngelm/PiUI.git
+cd PiUI
+pnpm install --frozen-lockfile
+pnpm tauri dev
+```
+
+### Release build
 
 ```bash
 pnpm install --frozen-lockfile
@@ -54,30 +110,33 @@ pnpm repo:check
 pnpm check
 pnpm test
 pnpm contract:test
-pnpm build
-pnpm test:e2e
-pnpm perf:smoke
 cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+pnpm tauri build --no-bundle
 ```
 
-Run the desktop app during development:
+The executable is written to `target/release/`. On Windows, maintainers can create the NSIS installer with:
 
-```bash
-pnpm tauri dev
+```powershell
+pnpm tauri build --bundles nsis --ci
 ```
 
-### Additional quality gates
+## Quality checks
 
 ```bash
 pnpm repo:check
-pnpm mutation:test
-pnpm mutation:catalog-state
 python tools/validate_spec.py
-python tools/validate_runtime_evidence.py --check evidence/upstream/npm/earendil-works-pi-coding-agent/0.81.1
+pnpm check
+pnpm test
+pnpm contract:test
+pnpm build
+pnpm test:e2e
+pnpm perf:smoke
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
-`pnpm test:e2e` is currently a static UI smoke check, not a packaged desktop E2E suite. The required release-level platform and real-Pi checks are documented in [docs/08_TESTING_AND_PERFORMANCE.md](docs/08_TESTING_AND_PERFORMANCE.md).
+`pnpm test:e2e` is currently a static UI smoke check rather than a packaged desktop E2E suite.
 
 ## Repository layout
 
@@ -85,32 +144,33 @@ python tools/validate_runtime_evidence.py --check evidence/upstream/npm/earendil
 apps/desktop/           Tauri 2 host and Svelte 5 interface
 crates/piui-contracts/  Safe host/UI DTOs and fixtures
 crates/piui-index/      Rebuildable SQLite index and LF-only session scanner
-crates/piui-runtime/    Pi RPC adapter, lifecycle, and safe stream projection
+crates/piui-runtime/    Pi RPC adapter, lifecycle, and stream projection
 crates/piui-platform/   Native identity and process-containment primitives
 crates/piui-extensions/ Extension manifest validation
 contracts/              Versioned TypeScript contracts
-fixtures/               Synthetic, credential-free test data
-spikes/                 Isolated evidence and experiments; not runtime dependencies
 docs/                   Product, architecture, security, and release documentation
+spikes/                 Isolated evidence and experiments, not runtime dependencies
 ```
-
-## Contributing
-
-Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md), and the [architecture documentation](docs/03_ARCHITECTURE.md) before opening a pull request. Changes to IPC contracts require a version bump, compatibility coverage, and an update under `contracts/`.
 
 ## Documentation
 
-Most detailed project documentation is currently in Russian:
-
-- [Product and scope](docs/01_PRODUCT.md)
-- [UX and settings](docs/02_UX.md)
+- [Product scope](docs/01_PRODUCT.md)
+- [UX and information architecture](docs/02_UX.md)
 - [Architecture](docs/03_ARCHITECTURE.md)
 - [Pi integration](docs/04_PI_INTEGRATION.md)
+- [Extension SDK](docs/05_EXTENSION_SDK.md)
+- [Data and sessions](docs/06_DATA_AND_SESSIONS.md)
 - [Security model](docs/07_SECURITY.md)
 - [Testing and performance](docs/08_TESTING_AND_PERFORMANCE.md)
-- [Changelog](CHANGELOG.md)
-- [Sources and provenance notes](sources/SOURCES.md)
+- [Roadmap](docs/09_ROADMAP_AND_TASKS.md)
+- [Architecture decisions](docs/10_ADR.md)
+
+## Contributing and security
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md) before opening a pull request. Changes to IPC contracts require a version bump, compatibility coverage, and an update under `contracts/`.
+
+Report vulnerabilities privately according to [SECURITY.md](SECURITY.md). Never publish credentials, prompts, session files, or local filesystem paths in an issue.
 
 ## License
 
-PiUI is licensed under the [MIT License](LICENSE). Third-party dependencies and cited external materials remain subject to their own licenses and terms.
+PiUI is licensed under the [MIT License](LICENSE). Third-party dependencies and referenced external materials remain subject to their own licenses and terms.

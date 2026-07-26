@@ -1,73 +1,73 @@
-# 03. Архитектура PiUI
+# 03. PiUI Architecture
 
-## 1. Архитектурная цель
+## 1. Architectural goal
 
-PiUI должен быть тонкой desktop-оболочкой, которая:
+PiUI must be a thin desktop shell that:
 
-- запускает официальный Pi runtime без переписывания agent loop;
-- выдерживает падение, зависание или несовместимость отдельной сессии;
-- не держит runtime-процесс для каждого исторического чата;
-- предоставляет расширениям стабильные семантические точки интеграции;
-- остаётся отзывчивой на длинных сессиях и потоковом выводе;
-- одинаково проектируется для Windows, Linux и macOS;
-- может обновлять Pi runtime независимо от UI, но не незаметно нарушать совместимость.
+- launches the official Pi runtime without rewriting the agent loop;
+- withstands the crash, hang, or incompatibility of an individual session;
+- does not keep a runtime process for every historical chat;
+- provides extensions with stable semantic integration points;
+- remains responsive with long sessions and streaming output;
+- is designed consistently for Windows, Linux, and macOS;
+- can update the Pi runtime independently of the UI without silently breaking compatibility.
 
-Архитектура обязана быть **локальной по умолчанию**. Для работы самого Pi могут использоваться внешние model providers, но PiUI не требует собственного сервера, аккаунта или облачной БД.
+The architecture must be **local by default**. Pi itself may use external model providers, but PiUI does not require its own server, account, or cloud database.
 
-## 2. Принятое решение по стеку
+## 2. Adopted stack decision
 
-| Слой | Выбор | Назначение |
+| Layer | Choice | Purpose |
 |---|---|---|
-| Desktop host | Tauri 2 / Rust | окна, IPC, процессы, файловые операции, системная интеграция, updater |
+| Desktop host | Tauri 2 / Rust | windows, IPC, processes, file operations, system integration, updater |
 | UI | Svelte 5 + TypeScript + Vite | chat timeline, sidebar, settings, extension surfaces |
-| UI primitives | собственные токены + выборочные Bits UI primitives | доступные dialog/menu/select/tooltip без готовой визуальной темы |
-| Runtime transport | Pi RPC по JSONL через stdin/stdout | команды сессии и поток событий |
-| Process runtime | `tokio::process::Command` | точный контроль framing, stderr, process group/job object и shutdown |
-| Metadata/index | SQLite через `rusqlite`, FTS5 опционально | проекты, UI metadata и перестраиваемый поиск |
-| File watching | `notify` | инкрементальное обнаружение session files и package changes |
-| Trash | системная корзина через Rust crate/platform adapter | обратимое удаление session files |
-| Tests | Rust tests, Vitest, Playwright + packaged smoke tests | contracts, UI, runtime и платформы |
+| UI primitives | custom tokens + selected Bits UI primitives | accessible dialog/menu/select/tooltip without a prebuilt visual theme |
+| Runtime transport | Pi RPC over JSONL through stdin/stdout | session commands and event streaming |
+| Process runtime | `tokio::process::Command` | precise control of framing, stderr, process group/job object, and shutdown |
+| Metadata/index | SQLite through `rusqlite`, FTS5 optional | projects, UI metadata, and rebuildable search |
+| File watching | `notify` | incremental discovery of session files and package changes |
+| Trash | system recycle bin through a Rust crate/platform adapter | reversible deletion of session files |
+| Tests | Rust tests, Vitest, Playwright + packaged smoke tests | contracts, UI, runtime, and platforms |
 
-### Почему не Electron
+### Why not Electron
 
-Electron упрощает Node-интеграцию, но включает отдельный Chromium/Node runtime на окно приложения. Для требования минимального idle footprint это плохой базовый выбор. PiUI не нуждается в Node API во frontend: процессами и файлами всё равно должен владеть доверенный host.
+Electron simplifies Node integration, but includes a separate Chromium/Node runtime for each application window. This is a poor baseline choice for the minimum idle-footprint requirement. PiUI does not need the Node API in the frontend: the trusted host must own processes and files regardless.
 
-### Почему не Flutter
+### Why not Flutter
 
-Flutter может дать быстрый native-like UI, однако экосистема Pi и его расширений TypeScript-ориентирована. Svelte/TypeScript позволяет переиспользовать типы manifest и host API, а sandboxed extension views естественно размещаются в WebView/iframe.
+Flutter can provide a fast native-like UI; however, the Pi ecosystem and its extensions are TypeScript-oriented. Svelte/TypeScript enables reuse of manifest and host API types, while sandboxed extension views fit naturally in a WebView/iframe.
 
-### Почему не Qt
+### Why not Qt
 
-Qt даёт зрелый desktop stack, но усложняет TypeScript-oriented extension SDK и поставку web-based isolated views. Он остаётся резервной альтернативой, если измерения покажут неприемлемое расхождение системных WebView между платформами.
+Qt provides a mature desktop stack, but complicates the TypeScript-oriented extension SDK and delivery of web-based isolated views. It remains a fallback alternative if measurements show an unacceptable divergence in system WebViews across platforms.
 
-### Почему Svelte без SvelteKit
+### Why Svelte without SvelteKit
 
-PiUI — однооконное локальное приложение без SSR, server routes и web deployment. Обычный Vite build уменьшает поверхность конфигурации. Роутинг экранов реализуется локальным state machine, а не URL-first framework.
+PiUI is a single-window local application without SSR, server routes, or web deployment. A regular Vite build reduces the configuration surface. Screen routing is implemented as a local state machine rather than a URL-first framework.
 
-## 3. Контекст системы
+## 3. System context
 
 ```mermaid
 flowchart LR
-    U[Пользователь] --> W[PiUI WebView / Svelte]
+    U[User] --> W[PiUI WebView / Svelte]
     W <--> H[Tauri Host / Rust]
     H <--> DB[(PiUI SQLite cache)]
-    H --> FS[Project files и Pi session JSONL]
+    H --> FS[Project files and Pi session JSONL]
     H <--> P1[Pi RPC process: session A]
     H <--> P2[Pi RPC process: session B]
     P1 --> Providers[Model providers]
     P2 --> Providers
-    P1 --> Tools[Pi tools и extensions]
+    P1 --> Tools[Pi tools and extensions]
     P2 --> Tools
     H <--> EV[Sandboxed extension views]
 ```
 
-Основная граница доверия проходит между WebView/extension views и Rust host. Pi processes запускаются как локальные дочерние процессы с правами пользователя; это не sandbox.
+The primary trust boundary runs between WebView/extension views and the Rust host. Pi processes run as local child processes with user privileges; this is not a sandbox.
 
-## 4. Топология процессов
+## 4. Process topology
 
-### 4.1 Один процесс на реально активную сессию
+### 4.1 One process per genuinely active session
 
-Состояния runtime slot:
+Runtime-slot states:
 
 ```text
 Dormant -> Starting -> Ready -> Running -> Ready
@@ -75,79 +75,79 @@ Dormant -> Starting -> Ready -> Running -> Ready
 Ready|Running -> Stopping -> Dormant
 ```
 
-- **Dormant:** история доступна из индексатора, Pi process отсутствует.
-- **Starting:** выбран runtime, проверена версия, запущен RPC, выполнен handshake.
-- **Ready:** процесс держит сессию открытой и принимает команды.
-- **Running:** идёт assistant turn/tool execution.
-- **Recovering:** PiUI восстанавливает представление из JSONL и предлагает повторно открыть runtime.
-- **Stopping:** мягкое завершение, затем platform-specific termination fallback.
+- **Dormant:** history is available from the indexer; no Pi process exists.
+- **Starting:** the runtime is selected, its version checked, RPC launched, and the handshake completed.
+- **Ready:** the process keeps the session open and accepts commands.
+- **Running:** an assistant turn/tool execution is in progress.
+- **Recovering:** PiUI restores the view from JSONL and offers to reopen the runtime.
+- **Stopping:** graceful termination, followed by a platform-specific termination fallback.
 
-Исторический список из сотен сессий не должен означать сотни процессов.
+A historical list of hundreds of sessions must not mean hundreds of processes.
 
-### 4.2 Политика пула
+### 4.2 Pool policy
 
-Параметры по умолчанию:
+Default parameters:
 
 - `maxLiveRuntimes = 3`;
-- активная вкладка не вытесняется;
-- сессия с незавершённым turn не вытесняется;
-- idle ready-процесс закрывается после 10 минут;
-- при превышении лимита закрывается самый давно неиспользуемый idle runtime;
-- значения доступны в Advanced settings, но core UX не рекламирует параллелизм как отдельную функцию.
+- the active tab is not evicted;
+- a session with an unfinished turn is not evicted;
+- an idle ready process is closed after 10 minutes;
+- when the limit is exceeded, the longest-unused idle runtime is closed;
+- values are available in Advanced settings, but the core UX does not promote parallelism as a separate feature.
 
-Для MVP допустим `maxLiveRuntimes = 1`, если multi-session supervisor не готов. Контракты при этом сразу должны поддерживать несколько runtime IDs.
+For the MVP, `maxLiveRuntimes = 1` is acceptable if the multi-session supervisor is not ready. Contracts must nevertheless support multiple runtime IDs from the outset.
 
-### 4.3 Управление дочерними процессами
+### 4.3 Child-process management
 
-Host обязан:
+The host must:
 
-- запускать Pi с явным `cwd` проекта;
-- задавать контролируемое окружение и не логировать секреты;
-- читать stdout побайтно/чанками и разделять только по `0x0A`;
-- ограничивать максимальный размер одного protocol frame;
-- читать stderr отдельно и помещать его в redactable diagnostic ring buffer;
-- на Unix создавать отдельную process group;
-- на Windows использовать Job Object или эквивалент, чтобы завершать дерево процессов;
-- отличать нормальный EOF от crash и protocol corruption;
-- не считать строку stderr RPC-событием;
-- сериализовать команды, для которых Pi требует последовательность, и поддерживать correlation IDs на уровне PiUI adapter.
+- launch Pi with an explicit project `cwd`;
+- set a controlled environment and not log secrets;
+- read stdout byte-by-byte/in chunks and split only on `0x0A`;
+- limit the maximum size of a single protocol frame;
+- read stderr separately and place it in a redactable diagnostic ring buffer;
+- create a separate process group on Unix;
+- use a Job Object or equivalent on Windows to terminate the process tree;
+- distinguish normal EOF from a crash and protocol corruption;
+- not treat a stderr line as an RPC event;
+- serialize commands for which Pi requires ordering, and support correlation IDs at the PiUI adapter level.
 
-Tauri sidecar применяется для упаковки managed runtime, но сам supervisor строится на `tokio::process`, а не на frontend shell plugin.
+The Tauri sidecar is used to package a managed runtime, but the supervisor itself is built on `tokio::process`, not a frontend shell plugin.
 
 ## 5. Runtime modes
 
-PiUI поддерживает три режима, все через один `RuntimeAdapter`:
+PiUI supports three modes, all through a single `RuntimeAdapter`:
 
 ### Managed Pi
 
-PiUI поставляет проверенную версию Pi как sidecar или устанавливает её в app-managed directory. Предпочтительный кандидат — официальный standalone Pi executable с его runtime assets из versioned upstream release; PiUI не выполняет `npm install` при запуске приложения и не требует Node/Bun в системе пользователя. Если готовый upstream artifact недоступен для нужной платформы, допустима воспроизводимая сборка из versioned release source тем же upstream build path, но только после license/provenance review.
+PiUI ships a verified version of Pi as a sidecar or installs it in an app-managed directory. The preferred candidate is the official standalone Pi executable with its runtime assets from a versioned upstream release; PiUI does not run `npm install` at application startup and does not require Node/Bun on the user's system. If a ready upstream artifact is unavailable for the required platform, a reproducible build from versioned release source using the same upstream build path is permitted, but only after license/provenance review.
 
-- рекомендуемый режим public release;
-- версия, target triple, upstream source URL/hash и PiUI compatibility range закреплены в подписанном release manifest;
-- upstream checksum проверяется до переподписания/упаковки артефакта PiUI;
-- обновление runtime отделено от UI update и может быть откатано;
-- package manager пользователя не затрагивается;
-- host показывает фактическую версию, origin, hash и путь;
-- отсутствие managed artifact не блокирует system/custom modes.
+- recommended mode for public releases;
+- version, target triple, upstream source URL/hash, and PiUI compatibility range are pinned in a signed release manifest;
+- the upstream checksum is verified before PiUI artifact re-signing/packaging;
+- runtime updates are separate from UI updates and can be rolled back;
+- the user's package manager is not affected;
+- the host shows the actual version, origin, hash, and path;
+- the absence of a managed artifact does not block system/custom modes.
 
 ### System Pi
 
-Используется `pi` из `PATH`.
+Uses `pi` from `PATH`.
 
-- удобен разработчикам и для внутреннего alpha;
-- PiUI проводит version/capability probe перед запуском;
-- при несовместимости не пытается молча продолжить;
-- пользователь видит, какой executable найден.
+- convenient for developers and internal alpha;
+- PiUI performs a version/capability probe before launch;
+- on incompatibility, it does not attempt to continue silently;
+- the user sees which executable was found.
 
 ### Custom executable
 
-Пользователь выбирает бинарник/launcher вручную.
+The user selects a binary/launcher manually.
 
-- нужен для forks, development builds и Nix-like environments;
-- путь хранится как настройка, но проект не может подменить его сам;
-- такой runtime помечается как custom и не обновляется PiUI.
+- required for forks, development builds, and Nix-like environments;
+- the path is stored as a setting, but a project cannot replace it itself;
+- this runtime is marked as custom and is not updated by PiUI.
 
-### Требование к adapter
+### Adapter requirement
 
 ```rust
 trait RuntimeAdapter {
@@ -159,19 +159,19 @@ trait RuntimeAdapter {
 }
 ```
 
-UI не знает, managed это executable или system Pi.
+The UI does not know whether the executable is managed or system Pi.
 
 ## 6. Capability negotiation
 
-Версия Pi сама по себе недостаточна. При старте host формирует capability set на основании:
+The Pi version alone is insufficient. At startup, the host forms a capability set based on:
 
-1. версии executable;
-2. успешного ответа на безопасные RPC probes;
-3. доступных команд;
-4. opt-in bridge extension, если он установлен;
-5. PiUI runtime protocol version.
+1. the executable version;
+2. successful responses to safe RPC probes;
+3. available commands;
+4. an opt-in bridge extension, if installed;
+5. the PiUI runtime protocol version.
 
-Пример capabilities:
+Example capabilities:
 
 ```json
 {
@@ -189,13 +189,13 @@ UI не знает, managed это executable или system Pi.
 }
 ```
 
-Frontend показывает или отключает действие на основании capability, а не имени версии. Любое отсутствие capability должно приводить к понятному fallback, а не к исключению в UI.
+The frontend shows or disables an action based on a capability, not a version name. Any missing capability must result in a clear fallback, not a UI exception.
 
-## 7. Компоненты Rust host
+## 7. Rust host components
 
 ```text
 src-tauri/src/
-  app/                 use cases и orchestration
+  app/                 use cases and orchestration
   runtime/
     supervisor.rs
     rpc_codec.rs
@@ -237,22 +237,22 @@ src-tauri/src/
     bundle.rs
 ```
 
-### Основные сервисы
+### Core services
 
 - `ProjectRegistry`: canonical path, display name, ordering, trust state.
-- `SessionScanner`: read-only discovery Pi JSONL, incremental metadata extraction.
+- `SessionScanner`: read-only Pi JSONL discovery, incremental metadata extraction.
 - `SessionIndex`: rebuildable SQLite/FTS index.
-- `RuntimeSupervisor`: lifecycle Pi processes, command queues, crash recovery.
+- `RuntimeSupervisor`: Pi process lifecycle, command queues, crash recovery.
 - `AttachmentResolver`: image encoding, file-reference policy, managed copies.
-- `ExtensionRegistry`: discovery, validation, enablement and permission grants.
-- `ViewBroker`: isolated message channel between extension iframe/worker and host.
+- `ExtensionRegistry`: discovery, validation, enablement, and permission grants.
+- `ViewBroker`: isolated message channel between the extension iframe/worker and host.
 - `DiagnosticsService`: redacted logs and support bundle.
 
-## 8. Компоненты frontend
+## 8. Frontend components
 
 ```text
 src/
-  app/                 shell и screen state machine
+  app/                 shell and screen state machine
   features/
     projects/
     sessions/
@@ -263,7 +263,7 @@ src/
     trust/
   components/          PiUI-owned presentation components
   primitives/          thin wrappers over accessible headless primitives
-  stores/              небольшие domain stores
+  stores/              small domain stores
   host-api/            generated bindings/events
   renderers/
     markdown/
@@ -279,18 +279,18 @@ src/
 
 ### State ownership
 
-- Rust владеет process state, project trust, filesystem state, extension grants.
-- Frontend владеет selection, scroll anchor, expanded/collapsed blocks, transient menus.
-- Draft текста хранится в SQLite с debounce, но текущая строка остаётся локальной для мгновенного ввода.
-- Timeline cache во frontend ограничен; старые блоки могут выгружаться и запрашиваться страницами.
+- Rust owns process state, project trust, filesystem state, and extension grants.
+- The frontend owns selection, scroll anchor, expanded/collapsed blocks, and transient menus.
+- Text drafts are stored in SQLite with debounce, but the current line remains local for immediate input.
+- The frontend timeline cache is bounded; older blocks may be unloaded and requested in pages.
 
-Не допускается единый глобальный mutable store со всем приложением.
+A single global mutable store containing the entire application is not allowed.
 
-## 9. Typed IPC между Svelte и Rust
+## 9. Typed IPC between Svelte and Rust
 
-### Команды
+### Commands
 
-Frontend вызывает только команды вида:
+The frontend calls only commands of the form:
 
 ```ts
 openProject(path)
@@ -309,17 +309,17 @@ respondToUiRequest(requestId, value)
 setExtensionGrant(extensionId, permission, decision)
 ```
 
-Каждая команда:
+Each command:
 
-- валидирует IDs и paths на Rust стороне;
-- возвращает typed result с stable error code;
-- не принимает shell string;
-- не возвращает секреты;
-- имеет max payload limits.
+- validates IDs and paths on the Rust side;
+- returns a typed result with a stable error code;
+- does not accept a shell string;
+- does not return secrets;
+- has maximum payload limits.
 
-### События
+### Events
 
-Rust публикует discriminated unions:
+Rust publishes discriminated unions:
 
 ```ts
 type HostEvent =
@@ -332,9 +332,9 @@ type HostEvent =
   | { type: 'diagnostic'; code: string; safeSummary: string };
 ```
 
-Высокочастотные token events агрегируются host или frontend scheduler в кадры 16–33 ms. Один token не должен означать один full-tree render.
+High-frequency token events are batched by the host or frontend scheduler into 16–33 ms frames. One token must not mean one full-tree render.
 
-## 10. Представление timeline
+## 10. Timeline representation
 
 Pipeline:
 
@@ -346,7 +346,7 @@ Pi RPC event / JSONL entry
   -> virtualized timeline
 ```
 
-Нормализованный block не теряет raw payload и source entry ID:
+A normalized block does not lose the raw payload or source entry ID:
 
 ```ts
 interface TimelineBlock {
@@ -360,94 +360,94 @@ interface TimelineBlock {
 }
 ```
 
-Renderer registry всегда заканчивается generic JSON/text fallback. Никакой renderer не может сделать запись невидимой без явного фильтра пользователя.
+The renderer registry always ends with a generic JSON/text fallback. No renderer can make an entry invisible without an explicit user filter.
 
 ## 11. Extension architecture
 
-Extension host состоит из трёх независимых механизмов:
+The extension host consists of three independent mechanisms:
 
-1. **Backend compatibility:** Pi сам загружает обычные Pi extensions.
-2. **Declarative contributions:** PiUI читает manifest как данные и отображает собственными компонентами.
-3. **Sandboxed rich views:** изолированный iframe/worker, общающийся через versioned broker.
+1. **Backend compatibility:** Pi itself loads standard Pi extensions.
+2. **Declarative contributions:** PiUI reads the manifest as data and renders it with its own components.
+3. **Sandboxed rich views:** an isolated iframe/worker communicating through a versioned broker.
 
-Trusted shell replacement — отдельный режим, не часть обычного extension loading path.
+Trusted shell replacement is a separate mode, not part of the normal extension loading path.
 
-Project-local UI package не загружается до trust. Backend Pi resources также не должны запускаться до доверия в PiUI-controlled workflow.
+A project-local UI package is not loaded before trust. Backend Pi resources also must not start before trust in a PiUI-controlled workflow.
 
-## 12. Хранение и индекс
+## 12. Storage and index
 
-- Pi session JSONL — authoritative.
-- PiUI SQLite — cache и metadata.
-- Scanner не держит все сообщения всех сессий в памяти.
-- На startup читаются project/session headers и последние metadata; full indexing идёт после usable shell с ограничением I/O.
-- FTS можно отключить.
-- Индекс имеет schema version и generation ID.
-- При несовместимости база переименовывается в backup и перестраивается, а не мигрирует session content.
+- Pi session JSONL is authoritative.
+- PiUI SQLite is cache and metadata.
+- The scanner does not keep all messages from all sessions in memory.
+- At startup, project/session headers and recent metadata are read; full indexing runs after the usable shell with I/O throttling.
+- FTS may be disabled.
+- The index has a schema version and generation ID.
+- On incompatibility, the database is renamed to a backup and rebuilt rather than migrating session content.
 
-## 13. Работа с длинными сессиями
+## 13. Handling long sessions
 
-Обязательные техники:
+Required techniques:
 
-- block virtualization после 200 timeline blocks;
-- измерение высоты и сохранение scroll anchor;
-- windowed loading назад/вперёд;
-- memoized Markdown AST для завершённых сообщений;
-- code highlighting в worker или лениво после viewport entry;
-- collapsed tool output с лимитом initial render;
-- потоковый plaintext/минимальный Markdown, финальный parse после завершения блока;
-- blob/object URLs для локальных изображений вместо повторного base64 в DOM;
-- освобождение preview resources при закрытии.
+- block virtualization after 200 timeline blocks;
+- height measurement and scroll-anchor preservation;
+- windowed loading backward/forward;
+- memoized Markdown AST for completed messages;
+- code highlighting in a worker or lazily after viewport entry;
+- collapsed tool output with an initial-render limit;
+- streaming plaintext/minimal Markdown, final parse after block completion;
+- blob/object URLs for local images instead of repeated base64 in the DOM;
+- release preview resources on close.
 
 ## 14. Startup pipeline
 
-1. Показать окно и shell из локальных настроек.
-2. Открыть SQLite и реестр проектов.
-3. Проверить crash marker/safe mode.
-4. Быстро просканировать session headers для выбранного проекта.
-5. Показать список и последнюю выбранную сессию из read-only данных.
-6. Запустить runtime только при создании/продолжении интерактивной сессии.
-7. В фоне после first usable state: FTS indexing, update check, package validation.
+1. Show the window and shell from local settings.
+2. Open SQLite and the project registry.
+3. Check the crash marker/safe mode.
+4. Quickly scan session headers for the selected project.
+5. Show the list and most recently selected session from read-only data.
+6. Start the runtime only when an interactive session is created or continued.
+7. In the background after the first usable state: FTS indexing, update check, package validation.
 
-Сеть, providers и model list не блокируют шаги 1–5.
+Network, providers, and the model list do not block steps 1–5.
 
 ## 15. Error containment
 
-| Ошибка | Поведение |
+| Error | Behavior |
 |---|---|
-| Один Pi process упал | остальные сессии и shell работают; чат переходит в recoverable state |
-| Некорректный JSON frame | сохранить redacted diagnostics, остановить только этот runtime |
-| Extension renderer упал | заменить generic fallback, отключить renderer после crash loop |
-| SQLite повреждён | закрыть/переименовать cache, перестроить из JSONL |
-| Session JSONL имеет неполную последнюю строку | не считать файл потерянным; дождаться изменения или открыть до последней полной LF |
-| Project path исчез | сохранить реестр, показать missing state и Locate/Remove |
-| Managed Pi несовместим | rollback runtime или явный repair; не менять JSONL |
-| WebView reload | host продолжает контролировать процесс; UI запрашивает snapshot и revision |
+| One Pi process crashes | other sessions and the shell continue working; the chat enters a recoverable state |
+| Invalid JSON frame | retain redacted diagnostics; stop only this runtime |
+| Extension renderer crashes | replace with generic fallback; disable the renderer after a crash loop |
+| SQLite is corrupted | close/rename the cache; rebuild from JSONL |
+| Session JSONL has an incomplete final line | do not consider the file lost; wait for a change or open through the last complete LF |
+| Project path disappears | retain the registry; show missing state and Locate/Remove |
+| Managed Pi is incompatible | roll back the runtime or explicitly repair; do not change JSONL |
+| WebView reload | the host continues controlling the process; the UI requests snapshot and revision |
 
-## 16. Packaging и обновления
+## 16. Packaging and updates
 
 Release artifacts:
 
-- Windows: signed installer, WebView2 bootstrap policy, x64 обязательно; ARM64 после матрицы.
-- Linux: AppImage и/или deb/rpm после distro matrix; system WebKit dependency явно документируется.
-- macOS: signed/notarized universal или разделённые arm64/x64 builds.
+- Windows: signed installer, WebView2 bootstrap policy, x64 mandatory; ARM64 after the matrix.
+- Linux: AppImage and/or deb/rpm after the distro matrix; system WebKit dependency explicitly documented.
+- macOS: signed/notarized universal or separate arm64/x64 builds.
 
-UI update и managed Pi update имеют отдельные версии и compatibility matrix. Автообновление не применяется во время running turn; скачивание может идти, установка — после явного restart.
+UI updates and managed Pi updates have separate versions and a compatibility matrix. Auto-update is not applied during a running turn; downloading may proceed, while installation follows an explicit restart.
 
-## 17. Наблюдаемость без telemetry
+## 17. Observability without telemetry
 
-По умолчанию данные остаются локально:
+By default, data remains local:
 
-- structured rotating logs с redaction;
-- runtime lifecycle metrics в памяти;
-- пользовательская команда «Export diagnostics»;
-- diagnostic bundle перечисляет версии, capabilities, platform, crash codes и последние безопасные stderr lines;
-- prompts, tool arguments, paths и environment исключены по умолчанию либо требуют отдельного opt-in preview.
+- structured rotating logs with redaction;
+- in-memory runtime lifecycle metrics;
+- user-facing “Export diagnostics” command;
+- the diagnostic bundle lists versions, capabilities, platform, crash codes, and recent safe stderr lines;
+- prompts, tool arguments, paths, and environment are excluded by default or require a separate opt-in preview.
 
-Удалённая telemetry отсутствует в 1.0.
+There is no remote telemetry in 1.0.
 
-## 18. Репозиторий
+## 18. Repository
 
-Рекомендуемый monorepo:
+Recommended monorepo:
 
 ```text
 piui/
@@ -463,18 +463,18 @@ piui/
   docs/
 ```
 
-`packages/contracts` публикуется независимо только после стабилизации. Внутри репозитория Rust и TS типы генерируются из одного schema source либо проверяются golden fixtures, чтобы избежать drift.
+`packages/contracts` is published independently only after stabilization. Within the repository, Rust and TS types are generated from one schema source or verified with golden fixtures to prevent drift.
 
-## 19. Архитектурные критерии приёмки
+## 19. Architectural acceptance criteria
 
-Архитектура считается подтверждённой, когда:
+The architecture is considered validated when:
 
-- одна и та же session file открывается и продолжается в PiUI и CLI;
-- закрытие idle runtime не меняет историю;
-- crash runtime не падает вместе с desktop shell;
-- удаление SQLite не удаляет и не повреждает ни одной Pi session;
-- WebView не может выполнить произвольную команду или прочитать путь без host policy;
-- extension без PiUI manifest работает backend-only;
-- отключение extension оставляет все записи читаемыми generic renderer;
-- long-session fixture остаётся прокручиваемым в рамках performance budget;
-- Windows/Linux process-tree tests не оставляют orphan tool processes.
+- the same session file opens and continues in PiUI and the CLI;
+- closing an idle runtime does not change history;
+- a runtime crash does not crash the desktop shell with it;
+- deleting SQLite does not delete or corrupt any Pi session;
+- the WebView cannot execute an arbitrary command or read a path without host policy;
+- an extension without a PiUI manifest works backend-only;
+- disabling an extension leaves all entries readable by the generic renderer;
+- the long-session fixture remains scrollable within the performance budget;
+- Windows/Linux process-tree tests leave no orphaned tool processes.

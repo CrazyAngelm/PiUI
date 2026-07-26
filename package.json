@@ -18,6 +18,7 @@
     "perf:smoke": "pnpm --filter @piui/desktop perf:smoke",
     "mutation:test": "node scripts/mutation-index.mjs",
     "mutation:catalog-state": "node scripts/mutation-catalog-state.mjs",
-    "repo:check": "node scripts/public-repo-audit.mjs"
+    "repo:check": "node scripts/public-repo-audit.mjs",
+    "release:windows": "pnpm --filter @piui/desktop exec tauri build --bundles nsis --ci && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-windows-release.ps1"
   }
 }
