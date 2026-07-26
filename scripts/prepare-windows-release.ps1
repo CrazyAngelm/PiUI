@@ -36,9 +36,23 @@ $portableDestination = Join-Path $output "PiUI_${version}_windows_x86_64.exe"
 Copy-Item -LiteralPath $installers[0].FullName -Destination $installerDestination
 Copy-Item -LiteralPath $portableSource -Destination $portableDestination
 
+function Get-Sha256Hex {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $stream = [System.IO.File]::OpenRead($Path)
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = $algorithm.ComputeHash($stream)
+        return ([System.BitConverter]::ToString($digest)).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $algorithm.Dispose()
+        $stream.Dispose()
+    }
+}
+
 $releaseFiles = @(Get-ChildItem -LiteralPath $output -File | Sort-Object Name)
 $checksumLines = foreach ($file in $releaseFiles) {
-    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
+    $hash = Get-Sha256Hex -Path $file.FullName
     "$hash  $($file.Name)"
 }
 $checksumPath = Join-Path $output "SHA256SUMS.txt"
