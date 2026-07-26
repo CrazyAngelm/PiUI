@@ -1611,7 +1611,7 @@
           />
         </div>
       {:else}
-        <EmptyState eyebrow="Chats" title="New chat" description="No user folder is attached. Pi keeps an empty chat in memory and saves its JSONL history after the first assistant response." />
+        <EmptyState fill={true} eyebrow="Chats" title="New chat" description="No user folder is attached. Pi keeps an empty chat in memory and saves its JSONL history after the first assistant response." />
       {/if}
 
       {#key `personal:${personalChatEpoch}`}
@@ -1665,7 +1665,7 @@
           <p>Scanning local Pi sessions…</p>
         </section>
       {:else}
-        <EmptyState eyebrow="Session history" title="No Pi sessions here yet" description="Trust this project, then start a new Pi chat below. PiUI discovers the authoritative Pi JSONL session after the runtime stops." />
+        <EmptyState fill={true} eyebrow="Session history" title="No Pi sessions here yet" description="Trust this project, then start a new Pi chat below. PiUI discovers the authoritative Pi JSONL session after the runtime stops." />
       {/if}
 
       {#key `project:${state.selectedProjectId}:${projectChatEpoch}`}

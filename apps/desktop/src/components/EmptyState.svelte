@@ -2,11 +2,13 @@
   export let eyebrow = 'PiUI';
   export let title: string;
   export let description: string;
+  /** Use inside a chat workspace so its composer remains anchored at the bottom. */
+  export let fill = false;
   export let actionLabel: string | undefined = undefined;
   export let action: (() => void) | undefined = undefined;
 </script>
 
-<section class="empty-state" aria-live="polite">
+<section class:empty-state--fill={fill} class="empty-state" aria-live="polite">
   <p class="eyebrow">{eyebrow}</p>
   <h1>{title}</h1>
   <p>{description}</p>
@@ -24,6 +26,11 @@
     max-width: 520px;
     margin: 0 auto;
     padding: var(--piui-space-8);
+  }
+
+  .empty-state.empty-state--fill {
+    flex: 1 1 0;
+    min-height: 0;
   }
 
   .eyebrow {

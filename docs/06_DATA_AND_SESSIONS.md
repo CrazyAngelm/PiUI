@@ -76,7 +76,7 @@ Filesystem traversal, hashing, and SQLite commit run through host `spawn_blockin
 
 The catalog fingerprint is stored host-side only and includes path, native file ID/inode, size, mtime, bounded prefix/tail continuity digest, and parser version. Mtime or a continuity digest are not considered proof of a content revision: they only allow a repeated catalog parse to be skipped. Timeline and mutation admission use a separate strong observation with identity-bound full revision verification.
 
-For the first turn of a new Pi session, the UI stores a baseline of known opaque IDs before launching Pi and does not auto-select a catalog row until it finds exactly one new persisted row. Short retries use bounded exponential backoff; if JSONL has not yet appeared or candidates are ambiguous, visible `Retry discovery` gives the user an explicit recovery path rather than selecting another session.
+For the first turn of a new Pi session, the UI stores a baseline of known opaque IDs before launching Pi and does not auto-select a catalog row until it finds exactly one new persisted row. Short retries use bounded exponential backoff. An expected catalog miss stays silent while that retry window is active, because Pi may already have saved the chat while the index refresh is still catching up. If JSONL still has not appeared or candidates remain ambiguous after the window, visible `Retry discovery` gives the user an explicit recovery path rather than selecting another session; a later successful catalog resolution clears that feedback and replaces live blocks with the authoritative page.
 
 ### 3.3 Partial writes
 

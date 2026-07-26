@@ -112,6 +112,12 @@
   import { host } from '../../host-api/client';
   import type { ModelLite, ProjectSummary, RuntimeEventEnvelope, RuntimeState, SessionStateLite, SurfaceEvent, TimelineBlock } from '../../host-api/types';
   import { initialRuntimeSelection, rememberSessionRuntimePreference, runtimeSessionKey } from './runtimeSelection';
+  import {
+    SESSION_PERSISTENCE_FEEDBACK_DELAY_MS,
+    didResolveNewSession,
+    isPendingSessionPersistenceError,
+    withoutPersistedLiveBlocks,
+  } from './sessionPersistenceFeedback';
 
   export let projectId: string | undefined;
   export let sessionId: string | undefined;
@@ -172,7 +178,10 @@
   let startupTask: Promise<boolean> | undefined;
   let settleTask: Promise<void> | undefined;
   let newSessionResolutionActive = false;
-  let persistedSessionResolutionFailed = false;
+  let persistenceResolutionError: string | undefined;
+  let persistenceFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
+  let pendingPersistedBlockIds: Set<string> | undefined;
+  let observedSessionId = sessionId;
   let disposed = false;
   let unlisten: (() => void) | undefined;
   let composerTextarea: HTMLTextAreaElement | undefined;
@@ -185,6 +194,7 @@
   $: canSend = surfaceAvailable && !startBusy && !sendBusy && settleTask === undefined && draft.trim().length > 0;
   $: running = phase === 'running';
   $: syncSessionPreferenceKey(personal, projectId, sessionId);
+  $: reconcilePersistedSession(sessionId);
   $: if (phase === 'ready' && mounted) void focusComposer();
 
   onMount(() => {
@@ -194,6 +204,8 @@
   onDestroy(() => {
     disposed = true;
     abandonNewSessionResolution();
+    clearPersistenceFeedback();
+    pendingPersistedBlockIds = undefined;
     if (publishFrame !== undefined) cancelAnimationFrame(publishFrame);
     publishFrame = undefined;
     void onBlocksChanged([]);
@@ -298,17 +310,65 @@
     }
   }
 
+  function clearPersistenceFeedback(): void {
+    if (persistenceFeedbackTimer !== undefined) {
+      clearTimeout(persistenceFeedbackTimer);
+      persistenceFeedbackTimer = undefined;
+    }
+    persistenceResolutionError = undefined;
+  }
+
+  function schedulePersistenceFeedback(message: string): void {
+    clearPersistenceFeedback();
+    persistenceFeedbackTimer = setTimeout(() => {
+      persistenceFeedbackTimer = undefined;
+      if (!disposed && sessionId === undefined) persistenceResolutionError = message;
+    }, SESSION_PERSISTENCE_FEEDBACK_DELAY_MS);
+  }
+
+  function reconcilePersistedSession(nextSessionId: string | undefined): void {
+    const previousSessionId = observedSessionId;
+    observedSessionId = nextSessionId;
+    if (
+      !didResolveNewSession(previousSessionId, nextSessionId)
+      || (
+        !newSessionResolutionActive
+        && persistenceFeedbackTimer === undefined
+        && persistenceResolutionError === undefined
+        && pendingPersistedBlockIds === undefined
+      )
+    ) return;
+    clearPersistenceFeedback();
+    newSessionResolutionActive = false;
+    if (pendingPersistedBlockIds !== undefined) {
+      blocks = withoutPersistedLiveBlocks(blocks, pendingPersistedBlockIds);
+      pendingPersistedBlockIds = undefined;
+      publishBlocks();
+    }
+  }
+
+  function trackPendingPersistedBlocks(blockIds: ReadonlySet<string>): void {
+    pendingPersistedBlockIds ??= new Set<string>();
+    for (const blockId of blockIds) pendingPersistedBlockIds.add(blockId);
+  }
+
+  function releasePendingPersistedBlocks(blockIds: ReadonlySet<string>): void {
+    if (pendingPersistedBlockIds === undefined) return;
+    for (const blockId of blockIds) pendingPersistedBlockIds.delete(blockId);
+    if (pendingPersistedBlockIds.size === 0) pendingPersistedBlockIds = undefined;
+  }
+
   function beginNewSessionResolution(): void {
     if (sessionId !== undefined || newSessionResolutionActive) return;
     newSessionResolutionActive = true;
-    persistedSessionResolutionFailed = false;
+    clearPersistenceFeedback();
     onNewSessionStarting();
   }
 
   function abandonNewSessionResolution(): void {
     if (!newSessionResolutionActive) return;
     newSessionResolutionActive = false;
-    persistedSessionResolutionFailed = false;
+    clearPersistenceFeedback();
     onNewSessionStartAborted();
   }
 
@@ -582,18 +642,29 @@
 
   async function settleCompletedTurn(): Promise<void> {
     const completedBlockIds = new Set(blocks.map((block) => block.id));
+    const resolvingNewSession = newSessionResolutionActive && sessionId === undefined;
+    if (resolvingNewSession) trackPendingPersistedBlocks(completedBlockIds);
     try {
       await onTurnCompleted();
-      persistedSessionResolutionFailed = false;
+      clearPersistenceFeedback();
       if (disposed) return;
       // A queued turn may begin while the persisted page is refreshing. Remove
       // only blocks that belonged to the completed turn; never erase newer
       // streaming evidence that arrived during that await.
-      blocks = blocks.filter((block) => !completedBlockIds.has(block.id));
+      blocks = withoutPersistedLiveBlocks(blocks, completedBlockIds);
+      releasePendingPersistedBlocks(completedBlockIds);
       publishBlocks();
     } catch (refreshError) {
-      persistedSessionResolutionFailed = newSessionResolutionActive;
-      error = messageFor(refreshError);
+      if (resolvingNewSession) {
+        const message = messageFor(refreshError);
+        if (isPendingSessionPersistenceError(refreshError)) schedulePersistenceFeedback(message);
+        else {
+          clearPersistenceFeedback();
+          persistenceResolutionError = message;
+        }
+      } else {
+        error = messageFor(refreshError);
+      }
     } finally {
       newSessionResolutionActive = false;
     }
@@ -840,7 +911,11 @@
         {#if onRequestTrust}<button type="button" onclick={onRequestTrust}>Review trust</button>{/if}
       </div>
     {/if}
-    {#if error}<div class="chat-error-banner" role="alert">{error}{#if persistedSessionResolutionFailed && onRetryPersistedSession}<button type="button" onclick={onRetryPersistedSession}>Retry discovery</button>{/if}<button type="button" onclick={() => (error = undefined)}>Dismiss</button></div>{/if}
+    {#if persistenceResolutionError}
+      <div class="chat-error-banner" role="alert">{persistenceResolutionError}{#if onRetryPersistedSession}<button type="button" onclick={onRetryPersistedSession}>Retry discovery</button>{/if}<button type="button" onclick={clearPersistenceFeedback}>Dismiss</button></div>
+    {:else if error}
+      <div class="chat-error-banner" role="alert">{error}<button type="button" onclick={() => (error = undefined)}>Dismiss</button></div>
+    {/if}
     {#if compactionActive}<div class="chat-compaction-banner" role="status">Pi is compacting the context…</div>{/if}
 
     {#if personal}<p class="chat-personal-note">No user folder is attached. Pi persists this chat after its first assistant response.</p>{/if}

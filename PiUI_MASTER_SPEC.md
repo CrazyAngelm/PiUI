@@ -725,7 +725,7 @@ Extensions receive only documented semantic tokens; internal class names are not
 The order is fixed:
 
 1. **Settings** — icon + label, always available.
-2. **New chat** — primary compact action. When a project is selected, it opens an empty chat in that project by default; otherwise it opens a personal chat. The new-chat composer includes a Project picker next to Model and Thinking so the user can choose any available project or `No project` before sending. A projectless chat receives a host-owned neutral CWD that is not exposed to the WebView and is not shown as a project. An empty chat lives in Pi memory and appears in history only after the first assistant response, when Pi itself writes JSONL.
+2. **New chat** — primary compact action. When a project is selected, it opens an empty chat in that project by default; otherwise it opens a personal chat. The new-chat composer is anchored to the bottom of the workspace, including while an empty-session state is visible, so it does not jump when history appears. It includes a Project picker next to Model and Thinking so the user can choose any available project or `No project` before sending. A projectless chat receives a host-owned neutral CWD that is not exposed to the WebView and is not shown as a project. An empty chat lives in Pi memory and appears in history only after the first assistant response, when Pi itself writes JSONL.
 3. **Add project** — secondary action for registering an existing user folder.
 4. Optional command palette/search icon.
 
@@ -2906,7 +2906,7 @@ Filesystem traversal, hashing, and SQLite commit run through host `spawn_blockin
 
 The catalog fingerprint is stored host-side only and includes path, native file ID/inode, size, mtime, bounded prefix/tail continuity digest, and parser version. Mtime or a continuity digest are not considered proof of a content revision: they only allow a repeated catalog parse to be skipped. Timeline and mutation admission use a separate strong observation with identity-bound full revision verification.
 
-For the first turn of a new Pi session, the UI stores a baseline of known opaque IDs before launching Pi and does not auto-select a catalog row until it finds exactly one new persisted row. Short retries use bounded exponential backoff; if JSONL has not yet appeared or candidates are ambiguous, visible `Retry discovery` gives the user an explicit recovery path rather than selecting another session.
+For the first turn of a new Pi session, the UI stores a baseline of known opaque IDs before launching Pi and does not auto-select a catalog row until it finds exactly one new persisted row. Short retries use bounded exponential backoff. An expected catalog miss stays silent while that retry window is active, because Pi may already have saved the chat while the index refresh is still catching up. If JSONL still has not appeared or candidates remain ambiguous after the window, visible `Retry discovery` gives the user an explicit recovery path rather than selecting another session; a later successful catalog resolution clears that feedback and replaces live blocks with the authoritative page.
 
 #### 3.3 Partial writes
 
