@@ -37,8 +37,8 @@
     },
     {
       "name": "slsa-provenance.json",
-      "bytes": 597,
-      "sha256": "72061d915657d9e73e5512260b515b0a1d6438c5684f26c84543eab39ed810a0"
+      "bytes": 581,
+      "sha256": "9ad7aa7c26ef88d8a837a817a690fa030a9462cd7687eca8e5731ff85bc47a24"
     }
   ]
 }
