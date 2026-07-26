@@ -1,5 +1,10 @@
 <script lang="ts">
   import type { ProjectSummary, SessionCatalogFreshness, SessionSummary } from '../../host-api/types';
+  import {
+    PROJECT_SESSION_PAGE_SIZE,
+    nextProjectSessionCount,
+    visibleProjectSessionCount,
+  } from '../sessions/projectSessionPagination';
 
   export let projects: ProjectSummary[] = [];
   export let sessions: SessionSummary[] = [];
@@ -21,6 +26,23 @@
   export let onManageProject: (project: ProjectSummary) => void;
   export let onSettings: () => void;
   export let onSearch: () => void;
+
+  let projectSessionLimit = PROJECT_SESSION_PAGE_SIZE;
+  let projectSessionCatalogIdentity = '';
+
+  $: {
+    const nextCatalogIdentity = `${expandedProjectId ?? ''}:${sessions.map((session) => session.id).join('|')}`;
+    if (nextCatalogIdentity !== projectSessionCatalogIdentity) {
+      projectSessionCatalogIdentity = nextCatalogIdentity;
+      projectSessionLimit = PROJECT_SESSION_PAGE_SIZE;
+    }
+  }
+  $: selectedProjectSessionIndex = sessions.findIndex((session) => session.id === selectedSessionId);
+  $: if (selectedProjectSessionIndex >= projectSessionLimit) {
+    projectSessionLimit = visibleProjectSessionCount(selectedProjectSessionIndex + 1, sessions.length);
+  }
+  $: visibleProjectSessions = sessions.slice(0, visibleProjectSessionCount(projectSessionLimit, sessions.length));
+  $: hasHiddenProjectSessions = visibleProjectSessions.length < sessions.length;
 
 </script>
 
@@ -53,10 +75,13 @@
         {:else}
           {#each personalSessions as session (session.id)}
             <button class:selected={personalSelected && session.id === selectedPersonalSessionId} class="session-row" type="button" aria-current={personalSelected && session.id === selectedPersonalSessionId ? 'page' : undefined} onclick={() => onSelectPersonalSession(session)}>
-              <span class:status-dot--failed={session.parseState === 'corrupt'} class="status-dot status-dot--dormant" aria-hidden="true"></span>
+              {#if session.parseState === 'corrupt'}
+                <span class="status-dot status-dot--dormant status-dot--failed" role="img" aria-label="Session data may be incomplete"></span>
+              {:else}
+                <span class="status-dot status-dot--dormant" aria-hidden="true"></span>
+              {/if}
               <span class="session-copy">
                 <span class="session-title">{session.title}</span>
-                <span class="session-meta">{session.entryCount} entries · {session.parseState}</span>
               </span>
             </button>
           {/each}
@@ -95,15 +120,28 @@
               {:else if sessions.length === 0}
                 <p class="no-sessions">{sessionsFreshness === 'current' ? 'No indexed Pi sessions' : 'No indexed Pi sessions yet'}</p>
               {:else}
-                {#each sessions as session (session.id)}
+                {#each visibleProjectSessions as session (session.id)}
                   <button class:selected={session.id === selectedSessionId} class="session-row" type="button" aria-current={session.id === selectedSessionId ? 'page' : undefined} onclick={() => onSelectSession(session)}>
-                    <span class:status-dot--failed={session.parseState === 'corrupt'} class="status-dot status-dot--dormant" aria-hidden="true"></span>
+                    {#if session.parseState === 'corrupt'}
+                      <span class="status-dot status-dot--dormant status-dot--failed" role="img" aria-label="Session data may be incomplete"></span>
+                    {:else}
+                      <span class="status-dot status-dot--dormant" aria-hidden="true"></span>
+                    {/if}
                     <span class="session-copy">
                       <span class="session-title">{session.title}</span>
-                      <span class="session-meta">{session.entryCount} entries · {session.parseState}</span>
                     </span>
                   </button>
                 {/each}
+                {#if hasHiddenProjectSessions}
+                  <div class="session-pagination" aria-label="More project sessions">
+                    <button class="session-page-button" type="button" onclick={() => projectSessionLimit = nextProjectSessionCount(projectSessionLimit, sessions.length)}>
+                      Show {Math.min(PROJECT_SESSION_PAGE_SIZE, sessions.length - visibleProjectSessions.length)} more
+                    </button>
+                    <button class="session-page-button" type="button" onclick={() => projectSessionLimit = sessions.length}>
+                      Show all ({sessions.length})
+                    </button>
+                  </div>
+                {/if}
               {/if}
             </div>
           {/if}
@@ -149,6 +187,9 @@
   .trust-mark { margin-left: auto; color: var(--piui-warning); }
   .missing-mark { color: var(--piui-danger); }
   .session-list { display: grid; gap: 2px; margin: 2px 0 7px var(--piui-space-3); padding-left: var(--piui-space-2); border-left: 1px solid var(--piui-border-subtle); }
+  .session-pagination { display: flex; flex-wrap: wrap; gap: 2px; padding: var(--piui-space-1) var(--piui-space-2) 0; }
+  .session-page-button { min-height: 28px; padding: 3px 5px; border-radius: 3px; background: transparent; color: var(--piui-text-muted); font-size: 10px; font-weight: 700; }
+  .session-page-button:hover, .session-page-button:focus-visible { background: var(--piui-surface-2); color: var(--piui-text); }
   .session-list--personal { margin-top: 0; }
   .session-list-header { display: flex; align-items: center; justify-content: space-between; min-height: 25px; padding: 0 var(--piui-space-2); color: var(--piui-text-faint); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
   .catalog-refreshing { margin-left: 6px; color: var(--piui-text-muted); font-size: 9px; font-weight: 600; letter-spacing: 0; text-transform: none; }
@@ -159,7 +200,6 @@
   .session-row { display: flex; align-items: flex-start; gap: var(--piui-space-2); padding: 7px var(--piui-space-2); border-radius: var(--piui-radius-sm); background: transparent; color: var(--piui-text-muted); }
   .session-row:hover, .session-row.selected { background: var(--piui-surface-2); color: var(--piui-text); }
   .session-row .status-dot { width: 7px; height: 7px; margin-top: 5px; }
-  .session-copy { display: grid; min-width: 0; gap: 2px; }
-  .session-title { font-size: 13px; line-height: 1.25; }
-  .session-meta { color: var(--piui-text-faint); font-size: 10px; }
+  .session-copy { min-width: 0; }
+  .session-title { display: block; font-size: 13px; line-height: 1.25; }
 </style>

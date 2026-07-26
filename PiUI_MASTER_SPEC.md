@@ -753,7 +753,7 @@ A project row contains:
 
 Clicking a project row toggles its expanded state without losing the currently open timeline. On the first/manual refresh, the list immediately shows `Scanning local Pi sessions…` until the bounded host scan completes; a late response must not arbitrarily expand a group that the user closed.
 
-An expanded project shows sessions. Default sorting:
+An expanded project initially shows the five newest catalog sessions. If more exist, keyboard-accessible `Show 5 more` and `Show all (N)` controls reveal the next page or the complete already-indexed list; they do not initiate a filesystem scan. Default sorting:
 
 1. running/waiting-for-input;
 2. pinned;

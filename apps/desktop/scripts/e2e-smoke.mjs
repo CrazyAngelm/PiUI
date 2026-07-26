@@ -4,12 +4,14 @@ import { resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
 const app = await readFile(resolve(root, 'src/app/App.svelte'), 'utf8');
 const sidebar = await readFile(resolve(root, 'src/features/projects/ProjectSidebar.svelte'), 'utf8');
+const commandPalette = await readFile(resolve(root, 'src/features/navigation/CommandPalette.svelte'), 'utf8');
 const chatPanel = await readFile(resolve(root, 'src/features/runtime/ChatPanel.svelte'), 'utf8');
 const timeline = await readFile(resolve(root, 'src/features/sessions/Timeline.svelte'), 'utf8');
 const activityGroup = await readFile(resolve(root, 'src/features/sessions/ActivityGroup.svelte'), 'utf8');
 const timelineView = await readFile(resolve(root, 'src/features/sessions/timelineView.ts'), 'utf8');
 const markdown = await readFile(resolve(root, 'src/components/MarkdownContent.svelte'), 'utf8');
 const catalogView = await readFile(resolve(root, 'src/features/sessions/catalogView.ts'), 'utf8');
+const projectSessionPagination = await readFile(resolve(root, 'src/features/sessions/projectSessionPagination.ts'), 'utf8');
 const settings = await readFile(resolve(root, 'src/features/settings/SettingsView.svelte'), 'utf8');
 const tokens = await readFile(resolve(root, 'src/styles/tokens.css'), 'utf8');
 const hostClient = await readFile(resolve(root, 'src/host-api/client.ts'), 'utf8');
@@ -20,10 +22,16 @@ for (const requiredText of ['TrustDialog', 'ReadOnlyTree', 'SettingsView', 'list
   }
 }
 
-for (const requiredText of ['New chat', 'Chats', 'onSelectPersonalSession', 'aria-expanded', 'Scanning local Pi sessions']) {
+for (const requiredText of ['New chat', 'Chats', 'onSelectPersonalSession', 'aria-expanded', 'Scanning local Pi sessions', 'Show all (', 'session-pagination']) {
   if (!sidebar.includes(requiredText)) {
     throw new Error(`Chats sidebar smoke check is missing: ${requiredText}`);
   }
+}
+if (sidebar.includes('entries ·') || sidebar.includes('session-meta')) {
+  throw new Error('Session rows must not display redundant entry-count or health text.');
+}
+if (commandPalette.includes('entries ·') || commandPalette.includes('result-meta')) {
+  throw new Error('Search results must not display redundant entry-count or health text.');
 }
 
 for (const requiredText of ['startPersonalChat', 'loadCatalogFromCurrentRuntime', 'CATALOG_STORAGE_KEY', 'Load models…', 'No user folder is attached', 'onRequestTrust', 'Review trust', 'composer-submit', 'Stop current turn', 'Thinking', 'onNewSessionStarting', 'onNewSessionStartAborted', 'onRetryPersistedSession', 'Retry discovery', 'onBlocksChanged', 'projectLiveBlock', 'onNewChatProjectChange', 'aria-label="Project"', 'runtimeSessionKey']) {
@@ -52,6 +60,7 @@ for (const requiredText of ['--piui-chat-column-width: 1280px', 'data-font-size=
 }
 if (!hostClient.includes("'update_preferences_v8'")) throw new Error('Appearance preferences must use the versioned v8 host command.');
 if (!catalogView.includes('acceptsCatalogSnapshot') || !catalogView.includes('sequence')) throw new Error('Cache-first catalog watermark guard is missing.');
+if (!projectSessionPagination.includes('PROJECT_SESSION_PAGE_SIZE = 5') || !projectSessionPagination.includes('nextProjectSessionCount')) throw new Error('Project session pagination must reveal five-session pages.');
 if (markdown.includes('{@html')) throw new Error('Markdown renderer must not render raw HTML.');
 if (chatPanel.includes('chat-stream')) throw new Error('Live output must share the canonical timeline scroll.');
 
