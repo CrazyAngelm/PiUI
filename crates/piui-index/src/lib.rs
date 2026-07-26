@@ -6096,8 +6096,13 @@ mod tests {
             .expect("looks up indexed file")
             .expect("indexed file exists");
 
+        // Create the replacement while the original still exists. Removing and
+        // immediately recreating one path can reuse the same inode on Unix,
+        // which would make this identity test nondeterministic.
+        let replacement_path = root.join("replacement.jsonl");
+        write(&replacement_path, bytes).expect("writes distinct replacement");
         remove_file(&session).expect("removes original file");
-        write(&session, bytes).expect("replaces it with same content");
+        fs::rename(&replacement_path, &session).expect("moves replacement into place");
         let replacement = scan_file_bounded(&host_file, 1_024)
             .expect_err("same-content replacement has a different identity");
         assert!(matches!(&replacement, BoundedScanError::Changed));
