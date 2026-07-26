@@ -27,8 +27,8 @@ importers:
         specifier: 22.15.21
         version: 22.15.21
       svelte-check:
-        specifier: 4.3.1
-        version: 4.3.1(picomatch@4.0.5)(svelte@5.38.7)(typescript@5.9.2)
+        specifier: 4.7.3
+        version: 4.7.3(picomatch@4.0.5)(svelte@5.38.7)(typescript@5.9.2)
       typescript:
         specifier: 5.9.2
         version: 5.9.2
@@ -343,6 +343,10 @@ packages:
     peerDependencies:
       acorn: ^8.9.0
 
+  '@sveltejs/load-config@0.2.1':
+    resolution: {integrity: sha512-5m3B2cbqQ4TbwW6Xkh66Ntw6dD7gNc77cCxABTTesWcq9jxIzMgTk97pZx5vEtvQx8iokgi7GIphqZe+PGwcZA==}
+    engines: {node: '>= 18.0.0'}
+
   '@sveltejs/vite-plugin-svelte-inspector@4.0.1':
     resolution: {integrity: sha512-J/Nmb2Q2y7mck2hyCX4ckVHcR5tu2J+MtBEQqpDrrgELZ2uvraQcK/ioCV61AqkdXFgriksOKIceDcQmqnGhVw==}
     engines: {node: ^18.0.0 || ^20.0.0 || >=22}
@@ -648,8 +652,8 @@ packages:
   strip-literal@3.1.0:
     resolution: {integrity: sha512-8r3mkIM/2+PpjHoOtiAW8Rg3jJLHaV7xPwG+YRGrv6FP0wwk/toTpATxWYOW0BKdWwl82VT2tFYi5DlROa0Mxg==}
 
-  svelte-check@4.3.1:
-    resolution: {integrity: sha512-lkh8gff5gpHLjxIV+IaApMxQhTGnir2pNUAqcNgeKkvK5bT/30Ey/nzBxNLDlkztCH4dP7PixkMt9SWEKFPBWg==}
+  svelte-check@4.7.3:
+    resolution: {integrity: sha512-DHdTCGX62R0fCxBEaT+USdASAnoaRBaaNczkRJl0K7o3WyoCeVUbVxo6fKqpOll/B+WMWCsiFK0eFrJSNBKZIg==}
     engines: {node: '>= 18.0.0'}
     hasBin: true
     peerDependencies:
@@ -957,6 +961,8 @@ snapshots:
     dependencies:
       acorn: 8.17.0
 
+  '@sveltejs/load-config@0.2.1': {}
+
   '@sveltejs/vite-plugin-svelte-inspector@4.0.1(@sveltejs/vite-plugin-svelte@5.1.1(svelte@5.38.7)(vite@6.3.5(@types/node@22.15.21)))(svelte@5.38.7)(vite@6.3.5(@types/node@22.15.21))':
     dependencies:
       '@sveltejs/vite-plugin-svelte': 5.1.1(svelte@5.38.7)(vite@6.3.5(@types/node@22.15.21))
@@ -1256,9 +1262,10 @@ snapshots:
     dependencies:
       js-tokens: 9.0.1
 
-  svelte-check@4.3.1(picomatch@4.0.5)(svelte@5.38.7)(typescript@5.9.2):
+  svelte-check@4.7.3(picomatch@4.0.5)(svelte@5.38.7)(typescript@5.9.2):
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
+      '@sveltejs/load-config': 0.2.1
       chokidar: 4.0.3
       fdir: 6.5.0(picomatch@4.0.5)
       picocolors: 1.1.1
