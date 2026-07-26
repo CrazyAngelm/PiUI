@@ -1,0 +1,1190 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.piui.dev/extension-manifest/v1.json",
+  "title": "PiUI Extension Manifest v1",
+  "description": "Declarative UI contributions and isolated entry points for a PiUI-aware Pi package.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "name",
+    "version",
+    "engines",
+    "permissions",
+    "contributes"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "format": "uri"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "id": {
+      "$ref": "#/$defs/extensionId"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "version": {
+      "$ref": "#/$defs/version"
+    },
+    "publisher": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "license": {
+      "type": "string",
+      "maxLength": 100
+    },
+    "homepage": {
+      "type": "string",
+      "format": "uri"
+    },
+    "repository": {
+      "type": "string",
+      "format": "uri"
+    },
+    "engines": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "piui"
+      ],
+      "properties": {
+        "piui": {
+          "$ref": "#/$defs/versionRange"
+        },
+        "pi": {
+          "$ref": "#/$defs/versionRange"
+        },
+        "hostApi": {
+          "$ref": "#/$defs/versionRange"
+        }
+      }
+    },
+    "entrypoints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "worker": {
+          "$ref": "#/$defs/packagePath"
+        },
+        "views": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/localId"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/packagePath"
+          },
+          "maxProperties": 50,
+          "minProperties": 1
+        },
+        "shell": {
+          "$ref": "#/$defs/packagePath"
+        }
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/permission"
+      },
+      "uniqueItems": true,
+      "maxItems": 30,
+      "default": []
+    },
+    "permissionDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "origins"
+          ],
+          "properties": {
+            "origins": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^https://(?:\\*\\.)?[A-Za-z0-9.-]+(?::[0-9]{1,5})?$"
+              },
+              "uniqueItems": true,
+              "maxItems": 50,
+              "minItems": 1
+            },
+            "allowPrivateNetwork": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        },
+        "project": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "readGlobs": {
+              "$ref": "#/$defs/globs"
+            },
+            "writeGlobs": {
+              "$ref": "#/$defs/globs"
+            }
+          }
+        }
+      }
+    },
+    "extensionDependencies": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/extensionId"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/versionRange"
+      },
+      "maxProperties": 50
+    },
+    "requires": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100
+      },
+      "uniqueItems": true,
+      "maxItems": 50
+    },
+    "contributes": {
+      "$ref": "#/$defs/contributes"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "entrypoints"
+        ],
+        "properties": {
+          "entrypoints": {
+            "required": [
+              "shell"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "permissions"
+        ],
+        "properties": {
+          "permissions": {
+            "contains": {
+              "const": "ui.shell"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "permissions"
+        ],
+        "properties": {
+          "permissions": {
+            "contains": {
+              "const": "ui.shell"
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "entrypoints"
+        ],
+        "properties": {
+          "entrypoints": {
+            "required": [
+              "shell"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "permissions"
+        ],
+        "properties": {
+          "permissions": {
+            "contains": {
+              "const": "network"
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "permissionDetails"
+        ],
+        "properties": {
+          "permissionDetails": {
+            "required": [
+              "network"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "permissionDetails"
+        ],
+        "properties": {
+          "permissionDetails": {
+            "required": [
+              "network"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "permissions"
+        ],
+        "properties": {
+          "permissions": {
+            "contains": {
+              "const": "network"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "permissions"
+        ],
+        "properties": {
+          "permissions": {
+            "contains": {
+              "const": "ui.richView"
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "entrypoints"
+        ],
+        "properties": {
+          "entrypoints": {
+            "required": [
+              "views"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "contributes"
+        ],
+        "properties": {
+          "contributes": {
+            "anyOf": [
+              {
+                "required": [
+                  "renderers"
+                ],
+                "properties": {
+                  "renderers": {
+                    "contains": {
+                      "type": "object",
+                      "required": [
+                        "kind"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "rich"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "required": [
+                  "views"
+                ],
+                "properties": {
+                  "views": {
+                    "contains": {
+                      "type": "object",
+                      "required": [
+                        "kind"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "rich"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "required": [
+                  "previewProviders"
+                ],
+                "properties": {
+                  "previewProviders": {
+                    "contains": {
+                      "type": "object",
+                      "required": [
+                        "kind"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "const": "rich"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "permissions"
+        ],
+        "properties": {
+          "permissions": {
+            "contains": {
+              "const": "ui.richView"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "extensionId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 120,
+      "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$"
+    },
+    "localId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[A-Za-z][A-Za-z0-9._-]*$"
+    },
+    "qualifiedId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 180,
+      "pattern": "^[A-Za-z][A-Za-z0-9.-]*[.:][A-Za-z0-9._-]+$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "versionRange": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "packagePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^(?:\\./)?(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "icon": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^(?:[a-z][a-z0-9-]*|package:[A-Za-z0-9._/-]+)$"
+    },
+    "when": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "order": {
+      "type": "integer",
+      "minimum": -10000,
+      "maximum": 10000,
+      "default": 200
+    },
+    "handler": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 300,
+      "pattern": "^(?:pi-command|host|worker|view):[^\\s]+$"
+    },
+    "permission": {
+      "type": "string",
+      "enum": [
+        "session.read",
+        "session.command",
+        "session.prompt",
+        "composer.read",
+        "composer.write",
+        "project.read",
+        "project.write",
+        "externalFiles.read",
+        "network",
+        "clipboard.read",
+        "clipboard.write",
+        "notifications",
+        "storage",
+        "secrets",
+        "ui.richView",
+        "ui.shell"
+      ]
+    },
+    "globs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300
+      },
+      "uniqueItems": true,
+      "maxItems": 100
+    },
+    "slot": {
+      "type": "string",
+      "enum": [
+        "sidebar.project.beforeSessions",
+        "sidebar.project.afterSessions",
+        "sidebar.footer",
+        "header.session.leading",
+        "header.session.trailing",
+        "timeline.block.actions",
+        "composer.leading",
+        "composer.actions",
+        "composer.footer",
+        "rightPanel.primary",
+        "settings.extensions",
+        "status.runtime"
+      ]
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "handler"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/qualifiedId"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "icon": {
+          "$ref": "#/$defs/icon"
+        },
+        "handler": {
+          "$ref": "#/$defs/handler"
+        },
+        "when": {
+          "$ref": "#/$defs/when"
+        },
+        "enablement": {
+          "$ref": "#/$defs/when"
+        },
+        "defaultKeybinding": {
+          "type": "string",
+          "maxLength": 100
+        }
+      }
+    },
+    "composerAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "command"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/qualifiedId"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "icon": {
+          "$ref": "#/$defs/icon"
+        },
+        "command": {
+          "$ref": "#/$defs/qualifiedId"
+        },
+        "slot": {
+          "const": "composer.actions"
+        },
+        "group": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "order": {
+          "$ref": "#/$defs/order"
+        },
+        "when": {
+          "$ref": "#/$defs/when"
+        }
+      }
+    },
+    "statusItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "text"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/qualifiedId"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "tooltip": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "icon": {
+          "$ref": "#/$defs/icon"
+        },
+        "command": {
+          "$ref": "#/$defs/qualifiedId"
+        },
+        "slot": {
+          "const": "status.runtime"
+        },
+        "order": {
+          "$ref": "#/$defs/order"
+        },
+        "when": {
+          "$ref": "#/$defs/when"
+        }
+      }
+    },
+    "settingProperty": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "label"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/localId"
+        },
+        "type": {
+          "enum": [
+            "boolean",
+            "string",
+            "secret",
+            "number",
+            "enum",
+            "path",
+            "keybinding"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "default": {},
+        "enum": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              }
+            }
+          },
+          "maxItems": 100
+        },
+        "minimum": {
+          "type": "number"
+        },
+        "maximum": {
+          "type": "number"
+        },
+        "step": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "pathMode": {
+          "enum": [
+            "file",
+            "directory",
+            "saveFile"
+          ]
+        },
+        "when": {
+          "$ref": "#/$defs/when"
+        }
+      }
+    },
+    "settingsSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "properties"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/qualifiedId"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "order": {
+          "$ref": "#/$defs/order"
+        },
+        "properties": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/settingProperty"
+          },
+          "maxItems": 100
+        }
+      }
+    },
+    "rendererMatcher": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "toolName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "extensionId": {
+          "$ref": "#/$defs/extensionId"
+        },
+        "messageType": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "entryType": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "mime": {
+          "type": "string",
+          "maxLength": 200
+        }
+      }
+    },
+    "renderer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "for",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/qualifiedId"
+        },
+        "for": {
+          "$ref": "#/$defs/rendererMatcher"
+        },
+        "kind": {
+          "enum": [
+            "declarative",
+            "rich"
+          ]
+        },
+        "handler": {
+          "$ref": "#/$defs/handler"
+        },
+        "viewId": {
+          "$ref": "#/$defs/localId"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": -1000,
+          "maximum": 1000,
+          "default": 100
+        },
+        "when": {
+          "$ref": "#/$defs/when"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "declarative"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "handler"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "rich"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "viewId"
+            ]
+          }
+        }
+      ]
+    },
+    "view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "slot",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/qualifiedId"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "icon": {
+          "$ref": "#/$defs/icon"
+        },
+        "slot": {
+          "$ref": "#/$defs/slot"
+        },
+        "kind": {
+          "enum": [
+            "declarative",
+            "rich"
+          ]
+        },
+        "handler": {
+          "$ref": "#/$defs/handler"
+        },
+        "viewId": {
+          "$ref": "#/$defs/localId"
+        },
+        "order": {
+          "$ref": "#/$defs/order"
+        },
+        "when": {
+          "$ref": "#/$defs/when"
+        },
+        "retainContextWhenHidden": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "declarative"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "handler"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "rich"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "viewId"
+            ]
+          }
+        }
+      ]
+    },
+    "previewProvider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/qualifiedId"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "schemes": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "project",
+              "picked",
+              "attachment",
+              "package"
+            ]
+          },
+          "uniqueItems": true,
+          "maxItems": 4
+        },
+        "mime": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "uniqueItems": true,
+          "maxItems": 100
+        },
+        "extensions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^\\.[A-Za-z0-9._+-]+$"
+          },
+          "uniqueItems": true,
+          "maxItems": 100
+        },
+        "kind": {
+          "enum": [
+            "declarative",
+            "rich"
+          ]
+        },
+        "handler": {
+          "$ref": "#/$defs/handler"
+        },
+        "viewId": {
+          "$ref": "#/$defs/localId"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": -1000,
+          "maximum": 1000,
+          "default": 100
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "declarative"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "handler"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "rich"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "viewId"
+            ]
+          }
+        }
+      ]
+    },
+    "theme": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "tokens"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/qualifiedId"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "base": {
+          "enum": [
+            "light",
+            "dark"
+          ]
+        },
+        "tokens": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9]*(?:\\.[a-z0-9-]+)+$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "maxProperties": 300
+        }
+      }
+    },
+    "keybinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "key"
+      ],
+      "properties": {
+        "command": {
+          "$ref": "#/$defs/qualifiedId"
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "when": {
+          "$ref": "#/$defs/when"
+        }
+      }
+    },
+    "menuItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "location",
+        "command"
+      ],
+      "properties": {
+        "location": {
+          "enum": [
+            "project.context",
+            "session.context",
+            "timeline.block.context",
+            "attachment.context",
+            "commandPalette"
+          ]
+        },
+        "command": {
+          "$ref": "#/$defs/qualifiedId"
+        },
+        "group": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "order": {
+          "$ref": "#/$defs/order"
+        },
+        "when": {
+          "$ref": "#/$defs/when"
+        }
+      }
+    },
+    "contributes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/command"
+          },
+          "maxItems": 200
+        },
+        "composerActions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/composerAction"
+          },
+          "maxItems": 50
+        },
+        "statusItems": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/statusItem"
+          },
+          "maxItems": 50
+        },
+        "settings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/settingsSection"
+          },
+          "maxItems": 50
+        },
+        "renderers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/renderer"
+          },
+          "maxItems": 100
+        },
+        "views": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/view"
+          },
+          "maxItems": 50
+        },
+        "previewProviders": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/previewProvider"
+          },
+          "maxItems": 50
+        },
+        "themes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/theme"
+          },
+          "maxItems": 20
+        },
+        "keybindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/keybinding"
+          },
+          "maxItems": 200
+        },
+        "menus": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/menuItem"
+          },
+          "maxItems": 200
+        }
+      }
+    }
+  }
+}

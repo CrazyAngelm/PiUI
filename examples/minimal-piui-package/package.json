@@ -1,0 +1,15 @@
+{
+  "name": "@example/pi-project-health",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Reference package that extends both Pi and PiUI.",
+  "pi": {
+    "extensions": [
+      "./pi/extension.ts"
+    ]
+  },
+  "piui": {
+    "manifest": "./piui.manifest.json"
+  }
+}

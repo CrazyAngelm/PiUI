@@ -1,0 +1,23 @@
+{
+  "name": "piui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A minimal desktop shell for Pi sessions",
+  "license": "MIT",
+  "packageManager": "pnpm@10.23.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check": "pnpm --filter @piui/desktop check",
+    "test": "pnpm --filter @piui/desktop test",
+    "test:e2e": "pnpm --filter @piui/desktop test:e2e",
+    "build": "pnpm --filter @piui/desktop build",
+    "tauri": "pnpm --filter @piui/desktop tauri",
+    "contract:test": "pnpm --filter @piui/desktop contract:test",
+    "perf:smoke": "pnpm --filter @piui/desktop perf:smoke",
+    "mutation:test": "node scripts/mutation-index.mjs",
+    "mutation:catalog-state": "node scripts/mutation-catalog-state.mjs",
+    "repo:check": "node scripts/public-repo-audit.mjs"
+  }
+}

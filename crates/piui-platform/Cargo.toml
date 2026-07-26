@@ -1,0 +1,25 @@
+[package]
+name = "piui-platform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+license.workspace = true
+authors.workspace = true
+description = "Platform primitives for PiUI project identity, static system-Pi eligibility, and process containment"
+
+[dependencies]
+sha2.workspace = true
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }

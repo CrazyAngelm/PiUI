@@ -1,0 +1,3 @@
+# Machine-local static inventory reports may contain fingerprint-like metadata.
+*
+!.gitignore

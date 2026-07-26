@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "piui_compatibility": ">=0.0.0 <0.0.0",
+  "artifact": {
+    "pi_version": "REPLACE_AFTER_OFFLINE_VERIFICATION",
+    "distribution": "official-standalone",
+    "os": "windows",
+    "arch": "x86_64",
+    "filename": "pi.exe",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "provenance": {
+    "upstream_release_url": "https://REPLACE.example.invalid/release",
+    "upstream_checksum_url": "https://REPLACE.example.invalid/SHA256SUMS",
+    "upstream_verification": "sha256-verified",
+    "source_revision": "REPLACE_WITH_TAG_OR_COMMIT"
+  },
+  "capability_probe": {
+    "probe_contract": "REPLACE_WITH_VERSIONED_CONTRACT_ID",
+    "probe_fixture_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

@@ -1,0 +1,41 @@
+name: Bug report
+description: Report a reproducible PiUI defect without including private session data.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Do not include credentials, prompts, raw Pi session JSONL, absolute local paths, screenshots of private sessions, or full diagnostics containing user data.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the observed and expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal redacted reproduction
+      description: List the smallest safe steps to reproduce the issue.
+      placeholder: |
+        1. Start PiUI with a synthetic or empty test project.
+        2. …
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Provide only non-sensitive versions and platform details.
+      placeholder: "PiUI version, OS version, Pi version (if relevant), and whether safe mode was active."
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed credentials, private paths, session content, prompts, and personal data.
+          required: true

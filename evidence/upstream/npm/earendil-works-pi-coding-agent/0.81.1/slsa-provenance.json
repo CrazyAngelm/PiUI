@@ -1,0 +1,16 @@
+{
+  "schema": "piui-slsa-provenance-observation",
+  "version": 1,
+  "record_kind": "sanitized-local-summary",
+  "subject": {
+    "package": "@earendil-works/pi-coding-agent",
+    "package_version": "0.81.1",
+    "sha512": "afaa2f02c64e800a9b0bf694eacfbf74f9effec19906e5b264dbe2de95e3a5bb97e70be9dd7bc691023bfd52ef5f6a3d5e99a915a3d4c4a3729b559f90dfcff0"
+  },
+  "source": {
+    "repository": "https://github.com/earendil-works/pi",
+    "tag": "refs/tags/v0.81.1",
+    "commit": "20be4b18d4c57487f8993d2762bace129f0cf7c6",
+    "workflow": ".github/workflows/build-binaries.yml"
+  }
+}

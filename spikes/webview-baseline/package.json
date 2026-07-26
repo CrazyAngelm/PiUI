@@ -1,0 +1,26 @@
+{
+  "name": "piui-webview-baseline",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.23.0",
+  "scripts": {
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "build": "vite build",
+    "cargo:check": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "dev": "vite",
+    "tauri": "tauri",
+    "perf:baseline": "node scripts/measure-baseline.mjs"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "5.1.1",
+    "@tauri-apps/cli": "2.11.4",
+    "svelte": "5.38.7",
+    "svelte-check": "4.3.1",
+    "typescript": "5.9.2",
+    "vite": "6.3.5"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.1"
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "schema": "piui-observed-upstream-evidence",
+  "version": 1,
+  "collection": {
+    "method": "isolated-npm-audit-signatures",
+    "record_kind": "sanitized-local-summary",
+    "upstream_cryptographic_verification": "not-retained",
+    "isolated_graph": true,
+    "ignore_scripts": true,
+    "npm_audit_signatures": "observed-success"
+  },
+  "subject": {
+    "package": "@earendil-works/pi-coding-agent",
+    "package_version": "0.81.1",
+    "integrity": "sha512-r6ovAsZOgAqbC/aU6s+/dPnv/sGZBuWyZNvi3pXjpbuX5wvp3XvGkQI7/VLvX2o9XpmpFaPUxKNym1WfkN/P8A==",
+    "signature_key_id": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+    "repository": "https://github.com/earendil-works/pi",
+    "tag": "refs/tags/v0.81.1",
+    "commit": "20be4b18d4c57487f8993d2762bace129f0cf7c6",
+    "workflow": ".github/workflows/build-binaries.yml"
+  },
+  "attachments": [
+    {
+      "name": "isolated-graph.json",
+      "bytes": 270,
+      "sha256": "61c501371d1faa6cb96d01aad5d16457cc43f0f9335e69c6207c8f1a97356bbe"
+    },
+    {
+      "name": "npm-audit-signatures.json",
+      "bytes": 431,
+      "sha256": "924d5cee3d9683d9b34b51d6c6d8df9463cc449bc7cdcc4836fa53924a87249f"
+    },
+    {
+      "name": "registry-version.json",
+      "bytes": 499,
+      "sha256": "8396c6d31e971fea9d02e14c20f7c93bd8b8f1b59d58b60f88bb10758f46f3eb"
+    },
+    {
+      "name": "slsa-provenance.json",
+      "bytes": 597,
+      "sha256": "72061d915657d9e73e5512260b515b0a1d6438c5684f26c84543eab39ed810a0"
+    }
+  ]
+}

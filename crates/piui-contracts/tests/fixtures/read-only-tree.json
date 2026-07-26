@@ -1,0 +1,20 @@
+{
+  "sessionId": "session-123",
+  "currentLeafId": "entry-12",
+  "nodes": [
+    {
+      "entryId": "entry-1",
+      "roleOrType": "user",
+      "preview": "Investigate the scanner.",
+      "children": ["entry-12"],
+      "isCurrentPath": true
+    },
+    {
+      "entryId": "entry-12",
+      "parentId": "entry-1",
+      "roleOrType": "assistant",
+      "children": [],
+      "isCurrentPath": true
+    }
+  ]
+}

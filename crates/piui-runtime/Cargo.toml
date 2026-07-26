@@ -1,0 +1,23 @@
+[package]
+name = "piui-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+ed25519-dalek.workspace = true
+piui-contracts = { path = "../piui-contracts" }
+piui-platform = { path = "../piui-platform" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[target.'cfg(windows)'.dev-dependencies]
+uuid.workspace = true

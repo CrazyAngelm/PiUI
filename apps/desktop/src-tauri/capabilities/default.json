@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the PiUI main window. Grants the core event API so the UI can listen for streamed runtime events. App-defined commands are allowed by default; no shell, filesystem, or process permissions are exposed to the WebView.",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

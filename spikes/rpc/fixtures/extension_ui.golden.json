@@ -1,0 +1,195 @@
+{
+  "schema_version": 1,
+  "source": "synthetic rpc_ui_fixture.ts; values intentionally omitted",
+  "events": [
+    {
+      "type": "extension_ui_request",
+      "method": "setTitle",
+      "shape": [
+        "id",
+        "method",
+        "title",
+        "type"
+      ],
+      "dialog": false
+    },
+    {
+      "type": "extension_ui_request",
+      "method": "setStatus",
+      "shape": [
+        "id",
+        "method",
+        "statusKey",
+        "statusText",
+        "type"
+      ],
+      "dialog": false
+    },
+    {
+      "type": "extension_ui_request",
+      "method": "setWidget",
+      "shape": [
+        "id",
+        "method",
+        "type",
+        "widgetKey",
+        "widgetLines"
+      ],
+      "dialog": false
+    },
+    {
+      "type": "extension_ui_request",
+      "method": "notify",
+      "shape": [
+        "id",
+        "message",
+        "method",
+        "notifyType",
+        "type"
+      ],
+      "dialog": false
+    },
+    {
+      "type": "extension_ui_request",
+      "method": "setStatus",
+      "shape": [
+        "id",
+        "method",
+        "statusKey",
+        "statusText",
+        "type"
+      ],
+      "dialog": false
+    },
+    {
+      "type": "extension_ui_request",
+      "method": "setWidget",
+      "shape": [
+        "id",
+        "method",
+        "type",
+        "widgetKey",
+        "widgetLines"
+      ],
+      "dialog": false
+    },
+    {
+      "type": "extension_ui_request",
+      "method": "setTitle",
+      "shape": [
+        "id",
+        "method",
+        "title",
+        "type"
+      ],
+      "dialog": false
+    },
+    {
+      "type": "extension_ui_request",
+      "method": "set_editor_text",
+      "shape": [
+        "id",
+        "method",
+        "text",
+        "type"
+      ],
+      "dialog": false
+    },
+    {
+      "type": "extension_ui_request",
+      "method": "select",
+      "shape": [
+        "id",
+        "method",
+        "options",
+        "title",
+        "type"
+      ],
+      "dialog": true
+    },
+    {
+      "type": "extension_ui_request",
+      "method": "confirm",
+      "shape": [
+        "id",
+        "message",
+        "method",
+        "title",
+        "type"
+      ],
+      "dialog": true
+    },
+    {
+      "type": "extension_ui_request",
+      "method": "input",
+      "shape": [
+        "id",
+        "method",
+        "placeholder",
+        "title",
+        "type"
+      ],
+      "dialog": true
+    },
+    {
+      "type": "extension_ui_request",
+      "method": "editor",
+      "shape": [
+        "id",
+        "method",
+        "prefill",
+        "title",
+        "type"
+      ],
+      "dialog": true
+    },
+    {
+      "type": "extension_ui_request",
+      "method": "notify",
+      "shape": [
+        "id",
+        "message",
+        "method",
+        "notifyType",
+        "type"
+      ],
+      "dialog": false
+    },
+    {
+      "type": "extension_ui_request",
+      "method": "setStatus",
+      "shape": [
+        "id",
+        "method",
+        "statusKey",
+        "type"
+      ],
+      "dialog": false
+    },
+    {
+      "type": "extension_ui_request",
+      "method": "setWidget",
+      "shape": [
+        "id",
+        "method",
+        "type",
+        "widgetKey"
+      ],
+      "dialog": false
+    }
+  ],
+  "cancellation_resume": {
+    "cancelled_dialogs": [
+      "select",
+      "confirm",
+      "input",
+      "editor"
+    ],
+    "completion_notify_seen": true,
+    "resumed_after_cancellation": true
+  },
+  "timeout_behavior": {
+    "status": "inconclusive",
+    "reason": "Fixture sends no timeout-bearing dialog request; timeout auto-resolution was not exercised."
+  }
+}

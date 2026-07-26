@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "PiUI WebView Baseline",
+  "version": "0.0.1",
+  "identifier": "dev.piui.webview-baseline",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "PiUI WebView Baseline",
+        "width": 1120,
+        "height": 760,
+        "minWidth": 720,
+        "minHeight": 520,
+        "resizable": true,
+        "devtools": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; base-uri 'none'; object-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' asset:; font-src 'self'; connect-src 'self'; frame-src 'none'; frame-ancestors 'none'; form-action 'none'"
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

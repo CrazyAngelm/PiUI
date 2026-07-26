@@ -1,0 +1,10 @@
+{
+  "schema": "piui-isolated-npm-graph-observation",
+  "version": 1,
+  "record_kind": "sanitized-local-summary",
+  "package": "@earendil-works/pi-coding-agent",
+  "package_version": "0.81.1",
+  "lockfile_version": 3,
+  "isolated_graph": true,
+  "ignore_scripts": true
+}

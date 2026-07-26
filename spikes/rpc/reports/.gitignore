@@ -1,0 +1,3 @@
+# Keep the current sanitized baseline only; ignore ad-hoc local verification output.
+*.json
+!latest.json

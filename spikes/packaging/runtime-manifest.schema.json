@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://piui.local/spikes/packaging/runtime-manifest.schema.json",
+  "title": "PiUI managed Pi runtime manifest (SPIKE-07)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "piui_compatibility", "artifact", "provenance", "capability_probe"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "piui_compatibility": {"type": "string", "minLength": 1},
+    "artifact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pi_version", "distribution", "os", "arch", "filename", "sha256"],
+      "properties": {
+        "pi_version": {"type": "string", "minLength": 1},
+        "distribution": {"const": "official-standalone"},
+        "os": {"enum": ["windows", "linux", "macos"]},
+        "arch": {"enum": ["x86_64", "aarch64"]},
+        "filename": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "provenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["upstream_release_url", "upstream_checksum_url", "upstream_verification"],
+      "properties": {
+        "upstream_release_url": {"type": "string", "format": "uri", "pattern": "^https://"},
+        "upstream_checksum_url": {"type": "string", "format": "uri", "pattern": "^https://"},
+        "upstream_verification": {"const": "sha256-verified"},
+        "source_revision": {"type": "string", "minLength": 1}
+      }
+    },
+    "capability_probe": {
+      "type": "object", "additionalProperties": false,
+      "required": ["probe_contract", "probe_fixture_sha256"],
+      "properties": {
+        "probe_contract": {"type": "string", "minLength": 1},
+        "probe_fixture_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    }
+  }
+}

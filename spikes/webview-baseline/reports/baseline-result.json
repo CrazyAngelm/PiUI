@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "spike": "SPIKE-08",
+  "generatedAt": "2026-07-23T17:11:47.527Z",
+  "measurementStatus": "inconclusive",
+  "environment": {
+    "os": "Windows_NT 10.0.26200",
+    "platform": "win32",
+    "architecture": "x64",
+    "systemMemoryBytes": 33979490304,
+    "node": "v22.17.0",
+    "webviewVersion": null,
+    "hardwareProfile": null,
+    "build": "not verified as packaged release"
+  },
+  "metrics": {
+    "coldStartupMs": {
+      "status": "inconclusive",
+      "samples": [],
+      "reason": "Requires 20 packaged-release runs on a reference machine."
+    },
+    "warmStartupMs": {
+      "status": "inconclusive",
+      "samples": [],
+      "reason": "Requires 20 packaged-release runs on a reference machine."
+    },
+    "idleRssMiB": {
+      "status": "inconclusive",
+      "samples": [],
+      "reason": "Requires a visible window, 60-second idle sampling, and process-tree attribution."
+    },
+    "idleCpuPercent": {
+      "status": "inconclusive",
+      "samples": [],
+      "reason": "Requires a visible window and 60-second physical-machine sampling."
+    },
+    "longTimelineScroll": {
+      "status": "inconclusive",
+      "fixture": "?fixture=10k",
+      "reason": "Requires physical GUI scroll/frame-time capture; the fixture only verifies virtualized mounting."
+    },
+    "iframeWorkerIsolation": {
+      "status": "not-run",
+      "reason": "This intentionally plugin-free baseline has no iframe or worker isolation surface."
+    },
+    "platformRendering": {
+      "status": "inconclusive",
+      "reason": "Requires Windows WebView2 and Linux WebKitGTK reference-machine screenshots and interaction checks."
+    }
+  },
+  "budgets": {
+    "startupWarmP50Ms": 800,
+    "startupWarmP95Ms": 1500,
+    "windowsMacosRssHardMiB": 160,
+    "linuxRssHardMiB": 190,
+    "longSessionScrollP95Ms": 20
+  },
+  "conclusion": "No physical GUI, RSS, CPU, startup, or 10k-scroll budget is passed by this generated report."
+}

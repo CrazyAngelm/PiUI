@@ -1,0 +1,2 @@
+{"type":"session","version":3,"id":"6d68fbb3-e0c2-49b8-aeef-a506d04a7099","timestamp":"2025-01-01T00:00:00.000Z","cwd":"<synthetic-cwd>"}
+{"type":"message","id":"e2e49244-ae97-4de0-9026-8e63594d4708","parentId":null,"timestamp":"2025-01-01T00:00:01.000Z","message":{"role":"user","content":"PiUI synthetic fixture; no user data."}}

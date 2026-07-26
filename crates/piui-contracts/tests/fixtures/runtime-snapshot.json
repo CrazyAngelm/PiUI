@@ -1,0 +1,43 @@
+{
+  "runtimeId": "runtime-1",
+  "projectId": "project-alpha",
+  "sessionId": "session-123",
+  "state": "ready",
+  "revision": 42,
+  "capabilities": {
+    "rpc": true,
+    "images": true,
+    "models.list": true,
+    "models.switch": true,
+    "thinking.set": false,
+    "queue.setMode": true,
+    "session.switch": true,
+    "session.new": true,
+    "session.rename": false,
+    "session.export": false,
+    "session.fork": false,
+    "session.clone": false,
+    "session.tree.read": true,
+    "session.tree.navigate": false,
+    "session.shutdown": true,
+    "auth.headless": false,
+    "ui.standardDialogs": true,
+    "ui.customTui": false,
+    "future.capability": true
+  },
+  "currentModel": { "provider": "openai", "id": "gpt-5" },
+  "availableModels": [
+    {
+      "provider": "openai",
+      "id": "gpt-5",
+      "label": "GPT-5",
+      "supportsImages": true,
+      "contextWindow": 128000,
+      "thinkingLevels": ["low", "high"]
+    }
+  ],
+  "thinkingLevels": ["low", "high"],
+  "queueMode": "followUp",
+  "queuedCount": 0,
+  "blocks": []
+}

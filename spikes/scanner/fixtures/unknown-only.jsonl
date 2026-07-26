@@ -1,0 +1,2 @@
+{"type":"future_session_header","version":99,"id":"future-session","prompt":"UNKNOWN HEADER PROMPT MUST NOT APPEAR","name":"Future format"}
+{"type":"future_entry","id":"future-entry","parentId":"future-session","content":"UNKNOWN ENTRY CONTENT MUST NOT APPEAR","opaque":{"future":true}}

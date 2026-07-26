@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose a focused improvement to PiUI.
+title: "feature: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Explain the user problem, not just a preferred implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful outcome, including failure behavior where relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: extension
+    attributes:
+      label: Extension-first check
+      description: Could this be delivered as a PiUI/Pi extension contribution instead of a core feature? Explain why or why not.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: This request contains no credentials, private session content, or personal paths.
+          required: true

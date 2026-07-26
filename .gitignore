@@ -1,0 +1,54 @@
+# JavaScript and frontend build output
+node_modules/
+.pnpm-store/
+dist/
+coverage/
+playwright-report/
+test-results/
+.vite/
+
+# Rust and Tauri build output
+/target/
+**/target/
+**/src-tauri/gen/
+*.dSYM/
+
+# Local PiUI/Pi data, session transcripts, diagnostics, and agent state
+.piui/
+.pi/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.db-shm
+*.db-wal
+*.pid
+*.log
+*.trace
+
+# Credentials and machine-local configuration
+.env
+.env.*
+!.env.example
+.npmrc
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_rsa.pub
+
+# Mutation/fuzz/test artifacts and Python bytecode
+mutants.out*/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+spikes/**/reports/current-*.json
+spikes/packaging/reports/current-machine-report.json
+
+# Editor/OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+NUL

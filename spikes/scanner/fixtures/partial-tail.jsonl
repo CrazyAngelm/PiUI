@@ -1,0 +1,3 @@
+{"type":"session","version":3,"id":"sess-partial","name":"Partial fixture"}
+{"type":"message","id":"complete","message":{"role":"user","content":"Complete Unicode café 👾"}}
+{"type":"message","id":"partial","message":{"role":"assistant","content":"This incomplete entry is tail only"}

@@ -1,0 +1,7 @@
+{"type":"session","version":3,"id":"sess-known","name":"Initial title","cwd":"/synthetic/known-types"}
+{"type":"session_info","id":"info-1","parentId":null,"timestamp":"2026-02-02T10:00:00Z","name":"Updated title"}
+{"type":"message","id":"user-1","parentId":"info-1","timestamp":"2026-02-02T10:00:01Z","message":{"role":"user","content":"Synthetic known-type coverage"}}
+{"type":"thinking_level_change","id":"thinking-1","parentId":"user-1","timestamp":"2026-02-02T10:00:02Z","thinkingLevel":"high"}
+{"type":"model_change","id":"model-1","parentId":"thinking-1","timestamp":"2026-02-02T10:00:03Z","modelId":"synthetic/model"}
+{"type":"custom_message","id":"custom-message-1","parentId":"model-1","timestamp":"2026-02-02T10:00:04Z","message":{"role":"assistant","content":"Custom message entry"}}
+{"type":"label","id":"label-1","parentId":"custom-message-1","timestamp":"2026-02-02T10:00:05Z","label":"Synthetic branch label"}

@@ -1,0 +1,578 @@
+{
+  "schema_version": 1,
+  "harness": "piui-phase0-rpc-python-3.13",
+  "status_values": [
+    "pass",
+    "fail",
+    "inconclusive"
+  ],
+  "isolation": {
+    "synthetic_sessions_only": true,
+    "pi_coding_agent_dir": "temporary",
+    "session_dir": "temporary",
+    "cwd": "temporary",
+    "offline": true,
+    "project_resources_disabled_by_flags": true,
+    "credentials_inherited": false
+  },
+  "results": {
+    "SPIKE-01": {
+      "status": "pass",
+      "evidence": {
+        "explicit_existing_launch": {
+          "files_before": [
+            "sessions/concurrent synthetic source.jsonl",
+            "sessions/crash target ünicode.jsonl",
+            "sessions/existing session ünicode.jsonl",
+            "sessions/new-session source synthetic.jsonl",
+            "sessions/switch target 日本語.jsonl"
+          ],
+          "files_after": [
+            "sessions/concurrent synthetic source.jsonl",
+            "sessions/crash target ünicode.jsonl",
+            "sessions/existing session ünicode.jsonl",
+            "sessions/new-session source synthetic.jsonl",
+            "sessions/switch target 日本語.jsonl"
+          ],
+          "expected_session_id": "dfb46523-4771-4083-b446-9f56a27dccae",
+          "observed_session_id": "dfb46523-4771-4083-b446-9f56a27dccae",
+          "expected_entry_id": "620e1814-6859-45cb-9dfe-0980b9344d07",
+          "identity_matches": true,
+          "existing_entry_loaded": true
+        },
+        "expected_new_session": {
+          "files_before": [
+            "sessions/concurrent synthetic source.jsonl",
+            "sessions/crash target ünicode.jsonl",
+            "sessions/existing session ünicode.jsonl",
+            "sessions/new-session source synthetic.jsonl",
+            "sessions/switch target 日本語.jsonl"
+          ],
+          "files_after": [
+            "sessions/2026-07-23T19-00-37-146Z_05ff8ffe-f3b7-4694-a346-d9ec25e0f73c.jsonl",
+            "sessions/concurrent synthetic source.jsonl",
+            "sessions/crash target ünicode.jsonl",
+            "sessions/existing session ünicode.jsonl",
+            "sessions/new-session source synthetic.jsonl",
+            "sessions/switch target 日本語.jsonl"
+          ],
+          "creation_method": "--fork <synthetic source> --session-id <generated id>",
+          "source_session_id": "50472d81-e69e-4f84-9bf0-2b1608f2d862",
+          "expected_session_id": "05ff8ffe-f3b7-4694-a346-d9ec25e0f73c",
+          "observed_session_id": "05ff8ffe-f3b7-4694-a346-d9ec25e0f73c",
+          "identity_matches": true,
+          "extension_command_response_success": true,
+          "runtime_exited": true,
+          "exactly_one_expected_file_created": true,
+          "new_files": [
+            "sessions/2026-07-23T19-00-37-146Z_05ff8ffe-f3b7-4694-a346-d9ec25e0f73c.jsonl"
+          ],
+          "in_memory_synthetic_custom_entry": true,
+          "valid_synthetic_custom_entry": true
+        },
+        "switch_to_existing": {
+          "files_before": [
+            "sessions/2026-07-23T19-00-37-146Z_05ff8ffe-f3b7-4694-a346-d9ec25e0f73c.jsonl",
+            "sessions/concurrent synthetic source.jsonl",
+            "sessions/crash target ünicode.jsonl",
+            "sessions/existing session ünicode.jsonl",
+            "sessions/new-session source synthetic.jsonl",
+            "sessions/switch target 日本語.jsonl"
+          ],
+          "files_after": [
+            "sessions/2026-07-23T19-00-37-146Z_05ff8ffe-f3b7-4694-a346-d9ec25e0f73c.jsonl",
+            "sessions/concurrent synthetic source.jsonl",
+            "sessions/crash target ünicode.jsonl",
+            "sessions/existing session ünicode.jsonl",
+            "sessions/new-session source synthetic.jsonl",
+            "sessions/switch target 日本語.jsonl"
+          ],
+          "expected_session_id": "08fdcb12-a215-4fae-9ad3-055bea6a4966",
+          "observed_session_id": "08fdcb12-a215-4fae-9ad3-055bea6a4966",
+          "expected_entry_id": "b4a6406b-682d-43b8-a378-ce4e44251a37",
+          "identity_matches": true,
+          "existing_entry_loaded": true,
+          "no_ghost_file": true
+        },
+        "forced_crash": {
+          "files_before": [
+            "sessions/2026-07-23T19-00-37-146Z_05ff8ffe-f3b7-4694-a346-d9ec25e0f73c.jsonl",
+            "sessions/concurrent synthetic source.jsonl",
+            "sessions/crash target ünicode.jsonl",
+            "sessions/existing session ünicode.jsonl",
+            "sessions/new-session source synthetic.jsonl",
+            "sessions/switch target 日本語.jsonl"
+          ],
+          "files_after": [
+            "sessions/2026-07-23T19-00-37-146Z_05ff8ffe-f3b7-4694-a346-d9ec25e0f73c.jsonl",
+            "sessions/concurrent synthetic source.jsonl",
+            "sessions/crash target ünicode.jsonl",
+            "sessions/existing session ünicode.jsonl",
+            "sessions/new-session source synthetic.jsonl",
+            "sessions/switch target 日本語.jsonl"
+          ],
+          "expected_session_id": "84721ea6-6d76-4393-b0c5-eaf1f79e10e5",
+          "observed_session_id": "84721ea6-6d76-4393-b0c5-eaf1f79e10e5",
+          "expected_entry_id": "2cb264ff-34e7-4fa1-aa25-7b70a9f6192b",
+          "identity_matches": true,
+          "existing_entry_loaded": true,
+          "runtime_exited": true,
+          "no_ghost_file": true
+        },
+        "state": {
+          "id": "probe-02845019-50d9-44cf-950e-cfbf16132bfa",
+          "type": "response",
+          "command": "get_state",
+          "success": true,
+          "data": {
+            "model": {
+              "id": "unknown",
+              "name": "unknown",
+              "api": "unknown",
+              "provider": "unknown",
+              "baseUrl": "",
+              "reasoning": false,
+              "input": [],
+              "cost": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0
+              },
+              "contextWindow": 0,
+              "maxTokens": "<redacted>"
+            },
+            "thinkingLevel": "off",
+            "isStreaming": false,
+            "isCompacting": false,
+            "steeringMode": "one-at-a-time",
+            "followUpMode": "one-at-a-time",
+            "sessionFile": "<redacted>",
+            "sessionId": "dfb46523-4771-4083-b446-9f56a27dccae",
+            "autoCompactionEnabled": true,
+            "messageCount": 1,
+            "pendingMessageCount": 0
+          }
+        }
+      }
+    },
+    "SPIKE-02": {
+      "status": "fail",
+      "evidence": {
+        "idle_eof_exited_within_seconds": 3,
+        "direct_bash_child": {
+          "command_dispatched": true,
+          "child_ready": true,
+          "pi_exited_after_stdin_close": true,
+          "child_alive_after_pi_exit": true,
+          "cleanup_invoked_after_failure": true
+        },
+        "limitations": [
+          "Current-platform direct-bash result only; it does not establish cross-platform behavior.",
+          "This does not cover model-initiated tools, arbitrary descendants, or detached processes."
+        ]
+      }
+    },
+    "SPIKE-03": {
+      "status": "pass",
+      "evidence": {
+        "get_tree": {
+          "id": "probe-43ab4ad3-5723-4dfd-a5a4-6abd8db353f4",
+          "type": "response",
+          "command": "get_tree",
+          "success": true,
+          "data": {
+            "tree": [
+              {
+                "entry": {
+                  "type": "message",
+                  "id": "620e1814-6859-45cb-9dfe-0980b9344d07",
+                  "parentId": null,
+                  "timestamp": "2025-01-01T00:00:01.000Z",
+                  "message": "<redacted>"
+                },
+                "children": [
+                  {
+                    "entry": {
+                      "type": "thinking_level_change",
+                      "id": "32b4de87",
+                      "parentId": "620e1814-6859-45cb-9dfe-0980b9344d07",
+                      "timestamp": "2026-07-23T19:00:35.348Z",
+                      "thinkingLevel": "off"
+                    },
+                    "children": []
+                  }
+                ]
+              }
+            ],
+            "leafId": "32b4de87"
+          }
+        },
+        "direct_navigate_rpc": "not documented by installed RPC schema",
+        "bridge_feasibility": "SDK exposes navigateTree; a narrow extension/bridge command is feasible but unverified here."
+      }
+    },
+    "SPIKE-10": {
+      "status": "pass",
+      "evidence": {
+        "version": "0.81.1",
+        "probes": {
+          "get_state": {
+            "id": "probe-02845019-50d9-44cf-950e-cfbf16132bfa",
+            "type": "response",
+            "command": "get_state",
+            "success": true,
+            "data": {
+              "model": {
+                "id": "unknown",
+                "name": "unknown",
+                "api": "unknown",
+                "provider": "unknown",
+                "baseUrl": "",
+                "reasoning": false,
+                "input": [],
+                "cost": {
+                  "input": 0,
+                  "output": 0,
+                  "cacheRead": 0,
+                  "cacheWrite": 0
+                },
+                "contextWindow": 0,
+                "maxTokens": "<redacted>"
+              },
+              "thinkingLevel": "off",
+              "isStreaming": false,
+              "isCompacting": false,
+              "steeringMode": "one-at-a-time",
+              "followUpMode": "one-at-a-time",
+              "sessionFile": "<redacted>",
+              "sessionId": "dfb46523-4771-4083-b446-9f56a27dccae",
+              "autoCompactionEnabled": true,
+              "messageCount": 1,
+              "pendingMessageCount": 0
+            }
+          },
+          "get_tree": {
+            "id": "probe-43ab4ad3-5723-4dfd-a5a4-6abd8db353f4",
+            "type": "response",
+            "command": "get_tree",
+            "success": true,
+            "data": {
+              "tree": [
+                {
+                  "entry": {
+                    "type": "message",
+                    "id": "620e1814-6859-45cb-9dfe-0980b9344d07",
+                    "parentId": null,
+                    "timestamp": "2025-01-01T00:00:01.000Z",
+                    "message": "<redacted>"
+                  },
+                  "children": [
+                    {
+                      "entry": {
+                        "type": "thinking_level_change",
+                        "id": "32b4de87",
+                        "parentId": "620e1814-6859-45cb-9dfe-0980b9344d07",
+                        "timestamp": "2026-07-23T19:00:35.348Z",
+                        "thinkingLevel": "off"
+                      },
+                      "children": []
+                    }
+                  ]
+                }
+              ],
+              "leafId": "32b4de87"
+            }
+          },
+          "get_commands": {
+            "id": "probe-e6fba494-3cae-4767-b950-6e9bcd220b26",
+            "type": "response",
+            "command": "get_commands",
+            "success": true,
+            "data": {
+              "commands": [
+                {
+                  "name": "llama",
+                  "description": "Manage llama.cpp router models",
+                  "source": "extension",
+                  "sourceInfo": {
+                    "path": "<redacted>",
+                    "source": "inline",
+                    "scope": "temporary",
+                    "origin": "top-level"
+                  }
+                }
+              ]
+            }
+          },
+          "get_available_models": {
+            "id": "probe-96f2bac9-c5f5-4b2a-87a2-052005a494f4",
+            "type": "response",
+            "command": "get_available_models",
+            "success": true,
+            "data": {
+              "models": []
+            }
+          }
+        },
+        "all_required_probes_succeeded": true,
+        "unknown_fields_policy": "Preserve unknown objects as opaque runtime data."
+      }
+    },
+    "SPIKE-05": {
+      "status": "pass",
+      "evidence": {
+        "golden_fixture": "fixtures/extension_ui.golden.json",
+        "golden_matches": true,
+        "golden_event_corpus": [
+          {
+            "type": "extension_ui_request",
+            "method": "setTitle",
+            "shape": [
+              "id",
+              "method",
+              "title",
+              "type"
+            ],
+            "dialog": false
+          },
+          {
+            "type": "extension_ui_request",
+            "method": "setStatus",
+            "shape": [
+              "id",
+              "method",
+              "statusKey",
+              "statusText",
+              "type"
+            ],
+            "dialog": false
+          },
+          {
+            "type": "extension_ui_request",
+            "method": "setWidget",
+            "shape": [
+              "id",
+              "method",
+              "type",
+              "widgetKey",
+              "widgetLines"
+            ],
+            "dialog": false
+          },
+          {
+            "type": "extension_ui_request",
+            "method": "notify",
+            "shape": [
+              "id",
+              "message",
+              "method",
+              "notifyType",
+              "type"
+            ],
+            "dialog": false
+          },
+          {
+            "type": "extension_ui_request",
+            "method": "setStatus",
+            "shape": [
+              "id",
+              "method",
+              "statusKey",
+              "statusText",
+              "type"
+            ],
+            "dialog": false
+          },
+          {
+            "type": "extension_ui_request",
+            "method": "setWidget",
+            "shape": [
+              "id",
+              "method",
+              "type",
+              "widgetKey",
+              "widgetLines"
+            ],
+            "dialog": false
+          },
+          {
+            "type": "extension_ui_request",
+            "method": "setTitle",
+            "shape": [
+              "id",
+              "method",
+              "title",
+              "type"
+            ],
+            "dialog": false
+          },
+          {
+            "type": "extension_ui_request",
+            "method": "set_editor_text",
+            "shape": [
+              "id",
+              "method",
+              "text",
+              "type"
+            ],
+            "dialog": false
+          },
+          {
+            "type": "extension_ui_request",
+            "method": "select",
+            "shape": [
+              "id",
+              "method",
+              "options",
+              "title",
+              "type"
+            ],
+            "dialog": true
+          },
+          {
+            "type": "extension_ui_request",
+            "method": "confirm",
+            "shape": [
+              "id",
+              "message",
+              "method",
+              "title",
+              "type"
+            ],
+            "dialog": true
+          },
+          {
+            "type": "extension_ui_request",
+            "method": "input",
+            "shape": [
+              "id",
+              "method",
+              "placeholder",
+              "title",
+              "type"
+            ],
+            "dialog": true
+          },
+          {
+            "type": "extension_ui_request",
+            "method": "editor",
+            "shape": [
+              "id",
+              "method",
+              "prefill",
+              "title",
+              "type"
+            ],
+            "dialog": true
+          },
+          {
+            "type": "extension_ui_request",
+            "method": "notify",
+            "shape": [
+              "id",
+              "message",
+              "method",
+              "notifyType",
+              "type"
+            ],
+            "dialog": false
+          },
+          {
+            "type": "extension_ui_request",
+            "method": "setStatus",
+            "shape": [
+              "id",
+              "method",
+              "statusKey",
+              "type"
+            ],
+            "dialog": false
+          },
+          {
+            "type": "extension_ui_request",
+            "method": "setWidget",
+            "shape": [
+              "id",
+              "method",
+              "type",
+              "widgetKey"
+            ],
+            "dialog": false
+          }
+        ],
+        "requested_methods": [
+          "confirm",
+          "editor",
+          "input",
+          "notify",
+          "select",
+          "setStatus",
+          "setTitle",
+          "setWidget",
+          "set_editor_text"
+        ],
+        "cancellation_resume": {
+          "cancelled_dialogs": [
+            "select",
+            "confirm",
+            "input",
+            "editor"
+          ],
+          "completion_notify_seen": true,
+          "resumed_after_cancellation": true
+        },
+        "timeout_behavior": {
+          "status": "inconclusive",
+          "reason": "Fixture sends no timeout-bearing dialog request; timeout auto-resolution was not exercised."
+        },
+        "unsupported_tui_apis": [
+          "custom",
+          "header/footer",
+          "editor component",
+          "themes"
+        ]
+      }
+    },
+    "SPIKE-06": {
+      "status": "pass",
+      "evidence": {
+        "session_identity_expected": "1abc058d-a869-4c24-9dbf-49b68e1662f0",
+        "startup_dispatch": "thread barrier releases both harness-owned session_start appendEntry actions",
+        "writer_command_responses": {
+          "writer-a": {
+            "get_state": true,
+            "get_tree": true
+          },
+          "writer-b": {
+            "get_state": true,
+            "get_tree": true
+          }
+        },
+        "writer_identity_matches": {
+          "writer-a": true,
+          "writer-b": true
+        },
+        "writer_runtime_exits": {
+          "writer-a": true,
+          "writer-b": true
+        },
+        "spawn_errors": [],
+        "jsonl_lf_parseable": true,
+        "persisted_unique_tags": [
+          "writer-a",
+          "writer-b"
+        ],
+        "both_unique_entries_persisted_once": true,
+        "limitation": "This is a bounded custom-entry append race only; it does not establish multi-turn, tool, branch, merge, or general multi-writer safety."
+      }
+    },
+    "SPIKE-04": {
+      "status": "inconclusive",
+      "evidence": {
+        "headless_auth_rpc": "No documented auth status/login RPC probe in installed schema.",
+        "safe_test_boundary": "Harness deliberately has no credentials and does not launch interactive login."
+      }
+    }
+  }
+}

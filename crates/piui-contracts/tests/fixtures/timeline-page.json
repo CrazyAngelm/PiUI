@@ -1,0 +1,20 @@
+{
+  "sessionId": "session-123",
+  "blocks": [
+    {
+      "id": "block-1",
+      "kind": "assistant",
+      "status": "complete",
+      "createdAt": "2026-07-23T10:17:00Z",
+      "source": {
+        "sessionId": "session-123",
+        "entryId": "entry-12",
+        "type": "message"
+      },
+      "content": { "text": "A safe, normalized response." }
+    }
+  ],
+  "fileRevision": "sha256:session-fingerprint",
+  "olderCursor": "cursor-before-12",
+  "staleCursor": false
+}

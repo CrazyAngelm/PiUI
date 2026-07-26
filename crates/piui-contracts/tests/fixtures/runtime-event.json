@@ -1,0 +1,12 @@
+{
+  "type": "runtime.state",
+  "payload": {
+    "runtimeId": "runtime-1",
+    "projectId": "project-alpha",
+    "sessionId": "session-123",
+    "state": "running",
+    "previousState": "ready",
+    "reasonCode": "TURN_STARTED",
+    "safeSummary": "Generating a response."
+  }
+}

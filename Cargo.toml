@@ -1,0 +1,36 @@
+[workspace]
+members = [
+  "apps/desktop/src-tauri",
+  "crates/piui-contracts",
+  "crates/piui-extensions",
+  "crates/piui-index",
+  "crates/piui-platform",
+  "crates/piui-runtime",
+]
+exclude = ["spikes/webview-baseline/src-tauri"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+authors = ["PiUI contributors"]
+description = "A minimal desktop shell for Pi sessions"
+keywords = ["pi", "tauri", "desktop", "agent"]
+categories = ["development-tools", "gui"]
+
+[workspace.dependencies]
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "serde", "std"] }
+ed25519-dalek = { version = "2.1.1", default-features = false, features = ["std"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.143"
+sha2 = "0.10.9"
+thiserror = "2.0.16"
+tokio = { version = "1.47.1", features = ["io-util", "macros", "process", "rt", "sync", "time"] }
+uuid = { version = "1.18.1", features = ["v4", "serde"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"

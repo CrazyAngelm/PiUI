@@ -1,0 +1,8 @@
+{"type":"session","version":3,"id":"sess-corrupt","name":"Corrupt tree fixture"}
+{"type":"message","id":"root","message":{"role":"user","content":"Synthetic root"}}
+{"type":"message","id":"orphan","parentId":"not-present","message":{"role":"assistant","content":"Synthetic orphan"}}
+{"type":"message","id":"cycle-a","parentId":"cycle-b","message":{"role":"assistant","content":"Cycle A"}}
+{"type":"message","id":"cycle-b","parentId":"cycle-a","message":{"role":"assistant","content":"Cycle B"}}
+{"type":"future-widget","id":"future-1","parentId":"root","prompt":"MUST NOT APPEAR IN UNKNOWN SUMMARY","opaque":{"future":true}}
+{"type":"message","id":"after-bad","parentId":"root","message":{"role":"assistant","content":"Still scanned after malformed line"}}
+{"type":"message","id":"broken","message":

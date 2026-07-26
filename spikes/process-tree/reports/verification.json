@@ -1,0 +1,70 @@
+{
+  "schema_version": 2,
+  "harness": "piui-spike-02-process-tree-python-3.13",
+  "capture": {
+    "run_id": "e78ec063-7ac5-46c0-9135-ac191832dbd9",
+    "timestamp_utc": "2026-07-23T17:23:43Z",
+    "harness": {
+      "id": "piui-spike-02-process-tree-python-3.13",
+      "version": "2",
+      "source_sha256": "9f7af42770bb03da14952a9150a637f10c1a4ca2794dff279a2c612beb64e56c"
+    },
+    "runtime": {
+      "launcher_kind": "npm-cmd-shim",
+      "launcher_sha256": "7f4c35fbbbe908301c12e06b9e6b7017c6b9cbcc24c34e26615a08f9f60fa53e",
+      "pi_version": "0.81.1"
+    }
+  },
+  "platform": "windows",
+  "status": "pass",
+  "timeouts_seconds": {
+    "runtime_version_probe": 5.0,
+    "child_ready": 8.0,
+    "eof_grace": 2.0,
+    "post_containment_close": 5.0,
+    "unix_term_grace": 2.0,
+    "unix_kill_grace": 2.0
+  },
+  "isolation": {
+    "temporary_config_session_and_cwd": true,
+    "no_session": true,
+    "offline": true,
+    "project_resources_disabled": true,
+    "credentials_inherited": false,
+    "provider_prompt_sent": false,
+    "only_fixture_direct_bash_command": true
+  },
+  "evidence": {
+    "job_created": true,
+    "kill_on_job_close_enabled": true,
+    "runtime_created_suspended": true,
+    "runtime_assigned_before_resume": true,
+    "runtime_resumed_after_assignment": true,
+    "direct_bash_rpc_sent": true,
+    "child_ready": true,
+    "fixture_child_pid_observed": true,
+    "job_member_snapshot_available": true,
+    "fixture_child_in_job_before_eof": true,
+    "graceful_eof_sent": true,
+    "runtime_exited_within_eof_grace": true,
+    "eof_timeout_escalated_to_job_close": false,
+    "owned_member_count_before_job_close": 5,
+    "fixture_child_in_job_before_close": true,
+    "job_close_called": true,
+    "job_closed": true,
+    "runtime_dead_after_job_close": true,
+    "known_child_dead_after_job_close": true,
+    "alive_owned_member_count_after_job_close": 0,
+    "lf_protocol_error": false,
+    "sandbox_removed": true,
+    "emergency_fixture_cleanup_used": false
+  },
+  "limitations": [
+    "The proof covers the live Job membership snapshot and the bundled fixture PID only.",
+    "A process that deliberately breaks away from the Job before closure is outside this host containment boundary.",
+    "This is not an OS sandbox; Pi tools still run with the invoking user's permissions.",
+    "The Unix process-group branch is implemented separately and was not run by this Windows report."
+  ],
+  "containment_backend": "windows-job-object-kill-on-close",
+  "unix_process_group": "not_run_on_windows"
+}

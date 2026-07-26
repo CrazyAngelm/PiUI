@@ -1,0 +1,27 @@
+[package]
+name = "piui-index"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+piui-contracts = { path = "../piui-contracts" }
+piui-platform = { path = "../piui-platform" }
+rusqlite = { version = "0.32.1", features = ["bundled", "functions"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.177"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+] }

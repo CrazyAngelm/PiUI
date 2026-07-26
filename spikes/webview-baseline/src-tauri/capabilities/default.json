@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Baseline core window: no shell, filesystem, process, network, or plugin permissions.",
+  "windows": ["main"],
+  "permissions": []
+}

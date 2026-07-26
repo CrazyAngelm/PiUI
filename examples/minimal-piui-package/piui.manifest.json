@@ -1,0 +1,107 @@
+{
+  "$schema": "https://schemas.piui.dev/extension-manifest/v1.json",
+  "schemaVersion": 1,
+  "id": "example.project-health",
+  "name": "Project Health",
+  "description": "Demonstrates a backend Pi command and declarative PiUI contributions in one package.",
+  "version": "1.0.0",
+  "publisher": "Example",
+  "license": "MIT",
+  "engines": {
+    "piui": ">=1.0.0 <2",
+    "pi": ">=0.0.0",
+    "hostApi": ">=1.0.0 <2"
+  },
+  "entrypoints": {
+    "worker": "./piui/worker.js"
+  },
+  "permissions": [
+    "session.read",
+    "project.read",
+    "storage"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "example.project-health.refresh",
+        "title": "Refresh project health",
+        "category": "Project Health",
+        "description": "Runs the backend Pi command and appends a structured session entry.",
+        "icon": "pulse",
+        "handler": "pi-command:project-health-refresh",
+        "when": "project.trusted && runtime.ready"
+      },
+      {
+        "id": "example.project-health.openPanel",
+        "title": "Open project health panel",
+        "category": "Project Health",
+        "icon": "panel-right",
+        "handler": "worker:openPanel",
+        "when": "project.trusted"
+      }
+    ],
+    "composerActions": [
+      {
+        "id": "example.project-health.composerRefresh",
+        "title": "Refresh project health",
+        "description": "Run the Project Health command before the next prompt.",
+        "icon": "pulse",
+        "command": "example.project-health.refresh",
+        "slot": "composer.actions",
+        "group": "project-health",
+        "order": 220,
+        "when": "project.trusted && runtime.ready"
+      }
+    ],
+    "settings": [
+      {
+        "id": "example.project-health.settings",
+        "title": "Project Health",
+        "description": "Display preferences for the example extension.",
+        "order": 200,
+        "properties": [
+          {
+            "id": "showDetails",
+            "type": "boolean",
+            "label": "Show detailed status",
+            "description": "Include the current project path and session state in the panel.",
+            "default": false
+          }
+        ]
+      }
+    ],
+    "renderers": [
+      {
+        "id": "example.project-health.entryRenderer",
+        "for": {
+          "entryType": "example.project-health",
+          "extensionId": "example.project-health"
+        },
+        "kind": "declarative",
+        "handler": "worker:renderHealth",
+        "priority": 100
+      }
+    ],
+    "views": [
+      {
+        "id": "example.project-health.panel",
+        "title": "Project Health",
+        "icon": "pulse",
+        "slot": "rightPanel.primary",
+        "kind": "declarative",
+        "handler": "worker:renderPanel",
+        "order": 200,
+        "when": "project.trusted"
+      }
+    ],
+    "menus": [
+      {
+        "location": "project.context",
+        "command": "example.project-health.refresh",
+        "group": "diagnostics",
+        "order": 200,
+        "when": "project.trusted && runtime.ready"
+      }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "id": "session-123",
+  "projectId": "project-alpha",
+  "title": "Investigate scanner",
+  "titleSource": "first-user-message",
+  "createdAt": "2026-07-23T10:16:00Z",
+  "updatedAt": "2026-07-23T10:17:00Z",
+  "preview": "Investigate the scanner.",
+  "entryCount": 12,
+  "branchCount": 2,
+  "parseState": "partial",
+  "runtimeState": "recovering",
+  "model": { "provider": "openai", "id": "gpt-5" }
+}

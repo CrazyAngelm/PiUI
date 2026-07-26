@@ -1,0 +1,100 @@
+body {
+  background: var(--piui-bg);
+  color: var(--piui-text);
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  border: 0;
+}
+
+.icon-button,
+.button,
+.nav-button,
+.session-row {
+  transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease, transform 120ms ease;
+}
+
+.icon-button:active,
+.button:active,
+.nav-button:active,
+.session-row:active {
+  transform: translateY(1px);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.mono {
+  font-family: var(--piui-font-mono);
+}
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+
+.status-dot--ready,
+.status-dot--running {
+  color: var(--piui-success);
+  background: var(--piui-success);
+}
+
+.status-dot--failed {
+  color: var(--piui-danger);
+  background: var(--piui-danger);
+}
+
+.status-dot--dormant,
+.status-dot--restricted {
+  color: var(--piui-text-faint);
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--piui-surface-1), var(--piui-surface-2), var(--piui-surface-1));
+  background-size: 200% 100%;
+  animation: piui-shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes piui-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+:root[data-reduced-motion="reduce"] *,
+:root[data-reduced-motion="reduce"] *::before,
+:root[data-reduced-motion="reduce"] *::after {
+  scroll-behavior: auto !important;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-reduced-motion="system"] *,
+  :root[data-reduced-motion="system"] *::before,
+  :root[data-reduced-motion="system"] *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

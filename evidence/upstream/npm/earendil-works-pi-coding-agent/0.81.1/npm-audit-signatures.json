@@ -1,0 +1,10 @@
+{
+  "schema": "piui-npm-audit-signatures-observation",
+  "version": 1,
+  "record_kind": "sanitized-local-summary",
+  "package": "@earendil-works/pi-coding-agent",
+  "package_version": "0.81.1",
+  "integrity": "sha512-r6ovAsZOgAqbC/aU6s+/dPnv/sGZBuWyZNvi3pXjpbuX5wvp3XvGkQI7/VLvX2o9XpmpFaPUxKNym1WfkN/P8A==",
+  "signature_key_id": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+  "npm_audit_signatures": "observed-success"
+}

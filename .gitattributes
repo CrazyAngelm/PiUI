@@ -1,0 +1,28 @@
+# Keep repository text portable across Windows and Unix contributors.
+* text=auto eol=lf
+
+# Source and configuration files are always UTF-8 text.
+*.rs text
+*.ts text
+*.svelte text
+*.js text
+*.mjs text
+*.json text
+*.jsonl text
+*.toml text
+*.yaml text
+*.yml text
+*.md text
+*.txt text
+*.py text
+*.ps1 text
+*.sh text eol=lf
+
+# Binary assets must never be line-ending transformed.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.svg text

@@ -1,0 +1,149 @@
+:root {
+  color-scheme: dark;
+  --piui-bg: #151816;
+  --piui-bg-raised: #1a1e1b;
+  --piui-surface-1: #202521;
+  --piui-surface-2: #292f2a;
+  --piui-surface-3: #333a34;
+  --piui-text: #eef1eb;
+  --piui-text-muted: #9aa39a;
+  --piui-text-faint: #6f786f;
+  --piui-border: #363d37;
+  --piui-border-subtle: #2b312c;
+  --piui-accent: #9cbf82;
+  --piui-accent-ink: #192117;
+  --piui-accent-soft: #2c3828;
+  --piui-danger: #d68f82;
+  --piui-warning: #d5b36c;
+  --piui-success: #9cbf82;
+  --piui-focus: #d5e9bd;
+  --piui-user-surface: #202920;
+  --piui-user-border: #40503e;
+  --piui-danger-surface: rgba(116, 54, 45, .2);
+  --piui-danger-border: #68433e;
+  --piui-danger-text: #f0c7c0;
+  --piui-warning-surface: rgba(109, 94, 42, .18);
+  --piui-warning-border: #635a37;
+  --piui-warning-text: #e4d4a4;
+  --piui-radius-sm: 6px;
+  --piui-radius-md: 10px;
+  --piui-radius-lg: 16px;
+  --piui-space-1: 4px;
+  --piui-space-2: 8px;
+  --piui-space-3: 12px;
+  --piui-space-4: 16px;
+  --piui-space-5: 20px;
+  --piui-space-6: 24px;
+  --piui-space-7: 32px;
+  --piui-space-8: 40px;
+  --piui-font-ui: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --piui-font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  /* The wide default avoids wasting the workspace while preserving a
+     centered reading lane. Appearance preferences override these only after
+     the host has returned its validated local preference set. */
+  --piui-chat-column-width: 1280px;
+  --piui-chat-inline-padding: clamp(16px, 2vw, 32px);
+  --piui-chat-reading-width: 104ch;
+  --piui-chat-font-size: 15px;
+  --piui-chat-user-font-size: 14px;
+  --piui-chat-composer-font-size: 14px;
+  --piui-chat-code-font-size: 12px;
+  font-family: var(--piui-font-ui);
+  background: var(--piui-bg);
+  color: var(--piui-text);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --piui-bg: #f5f6f1;
+  --piui-bg-raised: #fbfcf8;
+  --piui-surface-1: #edf0e9;
+  --piui-surface-2: #e3e8df;
+  --piui-surface-3: #d7ded2;
+  --piui-text: #20261f;
+  --piui-text-muted: #596257;
+  --piui-text-faint: #747d72;
+  --piui-border: #cbd3c6;
+  --piui-border-subtle: #dce2d8;
+  --piui-accent: #668b52;
+  --piui-accent-ink: #f8fbf5;
+  --piui-accent-soft: #dbe8d3;
+  --piui-danger: #a5564c;
+  --piui-warning: #9a7433;
+  --piui-success: #668b52;
+  --piui-focus: #3c692e;
+  --piui-user-surface: #e5eee0;
+  --piui-user-border: #afc4a5;
+  --piui-danger-surface: #f6e5e2;
+  --piui-danger-border: #d5aaa4;
+  --piui-danger-text: #743a34;
+  --piui-warning-surface: #f4ecd9;
+  --piui-warning-border: #d6c399;
+  --piui-warning-text: #755821;
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] {
+    color-scheme: light;
+    --piui-bg: #f5f6f1;
+    --piui-bg-raised: #fbfcf8;
+    --piui-surface-1: #edf0e9;
+    --piui-surface-2: #e3e8df;
+    --piui-surface-3: #d7ded2;
+    --piui-text: #20261f;
+    --piui-text-muted: #596257;
+    --piui-text-faint: #747d72;
+    --piui-border: #cbd3c6;
+    --piui-border-subtle: #dce2d8;
+    --piui-accent: #668b52;
+    --piui-accent-ink: #f8fbf5;
+    --piui-accent-soft: #dbe8d3;
+    --piui-danger: #a5564c;
+    --piui-warning: #9a7433;
+    --piui-success: #668b52;
+    --piui-focus: #3c692e;
+    --piui-user-surface: #e5eee0;
+    --piui-user-border: #afc4a5;
+    --piui-danger-surface: #f6e5e2;
+    --piui-danger-border: #d5aaa4;
+    --piui-danger-text: #743a34;
+    --piui-warning-surface: #f4ecd9;
+    --piui-warning-border: #d6c399;
+    --piui-warning-text: #755821;
+  }
+}
+
+:root[data-density="compact"] {
+  --piui-space-3: 10px;
+  --piui-space-4: 12px;
+  --piui-space-5: 16px;
+  --piui-space-6: 20px;
+  --piui-space-7: 26px;
+  --piui-space-8: 32px;
+}
+
+:root[data-font-size="small"] {
+  --piui-chat-font-size: 14px;
+  --piui-chat-user-font-size: 13px;
+  --piui-chat-composer-font-size: 13px;
+  --piui-chat-code-font-size: 11px;
+}
+
+:root[data-font-size="large"] {
+  --piui-chat-font-size: 17px;
+  --piui-chat-user-font-size: 16px;
+  --piui-chat-composer-font-size: 16px;
+  --piui-chat-code-font-size: 14px;
+}
+
+:root[data-chat-width="centered"] {
+  --piui-chat-column-width: 980px;
+  --piui-chat-inline-padding: clamp(20px, 3vw, 48px);
+  --piui-chat-reading-width: 76ch;
+}
+
+:root[data-chat-width="focused"] {
+  --piui-chat-column-width: 780px;
+  --piui-chat-inline-padding: clamp(20px, 4vw, 56px);
+  --piui-chat-reading-width: 66ch;
+}
