@@ -9,7 +9,7 @@ authors.workspace = true
 [dependencies]
 piui-contracts = { path = "../piui-contracts" }
 piui-platform = { path = "../piui-platform" }
-rusqlite = { version = "0.32.1", features = ["bundled", "functions"] }
+rusqlite = { version = "0.40.1", features = ["bundled", "functions"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
