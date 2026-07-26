@@ -111,6 +111,10 @@
   let personalSelected = false;
   let selectedPersonalSessionId: string | undefined;
   let personalChatEpoch = 0;
+  let projectChatEpoch = 0;
+  let newChatProjectId: string | undefined;
+  let composingPersonalChat = false;
+  let composerDraft = '';
 
   const MAX_RETAINED_TIMELINE_BLOCKS = 500;
   // Monotonic local epochs prevent a delayed host response from rendering a
@@ -218,6 +222,7 @@
       const selectionWasRemoved = previousSessionId !== undefined && state.selectedSessionId === undefined;
       if (selectionWasRemoved) {
         sessionRequestEpoch += 1;
+        projectChatEpoch += 1;
         resetTimeline();
         tree = undefined;
       }
@@ -242,6 +247,7 @@
       }
       if (
         hydrateSelection
+        && newChatProjectId !== snapshot.projectId
         && state.selectedSessionId === undefined
         && snapshot.sessions[0] !== undefined
         && pendingProjectSessionResolution?.projectId !== snapshot.projectId
@@ -279,6 +285,7 @@
       && !snapshot.sessions.some((session) => session.id === previousSessionId);
     if (selectionWasRemoved) {
       sessionRequestEpoch += 1;
+      personalChatEpoch += 1;
       resetTimeline();
       tree = undefined;
       selectedPersonalSessionId = undefined;
@@ -301,6 +308,7 @@
     if (
       hydrateSelection
       && personalSelected
+      && !composingPersonalChat
       && selectedPersonalSessionId === undefined
       && snapshot.sessions[0] !== undefined
       && !pendingPersonalSessionResolution
@@ -416,9 +424,6 @@
         pendingProjectSessionResolution?.projectId !== projectId,
         recoveryEpoch,
       );
-      if (applied && snapshot.freshness === 'degraded' && sessionsRefreshError === undefined) {
-        sessionsRefreshError = 'Some local sessions could not be verified. Showing the last indexed catalog.';
-      }
       return applied ? snapshot : sessionCatalogs[projectId];
     } catch (error) {
       if (expectedProjectEpoch === projectRequestEpoch) {
@@ -438,9 +443,6 @@
     try {
       const snapshot = await host.refreshPersonalSessionCatalog();
       const applied = applyPersonalCatalog(snapshot, !pendingPersonalSessionResolution, recoveryEpoch);
-      if (applied && snapshot.freshness === 'degraded' && personalCatalogRefreshError === undefined) {
-        personalCatalogRefreshError = 'Some local sessions could not be verified. Showing the last indexed catalog.';
-      }
       return applied ? snapshot : personalCatalog;
     } catch (error) {
       if (isHostConflict(error)) invalidatePersonalCatalog();
@@ -762,7 +764,10 @@
           : selectedPersonalSessionId === expectedSessionId;
         if (expectedSessionEpoch !== sessionRequestEpoch || !personalSelected || !stillExpected) return;
         personalSessions = catalog.sessions;
-        if (expectedSessionId === undefined) selectedPersonalSessionId = session.id;
+        if (expectedSessionId === undefined) {
+          selectedPersonalSessionId = session.id;
+          composingPersonalChat = false;
+        }
         await applyCompletedTurnPage(page);
         resolved = true;
       } finally {
@@ -843,6 +848,7 @@
           selectFirst: false,
         });
         state = reduceAppState(state, { type: 'selected-session', sessionId: session.id });
+        newChatProjectId = undefined;
         loadedSessionProjectId = projectId;
       }
       await applyCompletedTurnPage(page);
@@ -920,6 +926,7 @@
 
   function clearSessionProjection(): void {
     sessionRequestEpoch += 1;
+    projectChatEpoch += 1;
     resetTimeline();
     tree = undefined;
     state = { ...state, sessions: [], selectedSessionId: undefined };
@@ -1025,6 +1032,7 @@
     personalSessions = [];
     if (!personalSelected) return;
     sessionRequestEpoch += 1;
+    personalChatEpoch += 1;
     selectedPersonalSessionId = undefined;
     resetTimeline();
     tree = undefined;
@@ -1056,15 +1064,19 @@
     }
     if (state.selectedProjectId !== projectId) return;
     sessionRequestEpoch += 1;
+    projectChatEpoch += 1;
     resetTimeline();
     tree = undefined;
     loadedSessionProjectId = undefined;
     state = { ...state, sessions: [], selectedSessionId: undefined };
   }
 
-  async function selectProject(project: ProjectSummary): Promise<void> {
+  async function selectProject(project: ProjectSummary, startNewChat = false): Promise<void> {
     settingsOpen = false;
+    if (!startNewChat) composerDraft = '';
     personalSelected = false;
+    composingPersonalChat = false;
+    newChatProjectId = startNewChat ? project.id : undefined;
     pendingPersonalSessionResolution = false;
     newPersonalSessionBaseline = undefined;
     pendingPersonalResolutionRetryCount = 0;
@@ -1073,7 +1085,7 @@
     const requestEpoch = ++projectRequestEpoch;
     pendingProjectSessionResolution = undefined;
     pendingProjectResolutionRetryCount = 0;
-    const retainedSessionId = state.selectedProjectId === project.id ? state.selectedSessionId : undefined;
+    const retainedSessionId = !startNewChat && state.selectedProjectId === project.id ? state.selectedSessionId : undefined;
     const retainedCatalog = sessionCatalogs[project.id];
     // Invalidate a pending timeline/tree response immediately, but retain any
     // known catalog rows. A slow filesystem reconciliation must never create a
@@ -1085,22 +1097,32 @@
     sessionsFreshness = retainedCatalog?.freshness ?? 'cached';
     sessionsRefreshError = undefined;
     sessionsLoading = retainedCatalog === undefined;
-    state = {
-      ...state,
-      error: undefined,
-      selectedProjectId: project.id,
-      selectedSessionId: retainedSessionId,
-      sessions: retainedCatalog?.sessions ?? [],
-    };
+    state = startNewChat
+      ? {
+          ...reduceAppState(state, {
+            type: 'new-chat',
+            projectId: project.id,
+            sessions: retainedCatalog?.sessions ?? [],
+          }),
+          error: undefined,
+        }
+      : {
+          ...state,
+          error: undefined,
+          selectedProjectId: project.id,
+          selectedSessionId: retainedSessionId,
+          sessions: retainedCatalog?.sessions ?? [],
+        };
     const recoveryEpoch = projectRecoveryEpoch(project.id);
     try {
       const catalog = await host.getSessionCatalog(project.id);
       if (requestEpoch !== projectRequestEpoch) return;
       const accepted = applyProjectCatalog(catalog, false, recoveryEpoch);
-      const initialSession = accepted
+      const initialSession = accepted && !startNewChat
         ? catalog.sessions.find((session) => session.id === state.selectedSessionId) ?? catalog.sessions[0]
         : undefined;
-      void hydrateProjectAfterCatalog(project.id, initialSession, requestEpoch);
+      if (startNewChat) void refreshProjectCatalog(project.id, requestEpoch);
+      else void hydrateProjectAfterCatalog(project.id, initialSession, requestEpoch);
     } catch (error) {
       if (requestEpoch !== projectRequestEpoch) return;
       if (isHostConflict(error)) invalidateProjectCatalog(project.id);
@@ -1115,6 +1137,9 @@
 
   async function selectSession(session: SessionSummary, expectedProjectEpoch = projectRequestEpoch, preserveLive = false): Promise<void> {
     settingsOpen = false;
+    newChatProjectId = undefined;
+    composerDraft = '';
+    projectChatEpoch += 1;
     const projectId = state.selectedProjectId;
     if (projectId === undefined) return;
     if (pendingProjectSessionResolution?.projectId === projectId) {
@@ -1163,8 +1188,20 @@
     }
   }
 
-  async function openNewChat(): Promise<void> {
+  async function openNewChat(targetProjectId: string | undefined, preserveDraft = false): Promise<void> {
+    if (!preserveDraft) composerDraft = '';
+    const targetProject = targetProjectId === undefined
+      ? undefined
+      : state.projects.find((project) => project.id === targetProjectId);
+    if (targetProject !== undefined) {
+      projectChatEpoch += 1;
+      await selectProject(targetProject, true);
+      return;
+    }
+
     settingsOpen = false;
+    newChatProjectId = undefined;
+    composingPersonalChat = true;
     projectRequestEpoch += 1;
     sessionRequestEpoch += 1;
     personalChatEpoch += 1;
@@ -1180,12 +1217,15 @@
     treeOpen = false;
     tree = undefined;
     resetTimeline();
-    state = { ...state, selectedProjectId: undefined, selectedSessionId: undefined, sessions: [] };
+    state = reduceAppState(state, { type: 'new-chat' });
     await refreshPersonalSessions();
   }
 
   async function selectPersonalSession(session: SessionSummary, preserveLive = false): Promise<void> {
     settingsOpen = false;
+    composingPersonalChat = false;
+    composerDraft = '';
+    personalChatEpoch += 1;
     const requestEpoch = ++sessionRequestEpoch;
     expandedProjectId = undefined;
     loadedSessionProjectId = undefined;
@@ -1312,7 +1352,7 @@
     if (searchOpen || trustOpen || projectSettingsOpen || settingsOpen || addProjectOpen) return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') {
       event.preventDefault();
-      void openNewChat();
+      void openNewChat(state.selectedProjectId);
     } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
       event.preventDefault();
       openSearch();
@@ -1516,9 +1556,8 @@
     selectedSessionId={state.selectedSessionId}
     sessionsLoading={sessionsLoading}
     sessionsFreshness={sessionsFreshness}
-    sessionsRefreshError={sessionsRefreshError}
     onAddProject={openAddProject}
-    onNewChat={() => void openNewChat()}
+    onNewChat={() => void openNewChat(state.selectedProjectId)}
     onSelectProject={toggleProject}
     onSelectSession={selectSession}
     onSelectPersonalSession={selectPersonalSession}
@@ -1575,11 +1614,14 @@
         <EmptyState eyebrow="Chats" title="New chat" description="No user folder is attached. Pi keeps an empty chat in memory and saves its JSONL history after the first assistant response." />
       {/if}
 
-      {#key `personal:${selectedPersonalSessionId ?? 'new'}:${personalChatEpoch}`}
+      {#key `personal:${personalChatEpoch}`}
         <ChatPanel
           personal={true}
+          projects={state.projects}
           projectId={undefined}
           sessionId={selectedPersonalSession?.id}
+          bind:draft={composerDraft}
+          onNewChatProjectChange={(projectId) => void openNewChat(projectId, true)}
           trusted={true}
           safeMode={state.safeMode}
           onTurnCompleted={refreshTimelineAfterTurn}
@@ -1590,7 +1632,7 @@
         />
       {/key}
     {:else if state.projects.length === 0}
-      <EmptyState eyebrow="Chats" title="Start a new chat" description="Talk to Pi without attaching a user folder. Add a project later when you want Pi session history from that folder." actionLabel="New chat" action={() => void openNewChat()} />
+      <EmptyState eyebrow="Chats" title="Start a new chat" description="Talk to Pi without attaching a user folder. Add a project later when you want Pi session history from that folder." actionLabel="New chat" action={() => void openNewChat(undefined)} />
     {:else if selectedProject === undefined}
       <EmptyState eyebrow="Projects" title="Select a project" description="Choose a folder in the sidebar to inspect its local Pi session history." />
     {:else}
@@ -1626,25 +1668,13 @@
         <EmptyState eyebrow="Session history" title="No Pi sessions here yet" description="Trust this project, then start a new Pi chat below. PiUI discovers the authoritative Pi JSONL session after the runtime stops." />
       {/if}
 
-      {#if selectedSession}
-        {#key state.selectedProjectId + ':' + selectedSession.id}
-          <ChatPanel
-            projectId={state.selectedProjectId}
-            sessionId={selectedSession.id}
-            trusted={selectedProject.trustState === 'trusted'}
-            safeMode={state.safeMode}
-            onRequestTrust={() => trustOpen = true}
-            onTurnCompleted={refreshTimelineAfterTurn}
-            onNewSessionStarting={captureNewProjectSessionBaseline}
-            onNewSessionStartAborted={abandonNewProjectSessionResolution}
-            onRetryPersistedSession={retryPersistedSessionDiscovery}
-            onBlocksChanged={updateLiveTimeline}
-          />
-        {/key}
-      {:else if selectedProject}
+      {#key `project:${state.selectedProjectId}:${projectChatEpoch}`}
         <ChatPanel
+          projects={state.projects}
           projectId={state.selectedProjectId}
-          sessionId={undefined}
+          sessionId={selectedSession?.id}
+          bind:draft={composerDraft}
+          onNewChatProjectChange={(projectId) => void openNewChat(projectId, true)}
           trusted={selectedProject.trustState === 'trusted'}
           safeMode={state.safeMode}
           onRequestTrust={() => trustOpen = true}
@@ -1654,7 +1684,7 @@
           onRetryPersistedSession={retryPersistedSessionDiscovery}
           onBlocksChanged={updateLiveTimeline}
         />
-      {/if}
+      {/key}
 
     {/if}
   </main>

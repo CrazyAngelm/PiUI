@@ -725,7 +725,7 @@ Extensions receive only documented semantic tokens; internal class names are not
 The order is fixed:
 
 1. **Settings** — icon + label, always available.
-2. **New chat** — primary compact action. Always opens a personal chat without a user folder; Pi receives a host-owned neutral CWD that is not exposed to the WebView and is not shown as a project. An empty personal chat lives in Pi memory and appears in history only after the first assistant response, when Pi itself writes JSONL.
+2. **New chat** — primary compact action. When a project is selected, it opens an empty chat in that project by default; otherwise it opens a personal chat. The new-chat composer includes a Project picker next to Model and Thinking so the user can choose any available project or `No project` before sending. A projectless chat receives a host-owned neutral CWD that is not exposed to the WebView and is not shown as a project. An empty chat lives in Pi memory and appears in history only after the first assistant response, when Pi itself writes JSONL.
 3. **Add project** — secondary action for registering an existing user folder.
 4. Optional command palette/search icon.
 
@@ -1954,7 +1954,7 @@ The preferred path is a documented Pi startup/session selector or RPC `switch_se
 
 #### 9.3 Creation
 
-`New chat` in the system Chats group immediately opens an empty composer; the runtime in a host-owned neutral CWD starts lazily on the first Send. A contextual project chat similarly starts Pi in the selected project `cwd` only on Send. Opening and rapidly switching history sessions does not create an agent process: the UI reuses a bounded display-safe provider/model cache. On first launch, the user may explicitly choose `Load available models…`; this action activates the current session through the same typed runtime adapter, not a separate catalog subprocess. In both cases, Pi remains the only writer: an empty session may be in memory until the first assistant response. A session appears in the sidebar only after durable Pi JSONL/file appears, not from an optimistic fake ID.
+`New chat` immediately opens an empty composer in the currently selected project, or in the system Chats scope when no project is selected. Before Send, a Project picker beside Model and Thinking can switch the new chat to any available project or to `No project`. A projectless runtime uses a host-owned neutral CWD; a contextual project chat starts Pi in the selected project `cwd`. Both start lazily on the first Send. Opening and rapidly switching history sessions does not create an agent process: the UI reuses a bounded display-safe provider/model cache. Model and thinking selections are remembered per opaque session for presentation, while the state returned by Pi when that session starts remains authoritative and is never overwritten by a global selection from another session. On first launch, the user may explicitly choose `Load available models…`; this action activates the current session through the same typed runtime adapter, not a separate catalog subprocess. In all cases, Pi remains the only writer: an empty session may be in memory until the first assistant response. A session appears in the sidebar only after durable Pi JSONL/file appears, not from an optimistic fake ID.
 
 #### 9.4 Rename
 

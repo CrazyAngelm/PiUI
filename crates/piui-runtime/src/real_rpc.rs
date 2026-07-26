@@ -17,7 +17,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
@@ -1577,9 +1578,11 @@ pub fn resolve_pi_launch() -> Result<PiLaunch, String> {
     if let Some(cli) = std::env::var_os("PIUI_PI_CLI") {
         let cli_path = PathBuf::from(cli);
         if cli_path.is_file() {
-            let node = std::env::var_os("PIUI_PI_NODE")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("node"));
+            let node = resolve_node_program(
+                &cli_path,
+                std::env::var_os("PIUI_PI_NODE"),
+                std::env::var_os("PATH"),
+            );
             return Ok(PiLaunch {
                 program: node,
                 leading_args: vec![cli_path.to_string_lossy().into_owned()],
@@ -1589,9 +1592,11 @@ pub fn resolve_pi_launch() -> Result<PiLaunch, String> {
     }
 
     if let Some(cli_path) = resolve_global_cli_js() {
-        let node = std::env::var_os("PIUI_PI_NODE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("node"));
+        let node = resolve_node_program(
+            &cli_path,
+            std::env::var_os("PIUI_PI_NODE"),
+            std::env::var_os("PATH"),
+        );
         return Ok(PiLaunch {
             program: node,
             leading_args: vec![cli_path.to_string_lossy().into_owned()],
@@ -1640,10 +1645,47 @@ fn find_pi_launcher() -> Option<PathBuf> {
     } else {
         &["pi"]
     };
-    let path_env = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path_env) {
+    find_launcher_in_path(names, std::env::var_os("PATH"))
+}
+
+/// Prefer the Node executable installed beside npm's global launcher. Desktop
+/// apps inherit Explorer's environment, which can lag behind a recent Node/Pi
+/// installation even though the global package itself is already discoverable
+/// through APPDATA. An explicit override remains authoritative.
+fn resolve_node_program(
+    cli_path: &Path,
+    override_program: Option<OsString>,
+    path_env: Option<OsString>,
+) -> PathBuf {
+    if let Some(program) = override_program.filter(|value| !value.is_empty()) {
+        return PathBuf::from(program);
+    }
+
+    let names: &[&str] = if cfg!(windows) {
+        &["node.exe", "node"]
+    } else {
+        &["node"]
+    };
+    // npm's Windows shims and optional node.exe live at the global bin root,
+    // while cli.js is nested below node_modules/@scope/package/dist. Search
+    // only this already-resolved package's ancestors before consulting PATH.
+    for directory in cli_path.ancestors().skip(1) {
         for name in names {
-            let candidate = dir.join(name);
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    find_launcher_in_path(names, path_env)
+        .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "node.exe" } else { "node" }))
+}
+
+fn find_launcher_in_path(names: &[&str], path_env: Option<OsString>) -> Option<PathBuf> {
+    let path_env = path_env?;
+    for directory in std::env::split_paths(&path_env) {
+        for name in names {
+            let candidate = directory.join(name);
             if candidate.is_file() {
                 return Some(candidate);
             }
@@ -1689,8 +1731,9 @@ mod tests {
         LOCAL_RUNTIME_EVENT_PROTOCOL, RealPiConfig, RealPiRuntime, RealRuntimeError,
         RuntimeEventEnvelope, RuntimeShared, StreamTracker, SurfaceEvent, extension_safe_summary,
         fail_pending, handle_frame, map_models, map_session_state, map_thinking_levels,
-        opaque_surface_id, prompt_command, required_response_data, safe_extension_method,
-        safe_tool_name, transition_starting_to_ready, validate_success_response,
+        opaque_surface_id, prompt_command, required_response_data, resolve_node_program,
+        safe_extension_method, safe_tool_name, transition_starting_to_ready,
+        validate_success_response,
     };
     use piui_contracts::RuntimeState;
     use serde_json::json;
@@ -1701,6 +1744,31 @@ mod tests {
     use tokio::sync::{Mutex, mpsc, oneshot};
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn installed_cli_prefers_a_sibling_node_without_relying_on_explorer_path() {
+        let serial = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "piui-node-resolution-test-{}-{serial}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let cli = root
+            .join("node_modules")
+            .join("@earendil-works")
+            .join("pi-coding-agent")
+            .join("dist")
+            .join("cli.js");
+        fs::create_dir_all(cli.parent().expect("cli parent")).expect("creates resolver fixture");
+        fs::write(&cli, "// fixture").expect("writes cli fixture");
+        let node = root.join(if cfg!(windows) { "node.exe" } else { "node" });
+        fs::write(&node, b"fixture").expect("writes node fixture");
+
+        let resolved = resolve_node_program(&cli, None, None);
+
+        assert_eq!(resolved, node);
+        fs::remove_dir_all(root).expect("removes resolver fixture");
+    }
 
     #[test]
     fn runtime_extension_projection_is_opaque_and_payload_free() {

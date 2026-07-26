@@ -69,6 +69,30 @@ describe('reduceAppState', () => {
     expect(state.sessions).toEqual(sessions);
   });
 
+  it('opens a new chat in the selected project without selecting an old session', () => {
+    const selected = {
+      ...initialAppState,
+      projects: [project],
+      selectedProjectId: project.id,
+      selectedSessionId: sessions[0].id,
+      sessions,
+    };
+
+    const projectChat = reduceAppState(selected, {
+      type: 'new-chat',
+      projectId: project.id,
+      sessions,
+    });
+    const personalChat = reduceAppState(projectChat, { type: 'new-chat' });
+
+    expect(projectChat.selectedProjectId).toBe(project.id);
+    expect(projectChat.selectedSessionId).toBeUndefined();
+    expect(projectChat.sessions).toEqual(sessions);
+    expect(personalChat.selectedProjectId).toBeUndefined();
+    expect(personalChat.selectedSessionId).toBeUndefined();
+    expect(personalChat.sessions).toEqual([]);
+  });
+
   it('accepts a refreshed restricted trust state and clears a removed project view', () => {
     const selected = {
       ...initialAppState,

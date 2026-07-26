@@ -22,6 +22,7 @@ export type AppAction =
   | { type: 'booted'; snapshot: AppSnapshot }
   | { type: 'projects-loaded'; projects: ProjectSummary[] }
   | { type: 'sessions-loaded'; projectId: string; sessions: SessionSummary[]; selectFirst?: boolean }
+  | { type: 'new-chat'; projectId?: string; sessions?: SessionSummary[] }
   | { type: 'selected-session'; sessionId?: string }
   | { type: 'runtime-updated'; runtime?: RuntimeSnapshot }
   | { type: 'failed'; message: string };
@@ -63,6 +64,13 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
         selectedSessionId,
       };
     }
+    case 'new-chat':
+      return {
+        ...state,
+        selectedProjectId: action.projectId,
+        selectedSessionId: undefined,
+        sessions: action.projectId === undefined ? [] : action.sessions ?? [],
+      };
     case 'selected-session':
       return { ...state, selectedSessionId: action.sessionId };
     case 'runtime-updated':

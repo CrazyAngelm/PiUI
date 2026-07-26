@@ -11,7 +11,6 @@
   export let selectedSessionId: string | undefined;
   export let sessionsLoading = false;
   export let sessionsFreshness: SessionCatalogFreshness = 'cached';
-  export let sessionsRefreshError: string | undefined;
   export let settingsSelected = false;
   export let onAddProject: () => void;
   export let onNewChat: () => void = () => {};
@@ -31,7 +30,7 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Z"/><path d="m19.2 13.1 1.26.98-1.7 2.94-1.5-.6a7.7 7.7 0 0 1-1.7.98L15.34 19h-3.4l-.23-1.6a7.7 7.7 0 0 1-1.7-.98l-1.5.6-1.7-2.94 1.26-.98a7.1 7.1 0 0 1 0-2.2l-1.26-.98 1.7-2.94 1.5.6a7.7 7.7 0 0 1 1.7-.98L11.94 5h3.4l.23 1.6a7.7 7.7 0 0 1 1.7.98l1.5-.6 1.7 2.94-1.26.98a7.1 7.1 0 0 1 0 2.2Z"/></svg>
       <span>Settings</span>
     </button>
-    <button class="nav-button nav-button--primary" type="button" onclick={onNewChat} aria-label="Start a new personal chat">
+    <button class="nav-button nav-button--primary" type="button" onclick={onNewChat} aria-label="Start a new chat">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
       <span>New chat</span>
     </button>
@@ -106,9 +105,6 @@
                   </button>
                 {/each}
               {/if}
-              {#if sessionsRefreshError}
-                <p class="catalog-error" role="status">{sessionsRefreshError}</p>
-              {/if}
             </div>
           {/if}
         </section>
@@ -156,7 +152,6 @@
   .session-list--personal { margin-top: 0; }
   .session-list-header { display: flex; align-items: center; justify-content: space-between; min-height: 25px; padding: 0 var(--piui-space-2); color: var(--piui-text-faint); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
   .catalog-refreshing { margin-left: 6px; color: var(--piui-text-muted); font-size: 9px; font-weight: 600; letter-spacing: 0; text-transform: none; }
-  .catalog-error { margin: 2px var(--piui-space-2) 5px; color: var(--piui-text-muted); font-size: 10px; line-height: 1.35; }
   .session-actions { display: flex; align-items: center; gap: 2px; }
   .refresh-button { padding: 2px 4px; border-radius: 3px; background: transparent; color: var(--piui-text-muted); font-size: 10px; font-weight: 700; letter-spacing: 0; text-transform: none; }
   .refresh-button:hover:not(:disabled) { background: var(--piui-surface-2); color: var(--piui-text); }

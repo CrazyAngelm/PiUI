@@ -1,17 +1,20 @@
 <script module lang="ts">
   import type { ModelLite as CachedModelLite } from '../../host-api/types';
+  import type { SessionRuntimePreference } from './runtimeSelection';
 
   const CATALOG_STORAGE_KEY = 'piui.runtime-catalog.v1';
   const DEFAULT_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
   const MAX_CACHED_MODELS = 512;
+  const MAX_SESSION_RUNTIME_PREFERENCES = 256;
 
   interface PersistedCatalog {
-    version: 1;
+    version: 2;
     models: CachedModelLite[];
     modelSelection?: CachedModelLite;
     modelSelectionExplicit?: boolean;
     thinkingSelection?: string;
     thinkingSelectionExplicit?: boolean;
+    sessionPreferences: SessionRuntimePreference[];
   }
 
   function validModel(value: unknown): value is CachedModelLite {
@@ -26,6 +29,18 @@
       && (candidate.label === undefined || (typeof candidate.label === 'string' && candidate.label.length <= 256));
   }
 
+  function validSessionPreference(value: unknown): value is SessionRuntimePreference {
+    if (typeof value !== 'object' || value === null) return false;
+    const candidate = value as Record<string, unknown>;
+    return typeof candidate.key === 'string'
+      && candidate.key.length > 0
+      && candidate.key.length <= 1024
+      && (candidate.model === undefined || validModel(candidate.model))
+      && (candidate.thinkingLevel === undefined || (typeof candidate.thinkingLevel === 'string' && DEFAULT_THINKING_LEVELS.includes(candidate.thinkingLevel)))
+      && typeof candidate.updatedAt === 'number'
+      && Number.isFinite(candidate.updatedAt);
+  }
+
   function readPersistedCatalog(): PersistedCatalog | undefined {
     if (typeof localStorage === 'undefined') return undefined;
     try {
@@ -34,19 +49,23 @@
       const parsed: unknown = JSON.parse(raw);
       if (typeof parsed !== 'object' || parsed === null) return undefined;
       const candidate = parsed as Record<string, unknown>;
-      if (candidate.version !== 1 || !Array.isArray(candidate.models) || candidate.models.length > MAX_CACHED_MODELS) return undefined;
+      if ((candidate.version !== 1 && candidate.version !== 2) || !Array.isArray(candidate.models) || candidate.models.length > MAX_CACHED_MODELS) return undefined;
       const models = candidate.models.filter(validModel);
       const modelSelection = validModel(candidate.modelSelection) ? candidate.modelSelection : undefined;
       const thinkingSelection = typeof candidate.thinkingSelection === 'string' && DEFAULT_THINKING_LEVELS.includes(candidate.thinkingSelection)
         ? candidate.thinkingSelection
         : undefined;
+      const sessionPreferences = candidate.version === 2 && Array.isArray(candidate.sessionPreferences)
+        ? candidate.sessionPreferences.filter(validSessionPreference).slice(-MAX_SESSION_RUNTIME_PREFERENCES)
+        : [];
       return {
-        version: 1,
+        version: 2,
         models,
         modelSelection,
         modelSelectionExplicit: candidate.modelSelectionExplicit === true,
         thinkingSelection,
         thinkingSelectionExplicit: candidate.thinkingSelectionExplicit === true,
+        sessionPreferences,
       };
     } catch {
       return undefined;
@@ -57,12 +76,13 @@
     if (typeof localStorage === 'undefined') return;
     try {
       const value: PersistedCatalog = {
-        version: 1,
+        version: 2,
         models: cachedModels.slice(0, MAX_CACHED_MODELS),
         modelSelection: cachedModelSelection,
         modelSelectionExplicit: cachedModelSelectionExplicit,
         thinkingSelection: cachedThinkingSelection,
         thinkingSelectionExplicit: cachedThinkingSelectionExplicit,
+        sessionPreferences: cachedSessionPreferences.slice(-MAX_SESSION_RUNTIME_PREFERENCES),
       };
       localStorage.setItem(CATALOG_STORAGE_KEY, JSON.stringify(value));
     } catch {
@@ -80,6 +100,7 @@
   let cachedModelSelectionExplicit = persistedCatalog?.modelSelectionExplicit === true;
   let cachedThinkingSelection: string | undefined = persistedCatalog?.thinkingSelection;
   let cachedThinkingSelectionExplicit = persistedCatalog?.thinkingSelectionExplicit === true;
+  let cachedSessionPreferences: SessionRuntimePreference[] = persistedCatalog?.sessionPreferences ?? [];
   // A keyed session switch destroys the old panel before creating the next
   // one. Serialize the new lazy start behind the previous owned-runtime stop
   // so the host's single live slot cannot be raced by a fast Send click.
@@ -89,13 +110,17 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
   import { host } from '../../host-api/client';
-  import type { ModelLite, RuntimeEventEnvelope, RuntimeState, SessionStateLite, SurfaceEvent, TimelineBlock } from '../../host-api/types';
+  import type { ModelLite, ProjectSummary, RuntimeEventEnvelope, RuntimeState, SessionStateLite, SurfaceEvent, TimelineBlock } from '../../host-api/types';
+  import { initialRuntimeSelection, rememberSessionRuntimePreference, runtimeSessionKey } from './runtimeSelection';
 
   export let projectId: string | undefined;
   export let sessionId: string | undefined;
   export let trusted: boolean;
   export let safeMode: boolean;
   export let personal: boolean = false;
+  export let draft = '';
+  export let projects: ProjectSummary[] = [];
+  export let onNewChatProjectChange: (projectId: string | undefined) => void = () => {};
   export let onRequestTrust: (() => void) | undefined = undefined;
   export let onTurnCompleted: () => void | Promise<void> = () => {};
   // The catalog is eventually consistent with Pi's first session write. Let
@@ -120,14 +145,24 @@
 
   let phase: RuntimeState = 'dormant';
   let blocks: LiveBlock[] = [];
-  let draft = '';
   let sendBusy = false;
   let startBusy = false;
   let abortBusy = false;
+  let sessionPreferenceKey = runtimeSessionKey(personal, projectId, sessionId);
+  const initialSelection = initialRuntimeSelection(
+    sessionPreferenceKey,
+    cachedSessionPreferences,
+    cachedModelSelection,
+    cachedModelSelectionExplicit,
+    cachedThinkingSelection,
+    cachedThinkingSelectionExplicit,
+  );
   let models: ModelLite[] = [...cachedModels];
   let thinkingLevels: string[] = [...cachedThinkingLevels];
-  let pendingModel: ModelLite | undefined = cachedModelSelectionExplicit ? cachedModelSelection : undefined;
-  let pendingThinkingLevel: string | undefined = cachedThinkingSelectionExplicit ? cachedThinkingSelection : undefined;
+  let pendingModel: ModelLite | undefined = initialSelection.pendingModel;
+  let pendingThinkingLevel: string | undefined = initialSelection.pendingThinkingLevel;
+  let rememberedModel: ModelLite | undefined = initialSelection.rememberedModel;
+  let rememberedThinkingLevel: string | undefined = initialSelection.rememberedThinkingLevel;
   let sessionState: SessionStateLite | undefined;
   let queue: { steering: number; followUp: number } | undefined;
   let compactionActive = false;
@@ -149,6 +184,7 @@
   $: enabled = surfaceAvailable && runtimeAllowed;
   $: canSend = surfaceAvailable && !startBusy && !sendBusy && settleTask === undefined && draft.trim().length > 0;
   $: running = phase === 'running';
+  $: syncSessionPreferenceKey(personal, projectId, sessionId);
   $: if (phase === 'ready' && mounted) void focusComposer();
 
   onMount(() => {
@@ -205,12 +241,13 @@
         : await host.startRuntime(projectId!, startSessionId);
       runtimeId = result.runtimeId;
       sessionState = result.sessionState;
-      if (pendingModel === undefined && result.sessionState.model !== undefined) {
+      rememberCurrentSessionPreference(result.sessionState.model, result.sessionState.thinkingLevel);
+      if (sessionPreferenceKey === undefined && pendingModel === undefined && result.sessionState.model !== undefined) {
         cachedModelSelection = result.sessionState.model;
         cachedModelSelectionExplicit = false;
         persistCatalog();
       }
-      if (pendingThinkingLevel === undefined && result.sessionState.thinkingLevel.length > 0) {
+      if (sessionPreferenceKey === undefined && pendingThinkingLevel === undefined && result.sessionState.thinkingLevel.length > 0) {
         cachedThinkingSelection = result.sessionState.thinkingLevel;
         cachedThinkingSelectionExplicit = false;
         persistCatalog();
@@ -303,8 +340,10 @@
       // this UI observation and Pi receiving it.
       await host.sendPrompt(runtimeId, text);
     } catch (sendError) {
-      draft = text;
-      error = messageFor(sendError);
+      if (!disposed) {
+        draft = text;
+        error = messageFor(sendError);
+      }
       abandonNewSessionResolution();
     } finally {
       sendBusy = false;
@@ -319,8 +358,10 @@
     try {
       await host.sendSteer(runtimeId, text);
     } catch (steerError) {
-      draft = text;
-      error = messageFor(steerError);
+      if (!disposed) {
+        draft = text;
+        error = messageFor(steerError);
+      }
     } finally {
       sendBusy = false;
     }
@@ -388,6 +429,7 @@
       }
       case 'stateSnapshot':
         sessionState = event.state;
+        rememberCurrentSessionPreference(event.state.model, event.state.thinkingLevel);
         if (event.state.isStreaming) phase = 'running';
         else if (phase === 'running') {
           phase = 'ready';
@@ -459,6 +501,7 @@
         break;
       case 'thinkingLevelChanged':
         if (sessionState) sessionState = { ...sessionState, thinkingLevel: event.level };
+        rememberCurrentSessionPreference(sessionState?.model, event.level);
         break;
       case 'sessionInfoChanged':
         if (sessionState) sessionState = { ...sessionState, sessionName: event.name };
@@ -645,6 +688,7 @@
         await host.setRuntimeThinking(targetRuntimeId, pendingThinkingLevel);
         if (sessionState) sessionState = { ...sessionState, thinkingLevel: pendingThinkingLevel };
       }
+      rememberCurrentSessionPreference(sessionState?.model, sessionState?.thinkingLevel);
       return true;
     } catch (preferenceError) {
       error = messageFor(preferenceError);
@@ -677,9 +721,13 @@
     const model = models.find((candidate) => candidate.provider === provider && candidate.id === id);
     if (model === undefined) return;
     pendingModel = model;
-    cachedModelSelection = model;
-    cachedModelSelectionExplicit = true;
-    persistCatalog();
+    if (sessionPreferenceKey === undefined) {
+      cachedModelSelection = model;
+      cachedModelSelectionExplicit = true;
+      persistCatalog();
+    } else {
+      rememberCurrentSessionPreference(model, sessionState?.thinkingLevel ?? pendingThinkingLevel ?? rememberedThinkingLevel);
+    }
     if (runtimeId !== undefined) await applyPendingRuntimePreferences(runtimeId);
   }
 
@@ -687,9 +735,13 @@
     const level = (event.currentTarget as HTMLSelectElement).value;
     if (!thinkingLevels.includes(level)) return;
     pendingThinkingLevel = level;
-    cachedThinkingSelection = level;
-    cachedThinkingSelectionExplicit = true;
-    persistCatalog();
+    if (sessionPreferenceKey === undefined) {
+      cachedThinkingSelection = level;
+      cachedThinkingSelectionExplicit = true;
+      persistCatalog();
+    } else {
+      rememberCurrentSessionPreference(sessionState?.model ?? pendingModel ?? rememberedModel, level);
+    }
     if (runtimeId !== undefined) await applyPendingRuntimePreferences(runtimeId);
   }
 
@@ -703,8 +755,62 @@
   }
 
   function selectedModelKey(): string {
-    const model = sessionState?.model ?? pendingModel ?? cachedModelSelection ?? models[0];
+    const newChatDefault = sessionPreferenceKey === undefined ? cachedModelSelection : undefined;
+    const model = sessionState?.model ?? pendingModel ?? rememberedModel ?? newChatDefault ?? models[0];
     return model === undefined ? '' : modelKey(model);
+  }
+
+  function selectedThinkingLevel(): string {
+    const newChatDefault = sessionPreferenceKey === undefined ? cachedThinkingSelection : undefined;
+    return sessionState?.thinkingLevel
+      ?? pendingThinkingLevel
+      ?? rememberedThinkingLevel
+      ?? newChatDefault
+      ?? thinkingLevels[0]
+      ?? '';
+  }
+
+  function syncSessionPreferenceKey(
+    nextPersonal: boolean,
+    nextProjectId: string | undefined,
+    nextSessionId: string | undefined,
+  ): void {
+    const nextKey = runtimeSessionKey(nextPersonal, nextProjectId, nextSessionId);
+    if (nextKey === sessionPreferenceKey) return;
+    sessionPreferenceKey = nextKey;
+    if (nextKey === undefined) return;
+    if (sessionState !== undefined) {
+      rememberCurrentSessionPreference(sessionState.model, sessionState.thinkingLevel);
+      return;
+    }
+    const restored = initialRuntimeSelection(
+      nextKey,
+      cachedSessionPreferences,
+      cachedModelSelection,
+      cachedModelSelectionExplicit,
+      cachedThinkingSelection,
+      cachedThinkingSelectionExplicit,
+    );
+    rememberedModel = restored.rememberedModel;
+    rememberedThinkingLevel = restored.rememberedThinkingLevel;
+  }
+
+  function rememberCurrentSessionPreference(model: ModelLite | undefined, thinkingLevel: string | undefined): void {
+    if (sessionPreferenceKey === undefined || (model === undefined && thinkingLevel === undefined)) return;
+    rememberedModel = model ?? rememberedModel;
+    rememberedThinkingLevel = thinkingLevel ?? rememberedThinkingLevel;
+    cachedSessionPreferences = rememberSessionRuntimePreference(cachedSessionPreferences, {
+      key: sessionPreferenceKey,
+      model: rememberedModel,
+      thinkingLevel: rememberedThinkingLevel,
+      updatedAt: Date.now(),
+    });
+    persistCatalog();
+  }
+
+  function changeNewChatProject(event: Event): void {
+    const value = (event.currentTarget as HTMLSelectElement).value;
+    onNewChatProjectChange(value.length > 0 ? value : undefined);
   }
 
   function onSubmit(event: SubmitEvent): void {
@@ -744,6 +850,17 @@
       <textarea id="chat-draft" bind:this={composerTextarea} bind:value={draft} rows="2" placeholder={running ? 'Queue a follow-up with Enter, or steer below' : 'Message Pi…'} onkeydown={handleComposerKeydown}></textarea>
       <div class="composer-footer">
         <div class="composer-options" aria-label="Runtime options">
+          {#if sessionId === undefined}
+            <div class="composer-picker">
+              <span class="picker-label">Project</span>
+              <select aria-label="Project" value={personal ? '' : projectId ?? ''} onchange={changeNewChatProject} disabled={startBusy || sendBusy || running}>
+                <option value="">No project</option>
+                {#each projects as project}
+                  <option value={project.id} disabled={project.missing}>{project.name}{project.missing ? ' — unavailable' : ''}</option>
+                {/each}
+              </select>
+            </div>
+          {/if}
           <div class="composer-picker">
             <span class="picker-label">Model</span>
             {#if models.length === 0}
@@ -761,7 +878,7 @@
             {#if thinkingLevels.length === 0}
               <button type="button" class="catalog-load" onclick={() => void loadCatalogFromCurrentRuntime()} disabled={startBusy} aria-label="Load thinking levels from Pi">{startBusy ? 'Loading…' : 'Load thinking…'}</button>
             {:else}
-              <select aria-label="Thinking" value={sessionState?.thinkingLevel ?? pendingThinkingLevel ?? cachedThinkingSelection ?? thinkingLevels[0]} onchange={(event) => void changeThinking(event)} disabled={startBusy}>
+              <select aria-label="Thinking" value={selectedThinkingLevel()} onchange={(event) => void changeThinking(event)} disabled={startBusy}>
                 {#each thinkingLevels as level}<option value={level}>{level}</option>{/each}
               </select>
             {/if}

@@ -14,7 +14,7 @@ const settings = await readFile(resolve(root, 'src/features/settings/SettingsVie
 const tokens = await readFile(resolve(root, 'src/styles/tokens.css'), 'utf8');
 const hostClient = await readFile(resolve(root, 'src/host-api/client.ts'), 'utf8');
 
-for (const requiredText of ['TrustDialog', 'ReadOnlyTree', 'SettingsView', 'listExtensions', 'setExtensionEnabled', 'openNewChat', 'getSessionCatalog', 'refreshSessionCatalog', 'listenSessionCatalogEvents', 'listenSessionRootHints', 'waitForCurrentProjectCatalog', 'waitForCurrentPersonalCatalog', 'projectRecoveryEpoch', 'pendingProjectSessionResolution', 'onlyNewCatalogSession', 'retryPersistedSessionDiscovery', 'historyScroller', 'handleHistoryScroll', 'scrollHistoryToLatest', 'nextBrowserFrame', 'height: 100dvh', 'updateFontSize', 'updateChatWidth', 'applyPreferences(next)', 'applyPreferences(previous)']) {
+for (const requiredText of ['TrustDialog', 'ReadOnlyTree', 'SettingsView', 'listExtensions', 'setExtensionEnabled', 'openNewChat', 'getSessionCatalog', 'refreshSessionCatalog', 'listenSessionCatalogEvents', 'listenSessionRootHints', 'waitForCurrentProjectCatalog', 'waitForCurrentPersonalCatalog', 'projectRecoveryEpoch', 'pendingProjectSessionResolution', 'newChatProjectId', 'composingPersonalChat', 'onlyNewCatalogSession', 'retryPersistedSessionDiscovery', 'historyScroller', 'handleHistoryScroll', 'scrollHistoryToLatest', 'nextBrowserFrame', 'height: 100dvh', 'updateFontSize', 'updateChatWidth', 'applyPreferences(next)', 'applyPreferences(previous)']) {
   if (!app.includes(requiredText)) {
     throw new Error(`Foundation UI smoke check is missing: ${requiredText}`);
   }
@@ -26,7 +26,7 @@ for (const requiredText of ['New chat', 'Chats', 'onSelectPersonalSession', 'ari
   }
 }
 
-for (const requiredText of ['startPersonalChat', 'loadCatalogFromCurrentRuntime', 'CATALOG_STORAGE_KEY', 'Load models…', 'No user folder is attached', 'onRequestTrust', 'Review trust', 'composer-submit', 'Stop current turn', 'Thinking', 'onNewSessionStarting', 'onNewSessionStartAborted', 'onRetryPersistedSession', 'Retry discovery', 'onBlocksChanged', 'projectLiveBlock']) {
+for (const requiredText of ['startPersonalChat', 'loadCatalogFromCurrentRuntime', 'CATALOG_STORAGE_KEY', 'Load models…', 'No user folder is attached', 'onRequestTrust', 'Review trust', 'composer-submit', 'Stop current turn', 'Thinking', 'onNewSessionStarting', 'onNewSessionStartAborted', 'onRetryPersistedSession', 'Retry discovery', 'onBlocksChanged', 'projectLiveBlock', 'onNewChatProjectChange', 'aria-label="Project"', 'runtimeSessionKey']) {
   if (!chatPanel.includes(requiredText)) {
     throw new Error(`Personal-chat runtime smoke check is missing: ${requiredText}`);
   }
