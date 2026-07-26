@@ -46,7 +46,7 @@ jobs:
       PIUI_REQUIRE_WINDOWS_REPARSE_TEST: ${{ matrix.os == 'windows-latest' && '1' || '' }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
@@ -68,7 +68,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: dtolnay/rust-toolchain@1.100.0
       - run: pnpm install --frozen-lockfile
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
