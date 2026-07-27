@@ -64,15 +64,15 @@ _Source file: `README.md`._
 #### Windows 10/11 (recommended)
 
 1. Install the official [Pi CLI](https://pi.dev/) and confirm that `pi --version` works in a new terminal.
-2. Open the [PiUI v0.1.0 release](https://github.com/CrazyAngelm/PiUI/releases/tag/v0.1.0).
-3. Download `PiUI_0.1.0_x64-setup.exe` and the matching `SHA256SUMS.txt`.
+2. Open the [PiUI v0.1.1 release](https://github.com/CrazyAngelm/PiUI/releases/tag/v0.1.1).
+3. Download `PiUI_0.1.1_x64-setup.exe` and the matching `SHA256SUMS.txt`.
 4. Verify the checksum, run the installer, and open **PiUI** from the Start menu.
 5. Choose **New chat** for a personal session or **Add project** to register an existing folder.
 
 Verify the installer after downloading both files:
 
 ```powershell
-Get-FileHash .\PiUI_0.1.0_x64-setup.exe -Algorithm SHA256
+Get-FileHash .\PiUI_0.1.1_x64-setup.exe -Algorithm SHA256
 Get-Content .\SHA256SUMS.txt
 ```
 
@@ -80,7 +80,7 @@ The hash printed by `Get-FileHash` must match the installer entry in `SHA256SUMS
 
 Because this developer-preview build is not code-signed, Windows may show an unknown-publisher warning. Verify the checksum before running it. If you do not want to run an unsigned binary, [build from source](#build-from-source).
 
-The portable `PiUI_0.1.0_windows_x86_64.exe` asset can be used without an installer. It has the same preview limitations.
+The portable `PiUI_0.1.1_windows_x86_64.exe` asset can be used without an installer. It has the same preview limitations.
 
 #### Linux and macOS
 
@@ -508,6 +508,7 @@ These capabilities are allowed as extensions; the core provides slots and host c
 | MOD-006 | Changing model during an incompatible state is blocked or queued according to Pi's actual response. | Must |
 | MOD-007 | PiUI does not create its own price list; it shows only cost metadata received from Pi, marked as an estimate. | Must |
 | MOD-008 | An unauthorized provider leads to the Settings/Auth flow, not manual JSON editing in the main UI. | Must |
+| MOD-009 | The model picker is theme-owned, searchable by provider/id/name, and does not repeat equivalent technical and display labels. | Must |
 
 #### 7.6 Attachments
 
@@ -725,7 +726,7 @@ Extensions receive only documented semantic tokens; internal class names are not
 The order is fixed:
 
 1. **Settings** — icon + label, always available.
-2. **New chat** — primary compact action. When a project is selected, it opens an empty chat in that project by default; otherwise it opens a personal chat. The new-chat composer is anchored to the bottom of the workspace, including while an empty-session state is visible, so it does not jump when history appears. It includes a Project picker next to Model and Thinking so the user can choose any available project or `No project` before sending. A projectless chat receives a host-owned neutral CWD that is not exposed to the WebView and is not shown as a project. An empty chat lives in Pi memory and appears in history only after the first assistant response, when Pi itself writes JSONL.
+2. **New chat** — primary compact action. When a project is selected, it opens an empty chat in that project by default; otherwise it opens a personal chat. The new-chat composer is anchored to the bottom of the workspace, including while an empty-session state is visible, so it does not jump when history appears. It includes a Project picker next to Model and Thinking so the user can choose any available project or `No project` before sending. A projectless chat receives a host-owned neutral CWD that is not exposed to the WebView and is not shown as a project. Chats shows a selected, presentation-only `New chat` row while the session still exists only in Pi memory. After the first assistant response writes JSONL, that row is replaced by and automatically selects the indexed session; the user never has to select the newly created chat manually.
 3. **Add project** — secondary action for registering an existing user folder.
 4. Optional command palette/search icon.
 
@@ -742,7 +743,7 @@ Developer-only fake runtime, legacy probe, and foundation disclaimers are not sh
 
 #### 3.2 Chats and projects
 
-Above Projects is a separate system group, **Chats**, containing personal sessions. It is not a project row: it has no path, trust toggle, rename/pin/remove controls, or project-local resource claims. The selected chat is indicated in the sidebar, and the chat surface shows the literal `No user folder is attached`; this is not a promise of an OS sandbox.
+Above Projects is a separate system group, **Chats**, containing personal sessions. It is not a project row: it has no path, trust toggle, rename/pin/remove controls, or project-local resource claims. The selected chat is indicated in the sidebar. Projectless state is communicated once by the `No project` composer control and concise empty-state copy rather than a repeated technical persistence notice; this is not a promise of an OS sandbox.
 
 A project row contains:
 
@@ -1954,7 +1955,7 @@ The preferred path is a documented Pi startup/session selector or RPC `switch_se
 
 #### 9.3 Creation
 
-`New chat` immediately opens an empty composer in the currently selected project, or in the system Chats scope when no project is selected. Before Send, a Project picker beside Model and Thinking can switch the new chat to any available project or to `No project`. A projectless runtime uses a host-owned neutral CWD; a contextual project chat starts Pi in the selected project `cwd`. Both start lazily on the first Send. Opening and rapidly switching history sessions does not create an agent process: the UI reuses a bounded display-safe provider/model cache. Model and thinking selections are remembered per opaque session for presentation, while the state returned by Pi when that session starts remains authoritative and is never overwritten by a global selection from another session. On first launch, the user may explicitly choose `Load available models…`; this action activates the current session through the same typed runtime adapter, not a separate catalog subprocess. In all cases, Pi remains the only writer: an empty session may be in memory until the first assistant response. A session appears in the sidebar only after durable Pi JSONL/file appears, not from an optimistic fake ID.
+`New chat` immediately opens an empty composer in the currently selected project, or in the system Chats scope when no project is selected. Before Send, a Project picker beside Model and Thinking can switch the new chat to any available project or to `No project`. A projectless runtime uses a host-owned neutral CWD; a contextual project chat starts Pi in the selected project `cwd`. Both start lazily on the first Send. Opening and rapidly switching history sessions does not create an agent process: the UI reuses a bounded display-safe provider/model cache. Model and thinking selections are remembered per opaque session for presentation, while the state returned by Pi when that session starts remains authoritative and is never overwritten by a global selection from another session. On first launch, the user may explicitly choose `Load available models…`; this action activates the current session through the same typed runtime adapter, not a separate catalog subprocess. The model control is a host-themed, searchable list grouped by provider; it displays the human label once while retaining provider and model id as search/provenance data. In all cases, Pi remains the only writer: an empty session may be in memory until the first assistant response. Before persistence the sidebar may show a selected presentation-only `New chat` row with no session id. Once durable Pi JSONL appears, catalog reconciliation identifies the single session absent from the captured baseline (with a bounded creation-time fallback for an incompletely hydrated baseline), loads its page, and selects its real opaque indexed id automatically.
 
 #### 9.4 Rename
 
@@ -2186,6 +2187,16 @@ PiUI must continue Pi's philosophy: a minimal core, extended through packages. A
 
 The absence of `piui` must never prevent a backend extension from working.
 
+#### v0.1 implementation status
+
+The current implementation deliberately exposes only the first narrow slices of this target contract:
+
+- **Tier 0:** Pi remains the only extension runtime. PiUI discovers `get_commands`, provides slash autocomplete and a provenance-labelled command palette, and projects the standard RPC Extension UI methods `select`, `confirm`, `input`, `editor`, `notify`, `setStatus`, `setWidget`, `setTitle`, and `set_editor_text` through a bounded host-owned mailbox. Absolute paths, ANSI/control sequences, raw RPC IDs, and arbitrary payload fields do not cross into the WebView. Awaited dialogs received during the startup handshake are cancelled rather than deadlocking Pi; active-session dialogs are interactive. TUI-only `ctx.ui.custom()` remains unsupported.
+- **Tier 1A:** for enabled, globally installed Pi packages, PiUI checks the package-root `piui.manifest.json` without executing package JavaScript. It currently projects only `pi-command:` command declarations and composer actions that reference them. Clicking an action prepares the slash command for user review; it does not execute silently. Unsupported handlers/contributions stay backend-only, and an absent or invalid manifest does not disable the Pi extension.
+- **Not implemented yet:** project-local manifest discovery, independent UI enablement/grants, `when` expressions (conditioned items are not activated), Pi/Host API engine probing and required-feature negotiation (such manifests remain backend-only), custom manifest paths, workers, UiNode renderers/views, rich views, shells, renderer ownership, and package UI diagnostics.
+
+The remaining sections define the intended SDK contract, not a claim that every surface already ships.
+
 ### 2. Extensibility tiers
 
 #### Tier 0 — Backend-only compatibility
@@ -2282,7 +2293,7 @@ Example `package.json`:
 }
 ```
 
-PiUI first applies Pi package discovery rules, then looks for the optional `piui.manifest.json`. It does not run `postinstall` or execute package code to read the manifest.
+PiUI first applies Pi package discovery rules, then looks for the optional `piui.manifest.json`. It does not run `postinstall` or execute package code to read the manifest. In v0.1, only the default package-root filename is discovered; the optional `package.json#piui.manifest` override is reserved for a later compatibility slice.
 
 ### 4. Manifest
 
@@ -2443,7 +2454,7 @@ Limits v1:
 
 Handler types:
 
-- `pi-command:<name>` — invokes a command already registered by the backend extension;
+- `pi-command:<name>` — invokes a command already registered by the backend extension (the only handler projected by Tier 1A in v0.1);
 - `host:<allowlisted-action>` — only actions explicitly exposed by the SDK;
 - `worker:<handler>` — invokes a sandboxed extension worker;
 - `view:<viewId>:<message>` — sends an event to a rich view.
@@ -5340,9 +5351,13 @@ Scale:
 
 **Signal:** `ctx.ui.custom`, header/footer/editor/theme are no-ops; custom entries lack renderer metadata.
 
-**Mitigation:** Tier 0 generic fallback + PiUI manifest/SDK; extension UI fixture corpus.
+**Implemented evidence:** against Pi 0.82.1, the typed adapter now enumerates RPC commands and projects bounded `notify`, status, widget, title, editor-text, select, confirm, input, and editor actions without exposing native paths or raw RPC IDs. A live installed-package probe exercised an extension slash command and observed its notification through the adapter; an isolated project-local synthetic fixture round-tripped select, confirm, input, and editor responses through the same LF-framed runtime. The first global-package `piui.manifest.json` fixture projects only `pi-command:` declarations and composer actions; removing or invalidating it leaves the backend and generic command surface intact.
 
-**Exit:** documented compatibility matrix and dual-package example; no claim of full automatic TUI parity.
+**Residual:** awaited dialogs emitted before the startup handshake reaches Ready are explicitly cancelled to prevent a protocol deadlock; TUI-only `ctx.ui.custom()` cannot be translated; project-local manifests, independent UI grants, renderer ownership, declarative views/renderers, and rich surfaces remain unimplemented. RPC `toolName` still does not reliably identify the owning extension.
+
+**Mitigation:** Tier 0 generic fallback + PiUI manifest/SDK; extension UI fixture corpus; require upstream extensions to use `ctx.mode === "tui"` only around genuinely TUI-only components.
+
+**Exit:** documented compatibility matrix and dual-package example; renderer ownership decision; no claim of full automatic TUI parity.
 
 #### R-06 — Concurrent writers
 
@@ -7516,6 +7531,115 @@ export interface HostCommandRequestV8 {
 export type HostCommandResponseV8 =
   | { protocol: 8; commandId: CommandId; ok: true; result: JsonValue | null }
   | { protocol: 8; commandId: CommandId; ok: false; error: HostError };
+
+/** Protocol v9 adds interactive standard Pi extension UI plus the live
+ * runtime command catalog. Raw Pi request ids, source paths, and unbounded
+ * extension payloads remain host-private. */
+export interface ProtocolEnvelopeV9<TType extends string, TPayload> {
+  protocol: 9;
+  type: TType;
+  payload: TPayload;
+}
+
+type ReversionV8HostCommand<T> = T extends ProtocolEnvelopeV8<infer TType, infer TPayload>
+  ? ProtocolEnvelopeV9<TType, TPayload>
+  : never;
+
+export interface DesktopRuntimeCommandV9 {
+  name: string;
+  description?: string;
+  source: 'extension' | 'prompt' | 'skill';
+  scope?: 'user' | 'project' | 'temporary';
+  origin?: 'package' | 'top-level';
+}
+
+export interface DesktopPiUiCommandContributionV9 {
+  extensionId: string;
+  extensionName: string;
+  id: string;
+  title: string;
+  description?: string;
+  commandName: string;
+}
+
+export interface DesktopPiUiComposerActionContributionV9 {
+  extensionId: string;
+  extensionName: string;
+  id: string;
+  title: string;
+  description?: string;
+  commandId: string;
+  commandName: string;
+  order: number;
+}
+
+export interface DesktopPiUiContributionCatalogV9 {
+  commands: DesktopPiUiCommandContributionV9[];
+  composerActions: DesktopPiUiComposerActionContributionV9[];
+}
+
+export interface DesktopExtensionUiOptionV9 {
+  id: string;
+  label: string;
+}
+
+export type DesktopExtensionDialogV9 =
+  | { kind: 'select'; id: string; title: string; options: DesktopExtensionUiOptionV9[]; timeoutMs?: number }
+  | { kind: 'confirm'; id: string; title: string; message: string; timeoutMs?: number }
+  | { kind: 'input'; id: string; title: string; placeholder?: string; timeoutMs?: number }
+  | { kind: 'editor'; id: string; title: string; prefill?: string; timeoutMs?: number };
+
+export type DesktopExtensionUiActionV9 =
+  | { action: 'dialog'; request: DesktopExtensionDialogV9 }
+  | { action: 'notify'; id: string; message: string; level: 'info' | 'warning' | 'error' }
+  | { action: 'status'; key: string; text?: string }
+  | { action: 'widget'; key: string; lines?: string[]; placement: 'aboveEditor' | 'belowEditor' }
+  | { action: 'title'; title: string }
+  | { action: 'editorText'; text: string }
+  | { action: 'unsupported'; id: string; method: string; safeSummary: string };
+
+export type DesktopExtensionUiResponseV9 =
+  | { kind: 'selected'; optionId: string }
+  | { kind: 'confirmed'; value: boolean }
+  | { kind: 'submitted'; value: string }
+  | { kind: 'cancelled' };
+
+export type DesktopRuntimeStreamEventV9 =
+  | Exclude<DesktopRuntimeStreamEventV5, { kind: 'extensionUiRequest' }>
+  | { kind: 'extensionUi'; action: DesktopExtensionUiActionV9 };
+
+export type DesktopRuntimeEventEnvelopeV9 =
+  | ({
+      protocol: 9;
+      runtimeId: RuntimeId;
+      scope: 'project';
+      projectId: ProjectId;
+      sessionId?: SessionId;
+    } & DesktopRuntimeStreamEventV9)
+  | ({
+      protocol: 9;
+      runtimeId: RuntimeId;
+      scope: 'personal';
+      sessionId?: SessionId;
+    } & DesktopRuntimeStreamEventV9);
+
+export type HostCommandV9 =
+  | ReversionV8HostCommand<HostCommandV8>
+  | ProtocolEnvelopeV9<'runtime.commands.get', { runtimeId: RuntimeId }>
+  | ProtocolEnvelopeV9<'extension.contributions.get', Record<string, never>>
+  | ProtocolEnvelopeV9<
+      'runtime.extensionUi.respond',
+      { runtimeId: RuntimeId; requestId: string; response: DesktopExtensionUiResponseV9 }
+    >;
+
+export interface HostCommandRequestV9 {
+  commandId: CommandId;
+  command: HostCommandV9;
+}
+
+export type HostCommandResponseV9 =
+  | { protocol: 9; commandId: CommandId; ok: true; result: JsonValue | null }
+  | { protocol: 9; commandId: CommandId; ok: false; error: HostError };
 
 export interface HostError {
   code:

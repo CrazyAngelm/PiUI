@@ -8,7 +8,9 @@ for (const file of files) {
   bytes += (await stat(resolve(assets, file))).size;
 }
 
-const budget = 200 * 1024;
+// Protocol v9 surfaces plus the accessible themed model picker consume a
+// measured ~38 KiB raw asset delta; retain about 6 KiB of headroom.
+const budget = 244 * 1024;
 if (bytes > budget) {
   throw new Error(`Frontend asset smoke budget exceeded: ${bytes} bytes > ${budget} bytes.`);
 }

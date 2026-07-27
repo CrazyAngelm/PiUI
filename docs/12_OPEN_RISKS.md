@@ -77,9 +77,13 @@ Scale:
 
 **Signal:** `ctx.ui.custom`, header/footer/editor/theme are no-ops; custom entries lack renderer metadata.
 
-**Mitigation:** Tier 0 generic fallback + PiUI manifest/SDK; extension UI fixture corpus.
+**Implemented evidence:** against Pi 0.82.1, the typed adapter now enumerates RPC commands and projects bounded `notify`, status, widget, title, editor-text, select, confirm, input, and editor actions without exposing native paths or raw RPC IDs. A live installed-package probe exercised an extension slash command and observed its notification through the adapter; an isolated project-local synthetic fixture round-tripped select, confirm, input, and editor responses through the same LF-framed runtime. The first global-package `piui.manifest.json` fixture projects only `pi-command:` declarations and composer actions; removing or invalidating it leaves the backend and generic command surface intact.
 
-**Exit:** documented compatibility matrix and dual-package example; no claim of full automatic TUI parity.
+**Residual:** awaited dialogs emitted before the startup handshake reaches Ready are explicitly cancelled to prevent a protocol deadlock; TUI-only `ctx.ui.custom()` cannot be translated; project-local manifests, independent UI grants, renderer ownership, declarative views/renderers, and rich surfaces remain unimplemented. RPC `toolName` still does not reliably identify the owning extension.
+
+**Mitigation:** Tier 0 generic fallback + PiUI manifest/SDK; extension UI fixture corpus; require upstream extensions to use `ctx.mode === "tui"` only around genuinely TUI-only components.
+
+**Exit:** documented compatibility matrix and dual-package example; renderer ownership decision; no claim of full automatic TUI parity.
 
 ### R-06 — Concurrent writers
 

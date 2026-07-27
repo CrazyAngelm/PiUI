@@ -52,6 +52,65 @@ export interface ApiRuntimeStart {
   sessionId?: string;
 }
 
+export interface RuntimeCommand {
+  name: string;
+  description?: string;
+  source: 'extension' | 'prompt' | 'skill';
+  scope?: 'user' | 'project' | 'temporary';
+  origin?: 'package' | 'top-level';
+}
+
+export interface PiUiCommandContribution {
+  extensionId: string;
+  extensionName: string;
+  id: string;
+  title: string;
+  description?: string;
+  commandName: string;
+}
+
+export interface PiUiComposerActionContribution {
+  extensionId: string;
+  extensionName: string;
+  id: string;
+  title: string;
+  description?: string;
+  commandId: string;
+  commandName: string;
+  order: number;
+}
+
+export interface PiUiContributionCatalog {
+  commands: PiUiCommandContribution[];
+  composerActions: PiUiComposerActionContribution[];
+}
+
+export interface ExtensionUiOption {
+  id: string;
+  label: string;
+}
+
+export type ExtensionDialogRequest =
+  | { kind: 'select'; id: string; title: string; options: ExtensionUiOption[]; timeoutMs?: number }
+  | { kind: 'confirm'; id: string; title: string; message: string; timeoutMs?: number }
+  | { kind: 'input'; id: string; title: string; placeholder?: string; timeoutMs?: number }
+  | { kind: 'editor'; id: string; title: string; prefill?: string; timeoutMs?: number };
+
+export type ExtensionUiAction =
+  | { action: 'dialog'; request: ExtensionDialogRequest }
+  | { action: 'notify'; id: string; message: string; level: 'info' | 'warning' | 'error' }
+  | { action: 'status'; key: string; text?: string }
+  | { action: 'widget'; key: string; lines?: string[]; placement: 'aboveEditor' | 'belowEditor' }
+  | { action: 'title'; title: string }
+  | { action: 'editorText'; text: string }
+  | { action: 'unsupported'; id: string; method: string; safeSummary: string };
+
+export type ExtensionUiResponse =
+  | { kind: 'selected'; optionId: string }
+  | { kind: 'confirmed'; value: boolean }
+  | { kind: 'submitted'; value: string }
+  | { kind: 'cancelled' };
+
 /** Streamed runtime events delivered on `piui://runtime-event`.
  * Mirrors `piui_runtime::SurfaceEvent` (tag = `kind`, camelCase fields). */
 export type SurfaceEvent =
@@ -74,21 +133,21 @@ export type SurfaceEvent =
   | { kind: 'compaction'; active: boolean; safeSummary?: string }
   | { kind: 'thinkingLevelChanged'; level: string }
   | { kind: 'sessionInfoChanged'; name?: string }
-  | { kind: 'extensionUiRequest'; id: string; method: string; safeSummary?: string }
+  | { kind: 'extensionUi'; action: ExtensionUiAction }
   | { kind: 'runtimeError'; safeSummary: string };
 
 /** Versioned payload emitted on the `piui://runtime-event` event channel.
  * Personal events deliberately have no backing workspace project id. */
 export type RuntimeEventEnvelope =
   | ({
-    protocol: 5;
+    protocol: 9;
     runtimeId: string;
     scope: 'project';
     projectId: string;
     sessionId?: string;
   } & SurfaceEvent)
   | ({
-    protocol: 5;
+    protocol: 9;
     runtimeId: string;
     scope: 'personal';
     sessionId?: string;

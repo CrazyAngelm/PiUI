@@ -10,6 +10,7 @@
   export let sessions: SessionSummary[] = [];
   export let personalSessions: SessionSummary[] = [];
   export let personalSelected = false;
+  export let personalDraftActive = false;
   export let selectedPersonalSessionId: string | undefined;
   export let selectedProjectId: string | undefined;
   export let expandedProjectId: string | undefined;
@@ -70,9 +71,15 @@
     <section class="chat-group" class:selected={personalSelected}>
       <p class="section-label">Chats</p>
       <div class="session-list session-list--personal" aria-label="Personal chats">
-        {#if personalSessions.length === 0}
+        {#if personalSessions.length === 0 && !personalDraftActive}
           <p class="no-sessions">No personal chats yet</p>
         {:else}
+          {#if personalDraftActive}
+            <div class="session-row session-row--draft selected" aria-current="page" role="status">
+              <span class="status-dot status-dot--pending" aria-hidden="true"></span>
+              <span class="session-copy"><span class="session-title">New chat</span></span>
+            </div>
+          {/if}
           {#each personalSessions as session (session.id)}
             <button class:selected={personalSelected && session.id === selectedPersonalSessionId} class="session-row" type="button" aria-current={personalSelected && session.id === selectedPersonalSessionId ? 'page' : undefined} onclick={() => onSelectPersonalSession(session)}>
               {#if session.parseState === 'corrupt'}
@@ -200,6 +207,8 @@
   .session-row { display: flex; align-items: flex-start; gap: var(--piui-space-2); padding: 7px var(--piui-space-2); border-radius: var(--piui-radius-sm); background: transparent; color: var(--piui-text-muted); }
   .session-row:hover, .session-row.selected { background: var(--piui-surface-2); color: var(--piui-text); }
   .session-row .status-dot { width: 7px; height: 7px; margin-top: 5px; }
+  .session-row--draft { cursor: default; }
+  .status-dot--pending { border-color: var(--piui-accent); background: var(--piui-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--piui-accent) 13%, transparent); }
   .session-copy { min-width: 0; }
   .session-title { display: block; font-size: 13px; line-height: 1.25; }
 </style>

@@ -4,12 +4,15 @@ import type {
   ApiRuntimeStart,
   AppSnapshot,
   ExtensionSummary,
+  ExtensionUiResponse,
   FakeScenario,
   FakeScenarioResult,
   ModelLite,
+  PiUiContributionCatalog,
   Preferences,
   ProjectSummary,
   ProjectTrustState,
+  RuntimeCommand,
   RuntimeEventEnvelope,
   RuntimeSnapshot,
   SessionCatalogEvent,
@@ -67,6 +70,9 @@ export interface HostClient {
   getRuntimeState(runtimeId: string): Promise<SessionStateLite>;
   getRuntimeModels(runtimeId: string): Promise<ModelLite[]>;
   getRuntimeThinkingLevels(runtimeId: string): Promise<string[]>;
+  getRuntimeCommands(runtimeId: string): Promise<RuntimeCommand[]>;
+  listPiUiContributions(): Promise<PiUiContributionCatalog>;
+  respondExtensionUi(runtimeId: string, requestId: string, response: ExtensionUiResponse): Promise<void>;
   setRuntimeModel(runtimeId: string, provider: string, modelId: string): Promise<void>;
   setRuntimeThinking(runtimeId: string, level: string): Promise<void>;
   setRuntimeSessionName(runtimeId: string, name: string): Promise<void>;
@@ -256,6 +262,15 @@ const tauriClient: HostClient = {
   },
   async getRuntimeThinkingLevels(runtimeId) {
     return invokeSafe<string[]>('Runtime thinking levels', 'get_runtime_thinking_levels', { runtimeId });
+  },
+  async getRuntimeCommands(runtimeId) {
+    return invokeSafe<RuntimeCommand[]>('Runtime commands', 'get_runtime_commands', { runtimeId });
+  },
+  async listPiUiContributions() {
+    return invokeSafe<PiUiContributionCatalog>('PiUI contributions', 'list_piui_contributions');
+  },
+  async respondExtensionUi(runtimeId, requestId, response) {
+    await invokeSafe<void>('Extension response', 'respond_extension_ui', { runtimeId, requestId, response });
   },
   async setRuntimeModel(runtimeId, provider, modelId) {
     await invokeSafe<void>('Runtime model set', 'set_runtime_model', { runtimeId, provider, modelId });
@@ -506,6 +521,15 @@ const mockClient: HostClient = {
   },
   async getRuntimeThinkingLevels() {
     return ['off'];
+  },
+  async getRuntimeCommands() {
+    return [];
+  },
+  async listPiUiContributions() {
+    return { commands: [], composerActions: [] };
+  },
+  async respondExtensionUi() {
+    /* not available in mock */
   },
   async setRuntimeModel() {
     /* not available in mock */

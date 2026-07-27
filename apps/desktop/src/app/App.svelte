@@ -6,6 +6,8 @@
   import ProjectSettingsDialog from '../features/projects/ProjectSettingsDialog.svelte';
   import TrustDialog from '../features/projects/TrustDialog.svelte';
   import ChatPanel from '../features/runtime/ChatPanel.svelte';
+  import { resolveNewCatalogSession } from '../features/runtime/sessionPersistenceFeedback';
+  import { commandDraft } from '../features/runtime/runtimeCommands';
   import Timeline from '../features/sessions/Timeline.svelte';
   import { acceptsCatalogSnapshot } from '../features/sessions/catalogView';
   import SettingsView from '../features/settings/SettingsView.svelte';
@@ -13,8 +15,11 @@
   import { hasNativeFolderPicker, host, isHostConflict } from '../host-api/client';
   import type {
     ExtensionSummary,
+    PiUiCommandContribution,
+    PiUiComposerActionContribution,
     Preferences,
     ProjectSummary,
+    RuntimeCommand,
     SessionCatalogEvent,
     SessionCatalogFreshness,
     SessionCatalogSnapshot,
@@ -64,11 +69,13 @@
   let pendingProjectResolutionLastCatalogSequence = 0;
   let pendingPersonalResolutionLastCatalogSequence = 0;
   let resolvingPendingProjectSession = false;
-  let resolvingPendingPersonalSession = false;
+  let resolvingPersonalSessionEpoch: number | undefined;
   let pendingProjectSessionCompletionObserved = false;
   let pendingPersonalSessionCompletionObserved = false;
   let newProjectSessionBaseline: ReadonlySet<string> | undefined;
+  let newProjectSessionStartedAt: number | undefined;
   let newPersonalSessionBaseline: ReadonlySet<string> | undefined;
+  let newPersonalSessionStartedAt: number | undefined;
   let rootHintSequence = 0;
   let rootHintPending = false;
   let rootHintTimer: ReturnType<typeof setTimeout> | undefined;
@@ -115,6 +122,10 @@
   let newChatProjectId: string | undefined;
   let composingPersonalChat = false;
   let composerDraft = '';
+  let runtimeCommands: RuntimeCommand[] = [];
+  let piUiCommands: PiUiCommandContribution[] = [];
+  let piUiComposerActions: PiUiComposerActionContribution[] = [];
+  let piUiContributionRequestEpoch = 0;
 
   const MAX_RETAINED_TIMELINE_BLOCKS = 500;
   // Monotonic local epochs prevent a delayed host response from rendering a
@@ -171,6 +182,7 @@
       // calls paint SQLite snapshots first and reconcile independently.
       if (initialProject !== undefined) void selectProject(initialProject);
       void refreshPersonalSessions();
+      if (!snapshot.safeMode) void refreshPiUiContributions();
     } catch (error) {
       state = reduceAppState(state, { type: 'failed', message: messageFor(error) });
     }
@@ -298,7 +310,7 @@
       );
       if (
         pendingPersonalSessionCompletionObserved
-        && !resolvingPendingPersonalSession
+        && resolvingPersonalSessionEpoch !== personalChatEpoch
         && isNewCatalogSnapshot
       ) {
         pendingPersonalResolutionRetryCount = 0;
@@ -547,12 +559,30 @@
     }
   }
 
+  async function refreshPiUiContributions(): Promise<void> {
+    const requestEpoch = ++piUiContributionRequestEpoch;
+    try {
+      const catalog = await host.listPiUiContributions();
+      if (requestEpoch === piUiContributionRequestEpoch) {
+        piUiCommands = catalog.commands;
+        piUiComposerActions = catalog.composerActions;
+      }
+    } catch {
+      // Optional UI contributions degrade to Pi's generic command surface.
+      if (requestEpoch === piUiContributionRequestEpoch) {
+        piUiCommands = [];
+        piUiComposerActions = [];
+      }
+    }
+  }
+
   async function toggleExtension(extension: ExtensionSummary, enabled: boolean): Promise<void> {
     if (extensionBusyId !== undefined) return;
     extensionBusyId = extension.id;
     extensionsError = undefined;
     try {
       extensions = await host.setExtensionEnabled(extension.id, enabled);
+      void refreshPiUiContributions();
     } catch (error) {
       extensionsError = messageFor(error);
     } finally {
@@ -612,7 +642,10 @@
   function captureNewProjectSessionBaseline(): void {
     const projectId = state.selectedProjectId;
     if (projectId !== undefined && state.selectedSessionId === undefined) {
-      newProjectSessionBaseline ??= new Set(state.sessions.map((session) => session.id));
+      if (newProjectSessionBaseline === undefined) {
+        newProjectSessionBaseline = new Set(state.sessions.map((session) => session.id));
+        newProjectSessionStartedAt = Date.now();
+      }
       if (pendingProjectSessionResolution === undefined) {
         pendingProjectSessionResolution = { projectId, epoch: projectRequestEpoch };
         pendingProjectResolutionRetryCount = 0;
@@ -650,6 +683,7 @@
     const pending = pendingProjectSessionResolution;
     pendingProjectSessionResolution = undefined;
     newProjectSessionBaseline = undefined;
+    newProjectSessionStartedAt = undefined;
     pendingProjectResolutionRetryCount = 0;
     pendingProjectResolutionLastCatalogSequence = 0;
     pendingProjectSessionCompletionObserved = false;
@@ -664,7 +698,10 @@
 
   function captureNewPersonalSessionBaseline(): void {
     if (personalSelected && selectedPersonalSessionId === undefined) {
-      newPersonalSessionBaseline ??= new Set(personalSessions.map((session) => session.id));
+      if (newPersonalSessionBaseline === undefined) {
+        newPersonalSessionBaseline = new Set(personalSessions.map((session) => session.id));
+        newPersonalSessionStartedAt = Date.now();
+      }
       if (!pendingPersonalSessionResolution) {
         pendingPersonalResolutionRetryCount = 0;
         pendingPersonalResolutionLastCatalogSequence = personalCatalog?.sequence ?? 0;
@@ -694,6 +731,7 @@
     const wasPending = pendingPersonalSessionResolution;
     pendingPersonalSessionResolution = false;
     newPersonalSessionBaseline = undefined;
+    newPersonalSessionStartedAt = undefined;
     pendingPersonalResolutionRetryCount = 0;
     pendingPersonalResolutionLastCatalogSequence = 0;
     pendingPersonalSessionCompletionObserved = false;
@@ -728,6 +766,7 @@
     if (personalSelected) {
       const expectedSessionId = selectedPersonalSessionId;
       const expectedSessionEpoch = sessionRequestEpoch;
+      const expectedChatEpoch = personalChatEpoch;
       pendingPersonalSessionCompletionObserved = true;
       const resolvingNewSession = pendingPersonalSessionResolution || expectedSessionId === undefined;
       const knownSessionIds = expectedSessionId === undefined
@@ -741,7 +780,7 @@
         pendingPersonalSessionResolution = true;
       }
       let resolved = false;
-      if (resolvingNewSession) resolvingPendingPersonalSession = true;
+      if (resolvingNewSession) resolvingPersonalSessionEpoch = expectedChatEpoch;
       try {
         const refreshed = await refreshPersonalCatalog();
         const catalog = refreshed?.freshness === 'current'
@@ -749,7 +788,7 @@
           : await waitForCurrentPersonalCatalog();
         if (catalog === undefined) throw new Error('Pi has not persisted the completed personal turn yet.');
         const session = expectedSessionId === undefined
-          ? onlyNewCatalogSession(catalog.sessions, knownSessionIds)
+          ? resolveNewCatalogSession(catalog.sessions, knownSessionIds, newPersonalSessionStartedAt)
           : catalog.sessions.find((candidate) => candidate.id === expectedSessionId);
         if (session === undefined) throw new Error('Pi has not persisted the completed personal turn yet.');
         let page: TimelinePage;
@@ -772,19 +811,22 @@
         resolved = true;
       } finally {
         if (resolvingNewSession) {
-          resolvingPendingPersonalSession = false;
-          if (resolved) {
-            pendingPersonalSessionResolution = false;
-            newPersonalSessionBaseline = undefined;
-            pendingPersonalResolutionRetryCount = 0;
-            pendingPersonalResolutionLastCatalogSequence = 0;
-            pendingPersonalSessionCompletionObserved = false;
-            if (pendingPersonalResolutionRetry !== undefined) {
-              clearTimeout(pendingPersonalResolutionRetry);
-              pendingPersonalResolutionRetry = undefined;
+          if (resolvingPersonalSessionEpoch === expectedChatEpoch) resolvingPersonalSessionEpoch = undefined;
+          if (expectedChatEpoch === personalChatEpoch) {
+            if (resolved) {
+              pendingPersonalSessionResolution = false;
+              newPersonalSessionBaseline = undefined;
+              newPersonalSessionStartedAt = undefined;
+              pendingPersonalResolutionRetryCount = 0;
+              pendingPersonalResolutionLastCatalogSequence = 0;
+              pendingPersonalSessionCompletionObserved = false;
+              if (pendingPersonalResolutionRetry !== undefined) {
+                clearTimeout(pendingPersonalResolutionRetry);
+                pendingPersonalResolutionRetry = undefined;
+              }
+            } else {
+              schedulePendingPersonalSessionResolution();
             }
-          } else {
-            schedulePendingPersonalSessionResolution();
           }
         }
       }
@@ -821,7 +863,7 @@
         : await waitForCurrentProjectCatalog(projectId, expectedProjectEpoch);
       if (catalog === undefined) throw new Error('Pi has not persisted the completed project turn yet.');
       const session = expectedSessionId === undefined
-        ? onlyNewCatalogSession(catalog.sessions, knownSessionIds)
+        ? resolveNewCatalogSession(catalog.sessions, knownSessionIds, newProjectSessionStartedAt)
         : catalog.sessions.find((candidate) => candidate.id === expectedSessionId);
       if (session === undefined) throw new Error('Pi has not persisted the completed project turn yet.');
       let page: TimelinePage;
@@ -861,6 +903,7 @@
             pendingProjectSessionResolution = undefined;
           }
           newProjectSessionBaseline = undefined;
+          newProjectSessionStartedAt = undefined;
           pendingProjectResolutionRetryCount = 0;
           pendingProjectResolutionLastCatalogSequence = 0;
           pendingProjectSessionCompletionObserved = false;
@@ -873,14 +916,6 @@
         }
       }
     }
-  }
-
-  function onlyNewCatalogSession(
-    sessions: SessionSummary[],
-    knownSessionIds: ReadonlySet<string>,
-  ): SessionSummary | undefined {
-    const newSessions = sessions.filter((session) => !knownSessionIds.has(session.id));
-    return newSessions.length === 1 ? newSessions[0] : undefined;
   }
 
   async function applyCompletedTurnPage(page: TimelinePage): Promise<void> {
@@ -1018,6 +1053,7 @@
   function invalidatePersonalCatalog(): void {
     pendingPersonalSessionResolution = false;
     newPersonalSessionBaseline = undefined;
+    newPersonalSessionStartedAt = undefined;
     pendingPersonalResolutionRetryCount = 0;
     pendingPersonalResolutionLastCatalogSequence = 0;
     if (pendingPersonalResolutionRetry !== undefined) {
@@ -1055,6 +1091,7 @@
     if (pendingProjectSessionResolution?.projectId === projectId) {
       pendingProjectSessionResolution = undefined;
       newProjectSessionBaseline = undefined;
+      newProjectSessionStartedAt = undefined;
       pendingProjectResolutionRetryCount = 0;
       pendingProjectResolutionLastCatalogSequence = 0;
       if (pendingProjectResolutionRetry !== undefined) {
@@ -1079,6 +1116,7 @@
     newChatProjectId = startNewChat ? project.id : undefined;
     pendingPersonalSessionResolution = false;
     newPersonalSessionBaseline = undefined;
+    newPersonalSessionStartedAt = undefined;
     pendingPersonalResolutionRetryCount = 0;
     selectedPersonalSessionId = undefined;
     expandedProjectId = project.id;
@@ -1092,6 +1130,7 @@
     // blank sidebar for a project we have indexed before.
     sessionRequestEpoch += 1;
     newProjectSessionBaseline = undefined;
+    newProjectSessionStartedAt = undefined;
     resetTimeline();
     tree = undefined;
     sessionsFreshness = retainedCatalog?.freshness ?? 'cached';
@@ -1145,6 +1184,7 @@
     if (pendingProjectSessionResolution?.projectId === projectId) {
       pendingProjectSessionResolution = undefined;
       newProjectSessionBaseline = undefined;
+      newProjectSessionStartedAt = undefined;
       pendingProjectResolutionRetryCount = 0;
     }
     const requestEpoch = ++sessionRequestEpoch;
@@ -1208,7 +1248,17 @@
     pendingProjectSessionResolution = undefined;
     pendingProjectResolutionRetryCount = 0;
     newProjectSessionBaseline = undefined;
+    newProjectSessionStartedAt = undefined;
+    pendingPersonalSessionResolution = false;
+    pendingPersonalResolutionRetryCount = 0;
+    pendingPersonalResolutionLastCatalogSequence = 0;
+    pendingPersonalSessionCompletionObserved = false;
     newPersonalSessionBaseline = undefined;
+    newPersonalSessionStartedAt = undefined;
+    if (pendingPersonalResolutionRetry !== undefined) {
+      clearTimeout(pendingPersonalResolutionRetry);
+      pendingPersonalResolutionRetry = undefined;
+    }
     expandedProjectId = undefined;
     loadedSessionProjectId = undefined;
     sessionsLoading = false;
@@ -1233,10 +1283,12 @@
     pendingProjectSessionResolution = undefined;
     pendingProjectResolutionRetryCount = 0;
     newProjectSessionBaseline = undefined;
+    newProjectSessionStartedAt = undefined;
     personalSelected = true;
     pendingPersonalSessionResolution = false;
     pendingPersonalResolutionRetryCount = 0;
     newPersonalSessionBaseline = undefined;
+    newPersonalSessionStartedAt = undefined;
     selectedPersonalSessionId = session.id;
     treeOpen = false;
     tree = undefined;
@@ -1391,6 +1443,12 @@
     } finally {
       if (requestEpoch === searchRequestEpoch) searchBusy = false;
     }
+  }
+
+  function useRuntimeCommand(command: RuntimeCommand): void {
+    if (composerDraft.trim().length > 0) return;
+    composerDraft = commandDraft(command);
+    closeSearch();
   }
 
   async function openSearchResult(result: SessionSummary): Promise<void> {
@@ -1550,6 +1608,7 @@
     sessions={state.sessions}
     personalSessions={personalSessions}
     personalSelected={personalSelected}
+    personalDraftActive={personalSelected && composingPersonalChat && selectedPersonalSessionId === undefined}
     selectedPersonalSessionId={selectedPersonalSessionId}
     selectedProjectId={state.selectedProjectId}
     expandedProjectId={expandedProjectId}
@@ -1611,7 +1670,7 @@
           />
         </div>
       {:else}
-        <EmptyState fill={true} eyebrow="Chats" title="New chat" description="No user folder is attached. Pi keeps an empty chat in memory and saves its JSONL history after the first assistant response." />
+        <EmptyState fill={true} eyebrow="Chats" title="New chat" description="Send a message below. This chat will appear in Chats after Pi replies." />
       {/if}
 
       {#key `personal:${personalChatEpoch}`}
@@ -1629,6 +1688,8 @@
           onNewSessionStartAborted={abandonNewPersonalSessionResolution}
           onRetryPersistedSession={retryPersistedSessionDiscovery}
           onBlocksChanged={updateLiveTimeline}
+          {piUiComposerActions}
+          onCommandsChanged={(commands) => (runtimeCommands = commands)}
         />
       {/key}
     {:else if state.projects.length === 0}
@@ -1683,6 +1744,8 @@
           onNewSessionStartAborted={abandonNewProjectSessionResolution}
           onRetryPersistedSession={retryPersistedSessionDiscovery}
           onBlocksChanged={updateLiveTimeline}
+          {piUiComposerActions}
+          onCommandsChanged={(commands) => (runtimeCommands = commands)}
         />
       {/key}
 
@@ -1715,6 +1778,10 @@
   onClose={closeSearch}
   onQuery={searchSessions}
   onOpenResult={openSearchResult}
+  commands={runtimeCommands}
+  {piUiCommands}
+  commandSelectionDisabled={composerDraft.trim().length > 0}
+  onUseCommand={useRuntimeCommand}
 />
 <ProjectSettingsDialog
   project={projectSettingsProject}

@@ -412,9 +412,9 @@ pub fn runtime_snapshot_named(
             session_tree_read: true,
             session_tree_navigate: false,
             auth_headless: false,
-            // The local preview emits a generic notice and cancels blocking
-            // extension dialogs; it must not claim standard-dialog support.
-            ui_standard_dialogs: false,
+            // PiUI routes bounded standard Pi extension dialogs through a
+            // host-owned mailbox; custom TUI components remain unsupported.
+            ui_standard_dialogs: true,
         },
         safe_summary: summary,
     }

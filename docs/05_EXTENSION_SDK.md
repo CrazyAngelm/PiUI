@@ -9,6 +9,16 @@ PiUI must continue Pi's philosophy: a minimal core, extended through packages. A
 
 The absence of `piui` must never prevent a backend extension from working.
 
+### v0.1 implementation status
+
+The current implementation deliberately exposes only the first narrow slices of this target contract:
+
+- **Tier 0:** Pi remains the only extension runtime. PiUI discovers `get_commands`, provides slash autocomplete and a provenance-labelled command palette, and projects the standard RPC Extension UI methods `select`, `confirm`, `input`, `editor`, `notify`, `setStatus`, `setWidget`, `setTitle`, and `set_editor_text` through a bounded host-owned mailbox. Absolute paths, ANSI/control sequences, raw RPC IDs, and arbitrary payload fields do not cross into the WebView. Awaited dialogs received during the startup handshake are cancelled rather than deadlocking Pi; active-session dialogs are interactive. TUI-only `ctx.ui.custom()` remains unsupported.
+- **Tier 1A:** for enabled, globally installed Pi packages, PiUI checks the package-root `piui.manifest.json` without executing package JavaScript. It currently projects only `pi-command:` command declarations and composer actions that reference them. Clicking an action prepares the slash command for user review; it does not execute silently. Unsupported handlers/contributions stay backend-only, and an absent or invalid manifest does not disable the Pi extension.
+- **Not implemented yet:** project-local manifest discovery, independent UI enablement/grants, `when` expressions (conditioned items are not activated), Pi/Host API engine probing and required-feature negotiation (such manifests remain backend-only), custom manifest paths, workers, UiNode renderers/views, rich views, shells, renderer ownership, and package UI diagnostics.
+
+The remaining sections define the intended SDK contract, not a claim that every surface already ships.
+
 ## 2. Extensibility tiers
 
 ### Tier 0 — Backend-only compatibility
@@ -105,7 +115,7 @@ Example `package.json`:
 }
 ```
 
-PiUI first applies Pi package discovery rules, then looks for the optional `piui.manifest.json`. It does not run `postinstall` or execute package code to read the manifest.
+PiUI first applies Pi package discovery rules, then looks for the optional `piui.manifest.json`. It does not run `postinstall` or execute package code to read the manifest. In v0.1, only the default package-root filename is discovered; the optional `package.json#piui.manifest` override is reserved for a later compatibility slice.
 
 ## 4. Manifest
 
@@ -266,7 +276,7 @@ Limits v1:
 
 Handler types:
 
-- `pi-command:<name>` — invokes a command already registered by the backend extension;
+- `pi-command:<name>` — invokes a command already registered by the backend extension (the only handler projected by Tier 1A in v0.1);
 - `host:<allowlisted-action>` — only actions explicitly exposed by the SDK;
 - `worker:<handler>` — invokes a sandboxed extension worker;
 - `view:<viewId>:<message>` — sends an event to a rich view.

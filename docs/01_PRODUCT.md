@@ -185,6 +185,7 @@ These capabilities are allowed as extensions; the core provides slots and host c
 | MOD-006 | Changing model during an incompatible state is blocked or queued according to Pi's actual response. | Must |
 | MOD-007 | PiUI does not create its own price list; it shows only cost metadata received from Pi, marked as an estimate. | Must |
 | MOD-008 | An unauthorized provider leads to the Settings/Auth flow, not manual JSON editing in the main UI. | Must |
+| MOD-009 | The model picker is theme-owned, searchable by provider/id/name, and does not repeat equivalent technical and display labels. | Must |
 
 ### 7.6 Attachments
 

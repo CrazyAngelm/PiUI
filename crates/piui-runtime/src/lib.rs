@@ -22,6 +22,7 @@ pub use piui_contracts as contracts;
 
 pub mod codec;
 mod extension_manager;
+pub mod extension_ui;
 pub mod fake;
 pub mod provenance;
 pub mod read_only_probe;
@@ -41,6 +42,9 @@ pub use extension_manager::{
     ExtensionManagerError, PiExtensionOrigin, PiExtensionResource, list_global_extensions,
     set_global_extension_enabled,
 };
+pub use extension_ui::{
+    ExtensionDialogOption, ExtensionDialogRequest, ExtensionUiAction, ExtensionUiResponse,
+};
 pub use fake::{
     FakeCommand, FakeEmission, FakeRuntime, FakeRuntimeError, FakeScenario, FakeTransportError,
     FakeTransportEvent, FakeTransportReplay, LifecycleState,
@@ -55,7 +59,8 @@ pub use read_only_probe::{
 };
 pub use real_rpc::{
     LOCAL_RUNTIME_EVENT_PROTOCOL, ModelLite, PiLaunch, RealPiConfig, RealPiRuntime,
-    RealRuntimeError, RuntimeEventEnvelope, SessionStateLite, SurfaceEvent, resolve_pi_launch,
+    RealRuntimeError, RuntimeCommandLite, RuntimeEventEnvelope, SessionStateLite, SurfaceEvent,
+    resolve_pi_launch,
 };
 pub use supervisor::{
     ManagedRuntimePurpose, ProbeAuthorization, ProductionRuntimePolicy,

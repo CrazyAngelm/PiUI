@@ -49,6 +49,14 @@ describe('safe host errors', () => {
     await expect(host.startPersonalChat()).rejects.toThrow('live Pi runtime');
   });
 
+  it('keeps optional extension UI contributions inert in the browser mock', async () => {
+    await expect(host.listPiUiContributions()).resolves.toEqual({
+      commands: [],
+      composerActions: [],
+    });
+    await expect(host.getRuntimeCommands('mock-runtime')).resolves.toEqual([]);
+  });
+
   it('toggles only an opaque global extension id in the browser mock', async () => {
     const before = await host.listExtensions();
     const target = before[0];

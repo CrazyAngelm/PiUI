@@ -8,6 +8,7 @@
 
 mod api;
 mod catalog_watch;
+mod contributions;
 mod dto;
 mod state;
 
@@ -35,6 +36,7 @@ pub fn run() -> Result<(), tauri::Error> {
             api::update_preferences,
             api::update_preferences_v8,
             api::list_extensions,
+            api::list_piui_contributions,
             api::set_extension_enabled,
             api::add_project,
             api::pick_and_add_project,
@@ -68,6 +70,8 @@ pub fn run() -> Result<(), tauri::Error> {
             api::get_runtime_state,
             api::get_runtime_models,
             api::get_runtime_thinking_levels,
+            api::get_runtime_commands,
+            api::respond_extension_ui,
             api::set_runtime_model,
             api::set_runtime_thinking,
             api::set_runtime_session_name,

@@ -12,7 +12,10 @@ import type {
   HostCommandV6 as ProtocolV6Command,
   HostCommandV7 as ProtocolV7Command,
   HostCommandV8 as ProtocolV8Command,
+  HostCommandV9 as ProtocolV9Command,
   DesktopBootstrapSnapshotV8,
+  DesktopRuntimeEventEnvelopeV9,
+  DesktopPiUiContributionCatalogV9,
   DesktopSessionCatalogSnapshotV7,
   DesktopSessionRootHintV7,
   CursorTimelinePage,
@@ -122,7 +125,16 @@ describe('host contract invariants', () => {
     };
     // @ts-expect-error A personal event cannot serialize a backing project id.
     personalEvent.projectId = 'host-personal-workspace';
-    const uiEvent: RuntimeEventEnvelope = event;
+    const uiEvent: RuntimeEventEnvelope = {
+      protocol: 9,
+      runtimeId: 'runtime',
+      scope: 'project',
+      projectId: 'project',
+      sessionId: 'session',
+      kind: 'stateSnapshot',
+      revision: 1,
+      state: event.state,
+    };
     // @ts-expect-error Session file paths are host-private and absent from v5.
     event.state.sessionFile = 'C:/private/session.jsonl';
     expect(uiEvent.runtimeId).toBe('runtime');
@@ -194,6 +206,68 @@ describe('host contract invariants', () => {
     expect(preferences.protocol).toBe(8);
     expect(bootstrap.preferences.fontSize).toBe('large');
     expect(bootstrap.preferences.chatWidth).toBe('wide');
+  });
+
+  it('versions interactive extension UI and runtime command discovery in protocol v9', () => {
+    const commands: ProtocolV9Command = {
+      protocol: 9,
+      type: 'runtime.commands.get',
+      payload: { runtimeId: 'runtime' },
+    };
+    const contributions: ProtocolV9Command = {
+      protocol: 9,
+      type: 'extension.contributions.get',
+      payload: {},
+    };
+    const catalog: DesktopPiUiContributionCatalogV9 = {
+      commands: [{
+        extensionId: 'test.extension',
+        extensionName: 'Test extension',
+        id: 'test.extension.status',
+        title: 'Status',
+        commandName: 'status',
+      }],
+      composerActions: [{
+        extensionId: 'test.extension',
+        extensionName: 'Test extension',
+        id: 'test.extension.statusAction',
+        title: 'Status',
+        commandId: 'test.extension.status',
+        commandName: 'status',
+        order: 100,
+      }],
+    };
+    const response: ProtocolV9Command = {
+      protocol: 9,
+      type: 'runtime.extensionUi.respond',
+      payload: {
+        runtimeId: 'runtime',
+        requestId: 'ui-request',
+        response: { kind: 'selected', optionId: 'option-a' },
+      },
+    };
+    const event: DesktopRuntimeEventEnvelopeV9 = {
+      protocol: 9,
+      runtimeId: 'runtime',
+      scope: 'personal',
+      kind: 'extensionUi',
+      action: {
+        action: 'dialog',
+        request: {
+          kind: 'select',
+          id: 'ui-request',
+          title: 'Choose a target',
+          options: [{ id: 'option-a', label: 'Target A' }],
+        },
+      },
+    };
+
+    expect(commands.type).toBe('runtime.commands.get');
+    expect(contributions.type).toBe('extension.contributions.get');
+    expect(catalog.composerActions[0]?.commandName).toBe('status');
+    expect(response.type).toBe('runtime.extensionUi.respond');
+    expect(event.action.action).toBe('dialog');
+    expect(event.scope).toBe('personal');
   });
 
   it('keeps projectless Chats commands in the additive v5 surface', () => {

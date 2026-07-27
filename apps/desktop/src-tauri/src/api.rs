@@ -1,3 +1,4 @@
+use crate::contributions::{PiUiContributionCatalog, project_global_contributions};
 use crate::dto::{
     ApiError, ApiExtensionSummary, ApiFakeScenarioResult, ApiPreferences, ApiProjectSummary,
     ApiRuntimeSnapshot, ApiRuntimeStart, ApiSessionCatalogEvent, ApiSessionCatalogSnapshot,
@@ -18,10 +19,10 @@ use piui_index::{
 };
 use piui_platform::ProjectDirectory;
 use piui_runtime::{
-    FakeCommand, FakeRuntime, FakeScenario, FakeTransportEvent, FakeTransportReplay,
-    LifecycleState, ModelLite, PiExtensionOrigin, PiExtensionResource, RealPiConfig, RealPiRuntime,
-    RealRuntimeError, RuntimeEventEnvelope, list_global_extensions, probe_system_pi,
-    set_global_extension_enabled,
+    ExtensionUiResponse, FakeCommand, FakeRuntime, FakeScenario, FakeTransportEvent,
+    FakeTransportReplay, LifecycleState, ModelLite, PiExtensionOrigin, PiExtensionResource,
+    RealPiConfig, RealPiRuntime, RealRuntimeError, RuntimeCommandLite, RuntimeEventEnvelope,
+    list_global_extensions, probe_system_pi, set_global_extension_enabled,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -187,6 +188,22 @@ pub async fn list_extensions(
         .await
         .map_err(|_| ApiError::runtime())?;
     Ok(api_extensions(resources))
+}
+
+/// Projects optional declarative UI manifests for enabled global Pi packages.
+/// Invalid or absent manifests degrade to an empty contribution; their Pi
+/// extension backend remains enabled and usable through generic surfaces.
+#[tauri::command]
+pub async fn list_piui_contributions(
+    state: State<'_, HostState>,
+) -> Result<PiUiContributionCatalog, ApiError> {
+    if state.safe_mode {
+        return Ok(PiUiContributionCatalog::default());
+    }
+    let resources = list_global_extensions(&state.personal_workspace.canonical_path)
+        .await
+        .map_err(|_| ApiError::runtime())?;
+    Ok(project_global_contributions(&resources))
 }
 
 /// Enables or disables one current global extension through Pi's upstream
@@ -1225,6 +1242,7 @@ const MAX_PROMPT_CHARS: usize = 128_000;
 const MAX_RUNTIME_ID_CHARS: usize = 128;
 const MAX_MODEL_IDENTIFIER_CHARS: usize = 256;
 const MAX_SESSION_NAME_CHARS: usize = 200;
+const MAX_EXTENSION_UI_RESPONSE_CHARS: usize = 128 * 1024;
 
 /// Spawns a real `pi --mode rpc` process bound to a user project cwd and,
 /// when a session id is given, continues the indexed Pi session. Streamed
@@ -1466,7 +1484,8 @@ pub async fn stop_live_runtime(
     state: State<'_, HostState>,
     runtime_id: String,
 ) -> Result<ApiRuntimeSnapshot, ApiError> {
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
+    // Stop is the preemptive escape hatch for an extension command waiting on
+    // an untimed dialog. It must not queue behind that prompt's operation gate.
     let _transition = state
         .try_begin_live_runtime_transition()
         .ok_or_else(ApiError::runtime_busy)?;
@@ -1515,6 +1534,38 @@ pub async fn get_runtime_thinking_levels(
     let runtime = live_runtime_for_read(&state, &runtime_id).await?;
     runtime
         .get_thinking_levels()
+        .await
+        .map_err(map_runtime_error)
+}
+
+#[tauri::command]
+pub async fn get_runtime_commands(
+    state: State<'_, HostState>,
+    runtime_id: String,
+) -> Result<Vec<RuntimeCommandLite>, ApiError> {
+    let _operation_guard = state.live_runtime_operation_gate.lock().await;
+    let runtime = live_runtime_for_read(&state, &runtime_id).await?;
+    runtime.get_commands().await.map_err(map_runtime_error)
+}
+
+#[tauri::command]
+pub async fn respond_extension_ui(
+    state: State<'_, HostState>,
+    runtime_id: String,
+    request_id: String,
+    response: ExtensionUiResponse,
+) -> Result<(), ApiError> {
+    if !valid_opaque_surface_id(&request_id, "piui-extension-dialog-")
+        || !valid_extension_ui_response(&response)
+    {
+        return Err(ApiError::invalid());
+    }
+    // This is a response sub-protocol, not a new runtime operation. It must
+    // bypass the command-operation gate because the originating `prompt`
+    // request may still be awaiting this exact dialog response.
+    let runtime = live_runtime_for_read(&state, &runtime_id).await?;
+    runtime
+        .respond_extension_ui(request_id, response)
         .await
         .map_err(map_runtime_error)
 }
@@ -1745,7 +1796,28 @@ fn map_runtime_error(error: RealRuntimeError) -> ApiError {
         RealRuntimeError::Command(_) => ApiError::runtime_rejected(),
         RealRuntimeError::Exited(_) | RealRuntimeError::Protocol(_) => ApiError::runtime_protocol(),
         RealRuntimeError::NotRunning | RealRuntimeError::Channel => ApiError::runtime_gone(),
+        RealRuntimeError::InvalidExtensionUiResponse => ApiError::invalid(),
     }
+}
+
+fn valid_extension_ui_response(response: &ExtensionUiResponse) -> bool {
+    match response {
+        ExtensionUiResponse::Selected { option_id } => {
+            valid_opaque_surface_id(option_id, "piui-extension-option-")
+        }
+        ExtensionUiResponse::Submitted { value } => {
+            value.chars().count() <= MAX_EXTENSION_UI_RESPONSE_CHARS
+        }
+        ExtensionUiResponse::Confirmed { .. } | ExtensionUiResponse::Cancelled => true,
+    }
+}
+
+fn valid_opaque_surface_id(value: &str, prefix: &str) -> bool {
+    value.len() == prefix.len() + 64
+        && value.starts_with(prefix)
+        && value[prefix.len()..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn prompt_text(value: &str) -> Option<String> {
@@ -2462,7 +2534,8 @@ mod tests {
         recapture_session_admission_after_start, refresh_project_sessions,
         refresh_project_sessions_with_integrity, require_user_project,
         revalidate_session_admission, rpc_identifier, runtime_state_is_usable, session_name,
-        thinking_level, timeline_page, valid_runtime_id, verified_project_directory,
+        thinking_level, timeline_page, valid_extension_ui_response, valid_opaque_surface_id,
+        valid_runtime_id, verified_project_directory,
     };
     use crate::dto::runtime_snapshot;
     use crate::state::HostState;
@@ -2472,7 +2545,8 @@ mod tests {
     };
     use piui_platform::ProjectDirectory;
     use piui_runtime::{
-        FakeCommand, FakeRuntime, FakeScenario, FakeTransportReplay, LifecycleState,
+        ExtensionUiResponse, FakeCommand, FakeRuntime, FakeScenario, FakeTransportReplay,
+        LifecycleState,
     };
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -2498,6 +2572,25 @@ mod tests {
         assert!(!runtime_state_is_usable(LifecycleState::Failed));
         assert_eq!(session_name("  My session  "), Some("My session".into()));
         assert!(session_name("bad\u{0000}name").is_none());
+
+        let dialog_id = format!("piui-extension-dialog-{}", "a".repeat(64));
+        let option_id = format!("piui-extension-option-{}", "b".repeat(64));
+        assert!(valid_opaque_surface_id(
+            &dialog_id,
+            "piui-extension-dialog-"
+        ));
+        assert!(!valid_opaque_surface_id(
+            "piui-extension-dialog-private",
+            "piui-extension-dialog-"
+        ));
+        assert!(valid_extension_ui_response(
+            &ExtensionUiResponse::Selected { option_id }
+        ));
+        assert!(!valid_extension_ui_response(
+            &ExtensionUiResponse::Submitted {
+                value: "x".repeat(128 * 1024 + 1),
+            }
+        ));
     }
 
     #[test]

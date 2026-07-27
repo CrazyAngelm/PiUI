@@ -507,6 +507,115 @@ export type HostCommandResponseV8 =
   | { protocol: 8; commandId: CommandId; ok: true; result: JsonValue | null }
   | { protocol: 8; commandId: CommandId; ok: false; error: HostError };
 
+/** Protocol v9 adds interactive standard Pi extension UI plus the live
+ * runtime command catalog. Raw Pi request ids, source paths, and unbounded
+ * extension payloads remain host-private. */
+export interface ProtocolEnvelopeV9<TType extends string, TPayload> {
+  protocol: 9;
+  type: TType;
+  payload: TPayload;
+}
+
+type ReversionV8HostCommand<T> = T extends ProtocolEnvelopeV8<infer TType, infer TPayload>
+  ? ProtocolEnvelopeV9<TType, TPayload>
+  : never;
+
+export interface DesktopRuntimeCommandV9 {
+  name: string;
+  description?: string;
+  source: 'extension' | 'prompt' | 'skill';
+  scope?: 'user' | 'project' | 'temporary';
+  origin?: 'package' | 'top-level';
+}
+
+export interface DesktopPiUiCommandContributionV9 {
+  extensionId: string;
+  extensionName: string;
+  id: string;
+  title: string;
+  description?: string;
+  commandName: string;
+}
+
+export interface DesktopPiUiComposerActionContributionV9 {
+  extensionId: string;
+  extensionName: string;
+  id: string;
+  title: string;
+  description?: string;
+  commandId: string;
+  commandName: string;
+  order: number;
+}
+
+export interface DesktopPiUiContributionCatalogV9 {
+  commands: DesktopPiUiCommandContributionV9[];
+  composerActions: DesktopPiUiComposerActionContributionV9[];
+}
+
+export interface DesktopExtensionUiOptionV9 {
+  id: string;
+  label: string;
+}
+
+export type DesktopExtensionDialogV9 =
+  | { kind: 'select'; id: string; title: string; options: DesktopExtensionUiOptionV9[]; timeoutMs?: number }
+  | { kind: 'confirm'; id: string; title: string; message: string; timeoutMs?: number }
+  | { kind: 'input'; id: string; title: string; placeholder?: string; timeoutMs?: number }
+  | { kind: 'editor'; id: string; title: string; prefill?: string; timeoutMs?: number };
+
+export type DesktopExtensionUiActionV9 =
+  | { action: 'dialog'; request: DesktopExtensionDialogV9 }
+  | { action: 'notify'; id: string; message: string; level: 'info' | 'warning' | 'error' }
+  | { action: 'status'; key: string; text?: string }
+  | { action: 'widget'; key: string; lines?: string[]; placement: 'aboveEditor' | 'belowEditor' }
+  | { action: 'title'; title: string }
+  | { action: 'editorText'; text: string }
+  | { action: 'unsupported'; id: string; method: string; safeSummary: string };
+
+export type DesktopExtensionUiResponseV9 =
+  | { kind: 'selected'; optionId: string }
+  | { kind: 'confirmed'; value: boolean }
+  | { kind: 'submitted'; value: string }
+  | { kind: 'cancelled' };
+
+export type DesktopRuntimeStreamEventV9 =
+  | Exclude<DesktopRuntimeStreamEventV5, { kind: 'extensionUiRequest' }>
+  | { kind: 'extensionUi'; action: DesktopExtensionUiActionV9 };
+
+export type DesktopRuntimeEventEnvelopeV9 =
+  | ({
+      protocol: 9;
+      runtimeId: RuntimeId;
+      scope: 'project';
+      projectId: ProjectId;
+      sessionId?: SessionId;
+    } & DesktopRuntimeStreamEventV9)
+  | ({
+      protocol: 9;
+      runtimeId: RuntimeId;
+      scope: 'personal';
+      sessionId?: SessionId;
+    } & DesktopRuntimeStreamEventV9);
+
+export type HostCommandV9 =
+  | ReversionV8HostCommand<HostCommandV8>
+  | ProtocolEnvelopeV9<'runtime.commands.get', { runtimeId: RuntimeId }>
+  | ProtocolEnvelopeV9<'extension.contributions.get', Record<string, never>>
+  | ProtocolEnvelopeV9<
+      'runtime.extensionUi.respond',
+      { runtimeId: RuntimeId; requestId: string; response: DesktopExtensionUiResponseV9 }
+    >;
+
+export interface HostCommandRequestV9 {
+  commandId: CommandId;
+  command: HostCommandV9;
+}
+
+export type HostCommandResponseV9 =
+  | { protocol: 9; commandId: CommandId; ok: true; result: JsonValue | null }
+  | { protocol: 9; commandId: CommandId; ok: false; error: HostError };
+
 export interface HostError {
   code:
     | 'INVALID_ARGUMENT'

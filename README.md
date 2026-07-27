@@ -23,15 +23,15 @@
 ### Windows 10/11 (recommended)
 
 1. Install the official [Pi CLI](https://pi.dev/) and confirm that `pi --version` works in a new terminal.
-2. Open the [PiUI v0.1.0 release](https://github.com/CrazyAngelm/PiUI/releases/tag/v0.1.0).
-3. Download `PiUI_0.1.0_x64-setup.exe` and the matching `SHA256SUMS.txt`.
+2. Open the [PiUI v0.1.1 release](https://github.com/CrazyAngelm/PiUI/releases/tag/v0.1.1).
+3. Download `PiUI_0.1.1_x64-setup.exe` and the matching `SHA256SUMS.txt`.
 4. Verify the checksum, run the installer, and open **PiUI** from the Start menu.
 5. Choose **New chat** for a personal session or **Add project** to register an existing folder.
 
 Verify the installer after downloading both files:
 
 ```powershell
-Get-FileHash .\PiUI_0.1.0_x64-setup.exe -Algorithm SHA256
+Get-FileHash .\PiUI_0.1.1_x64-setup.exe -Algorithm SHA256
 Get-Content .\SHA256SUMS.txt
 ```
 
@@ -39,7 +39,7 @@ The hash printed by `Get-FileHash` must match the installer entry in `SHA256SUMS
 
 Because this developer-preview build is not code-signed, Windows may show an unknown-publisher warning. Verify the checksum before running it. If you do not want to run an unsigned binary, [build from source](#build-from-source).
 
-The portable `PiUI_0.1.0_windows_x86_64.exe` asset can be used without an installer. It has the same preview limitations.
+The portable `PiUI_0.1.1_windows_x86_64.exe` asset can be used without an installer. It has the same preview limitations.
 
 ### Linux and macOS
 

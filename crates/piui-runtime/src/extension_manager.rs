@@ -8,6 +8,7 @@
 
 use crate::real_rpc::resolve_pi_launch;
 use serde::Deserialize;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -24,12 +25,37 @@ const MAX_OUTPUT_BYTES: usize = 512 * 1024;
 const MAX_EXTENSION_ITEMS: usize = 512;
 const READ_CHUNK_BYTES: usize = 16 * 1024;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct PiExtensionResource {
     pub path: PathBuf,
     pub name: String,
     pub enabled: bool,
     pub origin: PiExtensionOrigin,
+    /// Canonical package root retained only for trusted host-side package operations.
+    package_root: Option<PathBuf>,
+}
+
+impl PiExtensionResource {
+    /// Returns host-private package metadata. Callers must never serialize this path.
+    pub fn package_root(&self) -> Option<&Path> {
+        self.package_root.as_deref()
+    }
+}
+
+impl fmt::Debug for PiExtensionResource {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PiExtensionResource")
+            .field("path", &"<redacted>")
+            .field("name", &self.name)
+            .field("enabled", &self.enabled)
+            .field("origin", &self.origin)
+            .field(
+                "package_root",
+                &self.package_root.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -60,6 +86,7 @@ struct HelperItem {
     name: String,
     enabled: bool,
     origin: String,
+    base_dir: Option<String>,
 }
 
 pub async fn list_global_extensions(
@@ -202,11 +229,22 @@ fn parse_helper_output(output: &[u8]) -> Result<Vec<PiExtensionResource>, Extens
             "package" => PiExtensionOrigin::Package,
             _ => return Err(ExtensionManagerError::Failed),
         };
+        let package_root = match origin {
+            PiExtensionOrigin::TopLevel => None,
+            PiExtensionOrigin::Package => item.base_dir.and_then(|base_dir| {
+                let base_dir = PathBuf::from(base_dir);
+                if !base_dir.is_absolute() || !base_dir.is_dir() {
+                    return None;
+                }
+                base_dir.canonicalize().ok()
+            }),
+        };
         resources.push(PiExtensionResource {
             path,
             name: item.name,
             enabled: item.enabled,
             origin,
+            package_root,
         });
     }
     resources.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
@@ -216,6 +254,18 @@ fn parse_helper_output(output: &[u8]) -> Result<Vec<PiExtensionResource>, Extens
 #[cfg(test)]
 mod tests {
     use super::{PiExtensionOrigin, list_global_extensions, parse_helper_output};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temporary_directory(name: &str) -> std::path::PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is after the Unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("piui-{name}-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(&path).expect("creates temporary test directory");
+        path
+    }
 
     #[test]
     fn helper_projection_requires_sentinel_absolute_paths_and_known_origins() {
@@ -231,17 +281,90 @@ mod tests {
                     "path": path,
                     "name": "extension",
                     "enabled": true,
-                    "origin": "top-level"
+                    "origin": "top-level",
+                    "baseDir": "/ignored-for-top-level"
                 }]
             })
         );
         let items = parse_helper_output(payload.as_bytes()).expect("projects safe helper output");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].origin, PiExtensionOrigin::TopLevel);
+        assert_eq!(items[0].package_root, None);
         assert!(items[0].enabled);
 
         assert!(parse_helper_output(b"{\"items\":[]}").is_err());
         assert!(parse_helper_output(b"PIUI_EXTENSION_RESULT\t{\"items\":[{\"path\":\"relative.ts\",\"name\":\"x\",\"enabled\":true,\"origin\":\"package\"}]}\n").is_err());
+    }
+
+    #[test]
+    fn helper_projection_canonicalizes_absolute_package_roots() {
+        let root = temporary_directory("extension-package-root");
+        let extension_path = root.join("extension.ts");
+        let payload = format!(
+            "PIUI_EXTENSION_RESULT\t{}\n",
+            serde_json::json!({
+                "items": [{
+                    "path": extension_path,
+                    "name": "extension",
+                    "enabled": true,
+                    "origin": "package",
+                    "baseDir": root,
+                }]
+            })
+        );
+
+        let items = parse_helper_output(payload.as_bytes()).expect("accepts package root");
+        assert_eq!(
+            items[0].package_root,
+            Some(fs::canonicalize(&root).expect("canonical root"))
+        );
+        assert!(!format!("{:?}", items[0]).contains(&root.to_string_lossy().to_string()));
+        fs::remove_dir_all(root).expect("removes temporary test directory");
+    }
+
+    #[test]
+    fn helper_projection_ignores_unsafe_package_roots_without_path_disclosure() {
+        let root = temporary_directory("extension-package-root-errors");
+        let extension_path = root.join("extension.ts");
+        let non_directory = root.join("not-a-directory");
+        fs::write(&non_directory, "x").expect("creates test file");
+
+        for base_dir in [
+            std::path::PathBuf::from("relative-root"),
+            non_directory.clone(),
+        ] {
+            let payload = format!(
+                "PIUI_EXTENSION_RESULT\t{}\n",
+                serde_json::json!({
+                    "items": [{
+                        "path": extension_path,
+                        "name": "extension",
+                        "enabled": true,
+                        "origin": "package",
+                        "baseDir": base_dir,
+                    }]
+                })
+            );
+            let items = parse_helper_output(payload.as_bytes()).expect("retains backend resource");
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].package_root, None);
+            assert!(!format!("{:?}", items[0]).contains(&base_dir.to_string_lossy().to_string()));
+        }
+        let missing_base_dir = format!(
+            "PIUI_EXTENSION_RESULT\t{}\n",
+            serde_json::json!({
+                "items": [{
+                    "path": extension_path,
+                    "name": "extension",
+                    "enabled": true,
+                    "origin": "package",
+                }]
+            })
+        );
+        let items = parse_helper_output(missing_base_dir.as_bytes())
+            .expect("retains package without optional baseDir metadata");
+        assert_eq!(items[0].package_root, None);
+        fs::remove_dir_all(root).expect("removes temporary test directory");
     }
 
     #[tokio::test]

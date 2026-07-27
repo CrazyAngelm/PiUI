@@ -54,6 +54,7 @@ pub enum DiagnosticCode {
     RichViewPermissionRequired,
     RichViewEntrypointRequired,
     ShellSourceRejected,
+    ContributionProjectionInvalid,
 }
 
 impl DiagnosticCode {
@@ -76,6 +77,7 @@ impl DiagnosticCode {
             Self::RichViewPermissionRequired => "RICH_VIEW_PERMISSION_REQUIRED",
             Self::RichViewEntrypointRequired => "RICH_VIEW_ENTRYPOINT_REQUIRED",
             Self::ShellSourceRejected => "SHELL_SOURCE_REJECTED",
+            Self::ContributionProjectionInvalid => "CONTRIBUTION_PROJECTION_INVALID",
         }
     }
 }
@@ -92,8 +94,38 @@ pub struct ManifestDiagnostic {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedManifest {
     pub id: String,
+    /// Display-safe extension name. No raw manifest JSON is retained.
+    pub name: String,
+    /// Supported Tier-1A command projections only.
+    pub commands: Vec<CommandContribution>,
+    /// Supported Tier-1A composer-action projections only.
+    pub composer_actions: Vec<ComposerActionContribution>,
+    /// Host-private, character-allowlisted compatibility constraints.
+    pub piui_engine_range: String,
+    pub pi_engine_range: Option<String>,
+    pub host_api_engine_range: Option<String>,
+    pub has_required_features: bool,
     pub requested_permissions: BTreeSet<String>,
     pub source: PackageSource,
+}
+
+/// A display-safe command whose Pi command name has been separately validated.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommandContribution {
+    pub id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub pi_command: String,
+}
+
+/// A display-safe composer action targeting a projected command.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ComposerActionContribution {
+    pub id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub command_id: String,
+    pub order: i32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -211,11 +243,36 @@ impl ManifestValidator {
         if permissions.contains("ui.shell") && source != PackageSource::TrustedInstalled {
             push(&mut diagnostics, DiagnosticCode::ShellSourceRejected);
         }
+        let compatibility = project_compatibility(object);
+        let projection = project_tier_1a_contributions(object);
+        if projection.is_none() || compatibility.is_none() {
+            push(
+                &mut diagnostics,
+                DiagnosticCode::ContributionProjectionInvalid,
+            );
+        }
 
-        if diagnostics.is_empty() {
+        if let (
+            true,
+            Some((name, commands, composer_actions)),
+            Some((
+                piui_engine_range,
+                pi_engine_range,
+                host_api_engine_range,
+                has_required_features,
+            )),
+        ) = (diagnostics.is_empty(), projection, compatibility)
+        {
             ValidationReport {
                 manifest: Some(ValidatedManifest {
                     id: manifest_id.to_owned(),
+                    name,
+                    commands,
+                    composer_actions,
+                    piui_engine_range,
+                    pi_engine_range,
+                    host_api_engine_range,
+                    has_required_features,
                     requested_permissions: permissions,
                     source,
                 }),
@@ -228,6 +285,187 @@ impl ManifestValidator {
             }
         }
     }
+}
+
+const MAX_PROJECTED_CONTRIBUTIONS: usize = 128;
+const MAX_TITLE_CHARS: usize = 100;
+const MAX_DESCRIPTION_CHARS: usize = 1000;
+const DEFAULT_COMPOSER_ACTION_ORDER: i32 = 200;
+
+fn project_compatibility(
+    manifest: &serde_json::Map<String, Value>,
+) -> Option<(String, Option<String>, Option<String>, bool)> {
+    let engines = manifest.get("engines")?.as_object()?;
+    let piui = compatibility_range(engines.get("piui")?.as_str()?)?;
+    let pi = match engines.get("pi") {
+        Some(value) => Some(compatibility_range(value.as_str()?)?),
+        None => None,
+    };
+    let host_api = match engines.get("hostApi") {
+        Some(value) => Some(compatibility_range(value.as_str()?)?),
+        None => None,
+    };
+    let has_required_features = manifest
+        .get("requires")
+        .and_then(Value::as_array)
+        .is_some_and(|requires| !requires.is_empty());
+    Some((piui, pi, host_api, has_required_features))
+}
+
+fn compatibility_range(value: &str) -> Option<String> {
+    (!value.chars().any(char::is_control)
+        && value.chars().count() <= 100
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b' ' | b'.' | b'<' | b'>' | b'=' | b'~' | b'^' | b'*' | b'|' | b',' | b'-'
+                )
+        }))
+    .then(|| value.to_owned())
+}
+
+/// Produces the intentionally narrow Tier-1A UI surface. This parser does not
+/// retain handlers, paths, expressions, icons, or raw manifest values.
+fn project_tier_1a_contributions(
+    manifest: &serde_json::Map<String, Value>,
+) -> Option<(
+    String,
+    Vec<CommandContribution>,
+    Vec<ComposerActionContribution>,
+)> {
+    let name = display_text(manifest.get("name")?.as_str()?, MAX_TITLE_CHARS)?;
+    let contributes = manifest.get("contributes")?.as_object()?;
+    let command_items: &[Value] = match contributes.get("commands") {
+        Some(value) => value.as_array()?.as_slice(),
+        None => &[],
+    };
+    if command_items.len() > MAX_PROJECTED_CONTRIBUTIONS {
+        return None;
+    }
+
+    let mut commands = Vec::with_capacity(command_items.len());
+    let mut all_command_ids = HashSet::with_capacity(command_items.len());
+    let mut projected_command_ids = HashSet::with_capacity(command_items.len());
+    for item in command_items {
+        let item = item.as_object()?;
+        let id = item.get("id")?.as_str()?.to_owned();
+        all_command_ids.insert(id.clone());
+        if item.contains_key("when") || item.contains_key("enablement") {
+            // Conditions are not evaluated in Tier-1A; never broaden a
+            // contribution by silently treating an unknown condition as true.
+            continue;
+        }
+        let handler = item.get("handler")?.as_str()?;
+        let Some(pi_command) = handler.strip_prefix("pi-command:") else {
+            // Other schema-supported handlers remain valid, but cannot cross
+            // the current Tier-1A host boundary.
+            continue;
+        };
+        if !is_safe_pi_command_name(pi_command) {
+            return None;
+        }
+        let title = display_text(item.get("title")?.as_str()?, MAX_TITLE_CHARS)?;
+        let description = optional_display_text(item.get("description"), MAX_DESCRIPTION_CHARS)?;
+        projected_command_ids.insert(id.clone());
+        commands.push(CommandContribution {
+            id,
+            title,
+            description,
+            pi_command: pi_command.to_owned(),
+        });
+    }
+
+    let action_items: &[Value] = match contributes.get("composerActions") {
+        Some(value) => value.as_array()?.as_slice(),
+        None => &[],
+    };
+    if action_items.len() > MAX_PROJECTED_CONTRIBUTIONS {
+        return None;
+    }
+    let mut composer_actions = Vec::with_capacity(action_items.len());
+    for item in action_items {
+        let item = item.as_object()?;
+        let command_id = item.get("command")?.as_str()?.to_owned();
+        if !all_command_ids.contains(&command_id) {
+            return None;
+        }
+        if item.contains_key("when") || !projected_command_ids.contains(&command_id) {
+            // The action targets a valid but currently unsupported handler.
+            continue;
+        }
+        let order = item
+            .get("order")
+            .map_or(Some(DEFAULT_COMPOSER_ACTION_ORDER), |value| {
+                value.as_i64().and_then(|order| i32::try_from(order).ok())
+            })?;
+        composer_actions.push(ComposerActionContribution {
+            id: item.get("id")?.as_str()?.to_owned(),
+            title: display_text(item.get("title")?.as_str()?, MAX_TITLE_CHARS)?,
+            description: optional_display_text(item.get("description"), MAX_DESCRIPTION_CHARS)?,
+            command_id,
+            order,
+        });
+    }
+
+    Some((name, commands, composer_actions))
+}
+
+fn optional_display_text(value: Option<&Value>, max_chars: usize) -> Option<Option<String>> {
+    match value {
+        Some(value) => Some(Some(display_text(value.as_str()?, max_chars)?)),
+        None => Some(None),
+    }
+}
+
+fn display_text(value: &str, max_chars: usize) -> Option<String> {
+    (!value.chars().any(char::is_control)
+        && value.chars().count() <= max_chars
+        && !contains_absolute_path(value))
+    .then(|| value.to_owned())
+}
+
+fn contains_absolute_path(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    for index in 0..bytes.len() {
+        if index + 2 < bytes.len()
+            && bytes[index].is_ascii_alphabetic()
+            && bytes[index + 1] == b':'
+            && matches!(bytes[index + 2], b'/' | b'\\')
+        {
+            return true;
+        }
+        if index + 1 < bytes.len()
+            && matches!(
+                (bytes[index], bytes[index + 1]),
+                (b'\\', b'\\') | (b'/', b'/')
+            )
+        {
+            return true;
+        }
+        if bytes[index] != b'/'
+            || index > 0
+                && (bytes[index - 1].is_ascii_alphanumeric()
+                    || matches!(bytes[index - 1], b'_' | b'-'))
+        {
+            continue;
+        }
+        if bytes
+            .get(index + 1)
+            .is_some_and(|byte| !byte.is_ascii_whitespace())
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_safe_pi_command_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 160
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
 }
 
 fn validate_contribution_ids(
@@ -558,6 +796,9 @@ const fn diagnostic(code: DiagnosticCode) -> ManifestDiagnostic {
             DiagnosticCode::ShellSourceRejected => {
                 "Shell contributions are not allowed for this package source."
             }
+            DiagnosticCode::ContributionProjectionInvalid => {
+                "The manifest contains unsupported declarative UI contributions."
+            }
         },
     }
 }
@@ -594,7 +835,7 @@ mod tests {
                 "commands": [{
                     "id": "test.example.run",
                     "title": "Run",
-                    "handler": "worker:run"
+                    "handler": "pi-command:run"
                 }]
             }
         })
@@ -605,14 +846,128 @@ mod tests {
     }
 
     #[test]
-    fn supplied_example_is_schema_and_semantic_valid_without_grants() {
+    fn supplied_example_stays_valid_and_unsupported_handlers_or_conditions_are_not_projected() {
         let root =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/minimal-piui-package");
         let report = validator().validate_package(&root, PackageSource::TrustedInstalled);
+        assert!(report.diagnostics.is_empty());
+        let manifest = report.manifest.expect("valid reference manifest");
+        assert!(manifest.commands.is_empty());
+        assert!(manifest.composer_actions.is_empty());
+    }
+
+    #[test]
+    fn projects_safe_commands_and_composer_actions() {
+        let root = temp_package();
+        let mut manifest = base_manifest();
+        manifest["name"] = Value::String("Safe extension".into());
+        manifest["contributes"]["commands"][0]["description"] =
+            Value::String("Runs safely.".into());
+        manifest["contributes"]["commands"][0]["handler"] =
+            Value::String("pi-command:run.safe:command_1".into());
+        manifest["contributes"]["commands"][0]["icon"] = Value::String("untrusted-icon".into());
+        manifest["contributes"]["composerActions"] = serde_json::json!([{
+            "id": "test.example.runAction",
+            "title": "Run safely",
+            "description": "Starts the safe command.",
+            "icon": "untrusted-action-icon",
+            "command": "test.example.run",
+            "order": 240
+        }]);
+
+        let bytes = serde_json::to_vec(&manifest).expect("encode manifest");
+        let report = validator().validate_bytes(&root, &bytes, PackageSource::TrustedInstalled);
         assert!(report.is_valid(), "{:?}", report.diagnostics);
         let manifest = report.manifest.expect("validated manifest");
-        assert!(manifest.requested_permissions.contains("project.read"));
-        assert!(!manifest.requested_permissions.contains("ui.shell"));
+        assert_eq!(manifest.name, "Safe extension");
+        assert_eq!(
+            manifest.commands,
+            vec![CommandContribution {
+                id: "test.example.run".into(),
+                title: "Run".into(),
+                description: Some("Runs safely.".into()),
+                pi_command: "run.safe:command_1".into(),
+            }]
+        );
+        assert_eq!(
+            manifest.composer_actions,
+            vec![ComposerActionContribution {
+                id: "test.example.runAction".into(),
+                title: "Run safely".into(),
+                description: Some("Starts the safe command.".into()),
+                command_id: "test.example.run".into(),
+                order: 240,
+            }]
+        );
+        let safe_output = format!("{:?}", manifest);
+        assert!(!safe_output.contains("pi-command:"));
+        assert!(!safe_output.contains("untrusted-icon"));
+        assert!(!safe_output.contains("untrusted-action-icon"));
+        remove_dir_all(root).expect("remove package");
+    }
+
+    #[test]
+    fn rejects_dangling_composer_command_and_unsafe_display_text() {
+        let root = temp_package();
+        let mut dangling = base_manifest();
+        dangling["contributes"]["composerActions"] = serde_json::json!([{
+            "id": "test.example.runAction",
+            "title": "Run",
+            "command": "test.example.missing"
+        }]);
+        let bytes = serde_json::to_vec(&dangling).expect("encode dangling manifest");
+        let report = validator().validate_bytes(&root, &bytes, PackageSource::TrustedInstalled);
+        assert_eq!(
+            report.diagnostics[0].code,
+            DiagnosticCode::ContributionProjectionInvalid
+        );
+
+        let mut control = base_manifest();
+        control["contributes"]["commands"][0]["title"] = Value::String("Run\nnow".into());
+        let bytes = serde_json::to_vec(&control).expect("encode control manifest");
+        let report = validator().validate_bytes(&root, &bytes, PackageSource::TrustedInstalled);
+        assert_eq!(
+            report.diagnostics[0].code,
+            DiagnosticCode::ContributionProjectionInvalid
+        );
+
+        let mut long_title = base_manifest();
+        long_title["contributes"]["commands"][0]["title"] = Value::String("x".repeat(101));
+        let bytes = serde_json::to_vec(&long_title).expect("encode long title manifest");
+        let report = validator().validate_bytes(&root, &bytes, PackageSource::TrustedInstalled);
+        assert_eq!(
+            report.diagnostics[0].code,
+            DiagnosticCode::ContributionProjectionInvalid
+        );
+
+        let mut native_path = base_manifest();
+        native_path["contributes"]["commands"][0]["description"] =
+            Value::String(r"Read C:\sensitive\private.txt".into());
+        let bytes = serde_json::to_vec(&native_path).expect("encode native path manifest");
+        let report = validator().validate_bytes(&root, &bytes, PackageSource::TrustedInstalled);
+        assert_eq!(
+            report.diagnostics[0].code,
+            DiagnosticCode::ContributionProjectionInvalid
+        );
+        assert!(!format!("{:?}", report.diagnostics).contains("sensitive"));
+
+        let mut posix_path = base_manifest();
+        posix_path["contributes"]["commands"][0]["description"] =
+            Value::String("Config=/home/ada/private.json".into());
+        let bytes = serde_json::to_vec(&posix_path).expect("encode POSIX path manifest");
+        let report = validator().validate_bytes(&root, &bytes, PackageSource::TrustedInstalled);
+        assert_eq!(
+            report.diagnostics[0].code,
+            DiagnosticCode::ContributionProjectionInvalid
+        );
+        posix_path["contributes"]["commands"][0]["description"] = Value::String("Read /etc".into());
+        let bytes = serde_json::to_vec(&posix_path).expect("encode short POSIX path manifest");
+        let report = validator().validate_bytes(&root, &bytes, PackageSource::TrustedInstalled);
+        assert_eq!(
+            report.diagnostics[0].code,
+            DiagnosticCode::ContributionProjectionInvalid
+        );
+        remove_dir_all(root).expect("remove package");
     }
 
     #[test]

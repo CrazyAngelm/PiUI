@@ -12,6 +12,10 @@
 //! are reduced to a payload-free generic notice.
 
 use crate::codec::{RpcCodec, RpcCodecConfig};
+use crate::extension_ui::{
+    ExtensionUiAction, ExtensionUiDelivery, ExtensionUiMailbox, ExtensionUiResponse,
+    sanitize_single_line,
+};
 use piui_contracts::{RuntimeId, RuntimeState};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -32,10 +36,13 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(6);
 const READ_BUF_BYTES: usize = 16 * 1024;
 const MAX_THINKING_LEVELS: usize = 8;
+const MAX_RUNTIME_COMMANDS: usize = 512;
+const MAX_RUNTIME_COMMAND_NAME_CHARS: usize = 160;
+const MAX_RUNTIME_COMMAND_DESCRIPTION_CHARS: usize = 1_000;
 /// Version of the host-to-WebView live-runtime event channel.
-/// v5 makes projectless Chats explicit so the host-owned backing workspace id
-/// cannot cross the event boundary.
-pub const LOCAL_RUNTIME_EVENT_PROTOCOL: u8 = 5;
+/// v9 adds the bounded interactive extension UI surface while retaining the
+/// projectless Chats scope introduced by v5.
+pub const LOCAL_RUNTIME_EVENT_PROTOCOL: u8 = 9;
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
 
 /// How this host launches the Pi CLI in rpc mode.
@@ -68,6 +75,8 @@ pub enum RealRuntimeError {
     Exited(String),
     #[error("Response channel closed")]
     Channel,
+    #[error("The extension UI response is invalid or no longer pending")]
+    InvalidExtensionUiResponse,
 }
 
 /// A minimal, display-safe model descriptor projected from `get_available_models`.
@@ -78,6 +87,22 @@ pub struct ModelLite {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+/// A minimal, display-safe command projected from Pi's `get_commands` response.
+/// Source metadata is deliberately reduced to its allowlisted provenance labels;
+/// paths and base directories never cross this adapter boundary.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeCommandLite {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
 
 /// A minimal, display-safe session state projected from `get_state`.
@@ -190,11 +215,8 @@ pub enum SurfaceEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
     },
-    ExtensionUiRequest {
-        id: String,
-        method: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        safe_summary: Option<String>,
+    ExtensionUi {
+        action: ExtensionUiAction,
     },
     RuntimeError {
         safe_summary: String,
@@ -265,12 +287,16 @@ pub struct RealPiConfig {
 struct RuntimeShared {
     stdin: Mutex<Option<ChildStdin>>,
     pending: Mutex<HashMap<String, oneshot::Sender<Result<Value, RealRuntimeError>>>>,
+    extension_ui: Mutex<ExtensionUiMailbox>,
+    extension_ui_timeouts: Mutex<HashMap<String, oneshot::Sender<()>>>,
+    extension_ui_response_gate: Mutex<()>,
     state: Mutex<RuntimeState>,
     revision: AtomicU64,
     next_id: AtomicU64,
     /// Set only by the host-owned stop path; a clean EOF without this flag is
     /// a crashed/unexpected child, not an idle runtime.
     shutting_down: AtomicBool,
+    extension_ui_ready: AtomicBool,
 }
 
 /// Live runtime handle. Drop is not sufficient to stop the child; callers
@@ -348,10 +374,14 @@ impl RealPiRuntime {
         let shared = Arc::new(RuntimeShared {
             stdin: Mutex::new(Some(stdin)),
             pending: Mutex::new(HashMap::new()),
+            extension_ui: Mutex::new(ExtensionUiMailbox::new()),
+            extension_ui_timeouts: Mutex::new(HashMap::new()),
+            extension_ui_response_gate: Mutex::new(()),
             state: Mutex::new(RuntimeState::Starting),
             revision: AtomicU64::new(0),
             next_id: AtomicU64::new(1),
             shutting_down: AtomicBool::new(false),
+            extension_ui_ready: AtomicBool::new(false),
         });
 
         let (event_tx, event_rx) = mpsc::channel::<SurfaceEvent>(256);
@@ -394,6 +424,10 @@ impl RealPiRuntime {
                 "Pi stopped during the startup handshake.".into(),
             ));
         }
+        runtime
+            .shared
+            .extension_ui_ready
+            .store(true, Ordering::Release);
         let revision = runtime.shared.revision.load(Ordering::Relaxed);
 
         // Surface the initial model list asynchronously so the composer can
@@ -486,6 +520,12 @@ impl RealPiRuntime {
             .ok_or_else(|| RealRuntimeError::Protocol("missing thinking-level payload".into()))
     }
 
+    /// Lists invokable Pi slash commands through a bounded, path-free projection.
+    pub async fn get_commands(&self) -> Result<Vec<RuntimeCommandLite>, RealRuntimeError> {
+        let value = self.request("get_commands", json!({})).await?;
+        map_runtime_commands(&value)
+    }
+
     pub async fn set_model(
         &self,
         provider: String,
@@ -507,16 +547,45 @@ impl RealPiRuntime {
         self.fire_and_expect_success(body, COMMAND_TIMEOUT).await
     }
 
-    /// Graceful stop: abort a running turn, close stdin, wait, then kill.
+    /// Resolves one pending extension dialog through Pi's LF-framed RPC stdin.
+    /// The mailbox consumes a valid response exactly once; invalid, stale, or
+    /// mismatched responses intentionally expose no request or payload detail.
+    pub async fn respond_extension_ui(
+        &self,
+        public_id: String,
+        response: ExtensionUiResponse,
+    ) -> Result<(), RealRuntimeError> {
+        // This lane can run while the originating prompt command holds the
+        // host operation gate, but remains serialized with trust revocation
+        // and runtime retirement through `terminate`/`stop` below.
+        let _response_guard = self.shared.extension_ui_response_gate.lock().await;
+        if self.shared.shutting_down.load(Ordering::Acquire) {
+            return Err(RealRuntimeError::NotRunning);
+        }
+        let frame = {
+            let mut mailbox = self.shared.extension_ui.lock().await;
+            mailbox
+                .respond(&public_id, response)
+                .map_err(|_| RealRuntimeError::InvalidExtensionUiResponse)?
+        };
+        self.cancel_extension_ui_timeout(&public_id).await;
+        write_extension_ui_frame(&self.shared, frame).await
+    }
+
+    /// Graceful stop: cancel extension dialogs, abort a running turn, close
+    /// stdin, wait, then kill.
     pub async fn stop(&self) -> Result<(), RealRuntimeError> {
+        let _response_guard = self.shared.extension_ui_response_gate.lock().await;
         self.shared.shutting_down.store(true, Ordering::Release);
+        self.drain_extension_ui_dialogs().await;
         let _ = self.abort().await;
-        self.terminate().await
+        self.shutdown_child().await
     }
 
     /// Immediately retires a failed or no-longer-authorized runtime without
     /// issuing another RPC command through a stream that may already be bad.
     pub async fn terminate(&self) -> Result<(), RealRuntimeError> {
+        let _response_guard = self.shared.extension_ui_response_gate.lock().await;
         self.shared.shutting_down.store(true, Ordering::Release);
         self.shutdown_child().await
     }
@@ -554,6 +623,9 @@ impl RealPiRuntime {
             .and_then(Value::as_str)
             .map(str::to_owned)
             .ok_or_else(|| RealRuntimeError::Protocol("command missing type".into()))?;
+        if self.shared.shutting_down.load(Ordering::Acquire) {
+            return Err(RealRuntimeError::NotRunning);
+        }
         let encoded = serde_json::to_vec(&body)
             .map_err(|error| RealRuntimeError::Protocol(error.to_string()))?;
         let framed = {
@@ -566,6 +638,10 @@ impl RealPiRuntime {
         {
             let mut pending = self.shared.pending.lock().await;
             pending.insert(command_id.clone(), tx);
+        }
+        if self.shared.shutting_down.load(Ordering::Acquire) {
+            self.shared.pending.lock().await.remove(&command_id);
+            return Err(RealRuntimeError::NotRunning);
         }
         let write_result = {
             let mut stdin_guard = self.shared.stdin.lock().await;
@@ -583,18 +659,31 @@ impl RealPiRuntime {
             return Err(RealRuntimeError::NotRunning);
         }
 
-        match timeout(deadline, rx).await {
-            Ok(Ok(Ok(value))) => {
-                validate_success_response(&value, &expected_command)?;
-                Ok(value)
-            }
-            Ok(Ok(Err(error))) => Err(error),
-            Ok(Err(_)) => Err(RealRuntimeError::Exited(
-                "Pi closed the response channel before replying.".into(),
-            )),
-            Err(_) => {
-                self.shared.pending.lock().await.remove(&command_id);
-                Err(RealRuntimeError::Timeout)
+        let mut rx = rx;
+        loop {
+            match timeout(deadline, &mut rx).await {
+                Ok(Ok(Ok(value))) => {
+                    validate_success_response(&value, &expected_command)?;
+                    return Ok(value);
+                }
+                Ok(Ok(Err(error))) => return Err(error),
+                Ok(Err(_)) => {
+                    return Err(RealRuntimeError::Exited(
+                        "Pi closed the response channel before replying.".into(),
+                    ));
+                }
+                Err(_) => {
+                    // Extension slash commands reply only after their handler
+                    // returns. A documented UI dialog may therefore keep the
+                    // `prompt` request open beyond the normal command budget.
+                    let waiting_for_dialog = expected_command == "prompt"
+                        && self.shared.extension_ui.lock().await.pending_len() > 0;
+                    if waiting_for_dialog {
+                        continue;
+                    }
+                    self.shared.pending.lock().await.remove(&command_id);
+                    return Err(RealRuntimeError::Timeout);
+                }
             }
         }
     }
@@ -604,8 +693,43 @@ impl RealPiRuntime {
         format!("piui-c-{n}")
     }
 
+    async fn cancel_extension_ui_timeout(&self, public_id: &str) {
+        if let Some(cancel) = self
+            .shared
+            .extension_ui_timeouts
+            .lock()
+            .await
+            .remove(public_id)
+        {
+            let _ = cancel.send(());
+        }
+    }
+
+    async fn cancel_extension_ui_timeouts(&self) {
+        let cancellations = std::mem::take(&mut *self.shared.extension_ui_timeouts.lock().await);
+        for cancel in cancellations.into_values() {
+            let _ = cancel.send(());
+        }
+    }
+
+    async fn drain_extension_ui_dialogs(&self) {
+        let frames = {
+            let mut mailbox = self.shared.extension_ui.lock().await;
+            mailbox.drain_cancellations()
+        };
+        for frame in frames {
+            // Shutdown must not be blocked by an already-failed stdin pipe.
+            // The source id remains host-private and is never logged.
+            let _ = write_extension_ui_frame(&self.shared, frame).await;
+        }
+    }
+
     async fn shutdown_child(&self) -> Result<(), RealRuntimeError> {
         self.shared.shutting_down.store(true, Ordering::Release);
+        self.cancel_extension_ui_timeouts().await;
+        // Resolve every dialog before stdin closes so a waiting extension can
+        // unwind normally where the child is still able to read the response.
+        self.drain_extension_ui_dialogs().await;
         // Close stdin so Pi's reader reaches EOF and exits gracefully.
         {
             let mut stdin = self.shared.stdin.lock().await;
@@ -634,6 +758,28 @@ impl RealPiRuntime {
             }
         }
     }
+}
+
+async fn write_extension_ui_frame(
+    shared: &Arc<RuntimeShared>,
+    response: Value,
+) -> Result<(), RealRuntimeError> {
+    let mut frame = serde_json::to_vec(&response).map_err(|_| {
+        RealRuntimeError::Protocol("Could not encode an extension UI response.".into())
+    })?;
+    frame.push(b'\n');
+    let write_result = {
+        let mut stdin_guard = shared.stdin.lock().await;
+        if let Some(stdin) = stdin_guard.as_mut() {
+            match stdin.write_all(&frame).await {
+                Ok(()) => stdin.flush().await,
+                Err(error) => Err(error),
+            }
+        } else {
+            Err(std::io::Error::other("Pi stdin is unavailable"))
+        }
+    };
+    write_result.map_err(|_| RealRuntimeError::NotRunning)
 }
 
 fn prompt_command(command_id: String, text: String, streaming_behavior: &str) -> Value {
@@ -1275,46 +1421,157 @@ async fn handle_extension_ui(
     event_tx: &mpsc::Sender<SurfaceEvent>,
     shared: &Arc<RuntimeShared>,
 ) {
-    let source_id = obj
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned();
-    let source_method = obj
-        .get("method")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned();
-    let public_id = opaque_surface_id("extension", &source_id);
-    let public_method = safe_extension_method(&source_method);
-    let safe_summary = extension_safe_summary(&source_method);
-    // `spawn()` has not handed its receiver to the host until the get_state
-    // handshake returns. Do not let an extension's startup-notification burst
-    // fill that bounded channel and block protocol response routing. Status
-    // notices are best-effort; blocking dialogs still receive cancellation.
-    let _ = event_tx.try_send(SurfaceEvent::ExtensionUiRequest {
-        id: public_id,
-        method: public_method,
-        safe_summary,
-    });
-    // Blocking dialog methods must receive a response or Pi waits forever.
-    // For MVP we cancel them immediately; the UI still shows a generic notice.
-    if matches!(
-        source_method.as_str(),
-        "select" | "confirm" | "input" | "editor"
-    ) {
-        let response =
-            json!({ "type": "extension_ui_response", "id": source_id, "cancelled": true });
-        if let Ok(bytes) = serde_json::to_vec(&response) {
-            let mut frame = bytes;
-            frame.push(b'\n');
-            let mut stdin = shared.stdin.lock().await;
-            if let Some(stdin) = stdin.as_mut() {
-                let _ = stdin.write_all(&frame).await;
-                let _ = stdin.flush().await;
+    let dispatch = {
+        let mut mailbox = shared.extension_ui.lock().await;
+        mailbox.project(obj)
+    };
+    let crate::extension_ui::ExtensionUiDispatch {
+        action,
+        delivery,
+        immediate_response,
+        pending_id,
+    } = dispatch;
+
+    let dialog_timeout_ms = extension_dialog_timeout_ms(&action);
+
+    // A malformed, overflowing, or unsupported dialog must resume Pi even if
+    // the event queue is unavailable. The raw frame remains host-private.
+    if let Some(response) = immediate_response {
+        let _ = write_extension_ui_frame(shared, response).await;
+    }
+
+    // Pi may emit presentation updates during session_start, but the Tauri
+    // live-runtime slot does not exist until the startup handshake completes.
+    // Cancel an awaited startup dialog rather than deadlocking Pi; active-
+    // session dialogs use the interactive mailbox immediately after Ready.
+    if delivery == ExtensionUiDelivery::Dialog && !shared.extension_ui_ready.load(Ordering::Acquire)
+    {
+        if let Some(public_id) = pending_id {
+            let cancellation = {
+                let mut mailbox = shared.extension_ui.lock().await;
+                mailbox.cancel(&public_id)
+            };
+            if let Some(response) = cancellation {
+                let _ = write_extension_ui_frame(shared, response).await;
+            }
+            let _ = event_tx.try_send(SurfaceEvent::ExtensionUi {
+                action: crate::extension_ui::ExtensionUiAction::Unsupported {
+                    id: public_id,
+                    method: "startupDialog".into(),
+                    safe_summary: "An extension dialog was cancelled during runtime startup."
+                        .into(),
+                },
+            });
+        }
+        return;
+    }
+
+    // A dialog received while shutdown is in progress has no usable consumer.
+    // Remove it and best-effort cancel before stdin is closed instead of
+    // blocking the stdout reader on an event that cannot be answered.
+    if shared.shutting_down.load(Ordering::Acquire) {
+        if let Some(public_id) = pending_id {
+            let cancellation = {
+                let mut mailbox = shared.extension_ui.lock().await;
+                mailbox.cancel(&public_id)
+            };
+            if let Some(response) = cancellation {
+                let _ = write_extension_ui_frame(shared, response).await;
+            }
+        }
+        return;
+    }
+
+    let event = SurfaceEvent::ExtensionUi { action };
+    match delivery {
+        ExtensionUiDelivery::Dialog => {
+            // Dialogs are not lossy: the producer is backpressured until the
+            // host can render an actionable request.
+            if event_tx.send(event).await.is_err() {
+                if let Some(public_id) = pending_id {
+                    let cancellation = {
+                        let mut mailbox = shared.extension_ui.lock().await;
+                        mailbox.cancel(&public_id)
+                    };
+                    if let Some(response) = cancellation {
+                        let _ = write_extension_ui_frame(shared, response).await;
+                    }
+                }
+            } else if let (Some(public_id), Some(timeout_ms)) = (pending_id, dialog_timeout_ms) {
+                mirror_extension_dialog_timeout(
+                    Arc::clone(shared),
+                    event_tx.clone(),
+                    public_id,
+                    timeout_ms,
+                )
+                .await;
+            }
+        }
+        ExtensionUiDelivery::FireAndForget => {
+            // Notifications and presentation updates never block protocol
+            // routing. Preserve capacity for lifecycle/dialog events while a
+            // startup receiver has not yet been handed to the host.
+            if event_tx.capacity() > 32 {
+                let _ = event_tx.try_send(event);
             }
         }
     }
+}
+
+fn extension_dialog_timeout_ms(action: &ExtensionUiAction) -> Option<u64> {
+    match action {
+        ExtensionUiAction::Dialog { request } => match request {
+            crate::extension_ui::ExtensionDialogRequest::Select { timeout_ms, .. }
+            | crate::extension_ui::ExtensionDialogRequest::Confirm { timeout_ms, .. }
+            | crate::extension_ui::ExtensionDialogRequest::Input { timeout_ms, .. }
+            | crate::extension_ui::ExtensionDialogRequest::Editor { timeout_ms, .. } => *timeout_ms,
+        },
+        _ => None,
+    }
+}
+
+async fn mirror_extension_dialog_timeout(
+    shared: Arc<RuntimeShared>,
+    event_tx: mpsc::Sender<SurfaceEvent>,
+    public_id: String,
+    timeout_ms: u64,
+) {
+    let mailbox = shared.extension_ui.lock().await;
+    if !mailbox.contains(&public_id) {
+        return;
+    }
+    let (cancel_tx, cancel_rx) = oneshot::channel();
+    let previous = shared
+        .extension_ui_timeouts
+        .lock()
+        .await
+        .insert(public_id.clone(), cancel_tx);
+    drop(mailbox);
+    if let Some(previous) = previous {
+        let _ = previous.send(());
+    }
+    tokio::spawn(async move {
+        tokio::select! {
+            () = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {}
+            _ = cancel_rx => return,
+        }
+        shared.extension_ui_timeouts.lock().await.remove(&public_id);
+        let expired = {
+            let mut mailbox = shared.extension_ui.lock().await;
+            mailbox.forget(&public_id)
+        };
+        if expired && !shared.shutting_down.load(Ordering::Acquire) {
+            let _ = event_tx
+                .send(SurfaceEvent::ExtensionUi {
+                    action: ExtensionUiAction::Unsupported {
+                        id: public_id,
+                        method: "dialogTimeout".into(),
+                        safe_summary: "An extension dialog expired.".into(),
+                    },
+                })
+                .await;
+        }
+    });
 }
 
 fn ensure_block(
@@ -1371,32 +1628,6 @@ fn entry_kind(entry_type: &str) -> String {
         "model_change" => "custom".into(),
         "thinking_level_change" => "thinking".into(),
         _ => "unknown".into(),
-    }
-}
-
-fn safe_extension_method(method: &str) -> String {
-    match method {
-        "notify" => "notify".into(),
-        "setStatus" => "setStatus".into(),
-        "setWidget" => "setWidget".into(),
-        "setTitle" => "setTitle".into(),
-        "set_editor_text" => "set_editor_text".into(),
-        "select" | "confirm" | "input" | "editor" => method.to_owned(),
-        _ => "extension request".into(),
-    }
-}
-
-fn extension_safe_summary(method: &str) -> Option<String> {
-    match method {
-        "notify" => Some("Extension notification received.".into()),
-        "setStatus" => Some("Extension status updated.".into()),
-        "setWidget" => Some("Extension updated a status widget.".into()),
-        "setTitle" => Some("Extension title updated.".into()),
-        "set_editor_text" => Some("Extension updated the composer draft.".into()),
-        "select" | "confirm" | "input" | "editor" => Some(format!(
-            "An extension requested input (`{method}`) and was auto-cancelled."
-        )),
-        _ => Some("An unrecognized extension request was ignored.".into()),
     }
 }
 
@@ -1534,6 +1765,136 @@ fn map_models(value: &Value) -> Option<Vec<ModelLite>> {
             })
             .collect(),
     )
+}
+
+fn map_runtime_commands(value: &Value) -> Result<Vec<RuntimeCommandLite>, RealRuntimeError> {
+    let data = required_response_data(value, "get_commands")?;
+    let commands = data
+        .get("commands")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            RealRuntimeError::Protocol("Pi `get_commands` response lacked commands".into())
+        })?;
+    if commands.len() > MAX_RUNTIME_COMMANDS {
+        return Err(RealRuntimeError::Protocol(
+            "Pi `get_commands` response exceeded the command limit".into(),
+        ));
+    }
+
+    let mut projected = Vec::with_capacity(commands.len());
+    for command in commands {
+        if let Some(command) = parse_runtime_command(command) {
+            // Preserve collisions even when their private source paths reduce
+            // to identical public provenance. The frontend suppresses every
+            // ambiguous invocation instead of executing an arbitrary winner.
+            projected.push(command);
+        }
+    }
+    Ok(projected)
+}
+
+fn parse_runtime_command(value: &Value) -> Option<RuntimeCommandLite> {
+    let command = value.as_object()?;
+    let name = command.get("name")?.as_str()?;
+    if !valid_runtime_command_name(name) {
+        return None;
+    }
+    let source = command.get("source")?.as_str()?;
+    if !matches!(source, "extension" | "prompt" | "skill") {
+        return None;
+    }
+
+    let description = match command.get("description") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(description)) => {
+            Some(sanitize_runtime_command_description(description, name)?)
+        }
+        Some(_) => return None,
+    };
+
+    let source_info = match command.get("sourceInfo") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(source_info)) => Some(source_info),
+        Some(_) => return None,
+    };
+    let scope = parse_runtime_command_scope(source_info, command)?;
+    let origin = parse_runtime_command_origin(source_info)?;
+
+    Some(RuntimeCommandLite {
+        name: name.to_owned(),
+        description,
+        source: source.to_owned(),
+        scope,
+        origin,
+    })
+}
+
+fn valid_runtime_command_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().count() <= MAX_RUNTIME_COMMAND_NAME_CHARS
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+}
+
+fn parse_runtime_command_scope(
+    source_info: Option<&serde_json::Map<String, Value>>,
+    command: &serde_json::Map<String, Value>,
+) -> Option<Option<String>> {
+    let scope = source_info
+        .and_then(|source_info| source_info.get("scope"))
+        .or_else(|| command.get("location"));
+    parse_runtime_command_provenance(scope, &["user", "project", "temporary"])
+}
+
+fn parse_runtime_command_origin(
+    source_info: Option<&serde_json::Map<String, Value>>,
+) -> Option<Option<String>> {
+    parse_runtime_command_provenance(
+        source_info.and_then(|source_info| source_info.get("origin")),
+        &["package", "top-level"],
+    )
+}
+
+fn parse_runtime_command_provenance(
+    value: Option<&Value>,
+    allowed: &[&str],
+) -> Option<Option<String>> {
+    match value {
+        None | Some(Value::Null) => Some(None),
+        Some(Value::String(value)) if allowed.contains(&value.as_str()) => {
+            Some(Some(value.clone()))
+        }
+        Some(_) => None,
+    }
+}
+
+fn sanitize_runtime_command_description(value: &str, command_name: &str) -> Option<String> {
+    const COMMAND_SENTINEL: &str = "\u{fdd0}piui-slash-command\u{fdd1}";
+    let invocation = format!("/{command_name}");
+    let mut protected = String::with_capacity(value.len());
+    let mut cursor = 0;
+    while let Some(relative) = value[cursor..].find(&invocation) {
+        let start = cursor + relative;
+        let end = start + invocation.len();
+        protected.push_str(&value[cursor..start]);
+        let boundary_before = value[..start].chars().next_back().is_none_or(|character| {
+            !character.is_ascii_alphanumeric() && !matches!(character, '_' | '-')
+        });
+        let boundary_after = value[end..].chars().next().is_none_or(|character| {
+            !character.is_ascii_alphanumeric()
+                && !matches!(character, '_' | '-' | '.' | ':' | '/' | '\\')
+        });
+        if boundary_before && boundary_after {
+            protected.push_str(COMMAND_SENTINEL);
+        } else {
+            protected.push_str(&invocation);
+        }
+        cursor = end;
+    }
+    protected.push_str(&value[cursor..]);
+    sanitize_single_line(&protected, MAX_RUNTIME_COMMAND_DESCRIPTION_CHARS)
+        .map(|description| description.replace(COMMAND_SENTINEL, &invocation))
 }
 
 fn map_thinking_levels(value: &Value) -> Option<Vec<String>> {
@@ -1729,11 +2090,14 @@ fn common_global_roots() -> Vec<PathBuf> {
 mod tests {
     use super::{
         LOCAL_RUNTIME_EVENT_PROTOCOL, RealPiConfig, RealPiRuntime, RealRuntimeError,
-        RuntimeEventEnvelope, RuntimeShared, StreamTracker, SurfaceEvent, extension_safe_summary,
-        fail_pending, handle_frame, map_models, map_session_state, map_thinking_levels,
-        opaque_surface_id, prompt_command, required_response_data, resolve_node_program,
-        safe_extension_method, safe_tool_name, transition_starting_to_ready,
-        validate_success_response,
+        RuntimeEventEnvelope, RuntimeShared, StreamTracker, SurfaceEvent, fail_pending,
+        handle_extension_ui, handle_frame, map_models, map_runtime_commands, map_session_state,
+        map_thinking_levels, opaque_surface_id, prompt_command, required_response_data,
+        resolve_node_program, safe_tool_name, sanitize_runtime_command_description,
+        transition_starting_to_ready, validate_success_response,
+    };
+    use crate::extension_ui::{
+        ExtensionDialogRequest, ExtensionUiAction, ExtensionUiMailbox, ExtensionUiResponse,
     };
     use piui_contracts::RuntimeState;
     use serde_json::json;
@@ -1741,6 +2105,7 @@ mod tests {
     use std::fs;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::time::Duration;
     use tokio::sync::{Mutex, mpsc, oneshot};
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
@@ -1770,19 +2135,143 @@ mod tests {
         fs::remove_dir_all(root).expect("removes resolver fixture");
     }
 
+    #[tokio::test]
+    async fn startup_dialog_is_cancelled_instead_of_blocking_the_handshake() {
+        let shared = shared_for_test(RuntimeState::Starting);
+        shared.extension_ui_ready.store(false, Ordering::Release);
+        let (event_tx, mut event_rx) = mpsc::channel(4);
+        let request = json!({
+            "id": "startup-confirm",
+            "method": "confirm",
+            "title": "Continue?",
+            "message": "Startup dialog",
+        });
+        handle_extension_ui(
+            request.as_object().expect("extension request object"),
+            &event_tx,
+            &shared,
+        )
+        .await;
+
+        assert_eq!(shared.extension_ui.lock().await.pending_len(), 0);
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(SurfaceEvent::ExtensionUi {
+                action: ExtensionUiAction::Unsupported { ref method, .. }
+            }) if method == "startupDialog"
+        ));
+    }
+
+    #[tokio::test]
+    async fn dialog_timeout_is_mirrored_without_sending_a_competing_response() {
+        let shared = shared_for_test(RuntimeState::Ready);
+        let (event_tx, mut event_rx) = mpsc::channel(4);
+        let request = json!({
+            "id": "timed-confirm",
+            "method": "confirm",
+            "title": "Continue?",
+            "message": "Timed dialog",
+            "timeout": 5,
+        });
+        handle_extension_ui(
+            request.as_object().expect("extension request object"),
+            &event_tx,
+            &shared,
+        )
+        .await;
+
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(SurfaceEvent::ExtensionUi {
+                action: ExtensionUiAction::Dialog { .. }
+            })
+        ));
+        let expired = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+            .await
+            .expect("timeout mirror arrives");
+        assert!(matches!(
+            expired,
+            Some(SurfaceEvent::ExtensionUi {
+                action: ExtensionUiAction::Unsupported { ref method, .. }
+            }) if method == "dialogTimeout"
+        ));
+        assert_eq!(shared.extension_ui.lock().await.pending_len(), 0);
+    }
+
+    #[tokio::test]
+    async fn answering_a_timed_dialog_cancels_its_expiry_task() {
+        let shared = shared_for_test(RuntimeState::Ready);
+        let (event_tx, mut event_rx) = mpsc::channel(4);
+        let request = json!({
+            "id": "answered-confirm",
+            "method": "confirm",
+            "title": "Continue?",
+            "message": "Timed dialog",
+            "timeout": 60_000,
+        });
+        handle_extension_ui(
+            request.as_object().expect("extension request object"),
+            &event_tx,
+            &shared,
+        )
+        .await;
+        let public_id = match event_rx.recv().await {
+            Some(SurfaceEvent::ExtensionUi {
+                action:
+                    ExtensionUiAction::Dialog {
+                        request: ExtensionDialogRequest::Confirm { id, .. },
+                    },
+            }) => id,
+            _ => panic!("expected confirm dialog"),
+        };
+        assert_eq!(shared.extension_ui_timeouts.lock().await.len(), 1);
+        let runtime = RealPiRuntime {
+            shared: Arc::clone(&shared),
+            child: Mutex::new(None),
+            reader: Mutex::new(None),
+            stderr: Mutex::new(None),
+            launch_label: "test".into(),
+        };
+        assert!(matches!(
+            runtime
+                .respond_extension_ui(public_id, ExtensionUiResponse::Confirmed { value: true },)
+                .await,
+            Err(RealRuntimeError::NotRunning)
+        ));
+        tokio::task::yield_now().await;
+        assert!(shared.extension_ui_timeouts.lock().await.is_empty());
+        assert!(event_rx.try_recv().is_err());
+    }
+
     #[test]
-    fn runtime_extension_projection_is_opaque_and_payload_free() {
-        assert_eq!(safe_extension_method("notify"), "notify");
-        assert_eq!(safe_extension_method("/private/path"), "extension request");
+    fn runtime_extension_projection_is_opaque_bounded_and_path_safe() {
+        let mut mailbox = ExtensionUiMailbox::new();
+        let request = json!({
+            "id": "C:\\private\\extension-request",
+            "method": "notify",
+            "message": "Read C:\\private\\notice.txt\u{0007}",
+            "notifyType": "warning",
+        });
+        let object = request.as_object().expect("extension request object");
+        let dispatch = mailbox.project(object);
+        let payload = serde_json::to_value(SurfaceEvent::ExtensionUi {
+            action: dispatch.action,
+        })
+        .expect("serializes extension action");
+
+        assert_eq!(payload["kind"], "extensionUi");
+        assert_eq!(payload["action"]["action"], "notify");
+        assert_eq!(payload["action"]["level"], "warning");
         assert_eq!(
-            extension_safe_summary("notify").as_deref(),
-            Some("Extension notification received.")
+            payload["action"]["message"],
+            "Read <external-path>/notice.txt"
         );
-        assert!(
-            !extension_safe_summary("notify")
-                .expect("safe summary")
-                .contains("private")
-        );
+        let id = payload["action"]["id"]
+            .as_str()
+            .expect("opaque notification id");
+        assert!(id.starts_with("piui-extension-"));
+        assert!(!id.contains("private"));
+        assert!(!payload.to_string().contains("C:\\private"));
     }
 
     #[test]
@@ -1848,6 +2337,91 @@ mod tests {
     }
 
     #[test]
+    fn command_projection_is_bounded_collision_preserving_and_path_safe() {
+        let commands = map_runtime_commands(&json!({
+            "data": {
+                "commands": [
+                    {
+                        "name": "review:1",
+                        "description": "Review C:\\private\\project\\secret.md\u{0007}",
+                        "source": "extension",
+                        "sourceInfo": {
+                            "scope": "project",
+                            "origin": "package",
+                            "path": "C:\\private\\extension.ts",
+                            "baseDir": "C:\\private"
+                        }
+                    },
+                    {
+                        "name": "review:1",
+                        "description": "Duplicate is ignored",
+                        "source": "extension",
+                        "sourceInfo": { "scope": "project", "origin": "package" }
+                    },
+                    {
+                        "name": "review:1",
+                        "description": "Same name, different provenance remains",
+                        "source": "prompt",
+                        "location": "user",
+                        "sourceInfo": {
+                            "path": "/home/private/.pi/prompts/review.md",
+                            "baseDir": "/home/private"
+                        }
+                    },
+                    { "name": "unsafe name", "source": "extension" },
+                    { "name": "unknown", "source": "built-in" },
+                    {
+                        "name": "bad-origin",
+                        "source": "skill",
+                        "sourceInfo": { "origin": "untrusted" }
+                    }
+                ]
+            }
+        }))
+        .expect("valid catalog");
+
+        assert_eq!(commands.len(), 3);
+        assert_eq!(commands[0].name, "review:1");
+        assert_eq!(commands[0].scope.as_deref(), Some("project"));
+        assert_eq!(commands[0].origin.as_deref(), Some("package"));
+        assert_eq!(
+            commands[0].description.as_deref(),
+            Some("Review <external-path>/secret.md")
+        );
+        assert_eq!(commands[1].name, "review:1");
+        assert_eq!(commands[1].source, "extension");
+        assert_eq!(commands[2].scope.as_deref(), Some("user"));
+        assert_eq!(commands[2].origin, None);
+        let serialized = serde_json::to_string(&commands).expect("serializes safe commands");
+        assert!(!serialized.contains("C:\\\\private"));
+        assert!(!serialized.contains("/home/private"));
+        assert!(!serialized.contains("sourceInfo"));
+        assert!(!serialized.contains("baseDir"));
+    }
+
+    #[test]
+    fn command_descriptions_preserve_their_own_slash_invocation_only() {
+        assert_eq!(
+            sanitize_runtime_command_description(
+                "Usage: /goal <objective>; config: <external-path>/home/private/goal.json \u{001b}[32mready\u{001b}[0m",
+                "goal",
+            )
+            .as_deref(),
+            Some("Usage: /goal <objective>; config: <external-path>/goal.json ready")
+        );
+        assert!(sanitize_runtime_command_description(&"x".repeat(1_001), "goal").is_none());
+    }
+
+    #[test]
+    fn command_projection_rejects_malformed_or_oversized_catalogs() {
+        assert!(map_runtime_commands(&json!({ "data": { "commands": {} } })).is_err());
+        let commands = (0..513)
+            .map(|index| json!({ "name": format!("command-{index}"), "source": "extension" }))
+            .collect::<Vec<_>>();
+        assert!(map_runtime_commands(&json!({ "data": { "commands": commands } })).is_err());
+    }
+
+    #[test]
     fn prompt_submission_carries_atomic_streaming_behavior() {
         let prompt = prompt_command("request".into(), "hello".into(), "followUp");
         assert_eq!(
@@ -1905,10 +2479,14 @@ mod tests {
         Arc::new(RuntimeShared {
             stdin: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
+            extension_ui: Mutex::new(ExtensionUiMailbox::new()),
+            extension_ui_timeouts: Mutex::new(HashMap::new()),
+            extension_ui_response_gate: Mutex::new(()),
             state: Mutex::new(state),
             revision: AtomicU64::new(0),
             next_id: AtomicU64::new(1),
             shutting_down: AtomicBool::new(false),
+            extension_ui_ready: AtomicBool::new(true),
         })
     }
 
@@ -2004,7 +2582,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_events_have_an_explicit_v5_scope_envelope() {
+    fn runtime_events_have_an_explicit_v9_scope_envelope() {
         let payload = serde_json::to_value(RuntimeEventEnvelope::new(
             "runtime".into(),
             Some("project".into()),
@@ -2091,6 +2669,129 @@ mod tests {
         let persisted = fs::read_to_string(&session).expect("keeps session source");
         assert!(persisted.starts_with("{\"type\":\"session\""));
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// Manual integration evidence for the documented RPC Extension UI
+    /// protocol. The fixture is project-local and synthetic; no provider call,
+    /// user prompt content, or authoritative session mutation is involved.
+    #[tokio::test]
+    #[ignore = "requires a locally installed Pi CLI"]
+    async fn live_pi_extension_ui_dialog_sequence_round_trips() {
+        let serial = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "piui-live-extension-ui-test-{}-{serial}",
+            std::process::id()
+        ));
+        let extensions = root.join(".pi").join("extensions");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&extensions).expect("creates isolated extension directory");
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../spikes/rpc/fixtures/rpc_ui_fixture.ts");
+        fs::copy(&fixture, extensions.join("rpc-ui-fixture.ts"))
+            .expect("copies synthetic extension fixture");
+        let cwd = fs::canonicalize(&root).expect("canonical fixture workspace");
+
+        let (runtime, mut events, _runtime_id, _state, _revision) =
+            RealPiRuntime::spawn(RealPiConfig {
+                cwd,
+                session_path: None,
+                session_name: Some("PiUI synthetic extension UI probe".into()),
+            })
+            .await
+            .expect("starts Pi with the synthetic fixture");
+        assert!(
+            runtime
+                .get_commands()
+                .await
+                .expect("lists commands")
+                .iter()
+                .any(|command| command.name == "piui-rpc-ui-fixture")
+        );
+
+        let flow = tokio::time::timeout(Duration::from_secs(20), async {
+            let prompt = runtime.send_prompt("/piui-rpc-ui-fixture".into());
+            tokio::pin!(prompt);
+            let mut prompt_complete = false;
+            let mut fixture_complete = false;
+            while !prompt_complete || !fixture_complete {
+                tokio::select! {
+                    result = &mut prompt, if !prompt_complete => {
+                        result.expect("extension command completes");
+                        prompt_complete = true;
+                    }
+                    event = events.recv() => {
+                        let event = event.expect("runtime event channel stays open");
+                        let SurfaceEvent::ExtensionUi { action } = event else {
+                            continue;
+                        };
+                        match action {
+                            ExtensionUiAction::Dialog {
+                                request: ExtensionDialogRequest::Select { id, options, .. },
+                            } => {
+                                let option_id = options.first().expect("select option").id.clone();
+                                runtime.respond_extension_ui(
+                                    id,
+                                    ExtensionUiResponse::Selected { option_id },
+                                ).await.expect("responds to select");
+                            }
+                            ExtensionUiAction::Dialog {
+                                request: ExtensionDialogRequest::Confirm { id, .. },
+                            } => runtime.respond_extension_ui(
+                                id,
+                                ExtensionUiResponse::Confirmed { value: true },
+                            ).await.expect("responds to confirm"),
+                            ExtensionUiAction::Dialog {
+                                request: ExtensionDialogRequest::Input { id, .. },
+                            } => runtime.respond_extension_ui(
+                                id,
+                                ExtensionUiResponse::Submitted { value: "synthetic value".into() },
+                            ).await.expect("responds to input"),
+                            ExtensionUiAction::Dialog {
+                                request: ExtensionDialogRequest::Editor { id, .. },
+                            } => runtime.respond_extension_ui(
+                                id,
+                                ExtensionUiResponse::Submitted { value: "synthetic\ntext".into() },
+                            ).await.expect("responds to editor"),
+                            ExtensionUiAction::Notify { message, .. }
+                                if message == "Synthetic fixture completed" => {
+                                    fixture_complete = true;
+                                }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        })
+        .await;
+
+        assert!(flow.is_ok(), "synthetic dialog sequence timed out");
+
+        let stop_flow = tokio::time::timeout(Duration::from_secs(20), async {
+            let prompt = runtime.send_prompt("/piui-rpc-ui-fixture".into());
+            tokio::pin!(prompt);
+            loop {
+                tokio::select! {
+                    result = &mut prompt => panic!("untimed dialog completed before stop: {result:?}"),
+                    event = events.recv() => {
+                        let event = event.expect("runtime event channel stays open");
+                        if matches!(
+                            event,
+                            SurfaceEvent::ExtensionUi {
+                                action: ExtensionUiAction::Dialog { .. }
+                            }
+                        ) {
+                            runtime.stop().await.expect("preemptively stops pending dialog");
+                            assert!(prompt.await.is_err());
+                            break;
+                        }
+                    }
+                }
+            }
+        })
+        .await;
+        assert!(stop_flow.is_ok(), "pending dialog prevented runtime stop");
+        drop(runtime);
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// Manual integration evidence for the projectless-chat backing workspace.

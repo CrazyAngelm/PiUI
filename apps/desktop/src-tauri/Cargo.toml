@@ -20,6 +20,7 @@ tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
 piui-contracts = { path = "../../../crates/piui-contracts" }
+piui-extensions = { path = "../../../crates/piui-extensions" }
 piui-index = { path = "../../../crates/piui-index" }
 piui-platform = { path = "../../../crates/piui-platform" }
 piui-runtime = { path = "../../../crates/piui-runtime" }
