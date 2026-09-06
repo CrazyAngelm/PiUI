@@ -189,7 +189,7 @@
   .nav-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
   .nav-button--quiet { justify-content: flex-start; padding: 0 var(--piui-space-3); background: transparent; color: var(--piui-text-muted); }
   .nav-button--quiet:hover, .nav-button--quiet.selected { background: var(--piui-surface-1); color: var(--piui-text); }
-  .nav-button--primary { background: var(--piui-accent); color: var(--piui-accent-ink); }
+  .nav-button--primary { background: var(--piui-action); color: var(--piui-action-ink); }
   .nav-button--primary:hover:not(:disabled) { background: #b2cf97; }
   .nav-button:disabled { cursor: wait; opacity: .58; }
   .projects { flex: 1 1 0; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: var(--piui-space-3) var(--piui-space-2); }

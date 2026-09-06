@@ -53,21 +53,21 @@
 
 <style>
   .settings { flex:1; min-height:0; overflow:auto; background: var(--piui-bg); color: var(--piui-text); }
-  header { height: 66px; padding: 0 var(--piui-space-6); border-bottom: 1px solid var(--piui-border-subtle); display:flex; align-items:center; justify-content:space-between; }
+  header { height: 46px; padding: 0 var(--piui-space-6); border-bottom: 1px solid var(--piui-border-subtle); display:flex; align-items:center; justify-content:space-between; }
   header div { display:flex; align-items:baseline; gap:12px; }
   header span { color:var(--piui-text-muted); font-size:12px; }
-  h1 { margin:0; font-size:18px; font-weight:650; }
+  h1 { margin:0; font-size:15px; font-weight:650; }
   button, select { border:1px solid var(--piui-border); border-radius:7px; background:var(--piui-bg-raised); color:var(--piui-text); font:inherit; }
-  button { padding:8px 13px; cursor:pointer; }
+  button { padding:6px 10px; cursor:pointer; }
   button:focus-visible, select:focus-visible { outline:2px solid var(--piui-focus); outline-offset:2px; }
-  .body { width:min(720px, calc(100% - 40px)); margin:0 auto; padding:42px 0; }
+  .body { width:min(720px, calc(100% - 40px)); margin:0 auto; padding:28px 0; }
   .rows { border:1px solid var(--piui-border); border-radius:12px; background:var(--piui-bg-raised); overflow:hidden; }
-  label { min-height:74px; padding:14px 16px; display:flex; align-items:center; justify-content:space-between; gap:24px; border-bottom:1px solid var(--piui-border-subtle); }
+  label { min-height:60px; padding:10px 14px; display:flex; align-items:center; justify-content:space-between; gap:24px; border-bottom:1px solid var(--piui-border-subtle); }
   label:last-child { border-bottom:0; }
   label span { display:grid; gap:4px; }
   strong { font-size:14px; }
   small { color:var(--piui-text-muted); line-height:1.4; }
-  select { min-width:150px; padding:8px 10px; }
+  select { min-width:150px; padding:6px 9px; }
   .error { color:var(--piui-danger); }
   @media (max-width: 620px) { label { align-items:stretch; flex-direction:column; gap:10px; } select { width:100%; } }
 </style>

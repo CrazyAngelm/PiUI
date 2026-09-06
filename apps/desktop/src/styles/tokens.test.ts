@@ -29,6 +29,7 @@ describe('workspace semantic palette', () => {
           expect(ratio(values[`--piui-${control}`], values[`--piui-${surface}`])).toBeGreaterThanOrEqual(3);
         }
       }
+      expect(ratio(values['--piui-action-ink'], values['--piui-action'])).toBeGreaterThanOrEqual(4.5);
       expect(ratio(values['--piui-accent-ink'], values['--piui-accent'])).toBeGreaterThanOrEqual(4.5);
     });
   }

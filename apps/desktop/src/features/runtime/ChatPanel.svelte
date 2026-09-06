@@ -1381,7 +1381,7 @@
   .extension-draft-suggestion { display: flex; align-items: center; gap: var(--piui-space-2); padding: 7px 0; border-top: 1px solid var(--piui-border); border-bottom: 1px solid var(--piui-border); color: var(--piui-text-muted); font-size: 11px; }
   .extension-draft-suggestion span { min-width: 0; margin-right: auto; }
   .extension-draft-suggestion button { flex: 0 0 auto; min-height: 28px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--piui-text-muted); font-size: 11px; font-weight: 700; }
-  .extension-draft-suggestion .extension-draft-apply { background: var(--piui-accent); color: var(--piui-accent-ink); }
+  .extension-draft-suggestion .extension-draft-apply { background: var(--piui-action); color: var(--piui-action-ink); }
   .chat-sync-banner { display: flex; align-items: center; gap: var(--piui-space-2); min-height: 32px; padding: 5px 7px 5px 10px; border: 1px solid var(--piui-border); border-radius: var(--piui-radius-sm); background: var(--piui-surface-1); color: var(--piui-text-muted); font-size: 11px; }
   .chat-sync-banner > span { display: inline-flex; align-items: center; gap: 8px; margin-right: auto; }
   .sync-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--piui-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--piui-accent) 12%, transparent); }
@@ -1421,7 +1421,7 @@
   .composer-actions { flex: 0 0 auto; }
   .composer-steer { min-height: 30px; padding: 0 9px; border: 0; border-radius: 8px; background: transparent; color: var(--piui-warning); font-size: 11px; font-weight: 700; }
   .composer-steer:hover:not(:disabled) { background: rgba(255, 255, 255, .055); color: var(--piui-text); }
-  .composer-submit { display: inline-grid; width: 40px; height: 40px; place-items: center; flex: 0 0 auto; border: 0; border-radius: 50%; background: var(--piui-accent); color: var(--piui-accent-ink); transition: transform 140ms ease, background 140ms ease, opacity 140ms ease; }
+  .composer-submit { display: inline-grid; width: 40px; height: 40px; place-items: center; flex: 0 0 auto; border: 0; border-radius: 50%; background: var(--piui-action); color: var(--piui-action-ink); transition: transform 140ms ease, background 140ms ease, opacity 140ms ease; }
   .composer-submit:hover:not(:disabled) { transform: translateY(-1px); background: #b2cf97; }
   .composer-submit:active:not(:disabled) { transform: translateY(0) scale(.96); }
   .composer-submit:disabled { cursor: not-allowed; opacity: .38; }

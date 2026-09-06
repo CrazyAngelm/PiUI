@@ -14,7 +14,7 @@ describe('WorkspaceShell visible primary actions', () => {
     expect(body).not.toContain('<span>Approvals</span>');
     expect(body).not.toContain('<span>Activity</span>');
     const source = readFileSync(new URL('./WorkspaceShell.svelte', import.meta.url), 'utf8');
-    expect(source).toContain('background:var(--piui-accent); color:var(--piui-accent-ink)');
+    expect(source).toContain('background:var(--piui-action); color:var(--piui-action-ink)');
     expect(source).not.toContain('--workspace-action-ink');
     expect(source).not.toContain('button.accent kbd { color:currentColor; opacity:');
   });

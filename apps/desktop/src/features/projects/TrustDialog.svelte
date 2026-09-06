@@ -46,6 +46,6 @@
   .button { min-height: 38px; padding: 0 var(--piui-space-3); border-radius: var(--piui-radius-sm); font-size: 13px; font-weight: 700; }
   .button--quiet { background: transparent; color: var(--piui-text-muted); }
   .button--quiet:hover { background: var(--piui-surface-1); color: var(--piui-text); }
-  .button--primary { background: var(--piui-accent); color: var(--piui-accent-ink); }
+  .button--primary { background: var(--piui-action); color: var(--piui-action-ink); }
   .button:disabled { opacity: .6; }
 </style>

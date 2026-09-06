@@ -47,7 +47,7 @@
   .composer-controls { display: flex; align-items: center; gap: var(--piui-space-2); padding: var(--piui-space-2) var(--piui-space-3); border-top: 1px solid var(--piui-border-subtle); }
   label { color: var(--piui-text-muted); font-size: 11px; font-weight: 700; }
   select { min-height: 30px; max-width: 180px; border: 1px solid var(--piui-border); border-radius: var(--piui-radius-sm); background: var(--piui-surface-2); color: var(--piui-text); font-size: 12px; }
-  button { min-height: 30px; margin-left: auto; padding: 0 var(--piui-space-3); border-radius: var(--piui-radius-sm); background: var(--piui-accent); color: var(--piui-accent-ink); font-size: 12px; font-weight: 750; }
+  button { min-height: 30px; margin-left: auto; padding: 0 var(--piui-space-3); border-radius: var(--piui-radius-sm); background: var(--piui-action); color: var(--piui-action-ink); font-size: 12px; font-weight: 750; }
   button:disabled { background: var(--piui-surface-2); color: var(--piui-text-faint); }
   p { margin: 0; padding: 0 var(--piui-space-3) var(--piui-space-3); color: var(--piui-text-muted); font-size: 11px; line-height: 1.4; }
   @media (max-width: 700px) { .composer { margin: 0 var(--piui-space-4) var(--piui-space-3); }.composer-controls { flex-wrap: wrap; }.composer-controls button { margin-left: 0; } }

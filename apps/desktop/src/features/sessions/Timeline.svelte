@@ -96,15 +96,15 @@
 </section>
 
 <style>
-  .timeline { width: min(100%, var(--piui-chat-column-width)); min-width: 0; margin: 0 auto; padding: clamp(30px, 5vw, 58px) var(--piui-chat-inline-padding) 120px; }
-  .block { position: relative; min-width: 0; max-width: 100%; margin: 0 0 30px; }
+  .timeline { width: min(100%, var(--piui-chat-column-width)); min-width: 0; margin: 0 auto; padding: 28px var(--piui-chat-inline-padding) 40px; }
+  .block { position: relative; min-width: 0; max-width: 100%; margin: 0 0 24px; }
   .block header { display: flex; min-height: 20px; align-items: baseline; gap: var(--piui-space-2); margin-bottom: 7px; color: var(--piui-text-muted); font-size: 11px; font-weight: 720; letter-spacing: .02em; }
   .block time { margin-left: 2px; color: var(--piui-text-faint); font-size: 10px; font-variant-numeric: tabular-nums; font-weight: 500; opacity: 0; transition: opacity 140ms ease; }
   .block:hover time, .block:focus-within time { opacity: 1; }
   .streaming-label { color: var(--piui-accent); font-size: 10px; font-weight: 600; }
   .failure-label { color: var(--piui-danger-text); font-size: 10px; font-weight: 650; }.interrupted-label { color: var(--piui-warning-text); font-size: 10px; font-weight: 650; }
   .block--assistant { padding-left: 2px; }.block--assistant.block--failed, .block--assistant.block--interrupted { padding-left: 12px; border-left: 2px solid var(--piui-danger-border); border-radius: 1px; }.block--assistant.block--interrupted { border-left-color: var(--piui-warning-border); }
-  .block--user { width: fit-content; max-width: min(78%, var(--piui-chat-reading-width)); margin-left: auto; padding: 13px 15px 14px; border: 1px solid var(--piui-user-border); border-radius: 14px; background: var(--piui-user-surface); }
+  .block--user { width: fit-content; max-width: min(78%, var(--piui-chat-reading-width)); margin-left: auto; padding: 11px 14px; border: 1px solid transparent; border-radius: 12px; background: var(--piui-user-surface); }
   .block--user header { margin-bottom: 5px; color: var(--piui-accent); }
   .block--user :global(.markdown-content) { font-size: var(--piui-chat-user-font-size); line-height: 1.58; }
   .activity-disclosure { margin: 0 0 18px 14px; color: var(--piui-text-muted); }

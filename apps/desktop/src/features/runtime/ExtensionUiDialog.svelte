@@ -149,7 +149,7 @@
   .extension-dialog-actions button { min-height: 36px; padding: 0 14px; border-radius: 9px; font-size: 12px; font-weight: 720; transition: transform 120ms ease, background 120ms ease; }
   .extension-dialog-actions button:active:not(:disabled) { transform: scale(.98); }
   .quiet { border: 1px solid var(--piui-border); background: transparent; color: var(--piui-text-muted); }
-  .primary { border: 0; background: var(--piui-accent); color: var(--piui-accent-ink); }
+  .primary { border: 0; background: var(--piui-action); color: var(--piui-action-ink); }
   button:disabled { opacity: .5; }
   .extension-error { margin: var(--piui-space-3) 0 0; color: var(--piui-danger-text); font-size: 12px; }
   @media (max-width: 600px) { .extension-dialog-backdrop { align-items: end; padding: 10px; }.extension-dialog { width: 100%; max-height: 90dvh; border-radius: 18px; padding: 22px 18px; } }

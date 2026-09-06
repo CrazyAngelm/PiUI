@@ -469,9 +469,20 @@ export async function runWorkspaceWebview2Proof({
     const finalCatalog = await orchestrationCatalog(workspaceId);
     assertion(finalCatalog.profiles.length === 2 && finalCatalog.teams.length === 1 && finalCatalog.pipelines.length === 1 && finalCatalog.launchCommands.length === 1 && finalCatalog.launchCommands[0].id === graphCommand.summary.id, 'UI deletion must remove selected definitions and preserve the independent graph.');
     await selectWorkspaceSection('Systems');
+    await waitFor(`document.querySelector('select[aria-label="Open system"] option[value="${graphCommand.summary.id}"]')`, 'saved graph catalog loaded');
     await setControl('select[aria-label="Open system"]', graphCommand.summary.id, 'change');
     await waitFor(`document.querySelectorAll('.node').length === 2 && document.querySelectorAll('.connections li').length === 1`, 'reopened mixed graph');
     await capture('workspace-mixed-graph-reopened');
+    await evaluate(`document.querySelector('.close-inspector').focus()`);
+    assertion(await evaluate(`document.activeElement?.matches('button.close-inspector[aria-label]')`), 'Inspector close must be a labelled, keyboard-focusable native button');
+    // Synthetic KeyboardEvent does not trigger native button activation.
+    await evaluate(`document.activeElement.click()`);
+    await waitFor(`!document.querySelector('.graph-layout aside')`, 'close graph inspector');
+    assertion(await evaluate(`document.activeElement?.matches('button.node')`), 'Closing inspector must return focus to its graph node');
+    assertion(await evaluate(`document.activeElement?.matches('button.node')`), 'Graph selection must retain native keyboard button semantics');
+    await evaluate(`document.activeElement.click()`);
+    await waitFor(`document.querySelector('.graph-layout aside')`, 'reopen graph inspector');
+
     return names;
   }
 

@@ -113,7 +113,7 @@
   .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--piui-space-2); margin-top: var(--piui-space-3); }
   .button { min-height: 36px; padding: 0 var(--piui-space-3); border-radius: var(--piui-radius-sm); font-size: 12px; font-weight: 700; }
   .button--quiet { background: transparent; color: var(--piui-text-muted); }.button--quiet:hover { background: var(--piui-surface-1); color: var(--piui-text); }
-  .button--primary { background: var(--piui-accent); color: var(--piui-accent-ink); }
+  .button--primary { background: var(--piui-action); color: var(--piui-action-ink); }
   .registry-section, .danger-section { display: flex; align-items: center; justify-content: space-between; gap: var(--piui-space-4); margin-top: var(--piui-space-5); padding-top: var(--piui-space-5); border-top: 1px solid var(--piui-border-subtle); }
   .registry-section p, .danger-section p { max-width: 42ch; margin: var(--piui-space-1) 0 0; }
   .button--danger-outline { border: 1px solid #704946; background: transparent; color: var(--piui-danger); }
