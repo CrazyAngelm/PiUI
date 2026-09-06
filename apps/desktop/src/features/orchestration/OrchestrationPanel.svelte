@@ -1,9 +1,11 @@
 <script module lang="ts">
-  export type OrchestrationSection = 'agents' | 'teams' | 'pipelines' | 'runs';
+  export type OrchestrationSection = 'systems' | 'agents' | 'teams' | 'pipelines' | 'runs';
 </script>
 
 <script lang="ts">
+  import { t } from '../locale/language';
   import { onDestroy, onMount } from 'svelte';
+  import SystemGraphEditor from './SystemGraphEditor.svelte';
   import AgentProfileEditor from './AgentProfileEditor.svelte';
   import TeamEditor from './TeamEditor.svelte';
   import PipelineEditor from './PipelineEditor.svelte';
@@ -15,14 +17,15 @@
   import { checkedRunSnapshot, createRunLiveUpdates, mergeRunSummaries, mergeSelectedRun, runSummary } from './runUpdates';
   import { orchestrationError, orchestrationHost, OrchestrationOperationError } from '../../host-api/orchestrationClient';
   import type {
-    AgentProfile, TeamDefinition, PipelineDefinition, LaunchCommandReference, OrchestrationRunV2,
-    OrchestrationClient, OrchestrationCatalogV2, DefinitionSummary, StoredDefinition, RunSummary,
+    AgentProfile, TeamDefinition, PipelineDefinition, LaunchCommandReference, OrchestrationRunV3,
+    OrchestrationClient, OrchestrationCatalogV3, DefinitionSummary, StoredDefinition, RunSummary,
     OrchestrationDefinitionKind, StartRunRequest, TaskRecord, ReconcileUncertainTaskRequest,
   } from '../../host-api/orchestrationClient';
 
   export let workspaceId: string;
   export let section: OrchestrationSection = 'agents';
   export let safeMode = false;
+  export let onSectionChange: (section: OrchestrationSection) => void = () => {};
   export let onOpenSession: ((sessionId: string) => void) | undefined = undefined;
   export let onDirtyChange: (dirty: boolean) => void = () => {};
   /** Dependency injection is for native-host tests, never a production fake store. */
@@ -33,14 +36,14 @@
     | (EditorBase & { kind: 'profile'; stored?: StoredDefinition<AgentProfile>; profiles: readonly AgentProfile[] })
     | (EditorBase & { kind: 'team'; stored?: StoredDefinition<TeamDefinition>; profiles: readonly AgentProfile[] })
     | (EditorBase & { kind: 'pipeline'; stored?: StoredDefinition<PipelineDefinition>; profiles: readonly AgentProfile[]; teams: readonly TeamDefinition[] })
-    | (EditorBase & { kind: 'launch-command'; stored?: StoredDefinition<LaunchCommandReference>; catalog: OrchestrationCatalogV2 });
+    | (EditorBase & { kind: 'launch-command'; stored?: StoredDefinition<LaunchCommandReference>; catalog: OrchestrationCatalogV3 });
 
-  let catalog: OrchestrationCatalogV2 | undefined;
+  let catalog: OrchestrationCatalogV3 | undefined;
   let profileDetails: readonly AgentProfile[] = [];
   let runs: readonly RunSummary[] = [];
-  let selectedRun: OrchestrationRunV2 | undefined;
+  let selectedRun: OrchestrationRunV3 | undefined;
   let editor: Editor | undefined;
-  let launcher: { key: string; workspaceId: string; catalog: OrchestrationCatalogV2; command?: StoredDefinition<LaunchCommandReference>; request?: StartRunRequest } | undefined;
+  let launcher: { key: string; workspaceId: string; catalog: OrchestrationCatalogV3; command?: StoredDefinition<LaunchCommandReference>; request?: StartRunRequest } | undefined;
   let launchError: string | undefined;
   let launchRequests = new Set<string>();
   let runMutations = new Map<string, RunAction['type']>();
@@ -62,8 +65,9 @@
   let mounted = false;
   let observedScope = '';
   let dataScope = '';
-  const sectionTitles: Record<OrchestrationSection, string> = { agents: 'Agents', teams: 'Teams', pipelines: 'Pipelines', runs: 'Runs' };
+  const sectionTitles: Record<OrchestrationSection, string> = { systems: 'Systems', agents: 'Agents', teams: 'Teams', pipelines: 'Pipelines', runs: 'Runs' };
   const descriptions: Record<OrchestrationSection, string> = {
+    systems: 'Agent systems.',
     agents: 'Reusable agent settings and instructions.',
     teams: 'Choose members and how they can work together.',
     pipelines: 'Define tasks and the order they run in.',
@@ -95,7 +99,7 @@
 
   const liveRuns = createRunLiveUpdates({
     scope: () => ({ workspaceId, generation: viewGeneration, visible: mounted && (section === 'runs' || selectedRun !== undefined) && editor === undefined && launcher === undefined, revision: knownRunRevision }),
-    read: (request) => client.orchestration_get_run_v2(request),
+    read: (request) => client.orchestration_get_run_v3(request),
     apply: applyRunSnapshot,
     failed: (error, runId) => { runUpdateError = { runId, message: error.message }; },
   });
@@ -123,7 +127,7 @@
     return Math.max(runs.find((run) => run.id === runId)?.revision ?? -1, selectedRun?.id === runId ? selectedRun.revision : -1);
   }
 
-  function applyRunSnapshot(run: OrchestrationRunV2): void {
+  function applyRunSnapshot(run: OrchestrationRunV3): void {
     runs = mergeRunSummaries(runs, [runSummary(run)]);
     selectedRun = mergeSelectedRun(selectedRun, run);
     if (runUpdateError?.runId === run.id) runUpdateError = undefined;
@@ -133,8 +137,8 @@
     if (value === null) throw new OrchestrationOperationError('not-found', 'This record is no longer available. Refresh the list.');
     return value;
   }
-  async function loadProfiles(targetWorkspace: string, value: OrchestrationCatalogV2): Promise<readonly AgentProfile[]> {
-    return Promise.all(value.profiles.map(async (summary) => found(await client.orchestration_get_profile_v2({ workspaceId: targetWorkspace, id: summary.id })).value));
+  async function loadProfiles(targetWorkspace: string, value: OrchestrationCatalogV3): Promise<readonly AgentProfile[]> {
+    return Promise.all(value.profiles.map(async (summary) => found(await client.orchestration_get_profile_v3({ workspaceId: targetWorkspace, id: summary.id })).value));
   }
   async function refresh(): Promise<void> {
     const requestEpoch = ++epoch;
@@ -147,12 +151,12 @@
     listError = undefined;
     try {
       if (targetSection === 'runs') {
-        const result = await client.orchestration_list_runs_v2({ workspaceId: targetWorkspace });
+        const result = await client.orchestration_list_runs_v3({ workspaceId: targetWorkspace });
         if (!mounted || epoch !== requestEpoch || scope !== targetScope) return;
         runs = mergeRunSummaries(runs, result);
         runUpdateError = undefined;
       } else {
-        const result = await client.orchestration_catalog_v2({ workspaceId: targetWorkspace });
+        const result = await client.orchestration_catalog_v3({ workspaceId: targetWorkspace });
         const profiles = targetSection === 'agents' ? await loadProfiles(targetWorkspace, result) : [];
         if (!mounted || epoch !== requestEpoch || scope !== targetScope) return;
         catalog = result;
@@ -170,24 +174,24 @@
     actionBusy = true;
     listError = undefined;
     try {
-      const latest = await client.orchestration_catalog_v2({ workspaceId: targetWorkspace });
+      const latest = await client.orchestration_catalog_v3({ workspaceId: targetWorkspace });
       const base: EditorBase = { key: crypto.randomUUID(), workspaceId: targetWorkspace };
       let next: Editor;
       if (kind === 'profile') {
-        const [profiles, stored] = await Promise.all([loadProfiles(targetWorkspace, latest), summary ? client.orchestration_get_profile_v2({ workspaceId: targetWorkspace, id: summary.id }).then(found) : undefined]);
+        const [profiles, stored] = await Promise.all([loadProfiles(targetWorkspace, latest), summary ? client.orchestration_get_profile_v3({ workspaceId: targetWorkspace, id: summary.id }).then(found) : undefined]);
         next = { ...base, kind, profiles, stored };
       } else if (kind === 'team') {
-        const [profiles, stored] = await Promise.all([loadProfiles(targetWorkspace, latest), summary ? client.orchestration_get_team_v2({ workspaceId: targetWorkspace, id: summary.id }).then(found) : undefined]);
+        const [profiles, stored] = await Promise.all([loadProfiles(targetWorkspace, latest), summary ? client.orchestration_get_team_v3({ workspaceId: targetWorkspace, id: summary.id }).then(found) : undefined]);
         next = { ...base, kind, profiles, stored };
       } else if (kind === 'pipeline') {
         const [profiles, teams, stored] = await Promise.all([
           loadProfiles(targetWorkspace, latest),
-          Promise.all(latest.teams.map(async (team) => found(await client.orchestration_get_team_v2({ workspaceId: targetWorkspace, id: team.id })).value)),
-          summary ? client.orchestration_get_pipeline_v2({ workspaceId: targetWorkspace, id: summary.id }).then(found) : undefined,
+          Promise.all(latest.teams.map(async (team) => found(await client.orchestration_get_team_v3({ workspaceId: targetWorkspace, id: team.id })).value)),
+          summary ? client.orchestration_get_pipeline_v3({ workspaceId: targetWorkspace, id: summary.id }).then(found) : undefined,
         ]);
         next = { ...base, kind, profiles, teams, stored };
       } else {
-        const stored = summary ? found(await client.orchestration_get_launch_command_v2({ workspaceId: targetWorkspace, id: summary.id })) : undefined;
+        const stored = summary ? found(await client.orchestration_get_launch_command_v3({ workspaceId: targetWorkspace, id: summary.id })) : undefined;
         next = { ...base, kind, catalog: latest, stored };
       }
       if (!mounted || scope !== targetScope) return;
@@ -213,16 +217,16 @@
       switch (target.kind) {
         case 'profile':
           if (!('harness' in value)) return;
-          await client.orchestration_save_profile_v2({ ...common, value }); break;
+          await client.orchestration_save_profile_v3({ ...common, value }); break;
         case 'team':
           if (!('members' in value)) return;
-          await client.orchestration_save_team_v2({ ...common, value }); break;
+          await client.orchestration_save_team_v3({ ...common, value }); break;
         case 'pipeline':
           if (!('steps' in value)) return;
-          await client.orchestration_save_pipeline_v2({ ...common, value }); break;
+          await client.orchestration_save_pipeline_v3({ ...common, value }); break;
         case 'launch-command':
           if (!('teamId' in value)) return;
-          await client.orchestration_save_launch_command_v2({ ...common, value }); break;
+          await client.orchestration_save_launch_command_v3({ ...common, value }); break;
       }
       if (mounted && editor?.key === target.key) {
         editor = undefined;
@@ -241,10 +245,10 @@
     const request = { workspaceId: target.workspaceId, id: target.summary.id, expectedRevision: target.summary.revision };
     try {
       switch (target.kind) {
-        case 'profile': await client.orchestration_delete_profile_v2(request); break;
-        case 'team': await client.orchestration_delete_team_v2(request); break;
-        case 'pipeline': await client.orchestration_delete_pipeline_v2(request); break;
-        case 'launch-command': await client.orchestration_delete_launch_command_v2(request); break;
+        case 'profile': await client.orchestration_delete_profile_v3(request); break;
+        case 'team': await client.orchestration_delete_team_v3(request); break;
+        case 'pipeline': await client.orchestration_delete_pipeline_v3(request); break;
+        case 'launch-command': await client.orchestration_delete_launch_command_v3(request); break;
       }
       if (mounted && deleteRequest === target) { deleteRequest = undefined; await refresh(); }
     } catch (error) { if (mounted && deleteRequest === target) listError = orchestrationError(error).message; }
@@ -258,7 +262,7 @@
     actionBusy = true;
     listError = undefined;
     try {
-      const result = await client.orchestration_get_run_v2({ workspaceId: targetWorkspace, runId: summary.id });
+      const result = await client.orchestration_get_run_v3({ workspaceId: targetWorkspace, runId: summary.id });
       if (!mounted || scope !== targetScope || selectedReadEpoch !== requestEpoch) return;
       selectedRun = checkedRunSnapshot(result, summary.id, Math.max(summary.revision, knownRunRevision(summary.id)));
       applyRunSnapshot(selectedRun);
@@ -279,7 +283,7 @@
     const requestEpoch = ++selectedReadEpoch;
     manualRunBusy = true;
     try {
-      const result = await client.orchestration_get_run_v2({ workspaceId, runId: target.id });
+      const result = await client.orchestration_get_run_v3({ workspaceId, runId: target.id });
       if (!mounted || scope !== targetScope || selectedRun?.id !== target.id || selectedReadEpoch !== requestEpoch) return;
       applyRunSnapshot(checkedRunSnapshot(result, target.id, target.revision));
     } catch (error) {
@@ -308,8 +312,8 @@
     listError = undefined;
     try {
       const [latest, stored] = await Promise.all([
-        client.orchestration_catalog_v2({ workspaceId: targetWorkspace }),
-        command ? client.orchestration_get_launch_command_v2({ workspaceId: targetWorkspace, id: command.id }).then(found) : undefined,
+        client.orchestration_catalog_v3({ workspaceId: targetWorkspace }),
+        command ? client.orchestration_get_launch_command_v3({ workspaceId: targetWorkspace, id: command.id }).then(found) : undefined,
       ]);
       if (!mounted || scope !== targetScope) return;
       launcher = { key: crypto.randomUUID(), workspaceId: targetWorkspace, catalog: latest, command: stored };
@@ -396,21 +400,25 @@
   }
 
   function kindForSection(value: OrchestrationSection): OrchestrationDefinitionKind {
-    switch (value) { case 'agents': return 'profile'; case 'teams': return 'team'; case 'pipelines': return 'pipeline'; case 'runs': return 'pipeline'; }
+    switch (value) { case 'systems': return 'pipeline'; case 'agents': return 'profile'; case 'teams': return 'team'; case 'pipelines': return 'pipeline'; case 'runs': return 'pipeline'; }
   }
   function harnessName(value: AgentProfile['harness']): string {
     switch (value) { case 'pi': return 'Pi'; case 'prime-agent': return 'Prime Agent'; case 'codex': return 'Codex'; }
   }
 </script>
 
-<section class="orchestration-panel" aria-labelledby="orchestration-title">
-  {#if safeMode}<p class="notice" role="status">Safe mode. Definitions and recorded runs are read-only. No native work starts here.</p>{/if}
+<section class="orchestration-panel" class:graph-view={section === 'systems'} aria-labelledby="orchestration-title">
+  {#if section === 'systems'}
+    <h1 id="orchestration-title" class="sr-only">{$t('Systems')}</h1>
+    {#key workspaceId}<SystemGraphEditor {workspaceId} {safeMode} {client} {onDirtyChange} onRun={() => { section = 'runs'; onSectionChange('runs'); }} />{/key}
+  {:else}
+  {#if safeMode}<p class="notice" role="status">{$t('Safe mode. Definitions and recorded runs are read-only. No native work starts here.')}</p>{/if}
   {#if (section === 'runs' || selectedRun !== undefined) && !editor && !launcher && streamError}<p class="notice" role="status">Live updates are unavailable. Use Refresh to load recorded state. {streamError}</p>{/if}
   {#if !workspaceId.trim()}
-    <div class="empty"><h2 id="orchestration-title">Choose a project</h2><p>Select a project to read its agent profiles, teams, pipelines and runs.</p></div>
+    <div class="empty"><h2 id="orchestration-title">{$t('Choose a project')}</h2><p>{$t('Select a project to read its agent profiles, teams, pipelines and runs.')}</p></div>
   {:else if editor}
-    <h1 id="orchestration-title" class="sr-only">Definition editor</h1>
-    {#if staleEditorScope}<p class="notice" role="status">This draft belongs to the previous project. Return to that project to save, or cancel this editor.</p>{/if}
+    <h1 id="orchestration-title" class="sr-only">{$t('Definition editor')}</h1>
+    {#if staleEditorScope}<p class="notice" role="status">{$t('This draft belongs to the previous project. Return to that project to save, or cancel this editor.')}</p>{/if}
     {#key editor.key}
       {#if editor.kind === 'profile'}<AgentProfileEditor profile={editor.stored?.value} profiles={editor.profiles} busy={actionBusy} error={editorError} readOnly={safeMode || staleEditorScope} onSave={(value) => void saveDefinition(value)} onCancel={closeEditor} {onDirtyChange} />
       {:else if editor.kind === 'team'}<TeamEditor team={editor.stored?.value} profiles={editor.profiles} busy={actionBusy} error={editorError} readOnly={safeMode || staleEditorScope} onSave={(value) => void saveDefinition(value)} onCancel={closeEditor} {onDirtyChange} />
@@ -418,37 +426,39 @@
       {:else}<LaunchCommandEditor command={editor.stored?.value} teams={editor.catalog.teams} pipelines={editor.catalog.pipelines} busy={actionBusy} error={editorError} readOnly={safeMode || staleEditorScope} onSave={(value) => void saveDefinition(value)} onCancel={closeEditor} {onDirtyChange} />{/if}
     {/key}
   {:else if launcher}
-    <h1 id="orchestration-title" class="sr-only">Launch a recorded run</h1>
-    {#if launcher.request}<p class="hint">Requested run: <code>{launcher.request.runId}</code>. Leaving this view does not cancel it.</p>{/if}
+    <h1 id="orchestration-title" class="sr-only">{$t('Launch a recorded run')}</h1>
+    {#if launcher.request}<p class="hint">{$t('Requested run: ')}<code>{launcher.request.runId}</code>. Leaving this view does not cancel it.</p>{/if}
     {#key launcher.key}<RunLauncher teams={launcher.catalog.teams} pipelines={launcher.catalog.pipelines} command={launcher.command} busy={launcherBusy} error={launchError} readOnly={safeMode || launcher.workspaceId !== workspaceId} locked={launcher.request !== undefined} onStart={(selection) => void startRun(selection)} onCancel={() => { if (!launcherBusy) { launcher = undefined; launchError = undefined; } }} />{/key}
   {:else if selectedRun}
-    <h1 id="orchestration-title" class="sr-only">Run details</h1>
-    <div class="page-actions"><button type="button" class="secondary" onclick={() => void refreshSelectedRun()} disabled={manualRunBusy} aria-label="Refresh run">{manualRunBusy ? 'Refreshing…' : 'Refresh run'}</button></div>
-    {#if runUpdateError?.runId === selectedRun.id}<div class="error" role="alert"><strong>Could not refresh the recorded run</strong><p>{runUpdateError.message}</p></div>{/if}
+    <h1 id="orchestration-title" class="sr-only">{$t('Run details')}</h1>
+    <div class="page-actions"><button type="button" class="secondary" onclick={() => void refreshSelectedRun()} disabled={manualRunBusy} aria-label={$t('Refresh run')}>{manualRunBusy ? 'Refreshing…' : 'Refresh run'}</button></div>
+    {#if runUpdateError?.runId === selectedRun.id}<div class="error" role="alert"><strong>{$t('Could not refresh the recorded run')}</strong><p>{runUpdateError.message}</p></div>{/if}
     {#if selectedPendingAction !== undefined}<p class="notice" role="status">{pendingActionLabel(selectedPendingAction)}</p>{/if}
     <RunInspector run={selectedRun} {onOpenSession} onClose={closeRun} busy={selectedPendingAction !== undefined} error={selectedActionError} onCancelRun={safeMode ? undefined : cancelSelectedRun} onRetryTask={safeMode ? undefined : retryTask} onReconcileTask={safeMode ? undefined : reconcileTask} />
   {:else}
-    <header class="page-header"><div><h1 id="orchestration-title">{sectionTitles[section]}</h1><p>{descriptions[section]}</p></div><div class="page-actions"><button type="button" class="secondary" onclick={() => void refresh()} disabled={listBusy || actionBusy} aria-label={`Refresh ${sectionTitles[section].toLowerCase()}`}>{listBusy ? 'Refreshing…' : 'Refresh'}</button>{#if section !== 'runs' && !safeMode}<button type="button" class="primary" disabled={actionBusy || listBusy} onclick={() => void openEditor(kindForSection(section))}>{section === 'agents' ? 'Create profile' : section === 'teams' ? 'Create team' : 'Create pipeline'}</button>{/if}{#if section === 'runs'}<button type="button" class="primary" disabled={safeMode || actionBusy || listBusy} onclick={() => void openLauncher()}>Start run</button>{/if}</div></header>
+    <header class="page-header"><div><h1 id="orchestration-title">{$t(sectionTitles[section])}</h1><p>{$t(descriptions[section])}</p></div><div class="page-actions"><button type="button" class="secondary" onclick={() => void refresh()} disabled={listBusy || actionBusy} aria-label={`Refresh ${sectionTitles[section].toLowerCase()}`}>{listBusy ? 'Refreshing…' : 'Refresh'}</button>{#if section !== 'runs' && !safeMode}<button type="button" class="primary" disabled={actionBusy || listBusy} onclick={() => void openEditor(kindForSection(section))}>{$t(section === 'agents' ? 'Create profile' : section === 'teams' ? 'Create team' : 'Create pipeline')}</button>{/if}{#if section === 'runs'}<button type="button" class="primary" disabled={safeMode || actionBusy || listBusy} onclick={() => void openLauncher()}>{$t('Start run')}</button>{/if}</div></header>
     <label class="search"><span>Search {sectionTitles[section].toLowerCase()}</span><input type="search" bind:value={query} placeholder={`Find ${sectionTitles[section].toLowerCase()}…`} /></label>
-    {#if listError}<div class="error" role="alert"><strong>Could not complete the workspace action</strong><p>{listError}</p><button type="button" onclick={() => void refresh()} disabled={listBusy || actionBusy}>Try again</button></div>{/if}
-    {#if section === 'runs' && runUpdateError}<div class="error" role="alert"><strong>Could not refresh a recorded run</strong><p>{runUpdateError.message}</p><button type="button" onclick={() => void refresh()} disabled={listBusy}>Refresh runs</button></div>{/if}
-    {#if deleteRequest}<div class="delete-confirm" role="group" aria-label="Confirm definition deletion"><strong>Delete {deleteRequest.summary.name}?</strong><p>Delete this definition? Existing sessions and recorded runs are kept.</p><div class="page-actions"><button type="button" class="secondary" disabled={actionBusy} onclick={() => deleteRequest = undefined}>Keep definition</button><button type="button" class="danger" disabled={actionBusy || safeMode} onclick={() => void deleteDefinition()}>{actionBusy ? 'Deleting…' : 'Delete definition'}</button></div></div>{/if}
+    {#if listError}<div class="error" role="alert"><strong>{$t('Could not complete the workspace action')}</strong><p>{listError}</p><button type="button" onclick={() => void refresh()} disabled={listBusy || actionBusy}>{$t('Try again')}</button></div>{/if}
+    {#if section === 'runs' && runUpdateError}<div class="error" role="alert"><strong>{$t('Could not refresh a recorded run')}</strong><p>{runUpdateError.message}</p><button type="button" onclick={() => void refresh()} disabled={listBusy}>{$t('Refresh runs')}</button></div>{/if}
+    {#if deleteRequest}<div class="delete-confirm" role="group" aria-label={$t('Confirm definition deletion')}><strong>Delete {deleteRequest.summary.name}?</strong><p>{$t('Delete this definition? Existing sessions and recorded runs are kept.')}</p><div class="page-actions"><button type="button" class="secondary" disabled={actionBusy} onclick={() => deleteRequest = undefined}>{$t('Keep definition')}</button><button type="button" class="danger" disabled={actionBusy || safeMode} onclick={() => void deleteDefinition()}>{actionBusy ? 'Deleting…' : 'Delete definition'}</button></div></div>{/if}
     {#if listBusy && dataScope !== scope}<p class="loading" role="status">Loading local {sectionTitles[section].toLowerCase()}…</p>
     {:else if dataScope === scope}
       {#if section === 'runs'}
         {#if visibleRuns.length === 0}<div class="empty"><h2>{query.trim() ? 'No matching runs' : 'No runs recorded'}</h2><p>{query.trim() ? 'Change the search to see other runs.' : 'Choose Start run to use a saved team and pipeline. Only recorded runs appear here.'}</p></div>
-        {:else}<ul class="definition-list" aria-label="Recorded runs">{#each visibleRuns as run (run.id)}<li><button type="button" class="row-open" onclick={() => void openRun(run)} disabled={actionBusy}><strong>{run.pipelineName}</strong><span>{run.teamName} · {run.status === 'uncertain' ? 'Needs reconciliation' : run.status} · Revision {run.revision}</span></button></li>{/each}</ul>{/if}
+        {:else}<ul class="definition-list" aria-label={$t('Recorded runs')}>{#each visibleRuns as run (run.id)}<li><button type="button" class="row-open" onclick={() => void openRun(run)} disabled={actionBusy}><strong>{run.pipelineName}</strong><span>{run.teamName} · {run.status === 'uncertain' ? 'Needs reconciliation' : run.status} · Revision {run.revision}</span></button></li>{/each}</ul>{/if}
       {:else}
         {#if visibleRows.length === 0}<div class="empty"><h2>{query.trim() ? 'No matching definitions' : `No ${sectionTitles[section].toLowerCase()} yet`}</h2><p>{query.trim() ? 'Change the search to see other definitions.' : safeMode ? 'Create actions are disabled in safe mode.' : 'Create a definition when you are ready. Nothing runs when you save.'}</p></div>
-        {:else}<ul class="definition-list" aria-label={`${sectionTitles[section]} definitions`}>{#each visibleRows as row (row.id)}{@const profile = section === 'agents' ? profileDetails.find((item) => item.id === row.id) : undefined}<li><button type="button" class="row-open" onclick={() => void openEditor(kindForSection(section), row)} disabled={actionBusy}><strong>{row.name}</strong><span>{profile ? `${harnessName(profile.harness)} · ${profile.model} · ` : ''}Revision {row.revision}</span>{#if profile?.toolPolicy.rules.some((rule) => rule.mandatory && (rule.enforcement === 'advisory' || rule.enforcement === 'unsupported'))}<span class="policy-warning">Unsupported mandatory policy — launch blocked</span>{/if}</button>{#if !safeMode}<button type="button" class="row-delete" disabled={actionBusy} aria-label={`Delete ${row.name}`} onclick={() => deleteRequest = { workspaceId, kind: kindForSection(section), summary: row }}>Delete</button>{/if}</li>{/each}</ul>{/if}
-        {#if section === 'pipelines'}<section class="commands" aria-labelledby="launch-commands-title"><header class="page-header"><div><h2 id="launch-commands-title">Launch commands</h2><p>Save a team and pipeline together for reuse.</p></div>{#if !safeMode}<button type="button" class="secondary" disabled={actionBusy || listBusy} onclick={() => void openEditor('launch-command')}>Create launch command</button>{/if}</header>{#if visibleCommands.length === 0}<p class="hint">{query.trim() ? 'No matching launch commands.' : 'No launch commands saved.'}</p>{:else}<ul class="definition-list" aria-label="Launch commands">{#each visibleCommands as command (command.id)}<li><button type="button" class="row-open" onclick={() => void openEditor('launch-command', command)} disabled={actionBusy}><strong>{command.name}</strong><span>Revision {command.revision} · Saved team and pipeline</span></button><button type="button" class="secondary" aria-label={`Launch ${command.name}`} disabled={safeMode || actionBusy} onclick={() => void openLauncher(command)}>Launch</button>{#if !safeMode}<button type="button" class="row-delete" disabled={actionBusy} aria-label={`Delete ${command.name}`} onclick={() => deleteRequest = { workspaceId, kind: 'launch-command', summary: command }}>Delete</button>{/if}</li>{/each}</ul>{/if}</section>{/if}
+        {:else}<ul class="definition-list" aria-label={`${$t(sectionTitles[section])} definitions`}>{#each visibleRows as row (row.id)}{@const profile = section === 'agents' ? profileDetails.find((item) => item.id === row.id) : undefined}<li><button type="button" class="row-open" onclick={() => void openEditor(kindForSection(section), row)} disabled={actionBusy}><strong>{row.name}</strong><span>{profile ? `${harnessName(profile.harness)} · ${profile.model} · ` : ''}Revision {row.revision}</span>{#if profile?.toolPolicy.rules.some((rule) => rule.mandatory && (rule.enforcement === 'advisory' || rule.enforcement === 'unsupported'))}<span class="policy-warning">{$t('Unsupported mandatory policy — launch blocked')}</span>{/if}</button>{#if !safeMode}<button type="button" class="row-delete" disabled={actionBusy} aria-label={`Delete ${row.name}`} onclick={() => deleteRequest = { workspaceId, kind: kindForSection(section), summary: row }}>{$t('Delete')}</button>{/if}</li>{/each}</ul>{/if}
+        {#if section === 'pipelines'}<section class="commands" aria-labelledby="launch-commands-title"><header class="page-header"><div><h2 id="launch-commands-title">{$t('Launch commands')}</h2><p>{$t('Save a team and pipeline together for reuse.')}</p></div>{#if !safeMode}<button type="button" class="secondary" disabled={actionBusy || listBusy} onclick={() => void openEditor('launch-command')}>{$t('Create launch command')}</button>{/if}</header>{#if visibleCommands.length === 0}<p class="hint">{query.trim() ? 'No matching launch commands.' : 'No launch commands saved.'}</p>{:else}<ul class="definition-list" aria-label={$t('Launch commands')}>{#each visibleCommands as command (command.id)}<li><button type="button" class="row-open" onclick={() => void openEditor('launch-command', command)} disabled={actionBusy}><strong>{command.name}</strong><span>Revision {command.revision} · Saved team and pipeline</span></button><button type="button" class="secondary" aria-label={`Launch ${command.name}`} disabled={safeMode || actionBusy} onclick={() => void openLauncher(command)}>{$t('Launch')}</button>{#if !safeMode}<button type="button" class="row-delete" disabled={actionBusy} aria-label={`Delete ${command.name}`} onclick={() => deleteRequest = { workspaceId, kind: 'launch-command', summary: command }}>{$t('Delete')}</button>{/if}</li>{/each}</ul>{/if}</section>{/if}
       {/if}
     {/if}
-    {#if actionBusy}<p class="loading" role="status">Loading or saving the selected record…</p>{/if}
+    {#if actionBusy}<p class="loading" role="status">{$t('Loading or saving the selected record…')}</p>{/if}
+  {/if}
   {/if}
 </section>
 
 <style>
+  .orchestration-panel.graph-view { height:100%; padding:0; }
   .orchestration-panel { min-width: 0; padding: var(--piui-space-6); color: var(--piui-text); }
   .page-header, .page-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--piui-space-3); }.page-header { justify-content: space-between; margin-bottom: var(--piui-space-5); }.page-header h1, .page-header h2, p { margin: 0; }.page-header h1 { font-size: 24px; letter-spacing: -.025em; }.page-header h2 { font-size: 18px; }.page-header p { margin-top: var(--piui-space-2); color: var(--piui-text-muted); font-size: 13px; line-height: 1.5; }
   button { min-height: 36px; padding: var(--piui-space-2) var(--piui-space-3); border-radius: var(--piui-radius-sm); font-size: 13px; }.secondary { border: 1px solid var(--piui-border); background: var(--piui-surface-1); color: var(--piui-text); }.primary { background: var(--piui-accent); color: var(--piui-accent-ink); font-weight: 600; }.danger { background: var(--piui-danger-surface); color: var(--piui-danger-text); border: 1px solid var(--piui-danger-border); }button:disabled { opacity: .6; }button:hover:not(:disabled):not(.primary):not(.danger) { background: var(--piui-surface-2); }

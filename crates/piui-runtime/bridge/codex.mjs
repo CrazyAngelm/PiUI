@@ -769,11 +769,21 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       { type: "function", name: "spawn", description: "Lease one ready predefined pipeline step using its snapshotted profile.", inputSchema: { type: "object", properties: { stepId: { type: "string" } }, required: ["stepId"], additionalProperties: false } },
     ],
   }] : undefined;
+  const resourceConfig = {};
+  for (const rule of config.resourceRules ?? []) {
+    if (rule.kind === "skill") {
+      if (!path.isAbsolute(rule.id)) throw cleanupStartupFailure(fail("invalid-skill-path", "Codex skill rules require an absolute path."));
+      (resourceConfig["skills.config"] ??= []).push({ path: rule.id, enabled: rule.enabled });
+    } else if (rule.kind === "mcp" && /^[a-zA-Z0-9_-]+$/.test(rule.id)) {
+      resourceConfig[`mcp_servers.${rule.id}.enabled`] = rule.enabled;
+    } else throw cleanupStartupFailure(fail("unsupported-resource-policy", "The resource policy is invalid."));
+  }
   const threadParams = {
     cwd: config.cwd,
+    ...(config.serviceTier ? { serviceTier: config.serviceTier === "fast" ? "fast" : "default" } : {}),
     ...(currentModel ? { model: currentModel.id, ...(currentModel.provider ? { modelProvider: currentModel.provider } : {}) } : {}),
     ...(typeof config.baseInstructions === "string" ? { baseInstructions: config.baseInstructions, developerInstructions: config.instructions ?? "" } : typeof config.instructions === "string" ? { developerInstructions: config.instructions } : {}),
-    ...(coordinationEnabled || config.nativeSubagents === false ? { config: { "features.multi_agent": false, "features.multi_agent_v2": false } } : {}),
+    config: { ...resourceConfig, ...(coordinationEnabled || config.nativeSubagents === false ? { "features.multi_agent": false, "features.multi_agent_v2": false } : {}) },
     ...permissionParams,
   };
   const { cwd: _startCwd, ...startThreadParams } = threadParams;
@@ -895,6 +905,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
         const response = await callNative("turn/start", {
           threadId: nativeId,
           input: [textInput(text)],
+          ...(config.serviceTier ? { serviceTier: config.serviceTier === "fast" ? "fast" : "default" } : {}),
           ...(currentModel ? { model: currentModel.id } : {}),
           ...(thinkingLevel ? { effort: thinkingLevel } : {}),
         });

@@ -328,3 +328,14 @@ test("fails closed for unsupported mandatory policy", async () => {
     (error) => error.bridgeCode === "native-unavailable",
   );
 });
+
+for (const [mode, tier] of [["standard", "default"], ["fast", "fast"]]) {
+  test(`forwards ${mode}, reasoning and per-thread resources without global changes`, async () => {
+    const adapter = await createCodexAdapter({ ...config, serviceTier: mode, thinkingLevel: "low", resourceRules: [
+      { kind: "mcp", id: "example", enabled: false },
+      { kind: "skill", id: fileURLToPath(new URL("./SKILL.md", import.meta.url)), enabled: false },
+    ], runtimeArgs: [fixture, "--expect-settings", JSON.stringify({ tier })] }, () => {});
+    try { assert.deepEqual(await adapter.prompt({ text: "fixture", mode: "prompt" }), { accepted: true }); }
+    finally { await adapter.dispose(); }
+  });
+}

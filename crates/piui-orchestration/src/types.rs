@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const ORCHESTRATION_SCHEMA_VERSION: u32 = 2;
+pub const ORCHESTRATION_SCHEMA_VERSION: u32 = 3;
 
 pub type Revision = u64;
 
@@ -78,6 +78,21 @@ pub struct DeclaredToolPolicy {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceRule {
+    pub kind: ResourceKind,
+    pub id: String,
+    pub enabled: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResourceKind {
+    Skill,
+    Mcp,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentProfile {
     pub id: String,
     pub name: String,
@@ -89,6 +104,12 @@ pub struct AgentProfile {
     pub instructions: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_instructions: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_rules: Vec<ResourceRule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
     pub tool_policy: DeclaredToolPolicy,
     /// Workspace coordinator templates this profile may request dynamically.
     /// This does not restrict native RLM, Python, subprocesses, or OS access.
@@ -113,7 +134,7 @@ pub struct DirectedEdge {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TeamDefinition {
-    /// Explicitly grant new profile-based agents bidirectional team messaging.
+    /// Grant new agents only the parent-authorized directions of team messaging.
     /// Older definitions keep parent-only communication.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub spawned_agents_join_team: bool,

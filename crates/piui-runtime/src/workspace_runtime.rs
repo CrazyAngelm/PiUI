@@ -334,6 +334,9 @@ pub struct NativeRuntimeConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
     pub base_instructions: Option<String>,
+    pub service_tier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_rules: Option<serde_json::Value>,
     pub permission_mode: PermissionMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<Vec<String>>,
@@ -1670,6 +1673,8 @@ mod tests {
             model: None,
             thinking_level: None,
             base_instructions: None,
+            service_tier: None,
+            resource_rules: None,
             instructions: None,
             permission_mode: PermissionMode::Native,
             allowed_tools: None,

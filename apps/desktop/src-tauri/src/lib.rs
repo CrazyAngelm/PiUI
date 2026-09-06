@@ -10,6 +10,7 @@ mod api;
 mod catalog_watch;
 mod contributions;
 mod dto;
+mod harness_configuration;
 mod orchestration_api;
 mod orchestration_scheduler;
 #[cfg(feature = "native-prime-scheduler-test")]
@@ -793,25 +794,26 @@ pub fn run() -> Result<(), tauri::Error> {
             api::set_runtime_model,
             api::set_runtime_thinking,
             api::set_runtime_session_name,
-            orchestration_api::orchestration_catalog_v2,
-            orchestration_api::orchestration_get_profile_v2,
-            orchestration_api::orchestration_save_profile_v2,
-            orchestration_api::orchestration_delete_profile_v2,
-            orchestration_api::orchestration_get_team_v2,
-            orchestration_api::orchestration_save_team_v2,
-            orchestration_api::orchestration_delete_team_v2,
-            orchestration_api::orchestration_get_pipeline_v2,
-            orchestration_api::orchestration_save_pipeline_v2,
-            orchestration_api::orchestration_delete_pipeline_v2,
-            orchestration_api::orchestration_get_launch_command_v2,
-            orchestration_api::orchestration_save_launch_command_v2,
-            orchestration_api::orchestration_delete_launch_command_v2,
-            orchestration_api::orchestration_list_runs_v2,
-            orchestration_api::orchestration_get_run_v2,
-            orchestration_api::orchestration_start_run_v2,
-            orchestration_api::orchestration_cancel_run_v2,
-            orchestration_api::orchestration_reconcile_uncertain_task_v2,
-            orchestration_api::orchestration_retry_uncertain_task_v2,
+            orchestration_api::orchestration_catalog_v3,
+            orchestration_api::orchestration_save_graph_v3,
+            orchestration_api::orchestration_get_profile_v3,
+            orchestration_api::orchestration_save_profile_v3,
+            orchestration_api::orchestration_delete_profile_v3,
+            orchestration_api::orchestration_get_team_v3,
+            orchestration_api::orchestration_save_team_v3,
+            orchestration_api::orchestration_delete_team_v3,
+            orchestration_api::orchestration_get_pipeline_v3,
+            orchestration_api::orchestration_save_pipeline_v3,
+            orchestration_api::orchestration_delete_pipeline_v3,
+            orchestration_api::orchestration_get_launch_command_v3,
+            orchestration_api::orchestration_save_launch_command_v3,
+            orchestration_api::orchestration_delete_launch_command_v3,
+            orchestration_api::orchestration_list_runs_v3,
+            orchestration_api::orchestration_get_run_v3,
+            orchestration_api::orchestration_start_run_v3,
+            orchestration_api::orchestration_cancel_run_v3,
+            orchestration_api::orchestration_reconcile_uncertain_task_v3,
+            orchestration_api::orchestration_retry_uncertain_task_v3,
         ])
         .build(context)?;
     app.run(|app, event| {

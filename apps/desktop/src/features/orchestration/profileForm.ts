@@ -5,7 +5,7 @@ import type {
   PolicyEnforcement,
   ToolDecision,
   ToolRule,
-} from '../../../../../contracts/orchestration-v2';
+} from '../../../../../contracts/orchestration-v3';
 
 export interface ProfileDraft {
   id: string;
@@ -13,11 +13,14 @@ export interface ProfileDraft {
   harness: Harness;
   modelProvider: string;
   model: string;
+  reasoning: string;
+  serviceTier: 'standard' | 'fast';
   permissionMode: PermissionMode;
   instructions: string;
   replaceBasePrompt: boolean;
   baseInstructions: string;
   toolRules: ToolRule[];
+  resourceRules: NonNullable<AgentProfile['resourceRules']>;
   allowedSpawnProfileIds: string[];
 }
 
@@ -37,11 +40,14 @@ export function createProfileDraft(
       harness: 'pi',
       modelProvider: '',
       model: '',
+      reasoning: '',
+      serviceTier: 'standard',
       permissionMode: 'native',
       instructions: '',
       replaceBasePrompt: false,
       baseInstructions: '',
       toolRules: [],
+      resourceRules: [],
       allowedSpawnProfileIds: [],
     };
   }
@@ -52,10 +58,13 @@ export function createProfileDraft(
     harness: profile.harness,
     modelProvider: profile.modelProvider ?? '',
     model: profile.model,
+    reasoning: profile.reasoning ?? '',
+    serviceTier: profile.serviceTier ?? 'standard',
     permissionMode: profile.permissionMode,
     instructions: profile.instructions,
     replaceBasePrompt: profile.baseInstructions !== undefined,
     baseInstructions: profile.baseInstructions ?? '',
+    resourceRules: profile.resourceRules ?? [],
     toolRules: profile.toolPolicy.rules.map((rule) => ({ ...rule })),
     allowedSpawnProfileIds: [...profile.allowedSpawnProfileIds],
   };
@@ -69,9 +78,12 @@ export function profileFromDraft(draft: ProfileDraft): AgentProfile {
     harness: draft.harness,
     ...(provider === '' ? {} : { modelProvider: provider }),
     model: draft.model.trim(),
+    ...(draft.reasoning ? { reasoning: draft.reasoning } : {}),
+    ...(draft.harness === 'codex' ? { serviceTier: draft.serviceTier } : {}),
     permissionMode: draft.permissionMode,
     instructions: draft.instructions,
     ...(draft.replaceBasePrompt && draft.harness === 'codex' ? { baseInstructions: draft.baseInstructions } : {}),
+    ...(draft.resourceRules.length ? { resourceRules: draft.resourceRules } : {}),
     toolPolicy: { rules: draft.toolRules.map((rule) => ({ ...rule, tool: rule.tool.trim() })) },
     allowedSpawnProfileIds: [...draft.allowedSpawnProfileIds],
   };
@@ -79,6 +91,8 @@ export function profileFromDraft(draft: ProfileDraft): AgentProfile {
 
 export function validateProfileDraft(draft: ProfileDraft): ProfileDraftValidation {
   const errors: string[] = [];
+  if (draft.resourceRules.some(rule => !rule.id.trim())) errors.push('Name every resource rule or remove it.');
+  if (new Set(draft.resourceRules.map(rule => `${rule.kind}:${rule.id}`)).size !== draft.resourceRules.length) errors.push('Remove duplicate resource rules.');
   if (draft.name.trim() === '') errors.push('Enter a profile name.');
   if (draft.model.trim() === '') errors.push('Enter a model.');
   if (draft.toolRules.some((rule) => rule.tool.trim() === '')) errors.push('Name every declared tool rule or remove it.');

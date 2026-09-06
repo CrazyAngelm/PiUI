@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { OrchestrationRunChangedEventV2, OrchestrationRunV2 } from '../../host-api/orchestrationClient';
+import type { OrchestrationRunChangedEventV3, OrchestrationRunV3 } from '../../host-api/orchestrationClient';
 import { checkedRunSnapshot, createRunLiveUpdates, mergeRunSummaries, mergeSelectedRun, runSummary } from './runUpdates';
 
-const run: OrchestrationRunV2 = {
-  schemaVersion: 2, id: 'fixture-run', revision: 1, status: 'running',
+const run: OrchestrationRunV3 = {
+  schemaVersion: 3, id: 'fixture-run', revision: 1, status: 'running',
   definition: {
     profiles: [],
     team: { id: 'fixture-team', name: 'Fixture team', members: [], sendEdges: [], observeEdges: [], orchestratorMemberId: 'fixture-member' },
@@ -11,8 +11,8 @@ const run: OrchestrationRunV2 = {
   },
   tasks: [], messages: [], agentRequests: [],
 };
-function changed(revision: number, runId = run.id): OrchestrationRunChangedEventV2 {
-  return { protocol: 2, type: 'runChanged', workspaceId: 'fixture-workspace', runId, revision };
+function changed(revision: number, runId = run.id): OrchestrationRunChangedEventV3 {
+  return { protocol: 3, type: 'runChanged', workspaceId: 'fixture-workspace', runId, revision };
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -44,11 +44,11 @@ describe('run revision projection', () => {
 describe('durable run invalidations', () => {
   it('coalesces a synchronous burst by run and suppresses duplicate/older revisions', async () => {
     const started = deferred<void>();
-    const response = deferred<OrchestrationRunV2>();
+    const response = deferred<OrchestrationRunV3>();
     const applied = deferred<void>();
     let revision = 1;
     const read = vi.fn(() => { started.resolve(); return response.promise; });
-    const apply = vi.fn((value: OrchestrationRunV2) => { revision = value.revision; applied.resolve(); });
+    const apply = vi.fn((value: OrchestrationRunV3) => { revision = value.revision; applied.resolve(); });
     const updates = createRunLiveUpdates({ scope: () => ({ workspaceId: 'fixture-workspace', generation: 1, visible: true, revision: () => revision }), read, apply, failed: vi.fn() });
     updates.invalidate(changed(2));
     updates.invalidate(changed(3));
@@ -67,8 +67,8 @@ describe('durable run invalidations', () => {
   it('reads again only when a newer durable event arrived during the current read', async () => {
     const firstStarted = deferred<void>();
     const secondStarted = deferred<void>();
-    const first = deferred<OrchestrationRunV2>();
-    const second = deferred<OrchestrationRunV2>();
+    const first = deferred<OrchestrationRunV3>();
+    const second = deferred<OrchestrationRunV3>();
     const complete = deferred<void>();
     let revision = 1;
     const read = vi.fn().mockImplementationOnce(() => { firstStarted.resolve(); return first.promise; }).mockImplementationOnce(() => { secondStarted.resolve(); return second.promise; });
@@ -94,7 +94,7 @@ describe('durable run invalidations', () => {
 
   it('drops a response from an earlier workspace visit, even after returning to the same workspace ID', async () => {
     const started = deferred<void>();
-    const response = deferred<OrchestrationRunV2>();
+    const response = deferred<OrchestrationRunV3>();
     let generation = 1;
     const apply = vi.fn();
     const failed = vi.fn();
@@ -111,7 +111,7 @@ describe('durable run invalidations', () => {
 
   it('leaves editors alone and stops both pending and later updates after disposal', async () => {
     const started = deferred<void>();
-    const response = deferred<OrchestrationRunV2>();
+    const response = deferred<OrchestrationRunV3>();
     let visible = true;
     const read = vi.fn(() => { started.resolve(); return response.promise; });
     const apply = vi.fn();

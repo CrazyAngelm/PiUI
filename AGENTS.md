@@ -87,3 +87,44 @@ pnpm perf:smoke     # startup, idle RSS, long-session scroll, stream batching
 ## Before implementation begins
 
 The first task is to complete the spikes in `docs/12_OPEN_RISKS.md`. Do not build UI on assumptions about RPC-process termination, initial session creation, OAuth, or tree navigation.
+
+## Multi-harness systems (mandatory)
+
+PiUI is a desktop shell and a durable coordinator, not a model/tool loop. Native
+harnesses own inference, credentials, compaction, tools, approvals and history.
+Pi JSONL is authoritative for Pi; Prime and Codex retain their own native history
+formats. Never translate one harness history into another chat format.
+
+- A graph is harness-neutral: profiles select adapters; result, message,
+  observation and delegation edges carry distinct meanings and permissions.
+  Result dependencies must pass through verified native history references and
+  the existing dependency-context resolver, including Codex -> Prime and back.
+- Adapter-owned configuration lives in `src/harness-adapters/` (presentation),
+  `src-tauri/src/harness_configuration.rs` (host enforcement), and
+  `crates/piui-runtime/bridge/` (native transport). Keep harness branches out of
+  graph scheduling. A manifest is presentation metadata, not proof of security.
+- Adding a harness requires its typed identity/contract version, configuration
+  manifest, native bridge, discovery/version verification, process containment,
+  lifecycle/history binding, approval and cancellation mapping, generic event
+  fallback, and adapter tests. Arbitrary runtime-loaded JS is not a plugin API.
+- Unsupported required settings fail before native execution. Do not silently
+  ignore requested tools, skills, MCP, reasoning, speed or permission settings.
+  Use native model catalogs for actual reasoning availability; example values
+  in a configuration manifest are not guarantees for every model.
+- Resource settings are per-session overrides. Never modify the user's global
+  auth/config, another agent's settings, or a shared Prime daemon to implement
+  them. A disabled skill is not a filesystem access restriction.
+- Coordinator child admission must prove same-or-less file, tool, resource and
+  further-delegation authority. Check every generation from the frozen run
+  snapshot, including an allowed profile. Native defaults across different
+  harnesses are incomparable; reject such delegation rather than guessing.
+  This comparison does not assert OS isolation where an adapter has none.
+- Save a graph's profiles, team, pipeline and launch reference atomically with
+  revision checks. Failed saves preserve all prior definitions. Run retries
+  retain their request identity until their outcome is known.
+- English is the default UI language. Visible interface strings belong to the
+  locale catalog; support Russian without translating user prompts or history.
+- Validate changes through the native WebView and adapter tests, including a
+  cross-harness result edge, denied escalation, unsupported capability, reload,
+  safe mode and keyboard operation. Report synthetic and real-provider evidence
+  separately. Never claim hundreds of paid model turns from a transport probe.

@@ -5,7 +5,7 @@ import TeamEditor from './TeamEditor.svelte';
 import PipelineEditor from './PipelineEditor.svelte';
 import LaunchCommandEditor from './LaunchCommandEditor.svelte';
 import OrchestrationPanel from './OrchestrationPanel.svelte';
-import type { AgentProfile, TeamDefinition, PipelineDefinition } from '../../../../../contracts/orchestration-v2';
+import type { AgentProfile, TeamDefinition, PipelineDefinition } from '../../../../../contracts/orchestration-v3';
 
 const profile: AgentProfile = {
   id: 'fixture-profile', name: 'Fixture review', harness: 'prime-agent', model: 'fixture-model', permissionMode: 'read-only',

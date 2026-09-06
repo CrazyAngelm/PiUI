@@ -120,6 +120,7 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
 
   const authStorage = sdk.AuthStorage.create(join(config.agentDir, "auth.json"), { usePrimeCliConfig: true });
   let selectedModel = config.model?.id ? { id: config.model.id, provider: config.model.provider } : undefined;
+  if ((config.resourceRules ?? []).some(rule => rule.kind !== "skill")) throw fail("unsupported-resource-policy", "Prime does not expose per-session MCP disabling, including built-in integrations.");
   const createRuntime = async ({ cwd, sessionManager: manager, sessionStartEvent }) => {
     const settingsManager = sdk.SettingsManager.create(cwd, config.agentDir);
     const modelRegistry = sdk.ModelRegistry.create(authStorage, join(config.agentDir, "models.json"));
@@ -137,6 +138,10 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
       settingsManager,
       modelRegistry,
       resourceLoaderOptions: {
+        ...((config.resourceRules ?? []).length ? { skillsOverride: (base) => {
+          if (config.resourceRules.some(rule => rule.enabled && !base.skills.some(skill => skill.name === rule.id))) throw fail("resource-unavailable", "An enabled Prime skill is not available in the native resource loader.");
+          return { ...base, skills: base.skills.filter(skill => !config.resourceRules.some(rule => rule.kind === "skill" && rule.id === skill.name && !rule.enabled)) };
+        } } : {}),
         ...(typeof config.instructions === "string" && config.instructions.trim() ? { appendSystemPrompt: [config.instructions] } : {}),
       },
     });

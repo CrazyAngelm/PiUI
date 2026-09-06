@@ -1,6 +1,7 @@
 <script lang="ts">
-  import type { LaunchCommandReference } from '../../../../../contracts/orchestration-v2';
-  import type { DefinitionSummary } from '../../../../../contracts/orchestration-host-v2';
+  import { t } from '../locale/language';
+  import type { LaunchCommandReference } from '../../../../../contracts/orchestration-v3';
+  import type { DefinitionSummary } from '../../../../../contracts/orchestration-host-v3';
   export let command: LaunchCommandReference | undefined;
   export let teams: readonly DefinitionSummary[] = [];
   export let pipelines: readonly DefinitionSummary[] = [];
@@ -27,16 +28,16 @@
 
 <form class="editor" onsubmit={save} aria-labelledby="launch-editor-title">
   <header><h2 id="launch-editor-title">{command ? 'Edit launch command' : 'Create launch command'}</h2><span>{readOnly ? 'Read-only' : dirty ? 'Unsaved changes' : 'No unsaved changes'}</span></header>
-  <p class="hint">Save a name for a team and pipeline. This is a reusable definition reference, not a shell command. Saving does not start a run.</p>
+  <p class="hint">{$t('Save a name for a team and pipeline. This is a reusable definition reference, not a shell command. Saving does not start a run.')}</p>
   <fieldset disabled={busy || readOnly}>
-    <label for="launch-name">Launch name</label><input id="launch-name" value={draft.name} oninput={(event) => draft = { ...draft, name: event.currentTarget.value }} autocomplete="off" />
-    <label for="launch-team">Team</label><select id="launch-team" value={draft.teamId} onchange={(event) => draft = { ...draft, teamId: event.currentTarget.value }}><option value="">Choose team</option>{#if draft.teamId && !teams.some((team) => team.id === draft.teamId)}<option value={draft.teamId}>Unavailable team</option>{/if}{#each teams as team (team.id)}<option value={team.id}>{team.name}</option>{/each}</select>
-    <label for="launch-pipeline">Pipeline</label><select id="launch-pipeline" value={draft.pipelineId} onchange={(event) => draft = { ...draft, pipelineId: event.currentTarget.value }}><option value="">Choose pipeline</option>{#if draft.pipelineId && !pipelines.some((pipeline) => pipeline.id === draft.pipelineId)}<option value={draft.pipelineId}>Unavailable pipeline</option>{/if}{#each pipelines as pipeline (pipeline.id)}<option value={pipeline.id}>{pipeline.name}</option>{/each}</select>
+    <label for="launch-name">{$t('Launch name')}</label><input id="launch-name" value={draft.name} oninput={(event) => draft = { ...draft, name: event.currentTarget.value }} autocomplete="off" />
+    <label for="launch-team">{$t('Team')}</label><select id="launch-team" value={draft.teamId} onchange={(event) => draft = { ...draft, teamId: event.currentTarget.value }}><option value="">{$t('Choose team')}</option>{#if draft.teamId && !teams.some((team) => team.id === draft.teamId)}<option value={draft.teamId}>{$t('Unavailable team')}</option>{/if}{#each teams as team (team.id)}<option value={team.id}>{team.name}</option>{/each}</select>
+    <label for="launch-pipeline">{$t('Pipeline')}</label><select id="launch-pipeline" value={draft.pipelineId} onchange={(event) => draft = { ...draft, pipelineId: event.currentTarget.value }}><option value="">{$t('Choose pipeline')}</option>{#if draft.pipelineId && !pipelines.some((pipeline) => pipeline.id === draft.pipelineId)}<option value={draft.pipelineId}>{$t('Unavailable pipeline')}</option>{/if}{#each pipelines as pipeline (pipeline.id)}<option value={pipeline.id}>{pipeline.name}</option>{/each}</select>
   </fieldset>
-  {#if teams.length === 0 || pipelines.length === 0}<p class="notice">Create a team and a pipeline before saving a launch command.</p>{/if}
-  <p class="hint">Launch execution and parameter inputs are not available in this editor contract. No native work starts here.</p>
+  {#if teams.length === 0 || pipelines.length === 0}<p class="notice">{$t('Create a team and a pipeline before saving a launch command.')}</p>{/if}
+  <p class="hint">{$t('Launch execution and parameter inputs are not available in this editor contract. No native work starts here.')}</p>
   {#if validation || error}<p class="error" role="alert">{error ?? validation}</p>{/if}
-  {#if discardPrompt}<div class="discard" role="group" aria-label="Unsaved launch command changes"><p>Discard unsaved changes?</p><button type="button" onclick={() => discardPrompt = false}>Keep editing</button><button type="button" onclick={onCancel}>Discard changes</button></div>{/if}
+  {#if discardPrompt}<div class="discard" role="group" aria-label={$t('Unsaved launch command changes')}><p>{$t('Discard unsaved changes?')}</p><button type="button" onclick={() => discardPrompt = false}>{$t('Keep editing')}</button><button type="button" onclick={onCancel}>{$t('Discard changes')}</button></div>{/if}
   <footer><button type="button" disabled={busy} onclick={() => { if (dirty && !readOnly) discardPrompt = true; else onCancel(); }}>{readOnly ? 'Back' : 'Cancel'}</button>{#if !readOnly}<button type="submit" class="primary" disabled={busy}>{busy ? 'Saving…' : 'Save launch command'}</button>{/if}</footer>
 </form>
 

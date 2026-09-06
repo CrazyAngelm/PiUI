@@ -1,5 +1,5 @@
-import type { DefinitionSummary, StoredDefinition } from '../../../../../contracts/orchestration-host-v2';
-import type { LaunchCommandReference } from '../../../../../contracts/orchestration-v2';
+import type { DefinitionSummary, StoredDefinition } from '../../../../../contracts/orchestration-host-v3';
+import type { LaunchCommandReference } from '../../../../../contracts/orchestration-v3';
 
 export interface RunLaunchSelection {
   readonly teamId: string;

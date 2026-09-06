@@ -4,23 +4,31 @@
 //! sessions. It does not implement a model loop, provider, or tool executor.
 
 use crate::api::verified_project_directory;
+#[cfg(test)]
+use crate::harness_configuration::PI_NATIVE_TOOL_NAMES;
+use crate::harness_configuration::{LaunchPolicy, launch_policy};
 use crate::orchestration_api::{
     AgentRequestAdmission, AgentToolOperation, AgentToolRequest, ManagedAgentContext,
-    ORCHESTRATION_EVENT_V2, OrchestrationApiState, OrchestrationRunChangedEventV2,
+    ORCHESTRATION_EVENT_V3, OrchestrationApiState, OrchestrationRunChangedEventV3,
 };
 use crate::state::HostState;
+#[cfg(test)]
+use crate::workspace_api::HarnessCapabilities;
 use crate::workspace_api::{
-    CoordinatorRequestHandler, CoordinatorRequestOrigin, HarnessCapabilities, HarnessKind,
+    CoordinatorRequestHandler, CoordinatorRequestOrigin, HarnessKind,
     PermissionMode as WorkspacePermissionMode, PromptMode, TurnOutcome, TurnState,
     WORKSPACE_EVENT_NAME, WorkspaceEventPublisher, WorkspaceLaunchRequest, WorkspaceModel,
     WorkspaceRuntimeHandle,
 };
 use piui_orchestration::{
-    AgentOperationCapabilities, AgentProfile, CompletionOutcome, ControlledSpawnLease,
-    FailureRecord, Harness, MessageStatus, NativeBridgeCapabilities, PolicyEnforcement, Run,
-    TaskStatus, ToolDecision, UncertaintyIdentity,
+    AgentProfile, CompletionOutcome, ControlledSpawnLease, FailureRecord, Harness, MessageStatus,
+    Run, TaskStatus, UncertaintyIdentity,
 };
-use piui_runtime::workspace_runtime::{CoordinatorOperation, CoordinatorResponse, Enforcement};
+#[cfg(test)]
+use piui_orchestration::{PolicyEnforcement, ToolDecision};
+#[cfg(test)]
+use piui_runtime::workspace_runtime::Enforcement;
+use piui_runtime::workspace_runtime::{CoordinatorOperation, CoordinatorResponse};
 use serde::Serialize;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -48,11 +56,11 @@ impl OrchestrationSchedulerError {
         Self::new("conflict")
     }
 
-    fn unavailable() -> Self {
+    pub(crate) fn unavailable() -> Self {
         Self::new("runtime-unavailable")
     }
 
-    fn unsupported() -> Self {
+    pub(crate) fn unsupported() -> Self {
         Self::new("unsupported-policy")
     }
 
@@ -1046,9 +1054,9 @@ impl OrchestrationScheduler {
 
     fn emit_run_invalidation<R: Runtime>(&self, app: &AppHandle<R>, workspace_id: &str, run: &Run) {
         let _ = app.emit(
-            ORCHESTRATION_EVENT_V2,
-            OrchestrationRunChangedEventV2 {
-                protocol: 2,
+            ORCHESTRATION_EVENT_V3,
+            OrchestrationRunChangedEventV3 {
+                protocol: 3,
                 event_type: "runChanged",
                 workspace_id: workspace_id.to_owned(),
                 run_id: run.id().to_owned(),
@@ -1165,166 +1173,6 @@ impl OrchestrationScheduler {
     }
 }
 
-#[derive(Clone)]
-struct LaunchPolicy {
-    allowed_tools: Option<Vec<String>>,
-    coordinator: bool,
-}
-
-const PI_NATIVE_TOOL_NAMES: &[&str] = &["read", "bash", "edit", "write", "grep", "find", "ls"];
-const PI_READ_ONLY_TOOL_NAMES: &[&str] = &["read", "grep", "find", "ls"];
-const PRIME_NATIVE_TOOL_NAMES: &[&str] = &["ipython", "workspace"];
-
-fn literal_native_tool_names<'a>(
-    profile: &AgentProfile,
-    native: &HarnessCapabilities,
-) -> Result<Vec<&'a str>, OrchestrationSchedulerError> {
-    if !native.tool_policy.supported || native.tool_policy.enforcement != Enforcement::Native {
-        return Ok(Vec::new());
-    }
-    let tools = match profile.harness {
-        Harness::Pi => PI_NATIVE_TOOL_NAMES,
-        Harness::PrimeAgent => PRIME_NATIVE_TOOL_NAMES,
-        Harness::Codex => &[],
-    };
-    Ok(tools.to_vec())
-}
-
-fn validate_native_tool_rules(
-    profile: &AgentProfile,
-    supported: &[&str],
-) -> Result<(), OrchestrationSchedulerError> {
-    let native_rules = profile
-        .tool_policy
-        .rules
-        .iter()
-        .filter(|rule| rule.enforcement == PolicyEnforcement::Native)
-        .collect::<Vec<_>>();
-    for rule in &native_rules {
-        // Exact equality rejects commas, globs, aliases, and unknown extension
-        // names. The Pi bridge repeats this validation before building argv.
-        if !supported.contains(&rule.tool.as_str()) {
-            return Err(OrchestrationSchedulerError::unsupported());
-        }
-        if profile.harness == Harness::Pi
-            && profile.permission_mode == piui_orchestration::PermissionMode::ReadOnly
-            && rule.decision == ToolDecision::Allow
-            && !PI_READ_ONLY_TOOL_NAMES.contains(&rule.tool.as_str())
-        {
-            return Err(OrchestrationSchedulerError::unsupported());
-        }
-        if native_rules
-            .iter()
-            .any(|other| other.tool == rule.tool && other.decision != rule.decision)
-        {
-            return Err(OrchestrationSchedulerError::unsupported());
-        }
-    }
-    Ok(())
-}
-
-fn launch_policy(
-    profile: &AgentProfile,
-    native: &HarnessCapabilities,
-) -> Result<(NativeBridgeCapabilities, LaunchPolicy), OrchestrationSchedulerError> {
-    if !native.prompt.supported || !native.models.supported {
-        return Err(OrchestrationSchedulerError::unavailable());
-    }
-    if profile.base_instructions.is_some() && profile.harness != Harness::Codex {
-        return Err(OrchestrationSchedulerError::unsupported());
-    }
-    if !profile.instructions.trim().is_empty() && !native.instructions.supported {
-        return Err(OrchestrationSchedulerError::unsupported());
-    }
-    let permission_modes = match profile.harness {
-        Harness::Pi => vec![
-            piui_orchestration::PermissionMode::Native,
-            piui_orchestration::PermissionMode::ReadOnly,
-            piui_orchestration::PermissionMode::FullAccess,
-        ],
-        Harness::PrimeAgent => vec![piui_orchestration::PermissionMode::Native],
-        Harness::Codex => vec![
-            piui_orchestration::PermissionMode::Native,
-            piui_orchestration::PermissionMode::ReadOnly,
-            piui_orchestration::PermissionMode::WorkspaceWrite,
-            piui_orchestration::PermissionMode::FullAccess,
-        ],
-    };
-    if !permission_modes.contains(&profile.permission_mode) {
-        return Err(OrchestrationSchedulerError::unsupported());
-    }
-
-    let supported_native_tools = literal_native_tool_names(profile, native)?;
-    validate_native_tool_rules(profile, &supported_native_tools)?;
-    let workspace_tool_denied = native.tool_policy.supported
-        && profile.tool_policy.rules.iter().any(|rule| {
-            rule.enforcement == PolicyEnforcement::Native
-                && rule.decision == ToolDecision::Deny
-                && rule.tool == "workspace"
-        });
-    let coordinator =
-        matches!(profile.harness, Harness::PrimeAgent | Harness::Codex) && !workspace_tool_denied;
-    let agent_operations = AgentOperationCapabilities {
-        roster: coordinator,
-        send: coordinator,
-        observe: coordinator,
-        spawn: coordinator,
-    };
-    let coordinator_enforced_tools = if coordinator {
-        vec![
-            "orchestration.roster".into(),
-            "orchestration.send".into(),
-            "orchestration.observe".into(),
-            "orchestration.spawn".into(),
-        ]
-    } else {
-        Vec::new()
-    };
-    // This list is adapter-owned truth. Never derive it from profile text:
-    // doing so would let a declaration attest its own arbitrary tool name.
-    let native_enforced_tools = supported_native_tools
-        .iter()
-        .map(|tool| (*tool).to_owned())
-        .collect();
-    let capabilities = NativeBridgeCapabilities {
-        permission_modes,
-        native_enforced_tools,
-        coordinator_enforced_tools,
-        agent_operations,
-    };
-    piui_orchestration::validate_profile_capabilities(profile, &capabilities)
-        .map_err(|_| OrchestrationSchedulerError::unsupported())?;
-
-    let native_rules = profile
-        .tool_policy
-        .rules
-        .iter()
-        .filter(|rule| rule.enforcement == PolicyEnforcement::Native)
-        .collect::<Vec<_>>();
-    let allowed_tools = if native.tool_policy.supported && !native_rules.is_empty() {
-        let mut tools = native_rules
-            .iter()
-            .filter(|rule| rule.decision == ToolDecision::Allow)
-            .map(|rule| rule.tool.clone())
-            .collect::<Vec<_>>();
-        if coordinator && !tools.iter().any(|tool| tool == "workspace") {
-            tools.push("workspace".into());
-        }
-        tools.sort();
-        tools.dedup();
-        Some(tools)
-    } else {
-        None
-    };
-    Ok((
-        capabilities,
-        LaunchPolicy {
-            allowed_tools,
-            coordinator,
-        },
-    ))
-}
-
 fn workspace_launch_request(
     workspace_id: &str,
     session_id: &str,
@@ -1347,8 +1195,10 @@ fn workspace_launch_request(
             name: lease.profile.model.clone(),
             thinking_levels: None,
         }),
-        thinking_level: None,
+        thinking_level: lease.profile.reasoning.clone(),
         base_instructions: lease.profile.base_instructions.clone(),
+        service_tier: lease.profile.service_tier.clone(),
+        resource_rules: serde_json::to_value(&lease.profile.resource_rules).ok(),
         instructions: (!lease.profile.instructions.trim().is_empty())
             .then(|| lease.profile.instructions.clone()),
         permission_mode: workspace_permission(lease.profile.permission_mode),
@@ -1619,6 +1469,8 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
                     model: None,
                     thinking_level: None,
                     base_instructions: None,
+                    service_tier: None,
+                    resource_rules: None,
                     instructions: None,
                     permission_mode: WorkspacePermissionMode::Native,
                     allowed_tools: Some(vec![]),
@@ -1647,6 +1499,8 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
         model: default_model.id.clone(),
         permission_mode: piui_orchestration::PermissionMode::Native,
         base_instructions: None,
+        service_tier: None,
+        resource_rules: None,
         instructions: "Do not call tools. Reply with exactly the marker requested by the task."
             .into(),
         tool_policy: DeclaredToolPolicy {
@@ -1696,7 +1550,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
             },
         ],
     };
-    let store_directory = app_data.join("orchestration-v2");
+    let store_directory = app_data.join("orchestration-v3");
     fs::create_dir_all(&store_directory).unwrap();
     let document = serde_json::json!({
         "version": 1,
@@ -1874,6 +1728,9 @@ mod tests {
             model: "model".into(),
             permission_mode: piui_orchestration::PermissionMode::Native,
             base_instructions: None,
+            service_tier: None,
+            resource_rules: vec![],
+            reasoning: None,
             instructions: "Be exact".into(),
             tool_policy: piui_orchestration::DeclaredToolPolicy { rules: vec![] },
             allowed_spawn_profile_ids: vec![],
@@ -2060,7 +1917,19 @@ mod tests {
     #[tokio::test]
     async fn fake_adapter_two_step_dag_passes_exact_dependency_history_reference() {
         use piui_orchestration::{Coordinator, NativeExecutionReference, RunStatus};
-        let mut run = Coordinator::new_run("run", dag_snapshot()).unwrap();
+        let mut definition = dag_snapshot();
+        let mut prime = profile(Harness::PrimeAgent);
+        prime.id = "prime-profile".into();
+        definition.profiles.push(prime);
+        definition
+            .team
+            .members
+            .push(piui_orchestration::TeamMember {
+                id: "prime-member".into(),
+                profile_id: "prime-profile".into(),
+            });
+        definition.pipeline.steps[1].assigned_member_id = "prime-member".into();
+        let mut run = Coordinator::new_run("run", definition).unwrap();
         let first = Coordinator::dispatch_next(
             &mut run,
             0,
@@ -2101,6 +1970,8 @@ mod tests {
         )
         .unwrap()
         .unwrap();
+        assert_eq!(first.profile.harness, Harness::Codex);
+        assert_eq!(second.profile.harness, Harness::PrimeAgent);
         assert_eq!(second.dependency_result_references, vec![reference]);
         Coordinator::complete_task(
             &mut run,

@@ -5,9 +5,12 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { createPrimeAdapter } from "./prime.mjs";
-import { getModelLookupCounts, resetModelLookupCounts } from "./fixtures/prime-sdk-fixture/dist/index.js";
+import { getModelLookupCounts, resetModelLookupCounts, lastConfiguredSkills } from "./fixtures/prime-sdk-fixture/index.mjs";
 
 const fixtureRoot = fileURLToPath(new URL("./fixtures/prime-sdk-fixture", import.meta.url));
+// Native package layout is generated from the tracked fixture source.
+await mkdir(join(fixtureRoot, "dist"), { recursive: true });
+await writeFile(join(fixtureRoot, "dist", "index.js"), 'export * from "../index.mjs";\n');
 async function config(overrides = {}) {
   const root = await mkdtemp(join(tmpdir(), "piui-prime-adapter-"));
   const cwd = join(root, "project");
@@ -182,4 +185,10 @@ test("Prime fails closed for another installed package version", async () => {
   await mkdir(join(packageRoot, "dist"));
   await writeFile(join(packageRoot, "package.json"), JSON.stringify({ name: "prime-agent", version: "0.9.4", exports: { ".": { import: "./dist/index.js" } } }));
   await assert.rejects(createPrimeAdapter(await config({ packageRoot }), () => {}), (error) => error.bridgeCode === "unsupported-version");
+});
+
+test("Prime filters one skill per session and rejects unsupported MCP isolation", async () => {
+  const adapter = await createPrimeAdapter(await config({ resourceRules: [{ kind: "skill", id: "alpha", enabled: false }] }), () => {});
+  try { assert.deepEqual(lastConfiguredSkills(), ["beta"]); } finally { await adapter.dispose(); }
+  await assert.rejects(createPrimeAdapter(await config({ resourceRules: [{ kind: "mcp", id: "example", enabled: false }] }), () => {}), { bridgeCode: "unsupported-resource-policy" });
 });

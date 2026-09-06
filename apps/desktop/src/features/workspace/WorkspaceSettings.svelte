@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { language, setLanguage, t } from '../locale/language';
   import type { Preferences } from '../../host-api/types';
 
   export let preferences: Preferences;
@@ -14,34 +15,35 @@
 
 <section class="settings" aria-labelledby="workspace-settings-title">
   <header>
-    <div><span>PiUI</span><h1 id="workspace-settings-title">Settings</h1></div>
-    <button type="button" onclick={onClose}>Done</button>
+    <div><span>{$t('PiUI')}</span><h1 id="workspace-settings-title">{$t('Settings')}</h1></div>
+    <button type="button" onclick={onClose}>{$t('Done')}</button>
   </header>
   <div class="body">
     <div class="rows">
-      <label><span><strong>Theme</strong><small>Choose a theme or follow the operating system.</small></span>
+      <label><span><strong>{$t('Language')}</strong></span><select aria-label="Language" value={$language} onchange={(event) => setLanguage(event.currentTarget.value as 'en' | 'ru')}><option value="en">{$t('English')}</option><option value="ru">Русский</option></select></label>
+      <label><span><strong>{$t('Theme')}</strong><small>{$t('Choose a theme or follow the operating system.')}</small></span>
         <select value={preferences.theme} onchange={(event) => change('theme', event)} disabled={busy}>
-          <option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option>
+          <option value="system">{$t('System')}</option><option value="light">{$t('Light')}</option><option value="dark">{$t('Dark')}</option>
         </select>
       </label>
-      <label><span><strong>Density</strong><small>Adjust spacing without reducing control labels.</small></span>
+      <label><span><strong>{$t('Density')}</strong><small>{$t('Adjust spacing without reducing control labels.')}</small></span>
         <select value={preferences.density} onchange={(event) => change('density', event)} disabled={busy}>
-          <option value="comfortable">Comfortable</option><option value="compact">Compact</option>
+          <option value="comfortable">{$t('Comfortable')}</option><option value="compact">{$t('Compact')}</option>
         </select>
       </label>
-      <label><span><strong>Motion</strong><small>Reduce nonessential interface transitions.</small></span>
+      <label><span><strong>{$t('Motion')}</strong><small>{$t('Reduce nonessential interface transitions.')}</small></span>
         <select value={preferences.reducedMotion} onchange={(event) => change('reducedMotion', event)} disabled={busy}>
-          <option value="system">Follow system</option><option value="reduce">Reduce motion</option>
+          <option value="system">{$t('Follow system')}</option><option value="reduce">{$t('Reduce motion')}</option>
         </select>
       </label>
-      <label><span><strong>Chat text size</strong><small>Change local conversation text size.</small></span>
+      <label><span><strong>{$t('Chat text size')}</strong><small>{$t('Change local conversation text size.')}</small></span>
         <select value={preferences.fontSize} onchange={(event) => change('fontSize', event)} disabled={busy}>
-          <option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option>
+          <option value="small">{$t('Small')}</option><option value="medium">{$t('Medium')}</option><option value="large">{$t('Large')}</option>
         </select>
       </label>
-      <label><span><strong>Conversation width</strong><small>Choose how much of the main workspace chat uses.</small></span>
+      <label><span><strong>{$t('Conversation width')}</strong><small>{$t('Choose how much of the main workspace chat uses.')}</small></span>
         <select value={preferences.chatWidth} onchange={(event) => change('chatWidth', event)} disabled={busy}>
-          <option value="wide">Wide</option><option value="centered">Centered</option><option value="focused">Focused</option>
+          <option value="wide">{$t('Wide')}</option><option value="centered">{$t('Centered')}</option><option value="focused">{$t('Focused')}</option>
         </select>
       </label>
     </div>

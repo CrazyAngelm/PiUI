@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { AgentProfile, DirectedEdge, TeamDefinition } from '../../../../../contracts/orchestration-v2';
+  import { t } from '../locale/language';
+  import type { AgentProfile, DirectedEdge, TeamDefinition } from '../../../../../contracts/orchestration-v3';
   import { connectionPreset, setConnection } from './connections';
   export let team: TeamDefinition;
   export let profiles: readonly AgentProfile[];
@@ -21,16 +22,16 @@
 </script>
 
 <section class="connections" aria-labelledby="connections-title">
-  <header><div><h2 id="connections-title">Connections</h2><p>Choose an agent, then set each direction independently.</p></div><span class="count">{team.members.length} agents · {team.sendEdges.length} message routes</span></header>
-  <div class="presets" aria-label="Message topology presets">
-    <span>Messaging</span>
-    <button type="button" disabled={disabled || !team.orchestratorMemberId} onclick={() => onChange('sendEdges', connectionPreset(team.members, team.orchestratorMemberId, 'orchestrator'))}>Through orchestrator</button>
-    <button type="button" disabled={disabled} onclick={() => onChange('sendEdges', connectionPreset(team.members, team.orchestratorMemberId, 'everyone'))}>Everyone to everyone</button>
-    <button type="button" disabled={disabled} onclick={() => onChange('sendEdges', [])}>No messages</button>
+  <header><div><h2 id="connections-title">{$t('Connections')}</h2><p>{$t('Choose an agent, then set each direction independently.')}</p></div><span class="count">{team.members.length} agents · {team.sendEdges.length} message routes</span></header>
+  <div class="presets" aria-label={$t('Message topology presets')}>
+    <span>{$t('Messaging')}</span>
+    <button type="button" disabled={disabled || !team.orchestratorMemberId} onclick={() => onChange('sendEdges', connectionPreset(team.members, team.orchestratorMemberId, 'orchestrator'))}>{$t('Through orchestrator')}</button>
+    <button type="button" disabled={disabled} onclick={() => onChange('sendEdges', connectionPreset(team.members, team.orchestratorMemberId, 'everyone'))}>{$t('Everyone to everyone')}</button>
+    <button type="button" disabled={disabled} onclick={() => onChange('sendEdges', [])}>{$t('No messages')}</button>
   </div>
-  {#if team.members.length === 0}<p class="empty">Add agents to connect them.</p>{:else}
+  {#if team.members.length === 0}<p class="empty">{$t('Add agents to connect them.')}</p>{:else}
     <div class="network">
-      <nav aria-label="Select agent connections">
+      <nav aria-label={$t('Select agent connections')}>
         {#each team.members as member (member.id)}
           <button class:selected={selected === member.id} aria-pressed={selected === member.id} type="button" onclick={() => selected = member.id}>
             <span class="avatar" aria-hidden="true">{label(member.id).slice(0, 1)}</span>
@@ -39,10 +40,10 @@
         {/each}
       </nav>
       <div class="routes">
-        <div class="route-heading"><h3>{label(selected)}</h3><div class="modes" aria-label="Connection type"><button type="button" aria-pressed={kind === 'sendEdges'} onclick={() => kind = 'sendEdges'}>Messaging</button><button type="button" aria-pressed={kind === 'observeEdges'} onclick={() => kind = 'observeEdges'}>Observation</button></div></div>
-        <label class="search"><span class="visually-hidden">Find a connection target</span><input type="search" bind:value={query} placeholder="Find an agent" /></label>
-        {#if kind === 'observeEdges'}<p class="note">Observation grants access to recorded results. It does not grant messaging.</p>{/if}
-        <div class="direction-head" aria-hidden="true"><span>Agent</span><span>Outgoing →</span><span>← Incoming</span></div>
+        <div class="route-heading"><h3>{label(selected)}</h3><div class="modes" aria-label={$t('Connection type')}><button type="button" aria-pressed={kind === 'sendEdges'} onclick={() => kind = 'sendEdges'}>{$t('Messaging')}</button><button type="button" aria-pressed={kind === 'observeEdges'} onclick={() => kind = 'observeEdges'}>{$t('Observation')}</button></div></div>
+        <label class="search"><span class="visually-hidden">{$t('Find a connection target')}</span><input type="search" bind:value={query} placeholder={$t('Find an agent')} /></label>
+        {#if kind === 'observeEdges'}<p class="note">{$t('Observation grants access to recorded results. It does not grant messaging.')}</p>{/if}
+        <div class="direction-head" aria-hidden="true"><span>{$t('Agent')}</span><span>{$t('Outgoing →')}</span><span>← Incoming</span></div>
         {#each targets as target (target.id)}
           <div class="route"><strong>{label(target.id)}</strong>
             <label><input type="checkbox" checked={connected(selected, target.id)} disabled={disabled} onchange={(event) => onChange(kind, setConnection(team[kind], selected, target.id, event.currentTarget.checked))} /><span>{kind === 'sendEdges' ? 'Send' : 'Observe'}</span><span class="visually-hidden"> from {label(selected)} to {label(target.id)}</span></label>

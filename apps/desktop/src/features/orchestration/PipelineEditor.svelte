@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { PipelineDefinition, PipelineStep, TeamDefinition, AgentProfile } from '../../../../../contracts/orchestration-v2';
+  import { t } from '../locale/language';
+  import type { PipelineDefinition, PipelineStep, TeamDefinition, AgentProfile } from '../../../../../contracts/orchestration-v3';
   import { createPipeline, createPipelineStep, removePipelineStep, validatePipeline } from './pipelineForm';
 
   export let pipeline: PipelineDefinition | undefined;
@@ -46,31 +47,31 @@
 </script>
 
 <form class="editor" onsubmit={save} aria-labelledby="pipeline-editor-title">
-  <header><div><p class="context">Pipeline definition</p><h2 id="pipeline-editor-title">{pipeline ? pipeline.name : 'Create pipeline'}</h2></div><span class="draft-state">{readOnly ? 'Read-only' : dirty ? 'Unsaved changes' : 'No unsaved changes'}</span></header>
-  <p class="description">Define task dependencies. Native harnesses execute the tasks; saving does not start a run.</p>
+  <header><div><p class="context">{$t('Pipeline definition')}</p><h2 id="pipeline-editor-title">{pipeline ? pipeline.name : 'Create pipeline'}</h2></div><span class="draft-state">{readOnly ? 'Read-only' : dirty ? 'Unsaved changes' : 'No unsaved changes'}</span></header>
+  <p class="description">{$t('Define task dependencies. Native harnesses execute the tasks; saving does not start a run.')}</p>
   <fieldset disabled={busy || readOnly}>
-    <label for="pipeline-name">Name</label>
+    <label for="pipeline-name">{$t('Name')}</label>
     <input id="pipeline-name" value={draft.name} oninput={(event) => draft = { ...draft, name: event.currentTarget.value }} autocomplete="off" />
     <section class="tasks" aria-labelledby="pipeline-tasks-title">
-      <div class="section-heading"><h3 id="pipeline-tasks-title">Tasks</h3><button type="button" class="secondary" onclick={() => draft = { ...draft, steps: [...draft.steps, createPipelineStep(crypto.randomUUID())] }}>Add task</button></div>
-      <p class="hint">Member slots must match the team selected at launch. Dependency arrows mean “runs after”, not message or spawn permission.</p>
+      <div class="section-heading"><h3 id="pipeline-tasks-title">{$t('Tasks')}</h3><button type="button" class="secondary" onclick={() => draft = { ...draft, steps: [...draft.steps, createPipelineStep(crypto.randomUUID())] }}>{$t('Add task')}</button></div>
+      <p class="hint">{$t('Member slots must match the team selected at launch. Dependency arrows mean “runs after”, not message or spawn permission.')}</p>
       <datalist id="pipeline-member-slots">{#each slots as slot (slot.id)}<option value={slot.id}>{slot.label}</option>{/each}</datalist>
-      {#if draft.steps.length === 0}<p class="empty">No tasks yet. Add a task to describe the work.</p>{/if}
+      {#if draft.steps.length === 0}<p class="empty">{$t('No tasks yet. Add a task to describe the work.')}</p>{/if}
       {#each draft.steps as step, index (step.id)}
         <section class="task" aria-label={`Task ${index + 1}: ${step.name || 'Unnamed task'}`}>
-          <div class="section-heading"><h4>Task {index + 1}</h4><button type="button" class="remove" aria-label={`Remove task ${step.name || index + 1}`} onclick={() => draft = removePipelineStep(draft, step.id)}>Remove task</button></div>
+          <div class="section-heading"><h4>Task {index + 1}</h4><button type="button" class="remove" aria-label={`Remove task ${step.name || index + 1}`} onclick={() => draft = removePipelineStep(draft, step.id)}>{$t('Remove task')}</button></div>
           <div class="task-fields">
-            <div><label for={`step-name-${step.id}`}>Task name</label><input id={`step-name-${step.id}`} value={step.name} oninput={(event) => updateStep(step.id, { name: event.currentTarget.value })} /></div>
-            <div><label for={`step-member-${step.id}`}>Member slot</label><input id={`step-member-${step.id}`} list="pipeline-member-slots" value={step.assignedMemberId} oninput={(event) => updateStep(step.id, { assignedMemberId: event.currentTarget.value })} autocomplete="off" /></div>
+            <div><label for={`step-name-${step.id}`}>{$t('Task name')}</label><input id={`step-name-${step.id}`} value={step.name} oninput={(event) => updateStep(step.id, { name: event.currentTarget.value })} /></div>
+            <div><label for={`step-member-${step.id}`}>{$t('Member slot')}</label><input id={`step-member-${step.id}`} list="pipeline-member-slots" value={step.assignedMemberId} oninput={(event) => updateStep(step.id, { assignedMemberId: event.currentTarget.value })} autocomplete="off" /></div>
           </div>
-          <label for={`step-instructions-${step.id}`}>Task instructions</label><textarea id={`step-instructions-${step.id}`} rows="4" value={step.instructions} oninput={(event) => updateStep(step.id, { instructions: event.currentTarget.value })}></textarea>
-          <fieldset class="dependencies"><legend>Run after</legend>
+          <label for={`step-instructions-${step.id}`}>{$t('Task instructions')}</label><textarea id={`step-instructions-${step.id}`} rows="4" value={step.instructions} oninput={(event) => updateStep(step.id, { instructions: event.currentTarget.value })}></textarea>
+          <fieldset class="dependencies"><legend>{$t('Run after')}</legend>
             {#each draft.steps.filter((candidate) => candidate.id !== step.id) as dependency (dependency.id)}
               <label class="checkbox"><input type="checkbox" checked={step.dependencyStepIds.includes(dependency.id)} onchange={(event) => toggleDependency(step.id, dependency.id, event.currentTarget.checked)} /><span>{dependency.name || 'Unnamed task'}</span></label>
             {/each}
-            {#if draft.steps.length === 1}<p class="hint">This task has no other task to depend on.</p>{/if}
+            {#if draft.steps.length === 1}<p class="hint">{$t('This task has no other task to depend on.')}</p>{/if}
             {#each step.dependencyStepIds.filter((id) => !draft.steps.some((candidate) => candidate.id === id) || id === step.id) as missing (missing)}
-              <div class="invalid-dependency"><span>Invalid dependency: {missing === step.id ? 'This task depends on itself' : missing}</span><button type="button" onclick={() => toggleDependency(step.id, missing, false)}>Remove dependency</button></div>
+              <div class="invalid-dependency"><span>Invalid dependency: {missing === step.id ? 'This task depends on itself' : missing}</span><button type="button" onclick={() => toggleDependency(step.id, missing, false)}>{$t('Remove dependency')}</button></div>
             {/each}
           </fieldset>
         </section>
@@ -78,15 +79,15 @@
     </section>
   </fieldset>
   {#if draft.steps.length > 0}
-    <section class="dependency-preview" aria-labelledby="dependency-preview-title"><h3 id="dependency-preview-title">Dependency order</h3>
+    <section class="dependency-preview" aria-labelledby="dependency-preview-title"><h3 id="dependency-preview-title">{$t('Dependency order')}</h3>
       {#if validation.orderedStepIds.length > 0}<ol>{#each validation.orderedStepIds as id (id)}{@const step = draft.steps.find((item) => item.id === id)}<li><strong>{step?.name}</strong><span>{step?.dependencyStepIds.length ? `After ${step.dependencyStepIds.map((dependency) => draft.steps.find((item) => item.id === dependency)?.name ?? dependency).join(', ')}` : 'Ready when the run starts'}</span></li>{/each}</ol>
-      {:else}<p class="hint">Complete task names and member slots, then resolve any missing or cyclic dependencies to preview execution order.</p>{/if}
-      <p class="hint">Independent tasks may run in parallel when the host supports it. This list is a dependency preview, not an execution journal.</p>
+      {:else}<p class="hint">{$t('Complete task names and member slots, then resolve any missing or cyclic dependencies to preview execution order.')}</p>{/if}
+      <p class="hint">{$t('Independent tasks may run in parallel when the host supports it. This list is a dependency preview, not an execution journal.')}</p>
     </section>
   {/if}
-  {#if showValidation && validation.errors.length > 0}<div class="error" role="alert"><strong>Check this pipeline</strong><ul>{#each validation.errors as issue}<li>{issue}</li>{/each}</ul></div>{/if}
+  {#if showValidation && validation.errors.length > 0}<div class="error" role="alert"><strong>{$t('Check this pipeline')}</strong><ul>{#each validation.errors as issue}<li>{issue}</li>{/each}</ul></div>{/if}
   {#if error}<p class="error" role="alert">{error}</p>{/if}
-  {#if discardPrompt}<div class="discard" role="group" aria-label="Unsaved pipeline changes"><p>Discard unsaved pipeline changes?</p><button type="button" class="secondary" onclick={() => discardPrompt = false}>Keep editing</button><button type="button" class="remove" onclick={onCancel}>Discard changes</button></div>{/if}
+  {#if discardPrompt}<div class="discard" role="group" aria-label={$t('Unsaved pipeline changes')}><p>{$t('Discard unsaved pipeline changes?')}</p><button type="button" class="secondary" onclick={() => discardPrompt = false}>{$t('Keep editing')}</button><button type="button" class="remove" onclick={onCancel}>{$t('Discard changes')}</button></div>{/if}
   <footer><button type="button" class="secondary" onclick={cancel} disabled={busy}>{readOnly ? 'Back' : 'Cancel'}</button>{#if !readOnly}<button type="submit" class="primary" disabled={busy}>{busy ? 'Saving…' : 'Save pipeline'}</button>{/if}</footer>
 </form>
 

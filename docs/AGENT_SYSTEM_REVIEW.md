@@ -73,7 +73,7 @@ python -m yt_dlp --skip-download --write-subs --write-auto-subs --sub-langs ru -
 | Dynamic agents | `workspace.spawn_agent` creates a task/member from an allowed snapshotted profile; task text cannot override tools or permissions |
 | Collect results | `workspace.wait` waits for an observed member's current task and returns its latest assistant result; caller cancellation ends the wait |
 | Directed communication | Separate incoming/outgoing messaging and observation; orchestrator/all-to-all presets |
-| Dynamic peers | Explicit team option lets spawned agents message the team; absent option retains parent-only messaging |
+| Dynamic peers | Explicit team option lets spawned agents inherit their parent’s directed team connections; absent option retains parent-only messaging |
 | Saved workflows | Persisted teams, dependency pipelines and reusable launch commands |
 | Large-run inspection | Agent/task search, status filters, native-session links, linear member/profile lookup |
 | Less clutter | Legacy history navigation and alternate history page removed; empty approval/activity shortcuts hidden; chat filters contextual; advanced profile/subagent controls collapsed |
@@ -83,8 +83,8 @@ original launch graph. Saved definitions do not change. Typed requests and
 leases are journaled before side effects; uncertain work is not blindly replayed.
 
 This is not a full clone of the video's product: arbitrary named runtime
-channels, model-authored security profiles and a freeform node canvas are not
-implemented. Finished one-shot tasks are not permanent autonomous participants;
+channels and model-authored security profiles are not implemented. The node
+canvas described below now covers saved systems. Finished one-shot tasks are not permanent autonomous participants;
 the parent should collect child results with `wait` before completing itself.
 
 ## Empty prompt and permission boundaries
@@ -117,3 +117,64 @@ Local probes: `scripts/codex-prompt-probe.mjs` (also `--empty`),
 `scripts/prime-lifecycle-probe.mjs --daemon-socket <non-default-endpoint>`.
 Use the repository's Windows `piui-e2e-job` containment runner. Scale scripts
 default to the Windows npm native binary; `PIUI_CODEX_BINARY` overrides it.
+
+
+## Unified systems update — 2026-09-06
+
+Systems is the main agent-workflow screen. One editable canvas compiles into
+existing profiles, teams, dependency pipelines and launch commands, saved in
+one host transaction. Result dependencies, directed messages, observation and
+spawn grants remain distinct. Sequential, parallel, workers-to-supervisor and
+peer-message presets are available. Advanced editors remain available for
+older definitions that cannot be represented without losing information.
+Positions are rebuildable UI metadata; native session history is unchanged.
+
+Each harness adapter declares its configuration capabilities. Profiles carry
+reasoning, supported speed tiers and skill/MCP rules through orchestration v3
+to the native adapter. Codex supports per-thread skill paths, MCP server names
+and Standard/Fast; Prime supports skill names and native tool filtering.
+Unsupported mandatory settings reject launch rather than silently disappearing.
+English is the default UI language; Russian can be selected in Settings.
+Some dynamic/advanced explanatory text still uses the English fallback.
+
+The host checks child permissions at each workspace-managed spawn: filesystem
+mode, native tool restrictions, disabled resources and further spawn grants
+cannot exceed the parent's authority. Team connection inheritance preserves
+direction. This is a coordinator permission boundary, not an OS sandbox or a
+claim about unrestricted native delegation outside workspace tools.
+
+Native Prime currently has no supported per-session MCP disable contract.
+Its skill advertisement depends on the ipython tool; the installed SDK also
+associates native RLM delegation with that tool. These features must not be
+presented as independently enforceable switches. Codex does not expose an
+arbitrary native-tool allowlist. The adapter UI reflects those differences.
+
+Verified for this update:
+
+- Windows workspace WebView2 E2E: `target/piui-evidence/29600-1788705877201/report.json`.
+  Mixed Codex/Prime graph creation and reopening, reasoning/Fast persistence,
+  result connections, Russian settings and locale persistence, CRUD, rejected
+  policy, native Codex lifecycle and safe mode passed.
+- Classic native WebView2 E2E: `target/piui-evidence/28272-1788705954213/report.json`.
+  Existing generic rendering and safe-mode flows passed.
+- Native Codex with a local synthetic Responses provider: reasoning and Standard
+  reach the outgoing request; enabled/disabled skills respectively appear/do
+  not appear. `scripts/codex-prompt-probe.mjs --settings --skill-enabled` and
+  `--settings --skill-disabled` reproduce this check.
+- Native Prime 0.9.3 with a local synthetic Responses provider and explicit
+  non-default daemon socket: reasoning and both skill states passed.
+  `target/prime-settings-zGV19i/report.json`; reproduce with
+  `scripts/prime-settings-probe.mjs --daemon-socket <non-default-endpoint>`
+  inside the Windows containment runner.
+- Scheduler integration verifies Codex-to-Prime result transfer and exact
+  native history references using deterministic adapter fixtures. It is not
+  an authenticated end-to-end mixed-model workload.
+- UI/unit tests, v3 contract tests, Rust workspace tests, clippy, repository
+  audit and production frontend build passed. Existing native history and
+  historical v2 contracts are preserved; persisted v1/v2 runs migrate to v3.
+
+Remaining product scope: selector/round-robin/handoff loops, arbitrary runtime
+channels/groups and permanent autonomous teams are not implemented. Each graph
+node currently starts a pipeline task; spawn grants permit additional agents
+from allowed profiles. The scale evidence above remains synthetic transport
+measurement, not a guarantee for hundreds of tool-heavy production agents.

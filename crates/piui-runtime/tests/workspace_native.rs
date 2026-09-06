@@ -87,6 +87,8 @@ fn native_config(kind: HarnessKind, label: &str) -> NativeRuntimeConfig {
         model: None,
         thinking_level: None,
         base_instructions: None,
+        service_tier: None,
+        resource_rules: None,
         instructions: None,
         permission_mode: PermissionMode::Native,
         allowed_tools,

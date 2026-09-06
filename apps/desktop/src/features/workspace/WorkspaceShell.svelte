@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../locale/language';
   import { onMount, tick } from 'svelte';
   import ConversationViewport from './ConversationViewport.svelte';
   import { host } from '../../host-api/client';
@@ -25,7 +26,7 @@
 
 
   type MainView = 'sessions' | 'workspace' | 'settings';
-  type WorkspaceSection = 'agents' | 'teams' | 'pipelines' | 'runs';
+  type WorkspaceSection = 'systems' | 'agents' | 'teams' | 'pipelines' | 'runs';
   type Inspector = 'approvals' | 'activity' | 'details' | undefined;
   type OrchestrationComponent = typeof import('../orchestration/OrchestrationPanel.svelte').default;
 
@@ -58,7 +59,7 @@
   let pendingEvents: Record<string, WorkspaceEvent[]> = {};
   let mainView: MainView = 'sessions';
   let previousMainView: Exclude<MainView, 'settings'> = 'sessions';
-  let workspaceSection: WorkspaceSection = 'agents';
+  let workspaceSection: WorkspaceSection = 'systems';
   let requestedWorkspaceSection: WorkspaceSection | undefined;
   let requestedMainView: MainView | undefined;
   let orchestrationDirty = false;
@@ -144,7 +145,7 @@
       const value = JSON.parse(raw) as PersistedUiState;
       if (typeof value.selectedWorkspaceId === 'string') selectedWorkspaceId = value.selectedWorkspaceId;
       if (typeof value.selectedSessionId === 'string') selectedSessionId = value.selectedSessionId;
-      if (value.workspaceSection && ['agents', 'teams', 'pipelines', 'runs'].includes(value.workspaceSection)) workspaceSection = value.workspaceSection;
+      if (value.workspaceSection && ['systems', 'agents', 'teams', 'pipelines', 'runs'].includes(value.workspaceSection)) workspaceSection = value.workspaceSection;
       if (value.drafts && typeof value.drafts === 'object') {
         drafts = Object.fromEntries(Object.entries(value.drafts).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
       }
@@ -698,42 +699,42 @@
 </script>
 
 <div class="shell" class:with-inspector={inspector !== undefined} inert={Boolean(trustTarget || requestedWorkspaceSection || requestedMainView || pendingNavigation)}>
-  <a class="skip-link" href="#workspace-main">Skip to main content</a>
-  {#if catalog.safeMode}<div class="safe-mode" role="status">Safe mode. Runtime actions and extensions are disabled. Local history remains read-only.</div>{/if}
+  <a class="skip-link" href="#workspace-main">{$t('Skip to main content')}</a>
+  {#if catalog.safeMode}<div class="safe-mode" role="status">{$t('Safe mode. Runtime actions and extensions are disabled. Local history remains read-only.')}</div>{/if}
 
-  <aside class:open={navigationOpen} inert={narrow && !navigationOpen} aria-label="Workspace navigation">
-    <div class="brand-row"><div class="brand"><span class="brand-mark" aria-hidden="true">π</span><strong>PiUI</strong></div><button class="icon narrow-only" type="button" onclick={() => navigationOpen = false} aria-label="Close navigation">×</button></div>
+  <aside class:open={navigationOpen} inert={narrow && !navigationOpen} aria-label={$t('Workspace navigation')}>
+    <div class="brand-row"><div class="brand"><span class="brand-mark" aria-hidden="true">π</span><strong>{$t('PiUI')}</strong></div><button class="icon narrow-only" type="button" onclick={() => navigationOpen = false} aria-label={$t('Close navigation')}>×</button></div>
     <div class="primary-actions">
-      <button type="button" class="accent" onclick={startNewSession}><span class="action-label"><span class="action-icon" aria-hidden="true">＋</span><span>New chat</span></span><kbd>{modifier}N</kbd></button>
-      <button type="button" onclick={addProject} disabled={addingProject}>{addingProject ? 'Opening picker…' : 'Add project'}</button>
+      <button type="button" class="accent" onclick={startNewSession}><span class="action-label"><span class="action-icon" aria-hidden="true">＋</span><span>{$t('New chat')}</span></span><kbd>{modifier}N</kbd></button>
+      <button type="button" onclick={addProject} disabled={addingProject}>{$t(addingProject ? 'Opening picker…' : 'Add project')}</button>
     </div>
-    <div class="view-switch" aria-label="Workspace view">
-      <button type="button" class:active={mainView === 'sessions'} aria-current={mainView === 'sessions' ? 'page' : undefined} onclick={() => requestMainView('sessions')}>Sessions</button>
-      <button type="button" class:active={mainView === 'workspace'} aria-current={mainView === 'workspace' ? 'page' : undefined} onclick={() => requestMainView('workspace')}>Workspace</button>
+    <div class="view-switch" aria-label={$t('Workspace view')}>
+      <button type="button" class:active={mainView === 'sessions'} aria-current={mainView === 'sessions' ? 'page' : undefined} onclick={() => requestMainView('sessions')}>{$t('Sessions')}</button>
+      <button type="button" class:active={mainView === 'workspace'} aria-current={mainView === 'workspace' ? 'page' : undefined} onclick={() => requestMainView('workspace')}>{$t('Workspace')}</button>
     </div>
     {#if mainView === 'sessions'}
-    <label class="search-label" aria-label="Search sessions">
-      <span aria-hidden="true">⌕</span><input bind:this={searchInput} bind:value={search} placeholder="Search this project" />
+    <label class="search-label" aria-label={$t('Search sessions')}>
+      <span aria-hidden="true">⌕</span><input bind:this={searchInput} bind:value={search} placeholder={$t('Search this project')} />
     </label>
     {#if new Set(catalog.sessions.map(session => session.harness)).size > 1}
-    <label class="filter-label"><span>Harness</span><select bind:value={harnessFilter}>
-      <option value="all">All harnesses</option><option value="pi">Pi</option><option value="prime-agent">Prime Agent</option><option value="codex">Codex</option>
+    <label class="filter-label"><span>{$t('Harness')}</span><select bind:value={harnessFilter}>
+      <option value="all">{$t('All harnesses')}</option><option value="pi">{$t('Pi')}</option><option value="prime-agent">{$t('Prime Agent')}</option><option value="codex">{$t('Codex')}</option>
     </select></label>
     {/if}
     {/if}
 
-    <div class="list-heading"><span>Projects</span><span>{catalog.workspaces.length || ''}</span></div>
-    <nav class="project-list" aria-label="Projects and native sessions">
-      {#if catalogLoading}<p class="muted" role="status">Loading local workspace…</p>
-      {:else if catalog.workspaces.length === 0}<p class="muted">No projects registered.</p>
+    <div class="list-heading"><span>{$t('Projects')}</span><span>{catalog.workspaces.length || ''}</span></div>
+    <nav class="project-list" aria-label={$t('Projects and native sessions')}>
+      {#if catalogLoading}<p class="muted" role="status">{$t('Loading local workspace…')}</p>
+      {:else if catalog.workspaces.length === 0}<p class="muted">{$t('No projects registered.')}</p>
       {:else}
         {#each catalog.workspaces as workspace (workspace.id)}
           <section class:current-project={workspace.id === selectedWorkspaceId}>
             <div class="project-row">
               <button type="button" onclick={() => selectProject(workspace.id)} aria-current={workspace.id === selectedWorkspaceId ? 'true' : undefined}>
-                <span title={workspace.name}>{workspace.name}</span>{#if workspace.missing}<small>Missing</small>{:else if workspace.trust === 'restricted'}<small>Restricted</small>{/if}
+                <span title={workspace.personal ? $t('Chats') : workspace.name}>{workspace.personal ? $t('Chats') : workspace.name}</span>{#if workspace.missing}<small>{$t('Missing')}</small>{:else if workspace.trust === 'restricted'}<small>{$t('Restricted')}</small>{/if}
               </button>
-              {#if !workspace.personal && workspace.trust === 'restricted'}<button class="more" type="button" onclick={() => { trustTarget = workspace; trustError = undefined; }} aria-label={`Review trust for ${workspace.name}`}>⌾</button>{/if}
+              {#if !workspace.personal && workspace.trust === 'restricted'}<button class="more" type="button" onclick={() => { trustTarget = workspace; trustError = undefined; }} aria-label={`Review trust for ${workspace.personal ? $t('Chats') : workspace.name}`}>⌾</button>{/if}
             </div>
             {#if workspace.id === selectedWorkspaceId && mainView === 'sessions'}
               <div class="session-list">
@@ -743,7 +744,7 @@
                     <span class="session-meta"><span aria-label={harnessLabel(session.harness)}>{session.harness === 'prime-agent' ? 'Prime' : harnessLabel(session.harness)}</span><span class={`status status--${session.status}`}>{statusLabel(session.status)}</span></span>
                   </button>
                 {/each}
-                {#if visibleSessions.length === 0}<div class="session-empty"><p>{search || harnessFilter !== 'all' ? 'No matching chats.' : 'No chats yet.'}</p>{#if search || harnessFilter !== 'all'}<button type="button" onclick={() => { search = ''; harnessFilter = 'all'; }}>Clear filters</button>{:else}<button type="button" onclick={startNewSession}>Start a chat</button>{/if}</div>{/if}
+                {#if visibleSessions.length === 0}<div class="session-empty"><p>{search || harnessFilter !== 'all' ? 'No matching chats.' : 'No chats yet.'}</p>{#if search || harnessFilter !== 'all'}<button type="button" onclick={() => { search = ''; harnessFilter = 'all'; }}>{$t('Clear filters')}</button>{:else}<button type="button" onclick={startNewSession}>{$t('Start a chat')}</button>{/if}</div>{/if}
               </div>
             {/if}
           </section>
@@ -751,77 +752,78 @@
       {/if}
     </nav>
     <div class="utilities">
-      {#if attentionCount}<button type="button" onclick={(event) => openInspector('approvals', event)}><span>Approvals</span><strong>{attentionCount}</strong></button>{/if}
-      {#if activeSessions.length}<button type="button" onclick={(event) => openInspector('activity', event)}><span>Activity</span><strong>{activeSessions.length}</strong></button>{/if}
-      <button type="button" class:current-utility={mainView === 'settings'} onclick={showSettings}>Settings <kbd>{modifier},</kbd></button>
+      {#if attentionCount}<button type="button" onclick={(event) => openInspector('approvals', event)}><span>{$t('Approvals')}</span><strong>{attentionCount}</strong></button>{/if}
+      {#if activeSessions.length}<button type="button" onclick={(event) => openInspector('activity', event)}><span>{$t('Activity')}</span><strong>{activeSessions.length}</strong></button>{/if}
+      <button type="button" class:current-utility={mainView === 'settings'} onclick={showSettings}>{$t('Settings ')}<kbd>{modifier},</kbd></button>
     </div>
   </aside>
-  {#if navigationOpen}<button class="nav-scrim" type="button" onclick={() => navigationOpen = false} aria-label="Close navigation"></button>{/if}
+  {#if navigationOpen}<button class="nav-scrim" type="button" onclick={() => navigationOpen = false} aria-label={$t('Close navigation')}></button>{/if}
 
   <main id="workspace-main" tabindex="-1" inert={narrow && navigationOpen}>
     <div class="narrow-context">
-      <button class="icon" type="button" onclick={() => navigationOpen = true} aria-label="Open navigation">☰</button>
+      <button class="icon" type="button" onclick={() => navigationOpen = true} aria-label={$t('Open navigation')}>☰</button>
       <div><strong>{mainView === 'settings' ? 'Settings' : mainView === 'workspace' ? selectedWorkspace?.name ?? 'Workspace' : newSessionOpen ? 'New chat' : selectedSession?.title ?? selectedWorkspace?.name ?? 'Workspace'}</strong>{#if selectedSession}<small>{harnessLabel(selectedSession.harness)} · {statusLabel(selectedSession.status)}</small>{/if}</div>
-      {#if selectedSession}<button class="icon" type="button" onclick={(event) => openInspector('details', event)} aria-label="Open session details">ⓘ</button>{/if}
+      {#if selectedSession}<button class="icon" type="button" onclick={(event) => openInspector('details', event)} aria-label={$t('Open session details')}>ⓘ</button>{/if}
     </div>
 
-    {#if catalogError}<div class="top-error" role="alert"><span>{catalogError}</span><button type="button" onclick={() => loadCatalog()}>Refresh</button></div>{/if}
+    {#if catalogError}<div class="top-error" role="alert"><span>{catalogError}</span><button type="button" onclick={() => loadCatalog()}>{$t('Refresh')}</button></div>{/if}
 
     {#if mainView === 'settings'}
       <WorkspaceSettings {preferences} busy={preferencesBusy} error={preferencesError} onChange={savePreferences} onClose={closeSettings} />
     {:else if mainView === 'workspace'}
       <section class="workspace-view" aria-labelledby="workspace-view-title">
         <header class="workspace-header">
-          <div><small>Workspace</small><h1 id="workspace-view-title">{selectedWorkspace?.name ?? 'Select a project'}</h1></div>
-          <nav aria-label="Workspace sections">
-            {#each ['agents', 'teams', 'pipelines', 'runs'] as section}
-              <button type="button" class:active={workspaceSection === section} aria-current={workspaceSection === section ? 'page' : undefined} onclick={() => requestSection(section as WorkspaceSection)}>{section[0]?.toUpperCase() + section.slice(1)}</button>
+          <div><small>{$t('Workspace')}</small><h1 id="workspace-view-title">{selectedWorkspace?.name ?? 'Select a project'}</h1></div>
+          <nav aria-label={$t('Workspace sections')}>
+            {#each ['systems', 'runs'] as section}
+              <button type="button" class:active={workspaceSection === section} aria-current={workspaceSection === section ? 'page' : undefined} onclick={() => requestSection(section as WorkspaceSection)}>{$t(section[0]?.toUpperCase() + section.slice(1))}</button>
             {/each}
+            <details><summary>{$t('Advanced')}</summary>{#each ['agents', 'teams', 'pipelines'] as section}<button type="button" onclick={() => requestSection(section as WorkspaceSection)}>{$t(section[0]?.toUpperCase() + section.slice(1))}</button>{/each}</details>
           </nav>
         </header>
         <div class="orchestration-host">
-          {#if !selectedWorkspaceId}<div class="state"><h2>Select a project</h2><p>Agents, teams, pipelines, and runs always show their project scope.</p></div>
-          {:else if orchestrationLoading}<div class="state" role="status"><h2>Loading workspace…</h2></div>
-          {:else if orchestrationError}<div class="state"><h2>Workspace unavailable</h2><p>{orchestrationError}</p><button type="button" onclick={showWorkspace}>Try again</button></div>
-          {:else if OrchestrationPanel}{#key orchestrationEpoch}<OrchestrationPanel workspaceId={selectedWorkspaceId} section={workspaceSection} safeMode={catalog.safeMode} onOpenSession={openSession} onDirtyChange={(dirty: boolean) => orchestrationDirty = dirty} />{/key}
-          {:else}<div class="state"><h2>Workspace unavailable</h2><p>This optional contribution is not available. Native session history remains accessible.</p></div>{/if}
+          {#if !selectedWorkspaceId}<div class="state"><h2>{$t('Select a project')}</h2><p>{$t('Agents, teams, pipelines, and runs always show their project scope.')}</p></div>
+          {:else if orchestrationLoading}<div class="state" role="status"><h2>{$t('Loading workspace…')}</h2></div>
+          {:else if orchestrationError}<div class="state"><h2>{$t('Workspace unavailable')}</h2><p>{orchestrationError}</p><button type="button" onclick={showWorkspace}>{$t('Try again')}</button></div>
+          {:else if OrchestrationPanel}{#key orchestrationEpoch}<OrchestrationPanel workspaceId={selectedWorkspaceId} section={workspaceSection} onSectionChange={(section: WorkspaceSection) => workspaceSection = section} safeMode={catalog.safeMode} onOpenSession={openSession} onDirtyChange={(dirty: boolean) => orchestrationDirty = dirty} />{/key}
+          {:else}<div class="state"><h2>{$t('Workspace unavailable')}</h2><p>{$t('This optional contribution is not available. Native session history remains accessible.')}</p></div>{/if}
         </div>
       </section>
     {:else if newSessionOpen}
       <section class="new-session" aria-labelledby="new-session-title">
         <div class="new-session-card">
-          <small>{selectedWorkspace?.name ?? 'Your workspace'}</small><h1 id="new-session-title">Create a new chat</h1>
-          <p>Choose where to work and which agent to use.</p>
-          <label>Project<select id="new-session-project" bind:value={newWorkspaceId} disabled={createBusy}><option value="">Choose project</option>{#each catalog.workspaces.filter((workspace) => !workspace.missing) as workspace}<option value={workspace.id}>{workspace.name}{workspace.personal ? ' · Personal' : ''}</option>{/each}</select></label>
-          <label>Harness<select id="new-session-harness" bind:value={newHarness} onchange={() => newModelId = ''} disabled={createBusy}><option value="">Choose harness</option>{#each catalog.harnesses as harness}<option value={harness.kind} disabled={harness.status !== 'available'}>{harness.name} · {harness.status === 'available' ? 'Available' : harness.status === 'unverified' ? 'Setup or verification required' : 'Unavailable'}</option>{/each}</select></label>
+          <small>{selectedWorkspace?.name ?? 'Your workspace'}</small><h1 id="new-session-title">{$t('Create a new chat')}</h1>
+          <p>{$t('Choose where to work and which agent to use.')}</p>
+          <label>{$t('Project')}<select id="new-session-project" bind:value={newWorkspaceId} disabled={createBusy}><option value="">{$t('Choose project')}</option>{#each catalog.workspaces.filter((workspace) => !workspace.missing) as workspace}<option value={workspace.id}>{workspace.personal ? $t('Chats') : workspace.name}{workspace.personal ? ' · Personal' : ''}</option>{/each}</select></label>
+          <label>{$t('Harness')}<select id="new-session-harness" bind:value={newHarness} onchange={() => newModelId = ''} disabled={createBusy}><option value="">{$t('Choose harness')}</option>{#each catalog.harnesses as harness}<option value={harness.kind} disabled={harness.status !== 'available'}>{harness.name} · {harness.status === 'available' ? 'Available' : harness.status === 'unverified' ? 'Setup or verification required' : 'Unavailable'}</option>{/each}</select></label>
           {#if newHarness && catalog.harnesses.find((item) => item.kind === newHarness)?.reason}<p class="field-note">{catalog.harnesses.find((item) => item.kind === newHarness)?.reason}</p>{/if}
-          <details class="setup-details"><summary>Availability and setup</summary>
-          <ul class="harness-readiness" aria-label="Native harness readiness">
+          <details class="setup-details"><summary>{$t('Availability and setup')}</summary>
+          <ul class="harness-readiness" aria-label={$t('Native harness readiness')}>
             {#each catalog.harnesses as harness}<li><strong>{harness.name}</strong><span>{harness.status === 'available' ? 'Available' : harness.status === 'unverified' ? 'Setup or verification required' : 'Unavailable'}{harness.reason ? ` — ${harness.reason}` : ''}</span></li>{/each}
           </ul></details>
-          <details class="session-options"><summary>Model and permissions</summary>
-          <label>Model<select bind:value={newModelId} disabled={createBusy}><option value="">Native default</option>{#each knownModels as model}<option value={model.id}>{model.name}{model.provider ? ` · ${model.provider}` : ''}</option>{/each}</select></label>
-          {#if knownModels.length === 0}<p class="field-note">The agent will use its configured model.</p>{/if}
-          <label>Permission mode<select bind:value={permissionMode} disabled={createBusy}>
-            <option value="native">Native permissions</option><option value="read-only">Read-only</option><option value="workspace-write">Workspace write</option><option value="full-access">Full access</option>
+          <details class="session-options"><summary>{$t('Model and permissions')}</summary>
+          <label>{$t('Model')}<select bind:value={newModelId} disabled={createBusy}><option value="">{$t('Native default')}</option>{#each knownModels as model}<option value={model.id}>{model.name}{model.provider ? ` · ${model.provider}` : ''}</option>{/each}</select></label>
+          {#if knownModels.length === 0}<p class="field-note">{$t('The agent will use its configured model.')}</p>{/if}
+          <label>{$t('Permission mode')}<select bind:value={permissionMode} disabled={createBusy}>
+            <option value="native">{$t('Native permissions')}</option><option value="read-only">{$t('Read-only')}</option><option value="workspace-write">{$t('Workspace write')}</option><option value="full-access">{$t('Full access')}</option>
           </select></label>
           <p class:warning={permissionMode === 'full-access'} class="permission-copy">{permissionMode === 'native' ? "Uses the agent’s configured permissions. Project trust is separate; this is not a sandbox." : permissionMode === 'read-only' ? 'Requests a strict read-only native policy. The host rejects it when the harness cannot enforce it.' : permissionMode === 'workspace-write' ? 'Requests writes limited to the workspace. This is not a sandbox guarantee; the host must enforce it.' : 'Requests the harness native full-access policy. This does not grant project trust or access to other harnesses.'}</p>
           </details>
           {#if createError}<p class="error" role="alert">{createError}</p>{/if}
-          <div class="form-actions"><button type="button" onclick={() => newSessionOpen = false} disabled={createBusy}>Cancel</button><button class="accent" type="button" onclick={createSession} disabled={createBusy || catalog.safeMode || !newWorkspaceId || !newHarness || catalog.harnesses.find((item) => item.kind === newHarness)?.status !== 'available'}>{createBusy ? `Starting ${newHarness ? harnessLabel(newHarness) : 'session'}…` : 'Create session'}</button></div>
+          <div class="form-actions"><button type="button" onclick={() => newSessionOpen = false} disabled={createBusy}>{$t('Cancel')}</button><button class="accent" type="button" onclick={createSession} disabled={createBusy || catalog.safeMode || !newWorkspaceId || !newHarness || catalog.harnesses.find((item) => item.kind === newHarness)?.status !== 'available'}>{createBusy ? `Starting ${newHarness ? harnessLabel(newHarness) : 'session'}…` : 'Create session'}</button></div>
         </div>
       </section>
     {:else if selectedSnapshot}
       <section class="session-view" aria-labelledby="session-title">
         <header class="session-context">
           <div><span class="session-project">{catalog.workspaces.find((item) => item.id === selectedSnapshot.session.workspaceId)?.name ?? 'Project'}</span><span aria-label={harnessLabel(selectedSnapshot.session.harness)}>{harnessLabel(selectedSnapshot.session.harness)}</span><strong id="session-title">{selectedSnapshot.session.title}</strong><span class={`status status--${selectedSnapshot.session.status}`}>{statusLabel(selectedSnapshot.session.status)}</span></div>
-          <button type="button" onclick={(event) => openInspector('details', event)}>Session details</button>
+          <button type="button" onclick={(event) => openInspector('details', event)}>{$t('Session details')}</button>
         </header>
-        {#if sessionError}<div class="inline-error" role="alert"><span>{sessionError}</span><button type="button" onclick={() => reconcileSession(selectedSnapshot.session.id)}>Check status</button></div>{/if}
+        {#if sessionError}<div class="inline-error" role="alert"><span>{sessionError}</span><button type="button" onclick={() => reconcileSession(selectedSnapshot.session.id)}>{$t('Check status')}</button></div>{/if}
         <ConversationViewport blocks={selectedSnapshot.blocks} loading={sessionLoading} sessionKey={selectedSnapshot.session.id} agentLabel={harnessLabel(selectedSnapshot.session.harness)} />
         <div class="composer-shell">
-          {#if catalog.safeMode}<p class="composer-notice">Runtime actions are disabled in safe mode. Your draft is preserved.</p>
-          {:else if selectedSnapshot.session.status === 'closed'}<p class="composer-notice">This native session is closed. Its transcript remains readable.</p>
+          {#if catalog.safeMode}<p class="composer-notice">{$t('Runtime actions are disabled in safe mode. Your draft is preserved.')}</p>
+          {:else if selectedSnapshot.session.status === 'closed'}<p class="composer-notice">{$t('This native session is closed. Its transcript remains readable.')}</p>
           {:else if !selectedSnapshot.capabilities.prompt.supported}<p class="composer-notice">{selectedSnapshot.capabilities.prompt.reason ?? `${harnessLabel(selectedSnapshot.session.harness)} is read-only in this mode.`}</p>
           {:else}
             <div class="composer">
@@ -830,26 +832,26 @@
               <div class="composer-actions">
                 <div class="runtime-options">
                   <span>{harnessLabel(selectedSnapshot.session.harness)} · {selectedSnapshot.session.model?.name ?? 'Native model'}</span>
-                  {#if selectedSnapshot.session.status === 'running'}<label>Send mode<select bind:value={sendMode}><option value="follow-up">Follow up</option><option value="steer">Steer</option><option value="prompt">Prompt</option></select></label>{/if}
+                  {#if selectedSnapshot.session.status === 'running'}<label>{$t('Send mode')}<select bind:value={sendMode}><option value="follow-up">{$t('Follow up')}</option><option value="steer">{$t('Steer')}</option><option value="prompt">{$t('Prompt')}</option></select></label>{/if}
                 </div>
                 {#if selectedSnapshot.session.status === 'running' || selectedSnapshot.session.status === 'stopping'}<button class="stop" type="button" onclick={interruptSession} disabled={interruptBusy || selectedSnapshot.session.status === 'stopping'}>{interruptBusy || selectedSnapshot.session.status === 'stopping' ? 'Stopping…' : 'Stop turn'}</button>{/if}
-                <button class="accent" type="button" onclick={send} disabled={sendBusy || (drafts[selectedSnapshot.session.id] ?? '').trim() === ''}>{sendBusy ? 'Sending…' : selectedSnapshot.session.status === 'running' && sendMode === 'steer' ? 'Steer' : selectedSnapshot.session.status === 'running' && sendMode === 'follow-up' ? 'Follow up' : 'Send'}</button>
+                <button class="accent" type="button" onclick={send} disabled={sendBusy || (drafts[selectedSnapshot.session.id] ?? '').trim() === ''}>{$t(sendBusy ? 'Sending…' : selectedSnapshot.session.status === 'running' && sendMode === 'steer' ? 'Steer' : selectedSnapshot.session.status === 'running' && sendMode === 'follow-up' ? 'Follow up' : 'Send')}</button>
               </div>
             </div>
           {/if}
-          {#if !catalog.safeMode && selectedSnapshot.session.status !== 'closed' && selectedSnapshot.capabilities.prompt.supported}<p class="composer-hint">Enter to send <span>·</span> Shift+Enter for a new line</p>{/if}
+          {#if !catalog.safeMode && selectedSnapshot.session.status !== 'closed' && selectedSnapshot.capabilities.prompt.supported}<p class="composer-hint">{$t('Enter to send ')}<span>·</span> Shift+Enter for a new line</p>{/if}
           {#if sendError}<p class="error composer-error" role="alert">{sendError}</p>{/if}
         </div>
       </section>
     {:else if sessionLoading}
-      <div class="state" role="status"><h1>Opening chat…</h1><p>Your conversation is loading.</p></div>
+      <div class="state" role="status"><h1>{$t('Opening chat…')}</h1><p>{$t('Your conversation is loading.')}</p></div>
     {:else}
       <div class="state empty">
         <span class="welcome-mark" aria-hidden="true">π</span>
         <p class="welcome-project">{selectedWorkspace?.name ?? 'PiUI'}</p>
         <h1>{catalogLoading ? 'Opening your workspace…' : 'What are we working on?'}</h1>
         <p>{catalog.safeMode ? 'Browse your conversations in read-only safe mode.' : 'Start a chat, or pick up a conversation from the sidebar.'}</p>
-        <div><button class="accent" type="button" onclick={startNewSession} disabled={catalog.safeMode || catalogLoading}>New chat <kbd>{modifier}N</kbd></button></div>
+        <div><button class="accent" type="button" onclick={startNewSession} disabled={catalog.safeMode || catalogLoading}>{$t('New chat ')}<kbd>{modifier}N</kbd></button></div>
         {#if sessionError}<p class="error" role="alert">{sessionError}</p>{/if}
       </div>
     {/if}
@@ -857,10 +859,10 @@
 
   {#if inspector}
     <aside class="inspector" tabindex="-1" aria-label={inspector === 'approvals' ? 'Approvals' : inspector === 'activity' ? 'Activity' : 'Session details'}>
-      <header><div><small>Inspector</small><h2>{inspector === 'approvals' ? 'Approvals' : inspector === 'activity' ? 'Activity' : 'Session details'}</h2></div><button class="icon" type="button" onclick={closeInspector} aria-label="Close inspector">×</button></header>
+      <header><div><small>{$t('Inspector')}</small><h2>{inspector === 'approvals' ? 'Approvals' : inspector === 'activity' ? 'Activity' : 'Session details'}</h2></div><button class="icon" type="button" onclick={closeInspector} aria-label={$t('Close inspector')}>×</button></header>
       {#if inspector === 'approvals'}
         <div class="inspector-body approval-list">
-          {#if allApprovals.length === 0}<div class="state compact"><h3>You’re all caught up</h3><p>Requests from all projects appear here when they need your attention.</p></div>{/if}
+          {#if allApprovals.length === 0}<div class="state compact"><h3>{$t('You’re all caught up')}</h3><p>{$t('Requests from all projects appear here when they need your attention.')}</p></div>{/if}
           {#each allApprovals as item (approvalKey(item.snapshot.session.id, item.approval.id))}
             {@const key = approvalKey(item.snapshot.session.id, item.approval.id)}
             {@const workspace = catalog.workspaces.find((value) => value.id === item.snapshot.session.workspaceId)}
@@ -877,19 +879,19 @@
         </div>
       {:else if inspector === 'activity'}
         <div class="inspector-body">
-          {#if activeSessions.length === 0}<div class="state compact"><h3>Nothing running</h3><p>Active and failed chats from all projects appear here.</p></div>
-          {:else}<ul class="activity-list">{#each activeSessions as session}<li><span class={`status-dot status--${session.status}`}></span><div><strong>{session.title}</strong><small>{harnessLabel(session.harness)} · {statusLabel(session.status)}</small></div><button type="button" onclick={() => openSession(session.id)}>Open</button></li>{/each}</ul>{/if}
+          {#if activeSessions.length === 0}<div class="state compact"><h3>{$t('Nothing running')}</h3><p>{$t('Active and failed chats from all projects appear here.')}</p></div>
+          {:else}<ul class="activity-list">{#each activeSessions as session}<li><span class={`status-dot status--${session.status}`}></span><div><strong>{session.title}</strong><small>{harnessLabel(session.harness)} · {statusLabel(session.status)}</small></div><button type="button" onclick={() => openSession(session.id)}>{$t('Open')}</button></li>{/each}</ul>{/if}
         </div>
       {:else if selectedSnapshot}
         <div class="inspector-body details">
-          <dl><div><dt>Harness</dt><dd>{harnessLabel(selectedSnapshot.session.harness)}</dd></div><div><dt>Status</dt><dd>{statusLabel(selectedSnapshot.session.status)}</dd></div><div><dt>History revision</dt><dd>{selectedSnapshot.revision}</dd></div><div><dt>Model</dt><dd>{selectedSnapshot.session.model?.name ?? 'Native default'}</dd></div></dl>
-          <label>Session title<input bind:value={renameDraft} disabled={sessionActionBusy} /></label><button type="button" onclick={renameSession} disabled={sessionActionBusy || renameDraft.trim() === '' || renameDraft.trim() === selectedSnapshot.session.title}>Rename session</button>
-          {#if selectedSnapshot.capabilities.models.supported}<label>Model<select value={selectedSnapshot.session.model?.id ?? ''} onchange={setModel} disabled={sessionActionBusy}><option value="">Native default</option>{#each selectedSnapshot.models as model}<option value={model.id}>{model.name}{model.provider ? ` · ${model.provider}` : ''}</option>{/each}</select></label>{:else}<p class="muted">{selectedSnapshot.capabilities.models.reason ?? 'Model changes are not supported by this harness.'}</p>{/if}
-          <section class="capabilities"><h3>Native capabilities</h3><ul>{#each Object.entries(selectedSnapshot.capabilities) as [name, capability]}<li><span>{name}</span><span>{capability.supported ? capability.enforcement : 'Unavailable'}</span></li>{/each}</ul></section>
-          {#if selectedSnapshot.session.status !== 'closed'}<button class="danger-zone" type="button" onclick={closeSession} disabled={sessionActionBusy}>Close native session</button>{/if}
+          <dl><div><dt>{$t('Harness')}</dt><dd>{harnessLabel(selectedSnapshot.session.harness)}</dd></div><div><dt>{$t('Status')}</dt><dd>{statusLabel(selectedSnapshot.session.status)}</dd></div><div><dt>{$t('History revision')}</dt><dd>{selectedSnapshot.revision}</dd></div><div><dt>{$t('Model')}</dt><dd>{selectedSnapshot.session.model?.name ?? 'Native default'}</dd></div></dl>
+          <label>{$t('Session title')}<input bind:value={renameDraft} disabled={sessionActionBusy} /></label><button type="button" onclick={renameSession} disabled={sessionActionBusy || renameDraft.trim() === '' || renameDraft.trim() === selectedSnapshot.session.title}>{$t('Rename session')}</button>
+          {#if selectedSnapshot.capabilities.models.supported}<label>{$t('Model')}<select value={selectedSnapshot.session.model?.id ?? ''} onchange={setModel} disabled={sessionActionBusy}><option value="">{$t('Native default')}</option>{#each selectedSnapshot.models as model}<option value={model.id}>{model.name}{model.provider ? ` · ${model.provider}` : ''}</option>{/each}</select></label>{:else}<p class="muted">{selectedSnapshot.capabilities.models.reason ?? 'Model changes are not supported by this harness.'}</p>{/if}
+          <section class="capabilities"><h3>{$t('Native capabilities')}</h3><ul>{#each Object.entries(selectedSnapshot.capabilities) as [name, capability]}<li><span>{name}</span><span>{capability.supported ? capability.enforcement : 'Unavailable'}</span></li>{/each}</ul></section>
+          {#if selectedSnapshot.session.status !== 'closed'}<button class="danger-zone" type="button" onclick={closeSession} disabled={sessionActionBusy}>{$t('Close native session')}</button>{/if}
           {#if sessionError}<p class="error" role="alert">{sessionError}</p>{/if}
         </div>
-      {:else}<div class="state compact"><h3>No session selected</h3><p>Select a session to inspect its native capabilities.</p></div>{/if}
+      {:else}<div class="state compact"><h3>{$t('No session selected')}</h3><p>{$t('Select a session to inspect its native capabilities.')}</p></div>{/if}
     </aside>
   {/if}
 </div>
@@ -897,11 +899,11 @@
 {#if trustTarget}
   <div class="modal-backdrop" role="presentation">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="trust-title" tabindex="-1" use:modalFocus={() => { if (!trustBusy) trustTarget = undefined; }}>
-      <small>Project resources</small><h2 id="trust-title">Trust {trustTarget.name}?</h2>
-      <p>This lets supported native harnesses use project resources within the permissions selected for each session.</p>
-      <p><strong>Trust is not a sandbox.</strong> Native processes can have operating-system access beyond this folder unless their selected policy is enforced by the harness.</p>
+      <small>{$t('Project resources')}</small><h2 id="trust-title">Trust {trustTarget.name}?</h2>
+      <p>{$t('This lets supported native harnesses use project resources within the permissions selected for each session.')}</p>
+      <p><strong>{$t('Trust is not a sandbox.')}</strong> Native processes can have operating-system access beyond this folder unless their selected policy is enforced by the harness.</p>
       {#if trustError}<p class="error" role="alert">{trustError}</p>{/if}
-      <div class="form-actions"><button type="button" onclick={() => trustTarget = undefined} disabled={trustBusy}>Cancel</button><button class="accent" type="button" onclick={trustProject} disabled={trustBusy}>{trustBusy ? 'Saving trust…' : `Trust ${trustTarget.name}`}</button></div>
+      <div class="form-actions"><button type="button" onclick={() => trustTarget = undefined} disabled={trustBusy}>{$t('Cancel')}</button><button class="accent" type="button" onclick={trustProject} disabled={trustBusy}>{trustBusy ? 'Saving trust…' : `Trust ${trustTarget.name}`}</button></div>
     </div>
   </div>
 {/if}
@@ -909,8 +911,8 @@
 {#if requestedWorkspaceSection || requestedMainView || pendingNavigation}
   <div class="modal-backdrop" role="presentation">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="discard-title" tabindex="-1" use:modalFocus={keepEditingWorkspace}>
-      <small>Unsaved workspace changes</small><h2 id="discard-title">Leave this editor?</h2><p>Keep editing, or discard the unsaved definition before changing views.</p>
-      <div class="form-actions"><button type="button" onclick={keepEditingWorkspace}>Keep editing</button><button class="danger" type="button" onclick={confirmDiscardWorkspace}>Discard changes</button></div>
+      <small>{$t('Unsaved workspace changes')}</small><h2 id="discard-title">{$t('Leave this editor?')}</h2><p>{$t('Keep editing, or discard the unsaved definition before changing views.')}</p>
+      <div class="form-actions"><button type="button" onclick={keepEditingWorkspace}>{$t('Keep editing')}</button><button class="danger" type="button" onclick={confirmDiscardWorkspace}>{$t('Discard changes')}</button></div>
     </div>
   </div>
 {/if}

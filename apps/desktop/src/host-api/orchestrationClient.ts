@@ -1,20 +1,20 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
-  ORCHESTRATION_EVENT_V2,
-  type OrchestrationHostCommandsV2,
+  ORCHESTRATION_EVENT_V3,
+  type OrchestrationHostCommandsV3,
   type OrchestrationHostErrorCode,
-  type OrchestrationRunChangedEventV2,
-} from '../../../../contracts/orchestration-host-v2';
+  type OrchestrationRunChangedEventV3,
+} from '../../../../contracts/orchestration-host-v3';
 
-export type * from '../../../../contracts/orchestration-host-v2';
-export type * from '../../../../contracts/orchestration-v2';
-export { ORCHESTRATION_EVENT_V2 };
-export interface OrchestrationClient extends OrchestrationHostCommandsV2 {
-  listen(handler: (event: OrchestrationRunChangedEventV2) => void): Promise<() => void>;
+export type * from '../../../../contracts/orchestration-host-v3';
+export type * from '../../../../contracts/orchestration-v3';
+export { ORCHESTRATION_EVENT_V3 };
+export interface OrchestrationClient extends OrchestrationHostCommandsV3 {
+  listen(handler: (event: OrchestrationRunChangedEventV3) => void): Promise<() => void>;
 }
-export type OrchestrationCommandName = keyof OrchestrationHostCommandsV2;
-export type OrchestrationRequest = Parameters<OrchestrationHostCommandsV2[OrchestrationCommandName]>[0];
+export type OrchestrationCommandName = keyof OrchestrationHostCommandsV3;
+export type OrchestrationRequest = Parameters<OrchestrationHostCommandsV3[OrchestrationCommandName]>[0];
 export type OrchestrationInvoke = <T>(route: OrchestrationCommandName, args: { request: OrchestrationRequest }) => Promise<T>;
 export type OrchestrationSubscribe = (handler: (payload: unknown) => void) => Promise<() => void>;
 export type OrchestrationErrorCode = OrchestrationHostErrorCode | 'desktop-unavailable' | 'unknown';
@@ -52,13 +52,13 @@ export function orchestrationError(cause: unknown): OrchestrationOperationError 
 }
 
 /** Only versioned, scalar invalidations cross this boundary; native payload details do not. */
-export function orchestrationRunChanged(payload: unknown): OrchestrationRunChangedEventV2 | undefined {
+export function orchestrationRunChanged(payload: unknown): OrchestrationRunChangedEventV3 | undefined {
   if (typeof payload !== 'object' || payload === null) return undefined;
-  if (!('protocol' in payload) || payload.protocol !== 2 || !('type' in payload) || payload.type !== 'runChanged') return undefined;
+  if (!('protocol' in payload) || payload.protocol !== 3 || !('type' in payload) || payload.type !== 'runChanged') return undefined;
   if (!('workspaceId' in payload) || typeof payload.workspaceId !== 'string' || !payload.workspaceId.trim()) return undefined;
   if (!('runId' in payload) || typeof payload.runId !== 'string' || !payload.runId.trim()) return undefined;
   if (!('revision' in payload) || typeof payload.revision !== 'number' || !Number.isSafeInteger(payload.revision) || payload.revision < 0) return undefined;
-  return { protocol: 2, type: 'runChanged', workspaceId: payload.workspaceId, runId: payload.runId, revision: payload.revision };
+  return { protocol: 3, type: 'runChanged', workspaceId: payload.workspaceId, runId: payload.runId, revision: payload.revision };
 }
 
 async function unavailableSubscription(): Promise<() => void> {
@@ -82,25 +82,26 @@ export function createOrchestrationClient(
         });
       } catch (error) { throw orchestrationError(error); }
     },
-    orchestration_catalog_v2: (request) => call('orchestration_catalog_v2', request),
-    orchestration_get_profile_v2: (request) => call('orchestration_get_profile_v2', request),
-    orchestration_save_profile_v2: (request) => call('orchestration_save_profile_v2', request),
-    orchestration_delete_profile_v2: (request) => call('orchestration_delete_profile_v2', request),
-    orchestration_get_team_v2: (request) => call('orchestration_get_team_v2', request),
-    orchestration_save_team_v2: (request) => call('orchestration_save_team_v2', request),
-    orchestration_delete_team_v2: (request) => call('orchestration_delete_team_v2', request),
-    orchestration_get_pipeline_v2: (request) => call('orchestration_get_pipeline_v2', request),
-    orchestration_save_pipeline_v2: (request) => call('orchestration_save_pipeline_v2', request),
-    orchestration_delete_pipeline_v2: (request) => call('orchestration_delete_pipeline_v2', request),
-    orchestration_get_launch_command_v2: (request) => call('orchestration_get_launch_command_v2', request),
-    orchestration_save_launch_command_v2: (request) => call('orchestration_save_launch_command_v2', request),
-    orchestration_delete_launch_command_v2: (request) => call('orchestration_delete_launch_command_v2', request),
-    orchestration_list_runs_v2: (request) => call('orchestration_list_runs_v2', request),
-    orchestration_get_run_v2: (request) => call('orchestration_get_run_v2', request),
-    orchestration_start_run_v2: (request) => call('orchestration_start_run_v2', request),
-    orchestration_cancel_run_v2: (request) => call('orchestration_cancel_run_v2', request),
-    orchestration_reconcile_uncertain_task_v2: (request) => call('orchestration_reconcile_uncertain_task_v2', request),
-    orchestration_retry_uncertain_task_v2: (request) => call('orchestration_retry_uncertain_task_v2', request),
+    orchestration_save_graph_v3: (request) => call('orchestration_save_graph_v3', request),
+    orchestration_catalog_v3: (request) => call('orchestration_catalog_v3', request),
+    orchestration_get_profile_v3: (request) => call('orchestration_get_profile_v3', request),
+    orchestration_save_profile_v3: (request) => call('orchestration_save_profile_v3', request),
+    orchestration_delete_profile_v3: (request) => call('orchestration_delete_profile_v3', request),
+    orchestration_get_team_v3: (request) => call('orchestration_get_team_v3', request),
+    orchestration_save_team_v3: (request) => call('orchestration_save_team_v3', request),
+    orchestration_delete_team_v3: (request) => call('orchestration_delete_team_v3', request),
+    orchestration_get_pipeline_v3: (request) => call('orchestration_get_pipeline_v3', request),
+    orchestration_save_pipeline_v3: (request) => call('orchestration_save_pipeline_v3', request),
+    orchestration_delete_pipeline_v3: (request) => call('orchestration_delete_pipeline_v3', request),
+    orchestration_get_launch_command_v3: (request) => call('orchestration_get_launch_command_v3', request),
+    orchestration_save_launch_command_v3: (request) => call('orchestration_save_launch_command_v3', request),
+    orchestration_delete_launch_command_v3: (request) => call('orchestration_delete_launch_command_v3', request),
+    orchestration_list_runs_v3: (request) => call('orchestration_list_runs_v3', request),
+    orchestration_get_run_v3: (request) => call('orchestration_get_run_v3', request),
+    orchestration_start_run_v3: (request) => call('orchestration_start_run_v3', request),
+    orchestration_cancel_run_v3: (request) => call('orchestration_cancel_run_v3', request),
+    orchestration_reconcile_uncertain_task_v3: (request) => call('orchestration_reconcile_uncertain_task_v3', request),
+    orchestration_retry_uncertain_task_v3: (request) => call('orchestration_retry_uncertain_task_v3', request),
   };
 }
 
@@ -114,6 +115,6 @@ export const orchestrationDesktopAvailable = typeof window !== 'undefined' && '_
 export const orchestrationHost: OrchestrationClient = orchestrationDesktopAvailable
   ? createOrchestrationClient(
       (route, args) => invoke(route, args),
-      (handler) => listen<unknown>(ORCHESTRATION_EVENT_V2, ({ payload }) => handler(payload)),
+      (handler) => listen<unknown>(ORCHESTRATION_EVENT_V3, ({ payload }) => handler(payload)),
     )
   : createUnavailableOrchestrationClient();

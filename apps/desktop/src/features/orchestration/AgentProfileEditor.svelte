@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { harnessConfigurations } from '../../harness-adapters';
+  import { t } from '../locale/language';
   import { tick } from 'svelte';
-  import type { AgentProfile, Harness, PermissionMode, ToolRule } from '../../../../../contracts/orchestration-v2';
+  import type { AgentProfile, Harness, PermissionMode, ToolRule } from '../../../../../contracts/orchestration-v3';
   import {
     createProfileDraft,
     enforcementLabel,
@@ -30,6 +32,7 @@
   let lastError: string | undefined;
   let lastReportedDirty: boolean | undefined;
 
+  $: configuration = harnessConfigurations[draft.harness];
   $: disabled = busy || readOnly;
   $: dirty = fingerprint(draft) !== baseline;
   $: spawnOptions = spawnProfileOptions(profiles, draft.id);
@@ -126,77 +129,92 @@
 
 <form class="editor" onsubmit={(event) => { event.preventDefault(); save(); }} aria-labelledby="profile-editor-title">
   <header>
-    <p class="eyebrow">Agent profile</p>
-    <h1 id="profile-editor-title">{profile === undefined ? 'Create profile' : 'Edit profile'}</h1>
-    {#if readOnly}<p class="notice" role="status">Read-only mode. Profile data is shown, but changes cannot be saved.</p>{/if}
+    <p class="eyebrow">{$t('Agent profile')}</p>
+    <h1 id="profile-editor-title">{$t(profile === undefined ? 'Create profile' : 'Edit profile')}</h1>
+    {#if readOnly}<p class="notice" role="status">{$t('Read-only mode. Profile data is shown, but changes cannot be saved.')}</p>{/if}
   </header>
 
   {#if error || validationErrors.length > 0}
     <div class="error-summary" role="alert" tabindex="-1" bind:this={errorSummary}>
-      <strong>Profile was not saved.</strong>
+      <strong>{$t('Profile was not saved.')}</strong>
       {#if error}<p>{error}</p>{/if}
       {#if validationErrors.length > 0}<ul>{#each validationErrors as validationError}<li>{validationError}</li>{/each}</ul>{/if}
     </div>
   {/if}
 
-  <section aria-label="Agent identity">
-    <label for="profile-name">Name</label>
+  <section aria-label={$t('Agent identity')}>
+    <label for="profile-name">{$t('Name')}</label>
     <input id="profile-name" value={draft.name} oninput={(event) => updateDraft({ name: event.currentTarget.value })} disabled={disabled} autocomplete="off" />
   </section>
 
-  <section aria-label="Runtime">
+  <section aria-label={$t('Runtime')}>
     {#if profile === undefined}
-      <label for="profile-harness">Harness</label>
+      <label for="profile-harness">{$t('Harness')}</label>
       <select id="profile-harness" value={draft.harness} onchange={(event) => updateDraft({ harness: event.currentTarget.value as Harness })} disabled={disabled}>
-        <option value="pi">Pi</option>
-        <option value="prime-agent">Prime Agent</option>
-        <option value="codex">Codex</option>
+        <option value="pi">{$t('Pi')}</option>
+        <option value="prime-agent">{$t('Prime Agent')}</option>
+        <option value="codex">{$t('Codex')}</option>
       </select>
     {:else}
-      <p class="static-field"><strong>Harness</strong><span>{harnessLabel(draft.harness)}</span></p>
+      <p class="static-field"><strong>{$t('Harness')}</strong><span>{harnessLabel(draft.harness)}</span></p>
     {/if}
 
     <div class="field-grid">
-      <div><label for="profile-model-provider">Model provider <span>(optional)</span></label><input id="profile-model-provider" value={draft.modelProvider} oninput={(event) => updateDraft({ modelProvider: event.currentTarget.value })} disabled={disabled} autocomplete="off" /></div>
-      <div><label for="profile-model">Model</label><input id="profile-model" value={draft.model} oninput={(event) => updateDraft({ model: event.currentTarget.value })} disabled={disabled} autocomplete="off" /></div>
+      <div><label for="profile-model-provider">{$t('Model provider ')}<span>(optional)</span></label><input id="profile-model-provider" value={draft.modelProvider} oninput={(event) => updateDraft({ modelProvider: event.currentTarget.value })} disabled={disabled} autocomplete="off" /></div>
+      <div><label for="profile-model">{$t('Model')}</label><input id="profile-model" value={draft.model} oninput={(event) => updateDraft({ model: event.currentTarget.value })} disabled={disabled} autocomplete="off" /></div>
     </div>
 
 
   </section>
 
+  <section aria-label={$t('Inference settings')}>
+    <div class="field-grid">
+      <label>Reasoning
+        <select aria-label={$t('Reasoning')} value={draft.reasoning} onchange={(event) => updateDraft({ reasoning: event.currentTarget.value })} disabled={disabled}>
+          <option value="">{$t('Model default')}</option>
+          {#each configuration.reasoningExamples as level}<option value={level}>{level}</option>{/each}
+        </select>
+      </label>
+      {#if configuration.speed}<label>Speed
+        <select aria-label={$t('Speed')} value={draft.serviceTier} onchange={(event) => updateDraft({ serviceTier: event.currentTarget.value as 'standard' | 'fast' })} disabled={disabled}><option value="standard">{$t('Standard')}</option><option value="fast">{$t('Fast')}</option></select>
+      </label>{/if}
+    </div>
+    <p class="field-note">The selected model must support this reasoning level.{draft.harness === 'codex' ? ' Fast uses the native service tier and may cost more.' : ''}</p>
+  </section>
+
   <section aria-labelledby="instructions-heading">
-    <h2 id="instructions-heading">Instructions</h2>
-    {#if draft.harness === 'codex'}
+    <h2 id="instructions-heading">{$t('Instructions')}</h2>
+    {#if configuration.basePrompt}
       <label class="mandatory"><input type="checkbox" checked={draft.replaceBasePrompt} onchange={(event) => updateDraft({ replaceBasePrompt: event.currentTarget.checked })} disabled={disabled} /> Replace Codex base prompt</label>
       {#if draft.replaceBasePrompt}
-        <label for="profile-base-instructions">Your base prompt</label>
+        <label for="profile-base-instructions">{$t('Your base prompt')}</label>
         <textarea id="profile-base-instructions" value={draft.baseInstructions} oninput={(event) => updateDraft({ baseInstructions: event.currentTarget.value })} disabled={disabled} spellcheck="true"></textarea>
-        <p class="field-note">Replaces the built-in coding prompt. Leave empty for no base text. Tool descriptions, project instructions and native permission context still apply.</p>
+        <p class="field-note">{$t('Replaces the built-in coding prompt. Leave empty for no base text. Tool descriptions, project instructions and native permission context still apply.')}</p>
       {/if}
     {/if}
-    <label for="profile-instructions">Additional instructions</label>
+    <label for="profile-instructions">{$t('Additional instructions')}</label>
     <textarea id="profile-instructions" value={draft.instructions} oninput={(event) => updateDraft({ instructions: event.currentTarget.value })} disabled={disabled} spellcheck="true"></textarea>
   </section>
 
   <details class="advanced" open={primeStrictPermission || draft.toolRules.length > 0}>
-    <summary>Permissions and tools <span>{draft.permissionMode === 'native' ? 'Native defaults' : draft.permissionMode}</span></summary>
+    <summary>{$t('Permissions and tools ')}<span>{draft.permissionMode === 'native' ? 'Native defaults' : draft.permissionMode}</span></summary>
     <section aria-labelledby="policy-heading">
-      <label for="profile-permission">File access</label>
+      <label for="profile-permission">{$t('File access')}</label>
       <select id="profile-permission" value={draft.permissionMode} onchange={(event) => updateDraft({ permissionMode: event.currentTarget.value as PermissionMode })} disabled={disabled}>
-        <option value="native">Native permissions</option><option value="read-only">Read-only</option><option value="workspace-write">Workspace write</option><option value="full-access">Full access</option>
+        <option value="native">{$t('Native permissions')}</option><option value="read-only">{$t('Read-only')}</option><option value="workspace-write">{$t('Workspace write')}</option><option value="full-access">{$t('Full access')}</option>
       </select>
       <p class="field-note">{permissionDescription(draft.permissionMode)}</p>
-      {#if primeStrictPermission}<p class="rule-warning">Prime Agent rejects this strict permission mode. Choose a supported mode to launch.</p>{/if}
+      {#if primeStrictPermission}<p class="rule-warning">{$t('Prime Agent rejects this strict permission mode. Choose a supported mode to launch.')}</p>{/if}
 
-    <h2 id="policy-heading">Tool rules</h2>
-    <p class="section-note">Unsupported mandatory rules block launch. Advisory rules are instructions only.</p>
+    <h2 id="policy-heading">{$t('Tool rules')}</h2>
+    <p class="section-note">{$t('Unsupported mandatory rules block launch. Advisory rules are instructions only.')}</p>
     {#each draft.toolRules as rule, index (`${index}`)}
       <div class="tool-rule">
-        <div><label for={`tool-name-${index}`}>Tool</label><input id={`tool-name-${index}`} value={rule.tool} oninput={(event) => updateRule(index, { tool: event.currentTarget.value })} disabled={disabled} autocomplete="off" /></div>
-        <div><label for={`tool-decision-${index}`}>Decision</label><select id={`tool-decision-${index}`} value={rule.decision} onchange={(event) => updateRule(index, { decision: event.currentTarget.value as ToolRule['decision'] })} disabled={disabled}><option value="allow">Allow</option><option value="deny">Deny</option></select></div>
-        <div><label for={`tool-enforcement-${index}`}>Requested enforcement</label><select id={`tool-enforcement-${index}`} value={rule.enforcement} onchange={(event) => updateRule(index, { enforcement: event.currentTarget.value as ToolRule['enforcement'] })} disabled={disabled}><option value="native">Requested native enforcement</option><option value="coordinator">Requested coordinator enforcement</option><option value="advisory">Requested advisory policy</option><option value="unsupported">Requested unsupported policy</option></select></div>
+        <div><label for={`tool-name-${index}`}>{$t('Tool')}</label><input id={`tool-name-${index}`} value={rule.tool} oninput={(event) => updateRule(index, { tool: event.currentTarget.value })} disabled={disabled} autocomplete="off" /></div>
+        <div><label for={`tool-decision-${index}`}>{$t('Decision')}</label><select id={`tool-decision-${index}`} value={rule.decision} onchange={(event) => updateRule(index, { decision: event.currentTarget.value as ToolRule['decision'] })} disabled={disabled}><option value="allow">{$t('Allow')}</option><option value="deny">{$t('Deny')}</option></select></div>
+        <div><label for={`tool-enforcement-${index}`}>{$t('Requested enforcement')}</label><select id={`tool-enforcement-${index}`} value={rule.enforcement} onchange={(event) => updateRule(index, { enforcement: event.currentTarget.value as ToolRule['enforcement'] })} disabled={disabled}><option value="native">{$t('Requested native enforcement')}</option><option value="coordinator">{$t('Requested coordinator enforcement')}</option><option value="advisory">{$t('Requested advisory policy')}</option><option value="unsupported">{$t('Requested unsupported policy')}</option></select></div>
         <label class="mandatory"><input type="checkbox" checked={rule.mandatory} onchange={(event) => updateRule(index, { mandatory: event.currentTarget.checked })} disabled={disabled} /> Mandatory</label>
-        <button class="button button--quiet" type="button" onclick={() => removeRule(index)} disabled={disabled} aria-label={`Remove ${rule.tool === '' ? 'unnamed' : rule.tool} tool rule`}>Remove</button>
+        <button class="button button--quiet" type="button" onclick={() => removeRule(index)} disabled={disabled} aria-label={`Remove ${rule.tool === '' ? 'unnamed' : rule.tool} tool rule`}>{$t('Remove')}</button>
         {#if draft.harness === 'prime-agent' && rule.mandatory && rule.decision === 'deny' && isNativeRlmRule(rule)}<p class="rule-warning">● Unsupported mandatory rule. Prime Agent cannot disable native RLM while retaining normal IPython; the requirement is rejected.</p>
         {:else if rule.enforcement === 'unsupported' && rule.mandatory}<p class="rule-warning">● Unsupported mandatory rule. It cannot satisfy a required launch policy.</p>
         {:else if rule.enforcement === 'unsupported'}<p class="rule-warning">● Unsupported rule. This editor cannot claim it is enforced.</p>
@@ -205,16 +223,32 @@
         {:else}<p class="rule-status">● Requested {enforcementLabel(rule.enforcement).toLowerCase()} · {toolDecisionLabel(rule.decision)} · Native adapter scope only; actual enforcement is unverified</p>{/if}
       </div>
     {/each}
-    <button class="button button--quiet" type="button" onclick={addRule} disabled={disabled}>Add tool rule</button>
+    <button class="button button--quiet" type="button" onclick={addRule} disabled={disabled}>{$t('Add tool rule')}</button>
   </section>
 
   </details>
+  <details class="advanced" open={draft.resourceRules.length > 0}>
+    <summary>{$t('Skills &amp; MCP ')}<span>{draft.resourceRules.length || 'Native defaults'}</span></summary>
+    <section>
+      <p class="section-note">{$t('Override resources already configured in this harness. Codex skills use an absolute SKILL.md path; Prime skills use their name. Disabling a skill removes its harness registration, not OS file access.')}</p>
+      {#each draft.resourceRules as rule, index}
+        <div class="field-grid">
+          <label>{$t('Resource')}<select aria-label={`Resource type ${index + 1}`} value={rule.kind} disabled={disabled} onchange={(event) => updateDraft({ resourceRules: draft.resourceRules.map((item, i) => i === index ? { ...item, kind: event.currentTarget.value as 'skill' | 'mcp' } : item) })}><option value="skill">{$t('Skill')}</option><option value="mcp" disabled={!configuration.resourceKinds.includes('mcp')}>{$t('MCP')}</option></select></label>
+          <label>{$t('Name or path')}<input aria-label={`Resource identifier ${index + 1}`} value={rule.id} disabled={disabled} oninput={(event) => updateDraft({ resourceRules: draft.resourceRules.map((item, i) => i === index ? { ...item, id: event.currentTarget.value } : item) })} /></label>
+          <label class="mandatory"><input type="checkbox" checked={rule.enabled} disabled={disabled} onchange={(event) => updateDraft({ resourceRules: draft.resourceRules.map((item, i) => i === index ? { ...item, enabled: event.currentTarget.checked } : item) })} />{$t('Enabled')}</label>
+          <button type="button" class="button button--quiet" disabled={disabled} onclick={() => updateDraft({ resourceRules: draft.resourceRules.filter((_, i) => i !== index) })}>{$t('Remove')}</button>
+        </div>
+      {/each}
+      <button type="button" class="button button--quiet" disabled={disabled || !configuration.resourceKinds.length} onclick={() => updateDraft({ resourceRules: [...draft.resourceRules, { kind: 'skill', id: '', enabled: false }] })}>{$t('Add resource rule')}</button>
+      {#if !configuration.resourceKinds.includes('mcp')}<p class="field-note">{$t('Per-agent MCP overrides are not supported by this adapter. Mandatory overrides block launch.')}</p>{/if}
+    </section>
+  </details>
   <details class="advanced" open={draft.allowedSpawnProfileIds.length > 0}>
-    <summary>Subagents <span>{draft.allowedSpawnProfileIds.length ? `${draft.allowedSpawnProfileIds.length} allowed profiles` : 'Disabled'}</span></summary>
+    <summary>{$t('Subagents ')}<span>{draft.allowedSpawnProfileIds.length ? `${draft.allowedSpawnProfileIds.length} allowed profiles` : 'Disabled'}</span></summary>
     <section aria-labelledby="spawn-heading">
-    <h2 id="spawn-heading">Allowed profiles</h2>
-    <p class="section-note">Choose which agents this profile may create. This controls workspace delegation, not native processes or OS access.</p>
-    {#if spawnOptions.length === 0}<p class="empty">Save another profile to allow delegation.</p>{/if}
+    <h2 id="spawn-heading">{$t('Allowed profiles')}</h2>
+    <p class="section-note">{$t('Choose which agents this profile may create. This controls workspace delegation, not native processes or OS access.')}</p>
+    {#if spawnOptions.length === 0}<p class="empty">{$t('Save another profile to allow delegation.')}</p>{/if}
     <div class="spawn-options">
       {#each spawnOptions as candidate (candidate.id)}
         <label><input type="checkbox" checked={draft.allowedSpawnProfileIds.includes(candidate.id)} onchange={() => toggleSpawnProfile(candidate.id)} disabled={disabled} /> <span>{candidate.name || 'Unnamed profile'}{candidate.id === draft.id ? ' (current profile)' : ''} <small>{harnessLabel(candidate.harness)} · {candidate.model}</small></span></label>
@@ -226,15 +260,15 @@
 
   {#if confirmDiscard}
     <section class="discard-choice" aria-labelledby="discard-heading">
-      <h2 id="discard-heading">Discard unsaved changes?</h2>
-      <p>Your profile changes have not been saved.</p>
-      <div class="actions"><button class="button button--quiet" type="button" onclick={() => confirmDiscard = false} disabled={busy}>Keep editing</button><button class="button button--danger" type="button" onclick={onCancel} disabled={busy}>Discard changes</button></div>
+      <h2 id="discard-heading">{$t('Discard unsaved changes?')}</h2>
+      <p>{$t('Your profile changes have not been saved.')}</p>
+      <div class="actions"><button class="button button--quiet" type="button" onclick={() => confirmDiscard = false} disabled={busy}>{$t('Keep editing')}</button><button class="button button--danger" type="button" onclick={onCancel} disabled={busy}>{$t('Discard changes')}</button></div>
     </section>
   {/if}
 
   <footer>
     <span class="save-state" aria-live="polite">{busy ? 'Saving…' : dirty ? 'Unsaved changes' : 'Saved'}</span>
-    <div class="actions"><button class="button button--quiet" type="button" onclick={requestCancel} disabled={busy}>Cancel</button>{#if !readOnly}<button class="button button--primary" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save profile'}</button>{/if}</div>
+    <div class="actions"><button class="button button--quiet" type="button" onclick={requestCancel} disabled={busy}>{$t('Cancel')}</button>{#if !readOnly}<button class="button button--primary" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save profile'}</button>{/if}</div>
   </footer>
 </form>
 

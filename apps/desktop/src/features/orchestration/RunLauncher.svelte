@@ -1,6 +1,7 @@
 <script lang="ts">
-  import type { DefinitionSummary, StoredDefinition } from '../../../../../contracts/orchestration-host-v2';
-  import type { LaunchCommandReference } from '../../../../../contracts/orchestration-v2';
+  import { t } from '../locale/language';
+  import type { DefinitionSummary, StoredDefinition } from '../../../../../contracts/orchestration-host-v3';
+  import type { LaunchCommandReference } from '../../../../../contracts/orchestration-v3';
   import { initialRunLaunchSelection, validateRunLaunchSelection, type RunLaunchSelection } from './runLaunch';
 
   export let teams: readonly DefinitionSummary[] = [];
@@ -45,45 +46,45 @@
 
 <form class="launcher" aria-labelledby="run-launcher-title" onsubmit={(event) => { event.preventDefault(); start(); }}>
   <header>
-    <p class="eyebrow">Run</p>
+    <p class="eyebrow">{$t('Run')}</p>
     <h1 id="run-launcher-title">{command === undefined ? 'Start run' : command.value.name}</h1>
-    {#if command !== undefined}<p class="command-note">Named launch command. Its saved team and pipeline references are locked.</p>{/if}
+    {#if command !== undefined}<p class="command-note">{$t('Named launch command. Its saved team and pipeline references are locked.')}</p>{/if}
   </header>
 
   {#if error || validationErrors.length > 0}
     <div class="error-summary" role="alert">
-      <strong>Launch request needs attention.</strong>
+      <strong>{$t('Launch request needs attention.')}</strong>
       {#if error}<p>{error}</p>{/if}
       {#if validationErrors.length > 0}<ul>{#each validationErrors as issue}<li>{issue}</li>{/each}</ul>{/if}
     </div>
   {/if}
 
-  {#if readOnly}<p class="notice" role="status">Read-only mode. Starting a run is disabled.</p>{/if}
-  {#if locked}<p class="notice" role="status">This launch request is locked to the selected definitions. Retrying reuses the same run ID; it does not replay a task.</p>{/if}
+  {#if readOnly}<p class="notice" role="status">{$t('Read-only mode. Starting a run is disabled.')}</p>{/if}
+  {#if locked}<p class="notice" role="status">{$t('This launch request is locked to the selected definitions. Retrying reuses the same run ID; it does not replay a task.')}</p>{/if}
 
-  <section aria-label="Run definition selection">
-    <label for="run-team">Team</label>
+  <section aria-label={$t('Run definition selection')}>
+    <label for="run-team">{$t('Team')}</label>
     <select id="run-team" value={selection.teamId} onchange={selectTeam} disabled={disabled}>
-      <option value="">Select a team</option>
+      <option value="">{$t('Select a team')}</option>
       {#if selection.teamId && !teams.some((team) => team.id === selection.teamId)}<option value={selection.teamId}>Unavailable team ({selection.teamId})</option>{/if}
       {#each teams as team (team.id)}<option value={team.id}>{team.name}</option>{/each}
     </select>
 
-    <label for="run-pipeline">Pipeline</label>
+    <label for="run-pipeline">{$t('Pipeline')}</label>
     <select id="run-pipeline" value={selection.pipelineId} onchange={selectPipeline} disabled={disabled}>
-      <option value="">Select a pipeline</option>
+      <option value="">{$t('Select a pipeline')}</option>
       {#if selection.pipelineId && !pipelines.some((pipeline) => pipeline.id === selection.pipelineId)}<option value={selection.pipelineId}>Unavailable pipeline ({selection.pipelineId})</option>{/if}
       {#each pipelines as pipeline (pipeline.id)}<option value={pipeline.id}>{pipeline.name}</option>{/each}
     </select>
   </section>
 
-  <section class="explanation" aria-label="Launch information">
-    <p>The host uses the latest saved definitions and checks native readiness and policy. The returned run snapshot is authoritative.</p>
-    <p>Leaving this view does not cancel requested native work.</p>
+  <section class="explanation" aria-label={$t('Launch information')}>
+    <p>{$t('The host uses the latest saved definitions and checks native readiness and policy. The returned run snapshot is authoritative.')}</p>
+    <p>{$t('Leaving this view does not cancel requested native work.')}</p>
   </section>
 
   <footer>
-    <button class="button button--quiet" type="button" onclick={onCancel} disabled={busy}>Back</button>
+    <button class="button button--quiet" type="button" onclick={onCancel} disabled={busy}>{$t('Back')}</button>
     {#if !readOnly}<button class="button button--primary" type="submit" disabled={busy}>{busy ? 'Requesting launch…' : locked ? 'Retry same launch request' : 'Start run'}</button>{/if}
   </footer>
 </form>

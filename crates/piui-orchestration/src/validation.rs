@@ -362,7 +362,76 @@ pub fn authorize_spawn<'a>(
             requested_profile_id: requested_profile_id.to_owned(),
         });
     }
+    if !spawn_permissions_subset(spawner, requested) {
+        return Err(AuthorizationError::SpawnDenied {
+            spawner_profile_id: spawner_profile_id.to_owned(),
+            requested_profile_id: requested_profile_id.to_owned(),
+        });
+    }
     Ok(requested)
+}
+
+/// Compare declared authority conservatively. Native defaults are comparable
+/// only inside the same adapter. Every generation is checked at admission.
+pub fn spawn_permissions_subset(parent: &AgentProfile, child: &AgentProfile) -> bool {
+    use crate::PermissionMode::*;
+    let files = match (parent.permission_mode, child.permission_mode) {
+        (Native, Native) => parent.harness == child.harness,
+        (FullAccess, ReadOnly | WorkspaceWrite | FullAccess) => true,
+        (WorkspaceWrite, ReadOnly | WorkspaceWrite) => true,
+        (ReadOnly, ReadOnly) => true,
+        _ => false,
+    };
+    if !files {
+        return false;
+    }
+    // Denials cannot disappear or become advisory on a child.
+    if parent.tool_policy.rules.iter().any(|rule| {
+        rule.decision == ToolDecision::Deny
+            && !child.tool_policy.rules.iter().any(|candidate| {
+                candidate.tool == rule.tool
+                    && candidate.decision == ToolDecision::Deny
+                    && candidate.enforcement == rule.enforcement
+                    && (!rule.mandatory || candidate.mandatory)
+            })
+    }) {
+        return false;
+    }
+    // Native rules form an allowlist in the runtime adapter. An absent child
+    // allowlist would restore its default tools, so it cannot inherit that way.
+    let native_rules = |profile: &AgentProfile| {
+        profile
+            .tool_policy
+            .rules
+            .iter()
+            .filter(|rule| rule.enforcement == PolicyEnforcement::Native)
+            .map(|rule| (rule.tool.clone(), rule.decision))
+            .collect::<Vec<_>>()
+    };
+    let parent_rules = native_rules(parent);
+    let child_rules = native_rules(child);
+    if !parent_rules.is_empty()
+        && (child_rules.is_empty()
+            || child_rules.iter().any(|(tool, decision)| {
+                *decision == ToolDecision::Allow
+                    && !parent_rules.contains(&(tool.clone(), ToolDecision::Allow))
+            }))
+    {
+        return false;
+    }
+    if parent.resource_rules.iter().any(|rule| {
+        !rule.enabled
+            && !child.resource_rules.iter().any(|candidate| {
+                candidate.kind == rule.kind && candidate.id == rule.id && !candidate.enabled
+            })
+    }) {
+        return false;
+    }
+    // Delegation is itself authority; a child cannot acquire new templates.
+    child
+        .allowed_spawn_profile_ids
+        .iter()
+        .all(|id| parent.allowed_spawn_profile_ids.contains(id))
 }
 
 pub fn authorize_coordinator_tool(

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { AgentProfile, DirectedEdge, TeamDefinition, TeamMember } from '../../../../../contracts/orchestration-v2';
+  import { t } from '../locale/language';
+  import type { AgentProfile, DirectedEdge, TeamDefinition, TeamMember } from '../../../../../contracts/orchestration-v3';
   import TeamConnections from './TeamConnections.svelte';
   import {
     cloneTeamDefinition,
@@ -117,58 +118,58 @@
 <section class="team-editor" aria-labelledby="team-editor-title">
   <header>
     <div>
-      <p class="eyebrow">Team definition</p>
-      <h1 id="team-editor-title">{team === undefined ? 'Create team' : 'Edit team'}</h1>
+      <p class="eyebrow">{$t('Team definition')}</p>
+      <h1 id="team-editor-title">{$t(team === undefined ? 'Create team' : 'Edit team')}</h1>
     </div>
-    {#if readOnly}<p class="state" role="status">This team is read-only.</p>{:else if busy}<p class="state" role="status">Saving team…</p>{:else if isDirty}<p class="state" role="status">Unsaved changes</p>{/if}
+    {#if readOnly}<p class="state" role="status">{$t('This team is read-only.')}</p>{:else if busy}<p class="state" role="status">{$t('Saving team…')}</p>{:else if isDirty}<p class="state" role="status">{$t('Unsaved changes')}</p>{/if}
   </header>
 
-  {#if error}<div class="error" role="alert"><strong>Could not save team.</strong> {error}</div>{/if}
+  {#if error}<div class="error" role="alert"><strong>{$t('Could not save team.')}</strong> {error}</div>{/if}
   {#if issues.length > 0 && !readOnly}
-    <div class="validation" role="alert" aria-label="Team validation issues">
-      <strong>Complete the team before saving.</strong>
+    <div class="validation" role="alert" aria-label={$t('Team validation issues')}>
+      <strong>{$t('Complete the team before saving.')}</strong>
       <ul>{#each issues as issue}<li>{issue.message}</li>{/each}</ul>
     </div>
   {/if}
 
   <fieldset disabled={readOnly || busy}>
-    <legend class="visually-hidden">Team details</legend>
+    <legend class="visually-hidden">{$t('Team details')}</legend>
     <label class="field">
-      <span>Team name</span>
+      <span>{$t('Team name')}</span>
       <input value={draft.name} oninput={changeName} autocomplete="off" aria-invalid={issues.some((issue) => issue.path === 'name')} />
     </label>
 
     <section class="editor-section" aria-labelledby="members-title">
-      <div class="section-heading"><div><h2 id="members-title">Members</h2><p>Choose a saved agent profile for each role.</p></div><button type="button" onclick={addMember} disabled={profiles.length === 0}>Add member</button></div>
-      {#if profiles.length === 0}<p class="empty">No profiles are available. Create a profile before adding a member.</p>{/if}
+      <div class="section-heading"><div><h2 id="members-title">{$t('Members')}</h2><p>{$t('Choose a saved agent profile for each role.')}</p></div><button type="button" onclick={addMember} disabled={profiles.length === 0}>{$t('Add member')}</button></div>
+      {#if profiles.length === 0}<p class="empty">{$t('No profiles are available. Create a profile before adding a member.')}</p>{/if}
       <div class="member-list">
         {#each draft.members as member, memberIndex (memberIndex)}
           <article class="member-row">
-            <label><span>Role name</span><input value={member.id} oninput={(event) => updateMember(memberIndex, 'id', (event.currentTarget as HTMLInputElement).value)} /></label>
-            <label><span>Profile</span><select value={member.profileId} oninput={(event) => updateMember(memberIndex, 'profileId', (event.currentTarget as HTMLSelectElement).value)}>{#each profiles as profile}<option value={profile.id}>{profile.name} · {profile.harness}</option>{/each}</select></label>
-            <button type="button" class="remove" aria-label={`Remove member ${member.id}`} onclick={() => removeMember(member.id)}>Remove</button>
+            <label><span>{$t('Role name')}</span><input value={member.id} oninput={(event) => updateMember(memberIndex, 'id', (event.currentTarget as HTMLInputElement).value)} /></label>
+            <label><span>{$t('Profile')}</span><select value={member.profileId} oninput={(event) => updateMember(memberIndex, 'profileId', (event.currentTarget as HTMLSelectElement).value)}>{#each profiles as profile}<option value={profile.id}>{profile.name} · {profile.harness}</option>{/each}</select></label>
+            <button type="button" class="remove" aria-label={`Remove member ${member.id}`} onclick={() => removeMember(member.id)}>{$t('Remove')}</button>
           </article>
         {/each}
       </div>
     </section>
 
     <section class="editor-section" aria-labelledby="orchestrator-title">
-      <h2 id="orchestrator-title">Orchestrator</h2>
-      <p>Choose who coordinates the team. Set its connections below.</p>
-      <label class="field compact"><span>Orchestrator member</span><select value={draft.orchestratorMemberId} oninput={setOrchestrator}><option value="">Choose a member</option>{#each memberOptions as option}<option value={option.member.id}>{memberLabel(option.member)}</option>{/each}</select></label>
+      <h2 id="orchestrator-title">{$t('Orchestrator')}</h2>
+      <p>{$t('Choose who coordinates the team. Set its connections below.')}</p>
+      <label class="field compact"><span>{$t('Orchestrator member')}</span><select value={draft.orchestratorMemberId} oninput={setOrchestrator}><option value="">{$t('Choose a member')}</option>{#each memberOptions as option}<option value={option.member.id}>{memberLabel(option.member)}</option>{/each}</select></label>
     </section>
 
   </fieldset>
   <TeamConnections team={draft} {profiles} disabled={readOnly || busy} onChange={(kind, edges) => draft = { ...draft, [kind]: edges }} />
-  <details class="subagents"><summary>Subagents</summary>
+  <details class="subagents"><summary>{$t('Subagents')}</summary>
   <fieldset disabled={readOnly || busy}>
-    <legend class="visually-hidden">Agent creation permissions</legend>
-    <label class="spawn-communication"><input type="checkbox" checked={draft.spawnedAgentsJoinTeam ?? false} onchange={(event) => draft = { ...draft, spawnedAgentsJoinTeam: event.currentTarget.checked }} /> Let newly created agents message the whole team</label>
-    <p class="empty">Otherwise they can message only the agent that created them. Profile permissions still apply.</p>
+    <legend class="visually-hidden">{$t('Agent creation permissions')}</legend>
+    <label class="spawn-communication"><input type="checkbox" checked={draft.spawnedAgentsJoinTeam ?? false} onchange={(event) => draft = { ...draft, spawnedAgentsJoinTeam: event.currentTarget.checked }} /> {$t('Let subagents inherit their parent’s team connections')}</label>
+    <p class="empty">{$t('Otherwise they can message only the agent that created them. Profile permissions still apply.')}</p>
     <section class="editor-section" aria-labelledby="spawning-title">
-      <h2 id="spawning-title">Allowed profiles</h2>
-      <p>Each agent can create only the profiles allowed in its settings.</p>
-      {#if draft.members.length === 0}<p class="empty">Add a member to see its profile-owned workspace child templates.</p>
+      <h2 id="spawning-title">{$t('Allowed profiles')}</h2>
+      <p>{$t('Each agent can create only the profiles allowed in its settings.')}</p>
+      {#if draft.members.length === 0}<p class="empty">{$t('Add a member to see its profile-owned workspace child templates.')}</p>
       {:else}<ul class="spawn-list">{#each draft.members as member}<li><strong>{memberLabel(member)}</strong><span>{#if profileById(profiles, member.profileId)?.allowedSpawnProfileIds.length}{profileById(profiles, member.profileId)?.allowedSpawnProfileIds.map((id) => profileById(profiles, id)?.name ?? `Unavailable profile ${id}`).join(', ')}{:else}Disabled.{/if}</span></li>{/each}</ul>{/if}
     </section>
 
@@ -177,9 +178,9 @@
   </details>
 
   {#if cancelConfirmation}
-    <aside class="cancel-confirmation" aria-live="polite"><strong>Discard unsaved changes?</strong><span>Keep editing to return to this draft.</span><div><button type="button" onclick={() => (cancelConfirmation = false)}>Keep editing</button><button type="button" class="remove" onclick={discardChanges}>Discard changes</button></div></aside>
+    <aside class="cancel-confirmation" aria-live="polite"><strong>{$t('Discard unsaved changes?')}</strong><span>{$t('Keep editing to return to this draft.')}</span><div><button type="button" onclick={() => (cancelConfirmation = false)}>{$t('Keep editing')}</button><button type="button" class="remove" onclick={discardChanges}>{$t('Discard changes')}</button></div></aside>
   {/if}
-  <footer><button type="button" onclick={requestCancel} disabled={busy}>{readOnly ? 'Close' : 'Cancel'}</button>{#if !readOnly}<button type="button" class="primary" onclick={save} disabled={!canSave}>Save team</button>{/if}</footer>
+  <footer><button type="button" onclick={requestCancel} disabled={busy}>{readOnly ? 'Close' : 'Cancel'}</button>{#if !readOnly}<button type="button" class="primary" onclick={save} disabled={!canSave}>{$t('Save team')}</button>{/if}</footer>
 </section>
 
 <style>

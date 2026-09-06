@@ -17,6 +17,8 @@ const holdModelFixture = process.argv.includes("--hold-model");
 const effectivePermissionMismatch = process.argv.includes("--effective-permission-mismatch");
 const badFrame = process.argv.find((argument) => argument.startsWith("--bad-frame="))?.slice("--bad-frame=".length);
 const userInputFixture = process.argv.includes("--user-input");
+const settingsIndex = process.argv.indexOf("--expect-settings");
+const expectedSettings = settingsIndex >= 0 ? JSON.parse(process.argv[settingsIndex + 1]) : undefined;
 const unknownItemsFixture = process.argv.includes("--unknown-items");
 
 const permissionMatches = (params) => {
@@ -35,6 +37,9 @@ input.on("line", (line) => {
   } else if (message.method === "initialized") {
     // Handshake notification has no response.
   } else if (message.method === "thread/start" || message.method === "thread/resume") {
+    if (expectedSettings && (message.params.serviceTier !== expectedSettings.tier || message.params.config?.["mcp_servers.example.enabled"] !== false || message.params.config?.["skills.config"]?.[0]?.enabled !== false)) {
+      send({ id: message.id, error: { code: -32602, message: "settings not forwarded" } }); return;
+    }
     if (poolFixture && message.method === "thread/start") threadId = `thread-${++threadSerial}`;
     if (badFrame) {
       process.stdout.write(badFrame === "syntax" ? "{invalid\n" : badFrame === "null" ? "null\n" : "{}\n");
@@ -136,6 +141,9 @@ input.on("line", (line) => {
   } else if (message.id === 911 && message.result?.success === false) {
     send({ method: "warning", params: { threadId, message: "invalid coordinator call rejected" } });
   } else if (message.method === "turn/start") {
+    if (expectedSettings && (message.params.serviceTier !== expectedSettings.tier || message.params.effort !== "low")) {
+      send({ id: message.id, error: { code: -32602, message: "turn settings not forwarded" } }); return;
+    }
     if (poolFixture && message.params.input?.[0]?.text === 'crash fixture') { process.exit(1); }
     const responseText = poolFixture ? message.params.input?.[0]?.text : "hello";
     send({ id: message.id, result: { turn: { id: "turn-fixture", status: "inProgress", items: [] } } });

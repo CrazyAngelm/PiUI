@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../locale/language';
   import Timeline from '../sessions/Timeline.svelte';
   import type { TimelineBlock } from '../../host-api/types';
 
@@ -34,10 +35,10 @@
 
 <div class="conversation-viewport">
   <!-- svelte-ignore a11y_no_noninteractive_tabindex (The scroll region must support keyboard scrolling.) -->
-  <div class="timeline-scroller" bind:this={scroller} use:followConversation={sessionKey} tabindex="0" role="region" aria-label="Conversation messages">
+  <div class="timeline-scroller" bind:this={scroller} use:followConversation={sessionKey} tabindex="0" role="region" aria-label={$t('Conversation messages')}>
     <Timeline {blocks} {loading} {sessionKey} {agentLabel} />
   </div>
-  {#if !following}<button class="jump-latest" type="button" onclick={latest}>↓ Back to latest</button>{/if}
+  {#if !following}<button class="jump-latest" type="button" onclick={latest}>{$t('↓ Back to latest')}</button>{/if}
 </div>
 
 <style>

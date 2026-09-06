@@ -17,3 +17,8 @@
 7. JSON Schema validates structural and some security invariants: `ui.shell` ↔ shell entrypoint, `network` ↔ allowlist origin, `ui.richView` ↔ views entrypoint, rich contribution → `ui.richView`.
 8. The host performs a second, semantic pass: namespace uniqueness and ownership, existence of `viewId`/command/handler targets, dependency cycles, slot conflicts, trust level, actual Host API calls conforming to granted permissions, and prohibition of `ui.shell` for project-local/untrusted packages.
 9. The API described here is the target implementation contract; it does not claim that the SDK already exists.
+
+Orchestration v3 adds optional profile `reasoning`, `serviceTier`, `resourceRules`
+and the atomic `orchestration_save_graph_v3` command. v1/v2 declarations remain
+historical contracts; the active desktop uses v3. Recorded v1/v2 runs migrate
+without native history mutation. Missing profile fields retain native defaults.

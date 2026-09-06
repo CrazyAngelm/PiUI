@@ -371,3 +371,51 @@ The local 200-request test is transport evidence, not a production throughput
 or model-quality guarantee. No public fork was verified as the author's paid
 fork. Arbitrary channels and model-authored security profiles are outside the
 implemented surface; Linux lifecycle remains unverified.
+
+## ADR-025 — One graph, adapter-owned capabilities and monotonic delegation
+
+Accepted 2026-09-06. The Systems view edits profiles, a team, a dependency DAG and
+its saved launch reference in one place. Result edges order tasks and deliver
+native result references. Messaging, observation and delegation are separate
+permissions; a message cycle does not imply an execution cycle. Profiles retain
+native harness selection, so a result edge can connect Codex and Prime.
+
+Orchestration IPC/run schema is v3. The host saves graph definitions in one
+revision-checked durable transaction. v1/v2 recorded runs migrate in memory to
+v3 without rewriting native histories. Existing advanced definitions remain
+editable using their original editors; the graph refuses shapes it cannot
+round-trip rather than losing assignments or external child templates.
+
+Reasoning, explicit Standard/Fast and resource overrides are snapshotted per
+profile and forwarded to the native launch adapter. Codex Standard sends native
+`default`, avoiding inheritance of a global Fast setting. Codex skills use native
+`skills.config`; MCP overrides use the configured server's `enabled` field.
+Prime skill filtering uses the SDK resource loader. Prime MCP isolation and
+Codex arbitrary strict tool allowlists remain unsupported and fail closed.
+Resource availability is not OS confinement.
+
+The coordinator rejects children with higher file privileges, removed denials,
+wider native tool allowlists, removed disabled resources, or wider child-profile
+grants. Same-harness native defaults are comparable; cross-harness defaults are
+not. This applies to dynamic profile spawns and predefined controlled spawns.
+
+Sources and represented patterns:
+- AutoGen Teams: https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/tutorial/teams.html
+  Round-robin, selector and handoff teams differ in who selects the next speaker.
+- LangGraph Swarm: https://github.com/langchain-ai/langgraph-swarm-py
+  Handoff is an explicit transfer of control, not just a dependency edge.
+- Codex speed: https://learn.chatgpt.com/docs/agent-configuration/speed
+- Codex configuration schema: https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json
+- Video analysis and timestamps remain in AGENT_SYSTEM_REVIEW.md.
+
+The implemented presets are sequential tasks, parallel independent tasks,
+workers followed by a supervisor, and peer messaging. They configure actual
+edges, not labels that change hidden scheduler behavior. Autonomous selector
+loops, dynamic channels/groups, durable handoff and persistent round-robin teams
+are not represented as completed features. Implementing them requires explicit
+native event/lifecycle contracts and termination semantics, not another LLM loop
+inside PiUI. No arbitrary round or agent cap is introduced.
+
+English/Russian selection is local UI metadata, defaults to English and survives
+restart. User text and native outputs retain their original language. Layout
+positions are also rebuildable local UI metadata, separate from durable tasks.

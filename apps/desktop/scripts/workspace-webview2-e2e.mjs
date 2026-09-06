@@ -208,7 +208,7 @@ export async function runWorkspaceWebview2Proof({
 
   async function waitForWorkspaceShell() {
     await waitFor(`typeof window.__TAURI_INTERNALS__?.invoke === 'function'`, 'Tauri invoke bridge', startupBoundMs);
-    await waitFor(`document.querySelector('aside[aria-label="Workspace navigation"]') && document.querySelector('#workspace-main')`, 'redesigned workspace shell', startupBoundMs);
+    await waitFor(`document.querySelector('aside .utilities') && document.querySelector('#workspace-main')`, 'redesigned workspace shell', startupBoundMs);
     assertion(!automation.currentPage?.href.includes('view=classic'), 'The redesigned proof navigated to the classic compatibility route.');
   }
 
@@ -250,15 +250,15 @@ export async function runWorkspaceWebview2Proof({
   }
 
   async function orchestrationCatalog(workspaceId) {
-    return invoke('orchestration_catalog_v2', { request: { workspaceId } });
+    return invoke('orchestration_catalog_v3', { request: { workspaceId } });
   }
 
   async function readSingle(kind, workspaceId, name) {
     const routes = {
-      profile: ['profiles', 'orchestration_get_profile_v2'],
-      team: ['teams', 'orchestration_get_team_v2'],
-      pipeline: ['pipelines', 'orchestration_get_pipeline_v2'],
-      launch: ['launchCommands', 'orchestration_get_launch_command_v2'],
+      profile: ['profiles', 'orchestration_get_profile_v3'],
+      team: ['teams', 'orchestration_get_team_v3'],
+      pipeline: ['pipelines', 'orchestration_get_pipeline_v3'],
+      launch: ['launchCommands', 'orchestration_get_launch_command_v3'],
     };
     const [collection, route] = routes[kind];
     const catalog = await orchestrationCatalog(workspaceId);
@@ -270,6 +270,7 @@ export async function runWorkspaceWebview2Proof({
   }
 
   async function selectWorkspaceSection(name) {
+    if (['Agents', 'Teams', 'Pipelines'].includes(name)) await evaluate(`document.querySelector('nav[aria-label="Workspace sections"] details').open = true`);
     await clickButton(name, 'nav[aria-label="Workspace sections"]');
     await waitFor(`document.querySelector('#orchestration-title')?.textContent?.trim() === ${JSON.stringify(name)}`, `${name} workspace section`);
   }
@@ -283,7 +284,29 @@ export async function runWorkspaceWebview2Proof({
     };
 
     await clickButton('Workspace', '.view-switch');
-    await waitFor(`document.querySelector('#orchestration-title')?.textContent?.trim() === 'Agents'`, 'Agents workspace section', startupBoundMs);
+    await selectWorkspaceSection('Systems');
+    await setControl('.system-name', 'Mixed graph proof');
+    await clickButton('＋ Add agent', '.canvas-tools');
+    await setControl('aside label:nth-of-type(3) input', 'fixture-model');
+    await setControl('aside label:nth-of-type(4) input', 'low');
+    await setControl('aside label:nth-of-type(5) select', 'fast', 'change');
+    await clickButton('＋ Add agent', '.canvas-tools');
+    await setControl('aside label:nth-of-type(2) select', 'prime-agent', 'change');
+    await setControl('aside label:nth-of-type(3) input', 'prime-fixture');
+    await evaluate(`(() => { const select = document.querySelector('.canvas-tools select'); select.value = 'sequential'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await waitFor(`document.querySelectorAll('.connections li').length === 1`, 'graph result connection');
+    await clickButton('Save', '.system-editor .toolbar');
+    await waitFor(`document.querySelector('.save-state')?.textContent === 'Saved'`, 'atomic graph save');
+    const graphCommand = await readSingle('launch', workspaceId, 'Mixed graph proof');
+    const graphPipeline = await invoke('orchestration_get_pipeline_v3', { request: { workspaceId, id: graphCommand.stored.value.pipelineId } });
+    assertion(graphPipeline.value.steps[1].dependencyStepIds[0] === graphPipeline.value.steps[0].id, 'Mixed graph lost its result edge');
+    const graphCatalog = await orchestrationCatalog(workspaceId);
+    const graphProfiles = [];
+    for (const item of graphCatalog.profiles.filter(item => ['Agent 1', 'Agent 2'].includes(item.name))) graphProfiles.push(await invoke('orchestration_get_profile_v3', { request: { workspaceId, id: item.id } }));
+    assertion(graphProfiles.some(item => item.value.harness === 'codex' && item.value.reasoning === 'low' && item.value.serviceTier === 'fast'), 'Graph lost Codex settings');
+    assertion(graphProfiles.some(item => item.value.harness === 'prime-agent'), 'Graph lost Prime adapter');
+    await capture('workspace-mixed-graph');
+    await selectWorkspaceSection('Agents');
 
     await clickButton('Create profile');
     await waitFor(`document.querySelector('#profile-name')`, 'Codex prompt editor');
@@ -334,6 +357,7 @@ export async function runWorkspaceWebview2Proof({
     await clickButton('Add member');
     await waitFor(`document.querySelector('.member-row input')`, 'team member row');
     await setControl('.member-row input', 'lead');
+    await setControl('.member-row select', profile.summary.id, 'input');
     await setLabelledControl('Orchestrator member', 'lead', 'input');
     await clickButton('Add member');
     await waitFor(`document.querySelectorAll('.member-row').length === 2`, 'second team member');
@@ -381,17 +405,8 @@ export async function runWorkspaceWebview2Proof({
     await clickButton('Create launch command');
     await waitFor(`document.querySelector('#launch-name')`, 'launch command editor');
     await setControl('#launch-name', names.launch[0]);
-    const referencesSelected = await evaluate(`(() => {
-      for (const selector of ['#launch-team', '#launch-pipeline']) {
-        const control = document.querySelector(selector);
-        const option = [...control.options].find((item) => item.value !== '');
-        if (!option) return false;
-        Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(control, option.value);
-        control.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-      return true;
-    })()`);
-    assertion(referencesSelected, 'Launch command could not select its saved team and pipeline.');
+    await setControl('#launch-team', team.summary.id, 'change');
+    await setControl('#launch-pipeline', pipeline.summary.id, 'change');
     await clickButton('Save launch command');
     await waitFor(`[...document.querySelectorAll('ul[aria-label="Launch commands"] strong')].some((item) => item.textContent?.trim() === ${JSON.stringify(names.launch[0])})`, 'saved launch command');
     let launch = await readSingle('launch', workspaceId, names.launch[0]);
@@ -421,9 +436,9 @@ export async function runWorkspaceWebview2Proof({
     await clickButton('Start run');
     await waitFor(`document.querySelector('#run-inspector-title') && document.querySelector('[aria-label="Run status: Failed"]')`, 'recorded unsupported-policy run failure', startupBoundMs);
     await waitFor(`document.querySelector('.inspector .error[role="alert"]')?.textContent?.includes(${JSON.stringify(expectedFailureCopy)})`, 'safe native preflight error');
-    const runs = await invoke('orchestration_list_runs_v2', { request: { workspaceId } });
+    const runs = await invoke('orchestration_list_runs_v3', { request: { workspaceId } });
     assertion(Array.isArray(runs) && runs.length === 1 && runs[0].status === 'failed', 'The host did not retain exactly one failed run after policy preflight rejection.');
-    const recordedRun = await invoke('orchestration_get_run_v2', { request: { workspaceId, runId: runs[0].id } });
+    const recordedRun = await invoke('orchestration_get_run_v3', { request: { workspaceId, runId: runs[0].id } });
     assertion(recordedRun?.status === 'failed' && recordedRun.tasks?.length === 1, 'The recorded policy-rejected run is not terminal failed.');
     assertion(recordedRun.tasks[0]?.status === 'failed' && recordedRun.tasks[0]?.failure?.code === expectedFailureCode, 'The failed task did not preserve the expected native preflight failure code.');
     assertion(!JSON.stringify(recordedRun).toLocaleLowerCase().includes('succeeded'), 'The policy-rejected run fabricated a succeeded outcome.');
@@ -452,7 +467,11 @@ export async function runWorkspaceWebview2Proof({
       await waitFor(`![...document.querySelectorAll('.definition-list strong')].some((item) => item.textContent?.trim() === ${JSON.stringify(name)})`, `deleted ${name}`);
     }
     const finalCatalog = await orchestrationCatalog(workspaceId);
-    assertion(finalCatalog.profiles.length === 0 && finalCatalog.teams.length === 0 && finalCatalog.pipelines.length === 0 && finalCatalog.launchCommands.length === 0, 'UI deletion did not remove all workspace E2E definitions from the host.');
+    assertion(finalCatalog.profiles.length === 2 && finalCatalog.teams.length === 1 && finalCatalog.pipelines.length === 1 && finalCatalog.launchCommands.length === 1 && finalCatalog.launchCommands[0].id === graphCommand.summary.id, 'UI deletion must remove selected definitions and preserve the independent graph.');
+    await selectWorkspaceSection('Systems');
+    await setControl('select[aria-label="Open system"]', graphCommand.summary.id, 'change');
+    await waitFor(`document.querySelectorAll('.node').length === 2 && document.querySelectorAll('.connections li').length === 1`, 'reopened mixed graph');
+    await capture('workspace-mixed-graph-reopened');
     return names;
   }
 
@@ -471,10 +490,10 @@ export async function runWorkspaceWebview2Proof({
       steps: [{ id: SAFE_FIXTURE.stepId, name: 'Blocked task', assignedMemberId: SAFE_FIXTURE.memberId, instructions: 'Must not run in safe mode.', dependencyStepIds: [] }],
     };
     const launch = { id: SAFE_FIXTURE.launchId, name: 'Safe-mode launch', teamId: SAFE_FIXTURE.teamId, pipelineId: SAFE_FIXTURE.pipelineId };
-    await invoke('orchestration_save_profile_v2', { request: { workspaceId, value: profile } });
-    await invoke('orchestration_save_team_v2', { request: { workspaceId, value: team } });
-    await invoke('orchestration_save_pipeline_v2', { request: { workspaceId, value: pipeline } });
-    await invoke('orchestration_save_launch_command_v2', { request: { workspaceId, value: launch } });
+    await invoke('orchestration_save_profile_v3', { request: { workspaceId, value: profile } });
+    await invoke('orchestration_save_team_v3', { request: { workspaceId, value: team } });
+    await invoke('orchestration_save_pipeline_v3', { request: { workspaceId, value: pipeline } });
+    await invoke('orchestration_save_launch_command_v3', { request: { workspaceId, value: launch } });
   }
 
 
@@ -524,14 +543,14 @@ export async function runWorkspaceWebview2Proof({
         && definitions.launchCommands.some((item) => item.id === SAFE_FIXTURE.launchId),
       'Safe-mode run fixtures did not persist from the normal host process.',
     );
-    await assertRejected('orchestration_start_run_v2', { request: {
+    await assertRejected('orchestration_start_run_v3', { request: {
       workspaceId: workspace.id, runId: `workspace-e2e-safe-run-${Date.now()}`,
       teamId: SAFE_FIXTURE.teamId, pipelineId: SAFE_FIXTURE.pipelineId, launchCommandId: SAFE_FIXTURE.launchId,
     } }, 'Safe-mode orchestration run creation', 'runtime-unavailable');
 
     try {
       await clickButton('Workspace', '.view-switch');
-      await waitFor(`document.querySelector('.orchestration-panel .notice')?.textContent?.includes('read-only')`, 'safe-mode workspace notice', startupBoundMs);
+      await waitFor(`/read-only|viewing only/.test(document.querySelector('.orchestration-panel .notice')?.textContent ?? '')`, 'safe-mode workspace notice', startupBoundMs);
       assertion(await evaluate(`![...document.querySelectorAll('.orchestration-panel button')].some((item) => /^Create /.test(item.textContent?.trim() ?? ''))`), 'Safe mode exposed a workspace definition create action.');
       await selectWorkspaceSection('Runs');
       assertion(await evaluate(`(() => { const button = [...document.querySelectorAll('.orchestration-panel button')].find((item) => item.textContent?.trim() === 'Start run'); return Boolean(button?.disabled); })()`), 'Safe mode exposed an enabled Start run control.');
@@ -671,7 +690,7 @@ export async function runWorkspaceWebview2Proof({
   checks.push('composer-visible-with-scroll', 'conversation-follow-and-reading-position');
 
   await clickButton('Workspace', '.view-switch');
-  await waitFor(`document.querySelector('#orchestration-title')?.textContent?.trim() === 'Agents'`, 'workspace for navigation proof', startupBoundMs);
+  await selectWorkspaceSection('Agents');
   await clickButton('Create profile');
   await waitFor(`document.querySelector('#profile-name') && !document.querySelector('#profile-name').disabled`, 'editable profile for navigation proof');
   await setControl('#profile-name', 'Unsaved navigation proof');
@@ -701,6 +720,14 @@ export async function runWorkspaceWebview2Proof({
   await waitFor(`document.documentElement.dataset.theme === 'dark'`, 'dark theme');
   const darkColor = await evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--piui-bg').trim()`);
   assertion(lightColor && darkColor && lightColor !== darkColor, 'Light and dark themes resolved to the same background token.');
+  await setControl('select[aria-label="Language"]', 'ru', 'change');
+  await waitFor(`document.documentElement.lang === 'ru' && document.querySelector('#workspace-settings-title')?.textContent === 'Настройки'`, 'Russian settings');
+  await capture('workspace-russian-settings');
+  await reload();
+  assertion(await evaluate(`document.documentElement.lang === 'ru'`), 'Language choice was not persisted');
+  await clickButton('Настройки', '.utilities');
+  await setControl('select[aria-label="Language"]', 'en', 'change');
+  await waitFor(`document.documentElement.lang === 'en'`, 'English settings');
   await clickButton('Done');
 
   await resizeWindow({ width: 720, height: 700, appOwnerPid });
@@ -732,14 +759,14 @@ export async function runWorkspaceWebview2Proof({
   await assertRejected('workspace_command_v11', { command: { type: 'shell', command: 'whoami' } }, 'Unknown workspace command');
   await assertRejected('workspace_command_v11', { command: { type: 'snapshot', sessionId: nativeSession.id, nativePath: projectPath } }, 'Forged native path field');
   await assertRejected('workspace_command_v11', { command: { type: 'createSession', workspaceId: workspace.id, harness: eligible.kind, permissionMode: 'native', profileId: 'forged-profile-id' } }, 'Forged ordinary-session profile field');
-  await assertRejected('orchestration_catalog_v2', { request: { workspaceId: workspace.id, actor: 'forged-actor' } }, 'Forged orchestration actor field');
+  await assertRejected('orchestration_catalog_v3', { request: { workspaceId: workspace.id, actor: 'forged-actor' } }, 'Forged orchestration actor field');
   await assertRejected('workspace_command_v11', { command: { type: 'respond', sessionId: nativeSession.id, requestId: 'forged-approval', decision: 'approve-once' } }, 'Forged approval reply', 'approval');
   const forgedWorkspaceProfile = {
     id: 'forged-profile', name: 'Forged profile', harness: 'pi', model: 'native', permissionMode: 'native',
     instructions: '', toolPolicy: { rules: [] }, allowedSpawnProfileIds: [],
   };
   await assertRejected('workspace_command_v11', { command: { type: 'createSession', workspaceId: 'forged-workspace-id', harness: eligible.kind, permissionMode: 'native' } }, 'Unknown native-session workspace');
-  await assertRejected('orchestration_save_profile_v2', { request: { workspaceId: 'forged-workspace-id', value: forgedWorkspaceProfile } }, 'Unknown orchestration workspace');
+  await assertRejected('orchestration_save_profile_v3', { request: { workspaceId: 'forged-workspace-id', value: forgedWorkspaceProfile } }, 'Unknown orchestration workspace');
   end('rejections');
   checks.push('unknown-command-rejected', 'native-path-field-rejected', 'ordinary-profile-field-rejected', 'actor-field-rejected', 'forged-approval-rejected', 'unknown-native-and-orchestration-workspaces-rejected');
 

@@ -17,8 +17,8 @@ pub use coordinator::{
 pub use types::*;
 pub use validation::{
     AuthorizationError, DefinitionError, authorize_coordinator_tool, authorize_observe,
-    authorize_send, authorize_spawn, validate_definition, validate_history_reference,
-    validate_profile_capabilities,
+    authorize_send, authorize_spawn, spawn_permissions_subset, validate_definition,
+    validate_history_reference, validate_profile_capabilities,
 };
 
 #[cfg(test)]

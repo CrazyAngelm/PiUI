@@ -98,11 +98,11 @@ fn scheduler_error(
     OrchestrationApiError { code: error.code }
 }
 
-pub const ORCHESTRATION_EVENT_V2: &str = "piui://orchestration-event";
+pub const ORCHESTRATION_EVENT_V3: &str = "piui://orchestration-event";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OrchestrationRunChangedEventV2 {
+pub struct OrchestrationRunChangedEventV3 {
     pub protocol: u8,
     #[serde(rename = "type")]
     pub event_type: &'static str,
@@ -113,9 +113,9 @@ pub struct OrchestrationRunChangedEventV2 {
 
 pub fn emit_run_changed(app: &AppHandle, workspace_id: &str, run: &Run) {
     let _ = app.emit(
-        ORCHESTRATION_EVENT_V2,
-        OrchestrationRunChangedEventV2 {
-            protocol: 2,
+        ORCHESTRATION_EVENT_V3,
+        OrchestrationRunChangedEventV3 {
+            protocol: 3,
             event_type: "runChanged",
             workspace_id: workspace_id.to_owned(),
             run_id: run.id().to_owned(),
@@ -894,7 +894,7 @@ pub struct DefinitionSummary {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OrchestrationCatalogV2 {
+pub struct OrchestrationCatalogV3 {
     pub profiles: Vec<DefinitionSummary>,
     pub teams: Vec<DefinitionSummary>,
     pub pipelines: Vec<DefinitionSummary>,
@@ -937,6 +937,24 @@ impl DefinitionValue for AgentProfile {
         !self.id.trim().is_empty()
             && !self.name.trim().is_empty()
             && !self.model.trim().is_empty()
+            && self.service_tier.as_deref().is_none_or(|tier| {
+                self.harness == piui_orchestration::Harness::Codex
+                    && matches!(tier, "standard" | "fast")
+            })
+            && self.reasoning.as_deref().is_none_or(|level| {
+                matches!(
+                    level,
+                    "off"
+                        | "none"
+                        | "minimal"
+                        | "low"
+                        | "medium"
+                        | "high"
+                        | "xhigh"
+                        | "max"
+                        | "ultra"
+                )
+            })
             && self.allowed_spawn_profile_ids.iter().all(|id| {
                 id == &self.id || workspace.profiles.iter().any(|value| value.value.id == *id)
             })
@@ -1180,15 +1198,15 @@ fn delete_definition<T: DefinitionValue>(
 }
 
 #[tauri::command]
-pub fn orchestration_catalog_v2(
+pub fn orchestration_catalog_v3(
     state: State<'_, OrchestrationApiState>,
     host_state: State<'_, HostState>,
     request: WorkspaceRequest,
-) -> Result<OrchestrationCatalogV2, OrchestrationApiError> {
+) -> Result<OrchestrationCatalogV3, OrchestrationApiError> {
     validate_workspace_scope(&host_state, &request.workspace_id)?;
     let store = state.lock()?;
     let Some(workspace) = store.workspace(&request.workspace_id) else {
-        return Ok(OrchestrationCatalogV2 {
+        return Ok(OrchestrationCatalogV3 {
             profiles: vec![],
             teams: vec![],
             pipelines: vec![],
@@ -1207,7 +1225,7 @@ pub fn orchestration_catalog_v2(
         result.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
         result
     }
-    Ok(OrchestrationCatalogV2 {
+    Ok(OrchestrationCatalogV3 {
         profiles: summaries(&workspace.profiles),
         teams: summaries(&workspace.teams),
         pipelines: summaries(&workspace.pipelines),
@@ -1250,32 +1268,32 @@ macro_rules! definition_commands {
 }
 
 definition_commands!(
-    orchestration_get_profile_v2,
-    orchestration_save_profile_v2,
-    orchestration_delete_profile_v2,
+    orchestration_get_profile_v3,
+    orchestration_save_profile_v3,
+    orchestration_delete_profile_v3,
     AgentProfile
 );
 definition_commands!(
-    orchestration_get_team_v2,
-    orchestration_save_team_v2,
-    orchestration_delete_team_v2,
+    orchestration_get_team_v3,
+    orchestration_save_team_v3,
+    orchestration_delete_team_v3,
     TeamDefinition
 );
 definition_commands!(
-    orchestration_get_pipeline_v2,
-    orchestration_save_pipeline_v2,
-    orchestration_delete_pipeline_v2,
+    orchestration_get_pipeline_v3,
+    orchestration_save_pipeline_v3,
+    orchestration_delete_pipeline_v3,
     PipelineDefinition
 );
 definition_commands!(
-    orchestration_get_launch_command_v2,
-    orchestration_save_launch_command_v2,
-    orchestration_delete_launch_command_v2,
+    orchestration_get_launch_command_v3,
+    orchestration_save_launch_command_v3,
+    orchestration_delete_launch_command_v3,
     LaunchCommandReference
 );
 
 #[tauri::command]
-pub fn orchestration_list_runs_v2(
+pub fn orchestration_list_runs_v3(
     state: State<'_, OrchestrationApiState>,
     host_state: State<'_, HostState>,
     request: WorkspaceRequest,
@@ -1302,7 +1320,7 @@ pub fn orchestration_list_runs_v2(
 }
 
 #[tauri::command]
-pub fn orchestration_get_run_v2(
+pub fn orchestration_get_run_v3(
     state: State<'_, OrchestrationApiState>,
     host_state: State<'_, HostState>,
     request: RunRequest,
@@ -1322,7 +1340,7 @@ pub fn orchestration_get_run_v2(
 }
 
 #[tauri::command]
-pub async fn orchestration_start_run_v2(
+pub async fn orchestration_start_run_v3(
     state: State<'_, OrchestrationApiState>,
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
@@ -1348,7 +1366,7 @@ pub async fn orchestration_start_run_v2(
 }
 
 #[tauri::command]
-pub async fn orchestration_cancel_run_v2(
+pub async fn orchestration_cancel_run_v3(
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
     app: AppHandle,
@@ -1369,7 +1387,7 @@ pub async fn orchestration_cancel_run_v2(
 }
 
 #[tauri::command]
-pub async fn orchestration_reconcile_uncertain_task_v2(
+pub async fn orchestration_reconcile_uncertain_task_v3(
     state: State<'_, OrchestrationApiState>,
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
@@ -1429,7 +1447,7 @@ pub async fn orchestration_reconcile_uncertain_task_v2(
 }
 
 #[tauri::command]
-pub async fn orchestration_retry_uncertain_task_v2(
+pub async fn orchestration_retry_uncertain_task_v3(
     state: State<'_, OrchestrationApiState>,
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
@@ -1777,5 +1795,150 @@ mod tests {
         ] {
             assert!(serde_json::from_value::<AgentToolRequest>(forged).is_err());
         }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SaveGraphRequest {
+    pub workspace_id: String,
+    pub profiles: Vec<SaveDefinitionRequest<AgentProfile>>,
+    pub team: SaveDefinitionRequest<TeamDefinition>,
+    pub pipeline: SaveDefinitionRequest<PipelineDefinition>,
+    pub command: SaveDefinitionRequest<LaunchCommandReference>,
+}
+
+fn put_graph_definition<T: DefinitionValue>(
+    workspace: &mut WorkspaceOrchestration,
+    request: SaveDefinitionRequest<T>,
+) -> Result<(), StoreError> {
+    if request.workspace_id != workspace.workspace_id {
+        return Err(StoreError::Invalid);
+    }
+    let values = T::values_mut(workspace);
+    match (
+        values
+            .iter()
+            .position(|stored| stored.value.id() == request.value.id()),
+        request.expected_revision,
+    ) {
+        (None, None) => values.push(StoredDefinition {
+            revision: 0,
+            value: request.value,
+        }),
+        (Some(index), Some(expected)) if values[index].revision == expected => {
+            values[index] = StoredDefinition {
+                revision: expected.checked_add(1).ok_or(StoreError::Invalid)?,
+                value: request.value,
+            };
+        }
+        _ => return Err(StoreError::Conflict),
+    }
+    Ok(())
+}
+
+fn save_graph(
+    state: &OrchestrationApiState,
+    request: SaveGraphRequest,
+) -> Result<(), OrchestrationApiError> {
+    validate_workspace_id(&request.workspace_id)?;
+    let snapshot = RunDefinitionSnapshot {
+        profiles: request
+            .profiles
+            .iter()
+            .map(|entry| entry.value.clone())
+            .collect(),
+        team: request.team.value.clone(),
+        pipeline: request.pipeline.value.clone(),
+        launch_command: Some(request.command.value.clone()),
+    };
+    piui_orchestration::validate_definition(&snapshot)
+        .map_err(|_| OrchestrationApiError::invalid())?;
+    for parent in &snapshot.profiles {
+        for child in &parent.allowed_spawn_profile_ids {
+            piui_orchestration::authorize_spawn(&snapshot, &parent.id, child)
+                .map_err(|_| OrchestrationApiError::denied())?;
+        }
+    }
+    state
+        .lock()?
+        .transact(|workspaces| {
+            let index = match workspaces
+                .iter()
+                .position(|value| value.workspace_id == request.workspace_id)
+            {
+                Some(index) => index,
+                None => {
+                    workspaces.push(WorkspaceOrchestration::empty(request.workspace_id.clone()));
+                    workspaces.len() - 1
+                }
+            };
+            let workspace = &mut workspaces[index];
+            for profile in request.profiles {
+                put_graph_definition(workspace, profile)?;
+            }
+            put_graph_definition(workspace, request.team)?;
+            put_graph_definition(workspace, request.pipeline)?;
+            put_graph_definition(workspace, request.command)?;
+            if snapshot
+                .profiles
+                .iter()
+                .any(|value| !value.valid_for_workspace(workspace))
+            {
+                return Err(StoreError::Invalid);
+            }
+            Ok(())
+        })
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn orchestration_save_graph_v3(
+    state: State<'_, OrchestrationApiState>,
+    host_state: State<'_, HostState>,
+    request: SaveGraphRequest,
+) -> Result<(), OrchestrationApiError> {
+    let _operation = host_state.live_runtime_operation_gate.lock().await;
+    validate_workspace_scope(&host_state, &request.workspace_id)?;
+    save_graph(&state, request)
+}
+
+#[cfg(test)]
+mod graph_tests {
+    use super::*;
+    fn request() -> SaveGraphRequest {
+        serde_json::from_value(serde_json::json!({
+            "workspaceId":"workspace",
+            "profiles":[{"workspaceId":"workspace","value":{"id":"agent","name":"Agent","harness":"codex","model":"model","permissionMode":"read-only","instructions":"","reasoning":"high","serviceTier":"fast","resourceRules":[{"kind":"mcp","id":"example","enabled":false}],"toolPolicy":{"rules":[]},"allowedSpawnProfileIds":[]}}],
+            "team":{"workspaceId":"workspace","value":{"id":"team","name":"System","members":[{"id":"node","profileId":"agent"}],"sendEdges":[],"observeEdges":[],"orchestratorMemberId":"node"}},
+            "pipeline":{"workspaceId":"workspace","value":{"id":"pipeline","name":"System","steps":[{"id":"node","name":"Task","assignedMemberId":"node","instructions":"Work","dependencyStepIds":[]}]}},
+            "command":{"workspaceId":"workspace","value":{"id":"command","name":"System","teamId":"team","pipelineId":"pipeline"}}
+        })).unwrap()
+    }
+    #[test]
+    fn graph_save_is_atomic_and_preserves_settings_across_reopen() {
+        let root = std::env::temp_dir().join(format!("piui-graph-{}", uuid::Uuid::new_v4()));
+        let state = OrchestrationApiState::open(&root).unwrap();
+        save_graph(&state, request()).unwrap();
+        let mut conflict = request();
+        conflict.profiles[0].expected_revision = Some(0);
+        conflict.profiles[0].value.name = "Must roll back".into();
+        assert!(save_graph(&state, conflict).is_err());
+        drop(state);
+        let state = OrchestrationApiState::open(&root).unwrap();
+        let store = state.lock().unwrap();
+        let workspace = store.workspace("workspace").unwrap();
+        assert_eq!(workspace.profiles[0].value.name, "Agent");
+        assert_eq!(workspace.profiles[0].revision, 0);
+        assert_eq!(
+            workspace.profiles[0].value.reasoning.as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            workspace.profiles[0].value.service_tier.as_deref(),
+            Some("fast")
+        );
+        assert!(!workspace.profiles[0].value.resource_rules[0].enabled);
+        assert_eq!(workspace.launch_commands.len(), 1);
     }
 }

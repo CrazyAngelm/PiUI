@@ -252,10 +252,22 @@ impl Coordinator {
                 (recipient.as_str(), id.as_str()),
                 (id.as_str(), recipient.as_str()),
             ] {
-                definition.team.send_edges.push(crate::DirectedEdge {
-                    from_member_id: from.into(),
-                    to_member_id: to.into(),
-                });
+                // Joining the team cannot create a route the parent did not
+                // possess. Parent/child return communication is intrinsic.
+                let inherited = recipient == actor_member_id
+                    || if from == id {
+                        crate::authorize_send(&run.definition.team, actor_member_id, &recipient)
+                            .is_ok()
+                    } else {
+                        crate::authorize_send(&run.definition.team, &recipient, actor_member_id)
+                            .is_ok()
+                    };
+                if inherited {
+                    definition.team.send_edges.push(crate::DirectedEdge {
+                        from_member_id: from.into(),
+                        to_member_id: to.into(),
+                    });
+                }
             }
         }
         definition.team.observe_edges.push(crate::DirectedEdge {
@@ -987,7 +999,7 @@ pub fn serialize_run(run: &Run) -> Result<Vec<u8>, RunDataError> {
 
 pub fn deserialize_run(bytes: &[u8]) -> Result<Run, RunDataError> {
     let mut run: Run = serde_json::from_slice(bytes).map_err(RunDataError::Deserialize)?;
-    if run.schema_version == 1 {
+    if matches!(run.schema_version, 1 | 2) {
         run.schema_version = ORCHESTRATION_SCHEMA_VERSION;
     }
     validate_run_data(&run)?;

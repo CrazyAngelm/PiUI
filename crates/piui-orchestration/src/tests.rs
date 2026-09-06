@@ -9,7 +9,7 @@ fn v1_run_migrates_without_changing_native_prompt() {
         serde_json::from_slice(&serialize_run(&run).unwrap()).unwrap();
     json["schemaVersion"] = 1.into();
     let migrated = deserialize_run(&serde_json::to_vec(&json).unwrap()).unwrap();
-    assert_eq!(migrated.schema_version(), 2);
+    assert_eq!(migrated.schema_version(), 3);
     assert!(
         migrated
             .definition()
@@ -91,7 +91,7 @@ fn dynamic_peer_messaging_requires_explicit_team_grant() {
     )
     .unwrap();
     assert!(authorize_send(&run.definition.team, &child, "worker").is_ok());
-    assert!(authorize_send(&run.definition.team, "worker", &child).is_ok());
+    assert!(authorize_send(&run.definition.team, "worker", &child).is_err());
     assert!(authorize_observe(&run.definition.team, "worker", &child).is_err());
 }
 
@@ -102,8 +102,11 @@ fn profile(id: &str, harness: Harness, allowed: &[&str]) -> AgentProfile {
         harness,
         model_provider: Some("example-provider".to_owned()),
         model: format!("{id}-model"),
-        permission_mode: PermissionMode::Native,
+        permission_mode: PermissionMode::ReadOnly,
         base_instructions: None,
+        reasoning: None,
+        service_tier: None,
+        resource_rules: vec![],
         instructions: format!("instructions for {id}"),
         tool_policy: DeclaredToolPolicy {
             rules: vec![ToolRule {
@@ -403,7 +406,7 @@ fn rust_json_matches_typescript_v1_golden_shape_and_rejects_unknown_fields() {
     let run = Coordinator::new_run("run-1", snapshot()).unwrap();
     let actual: serde_json::Value = serde_json::from_slice(&serialize_run(&run).unwrap()).unwrap();
     let golden = json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "id": "run-1",
         "definition": {
             "profiles": [
@@ -413,7 +416,7 @@ fn rust_json_matches_typescript_v1_golden_shape_and_rejects_unknown_fields() {
                     "harness": "pi",
                     "modelProvider": "example-provider",
                     "model": "lead-profile-model",
-                    "permissionMode": "native",
+                    "permissionMode": "read-only",
                     "instructions": "instructions for lead-profile",
                     "toolPolicy": {"rules": [{
                         "tool": "session.send", "decision": "allow", "enforcement": "native", "mandatory": true
@@ -426,7 +429,7 @@ fn rust_json_matches_typescript_v1_golden_shape_and_rejects_unknown_fields() {
                     "harness": "codex",
                     "modelProvider": "example-provider",
                     "model": "worker-profile-model",
-                    "permissionMode": "native",
+                    "permissionMode": "read-only",
                     "instructions": "instructions for worker-profile",
                     "toolPolicy": {"rules": [{
                         "tool": "session.send", "decision": "allow", "enforcement": "native", "mandatory": true
@@ -483,7 +486,7 @@ fn rust_json_matches_typescript_v1_golden_shape_and_rejects_unknown_fields() {
 
 fn bridge_capabilities() -> NativeBridgeCapabilities {
     NativeBridgeCapabilities {
-        permission_modes: vec![PermissionMode::Native],
+        permission_modes: vec![PermissionMode::ReadOnly],
         native_enforced_tools: vec!["session.send".to_owned()],
         coordinator_enforced_tools: vec![
             "orchestration.roster".to_owned(),
@@ -752,4 +755,38 @@ fn coordinator_deny_rule_blocks_reverse_operation_even_when_acl_allows_it() {
         Err(AuthorizationError::CoordinatorToolDenied { .. })
     ));
     authorize_coordinator_tool(&definition, "lead", "orchestration.send").unwrap();
+}
+
+#[test]
+fn child_authority_cannot_widen_files_tools_resources_or_delegation() {
+    let mut definition = snapshot();
+    assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_ok());
+    definition.profiles[1].permission_mode = PermissionMode::FullAccess;
+    assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_err());
+    definition.profiles[1].permission_mode = PermissionMode::ReadOnly;
+    definition.profiles[1].tool_policy.rules.clear();
+    assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_err());
+    definition.profiles[1].tool_policy = definition.profiles[0].tool_policy.clone();
+    definition.profiles[0].resource_rules.push(ResourceRule {
+        kind: ResourceKind::Mcp,
+        id: "private".into(),
+        enabled: false,
+    });
+    assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_err());
+    definition.profiles[1].resource_rules = definition.profiles[0].resource_rules.clone();
+    assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_ok());
+    definition.profiles[1]
+        .allowed_spawn_profile_ids
+        .push("lead-profile".into());
+    assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_err());
+}
+
+#[test]
+fn native_defaults_do_not_prove_cross_harness_authority() {
+    let mut definition = snapshot();
+    definition.profiles[0].permission_mode = PermissionMode::Native;
+    definition.profiles[1].permission_mode = PermissionMode::Native;
+    assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_err());
+    definition.profiles[1].harness = definition.profiles[0].harness;
+    assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_ok());
 }
