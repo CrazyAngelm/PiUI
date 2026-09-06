@@ -22,3 +22,10 @@ Orchestration v3 adds optional profile `reasoning`, `serviceTier`, `resourceRule
 and the atomic `orchestration_save_graph_v3` command. v1/v2 declarations remain
 historical contracts; the active desktop uses v3. Recorded v1/v2 runs migrate
 without native history mutation. Missing profile fields retain native defaults.
+# Portable system files
+
+`system-file-v1.schema.json` is the versioned JSON exchange contract for the
+unified graph. It is not a native session format or a store generation dump.
+Unknown fields and versions are rejected. The UI and `pnpm system:check` share
+schema/semantic checks; the existing typed host remains authoritative for
+save and execution. See `docs/SYSTEM_FILES.md`.

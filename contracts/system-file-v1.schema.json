@@ -1,0 +1,245 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PiUI system file v1",
+  "type": "object",
+  "properties": {
+    "format": {
+      "const": "piui-system"
+    },
+    "version": {
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "orchestrator": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "inheritTeamConnections": {
+      "type": "boolean"
+    },
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "profile": {
+            "$ref": "#/definitions/profile"
+          },
+          "task": {
+            "type": "string"
+          },
+          "position": {
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "number",
+                "minimum": 0
+              },
+              "y": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "x",
+              "y"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "profile",
+          "task"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "connections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "kind": {
+            "enum": [
+              "result",
+              "send",
+              "observe",
+              "spawn"
+            ]
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "kind"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "format",
+    "version",
+    "name",
+    "agents",
+    "connections"
+  ],
+  "additionalProperties": false,
+  "definitions": {
+    "profile": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "harness": {
+          "enum": [
+            "codex",
+            "prime-agent",
+            "pi"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "modelProvider": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "permissionMode": {
+          "enum": [
+            "native",
+            "read-only",
+            "workspace-write",
+            "full-access"
+          ]
+        },
+        "instructions": {
+          "type": "string"
+        },
+        "baseInstructions": {
+          "type": "string"
+        },
+        "reasoning": {
+          "enum": [
+            "off",
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
+        },
+        "serviceTier": {
+          "enum": [
+            "standard",
+            "fast"
+          ]
+        },
+        "toolPolicy": {
+          "type": "object",
+          "properties": {
+            "rules": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "tool": {
+                    "type": "string",
+                    "pattern": "\\S"
+                  },
+                  "decision": {
+                    "enum": [
+                      "allow",
+                      "deny"
+                    ]
+                  },
+                  "enforcement": {
+                    "enum": [
+                      "native",
+                      "coordinator",
+                      "advisory",
+                      "unsupported"
+                    ]
+                  },
+                  "mandatory": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "tool",
+                  "decision",
+                  "enforcement",
+                  "mandatory"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "rules"
+          ],
+          "additionalProperties": false
+        },
+        "resourceRules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "skill",
+                  "mcp"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "enabled": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "enabled"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "name",
+        "harness",
+        "model",
+        "permissionMode",
+        "instructions",
+        "toolPolicy"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

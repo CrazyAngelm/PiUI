@@ -1,5 +1,20 @@
 # AGENTS.md — mandatory PiUI development rules
 
+## User-authored system files
+
+- `contracts/system-file-v1.schema.json` is the portable graph contract. Keep
+  UI import/export and `pnpm system:check` on the same parser; adapter-specific
+  static checks belong to `src/harness-adapters/validation.ts`.
+- Import is a new draft, not authorization to run, overwrite saved definitions,
+  evaluate code, load includes or mutate native/global configuration. Failed
+  validation preserves the current graph. Save remains an atomic host action.
+- A breaking file-format change needs its own version and migration/round-trip
+  tests. Do not change native session formats or IPC versions merely to rename
+  an exchange document field. Never silently drop unsupported fields.
+- Maintain `skills/piui-systems/` and examples when changing the exchange format
+  or adapter capabilities. Skills must distinguish verified configuration from
+  available native models/tools and must not advertise unsupported isolation.
+
 This file is intended for coding agents and engineers working on the PiUI repository. The requirements below take precedence over the local convenience of any particular task.
 
 ## Goal

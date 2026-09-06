@@ -1,0 +1,44 @@
+{
+  "format": "piui-system",
+  "version": 1,
+  "name": "mixed-review",
+  "orchestrator": "review",
+  "agents": [
+    {
+      "id": "research",
+      "profile": {
+        "name": "Research",
+        "harness": "codex",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "read-only",
+        "instructions": "When called: perform only the assigned task. Input: task instructions and dependency results. Output: evidence, conclusions and unresolved questions. Finish when the stated acceptance criteria are proven or report the concrete blocker. Do not invent findings.",
+        "toolPolicy": {
+          "rules": []
+        },
+        "serviceTier": "standard"
+      },
+      "task": "Investigate the user-defined problem. Return evidence and a proposed solution; do not edit files."
+    },
+    {
+      "id": "review",
+      "profile": {
+        "name": "Review",
+        "harness": "prime-agent",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "native",
+        "instructions": "When called: perform only the assigned task. Input: task instructions and dependency results. Output: evidence, conclusions and unresolved questions. Finish when the stated acceptance criteria are proven or report the concrete blocker. Do not invent findings.",
+        "toolPolicy": {
+          "rules": []
+        }
+      },
+      "task": "Review the dependency result. Report only issues that prevent meeting the user goal, with evidence. Do not change files."
+    }
+  ],
+  "connections": [
+    {
+      "from": "research",
+      "to": "review",
+      "kind": "result"
+    }
+  ]
+}

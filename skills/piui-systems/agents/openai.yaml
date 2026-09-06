@@ -1,0 +1,4 @@
+interface:
+  display_name: "PiUI Systems"
+  short_description: "Build validated PiUI agent systems from a task"
+  default_prompt: "Use $piui-systems to turn my task into a validated PiUI system file with appropriate harnesses, dependencies and permissions."

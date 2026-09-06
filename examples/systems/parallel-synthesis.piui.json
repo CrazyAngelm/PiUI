@@ -1,0 +1,65 @@
+{
+  "format": "piui-system",
+  "version": 1,
+  "name": "parallel-synthesis",
+  "orchestrator": "synthesis",
+  "agents": [
+    {
+      "id": "architecture",
+      "profile": {
+        "name": "Architecture",
+        "harness": "codex",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "read-only",
+        "instructions": "When called: perform only the assigned task. Input: task instructions and dependency results. Output: evidence, conclusions and unresolved questions. Finish when the stated acceptance criteria are proven or report the concrete blocker. Do not invent findings.",
+        "toolPolicy": {
+          "rules": []
+        },
+        "serviceTier": "standard"
+      },
+      "task": "Review architecture relevant to the user task. Return evidence and risks; do not edit files."
+    },
+    {
+      "id": "validation",
+      "profile": {
+        "name": "Validation",
+        "harness": "codex",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "read-only",
+        "instructions": "When called: perform only the assigned task. Input: task instructions and dependency results. Output: evidence, conclusions and unresolved questions. Finish when the stated acceptance criteria are proven or report the concrete blocker. Do not invent findings.",
+        "toolPolicy": {
+          "rules": []
+        },
+        "serviceTier": "standard"
+      },
+      "task": "Independently inspect the validation requirements for the user task. Return evidence and gaps; do not edit files."
+    },
+    {
+      "id": "synthesis",
+      "profile": {
+        "name": "Synthesis",
+        "harness": "codex",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "read-only",
+        "instructions": "When called: perform only the assigned task. Input: task instructions and dependency results. Output: evidence, conclusions and unresolved questions. Finish when the stated acceptance criteria are proven or report the concrete blocker. Do not invent findings.",
+        "toolPolicy": {
+          "rules": []
+        },
+        "serviceTier": "standard"
+      },
+      "task": "Combine dependency findings into a proposal. Resolve disagreements against evidence and the user goal."
+    }
+  ],
+  "connections": [
+    {
+      "from": "architecture",
+      "to": "synthesis",
+      "kind": "result"
+    },
+    {
+      "from": "validation",
+      "to": "synthesis",
+      "kind": "result"
+    }
+  ]
+}

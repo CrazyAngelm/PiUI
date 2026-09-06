@@ -9,6 +9,9 @@ export function setLanguage(value: Language): void {
 }
 language.subscribe(value => { if (typeof document !== 'undefined') document.documentElement.lang = value; });
 const russian: Readonly<Record<string, string>> = {
+  'Imported as a new system. Save to keep it.': 'Импортировано как новая система. Сохраните, чтобы оставить её.',
+  'File': 'Файл', 'Import JSON': 'Импорт JSON', 'Export JSON': 'Экспорт JSON',
+  'Invalid JSON.': 'Некорректный JSON.', 'Could not import system.': 'Не удалось импортировать систему.', 'Could not export system.': 'Не удалось экспортировать систему.',
   'Settings': 'Настройки', 'Done': 'Готово', 'Language': 'Язык', 'Theme': 'Тема', 'System': 'Системная', 'Light': 'Светлая', 'Dark': 'Тёмная',
   'Density': 'Плотность', 'Comfortable': 'Обычная', 'Compact': 'Компактная', 'Motion': 'Анимация', 'Follow system': 'Как в системе', 'Reduce motion': 'Уменьшить анимацию',
   'Chat text size': 'Размер текста', 'Small': 'Маленький', 'Medium': 'Средний', 'Large': 'Большой', 'Conversation width': 'Ширина диалога', 'Wide': 'Широкая', 'Centered': 'По центру', 'Focused': 'Узкая',

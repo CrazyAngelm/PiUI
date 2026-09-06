@@ -23,6 +23,9 @@
   let kind: ConnectionKind = 'result';
   let zoom = 1;
   let detailed = false;
+  let filePicker: HTMLInputElement;
+  let downloadUrl: string | undefined;
+  let fileNotice = '';
   let pendingRunId: string | undefined;
   $: nodeById = new Map(graph.nodes.map(node => [node.id, node]));
   let drag: { id: string; pointer: number; startX: number; startY: number; x: number; y: number } | undefined;
@@ -32,7 +35,32 @@
   $: onDirtyChange(dirty);
   $: width = Math.max(1000, ...graph.nodes.map(node => node.x + 300));
   $: height = Math.max(560, ...graph.nodes.map(node => node.y + 220));
-  onMount(() => { void refresh(); return () => onDirtyChange(false); });
+  onMount(() => { void refresh(); return () => { onDirtyChange(false); if (downloadUrl) URL.revokeObjectURL(downloadUrl); }; });
+  async function importFile(event: Event): Promise<void> {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0]; input.value = '';
+    if (!file || safeMode || busy) return;
+    if (dirty) { errors = ['Save changes before opening another system.']; return; }
+    busy = true; errors = [];
+    try {
+      const { parseSystemFile, systemFileToGraph } = await import('./systemFile');
+      const next = systemFileToGraph(parseSystemFile(await file.text()));
+      graph = next; revisions = new Map(); selectedId = next.nodes[0]?.id ?? ''; detailed = false; pendingRunId = undefined; fileNotice = 'Imported as a new system. Save to keep it.';
+    } catch (error) { errors = [error instanceof Error ? error.message : 'Could not import system.']; }
+    finally { busy = false; }
+  }
+  async function exportFile(): Promise<void> {
+    if (busy) return;
+    errors = [];
+    try {
+      const { serializeSystemFile } = await import('./systemFile');
+      const text = serializeSystemFile(graph);
+      if (downloadUrl) URL.revokeObjectURL(downloadUrl);
+      downloadUrl = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+      const link = document.createElement('a'); link.href = downloadUrl; link.download = 'system.piui.json';
+      link.click();
+    } catch (error) { errors = [error instanceof Error ? error.message : 'Could not export system.']; }
+  }
   async function refresh(): Promise<void> { try { commands = (await client.orchestration_catalog_v3({ workspaceId })).launchCommands; } catch (error) { errors = [orchestrationError(error).message]; } }
   function updateNode(id: string, change: Partial<GraphNode>): void { graph = { ...graph, nodes: graph.nodes.map(node => node.id === id ? { ...node, ...change } : node) }; }
   function updateProfile(change: Partial<AgentProfile>): void { if (selected) updateNode(selected.id, { profile: { ...selected.profile, ...change } }); }
@@ -87,7 +115,7 @@
       const request = <T extends { id: string }>(value: T): SaveDefinitionRequest<T> => ({ workspaceId, value, ...(revisions.has(value.id) ? { expectedRevision: revisions.get(value.id)! } : {}) });
       await client.orchestration_save_graph_v3({ workspaceId, profiles: definition.profiles.map(value => request(value)), team: request(definition.team), pipeline: request(definition.pipeline), command: request(definition.command) });
       revisions = new Map([...definition.profiles, definition.team, definition.pipeline, definition.command].map(value => [value.id, (revisions.get(value.id) ?? -1) + 1]));
-      baseline = JSON.stringify(graph);
+      baseline = JSON.stringify(graph); fileNotice = '';
       try { localStorage.setItem(`piui.graph.${workspaceId}.${graph.id}`, JSON.stringify(graph.nodes.map(({ id, x, y }) => ({ id, x, y })))); } catch { /* Definition already persisted by the host. */ }
       await refresh();
       if (run) {
@@ -106,10 +134,16 @@
     <input class="system-name" aria-label={$t('Name')} placeholder={$t('Agent system')} bind:value={graph.name} disabled={safeMode || busy} />
     <select aria-label={$t('Open system')} value={revisions.has(graph.id) ? graph.id : ''} onchange={(event) => void open(event.currentTarget.value)} disabled={busy}><option value="">{$t('Open system')}</option>{#each commands as command}<option value={command.id}>{command.name}</option>{/each}</select>
     <button onclick={requestNew} disabled={busy || safeMode}>{$t('New system')}</button>
+    <details class="file-menu"><summary>{$t('File')}</summary><div>
+      <button onclick={() => filePicker.click()} disabled={safeMode || busy}>{$t('Import JSON')}</button>
+      <button onclick={() => void exportFile()} disabled={busy || !graph.nodes.length}>{$t('Export JSON')}</button>
+    </div></details>
+    <input class="file-input" bind:this={filePicker} type="file" accept=".json,application/json" aria-label={$t('Import JSON')} onchange={(event) => void importFile(event)} tabindex="-1" />
     <span class="save-state" aria-live="polite">{$t(busy ? 'Saving…' : dirty ? 'Unsaved changes' : 'Saved')}</span>
     <button onclick={() => void save()} disabled={busy || safeMode}>{$t('Save')}</button>
     <button class="primary" onclick={() => void save(true)} disabled={busy || safeMode || !graph.nodes.length}>{$t('Run')}</button>
   </header>
+  {#if fileNotice}<p class="notice" role="status">{$t(fileNotice)}</p>{/if}
   {#if safeMode}<p class="notice">{$t('Safe mode: viewing only.')}</p>{/if}
   {#if errors.length}<div class="errors" role="alert">{#each errors as error}<p>{$t(error)}</p>{/each}</div>{/if}
   {#if detailed && selected}
@@ -156,6 +190,10 @@
 </section>
 
 <style>
+  .file-input { display:none; }
+  .file-menu { position:relative; } .file-menu summary { cursor:pointer; padding:5px 9px; }
+  .file-menu > div { position:absolute; right:0; top:100%; z-index:10; min-width:140px; padding:4px; border:1px solid var(--piui-border); border-radius:6px; background:var(--piui-bg-raised); }
+  .file-menu button { display:block; width:100%; border:0; text-align:left; }
   .system-editor { color:var(--piui-text); height:100%; min-height:0; display:flex; flex-direction:column; }
   .editing-profile { overflow:auto; }
   .toolbar,.canvas-tools { display:flex; gap:6px; align-items:center; padding:8px 14px; border-bottom:1px solid var(--piui-border-subtle); flex-wrap:wrap; }

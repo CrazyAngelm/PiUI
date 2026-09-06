@@ -1,0 +1,24 @@
+{
+  "format": "piui-system",
+  "version": 1,
+  "name": "single",
+  "orchestrator": "analyst",
+  "agents": [
+    {
+      "id": "analyst",
+      "profile": {
+        "name": "Analyst",
+        "harness": "codex",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "read-only",
+        "instructions": "When called: perform only the assigned task. Input: task instructions and dependency results. Output: evidence, conclusions and unresolved questions. Finish when the stated acceptance criteria are proven or report the concrete blocker. Do not invent findings.",
+        "toolPolicy": {
+          "rules": []
+        },
+        "serviceTier": "standard"
+      },
+      "task": "Inspect the requested project area. Return findings with file references. Do not change files."
+    }
+  ],
+  "connections": []
+}

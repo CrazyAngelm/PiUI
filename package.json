@@ -16,11 +16,13 @@
     "test:e2e:tauri:windows": "pnpm --filter @piui/desktop test:e2e:tauri:windows",
     "build": "pnpm --filter @piui/desktop build",
     "tauri": "pnpm --filter @piui/desktop tauri",
-    "contract:test": "pnpm --filter @piui/desktop contract:test",
+    "contract:test": "node scripts/system-schema.mjs --check && pnpm --filter @piui/desktop contract:test",
     "perf:smoke": "pnpm --filter @piui/desktop perf:smoke",
     "mutation:test": "node scripts/mutation-index.mjs",
     "mutation:catalog-state": "node scripts/mutation-catalog-state.mjs",
     "repo:check": "node scripts/public-repo-audit.mjs",
-    "release:windows": "pnpm --filter @piui/desktop exec tauri build --bundles nsis --ci && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-windows-release.ps1"
+    "release:windows": "pnpm --filter @piui/desktop exec tauri build --bundles nsis --ci && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-windows-release.ps1",
+    "system:check": "node scripts/system-config.mjs",
+    "system:schema": "node scripts/system-schema.mjs"
   }
 }

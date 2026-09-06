@@ -483,6 +483,49 @@ export async function runWorkspaceWebview2Proof({
     await evaluate(`document.activeElement.click()`);
     await waitFor(`document.querySelector('.graph-layout aside')`, 'reopen graph inspector');
 
+    // Export through the actual UI serializer. Suppress only the native download
+    // in this isolated test; retain the Blob bytes for the import round trip.
+    await evaluate(`(() => {
+      window.__piuiAnchorClick = HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click = function() {
+        window.__piuiExportPromise = fetch(this.href).then(response => response.text());
+      };
+      document.querySelector('.file-menu').open = true;
+    })()`);
+    let exported;
+    try {
+      await clickButton('Export JSON', '.file-menu');
+      await waitFor(`Boolean(window.__piuiExportPromise)`, 'export JSON blob');
+      exported = await evaluate(`window.__piuiExportPromise`);
+    } finally {
+      await evaluate(`HTMLAnchorElement.prototype.click = window.__piuiAnchorClick`);
+    }
+    const imported = JSON.parse(exported);
+    assertion(imported.format === 'piui-system' && imported.agents.length === 2, 'Export lost mixed-system agents');
+    const priorName = await evaluate(`document.querySelector('.system-name').value`);
+    async function chooseJson(text) {
+      await evaluate(`(() => {
+        const input = document.querySelector('.file-input'); const transfer = new DataTransfer();
+        transfer.items.add(new File([${JSON.stringify(text)}], 'proof.piui.json', {type:'application/json'}));
+        input.files = transfer.files; input.dispatchEvent(new Event('change', {bubbles:true}));
+      })()`);
+    }
+    await chooseJson('{invalid');
+    await waitFor(`document.querySelector('.system-editor [role="alert"]')`, 'invalid system file error');
+    assertion(await evaluate(`document.querySelector('.system-name').value`) === priorName, 'Failed import replaced the current system');
+    imported.name = 'Imported JSON proof';
+    await chooseJson(JSON.stringify(imported));
+    await waitFor(`document.querySelector('.system-name').value === 'Imported JSON proof' && document.querySelector('.save-state')?.textContent === 'Unsaved changes'`, 'imported system draft');
+    const beforeImportSave = await orchestrationCatalog(workspaceId);
+    assertion(!beforeImportSave.launchCommands.some(item => item.name === imported.name), 'Import saved or ran without explicit Save');
+    await clickButton('Save', '.system-editor .toolbar');
+    await waitFor(`document.querySelector('.save-state')?.textContent === 'Saved'`, 'save imported system');
+    const importedCommand = await readSingle('launch', workspaceId, imported.name);
+    assertion(importedCommand.summary.id !== graphCommand.summary.id, 'Import reused an existing system identity');
+    const afterImportSave = await orchestrationCatalog(workspaceId);
+    assertion(afterImportSave.launchCommands.some(item => item.id === graphCommand.summary.id), 'Import overwrote the original system');
+    await evaluate(`document.querySelector('.file-menu').open = false`);
+    await capture('workspace-imported-json');
     return names;
   }
 
