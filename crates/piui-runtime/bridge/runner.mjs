@@ -5,6 +5,7 @@ const MAX_FRAME_BYTES = 32 * 1024 * 1024;
 const METHODS = new Set([
   "initialize", "snapshot", "prompt", "interrupt", "models",
   "setModel", "respond", "rename", "dispose", "coordinatorResponse",
+  "openSession", "sessionRequest",
 ]);
 
 function safeFailure(id, code, message) {
@@ -52,7 +53,8 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
     const keys = Object.keys(operation).sort().join(",");
     if (operation.type === "roster") return keys === "type";
     if (operation.type === "send") return keys === "body,recipientMemberId,type" && typeof operation.recipientMemberId === "string" && typeof operation.body === "string";
-    if (operation.type === "observe") return keys === "targetMemberId,type" && typeof operation.targetMemberId === "string";
+    if (operation.type === "observe" || operation.type === "wait") return keys === "targetMemberId,type" && typeof operation.targetMemberId === "string";
+    if (operation.type === "spawnAgent") return keys === "instructions,name,profileId,type" && [operation.profileId, operation.name, operation.instructions].every(v => typeof v === "string");
     if (operation.type === "spawn") return keys === "stepId,type" && typeof operation.stepId === "string";
     return false;
   };
@@ -77,6 +79,7 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
 
   const emit = (event) => {
     if (event && typeof event === "object") {
+      if (event.type === 'pooledEvent') { writeFrame(output, {sessionId:event.sessionId,event:event.event}); return; }
       if (event.type === "turnCompleted") rejectCoordinatorPending();
       writeFrame(output, { event });
     }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import type { AgentProfile, Harness, PermissionMode, ToolRule } from '../../../../../contracts/orchestration-v1';
+  import type { AgentProfile, Harness, PermissionMode, ToolRule } from '../../../../../contracts/orchestration-v2';
   import {
     createProfileDraft,
     enforcementLabel,
@@ -128,7 +128,6 @@
   <header>
     <p class="eyebrow">Agent profile</p>
     <h1 id="profile-editor-title">{profile === undefined ? 'Create profile' : 'Edit profile'}</h1>
-    <p class="intro">Save settings to reuse when launching an agent.</p>
     {#if readOnly}<p class="notice" role="status">Read-only mode. Profile data is shown, but changes cannot be saved.</p>{/if}
   </header>
 
@@ -140,14 +139,12 @@
     </div>
   {/if}
 
-  <section aria-labelledby="identity-heading">
-    <h2 id="identity-heading">Identity</h2>
+  <section aria-label="Agent identity">
     <label for="profile-name">Name</label>
     <input id="profile-name" value={draft.name} oninput={(event) => updateDraft({ name: event.currentTarget.value })} disabled={disabled} autocomplete="off" />
   </section>
 
-  <section aria-labelledby="runtime-heading">
-    <h2 id="runtime-heading">Runtime</h2>
+  <section aria-label="Runtime">
     {#if profile === undefined}
       <label for="profile-harness">Harness</label>
       <select id="profile-harness" value={draft.harness} onchange={(event) => updateDraft({ harness: event.currentTarget.value as Harness })} disabled={disabled}>
@@ -157,7 +154,6 @@
       </select>
     {:else}
       <p class="static-field"><strong>Harness</strong><span>{harnessLabel(draft.harness)}</span></p>
-      <p class="field-note">A saved profile keeps its harness. Create a copy to use another harness.</p>
     {/if}
 
     <div class="field-grid">
@@ -165,30 +161,35 @@
       <div><label for="profile-model">Model</label><input id="profile-model" value={draft.model} oninput={(event) => updateDraft({ model: event.currentTarget.value })} disabled={disabled} autocomplete="off" /></div>
     </div>
 
-    <fieldset class="permission-mode" disabled={disabled}>
-      <legend>Native permissions</legend>
-      {#each ['native', 'read-only', 'workspace-write', 'full-access'] as mode}
-        {@const permission = mode as PermissionMode}
-        <label class:chosen={draft.permissionMode === permission}>
-          <input type="radio" name="permission-mode" value={permission} checked={draft.permissionMode === permission} onchange={() => updateDraft({ permissionMode: permission })} />
-          <span><strong>{permission === 'native' ? 'Native permissions' : permission === 'read-only' ? 'Read-only' : permission === 'workspace-write' ? 'Workspace write' : 'Full access'}</strong><small>{permissionDescription(permission)}</small></span>
-        </label>
-      {/each}
-    </fieldset>
-    {#if primeStrictPermission}<p class="rule-warning">Prime Agent rejects this strict permission mode. Choose a supported mode to launch.</p>{/if}
+
   </section>
 
   <section aria-labelledby="instructions-heading">
     <h2 id="instructions-heading">Instructions</h2>
-    <label for="profile-instructions">Profile instructions</label>
+    {#if draft.harness === 'codex'}
+      <label class="mandatory"><input type="checkbox" checked={draft.replaceBasePrompt} onchange={(event) => updateDraft({ replaceBasePrompt: event.currentTarget.checked })} disabled={disabled} /> Replace Codex base prompt</label>
+      {#if draft.replaceBasePrompt}
+        <label for="profile-base-instructions">Your base prompt</label>
+        <textarea id="profile-base-instructions" value={draft.baseInstructions} oninput={(event) => updateDraft({ baseInstructions: event.currentTarget.value })} disabled={disabled} spellcheck="true"></textarea>
+        <p class="field-note">Replaces the built-in coding prompt. Leave empty for no base text. Tool descriptions, project instructions and native permission context still apply.</p>
+      {/if}
+    {/if}
+    <label for="profile-instructions">Additional instructions</label>
     <textarea id="profile-instructions" value={draft.instructions} oninput={(event) => updateDraft({ instructions: event.currentTarget.value })} disabled={disabled} spellcheck="true"></textarea>
-    <p class="field-note">These instructions apply when the profile is launched.</p>
   </section>
 
-  <section aria-labelledby="policy-heading">
-    <h2 id="policy-heading">Declared tool rules</h2>
-    <p class="section-note">Requested enforcement is a declaration, not verified actual enforcement. Requested coordinator enforcement applies only to the Workspace coordinator route. Advisory rules are not enforcement boundaries or sandboxes.</p>
-    {#if draft.toolRules.length === 0}<p class="empty">No tool rules are declared.</p>{/if}
+  <details class="advanced" open={primeStrictPermission || draft.toolRules.length > 0}>
+    <summary>Permissions and tools <span>{draft.permissionMode === 'native' ? 'Native defaults' : draft.permissionMode}</span></summary>
+    <section aria-labelledby="policy-heading">
+      <label for="profile-permission">File access</label>
+      <select id="profile-permission" value={draft.permissionMode} onchange={(event) => updateDraft({ permissionMode: event.currentTarget.value as PermissionMode })} disabled={disabled}>
+        <option value="native">Native permissions</option><option value="read-only">Read-only</option><option value="workspace-write">Workspace write</option><option value="full-access">Full access</option>
+      </select>
+      <p class="field-note">{permissionDescription(draft.permissionMode)}</p>
+      {#if primeStrictPermission}<p class="rule-warning">Prime Agent rejects this strict permission mode. Choose a supported mode to launch.</p>{/if}
+
+    <h2 id="policy-heading">Tool rules</h2>
+    <p class="section-note">Unsupported mandatory rules block launch. Advisory rules are instructions only.</p>
     {#each draft.toolRules as rule, index (`${index}`)}
       <div class="tool-rule">
         <div><label for={`tool-name-${index}`}>Tool</label><input id={`tool-name-${index}`} value={rule.tool} oninput={(event) => updateRule(index, { tool: event.currentTarget.value })} disabled={disabled} autocomplete="off" /></div>
@@ -207,17 +208,21 @@
     <button class="button button--quiet" type="button" onclick={addRule} disabled={disabled}>Add tool rule</button>
   </section>
 
-  <section aria-labelledby="spawn-heading">
-    <h2 id="spawn-heading">Allowed workspace child templates</h2>
-    <p class="section-note">This restricts only Workspace coordinator template launches to these exact saved profiles. It does not restrict native children, Python, RLM, processes, or other harness capabilities. Selecting one does not grant execution permission.</p>
-    {#if spawnOptions.length === 0}<p class="empty">No workspace template launches are declared because there are no saved profile templates to select.</p>{/if}
+  </details>
+  <details class="advanced" open={draft.allowedSpawnProfileIds.length > 0}>
+    <summary>Subagents <span>{draft.allowedSpawnProfileIds.length ? `${draft.allowedSpawnProfileIds.length} allowed profiles` : 'Disabled'}</span></summary>
+    <section aria-labelledby="spawn-heading">
+    <h2 id="spawn-heading">Allowed profiles</h2>
+    <p class="section-note">Choose which agents this profile may create. This controls workspace delegation, not native processes or OS access.</p>
+    {#if spawnOptions.length === 0}<p class="empty">Save another profile to allow delegation.</p>{/if}
     <div class="spawn-options">
       {#each spawnOptions as candidate (candidate.id)}
         <label><input type="checkbox" checked={draft.allowedSpawnProfileIds.includes(candidate.id)} onchange={() => toggleSpawnProfile(candidate.id)} disabled={disabled} /> <span>{candidate.name || 'Unnamed profile'}{candidate.id === draft.id ? ' (current profile)' : ''} <small>{harnessLabel(candidate.harness)} · {candidate.model}</small></span></label>
       {/each}
     </div>
-    {#if draft.allowedSpawnProfileIds.length === 0}<p class="empty">No workspace template launches are declared.</p>{/if}
   </section>
+
+  </details>
 
   {#if confirmDiscard}
     <section class="discard-choice" aria-labelledby="discard-heading">
@@ -234,9 +239,16 @@
 </form>
 
 <style>
+  label[for="profile-model-provider"] { display:block; }
+  .advanced { border-top:1px solid var(--piui-border-subtle); margin-bottom:var(--piui-space-4); }
+  .advanced summary { cursor:pointer; padding:var(--piui-space-3) 0; font-size:14px; font-weight:600; }
+  .advanced summary span { margin-left:.6rem; color:var(--piui-text-muted); font-size:12px; font-weight:400; }
+  .advanced summary:focus-visible { outline:2px solid var(--piui-focus); outline-offset:2px; }
+  .advanced section { border:0; margin-bottom:var(--piui-space-4); padding-top:0; }
+
   .static-field { display: grid; gap: 5px; margin: 0; font-size: 13px; }.static-field strong { font-weight: 650; }.static-field span { min-height: 38px; padding: 8px 10px; border: 1px solid var(--piui-border); border-radius: var(--piui-radius-sm); background: var(--piui-surface-1); color: var(--piui-text-muted); }
   .editor { max-width: 840px; padding: var(--piui-space-7); color: var(--piui-text); }
-  header, section { margin: 0 0 var(--piui-space-7); } .eyebrow { margin: 0 0 var(--piui-space-2); color: var(--piui-accent); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; } h1, h2 { margin: 0; letter-spacing: -.025em; } h1 { font-size: 28px; } h2 { font-size: 16px; } .intro, .section-note, .field-note, .empty { color: var(--piui-text-muted); font-size: 13px; line-height: 1.5; } .intro { max-width: 68ch; margin: var(--piui-space-3) 0 0; } .notice, .error-summary, .discard-choice { margin: 0 0 var(--piui-space-5); padding: var(--piui-space-3); border: 1px solid var(--piui-warning-border); border-radius: var(--piui-radius-sm); background: var(--piui-warning-surface); color: var(--piui-warning-text); font-size: 13px; line-height: 1.5; } .error-summary { border-color: var(--piui-danger-border); background: var(--piui-danger-surface); color: var(--piui-danger-text); }.error-summary p, .error-summary ul { margin: var(--piui-space-2) 0 0; }
-  section { display: grid; gap: var(--piui-space-2); padding-top: var(--piui-space-5); border-top: 1px solid var(--piui-border-subtle); } label { display: grid; gap: 5px; color: var(--piui-text); font-size: 13px; font-weight: 650; } label span { color: var(--piui-text-muted); font-weight: 500; } input, select, textarea { box-sizing: border-box; width: 100%; min-height: 38px; padding: 8px 10px; border: 1px solid var(--piui-border-strong); border-radius: var(--piui-radius-sm); background: var(--piui-surface-1); color: var(--piui-text); font: inherit; } textarea { min-height: 160px; max-height: 360px; resize: vertical; line-height: 1.5; } input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible { outline: 2px solid var(--piui-focus); outline-offset: 2px; } .field-grid, .tool-rule { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--piui-space-3); }.permission-mode { display: grid; gap: var(--piui-space-2); margin: var(--piui-space-2) 0 0; padding: var(--piui-space-3); border: 1px solid var(--piui-border); border-radius: var(--piui-radius-sm); }.permission-mode legend { padding: 0 4px; font-size: 13px; font-weight: 700; }.permission-mode label, .spawn-options label { grid-template-columns: auto 1fr; align-items: start; padding: var(--piui-space-2); border-radius: var(--piui-radius-sm); }.permission-mode label.chosen { background: var(--piui-surface-2); }.permission-mode input, .mandatory input, .spawn-options input { width: 16px; min-height: 16px; margin-top: 2px; }.permission-mode small, .spawn-options small { display: block; margin-top: 3px; color: var(--piui-text-muted); font-size: 12px; font-weight: 400; }.tool-rule { margin: var(--piui-space-2) 0; padding: var(--piui-space-3); border: 1px solid var(--piui-border); border-radius: var(--piui-radius-sm); }.tool-rule > :nth-child(1) { grid-column: span 2; }.mandatory { grid-template-columns: auto 1fr; align-items: center; }.rule-warning, .rule-status { grid-column: span 2; margin: 0; font-size: 12px; }.rule-warning { color: var(--piui-warning-text); }.rule-status { color: var(--piui-text-muted); }.spawn-options { display: grid; gap: var(--piui-space-1); }.spawn-options label:hover { background: var(--piui-surface-1); }.button { min-height: 36px; padding: 0 var(--piui-space-3); border: 1px solid transparent; border-radius: var(--piui-radius-sm); color: var(--piui-text); font: inherit; font-size: 13px; font-weight: 650; }.button--quiet { background: transparent; border-color: var(--piui-border); }.button--quiet:hover:not(:disabled) { background: var(--piui-surface-2); }.button--primary { background: var(--piui-accent); color: var(--piui-accent-ink); }.button--danger { border-color: var(--piui-danger-border); background: var(--piui-danger-surface); color: var(--piui-danger-text); }.button:disabled, input:disabled, select:disabled, textarea:disabled { cursor: not-allowed; opacity: .6; } footer { display: flex; align-items: center; justify-content: space-between; gap: var(--piui-space-3); padding-top: var(--piui-space-5); border-top: 1px solid var(--piui-border); }.save-state { color: var(--piui-text-muted); font-size: 13px; }.actions { display: flex; flex-wrap: wrap; gap: var(--piui-space-2); }.discard-choice { margin-top: calc(var(--piui-space-7) * -1); }.discard-choice h2, .discard-choice p { margin: 0; }.discard-choice p { margin-top: var(--piui-space-2); }.discard-choice .actions { margin-top: var(--piui-space-3); }
+  header, section { margin: 0 0 var(--piui-space-7); } .eyebrow { margin: 0 0 var(--piui-space-2); color: var(--piui-accent); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; } h1, h2 { margin: 0; letter-spacing: -.025em; } h1 { font-size: 28px; } h2 { font-size: 16px; } .section-note, .field-note, .empty { color: var(--piui-text-muted); font-size: 13px; line-height: 1.5; } .notice, .error-summary, .discard-choice { margin: 0 0 var(--piui-space-5); padding: var(--piui-space-3); border: 1px solid var(--piui-warning-border); border-radius: var(--piui-radius-sm); background: var(--piui-warning-surface); color: var(--piui-warning-text); font-size: 13px; line-height: 1.5; } .error-summary { border-color: var(--piui-danger-border); background: var(--piui-danger-surface); color: var(--piui-danger-text); }.error-summary p, .error-summary ul { margin: var(--piui-space-2) 0 0; }
+  section { display: grid; gap: var(--piui-space-2); padding-top: var(--piui-space-5); border-top: 1px solid var(--piui-border-subtle); } label { display: grid; gap: 5px; color: var(--piui-text); font-size: 13px; font-weight: 650; } label span { color: var(--piui-text-muted); font-weight: 500; } input, select, textarea { box-sizing: border-box; width: 100%; min-height: 38px; padding: 8px 10px; border: 1px solid var(--piui-border-strong); border-radius: var(--piui-radius-sm); background: var(--piui-surface-1); color: var(--piui-text); font: inherit; } textarea { min-height: 160px; max-height: 360px; resize: vertical; line-height: 1.5; } input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible { outline: 2px solid var(--piui-focus); outline-offset: 2px; } .field-grid, .tool-rule { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--piui-space-3); }.spawn-options label { grid-template-columns: auto 1fr; align-items: start; padding: var(--piui-space-2); border-radius: var(--piui-radius-sm); }.mandatory input, .spawn-options input { width: 16px; min-height: 16px; margin-top: 2px; }.spawn-options small { display: block; margin-top: 3px; color: var(--piui-text-muted); font-size: 12px; font-weight: 400; }.tool-rule { margin: var(--piui-space-2) 0; padding: var(--piui-space-3); border: 1px solid var(--piui-border); border-radius: var(--piui-radius-sm); }.tool-rule > :nth-child(1) { grid-column: span 2; }.mandatory { grid-template-columns: auto 1fr; align-items: center; }.rule-warning, .rule-status { grid-column: span 2; margin: 0; font-size: 12px; }.rule-warning { color: var(--piui-warning-text); }.rule-status { color: var(--piui-text-muted); }.spawn-options { display: grid; gap: var(--piui-space-1); }.spawn-options label:hover { background: var(--piui-surface-1); }.button { min-height: 36px; padding: 0 var(--piui-space-3); border: 1px solid transparent; border-radius: var(--piui-radius-sm); color: var(--piui-text); font: inherit; font-size: 13px; font-weight: 650; }.button--quiet { background: transparent; border-color: var(--piui-border); }.button--quiet:hover:not(:disabled) { background: var(--piui-surface-2); }.button--primary { background: var(--piui-accent); color: var(--piui-accent-ink); }.button--danger { border-color: var(--piui-danger-border); background: var(--piui-danger-surface); color: var(--piui-danger-text); }.button:disabled, input:disabled, select:disabled, textarea:disabled { cursor: not-allowed; opacity: .6; } footer { display: flex; align-items: center; justify-content: space-between; gap: var(--piui-space-3); padding-top: var(--piui-space-5); border-top: 1px solid var(--piui-border); }.save-state { color: var(--piui-text-muted); font-size: 13px; }.actions { display: flex; flex-wrap: wrap; gap: var(--piui-space-2); }.discard-choice { margin-top: calc(var(--piui-space-7) * -1); }.discard-choice h2, .discard-choice p { margin: 0; }.discard-choice p { margin-top: var(--piui-space-2); }.discard-choice .actions { margin-top: var(--piui-space-3); }
   @media (max-width: 620px) { .editor { padding: var(--piui-space-4); }.field-grid, .tool-rule { grid-template-columns: 1fr; }.tool-rule > :nth-child(1), .rule-warning, .rule-status { grid-column: auto; } footer { align-items: flex-start; flex-direction: column; } }
 </style>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentProfile } from '../../../../../contracts/orchestration-v1';
+import type { AgentProfile } from '../../../../../contracts/orchestration-v2';
 import {
   createProfileDraft,
   newToolRule,
@@ -21,6 +21,16 @@ const profile: AgentProfile = {
 };
 
 describe('profile form helpers', () => {
+  it('distinguishes an empty replacement from native instructions and never passes it to another harness', () => {
+    const draft = createProfileDraft({ ...profile, harness: 'codex', baseInstructions: '' });
+    expect(draft.replaceBasePrompt).toBe(true);
+    expect(profileFromDraft(draft).baseInstructions).toBe('');
+    draft.replaceBasePrompt = false;
+    expect(profileFromDraft(draft).baseInstructions).toBeUndefined();
+    draft.replaceBasePrompt = true;
+    draft.harness = 'prime-agent';
+    expect(profileFromDraft(draft).baseInstructions).toBeUndefined();
+  });
   it('creates a new, unsaved profile draft with a generated opaque id and native permissions', () => {
     const draft = createProfileDraft(undefined, () => 'generated-id');
 

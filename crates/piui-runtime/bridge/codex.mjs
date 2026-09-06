@@ -1,6 +1,6 @@
 // Codex app-server adapter. All implementation bindings stay factory-local so
 // this source can be concatenated with the common embedded runner.
-export async function createCodexAdapter(config, emit, coordinatorRequest) {
+export async function createCodexAdapter(config, emit, coordinatorRequest, openChild) {
   const { spawn } = await import("node:child_process");
   const path = await import("node:path");
 
@@ -370,7 +370,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest) {
     if (
       !coordinationEnabled
       || params?.namespace !== "workspace"
-      || !new Set(["roster", "send", "observe", "spawn"]).has(params?.tool)
+      || !new Set(["roster", "send", "observe", "wait", "spawn", "spawn_agent"]).has(params?.tool)
       || !params.arguments
       || typeof params.arguments !== "object"
       || Array.isArray(params.arguments)
@@ -385,15 +385,16 @@ export async function createCodexAdapter(config, emit, coordinatorRequest) {
       && typeof value.body === "string"
     ) return { type: "send", recipientMemberId: value.recipientMemberId, body: value.body };
     if (
-      params.tool === "observe"
+      (params.tool === "observe" || params.tool === "wait")
       && keys.join(",") === "targetMemberId"
       && typeof value.targetMemberId === "string"
-    ) return { type: "observe", targetMemberId: value.targetMemberId };
+    ) return { type: params.tool, targetMemberId: value.targetMemberId };
     if (
       params.tool === "spawn"
       && keys.join(",") === "stepId"
       && typeof value.stepId === "string"
     ) return { type: "spawn", stepId: value.stepId };
+    if (params.tool === "spawn_agent" && keys.join(",") === "instructions,name,profileId" && [value.profileId, value.name, value.instructions].every(v => typeof v === "string")) return { type: "spawnAgent", ...value };
     return null;
   };
   const answerCoordinatorCall = async (message) => {
@@ -665,7 +666,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest) {
   if (coordinationEnabled || config.nativeSubagents === false) args.push("--disable", "multi_agent", "--disable", "multi_agent_v2");
   // Inherit native CODEX_HOME/auth without inspecting or logging it. sessionDir
   // remains host metadata/scratch; it is not substituted for the user's Codex home.
-  const child = spawn(config.runtimeProgram, [...config.runtimeArgs, ...args], {
+  const child = (openChild ?? spawn)(config.runtimeProgram, [...config.runtimeArgs, ...args], {
     cwd: config.cwd,
     env: process.env,
     windowsHide: true,
@@ -763,13 +764,15 @@ export async function createCodexAdapter(config, emit, coordinatorRequest) {
       { type: "function", name: "roster", description: "List coordinator-visible run members.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
       { type: "function", name: "send", description: "Send a message to one coordinator-visible member.", inputSchema: { type: "object", properties: { recipientMemberId: { type: "string" }, body: { type: "string" } }, required: ["recipientMemberId", "body"], additionalProperties: false } },
       { type: "function", name: "observe", description: "Read authorized activity for one coordinator-visible member.", inputSchema: { type: "object", properties: { targetMemberId: { type: "string" } }, required: ["targetMemberId"], additionalProperties: false } },
+      { type: "function", name: "wait", description: "Wait for an observed agent's current task and read its result. Use after spawn_agent to collect the child's result before completing your own task. Requires observation permission.", inputSchema: { type: "object", properties: { targetMemberId: { type: "string" } }, required: ["targetMemberId"], additionalProperties: false } },
+      { type: "function", name: "spawn_agent", description: "Create an independent agent using an allowed profile from roster. Give it a name and task. It can message its creator; unrelated peers are not granted access.", inputSchema: { type: "object", properties: { profileId: { type: "string" }, name: { type: "string" }, instructions: { type: "string" } }, required: ["profileId", "name", "instructions"], additionalProperties: false } },
       { type: "function", name: "spawn", description: "Lease one ready predefined pipeline step using its snapshotted profile.", inputSchema: { type: "object", properties: { stepId: { type: "string" } }, required: ["stepId"], additionalProperties: false } },
     ],
   }] : undefined;
   const threadParams = {
     cwd: config.cwd,
     ...(currentModel ? { model: currentModel.id, ...(currentModel.provider ? { modelProvider: currentModel.provider } : {}) } : {}),
-    ...(typeof config.instructions === "string" ? { developerInstructions: config.instructions } : {}),
+    ...(typeof config.baseInstructions === "string" ? { baseInstructions: config.baseInstructions, developerInstructions: config.instructions ?? "" } : typeof config.instructions === "string" ? { developerInstructions: config.instructions } : {}),
     ...(coordinationEnabled || config.nativeSubagents === false ? { config: { "features.multi_agent": false, "features.multi_agent_v2": false } } : {}),
     ...permissionParams,
   };

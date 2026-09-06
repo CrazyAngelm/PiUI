@@ -312,6 +312,7 @@ pub(crate) struct WorkspaceLaunchRequest {
     pub model: Option<WorkspaceModel>,
     pub thinking_level: Option<String>,
     pub instructions: Option<String>,
+    pub base_instructions: Option<String>,
     pub permission_mode: PermissionMode,
     pub allowed_tools: Option<Vec<String>>,
     pub native_subagents: Option<bool>,
@@ -443,6 +444,7 @@ struct RuntimeStartOptions {
     model: Option<WorkspaceModel>,
     thinking_level: Option<String>,
     instructions: Option<String>,
+    base_instructions: Option<String>,
     allowed_tools: Option<Vec<String>>,
     native_subagents: Option<bool>,
     coordinator: Option<CoordinatorBinding>,
@@ -450,28 +452,17 @@ struct RuntimeStartOptions {
 }
 
 impl RuntimeStartOptions {
-    fn explicit(
-        model: Option<WorkspaceModel>,
-        thinking_level: Option<String>,
-        instructions: Option<String>,
-        allowed_tools: Option<Vec<String>>,
-        native_subagents: Option<bool>,
-        coordinator: Option<CoordinatorBinding>,
-        publisher: WorkspaceEventPublisher,
-    ) -> Self {
+    fn ordinary_open(publisher: WorkspaceEventPublisher) -> Self {
         Self {
-            model,
-            thinking_level,
-            instructions,
-            allowed_tools,
-            native_subagents,
-            coordinator,
+            model: None,
+            thinking_level: None,
+            instructions: None,
+            base_instructions: None,
+            allowed_tools: None,
+            native_subagents: None,
+            coordinator: None,
             publisher,
         }
-    }
-
-    fn ordinary_open(publisher: WorkspaceEventPublisher) -> Self {
-        Self::explicit(None, None, None, None, None, None, publisher)
     }
 }
 
@@ -567,15 +558,16 @@ impl WorkspaceHost {
             .start_record(
                 directory,
                 record,
-                RuntimeStartOptions::explicit(
-                    runtime_model,
-                    runtime_thinking_level,
-                    request.instructions,
-                    request.allowed_tools,
-                    request.native_subagents,
+                RuntimeStartOptions {
+                    model: runtime_model,
+                    thinking_level: runtime_thinking_level,
+                    instructions: request.instructions,
+                    base_instructions: request.base_instructions,
+                    allowed_tools: request.allowed_tools,
+                    native_subagents: request.native_subagents,
                     coordinator,
                     publisher,
-                ),
+                },
             )
             .await;
         if result.is_err() {
@@ -664,6 +656,7 @@ impl WorkspaceHost {
             model,
             thinking_level,
             instructions,
+            base_instructions,
             allowed_tools,
             native_subagents,
             coordinator,
@@ -682,6 +675,7 @@ impl WorkspaceHost {
             model,
             thinking_level,
             instructions,
+            base_instructions,
             permission_mode: record.permission_mode,
             allowed_tools,
             native_subagents,
@@ -764,7 +758,10 @@ impl WorkspaceHost {
         Ok(snapshot)
     }
 
-    async fn snapshot(&self, session_id: &str) -> Result<SessionSnapshot, WorkspaceError> {
+    pub(crate) async fn snapshot(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionSnapshot, WorkspaceError> {
         let (runtime, state) = self
             .live_runtime(session_id)?
             .ok_or_else(WorkspaceError::closed)?;
@@ -1473,6 +1470,7 @@ pub async fn workspace_command_v11(
                         task_id: None,
                         model,
                         thinking_level: None,
+                        base_instructions: None,
                         instructions: None,
                         permission_mode,
                         allowed_tools: None,
@@ -2493,15 +2491,11 @@ mod tests {
             name: "Profile model".into(),
             thinking_levels: Some(vec!["high".into()]),
         };
-        let explicit = RuntimeStartOptions::explicit(
-            Some(explicit_model.clone()),
-            Some("high".into()),
-            None,
-            None,
-            None,
-            None,
-            publisher,
-        );
+        let explicit = RuntimeStartOptions {
+            model: Some(explicit_model.clone()),
+            thinking_level: Some("high".into()),
+            ..RuntimeStartOptions::ordinary_open(publisher)
+        };
         assert_eq!(explicit.model, Some(explicit_model));
         assert_eq!(explicit.thinking_level.as_deref(), Some("high"));
     }

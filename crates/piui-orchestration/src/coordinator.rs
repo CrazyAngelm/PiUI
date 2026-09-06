@@ -99,6 +99,7 @@ impl Coordinator {
             schema_version: ORCHESTRATION_SCHEMA_VERSION,
             id: run_id,
             definition,
+            initial_definition: None,
             status: RunStatus::Running,
             revision: 0,
             tasks,
@@ -196,6 +197,94 @@ impl Coordinator {
             task_instructions: step.instructions,
             dependency_result_references,
         }))
+    }
+
+    /// Add one independent agent from an explicitly allowed snapshotted profile.
+    /// The request id is its durable identity; profile policies are never authored
+    /// by the model. Parent/child delivery is bidirectional; team-wide delivery
+    /// requires the launch snapshot's explicit spawned_agents_join_team grant.
+    pub fn add_spawned_agent(
+        run: &mut Run,
+        actor_member_id: &str,
+        request_id: &str,
+        profile_id: &str,
+        name: &str,
+        instructions: &str,
+    ) -> Result<String, CoordinatorError> {
+        ensure_active(run)?;
+        let actor = run
+            .definition
+            .team
+            .members
+            .iter()
+            .find(|m| m.id == actor_member_id)
+            .ok_or_else(|| AuthorizationError::UnknownMember {
+                member_id: actor_member_id.into(),
+            })?;
+        authorize_spawn(&run.definition, &actor.profile_id, profile_id)?;
+        if name.trim().is_empty() || instructions.trim().is_empty() || request_id.trim().is_empty()
+        {
+            return Err(CoordinatorError::EmptyId { kind: "agent task" });
+        }
+        let id = format!("agent-{request_id}");
+        if run.definition.pipeline.steps.iter().any(|s| s.id == id) {
+            return Err(CoordinatorError::AgentRequestConflict {
+                request_id: request_id.into(),
+            });
+        }
+        let mut definition = run.definition.clone();
+        let recipients = if definition.team.spawned_agents_join_team {
+            definition
+                .team
+                .members
+                .iter()
+                .map(|member| member.id.clone())
+                .collect::<Vec<_>>()
+        } else {
+            vec![actor_member_id.to_owned()]
+        };
+        definition.team.members.push(crate::TeamMember {
+            id: id.clone(),
+            profile_id: profile_id.into(),
+        });
+        for recipient in recipients {
+            for (from, to) in [
+                (recipient.as_str(), id.as_str()),
+                (id.as_str(), recipient.as_str()),
+            ] {
+                definition.team.send_edges.push(crate::DirectedEdge {
+                    from_member_id: from.into(),
+                    to_member_id: to.into(),
+                });
+            }
+        }
+        definition.team.observe_edges.push(crate::DirectedEdge {
+            from_member_id: actor_member_id.into(),
+            to_member_id: id.clone(),
+        });
+        definition.pipeline.steps.push(crate::PipelineStep {
+            id: id.clone(),
+            name: name.into(),
+            assigned_member_id: id.clone(),
+            instructions: instructions.into(),
+            dependency_step_ids: Vec::new(),
+        });
+        validate_definition(&definition)?;
+        if run.initial_definition.is_none() {
+            run.initial_definition = Some(run.definition.clone());
+        }
+        run.definition = definition;
+        run.tasks.push(TaskRecord {
+            step_id: id.clone(),
+            status: TaskStatus::Ready,
+            revision: 0,
+            lease_id: None,
+            execution: None,
+            result_reference: None,
+            failure: None,
+        });
+        run.revision += 1;
+        Ok(id)
     }
 
     /// Reserves one predefined ready DAG step for an authenticated controlled
@@ -897,7 +986,10 @@ pub fn serialize_run(run: &Run) -> Result<Vec<u8>, RunDataError> {
 }
 
 pub fn deserialize_run(bytes: &[u8]) -> Result<Run, RunDataError> {
-    let run: Run = serde_json::from_slice(bytes).map_err(RunDataError::Deserialize)?;
+    let mut run: Run = serde_json::from_slice(bytes).map_err(RunDataError::Deserialize)?;
+    if run.schema_version == 1 {
+        run.schema_version = ORCHESTRATION_SCHEMA_VERSION;
+    }
     validate_run_data(&run)?;
     Ok(run)
 }
@@ -972,6 +1064,15 @@ fn validate_run_data(run: &Run) -> Result<(), CoordinatorError> {
         }
         let target_exists = match &request.operation {
             AgentRequestKind::Roster => true,
+            AgentRequestKind::SpawnAgent { profile_id, .. } => run
+                .definition
+                .team
+                .members
+                .iter()
+                .find(|m| m.id == request.actor_member_id)
+                .is_some_and(|m| {
+                    authorize_spawn(&run.definition, &m.profile_id, profile_id).is_ok()
+                }),
             AgentRequestKind::Send {
                 recipient_member_id,
             } => authorize_send(

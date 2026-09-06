@@ -2,6 +2,99 @@ use serde_json::json;
 
 use crate::*;
 
+#[test]
+fn v1_run_migrates_without_changing_native_prompt() {
+    let run = Coordinator::new_run("old", snapshot()).unwrap();
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&serialize_run(&run).unwrap()).unwrap();
+    json["schemaVersion"] = 1.into();
+    let migrated = deserialize_run(&serde_json::to_vec(&json).unwrap()).unwrap();
+    assert_eq!(migrated.schema_version(), 2);
+    assert!(
+        migrated
+            .definition()
+            .profiles
+            .iter()
+            .all(|p| p.base_instructions.is_none())
+    );
+}
+
+#[test]
+fn spawned_agent_uses_allowed_profile_and_keeps_original_definition() {
+    let original = snapshot();
+    let mut run = Coordinator::new_run("dynamic", original.clone()).unwrap();
+    let step = Coordinator::add_spawned_agent(
+        &mut run,
+        "lead",
+        "create-worker",
+        "worker-profile",
+        "Check results",
+        "Review the result",
+    )
+    .unwrap();
+    assert_eq!(run.initial_definition.as_ref(), Some(&original));
+    assert_eq!(run.definition.profiles, original.profiles);
+    assert!(authorize_send(&run.definition.team, "lead", &step).is_ok());
+    assert!(authorize_send(&run.definition.team, &step, "lead").is_ok());
+    assert!(authorize_send(&run.definition.team, &step, "worker").is_err());
+    let before = run.clone();
+    assert!(
+        Coordinator::add_spawned_agent(
+            &mut run,
+            "lead",
+            "create-worker",
+            "worker-profile",
+            "Different",
+            "Different"
+        )
+        .is_err()
+    );
+    assert_eq!(before, run);
+    assert!(
+        Coordinator::add_spawned_agent(
+            &mut run,
+            &step,
+            "escalate",
+            "lead-profile",
+            "Boss",
+            "Escalate"
+        )
+        .is_err()
+    );
+    assert_eq!(before, run);
+    let revision = run.revision();
+    let lease = Coordinator::lease_controlled_spawn(
+        &mut run,
+        revision,
+        "lead",
+        &step,
+        "lease-dynamic".into(),
+    )
+    .unwrap();
+    assert_eq!(lease.profile.id, "worker-profile");
+    assert_eq!(lease.task_instructions, "Review the result");
+    assert_eq!(deserialize_run(&serialize_run(&run).unwrap()).unwrap(), run);
+}
+
+#[test]
+fn dynamic_peer_messaging_requires_explicit_team_grant() {
+    let mut definition = snapshot();
+    definition.team.spawned_agents_join_team = true;
+    let mut run = Coordinator::new_run("peer-team", definition).unwrap();
+    let child = Coordinator::add_spawned_agent(
+        &mut run,
+        "lead",
+        "child",
+        "worker-profile",
+        "Reviewer",
+        "Review",
+    )
+    .unwrap();
+    assert!(authorize_send(&run.definition.team, &child, "worker").is_ok());
+    assert!(authorize_send(&run.definition.team, "worker", &child).is_ok());
+    assert!(authorize_observe(&run.definition.team, "worker", &child).is_err());
+}
+
 fn profile(id: &str, harness: Harness, allowed: &[&str]) -> AgentProfile {
     AgentProfile {
         id: id.to_owned(),
@@ -10,6 +103,7 @@ fn profile(id: &str, harness: Harness, allowed: &[&str]) -> AgentProfile {
         model_provider: Some("example-provider".to_owned()),
         model: format!("{id}-model"),
         permission_mode: PermissionMode::Native,
+        base_instructions: None,
         instructions: format!("instructions for {id}"),
         tool_policy: DeclaredToolPolicy {
             rules: vec![ToolRule {
@@ -30,6 +124,7 @@ fn snapshot() -> RunDefinitionSnapshot {
             profile("worker-profile", Harness::Codex, &[]),
         ],
         team: TeamDefinition {
+            spawned_agents_join_team: false,
             id: "team-1".to_owned(),
             name: "Mixed team".to_owned(),
             members: vec![
@@ -308,7 +403,7 @@ fn rust_json_matches_typescript_v1_golden_shape_and_rejects_unknown_fields() {
     let run = Coordinator::new_run("run-1", snapshot()).unwrap();
     let actual: serde_json::Value = serde_json::from_slice(&serialize_run(&run).unwrap()).unwrap();
     let golden = json!({
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "id": "run-1",
         "definition": {
             "profiles": [

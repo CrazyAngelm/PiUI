@@ -109,10 +109,11 @@ impl OrchestrationStore {
             let valid = fs::read(&path)
                 .ok()
                 .and_then(|bytes| serde_json::from_slice::<StoreDocument>(&bytes).ok())
-                .filter(|document| {
-                    document.version == STORE_VERSION
+                .and_then(|mut document| {
+                    let valid = document.version == STORE_VERSION
                         && document.generation == generation
-                        && valid_document(document)
+                        && migrate_document(&mut document);
+                    valid.then_some(document)
                 });
             let Some(document) = valid else {
                 // An interrupted create-only generation is never authoritative.
@@ -212,21 +213,22 @@ impl OrchestrationStore {
     }
 }
 
-fn valid_document(document: &StoreDocument) -> bool {
+fn migrate_document(document: &mut StoreDocument) -> bool {
     let mut workspace_ids = std::collections::BTreeSet::new();
-    for workspace in &document.workspaces {
+    for workspace in &mut document.workspaces {
         if workspace.workspace_id.trim().is_empty()
             || !workspace_ids.insert(workspace.workspace_id.as_str())
         {
             return false;
         }
-        for run in &workspace.runs {
+        for run in &mut workspace.runs {
             let Ok(bytes) = serialize_run(run) else {
                 return false;
             };
-            if deserialize_run(&bytes).is_err() {
+            let Ok(migrated) = deserialize_run(&bytes) else {
                 return false;
-            }
+            };
+            *run = migrated;
         }
     }
     true
@@ -259,6 +261,41 @@ mod tests {
 
     fn root() -> PathBuf {
         std::env::temp_dir().join(format!("piui-orchestration-store-{}", Uuid::new_v4()))
+    }
+
+    #[test]
+    fn opening_v1_generation_returns_migrated_runs_without_rewriting_source() {
+        let root = root();
+        let directory = root.join(STORE_DIRECTORY);
+        fs::create_dir_all(&directory).unwrap();
+        let document = serde_json::json!({
+            "version":1,"generation":1,"workspaces":[{
+                "workspaceId":"project","profiles":[],"teams":[],"pipelines":[],"launchCommands":[],
+                "runs":[{
+                    "schemaVersion":1,"id":"old-run","status":"running","revision":0,"messages":[],"agentRequests":[],
+                    "tasks":[{"stepId":"task","status":"ready","revision":0}],
+                    "definition":{
+                        "profiles":[{"id":"profile","name":"Worker","harness":"codex","model":"native","permissionMode":"native","instructions":"Keep this prompt","toolPolicy":{"rules":[]},"allowedSpawnProfileIds":[]}],
+                        "team":{"id":"team","name":"Team","members":[{"id":"member","profileId":"profile"}],"sendEdges":[],"observeEdges":[],"orchestratorMemberId":"member"},
+                        "pipeline":{"id":"pipeline","name":"Pipeline","steps":[{"id":"task","name":"Task","assignedMemberId":"member","instructions":"Work","dependencyStepIds":[]}]}
+                    }
+                }]
+            }]
+        });
+        let source = serde_json::to_vec(&document).unwrap();
+        let path = generation_path(&directory, 1);
+        fs::write(&path, &source).unwrap();
+        let store = OrchestrationStore::open(&root).unwrap();
+        let run = &store.workspace("project").unwrap().runs[0];
+        assert_eq!(run.schema_version(), 2);
+        assert_eq!(
+            run.definition().profiles[0].instructions,
+            "Keep this prompt"
+        );
+        assert_eq!(run.definition().profiles[0].base_instructions, None);
+        assert!(!run.definition().team.spawned_agents_join_team);
+        assert_eq!(fs::read(path).unwrap(), source);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

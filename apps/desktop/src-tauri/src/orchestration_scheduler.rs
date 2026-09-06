@@ -6,7 +6,7 @@
 use crate::api::verified_project_directory;
 use crate::orchestration_api::{
     AgentRequestAdmission, AgentToolOperation, AgentToolRequest, ManagedAgentContext,
-    ORCHESTRATION_EVENT_V1, OrchestrationApiState, OrchestrationRunChangedEventV1,
+    ORCHESTRATION_EVENT_V2, OrchestrationApiState, OrchestrationRunChangedEventV2,
 };
 use crate::state::HostState;
 use crate::workspace_api::{
@@ -621,8 +621,9 @@ impl OrchestrationScheduler {
             run_id: origin.run_id.clone(),
             workspace_session_id: origin.session_id.clone(),
         };
+        let wait_for_result = matches!(operation, CoordinatorOperation::Wait { .. });
         let request = AgentToolRequest {
-            request_id: origin.request_id,
+            request_id: format!("{}-{}", origin.session_id, origin.request_id),
             operation: match operation {
                 CoordinatorOperation::Roster => AgentToolOperation::Roster,
                 CoordinatorOperation::Send {
@@ -632,10 +633,20 @@ impl OrchestrationScheduler {
                     recipient_member_id,
                     body,
                 },
-                CoordinatorOperation::Observe { target_member_id } => {
+                CoordinatorOperation::Observe { target_member_id }
+                | CoordinatorOperation::Wait { target_member_id } => {
                     AgentToolOperation::Observe { target_member_id }
                 }
                 CoordinatorOperation::Spawn { step_id } => AgentToolOperation::Spawn { step_id },
+                CoordinatorOperation::SpawnAgent {
+                    profile_id,
+                    name,
+                    instructions,
+                } => AgentToolOperation::SpawnAgent {
+                    profile_id,
+                    name,
+                    instructions,
+                },
             },
         };
 
@@ -688,7 +699,11 @@ impl OrchestrationScheduler {
         };
 
         match admission {
-            AgentRequestAdmission::Roster { members } => CoordinatorResponse::Success(json!({
+            AgentRequestAdmission::Roster {
+                members,
+                spawn_profiles,
+            } => CoordinatorResponse::Success(json!({
+                "spawnProfiles": spawn_profiles.into_iter().map(|p| json!({"profileId": p.id, "name": p.name, "harness": harness_name(p.harness)})).collect::<Vec<_>>(),
                 "members": members.into_iter().map(|member| json!({
                     "memberId": member.member_id,
                     "profileId": member.profile_id,
@@ -700,10 +715,17 @@ impl OrchestrationScheduler {
             AgentRequestAdmission::Observe {
                 member_id,
                 history_references,
-            } => CoordinatorResponse::Success(json!({
-                "memberId": member_id,
-                "historyReferences": history_references,
-            })),
+            } => {
+                if wait_for_result {
+                    self.wait_for_member(app, &context, &origin.member_id, &member_id)
+                        .await
+                } else {
+                    CoordinatorResponse::Success(json!({
+                        "memberId": member_id,
+                        "historyReferences": history_references,
+                    }))
+                }
+            }
             AgentRequestAdmission::Send {
                 message_id,
                 recipient_member_id,
@@ -761,16 +783,85 @@ impl OrchestrationScheduler {
                         return coordinator_failure("unsupported-policy");
                     }
                 };
+                let member_id = lease.member_id.clone();
+                let step_id = lease.step_id.clone();
                 match self
                     .launch_lease(app, workspace_id, lease, policy, None)
                     .await
                 {
                     Ok(session_id) => CoordinatorResponse::Success(json!({
+                        "memberId": member_id,
+                        "stepId": step_id,
                         "sessionId": session_id,
                     })),
                     Err(_) => coordinator_failure("managed-spawn-uncertain"),
                 }
             }
+        }
+    }
+
+    /// Observation has already been authorized by the durable API. Waiting is
+    /// event-driven and keeps the caller's native tool call open, not a new loop.
+    async fn wait_for_member<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        context: &ManagedAgentContext,
+        actor_member_id: &str,
+        member_id: &str,
+    ) -> CoordinatorResponse {
+        if actor_member_id == member_id {
+            return coordinator_failure("cannot-wait-for-self");
+        }
+        let run = match self
+            .current_run(app, &context.workspace_id, &context.run_id)
+            .await
+        {
+            Ok(run) => run,
+            Err(_) => return coordinator_failure("run-unavailable"),
+        };
+        let task = run.tasks().iter().rev().find(|task| {
+            run.definition()
+                .pipeline
+                .steps
+                .iter()
+                .any(|step| step.id == task.step_id() && step.assigned_member_id == member_id)
+        });
+        let Some(execution) = task.and_then(|task| task.execution()) else {
+            return coordinator_failure("member-not-started");
+        };
+        if let Ok(active) = self.active(&execution.id) {
+            let Ok(mut target) = active.handle.subscribe_turns() else {
+                return coordinator_failure("runtime-unavailable");
+            };
+            let Ok(caller) = self.active(&context.workspace_session_id) else {
+                return coordinator_failure("coordinator-origin-invalid");
+            };
+            let Ok(mut caller_turns) = caller.handle.subscribe_turns() else {
+                return coordinator_failure("runtime-unavailable");
+            };
+            if wait_for_observed_turn(&mut target, &mut caller_turns)
+                .await
+                .is_err()
+            {
+                return coordinator_failure("wait-cancelled");
+            }
+        }
+        let host = app.state::<HostState>();
+        let _operation = host.live_runtime_operation_gate.lock().await;
+        if authorize_live_workspace(&host, &context.workspace_id).is_err()
+            || self.is_run_cancelling(&context.workspace_id, &context.run_id)
+        {
+            return coordinator_failure("wait-cancelled");
+        }
+        match host.workspace.snapshot(&execution.id).await {
+            Ok(snapshot) => CoordinatorResponse::Success(json!({
+                "memberId": member_id,
+                "status": snapshot.session.status,
+                "result": snapshot.blocks.iter().rev().find(|block| {
+                    block.kind == piui_runtime::workspace_runtime::BlockKind::Assistant
+                }).and_then(|block| block.text.as_deref()),
+            })),
+            Err(_) => coordinator_failure("result-unavailable"),
         }
     }
 
@@ -955,9 +1046,9 @@ impl OrchestrationScheduler {
 
     fn emit_run_invalidation<R: Runtime>(&self, app: &AppHandle<R>, workspace_id: &str, run: &Run) {
         let _ = app.emit(
-            ORCHESTRATION_EVENT_V1,
-            OrchestrationRunChangedEventV1 {
-                protocol: 1,
+            ORCHESTRATION_EVENT_V2,
+            OrchestrationRunChangedEventV2 {
+                protocol: 2,
                 event_type: "runChanged",
                 workspace_id: workspace_id.to_owned(),
                 run_id: run.id().to_owned(),
@@ -1139,6 +1230,9 @@ fn launch_policy(
     if !native.prompt.supported || !native.models.supported {
         return Err(OrchestrationSchedulerError::unavailable());
     }
+    if profile.base_instructions.is_some() && profile.harness != Harness::Codex {
+        return Err(OrchestrationSchedulerError::unsupported());
+    }
     if !profile.instructions.trim().is_empty() && !native.instructions.supported {
         return Err(OrchestrationSchedulerError::unsupported());
     }
@@ -1254,6 +1348,7 @@ fn workspace_launch_request(
             thinking_levels: None,
         }),
         thinking_level: None,
+        base_instructions: lease.profile.base_instructions.clone(),
         instructions: (!lease.profile.instructions.trim().is_empty())
             .then(|| lease.profile.instructions.clone()),
         permission_mode: workspace_permission(lease.profile.permission_mode),
@@ -1402,6 +1497,25 @@ async fn wait_for_terminal_outcome(
     }
 }
 
+async fn wait_for_observed_turn(
+    target: &mut watch::Receiver<TurnState>,
+    caller: &mut watch::Receiver<TurnState>,
+) -> Result<(), ()> {
+    let caller_generation = caller.borrow().generation;
+    loop {
+        if target.borrow().generation > 0 {
+            return target.borrow().outcome.map(|_| ()).ok_or(());
+        }
+        tokio::select! {
+            changed = target.changed() => changed.map_err(|_| ())?,
+            changed = caller.changed() => {
+                changed.map_err(|_| ())?;
+                if caller.borrow().generation != caller_generation { return Err(()); }
+            }
+        }
+    }
+}
+
 fn coordinator_failure(code: &str) -> CoordinatorResponse {
     CoordinatorResponse::Failure {
         code: code.to_owned(),
@@ -1504,6 +1618,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
                     task_id: None,
                     model: None,
                     thinking_level: None,
+                    base_instructions: None,
                     instructions: None,
                     permission_mode: WorkspacePermissionMode::Native,
                     allowed_tools: Some(vec![]),
@@ -1531,6 +1646,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
         model_provider: default_model.provider.clone(),
         model: default_model.id.clone(),
         permission_mode: piui_orchestration::PermissionMode::Native,
+        base_instructions: None,
         instructions: "Do not call tools. Reply with exactly the marker requested by the task."
             .into(),
         tool_policy: DeclaredToolPolicy {
@@ -1547,6 +1663,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
         allowed_spawn_profile_ids: vec![],
     };
     let team = TeamDefinition {
+        spawned_agents_join_team: false,
         id: "prime-team".into(),
         name: "Prime native team".into(),
         members: vec![TeamMember {
@@ -1579,7 +1696,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
             },
         ],
     };
-    let store_directory = app_data.join("orchestration-v1");
+    let store_directory = app_data.join("orchestration-v2");
     fs::create_dir_all(&store_directory).unwrap();
     let document = serde_json::json!({
         "version": 1,
@@ -1756,6 +1873,7 @@ mod tests {
             model_provider: Some("provider".into()),
             model: "model".into(),
             permission_mode: piui_orchestration::PermissionMode::Native,
+            base_instructions: None,
             instructions: "Be exact".into(),
             tool_policy: piui_orchestration::DeclaredToolPolicy { rules: vec![] },
             allowed_spawn_profile_ids: vec![],
@@ -1838,6 +1956,29 @@ mod tests {
         next_generation: u64,
     }
 
+    #[tokio::test]
+    async fn observed_wait_returns_on_result_and_stops_when_caller_is_cancelled() {
+        let mut target = FakeTurnAdapter::new();
+        let mut caller = FakeTurnAdapter::new();
+        let mut target_rx = target.receiver.clone();
+        let mut caller_rx = caller.receiver.clone();
+        let waiter = wait_for_observed_turn(&mut target_rx, &mut caller_rx);
+        let completion = async {
+            target.accept_prompt_with(TurnOutcome::Succeeded);
+        };
+        let (result, _) = tokio::join!(waiter, completion);
+        assert_eq!(result, Ok(()));
+
+        let target = FakeTurnAdapter::new();
+        let mut target_rx = target.receiver.clone();
+        let waiter = wait_for_observed_turn(&mut target_rx, &mut caller_rx);
+        let cancellation = async {
+            caller.accept_prompt_with(TurnOutcome::Interrupted);
+        };
+        let (result, _) = tokio::join!(waiter, cancellation);
+        assert_eq!(result, Err(()));
+    }
+
     impl FakeTurnAdapter {
         fn new() -> Self {
             let (sender, receiver) = watch::channel(TurnState {
@@ -1881,6 +2022,7 @@ mod tests {
         RunDefinitionSnapshot {
             profiles: vec![profile(Harness::Codex)],
             team: TeamDefinition {
+                spawned_agents_join_team: false,
                 id: "team".into(),
                 name: "Team".into(),
                 members: vec![TeamMember {

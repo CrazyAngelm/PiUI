@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createOrchestrationClient,
-  type OrchestrationCommandName, type OrchestrationRequest, type OrchestrationRunV1, type StartRunRequest,
+  type OrchestrationCommandName, type OrchestrationRequest, type OrchestrationRunV2, type StartRunRequest,
 } from '../../host-api/orchestrationClient';
 import { performRunAction, uncertainTaskMutation } from './runActions';
 
-const run: OrchestrationRunV1 = {
-  schemaVersion: 1, id: 'fixture-run', revision: 4, status: 'uncertain',
+const run: OrchestrationRunV2 = {
+  schemaVersion: 2, id: 'fixture-run', revision: 4, status: 'uncertain',
   definition: {
     profiles: [],
     team: { id: 'fixture-team', name: 'Fixture team', members: [], sendEdges: [], observeEdges: [], orchestratorMemberId: 'fixture-member' },
@@ -32,12 +32,12 @@ describe('real run action requests', () => {
   it('shows the durable failed run when host-native preflight rejects, not a fabricated launch success', async () => {
     const failed = { ...run, revision: 5, status: 'failed' as const };
     const { client, calls } = testClient((route) => {
-      if (route === 'orchestration_start_run_v1') throw { code: 'unsupported-policy', message: 'private model configuration' };
+      if (route === 'orchestration_start_run_v2') throw { code: 'unsupported-policy', message: 'private model configuration' };
       return failed;
     });
     const result = await performRunAction(client, { type: 'start', request: start }, false);
     expect(result).toMatchObject({ type: 'recorded', run: { status: 'failed', revision: 5 }, actionError: { code: 'unsupported-policy' } });
-    expect(calls).toEqual([{ route: 'orchestration_start_run_v1', request: start }, { route: 'orchestration_get_run_v1', request: { workspaceId: start.workspaceId, runId: start.runId } }]);
+    expect(calls).toEqual([{ route: 'orchestration_start_run_v2', request: start }, { route: 'orchestration_get_run_v2', request: { workspaceId: start.workspaceId, runId: start.runId } }]);
     expect(JSON.stringify(result)).not.toContain('private model configuration');
   });
 
@@ -45,7 +45,7 @@ describe('real run action requests', () => {
     const { client, calls } = testClient(() => ({ ...run, revision: 5, status: 'uncertain' }));
     const request = { workspaceId: start.workspaceId, runId: run.id, expectedRunRevision: 4 };
     const result = await performRunAction(client, { type: 'cancel', request }, false);
-    expect(calls).toEqual([{ route: 'orchestration_cancel_run_v1', request }]);
+    expect(calls).toEqual([{ route: 'orchestration_cancel_run_v2', request }]);
     expect(result).toMatchObject({ type: 'recorded', run: { status: 'uncertain' } });
     expect(result).not.toHaveProperty('actionError');
   });
@@ -59,7 +59,7 @@ describe('real run action requests', () => {
     await performRunAction(client, { type: 'retry', request }, false);
     const reconciliation = { ...request, resolution: { status: 'succeeded' as const } };
     await performRunAction(client, { type: 'reconcile', request: reconciliation }, false);
-    expect(calls).toEqual([{ route: 'orchestration_retry_uncertain_task_v1', request }, { route: 'orchestration_reconcile_uncertain_task_v1', request: reconciliation }]);
+    expect(calls).toEqual([{ route: 'orchestration_retry_uncertain_task_v2', request }, { route: 'orchestration_reconcile_uncertain_task_v2', request: reconciliation }]);
   });
 
   it('does not replay a command or change the request ID after an unconfirmed native failure', async () => {
@@ -67,7 +67,7 @@ describe('real run action requests', () => {
     const { client, calls } = testClient(() => { throw { code: 'native-outcome-uncertain' }; });
     const result = await performRunAction(client, { type: 'start', request: start }, false);
     expect(result).toMatchObject({ type: 'unconfirmed', error: { code: 'native-outcome-uncertain' }, recovery: 'unavailable' });
-    expect(calls.map((call) => call.route)).toEqual(['orchestration_start_run_v1', 'orchestration_get_run_v1']);
+    expect(calls.map((call) => call.route)).toEqual(['orchestration_start_run_v2', 'orchestration_get_run_v2']);
     expect(start).toEqual(original);
   });
 
@@ -80,7 +80,7 @@ describe('real run action requests', () => {
   });
 
   it('never installs a wrong-run or older-than-request response as the action outcome', async () => {
-    const { client, calls } = testClient((route) => route === 'orchestration_cancel_run_v1' ? { ...run, id: 'another-run' } : { ...run, revision: 5 });
+    const { client, calls } = testClient((route) => route === 'orchestration_cancel_run_v2' ? { ...run, id: 'another-run' } : { ...run, revision: 5 });
     const request = { workspaceId: start.workspaceId, runId: run.id, expectedRunRevision: 4 };
     expect(await performRunAction(client, { type: 'cancel', request }, false)).toMatchObject({ type: 'recorded', run: { id: run.id, revision: 5 }, actionError: { code: 'conflict' } });
     expect(calls).toHaveLength(2);

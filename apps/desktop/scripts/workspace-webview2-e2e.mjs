@@ -250,15 +250,15 @@ export async function runWorkspaceWebview2Proof({
   }
 
   async function orchestrationCatalog(workspaceId) {
-    return invoke('orchestration_catalog_v1', { request: { workspaceId } });
+    return invoke('orchestration_catalog_v2', { request: { workspaceId } });
   }
 
   async function readSingle(kind, workspaceId, name) {
     const routes = {
-      profile: ['profiles', 'orchestration_get_profile_v1'],
-      team: ['teams', 'orchestration_get_team_v1'],
-      pipeline: ['pipelines', 'orchestration_get_pipeline_v1'],
-      launch: ['launchCommands', 'orchestration_get_launch_command_v1'],
+      profile: ['profiles', 'orchestration_get_profile_v2'],
+      team: ['teams', 'orchestration_get_team_v2'],
+      pipeline: ['pipelines', 'orchestration_get_pipeline_v2'],
+      launch: ['launchCommands', 'orchestration_get_launch_command_v2'],
     };
     const [collection, route] = routes[kind];
     const catalog = await orchestrationCatalog(workspaceId);
@@ -286,17 +286,35 @@ export async function runWorkspaceWebview2Proof({
     await waitFor(`document.querySelector('#orchestration-title')?.textContent?.trim() === 'Agents'`, 'Agents workspace section', startupBoundMs);
 
     await clickButton('Create profile');
+    await waitFor(`document.querySelector('#profile-name')`, 'Codex prompt editor');
+    await setControl('#profile-name', 'Custom Codex prompt');
+    await setControl('#profile-harness', 'codex', 'change');
+    await setControl('#profile-model', 'fixture-model');
+    assertion(await evaluate(`(() => {
+      const label = [...document.querySelectorAll('label')].find(e => e.textContent.includes('Replace Codex base prompt'));
+      const checkbox = label?.querySelector('input');
+      checkbox?.focus(); checkbox?.click();
+      return checkbox?.checked && document.activeElement === checkbox;
+    })()`), 'Codex base prompt toggle must be focusable and labelled.');
+    await waitFor(`document.querySelector('#profile-base-instructions')`, 'explicit empty Codex prompt');
+    await evaluate(`document.querySelector('#profile-editor-title').scrollIntoView({block:'start'})`);
+    await capture('workspace-codex-profile');
+    await clickButton('Save profile');
+    await waitFor(`[...document.querySelectorAll('.definition-list strong')].some(e => e.textContent === 'Custom Codex prompt')`, 'saved Codex prompt');
+    const customPrompt = await readSingle('profile', workspaceId, 'Custom Codex prompt');
+    assertion(customPrompt.stored.value.baseInstructions === '', 'Explicit empty base prompt was lost at the host boundary.');
+    await clickButton('Delete Custom Codex prompt');
+    await waitFor(`document.querySelector('[aria-label="Confirm definition deletion"]')`, 'Codex profile deletion confirmation');
+    await clickButton('Delete definition', '[aria-label="Confirm definition deletion"]');
+    await waitFor(`!document.querySelector('[aria-label="Confirm definition deletion"]')`, 'Codex profile deleted');
+
+    await clickButton('Create profile');
     await waitFor(`document.querySelector('#profile-name')`, 'profile editor');
     await setControl('#profile-name', names.profile[0]);
     await setControl('#profile-harness', 'prime-agent', 'change');
     await setControl('#profile-model', 'workspace-e2e-invalid-model');
-    const strictPrimePolicy = await evaluate(`(() => {
-      const control = document.querySelector('input[name="permission-mode"][value="read-only"]');
-      if (!(control instanceof HTMLInputElement) || control.disabled) return false;
-      control.click();
-      return control.checked;
-    })()`);
-    assertion(strictPrimePolicy, 'Could not select the intentionally unsupported Prime Agent read-only launch policy.');
+    await evaluate(`document.querySelector('details.advanced summary').click()`);
+    await setControl('#profile-permission', 'read-only', 'change');
     await waitFor(`document.querySelector('.rule-warning')?.textContent?.includes('Prime Agent rejects this strict permission mode')`, 'unsupported Prime policy warning');
     await clickButton('Save profile');
     await waitFor(`[...document.querySelectorAll('.definition-list strong')].some((item) => item.textContent?.trim() === ${JSON.stringify(names.profile[0])})`, 'saved profile');
@@ -317,9 +335,21 @@ export async function runWorkspaceWebview2Proof({
     await waitFor(`document.querySelector('.member-row input')`, 'team member row');
     await setControl('.member-row input', 'lead');
     await setLabelledControl('Orchestrator member', 'lead', 'input');
+    await clickButton('Add member');
+    await waitFor(`document.querySelectorAll('.member-row').length === 2`, 'second team member');
+    await clickButton('Everyone to everyone');
+    assertion(await evaluate(`document.querySelectorAll('.routes input[type="checkbox"]:checked').length === 2`), 'Peer preset must enable both message directions.');
+    await evaluate(`document.querySelector('details.subagents summary').click()`);
+    assertion(await evaluate(`(() => {
+      const input = document.querySelector('.spawn-communication input');
+      input.focus(); input.click(); return input.checked && document.activeElement === input;
+    })()`), 'Dynamic team messaging must require an explicit focusable choice.');
+    await evaluate(`document.querySelector('details.subagents summary').click(); document.querySelector('#connections-title').scrollIntoView({block:'start'})`);
+    await capture('workspace-team-connections');
     await clickButton('Save team');
     await waitFor(`[...document.querySelectorAll('.definition-list strong')].some((item) => item.textContent?.trim() === ${JSON.stringify(names.team[0])})`, 'saved team');
     let team = await readSingle('team', workspaceId, names.team[0]);
+    assertion(team.stored.value.sendEdges.length === 2 && team.stored.value.spawnedAgentsJoinTeam === true, 'Team messaging policy did not persist.');
     await clickButton(names.team[0]);
     await waitFor(`document.querySelector('#team-editor-title')`, 'stored team editor');
     await setLabelledControl('Team name', names.team[1]);
@@ -391,9 +421,9 @@ export async function runWorkspaceWebview2Proof({
     await clickButton('Start run');
     await waitFor(`document.querySelector('#run-inspector-title') && document.querySelector('[aria-label="Run status: Failed"]')`, 'recorded unsupported-policy run failure', startupBoundMs);
     await waitFor(`document.querySelector('.inspector .error[role="alert"]')?.textContent?.includes(${JSON.stringify(expectedFailureCopy)})`, 'safe native preflight error');
-    const runs = await invoke('orchestration_list_runs_v1', { request: { workspaceId } });
+    const runs = await invoke('orchestration_list_runs_v2', { request: { workspaceId } });
     assertion(Array.isArray(runs) && runs.length === 1 && runs[0].status === 'failed', 'The host did not retain exactly one failed run after policy preflight rejection.');
-    const recordedRun = await invoke('orchestration_get_run_v1', { request: { workspaceId, runId: runs[0].id } });
+    const recordedRun = await invoke('orchestration_get_run_v2', { request: { workspaceId, runId: runs[0].id } });
     assertion(recordedRun?.status === 'failed' && recordedRun.tasks?.length === 1, 'The recorded policy-rejected run is not terminal failed.');
     assertion(recordedRun.tasks[0]?.status === 'failed' && recordedRun.tasks[0]?.failure?.code === expectedFailureCode, 'The failed task did not preserve the expected native preflight failure code.');
     assertion(!JSON.stringify(recordedRun).toLocaleLowerCase().includes('succeeded'), 'The policy-rejected run fabricated a succeeded outcome.');
@@ -441,10 +471,10 @@ export async function runWorkspaceWebview2Proof({
       steps: [{ id: SAFE_FIXTURE.stepId, name: 'Blocked task', assignedMemberId: SAFE_FIXTURE.memberId, instructions: 'Must not run in safe mode.', dependencyStepIds: [] }],
     };
     const launch = { id: SAFE_FIXTURE.launchId, name: 'Safe-mode launch', teamId: SAFE_FIXTURE.teamId, pipelineId: SAFE_FIXTURE.pipelineId };
-    await invoke('orchestration_save_profile_v1', { request: { workspaceId, value: profile } });
-    await invoke('orchestration_save_team_v1', { request: { workspaceId, value: team } });
-    await invoke('orchestration_save_pipeline_v1', { request: { workspaceId, value: pipeline } });
-    await invoke('orchestration_save_launch_command_v1', { request: { workspaceId, value: launch } });
+    await invoke('orchestration_save_profile_v2', { request: { workspaceId, value: profile } });
+    await invoke('orchestration_save_team_v2', { request: { workspaceId, value: team } });
+    await invoke('orchestration_save_pipeline_v2', { request: { workspaceId, value: pipeline } });
+    await invoke('orchestration_save_launch_command_v2', { request: { workspaceId, value: launch } });
   }
 
 
@@ -494,7 +524,7 @@ export async function runWorkspaceWebview2Proof({
         && definitions.launchCommands.some((item) => item.id === SAFE_FIXTURE.launchId),
       'Safe-mode run fixtures did not persist from the normal host process.',
     );
-    await assertRejected('orchestration_start_run_v1', { request: {
+    await assertRejected('orchestration_start_run_v2', { request: {
       workspaceId: workspace.id, runId: `workspace-e2e-safe-run-${Date.now()}`,
       teamId: SAFE_FIXTURE.teamId, pipelineId: SAFE_FIXTURE.pipelineId, launchCommandId: SAFE_FIXTURE.launchId,
     } }, 'Safe-mode orchestration run creation', 'runtime-unavailable');
@@ -532,7 +562,7 @@ export async function runWorkspaceWebview2Proof({
     projectTree: document.querySelector('nav[aria-label="Projects and native sessions"]') !== null,
     viewSwitch: document.querySelector('[aria-label="Workspace view"]') !== null,
     mainFocusable: document.querySelector('#workspace-main')?.getAttribute('tabindex') === '-1',
-    actions: ['Settings','New chat','Add project','Legacy history','Approvals','Activity'].every((name) =>
+    actions: ['Settings','New chat','Add project'].every((name) =>
       [...document.querySelectorAll('button')].some((button) => button.textContent?.trim().startsWith(name))),
   }))()`);
   assertion(Object.values(shellAccessibility).every(Boolean), 'The Sessions startup surface lost a keyboard or screen-reader label.');
@@ -657,16 +687,8 @@ export async function runWorkspaceWebview2Proof({
   await waitFor(`document.querySelector('#session-title')`, 'return to original session');
   checks.push('dirty-editor-navigation-guard', 'modal-escape-preserves-input', 'explicit-discard-navigation');
 
-  begin('historyContinuity');
-  await clickButton('Legacy history');
-  await waitFor(`document.querySelector('nav[aria-label="Indexed history navigation"]')`, 'legacy indexed history route', startupBoundMs);
-  assertion(await evaluate(`document.body.textContent.includes('Read only') && [...document.querySelectorAll('button')].some((item) => item.textContent?.trim() === '← Back to sessions')`), 'Legacy history did not expose its read-only label and Back action.');
-  await clickButton('← Back to sessions');
-  await waitFor(`document.querySelector('#session-title')?.textContent?.trim() === 'Native lifecycle proof'`, 'return from legacy history', startupBoundMs);
-  const afterHistory = await invoke('workspace_command_v11', { command: { type: 'snapshot', sessionId: nativeSession.id } });
-  assertion(afterHistory?.snapshot?.session?.status !== 'closed', 'Opening legacy read-only history closed the v11 native session.');
-  end('historyContinuity');
-  checks.push('legacy-read-only-route', 'legacy-back-preserves-native-session');
+  assertion(await evaluate(`!document.body.textContent.includes('Legacy history')`), 'Removed history navigation must not reappear.');
+  checks.push('no-legacy-history-navigation');
 
   begin('appearance');
   await clickButton('Settings');
@@ -710,14 +732,14 @@ export async function runWorkspaceWebview2Proof({
   await assertRejected('workspace_command_v11', { command: { type: 'shell', command: 'whoami' } }, 'Unknown workspace command');
   await assertRejected('workspace_command_v11', { command: { type: 'snapshot', sessionId: nativeSession.id, nativePath: projectPath } }, 'Forged native path field');
   await assertRejected('workspace_command_v11', { command: { type: 'createSession', workspaceId: workspace.id, harness: eligible.kind, permissionMode: 'native', profileId: 'forged-profile-id' } }, 'Forged ordinary-session profile field');
-  await assertRejected('orchestration_catalog_v1', { request: { workspaceId: workspace.id, actor: 'forged-actor' } }, 'Forged orchestration actor field');
+  await assertRejected('orchestration_catalog_v2', { request: { workspaceId: workspace.id, actor: 'forged-actor' } }, 'Forged orchestration actor field');
   await assertRejected('workspace_command_v11', { command: { type: 'respond', sessionId: nativeSession.id, requestId: 'forged-approval', decision: 'approve-once' } }, 'Forged approval reply', 'approval');
   const forgedWorkspaceProfile = {
     id: 'forged-profile', name: 'Forged profile', harness: 'pi', model: 'native', permissionMode: 'native',
     instructions: '', toolPolicy: { rules: [] }, allowedSpawnProfileIds: [],
   };
   await assertRejected('workspace_command_v11', { command: { type: 'createSession', workspaceId: 'forged-workspace-id', harness: eligible.kind, permissionMode: 'native' } }, 'Unknown native-session workspace');
-  await assertRejected('orchestration_save_profile_v1', { request: { workspaceId: 'forged-workspace-id', value: forgedWorkspaceProfile } }, 'Unknown orchestration workspace');
+  await assertRejected('orchestration_save_profile_v2', { request: { workspaceId: 'forged-workspace-id', value: forgedWorkspaceProfile } }, 'Unknown orchestration workspace');
   end('rejections');
   checks.push('unknown-command-rejected', 'native-path-field-rejected', 'ordinary-profile-field-rejected', 'actor-field-rejected', 'forged-approval-rejected', 'unknown-native-and-orchestration-workspaces-rejected');
 

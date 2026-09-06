@@ -1,12 +1,12 @@
 import type {
   AgentProfile,
   MessageStatus,
-  OrchestrationRunV1,
+  OrchestrationRunV2,
   RunStatus,
   TaskRecord,
   TaskStatus,
   TeamMember,
-} from '../../../../../contracts/orchestration-v1';
+} from '../../../../../contracts/orchestration-v2';
 
 export interface StatusPresentation {
   readonly icon: string;
@@ -38,11 +38,11 @@ export function statusPresentation(status: RunStatus | TaskStatus | MessageStatu
   }
 }
 
-export function memberById(run: OrchestrationRunV1, memberId: string): TeamMember | undefined {
+export function memberById(run: OrchestrationRunV2, memberId: string): TeamMember | undefined {
   return run.definition.team.members.find((member) => member.id === memberId);
 }
 
-export function profileForMember(run: OrchestrationRunV1, member: TeamMember | undefined): AgentProfile | undefined {
+export function profileForMember(run: OrchestrationRunV2, member: TeamMember | undefined): AgentProfile | undefined {
   return member === undefined ? undefined : run.definition.profiles.find((profile) => profile.id === member.profileId);
 }
 
@@ -51,23 +51,26 @@ export function sessionIdForTask(task: TaskRecord | undefined): string | undefin
   return task?.execution?.id;
 }
 
-export function taskDisplays(run: OrchestrationRunV1): readonly TaskDisplay[] {
+export function taskDisplays(run: OrchestrationRunV2): readonly TaskDisplay[] {
+  const tasks = new Map(run.tasks.map(task => [task.stepId, task]));
+  const members = new Map(run.definition.team.members.map(member => [member.id, member]));
+  const profiles = new Map(run.definition.profiles.map(profile => [profile.id, profile]));
   return run.definition.pipeline.steps.map((step) => {
-    const task = run.tasks.find((candidate) => candidate.stepId === step.id);
-    const member = memberById(run, step.assignedMemberId);
+    const task = tasks.get(step.id);
+    const member = members.get(step.assignedMemberId);
     return {
       task,
       stepId: step.id,
       stepName: step.name || step.id,
       member,
-      profile: profileForMember(run, member),
+      profile: member ? profiles.get(member.profileId) : undefined,
       status: task === undefined ? statusPresentation('uncertain') : statusPresentation(task.status),
       sessionId: sessionIdForTask(task),
     };
   });
 }
 
-export function memberLabel(run: OrchestrationRunV1, memberId: string): string {
+export function memberLabel(run: OrchestrationRunV2, memberId: string): string {
   const member = memberById(run, memberId);
   const profile = profileForMember(run, member);
   return profile?.name || member?.id || `Unknown member (${memberId})`;

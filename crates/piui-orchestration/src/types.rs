@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const ORCHESTRATION_SCHEMA_VERSION: u32 = 1;
+pub const ORCHESTRATION_SCHEMA_VERSION: u32 = 2;
 
 pub type Revision = u64;
 
@@ -87,6 +87,8 @@ pub struct AgentProfile {
     pub model: String,
     pub permission_mode: PermissionMode,
     pub instructions: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_instructions: Option<String>,
     pub tool_policy: DeclaredToolPolicy,
     /// Workspace coordinator templates this profile may request dynamically.
     /// This does not restrict native RLM, Python, subprocesses, or OS access.
@@ -111,6 +113,10 @@ pub struct DirectedEdge {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TeamDefinition {
+    /// Explicitly grant new profile-based agents bidirectional team messaging.
+    /// Older definitions keep parent-only communication.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub spawned_agents_join_team: bool,
     pub id: String,
     pub name: String,
     pub members: Vec<TeamMember>,
@@ -294,9 +300,20 @@ impl MessageRecord {
 )]
 pub enum AgentRequestKind {
     Roster,
-    Send { recipient_member_id: String },
-    Observe { target_member_id: String },
-    Spawn { step_id: String },
+    Send {
+        recipient_member_id: String,
+    },
+    Observe {
+        target_member_id: String,
+    },
+    Spawn {
+        step_id: String,
+    },
+    SpawnAgent {
+        profile_id: String,
+        name: String,
+        instructions: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -329,6 +346,9 @@ pub struct Run {
     pub(crate) schema_version: u32,
     pub(crate) id: String,
     pub(crate) definition: RunDefinitionSnapshot,
+    /// Original user definitions retained before runtime graph expansion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) initial_definition: Option<RunDefinitionSnapshot>,
     pub(crate) status: RunStatus,
     pub(crate) revision: Revision,
     pub(crate) tasks: Vec<TaskRecord>,

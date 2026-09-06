@@ -1,5 +1,5 @@
 /**
- * PiUI harness-neutral orchestration contract v1.
+ * PiUI harness-neutral orchestration contract v2.
  *
  * Native harnesses still own model/tool loops, credentials, approvals,
  * compaction, transcripts, and processes. This contract contains definition
@@ -49,6 +49,8 @@ export interface AgentProfile {
   readonly model: string;
   readonly permissionMode: PermissionMode;
   readonly instructions: string;
+  /** Codex base prompt replacement. Omit to retain the native prompt; an empty string explicitly replaces it with no base text. */
+  readonly baseInstructions?: string;
   readonly toolPolicy: DeclaredToolPolicy;
   /** Exact workspace coordinator templates that may be spawned. This does not restrict native RLM, Python, subprocesses, or OS access. A request cannot override them. */
   readonly allowedSpawnProfileIds: readonly OrchestrationId[];
@@ -65,6 +67,8 @@ export interface DirectedEdge {
 }
 
 export interface TeamDefinition {
+  /** New agents otherwise communicate only with the parent that created them. */
+  readonly spawnedAgentsJoinTeam?: boolean;
   readonly id: OrchestrationId;
   readonly name: string;
   readonly members: readonly TeamMember[];
@@ -155,7 +159,8 @@ export type AgentRequestKind =
   | { readonly type: 'roster' }
   | { readonly type: 'send'; readonly recipientMemberId: OrchestrationId }
   | { readonly type: 'observe'; readonly targetMemberId: OrchestrationId }
-  | { readonly type: 'spawn'; readonly stepId: OrchestrationId };
+  | { readonly type: 'spawn'; readonly stepId: OrchestrationId }
+  | { readonly type: 'spawnAgent'; readonly profileId: OrchestrationId; readonly name: string; readonly instructions: string };
 
 export interface AgentRequestRecord {
   readonly id: OrchestrationId;
@@ -164,10 +169,11 @@ export interface AgentRequestRecord {
   readonly operation: AgentRequestKind;
 }
 
-export interface OrchestrationRunV1 {
-  readonly schemaVersion: 1;
+export interface OrchestrationRunV2 {
+  readonly schemaVersion: 2;
   readonly id: OrchestrationId;
   readonly definition: RunDefinitionSnapshot;
+  readonly initialDefinition?: RunDefinitionSnapshot;
   readonly status: RunStatus;
   readonly revision: Revision;
   readonly tasks: readonly TaskRecord[];
@@ -204,5 +210,5 @@ export interface CancelRequest {
 }
 
 export type CompletionOutcome =
-  | { readonly status: 'succeeded'; readonly resultReference?: string }
+  | { readonly status: 'succeeded'; readonly resultReference?: NativeHistoryReference }
   | { readonly status: 'failed'; readonly failure: FailureRecord };

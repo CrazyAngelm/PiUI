@@ -15,8 +15,8 @@
   import { checkedRunSnapshot, createRunLiveUpdates, mergeRunSummaries, mergeSelectedRun, runSummary } from './runUpdates';
   import { orchestrationError, orchestrationHost, OrchestrationOperationError } from '../../host-api/orchestrationClient';
   import type {
-    AgentProfile, TeamDefinition, PipelineDefinition, LaunchCommandReference, OrchestrationRunV1,
-    OrchestrationClient, OrchestrationCatalogV1, DefinitionSummary, StoredDefinition, RunSummary,
+    AgentProfile, TeamDefinition, PipelineDefinition, LaunchCommandReference, OrchestrationRunV2,
+    OrchestrationClient, OrchestrationCatalogV2, DefinitionSummary, StoredDefinition, RunSummary,
     OrchestrationDefinitionKind, StartRunRequest, TaskRecord, ReconcileUncertainTaskRequest,
   } from '../../host-api/orchestrationClient';
 
@@ -33,14 +33,14 @@
     | (EditorBase & { kind: 'profile'; stored?: StoredDefinition<AgentProfile>; profiles: readonly AgentProfile[] })
     | (EditorBase & { kind: 'team'; stored?: StoredDefinition<TeamDefinition>; profiles: readonly AgentProfile[] })
     | (EditorBase & { kind: 'pipeline'; stored?: StoredDefinition<PipelineDefinition>; profiles: readonly AgentProfile[]; teams: readonly TeamDefinition[] })
-    | (EditorBase & { kind: 'launch-command'; stored?: StoredDefinition<LaunchCommandReference>; catalog: OrchestrationCatalogV1 });
+    | (EditorBase & { kind: 'launch-command'; stored?: StoredDefinition<LaunchCommandReference>; catalog: OrchestrationCatalogV2 });
 
-  let catalog: OrchestrationCatalogV1 | undefined;
+  let catalog: OrchestrationCatalogV2 | undefined;
   let profileDetails: readonly AgentProfile[] = [];
   let runs: readonly RunSummary[] = [];
-  let selectedRun: OrchestrationRunV1 | undefined;
+  let selectedRun: OrchestrationRunV2 | undefined;
   let editor: Editor | undefined;
-  let launcher: { key: string; workspaceId: string; catalog: OrchestrationCatalogV1; command?: StoredDefinition<LaunchCommandReference>; request?: StartRunRequest } | undefined;
+  let launcher: { key: string; workspaceId: string; catalog: OrchestrationCatalogV2; command?: StoredDefinition<LaunchCommandReference>; request?: StartRunRequest } | undefined;
   let launchError: string | undefined;
   let launchRequests = new Set<string>();
   let runMutations = new Map<string, RunAction['type']>();
@@ -95,7 +95,7 @@
 
   const liveRuns = createRunLiveUpdates({
     scope: () => ({ workspaceId, generation: viewGeneration, visible: mounted && (section === 'runs' || selectedRun !== undefined) && editor === undefined && launcher === undefined, revision: knownRunRevision }),
-    read: (request) => client.orchestration_get_run_v1(request),
+    read: (request) => client.orchestration_get_run_v2(request),
     apply: applyRunSnapshot,
     failed: (error, runId) => { runUpdateError = { runId, message: error.message }; },
   });
@@ -123,7 +123,7 @@
     return Math.max(runs.find((run) => run.id === runId)?.revision ?? -1, selectedRun?.id === runId ? selectedRun.revision : -1);
   }
 
-  function applyRunSnapshot(run: OrchestrationRunV1): void {
+  function applyRunSnapshot(run: OrchestrationRunV2): void {
     runs = mergeRunSummaries(runs, [runSummary(run)]);
     selectedRun = mergeSelectedRun(selectedRun, run);
     if (runUpdateError?.runId === run.id) runUpdateError = undefined;
@@ -133,8 +133,8 @@
     if (value === null) throw new OrchestrationOperationError('not-found', 'This record is no longer available. Refresh the list.');
     return value;
   }
-  async function loadProfiles(targetWorkspace: string, value: OrchestrationCatalogV1): Promise<readonly AgentProfile[]> {
-    return Promise.all(value.profiles.map(async (summary) => found(await client.orchestration_get_profile_v1({ workspaceId: targetWorkspace, id: summary.id })).value));
+  async function loadProfiles(targetWorkspace: string, value: OrchestrationCatalogV2): Promise<readonly AgentProfile[]> {
+    return Promise.all(value.profiles.map(async (summary) => found(await client.orchestration_get_profile_v2({ workspaceId: targetWorkspace, id: summary.id })).value));
   }
   async function refresh(): Promise<void> {
     const requestEpoch = ++epoch;
@@ -147,12 +147,12 @@
     listError = undefined;
     try {
       if (targetSection === 'runs') {
-        const result = await client.orchestration_list_runs_v1({ workspaceId: targetWorkspace });
+        const result = await client.orchestration_list_runs_v2({ workspaceId: targetWorkspace });
         if (!mounted || epoch !== requestEpoch || scope !== targetScope) return;
         runs = mergeRunSummaries(runs, result);
         runUpdateError = undefined;
       } else {
-        const result = await client.orchestration_catalog_v1({ workspaceId: targetWorkspace });
+        const result = await client.orchestration_catalog_v2({ workspaceId: targetWorkspace });
         const profiles = targetSection === 'agents' ? await loadProfiles(targetWorkspace, result) : [];
         if (!mounted || epoch !== requestEpoch || scope !== targetScope) return;
         catalog = result;
@@ -170,24 +170,24 @@
     actionBusy = true;
     listError = undefined;
     try {
-      const latest = await client.orchestration_catalog_v1({ workspaceId: targetWorkspace });
+      const latest = await client.orchestration_catalog_v2({ workspaceId: targetWorkspace });
       const base: EditorBase = { key: crypto.randomUUID(), workspaceId: targetWorkspace };
       let next: Editor;
       if (kind === 'profile') {
-        const [profiles, stored] = await Promise.all([loadProfiles(targetWorkspace, latest), summary ? client.orchestration_get_profile_v1({ workspaceId: targetWorkspace, id: summary.id }).then(found) : undefined]);
+        const [profiles, stored] = await Promise.all([loadProfiles(targetWorkspace, latest), summary ? client.orchestration_get_profile_v2({ workspaceId: targetWorkspace, id: summary.id }).then(found) : undefined]);
         next = { ...base, kind, profiles, stored };
       } else if (kind === 'team') {
-        const [profiles, stored] = await Promise.all([loadProfiles(targetWorkspace, latest), summary ? client.orchestration_get_team_v1({ workspaceId: targetWorkspace, id: summary.id }).then(found) : undefined]);
+        const [profiles, stored] = await Promise.all([loadProfiles(targetWorkspace, latest), summary ? client.orchestration_get_team_v2({ workspaceId: targetWorkspace, id: summary.id }).then(found) : undefined]);
         next = { ...base, kind, profiles, stored };
       } else if (kind === 'pipeline') {
         const [profiles, teams, stored] = await Promise.all([
           loadProfiles(targetWorkspace, latest),
-          Promise.all(latest.teams.map(async (team) => found(await client.orchestration_get_team_v1({ workspaceId: targetWorkspace, id: team.id })).value)),
-          summary ? client.orchestration_get_pipeline_v1({ workspaceId: targetWorkspace, id: summary.id }).then(found) : undefined,
+          Promise.all(latest.teams.map(async (team) => found(await client.orchestration_get_team_v2({ workspaceId: targetWorkspace, id: team.id })).value)),
+          summary ? client.orchestration_get_pipeline_v2({ workspaceId: targetWorkspace, id: summary.id }).then(found) : undefined,
         ]);
         next = { ...base, kind, profiles, teams, stored };
       } else {
-        const stored = summary ? found(await client.orchestration_get_launch_command_v1({ workspaceId: targetWorkspace, id: summary.id })) : undefined;
+        const stored = summary ? found(await client.orchestration_get_launch_command_v2({ workspaceId: targetWorkspace, id: summary.id })) : undefined;
         next = { ...base, kind, catalog: latest, stored };
       }
       if (!mounted || scope !== targetScope) return;
@@ -213,16 +213,16 @@
       switch (target.kind) {
         case 'profile':
           if (!('harness' in value)) return;
-          await client.orchestration_save_profile_v1({ ...common, value }); break;
+          await client.orchestration_save_profile_v2({ ...common, value }); break;
         case 'team':
           if (!('members' in value)) return;
-          await client.orchestration_save_team_v1({ ...common, value }); break;
+          await client.orchestration_save_team_v2({ ...common, value }); break;
         case 'pipeline':
           if (!('steps' in value)) return;
-          await client.orchestration_save_pipeline_v1({ ...common, value }); break;
+          await client.orchestration_save_pipeline_v2({ ...common, value }); break;
         case 'launch-command':
           if (!('teamId' in value)) return;
-          await client.orchestration_save_launch_command_v1({ ...common, value }); break;
+          await client.orchestration_save_launch_command_v2({ ...common, value }); break;
       }
       if (mounted && editor?.key === target.key) {
         editor = undefined;
@@ -241,10 +241,10 @@
     const request = { workspaceId: target.workspaceId, id: target.summary.id, expectedRevision: target.summary.revision };
     try {
       switch (target.kind) {
-        case 'profile': await client.orchestration_delete_profile_v1(request); break;
-        case 'team': await client.orchestration_delete_team_v1(request); break;
-        case 'pipeline': await client.orchestration_delete_pipeline_v1(request); break;
-        case 'launch-command': await client.orchestration_delete_launch_command_v1(request); break;
+        case 'profile': await client.orchestration_delete_profile_v2(request); break;
+        case 'team': await client.orchestration_delete_team_v2(request); break;
+        case 'pipeline': await client.orchestration_delete_pipeline_v2(request); break;
+        case 'launch-command': await client.orchestration_delete_launch_command_v2(request); break;
       }
       if (mounted && deleteRequest === target) { deleteRequest = undefined; await refresh(); }
     } catch (error) { if (mounted && deleteRequest === target) listError = orchestrationError(error).message; }
@@ -258,7 +258,7 @@
     actionBusy = true;
     listError = undefined;
     try {
-      const result = await client.orchestration_get_run_v1({ workspaceId: targetWorkspace, runId: summary.id });
+      const result = await client.orchestration_get_run_v2({ workspaceId: targetWorkspace, runId: summary.id });
       if (!mounted || scope !== targetScope || selectedReadEpoch !== requestEpoch) return;
       selectedRun = checkedRunSnapshot(result, summary.id, Math.max(summary.revision, knownRunRevision(summary.id)));
       applyRunSnapshot(selectedRun);
@@ -279,7 +279,7 @@
     const requestEpoch = ++selectedReadEpoch;
     manualRunBusy = true;
     try {
-      const result = await client.orchestration_get_run_v1({ workspaceId, runId: target.id });
+      const result = await client.orchestration_get_run_v2({ workspaceId, runId: target.id });
       if (!mounted || scope !== targetScope || selectedRun?.id !== target.id || selectedReadEpoch !== requestEpoch) return;
       applyRunSnapshot(checkedRunSnapshot(result, target.id, target.revision));
     } catch (error) {
@@ -308,8 +308,8 @@
     listError = undefined;
     try {
       const [latest, stored] = await Promise.all([
-        client.orchestration_catalog_v1({ workspaceId: targetWorkspace }),
-        command ? client.orchestration_get_launch_command_v1({ workspaceId: targetWorkspace, id: command.id }).then(found) : undefined,
+        client.orchestration_catalog_v2({ workspaceId: targetWorkspace }),
+        command ? client.orchestration_get_launch_command_v2({ workspaceId: targetWorkspace, id: command.id }).then(found) : undefined,
       ]);
       if (!mounted || scope !== targetScope) return;
       launcher = { key: crypto.randomUUID(), workspaceId: targetWorkspace, catalog: latest, command: stored };

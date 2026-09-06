@@ -36,7 +36,7 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
   let manifest;
   try { manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8")); }
   catch { throw fail("runtime-unavailable", "The Prime SDK package could not be loaded."); }
-  if (manifest?.name !== "prime-agent" || manifest?.version !== "0.9.2" || manifest?.exports?.["."]?.import !== "./dist/index.js") {
+  if (manifest?.name !== "prime-agent" || !["0.9.2", "0.9.3"].includes(manifest?.version) || manifest?.exports?.["."]?.import !== "./dist/index.js") {
     throw fail("unsupported-version", "The installed Prime Agent version is not supported.");
   }
   if (config.kernelPython) process.env.PRIME_AGENT_KERNEL_PYTHON = config.kernelPython;
@@ -67,12 +67,14 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
     workspaceTool = sdk.defineTool({
       name: "workspace",
       label: "Workspace coordinator",
-      description: "Use the authenticated workspace coordinator to list allowed team members, send a message, observe an allowed member, or start one predefined ready pipeline step. Do not supply actor, session, run, profile, model, policy, or instruction overrides.",
+      description: "Use the authenticated workspace coordinator to list members, send messages, observe results, start a predefined step, or create an agent using an allowed profile from roster. New agents inherit that profile's permissions. Use wait with the returned memberId to collect an observed agent's result before completing your own task.",
       parameters: Type.Union([
         Type.Object({ type: Type.Literal("roster") }, exact),
         Type.Object({ type: Type.Literal("send"), recipientMemberId: Type.String(), body: Type.String() }, exact),
         Type.Object({ type: Type.Literal("observe"), targetMemberId: Type.String() }, exact),
+        Type.Object({ type: Type.Literal("wait"), targetMemberId: Type.String() }, exact),
         Type.Object({ type: Type.Literal("spawn"), stepId: Type.String() }, exact),
+        Type.Object({ type: Type.Literal("spawnAgent"), profileId: Type.String(), name: Type.String(), instructions: Type.String() }, exact),
       ]),
       async execute(toolCallId, operation, signal) {
         try {

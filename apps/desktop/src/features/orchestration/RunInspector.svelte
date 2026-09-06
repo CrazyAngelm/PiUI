@@ -1,9 +1,9 @@
 <script lang="ts">
-  import type { OrchestrationRunV1, TaskRecord } from '../../../../../contracts/orchestration-v1';
-  import type { ReconcileUncertainTaskRequest } from '../../../../../contracts/orchestration-host-v1';
+  import type { OrchestrationRunV2, TaskRecord } from '../../../../../contracts/orchestration-v2';
+  import type { ReconcileUncertainTaskRequest } from '../../../../../contracts/orchestration-host-v2';
   import { memberLabel, statusPresentation, taskDisplays } from './runView';
 
-  export let run: OrchestrationRunV1;
+  export let run: OrchestrationRunV2;
   export let onClose: () => void;
   export let onOpenSession: ((sessionId: string) => void) | undefined = undefined;
   export let busy = false;
@@ -20,8 +20,12 @@
   let reconciliationAcknowledged = false;
   let reconcilingTask: { readonly runKey: string; readonly stepId: string; readonly revision: number } | undefined;
   let previousError: string | undefined;
+  let taskQuery = '';
+  let taskFilter = 'all';
 
   $: displays = taskDisplays(run);
+  $: visibleDisplays = displays.filter(display => `${display.stepName} ${display.profile?.name ?? ''} ${display.profile?.harness ?? ''}`.toLowerCase().includes(taskQuery.toLowerCase())
+    && (taskFilter === 'all' || (taskFilter === 'active' ? ['running', 'ready'].includes(display.task?.status ?? '') : taskFilter === 'attention' ? ['failed', 'uncertain'].includes(display.task?.status ?? '') : ['succeeded', 'cancelled'].includes(display.task?.status ?? ''))));
   $: snapshotStepIds = new Set(run.definition.pipeline.steps.map((step) => step.id));
   $: journalOnlyTasks = run.tasks.filter((task) => !snapshotStepIds.has(task.stepId));
   $: runState = statusPresentation(run.status);
@@ -137,17 +141,18 @@
   {#if error !== undefined}<p class="error" role="alert">{error}</p>{/if}
 
   <section aria-labelledby="tasks-title">
-    <h3 id="tasks-title">Tasks</h3>
+    <h3 id="tasks-title">Tasks <span class="metadata">{visibleDisplays.length} / {displays.length}</span></h3>
+    <div class="task-filters"><label>Find agent or task<input type="search" bind:value={taskQuery} placeholder="Search this run" /></label><label>Status<select bind:value={taskFilter}><option value="all">All tasks</option><option value="active">Active</option><option value="attention">Needs attention</option><option value="completed">Completed</option></select></label></div>
     {#if displays.length === 0}<p class="empty">No pipeline tasks are present in this definition snapshot.</p>{/if}
+    {#if displays.length > 0 && visibleDisplays.length === 0}<p class="empty" role="status">No tasks match these filters.</p>{/if}
     <ol class="task-list">
-      {#each displays as display (display.stepId)}
+      {#each visibleDisplays as display (display.stepId)}
         <li class="task">
           <div class="task__title"><strong>{display.stepName}</strong><span class={`status status--${display.status.tone}`} aria-label={`Task status: ${display.status.label}`}><span aria-hidden="true">{display.status.icon}</span> {display.status.label}</span></div>
           <p class="metadata">Member: {display.profile?.name || display.member?.id || `Unknown member (${display.stepId})`}</p>
           {#if display.task === undefined}
             <p class="reconcile">No task journal record. Needs reconciliation.</p>
           {:else}
-            <p class="metadata">Task revision {display.task.revision}</p>
             {#if display.task.failure !== undefined}<p class="failure"><strong>Failure code:</strong> <code>{display.task.failure.code}</code></p>{/if}
             {#if display.task.resultReference !== undefined}<p class="reference"><strong>Result reference:</strong> {resultReference(display.task)}</p>{/if}
             {#if display.sessionId !== undefined}
@@ -238,6 +243,7 @@
 </aside>
 
 <style>
+  .task-filters { display:flex; flex-wrap:wrap; gap:.75rem; margin:.8rem 0; } .task-filters label { display:grid; gap:.35rem; font-size:.75rem; color:var(--piui-text-muted); } .task-filters input,.task-filters select { background:var(--piui-bg-raised); color:var(--piui-text); border:1px solid var(--piui-border); border-radius:var(--piui-radius-sm); font:inherit; padding:.55rem; } .task-filters input:focus-visible,.task-filters select:focus-visible { outline:2px solid var(--piui-focus); outline-offset:2px; }
   .inspector { display: grid; gap: var(--piui-space-4); min-width: 0; color: var(--piui-text); }
   .inspector__header { display: flex; align-items: start; justify-content: space-between; gap: var(--piui-space-3); padding-bottom: var(--piui-space-3); border-bottom: 1px solid var(--piui-border); }
   h2, h3, h4, h5, p { margin: 0; } h2 { font-size: 20px; letter-spacing: -.02em; } h3 { font-size: 15px; } h4 { font-size: 13px; } h5 { font-size: 12px; }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { DefinitionSummary, StoredDefinition } from '../../../../../contracts/orchestration-host-v1';
-import type { LaunchCommandReference } from '../../../../../contracts/orchestration-v1';
+import type { DefinitionSummary, StoredDefinition } from '../../../../../contracts/orchestration-host-v2';
+import type { LaunchCommandReference } from '../../../../../contracts/orchestration-v2';
 import { initialRunLaunchSelection, validateRunLaunchSelection } from './runLaunch';
 
 const teams: readonly DefinitionSummary[] = [{ id: 'team-a', name: 'Team A', revision: 1 }];

@@ -98,11 +98,11 @@ fn scheduler_error(
     OrchestrationApiError { code: error.code }
 }
 
-pub const ORCHESTRATION_EVENT_V1: &str = "piui://orchestration-event";
+pub const ORCHESTRATION_EVENT_V2: &str = "piui://orchestration-event";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OrchestrationRunChangedEventV1 {
+pub struct OrchestrationRunChangedEventV2 {
     pub protocol: u8,
     #[serde(rename = "type")]
     pub event_type: &'static str,
@@ -113,9 +113,9 @@ pub struct OrchestrationRunChangedEventV1 {
 
 pub fn emit_run_changed(app: &AppHandle, workspace_id: &str, run: &Run) {
     let _ = app.emit(
-        ORCHESTRATION_EVENT_V1,
-        OrchestrationRunChangedEventV1 {
-            protocol: 1,
+        ORCHESTRATION_EVENT_V2,
+        OrchestrationRunChangedEventV2 {
+            protocol: 2,
             event_type: "runChanged",
             workspace_id: workspace_id.to_owned(),
             run_id: run.id().to_owned(),
@@ -360,6 +360,27 @@ impl OrchestrationApiState {
                         )?;
                         Ok(AgentRequestAdmission::Roster {
                             members: reachable_members(run, &actor_member_id),
+                            spawn_profiles: run
+                                .definition()
+                                .team
+                                .members
+                                .iter()
+                                .find(|m| m.id == actor_member_id)
+                                .and_then(|m| {
+                                    run.definition()
+                                        .profiles
+                                        .iter()
+                                        .find(|p| p.id == m.profile_id)
+                                })
+                                .map(|actor| {
+                                    run.definition()
+                                        .profiles
+                                        .iter()
+                                        .filter(|p| actor.allowed_spawn_profile_ids.contains(&p.id))
+                                        .cloned()
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
                         })
                     })
                     .map_err(Into::into)
@@ -484,6 +505,61 @@ impl OrchestrationApiState {
                             body,
                             already_delivered: false,
                         })
+                    })
+                    .map_err(Into::into)
+            }
+            AgentToolOperation::SpawnAgent {
+                profile_id,
+                name,
+                instructions,
+            } => {
+                if !capabilities.agent_operations.spawn {
+                    return Err(OrchestrationApiError::denied());
+                }
+                let mut store = self.lock()?;
+                store
+                    .transact(|workspaces| {
+                        let run = mutable_run(workspaces, &context.workspace_id, &context.run_id)?;
+                        let actor = derive_actor_member_id(run, &context.workspace_session_id)
+                            .map_err(|_| StoreError::Denied)?;
+                        authorize_coordinator_tool(run.definition(), &actor, "orchestration.spawn")
+                            .map_err(|_| StoreError::Denied)?;
+                        let first_admission = record_agent_request(
+                            run,
+                            &request.request_id,
+                            &context.workspace_session_id,
+                            &actor,
+                            AgentRequestKind::SpawnAgent {
+                                profile_id: profile_id.clone(),
+                                name: name.clone(),
+                                instructions: instructions.clone(),
+                            },
+                        )?;
+                        let step_id = if first_admission {
+                            Coordinator::add_spawned_agent(
+                                run,
+                                &actor,
+                                &request.request_id,
+                                &profile_id,
+                                &name,
+                                &instructions,
+                            )
+                            .map_err(|_| StoreError::Denied)?
+                        } else {
+                            format!("agent-{}", request.request_id)
+                        };
+                        if let Some(committed) = committed_spawn(run, &step_id) {
+                            return Ok(committed);
+                        }
+                        let lease = Coordinator::lease_controlled_spawn(
+                            run,
+                            run.revision(),
+                            &actor,
+                            &step_id,
+                            request.request_id,
+                        )
+                        .map_err(|_| StoreError::Conflict)?;
+                        Ok(AgentRequestAdmission::Spawn { lease })
                     })
                     .map_err(Into::into)
             }
@@ -673,6 +749,11 @@ pub enum AgentToolOperation {
     Spawn {
         step_id: String,
     },
+    SpawnAgent {
+        profile_id: String,
+        name: String,
+        instructions: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -689,6 +770,7 @@ pub struct ReachableMember {
 pub enum AgentRequestAdmission {
     Roster {
         members: Vec<ReachableMember>,
+        spawn_profiles: Vec<AgentProfile>,
     },
     Send {
         message_id: String,
@@ -812,7 +894,7 @@ pub struct DefinitionSummary {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OrchestrationCatalogV1 {
+pub struct OrchestrationCatalogV2 {
     pub profiles: Vec<DefinitionSummary>,
     pub teams: Vec<DefinitionSummary>,
     pub pipelines: Vec<DefinitionSummary>,
@@ -1098,15 +1180,15 @@ fn delete_definition<T: DefinitionValue>(
 }
 
 #[tauri::command]
-pub fn orchestration_catalog_v1(
+pub fn orchestration_catalog_v2(
     state: State<'_, OrchestrationApiState>,
     host_state: State<'_, HostState>,
     request: WorkspaceRequest,
-) -> Result<OrchestrationCatalogV1, OrchestrationApiError> {
+) -> Result<OrchestrationCatalogV2, OrchestrationApiError> {
     validate_workspace_scope(&host_state, &request.workspace_id)?;
     let store = state.lock()?;
     let Some(workspace) = store.workspace(&request.workspace_id) else {
-        return Ok(OrchestrationCatalogV1 {
+        return Ok(OrchestrationCatalogV2 {
             profiles: vec![],
             teams: vec![],
             pipelines: vec![],
@@ -1125,7 +1207,7 @@ pub fn orchestration_catalog_v1(
         result.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
         result
     }
-    Ok(OrchestrationCatalogV1 {
+    Ok(OrchestrationCatalogV2 {
         profiles: summaries(&workspace.profiles),
         teams: summaries(&workspace.teams),
         pipelines: summaries(&workspace.pipelines),
@@ -1168,32 +1250,32 @@ macro_rules! definition_commands {
 }
 
 definition_commands!(
-    orchestration_get_profile_v1,
-    orchestration_save_profile_v1,
-    orchestration_delete_profile_v1,
+    orchestration_get_profile_v2,
+    orchestration_save_profile_v2,
+    orchestration_delete_profile_v2,
     AgentProfile
 );
 definition_commands!(
-    orchestration_get_team_v1,
-    orchestration_save_team_v1,
-    orchestration_delete_team_v1,
+    orchestration_get_team_v2,
+    orchestration_save_team_v2,
+    orchestration_delete_team_v2,
     TeamDefinition
 );
 definition_commands!(
-    orchestration_get_pipeline_v1,
-    orchestration_save_pipeline_v1,
-    orchestration_delete_pipeline_v1,
+    orchestration_get_pipeline_v2,
+    orchestration_save_pipeline_v2,
+    orchestration_delete_pipeline_v2,
     PipelineDefinition
 );
 definition_commands!(
-    orchestration_get_launch_command_v1,
-    orchestration_save_launch_command_v1,
-    orchestration_delete_launch_command_v1,
+    orchestration_get_launch_command_v2,
+    orchestration_save_launch_command_v2,
+    orchestration_delete_launch_command_v2,
     LaunchCommandReference
 );
 
 #[tauri::command]
-pub fn orchestration_list_runs_v1(
+pub fn orchestration_list_runs_v2(
     state: State<'_, OrchestrationApiState>,
     host_state: State<'_, HostState>,
     request: WorkspaceRequest,
@@ -1220,7 +1302,7 @@ pub fn orchestration_list_runs_v1(
 }
 
 #[tauri::command]
-pub fn orchestration_get_run_v1(
+pub fn orchestration_get_run_v2(
     state: State<'_, OrchestrationApiState>,
     host_state: State<'_, HostState>,
     request: RunRequest,
@@ -1240,7 +1322,7 @@ pub fn orchestration_get_run_v1(
 }
 
 #[tauri::command]
-pub async fn orchestration_start_run_v1(
+pub async fn orchestration_start_run_v2(
     state: State<'_, OrchestrationApiState>,
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
@@ -1266,7 +1348,7 @@ pub async fn orchestration_start_run_v1(
 }
 
 #[tauri::command]
-pub async fn orchestration_cancel_run_v1(
+pub async fn orchestration_cancel_run_v2(
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
     app: AppHandle,
@@ -1287,7 +1369,7 @@ pub async fn orchestration_cancel_run_v1(
 }
 
 #[tauri::command]
-pub async fn orchestration_reconcile_uncertain_task_v1(
+pub async fn orchestration_reconcile_uncertain_task_v2(
     state: State<'_, OrchestrationApiState>,
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
@@ -1347,7 +1429,7 @@ pub async fn orchestration_reconcile_uncertain_task_v1(
 }
 
 #[tauri::command]
-pub async fn orchestration_retry_uncertain_task_v1(
+pub async fn orchestration_retry_uncertain_task_v2(
     state: State<'_, OrchestrationApiState>,
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
@@ -1584,6 +1666,91 @@ fn mutable_run<'a>(
 #[cfg(test)]
 mod tests {
     use super::{AgentToolOperation, AgentToolRequest};
+
+    #[test]
+    fn dynamic_spawn_request_replays_committed_identity_without_duplicate_agent() {
+        use super::*;
+        let root = std::env::temp_dir().join(format!("piui-spawn-api-{}", uuid::Uuid::new_v4()));
+        let state = OrchestrationApiState::open(&root).unwrap();
+        let definition: RunDefinitionSnapshot = serde_json::from_value(serde_json::json!({
+            "profiles":[{"id":"profile","name":"Worker","harness":"codex","model":"native","permissionMode":"native","instructions":"","toolPolicy":{"rules":[]},"allowedSpawnProfileIds":["profile"]}],
+            "team":{"id":"team","name":"Team","members":[{"id":"parent","profileId":"profile"}],"sendEdges":[],"observeEdges":[],"orchestratorMemberId":"parent"},
+            "pipeline":{"id":"pipeline","name":"Pipeline","steps":[{"id":"task","name":"Task","assignedMemberId":"parent","instructions":"Work","dependencyStepIds":[]}]}
+        })).unwrap();
+        let mut run = Coordinator::new_run("run", definition).unwrap();
+        Coordinator::dispatch_next(
+            &mut run,
+            0,
+            NativeExecutionReference {
+                id: "parent-session".into(),
+            },
+        )
+        .unwrap();
+        state
+            .lock()
+            .unwrap()
+            .transact(|workspaces| {
+                let mut workspace = WorkspaceOrchestration::empty("project".into());
+                workspace.runs.push(run);
+                workspaces.push(workspace);
+                Ok(())
+            })
+            .unwrap();
+        let capabilities: NativeBridgeCapabilities = serde_json::from_value(serde_json::json!({
+            "permissionModes":["native"],"nativeEnforcedTools":[],"coordinatorEnforcedTools":[],
+            "agentOperations":{"roster":true,"send":true,"observe":true,"spawn":true}
+        }))
+        .unwrap();
+        let context = ManagedAgentContext {
+            workspace_id: "project".into(),
+            run_id: "run".into(),
+            workspace_session_id: "parent-session".into(),
+        };
+        let request = AgentToolRequest {
+            request_id: "spawn-one".into(),
+            operation: AgentToolOperation::SpawnAgent {
+                profile_id: "profile".into(),
+                name: "Child".into(),
+                instructions: "Review".into(),
+            },
+        };
+        let AgentRequestAdmission::Spawn { lease } = state
+            .handle_agent_request(context.clone(), request.clone(), &capabilities)
+            .unwrap()
+        else {
+            panic!("expected lease")
+        };
+        state
+            .commit_launch_lease("project", "run", &lease, "child-session".into())
+            .unwrap();
+        assert!(
+            matches!(state.handle_agent_request(context.clone(), request, &capabilities).unwrap(), AgentRequestAdmission::SpawnCommitted {workspace_session_id, ..} if workspace_session_id == "child-session")
+        );
+        let forged = AgentToolRequest {
+            request_id: "spawn-one".into(),
+            operation: AgentToolOperation::SpawnAgent {
+                profile_id: "profile".into(),
+                name: "Other".into(),
+                instructions: "Different".into(),
+            },
+        };
+        assert!(
+            state
+                .handle_agent_request(context, forged, &capabilities)
+                .is_err()
+        );
+        assert_eq!(
+            state
+                .get_run("project", "run")
+                .unwrap()
+                .unwrap()
+                .tasks()
+                .len(),
+            2
+        );
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn reverse_agent_request_has_no_actor_field_and_uses_final_observe_name() {

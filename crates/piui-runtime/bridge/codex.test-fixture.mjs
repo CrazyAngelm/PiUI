@@ -4,6 +4,8 @@ import { join } from "node:path";
 const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 let threadId = "thread-fixture";
+const poolFixture = process.argv.includes("--pool");
+let threadSerial = 0;
 const permissionIndex = process.argv.indexOf("--expect-permission");
 const expectedPermission = permissionIndex >= 0 ? process.argv[permissionIndex + 1] : "native";
 const coordinatorFixture = process.argv.includes("--coordinator");
@@ -26,12 +28,14 @@ const permissionMatches = (params) => {
 
 input.on("line", (line) => {
   const message = JSON.parse(line);
+  if (poolFixture && message.params?.threadId) threadId = message.params.threadId;
   if (message.method === "initialize") {
     const userAgent = process.argv.includes("--wrong-version") ? "fixture/0.148.0" : "fixture/0.147.0";
     send({ id: message.id, result: { userAgent, codexHome: "/fixture", platformFamily: "fixture", platformOs: "fixture" } });
   } else if (message.method === "initialized") {
     // Handshake notification has no response.
   } else if (message.method === "thread/start" || message.method === "thread/resume") {
+    if (poolFixture && message.method === "thread/start") threadId = `thread-${++threadSerial}`;
     if (badFrame) {
       process.stdout.write(badFrame === "syntax" ? "{invalid\n" : badFrame === "null" ? "null\n" : "{}\n");
       return;
@@ -102,7 +106,7 @@ input.on("line", (line) => {
       const tools = message.params.dynamicTools?.[0]?.tools?.map((tool) => tool.name).sort();
       if (
         message.params.dynamicTools?.[0]?.name !== "workspace"
-        || tools?.join(",") !== "observe,roster,send,spawn"
+        || tools?.join(",") !== "observe,roster,send,spawn,spawn_agent,wait"
         || message.params.config?.["features.multi_agent"] !== false
         || message.params.config?.["features.multi_agent_v2"] !== false
       ) {
@@ -132,16 +136,20 @@ input.on("line", (line) => {
   } else if (message.id === 911 && message.result?.success === false) {
     send({ method: "warning", params: { threadId, message: "invalid coordinator call rejected" } });
   } else if (message.method === "turn/start") {
+    if (poolFixture && message.params.input?.[0]?.text === 'crash fixture') { process.exit(1); }
+    const responseText = poolFixture ? message.params.input?.[0]?.text : "hello";
     send({ id: message.id, result: { turn: { id: "turn-fixture", status: "inProgress", items: [] } } });
     send({ method: "turn/started", params: { threadId, turn: { id: "turn-fixture", status: "inProgress", items: [] } } });
     send({ method: "item/started", params: { threadId, turnId: "turn-fixture", startedAtMs: 3, item: { type: "agentMessage", id: "agent-fixture", text: "", phase: null, memoryCitation: null } } });
-    send({ method: "item/agentMessage/delta", params: { threadId, turnId: "turn-fixture", itemId: "agent-fixture", delta: "hello" } });
-    send({ method: "item/completed", params: { threadId, turnId: "turn-fixture", completedAtMs: 4, item: { type: "agentMessage", id: "agent-fixture", text: "hello", phase: null, memoryCitation: null } } });
+    send({ method: "item/agentMessage/delta", params: { threadId, turnId: "turn-fixture", itemId: "agent-fixture", delta: responseText } });
+    send({ method: "item/completed", params: { threadId, turnId: "turn-fixture", completedAtMs: 4, item: { type: "agentMessage", id: "agent-fixture", text: responseText, phase: null, memoryCitation: null } } });
     if (!holdTurnFixture) {
       const requestedText = message.params.input?.[0]?.text;
       const finalStatus = requestedText === "fail fixture" ? "failed" : "completed";
       send({ method: "turn/completed", params: { threadId, turn: { id: "turn-fixture", status: finalStatus, items: [], ...(finalStatus === "failed" ? { error: { message: "raw fixture secret", codexErrorInfo: "unauthorized", additionalDetails: "raw fixture detail" } } : {}) } } });
     }
+  } else if (message.method === "thread/unsubscribe") {
+    send({id:message.id,result:{status:'unsubscribed'}});
   } else if (message.method === "model/list") {
     if (holdModelFixture) return;
     send({ id: message.id, result: { data: [{ id: "fixture-model", model: "fixture-model", displayName: "Fixture Model", hidden: false, supportedReasoningEfforts: [{ reasoningEffort: "low" }] }], nextCursor: null } });

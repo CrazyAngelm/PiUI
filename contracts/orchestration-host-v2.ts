@@ -1,4 +1,4 @@
-/** Trusted WebView-to-host orchestration commands v1.
+/** Trusted WebView-to-host orchestration commands v2.
  *
  * Command arguments contain opaque workspace/definition ids only. There is no
  * shell, filesystem, credential, native session, sender, or process surface.
@@ -11,11 +11,11 @@ import type {
   LaunchCommandReference,
   NativeHistoryReference,
   OrchestrationId,
-  OrchestrationRunV1,
+  OrchestrationRunV2,
   PipelineDefinition,
   Revision,
   TeamDefinition,
-} from './orchestration-v1';
+} from './orchestration-v2';
 
 export type OrchestrationDefinitionKind = 'profile' | 'team' | 'pipeline' | 'launch-command';
 
@@ -25,7 +25,7 @@ export interface DefinitionSummary {
   readonly revision: Revision;
 }
 
-export interface OrchestrationCatalogV1 {
+export interface OrchestrationCatalogV2 {
   readonly profiles: readonly DefinitionSummary[];
   readonly teams: readonly DefinitionSummary[];
   readonly pipelines: readonly DefinitionSummary[];
@@ -87,18 +87,18 @@ export interface RetryUncertainTaskRequest extends RunMutationRequest {
 
 export interface RunSummary {
   readonly id: OrchestrationId;
-  readonly status: OrchestrationRunV1['status'];
+  readonly status: OrchestrationRunV2['status'];
   readonly revision: Revision;
   readonly teamName: string;
   readonly pipelineName: string;
 }
 
 
-export const ORCHESTRATION_EVENT_V1 = 'piui://orchestration-event' as const;
+export const ORCHESTRATION_EVENT_V2 = 'piui://orchestration-event' as const;
 
 /** Emitted only after the durable generation containing this revision commits. */
-export interface OrchestrationRunChangedEventV1 {
-  readonly protocol: 1;
+export interface OrchestrationRunChangedEventV2 {
+  readonly protocol: 2;
   readonly type: 'runChanged';
   readonly workspaceId: OrchestrationId;
   readonly runId: OrchestrationId;
@@ -116,35 +116,35 @@ export type OrchestrationHostErrorCode =
   | 'native-outcome-uncertain'
   | 'denied';
 
-export interface OrchestrationHostCommandsV1 {
-  orchestration_catalog_v1(request: WorkspaceRequest): Promise<OrchestrationCatalogV1>;
+export interface OrchestrationHostCommandsV2 {
+  orchestration_catalog_v2(request: WorkspaceRequest): Promise<OrchestrationCatalogV2>;
 
-  orchestration_get_profile_v1(request: GetDefinitionRequest): Promise<StoredDefinition<AgentProfile> | null>;
-  orchestration_save_profile_v1(request: SaveDefinitionRequest<AgentProfile>): Promise<StoredDefinition<AgentProfile>>;
-  orchestration_delete_profile_v1(request: DeleteDefinitionRequest): Promise<void>;
+  orchestration_get_profile_v2(request: GetDefinitionRequest): Promise<StoredDefinition<AgentProfile> | null>;
+  orchestration_save_profile_v2(request: SaveDefinitionRequest<AgentProfile>): Promise<StoredDefinition<AgentProfile>>;
+  orchestration_delete_profile_v2(request: DeleteDefinitionRequest): Promise<void>;
 
-  orchestration_get_team_v1(request: GetDefinitionRequest): Promise<StoredDefinition<TeamDefinition> | null>;
-  orchestration_save_team_v1(request: SaveDefinitionRequest<TeamDefinition>): Promise<StoredDefinition<TeamDefinition>>;
-  orchestration_delete_team_v1(request: DeleteDefinitionRequest): Promise<void>;
+  orchestration_get_team_v2(request: GetDefinitionRequest): Promise<StoredDefinition<TeamDefinition> | null>;
+  orchestration_save_team_v2(request: SaveDefinitionRequest<TeamDefinition>): Promise<StoredDefinition<TeamDefinition>>;
+  orchestration_delete_team_v2(request: DeleteDefinitionRequest): Promise<void>;
 
-  orchestration_get_pipeline_v1(request: GetDefinitionRequest): Promise<StoredDefinition<PipelineDefinition> | null>;
-  orchestration_save_pipeline_v1(request: SaveDefinitionRequest<PipelineDefinition>): Promise<StoredDefinition<PipelineDefinition>>;
-  orchestration_delete_pipeline_v1(request: DeleteDefinitionRequest): Promise<void>;
+  orchestration_get_pipeline_v2(request: GetDefinitionRequest): Promise<StoredDefinition<PipelineDefinition> | null>;
+  orchestration_save_pipeline_v2(request: SaveDefinitionRequest<PipelineDefinition>): Promise<StoredDefinition<PipelineDefinition>>;
+  orchestration_delete_pipeline_v2(request: DeleteDefinitionRequest): Promise<void>;
 
-  orchestration_get_launch_command_v1(
+  orchestration_get_launch_command_v2(
     request: GetDefinitionRequest,
   ): Promise<StoredDefinition<LaunchCommandReference> | null>;
-  orchestration_save_launch_command_v1(
+  orchestration_save_launch_command_v2(
     request: SaveDefinitionRequest<LaunchCommandReference>,
   ): Promise<StoredDefinition<LaunchCommandReference>>;
-  orchestration_delete_launch_command_v1(request: DeleteDefinitionRequest): Promise<void>;
+  orchestration_delete_launch_command_v2(request: DeleteDefinitionRequest): Promise<void>;
 
-  orchestration_list_runs_v1(request: WorkspaceRequest): Promise<readonly RunSummary[]>;
-  orchestration_get_run_v1(request: RunRequest): Promise<OrchestrationRunV1 | null>;
-  orchestration_start_run_v1(request: StartRunRequest): Promise<OrchestrationRunV1>;
-  orchestration_cancel_run_v1(request: RunMutationRequest): Promise<OrchestrationRunV1>;
-  orchestration_reconcile_uncertain_task_v1(
+  orchestration_list_runs_v2(request: WorkspaceRequest): Promise<readonly RunSummary[]>;
+  orchestration_get_run_v2(request: RunRequest): Promise<OrchestrationRunV2 | null>;
+  orchestration_start_run_v2(request: StartRunRequest): Promise<OrchestrationRunV2>;
+  orchestration_cancel_run_v2(request: RunMutationRequest): Promise<OrchestrationRunV2>;
+  orchestration_reconcile_uncertain_task_v2(
     request: ReconcileUncertainTaskRequest,
-  ): Promise<OrchestrationRunV1>;
-  orchestration_retry_uncertain_task_v1(request: RetryUncertainTaskRequest): Promise<OrchestrationRunV1>;
+  ): Promise<OrchestrationRunV2>;
+  orchestration_retry_uncertain_task_v2(request: RetryUncertainTaskRequest): Promise<OrchestrationRunV2>;
 }

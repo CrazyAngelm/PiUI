@@ -5,7 +5,7 @@ import type {
   PolicyEnforcement,
   ToolDecision,
   ToolRule,
-} from '../../../../../contracts/orchestration-v1';
+} from '../../../../../contracts/orchestration-v2';
 
 export interface ProfileDraft {
   id: string;
@@ -15,6 +15,8 @@ export interface ProfileDraft {
   model: string;
   permissionMode: PermissionMode;
   instructions: string;
+  replaceBasePrompt: boolean;
+  baseInstructions: string;
   toolRules: ToolRule[];
   allowedSpawnProfileIds: string[];
 }
@@ -37,6 +39,8 @@ export function createProfileDraft(
       model: '',
       permissionMode: 'native',
       instructions: '',
+      replaceBasePrompt: false,
+      baseInstructions: '',
       toolRules: [],
       allowedSpawnProfileIds: [],
     };
@@ -50,6 +54,8 @@ export function createProfileDraft(
     model: profile.model,
     permissionMode: profile.permissionMode,
     instructions: profile.instructions,
+    replaceBasePrompt: profile.baseInstructions !== undefined,
+    baseInstructions: profile.baseInstructions ?? '',
     toolRules: profile.toolPolicy.rules.map((rule) => ({ ...rule })),
     allowedSpawnProfileIds: [...profile.allowedSpawnProfileIds],
   };
@@ -65,6 +71,7 @@ export function profileFromDraft(draft: ProfileDraft): AgentProfile {
     model: draft.model.trim(),
     permissionMode: draft.permissionMode,
     instructions: draft.instructions,
+    ...(draft.replaceBasePrompt && draft.harness === 'codex' ? { baseInstructions: draft.baseInstructions } : {}),
     toolPolicy: { rules: draft.toolRules.map((rule) => ({ ...rule, tool: rule.tool.trim() })) },
     allowedSpawnProfileIds: [...draft.allowedSpawnProfileIds],
   };

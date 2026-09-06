@@ -23,7 +23,6 @@
   import { modalFocus, sessionForProject, shortcutModifier } from './workspaceUx';
   import { acceptWorkspaceSnapshot, applyWorkspaceEvent, harnessLabel, mergeCatalogSession, protectClosedCatalogSessions, resolveCloseAfterCatalog, sortedSessions, statusLabel } from './workspaceState';
 
-  export let onOpenLegacyHistory: () => void;
 
   type MainView = 'sessions' | 'workspace' | 'settings';
   type WorkspaceSection = 'agents' | 'teams' | 'pipelines' | 'runs';
@@ -168,12 +167,6 @@
     persistUiState();
   }
 
-  function openLegacyHistory(): void {
-    if (guardNavigation(openLegacyHistory)) return;
-    persistUiState();
-    onOpenLegacyHistory();
-  }
-
   function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : 'The workspace operation could not be completed.';
   }
@@ -228,7 +221,7 @@
       if (selectedSessionId && !next.sessions.some((session) => session.id === selectedSessionId) && snapshots[selectedSessionId] === undefined && selectedSessionId !== pendingAcceptedSessionId) selectedSessionId = '';
       if (!newWorkspaceId || !next.workspaces.some((workspace) => workspace.id === newWorkspaceId)) newWorkspaceId = selectedWorkspaceId;
       if (!newHarness) newHarness = next.harnesses.find((harness) => harness.status === 'available')?.kind ?? '';
-      // A listener may have been absent while the shell showed legacy history.
+      // A listener may have been absent while the shell was unmounted.
       // Reconcile every non-closed native session without blocking first paint;
       // snapshot is read-only and never adopts, starts, or disposes a runtime.
       for (const session of next.sessions) if (session.status !== 'closed') void reconcileSession(session.id);
@@ -718,12 +711,16 @@
       <button type="button" class:active={mainView === 'sessions'} aria-current={mainView === 'sessions' ? 'page' : undefined} onclick={() => requestMainView('sessions')}>Sessions</button>
       <button type="button" class:active={mainView === 'workspace'} aria-current={mainView === 'workspace' ? 'page' : undefined} onclick={() => requestMainView('workspace')}>Workspace</button>
     </div>
+    {#if mainView === 'sessions'}
     <label class="search-label" aria-label="Search sessions">
       <span aria-hidden="true">⌕</span><input bind:this={searchInput} bind:value={search} placeholder="Search this project" />
     </label>
+    {#if new Set(catalog.sessions.map(session => session.harness)).size > 1}
     <label class="filter-label"><span>Harness</span><select bind:value={harnessFilter}>
       <option value="all">All harnesses</option><option value="pi">Pi</option><option value="prime-agent">Prime Agent</option><option value="codex">Codex</option>
     </select></label>
+    {/if}
+    {/if}
 
     <div class="list-heading"><span>Projects</span><span>{catalog.workspaces.length || ''}</span></div>
     <nav class="project-list" aria-label="Projects and native sessions">
@@ -738,7 +735,7 @@
               </button>
               {#if !workspace.personal && workspace.trust === 'restricted'}<button class="more" type="button" onclick={() => { trustTarget = workspace; trustError = undefined; }} aria-label={`Review trust for ${workspace.name}`}>⌾</button>{/if}
             </div>
-            {#if workspace.id === selectedWorkspaceId}
+            {#if workspace.id === selectedWorkspaceId && mainView === 'sessions'}
               <div class="session-list">
                 {#each visibleSessions as session (session.id)}
                   <button type="button" class:selected={session.id === selectedSessionId} onclick={() => openSession(session.id)} aria-current={session.id === selectedSessionId ? 'page' : undefined}>
@@ -754,9 +751,8 @@
       {/if}
     </nav>
     <div class="utilities">
-      <button type="button" onclick={openLegacyHistory}>Legacy history <span class="utility-note">Read only</span></button>
-      <button type="button" onclick={(event) => openInspector('approvals', event)}><span>Approvals</span>{#if attentionCount}<strong>{attentionCount}</strong>{/if}</button>
-      <button type="button" onclick={(event) => openInspector('activity', event)}><span>Activity</span>{#if activeSessions.length}<strong>{activeSessions.length}</strong>{/if}</button>
+      {#if attentionCount}<button type="button" onclick={(event) => openInspector('approvals', event)}><span>Approvals</span><strong>{attentionCount}</strong></button>{/if}
+      {#if activeSessions.length}<button type="button" onclick={(event) => openInspector('activity', event)}><span>Activity</span><strong>{activeSessions.length}</strong></button>{/if}
       <button type="button" class:current-utility={mainView === 'settings'} onclick={showSettings}>Settings <kbd>{modifier},</kbd></button>
     </div>
   </aside>
@@ -1094,7 +1090,6 @@
   .brand { display:flex; align-items:center; gap:8px; }
   .brand-mark { font:600 22px Georgia, serif; color:var(--piui-accent); }
   .list-heading { display:flex; justify-content:space-between; padding:10px 16px 5px; color:var(--piui-text-faint); font-size:11px; font-weight:600; }
-  .utility-note { color:var(--piui-text-faint); font-size:11px; }
   .utilities .current-utility { background:var(--piui-surface-1); }
   .session-empty { padding:8px; font-size:12px; color:var(--piui-text-muted); }
   .session-empty p { margin:0 0 6px; }

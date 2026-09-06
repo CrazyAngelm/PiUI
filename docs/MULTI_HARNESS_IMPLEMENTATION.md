@@ -13,7 +13,11 @@ The user authorized implementing the previously recommended PiUI product: normal
 - Native session history remains authoritative. PiUI catalog remains rebuildable; user-authored orchestration definitions/run journal are separate durable data. No direct JSONL mutation, frontend credentials, arbitrary WebView shell/FS access or implicit project-code trust.
 - Unit/contract tests, Windows native E2E, runtime probes and perf smoke prove actual paths. Windows/Linux lifecycle behavior is tested in appropriate environments; an unavailable environment is reported as an open verification blocker, not a pass.
 
-## Latest verified status
+## Current follow-up
+
+See [the September 6 agent-system review](AGENT_SYSTEM_REVIEW.md) for shared Rust Codex execution, base-prompt replacement, dynamic delegation, orchestration v2, Prime 0.9.3 compatibility and the subsequent removal of Legacy history navigation.
+
+## Earlier verified status
 - Windows workspace-v11 native E2E PASS, including zero-turn same-ID reopen/reclose, graceful disposal, persisted definitions, rejected-policy runs, forged boundaries, safe mode, and empty owned Job before fixture removal. Evidence: `target/piui-evidence/21760-1788691641684/report.json` and seven PNGs.
 - Real Prime default-provider marker turn and same-native-ID history resume PASS. Real two-task managed Prime dependency DAG PASS with native tools disabled: predecessor content hash, downstream native input and copied assistant output verified. The integration uses Tauri MockRuntime only for state/events; native host, scheduler, provider and histories are real. Source-controlled Windows integration-test manifest preserves the production manifest and default Cargo tests.
 - Latest completed UI checks: 148 tests, Svelte/TypeScript 0 errors/0 warnings, contract tests 22, build and asset-size smoke PASS. Final default Rust verification after the opt-in native-test seam: 318 passed, 11 ignored; workspace clippy/all-targets with `-D warnings` and fmt check PASS.

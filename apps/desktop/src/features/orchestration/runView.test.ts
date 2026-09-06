@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { OrchestrationRunV1 } from '../../../../../contracts/orchestration-v1';
+import type { OrchestrationRunV2 } from '../../../../../contracts/orchestration-v2';
 import { memberById, memberLabel, sessionIdForTask, statusPresentation, taskDisplays } from './runView';
 
-const run: OrchestrationRunV1 = {
-  schemaVersion: 1, id: 'run-1', status: 'running', revision: 4,
+const run: OrchestrationRunV2 = {
+  schemaVersion: 2, id: 'run-1', status: 'running', revision: 4,
   definition: {
     profiles: [{ id: 'profile-1', name: 'Planner', harness: 'pi', model: 'model', permissionMode: 'native', instructions: 'Plan.', toolPolicy: { rules: [] }, allowedSpawnProfileIds: [] }],
     team: { id: 'team-1', name: 'Team', members: [{ id: 'member-1', profileId: 'profile-1' }], sendEdges: [], observeEdges: [], orchestratorMemberId: 'member-1' },

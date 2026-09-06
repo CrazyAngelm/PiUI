@@ -5,7 +5,7 @@ import TeamEditor from './TeamEditor.svelte';
 import PipelineEditor from './PipelineEditor.svelte';
 import LaunchCommandEditor from './LaunchCommandEditor.svelte';
 import OrchestrationPanel from './OrchestrationPanel.svelte';
-import type { AgentProfile, TeamDefinition, PipelineDefinition } from '../../../../../contracts/orchestration-v1';
+import type { AgentProfile, TeamDefinition, PipelineDefinition } from '../../../../../contracts/orchestration-v2';
 
 const profile: AgentProfile = {
   id: 'fixture-profile', name: 'Fixture review', harness: 'prime-agent', model: 'fixture-model', permissionMode: 'read-only',
@@ -35,7 +35,7 @@ describe('orchestration component integration', () => {
     const { body } = render(TeamEditor, { props: { team, profiles: [profile], error: undefined, onSave: noAction, onCancel: noAction, readOnly: true } });
     expect(body).toContain('Messaging');
     expect(body).toContain('Observation');
-    expect(body).toContain('Allowed workspace child templates');
+    expect(body).toContain('Subagents');
     expect(body).toContain('disabled');
     expect(body).not.toContain('>Start run<');
   });

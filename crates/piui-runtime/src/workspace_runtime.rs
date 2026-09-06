@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::Duration;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -36,6 +36,7 @@ const RUNNER_SOURCE: &str = include_str!("../bridge/runner.mjs");
 const PI_SOURCE: &str = include_str!("../bridge/pi.mjs");
 const PRIME_SOURCE: &str = include_str!("../bridge/prime.mjs");
 const CODEX_SOURCE: &str = include_str!("../bridge/codex.mjs");
+const CODEX_POOL_SOURCE: &str = include_str!("../bridge/codex-pool.mjs");
 
 // The full bridge source is sent through stdin because CreateProcess has a
 // 32767 UTF--16 command-line limit. This fixed ESM bootstrap reads exactly the
@@ -244,8 +245,16 @@ pub enum CoordinatorOperation {
     Observe {
         target_member_id: String,
     },
+    Wait {
+        target_member_id: String,
+    },
     Spawn {
         step_id: String,
+    },
+    SpawnAgent {
+        profile_id: String,
+        name: String,
+        instructions: String,
     },
 }
 
@@ -324,6 +333,7 @@ pub struct NativeRuntimeConfig {
     pub thinking_level: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
+    pub base_instructions: Option<String>,
     pub permission_mode: PermissionMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<Vec<String>>,
@@ -438,11 +448,14 @@ struct InitializeConfig<'a> {
     config: &'a NativeRuntimeConfig,
     runtime_program: String,
     runtime_args: Vec<String>,
+    pool_host: bool,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BridgeFrame {
+    #[serde(default, rename = "sessionId")]
+    session_id: Option<String>,
     #[serde(default)]
     id: Option<String>,
     #[serde(default)]
@@ -463,12 +476,15 @@ struct BridgeError {
     message: String,
 }
 
+type SessionEventRoute = (mpsc::Sender<NativeEvent>, Arc<AtomicBool>);
+
 struct RuntimeShared {
+    session_events: Mutex<HashMap<String, SessionEventRoute>>,
     stdin: Mutex<Option<ChildStdin>>,
     pending: Mutex<HashMap<String, oneshot::Sender<Result<Value, NativeRuntimeError>>>>,
     timed_out: Mutex<HashSet<String>>,
     next_id: AtomicU64,
-    accepting: AtomicBool,
+    accepting: Arc<AtomicBool>,
     shutting_down: AtomicBool,
 }
 
@@ -521,6 +537,7 @@ impl Drop for RuntimeContainment {
 
 /// One owned native bridge and all descendants it creates.
 pub struct NativeRuntime {
+    pooled: Option<(Arc<NativeRuntime>, String)>,
     shared: Arc<RuntimeShared>,
     child: Mutex<Option<Child>>,
     reader: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -529,6 +546,87 @@ pub struct NativeRuntime {
 }
 
 impl NativeRuntime {
+    async fn spawn_pooled(
+        config: NativeRuntimeConfig,
+        node: PathBuf,
+        launch: ResolvedHarnessLaunch,
+        source: Vec<u8>,
+    ) -> Result<(Self, mpsc::Receiver<NativeEvent>), NativeRuntimeError> {
+        type PoolKey = (PathBuf, Option<std::ffi::OsString>);
+        type Pools = Mutex<HashMap<PoolKey, Weak<NativeRuntime>>>;
+        static POOLS: OnceLock<Pools> = OnceLock::new();
+        let key = (config.cwd.clone(), std::env::var_os("CODEX_HOME"));
+        let mut pools = POOLS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .await;
+        pools.retain(|_, pool| pool.strong_count() > 0);
+        let initialize = json!(InitializeConfig {
+            config: &config,
+            runtime_program: launch.program.to_string_lossy().into_owned(),
+            runtime_args: launch.args.clone(),
+            pool_host: false,
+        });
+        let pool = if let Some(pool) = pools
+            .get(&key)
+            .and_then(Weak::upgrade)
+            .filter(|pool| pool.shared.accepting.load(Ordering::Acquire))
+        {
+            pool
+        } else {
+            let (pool, _events) =
+                Self::spawn_resolved(config.clone(), node, launch, source, true).await?;
+            let pool = Arc::new(pool);
+            pools.insert(key, Arc::downgrade(&pool));
+            pool
+        };
+        drop(pools);
+        let session_id = config.session_dir.to_string_lossy().into_owned();
+        let (events, receiver) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
+        let accepting = Arc::new(AtomicBool::new(true));
+        pool.shared
+            .session_events
+            .lock()
+            .await
+            .insert(session_id.clone(), (events, accepting.clone()));
+        if let Err(error) = pool
+            .request(
+                "openSession",
+                json!({"sessionId":session_id,"config":initialize}),
+                REQUEST_TIMEOUT,
+                false,
+            )
+            .await
+        {
+            pool.shared.session_events.lock().await.remove(&session_id);
+            return Err(error);
+        }
+        Ok((
+            Self {
+                pooled: Some((pool, session_id)),
+                shared: Arc::new(RuntimeShared {
+                    session_events: Mutex::new(HashMap::new()),
+                    stdin: Mutex::new(None),
+                    pending: Mutex::new(HashMap::new()),
+                    timed_out: Mutex::new(HashSet::new()),
+                    next_id: AtomicU64::new(1),
+                    accepting,
+                    shutting_down: AtomicBool::new(false),
+                }),
+                child: Mutex::new(None),
+                reader: Mutex::new(None),
+                stderr: Mutex::new(None),
+                containment: Arc::new(RuntimeContainment {
+                    #[cfg(unix)]
+                    unix_group: StdMutex::new(None),
+                    #[cfg(windows)]
+                    windows_job: StdMutex::new(None),
+                }),
+            },
+            receiver,
+        ))
+    }
+
     pub async fn spawn(
         config: NativeRuntimeConfig,
     ) -> Result<(Self, mpsc::Receiver<NativeEvent>), NativeRuntimeError> {
@@ -537,7 +635,10 @@ impl NativeRuntime {
         let node = resolve_node()?;
         let launch = resolve_harness_launch_for_config(&config)?;
         let source = bridge_source(config.harness)?;
-        Self::spawn_resolved(config, node, launch, source).await
+        if config.harness == HarnessKind::Codex && config.coordination {
+            return Self::spawn_pooled(config, node, launch, source).await;
+        }
+        Self::spawn_resolved(config, node, launch, source, false).await
     }
 
     async fn spawn_resolved(
@@ -545,6 +646,7 @@ impl NativeRuntime {
         node: PathBuf,
         launch: ResolvedHarnessLaunch,
         source: Vec<u8>,
+        pool_host: bool,
     ) -> Result<(Self, mpsc::Receiver<NativeEvent>), NativeRuntimeError> {
         let source_len =
             u32::try_from(source.len()).map_err(|_| NativeRuntimeError::BridgeSourceTooLarge)?;
@@ -612,11 +714,12 @@ impl NativeRuntime {
         let stdout = child.stdout.take().ok_or(NativeRuntimeError::Spawn)?;
         let stderr = child.stderr.take();
         let shared = Arc::new(RuntimeShared {
+            session_events: Mutex::new(HashMap::new()),
             stdin: Mutex::new(Some(stdin)),
             pending: Mutex::new(HashMap::new()),
             timed_out: Mutex::new(HashSet::new()),
             next_id: AtomicU64::new(1),
-            accepting: AtomicBool::new(true),
+            accepting: Arc::new(AtomicBool::new(true)),
             shutting_down: AtomicBool::new(false),
         });
         let containment = Arc::new(RuntimeContainment {
@@ -644,6 +747,7 @@ impl NativeRuntime {
             })
         });
         let runtime = Self {
+            pooled: None,
             shared,
             child: Mutex::new(Some(child)),
             reader: Mutex::new(Some(reader)),
@@ -659,6 +763,7 @@ impl NativeRuntime {
             config: &config,
             runtime_program: launch.program.to_string_lossy().into_owned(),
             runtime_args: launch.args,
+            pool_host,
         };
         if let Err(error) = runtime
             .request("initialize", json!(initialize), REQUEST_TIMEOUT, false)
@@ -795,6 +900,13 @@ impl NativeRuntime {
         let graceful = self
             .request("dispose", json!({}), SHUTDOWN_TIMEOUT, true)
             .await;
+        if let Some((pool, session_id)) = &self.pooled {
+            pool.shared.session_events.lock().await.remove(session_id);
+            if graceful.is_err() {
+                let _ = pool.terminate_containment();
+            }
+            return graceful.map(|_| ());
+        }
         let shutdown = self.shutdown_child().await;
         match (graceful, shutdown) {
             (Err(error), _) => Err(error),
@@ -807,6 +919,11 @@ impl NativeRuntime {
     pub async fn terminate(&self) -> Result<(), NativeRuntimeError> {
         self.shared.shutting_down.store(true, Ordering::Release);
         self.shared.accepting.store(false, Ordering::Release);
+        if let Some((pool, _)) = &self.pooled {
+            // Emergency trust/protocol retirement stops the shared workspace
+            // process too; it must never leave native tools running.
+            return pool.terminate_containment();
+        }
         self.shutdown_child().await
     }
 
@@ -822,6 +939,15 @@ impl NativeRuntime {
             && !allow_shutdown
         {
             return Err(NativeRuntimeError::NotRunning);
+        }
+        if let Some((pool, session_id)) = &self.pooled {
+            return Box::pin(pool.request(
+                "sessionRequest",
+                json!({"sessionId":session_id,"method":method,"params":params}),
+                deadline,
+                false,
+            ))
+            .await;
         }
         let id = format!(
             "piui-bridge-{}",
@@ -897,6 +1023,11 @@ impl NativeRuntime {
 
 impl Drop for NativeRuntime {
     fn drop(&mut self) {
+        if let Some((pool, _)) = &self.pooled {
+            if !self.shared.shutting_down.load(Ordering::Acquire) {
+                let _ = pool.terminate_containment();
+            }
+        }
         let _ = self.terminate_containment();
     }
 }
@@ -952,6 +1083,14 @@ async fn read_bridge_stdout<R: tokio::io::AsyncRead + Unpin>(
             NativeRuntimeError::UnexpectedExit
         };
         fail_pending(&shared, error.clone()).await;
+        for (sender, _) in shared.session_events.lock().await.values() {
+            let _ = sender.try_send(NativeEvent::Status {
+                status: SessionStatus::Failed,
+            });
+            let _ = sender.try_send(NativeEvent::Error {
+                message: "The shared Codex runtime stopped.".into(),
+            });
+        }
         let _ = events.try_send(NativeEvent::Status {
             status: SessionStatus::Failed,
         });
@@ -977,6 +1116,22 @@ async fn route_bridge_frame(
 ) -> Result<(), NativeRuntimeError> {
     let frame: BridgeFrame =
         serde_json::from_value(value).map_err(|_| NativeRuntimeError::Protocol)?;
+    if let Some(session_id) = frame.session_id {
+        if frame.id.is_some() || frame.ok.is_some() {
+            return Err(NativeRuntimeError::Protocol);
+        }
+        let event = frame.event.ok_or(NativeRuntimeError::Protocol)?;
+        let sessions = shared.session_events.lock().await;
+        if let Some((sender, accepting)) = sessions.get(&session_id) {
+            match sender.try_send(event) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Closed(_)) if !accepting.load(Ordering::Acquire) => {
+                }
+                Err(_) => return Err(NativeRuntimeError::Protocol),
+            }
+        }
+        return Ok(());
+    }
     match (frame.id, frame.ok, frame.event) {
         (None, None, Some(event)) => match events.try_send(event) {
             Ok(()) => Ok(()),
@@ -1164,7 +1319,10 @@ fn verified_prime_package_root(root: &Path) -> bool {
         return false;
     };
     package.get("name").and_then(Value::as_str) == Some("prime-agent")
-        && package.get("version").and_then(Value::as_str) == Some("0.9.2")
+        && matches!(
+            package.get("version").and_then(Value::as_str),
+            Some("0.9.2" | "0.9.3")
+        )
 }
 
 fn is_isolated_daemon(socket: Option<&str>) -> bool {
@@ -1186,6 +1344,9 @@ fn is_isolated_daemon(socket: Option<&str>) -> bool {
 }
 
 fn bridge_source(kind: HarnessKind) -> Result<Vec<u8>, NativeRuntimeError> {
+    if kind == HarnessKind::Codex {
+        return Ok(format!("{CODEX_SOURCE}\n{CODEX_POOL_SOURCE}\nglobalThis.__PIUI_BRIDGE_FACTORY__=(config,emit,coordinator)=>config.poolHost?createCodexPool(config,emit):createCodexAdapter(config,emit,coordinator);\n{RUNNER_SOURCE}").into_bytes());
+    }
     let (factory, name) = match kind {
         HarnessKind::Pi => (PI_SOURCE, "createPiAdapter"),
         HarnessKind::PrimeAgent => (PRIME_SOURCE, "createPrimeAdapter"),
@@ -1233,7 +1394,7 @@ fn resolve_harness_launch_for_config(
     Ok(ResolvedHarnessLaunch {
         program: resolve_node()?,
         args: vec![entry.to_string_lossy().into_owned()],
-        version: Some("0.9.2".into()),
+        version: package_version(&entry),
     })
 }
 
@@ -1436,7 +1597,7 @@ pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
                 HarnessKind::Codex => Some("0.147.0"),
             };
             let version_supported = expected.is_none_or(|expected| {
-                launch.version.as_deref() == Some(expected)
+                launch.version.as_deref() == Some(expected) || (kind == HarnessKind::PrimeAgent && launch.version.as_deref() == Some("0.9.3"))
             });
             let platform_verified = cfg!(windows);
             let (status, reason) = if !version_supported {
@@ -1508,6 +1669,7 @@ mod tests {
             title: None,
             model: None,
             thinking_level: None,
+            base_instructions: None,
             instructions: None,
             permission_mode: PermissionMode::Native,
             allowed_tools: None,
@@ -1518,6 +1680,40 @@ mod tests {
             kernel_python: None,
             coordination: false,
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "uses the installed Codex for prompt-free lifecycle verification"]
+    async fn pooled_codex_sessions_share_process_and_close_independently() {
+        let root =
+            std::env::temp_dir().join(format!("piui-codex-pool-lifecycle-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("isolated cwd");
+        let mut config = test_config();
+        config.cwd = std::fs::canonicalize(&root).expect("canonical cwd");
+        config.harness = HarnessKind::Codex;
+        config.coordination = true;
+        config.session_dir = root.join("one");
+        let (one, _one_events) = NativeRuntime::spawn(config.clone())
+            .await
+            .expect("first pooled session");
+        config.session_dir = root.join("two");
+        let (two, _two_events) = NativeRuntime::spawn(config)
+            .await
+            .expect("second pooled session");
+        let one_pool = &one.pooled.as_ref().expect("pooled").0;
+        let two_pool = &two.pooled.as_ref().expect("pooled").0;
+        assert!(Arc::ptr_eq(one_pool, two_pool));
+        assert_ne!(
+            one.snapshot().await.expect("first").native_id,
+            two.snapshot().await.expect("second").native_id
+        );
+        one.begin_retirement();
+        one.dispose().await.expect("close first only");
+        assert_eq!(
+            two.snapshot().await.expect("second stays open").status,
+            SessionStatus::Idle
+        );
+        two.dispose().await.expect("close second");
     }
 
     fn test_bridge_source(factory_body: &str) -> Vec<u8> {
@@ -1540,6 +1736,7 @@ mod tests {
                 version: None,
             },
             test_bridge_source(factory_body),
+            false,
         )
         .await
     }
@@ -1576,11 +1773,12 @@ mod tests {
     #[tokio::test]
     async fn routes_parallel_out_of_order_responses() {
         let shared = Arc::new(RuntimeShared {
+            session_events: Mutex::new(HashMap::new()),
             stdin: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             timed_out: Mutex::new(HashSet::new()),
             next_id: AtomicU64::new(1),
-            accepting: AtomicBool::new(true),
+            accepting: Arc::new(AtomicBool::new(true)),
             shutting_down: AtomicBool::new(false),
         });
         let (tx1, rx1) = oneshot::channel();
@@ -1601,11 +1799,12 @@ mod tests {
     #[tokio::test]
     async fn rejects_unknown_response_but_ignores_late_timeout() {
         let shared = Arc::new(RuntimeShared {
+            session_events: Mutex::new(HashMap::new()),
             stdin: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             timed_out: Mutex::new(HashSet::from(["late".into()])),
             next_id: AtomicU64::new(1),
-            accepting: AtomicBool::new(true),
+            accepting: Arc::new(AtomicBool::new(true)),
             shutting_down: AtomicBool::new(false),
         });
         let (events, _) = mpsc::channel(1);
@@ -1630,11 +1829,12 @@ mod tests {
     #[tokio::test]
     async fn lf_codec_keeps_unicode_separators_inside_one_corrupt_frame() {
         let shared = Arc::new(RuntimeShared {
+            session_events: Mutex::new(HashMap::new()),
             stdin: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             timed_out: Mutex::new(HashSet::new()),
             next_id: AtomicU64::new(1),
-            accepting: AtomicBool::new(true),
+            accepting: Arc::new(AtomicBool::new(true)),
             shutting_down: AtomicBool::new(false),
         });
         let (events, mut receiver) = mpsc::channel(4);
@@ -1673,11 +1873,12 @@ mod tests {
     #[tokio::test]
     async fn fragmented_lf_frame_decodes() {
         let shared = Arc::new(RuntimeShared {
+            session_events: Mutex::new(HashMap::new()),
             stdin: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             timed_out: Mutex::new(HashSet::new()),
             next_id: AtomicU64::new(1),
-            accepting: AtomicBool::new(true),
+            accepting: Arc::new(AtomicBool::new(true)),
             shutting_down: AtomicBool::new(true),
         });
         let (events, mut receiver) = mpsc::channel(2);

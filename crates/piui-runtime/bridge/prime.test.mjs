@@ -180,6 +180,6 @@ test("Prime rejects unproved mandatory policy and unsafe paths before SDK start"
 test("Prime fails closed for another installed package version", async () => {
   const packageRoot = await mkdtemp(join(tmpdir(), "piui-prime-version-"));
   await mkdir(join(packageRoot, "dist"));
-  await writeFile(join(packageRoot, "package.json"), JSON.stringify({ name: "prime-agent", version: "0.9.3", exports: { ".": { import: "./dist/index.js" } } }));
+  await writeFile(join(packageRoot, "package.json"), JSON.stringify({ name: "prime-agent", version: "0.9.4", exports: { ".": { import: "./dist/index.js" } } }));
   await assert.rejects(createPrimeAdapter(await config({ packageRoot }), () => {}), (error) => error.bridgeCode === "unsupported-version");
 });

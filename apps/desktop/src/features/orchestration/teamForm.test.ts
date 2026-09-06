@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentProfile, TeamDefinition } from '../../../../../contracts/orchestration-v1';
+import type { AgentProfile, TeamDefinition } from '../../../../../contracts/orchestration-v2';
 import { cloneTeamDefinition, createEmptyTeamDefinition, validateTeamDefinition } from './teamForm';
 
 const profiles: readonly AgentProfile[] = [

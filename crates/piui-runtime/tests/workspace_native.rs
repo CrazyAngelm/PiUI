@@ -86,6 +86,7 @@ fn native_config(kind: HarnessKind, label: &str) -> NativeRuntimeConfig {
         title: Some("PiUI integration verification".into()),
         model: None,
         thinking_level: None,
+        base_instructions: None,
         instructions: None,
         permission_mode: PermissionMode::Native,
         allowed_tools,

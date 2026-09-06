@@ -335,3 +335,39 @@ Permissions distinguish native-enforced, coordinator-enforced, advisory and unsu
 
 
 **Implemented lifecycle semantics (workspace v11):** A native ID or reserved path is not persistence proof. Only a known-absent, never-materialized empty draft may reopen through a fresh native session while keeping its opaque PiUI identity. Existing, corrupt, inaccessible or previously materialized history must not become an empty replacement. Materialization truth is monotonic; native history remains authoritative. Cached observed model metadata is display state, not an ordinary-open override; explicit create/profile configuration stays explicit. Graceful close requires both the native disposal acknowledgement and owned containment cleanup. UI error recovery reconciles host state while retaining the failure warning, never fabricating a successful acknowledgement.
+
+
+## ADR-024 — Shared native Codex transport and orchestration v2
+
+**Status:** Accepted and implemented September 6, 2026, following the user's
+explicit request for Rust-backed multi-agent execution and customizable prompts.
+
+**Decision:** Managed Codex sessions in the same canonical workspace and Codex
+home share an owned Rust app-server. Native threads retain separate adapters,
+request IDs, event streams and approvals. Control admission is serialized after
+an observed native overload response; model turns remain concurrent. Normal
+session retirement interrupts its active turn, unsubscribes its thread and
+leaves other sessions alive. A shared native failure invalidates all owners;
+emergency trust/protocol retirement terminates the contained workspace process.
+Prime remains a separate native SDK adapter. No global CLI installation changes.
+
+Profiles may replace the Codex base prompt, including empty text, independently
+of additive instructions. This does not remove project/tool/permission context.
+Dynamic spawning may only select an already authorized snapshotted profile.
+The original launch graph is retained separately from its evolving effective
+graph. New agents get parent messaging by default; team-wide messaging requires
+an explicit saved option. Event-driven wait requires observation permission and
+returns the child's native result. No new provider client or agent loop is added.
+
+Orchestration commands/events and run schema are v2. Version-one runs migrate
+on read; absent options preserve native prompts and parent-only communication.
+The existing storage directory/envelope remain stable. Historical native
+transcripts are neither deleted nor converted. The Legacy history navigation
+and alternate page are removed at the user's request; the classic development
+compatibility entry remains outside normal navigation.
+
+**Evidence and limits:** See [research and runtime evidence](AGENT_SYSTEM_REVIEW.md).
+The local 200-request test is transport evidence, not a production throughput
+or model-quality guarantee. No public fork was verified as the author's paid
+fork. Arbitrary channels and model-authored security profiles are outside the
+implemented surface; Linux lifecycle remains unverified.
