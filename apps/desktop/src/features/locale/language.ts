@@ -9,6 +9,8 @@ export function setLanguage(value: Language): void {
 }
 language.subscribe(value => { if (typeof document !== 'undefined') document.documentElement.lang = value; });
 const russian: Readonly<Record<string, string>> = {
+  'Model and reasoning': 'Модель и рассуждения', 'Native model': 'Модель по умолчанию', 'On': 'Вкл.', 'Off': 'Выкл.',
+  'off': 'Отключено', 'none': 'Без рассуждений', 'minimal': 'Минимально', 'low': 'Низкое', 'medium': 'Среднее', 'high': 'Высокое', 'xhigh': 'Очень высокое', 'max': 'Максимальное', 'ultra': 'Ультра',
   'Imported as a new system. Save to keep it.': 'Импортировано как новая система. Сохраните, чтобы оставить её.',
   'File': 'Файл', 'Import JSON': 'Импорт JSON', 'Export JSON': 'Экспорт JSON',
   'Invalid JSON.': 'Некорректный JSON.', 'Could not import system.': 'Не удалось импортировать систему.', 'Could not export system.': 'Не удалось экспортировать систему.',

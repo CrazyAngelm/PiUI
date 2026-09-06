@@ -22,6 +22,7 @@
     OrchestrationDefinitionKind, StartRunRequest, TaskRecord, ReconcileUncertainTaskRequest,
   } from '../../host-api/orchestrationClient';
 
+  export let modelsFor: (harness: AgentProfile['harness']) => import('../../../../../contracts/workspace-v11').WorkspaceModel[] = () => [];
   export let workspaceId: string;
   export let section: OrchestrationSection = 'agents';
   export let safeMode = false;
@@ -410,7 +411,7 @@
 <section class="orchestration-panel" class:graph-view={section === 'systems'} aria-labelledby="orchestration-title">
   {#if section === 'systems'}
     <h1 id="orchestration-title" class="sr-only">{$t('Systems')}</h1>
-    {#key workspaceId}<SystemGraphEditor {workspaceId} {safeMode} {client} {onDirtyChange} onRun={() => { section = 'runs'; onSectionChange('runs'); }} />{/key}
+    {#key workspaceId}<SystemGraphEditor {modelsFor} {workspaceId} {safeMode} {client} {onDirtyChange} onRun={() => { section = 'runs'; onSectionChange('runs'); }} />{/key}
   {:else}
   {#if safeMode}<p class="notice" role="status">{$t('Safe mode. Definitions and recorded runs are read-only. No native work starts here.')}</p>{/if}
   {#if (section === 'runs' || selectedRun !== undefined) && !editor && !launcher && streamError}<p class="notice" role="status">Live updates are unavailable. Use Refresh to load recorded state. {streamError}</p>{/if}

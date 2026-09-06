@@ -79,7 +79,7 @@ export function profileFromDraft(draft: ProfileDraft): AgentProfile {
     ...(provider === '' ? {} : { modelProvider: provider }),
     model: draft.model.trim(),
     ...(draft.reasoning ? { reasoning: draft.reasoning } : {}),
-    ...(draft.harness === 'codex' ? { serviceTier: draft.serviceTier } : {}),
+    ...(draft.harness !== 'pi' ? { serviceTier: draft.serviceTier } : {}),
     permissionMode: draft.permissionMode,
     instructions: draft.instructions,
     ...(draft.replaceBasePrompt && draft.harness === 'codex' ? { baseInstructions: draft.baseInstructions } : {}),

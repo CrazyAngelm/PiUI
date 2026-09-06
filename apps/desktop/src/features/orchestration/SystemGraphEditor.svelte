@@ -6,6 +6,7 @@
   import AgentProfileEditor from './AgentProfileEditor.svelte';
   import { orchestrationHost, orchestrationError, type OrchestrationClient, type DefinitionSummary, type AgentProfile, type SaveDefinitionRequest, type StoredDefinition } from '../../host-api/orchestrationClient';
   import { emptyGraph, newGraphNode, compileGraph, graphErrors, patternEdges, type AgentGraph, type GraphNode, type ConnectionKind } from './agentGraph';
+  export let modelsFor: (harness: AgentProfile['harness']) => import('../../../../../contracts/workspace-v11').WorkspaceModel[] = () => [];
   export let workspaceId: string;
   export let safeMode = false;
   export let onDirtyChange: (dirty: boolean) => void = () => {};
@@ -29,6 +30,8 @@
   let pendingRunId: string | undefined;
   $: nodeById = new Map(graph.nodes.map(node => [node.id, node]));
   let drag: { id: string; pointer: number; startX: number; startY: number; x: number; y: number } | undefined;
+  $: availableModels = selected ? modelsFor(selected.profile.harness) : [];
+  $: nativeModel = selected ? availableModels.find(model => model.id === selected.profile.model && model.provider === selected.profile.modelProvider) : undefined;
   $: configuration = selected ? harnessConfigurations[selected.profile.harness] : undefined;
   $: selected = graph.nodes.find(node => node.id === selectedId);
   $: dirty = JSON.stringify(graph) !== baseline;
@@ -177,8 +180,9 @@
       <div class="inspector-heading"><h2>{selected.profile.name}</h2><button class="close-inspector" aria-label={$t('Close')} onclick={(event) => { event.currentTarget.closest('.graph-layout')?.querySelector<HTMLButtonElement>('.node.selected')?.focus(); selectedId = ''; }}>×</button></div>
         <label>{$t('Name')}<input value={selected.profile.name} oninput={(event) => updateProfile({ name: event.currentTarget.value })} disabled={safeMode || busy} /></label>
         <label>Harness<select value={selected.profile.harness} onchange={(event) => { const harness = event.currentTarget.value as AgentProfile['harness']; updateProfile({ harness, permissionMode: harnessConfigurations[harness].defaultPermission, serviceTier: harnessConfigurations[harness].speed ? 'standard' : undefined, baseInstructions: undefined, reasoning: undefined }); }} disabled={safeMode || busy}><option value="codex">Codex</option><option value="prime-agent">Prime Agent</option><option value="pi">Pi</option></select></label>
-        <label>{$t('Model')}<input value={selected.profile.model} oninput={(event) => updateProfile({ model: event.currentTarget.value })} disabled={safeMode || busy} /></label>
-        <label>{$t('Reasoning')}<input list="reasoning-levels" placeholder={$t('Model default')} value={selected.profile.reasoning ?? ''} oninput={(event) => updateProfile({ reasoning: event.currentTarget.value || undefined })} disabled={safeMode || busy} /><datalist id="reasoning-levels">{#each configuration?.reasoningExamples ?? [] as level}<option value={level}></option>{/each}</datalist></label>
+        <label>{$t('Model')}<input list="graph-models" value={selected.profile.model} oninput={(event) => { const model = availableModels.find(entry => entry.id === event.currentTarget.value); updateProfile({ model: event.currentTarget.value, ...(model ? { modelProvider: model.provider } : {}), reasoning: undefined }); }} disabled={safeMode || busy} /></label>
+        <datalist id="graph-models">{#each availableModels as model}<option value={model.id}>{model.name}{model.provider ? ` · ${model.provider}` : ''}</option>{/each}</datalist>
+        <label>{$t('Reasoning')}<input list="reasoning-levels" placeholder={$t('Model default')} value={selected.profile.reasoning ?? ''} oninput={(event) => updateProfile({ reasoning: event.currentTarget.value || undefined })} disabled={safeMode || busy} /><datalist id="reasoning-levels">{#each nativeModel?.thinkingLevels ?? configuration?.reasoningExamples ?? [] as level}<option value={level}></option>{/each}</datalist></label>
         {#if configuration?.speed}<label>{$t('Speed')}<select value={selected.profile.serviceTier ?? 'standard'} onchange={(event) => updateProfile({ serviceTier: event.currentTarget.value as 'standard' | 'fast' })} disabled={safeMode || busy}><option value="standard">{$t('Standard')}</option><option value="fast">Fast</option></select></label>{#if selected.profile.serviceTier === 'fast'}<small>{$t('Fast may use additional credits.')}</small>{/if}{/if}
         <label>{$t('Task')}<textarea value={selected.task} oninput={(event) => updateNode(selectedId, { task: event.currentTarget.value })} disabled={safeMode || busy}></textarea></label>
         <label>{$t('File access')}<select value={selected.profile.permissionMode} onchange={(event) => updateProfile({ permissionMode: event.currentTarget.value as AgentProfile['permissionMode'] })} disabled={safeMode || busy}>{#each configuration?.permissionModes ?? [] as mode}<option value={mode}>{$t(permissionLabels[mode])}</option>{/each}</select></label>

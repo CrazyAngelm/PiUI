@@ -746,6 +746,7 @@ pub fn run() -> Result<(), tauri::Error> {
         })
         .invoke_handler(tauri::generate_handler![
             workspace_api::workspace_command_v11,
+            workspace_api::workspace_settings_v12,
             api::bootstrap,
             api::bootstrap_v10,
             api::update_preferences,

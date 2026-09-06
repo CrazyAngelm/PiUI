@@ -916,7 +916,7 @@ impl WorkspaceHost {
             .live_runtime(session_id)?
             .ok_or_else(WorkspaceError::closed)?;
         runtime
-            .set_model(model.clone(), thinking_level.clone())
+            .set_model(model.clone(), thinking_level.clone(), None)
             .await
             .map_err(|_| WorkspaceError::runtime())?;
         self.update_record(session_id, |record| {
@@ -1421,6 +1421,106 @@ fn history_block_label(kind: BlockKind) -> &'static str {
         BlockKind::Compaction => "Context compacted",
         BlockKind::Unknown => "Unrecognized history entry",
     }
+}
+
+/// Additive settings protocol; the workspace v11 command grammar stays frozen.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum RuntimeSettingsCommand {
+    Get {
+        session_id: String,
+    },
+    Set {
+        session_id: String,
+        model: WorkspaceModel,
+        thinking_level: Option<String>,
+        service_tier: Option<String>,
+    },
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeSettings {
+    protocol: u8,
+    session_id: String,
+    model: Option<WorkspaceModel>,
+    models: Vec<WorkspaceModel>,
+    thinking_level: Option<String>,
+    service_tier: Option<String>,
+}
+#[tauri::command]
+pub async fn workspace_settings_v12(
+    state: State<'_, HostState>,
+    command: RuntimeSettingsCommand,
+) -> Result<RuntimeSettings, WorkspaceError> {
+    let host = state.inner();
+    if host.safe_mode {
+        return Err(WorkspaceError::safe_mode());
+    }
+    let session_id = match &command {
+        RuntimeSettingsCommand::Get { session_id }
+        | RuntimeSettingsCommand::Set { session_id, .. } => session_id,
+    };
+    let _operation = authorize_live_session(host, session_id).await?;
+    let (runtime, _) = host
+        .workspace
+        .live_runtime(session_id)?
+        .ok_or_else(WorkspaceError::closed)?;
+    let models = runtime
+        .models()
+        .await
+        .map_err(|_| WorkspaceError::runtime())?;
+    if let RuntimeSettingsCommand::Set {
+        model,
+        thinking_level,
+        service_tier,
+        ..
+    } = &command
+    {
+        let before = runtime
+            .snapshot()
+            .await
+            .map_err(|_| WorkspaceError::runtime())?;
+        if before.status != SessionStatus::Idle {
+            return Err(WorkspaceError::invalid());
+        }
+        let candidate = models
+            .iter()
+            .find(|candidate| candidate.id == model.id && candidate.provider == model.provider)
+            .ok_or_else(WorkspaceError::invalid)?;
+        validate_model(candidate, thinking_level.as_deref())?;
+        let record = host.workspace.record(session_id)?;
+        if service_tier.is_some()
+            && (record.harness == HarnessKind::Pi
+                || !matches!(service_tier.as_deref(), Some("standard" | "fast")))
+        {
+            return Err(WorkspaceError::invalid());
+        }
+        runtime
+            .set_model(
+                candidate.clone(),
+                thinking_level.clone(),
+                service_tier.clone(),
+            )
+            .await
+            .map_err(|_| WorkspaceError::runtime())?;
+    }
+    let native = runtime
+        .snapshot()
+        .await
+        .map_err(|_| WorkspaceError::runtime())?;
+    Ok(RuntimeSettings {
+        protocol: 12,
+        session_id: session_id.clone(),
+        model: native.model,
+        models: native.models,
+        thinking_level: native.thinking_level,
+        service_tier: native.service_tier,
+    })
 }
 
 #[tauri::command]
@@ -2490,6 +2590,16 @@ mod tests {
         };
         assert!(validate_model(&model, Some("high")).is_ok());
         assert!(validate_model(&model, Some("invented")).is_err());
+    }
+
+    #[test]
+    fn runtime_settings_v12_is_additive_and_rejects_private_fields() {
+        let command = serde_json::json!({"type":"set", "sessionId":"opaque", "model":{"id":"model", "provider":"provider", "name":"Model"}, "thinkingLevel":"low", "serviceTier":"fast"});
+        assert!(serde_json::from_value::<super::RuntimeSettingsCommand>(command.clone()).is_ok());
+        assert!(serde_json::from_value::<WorkspaceCommand>(command.clone()).is_err());
+        let mut forged = command;
+        forged["cwd"] = serde_json::json!("private-path");
+        assert!(serde_json::from_value::<super::RuntimeSettingsCommand>(forged).is_err());
     }
 
     #[test]

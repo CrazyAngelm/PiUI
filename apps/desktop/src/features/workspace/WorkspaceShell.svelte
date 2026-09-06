@@ -1,6 +1,7 @@
 <script lang="ts">
   import { t } from '../locale/language';
   import { onMount, tick } from 'svelte';
+  import RuntimePicker from './RuntimePicker.svelte';
   import ConversationViewport from './ConversationViewport.svelte';
   import { host } from '../../host-api/client';
   import type { Preferences } from '../../host-api/types';
@@ -348,7 +349,7 @@
     if (!kind) return [];
     const byId = new Map<string, WorkspaceModel>();
     for (const snapshot of Object.values(snapshots)) {
-      if (snapshot.session.harness === kind) for (const model of snapshot.models) byId.set(model.id, model);
+      if (snapshot.session.harness === kind) for (const model of snapshot.models) byId.set(JSON.stringify([model.provider, model.id]), model);
     }
     return [...byId.values()].sort((left, right) => left.name.localeCompare(right.name));
   }
@@ -363,7 +364,7 @@
       createError = harness?.reason ?? 'The selected harness is not available.';
       return;
     }
-    const model = knownModels.find((item) => item.id === newModelId);
+    const model = knownModels.find((item) => JSON.stringify([item.provider, item.id]) === newModelId);
     createBusy = true;
     createError = undefined;
     try {
@@ -438,24 +439,6 @@
       const result = await workspaceHost.request({ type: 'renameSession', sessionId: selectedSession.id, title: renameDraft.trim() });
       if (result.type === 'session') storeSnapshot(result.snapshot);
       else if (result.type === 'accepted') await reconcileSession(selectedSession.id);
-    } catch (error) {
-      sessionError = errorMessage(error);
-    } finally {
-      sessionActionBusy = false;
-    }
-  }
-
-  async function setModel(event: Event): Promise<void> {
-    if (!selectedSnapshot || sessionActionBusy) return;
-    const id = (event.currentTarget as HTMLSelectElement).value;
-    const model = selectedSnapshot.models.find((item) => item.id === id);
-    if (!model) return;
-    sessionActionBusy = true;
-    sessionError = undefined;
-    try {
-      const result = await workspaceHost.request({ type: 'setModel', sessionId: selectedSnapshot.session.id, model });
-      if (result.type === 'session') storeSnapshot(result.snapshot);
-      else if (result.type === 'accepted') await reconcileSession(selectedSnapshot.session.id);
     } catch (error) {
       sessionError = errorMessage(error);
     } finally {
@@ -785,7 +768,7 @@
           {#if !selectedWorkspaceId}<div class="state"><h2>{$t('Select a project')}</h2><p>{$t('Agents, teams, pipelines, and runs always show their project scope.')}</p></div>
           {:else if orchestrationLoading}<div class="state" role="status"><h2>{$t('Loading workspace…')}</h2></div>
           {:else if orchestrationError}<div class="state"><h2>{$t('Workspace unavailable')}</h2><p>{orchestrationError}</p><button type="button" onclick={showWorkspace}>{$t('Try again')}</button></div>
-          {:else if OrchestrationPanel}{#key orchestrationEpoch}<OrchestrationPanel workspaceId={selectedWorkspaceId} section={workspaceSection} onSectionChange={(section: WorkspaceSection) => workspaceSection = section} safeMode={catalog.safeMode} onOpenSession={openSession} onDirtyChange={(dirty: boolean) => orchestrationDirty = dirty} />{/key}
+          {:else if OrchestrationPanel}{#key orchestrationEpoch}<OrchestrationPanel modelsFor={modelChoices} workspaceId={selectedWorkspaceId} section={workspaceSection} onSectionChange={(section: WorkspaceSection) => workspaceSection = section} safeMode={catalog.safeMode} onOpenSession={openSession} onDirtyChange={(dirty: boolean) => orchestrationDirty = dirty} />{/key}
           {:else}<div class="state"><h2>{$t('Workspace unavailable')}</h2><p>{$t('This optional contribution is not available. Native session history remains accessible.')}</p></div>{/if}
         </div>
       </section>
@@ -802,7 +785,7 @@
             {#each catalog.harnesses as harness}<li><strong>{harness.name}</strong><span>{harness.status === 'available' ? 'Available' : harness.status === 'unverified' ? 'Setup or verification required' : 'Unavailable'}{harness.reason ? ` — ${harness.reason}` : ''}</span></li>{/each}
           </ul></details>
           <details class="session-options"><summary>{$t('Model and permissions')}</summary>
-          <label>{$t('Model')}<select bind:value={newModelId} disabled={createBusy}><option value="">{$t('Native default')}</option>{#each knownModels as model}<option value={model.id}>{model.name}{model.provider ? ` · ${model.provider}` : ''}</option>{/each}</select></label>
+          <label>{$t('Model')}<select bind:value={newModelId} disabled={createBusy}><option value="">{$t('Native default')}</option>{#each knownModels as model}<option value={JSON.stringify([model.provider, model.id])}>{model.name}{model.provider ? ` · ${model.provider}` : ''}</option>{/each}</select></label>
           {#if knownModels.length === 0}<p class="field-note">{$t('The agent will use its configured model.')}</p>{/if}
           <label>{$t('Permission mode')}<select bind:value={permissionMode} disabled={createBusy}>
             <option value="native">{$t('Native permissions')}</option><option value="read-only">{$t('Read-only')}</option><option value="workspace-write">{$t('Workspace write')}</option><option value="full-access">{$t('Full access')}</option>
@@ -831,7 +814,7 @@
               <textarea id="session-draft" value={drafts[selectedSnapshot.session.id] ?? ''} oninput={(event) => updateDraft(selectedSnapshot.session.id, (event.currentTarget as HTMLTextAreaElement).value)} onkeydown={composerKeydown} placeholder={selectedSnapshot.session.status === 'running' ? 'Follow up while this turn runs…' : `Message ${harnessLabel(selectedSnapshot.session.harness)}…`} rows="2"></textarea>
               <div class="composer-actions">
                 <div class="runtime-options">
-                  <span>{harnessLabel(selectedSnapshot.session.harness)} · {selectedSnapshot.session.model?.name ?? 'Native model'}</span>
+                  {#key selectedSnapshot.session.id}<RuntimePicker session={selectedSnapshot.session} disabled={sessionActionBusy || selectedSnapshot.session.status !== 'idle' || !selectedSnapshot.capabilities.models.supported} onchange={() => reconcileSession(selectedSnapshot.session.id)} />{/key}
                   {#if selectedSnapshot.session.status === 'running'}<label>{$t('Send mode')}<select bind:value={sendMode}><option value="follow-up">{$t('Follow up')}</option><option value="steer">{$t('Steer')}</option><option value="prompt">{$t('Prompt')}</option></select></label>{/if}
                 </div>
                 {#if selectedSnapshot.session.status === 'running' || selectedSnapshot.session.status === 'stopping'}<button class="stop" type="button" onclick={interruptSession} disabled={interruptBusy || selectedSnapshot.session.status === 'stopping'}>{interruptBusy || selectedSnapshot.session.status === 'stopping' ? 'Stopping…' : 'Stop turn'}</button>{/if}
@@ -886,7 +869,6 @@
         <div class="inspector-body details">
           <dl><div><dt>{$t('Harness')}</dt><dd>{harnessLabel(selectedSnapshot.session.harness)}</dd></div><div><dt>{$t('Status')}</dt><dd>{statusLabel(selectedSnapshot.session.status)}</dd></div><div><dt>{$t('History revision')}</dt><dd>{selectedSnapshot.revision}</dd></div><div><dt>{$t('Model')}</dt><dd>{selectedSnapshot.session.model?.name ?? 'Native default'}</dd></div></dl>
           <label>{$t('Session title')}<input bind:value={renameDraft} disabled={sessionActionBusy} /></label><button type="button" onclick={renameSession} disabled={sessionActionBusy || renameDraft.trim() === '' || renameDraft.trim() === selectedSnapshot.session.title}>{$t('Rename session')}</button>
-          {#if selectedSnapshot.capabilities.models.supported}<label>{$t('Model')}<select value={selectedSnapshot.session.model?.id ?? ''} onchange={setModel} disabled={sessionActionBusy}><option value="">{$t('Native default')}</option>{#each selectedSnapshot.models as model}<option value={model.id}>{model.name}{model.provider ? ` · ${model.provider}` : ''}</option>{/each}</select></label>{:else}<p class="muted">{selectedSnapshot.capabilities.models.reason ?? 'Model changes are not supported by this harness.'}</p>{/if}
           <section class="capabilities"><h3>{$t('Native capabilities')}</h3><ul>{#each Object.entries(selectedSnapshot.capabilities) as [name, capability]}<li><span>{name}</span><span>{capability.supported ? capability.enforcement : 'Unavailable'}</span></li>{/each}</ul></section>
           {#if selectedSnapshot.session.status !== 'closed'}<button class="danger-zone" type="button" onclick={closeSession} disabled={sessionActionBusy}>{$t('Close native session')}</button>{/if}
           {#if sessionError}<p class="error" role="alert">{sessionError}</p>{/if}
@@ -981,11 +963,10 @@
   .session-context strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
   .session-context button { border:0; background:transparent; color:var(--piui-text-muted); font-size:12px; }
   .composer-shell { flex-shrink:0; padding:10px var(--piui-chat-inline-padding) 12px; background:var(--piui-bg); }
-  .composer { width:min(100%, var(--piui-chat-column-width)); margin:0 auto; overflow:hidden; border:1px solid var(--piui-border); border-radius:12px; background:var(--piui-bg-raised); box-shadow:0 4px 18px rgba(0,0,0,.08); }
+  .composer { width:min(100%, var(--piui-chat-column-width)); margin:0 auto; overflow:visible; border:1px solid var(--piui-border); border-radius:12px; background:var(--piui-bg-raised); box-shadow:0 4px 18px rgba(0,0,0,.08); }
   .composer textarea { width:100%; min-height:54px; max-height:30dvh; resize:vertical; font-size:var(--piui-chat-composer-font-size); padding:13px 14px 6px; border:0; outline:0; background:transparent; line-height:1.5; }
   .composer-actions { padding:7px; display:flex; align-items:center; gap:7px; }
   .runtime-options { flex:1; min-width:0; display:flex; align-items:center; gap:12px; color:var(--piui-text-muted); font-size:12px; }
-  .runtime-options > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .runtime-options label { display:flex; align-items:center; gap:6px; }
   .runtime-options select { padding:4px; border:1px solid var(--piui-border-subtle); border-radius:5px; background:var(--piui-bg); }
   .composer-actions button, .form-actions button, .state button, .details > button, .decision-row button { padding:6px 10px; border:1px solid var(--piui-border); border-radius:7px; background:var(--piui-bg-raised); }
@@ -1006,7 +987,7 @@
   .new-session-card h1 { margin:7px 0 9px; font-size:22px; }
   .new-session-card > p { color:var(--piui-text-muted); line-height:1.5; }
   .new-session-card > label, .session-options label, .details > label, .approval label { margin-top:15px; display:grid; gap:6px; font-size:13px; font-weight:600; }
-  .new-session-card select, .details input, .details select, .approval textarea { width:100%; padding:7px 9px; border:1px solid var(--piui-border); border-radius:7px; background:var(--piui-bg-raised); }
+  .new-session-card select, .details input, .approval textarea { width:100%; padding:7px 9px; border:1px solid var(--piui-border); border-radius:7px; background:var(--piui-bg-raised); }
   .field-note { margin:6px 0 0 !important; font-size:12px; }
   .harness-readiness { list-style:none; margin:8px 0 0; padding:0; display:grid; gap:4px; }
   .harness-readiness li { display:flex; justify-content:space-between; gap:14px; color:var(--piui-text-muted); font-size:11px; }
@@ -1084,7 +1065,6 @@
     .session-context { display:none; }
     .workspace-header { align-items:flex-start; flex-direction:column; }
     .workspace-header nav { max-width:100%; overflow:auto; }
-    .runtime-options > span { display:none; }
   }
   @media (prefers-reduced-motion: reduce) { .workspace-navigation { transition:none; } }
   :global(:root[data-reduced-motion="reduce"]) .workspace-navigation { transition:none; }

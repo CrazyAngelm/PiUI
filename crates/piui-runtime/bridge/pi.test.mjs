@@ -39,7 +39,7 @@ test("approval responses are single-use and do not expose native origin", async 
 
 test("rejects unsupported mandatory policy before spawning", async () => {
   await assert.rejects(createPiAdapter(config({ permissionMode: "workspace-write" }), () => {}), (error) => error.bridgeCode === "unsupported-policy");
-  await assert.rejects(createPiAdapter(config({ instructions: "secret" }), () => {}), (error) => error.bridgeCode === "unsupported-policy");
+
 });
 
 test("emits explicit native terminal outcome before idle", async () => {
@@ -98,4 +98,10 @@ test("accepts only exact Pi built-ins and gives read-only deny precedence", asyn
   const denied = await createPiAdapter(config({ permissionMode: "read-only", allowedTools: ["write"] }), () => {});
   assert.equal((await denied.snapshot()).title, "no-tools");
   await denied.dispose();
+});
+
+test("Pi appends managed instructions through a native file argument", async () => {
+  const adapter = await createPiAdapter(config({ instructions: "Follow the assigned graph task." }), () => {});
+  try { assert.equal((await adapter.snapshot()).capabilities.instructions.supported, true); }
+  finally { await adapter.dispose(); }
 });

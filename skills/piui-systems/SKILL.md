@@ -31,7 +31,8 @@ If asked to modify an existing saved system, use its exported JSON as input. Imp
 
 ## Runtime boundaries
 
-- Standard/Fast and base-prompt replacement are Codex capabilities. Omitted `baseInstructions` keeps the native base; `""` replaces only that base with empty text, not all native context.
+- Standard/Fast is supported by Codex and by Prime models advertised as Fast-capable by its native SDK; Pi RPC does not expose it. Base-prompt replacement is a Codex capability. Omitted `baseInstructions` keeps the native base; `""` replaces only that base with empty text, not all native context.
+- Pi profiles can append native instructions and participate in result pipelines. Its current RPC adapter does not expose workspace messaging/delegation tools; do not promise Pi send/observe/spawn links.
 - Codex skill IDs are absolute paths; MCP IDs are existing configured server names. Prime skill IDs are names. Per-agent Prime MCP disabling is unsupported; skills depend on its ipython tool and native RLM cannot be treated as an independent workspace spawn switch.
 - Disabling a skill controls discovery, not file access. No file contains API keys, credentials, native session IDs, shell commands for startup or executable plugins.
 - Workspace-managed child permission checks do not govern arbitrary native subprocesses/RLM. Be explicit if a requested isolation guarantee cannot be provided.

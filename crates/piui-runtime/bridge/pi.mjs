@@ -1,7 +1,8 @@
 export async function createPiAdapter(config, emit) {
   const { spawn } = await import("node:child_process");
   const { createHash } = await import("node:crypto");
-  const { stat } = await import("node:fs/promises");
+  const { stat, mkdtemp, writeFile, rm } = await import("node:fs/promises");
+  const { join } = await import("node:path");
 
   const fail = (code, safeMessage) => Object.assign(new Error(code), { bridgeCode: code, safeMessage });
   const isMaterialized = async (nativePath) => {
@@ -13,7 +14,7 @@ export async function createPiAdapter(config, emit) {
   if (typeof config.runtimeProgram !== "string" || !Array.isArray(config.runtimeArgs)) {
     throw fail("runtime-unavailable", "The Pi runtime is not installed.");
   }
-  if (config.instructions) throw fail("unsupported-policy", "This Pi adapter cannot enforce custom instructions safely.");
+
   if (config.nativeSubagents === true) throw fail("unsupported-policy", "This Pi adapter cannot enforce native subagent policy.");
   if (config.coordination === true) throw fail("unsupported-policy", "This Pi RPC adapter cannot register the coordinator tool.");
   if (config.permissionMode === "workspace-write") {
@@ -41,6 +42,13 @@ export async function createPiAdapter(config, emit) {
     else commandArgs.push("--tools", effectiveAllowedTools.join(","), "--no-extensions");
   }
 
+  let instructionDirectory;
+  if (typeof config.instructions === "string" && config.instructions.trim()) {
+    instructionDirectory = await mkdtemp(join(config.sessionDir, "instructions-"));
+    const instructionPath = join(instructionDirectory, "append.md");
+    await writeFile(instructionPath, config.instructions, { mode: 0o600 });
+    commandArgs.push("--append-system-prompt", instructionPath);
+  }
   const child = spawn(config.runtimeProgram, commandArgs, {
     cwd: config.cwd,
     stdio: ["pipe", "pipe", "pipe"],
@@ -257,6 +265,9 @@ export async function createPiAdapter(config, emit) {
   child.stdout.on("end", () => { if (stdoutBytes.length) failNative(); });
   child.on("error", failNative);
   child.on("exit", failNative);
+  const cleanupInstructions = () => { if (instructionDirectory) void rm(instructionDirectory, { recursive: true, force: true }).catch(() => {}); };
+  child.on("exit", cleanupInstructions);
+  child.on("error", cleanupInstructions);
 
   state = await request("get_state");
   model = mapModel(state.model);
@@ -275,7 +286,7 @@ export async function createPiAdapter(config, emit) {
     resume: { supported: true, enforcement: "native" },
     models: { supported: true, enforcement: "native" },
     approvals: { supported: true, enforcement: "native" },
-    instructions: { supported: false, enforcement: "unsupported", reason: "Safe instruction injection is not available through this Pi RPC adapter." },
+    instructions: { supported: true, enforcement: "native" },
     toolPolicy: { supported: config.permissionMode === "read-only" || Array.isArray(config.allowedTools), enforcement: config.permissionMode === "read-only" || Array.isArray(config.allowedTools) ? "native" : "advisory", reason: config.permissionMode === "native" || config.permissionMode === "full-access" ? "Pi uses its native configured tool policy." : undefined },
     nativeSubagents: { supported: false, enforcement: "unsupported", reason: "Native subagent policy is not exposed by Pi RPC." },
   };
@@ -294,8 +305,14 @@ export async function createPiAdapter(config, emit) {
       const latest = await request("get_state");
       state = latest;
       model = mapModel(latest.model);
+      const reasoning = await request("get_available_thinking_levels").catch(() => null);
+      if (model && Array.isArray(reasoning?.levels)) {
+        model.thinkingLevels = reasoning.levels;
+        availableModels = availableModels.map((entry) => entry.id === model.id && entry.provider === model.provider ? { ...entry, thinkingLevels: reasoning.levels } : entry);
+      }
       return {
         nativeId: latest.sessionId,
+        thinkingLevel: latest.thinkingLevel,
         ...(latest.sessionFile ? { nativePath: latest.sessionFile } : {}),
         materialized: await isMaterialized(latest.sessionFile),
         title: latest.sessionName ?? config.title ?? "Pi session",
@@ -320,7 +337,8 @@ export async function createPiAdapter(config, emit) {
       availableModels = (result?.models ?? []).map(mapModel).filter(Boolean);
       return availableModels;
     },
-    async setModel({ model: requested, thinkingLevel }) {
+    async setModel({ model: requested, thinkingLevel, serviceTier }) {
+      if (serviceTier != null) throw fail("unsupported-settings", "This harness does not support service tiers.");
       if (!requested?.id || !requested?.provider) throw fail("invalid-request", "Pi model selection requires a provider and model id.");
       model = mapModel(await request("set_model", { provider: requested.provider, modelId: requested.id }));
       if (thinkingLevel) await request("set_thinking_level", { level: thinkingLevel });

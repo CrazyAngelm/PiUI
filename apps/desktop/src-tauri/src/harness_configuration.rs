@@ -72,9 +72,10 @@ pub(crate) fn launch_policy(
     if !native.prompt.supported || !native.models.supported {
         return Err(OrchestrationSchedulerError::unavailable());
     }
-    if (profile.base_instructions.is_some() || profile.service_tier.is_some())
-        && profile.harness != Harness::Codex
-    {
+    if profile.base_instructions.is_some() && profile.harness != Harness::Codex {
+        return Err(OrchestrationSchedulerError::unsupported());
+    }
+    if profile.service_tier.is_some() && profile.harness == Harness::Pi {
         return Err(OrchestrationSchedulerError::unsupported());
     }
     if profile.resource_rules.iter().any(|rule| {

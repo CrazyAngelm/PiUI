@@ -35,6 +35,9 @@ input.on("line", (line) => {
     const userAgent = process.argv.includes("--wrong-version") ? "fixture/0.148.0" : "fixture/0.147.0";
     send({ id: message.id, result: { userAgent, codexHome: "/fixture", platformFamily: "fixture", platformOs: "fixture" } });
   } else if (message.method === "initialized") {
+    if (process.argv.includes("--mcp-startup")) {
+      for (const status of ["starting", "ready", "failed"]) send({ method: "mcpServer/startupStatus/updated", params: { name: "fixture", status, error: "PRIVATE_MCP_DETAIL" } });
+    }
     // Handshake notification has no response.
   } else if (message.method === "thread/start" || message.method === "thread/resume") {
     if (expectedSettings && (message.params.serviceTier !== expectedSettings.tier || message.params.config?.["mcp_servers.example.enabled"] !== false || message.params.config?.["skills.config"]?.[0]?.enabled !== false)) {
@@ -163,6 +166,7 @@ input.on("line", (line) => {
     send({ id: message.id, result: { data: [{ id: "fixture-model", model: "fixture-model", displayName: "Fixture Model", hidden: false, supportedReasoningEfforts: [{ reasoningEffort: "low" }] }], nextCursor: null } });
   } else if (message.method === "thread/settings/update" || message.method === "thread/name/set" || message.method === "turn/interrupt") {
     send({ id: message.id, result: {} });
+    if (message.method === "thread/settings/update") send({ method: "thread/settings/updated", params: { threadId, model: message.params.model, reasoningEffort: message.params.effort, serviceTier: message.params.serviceTier } });
     if (message.method === "thread/name/set") send({ method: "thread/name/updated", params: { threadId, threadName: message.params.name } });
     if (message.method === "turn/interrupt" && holdTurnFixture) send({ method: "turn/completed", params: { threadId, turn: { id: "turn-fixture", status: "interrupted", items: [] } } });
   } else if (message.id !== undefined) {

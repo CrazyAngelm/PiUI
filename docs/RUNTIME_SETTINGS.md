@@ -1,0 +1,19 @@
+# Native runtime settings
+
+The composer exposes one compact model/reasoning menu and a Fast toggle when the native adapter supports it. It uses the native catalog, preserves provider identity, reports failed changes, and shows confirmed native settings. Changes are disabled during active turns. Escape restores focus; the popover remains outside composer clipping. English remains the default; Russian labels follow app settings.
+
+`workspace_settings_v12` is an additive allowlisted get/set route described by `contracts/workspace-settings-v12.ts`. It does not change the frozen workspace v11 grammar or event channel. The host checks safe mode, project trust, live session identity, idle state and native model catalog before mutation. Responses contain no native paths, executable arguments or credentials. Native histories/settings own persistence; PiUI does not edit JSONL.
+
+- Codex: native `model/list`, `thread/settings/update`, and turn settings. Reasoning choices use `supportedReasoningEfforts`; model switches use the native default effort. Fast maps to app-server `fast` / Responses `priority`; Standard maps to `default`. MCP startup notifications and settings notifications are lifecycle metadata, not transcript items. MCP failure emits a safe actionable error. Unknown content retains its generic fallback.
+- Prime: native model registry, supported thinking levels, `setModel`, `setThinkingLevel`, `setServiceTier`. Its import-only aliased model package supplies capability detection, without duplicating model-name rules. Fast requires native `supportsFastMode`, maps to `priority`, and unsupported requests fail. Managed launch options pass the tier directly to SDK session construction rather than changing a global default during preflight.
+- Pi: native model RPC and `get_available_thinking_levels` / `set_thinking_level`. Fast is unavailable in this RPC contract. Profile instructions use native `--append-system-prompt` with an owned temporary file, cleaned on process exit. Result pipelines can use Pi, while its current adapter still does not register the workspace messaging/delegation tool.
+
+Graph model suggestions reuse catalogs already observed in native chats; explicit model IDs remain possible for offline system authoring. Both graph and advanced profile forms preserve Prime speed settings. Host save validation accepts Prime and Codex speed, and launch adapters validate native support.
+
+## Verification
+
+`node --test crates/piui-runtime/bridge/*.test.mjs` covers native framing/translation fixtures, settings mutation, invalid settings, MCP startup classification and fallback behavior. Workspace WebView2 E2E changes real Codex reasoning/Fast via the composer, verifies native readback, invalid input, safe mode, keyboard focus, clipping, graph save/reopen/import/export and native lifecycle.
+
+`piui-e2e-job --cleanup-bound-ms 5000 -- node scripts/native-settings-matrix.mjs --daemon-socket <explicit-isolated-endpoint>` uses installed Pi, Codex and Prime with isolated homes and a local deterministic Responses provider. It verifies managed launch settings, subsequent ordinary model settings, actual streamed result and successful terminal outcome, and forwards a result to the next native adapter. It is not a paid-provider reliability test or a scheduler stress benchmark. Existing scheduler tests separately cover native-history dependency resolution and cross-harness scheduling. Prime's default supervisor is never used.
+
+Latest evidence (2026-09-06): workspace WebView2 `target/piui-evidence/22320-1788711817496/report.json`; installed-native local-provider matrix `target/native-settings-6qy0UH/report.json`. The native matrix completed Pi → Codex → Prime and checked launch + mutable settings; the end-to-end host UI proof is Codex, while cross-harness scheduler behavior is separately covered by Rust tests.

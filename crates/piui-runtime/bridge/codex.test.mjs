@@ -339,3 +339,27 @@ for (const [mode, tier] of [["standard", "default"], ["fast", "fast"]]) {
     finally { await adapter.dispose(); }
   });
 }
+
+test("MCP startup is lifecycle metadata, failures are safe errors", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--mcp-startup"] }, event => events.push(event));
+  try {
+    assert.equal(adapter.snapshot().blocks.some(block => block.safeSummary?.includes("startupStatus")), false);
+    assert.equal(events.filter(event => event.type === "error" && event.message.includes("MCP")).length, 1);
+    assert.equal(JSON.stringify(events).includes("PRIVATE_MCP_DETAIL"), false);
+  } finally { await adapter.dispose(); }
+});
+test("ordinary Codex settings change Fast and reasoning without transcript noise", async () => {
+  const adapter = await createCodexAdapter(config, () => {});
+  try {
+    const [model] = await adapter.models();
+    await adapter.setModel({ model, thinkingLevel: "low", serviceTier: "fast" });
+    assert.equal(adapter.snapshot().thinkingLevel, "low");
+    assert.equal(adapter.snapshot().serviceTier, "fast");
+    await adapter.setModel({ model, thinkingLevel: "low", serviceTier: "standard" });
+    assert.equal(adapter.snapshot().serviceTier, "standard");
+    await assert.rejects(adapter.setModel({ model, thinkingLevel: "invented", serviceTier: "fast" }));
+    assert.equal(adapter.snapshot().serviceTier, "standard");
+    assert.equal(adapter.snapshot().blocks.some(block => block.safeSummary?.includes("settings/updated")), false);
+  } finally { await adapter.dispose(); }
+});

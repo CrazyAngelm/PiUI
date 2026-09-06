@@ -587,6 +587,7 @@ export async function runWorkspaceWebview2Proof({
     await automation.dispatchKey({ key: 'n', code: 'KeyN', ctrlKey: true });
     await waitFor(`document.querySelector('#new-session-title')`, 'safe-mode new-session form');
     assertion(await evaluate(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Create session'); return Boolean(button?.disabled); })()`), 'Safe mode exposed an enabled Create session action.');
+    await assertRejected('workspace_settings_v12', { command: { type: 'get', sessionId: 'safe-fixture' } }, 'Safe-mode runtime settings', 'safe');
     await assertRejected('workspace_command_v11', { command: { type: 'createSession', workspaceId: workspace.id, harness: 'pi', permissionMode: 'native' } }, 'Safe-mode native session creation', 'safe');
 
     const definitions = await orchestrationCatalog(workspace.id);
@@ -722,6 +723,32 @@ export async function runWorkspaceWebview2Proof({
   assertion(renamedSnapshot?.snapshot?.session?.title === 'Native lifecycle proof', 'Rename did not reach the native workspace host.');
   end('nativeLifecycle');
   checks.push('eligible-native-start', 'native-snapshot-no-private-reference', 'native-ui-rename');
+  await clickButton('Model and reasoning');
+  await waitFor(`document.querySelector('.runtime-picker select[aria-label="Model"]')?.options.length > 0 && !document.querySelector('.runtime-picker select').disabled`, 'native model catalog', startupBoundMs);
+  const beforeSettings = await invoke('workspace_settings_v12', { command: { type: 'get', sessionId: nativeSession.id } });
+  assertion(beforeSettings.protocol === 12 && beforeSettings.models.length > 0, 'Missing native model catalog');
+  if (eligible.kind === 'codex') {
+    const selectedModel = beforeSettings.models.find(model => model.id === beforeSettings.model?.id);
+    assertion(selectedModel?.thinkingLevels?.length, 'Codex reasoning metadata missing');
+    const effort = selectedModel.thinkingLevels[0];
+    await setControl('.runtime-picker select[aria-label="Reasoning"]', effort, 'change');
+    await waitFor(`!document.querySelector('.runtime-picker .speed')?.disabled`, 'reasoning saved', startupBoundMs);
+    const wasFast = beforeSettings.serviceTier === 'fast';
+    await evaluate(`document.querySelector('.runtime-picker .speed').click()`);
+    await waitFor(`document.querySelector('.runtime-picker .speed')?.getAttribute('aria-pressed') === ${JSON.stringify(String(!wasFast))} && !document.querySelector('.runtime-picker .speed').disabled`, 'Fast saved', startupBoundMs);
+    const changed = await invoke('workspace_settings_v12', { command: { type: 'get', sessionId: nativeSession.id } });
+    assertion(changed.thinkingLevel === effort && changed.serviceTier === (wasFast ? 'standard' : 'fast'), 'Settings did not reach native Codex');
+    await assertRejected('workspace_settings_v12', { command: { type: 'set', sessionId: nativeSession.id, model: selectedModel, thinkingLevel: 'not-a-native-level' } }, 'Invalid native reasoning');
+    const clean = await invoke('workspace_command_v11', { command: { type: 'snapshot', sessionId: nativeSession.id } });
+    assertion(!clean.snapshot.blocks.some(block => block.safeSummary?.includes('mcpServer/startupStatus') || block.safeSummary?.includes('thread/settings')), 'Lifecycle notifications leaked into chat');
+  }
+  await capture('workspace-runtime-picker');
+  assertion(await evaluate(`(() => { const popup = document.querySelector('.runtime-picker .popover'); const model = popup?.querySelector('select'); if (!popup || !model) return false; const rect = model.getBoundingClientRect(); return document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2) === model; })()`), 'Model picker is clipped or covered');
+  await automation.dispatchKey({ key: 'Escape', code: 'Escape' });
+  await waitFor(`!document.querySelector('.runtime-picker .popover')`, 'model picker Escape');
+  assertion(await evaluate(`document.activeElement?.getAttribute('aria-label') === 'Model and reasoning'`), 'Model picker lost keyboard focus');
+  checks.push('native-model-reasoning-fast-settings', 'native-settings-failure', 'model-picker-keyboard', 'no-mcp-transcript-noise');
+
 
   await clickButton('Close inspector');
   const geometry = await evaluate(`(() => {

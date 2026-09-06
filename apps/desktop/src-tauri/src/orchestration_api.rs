@@ -938,8 +938,10 @@ impl DefinitionValue for AgentProfile {
             && !self.name.trim().is_empty()
             && !self.model.trim().is_empty()
             && self.service_tier.as_deref().is_none_or(|tier| {
-                self.harness == piui_orchestration::Harness::Codex
-                    && matches!(tier, "standard" | "fast")
+                matches!(
+                    self.harness,
+                    piui_orchestration::Harness::Codex | piui_orchestration::Harness::PrimeAgent
+                ) && matches!(tier, "standard" | "fast")
             })
             && self.reasoning.as_deref().is_none_or(|level| {
                 matches!(

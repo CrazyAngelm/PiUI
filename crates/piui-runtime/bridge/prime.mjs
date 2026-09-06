@@ -45,6 +45,19 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
   try { sdk = await import(pathToFileURL(join(packageRoot, "dist", "index.js")).href); }
   catch { throw fail("runtime-unavailable", "The Prime SDK package could not be loaded."); }
 
+  let nativeModelFeatures;
+  try {
+    const requireFromPrime = createRequire(join(packageRoot, "package.json"));
+    // This SDK ships an import-only aliased package, so CJS resolve cannot use its root export.
+    for (const base of requireFromPrime.resolve.paths("@earendil-works/pi-ai") ?? []) {
+      const root = join(base, "@earendil-works/pi-ai");
+      let modelManifest;
+      try { modelManifest = JSON.parse(await readFile(join(root, "package.json"), "utf8")); } catch { continue; }
+      if (modelManifest.exports?.["."]?.import !== "./dist/index.js") break;
+      nativeModelFeatures = await import(pathToFileURL(join(root, "dist/index.js")).href);
+      break;
+    }
+  } catch { /* Older SDK packages can still run without optional model feature discovery. */ }
   let workspaceTool;
   if (config.coordination === true) {
     let Type;
@@ -131,6 +144,7 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
       if (matches.length !== 1) throw fail("model-unavailable", "The selected Prime model is unavailable or not authenticated.");
       model = matches[0];
     }
+    if (config.serviceTier === "fast" && nativeModelFeatures?.supportsFastMode?.(model) !== true) throw fail("unsupported-settings", "This Prime model does not support Fast.");
     const services = await sdk.createAgentSessionServices({
       cwd,
       agentDir: config.agentDir,
@@ -152,6 +166,7 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
         sessionStartEvent,
         ...(model ? { model } : {}),
         ...(config.thinkingLevel ? { thinkingLevel: config.thinkingLevel } : {}),
+        ...(config.serviceTier ? { serviceTier: config.serviceTier === "fast" ? "priority" : "default" } : {}),
         ...(Array.isArray(config.allowedTools) ? { tools: config.allowedTools } : {}),
         ...(workspaceTool ? { customTools: [workspaceTool] } : {}),
       })),
@@ -167,6 +182,13 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
   });
   const connection = new sdk.InProcessAgentConnection(runtime);
   await connection.bindHeadlessExtensions();
+  const applyServiceTier = async (tier) => {
+    if (!["standard", "fast"].includes(tier) || typeof connection.setServiceTier !== "function") throw fail("unsupported-settings", "Prime service tiers are unavailable.");
+    const current = await connection.getState();
+    if (tier === "fast" && nativeModelFeatures?.supportsFastMode?.(current.model) !== true) throw fail("unsupported-settings", "This Prime model does not support Fast.");
+    await connection.setServiceTier(tier === "fast" ? "priority" : "default");
+  };
+
 
   let status = "starting";
   let disposed = false;
@@ -189,6 +211,7 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
     id: candidate.id,
     ...(typeof candidate.provider === "string" ? { provider: candidate.provider } : {}),
     name: typeof candidate.name === "string" ? candidate.name : candidate.id,
+    ...(nativeModelFeatures?.getSupportedThinkingLevels ? { thinkingLevels: nativeModelFeatures.getSupportedThinkingLevels(candidate) } : {}),
   } : undefined;
   const putBlock = (block) => {
     blocks.set(block.id, block);
@@ -350,8 +373,14 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
       if (disposed) throw fail("not-running", "The Prime runtime is not running.");
       const current = await connection.getState();
       model = mapModel(current.model);
+      if (model && typeof runtime.session.getAvailableThinkingLevels === "function") {
+        model.thinkingLevels = runtime.session.getAvailableThinkingLevels();
+        modelCatalog = modelCatalog.map((entry) => entry.id === model.id && entry.provider === model.provider ? { ...entry, thinkingLevels: model.thinkingLevels } : entry);
+      }
       return {
         nativeId: current.sessionId,
+        thinkingLevel: current.thinkingLevel,
+        ...(nativeModelFeatures?.supportsFastMode?.(current.model) ? { serviceTier: runtime.session.serviceTier === "priority" ? "fast" : "standard" } : {}),
         ...(current.sessionFile ? { nativePath: current.sessionFile } : {}),
         materialized: await isMaterialized(current.sessionFile),
         title: current.sessionName ?? title,
@@ -382,13 +411,18 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
       modelCatalog = (await connection.getAvailableModels()).map(mapModel).filter(Boolean);
       return modelCatalog;
     },
-    async setModel({ model: requested, thinkingLevel }) {
+    async setModel({ model: requested, thinkingLevel, serviceTier }) {
+
       if (!requested?.id) throw fail("invalid-request", "A Prime model id is required.");
       const matches = modelCatalog.filter((candidate) => candidate.id === requested.id && (!requested.provider || candidate.provider === requested.provider));
       if (matches.length !== 1 || !matches[0].provider) throw fail("model-unavailable", "The selected Prime model is unavailable or ambiguous.");
+      const raw = runtime.services.modelRegistry.getAvailable().find(entry => entry.id === matches[0].id && entry.provider === matches[0].provider);
+      if (thinkingLevel && nativeModelFeatures?.getSupportedThinkingLevels && !nativeModelFeatures.getSupportedThinkingLevels(raw).includes(thinkingLevel)) throw fail("invalid-settings", "Unsupported Prime reasoning level.");
+      if (serviceTier === "fast" && nativeModelFeatures?.supportsFastMode?.(raw) !== true) throw fail("unsupported-settings", "This Prime model does not support Fast.");
       model = mapModel(await connection.setModel(matches[0].provider, matches[0].id));
       selectedModel = { id: matches[0].id, provider: matches[0].provider };
       if (thinkingLevel) await connection.setThinkingLevel(thinkingLevel);
+      if (serviceTier) await applyServiceTier(serviceTier);
     },
     async respond() { throw fail("unsupported-method", "Prime headless approvals are not available."); },
     async rename({ title: nextTitle }) {

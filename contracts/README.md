@@ -29,3 +29,5 @@ unified graph. It is not a native session format or a store generation dump.
 Unknown fields and versions are rejected. The UI and `pnpm system:check` share
 schema/semantic checks; the existing typed host remains authoritative for
 save and execution. See `docs/SYSTEM_FILES.md`.
+
+Workspace runtime settings use the additive `workspace_settings_v12` route and `workspace-settings-v12.ts`. The v11 command/event route remains frozen. Get/set are live trusted-session actions, blocked in safe mode. See `docs/RUNTIME_SETTINGS.md`.

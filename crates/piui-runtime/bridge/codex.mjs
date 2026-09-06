@@ -74,6 +74,8 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   let thinkingLevel = typeof config.thinkingLevel === "string" ? config.thinkingLevel : undefined;
   let currentProvider = currentModel?.provider;
   let modelCatalog = [];
+  const modelDefaults = new Map();
+  let serviceTier = config.serviceTier;
 
   const setStatus = (next) => {
     if (status === next) return;
@@ -488,6 +490,17 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       return;
     }
     if (nativeId && typeof params.threadId === "string" && params.threadId !== nativeId) return;
+    if (method === "mcpServer/startupStatus/updated") {
+      if (params.status === "failed") emit({ type: "error", message: "A Codex MCP server failed to start. Check its native configuration." });
+      return;
+    }
+    if (method === "thread/settings/updated") {
+      const settings = params.settings ?? params;
+      if (typeof settings.model === "string") currentModel = { id: settings.model, name: settings.model, ...(currentProvider ? { provider: currentProvider } : {}) };
+      if (typeof settings.reasoningEffort === "string") thinkingLevel = settings.reasoningEffort;
+      if ("serviceTier" in settings) serviceTier = settings.serviceTier === "fast" ? "fast" : "standard";
+      return;
+    }
     if (method === "thread/name/updated") {
       if (typeof params.threadName === "string") title = params.threadName;
       return;
@@ -780,7 +793,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   }
   const threadParams = {
     cwd: config.cwd,
-    ...(config.serviceTier ? { serviceTier: config.serviceTier === "fast" ? "fast" : "default" } : {}),
+    ...(serviceTier ? { serviceTier: serviceTier === "fast" ? "fast" : "default" } : {}),
     ...(currentModel ? { model: currentModel.id, ...(currentModel.provider ? { modelProvider: currentModel.provider } : {}) } : {}),
     ...(typeof config.baseInstructions === "string" ? { baseInstructions: config.baseInstructions, developerInstructions: config.instructions ?? "" } : typeof config.instructions === "string" ? { developerInstructions: config.instructions } : {}),
     config: { ...resourceConfig, ...(coordinationEnabled || config.nativeSubagents === false ? { "features.multi_agent": false, "features.multi_agent_v2": false } : {}) },
@@ -795,6 +808,8 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
         initialTurnsPage: { sortDirection: "desc", itemsView: "full" },
       })
     : await callDuringStartup("thread/start", { ...startThreadParams, ephemeral: false, ...(workspaceTools ? { dynamicTools: workspaceTools } : {}) });
+  thinkingLevel ??= opened.reasoningEffort ?? undefined;
+  serviceTier ??= opened.serviceTier === "fast" ? "fast" : "standard";
   const thread = opened?.thread;
   if (!thread || typeof thread.id !== "string") {
     throw cleanupStartupFailure(fail("native-thread-failed", "Codex could not open the native thread."));
@@ -862,6 +877,8 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     snapshot() {
       return {
         nativeId,
+        thinkingLevel,
+        serviceTier,
         materialized,
         ...(bindingPublished && nativePath ? { nativePath } : {}),
         title,
@@ -905,7 +922,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
         const response = await callNative("turn/start", {
           threadId: nativeId,
           input: [textInput(text)],
-          ...(config.serviceTier ? { serviceTier: config.serviceTier === "fast" ? "fast" : "default" } : {}),
+          ...(serviceTier ? { serviceTier: serviceTier === "fast" ? "fast" : "default" } : {}),
           ...(currentModel ? { model: currentModel.id } : {}),
           ...(thinkingLevel ? { effort: thinkingLevel } : {}),
         });
@@ -940,25 +957,32 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       let cursor = null;
       do {
         const page = await callNative("model/list", { cursor, includeHidden: false });
+        for (const model of page?.data || []) modelDefaults.set(model.model || model.id, model.defaultReasoningEffort);
         data.push(...(page?.data || []).filter((model) => !model.hidden).map(mapModel));
         cursor = page?.nextCursor || null;
       } while (cursor);
       modelCatalog = data;
       return data;
     },
-    async setModel({ model, thinkingLevel: nextThinkingLevel }) {
+    async setModel({ model, thinkingLevel: nextThinkingLevel, serviceTier: nextServiceTier }) {
       if (!model || typeof model.id !== "string") throw fail("invalid-model", "The Codex model selection is invalid.");
       if (model.provider && currentProvider && model.provider !== currentProvider) {
         throw fail("unsupported-provider-change", "Codex cannot change model providers on an existing thread.");
       }
+      if (nextServiceTier != null && !["standard", "fast"].includes(nextServiceTier)) throw fail("invalid-settings", "Invalid Codex service tier.");
+      const candidate = modelCatalog.find((entry) => entry.id === model.id);
+      if (!candidate || (nextThinkingLevel && !candidate.thinkingLevels.includes(nextThinkingLevel))) throw fail("invalid-settings", "The model or reasoning level is unavailable.");
+      const effectiveEffort = nextThinkingLevel ?? (currentModel?.id !== model.id ? modelDefaults.get(model.id) : thinkingLevel);
       await callNative("thread/settings/update", {
         threadId: nativeId,
         model: model.id,
-        ...(typeof nextThinkingLevel === "string" ? { effort: nextThinkingLevel } : {}),
+        ...(nextServiceTier ? { serviceTier: nextServiceTier === "fast" ? "fast" : "default" } : {}),
+        ...(typeof effectiveEffort === "string" ? { effort: effectiveEffort } : {}),
       });
+      serviceTier = nextServiceTier || serviceTier;
       currentProvider = model.provider || currentProvider;
       currentModel = { id: model.id, ...(currentProvider ? { provider: currentProvider } : {}), name: model.name || model.id };
-      thinkingLevel = typeof nextThinkingLevel === "string" ? nextThinkingLevel : thinkingLevel;
+      thinkingLevel = effectiveEffort;
       return { model: currentModel, ...(thinkingLevel ? { thinkingLevel } : {}) };
     },
     async respond({ requestId, decision, text }) {

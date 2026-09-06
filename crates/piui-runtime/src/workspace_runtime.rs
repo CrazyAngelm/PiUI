@@ -204,6 +204,10 @@ pub struct NativeApproval {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
     pub native_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_path: Option<String>,
@@ -830,10 +834,11 @@ impl NativeRuntime {
         &self,
         model: WorkspaceModel,
         thinking_level: Option<String>,
+        service_tier: Option<String>,
     ) -> Result<(), NativeRuntimeError> {
         self.request(
             "setModel",
-            json!({ "model": model, "thinkingLevel": thinking_level }),
+            json!({ "model": model, "thinkingLevel": thinking_level, "serviceTier": service_tier }),
             REQUEST_TIMEOUT,
             false,
         )
@@ -1538,11 +1543,7 @@ pub fn offline_harness_capabilities(kind: HarnessKind) -> HarnessCapabilities {
             resume: capability(true, Enforcement::Native, None),
             models: capability(true, Enforcement::Native, None),
             approvals: capability(true, Enforcement::Native, None),
-            instructions: capability(
-                false,
-                Enforcement::Unsupported,
-                Some("Safe instruction injection is not available through Pi RPC."),
-            ),
+            instructions: capability(true, Enforcement::Native, None),
             tool_policy: capability(
                 true,
                 Enforcement::Native,
