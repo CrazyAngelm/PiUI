@@ -588,6 +588,7 @@ export async function runWorkspaceWebview2Proof({
     await waitFor(`document.querySelector('#new-session-title')`, 'safe-mode new-session form');
     assertion(await evaluate(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Create session'); return Boolean(button?.disabled); })()`), 'Safe mode exposed an enabled Create session action.');
     await assertRejected('workspace_settings_v12', { command: { type: 'get', sessionId: 'safe-fixture' } }, 'Safe-mode runtime settings', 'safe');
+    await assertRejected('workspace_lifecycle_v13', { command: { type: 'deleteSession', sessionId: 'safe-fixture' } }, 'Safe-mode chat deletion', 'safe');
     await assertRejected('workspace_command_v11', { command: { type: 'createSession', workspaceId: workspace.id, harness: 'pi', permissionMode: 'native' } }, 'Safe-mode native session creation', 'safe');
 
     const definitions = await orchestrationCatalog(workspace.id);
@@ -868,18 +869,18 @@ export async function runWorkspaceWebview2Proof({
   catalog = await verifyClosedNativeSession(nativeSession.id, 'workspace-close-failure-initial');
 
   try {
-    await waitFor(`(() => {
-      const button = [...document.querySelectorAll('.session-list > button')].find((item) => item.querySelector('.session-title')?.textContent?.trim() === 'Native lifecycle proof');
-      if (!button || button.disabled) return false;
-      button.click();
-      return true;
-    })()`, 'closed native session row for explicit reopen');
+    await reload();
+    await waitFor(`[...document.querySelectorAll('.composer-notice button')].some(button => button.textContent.trim() === 'Continue chat')`, 'saved chat continuation after reload');
+    await evaluate(`document.querySelector('.composer-notice button').focus()`);
+    assertion(await evaluate(`document.activeElement?.textContent?.trim() === 'Continue chat'`), 'Continue chat must be keyboard focusable');
+    await clickButton('Continue chat', '.composer-notice');
     await waitFor(`[...document.querySelectorAll('.session-list > button')].some((item) => item.querySelector('.session-title')?.textContent?.trim() === 'Native lifecycle proof' && item.textContent?.includes('Idle'))`, 'zero-turn native session reopened as idle', startupBoundMs);
     catalog = await workspaceCatalog();
     const reopenedById = catalog.sessions.filter((item) => item.id === nativeSession.id);
     const reopenedByIdentity = catalog.sessions.filter((item) => item.title === 'Native lifecycle proof' && item.harness === eligible.kind);
     assertion(reopenedById.length === 1 && reopenedById[0].status === 'idle', 'Zero-turn reopen did not retain the same opaque workspace session ID in idle state.');
     assertion(reopenedByIdentity.length === 1 && reopenedByIdentity[0].id === nativeSession.id, 'Zero-turn reopen created a duplicate workspace session.');
+    await clickButton('Session details');
     await waitFor(`document.querySelector('aside[aria-label="Session details"] button.danger-zone')?.textContent?.trim() === 'Close native session'`, 'reopened native session close control');
   } catch {
     const catalogOutcome = await invokeOutcome('workspace_command_v11', { command: { type: 'catalog' } });
@@ -903,6 +904,17 @@ export async function runWorkspaceWebview2Proof({
   end('nativeClose');
   checks.push('native-ui-close', 'zero-turn-ui-reopen-same-session', 'native-ui-reclose');
 
+  await clickButton('Delete chat', 'aside[aria-label="Session details"]');
+  await waitFor(`document.querySelector('[aria-labelledby="delete-chat-title"]')`, 'delete confirmation');
+  assertion(await evaluate(`document.querySelector('.shell').inert && document.activeElement?.closest('[role="dialog"]') !== null`), 'Deletion dialog traps keyboard focus');
+  await clickButton('Cancel', '[aria-labelledby="delete-chat-title"]');
+  assertion((await workspaceCatalog()).sessions.some(session => session.id === nativeSession.id), 'Cancelling deletion must retain the chat');
+  await clickButton('Delete chat', 'aside[aria-label="Session details"]');
+  await clickButton('Delete chat', '[aria-labelledby="delete-chat-title"]');
+  await waitFor(`!document.querySelector('[aria-labelledby="delete-chat-title"]')`, 'deleted chat confirmation closes');
+  await reload();
+  assertion(!(await workspaceCatalog()).sessions.some(session => session.id === nativeSession.id), 'Deleted chat returned after reload');
+  checks.push('saved-chat-continue-after-reload', 'delete-chat-cancel-focus-and-reload');
   timings.total = normalizedMilliseconds(performance.now() - startedAt);
   return {
     checks,

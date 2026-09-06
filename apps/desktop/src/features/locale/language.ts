@@ -9,6 +9,9 @@ export function setLanguage(value: Language): void {
 }
 language.subscribe(value => { if (typeof document !== 'undefined') document.documentElement.lang = value; });
 const russian: Readonly<Record<string, string>> = {
+  'Continue chat': 'Продолжить чат', 'Delete chat': 'Удалить чат',
+  'Continue this chat to load its native conversation.': 'Продолжите чат, чтобы загрузить его историю из harness.',
+  'Remove this chat from PiUI? Native harness history will be kept.': 'Удалить этот чат из PiUI? История самого harness сохранится.',
   'Model and reasoning': 'Модель и рассуждения', 'Native model': 'Модель по умолчанию', 'On': 'Вкл.', 'Off': 'Выкл.',
   'off': 'Отключено', 'none': 'Без рассуждений', 'minimal': 'Минимально', 'low': 'Низкое', 'medium': 'Среднее', 'high': 'Высокое', 'xhigh': 'Очень высокое', 'max': 'Максимальное', 'ultra': 'Ультра',
   'Imported as a new system. Save to keep it.': 'Импортировано как новая система. Сохраните, чтобы оставить её.',

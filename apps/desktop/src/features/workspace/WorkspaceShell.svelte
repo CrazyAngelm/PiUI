@@ -2,6 +2,7 @@
   import { t } from '../locale/language';
   import { onMount, tick } from 'svelte';
   import RuntimePicker from './RuntimePicker.svelte';
+  import { deleteWorkspaceSession } from '../../host-api/workspaceLifecycle';
   import ConversationViewport from './ConversationViewport.svelte';
   import { host } from '../../host-api/client';
   import type { Preferences } from '../../host-api/types';
@@ -36,6 +37,30 @@
     theme: 'system', density: 'comfortable', reducedMotion: 'system', fontSize: 'medium', chatWidth: 'wide',
   };
   const uiStateKey = 'piui.workspace.ui.v11';
+  let deleteTarget: WorkspaceSession | undefined;
+  let deleteBusy = false;
+  let deleteError: string | undefined;
+  const deletedSessionIds = new Set<string>();
+
+  async function deleteChat(): Promise<void> {
+    if (!deleteTarget || deleteBusy) return;
+    const id = deleteTarget.id;
+    deleteBusy = true;
+    deleteError = undefined;
+    try {
+      await deleteWorkspaceSession(id);
+      deletedSessionIds.add(id);
+      const { [id]: removedSnapshot, ...remainingSnapshots } = snapshots;
+      const { [id]: removedDraft, ...remainingDrafts } = drafts;
+      snapshots = remainingSnapshots;
+      drafts = remainingDrafts;
+      catalog = { ...catalog, sessions: catalog.sessions.filter(session => session.id !== id) };
+      if (selectedSessionId === id) { selectedSessionId = ''; inspector = undefined; }
+      persistUiState();
+      deleteTarget = undefined;
+    } catch (error) { deleteError = errorMessage(error); }
+    finally { deleteBusy = false; }
+  }
   interface PersistedUiState {
     selectedWorkspaceId?: string;
     selectedSessionId?: string;
@@ -215,6 +240,7 @@
       const received = await workspaceHost.catalog();
       if (disposed || request !== catalogRequest) return;
       const next = protectClosedCatalogSessions(received, snapshots);
+      next.sessions = next.sessions.filter(session => !deletedSessionIds.has(session.id));
       catalog = next;
       const candidate = preferredWorkspaceId ?? selectedWorkspaceId;
       selectedWorkspaceId = next.workspaces.some((workspace) => workspace.id === candidate)
@@ -236,6 +262,7 @@
   }
 
   function storeSnapshot(next: SessionSnapshot, allowClosedReopen = false): void {
+    if (deletedSessionIds.has(next.session.id)) return;
     const current = snapshots[next.session.id];
     const accepted = acceptWorkspaceSnapshot(current, next, allowClosedReopen);
     if (accepted !== next) return;
@@ -285,6 +312,7 @@
   }
 
   function handleEvent(incoming: WorkspaceEvent): void {
+    if (deletedSessionIds.has(incoming.sessionId)) return;
     const current = snapshots[incoming.sessionId];
     if (!current) {
       const queued = pendingEvents[incoming.sessionId] ?? [];
@@ -320,7 +348,7 @@
     sessionError = undefined;
     renameDraft = catalog.sessions.find((session) => session.id === sessionId)?.title ?? '';
     const request = ++sessionRequest;
-    sessionLoading = snapshots[sessionId] === undefined;
+    sessionLoading = true;
     try {
       const result = await workspaceHost.request({ type: 'openSession', sessionId });
       if (disposed || request !== sessionRequest || selectedSessionId !== sessionId) return;
@@ -681,7 +709,7 @@
   });
 </script>
 
-<div class="shell" class:with-inspector={inspector !== undefined} inert={Boolean(trustTarget || requestedWorkspaceSection || requestedMainView || pendingNavigation)}>
+<div class="shell" class:with-inspector={inspector !== undefined} inert={Boolean(deleteTarget || trustTarget || requestedWorkspaceSection || requestedMainView || pendingNavigation)}>
   <a class="skip-link" href="#workspace-main">{$t('Skip to main content')}</a>
   {#if catalog.safeMode}<div class="safe-mode" role="status">{$t('Safe mode. Runtime actions and extensions are disabled. Local history remains read-only.')}</div>{/if}
 
@@ -806,7 +834,7 @@
         <ConversationViewport blocks={selectedSnapshot.blocks} loading={sessionLoading} sessionKey={selectedSnapshot.session.id} agentLabel={harnessLabel(selectedSnapshot.session.harness)} />
         <div class="composer-shell">
           {#if catalog.safeMode}<p class="composer-notice">{$t('Runtime actions are disabled in safe mode. Your draft is preserved.')}</p>
-          {:else if selectedSnapshot.session.status === 'closed'}<p class="composer-notice">{$t('This native session is closed. Its transcript remains readable.')}</p>
+          {:else if selectedSnapshot.session.status === 'closed'}<div class="composer-notice">{#if selectedSnapshot.session.runId}<p>{$t('This native session is closed. Its transcript remains readable.')}</p>{:else}<button type="button" onclick={() => openSession(selectedSnapshot.session.id)} disabled={sessionLoading}>{$t(sessionLoading ? 'Starting' : 'Continue chat')}</button>{/if}</div>
           {:else if !selectedSnapshot.capabilities.prompt.supported}<p class="composer-notice">{selectedSnapshot.capabilities.prompt.reason ?? `${harnessLabel(selectedSnapshot.session.harness)} is read-only in this mode.`}</p>
           {:else}
             <div class="composer">
@@ -828,6 +856,14 @@
       </section>
     {:else if sessionLoading}
       <div class="state" role="status"><h1>{$t('Opening chat…')}</h1><p>{$t('Your conversation is loading.')}</p></div>
+    {:else if selectedSession}
+      <div class="state">
+        <h1>{selectedSession.title}</h1>
+        <p>{$t('Continue this chat to load its native conversation.')}</p>
+        {#if sessionError}<p class="error" role="alert">{sessionError}</p>{/if}
+        {#if !selectedSession.runId}<div class="composer-notice"><button type="button" onclick={() => openSession(selectedSession.id)} disabled={catalog.safeMode || sessionLoading}>{$t('Continue chat')}</button></div>
+        <button type="button" onclick={() => { deleteTarget = selectedSession; deleteError = undefined; }} disabled={catalog.safeMode}>{$t('Delete chat')}</button>{/if}
+      </div>
     {:else}
       <div class="state empty">
         <span class="welcome-mark" aria-hidden="true">π</span>
@@ -871,6 +907,7 @@
           <label>{$t('Session title')}<input bind:value={renameDraft} disabled={sessionActionBusy} /></label><button type="button" onclick={renameSession} disabled={sessionActionBusy || renameDraft.trim() === '' || renameDraft.trim() === selectedSnapshot.session.title}>{$t('Rename session')}</button>
           <section class="capabilities"><h3>{$t('Native capabilities')}</h3><ul>{#each Object.entries(selectedSnapshot.capabilities) as [name, capability]}<li><span>{name}</span><span>{capability.supported ? capability.enforcement : 'Unavailable'}</span></li>{/each}</ul></section>
           {#if selectedSnapshot.session.status !== 'closed'}<button class="danger-zone" type="button" onclick={closeSession} disabled={sessionActionBusy}>{$t('Close native session')}</button>{/if}
+          {#if !selectedSnapshot.session.runId}<button class="danger-zone" type="button" onclick={() => { deleteTarget = selectedSnapshot.session; deleteError = undefined; }} disabled={catalog.safeMode || sessionActionBusy || !['idle', 'closed', 'failed'].includes(selectedSnapshot.session.status)}>{$t('Delete chat')}</button>{/if}
           {#if sessionError}<p class="error" role="alert">{sessionError}</p>{/if}
         </div>
       {:else}<div class="state compact"><h3>{$t('No session selected')}</h3><p>{$t('Select a session to inspect its native capabilities.')}</p></div>{/if}
@@ -895,6 +932,18 @@
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="discard-title" tabindex="-1" use:modalFocus={keepEditingWorkspace}>
       <small>{$t('Unsaved workspace changes')}</small><h2 id="discard-title">{$t('Leave this editor?')}</h2><p>{$t('Keep editing, or discard the unsaved definition before changing views.')}</p>
       <div class="form-actions"><button type="button" onclick={keepEditingWorkspace}>{$t('Keep editing')}</button><button class="danger" type="button" onclick={confirmDiscardWorkspace}>{$t('Discard changes')}</button></div>
+    </div>
+  </div>
+{/if}
+
+{#if deleteTarget}
+  <div class="modal-backdrop" role="presentation">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="delete-chat-title" tabindex="-1" use:modalFocus={() => { if (!deleteBusy) deleteTarget = undefined; }}>
+      <h2 id="delete-chat-title">{$t('Delete chat')}?</h2>
+      <p>{deleteTarget.title}</p>
+      <p>{$t('Remove this chat from PiUI? Native harness history will be kept.')}</p>
+      {#if deleteError}<p role="alert">{deleteError}</p>{/if}
+      <div class="form-actions"><button type="button" onclick={() => deleteTarget = undefined} disabled={deleteBusy}>{$t('Cancel')}</button><button class="danger" type="button" onclick={deleteChat} disabled={deleteBusy}>{$t('Delete chat')}</button></div>
     </div>
   </div>
 {/if}

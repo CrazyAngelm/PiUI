@@ -1523,6 +1523,61 @@ pub async fn workspace_settings_v12(
     })
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", deny_unknown_fields)]
+pub enum WorkspaceLifecycleCommand {
+    #[serde(rename = "deleteSession", rename_all = "camelCase")]
+    DeleteSession { session_id: String },
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceLifecycleResult {
+    protocol: u8,
+    session_id: String,
+}
+
+#[tauri::command]
+pub async fn workspace_lifecycle_v13(
+    state: State<'_, HostState>,
+    command: WorkspaceLifecycleCommand,
+) -> Result<WorkspaceLifecycleResult, WorkspaceError> {
+    if state.safe_mode {
+        return Err(WorkspaceError::safe_mode());
+    }
+    let WorkspaceLifecycleCommand::DeleteSession { session_id } = command;
+    validate_session_id(&session_id)?;
+    let _operation = state.live_runtime_operation_gate.lock().await;
+    let record = state.workspace.record(&session_id)?;
+    // Run history remains owned by the coordinator, not the ordinary chat list.
+    if record.run_id.is_some() {
+        return Err(WorkspaceError::not_supported());
+    }
+    if let Some((runtime, _)) = state.workspace.live_runtime(&session_id)? {
+        let snapshot = runtime
+            .snapshot()
+            .await
+            .map_err(|_| WorkspaceError::runtime())?;
+        if !matches!(
+            snapshot.status,
+            SessionStatus::Idle | SessionStatus::Closed | SessionStatus::Failed
+        ) {
+            return Err(WorkspaceError::conflict());
+        }
+    }
+    state.workspace.close_session(&session_id).await?;
+    lock(&state.workspace.inner.registry)?
+        .transact(|sessions| {
+            sessions.retain(|record| record.id != session_id);
+            Ok(())
+        })
+        .map_err(|_| WorkspaceError::io())?;
+    Ok(WorkspaceLifecycleResult {
+        protocol: 13,
+        session_id,
+    })
+}
+
 #[tauri::command]
 pub async fn workspace_command_v11(
     app: AppHandle,
@@ -2590,6 +2645,28 @@ mod tests {
         };
         assert!(validate_model(&model, Some("high")).is_ok());
         assert!(validate_model(&model, Some("invented")).is_err());
+    }
+
+    #[test]
+    fn lifecycle_v13_accepts_only_an_opaque_session_address() {
+        assert!(
+            serde_json::from_value::<super::WorkspaceLifecycleCommand>(serde_json::json!({
+                "type": "deleteSession", "sessionId": "chat"
+            }))
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_value::<super::WorkspaceLifecycleCommand>(serde_json::json!({
+                "type": "deleteSession", "sessionId": "chat", "nativePath": "forged"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<WorkspaceCommand>(serde_json::json!({
+                "type": "deleteSession", "sessionId": "chat"
+            }))
+            .is_err()
+        );
     }
 
     #[test]

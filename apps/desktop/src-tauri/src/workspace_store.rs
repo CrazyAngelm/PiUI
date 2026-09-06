@@ -267,6 +267,34 @@ mod tests {
     }
 
     #[test]
+    fn removed_chat_stays_removed_after_reload_without_touching_history() {
+        let root = test_root();
+        let mut registry = WorkspaceRegistry::open(&root).expect("opens registry");
+        let history = root.join("native.jsonl");
+        fs::write(&history, "native history").expect("writes native fixture");
+        registry
+            .transact(|sessions| {
+                sessions.extend([session("removed"), session("kept")]);
+                Ok(())
+            })
+            .expect("persists chats");
+        registry
+            .transact(|sessions| {
+                sessions.retain(|session| session.id != "removed");
+                Ok(())
+            })
+            .expect("deletes chat entry");
+        let restored = WorkspaceRegistry::open(&root).expect("reloads registry");
+        assert!(restored.session("removed").is_none());
+        assert!(restored.session("kept").is_some());
+        assert_eq!(
+            fs::read_to_string(history).expect("native history remains"),
+            "native history"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn serialized_registry_is_host_private_and_contains_no_transcript() {
         let root = test_root();
         let mut registry = WorkspaceRegistry::open(&root).expect("opens registry");
