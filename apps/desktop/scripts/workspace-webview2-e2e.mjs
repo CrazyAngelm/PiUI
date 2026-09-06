@@ -725,9 +725,17 @@ export async function runWorkspaceWebview2Proof({
   checks.push('eligible-native-start', 'native-snapshot-no-private-reference', 'native-ui-rename');
   await clickButton('Model and reasoning');
   await waitFor(`document.querySelector('.runtime-picker select[aria-label="Model"]')?.options.length > 0 && !document.querySelector('.runtime-picker select').disabled`, 'native model catalog', startupBoundMs);
-  const beforeSettings = await invoke('workspace_settings_v12', { command: { type: 'get', sessionId: nativeSession.id } });
+  let beforeSettings = await invoke('workspace_settings_v12', { command: { type: 'get', sessionId: nativeSession.id } });
   assertion(beforeSettings.protocol === 12 && beforeSettings.models.length > 0, 'Missing native model catalog');
   if (eligible.kind === 'codex') {
+    const nextIndex = beforeSettings.models.findIndex(model => model.id !== beforeSettings.model?.id && model.thinkingLevels?.length);
+    assertion(nextIndex >= 0, 'Native model-switch proof requires another catalog model');
+    const nextModel = beforeSettings.models[nextIndex];
+    await setControl('.runtime-picker select[aria-label="Model"]', String(nextIndex), 'change');
+    await waitFor(`!document.querySelector('.runtime-picker select[aria-label="Model"]').disabled && document.querySelector('.runtime-picker .trigger')?.textContent.includes(${JSON.stringify(nextModel.name)})`, 'native model switched', startupBoundMs);
+    beforeSettings = await invoke('workspace_settings_v12', { command: { type: 'get', sessionId: nativeSession.id } });
+    assertion(beforeSettings.model.id === nextModel.id && beforeSettings.model.provider === nextModel.provider, 'Native model/provider did not change');
+    checks.push('native-composer-model-switch');
     const selectedModel = beforeSettings.models.find(model => model.id === beforeSettings.model?.id);
     assertion(selectedModel?.thinkingLevels?.length, 'Codex reasoning metadata missing');
     const effort = selectedModel.thinkingLevels[0];
