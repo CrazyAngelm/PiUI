@@ -5,6 +5,7 @@ const project = {
   id: 'project-1',
   name: 'Work',
   displayPath: 'D:/work',
+  agentKind: 'pi' as const,
   trustState: 'restricted' as const,
   pinned: false,
   missing: false,
@@ -91,6 +92,70 @@ describe('reduceAppState', () => {
     expect(personalChat.selectedProjectId).toBeUndefined();
     expect(personalChat.selectedSessionId).toBeUndefined();
     expect(personalChat.sessions).toEqual([]);
+  });
+
+  it('binds exact Prime session B from an A+B catalog without changing the live chat key', () => {
+    const primeProject = { ...project, agentKind: 'prime-agent' as const };
+    const sessionA = { ...sessions[0], id: 'opaque-a', projectId: primeProject.id };
+    const sessionB = { ...sessionA, id: 'opaque-b', title: 'Bound B' };
+    const projectChatEpoch = 17;
+    const liveChatKey = `project:${primeProject.id}:${primeProject.agentKind}:${projectChatEpoch}`;
+    const awaitingRuntime = {
+      ...initialAppState,
+      projects: [primeProject],
+      selectedProjectId: primeProject.id,
+      sessions: [sessionA],
+    };
+
+    // Metadata-only startup can begin from this blank selection. The runtime
+    // binding uses exact opaque B and in-place catalog selection; it does not
+    // take the `new-chat` navigation/remount path.
+    const catalog = reduceAppState(awaitingRuntime, {
+      type: 'sessions-loaded',
+      projectId: primeProject.id,
+      sessions: [sessionA, sessionB],
+      selectFirst: false,
+    });
+    const bound = reduceAppState(catalog, { type: 'selected-session', sessionId: sessionB.id });
+
+    expect(bound.selectedSessionId).toBe(sessionB.id);
+    expect(bound.sessions.map((session) => session.id)).toEqual([sessionA.id, sessionB.id]);
+    expect(`project:${bound.selectedProjectId}:${primeProject.agentKind}:${projectChatEpoch}`).toBe(liveChatKey);
+  });
+
+  it('keeps prior Prime sessions when starting another session in the same project', () => {
+    const primeProject = { ...project, agentKind: 'prime-agent' as const };
+    const first = { ...sessions[0], projectId: primeProject.id };
+    const second = { ...first, id: 'session-2', title: 'Second task' };
+    const selected = {
+      ...initialAppState,
+      projects: [primeProject],
+      selectedProjectId: primeProject.id,
+      selectedSessionId: first.id,
+      sessions: [first],
+    };
+
+    const firstDraft = reduceAppState(selected, {
+      type: 'new-chat',
+      projectId: primeProject.id,
+      sessions: [first],
+    });
+    const secondConfirmed = reduceAppState(firstDraft, {
+      type: 'sessions-loaded',
+      projectId: primeProject.id,
+      sessions: [second, first],
+    });
+    const secondDraft = reduceAppState(secondConfirmed, {
+      type: 'new-chat',
+      projectId: primeProject.id,
+      sessions: [second, first],
+    });
+
+    expect(firstDraft.selectedSessionId).toBeUndefined();
+    expect(secondConfirmed.selectedSessionId).toBe(second.id);
+    expect(secondDraft.selectedSessionId).toBeUndefined();
+    expect(secondDraft.sessions.map((session) => session.id)).toEqual([second.id, first.id]);
+    expect(secondDraft.projects[0].agentKind).toBe('prime-agent');
   });
 
   it('accepts a refreshed restricted trust state and clears a removed project view', () => {

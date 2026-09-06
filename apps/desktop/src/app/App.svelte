@@ -6,14 +6,16 @@
   import ProjectSettingsDialog from '../features/projects/ProjectSettingsDialog.svelte';
   import TrustDialog from '../features/projects/TrustDialog.svelte';
   import ChatPanel from '../features/runtime/ChatPanel.svelte';
-  import { resolveNewCatalogSession } from '../features/runtime/sessionPersistenceFeedback';
+  import { PRIME_RUNTIME_BINDING_ERROR, PRIME_RUNTIME_BINDING_PENDING, acceptsPrimeRuntimeBindingSnapshot, ownsRuntimeBinding, resolveNewCatalogSession, resolvePrimeRuntimeCatalogSession } from '../features/runtime/sessionPersistenceFeedback';
   import { commandDraft } from '../features/runtime/runtimeCommands';
+  import { liveRuntimeSupported } from '../features/runtime/runtimeSelection';
   import Timeline from '../features/sessions/Timeline.svelte';
   import { acceptsCatalogSnapshot } from '../features/sessions/catalogView';
   import SettingsView from '../features/settings/SettingsView.svelte';
   import ReadOnlyTree from '../features/tree/ReadOnlyTree.svelte';
   import { hasNativeFolderPicker, host, isHostConflict } from '../host-api/client';
   import type {
+    AgentKind,
     ExtensionSummary,
     PiUiCommandContribution,
     PiUiComposerActionContribution,
@@ -31,6 +33,11 @@
   } from '../host-api/types';
   import { initialAppState, reduceAppState, type AppState } from './state';
 
+  // The redesigned shell uses this component only for legacy indexed history.
+  // Existing standalone/classic use retains its previous explicit controls.
+  export let historyOnly = false;
+  export let onNewWorkspaceChat: () => void = () => {};
+
   let state: AppState = initialAppState;
   let timeline: TimelineBlock[] = [];
   let liveTimeline: TimelineBlock[] = [];
@@ -47,6 +54,13 @@
   let sessionsRefreshError: string | undefined;
   let sessionCatalogs: Record<string, SessionCatalogSnapshot> = {};
   let catalogStatusSequences: Record<string, number> = {};
+  let primeRuntimeCatalogGuard: readonly [
+    projectId: string,
+    opaqueSessionId: string,
+    sequence: number,
+    sessionEpoch: number,
+    chatEpoch: number,
+  ] | undefined;
   interface CatalogInvalidation {
     sequence: number;
     epoch: number;
@@ -83,7 +97,11 @@
   let tree: SessionTree | undefined;
   let addProjectOpen = false;
   let projectPath = '';
+  let projectAgentKind: AgentKind = 'pi';
   let addProjectBusy = false;
+  let addProjectError: string | undefined;
+  let addProjectDialog: HTMLDialogElement | undefined;
+  let addProjectReturnFocus: HTMLElement | undefined;
   let trustOpen = false;
   let trustBusy = false;
   let projectSettingsOpen = false;
@@ -102,6 +120,7 @@
   };
   let preferencesBusy = false;
   let preferencesError: string | undefined;
+  let extensionAgentKind: AgentKind = 'pi';
   let extensions: ExtensionSummary[] = [];
   let extensionsLoading = false;
   let extensionsError: string | undefined;
@@ -137,6 +156,15 @@
   $: projectSettingsProject = state.projects.find((project) => project.id === projectSettingsTargetId);
   $: selectedSession = state.sessions.find((session) => session.id === state.selectedSessionId);
   $: selectedPersonalSession = personalSessions.find((session) => session.id === selectedPersonalSessionId);
+  $: selectedAgentLabel = selectedProject?.agentKind === 'prime-agent' ? 'Prime Agent' : 'Pi';
+  $: if (
+    primeRuntimeCatalogGuard !== undefined
+    && !matchesPrimeRuntimeBinding(
+      primeRuntimeCatalogGuard[0],
+      primeRuntimeCatalogGuard[3],
+      primeRuntimeCatalogGuard[4],
+    )
+  ) primeRuntimeCatalogGuard = undefined;
 
   onMount(() => {
     let unlistenCatalog: (() => void) | undefined;
@@ -211,11 +239,27 @@
     if (snapshot.sequence < knownStatusSequence) return false;
     const current = sessionCatalogs[snapshot.projectId];
     if (!acceptsCatalogSnapshot(current, snapshot)) return false;
+    const bindingGuard = primeRuntimeCatalogGuard;
+    if (
+      bindingGuard?.[0] === snapshot.projectId
+      && matchesPrimeRuntimeBinding(bindingGuard[0], bindingGuard[3], bindingGuard[4])
+      && !acceptsPrimeRuntimeBindingSnapshot(
+        snapshot.sessions,
+        bindingGuard[1],
+        snapshot.sequence,
+        bindingGuard[2],
+      )
+    ) return false;
     if (invalidation !== undefined) {
       const { [snapshot.projectId]: _recovered, ...remaining } = invalidatedProjectCatalogs;
       invalidatedProjectCatalogs = remaining;
     }
     sessionCatalogs = { ...sessionCatalogs, [snapshot.projectId]: snapshot };
+    if (
+      bindingGuard?.[0] === snapshot.projectId
+      && snapshot.sequence > bindingGuard[2]
+      && resolvePrimeRuntimeCatalogSession(snapshot.sessions, bindingGuard[1]) !== undefined
+    ) primeRuntimeCatalogGuard = undefined;
     const statusSequence = Math.max(catalogStatusSequences[snapshot.projectId] ?? 0, snapshot.sequence);
     catalogStatusSequences = {
       ...catalogStatusSequences,
@@ -469,14 +513,21 @@
 
   async function waitForCurrentProjectCatalog(
     projectId: string,
-    expectedProjectEpoch: number,
+    expectedProjectEpoch: number | undefined,
+    requiredSessionId: string | undefined = undefined,
+    isStillExpected: () => boolean = () => true,
   ): Promise<SessionCatalogSnapshot | undefined> {
     for (let attempt = 0; attempt < 30; attempt += 1) {
-      if (expectedProjectEpoch !== projectRequestEpoch || state.selectedProjectId !== projectId) return undefined;
+      if (
+        (expectedProjectEpoch !== undefined && expectedProjectEpoch !== projectRequestEpoch)
+        || state.selectedProjectId !== projectId
+        || !isStillExpected()
+      ) return undefined;
       const cached = sessionCatalogs[projectId];
       if (
         cached?.freshness === 'current'
         && cached.sequence >= (catalogStatusSequences[projectId] ?? 0)
+        && (requiredSessionId === undefined || cached.sessions.some((session) => session.id === requiredSessionId))
       ) {
         return cached;
       }
@@ -545,18 +596,32 @@
     treeOpen = false;
   }
 
-  async function refreshExtensions(): Promise<void> {
+  async function refreshExtensions(agentKind: AgentKind = extensionAgentKind): Promise<void> {
     const requestEpoch = ++extensionRequestEpoch;
     extensionsLoading = true;
     extensionsError = undefined;
     try {
-      const discovered = await host.listExtensions();
-      if (requestEpoch === extensionRequestEpoch) extensions = discovered;
+      const discovered = await host.listExtensions(agentKind);
+      if (requestEpoch === extensionRequestEpoch && agentKind === extensionAgentKind) {
+        extensions = discovered;
+      }
     } catch (error) {
-      if (requestEpoch === extensionRequestEpoch) extensionsError = messageFor(error);
+      if (requestEpoch === extensionRequestEpoch && agentKind === extensionAgentKind) {
+        extensionsError = messageFor(error);
+      }
     } finally {
-      if (requestEpoch === extensionRequestEpoch) extensionsLoading = false;
+      if (requestEpoch === extensionRequestEpoch && agentKind === extensionAgentKind) {
+        extensionsLoading = false;
+      }
     }
+  }
+
+  function selectExtensionAgent(agentKind: AgentKind): void {
+    if (agentKind === extensionAgentKind || extensionBusyId !== undefined) return;
+    extensionAgentKind = agentKind;
+    extensions = [];
+    extensionsError = undefined;
+    void refreshExtensions(agentKind);
   }
 
   async function refreshPiUiContributions(): Promise<void> {
@@ -577,12 +642,12 @@
   }
 
   async function toggleExtension(extension: ExtensionSummary, enabled: boolean): Promise<void> {
-    if (extensionBusyId !== undefined) return;
+    if (extensionBusyId !== undefined || extension.agentKind !== extensionAgentKind) return;
     extensionBusyId = extension.id;
     extensionsError = undefined;
     try {
-      extensions = await host.setExtensionEnabled(extension.id, enabled);
-      void refreshPiUiContributions();
+      extensions = await host.setExtensionEnabled(extensionAgentKind, extension.id, enabled);
+      if (extensionAgentKind === 'pi') void refreshPiUiContributions();
     } catch (error) {
       extensionsError = messageFor(error);
     } finally {
@@ -639,6 +704,97 @@
     if (shouldFollow && historyScroller !== undefined) historyScroller.scrollTop = historyScroller.scrollHeight;
   }
 
+  function clearNewProjectSessionResolution(): void {
+    pendingProjectSessionResolution = undefined;
+    newProjectSessionBaseline = undefined;
+    newProjectSessionStartedAt = undefined;
+    pendingProjectResolutionRetryCount = 0;
+    pendingProjectResolutionLastCatalogSequence = 0;
+    pendingProjectSessionCompletionObserved = false;
+    if (pendingProjectResolutionRetry !== undefined) {
+      clearTimeout(pendingProjectResolutionRetry);
+      pendingProjectResolutionRetry = undefined;
+    }
+  }
+
+  function matchesPrimeRuntimeBinding(
+    projectId: string,
+    expectedSessionEpoch: number,
+    expectedChatEpoch: number,
+  ): boolean {
+    return ownsRuntimeBinding(
+      state.selectedProjectId,
+      projectId,
+      sessionRequestEpoch,
+      expectedSessionEpoch,
+      projectChatEpoch,
+      expectedChatEpoch,
+    );
+  }
+
+  function currentPrimeRuntimeSession(
+    snapshot: SessionCatalogSnapshot | undefined,
+    projectId: string,
+    opaqueSessionId: string,
+  ): SessionSummary | undefined {
+    if (
+      snapshot?.scope !== 'project'
+      || snapshot.projectId !== projectId
+      || snapshot.freshness !== 'current'
+      || snapshot.sequence < (catalogStatusSequences[projectId] ?? 0)
+    ) return undefined;
+    return resolvePrimeRuntimeCatalogSession(snapshot.sessions, opaqueSessionId);
+  }
+
+  function primeRuntimeSessionResolver(
+    projectId: string,
+    expectedSessionEpoch: number,
+    expectedChatEpoch: number,
+  ): (opaqueSessionId: string) => Promise<void> {
+    return async (opaqueSessionId) => {
+      const isStillExpected = () => matchesPrimeRuntimeBinding(projectId, expectedSessionEpoch, expectedChatEpoch);
+      if (!isStillExpected()) throw new Error(PRIME_RUNTIME_BINDING_ERROR);
+      // Metadata discovery starts Prime too. Hold the blank selection until its
+      // exact host-indexed row is current; project disclosure is presentation.
+      newChatProjectId = projectId;
+
+      let catalog: SessionCatalogSnapshot | undefined = sessionCatalogs[projectId];
+      let session = currentPrimeRuntimeSession(catalog, projectId, opaqueSessionId);
+      if (session === undefined) {
+        await refreshProjectCatalog(projectId, projectRequestEpoch);
+        if (!isStillExpected()) throw new Error(PRIME_RUNTIME_BINDING_ERROR);
+        catalog = sessionCatalogs[projectId];
+        session = currentPrimeRuntimeSession(catalog, projectId, opaqueSessionId);
+        if (session === undefined) {
+          catalog = await waitForCurrentProjectCatalog(projectId, undefined, opaqueSessionId, isStillExpected);
+          if (!isStillExpected()) throw new Error(PRIME_RUNTIME_BINDING_ERROR);
+          session = currentPrimeRuntimeSession(catalog, projectId, opaqueSessionId);
+        }
+      }
+      if (catalog === undefined || session === undefined) throw new Error(PRIME_RUNTIME_BINDING_ERROR);
+
+      // This is a binding, not navigation: retain the live ChatPanel and its
+      // streamed projection while the catalog gains the exact opaque row.
+      primeRuntimeCatalogGuard = [
+        projectId,
+        opaqueSessionId,
+        catalog.sequence,
+        expectedSessionEpoch,
+        expectedChatEpoch,
+      ];
+      state = reduceAppState(state, {
+        type: 'sessions-loaded',
+        projectId,
+        sessions: catalog.sessions,
+        selectFirst: false,
+      });
+      state = reduceAppState(state, { type: 'selected-session', sessionId: session.id });
+      newChatProjectId = undefined;
+      loadedSessionProjectId = projectId;
+      clearNewProjectSessionResolution();
+    };
+  }
+
   function captureNewProjectSessionBaseline(): void {
     const projectId = state.selectedProjectId;
     if (projectId !== undefined && state.selectedSessionId === undefined) {
@@ -681,16 +837,7 @@
 
   function abandonNewProjectSessionResolution(): void {
     const pending = pendingProjectSessionResolution;
-    pendingProjectSessionResolution = undefined;
-    newProjectSessionBaseline = undefined;
-    newProjectSessionStartedAt = undefined;
-    pendingProjectResolutionRetryCount = 0;
-    pendingProjectResolutionLastCatalogSequence = 0;
-    pendingProjectSessionCompletionObserved = false;
-    if (pendingProjectResolutionRetry !== undefined) {
-      clearTimeout(pendingProjectResolutionRetry);
-      pendingProjectResolutionRetry = undefined;
-    }
+    clearNewProjectSessionResolution();
     if (pending !== undefined && state.selectedProjectId === pending.projectId) {
       void refreshProjectCatalog(pending.projectId, pending.epoch);
     }
@@ -835,6 +982,10 @@
 
     const projectId = state.selectedProjectId;
     if (projectId === undefined) return;
+    const expectedProject = state.projects.find((project) => project.id === projectId);
+    if (expectedProject === undefined) return;
+    const expectedAgentKind = expectedProject.agentKind;
+    const expectedAgentLabel = expectedAgentKind === 'prime-agent' ? 'Prime Agent' : 'Pi';
     const expectedSessionId = state.selectedSessionId;
     const expectedProjectEpoch = projectRequestEpoch;
     const expectedSessionEpoch = sessionRequestEpoch;
@@ -861,11 +1012,19 @@
       const catalog = refreshed?.freshness === 'current'
         ? refreshed
         : await waitForCurrentProjectCatalog(projectId, expectedProjectEpoch);
-      if (catalog === undefined) throw new Error('Pi has not persisted the completed project turn yet.');
-      const session = expectedSessionId === undefined
-        ? resolveNewCatalogSession(catalog.sessions, knownSessionIds, newProjectSessionStartedAt)
-        : catalog.sessions.find((candidate) => candidate.id === expectedSessionId);
-      if (session === undefined) throw new Error('Pi has not persisted the completed project turn yet.');
+      if (catalog === undefined) throw new Error(`${expectedAgentLabel} has not persisted the completed project turn yet.`);
+      const session = expectedAgentKind === 'prime-agent'
+        ? resolvePrimeRuntimeCatalogSession(catalog.sessions, expectedSessionId)
+        : expectedSessionId === undefined
+          ? resolveNewCatalogSession(catalog.sessions, knownSessionIds, newProjectSessionStartedAt)
+          : catalog.sessions.find((candidate) => candidate.id === expectedSessionId);
+      if (session === undefined) {
+        throw new Error(
+          expectedAgentKind === 'prime-agent' && expectedSessionId === undefined
+            ? PRIME_RUNTIME_BINDING_PENDING
+            : `${expectedAgentLabel} has not persisted the completed project turn yet.`,
+        );
+      }
       let page: TimelinePage;
       try {
         page = await host.getTimelinePage(projectId, session.id);
@@ -1229,11 +1388,20 @@
   }
 
   async function openNewChat(targetProjectId: string | undefined, preserveDraft = false): Promise<void> {
+    if (historyOnly) {
+      onNewWorkspaceChat();
+      return;
+    }
     if (!preserveDraft) composerDraft = '';
     const targetProject = targetProjectId === undefined
       ? undefined
       : state.projects.find((project) => project.id === targetProjectId);
     if (targetProject !== undefined) {
+      if (!liveRuntimeSupported(targetProject.agentKind)) {
+        // Every UI entry point, including Ctrl/Cmd+N, fails closed for Prime
+        // live control. Existing indexed history remains selectable.
+        return;
+      }
       projectChatEpoch += 1;
       await selectProject(targetProject, true);
       return;
@@ -1466,28 +1634,63 @@
 
   async function openAddProject(): Promise<void> {
     settingsOpen = false;
-    if (hasNativeFolderPicker) {
-      try {
-        const project = await host.pickAndAddProject();
-        if (project !== undefined) await adoptAddedProject(project);
-      } catch (error) {
-        state = reduceAppState(state, { type: 'failed', message: messageFor(error) });
-      }
+    projectPath = '';
+    projectAgentKind = 'pi';
+    addProjectError = undefined;
+    const activeElement = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : undefined;
+    addProjectReturnFocus = activeElement !== undefined && activeElement !== document.body
+      ? activeElement
+      : document.querySelector<HTMLElement>('button[aria-label="Add a project folder"]') ?? undefined;
+    addProjectOpen = true;
+    await tick();
+    if (addProjectDialog !== undefined && !addProjectDialog.open) addProjectDialog.showModal();
+    addProjectDialog?.querySelector<HTMLInputElement>('input[name="agent-kind"]:checked')?.focus();
+  }
+
+  async function closeAddProject(force = false): Promise<void> {
+    if (addProjectBusy && !force) return;
+    addProjectDialog?.close();
+    addProjectOpen = false;
+    await tick();
+    addProjectReturnFocus?.focus();
+    addProjectReturnFocus = undefined;
+  }
+
+  function handleAddProjectDialogKeydown(event: KeyboardEvent): void {
+    if (!addProjectOpen || addProjectDialog === undefined) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      if (!addProjectBusy) void closeAddProject();
       return;
     }
-    projectPath = '';
-    addProjectOpen = true;
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(addProjectDialog.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ));
+    if (focusable.length === 0) return;
+    const currentIndex = focusable.indexOf(document.activeElement as HTMLElement);
+    const nextIndex = event.shiftKey
+      ? (currentIndex <= 0 ? focusable.length - 1 : currentIndex - 1)
+      : (currentIndex === focusable.length - 1 ? 0 : currentIndex + 1);
+    event.preventDefault();
+    focusable[nextIndex]?.focus();
   }
 
   async function addProject(): Promise<void> {
-    if (projectPath.trim().length === 0) return;
+    if (!hasNativeFolderPicker && projectPath.trim().length === 0) return;
     addProjectBusy = true;
+    addProjectError = undefined;
     try {
-      const project = await host.addProject(projectPath);
+      const project = hasNativeFolderPicker
+        ? await host.pickAndAddProject(projectAgentKind)
+        : await host.addProject(projectPath, projectAgentKind);
+      if (project === undefined) return;
       await adoptAddedProject(project);
-      addProjectOpen = false;
+      await closeAddProject(true);
     } catch (error) {
-      state = reduceAppState(state, { type: 'failed', message: messageFor(error) });
+      addProjectError = messageFor(error);
     } finally {
       addProjectBusy = false;
     }
@@ -1615,8 +1818,10 @@
     selectedSessionId={state.selectedSessionId}
     sessionsLoading={sessionsLoading}
     sessionsFreshness={sessionsFreshness}
+    projectSessionCreationPending={pendingProjectSessionResolution !== undefined}
     onAddProject={openAddProject}
     onNewChat={() => void openNewChat(state.selectedProjectId)}
+    onNewProjectSession={(project) => void openNewChat(project.id)}
     onSelectProject={toggleProject}
     onSelectSession={selectSession}
     onSelectPersonalSession={selectPersonalSession}
@@ -1635,6 +1840,7 @@
         {preferences}
         {preferencesBusy}
         {preferencesError}
+        {extensionAgentKind}
         {extensions}
         {extensionsLoading}
         {extensionsError}
@@ -1644,6 +1850,7 @@
         onMotion={updateReducedMotion}
         onFontSize={updateFontSize}
         onChatWidth={updateChatWidth}
+        onExtensionAgentKind={selectExtensionAgent}
         onToggleExtension={(extension, enabled) => void toggleExtension(extension, enabled)}
         onRefreshExtensions={() => void refreshExtensions()}
         onClose={() => settingsOpen = false}
@@ -1667,15 +1874,18 @@
             blocks={[...timeline, ...liveTimeline]}
             sessionKey={selectedPersonalSessionId}
             loading={selectedPersonalSession !== undefined && !timelineLoaded && liveTimeline.length === 0}
+            agentLabel="Pi"
           />
         </div>
       {:else}
         <EmptyState fill={true} eyebrow="Chats" title="New chat" description="Send a message below. This chat will appear in Chats after Pi replies." />
       {/if}
 
+      {#if !historyOnly}
       {#key `personal:${personalChatEpoch}`}
         <ChatPanel
           personal={true}
+          agentKind="pi"
           projects={state.projects}
           projectId={undefined}
           sessionId={selectedPersonalSession?.id}
@@ -1692,13 +1902,16 @@
           onCommandsChanged={(commands) => (runtimeCommands = commands)}
         />
       {/key}
+      {:else}
+        <p class="history-only-notice">Indexed native history is read only. <button type="button" onclick={onNewWorkspaceChat}>Return to sessions</button></p>
+      {/if}
     {:else if state.projects.length === 0}
       <EmptyState eyebrow="Chats" title="Start a new chat" description="Talk to Pi without attaching a user folder. Add a project later when you want Pi session history from that folder." actionLabel="New chat" action={() => void openNewChat(undefined)} />
     {:else if selectedProject === undefined}
-      <EmptyState eyebrow="Projects" title="Select a project" description="Choose a folder in the sidebar to inspect its local Pi session history." />
+      <EmptyState eyebrow="Projects" title="Select a project" description="Choose a folder in the sidebar to inspect its local agent session history." />
     {:else}
       {#if selectedProject.missing}
-        <div class="offline-banner" role="status"><strong>Folder unavailable.</strong><span>Reconnect the folder and use Refresh. PiUI has not changed any Pi session files.</span></div>
+        <div class="offline-banner" role="status"><strong>Folder unavailable.</strong><span>Reconnect the folder and use Refresh. PiUI has not changed any agent session files.</span></div>
       {/if}
       {#if state.safeMode}
         <div class="safe-mode-banner" role="status"><strong>Safe mode.</strong><span>Extensions and runtime actions are disabled. Your local history remains read only.</span></div>
@@ -1718,22 +1931,30 @@
             blocks={[...timeline, ...liveTimeline]}
             sessionKey={state.selectedSessionId}
             loading={selectedSession !== undefined && !timelineLoaded && liveTimeline.length === 0}
+            agentLabel={selectedAgentLabel}
           />
         </div>
       {:else if sessionsLoading}
         <section class="session-scan-state" aria-live="polite">
           <p class="eyebrow">Session history</p>
-          <p>Scanning local Pi sessions…</p>
+          <p>Scanning local {selectedAgentLabel} sessions…</p>
         </section>
       {:else}
-        <EmptyState fill={true} eyebrow="Session history" title="No Pi sessions here yet" description="Trust this project, then start a new Pi chat below. PiUI discovers the authoritative Pi JSONL session after the runtime stops." />
+        <EmptyState fill={true} eyebrow="Session history" title={`No ${selectedAgentLabel} sessions here yet`} description={`Trust this project, then start a new ${selectedAgentLabel} chat below. PiUI discovers the authoritative ${selectedAgentLabel} session after the runtime stops.`} />
       {/if}
 
-      {#key `project:${state.selectedProjectId}:${projectChatEpoch}`}
+      {#if !historyOnly}
+      {#key `project:${state.selectedProjectId}:${selectedProject.agentKind}:${projectChatEpoch}`}
         <ChatPanel
           projects={state.projects}
           projectId={state.selectedProjectId}
-          sessionId={selectedSession?.id}
+          agentKind={selectedProject.agentKind}
+          sessionId={state.selectedSessionId}
+          onRuntimeSessionResolved={primeRuntimeSessionResolver(
+            selectedProject.id,
+            sessionRequestEpoch,
+            projectChatEpoch,
+          )}
           bind:draft={composerDraft}
           onNewChatProjectChange={(projectId) => void openNewChat(projectId, true)}
           trusted={selectedProject.trustState === 'trusted'}
@@ -1744,10 +1965,13 @@
           onNewSessionStartAborted={abandonNewProjectSessionResolution}
           onRetryPersistedSession={retryPersistedSessionDiscovery}
           onBlocksChanged={updateLiveTimeline}
-          {piUiComposerActions}
+          piUiComposerActions={selectedProject.agentKind === 'pi' ? piUiComposerActions : []}
           onCommandsChanged={(commands) => (runtimeCommands = commands)}
         />
       {/key}
+      {:else}
+        <p class="history-only-notice">Indexed native history is read only. <button type="button" onclick={onNewWorkspaceChat}>Return to sessions</button></p>
+      {/if}
 
     {/if}
   </main>
@@ -1756,16 +1980,41 @@
 </div>
 
 {#if addProjectOpen}
-  <div class="modal-backdrop" role="presentation" onclick={(event) => { if (event.target === event.currentTarget && !addProjectBusy) addProjectOpen = false; }}>
-    <form class="add-dialog" aria-labelledby="add-project-title" onsubmit={(event) => { event.preventDefault(); void addProject(); }}>
+  <dialog
+    bind:this={addProjectDialog}
+    class="add-project-modal"
+    aria-modal="true"
+    aria-labelledby="add-project-title"
+    aria-describedby="add-project-description"
+    onkeydown={handleAddProjectDialogKeydown}
+    oncancel={(event) => { event.preventDefault(); if (!addProjectBusy) void closeAddProject(); }}
+    onclick={(event) => { if (event.target === event.currentTarget && !addProjectBusy) void closeAddProject(); }}
+  >
+    <form class="add-dialog" onsubmit={(event) => { event.preventDefault(); void addProject(); }}>
       <p class="eyebrow">Local project</p>
       <h2 id="add-project-title">Add an existing folder</h2>
-      <label for="project-path">Folder path</label>
-      <input id="project-path" bind:value={projectPath} autocomplete="off" placeholder="D:\\work\\project" disabled={addProjectBusy} />
-      <p class="helper">The host canonicalizes this path and prevents duplicate project entries. Project-local code stays blocked in this foundation build.</p>
-      <div class="dialog-actions"><button type="button" class="quiet" onclick={() => addProjectOpen = false} disabled={addProjectBusy}>Cancel</button><button type="submit" class="primary" disabled={addProjectBusy || projectPath.trim().length === 0}>{addProjectBusy ? 'Adding…' : 'Add restricted'}</button></div>
+      <fieldset class="agent-kind-fieldset" disabled={addProjectBusy}>
+        <legend>Agent runtime</legend>
+        <div class="agent-kind-options">
+          <label class:selected={projectAgentKind === 'pi'}>
+            <input type="radio" name="agent-kind" value="pi" bind:group={projectAgentKind} />
+            <span><strong>Pi</strong><small>Standard Pi sessions and extensions</small></span>
+          </label>
+          <label class:selected={projectAgentKind === 'prime-agent'}>
+            <input type="radio" name="agent-kind" value="prime-agent" bind:group={projectAgentKind} />
+            <span><strong>Prime Agent</strong><small>Prime sessions, goals, RLM and schedules</small></span>
+          </label>
+        </div>
+      </fieldset>
+      {#if !hasNativeFolderPicker}
+        <label for="project-path">Folder path</label>
+        <input type="text" id="project-path" bind:value={projectPath} autocomplete="off" placeholder="D:\work\project" disabled={addProjectBusy} />
+      {/if}
+      <p class="helper" id="add-project-description">A folder keeps this runtime choice. Registering the same folder with a different runtime is blocked so Pi and Prime Agent sessions never mix.</p>
+      {#if addProjectError}<p class="add-project-error" role="alert">{addProjectError}</p>{/if}
+      <div class="dialog-actions"><button type="button" class="quiet" onclick={() => void closeAddProject()} disabled={addProjectBusy}>Cancel</button><button type="submit" class="primary" disabled={addProjectBusy || (!hasNativeFolderPicker && projectPath.trim().length === 0)}>{addProjectBusy ? 'Adding…' : hasNativeFolderPicker ? 'Choose folder' : 'Add restricted'}</button></div>
     </form>
-  </div>
+  </dialog>
 {/if}
 
 <TrustDialog project={selectedProject} open={trustOpen} busy={trustBusy} onClose={() => trustOpen = false} onTrust={trustProject} />
@@ -1779,7 +2028,8 @@
   onQuery={searchSessions}
   onOpenResult={openSearchResult}
   commands={runtimeCommands}
-  {piUiCommands}
+  piUiCommands={selectedProject?.agentKind === 'prime-agent' ? [] : piUiCommands}
+  agentLabel={selectedAgentLabel}
   commandSelectionDisabled={composerDraft.trim().length > 0}
   onUseCommand={useRuntimeCommand}
 />
@@ -1796,12 +2046,14 @@
 />
 
 <style>
+  .history-only-notice { margin: 0; padding: var(--piui-space-4); border-top: 1px solid var(--piui-border-subtle); color: var(--piui-text-muted); font-size: 13px; }
+  .history-only-notice button { background: transparent; color: var(--piui-accent); text-decoration: underline; text-underline-offset: 3px; }
   .app-shell { display: grid; grid-template-columns: minmax(220px, 272px) minmax(0, 1fr); height: 100dvh; min-height: 0; overflow: hidden; background: var(--piui-bg); }
   .app-shell.with-tree { grid-template-columns: minmax(220px, 272px) minmax(0, 1fr) minmax(230px, 320px); }
   .workspace { display: flex; flex-direction: column; min-width: 0; height: 100dvh; min-height: 0; overflow: hidden; }
   .booting { display: grid; align-content: center; gap: var(--piui-space-3); max-width: 620px; padding: var(--piui-space-8); margin: auto; width: 100%; }.booting span { display: block; height: 14px; border-radius: 4px; }.booting .title { width: 42%; height: 30px; }.booting .copy { width: 90%; }.booting .copy--short { width: 60%; }
   .history-scroll { flex: 1 1 0; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }.history-load-status { position: sticky; top: var(--piui-space-2); z-index: 1; width: max-content; margin: var(--piui-space-2) auto; padding: 5px 10px; border-radius: 999px; background: var(--piui-surface-2); color: var(--piui-text-muted); font-size: 10px; }.session-scan-state { flex: 1 1 0; display: grid; align-content: center; justify-items: center; gap: var(--piui-space-2); padding: var(--piui-space-8); color: var(--piui-text-muted); text-align: center; }.session-scan-state p:not(.eyebrow) { margin: 0; font-size: 13px; }.timeline-window-notice { width: min(100%, var(--piui-chat-column-width)); margin: var(--piui-space-4) auto 0; padding: 0 var(--piui-chat-inline-padding); color: var(--piui-warning); font-size: 11px; line-height: 1.5; }.safe-mode-banner, .offline-banner, .error-banner { display: flex; align-items: baseline; gap: var(--piui-space-2); padding: 10px var(--piui-space-6); border-bottom: 1px solid; font-size: 12px; }.safe-mode-banner { border-color: var(--piui-warning-border); background: var(--piui-warning-surface); color: var(--piui-warning-text); }.offline-banner { border-color: var(--piui-danger-border); background: var(--piui-danger-surface); color: var(--piui-danger-text); }.error-banner { border-color: var(--piui-danger-border); background: var(--piui-danger-surface); color: var(--piui-danger-text); }.error-banner button { margin-left: auto; background: transparent; color: inherit; font-size: 12px; text-decoration: underline; }
-  .modal-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: var(--piui-space-4); background: rgba(10, 13, 10, .72); }.add-dialog { width: min(100%, 510px); max-height: min(86dvh, 760px); overflow: auto; border: 1px solid var(--piui-border); border-radius: var(--piui-radius-lg); background: var(--piui-bg-raised); padding: clamp(24px, 5vw, 40px); box-shadow: 0 24px 72px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.04); }.eyebrow { margin: 0 0 var(--piui-space-3); color: var(--piui-accent); font-size: 11px; font-weight: 720; letter-spacing: .11em; text-transform: uppercase; }.add-dialog h2 { margin: 0; font-size: 26px; letter-spacing: -.035em; }.add-dialog label { display: block; margin-top: var(--piui-space-6); color: var(--piui-text); font-size: 12px; font-weight: 700; }.add-dialog input { width: 100%; min-height: 42px; margin-top: var(--piui-space-2); padding: 0 var(--piui-space-3); border: 1px solid var(--piui-border); border-radius: var(--piui-radius-sm); background: var(--piui-surface-1); color: var(--piui-text); }.helper { margin: var(--piui-space-3) 0 0; color: var(--piui-text-muted); font-size: 12px; line-height: 1.55; }.dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--piui-space-2); margin-top: var(--piui-space-6); }.dialog-actions button { min-height: 38px; padding: 0 var(--piui-space-3); border-radius: var(--piui-radius-sm); font-size: 13px; font-weight: 700; }.quiet { background: transparent; color: var(--piui-text-muted); }.quiet:hover { background: var(--piui-surface-1); color: var(--piui-text); }.primary { background: var(--piui-accent); color: var(--piui-accent-ink); }.primary:disabled { opacity: .55; }
+  .add-project-modal { width: 100%; max-width: none; height: 100%; max-height: none; margin: 0; border: 0; background: transparent; padding: var(--piui-space-4); color: var(--piui-text); }.add-project-modal[open] { display: grid; place-items: center; }.add-project-modal::backdrop { background: rgba(10, 13, 10, .72); }.add-dialog { width: min(100%, 510px); max-height: min(86dvh, 760px); overflow: auto; border: 1px solid var(--piui-border); border-radius: var(--piui-radius-lg); background: var(--piui-bg-raised); padding: clamp(24px, 5vw, 40px); box-shadow: 0 24px 72px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.04); }.eyebrow { margin: 0 0 var(--piui-space-3); color: var(--piui-accent); font-size: 11px; font-weight: 720; letter-spacing: .11em; text-transform: uppercase; }.add-dialog h2 { margin: 0; font-size: 26px; letter-spacing: -.035em; }.add-dialog > label { display: block; margin-top: var(--piui-space-6); color: var(--piui-text); font-size: 12px; font-weight: 700; }.add-dialog input[type="text"] { width: 100%; min-height: 42px; margin-top: var(--piui-space-2); padding: 0 var(--piui-space-3); border: 1px solid var(--piui-border); border-radius: var(--piui-radius-sm); background: var(--piui-surface-1); color: var(--piui-text); }.agent-kind-fieldset { margin: var(--piui-space-6) 0 0; padding: 0; border: 0; }.agent-kind-fieldset legend { margin-bottom: var(--piui-space-2); color: var(--piui-text); font-size: 12px; font-weight: 700; }.agent-kind-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--piui-space-2); }.agent-kind-options label { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 9px; min-height: 70px; padding: 11px; border: 1px solid var(--piui-border); border-radius: var(--piui-radius-sm); background: var(--piui-surface-1); cursor: pointer; }.agent-kind-options label.selected { border-color: var(--piui-accent); background: color-mix(in srgb, var(--piui-accent) 8%, var(--piui-surface-1)); }.agent-kind-options label:focus-within { outline: 2px solid var(--piui-focus); outline-offset: 2px; }.agent-kind-options input { margin: 3px 0 0; accent-color: var(--piui-accent); }.agent-kind-options span { display: grid; gap: 4px; }.agent-kind-options strong { color: var(--piui-text); font-size: 12px; }.agent-kind-options small { color: var(--piui-text-muted); font-size: 10px; line-height: 1.4; }.helper { margin: var(--piui-space-3) 0 0; color: var(--piui-text-muted); font-size: 12px; line-height: 1.55; }.add-project-error { margin: var(--piui-space-3) 0 0; color: var(--piui-danger-text); font-size: 12px; line-height: 1.5; }.dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--piui-space-2); margin-top: var(--piui-space-6); }.dialog-actions button { min-height: 38px; padding: 0 var(--piui-space-3); border-radius: var(--piui-radius-sm); font-size: 13px; font-weight: 700; }.quiet { background: transparent; color: var(--piui-text-muted); }.quiet:hover { background: var(--piui-surface-1); color: var(--piui-text); }.primary { background: var(--piui-accent); color: var(--piui-accent-ink); }.primary:disabled { opacity: .55; }
   @media (max-width: 900px) { .app-shell, .app-shell.with-tree { grid-template-columns: minmax(200px, 240px) minmax(0, 1fr); }.app-shell.with-tree > :last-child { position: fixed; inset: 0 0 0 auto; width: min(88vw, 320px); z-index: 10; box-shadow: -18px 0 44px rgba(0,0,0,.25); } }
-  @media (max-width: 650px) { .app-shell, .app-shell.with-tree { grid-template-columns: 1fr; }.app-shell > :first-child { display: none; }.error-banner { padding: 10px var(--piui-space-4); } }
+  @media (max-width: 650px) { .app-shell, .app-shell.with-tree { grid-template-columns: 1fr; }.app-shell > :first-child { display: none; }.error-banner { padding: 10px var(--piui-space-4); }.agent-kind-options { grid-template-columns: 1fr; } }
 </style>

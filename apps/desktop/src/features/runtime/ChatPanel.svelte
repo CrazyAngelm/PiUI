@@ -110,7 +110,7 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
   import { host } from '../../host-api/client';
-  import type { ExtensionUiResponse, ModelLite, PiUiComposerActionContribution, ProjectSummary, RuntimeCommand, RuntimeEventEnvelope, RuntimeState, SessionStateLite, SurfaceEvent, TimelineBlock } from '../../host-api/types';
+  import type { AgentKind, ExtensionUiResponse, ModelLite, PiUiComposerActionContribution, ProjectSummary, RuntimeCommand, RuntimeEventEnvelope, RuntimeState, SessionStateLite, SurfaceEvent, TimelineBlock } from '../../host-api/types';
   import ExtensionUiDialog from './ExtensionUiDialog.svelte';
   import ModelPicker from './ModelPicker.svelte';
   import {
@@ -122,16 +122,20 @@
     removeExtensionDialog,
   } from './extensionUiState';
   import { commandDraft, filterRuntimeCommands, runtimeCommandKey, runtimeCommandProvenance, slashCommandQuery } from './runtimeCommands';
-  import { initialRuntimeSelection, rememberSessionRuntimePreference, runtimeSessionKey } from './runtimeSelection';
+  import { initialRuntimeSelection, liveRuntimeSupported, rememberSessionRuntimePreference, runtimeSessionKey } from './runtimeSelection';
   import {
+    PRIME_RUNTIME_BINDING_ERROR,
     SESSION_PERSISTENCE_FEEDBACK_DELAY_MS,
     didResolveNewSession,
     isPendingSessionPersistenceError,
     withoutPersistedLiveBlocks,
   } from './sessionPersistenceFeedback';
 
+  type RuntimeSessionResolver = (opaqueSessionId: string) => void | Promise<void>;
+
   export let projectId: string | undefined;
   export let sessionId: string | undefined;
+  export let agentKind: AgentKind = 'pi';
   export let trusted: boolean;
   export let safeMode: boolean;
   export let personal: boolean = false;
@@ -141,11 +145,14 @@
   export let onNewChatProjectChange: (projectId: string | undefined) => void = () => {};
   export let onRequestTrust: (() => void) | undefined = undefined;
   export let onTurnCompleted: () => void | Promise<void> = () => {};
-  // The catalog is eventually consistent with Pi's first session write. Let
-  // the owner capture and hold pre-start rows before a new runtime can create
-  // one; release that guard if startup/prompt submission cannot continue.
+  // Catalog discovery can lag a new runtime's first session write. Let the
+  // owner capture and hold pre-start rows before creation; release that guard
+  // if startup or prompt submission cannot continue.
   export let onNewSessionStarting: () => void = () => {};
   export let onNewSessionStartAborted: () => void = () => {};
+  // A new persisted session must bind its host-indexed opaque row before the
+  // panel treats it as durable.
+  export let onRuntimeSessionResolved: RuntimeSessionResolver | undefined = undefined;
   export let onRetryPersistedSession: (() => void) | undefined = undefined;
   export let onBlocksChanged: (blocks: TimelineBlock[]) => void | Promise<void> = () => {};
   export let onCommandsChanged: (commands: RuntimeCommand[]) => void = () => {};
@@ -171,17 +178,17 @@
   const initialSelection = initialRuntimeSelection(
     sessionPreferenceKey,
     cachedSessionPreferences,
-    cachedModelSelection,
-    cachedModelSelectionExplicit,
-    cachedThinkingSelection,
-    cachedThinkingSelectionExplicit,
+    agentKind === 'pi' ? cachedModelSelection : undefined,
+    agentKind === 'pi' && cachedModelSelectionExplicit,
+    agentKind === 'pi' ? cachedThinkingSelection : undefined,
+    agentKind === 'pi' && cachedThinkingSelectionExplicit,
   );
-  let models: ModelLite[] = [...cachedModels];
-  let thinkingLevels: string[] = [...cachedThinkingLevels];
+  let models: ModelLite[] = agentKind === 'pi' ? [...cachedModels] : [];
+  let thinkingLevels: string[] = agentKind === 'pi' ? [...cachedThinkingLevels] : [];
   let pendingModel: ModelLite | undefined = initialSelection.pendingModel;
   let pendingThinkingLevel: string | undefined = initialSelection.pendingThinkingLevel;
-  let newChatDefaultModel: ModelLite | undefined = cachedModelSelection;
-  let newChatDefaultThinkingLevel: string | undefined = cachedThinkingSelection;
+  let newChatDefaultModel: ModelLite | undefined = agentKind === 'pi' ? cachedModelSelection : undefined;
+  let newChatDefaultThinkingLevel: string | undefined = agentKind === 'pi' ? cachedThinkingSelection : undefined;
   let rememberedModel: ModelLite | undefined = initialSelection.rememberedModel;
   let rememberedThinkingLevel: string | undefined = initialSelection.rememberedThinkingLevel;
   let sessionState: SessionStateLite | undefined;
@@ -189,6 +196,7 @@
   let compactionActive = false;
   let error: string | undefined;
   let runtimeId: string | undefined;
+  let startupRuntimeId: string | undefined;
   let runtimeOwned = false;
   let startupTask: Promise<boolean> | undefined;
   let settleTask: Promise<void> | undefined;
@@ -213,9 +221,11 @@
   let extensionResponseBusy = false;
   let extensionResponseError: string | undefined;
 
+  $: agentLabel = agentKind === 'prime-agent' ? 'Prime Agent' : 'Pi';
+  $: liveRuntimeAvailable = liveRuntimeSupported(agentKind);
   $: surfaceAvailable = !safeMode && (personal || projectId !== undefined);
   $: runtimeAllowed = personal || trusted;
-  $: enabled = surfaceAvailable && runtimeAllowed;
+  $: enabled = surfaceAvailable && runtimeAllowed && liveRuntimeAvailable;
   $: canSend = surfaceAvailable && !startBusy && !sendBusy && settleTask === undefined && draft.trim().length > 0;
   $: running = phase === 'running';
   $: effectiveModel = sessionState?.model
@@ -281,9 +291,16 @@
 
   function start(continueSession: boolean): Promise<boolean> {
     if (!enabled || (!personal && projectId === undefined) || startBusy) return Promise.resolve(false);
+    // Future contained Prime support would need a pre-launch catalog baseline.
+    // `enabled` is false for Prime today, so this adapter branch is unreachable.
+    if (!continueSession && !personal && agentKind === 'prime-agent') beginNewSessionResolution();
     startBusy = true;
     const predecessor = runtimeHandoff;
-    const task = startInternal(continueSession, predecessor);
+    // Preserve the resolver that belongs to this panel's current new-chat
+    // identity even if a later navigation updates parent props while launch is
+    // serialized behind the previous runtime teardown.
+    const runtimeSessionResolver = onRuntimeSessionResolved;
+    const task = startInternal(continueSession, predecessor, runtimeSessionResolver);
     startupTask = task;
     void task.then(
       () => { if (startupTask === task) startupTask = undefined; },
@@ -292,12 +309,18 @@
     return task;
   }
 
-  async function startInternal(continueSession: boolean, predecessor: Promise<void>): Promise<boolean> {
+  async function startInternal(
+    continueSession: boolean,
+    predecessor: Promise<void>,
+    runtimeSessionResolver: RuntimeSessionResolver | undefined,
+  ): Promise<boolean> {
     try {
       await predecessor;
       if (disposed) return false;
       if (runtimeOwned) await teardown(true);
       error = undefined;
+      runtimeId = undefined;
+      startupRuntimeId = undefined;
       blocks = [];
       publishBlocks();
       phase = 'starting';
@@ -308,16 +331,25 @@
       const result = personal
         ? await host.startPersonalChat(startSessionId)
         : await host.startRuntime(projectId!, startSessionId);
+      if (result.agentKind !== agentKind || result.runtime.agentKind !== agentKind) {
+        await host.stopLiveRuntime(result.runtimeId).catch(() => undefined);
+        throw new Error('The host started a different agent runtime than this workspace requires.');
+      }
+      if (startupRuntimeId !== undefined && startupRuntimeId !== result.runtimeId) {
+        await host.stopLiveRuntime(result.runtimeId).catch(() => undefined);
+        throw new Error('The runtime startup event stream did not match the started runtime.');
+      }
       runtimeId = result.runtimeId;
+      startupRuntimeId = undefined;
       sessionState = result.sessionState;
       rememberCurrentSessionPreference(result.sessionState.model, result.sessionState.thinkingLevel);
-      if (sessionPreferenceKey === undefined && pendingModel === undefined && result.sessionState.model !== undefined) {
+      if (agentKind === 'pi' && sessionPreferenceKey === undefined && pendingModel === undefined && result.sessionState.model !== undefined) {
         cachedModelSelection = result.sessionState.model;
         newChatDefaultModel = result.sessionState.model;
         cachedModelSelectionExplicit = false;
         persistCatalog();
       }
-      if (sessionPreferenceKey === undefined && pendingThinkingLevel === undefined && result.sessionState.thinkingLevel.length > 0) {
+      if (agentKind === 'pi' && sessionPreferenceKey === undefined && pendingThinkingLevel === undefined && result.sessionState.thinkingLevel.length > 0) {
         cachedThinkingSelection = result.sessionState.thinkingLevel;
         newChatDefaultThinkingLevel = result.sessionState.thinkingLevel;
         cachedThinkingSelectionExplicit = false;
@@ -328,9 +360,39 @@
       // a UI ownership flag for the host-retired runtime.
       if (runtimeHasFailed()) {
         runtimeOwned = false;
+        runtimeId = undefined;
+        startupRuntimeId = undefined;
+        clearRuntimeExtensionSurfaces();
         unlisten?.();
         unlisten = undefined;
         return false;
+      }
+      if (disposed) {
+        await host.stopLiveRuntime(result.runtimeId).catch(() => undefined);
+        return false;
+      }
+      const requiresExactPrimeSessionBinding = !personal && agentKind === 'prime-agent' && !continueSession;
+      if (requiresExactPrimeSessionBinding) {
+        if (
+          result.sessionId === undefined
+          || result.sessionId.length === 0
+          || runtimeSessionResolver === undefined
+        ) {
+          await host.stopLiveRuntime(result.runtimeId).catch(() => undefined);
+          throw new Error(PRIME_RUNTIME_BINDING_ERROR);
+        }
+        try {
+          // This value is an opaque host catalog id. Do not use the native id
+          // in sessionState: it never crosses into selection or catalog logic.
+          await runtimeSessionResolver(result.sessionId);
+        } catch {
+          await host.stopLiveRuntime(result.runtimeId).catch(() => undefined);
+          throw new Error(PRIME_RUNTIME_BINDING_ERROR);
+        }
+        if (disposed || runtimeHasFailed()) {
+          await host.stopLiveRuntime(result.runtimeId).catch(() => undefined);
+          return false;
+        }
       }
       runtimeOwned = true;
       phase = result.runtime.state;
@@ -341,13 +403,17 @@
       ]);
       if (modelsResult.status === 'fulfilled') {
         models = modelsResult.value;
-        cachedModels = [...modelsResult.value];
-        persistCatalog();
+        if (agentKind === 'pi') {
+          cachedModels = [...modelsResult.value];
+          persistCatalog();
+        }
       }
       if (thinkingLevelsResult.status === 'fulfilled') {
         thinkingLevels = thinkingLevelsResult.value;
-        cachedThinkingLevels = [...thinkingLevelsResult.value];
-        persistCatalog();
+        if (agentKind === 'pi') {
+          cachedThinkingLevels = [...thinkingLevelsResult.value];
+          persistCatalog();
+        }
       }
       if (commandsResult.status === 'fulfilled') {
         runtimeCommands = commandsResult.value;
@@ -366,6 +432,11 @@
     } catch (startError) {
       unlisten?.();
       unlisten = undefined;
+      runtimeOwned = false;
+      runtimeId = undefined;
+      startupRuntimeId = undefined;
+      clearRuntimeExtensionSurfaces();
+      if (!continueSession && !personal && agentKind === 'prime-agent') abandonNewSessionResolution();
       error = messageFor(startError);
       phase = 'failed';
       return false;
@@ -530,14 +601,21 @@
     compactionActive = false;
     clearRuntimeExtensionSurfaces();
     runtimeId = undefined;
+    startupRuntimeId = undefined;
   }
 
   function handleEvent(event: RuntimeEventEnvelope): void {
-    if (runtimeId !== undefined && event.runtimeId !== runtimeId) return;
+    if (event.agentKind !== agentKind) return;
     if (personal) {
       if (event.scope !== 'personal') return;
     } else if (event.scope !== 'project' || projectId === undefined || event.projectId !== projectId) {
       return;
+    }
+    const expectedRuntimeId = runtimeId ?? startupRuntimeId;
+    if (expectedRuntimeId !== undefined && event.runtimeId !== expectedRuntimeId) return;
+    if (expectedRuntimeId === undefined) {
+      if (phase !== 'starting') return;
+      startupRuntimeId = event.runtimeId;
     }
     switch (event.kind) {
       case 'state': {
@@ -550,6 +628,8 @@
           // data. Release the UI ownership too, so a user can start again
           // rather than being stranded behind a stale End button.
           runtimeOwned = false;
+          runtimeId = undefined;
+          startupRuntimeId = undefined;
           abandonNewSessionResolution();
           clearRuntimeExtensionSurfaces();
           unlisten?.();
@@ -635,6 +715,10 @@
         break;
       case 'sessionInfoChanged':
         if (sessionState) sessionState = { ...sessionState, sessionName: event.name };
+        break;
+      case 'primeActivity':
+        // Prime live control is fail-closed, so no production UI state is
+        // allocated for its test-only activity contract.
         break;
       case 'extensionUi': {
         extensionUiRuntimeId = event.runtimeId;
@@ -800,7 +884,7 @@
       case 'user':
         return 'You';
       case 'assistant':
-        return 'Pi';
+        return agentLabel;
       case 'thinking':
         return 'Reasoning';
       case 'tool':
@@ -819,13 +903,13 @@
       const desiredModel = pendingModel;
       if (desiredModel !== undefined && (!sessionState?.model || modelKey(sessionState.model) !== modelKey(desiredModel))) {
         if (!models.some((candidate) => modelKey(candidate) === modelKey(desiredModel))) {
-          error = 'The previously selected model is no longer available in Pi.';
+          error = `The previously selected model is no longer available in ${agentLabel}.`;
           return false;
         }
         await host.setRuntimeModel(targetRuntimeId, desiredModel.provider, desiredModel.id);
         if (sessionState) sessionState = { ...sessionState, model: desiredModel };
         thinkingLevels = await host.getRuntimeThinkingLevels(targetRuntimeId);
-        cachedThinkingLevels = [...thinkingLevels];
+        if (agentKind === 'pi') cachedThinkingLevels = [...thinkingLevels];
       }
       if (pendingThinkingLevel !== undefined && sessionState?.thinkingLevel !== pendingThinkingLevel) {
         if (!thinkingLevels.includes(pendingThinkingLevel)) {
@@ -856,17 +940,17 @@
     ]);
     if (modelsResult.status === 'fulfilled') {
       models = modelsResult.value;
-      cachedModels = [...models];
+      if (agentKind === 'pi') cachedModels = [...models];
     }
     if (thinkingLevelsResult.status === 'fulfilled') {
       thinkingLevels = thinkingLevelsResult.value;
-      cachedThinkingLevels = [...thinkingLevels];
+      if (agentKind === 'pi') cachedThinkingLevels = [...thinkingLevels];
     }
     if (commandsResult.status === 'fulfilled') {
       runtimeCommands = commandsResult.value;
       onCommandsChanged([...runtimeCommands]);
     }
-    if (modelsResult.status === 'fulfilled' || thinkingLevelsResult.status === 'fulfilled') {
+    if (agentKind === 'pi' && (modelsResult.status === 'fulfilled' || thinkingLevelsResult.status === 'fulfilled')) {
       persistCatalog();
     }
     const requiredFailure = [modelsResult, thinkingLevelsResult]
@@ -877,7 +961,7 @@
   async function changeModel(model: ModelLite): Promise<void> {
     if (!models.some((candidate) => modelKey(candidate) === modelKey(model))) return;
     pendingModel = model;
-    if (sessionPreferenceKey === undefined) {
+    if (agentKind === 'pi' && sessionPreferenceKey === undefined) {
       cachedModelSelection = model;
       newChatDefaultModel = model;
       cachedModelSelectionExplicit = true;
@@ -892,7 +976,7 @@
     const level = (event.currentTarget as HTMLSelectElement).value;
     if (!thinkingLevels.includes(level)) return;
     pendingThinkingLevel = level;
-    if (sessionPreferenceKey === undefined) {
+    if (agentKind === 'pi' && sessionPreferenceKey === undefined) {
       cachedThinkingSelection = level;
       newChatDefaultThinkingLevel = level;
       cachedThinkingSelectionExplicit = true;
@@ -1023,7 +1107,7 @@
       }
     }
     if (runtimeCommands.length === 0) {
-      error = 'No Pi extension commands are available in the active runtime.';
+      error = `No ${agentLabel} commands are available in the active runtime.`;
       return false;
     }
     return true;
@@ -1034,7 +1118,7 @@
     if (!await ensureRuntimeCommandCatalog()) return;
     if (draft.trim().length > 0) return;
     if (matchingExtensionCommands(action).length !== 1) {
-      error = 'This extension command is unavailable or ambiguous in the active Pi runtime.';
+      error = `This extension command is unavailable or ambiguous in the active ${agentLabel} runtime.`;
       return;
     }
     draft = `/${action.commandName} `;
@@ -1087,13 +1171,17 @@
   }
 </script>
 
-<section class="chat-panel" aria-label="Live Pi conversation">
+<section class="chat-panel" aria-label={`Live ${agentLabel} conversation`}>
   {#if !surfaceAvailable}
     <div class="chat-notice"><p>Safe mode is on. Runtime actions are disabled.</p></div>
+  {:else if !liveRuntimeAvailable}
+    <div class="chat-notice" role="status">
+      <p>Prime Agent 0.8.1 live control is disabled because its shared daemon cannot be contained without risking other active sessions. Read-only history remains available.</p>
+    </div>
   {:else}
     {#if !runtimeAllowed}
       <div class="chat-trust-note" role="status">
-        <span>Trust this project before Pi can read files or run tools.</span>
+        <span>Trust this project before {agentLabel} can read files or run tools.</span>
         {#if onRequestTrust}<button type="button" onclick={onRequestTrust}>Review trust</button>{/if}
       </div>
     {/if}
@@ -1108,7 +1196,7 @@
     {:else if error}
       <div class="chat-error-banner" role="alert">{error}<button type="button" onclick={() => (error = undefined)}>Dismiss</button></div>
     {/if}
-    {#if compactionActive}<div class="chat-compaction-banner" role="status">Pi is compacting the context…</div>{/if}
+    {#if compactionActive}<div class="chat-compaction-banner" role="status">{agentLabel} is compacting the context…</div>{/if}
 
     {#if extensionUi.notifications.length > 0}
       <div class="extension-notifications" aria-live="polite" aria-label="Extension notifications">
@@ -1160,7 +1248,7 @@
         </div>
       {/if}
       {#if slashCommands.length > 0}
-        <div id="pi-command-suggestions" class="slash-command-menu" role="listbox" aria-label="Pi commands">
+        <div id="pi-command-suggestions" class="slash-command-menu" role="listbox" aria-label={`${agentLabel} commands`}>
           {#each slashCommands as command, index (runtimeCommandKey(command))}
             <button
               id={`pi-command-suggestion-${index}`}
@@ -1183,7 +1271,7 @@
         bind:this={composerTextarea}
         bind:value={draft}
         rows="2"
-        placeholder={running ? 'Queue a follow-up with Enter, or steer below' : 'Message Pi…'}
+        placeholder={running ? 'Queue a follow-up with Enter, or steer below' : `Message ${agentLabel}…`}
         aria-autocomplete="list"
         aria-controls={slashCommands.length > 0 ? 'pi-command-suggestions' : undefined}
         aria-activedescendant={slashCommands.length > 0 ? `pi-command-suggestion-${slashCommandSelection}` : undefined}
@@ -1197,7 +1285,7 @@
               <select aria-label="Project" value={personal ? '' : projectId ?? ''} onchange={changeNewChatProject} disabled={startBusy || sendBusy || running}>
                 <option value="">No project</option>
                 {#each projects as project}
-                  <option value={project.id} disabled={project.missing}>{project.name}{project.missing ? ' — unavailable' : ''}</option>
+                  <option value={project.id} disabled={project.missing}>{project.name} · {project.agentKind === 'prime-agent' ? 'Prime Agent' : 'Pi'}{project.missing ? ' — unavailable' : ''}</option>
                 {/each}
               </select>
             </div>
@@ -1205,12 +1293,13 @@
           <div class="composer-picker">
             <span class="picker-label">Model</span>
             {#if models.length === 0}
-              <button type="button" class="catalog-load" onclick={() => void loadCatalogFromCurrentRuntime()} disabled={startBusy} aria-label="Load available models from Pi">{startBusy ? 'Loading models…' : 'Load models…'}</button>
+              <button type="button" class="catalog-load" onclick={() => void loadCatalogFromCurrentRuntime()} disabled={startBusy} aria-label={`Load available models from ${agentLabel}`}>{startBusy ? 'Loading models…' : 'Load models…'}</button>
             {:else}
               <ModelPicker
                 {models}
                 currentModel={effectiveModel}
                 disabled={startBusy}
+                {agentLabel}
                 onSelect={(model) => void changeModel(model)}
               />
             {/if}
@@ -1218,7 +1307,7 @@
           <div class="composer-picker">
             <span class="picker-label">Thinking</span>
             {#if thinkingLevels.length === 0}
-              <button type="button" class="catalog-load" onclick={() => void loadCatalogFromCurrentRuntime()} disabled={startBusy} aria-label="Load thinking levels from Pi">{startBusy ? 'Loading…' : 'Load thinking…'}</button>
+              <button type="button" class="catalog-load" onclick={() => void loadCatalogFromCurrentRuntime()} disabled={startBusy} aria-label={`Load thinking levels from ${agentLabel}`}>{startBusy ? 'Loading…' : 'Load thinking…'}</button>
             {:else}
               <select aria-label="Thinking" value={effectiveThinkingLevel} onchange={(event) => void changeThinking(event)} disabled={startBusy}>
                 {#each thinkingLevels as level}<option value={level}>{level}</option>{/each}
@@ -1265,6 +1354,7 @@
     request={activeExtensionDialog}
     busy={extensionResponseBusy}
     error={extensionResponseError}
+    {agentLabel}
     onRespond={(response) => void respondToExtension(response)}
   />
 {/if}

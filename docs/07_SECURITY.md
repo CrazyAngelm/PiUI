@@ -2,9 +2,9 @@
 
 ## 1. Core honest statement
 
-Pi and its backend extensions run with the local user's permissions. Project trust controls which project-local resources are loaded, but **does not turn Pi into a sandbox**. PiUI must communicate this before the first agent launch in a new project.
+Pi and runtime-owned global extension managers run with the local user's permissions. Prime Agent history is read-only in PiUI, while its selected global extension manager may update Prime settings. Project trust **does not turn any runtime or extension into a sandbox**.
 
-PiUI reduces UI and accidental-action risk, but cannot promise isolation from a malicious Pi tool/extension without a separate OS/container sandbox architecture.
+PiUI reduces UI and accidental-action risk, but cannot promise isolation from a malicious runtime tool/extension without a separate OS/container sandbox architecture. The Pi live-RPC lane is a local preview. Prime Agent 0.8.1 live control is disabled because its shared daemon is not contained by the current per-runtime supervisor.
 
 ## 2. Assets to protect
 
@@ -65,7 +65,7 @@ Mitigations:
 
 ### Malicious backend extension/tool
 
-Backend code executes inside the Pi environment with user permissions.
+Backend code executes inside the selected Pi or Prime Agent environment with user permissions. Pi and Prime global extension inventories are separate; PiUI does not transfer code, enablement, commands, or grants across them.
 
 PiUI mitigations are limited to:
 
@@ -217,7 +217,8 @@ Tools launched by Pi may create descendants outside the controllable tree; PiUI 
 
 ## 9. Secrets and authentication
 
-- Pi owns provider credentials;
+- Each runtime owns provider credentials. PiUI does not read/write `auth.json`, Prime credentials, or Prime tokens;
+- v10 has no headless authentication capability. Prime stale-auth activity is display-only and cannot expose an interactive credential flow;
 - PiUI does not mirror secret values in SQLite/frontend stores;
 - the platform credential store is used only for PiUI extension secrets;
 - password inputs disable copy/display by default but permit explicit reveal;

@@ -2,25 +2,15 @@
   import MarkdownContent from '../../components/MarkdownContent.svelte';
   import type { TimelineBlock } from '../../host-api/types';
   import ActivityGroup from './ActivityGroup.svelte';
-  import { groupTimelineBlocks, type TimelineActivityGroup } from './timelineView';
+  import { groupTimelineBlocks, timelineBlockDisplayLabel, type TimelineActivityGroup } from './timelineView';
 
   export let blocks: TimelineBlock[] = [];
   export let loading = false;
   export let sessionKey: string | undefined = undefined;
+  export let agentLabel = 'Pi';
 
   let rememberedSessionKey = sessionKey;
   let activityOpenState: Record<string, boolean> = {};
-
-  const labels: Record<TimelineBlock['kind'], string> = {
-    user: 'You',
-    assistant: 'Pi',
-    thinking: 'Reasoning',
-    tool: 'Tool activity',
-    custom: 'Extension message',
-    error: 'Runtime notice',
-    compaction: 'Context compacted',
-    unknown: 'Unsupported session event',
-  };
 
   $: if (sessionKey !== rememberedSessionKey) {
     rememberedSessionKey = sessionKey;
@@ -60,7 +50,7 @@
       <span class="skeleton line line--wide"></span>
     </div>
   {:else if blocks.length === 0}
-    <p class="empty-timeline">This session has no readable timeline entries.</p>
+    <p class="empty-timeline">No messages to display.</p>
   {:else}
     {#each viewItems as item (item.type === 'activity-group' ? item.id : item.block.id)}
       {#if item.type === 'activity-group'}
@@ -73,12 +63,12 @@
         {@const block = item.block}
         <article class={`block ${kindClass(block.kind)}`} class:block--fallback={block.fallback} class:block--failed={block.status === 'failed'} class:block--interrupted={block.status === 'interrupted'} data-timeline-block={block.id}>
           {#if block.kind === 'compaction'}
-            <div class="event-row"><span></span><strong>{block.label ?? labels.compaction}</strong>{#if block.text || block.safeSummary}<span>{block.text ?? block.safeSummary}</span>{/if}</div>
+            <div class="event-row"><span></span><strong>{timelineBlockDisplayLabel(block, agentLabel)}</strong>{#if block.text || block.safeSummary}<span>{block.text ?? block.safeSummary}</span>{/if}</div>
           {:else if block.kind === 'custom' || block.kind === 'unknown'}
             <details class="activity-disclosure fallback-disclosure">
               <summary>
                 <span class="activity-chevron" aria-hidden="true">›</span>
-                <span class="activity-title">{block.label ?? labels[block.kind]}</span>
+                <span class="activity-title">{timelineBlockDisplayLabel(block, agentLabel)}</span>
                 {#if block.fallback}<span class="fallback-label">Compatibility view</span>{/if}
               </summary>
               {#if block.text}<div class="extension-content"><MarkdownContent source={block.text} compact={true} /></div>
@@ -86,7 +76,7 @@
             </details>
           {:else}
             <header>
-              <span>{block.label ?? labels[block.kind]}</span>
+              <span>{timelineBlockDisplayLabel(block, agentLabel)}</span>
               {#if block.status === 'streaming'}<span class="streaming-label">Writing…</span>
               {:else if block.status === 'failed'}<span class="failure-label">Failed</span>
               {:else if block.status === 'interrupted'}<span class="interrupted-label">Stopped</span>{/if}

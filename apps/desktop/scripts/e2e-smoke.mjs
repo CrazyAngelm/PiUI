@@ -7,6 +7,8 @@ const emptyState = await readFile(resolve(root, 'src/components/EmptyState.svelt
 const sidebar = await readFile(resolve(root, 'src/features/projects/ProjectSidebar.svelte'), 'utf8');
 const commandPalette = await readFile(resolve(root, 'src/features/navigation/CommandPalette.svelte'), 'utf8');
 const chatPanel = await readFile(resolve(root, 'src/features/runtime/ChatPanel.svelte'), 'utf8');
+const primeActivityPanel = await readFile(resolve(root, 'src/features/runtime/PrimeActivityPanel.svelte'), 'utf8');
+const primeActivityView = await readFile(resolve(root, 'src/features/runtime/primeActivityView.ts'), 'utf8');
 const extensionUiDialog = await readFile(resolve(root, 'src/features/runtime/ExtensionUiDialog.svelte'), 'utf8');
 const modelPicker = await readFile(resolve(root, 'src/features/runtime/ModelPicker.svelte'), 'utf8');
 const extensionUiState = await readFile(resolve(root, 'src/features/runtime/extensionUiState.ts'), 'utf8');
@@ -22,13 +24,13 @@ const settings = await readFile(resolve(root, 'src/features/settings/SettingsVie
 const tokens = await readFile(resolve(root, 'src/styles/tokens.css'), 'utf8');
 const hostClient = await readFile(resolve(root, 'src/host-api/client.ts'), 'utf8');
 
-for (const requiredText of ['TrustDialog', 'ReadOnlyTree', 'SettingsView', 'listExtensions', 'listPiUiContributions', 'setExtensionEnabled', 'openNewChat', 'getSessionCatalog', 'refreshSessionCatalog', 'listenSessionCatalogEvents', 'listenSessionRootHints', 'waitForCurrentProjectCatalog', 'waitForCurrentPersonalCatalog', 'projectRecoveryEpoch', 'pendingProjectSessionResolution', 'newChatProjectId', 'composingPersonalChat', 'resolveNewCatalogSession', 'retryPersistedSessionDiscovery', 'historyScroller', 'handleHistoryScroll', 'scrollHistoryToLatest', 'nextBrowserFrame', 'height: 100dvh', 'updateFontSize', 'updateChatWidth', 'applyPreferences(next)', 'applyPreferences(previous)', '<EmptyState fill={true} eyebrow="Chats"', '<EmptyState fill={true} eyebrow="Session history"']) {
+for (const requiredText of ['TrustDialog', 'ReadOnlyTree', 'SettingsView', 'listExtensions', 'listPiUiContributions', 'setExtensionEnabled', 'openNewChat', 'getSessionCatalog', 'refreshSessionCatalog', 'listenSessionCatalogEvents', 'listenSessionRootHints', 'waitForCurrentProjectCatalog', 'waitForCurrentPersonalCatalog', 'projectRecoveryEpoch', 'pendingProjectSessionResolution', 'newChatProjectId', 'composingPersonalChat', 'resolveNewCatalogSession', 'retryPersistedSessionDiscovery', 'historyScroller', 'handleHistoryScroll', 'scrollHistoryToLatest', 'nextBrowserFrame', 'height: 100dvh', 'updateFontSize', 'updateChatWidth', 'applyPreferences(next)', 'applyPreferences(previous)', '<EmptyState fill={true} eyebrow="Chats"', '<EmptyState fill={true} eyebrow="Session history"', '!liveRuntimeSupported(targetProject.agentKind)']) {
   if (!app.includes(requiredText)) {
     throw new Error(`Foundation UI smoke check is missing: ${requiredText}`);
   }
 }
 
-for (const requiredText of ['New chat', 'Chats', 'personalDraftActive', 'onSelectPersonalSession', 'aria-expanded', 'Scanning local Pi sessions', 'Show all (', 'session-pagination']) {
+for (const requiredText of ['New chat', 'New session', 'onNewProjectSession', 'projectSessionCreationPending', 'liveRuntimeSupported(project.agentKind)', 'Prime Agent history is read-only.', 'Chats', 'personalDraftActive', 'onSelectPersonalSession', 'aria-expanded', "project.agentKind === 'prime-agent'", 'Prime Agent', 'Show all (', 'session-pagination']) {
   if (!sidebar.includes(requiredText)) {
     throw new Error(`Chats sidebar smoke check is missing: ${requiredText}`);
   }
@@ -40,7 +42,7 @@ if (commandPalette.includes('entries ·') || commandPalette.includes('result-met
   throw new Error('Search results must not display redundant entry-count or health text.');
 }
 
-for (const requiredText of ['startPersonalChat', 'loadCatalogFromCurrentRuntime', 'getRuntimeCommands', 'respondExtensionUi', 'ExtensionUiDialog', 'Extension composer actions', 'ensureRuntimeCommandCatalog', 'aria-activedescendant', 'Pi commands', 'CATALOG_STORAGE_KEY', 'Load models…', 'ModelPicker', 'Finishing history sync…', 'onRequestTrust', 'Review trust', 'composer-submit', 'Stop current turn', 'Thinking', 'onNewSessionStarting', 'onNewSessionStartAborted', 'onRetryPersistedSession', 'Try again', 'onBlocksChanged', 'projectLiveBlock', 'onNewChatProjectChange', 'aria-label="Project"', 'runtimeSessionKey', 'schedulePersistenceFeedback', 'reconcilePersistedSession']) {
+for (const requiredText of ['startPersonalChat', 'loadCatalogFromCurrentRuntime', 'getRuntimeCommands', 'respondExtensionUi', 'ExtensionUiDialog', 'Extension composer actions', 'ensureRuntimeCommandCatalog', 'aria-activedescendant', 'CATALOG_STORAGE_KEY', 'Load models…', 'ModelPicker', 'Finishing history sync…', 'onRequestTrust', 'Review trust', 'composer-submit', 'Stop current turn', 'Thinking', 'onNewSessionStarting', 'onNewSessionStartAborted', 'onRetryPersistedSession', 'Try again', 'onBlocksChanged', 'projectLiveBlock', 'onNewChatProjectChange', 'aria-label="Project"', 'runtimeSessionKey', 'schedulePersistenceFeedback', 'reconcilePersistedSession']) {
   if (!chatPanel.includes(requiredText)) {
     throw new Error(`Personal-chat runtime smoke check is missing: ${requiredText}`);
   }
@@ -58,7 +60,16 @@ for (const requiredText of ['MAX_QUEUED_DIALOGS = 32', 'editorSuggestion', 'unsu
 for (const requiredText of ['slashCommandQuery', 'filterRuntimeCommands', 'runtimeCommandProvenance', 'package']) {
   if (!runtimeCommands.includes(requiredText)) throw new Error(`Runtime command aperture smoke check is missing: ${requiredText}`);
 }
-if (!commandPalette.includes('Pi commands') || !commandPalette.includes('runtimeCommandProvenance') || !commandPalette.includes('applyPiUiCommandContributions')) throw new Error('Command palette must expose Pi commands with provenance and declarative labels.');
+if (!commandPalette.includes('{agentLabel} commands') || !commandPalette.includes('runtimeCommandProvenance') || !commandPalette.includes('applyPiUiCommandContributions')) throw new Error('Command palette must expose agent-aware commands with provenance and declarative labels.');
+for (const requiredText of ['Prime Agent activity', 'role="status"', 'aria-live="polite"']) {
+  if (!primeActivityPanel.includes(requiredText)) throw new Error(`Prime activity accessibility smoke check is missing: ${requiredText}`);
+}
+for (const requiredText of ['upsertPrimeActivity', "singleton:goal", "case 'unknown'"]) {
+  if (!primeActivityView.includes(requiredText)) throw new Error(`Prime activity fallback smoke check is missing: ${requiredText}`);
+}
+for (const requiredText of ['showModal()', 'aria-modal="true"', 'handleAddProjectDialogKeydown', 'value="prime-agent"']) {
+  if (!app.includes(requiredText)) throw new Error(`Agent-kind dialog accessibility smoke check is missing: ${requiredText}`);
+}
 
 for (const requiredText of ['MarkdownContent', 'ActivityGroup', 'groupTimelineBlocks', 'Compatibility view', '--piui-chat-column-width', '--piui-chat-reading-width']) {
   if (!timeline.includes(requiredText)) throw new Error(`Semantic timeline smoke check is missing: ${requiredText}`);
@@ -72,13 +83,17 @@ for (const requiredText of ['TimelineActivityGroup', 'groupTimelineBlocks', 'sho
 for (const requiredText of ['parseMarkdown', 'code-block', 'Copy', 'safe-link', '--piui-chat-font-size']) {
   if (!markdown.includes(requiredText)) throw new Error(`Safe Markdown smoke check is missing: ${requiredText}`);
 }
-for (const requiredText of ['Appearance', 'Chat text size', 'Conversation width', 'font-size-preference', 'chat-width-preference']) {
+for (const requiredText of ['Appearance', 'Chat text size', 'Conversation width', 'font-size-preference', 'chat-width-preference', 'Extension runtime', 'Prime Agent 0.8.1 inventory', 'compatibility is not assumed', 'not enabled for Prime Agent automatically']) {
   if (!settings.includes(requiredText)) throw new Error(`Appearance settings smoke check is missing: ${requiredText}`);
 }
 for (const requiredText of ['--piui-chat-column-width: 1280px', 'data-font-size="large"', 'data-chat-width="centered"']) {
   if (!tokens.includes(requiredText)) throw new Error(`Appearance tokens smoke check is missing: ${requiredText}`);
 }
 if (!hostClient.includes("'update_preferences_v8'")) throw new Error('Appearance preferences must use the versioned v8 host command.');
+if (!hostClient.includes("'bootstrap_v10'")) throw new Error('Agent-kind bootstrap must use the versioned v10 host command.');
+for (const command of ["'list_extensions_v10'", "'set_extension_enabled_v10'"]) {
+  if (!hostClient.includes(command)) throw new Error(`Runtime-scoped extension command is missing: ${command}`);
+}
 for (const command of ["'get_runtime_commands'", "'respond_extension_ui'", "'list_piui_contributions'"]) {
   if (!hostClient.includes(command)) throw new Error(`Extension host command smoke check is missing: ${command}`);
 }

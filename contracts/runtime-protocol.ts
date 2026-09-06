@@ -616,6 +616,146 @@ export type HostCommandResponseV9 =
   | { protocol: 9; commandId: CommandId; ok: true; result: JsonValue | null }
   | { protocol: 9; commandId: CommandId; ok: false; error: HostError };
 
+/** Protocol v10 adds an explicit agent runtime kind and a bounded Prime
+ * activity lane. v9 remains frozen for ordinary Pi clients. */
+export interface ProtocolEnvelopeV10<TType extends string, TPayload> {
+  protocol: 10;
+  type: TType;
+  payload: TPayload;
+}
+
+type ReversionV9HostCommand<T> = T extends ProtocolEnvelopeV9<infer TType, infer TPayload>
+  ? ProtocolEnvelopeV10<TType, TPayload>
+  : never;
+
+export type AgentKindV10 = 'pi' | 'prime-agent';
+
+export interface DesktopProjectSummaryV10 extends DesktopProjectSummaryV2 {
+  agentKind: AgentKindV10;
+}
+
+export interface DesktopBootstrapSnapshotV10 extends Omit<DesktopBootstrapSnapshotV8, 'projects'> {
+  projects: DesktopProjectSummaryV10[];
+}
+
+/** Global inventory item issued by exactly one runtime manager. Native paths,
+ * package locators, settings content, and executable code stay host-private. */
+export interface DesktopExtensionSummaryV10 {
+  id: string;
+  agentKind: AgentKindV10;
+  name: string;
+  source: 'Global' | 'Package';
+  enabled: boolean;
+}
+
+export interface DesktopLiveRuntimeCapabilitiesV10 {
+  rpc: true;
+  'session.tree.read': true;
+  'session.tree.navigate': false;
+  'auth.headless': false;
+  'ui.standardDialogs': boolean;
+  'prime.activity': boolean;
+  'runtime.liveAttach': false;
+  'runtime.residentSessions': false;
+  'runtime.eventReplay': false;
+  'runtime.multiClient': false;
+  'thinking.catalog': boolean;
+}
+
+export interface DesktopLiveRuntimeSnapshotV10 {
+  runtimeId: RuntimeId;
+  agentKind: AgentKindV10;
+  state: RuntimeState;
+  revision: number;
+  capabilities: DesktopLiveRuntimeCapabilitiesV10;
+  safeSummary?: string;
+}
+
+/** v10 Prime projects expose only the host-indexed opaque catalog id. Pi keeps
+ * the frozen v3 state shape, including its legacy runtime-native id. */
+export interface DesktopLiveSessionStateV10 extends Omit<DesktopLiveSessionStateV3, 'sessionId'> {
+  /** Opaque catalog id when the host has a correlated session; omitted rather
+   * than leaking a Prime-native handshake/header id. */
+  sessionId?: SessionId;
+}
+
+export interface DesktopLiveRuntimeStartV10 {
+  runtime: DesktopLiveRuntimeSnapshotV10;
+  runtimeId: RuntimeId;
+  agentKind: AgentKindV10;
+  launchLabel: string;
+  sessionState: DesktopLiveSessionStateV10;
+  sessionId?: SessionId;
+}
+
+export type DesktopPrimeActivityV10 =
+  | { type: 'rlmChild'; id: string; label: string; status: 'queued' | 'running' | 'done' | 'error' | 'cancelled' | 'unknown'; model?: string; activity?: 'waiting' | 'writing' | 'executing'; toolName?: string; durationMs?: number; toolUseCount?: number; tokenCount?: number; repliedSinceTask?: boolean }
+  | { type: 'goal'; id: string; status: 'idle' | 'active' | 'paused' | 'budget_limited' | 'complete' | 'error'; objective?: string; tokensUsed: number; tokenBudget?: number; timeUsedSeconds: number; continuationsUsed: number }
+  | { type: 'sessionActions'; id: string; activeCount: number; queuedCount: number }
+  | { type: 'recap'; id: string; summary?: string }
+  | { type: 'authentication'; id: string; provider: string; status: 'stale' }
+  | { type: 'refinement'; id: string; status: 'complete' | 'failed' }
+  | { type: 'bash'; id: string; status: 'running' | 'complete' | 'failed' | 'cancelled'; exitCode?: number; truncated?: boolean }
+  | { type: 'heartbeat'; id: string; status: 'active' | 'paused' | 'completed' | 'cancelled' | 'not-configured' | 'unknown'; schedule?: string; deliveryMode?: 'steer' | 'follow_up' }
+  | { type: 'schedule'; id: string; status: 'active' | 'paused' | 'completed' | 'cancelled' | 'unknown'; source: 'cron' | 'heartbeat' | 'rlm_heartbeat'; schedule?: string }
+  | { type: 'unknown'; id: string; wireType: string };
+
+/** Prime state snapshots use the v10-safe state projection. Pi branches below
+ * retain the frozen v9 stream shape. */
+export type DesktopRuntimeStreamEventV10 =
+  | Exclude<DesktopRuntimeStreamEventV9, { kind: 'stateSnapshot' }>
+  | { kind: 'stateSnapshot'; state: DesktopLiveSessionStateV10; revision: number }
+  | { kind: 'primeActivity'; activity: DesktopPrimeActivityV10 };
+
+export type DesktopRuntimeEventEnvelopeV10 =
+  | ({
+      protocol: 10;
+      runtimeId: RuntimeId;
+      agentKind: 'pi';
+      scope: 'project';
+      projectId: ProjectId;
+      sessionId?: SessionId;
+    } & DesktopRuntimeStreamEventV9)
+  | ({
+      protocol: 10;
+      runtimeId: RuntimeId;
+      agentKind: 'prime-agent';
+      scope: 'project';
+      projectId: ProjectId;
+      sessionId?: SessionId;
+    } & DesktopRuntimeStreamEventV10)
+  | ({
+      protocol: 10;
+      runtimeId: RuntimeId;
+      agentKind: 'pi';
+      scope: 'personal';
+      sessionId?: SessionId;
+    } & DesktopRuntimeStreamEventV9);
+
+export type HostCommandV10 =
+  | ReversionV9HostCommand<HostCommandV9>
+  | ProtocolEnvelopeV10<'desktop.bootstrap.v10', Record<string, never>>
+  | ProtocolEnvelopeV10<'project.add.v10', { path: string; agentKind: AgentKindV10 }>
+  | ProtocolEnvelopeV10<'project.pickAndAdd.v10', { agentKind: AgentKindV10 }>
+  | ProtocolEnvelopeV10<'extension.global.list.v10', { agentKind: AgentKindV10 }>
+  | ProtocolEnvelopeV10<
+      'extension.global.setEnabled.v10',
+      { agentKind: AgentKindV10; extensionId: string; enabled: boolean }
+    >;
+
+export interface HostCommandRequestV10 {
+  commandId: CommandId;
+  command: HostCommandV10;
+}
+
+export type HostErrorV10 = Omit<HostError, 'code'> & {
+  code: HostError['code'] | 'PROJECT_KIND_CONFLICT' | 'SESSION_ALREADY_ACTIVE';
+};
+
+export type HostCommandResponseV10 =
+  | { protocol: 10; commandId: CommandId; ok: true; result: JsonValue | null }
+  | { protocol: 10; commandId: CommandId; ok: false; error: HostErrorV10 };
+
 export interface HostError {
   code:
     | 'INVALID_ARGUMENT'

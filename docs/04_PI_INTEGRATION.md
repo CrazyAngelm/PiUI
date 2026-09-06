@@ -8,7 +8,18 @@ PiUI uses Pi as the sole source of agent behavior. It does not call model provid
 PiUI Rust host <-> stdin/stdout JSONL <-> pi --mode rpc
 ```
 
-Each launch is bound to a specific project `cwd` and, when supported by the selected launch method, to an existing or new Pi session.
+Each launch is bound to a specific project `cwd` and, when supported by the selected launch method, to an existing or new session.
+
+## 1.1 Current runtime lanes and protocol v10
+
+The current host protocol is **v10**. It adds the explicit `pi | prime-agent` project kind, runtime-scoped opaque extension inventories, and typed bounded Prime activity contracts for a future contained adapter; v9 routes remain Pi-only compatibility routes. A project is registered to exactly one kind. Re-registering the same directory under the other kind fails rather than silently changing it.
+
+- **Pi:** the existing local Pi RPC preview and Pi session discovery behavior remain the compatibility lane.
+- **Prime Agent:** v10 supports separate read-only root-session discovery and a separate global extension inventory for **Prime Agent 0.8.1**. Live start/continue/prompt/stop fails as `NOT_SUPPORTED`: the CLI uses a shared detached daemon that is outside a safely owned per-runtime lifecycle.
+- A Prime project may contain multiple distinct indexed root sessions. Their catalog IDs are opaque. v10 start and state-event DTO projections substitute that opaque ID, or omit the field when unbound; a native Prime handshake/header ID never crosses to the WebView. The exact live binding and per-session lease adapter remain test-only design code and do not authorize a Prime launch.
+- Pi and Prime session roots must be disjoint. PiUI rejects equal, nested, lexical-alias, and Windows case-alias roots before refresh or launch. Prime scans only its flat root catalog and excludes positive-`rlmDepth` descendants from project chats; those are activity of the root session.
+
+The Prime activity contract is a display-safe, bounded typed projection only (RLM child, goal, session-action counts, recap, stale-auth status, refinement, bash, heartbeat, schedule, or payload-free unknown). It is retained for fixture/adapter compatibility but is not reachable from production live control while the daemon gate is closed. It is not a general Prime event/replay API. Snapshot projection and the UI helper retain at most the runtime channel’s established 256-event capacity. Raw `bash_output` chunks are discarded before any awaited UI-channel send; only the bounded typed `bash_end` summary is eligible for projection.
 
 ## 2. What belongs to Pi and what belongs to PiUI
 
@@ -29,7 +40,7 @@ No PiUI feature must become a second canonical representation of agent state.
 
 ### Global extension configuration
 
-PiUI does not parse or write Pi `settings.json`. Extension settings invoke a small typed host adapter which, in offline mode, imports upstream `SettingsManager` and `DefaultPackageManager`, skips installation of missing packages, and uses the same setters as `pi config`. Only global user resources are projected into the UI; filesystem paths and package source strings do not cross IPC. A toggle applies to future runtime starts. Project-local resources remain outside this surface and require a separate trusted-project flow.
+PiUI does not parse or write Pi `settings.json`. Extension settings invoke a small typed host adapter which, in offline mode, imports the selected runtime's own manager and uses its setters; missing packages are not installed. v10 lists and toggles the selected runtime's global inventory only. Pi and Prime inventories, opaque IDs, enablement, commands, and contributions remain separate; PiUI never copies, enables, or treats code from one root as code from the other. The legacy v9 routes remain Pi-only, and PiUI declarative contributions remain Pi-only. Only opaque display metadata crosses IPC. A toggle applies to future runtime starts. Project-local resources remain outside this surface and require a separate trusted-project flow.
 
 ## 3. Protocol framing
 
@@ -336,7 +347,7 @@ PiUI shows name/type/size and passes a path reference. It does not promise built
 
 ## 13. Authentication and provider setup
 
-Pi owns auth. PiUI must not parse `auth.json` for its own provider client.
+Each runtime owns its authentication. PiUI must not parse `auth.json` or Prime credentials/tokens for its own provider client. v10 advertises `auth.headless: false` for both lanes; the Prime preview's stale-auth activity is status only, never an interactive login surface.
 
 MVP options in order of preference:
 

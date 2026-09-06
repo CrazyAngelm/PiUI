@@ -74,6 +74,15 @@ function setPackage(item, enabled) {
   settingsManager.setPackages(packages);
 }
 
+async function confirmGlobalSettingsPersisted() {
+  await settingsManager.flush();
+  const errors =
+    settingsManager.drainErrors.length === 0
+      ? settingsManager.drainErrors()
+      : settingsManager.drainErrors("global");
+  if (errors.length > 0) fail("extension settings were not saved");
+}
+
 let items = await inventory();
 if (action === "set") {
   const item = items.find((candidate) => candidate.path === targetPath);
@@ -81,6 +90,7 @@ if (action === "set") {
   const enabled = enabledText === "true";
   if (item.origin === "package") setPackage(item, enabled);
   else setTopLevel(item, enabled);
+  await confirmGlobalSettingsPersisted();
   items = await inventory();
 } else if (action !== "list") {
   fail("unknown extension manager action");

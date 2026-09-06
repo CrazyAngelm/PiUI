@@ -1,12 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import type { TimelineBlock } from '../../host-api/types';
-import { groupTimelineBlocks } from './timelineView';
+import { groupTimelineBlocks, timelineBlockDisplayLabel } from './timelineView';
 
 function block(id: string, kind: TimelineBlock['kind'], status: TimelineBlock['status'] = 'complete'): TimelineBlock {
   return { id, kind, status };
 }
 
 describe('groupTimelineBlocks', () => {
+  it('relabels only the generic Prime assistant label and preserves explicit Pi labels', () => {
+    const generic = block('assistant', 'assistant');
+    const explicit = { ...generic, id: 'explicit', label: 'Pi · fake scenario' };
+    expect(timelineBlockDisplayLabel(generic, 'Prime Agent')).toBe('Prime Agent');
+    expect(timelineBlockDisplayLabel(explicit, 'Prime Agent')).toBe('Pi · fake scenario');
+    expect(timelineBlockDisplayLabel(explicit, 'Pi')).toBe('Pi · fake scenario');
+  });
+
   it('groups only consecutive tool and thinking blocks without changing their order', () => {
     const user = block('user', 'user');
     const thinking = block('thinking', 'thinking');

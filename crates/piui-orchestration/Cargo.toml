@@ -1,0 +1,16 @@
+[package]
+name = "piui-orchestration"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Harness-neutral orchestration policy and deterministic run coordination for PiUI"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

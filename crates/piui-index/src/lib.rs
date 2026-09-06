@@ -5,7 +5,10 @@
 //! projected in memory. SQLite stores only a replaceable projection and private
 //! host paths; UI-facing summaries contain safe display strings only.
 
+pub mod workspace_history;
+
 pub use piui_contracts as contracts;
+pub use piui_contracts::AgentKind;
 
 use piui_contracts::{
     BlockId, BlockStatus, EntryId, ModelRef, ProjectId, ProjectSummary as ContractProjectSummary,
@@ -58,7 +61,7 @@ const DISCOVERY_HEADER_PREFIX_BYTES: usize = 64 * 1024;
 /// Tail bytes included in the weak continuity fingerprint used only to avoid a
 /// repeat projection scan. This is deliberately not a rendering/mutation proof.
 const DISCOVERY_TAIL_EVIDENCE_BYTES: usize = 64 * 1024;
-const DISCOVERY_FINGERPRINT_PARSER_VERSION: i64 = 1;
+const DISCOVERY_FINGERPRINT_PARSER_VERSION: i64 = 2;
 /// Metadata discovery never retains an individual JSONL frame beyond this
 /// limit. Larger completed frames are recorded as corrupt and skipped.
 const CATALOG_FRAME_MAX_BYTES: usize = 1024 * 1024;
@@ -79,6 +82,11 @@ const KNOWN_TYPES: &[&str] = &[
     "thinking_level_change",
     "label",
     "branch_summary",
+    "service_tier_change",
+    "child_usage_attributed",
+    "session_state",
+    "agent_status",
+    "git_state",
     "tool",
     "tool_result",
 ];
@@ -210,6 +218,10 @@ pub struct ScanReport {
     /// use [`SessionSummary`] instead.
     #[serde(skip_serializing, skip_deserializing, default)]
     pub project_cwd: Option<String>,
+    /// Host-only Prime Agent topology marker. RLM descendants remain activity
+    /// of their root session and can be excluded from project chat catalogs.
+    #[serde(skip_serializing, skip_deserializing, default)]
+    pub is_agent_descendant: bool,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub first_user_preview: Option<String>,
@@ -961,6 +973,43 @@ pub fn discover_sessions_for_project_incremental(
     limits: SessionDiscoveryLimits,
     known_sources: &[CatalogSourceFingerprint],
 ) -> Result<IncrementalSessionDiscovery, DiscoveryError> {
+    discover_sessions_for_project_incremental_with_descendants(
+        session_roots,
+        project_directory,
+        limits,
+        known_sources,
+        true,
+        true,
+    )
+}
+
+/// Discovers only root agent sessions. Prime Agent RLM descendants share the
+/// same flat session directory but are rendered as activity of their parent,
+/// not as independent project chats.
+pub fn discover_root_agent_sessions_for_project_incremental(
+    session_roots: &[PathBuf],
+    project_directory: impl AsRef<Path>,
+    limits: SessionDiscoveryLimits,
+    known_sources: &[CatalogSourceFingerprint],
+) -> Result<IncrementalSessionDiscovery, DiscoveryError> {
+    discover_sessions_for_project_incremental_with_descendants(
+        session_roots,
+        project_directory,
+        limits,
+        known_sources,
+        false,
+        false,
+    )
+}
+
+fn discover_sessions_for_project_incremental_with_descendants(
+    session_roots: &[PathBuf],
+    project_directory: impl AsRef<Path>,
+    limits: SessionDiscoveryLimits,
+    known_sources: &[CatalogSourceFingerprint],
+    include_agent_descendants: bool,
+    scan_nested_directories: bool,
+) -> Result<IncrementalSessionDiscovery, DiscoveryError> {
     if limits.max_files == 0
         || limits.max_directories == 0
         || limits.max_entries == 0
@@ -1054,6 +1103,13 @@ pub fn discover_sessions_for_project_incremental(
                 continue;
             }
             if metadata.is_dir() {
+                // Prime Agent's supported catalog is flat. Nested directories
+                // are outside that source-of-truth root, not incomplete scan
+                // coverage, so intentionally ignore them without blocking a
+                // complete reconciliation of top-level sessions.
+                if !scan_nested_directories {
+                    continue;
+                }
                 if depth >= limits.max_depth {
                     stats.skipped_depth_directories =
                         stats.skipped_depth_directories.saturating_add(1);
@@ -1104,6 +1160,9 @@ pub fn discover_sessions_for_project_incremental(
                 .and_then(|name| name.to_str())
                 .unwrap_or("session.jsonl");
             let header_report = scan_bytes(source_name, &evidence.header_prefix);
+            if !include_agent_descendants && header_report.is_agent_descendant {
+                continue;
+            }
             if classify_report_project(&header_report, &canonical_project)
                 == CandidateProjectAttribution::OtherProject
             {
@@ -1145,6 +1204,9 @@ pub fn discover_sessions_for_project_incremental(
             };
             stats.full_content_scans = stats.full_content_scans.saturating_add(1);
             let report = verified.report;
+            if !include_agent_descendants && report.is_agent_descendant {
+                continue;
+            }
             match classify_report_project(&report, &canonical_project) {
                 CandidateProjectAttribution::MatchesRequestedProject => {
                     stats.matched_files = stats.matched_files.saturating_add(1);
@@ -1288,6 +1350,7 @@ struct CatalogAccumulator {
     pi_session_id: Option<String>,
     session_name: Option<String>,
     project_cwd: Option<String>,
+    is_agent_descendant: bool,
     created_at: Option<String>,
     updated_at: Option<String>,
     first_user_preview: Option<String>,
@@ -1366,6 +1429,7 @@ impl CatalogAccumulator {
             self.pi_session_id = string_field(object, id_keys).or(self.pi_session_id.take());
             self.session_name = string_field(object, &["name", "sessionName", "title"])
                 .or(self.session_name.take());
+            self.is_agent_descendant |= header_is_agent_descendant(object);
             match header_cwd_field(object) {
                 Ok(Some(cwd)) => self.project_cwd = Some(cwd),
                 Ok(None) => {}
@@ -1431,6 +1495,7 @@ impl CatalogAccumulator {
             pi_session_id: self.pi_session_id,
             session_name: self.session_name,
             project_cwd: self.project_cwd,
+            is_agent_descendant: self.is_agent_descendant,
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.or(self.created_at),
             first_user_preview: self.first_user_preview,
@@ -1601,6 +1666,7 @@ pub fn scan_bytes(source_name: &str, bytes: &[u8]) -> ScanReport {
     let mut pi_session_id = None;
     let mut session_name = None;
     let mut project_cwd = None;
+    let mut is_agent_descendant = false;
     let mut created_at = None;
     let mut last_model = None;
     let mut seen_entry_ids: HashMap<String, u64> = HashMap::new();
@@ -1668,6 +1734,7 @@ pub fn scan_bytes(source_name: &str, bytes: &[u8]) -> ScanReport {
             };
             pi_session_id = string_field(object, id_keys).or(pi_session_id);
             session_name = string_field(object, &["name", "sessionName", "title"]).or(session_name);
+            is_agent_descendant |= header_is_agent_descendant(object);
             match header_cwd_field(object) {
                 Ok(Some(cwd)) => project_cwd = Some(cwd),
                 Ok(None) => {}
@@ -1741,6 +1808,7 @@ pub fn scan_bytes(source_name: &str, bytes: &[u8]) -> ScanReport {
         pi_session_id,
         session_name,
         project_cwd,
+        is_agent_descendant,
         created_at,
         updated_at,
         first_user_preview,
@@ -2864,6 +2932,17 @@ fn header_cwd_field(object: &Map<String, Value>) -> Result<Option<String>, ()> {
     Ok(None)
 }
 
+fn header_is_agent_descendant(object: &Map<String, Value>) -> bool {
+    // Prime root forks also carry `parentSession`; only a positive RLM depth
+    // identifies a descendant worker that belongs in the parent activity lane.
+    ["rlmDepth", "rlm_depth"].iter().any(|key| {
+        object
+            .get(*key)
+            .and_then(Value::as_u64)
+            .is_some_and(|depth| depth > 0)
+    })
+}
+
 fn string_field(object: &Map<String, Value>, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| {
         object
@@ -3285,6 +3364,21 @@ pub struct Preferences {
     pub chat_width: ChatWidthPreference,
 }
 
+fn agent_kind_db(value: AgentKind) -> &'static str {
+    match value {
+        AgentKind::Pi => "pi",
+        AgentKind::PrimeAgent => "prime-agent",
+    }
+}
+
+fn agent_kind_from_db(value: &str) -> Result<AgentKind, IndexError> {
+    match value {
+        "pi" => Ok(AgentKind::Pi),
+        "prime-agent" => Ok(AgentKind::PrimeAgent),
+        _ => Err(IndexError::InvalidStoredValue("agent_kind")),
+    }
+}
+
 /// Path-safe DTO for UI and IPC. It deliberately contains no canonical path,
 /// session file path, URI, or CWD.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -3292,6 +3386,7 @@ pub struct ProjectSummary {
     pub id: String,
     pub name: String,
     pub display_path: String,
+    pub agent_kind: AgentKind,
     pub trust_state: TrustState,
     #[serde(default)]
     pub pinned: bool,
@@ -3360,6 +3455,8 @@ pub enum IndexError {
     ProjectDiscoveryGenerationUnavailable,
     #[error("project name is empty after sanitization")]
     InvalidProjectName,
+    #[error("project is already registered for a different agent runtime")]
+    ProjectAgentKindConflict,
     #[error("session search query is empty or exceeds the safe limit")]
     InvalidSessionSearchQuery,
     #[error("session search project allowlist exceeds the safe limit")]
@@ -3368,6 +3465,8 @@ pub enum IndexError {
     SessionIdentityUnavailable,
     #[error("indexed session changed before its discovery report could be stored")]
     SessionIdentityChanged,
+    #[error("project has multiple indexed sessions for one native session id")]
+    AmbiguousNativeSessionId,
     #[error("stored value is invalid: {0}")]
     InvalidStoredValue(&'static str),
 }
@@ -3501,6 +3600,7 @@ impl ProjectIndex {
                 order_key TEXT NOT NULL,
                 trust_state TEXT NOT NULL,
                 pinned INTEGER NOT NULL DEFAULT 0,
+                agent_kind TEXT NOT NULL DEFAULT 'pi',
                 directory_identity TEXT,
                 added_at INTEGER NOT NULL,
                 last_opened_at INTEGER,
@@ -3547,6 +3647,12 @@ impl ProjectIndex {
         if !self.table_has_column("projects", "pinned")? {
             self.connection.execute(
                 "ALTER TABLE projects ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        if !self.table_has_column("projects", "agent_kind")? {
+            self.connection.execute(
+                "ALTER TABLE projects ADD COLUMN agent_kind TEXT NOT NULL DEFAULT 'pi'",
                 [],
             )?;
         }
@@ -3636,19 +3742,42 @@ impl ProjectIndex {
         name: Option<&str>,
         trust_state: TrustState,
     ) -> Result<ProjectSummary, IndexError> {
-        let directory =
-            ProjectDirectory::resolve(path.as_ref()).map_err(|_| IndexError::NotDirectory)?;
-        self.register_project_directory(&directory, name, trust_state)
+        self.register_project_with_kind(path, name, trust_state, AgentKind::Pi)
     }
 
-    /// Registers a host-resolved project directory and persists its native
-    /// identity token. A canonical-path collision with a missing or mismatched
-    /// token is treated as replacement: its old trust is reset to Restricted.
+    /// Registers a project with an explicit agent runtime. The runtime kind is
+    /// PiUI metadata and never mutates configuration inside the folder.
+    pub fn register_project_with_kind(
+        &mut self,
+        path: impl AsRef<Path>,
+        name: Option<&str>,
+        trust_state: TrustState,
+        agent_kind: AgentKind,
+    ) -> Result<ProjectSummary, IndexError> {
+        let directory =
+            ProjectDirectory::resolve(path.as_ref()).map_err(|_| IndexError::NotDirectory)?;
+        self.register_project_directory_with_kind(&directory, name, trust_state, agent_kind)
+    }
+
+    /// Compatibility path for ordinary Pi projects.
     pub fn register_project_directory(
         &mut self,
         directory: &ProjectDirectory,
         name: Option<&str>,
         trust_state: TrustState,
+    ) -> Result<ProjectSummary, IndexError> {
+        self.register_project_directory_with_kind(directory, name, trust_state, AgentKind::Pi)
+    }
+
+    /// Registers a host-resolved project directory and persists its native
+    /// identity token. A canonical-path collision with a missing or mismatched
+    /// token is treated as replacement: its old trust is reset to Restricted.
+    pub fn register_project_directory_with_kind(
+        &mut self,
+        directory: &ProjectDirectory,
+        name: Option<&str>,
+        trust_state: TrustState,
+        agent_kind: AgentKind,
     ) -> Result<ProjectSummary, IndexError> {
         let canonical = directory.canonical_path();
         let canonical_text = canonical.to_string_lossy().into_owned();
@@ -3656,13 +3785,16 @@ impl ProjectIndex {
         let existing: Option<(ProjectSummary, Option<String>)> = self
             .connection
             .query_row(
-                "SELECT id, name, display_path, trust_state, pinned, missing_since, last_opened_at, directory_identity FROM projects WHERE canonical_path = ?1",
+                "SELECT id, name, display_path, trust_state, pinned, missing_since, last_opened_at, agent_kind, directory_identity FROM projects WHERE canonical_path = ?1",
                 params![canonical_text],
-                |row| Ok((project_summary_row(row)?, row.get(7)?)),
+                |row| Ok((project_summary_row(row)?, row.get(8)?)),
             )
             .optional()?;
         if let Some((existing, stored_identity)) = existing {
             if stored_identity.as_deref() == Some(identity.as_storage_str()) {
+                if existing.agent_kind != agent_kind {
+                    return Err(IndexError::ProjectAgentKindConflict);
+                }
                 return Ok(existing);
             }
             // Same spelling but a different native object (or a legacy row)
@@ -3674,14 +3806,14 @@ impl ProjectIndex {
                 params![&existing.id],
             )?;
             transaction.execute(
-                "UPDATE projects SET directory_identity = ?2, trust_state = ?3, missing_since = NULL WHERE id = ?1",
-                params![&existing.id, identity.as_storage_str(), TrustState::Restricted.as_db()],
+                "UPDATE projects SET directory_identity = ?2, trust_state = ?3, agent_kind = ?4, missing_since = NULL WHERE id = ?1",
+                params![&existing.id, identity.as_storage_str(), TrustState::Restricted.as_db(), agent_kind_db(agent_kind)],
             )?;
             transaction.commit()?;
             return self
                 .connection
                 .query_row(
-                    "SELECT id, name, display_path, trust_state, pinned, missing_since, last_opened_at FROM projects WHERE id = ?1",
+                    "SELECT id, name, display_path, trust_state, pinned, missing_since, last_opened_at, agent_kind FROM projects WHERE id = ?1",
                     params![existing.id],
                     project_summary_row,
                 )
@@ -3702,13 +3834,14 @@ impl ProjectIndex {
                     .unwrap_or_else(|| "Project".into())
             });
         self.connection.execute(
-            "INSERT INTO projects (id, canonical_path, display_path, name, order_key, trust_state, directory_identity, added_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![id, canonical_text, display_path, project_name, now_epoch_seconds().to_string(), trust_state.as_db(), identity.as_storage_str(), now_epoch_seconds()],
+            "INSERT INTO projects (id, canonical_path, display_path, name, order_key, trust_state, agent_kind, directory_identity, added_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![id, canonical_text, display_path, project_name, now_epoch_seconds().to_string(), trust_state.as_db(), agent_kind_db(agent_kind), identity.as_storage_str(), now_epoch_seconds()],
         )?;
         Ok(ProjectSummary {
             id,
             name: project_name,
             display_path,
+            agent_kind,
             trust_state,
             pinned: false,
             missing: false,
@@ -3737,6 +3870,19 @@ impl ProjectIndex {
                 .ok_or(IndexError::ProjectIdentityUnavailable),
             Some(None) => Err(IndexError::ProjectIdentityUnavailable),
         }
+    }
+
+    /// Returns the runtime kind selected when this workspace was registered.
+    pub fn project_agent_kind(&self, project_id: &str) -> Result<Option<AgentKind>, IndexError> {
+        let stored: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT agent_kind FROM projects WHERE id = ?1",
+                params![project_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        stored.map(|value| agent_kind_from_db(&value)).transpose()
     }
 
     /// True only when a stored project identity exists and exactly matches the
@@ -3775,7 +3921,7 @@ impl ProjectIndex {
     }
 
     pub fn list_projects(&self) -> Result<Vec<ProjectSummary>, IndexError> {
-        let mut statement = self.connection.prepare("SELECT id, name, display_path, trust_state, pinned, missing_since, last_opened_at FROM projects ORDER BY pinned DESC, order_key, id")?;
+        let mut statement = self.connection.prepare("SELECT id, name, display_path, trust_state, pinned, missing_since, last_opened_at, agent_kind FROM projects ORDER BY pinned DESC, order_key, id")?;
         let rows = statement.query_map([], project_summary_row)?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(IndexError::from)
@@ -3798,7 +3944,7 @@ impl ProjectIndex {
         }
         self.connection
             .query_row(
-                "SELECT id, name, display_path, trust_state, pinned, missing_since, last_opened_at FROM projects WHERE id = ?1",
+                "SELECT id, name, display_path, trust_state, pinned, missing_since, last_opened_at, agent_kind FROM projects WHERE id = ?1",
                 params![project_id],
                 project_summary_row,
             )
@@ -3823,7 +3969,7 @@ impl ProjectIndex {
         }
         self.connection
             .query_row(
-                "SELECT id, name, display_path, trust_state, pinned, missing_since, last_opened_at FROM projects WHERE id = ?1",
+                "SELECT id, name, display_path, trust_state, pinned, missing_since, last_opened_at, agent_kind FROM projects WHERE id = ?1",
                 params![project_id],
                 project_summary_row,
             )
@@ -3846,7 +3992,7 @@ impl ProjectIndex {
         }
         self.connection
             .query_row(
-                "SELECT id, name, display_path, trust_state, pinned, missing_since, last_opened_at FROM projects WHERE id = ?1",
+                "SELECT id, name, display_path, trust_state, pinned, missing_since, last_opened_at, agent_kind FROM projects WHERE id = ?1",
                 params![project_id],
                 project_summary_row,
             )
@@ -4505,6 +4651,31 @@ impl ProjectIndex {
             .map_err(IndexError::from)
     }
 
+    /// Resolves an opaque session ID only when exactly one indexed row in this
+    /// project has the given Pi-native session ID. This host-only association is
+    /// deliberately project-scoped: a missing or ambiguous match must never
+    /// select a row by catalog order, time, or path.
+    pub fn unique_project_session_id_by_pi_session_id(
+        &self,
+        project_id: &str,
+        pi_session_id: &str,
+    ) -> Result<Option<String>, IndexError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id FROM sessions_index
+             WHERE project_id = ?1 AND pi_session_id = ?2
+             LIMIT 2",
+        )?;
+        let mut rows = statement.query(params![project_id, pi_session_id])?;
+        let first = rows
+            .next()?
+            .map(|row| row.get::<_, String>(0))
+            .transpose()?;
+        if rows.next()?.is_some() {
+            return Err(IndexError::AmbiguousNativeSessionId);
+        }
+        Ok(first)
+    }
+
     pub fn list_sessions(
         &self,
         project_id: Option<&str>,
@@ -4583,10 +4754,15 @@ fn project_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectSumma
             ));
         }
     };
+    let agent: String = row.get(7)?;
+    let agent_kind = agent_kind_from_db(&agent).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(error))
+    })?;
     Ok(ProjectSummary {
         id: row.get(0)?,
         name: row.get(1)?,
         display_path: row.get(2)?,
+        agent_kind,
         trust_state,
         pinned,
         missing: row.get::<_, Option<i64>>(5)?.is_some(),
@@ -4691,6 +4867,7 @@ impl ProjectSummary {
         ContractProjectSummary {
             id: ProjectId::new(self.id.clone()),
             name: self.name.clone(),
+            agent_kind: self.agent_kind,
             trust_state: match self.trust_state {
                 TrustState::Unknown => ProjectTrustState::Unknown,
                 TrustState::Trusted => ProjectTrustState::Trusted,
@@ -5335,6 +5512,50 @@ mod tests {
     }
 
     #[test]
+    fn project_agent_kind_is_explicit_stable_and_conflicts_fail_closed() {
+        let root = std::env::temp_dir().join(format!("piui-index-agent-kind-{}", Uuid::new_v4()));
+        create_dir_all(&root).expect("creates project");
+        let mut index = ProjectIndex::open_in_memory().expect("opens index");
+
+        let prime = index
+            .register_project_with_kind(
+                &root,
+                Some("Prime project"),
+                TrustState::Restricted,
+                AgentKind::PrimeAgent,
+            )
+            .expect("registers Prime project");
+        assert_eq!(prime.agent_kind, AgentKind::PrimeAgent);
+        assert_eq!(
+            index
+                .project_agent_kind(&prime.id)
+                .expect("reads stored agent kind"),
+            Some(AgentKind::PrimeAgent)
+        );
+        assert_eq!(
+            index
+                .register_project_with_kind(
+                    &root,
+                    None,
+                    TrustState::Trusted,
+                    AgentKind::PrimeAgent,
+                )
+                .expect("same runtime registration is idempotent"),
+            prime
+        );
+        assert!(matches!(
+            index.register_project(&root, None, TrustState::Restricted),
+            Err(IndexError::ProjectAgentKindConflict)
+        ));
+        let after_conflict = index
+            .list_projects()
+            .expect("lists project after rejected conflict");
+        assert_eq!(after_conflict, vec![prime]);
+
+        remove_dir_all(&root).expect("removes project fixture");
+    }
+
+    #[test]
     fn preferences_default_after_legacy_index_state_migration() {
         let database =
             std::env::temp_dir().join(format!("piui-index-preferences-{}.db", Uuid::new_v4()));
@@ -5441,7 +5662,7 @@ mod tests {
     }
 
     #[test]
-    fn project_migration_adds_identity_and_pinned_columns_without_populating_legacy_rows() {
+    fn project_migration_adds_identity_pinned_and_default_pi_kind_without_populating_identity() {
         let database = std::env::temp_dir().join(format!(
             "piui-index-project-migration-{}.db",
             Uuid::new_v4()
@@ -5487,6 +5708,16 @@ mod tests {
             .optional()
             .expect("reads pinned migration");
         assert_eq!(pinned_column.as_deref(), Some("pinned"));
+        let agent_kind_column: Option<String> = index
+            .connection
+            .query_row(
+                "SELECT name FROM pragma_table_info('projects') WHERE name = 'agent_kind'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .expect("reads agent-kind migration");
+        assert_eq!(agent_kind_column.as_deref(), Some("agent_kind"));
         let active_order_index: Option<String> = index
             .connection
             .query_row(
@@ -5500,7 +5731,15 @@ mod tests {
             active_order_index.as_deref(),
             Some("projects_active_pinned_order")
         );
-        assert!(!index.list_projects().expect("lists migrated project")[0].pinned);
+        let migrated_project = &index.list_projects().expect("lists migrated project")[0];
+        assert!(!migrated_project.pinned);
+        assert_eq!(migrated_project.agent_kind, AgentKind::Pi);
+        assert_eq!(
+            index
+                .project_agent_kind("legacy-project")
+                .expect("reads migrated agent kind"),
+            Some(AgentKind::Pi)
+        );
         assert!(matches!(
             index.stored_project_identity("legacy-project"),
             Err(IndexError::ProjectIdentityUnavailable)
@@ -5698,6 +5937,82 @@ mod tests {
                 .remove_project_registry_entry(&project.id)
                 .expect("missing removal is safe")
         );
+        remove_dir_all(&root).expect("removes fixture");
+    }
+
+    #[test]
+    fn native_session_lookup_is_project_scoped_and_fails_closed_when_ambiguous() {
+        let root = std::env::temp_dir().join(format!("piui-index-native-id-{}", Uuid::new_v4()));
+        let first_project_path = root.join("first-project");
+        let second_project_path = root.join("second-project");
+        let sessions = root.join("sessions");
+        for directory in [&first_project_path, &second_project_path, &sessions] {
+            create_dir_all(directory).expect("creates fixture directory");
+        }
+        let source = |native_id: &str| {
+            format!(
+                "{{\"type\":\"session\",\"id\":{}}}\n",
+                serde_json::to_string(native_id).expect("encodes native id")
+            )
+        };
+        let first_file = sessions.join("first.jsonl");
+        let second_project_file = sessions.join("second-project.jsonl");
+        let duplicate_file = sessions.join("duplicate.jsonl");
+        write(&first_file, source("native-session")).expect("writes first session");
+        write(&second_project_file, source("native-session"))
+            .expect("writes second-project session");
+
+        let mut index = ProjectIndex::open_in_memory().expect("opens index");
+        let first_project = index
+            .register_project(&first_project_path, None, TrustState::Trusted)
+            .expect("registers first project");
+        let second_project = index
+            .register_project(&second_project_path, None, TrustState::Trusted)
+            .expect("registers second project");
+        let first = index
+            .index_scan(
+                &first_file,
+                Some(&first_project.id),
+                &scan_file(&first_file).expect("scans first session"),
+                1,
+            )
+            .expect("indexes first session");
+        index
+            .index_scan(
+                &second_project_file,
+                Some(&second_project.id),
+                &scan_file(&second_project_file).expect("scans second-project session"),
+                1,
+            )
+            .expect("indexes second-project session");
+
+        assert_eq!(
+            index
+                .unique_project_session_id_by_pi_session_id(&first_project.id, "native-session")
+                .expect("resolves exact first-project row"),
+            Some(first.id.clone())
+        );
+        assert_eq!(
+            index
+                .unique_project_session_id_by_pi_session_id(&first_project.id, "missing-native")
+                .expect("missing native id is not a fallback"),
+            None
+        );
+
+        write(&duplicate_file, source("native-session")).expect("writes duplicate session");
+        index
+            .index_scan(
+                &duplicate_file,
+                Some(&first_project.id),
+                &scan_file(&duplicate_file).expect("scans duplicate session"),
+                1,
+            )
+            .expect("indexes duplicate session");
+        assert!(matches!(
+            index.unique_project_session_id_by_pi_session_id(&first_project.id, "native-session"),
+            Err(IndexError::AmbiguousNativeSessionId)
+        ));
+
         remove_dir_all(&root).expect("removes fixture");
     }
 

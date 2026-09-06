@@ -14,7 +14,7 @@ Deleting items 4–5 must not destroy items 1–3.
 
 ## 2. Project model
 
-A project is a registered existing directory.
+A project is a registered existing directory with one explicit runtime kind (`pi` or `prime-agent`). The kind is rebuildable PiUI metadata and does not change files or configuration in that directory. The same resolved directory cannot be registered for both kinds at once.
 
 ```ts
 interface ProjectRecord {
@@ -28,6 +28,7 @@ interface ProjectRecord {
   trustState: 'unknown' | 'trusted' | 'restricted';
   missingSince?: string;
   runtimeProfileId?: string;
+  agentKind: 'pi' | 'prime-agent'; // explicit PiUI metadata; does not modify the project
 }
 ```
 
@@ -48,7 +49,9 @@ PiUI does not create `.piui` in a project without a separate decision/ADR. All o
 
 ### 3.1 Where to search
 
-The scanner receives explicit Pi session roots from the runtime environment (`PI_CODING_AGENT_SESSION_DIR` takes priority) and treats the existing conventional project-local `<project>/.pi/agent-sessions` as a known directory mapping. A single JSONL file is read with a hard host limit of 128 MiB; an oversized source is retained untouched and is not presented as indexed. The default global Pi location may be used as an initial hint. Project settings files are not parsed for discovery; paths and raw scanner diagnostics are not passed to the WebView.
+Pi and Prime Agent have separate discovery lanes. Pi receives explicit Pi roots from the runtime environment (`PI_CODING_AGENT_SESSION_DIR` takes priority) and recognizes the conventional project-local `<project>/.pi/agent-sessions` mapping. Prime Agent uses, in order, `PRIME_AGENT_SESSION_DIR`, `PRIME_AGENT_CODING_AGENT_SESSION_DIR`, `PRIME_AGENT_CODING_AGENT_DIR/sessions`, then `~/.prime/agent/sessions`. Relative configured roots resolve from the registered project. The host rejects overlapping, nested, lexical-alias, and Windows case-alias Pi/Prime roots before refresh or launch; it does not guess which runtime owns a shared tree.
+
+A Pi project scans only its Pi roots. A Prime project scans only its flat Prime root and excludes headers with positive `rlmDepth`: those are child-worker activity of their root session, not independent project chats. A Prime root may still contain several distinct root sessions. A single JSONL file is read with a hard host limit of 128 MiB; an oversized source is retained untouched and is not presented as indexed. Project settings files are not parsed for discovery; paths and raw scanner diagnostics are not passed to the WebView.
 
 The session ↔ project association is determined in this order:
 
@@ -74,9 +77,13 @@ filesystem watcher / explicit refresh / Pi runtime exit / polling hint
 
 Filesystem traversal, hashing, and SQLite commit run through host `spawn_blocking`, so the Tauri invoke/event task publishes `refreshStarted` immediately and does not block the WebView. Only a proven complete pass becomes `current`; incomplete coverage (an unavailable candidate/root, limit, CAS mismatch, or an empty set of roots without authority) keeps safe cached rows visible, but is published as `degraded` and does not reset the periodic integrity scan counter.
 
-The catalog fingerprint is stored host-side only and includes path, native file ID/inode, size, mtime, bounded prefix/tail continuity digest, and parser version. Mtime or a continuity digest are not considered proof of a content revision: they only allow a repeated catalog parse to be skipped. Timeline and mutation admission use a separate strong observation with identity-bound full revision verification.
+The catalog fingerprint is stored host-side only and includes path, native file ID/inode, size, mtime, a 64 KiB prefix and 64 KiB tail continuity digest, and parser version. Mtime or a continuity digest are weak, dynamic catalog evidence, not proof of a content revision: they only allow a repeated catalog parse to be skipped. Timeline and mutation admission use a separate strong observation with identity-bound full revision verification.
+
+After 20 successful incremental reconciliations for a project, the host forces a full integrity pass before another incremental pass. An incomplete pass does not advance this counter. This bounded refresh rule reduces repeated full scans but never upgrades weak evidence into mutation authority.
 
 For the first turn of a new Pi session, the UI stores a baseline of known opaque IDs before launching Pi and does not auto-select a catalog row until it finds exactly one new persisted row. Short retries use bounded exponential backoff. An expected catalog miss stays silent while that retry window is active, because Pi may already have saved the chat while the index refresh is still catching up. If JSONL still has not appeared or candidates remain ambiguous after the window, visible `Retry discovery` gives the user an explicit recovery path rather than selecting another session; a later successful catalog resolution clears that feedback and replaces live blocks with the authoritative page.
+
+Prime live startup is disabled while 0.8.1 depends on an unowned shared daemon. The exact handshake/header correlation code remains a non-authorizing adapter test contract: if a future contained runtime creates a root, the host must accept exactly one same-project row whose internal header ID matches and expose only its opaque catalog ID. Current Prime history uses only opaque indexed IDs and does not create or lease sessions.
 
 ### 3.3 Partial writes
 

@@ -2548,6 +2548,7 @@ dependencies = [
  "piui-contracts",
  "piui-extensions",
  "piui-index",
+ "piui-orchestration",
  "piui-platform",
  "piui-runtime",
  "rfd",
@@ -2589,9 +2590,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "piui-orchestration"
+version = "0.1.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "piui-platform"
 version = "0.1.1"
 dependencies = [
+ "libc",
  "sha2",
  "windows-sys 0.61.2",
 ]

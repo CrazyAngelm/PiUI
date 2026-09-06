@@ -1,7 +1,7 @@
 # PiUI
 
 <p align="center">
-  A fast, local desktop interface for browsing and continuing <a href="https://pi.dev/">Pi</a> sessions.
+  A fast, local desktop interface for browsing and continuing <a href="https://pi.dev/">Pi</a> sessions, with a separate experimental read-only Prime Agent 0.8.1 history lane.
 </p>
 
 <p align="center">
@@ -17,6 +17,10 @@
 
 > [!IMPORTANT]
 > PiUI is an early developer preview. The current Windows build is unsigned, does not auto-update, and is not a managed Pi distribution or an OS sandbox. Read the [current limitations](#current-limitations) before using it with important sessions.
+
+## Unreleased workspace development
+
+The working tree includes native Pi/Prime Agent/Codex session adapters and an optional Agents/Teams/Pipelines/Runs workspace. This is **not** an updated v0.1.1 release. Windows workspace lifecycle and safe-mode E2E pass; real Prime turns/resume pass. Pi authentication, unclassified Codex turn failures, and Linux validation remain open. See the [implementation status and evidence](docs/MULTI_HARNESS_IMPLEMENTATION.md) before treating a lane as ready.
 
 ## Install
 
@@ -61,22 +65,24 @@ Do not write to the same session from PiUI and the Pi CLI at the same time. Conc
 ## What PiUI does
 
 - discovers existing Pi JSONL sessions without introducing another chat format;
+- keeps Pi and Prime Agent 0.8.1 project kinds, session roots, and global extension inventories explicit and separate;
 - renders a safe, bounded transcript with Markdown, reasoning, and grouped tool activity;
-- continues indexed sessions or creates Pi-owned personal chats;
-- starts a locally installed Pi CLI in RPC mode only after an explicit user action;
+- continues indexed Pi sessions, keeps projectless personal chats Pi-owned, and renders Prime root-session history read-only;
+- starts a locally installed Pi CLI in RPC mode only after an explicit user action; Prime 0.8.1 live control stays disabled;
 - streams typed runtime events through a narrow Rust/Tauri host API;
 - keeps a rebuildable SQLite catalog separate from Pi's session files;
 - provides project trust controls and local appearance preferences;
 - supports keyboard navigation, safe generic fallbacks, and reduced motion.
 
-PiUI wraps Pi. It does not replace Pi's agent loop, providers, tools, compaction, authentication store, or session branching.
+PiUI wraps Pi and has a separate Prime Agent 0.8.1 preview: session history is read-only, while global extension settings remain runtime-scoped and configurable. It does not replace either runtime's agent loop, providers, tools, compaction, authentication store, or session branching.
 
 ## Current limitations
 
-- The local live-RPC path is a preview, not a managed-runtime provenance guarantee.
+- The local Pi live-RPC path is a preview, not a managed-runtime provenance guarantee. Prime Agent 0.8.1 live control fails closed because its shared detached daemon cannot yet be isolated and contained without risking other active Prime sessions.
+- Prime projects can list distinct root sessions read-only. Starting, continuing, prompting, stopping, exact live binding, daemon attach, resident sessions, replay, and multi-client control are not available through PiUI.
 - The Windows artifacts are unsigned and the application has no automatic updater.
 - Concurrent Pi CLI/PiUI writes to one session are unsupported.
-- Authentication stays in Pi's standard flow; PiUI does not read or expose `auth.json`.
+- Authentication stays in each runtime's standard flow; PiUI does not read or expose `auth.json` or Prime credentials/tokens, and has no headless auth flow.
 - Packaged browser/Tauri E2E, managed-runtime acquisition, updater, and the full Windows/Linux platform matrix remain release gates.
 - Project-local extension JavaScript stays disabled until its trust and isolation design is complete.
 
@@ -129,6 +135,7 @@ pnpm check
 pnpm test
 pnpm contract:test
 pnpm build
+pnpm test:smoke
 pnpm test:e2e
 pnpm perf:smoke
 cargo fmt --all -- --check
@@ -136,7 +143,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-`pnpm test:e2e` is currently a static UI smoke check rather than a packaged desktop E2E suite.
+`pnpm test:smoke` is the static source check. `pnpm test:e2e` dispatches to the real Windows Tauri/WebView2 harness, which passes through a feature-gated debug-only loopback driver and outside-Job fixture cleanup. Linux still fails explicitly because its WebKit harness is not implemented yet.
 
 ## Repository layout
 

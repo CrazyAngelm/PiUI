@@ -54,6 +54,7 @@ The UI does not access the `runtime`, `index`, or OS layers directly.
 
 - Parse stdout with a normal general-purpose line reader that splits on Unicode line separators. Pi RPC requires LF-only framing.
 - Kill only the parent PID while leaving child tool processes.
+- Run a real Prime Agent probe or test without an explicit non-default `--daemon-socket`; isolated session directories alone do not isolate the supervisor.
 - Hide project trust behind a generic “Continue” button.
 - Automatically copy external files into a project without a user-visible decision.
 - Render raw HTML from Markdown, tool output, or an extension payload.

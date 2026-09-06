@@ -8,11 +8,22 @@ license.workspace = true
 authors.workspace = true
 description = "Platform primitives for PiUI project identity, static system-Pi eligibility, and process containment"
 
+[features]
+e2e-harness = []
+
+[[bin]]
+name = "piui-e2e-job"
+path = "src/bin/piui-e2e-job.rs"
+required-features = ["e2e-harness"]
+
 [dependencies]
 sha2.workspace = true
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [

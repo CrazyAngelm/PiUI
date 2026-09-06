@@ -1,9 +1,10 @@
 <script lang="ts">
-  import type { ExtensionSummary, Preferences } from '../../host-api/types';
+  import type { AgentKind, ExtensionSummary, Preferences } from '../../host-api/types';
 
   export let preferences: Preferences;
   export let preferencesBusy = false;
   export let preferencesError: string | undefined;
+  export let extensionAgentKind: AgentKind = 'pi';
   export let extensions: ExtensionSummary[] = [];
   export let extensionsLoading = false;
   export let extensionsError: string | undefined;
@@ -13,6 +14,7 @@
   export let onMotion: (event: Event) => void;
   export let onFontSize: (event: Event) => void;
   export let onChatWidth: (event: Event) => void;
+  export let onExtensionAgentKind: (agentKind: AgentKind) => void;
   export let onToggleExtension: (extension: ExtensionSummary, enabled: boolean) => void;
   export let onRefreshExtensions: () => void;
   export let onClose: () => void;
@@ -107,22 +109,49 @@
         <section class="settings-section" aria-labelledby="extensions-title">
           <div class="section-heading section-heading--actions">
             <div>
-              <p class="section-eyebrow">Pi resources</p>
+              <p class="section-eyebrow">{extensionAgentKind === 'pi' ? 'Pi resources' : 'Prime Agent resources'}</p>
               <h2 id="extensions-title">Extensions</h2>
-              <p>Global extensions run with full system permissions. Changes apply the next time a chat runtime starts.</p>
+              <p>Global extensions run with full system permissions. Changes apply the next time that runtime starts.</p>
             </div>
             <button type="button" class="refresh-extensions" onclick={onRefreshExtensions} disabled={extensionsLoading || extensionBusyId !== undefined}>{extensionsLoading ? 'Loading…' : 'Refresh'}</button>
+          </div>
+
+          <div class="runtime-inventory" role="group" aria-label="Extension runtime">
+            <button
+              type="button"
+              class:active={extensionAgentKind === 'pi'}
+              aria-pressed={extensionAgentKind === 'pi'}
+              disabled={extensionBusyId !== undefined}
+              onclick={() => onExtensionAgentKind('pi')}
+            >Pi</button>
+            <button
+              type="button"
+              class:active={extensionAgentKind === 'prime-agent'}
+              aria-pressed={extensionAgentKind === 'prime-agent'}
+              disabled={extensionBusyId !== undefined}
+              onclick={() => onExtensionAgentKind('prime-agent')}
+            >Prime Agent</button>
+          </div>
+
+          <div class="runtime-boundary" role="note">
+            {#if extensionAgentKind === 'pi'}
+              <strong>Pi inventory</strong>
+              <p>Pi and Prime Agent use separate configuration roots. Extensions listed here are not enabled for Prime Agent automatically.</p>
+            {:else}
+              <strong>Prime Agent 0.8.1 inventory</strong>
+              <p>Some extension API names overlap with Pi, but compatibility is not assumed. Install and test each extension for Prime Agent separately.</p>
+            {/if}
           </div>
 
           {#if extensionsError}
             <div class:extension-error--compact={extensions.length > 0} class="extension-error" role="alert"><strong>Extension update failed.</strong><p>{extensionsError}</p>{#if extensions.length === 0}<button type="button" onclick={onRefreshExtensions}>Try again</button>{/if}</div>
           {/if}
           {#if extensionsLoading && extensions.length === 0}
-            <div class="extension-loading" role="status"><span></span><span></span><span></span></div>
+            <div class="extension-loading" role="status" aria-label={`Loading ${extensionAgentKind === 'pi' ? 'Pi' : 'Prime Agent'} extensions`}><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span></div>
           {:else if extensions.length === 0}
-            <div class="extension-empty"><strong>No global extensions found</strong><p>Install extensions with Pi, then refresh this page.</p></div>
+            <div class="extension-empty"><strong>No global extensions found</strong><p>Install extensions with {extensionAgentKind === 'pi' ? 'Pi' : 'Prime Agent'}, then refresh this page.</p></div>
           {:else}
-            <div class="extension-list" aria-label="Global Pi extensions">
+            <div class="extension-list" aria-label={`Global ${extensionAgentKind === 'pi' ? 'Pi' : 'Prime Agent'} extensions`}>
               {#each extensions as extension (extension.id)}
                 <article class="extension-row">
                   <div class="extension-icon" aria-hidden="true">{extension.name.slice(0, 1).toUpperCase()}</div>
@@ -130,14 +159,14 @@
                     <strong>{extension.name}</strong>
                     <span>{extension.source} extension</span>
                   </div>
-                  <label class="switch" aria-label={`${extension.enabled ? 'Disable' : 'Enable'} ${extension.name}`}>
+                  <label class="switch" aria-label={`${extension.enabled ? 'Disable' : 'Enable'} ${extension.name} for ${extensionAgentKind === 'pi' ? 'Pi' : 'Prime Agent'}`}>
                     <input type="checkbox" checked={extension.enabled} onchange={(event) => toggleExtension(extension, event)} disabled={extensionBusyId !== undefined} />
                     <span aria-hidden="true"></span>
                   </label>
                 </article>
               {/each}
             </div>
-            <p class="extension-note">Project-local extensions are intentionally not managed here. They remain behind the project trust boundary.</p>
+            <p class="extension-note">Project-local extensions are intentionally not managed here. The selected runtime can discover them only after project trust.</p>
           {/if}
         </section>
       {/if}
@@ -173,6 +202,14 @@
   .setting-row strong { font-size: 13px; }
   .setting-row small { color: var(--piui-text-muted); font-size: 11px; line-height: 1.4; }
   .setting-row select { width: min(190px, 42%); min-height: 36px; padding: 0 30px 0 10px; border: 1px solid var(--piui-border); border-radius: 8px; background: var(--piui-surface-1); color: var(--piui-text); font-size: 12px; }
+  .runtime-inventory { display: inline-flex; gap: 3px; margin: -8px 0 14px; padding: 3px; border: 1px solid var(--piui-border); border-radius: 10px; background: var(--piui-bg-raised); }
+  .runtime-inventory button { min-height: 32px; padding: 0 13px; border-radius: 7px; background: transparent; color: var(--piui-text-muted); font-size: 11px; font-weight: 720; }
+  .runtime-inventory button:hover:not(:disabled) { color: var(--piui-text); }
+  .runtime-inventory button.active { background: var(--piui-surface-2); color: var(--piui-text); }
+  .runtime-inventory button:disabled { cursor: wait; opacity: .6; }
+  .runtime-boundary { margin: 0 0 18px; padding: 13px 15px; border-left: 2px solid var(--piui-accent); border-radius: 0 9px 9px 0; background: var(--piui-surface-1); }
+  .runtime-boundary strong { color: var(--piui-text); font-size: 11px; }
+  .runtime-boundary p { margin: 4px 0 0; color: var(--piui-text-muted); font-size: 10px; line-height: 1.5; }
   .refresh-extensions { min-height: 34px; padding: 0 13px; border: 1px solid var(--piui-border); border-radius: 8px; background: var(--piui-surface-1); color: var(--piui-text-muted); font-size: 11px; font-weight: 700; }
   .refresh-extensions:hover:not(:disabled) { border-color: var(--piui-accent); color: var(--piui-text); }
   .extension-row { display: flex; align-items: center; gap: 13px; min-height: 70px; padding: 12px 16px; }

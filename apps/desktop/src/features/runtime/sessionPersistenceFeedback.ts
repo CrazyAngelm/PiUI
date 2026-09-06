@@ -1,8 +1,11 @@
 export const SESSION_PERSISTENCE_FEEDBACK_DELAY_MS = 8_500;
+export const PRIME_RUNTIME_BINDING_ERROR = 'Prime Agent binding failed.';
+export const PRIME_RUNTIME_BINDING_PENDING = 'Prime Agent runtime session binding is still pending.';
 
 const PENDING_PERSISTENCE_MESSAGES = new Set([
   'Pi has not persisted the completed personal turn yet.',
   'Pi has not persisted the completed project turn yet.',
+  PRIME_RUNTIME_BINDING_PENDING,
 ]);
 
 export function isPendingSessionPersistenceError(error: unknown): boolean {
@@ -11,6 +14,43 @@ export function isPendingSessionPersistenceError(error: unknown): boolean {
 
 export function didResolveNewSession(previousSessionId: string | undefined, nextSessionId: string | undefined): boolean {
   return previousSessionId === undefined && nextSessionId !== undefined;
+}
+
+/**
+ * Resolves only the host-indexed opaque id handed back by a new Prime runtime.
+ * Prime must never infer a session from catalog timing or ordering because other
+ * Prime runtimes can add rows to the same project at the same time.
+ */
+export function resolvePrimeRuntimeCatalogSession<T extends { id: string }>(
+  sessions: readonly T[],
+  opaqueSessionId: string | undefined,
+): T | undefined {
+  return opaqueSessionId === undefined
+    ? undefined
+    : sessions.find((session) => session.id === opaqueSessionId);
+}
+
+export function acceptsPrimeRuntimeBindingSnapshot<T extends { id: string }>(
+  sessions: readonly T[],
+  opaqueSessionId: string,
+  snapshotSequence: number,
+  bindingSequence: number,
+): boolean {
+  return snapshotSequence > bindingSequence
+    || resolvePrimeRuntimeCatalogSession(sessions, opaqueSessionId) !== undefined;
+}
+
+export function ownsRuntimeBinding(
+  selectedProjectId: string | undefined,
+  projectId: string,
+  sessionEpoch: number,
+  expectedSessionEpoch: number,
+  chatEpoch: number,
+  expectedChatEpoch: number,
+): boolean {
+  return selectedProjectId === projectId
+    && sessionEpoch === expectedSessionEpoch
+    && chatEpoch === expectedChatEpoch;
 }
 
 export function resolveNewCatalogSession<T extends { id: string; createdAt?: string }>(

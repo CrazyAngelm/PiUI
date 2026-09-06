@@ -1,0 +1,442 @@
+{
+  "checks": {
+    "auth_limitation": {
+      "evidence": [
+        {
+          "file": "dist/core/slash-commands.js",
+          "sha256": "84bad44fe5b290f0b53415f48a03a232e5a860f0021771a49bf0782799268dbe"
+        },
+        {
+          "file": "dist/modes/rpc/rpc-mode.js",
+          "sha256": "18c2025124980429139e9a6f231598937fe524ecf5beb8ed9d18f3331dbd6f29"
+        },
+        {
+          "file": "docs/rpc.md",
+          "sha256": "a577f9aa41d6f038f37968756af705d0a2de67787149058de16e2d2dde13cff2"
+        }
+      ],
+      "facts": {
+        "interactive_login_is_builtin": true,
+        "typed_rpc_auth_command_present": false,
+        "typed_rpc_auth_commands": []
+      },
+      "status": "pass"
+    },
+    "extension_boundary": {
+      "evidence": [
+        {
+          "file": "dist/config.js",
+          "sha256": "6ebd6202751fbed175053ab31c81e02e6d018b0e2b054b8a508de0858b6a3901"
+        },
+        {
+          "file": "dist/core/extensions/bundled-modules.js",
+          "sha256": "5f414d5d2e22f9f023c4c04708673d67fe00d9c6c79003222a577b1d67cf143c"
+        },
+        {
+          "file": "dist/core/extensions/loader.js",
+          "sha256": "5c0abedb23064bab94ccfb163084f141c5b601ce1204b391faa8fa58778d4e1a"
+        },
+        {
+          "file": "dist/core/extensions/types.d.ts",
+          "sha256": "5a900c70c764a128620a329ca5e103a57a683f33a09b797736ea229ff8163ad9"
+        },
+        {
+          "file": "docs/extensions.md",
+          "sha256": "1af67457909ca41633deae33cb0adf1cc77ea3532288550a71e1259543050705"
+        }
+      ],
+      "facts": {
+        "global_root": "~/.prime/agent/extensions/",
+        "pi_import_aliases_present": true,
+        "prime_specific_refinement_hooks_present": true,
+        "project_root": ".prime/agent/extensions/",
+        "universal_pi_abi_compatibility_proven": false
+      },
+      "status": "pass"
+    },
+    "flat_sessions_by_cwd": {
+      "evidence": [
+        {
+          "file": "README.md",
+          "sha256": "9a899deba40aa92e4497ac638853909a3c4d557255e72b3ea49e1f6759d0d24f"
+        },
+        {
+          "file": "dist/config.js",
+          "sha256": "6ebd6202751fbed175053ab31c81e02e6d018b0e2b054b8a508de0858b6a3901"
+        },
+        {
+          "file": "dist/core/session-manager.js",
+          "sha256": "8cfabd3ecc700748cdb8e8b79482b63fe199e108231c5a151030fd3c228f90e2"
+        },
+        {
+          "file": "dist/migrations.js",
+          "sha256": "3508b6d892f1edf9fa9964afb907773bfa746a6e3f410eb08458a152ab2784ce"
+        }
+      ],
+      "facts": {
+        "default_root": "~/.prime/agent/sessions/",
+        "layout": "flat-jsonl",
+        "project_key": "session-header-cwd"
+      },
+      "status": "pass"
+    },
+    "launched_bundle_closure": {
+      "evidence": [
+        {
+          "file": "dist/bundle/anthropic-7C6FL3HM.js",
+          "sha256": "87c4af6b3504106a3c5042aad40b4adb5c66d230380aad0d852b1e38a1c894f0"
+        },
+        {
+          "file": "dist/bundle/azure-openai-responses-DPOIEP5X.js",
+          "sha256": "430432ed19ec1ca5567e70fc6210b6477969aeaea0303daa17086e5c005e7d90"
+        },
+        {
+          "file": "dist/bundle/bundled-modules-45SZTQ6Z.js",
+          "sha256": "bbe06ce4392a7c827d4506d2044fa6b58e2680842eb8782ce8de108550cc24ad"
+        },
+        {
+          "file": "dist/bundle/chunk-2DXIEQO5.js",
+          "sha256": "ced944ad629cd1e508af8cc6c0eb131798b17beb39b8dcae39e3308dbc576dd4"
+        },
+        {
+          "file": "dist/bundle/chunk-2T7M7VJ4.js",
+          "sha256": "d1289bf68d2dac30d7562c98035c1a64c7a66a7075420feb144b7b57fc25e141"
+        },
+        {
+          "file": "dist/bundle/chunk-32OM3ZSR.js",
+          "sha256": "75553d25e215551a92aa9823b2879e13a3eedfdac6719efb415b348112a98bf1"
+        },
+        {
+          "file": "dist/bundle/chunk-5QCJ5DQU.js",
+          "sha256": "462e305733cd2abae7fed262c7f42c55ed6e6504ef7a273a95bc03761c5a10e9"
+        },
+        {
+          "file": "dist/bundle/chunk-6GUVYK6P.js",
+          "sha256": "eca6e283096bdf5bf2517250e2aa040c8c290ee3b8a95d820babcd8d2e2620db"
+        },
+        {
+          "file": "dist/bundle/chunk-7HELINBL.js",
+          "sha256": "319007157867bb7cd7aeccae63609008aac8af5fc5c70640f4f5bbca5eea9a79"
+        },
+        {
+          "file": "dist/bundle/chunk-BAWSWWEU.js",
+          "sha256": "c1d266dd9f169f5fa9da7dd0f28df3ef2f574cd44f8eb22f1a5841a8d329c62c"
+        },
+        {
+          "file": "dist/bundle/chunk-CFNASUYO.js",
+          "sha256": "25ae1ebaef01d37f2f0ed2f1c7643eb418312d36a4b780b9984bb256d89506f3"
+        },
+        {
+          "file": "dist/bundle/chunk-CL7XFWST.js",
+          "sha256": "0ea8a798f31f3968edfc1fec63a038607e834e476ad93fcddc63f83fff6b3a35"
+        },
+        {
+          "file": "dist/bundle/chunk-CRBVRZBV.js",
+          "sha256": "8f65769abfa306126727f11d29c19dada6b9e579a274f86d3d8833484f5cbb64"
+        },
+        {
+          "file": "dist/bundle/chunk-DXCEBO6P.js",
+          "sha256": "61e2f68601a7991acfe69b7232b49a65c194387760d569e35120f96e94a8e47c"
+        },
+        {
+          "file": "dist/bundle/chunk-EEFPTOXD.js",
+          "sha256": "0c91c9d27276edf34b005734101dd49c05aa885996e12b00dde9795d26500581"
+        },
+        {
+          "file": "dist/bundle/chunk-ENTVCTJV.js",
+          "sha256": "6ac5c5d3195247ea6924a516e43a0e129e9994a2f6f3d8ff8df6c537ffa572e9"
+        },
+        {
+          "file": "dist/bundle/chunk-GG7GAQ5N.js",
+          "sha256": "ebb14de4aa0d9f9dbc809159c0d0d8d1562ac6e6d37fbc4f0f33146783f6ee7d"
+        },
+        {
+          "file": "dist/bundle/chunk-HXOBFFJX.js",
+          "sha256": "c38abfe15055b7da75e55f3980901f2d2b993b6afbb89e3a5ef8088907fce01d"
+        },
+        {
+          "file": "dist/bundle/chunk-LJNR66GH.js",
+          "sha256": "2d48e946e55f72327377118328007f18b2580e625b0375ee384940f5e47e1313"
+        },
+        {
+          "file": "dist/bundle/chunk-NEAJOPUF.js",
+          "sha256": "57117f1660390eedb9d55ba86b366a1370ce3d993d6eb22048cb2eeb6daecd08"
+        },
+        {
+          "file": "dist/bundle/chunk-NQB5DCFC.js",
+          "sha256": "1f553959c6c093ec2efa79be795fed9fa4c5e9550dff9b5a0dea1d9bab509730"
+        },
+        {
+          "file": "dist/bundle/chunk-Q6J572OR.js",
+          "sha256": "e18ed662c9f4880686dd6154b7f01b0c5b82da0f27b1f86754418ce5e1742c5e"
+        },
+        {
+          "file": "dist/bundle/chunk-UIRUOAIQ.js",
+          "sha256": "56637d7676947f09a9ea007d551213080b4f3ee4bc1fb875b0df0d05d8faf0e0"
+        },
+        {
+          "file": "dist/bundle/chunk-UPDAFKL5.js",
+          "sha256": "74e6a58ca7a1462829e390ca587af2c3c4705e46f9df5f2655b54eb789b5f4de"
+        },
+        {
+          "file": "dist/bundle/chunk-ZEXT4XC7.js",
+          "sha256": "8b718a484b7a8f261d7d5030f178fef74d31f867613b5db59adcbb9bf109c899"
+        },
+        {
+          "file": "dist/bundle/cli-main-EQZFLIFH.js",
+          "sha256": "cc1d61d816c4922356e83664605562a3c1c370c11ab0653c61a3ddc17e626d7a"
+        },
+        {
+          "file": "dist/bundle/cli.js",
+          "sha256": "cc46be7cd92415b5bae591e4ebb8e958fd1151de1a6790001e3e3e45ebafe471"
+        },
+        {
+          "file": "dist/bundle/code-highlighter-MVLOIDOV.js",
+          "sha256": "4a6ac4332e5ba58afae5ba79b59ab55d14ae638182d181fa8b5807c625a4c358"
+        },
+        {
+          "file": "dist/bundle/compile-QT2UC7AD.js",
+          "sha256": "938d484bc39b729677a1fcdab3fbe78e7c99c41dae3262e4217dbdce93d3e25d"
+        },
+        {
+          "file": "dist/bundle/dist-WOIMTDM3.js",
+          "sha256": "069584ba5e8d8281c41d7d288400108c65022396c250e0a6016642ea228997a3"
+        },
+        {
+          "file": "dist/bundle/google-DRIEZT6Q.js",
+          "sha256": "74ae7ad1627332d32a618fb8908255b8df3d3e3c1fb68164fa4ec9fb8316aab9"
+        },
+        {
+          "file": "dist/bundle/google-vertex-64GXNMSJ.js",
+          "sha256": "d8f2af95748af54d47c65f83efc7ebb1e0a39968ffbc630bb819f1d5081fbbe2"
+        },
+        {
+          "file": "dist/bundle/jiti-static-UCYGOAUA.js",
+          "sha256": "8e4fec9bfa5a8de77b45e331b11921fea121db41dfbbf37ec81528d7d6fc0dc9"
+        },
+        {
+          "file": "dist/bundle/main-FNMHPZE3.js",
+          "sha256": "f3868c790c6dc13fe7112a48b0aa50051410d81de4693ba142bd9061df12595b"
+        },
+        {
+          "file": "dist/bundle/mistral-BOJDO6RZ.js",
+          "sha256": "d52d2bbb82bf1dd533e45b97294f30ac438c3132db2790f698a5a917187bb044"
+        },
+        {
+          "file": "dist/bundle/multipart-parser-RNXTMKQU.js",
+          "sha256": "defc2d44db318fa751609298c85d64e13fe5af3661cce4ccf27aae51a44a766a"
+        },
+        {
+          "file": "dist/bundle/openai-codex-responses-MFAGHLRW.js",
+          "sha256": "a4bf97bd393d8e7551a651b2d4c6826533fa0117befa161f5df5b009f53bfe91"
+        },
+        {
+          "file": "dist/bundle/openai-completions-BI7VQTS5.js",
+          "sha256": "e56947324e104432206ae2eaab4f7381380e670fbdaf8184be8101f95dd09d0a"
+        },
+        {
+          "file": "dist/bundle/openai-responses-YA6GITJN.js",
+          "sha256": "b07ac27885e64bf590f614ff50f901cf9480adc78132dd23bed32a830f23f399"
+        },
+        {
+          "file": "dist/bundle/src-DUDR5FOZ.js",
+          "sha256": "09c05ea567c7a548e5eb60f73cfca02d954f87fa4c1e78827a8720f69baed3fa"
+        }
+      ],
+      "facts": {
+        "closure_file_count": 40,
+        "closure_sha256": "0a06724ef75465b0c3ffbf25e03fe228d6168184b74254823301969b402b97a0",
+        "entrypoint": "dist/bundle/cli.js",
+        "literal_local_js_import_closure_complete": true,
+        "live_control_authorized": false,
+        "shared_daemon_markers_present": true
+      },
+      "status": "pass"
+    },
+    "lf_jsonl": {
+      "evidence": [
+        {
+          "file": "dist/modes/rpc/jsonl.js",
+          "sha256": "fb50c89be8f71253439778398431b05ab0ab5003423a65d2803d1e564c068272"
+        }
+      ],
+      "facts": {
+        "crlf_input_accepted": true,
+        "delimiter": "LF",
+        "node_readline_used": false,
+        "unicode_line_separators_are_payload": true
+      },
+      "status": "pass"
+    },
+    "package_identity": {
+      "evidence": [
+        {
+          "file": "package.json",
+          "sha256": "d64a57b6562408a1f2b46d5c436b3ae4c5a30774a5da948db74f5f48fc4dcb3d"
+        }
+      ],
+      "facts": {
+        "bin_matches": true,
+        "name_matches": true,
+        "version_matches": true
+      },
+      "status": "pass"
+    },
+    "prime_rpc_surface": {
+      "evidence": [
+        {
+          "file": "dist/core/agent-session.js",
+          "sha256": "fe60f29f0ea6e5b503fd3cf24334dac6c4e7199ddba2ff73dcdea74cb2a4b4a8"
+        },
+        {
+          "file": "dist/modes/rpc/rpc-mode.js",
+          "sha256": "18c2025124980429139e9a6f231598937fe524ecf5beb8ed9d18f3331dbd6f29"
+        }
+      ],
+      "facts": {
+        "event_types": [
+          "goal_update",
+          "rlm_child_update",
+          "refine_complete",
+          "refine_failed"
+        ],
+        "expected_commands_present": [
+          "abort",
+          "get_session_stats",
+          "get_state",
+          "list_heartbeats",
+          "list_schedules",
+          "observe",
+          "prompt",
+          "refine",
+          "send_message"
+        ],
+        "get_state_includes_goal": true,
+        "raw_session_events_forwarded": true
+      },
+      "status": "pass"
+    },
+    "rpc_resume": {
+      "evidence": [
+        {
+          "file": "dist/cli/args.js",
+          "sha256": "3f36b18e9cb6ecb05c2f5e93ee8e4e9333d17f92480501ba12d9725e57782a7d"
+        },
+        {
+          "file": "dist/main.js",
+          "sha256": "4e81d353d8128fb8fe367f74c2b067a4fb91e8b9796f026807edc21172da2674"
+        },
+        {
+          "file": "docs/sessions.md",
+          "sha256": "4d576c09ccce2707dba6b712d9713712e795e271da03d0065e0a5733282e2729"
+        }
+      ],
+      "facts": {
+        "explicit_selector_required_headlessly": true,
+        "selector_forms": [
+          "path",
+          "id"
+        ]
+      },
+      "status": "pass"
+    },
+    "shutdown_and_ownership": {
+      "evidence": [
+        {
+          "file": "dist/modes/rpc/rpc-mode.js",
+          "sha256": "18c2025124980429139e9a6f231598937fe524ecf5beb8ed9d18f3331dbd6f29"
+        },
+        {
+          "file": "docs/daemon.md",
+          "sha256": "90d1d1d328ae9d1e6f44bd12a3068b4737540c3f4830831b6954bfa339d6c1f2"
+        }
+      ],
+      "facts": {
+        "active_session_lease": true,
+        "live_control_authorized": false,
+        "piui_owns_supervisor": false,
+        "stdin_eof_waits_for_idle": true,
+        "supervisor_lifecycle_from_launched_bundle": "shared-detached-daemon",
+        "worker_lease_from_docs": "client-owned"
+      },
+      "status": "pass"
+    }
+  },
+  "collection": {
+    "allowlisted_package_files": [
+      "package.json",
+      "README.md",
+      "docs/daemon.md",
+      "docs/extensions.md",
+      "docs/rpc.md",
+      "docs/sessions.md",
+      "dist/cli/args.js",
+      "dist/config.js",
+      "dist/core/agent-session.js",
+      "dist/core/extensions/bundled-modules.js",
+      "dist/core/extensions/loader.js",
+      "dist/core/extensions/types.d.ts",
+      "dist/core/session-manager.js",
+      "dist/core/slash-commands.js",
+      "dist/main.js",
+      "dist/migrations.js",
+      "dist/modes/rpc/jsonl.js",
+      "dist/modes/rpc/rpc-mode.js"
+    ],
+    "auth_json_read": false,
+    "environment_dumped": false,
+    "launched_bundle_entrypoint": "dist/bundle/cli.js",
+    "launched_bundle_files": [
+      "dist/bundle/anthropic-7C6FL3HM.js",
+      "dist/bundle/azure-openai-responses-DPOIEP5X.js",
+      "dist/bundle/bundled-modules-45SZTQ6Z.js",
+      "dist/bundle/chunk-2DXIEQO5.js",
+      "dist/bundle/chunk-2T7M7VJ4.js",
+      "dist/bundle/chunk-32OM3ZSR.js",
+      "dist/bundle/chunk-5QCJ5DQU.js",
+      "dist/bundle/chunk-6GUVYK6P.js",
+      "dist/bundle/chunk-7HELINBL.js",
+      "dist/bundle/chunk-BAWSWWEU.js",
+      "dist/bundle/chunk-CFNASUYO.js",
+      "dist/bundle/chunk-CL7XFWST.js",
+      "dist/bundle/chunk-CRBVRZBV.js",
+      "dist/bundle/chunk-DXCEBO6P.js",
+      "dist/bundle/chunk-EEFPTOXD.js",
+      "dist/bundle/chunk-ENTVCTJV.js",
+      "dist/bundle/chunk-GG7GAQ5N.js",
+      "dist/bundle/chunk-HXOBFFJX.js",
+      "dist/bundle/chunk-LJNR66GH.js",
+      "dist/bundle/chunk-NEAJOPUF.js",
+      "dist/bundle/chunk-NQB5DCFC.js",
+      "dist/bundle/chunk-Q6J572OR.js",
+      "dist/bundle/chunk-UIRUOAIQ.js",
+      "dist/bundle/chunk-UPDAFKL5.js",
+      "dist/bundle/chunk-ZEXT4XC7.js",
+      "dist/bundle/cli-main-EQZFLIFH.js",
+      "dist/bundle/cli.js",
+      "dist/bundle/code-highlighter-MVLOIDOV.js",
+      "dist/bundle/compile-QT2UC7AD.js",
+      "dist/bundle/dist-WOIMTDM3.js",
+      "dist/bundle/google-DRIEZT6Q.js",
+      "dist/bundle/google-vertex-64GXNMSJ.js",
+      "dist/bundle/jiti-static-UCYGOAUA.js",
+      "dist/bundle/main-FNMHPZE3.js",
+      "dist/bundle/mistral-BOJDO6RZ.js",
+      "dist/bundle/multipart-parser-RNXTMKQU.js",
+      "dist/bundle/openai-codex-responses-MFAGHLRW.js",
+      "dist/bundle/openai-completions-BI7VQTS5.js",
+      "dist/bundle/openai-responses-YA6GITJN.js",
+      "dist/bundle/src-DUDR5FOZ.js"
+    ],
+    "mode": "static-bundle-closure-no-execution",
+    "prompt_content_read": false,
+    "user_session_files_read": false
+  },
+  "overall_status": "pass",
+  "package": {
+    "name": "prime-agent",
+    "version": "0.8.1"
+  },
+  "probe": "prime-agent-static-bundle-contract",
+  "schema_version": 2
+}

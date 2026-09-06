@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
+  AgentKind,
   ApiRuntimeStart,
   AppSnapshot,
   ExtensionSummary,
@@ -29,11 +30,11 @@ import type {
 export interface HostClient {
   bootstrap(): Promise<AppSnapshot>;
   updatePreferences(preferences: Preferences): Promise<Preferences>;
-  listExtensions(): Promise<ExtensionSummary[]>;
-  setExtensionEnabled(extensionId: string, enabled: boolean): Promise<ExtensionSummary[]>;
+  listExtensions(agentKind: AgentKind): Promise<ExtensionSummary[]>;
+  setExtensionEnabled(agentKind: AgentKind, extensionId: string, enabled: boolean): Promise<ExtensionSummary[]>;
   /** Opens the host-owned native folder picker when available. */
-  pickAndAddProject(): Promise<ProjectSummary | undefined>;
-  addProject(path: string): Promise<ProjectSummary>;
+  pickAndAddProject(agentKind: AgentKind): Promise<ProjectSummary | undefined>;
+  addProject(path: string, agentKind: AgentKind): Promise<ProjectSummary>;
   setProjectTrust(projectId: string, trustState: ProjectTrustState): Promise<ProjectSummary>;
   renameProject(projectId: string, name: string): Promise<ProjectSummary>;
   setProjectPinned(projectId: string, pinned: boolean): Promise<ProjectSummary>;
@@ -86,10 +87,12 @@ function inTauri(): boolean {
 
 export const hasNativeFolderPicker = inTauri();
 
-export class HostOperationError extends Error {
-  readonly code?: 'CONFLICT';
+type SafeHostErrorCode = 'CONFLICT' | 'PROJECT_KIND_CONFLICT' | 'SESSION_ALREADY_ACTIVE';
 
-  constructor(message: string, code?: 'CONFLICT') {
+export class HostOperationError extends Error {
+  readonly code?: SafeHostErrorCode;
+
+  constructor(message: string, code?: SafeHostErrorCode) {
     super(message);
     this.name = 'HostOperationError';
     this.code = code;
@@ -100,18 +103,22 @@ export function isHostConflict(error: unknown): error is HostOperationError {
   return error instanceof HostOperationError && error.code === 'CONFLICT';
 }
 
-function conflictCode(cause: unknown): 'CONFLICT' | undefined {
-  if (typeof cause === 'object' && cause !== null && 'code' in cause && cause.code === 'CONFLICT') {
-    return 'CONFLICT';
-  }
+function safeHostErrorCode(cause: unknown): SafeHostErrorCode | undefined {
+  const knownCode = (value: unknown): SafeHostErrorCode | undefined => {
+    if (typeof value !== 'object' || value === null || !('code' in value)) return undefined;
+    return value.code === 'CONFLICT'
+      || value.code === 'PROJECT_KIND_CONFLICT'
+      || value.code === 'SESSION_ALREADY_ACTIVE'
+      ? value.code
+      : undefined;
+  };
+  const direct = knownCode(cause);
+  if (direct !== undefined) return direct;
   // Tauri can serialize a command error as JSON text on some webview builds.
   // Parse only the known non-sensitive error code; never surface raw payloads.
   if (typeof cause === 'string') {
     try {
-      const parsed: unknown = JSON.parse(cause);
-      if (typeof parsed === 'object' && parsed !== null && 'code' in parsed && parsed.code === 'CONFLICT') {
-        return 'CONFLICT';
-      }
+      return knownCode(JSON.parse(cause) as unknown);
     } catch {
       // A non-JSON host error remains intentionally generic.
     }
@@ -120,9 +127,15 @@ function conflictCode(cause: unknown): 'CONFLICT' | undefined {
 }
 
 export function toSafeHostError(operation: string, cause: unknown): HostOperationError {
-  const code = conflictCode(cause);
+  const code = safeHostErrorCode(cause);
   if (code === 'CONFLICT') {
     return new HostOperationError('This project folder changed. Add it again and confirm trust before continuing.', code);
+  }
+  if (code === 'PROJECT_KIND_CONFLICT') {
+    return new HostOperationError('This folder already uses another agent runtime. Remove it before adding it with a different runtime.', code);
+  }
+  if (code === 'SESSION_ALREADY_ACTIVE') {
+    return new HostOperationError('This Prime Agent session is already active in another runtime. Stop it there before reopening it here.', code);
   }
   return new HostOperationError(`${operation} could not be completed. Open diagnostics for a safe error code.`);
 }
@@ -137,7 +150,7 @@ async function invokeSafe<T>(operation: string, command: string, args?: Record<s
 
 const tauriClient: HostClient = {
   async bootstrap() {
-    return invokeSafe<AppSnapshot>('Startup', 'bootstrap');
+    return invokeSafe<AppSnapshot>('Startup', 'bootstrap_v10');
   },
   async updatePreferences(preferences) {
     return invokeSafe<Preferences>('Preference update', 'update_preferences_v8', {
@@ -148,18 +161,22 @@ const tauriClient: HostClient = {
       chatWidth: preferences.chatWidth,
     });
   },
-  async listExtensions() {
-    return invokeSafe<ExtensionSummary[]>('Extension inventory', 'list_extensions');
+  async listExtensions(agentKind) {
+    return invokeSafe<ExtensionSummary[]>('Extension inventory', 'list_extensions_v10', { agentKind });
   },
-  async setExtensionEnabled(extensionId, enabled) {
-    return invokeSafe<ExtensionSummary[]>('Extension update', 'set_extension_enabled', { extensionId, enabled });
+  async setExtensionEnabled(agentKind, extensionId, enabled) {
+    return invokeSafe<ExtensionSummary[]>('Extension update', 'set_extension_enabled_v10', {
+      agentKind,
+      extensionId,
+      enabled,
+    });
   },
-  async pickAndAddProject() {
-    const project = await invokeSafe<ProjectSummary | null>('Folder selection', 'pick_and_add_project');
+  async pickAndAddProject(agentKind) {
+    const project = await invokeSafe<ProjectSummary | null>('Folder selection', 'pick_and_add_project_v10', { agentKind });
     return project ?? undefined;
   },
-  async addProject(path) {
-    return invokeSafe<ProjectSummary>('Project registration', 'add_project', { path });
+  async addProject(path, agentKind) {
+    return invokeSafe<ProjectSummary>('Project registration', 'add_project_v10', { path, agentKind });
   },
   async setProjectTrust(projectId, trustState) {
     return invokeSafe<ProjectSummary>('Trust update', 'set_project_trust', { projectId, trustState });
@@ -303,8 +320,9 @@ let mockPreferences: Preferences = {
   chatWidth: 'wide',
 };
 let mockExtensions: ExtensionSummary[] = [
-  { id: 'ext-mock-guard', name: 'permission-guard', source: 'Global', enabled: true },
-  { id: 'ext-mock-tools', name: 'workspace-tools', source: 'Package', enabled: false },
+  { id: 'ext-mock-pi-guard', agentKind: 'pi', name: 'permission-guard', source: 'Global', enabled: true },
+  { id: 'ext-mock-pi-tools', agentKind: 'pi', name: 'workspace-tools', source: 'Package', enabled: false },
+  { id: 'ext-mock-prime-review', agentKind: 'prime-agent', name: 'review-workers', source: 'Global', enabled: true },
 ];
 
 function makeMockSessions(projectId: string): SessionSummary[] {
@@ -330,27 +348,35 @@ const mockClient: HostClient = {
     mockPreferences = { ...preferences };
     return mockPreferences;
   },
-  async listExtensions() {
-    return mockExtensions.map((extension) => ({ ...extension }));
+  async listExtensions(agentKind) {
+    return mockExtensions
+      .filter((extension) => extension.agentKind === agentKind)
+      .map((extension) => ({ ...extension }));
   },
-  async setExtensionEnabled(extensionId, enabled) {
-    if (!mockExtensions.some((extension) => extension.id === extensionId)) {
+  async setExtensionEnabled(agentKind, extensionId, enabled) {
+    if (!mockExtensions.some((extension) => extension.agentKind === agentKind && extension.id === extensionId)) {
       throw new Error('Extension not found.');
     }
-    mockExtensions = mockExtensions.map((extension) => extension.id === extensionId ? { ...extension, enabled } : extension);
-    return mockExtensions.map((extension) => ({ ...extension }));
+    mockExtensions = mockExtensions.map((extension) =>
+      extension.agentKind === agentKind && extension.id === extensionId
+        ? { ...extension, enabled }
+        : extension,
+    );
+    return mockExtensions
+      .filter((extension) => extension.agentKind === agentKind)
+      .map((extension) => ({ ...extension }));
   },
   async pickAndAddProject() {
     return undefined;
   },
-  async addProject(path) {
+  async addProject(path, agentKind) {
     const trimmed = path.trim();
     if (trimmed.length === 0) {
       throw new Error('A folder path is required.');
     }
     const name = trimmed.split(/[\\/]/).filter(Boolean).at(-1) ?? 'Project';
     const id = `project-${crypto.randomUUID()}`;
-    const project: ProjectSummary = { id, name, displayPath: trimmed, trustState: 'restricted', pinned: false, missing: false };
+    const project: ProjectSummary = { id, name, displayPath: trimmed, agentKind, trustState: 'restricted', pinned: false, missing: false };
     mockState.projects = [...mockState.projects, project];
     mockState.sessions.set(id, makeMockSessions(id));
     return project;
@@ -479,16 +505,16 @@ const mockClient: HostClient = {
         : [{ id: 'mock-fake-assistant', kind: 'assistant' as const, label: 'Pi · fake scenario', text: `deterministic ${text}`, status: scenario === 'abort' ? 'interrupted' as const : 'complete' as const }]),
     ];
     return {
-      runtime: { runtimeId: 'fake-runtime', state: failed ? 'failed' : 'ready', revision: 3, capabilities: { rpc: true, 'session.tree.read': true, 'session.tree.navigate': false, 'auth.headless': false, 'ui.standardDialogs': true }, safeSummary: 'Mock fake scenario completed.' },
+      runtime: { runtimeId: 'fake-runtime', agentKind: 'pi', state: failed ? 'failed' : 'ready', revision: 3, capabilities: { rpc: true, 'session.tree.read': true, 'session.tree.navigate': false, 'auth.headless': false, 'ui.standardDialogs': true, 'prime.activity': false, 'runtime.liveAttach': false, 'runtime.residentSessions': false, 'runtime.eventReplay': false, 'runtime.multiClient': false, 'thinking.catalog': true }, safeSummary: 'Mock fake scenario completed.' },
       blocks,
       ephemeral: true,
     };
   },
   async startFakeRuntime() {
-    return { runtimeId: 'fake-runtime', state: 'ready', revision: 1, capabilities: { rpc: true, 'session.tree.read': true, 'session.tree.navigate': false, 'auth.headless': false, 'ui.standardDialogs': true }, safeSummary: 'Deterministic fake runtime ready.' };
+    return { runtimeId: 'fake-runtime', agentKind: 'pi', state: 'ready', revision: 1, capabilities: { rpc: true, 'session.tree.read': true, 'session.tree.navigate': false, 'auth.headless': false, 'ui.standardDialogs': true, 'prime.activity': false, 'runtime.liveAttach': false, 'runtime.residentSessions': false, 'runtime.eventReplay': false, 'runtime.multiClient': false, 'thinking.catalog': true }, safeSummary: 'Deterministic fake runtime ready.' };
   },
   async stopRuntime() {
-    return { runtimeId: 'fake-runtime', state: 'dormant', revision: 2, capabilities: { rpc: true, 'session.tree.read': true, 'session.tree.navigate': false, 'auth.headless': false, 'ui.standardDialogs': true }, safeSummary: 'Runtime stopped.' };
+    return { runtimeId: 'fake-runtime', agentKind: 'pi', state: 'dormant', revision: 2, capabilities: { rpc: true, 'session.tree.read': true, 'session.tree.navigate': false, 'auth.headless': false, 'ui.standardDialogs': true, 'prime.activity': false, 'runtime.liveAttach': false, 'runtime.residentSessions': false, 'runtime.eventReplay': false, 'runtime.multiClient': false, 'thinking.catalog': true }, safeSummary: 'Runtime stopped.' };
   },
   // The live Pi runtime is only available inside the Tauri host; the mock
   // keeps the vite-only dev shell navigable without a real process.
@@ -511,7 +537,7 @@ const mockClient: HostClient = {
     /* not available in mock */
   },
   async stopLiveRuntime() {
-    return { runtimeId: 'live-runtime', state: 'dormant', revision: 0, capabilities: { rpc: true, 'session.tree.read': true, 'session.tree.navigate': false, 'auth.headless': false, 'ui.standardDialogs': true }, safeSummary: 'Mock: live runtime stopped.' };
+    return { runtimeId: 'live-runtime', agentKind: 'pi', state: 'dormant', revision: 0, capabilities: { rpc: true, 'session.tree.read': true, 'session.tree.navigate': false, 'auth.headless': false, 'ui.standardDialogs': true, 'prime.activity': false, 'runtime.liveAttach': false, 'runtime.residentSessions': false, 'runtime.eventReplay': false, 'runtime.multiClient': false, 'thinking.catalog': true }, safeSummary: 'Mock: live runtime stopped.' };
   },
   async getRuntimeState() {
     throw new Error('A live Pi runtime is only available inside the PiUI desktop app.');

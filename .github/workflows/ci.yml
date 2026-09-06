@@ -29,7 +29,7 @@ jobs:
       - run: pnpm check
       - run: pnpm test
       - run: pnpm build
-      - run: pnpm test:e2e
+      - run: pnpm test:smoke
       - run: pnpm perf:smoke
       - run: pnpm contract:test
 
@@ -68,8 +68,19 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - uses: dtolnay/rust-toolchain@1.94.1
       - run: pnpm install --frozen-lockfile
+      - name: Prime Agent static compatibility spike
+        run: python spikes/prime-agent/run_tests.py
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: Windows E2E Job runner lint
+        run: cargo clippy -p piui-platform --features e2e-harness --all-targets -- -D warnings
+      - name: Windows E2E Job runner containment
+        run: cargo test -p piui-platform --features e2e-harness --test e2e_job_runner
+      - name: Tauri WebView2 E2E
+        run: pnpm test:e2e
       - run: pnpm --filter @piui/desktop tauri build --no-bundle

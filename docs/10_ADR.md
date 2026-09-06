@@ -309,3 +309,29 @@ Baseline adoption date: July 23, 2026. All decisions have **Accepted** status un
 **Consequences:** the SQLite migration stores host-private fingerprint evidence; legacy rows are shown cache-first and backfilled during the next reconciliation. Cold rebuild remains read-only and bounded; a same-stat rewrite requires full integrity reconciliation/strong observation. IPC v7 has a snapshot watermark for recovery after missed/reordered events.
 
 **Reconsideration:** if Pi provides official session-change/revision/lock capabilities with equivalent cross-platform semantics.
+
+
+---
+
+## ADR-023 — Native multi-harness workspaces and optional orchestration
+
+**Status:** Accepted product direction on September 6, 2026; runtime activation remains conditional on version-specific evidence.
+
+**Context:** The user explicitly requested Prime Agent and Codex as distinct native harnesses in normal project/session flows, configurable mixed-harness teams and pipelines, reusable commands, and a redesigned desktop UX. A model-provider switch is not a harness adapter. The previous Pi-only product scope cannot express that request.
+
+**Decision:** Keep Tauri/Svelte and the thin-shell rule. Generalize workspace identity independently of immutable native session/member harness identity. Add explicit versioned native adapters for Prime Agent and Codex; preserve the existing Pi adapter and history. Native runtimes own model/provider clients, agent/tool loops, authentication, compaction, branching and transcripts. Any SDK bridge runs in an owned host-side process, never the WebView, and must pass lifecycle tests before activation. Do not assume shared Prime daemon ownership; an isolated non-default endpoint or a proven in-process SDK execution boundary is required.
+
+Agent definitions, team topology, pipeline definitions, reusable launch commands and durable run state belong to a separate harness-neutral orchestration module. It schedules native work and checks spawn/send/read authority; it does not execute model tools or reproduce a harness agent loop. The optional desktop contribution is lazy-loaded and retains a plain session mode. Until generic rich extension views ship, the first-party contribution uses the same narrow host contract, with safe mode and immutable approval/recovery UI outside its control.
+
+Native histories remain authoritative in their native formats. PiUI's index stays rebuildable. User-authored definitions, immutable run snapshots, delivery state and task journals are separately persisted application data, not cache and not a second chat transcript. A native session reference is opaque to the UI. Credentials, native paths and process handles stay host-private.
+
+Permissions distinguish native-enforced, coordinator-enforced, advisory and unsupported. Unsupported mandatory requests fail before execution; prompt text/tool visibility is not an OS sandbox. Spawn hierarchy, messaging edges and observation permissions are separate policies. Delegation cannot widen authority. Recovery marks uncertain side effects for reconciliation rather than blindly replaying them. Closing a window, stopping a turn, stopping a run and stopping an owned runtime are separate operations.
+
+**Supersedes narrowly:** the Pi-only routing wording of ADR-001/003/005, the exclusion of first-party optional team/pipeline surfaces in ADR-015, and the assumption in ADR-006 that every PiUI-owned datum is rebuildable. All no-loop/no-provider, trust, source-of-truth, containment and extension-isolation invariants remain in force. Existing v1-v10 wire formats remain frozen; new contracts require compatibility fixtures.
+
+**Rejected:** putting an agent loop in Svelte/Rust; a privileged mandatory Prime/DSH parent for all harnesses; treating Codex-in-Prime model selection as Codex execution; converting Codex history to Pi JSONL; enabling Prime by removing its guard before evidence; shell strings or credentials in frontend contracts; advertising advisory file/message policies as hard isolation.
+
+**Proof required:** isolated native Prime and Codex lifecycle/protocol evidence; normal create/send/stop/reopen/approval flows; independently active sessions; mixed-harness delegation and denied routing; persisted definition/run recovery; keyboard/safe-mode/generic fallbacks; Windows native E2E plus Linux platform evidence where available; startup/rendering/RSS smoke without invented performance claims.
+
+
+**Implemented lifecycle semantics (workspace v11):** A native ID or reserved path is not persistence proof. Only a known-absent, never-materialized empty draft may reopen through a fresh native session while keeping its opaque PiUI identity. Existing, corrupt, inaccessible or previously materialized history must not become an empty replacement. Materialization truth is monotonic; native history remains authoritative. Cached observed model metadata is display state, not an ordinary-open override; explicit create/profile configuration stays explicit. Graceful close requires both the native disposal acknowledgement and owned containment cleanup. UI error recovery reconciles host state while retaining the failure warning, never fabricating a successful acknowledgement.

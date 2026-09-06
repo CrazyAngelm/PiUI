@@ -7,6 +7,8 @@
   export let onClose: () => void;
   export let onTrust: () => void;
 
+  $: agentLabel = project?.agentKind === 'prime-agent' ? 'Prime Agent' : 'Pi';
+
   function closeOnBackdrop(event: MouseEvent): void {
     if (event.target === event.currentTarget && !busy) onClose();
   }
@@ -17,7 +19,7 @@
     <dialog open class="dialog" aria-labelledby="trust-title" aria-describedby="trust-description">
       <p class="eyebrow">Trust decision</p>
       <h2 id="trust-title">Trust {project.name}?</h2>
-      <p id="trust-description">Pi and this project's extensions may read and modify files and run processes with your user permissions. Trust is not a sandbox.</p>
+      <p id="trust-description">{agentLabel} and trusted project integrations may read and modify files and run processes with your user permissions. Trust is not a sandbox.</p>
       <dl>
         <div><dt>Folder</dt><dd class="mono">{project.displayPath}</dd></div>
         <div><dt>Current access</dt><dd>Read-only history until you explicitly start a runtime.</dd></div>

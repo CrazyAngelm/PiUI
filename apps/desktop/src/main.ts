@@ -1,5 +1,5 @@
 import { mount } from 'svelte';
-import App from './app/App.svelte';
+import App from './app/DesktopRoot.svelte';
 import './styles/reset.css';
 import './styles/tokens.css';
 import './styles/app.css';

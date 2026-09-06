@@ -24,6 +24,36 @@ describe('safe host errors', () => {
     expect(error.message).toBe('Session scan could not be completed. Open diagnostics for a safe error code.');
   });
 
+  it('preserves only the project-kind conflict code and hides host details', () => {
+    const error = toSafeHostError('Project registration', {
+      code: 'PROJECT_KIND_CONFLICT',
+      message: 'D:/private/project was registered as pi',
+    });
+
+    expect(error.code).toBe('PROJECT_KIND_CONFLICT');
+    expect(isHostConflict(error)).toBe(false);
+    expect(error.message).toContain('another agent runtime');
+    expect(error.message).not.toContain('D:/private/project');
+  });
+
+  it('maps an active Prime lease to a typed path-free conflict', () => {
+    const error = toSafeHostError('Prime runtime start', {
+      code: 'SESSION_ALREADY_ACTIVE',
+      message: 'C:/private/session.jsonl is held by pid 1234',
+    });
+
+    expect(error.code).toBe('SESSION_ALREADY_ACTIVE');
+    expect(error.message).toContain('already active');
+    expect(error.message).not.toContain('C:/private');
+    expect(error.message).not.toContain('1234');
+  });
+
+  it('round-trips an explicit Prime Agent kind in the browser project mock', async () => {
+    const project = await host.addProject('D:/prime-project-test', 'prime-agent');
+    expect(project.agentKind).toBe('prime-agent');
+    await host.removeProject(project.id);
+  });
+
   it('round-trips only the typed PiUI display preferences in the browser mock', async () => {
     const before = (await host.bootstrap()).preferences;
     const updated = await host.updatePreferences({
@@ -57,13 +87,19 @@ describe('safe host errors', () => {
     await expect(host.getRuntimeCommands('mock-runtime')).resolves.toEqual([]);
   });
 
-  it('toggles only an opaque global extension id in the browser mock', async () => {
-    const before = await host.listExtensions();
-    const target = before[0];
+  it('keeps Pi and Prime Agent extension inventories separate in the browser mock', async () => {
+    const piBefore = await host.listExtensions('pi');
+    const primeBefore = await host.listExtensions('prime-agent');
+    expect(piBefore.every((extension) => extension.agentKind === 'pi')).toBe(true);
+    expect(primeBefore.every((extension) => extension.agentKind === 'prime-agent')).toBe(true);
+    expect(primeBefore.some((prime) => piBefore.some((pi) => pi.id === prime.id))).toBe(false);
+
+    const target = piBefore[0];
     expect(target).toBeDefined();
-    const updated = await host.setExtensionEnabled(target!.id, !target!.enabled);
+    const updated = await host.setExtensionEnabled('pi', target!.id, !target!.enabled);
     expect(updated.find((extension) => extension.id === target!.id)?.enabled).toBe(!target!.enabled);
-    await host.setExtensionEnabled(target!.id, target!.enabled);
+    await expect(host.setExtensionEnabled('prime-agent', target!.id, true)).rejects.toThrow('not found');
+    await host.setExtensionEnabled('pi', target!.id, target!.enabled);
   });
 
 });

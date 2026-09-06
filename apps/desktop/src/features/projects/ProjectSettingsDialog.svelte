@@ -15,6 +15,8 @@
   let removeConfirmation = false;
   let dialog: HTMLDialogElement | undefined;
 
+  $: agentLabel = project?.agentKind === 'prime-agent' ? 'Prime Agent' : 'Pi';
+
   $: if (!open) removeConfirmation = false;
   $: if (open && project) void focusFirstControl();
 
@@ -56,7 +58,7 @@
     <dialog bind:this={dialog} open class="dialog" aria-modal="true" aria-labelledby="project-settings-title" aria-describedby="project-settings-description">
       <p class="eyebrow">Local project</p>
       <h2 id="project-settings-title">Project settings</h2>
-      <p id="project-settings-description">These actions change PiUI’s local registry only. They never rename or delete the folder or Pi session files.</p>
+      <p id="project-settings-description">These actions change PiUI’s local registry only. They never rename or delete the folder or {agentLabel} session files.</p>
 
       <section class="rename-section" aria-label="Project display name">
         <label for="project-display-name">Display name</label>
@@ -78,7 +80,7 @@
       <section class="danger-section" aria-label="Remove project from PiUI">
         <div>
           <strong>Remove from PiUI</strong>
-          <p>Removes the local registry record and rebuildable cache. The folder and Pi JSONL files remain untouched.</p>
+          <p>Removes the local registry record and rebuildable cache. The folder and {agentLabel} JSONL files remain untouched.</p>
         </div>
         {#if removeConfirmation}
           <div class="remove-confirmation">

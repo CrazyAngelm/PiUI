@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ModelLite } from '../../host-api/types';
 import {
   initialRuntimeSelection,
+  liveRuntimeSupported,
   rememberSessionRuntimePreference,
   runtimeSessionKey,
   type SessionRuntimePreference,
@@ -11,6 +12,11 @@ const globalModel: ModelLite = { provider: 'global-provider', id: 'global-model'
 const sessionModel: ModelLite = { provider: 'session-provider', id: 'session-model' };
 
 describe('runtime selection ownership', () => {
+  it('fails closed for Prime live control while keeping Pi available', () => {
+    expect(liveRuntimeSupported('pi')).toBe(true);
+    expect(liveRuntimeSupported('prime-agent')).toBe(false);
+  });
+
   it('uses global explicit choices only for a brand-new chat', () => {
     const selection = initialRuntimeSelection(
       undefined,

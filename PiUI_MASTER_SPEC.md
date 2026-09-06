@@ -42,7 +42,7 @@ _Source file: `README.md`._
 ## PiUI
 
 <p align="center">
-  A fast, local desktop interface for browsing and continuing <a href="https://pi.dev/">Pi</a> sessions.
+  A fast, local desktop interface for browsing and continuing <a href="https://pi.dev/">Pi</a> sessions, with a separate experimental read-only Prime Agent 0.8.1 history lane.
 </p>
 
 <p align="center">
@@ -102,22 +102,24 @@ Do not write to the same session from PiUI and the Pi CLI at the same time. Conc
 ### What PiUI does
 
 - discovers existing Pi JSONL sessions without introducing another chat format;
+- keeps Pi and Prime Agent 0.8.1 project kinds, session roots, and global extension inventories explicit and separate;
 - renders a safe, bounded transcript with Markdown, reasoning, and grouped tool activity;
-- continues indexed sessions or creates Pi-owned personal chats;
-- starts a locally installed Pi CLI in RPC mode only after an explicit user action;
+- continues indexed Pi sessions, keeps projectless personal chats Pi-owned, and renders Prime root-session history read-only;
+- starts a locally installed Pi CLI in RPC mode only after an explicit user action; Prime 0.8.1 live control stays disabled;
 - streams typed runtime events through a narrow Rust/Tauri host API;
 - keeps a rebuildable SQLite catalog separate from Pi's session files;
 - provides project trust controls and local appearance preferences;
 - supports keyboard navigation, safe generic fallbacks, and reduced motion.
 
-PiUI wraps Pi. It does not replace Pi's agent loop, providers, tools, compaction, authentication store, or session branching.
+PiUI wraps Pi and has a separate Prime Agent 0.8.1 preview: session history is read-only, while global extension settings remain runtime-scoped and configurable. It does not replace either runtime's agent loop, providers, tools, compaction, authentication store, or session branching.
 
 ### Current limitations
 
-- The local live-RPC path is a preview, not a managed-runtime provenance guarantee.
+- The local Pi live-RPC path is a preview, not a managed-runtime provenance guarantee. Prime Agent 0.8.1 live control fails closed because its shared detached daemon cannot yet be isolated and contained without risking other active Prime sessions.
+- Prime projects can list distinct root sessions read-only. Starting, continuing, prompting, stopping, exact live binding, daemon attach, resident sessions, replay, and multi-client control are not available through PiUI.
 - The Windows artifacts are unsigned and the application has no automatic updater.
 - Concurrent Pi CLI/PiUI writes to one session are unsupported.
-- Authentication stays in Pi's standard flow; PiUI does not read or expose `auth.json`.
+- Authentication stays in each runtime's standard flow; PiUI does not read or expose `auth.json` or Prime credentials/tokens, and has no headless auth flow.
 - Packaged browser/Tauri E2E, managed-runtime acquisition, updater, and the full Windows/Linux platform matrix remain release gates.
 - Project-local extension JavaScript stays disabled until its trust and isolation design is complete.
 
@@ -170,6 +172,7 @@ pnpm check
 pnpm test
 pnpm contract:test
 pnpm build
+pnpm test:smoke
 pnpm test:e2e
 pnpm perf:smoke
 cargo fmt --all -- --check
@@ -177,7 +180,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-`pnpm test:e2e` is currently a static UI smoke check rather than a packaged desktop E2E suite.
+`pnpm test:smoke` is the static source check. `pnpm test:e2e` dispatches to the real Windows Tauri/WebView2 harness, which passes through a feature-gated debug-only loopback driver and outside-Job fixture cleanup. Linux still fails explicitly because its WebKit harness is not implemented yet.
 
 ### Repository layout
 
@@ -280,6 +283,7 @@ The UI does not access the `runtime`, `index`, or OS layers directly.
 
 - Parse stdout with a normal general-purpose line reader that splits on Unicode line separators. Pi RPC requires LF-only framing.
 - Kill only the parent PID while leaving child tool processes.
+- Run a real Prime Agent probe or test without an explicit non-default `--daemon-socket`; isolated session directories alone do not isolate the supervisor.
 - Hide project trust behind a generic “Continue” button.
 - Automatically copy external files into a project without a user-visible decision.
 - Render raw HTML from Markdown, tool output, or an extension payload.
@@ -735,9 +739,9 @@ Settings is located at the upper left, as required by the original requirement. 
 Settings is not a modal overlay. It replaces the main workspace while retaining the global sidebar, and has its own vertical navigation:
 
 - **Appearance** — system/light/dark theme, density, reduced motion, chat text size and a persistent centered conversation-width choice; the default is `Wide`, so the timeline uses the workspace instead of leaving large unused side gutters;
-- **Extensions** — a bounded list of global Pi extensions and real enable/disable switches.
+- **Extensions** — a bounded runtime selector plus separate global Pi and Prime Agent inventories with real enable/disable switches.
 
-Extension inventory and toggles are performed through Pi `SettingsManager`/`DefaultPackageManager`, not by parsing `settings.json` in the frontend. The WebView receives only an opaque id, display name, source class, and enabled state; native paths remain in the host. Changes take effect on the next chat runtime launch. Project-local extensions are not managed here and remain behind the project trust boundary.
+Extension inventory and toggles are performed through the selected runtime's own manager, not by parsing settings files in the frontend. The WebView receives only a runtime-scoped opaque id, display name, source class, and enabled state; native paths remain in the host. A change affects future launches for that runtime only. PiUI never copies or auto-enables an extension across Pi and Prime roots. Project-local extensions are not managed here and remain behind the project trust boundary. A toggle reports success only after that manager’s queued global write flushes and its matching error queue is empty; a failed write returns an error before re-inventory and never emits a success result.
 
 Developer-only fake runtime, legacy probe, and foundation disclaimers are not shown in product settings.
 
@@ -754,7 +758,9 @@ A project row contains:
 
 Clicking a project row toggles its expanded state without losing the currently open timeline. On the first/manual refresh, the list immediately shows `Scanning local Pi sessions…` until the bounded host scan completes; a late response must not arbitrarily expand a group that the user closed.
 
-An expanded project initially shows the five newest catalog sessions. If more exist, keyboard-accessible `Show 5 more` and `Show all (N)` controls reveal the next page or the complete already-indexed list; they do not initiate a filesystem scan. Default sorting:
+An expanded Pi project has a keyboard-accessible **New session** action that opens an empty Pi-owned chat while retaining every existing catalog row. Prime projects show their existing root sessions read-only: project and global New session actions are absent or disabled, the composer is hidden, and the containment notice remains screen-reader visible. Multiple existing Prime root sessions stay selectable; PiUI does not start or lease one.
+
+The expanded project initially shows the five newest catalog sessions. If more exist, keyboard-accessible `Show 5 more` and `Show all (N)` controls reveal the next page or the complete already-indexed list; they do not initiate a filesystem scan. Default sorting:
 
 1. running/waiting-for-input;
 2. pinned;
@@ -1757,7 +1763,18 @@ PiUI uses Pi as the sole source of agent behavior. It does not call model provid
 PiUI Rust host <-> stdin/stdout JSONL <-> pi --mode rpc
 ```
 
-Each launch is bound to a specific project `cwd` and, when supported by the selected launch method, to an existing or new Pi session.
+Each launch is bound to a specific project `cwd` and, when supported by the selected launch method, to an existing or new session.
+
+### 1.1 Current runtime lanes and protocol v10
+
+The current host protocol is **v10**. It adds the explicit `pi | prime-agent` project kind, runtime-scoped opaque extension inventories, and typed bounded Prime activity contracts for a future contained adapter; v9 routes remain Pi-only compatibility routes. A project is registered to exactly one kind. Re-registering the same directory under the other kind fails rather than silently changing it.
+
+- **Pi:** the existing local Pi RPC preview and Pi session discovery behavior remain the compatibility lane.
+- **Prime Agent:** v10 supports separate read-only root-session discovery and a separate global extension inventory for **Prime Agent 0.8.1**. Live start/continue/prompt/stop fails as `NOT_SUPPORTED`: the CLI uses a shared detached daemon that is outside a safely owned per-runtime lifecycle.
+- A Prime project may contain multiple distinct indexed root sessions. Their catalog IDs are opaque. v10 start and state-event DTO projections substitute that opaque ID, or omit the field when unbound; a native Prime handshake/header ID never crosses to the WebView. The exact live binding and per-session lease adapter remain test-only design code and do not authorize a Prime launch.
+- Pi and Prime session roots must be disjoint. PiUI rejects equal, nested, lexical-alias, and Windows case-alias roots before refresh or launch. Prime scans only its flat root catalog and excludes positive-`rlmDepth` descendants from project chats; those are activity of the root session.
+
+The Prime activity contract is a display-safe, bounded typed projection only (RLM child, goal, session-action counts, recap, stale-auth status, refinement, bash, heartbeat, schedule, or payload-free unknown). It is retained for fixture/adapter compatibility but is not reachable from production live control while the daemon gate is closed. It is not a general Prime event/replay API. Snapshot projection and the UI helper retain at most the runtime channel’s established 256-event capacity. Raw `bash_output` chunks are discarded before any awaited UI-channel send; only the bounded typed `bash_end` summary is eligible for projection.
 
 ### 2. What belongs to Pi and what belongs to PiUI
 
@@ -1778,7 +1795,7 @@ No PiUI feature must become a second canonical representation of agent state.
 
 #### Global extension configuration
 
-PiUI does not parse or write Pi `settings.json`. Extension settings invoke a small typed host adapter which, in offline mode, imports upstream `SettingsManager` and `DefaultPackageManager`, skips installation of missing packages, and uses the same setters as `pi config`. Only global user resources are projected into the UI; filesystem paths and package source strings do not cross IPC. A toggle applies to future runtime starts. Project-local resources remain outside this surface and require a separate trusted-project flow.
+PiUI does not parse or write Pi `settings.json`. Extension settings invoke a small typed host adapter which, in offline mode, imports the selected runtime's own manager and uses its setters; missing packages are not installed. v10 lists and toggles the selected runtime's global inventory only. Pi and Prime inventories, opaque IDs, enablement, commands, and contributions remain separate; PiUI never copies, enables, or treats code from one root as code from the other. The legacy v9 routes remain Pi-only, and PiUI declarative contributions remain Pi-only. Only opaque display metadata crosses IPC. A toggle applies to future runtime starts. Project-local resources remain outside this surface and require a separate trusted-project flow.
 
 ### 3. Protocol framing
 
@@ -2085,7 +2102,7 @@ PiUI shows name/type/size and passes a path reference. It does not promise built
 
 ### 13. Authentication and provider setup
 
-Pi owns auth. PiUI must not parse `auth.json` for its own provider client.
+Each runtime owns its authentication. PiUI must not parse `auth.json` or Prime credentials/tokens for its own provider client. v10 advertises `auth.headless: false` for both lanes; the Prime preview's stale-auth activity is status only, never an interactive login surface.
 
 MVP options in order of preference:
 
@@ -2855,7 +2872,7 @@ Deleting items 4–5 must not destroy items 1–3.
 
 ### 2. Project model
 
-A project is a registered existing directory.
+A project is a registered existing directory with one explicit runtime kind (`pi` or `prime-agent`). The kind is rebuildable PiUI metadata and does not change files or configuration in that directory. The same resolved directory cannot be registered for both kinds at once.
 
 ```ts
 interface ProjectRecord {
@@ -2869,6 +2886,7 @@ interface ProjectRecord {
   trustState: 'unknown' | 'trusted' | 'restricted';
   missingSince?: string;
   runtimeProfileId?: string;
+  agentKind: 'pi' | 'prime-agent'; // explicit PiUI metadata; does not modify the project
 }
 ```
 
@@ -2889,7 +2907,9 @@ PiUI does not create `.piui` in a project without a separate decision/ADR. All o
 
 #### 3.1 Where to search
 
-The scanner receives explicit Pi session roots from the runtime environment (`PI_CODING_AGENT_SESSION_DIR` takes priority) and treats the existing conventional project-local `<project>/.pi/agent-sessions` as a known directory mapping. A single JSONL file is read with a hard host limit of 128 MiB; an oversized source is retained untouched and is not presented as indexed. The default global Pi location may be used as an initial hint. Project settings files are not parsed for discovery; paths and raw scanner diagnostics are not passed to the WebView.
+Pi and Prime Agent have separate discovery lanes. Pi receives explicit Pi roots from the runtime environment (`PI_CODING_AGENT_SESSION_DIR` takes priority) and recognizes the conventional project-local `<project>/.pi/agent-sessions` mapping. Prime Agent uses, in order, `PRIME_AGENT_SESSION_DIR`, `PRIME_AGENT_CODING_AGENT_SESSION_DIR`, `PRIME_AGENT_CODING_AGENT_DIR/sessions`, then `~/.prime/agent/sessions`. Relative configured roots resolve from the registered project. The host rejects overlapping, nested, lexical-alias, and Windows case-alias Pi/Prime roots before refresh or launch; it does not guess which runtime owns a shared tree.
+
+A Pi project scans only its Pi roots. A Prime project scans only its flat Prime root and excludes headers with positive `rlmDepth`: those are child-worker activity of their root session, not independent project chats. A Prime root may still contain several distinct root sessions. A single JSONL file is read with a hard host limit of 128 MiB; an oversized source is retained untouched and is not presented as indexed. Project settings files are not parsed for discovery; paths and raw scanner diagnostics are not passed to the WebView.
 
 The session ↔ project association is determined in this order:
 
@@ -2915,9 +2935,13 @@ filesystem watcher / explicit refresh / Pi runtime exit / polling hint
 
 Filesystem traversal, hashing, and SQLite commit run through host `spawn_blocking`, so the Tauri invoke/event task publishes `refreshStarted` immediately and does not block the WebView. Only a proven complete pass becomes `current`; incomplete coverage (an unavailable candidate/root, limit, CAS mismatch, or an empty set of roots without authority) keeps safe cached rows visible, but is published as `degraded` and does not reset the periodic integrity scan counter.
 
-The catalog fingerprint is stored host-side only and includes path, native file ID/inode, size, mtime, bounded prefix/tail continuity digest, and parser version. Mtime or a continuity digest are not considered proof of a content revision: they only allow a repeated catalog parse to be skipped. Timeline and mutation admission use a separate strong observation with identity-bound full revision verification.
+The catalog fingerprint is stored host-side only and includes path, native file ID/inode, size, mtime, a 64 KiB prefix and 64 KiB tail continuity digest, and parser version. Mtime or a continuity digest are weak, dynamic catalog evidence, not proof of a content revision: they only allow a repeated catalog parse to be skipped. Timeline and mutation admission use a separate strong observation with identity-bound full revision verification.
+
+After 20 successful incremental reconciliations for a project, the host forces a full integrity pass before another incremental pass. An incomplete pass does not advance this counter. This bounded refresh rule reduces repeated full scans but never upgrades weak evidence into mutation authority.
 
 For the first turn of a new Pi session, the UI stores a baseline of known opaque IDs before launching Pi and does not auto-select a catalog row until it finds exactly one new persisted row. Short retries use bounded exponential backoff. An expected catalog miss stays silent while that retry window is active, because Pi may already have saved the chat while the index refresh is still catching up. If JSONL still has not appeared or candidates remain ambiguous after the window, visible `Retry discovery` gives the user an explicit recovery path rather than selecting another session; a later successful catalog resolution clears that feedback and replaces live blocks with the authoritative page.
+
+Prime live startup is disabled while 0.8.1 depends on an unowned shared daemon. The exact handshake/header correlation code remains a non-authorizing adapter test contract: if a future contained runtime creates a root, the host must accept exactly one same-project row whose internal header ID matches and expose only its opaque catalog ID. Current Prime history uses only opaque indexed IDs and does not create or lease sessions.
 
 #### 3.3 Partial writes
 
@@ -3306,9 +3330,9 @@ _Source file: `docs/07_SECURITY.md`._
 
 ### 1. Core honest statement
 
-Pi and its backend extensions run with the local user's permissions. Project trust controls which project-local resources are loaded, but **does not turn Pi into a sandbox**. PiUI must communicate this before the first agent launch in a new project.
+Pi and runtime-owned global extension managers run with the local user's permissions. Prime Agent history is read-only in PiUI, while its selected global extension manager may update Prime settings. Project trust **does not turn any runtime or extension into a sandbox**.
 
-PiUI reduces UI and accidental-action risk, but cannot promise isolation from a malicious Pi tool/extension without a separate OS/container sandbox architecture.
+PiUI reduces UI and accidental-action risk, but cannot promise isolation from a malicious runtime tool/extension without a separate OS/container sandbox architecture. The Pi live-RPC lane is a local preview. Prime Agent 0.8.1 live control is disabled because its shared daemon is not contained by the current per-runtime supervisor.
 
 ### 2. Assets to protect
 
@@ -3369,7 +3393,7 @@ Mitigations:
 
 #### Malicious backend extension/tool
 
-Backend code executes inside the Pi environment with user permissions.
+Backend code executes inside the selected Pi or Prime Agent environment with user permissions. Pi and Prime global extension inventories are separate; PiUI does not transfer code, enablement, commands, or grants across them.
 
 PiUI mitigations are limited to:
 
@@ -3521,7 +3545,8 @@ Tools launched by Pi may create descendants outside the controllable tree; PiUI 
 
 ### 9. Secrets and authentication
 
-- Pi owns provider credentials;
+- Each runtime owns provider credentials. PiUI does not read/write `auth.json`, Prime credentials, or Prime tokens;
+- v10 has no headless authentication capability. Prime stale-auth activity is display-only and cannot expose an interactive credential flow;
 - PiUI does not mirror secret values in SQLite/frontend stores;
 - the platform credential store is used only for PiUI extension secrets;
 - password inputs disable copy/display by default but permit explicit reveal;
@@ -3821,6 +3846,7 @@ Absolute FTS duration depends on storage; the release regression gate uses ±15%
 
 #### 4.5 Package
 
+- the current emitted frontend asset smoke gate is **260 KiB**. The current v10 read-only Prime lane and project-session UI build measures **259,817 bytes**, below the 266,240-byte gate; this is a local build-size check, not a public performance or release-gate closure;
 - compressed PiUI application payload target ≤35 MiB, excluding optional WebView bootstrap and managed Pi runtime;
 - runtime and UI artifact sizes reported separately;
 - no dependency may add >5 MiB compressed without ADR;
@@ -3935,7 +3961,7 @@ Required Playwright/Tauri harness scenarios:
 19. keyboard-only complete chat flow;
 20. WebView reload while runtime continues.
 
-Tests should assert host state/data, not only screenshots.
+Tests should assert host state/data, not only screenshots. The Windows v10 harness uses synthetic Pi/Prime roots and debug-only app/WebView data inside a canonical `<repo>/target/piui-e2e/<run>` fixture. An outside-Job controller contains the inner Node harness, while controlled feature-gated Job runners contain the Vite, proof-build, normal-app, and safe-app trees. The harness launches only Cargo's exact forced-target artifact and reports pass only after the outer Job is empty and bounded, reparse-safe fixture removal succeeds. Because the machine-provided Evergreen WebView2 runtime accepts remote-debugging arguments without exposing a CDP listener, the harness instead uses a Cargo-feature- and debug-gated exact-origin loopback driver injected only into the manually created `main` WebView; ordinary debug and release builds cannot activate it. The passing Windows flow verifies Pi generic fallback, multiple Prime root sessions in one project, the Prime read-only/live-disabled boundary, labelled modal controls, application keyboard focus handling, extension inventory separation, WebView reload, and safe mode without reading a user profile. The observed WebView user-agent product version is reported with the result rather than treated as a repository-pinned runtime. The canonical `pnpm test:e2e` command dispatches to this real harness on Windows and still fails explicitly on Linux because no WebKit harness exists yet. The former source check is `pnpm test:smoke` and is not counted as browser/Tauri E2E evidence.
 
 ### 9. Platform matrix
 
@@ -5308,6 +5334,7 @@ Scale:
 | R-18 | Managed runtime and system Pi diverge in packages/config behavior | Medium | High | G2/G6 |
 | R-19 | Generic file references are not sufficiently understandable to models/tools | Medium | Medium | G3 |
 | R-20 | Scope creep turns PiUI into an IDE/dashboard | High | High | All gates |
+| R-21 | Prime Agent 0.8.1 shared-daemon lifecycle cannot be isolated or contained safely | High | Critical | G0/G2/G3 |
 
 ### 3. Details and Exit Criteria
 
@@ -5351,11 +5378,11 @@ Scale:
 
 **Signal:** `ctx.ui.custom`, header/footer/editor/theme are no-ops; custom entries lack renderer metadata.
 
-**Implemented evidence:** against Pi 0.82.1, the typed adapter now enumerates RPC commands and projects bounded `notify`, status, widget, title, editor-text, select, confirm, input, and editor actions without exposing native paths or raw RPC IDs. A live installed-package probe exercised an extension slash command and observed its notification through the adapter; an isolated project-local synthetic fixture round-tripped select, confirm, input, and editor responses through the same LF-framed runtime. The first global-package `piui.manifest.json` fixture projects only `pi-command:` declarations and composer actions; removing or invalidating it leaves the backend and generic command surface intact.
+**Implemented evidence:** against Pi 0.82.1, the typed adapter now enumerates RPC commands and projects bounded `notify`, status, widget, title, editor-text, select, confirm, input, and editor actions without exposing native paths or raw RPC IDs. A live installed-package probe exercised an extension slash command and observed its notification through the adapter; an isolated project-local synthetic fixture round-tripped select, confirm, input, and editor responses through the same LF-framed runtime. The first global-package `piui.manifest.json` fixture projects only `pi-command:` declarations and composer actions; removing or invalidating it leaves the backend and generic command surface intact. For Prime Agent 0.8.1, the static probe now records separate `.prime/agent` extension roots, Pi-named loader aliases, and Prime-only refinement hooks. Versioned host commands list and toggle Pi and Prime global inventories through the selected package's own manager; opaque IDs include runtime kind and the legacy v9 routes remain Pi-only.
 
-**Residual:** awaited dialogs emitted before the startup handshake reaches Ready are explicitly cancelled to prevent a protocol deadlock; TUI-only `ctx.ui.custom()` cannot be translated; project-local manifests, independent UI grants, renderer ownership, declarative views/renderers, and rich surfaces remain unimplemented. RPC `toolName` still does not reliably identify the owning extension.
+**Residual:** awaited dialogs emitted before the startup handshake reaches Ready are explicitly cancelled to prevent a protocol deadlock; TUI-only `ctx.ui.custom()` cannot be translated; project-local manifests, independent UI grants, renderer ownership, declarative views/renderers, and rich surfaces remain unimplemented. RPC `toolName` still does not reliably identify the owning extension. Prime's Pi-named import aliases prove only a partial source surface, not universal ABI compatibility; Pi-only hooks/context fields and Prime-only refinement events require extension-owned adapters.
 
-**Mitigation:** Tier 0 generic fallback + PiUI manifest/SDK; extension UI fixture corpus; require upstream extensions to use `ctx.mode === "tui"` only around genuinely TUI-only components.
+**Mitigation:** Tier 0 generic fallback + PiUI manifest/SDK; extension UI fixture corpus; require upstream extensions to use `ctx.mode === "tui"` only around genuinely TUI-only components. Keep runtime inventories, enablement, commands, and contributions separate; never copy or auto-enable code across roots. Any future portability bridge is owned and advertised by the destination runtime after trust, not implemented in PiUI core.
 
 **Exit:** documented compatibility matrix and dual-package example; renderer ownership decision; no claim of full automatic TUI parity.
 
@@ -5480,6 +5507,16 @@ Scale:
 **Mitigation:** ADR-015, extension-first review, release gates, explicit non-goals.
 
 **Exit:** ongoing; each new core feature requires an ADR.
+
+#### R-21 — Prime Agent shared-daemon lifecycle
+
+**Signal:** `prime-agent@0.8.1 --mode rpc` reaches a shared detached supervisor. If PiUI starts that supervisor inside a per-runtime Job/process group, stopping PiUI can terminate unrelated Prime clients. If the supervisor already exists, the worker and its descendants are outside PiUI's containment.
+
+**Implemented evidence:** v10 registers one explicit project kind, keeps Pi and Prime roots/inventories separate, rejects root overlap, and lists root Prime sessions while excluding positive-`rlmDepth` children. Typed exact-binding, lease, and bounded activity adapter code remains covered by synthetic fixtures. The schema-v2 spike hashes the installed `dist/bundle/cli.js` literal local import closure and detects shared-daemon markers, but those hashes are not authenticated acquisition, execution, containment, or lifecycle authorization.
+
+**Current mitigation:** production Prime start/continue/prompt/stop fails closed as `NOT_SUPPORTED`; the UI retains read-only history and explains that the shared daemon is the blocker. PiUI never connects to, adopts, creates, or terminates the user's Prime supervisor.
+
+**Exit:** authenticate acquisition/provenance for the actual executable bundle, own a non-default daemon endpoint and complete lifecycle, and prove first-launch plus pre-existing-daemon containment on Windows and Linux without affecting another client. Until then, keep Prime live control disabled.
 
 ### 4. Secondary Risks
 
@@ -5686,7 +5723,7 @@ _Source file: `HANDOFF_PROMPT.md`._
 
 ## PiUI — handoff for coding agents and contributors
 
-PiUI is a minimal desktop shell on top of the Pi agent harness. It does not replace the Pi agent loop, provider clients, tools, compaction, session storage, or authentication.
+PiUI is a minimal desktop shell on top of Pi, with a separate Prime Agent 0.8.1 lane: read-only session history plus runtime-scoped configurable global extension settings. It does not replace either runtime's agent loop, provider clients, tools, compaction, session storage, or authentication.
 
 ### Before any task
 
@@ -5703,13 +5740,14 @@ Read in this order:
 - Do not give the WebView a general shell/filesystem/process API.
 - Do not read or pass through `auth.json`, credentials, the full environment, or raw prompts.
 - Do not run project-local UI/JavaScript before a separate trust decision.
-- Do not represent the local live-RPC preview as a managed runtime, sandbox, or release-ready feature.
+- Do not represent the local Pi live-RPC preview as a managed runtime, sandbox, containment guarantee, or release-ready feature.
+- Keep Pi and Prime Agent project kinds, session roots, extension inventories, and opaque IDs separate. Prime live control must remain fail-closed until PiUI owns a non-default daemon lifecycle and proves containment on Windows and Linux; do not claim launch, attach, resident sessions, replay, or multi-client support.
 - Do not add a cloud backend, telemetry, an account system, or Electron without an ADR.
 - For every new core feature, evaluate the extension-first alternative first.
 
 ### Current status
 
-The foundation and temporary local live-RPC preview are implemented, but public-release gates remain open. Actual Pi/runtime/packaging/platform claims must correspond only to evidence in `docs/13_FOUNDATION_STATUS.md`, `spikes/PHASE0_GATE.md`, and `CHECKLIST_RELEASE.md`.
+The foundation and temporary local Pi live-RPC preview are implemented, but public-release gates remain open. Host protocol v10 adds an explicit Prime project kind, separate read-only session discovery, and runtime-scoped global extension inventory; Prime live control is gated because 0.8.1 uses a shared detached daemon. Legacy v9 remains Pi-only. Actual runtime and platform claims must correspond only to accepted evidence.
 
 ### Work format
 
@@ -5746,7 +5784,7 @@ _Source file: `contracts/README.md`._
 
 - `piui-extension-manifest.schema.json` — normative JSON Schema for manifest v1.
 - `piui-host-api.d.ts` — author-facing API for declarative workers and rich views.
-- `runtime-protocol.ts` — internal typed IPC between the Rust host and core Svelte UI; v3 introduced the local live-runtime surface, v4 adds Pi-reported thinking-level discovery with a bumped event envelope, v5 adds host-owned personal Chats commands and scoped runtime events without exposing a workspace path, v6 versions desktop semantic timeline projection v2 (bounded known Pi content, correlated tools, no raw JSON/tool arguments), v7 adds cache-first session-catalog snapshots plus opaque watcher hints, and v8 versions PiUI-only appearance preferences (font size and centered conversation width). Catalog freshness never authorizes a JSONL mutation.
+- `runtime-protocol.ts` — internal typed IPC between the Rust host and core Svelte UI; v3 introduced the local live-runtime surface, v4 added Pi thinking-level discovery, v5 added host-owned personal Chats, v6 versioned semantic timeline projection v2, v7 added cache-first catalogs and watcher hints, v8 versioned PiUI-only appearance preferences, v9 added bounded extension UI/runtime commands, and v10 adds an explicit `pi | prime-agent` project kind, separate session discovery, runtime-scoped global extension commands, and a bounded non-authorizing Prime activity contract. A project has one kind; Pi and Prime roots, inventories, and opaque IDs remain separate. Prime 0.8.1 live start/continue/prompt/stop is fail-closed because its shared detached daemon is not contained by the current supervisor. Catalog freshness never authorizes a JSONL mutation.
 
 ### Rules
 
@@ -7640,6 +7678,146 @@ export interface HostCommandRequestV9 {
 export type HostCommandResponseV9 =
   | { protocol: 9; commandId: CommandId; ok: true; result: JsonValue | null }
   | { protocol: 9; commandId: CommandId; ok: false; error: HostError };
+
+/** Protocol v10 adds an explicit agent runtime kind and a bounded Prime
+ * activity lane. v9 remains frozen for ordinary Pi clients. */
+export interface ProtocolEnvelopeV10<TType extends string, TPayload> {
+  protocol: 10;
+  type: TType;
+  payload: TPayload;
+}
+
+type ReversionV9HostCommand<T> = T extends ProtocolEnvelopeV9<infer TType, infer TPayload>
+  ? ProtocolEnvelopeV10<TType, TPayload>
+  : never;
+
+export type AgentKindV10 = 'pi' | 'prime-agent';
+
+export interface DesktopProjectSummaryV10 extends DesktopProjectSummaryV2 {
+  agentKind: AgentKindV10;
+}
+
+export interface DesktopBootstrapSnapshotV10 extends Omit<DesktopBootstrapSnapshotV8, 'projects'> {
+  projects: DesktopProjectSummaryV10[];
+}
+
+/** Global inventory item issued by exactly one runtime manager. Native paths,
+ * package locators, settings content, and executable code stay host-private. */
+export interface DesktopExtensionSummaryV10 {
+  id: string;
+  agentKind: AgentKindV10;
+  name: string;
+  source: 'Global' | 'Package';
+  enabled: boolean;
+}
+
+export interface DesktopLiveRuntimeCapabilitiesV10 {
+  rpc: true;
+  'session.tree.read': true;
+  'session.tree.navigate': false;
+  'auth.headless': false;
+  'ui.standardDialogs': boolean;
+  'prime.activity': boolean;
+  'runtime.liveAttach': false;
+  'runtime.residentSessions': false;
+  'runtime.eventReplay': false;
+  'runtime.multiClient': false;
+  'thinking.catalog': boolean;
+}
+
+export interface DesktopLiveRuntimeSnapshotV10 {
+  runtimeId: RuntimeId;
+  agentKind: AgentKindV10;
+  state: RuntimeState;
+  revision: number;
+  capabilities: DesktopLiveRuntimeCapabilitiesV10;
+  safeSummary?: string;
+}
+
+/** v10 Prime projects expose only the host-indexed opaque catalog id. Pi keeps
+ * the frozen v3 state shape, including its legacy runtime-native id. */
+export interface DesktopLiveSessionStateV10 extends Omit<DesktopLiveSessionStateV3, 'sessionId'> {
+  /** Opaque catalog id when the host has a correlated session; omitted rather
+   * than leaking a Prime-native handshake/header id. */
+  sessionId?: SessionId;
+}
+
+export interface DesktopLiveRuntimeStartV10 {
+  runtime: DesktopLiveRuntimeSnapshotV10;
+  runtimeId: RuntimeId;
+  agentKind: AgentKindV10;
+  launchLabel: string;
+  sessionState: DesktopLiveSessionStateV10;
+  sessionId?: SessionId;
+}
+
+export type DesktopPrimeActivityV10 =
+  | { type: 'rlmChild'; id: string; label: string; status: 'queued' | 'running' | 'done' | 'error' | 'cancelled' | 'unknown'; model?: string; activity?: 'waiting' | 'writing' | 'executing'; toolName?: string; durationMs?: number; toolUseCount?: number; tokenCount?: number; repliedSinceTask?: boolean }
+  | { type: 'goal'; id: string; status: 'idle' | 'active' | 'paused' | 'budget_limited' | 'complete' | 'error'; objective?: string; tokensUsed: number; tokenBudget?: number; timeUsedSeconds: number; continuationsUsed: number }
+  | { type: 'sessionActions'; id: string; activeCount: number; queuedCount: number }
+  | { type: 'recap'; id: string; summary?: string }
+  | { type: 'authentication'; id: string; provider: string; status: 'stale' }
+  | { type: 'refinement'; id: string; status: 'complete' | 'failed' }
+  | { type: 'bash'; id: string; status: 'running' | 'complete' | 'failed' | 'cancelled'; exitCode?: number; truncated?: boolean }
+  | { type: 'heartbeat'; id: string; status: 'active' | 'paused' | 'completed' | 'cancelled' | 'not-configured' | 'unknown'; schedule?: string; deliveryMode?: 'steer' | 'follow_up' }
+  | { type: 'schedule'; id: string; status: 'active' | 'paused' | 'completed' | 'cancelled' | 'unknown'; source: 'cron' | 'heartbeat' | 'rlm_heartbeat'; schedule?: string }
+  | { type: 'unknown'; id: string; wireType: string };
+
+/** Prime state snapshots use the v10-safe state projection. Pi branches below
+ * retain the frozen v9 stream shape. */
+export type DesktopRuntimeStreamEventV10 =
+  | Exclude<DesktopRuntimeStreamEventV9, { kind: 'stateSnapshot' }>
+  | { kind: 'stateSnapshot'; state: DesktopLiveSessionStateV10; revision: number }
+  | { kind: 'primeActivity'; activity: DesktopPrimeActivityV10 };
+
+export type DesktopRuntimeEventEnvelopeV10 =
+  | ({
+      protocol: 10;
+      runtimeId: RuntimeId;
+      agentKind: 'pi';
+      scope: 'project';
+      projectId: ProjectId;
+      sessionId?: SessionId;
+    } & DesktopRuntimeStreamEventV9)
+  | ({
+      protocol: 10;
+      runtimeId: RuntimeId;
+      agentKind: 'prime-agent';
+      scope: 'project';
+      projectId: ProjectId;
+      sessionId?: SessionId;
+    } & DesktopRuntimeStreamEventV10)
+  | ({
+      protocol: 10;
+      runtimeId: RuntimeId;
+      agentKind: 'pi';
+      scope: 'personal';
+      sessionId?: SessionId;
+    } & DesktopRuntimeStreamEventV9);
+
+export type HostCommandV10 =
+  | ReversionV9HostCommand<HostCommandV9>
+  | ProtocolEnvelopeV10<'desktop.bootstrap.v10', Record<string, never>>
+  | ProtocolEnvelopeV10<'project.add.v10', { path: string; agentKind: AgentKindV10 }>
+  | ProtocolEnvelopeV10<'project.pickAndAdd.v10', { agentKind: AgentKindV10 }>
+  | ProtocolEnvelopeV10<'extension.global.list.v10', { agentKind: AgentKindV10 }>
+  | ProtocolEnvelopeV10<
+      'extension.global.setEnabled.v10',
+      { agentKind: AgentKindV10; extensionId: string; enabled: boolean }
+    >;
+
+export interface HostCommandRequestV10 {
+  commandId: CommandId;
+  command: HostCommandV10;
+}
+
+export type HostErrorV10 = Omit<HostError, 'code'> & {
+  code: HostError['code'] | 'PROJECT_KIND_CONFLICT' | 'SESSION_ALREADY_ACTIVE';
+};
+
+export type HostCommandResponseV10 =
+  | { protocol: 10; commandId: CommandId; ok: true; result: JsonValue | null }
+  | { protocol: 10; commandId: CommandId; ok: false; error: HostErrorV10 };
 
 export interface HostError {
   code:

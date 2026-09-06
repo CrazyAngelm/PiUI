@@ -1,4 +1,4 @@
-import type { ModelLite } from '../../host-api/types';
+import type { AgentKind, ModelLite } from '../../host-api/types';
 
 export interface SessionRuntimePreference {
   key: string;
@@ -15,6 +15,10 @@ export interface InitialRuntimeSelection {
 }
 
 const MAX_SESSION_RUNTIME_PREFERENCES = 256;
+
+export function liveRuntimeSupported(agentKind: AgentKind): boolean {
+  return agentKind === 'pi';
+}
 
 export function runtimeSessionKey(
   personal: boolean,

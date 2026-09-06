@@ -1,3 +1,4 @@
+export type AgentKind = 'pi' | 'prime-agent';
 export type ProjectTrustState = 'unknown' | 'trusted' | 'restricted';
 export type ParseState = 'healthy' | 'partial' | 'unsupported' | 'corrupt';
 export type RuntimeState = 'dormant' | 'starting' | 'ready' | 'running' | 'recovering' | 'stopping' | 'failed';
@@ -5,6 +6,7 @@ export type RuntimeState = 'dormant' | 'starting' | 'ready' | 'running' | 'recov
 export interface ExtensionSummary {
   /** Host-derived opaque id; native paths never cross IPC. */
   id: string;
+  agentKind: AgentKind;
   name: string;
   source: 'Global' | 'Package';
   enabled: boolean;
@@ -14,6 +16,7 @@ export interface ProjectSummary {
   id: string;
   name: string;
   displayPath: string;
+  agentKind: AgentKind;
   trustState: ProjectTrustState;
   pinned: boolean;
   missing: boolean;
@@ -27,9 +30,11 @@ export interface ModelLite {
   label?: string;
 }
 
-/** Display-safe session state projected from Pi `get_state`. */
+/** Display-safe session state projected at the host boundary. Pi keeps its
+ * legacy runtime-native id. Prime v10 replaces it with the opaque catalog id,
+ * or omits it when no safe catalog correlation exists. */
 export interface SessionStateLite {
-  sessionId: string;
+  sessionId?: string;
   sessionName?: string;
   messageCount: number;
   pendingMessageCount: number;
@@ -46,9 +51,15 @@ export interface SessionStateLite {
 export interface ApiRuntimeStart {
   runtime: RuntimeSnapshot;
   runtimeId: string;
+  agentKind: AgentKind;
   launchLabel: string;
   sessionState: SessionStateLite;
-  /** PiUI's opaque indexed id for a continued session, never Pi's native id. */
+  /**
+   * Host-indexed opaque session id. For a continued runtime it identifies the
+   * continued session; for a new Prime project runtime it is the exact
+   * handshake-correlated catalog row. Prime `sessionState.sessionId`, when
+   * present, is this same opaque value; a native handshake id never crosses.
+   */
   sessionId?: string;
 }
 
@@ -111,6 +122,18 @@ export type ExtensionUiResponse =
   | { kind: 'submitted'; value: string }
   | { kind: 'cancelled' };
 
+export type PrimeActivity =
+  | { type: 'rlmChild'; id: string; label: string; status: 'queued' | 'running' | 'done' | 'error' | 'cancelled' | 'unknown'; model?: string; activity?: 'waiting' | 'writing' | 'executing'; toolName?: string; durationMs?: number; toolUseCount?: number; tokenCount?: number; repliedSinceTask?: boolean }
+  | { type: 'goal'; id: string; status: 'idle' | 'active' | 'paused' | 'budget_limited' | 'complete' | 'error'; objective?: string; tokensUsed: number; tokenBudget?: number; timeUsedSeconds: number; continuationsUsed: number }
+  | { type: 'sessionActions'; id: string; activeCount: number; queuedCount: number }
+  | { type: 'recap'; id: string; summary?: string }
+  | { type: 'authentication'; id: string; provider: string; status: 'stale' }
+  | { type: 'refinement'; id: string; status: 'complete' | 'failed' }
+  | { type: 'bash'; id: string; status: 'running' | 'complete' | 'failed' | 'cancelled'; exitCode?: number; truncated?: boolean }
+  | { type: 'heartbeat'; id: string; status: 'active' | 'paused' | 'completed' | 'cancelled' | 'not-configured' | 'unknown'; schedule?: string; deliveryMode?: 'steer' | 'follow_up' }
+  | { type: 'schedule'; id: string; status: 'active' | 'paused' | 'completed' | 'cancelled' | 'unknown'; source: 'cron' | 'heartbeat' | 'rlm_heartbeat'; schedule?: string }
+  | { type: 'unknown'; id: string; wireType: string };
+
 /** Streamed runtime events delivered on `piui://runtime-event`.
  * Mirrors `piui_runtime::SurfaceEvent` (tag = `kind`, camelCase fields). */
 export type SurfaceEvent =
@@ -133,6 +156,7 @@ export type SurfaceEvent =
   | { kind: 'compaction'; active: boolean; safeSummary?: string }
   | { kind: 'thinkingLevelChanged'; level: string }
   | { kind: 'sessionInfoChanged'; name?: string }
+  | { kind: 'primeActivity'; activity: PrimeActivity }
   | { kind: 'extensionUi'; action: ExtensionUiAction }
   | { kind: 'runtimeError'; safeSummary: string };
 
@@ -140,15 +164,17 @@ export type SurfaceEvent =
  * Personal events deliberately have no backing workspace project id. */
 export type RuntimeEventEnvelope =
   | ({
-    protocol: 9;
+    protocol: 10;
     runtimeId: string;
+    agentKind: AgentKind;
     scope: 'project';
     projectId: string;
     sessionId?: string;
   } & SurfaceEvent)
   | ({
-    protocol: 9;
+    protocol: 10;
     runtimeId: string;
+    agentKind: 'pi';
     scope: 'personal';
     sessionId?: string;
   } & SurfaceEvent);
@@ -250,6 +276,12 @@ export interface RuntimeCapabilities {
   'session.tree.navigate': false;
   'auth.headless': false;
   'ui.standardDialogs': boolean;
+  'prime.activity': boolean;
+  'runtime.liveAttach': false;
+  'runtime.residentSessions': false;
+  'runtime.eventReplay': false;
+  'runtime.multiClient': false;
+  'thinking.catalog': boolean;
   [capability: string]: boolean | string | number | null;
 }
 
@@ -271,6 +303,7 @@ export interface FakeScenarioResult {
 
 export interface RuntimeSnapshot {
   runtimeId: string;
+  agentKind: AgentKind;
   state: RuntimeState;
   revision: number;
   capabilities: RuntimeCapabilities;
@@ -297,7 +330,7 @@ export interface AppSnapshot {
 }
 
 export interface HostError {
-  code: 'INVALID_ARGUMENT' | 'NOT_FOUND' | 'NOT_TRUSTED' | 'NOT_SUPPORTED' | 'PROJECT_UNAVAILABLE' | 'CONFLICT' | 'RUNTIME_FAILED' | 'IO_ERROR' | 'INTERNAL_ERROR';
+  code: 'INVALID_ARGUMENT' | 'NOT_FOUND' | 'NOT_TRUSTED' | 'NOT_SUPPORTED' | 'PROJECT_UNAVAILABLE' | 'CONFLICT' | 'PROJECT_KIND_CONFLICT' | 'SESSION_ALREADY_ACTIVE' | 'RUNTIME_FAILED' | 'IO_ERROR' | 'INTERNAL_ERROR';
   message: string;
   recoverable: boolean;
 }

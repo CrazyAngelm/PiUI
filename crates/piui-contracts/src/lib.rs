@@ -93,11 +93,29 @@ pub enum ProjectTrustState {
     Restricted,
 }
 
+/// Selects the installed agent runtime for a registered workspace. The value
+/// is persisted by PiUI; it never changes Pi or Prime Agent configuration.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentKind {
+    #[default]
+    Pi,
+    PrimeAgent,
+}
+
+impl AgentKind {
+    pub const fn is_pi(&self) -> bool {
+        matches!(self, Self::Pi)
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSummary {
     pub id: ProjectId,
     pub name: String,
+    #[serde(default, skip_serializing_if = "AgentKind::is_pi")]
+    pub agent_kind: AgentKind,
     #[serde(default)]
     pub trust_state: ProjectTrustState,
     #[serde(default)]
@@ -543,4 +561,33 @@ impl Default for HostError {
 
 fn default_host_error_message() -> String {
     "An internal host error occurred.".to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_agent_kind_preserves_legacy_pi_json_and_versions_prime_explicitly() {
+        let legacy: ProjectSummary = serde_json::from_value(serde_json::json!({
+            "id": "project",
+            "name": "Project",
+            "trustState": "restricted",
+            "missing": false
+        }))
+        .expect("deserializes frozen Pi project");
+        assert_eq!(legacy.agent_kind, AgentKind::Pi);
+        let legacy_json = serde_json::to_value(&legacy).expect("serializes Pi project");
+        assert!(legacy_json.get("agentKind").is_none());
+
+        let prime = ProjectSummary {
+            agent_kind: AgentKind::PrimeAgent,
+            ..legacy
+        };
+        let prime_json = serde_json::to_value(&prime).expect("serializes Prime project");
+        assert_eq!(
+            prime_json.get("agentKind").and_then(Value::as_str),
+            Some("prime-agent")
+        );
+    }
 }

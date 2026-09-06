@@ -47,12 +47,13 @@ Dependency direction is one-way: desktop composition → application adapters �
 
 See [`docs/13_FOUNDATION_STATUS.md`](docs/13_FOUNDATION_STATUS.md) for the precise completed boundary and external evidence still required.
 
-### Temporary local live-RPC preview (implemented; not a production Slice B/C completion)
+### Temporary local Pi live-RPC preview and Prime read-only lane
 
 - explicit user action in a trusted project resolves a locally installed Pi CLI, launches `pi --mode rpc`, and uses the LF codec plus typed command correlation/event projection;
 - existing indexed sessions launch through `--session`; a new runtime starts a Pi-owned session and the scanner discovers its JSONL after stop;
 - prompt, steer, follow-up, abort, model and thinking controls use Pi RPC only; PiUI never hand-writes JSONL or reads `auth.json`;
-- this preview intentionally bypasses managed-runtime provenance and release containment claims. It is developer-only, retains the fake/read-only route, and does not close any gate below.
+- Host Protocol v10 also has a separate Prime Agent 0.8.1 project kind. Pi/Prime roots and global extension inventories are separate, overlapping roots fail closed, and Prime lists root sessions while excluding positive-`rlmDepth` children. Prime live start/continue/prompt/stop is disabled: the 0.8.1 CLI reaches a shared detached daemon that is not safely owned by PiUI's per-runtime containment.
+- the Pi preview intentionally bypasses managed-runtime provenance and release containment claims. The Prime session lane remains read-only until a non-default daemon lifecycle, authenticated launched-bundle provenance, and Windows/Linux containment tests are accepted.
 
 ### Slice B — protected real-runtime adapter
 
@@ -65,7 +66,7 @@ See [`docs/13_FOUNDATION_STATUS.md`](docs/13_FOUNDATION_STATUS.md) for the preci
 
 ### Slice C — controlled session continuation
 
-The preview implements a narrow start/continue/chat surface for local development. A production continuation flow still requires the `spikes/PHASE0_GATE.md` continuation gate and must add:
+The Pi preview implements a narrow start/continue/chat surface for local development. A production continuation flow still requires the `spikes/PHASE0_GATE.md` continuation gate and must add:
 
 - create/open/continue session using documented Pi RPC paths with the final supervisor;
 - streaming timeline, stop/steer/follow-up, model/thinking controls with reconnect/recovery semantics;

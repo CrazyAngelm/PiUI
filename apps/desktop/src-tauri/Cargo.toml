@@ -15,6 +15,15 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "piui-desktop"
 path = "src/main.rs"
 
+[[test]]
+name = "native-prime-scheduler"
+path = "tests/native_prime_scheduler.rs"
+required-features = ["native-prime-scheduler-test"]
+
+[features]
+e2e-webview-automation = []
+native-prime-scheduler-test = []
+
 [build-dependencies]
 tauri-build = { version = "=2.6.3", features = [] }
 
@@ -22,6 +31,7 @@ tauri-build = { version = "=2.6.3", features = [] }
 piui-contracts = { path = "../../../crates/piui-contracts" }
 piui-extensions = { path = "../../../crates/piui-extensions" }
 piui-index = { path = "../../../crates/piui-index" }
+piui-orchestration = { path = "../../../crates/piui-orchestration" }
 piui-platform = { path = "../../../crates/piui-platform" }
 piui-runtime = { path = "../../../crates/piui-runtime" }
 serde.workspace = true
@@ -33,3 +43,6 @@ uuid.workspace = true
 tauri = { version = "=2.11.5", features = [] }
 rfd = "0.17.2"
 notify = "8.2.0"
+
+[dev-dependencies]
+tauri = { version = "=2.11.5", features = ["test"] }

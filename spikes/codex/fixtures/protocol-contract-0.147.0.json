@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "codexCliVersion": "0.147.0",
+  "generation": {
+    "typescript": [
+      "app-server",
+      "generate-ts",
+      "--experimental",
+      "--out",
+      "<temporary-directory>"
+    ],
+    "jsonSchema": [
+      "app-server",
+      "generate-json-schema",
+      "--experimental",
+      "--out",
+      "<temporary-directory>"
+    ]
+  },
+  "wire": {
+    "transport": "stdio://",
+    "framing": "one UTF-8 JSON object per LF (0x0A)",
+    "jsonrpcMember": false,
+    "requestRequired": [
+      "id",
+      "method"
+    ],
+    "responseRequired": [
+      "id",
+      "result"
+    ],
+    "errorRequired": [
+      "id",
+      "error"
+    ],
+    "notificationRequired": [
+      "method"
+    ]
+  },
+  "handshake": {
+    "requestMethod": "initialize",
+    "notificationMethod": "initialized",
+    "clientInfoRequired": [
+      "name",
+      "title",
+      "version"
+    ],
+    "capabilitiesRequired": [
+      "experimentalApi",
+      "requestAttestation"
+    ],
+    "responseRequired": [
+      "userAgent",
+      "codexHome",
+      "platformFamily",
+      "platformOs"
+    ]
+  },
+  "clientRequests": [
+    "thread/start",
+    "thread/resume",
+    "thread/list",
+    "thread/read",
+    "thread/turns/list",
+    "thread/items/list",
+    "thread/inject_items",
+    "turn/start",
+    "turn/interrupt",
+    "process/spawn",
+    "process/kill"
+  ],
+  "streamNotifications": [
+    "error",
+    "thread/started",
+    "thread/status/changed",
+    "turn/started",
+    "item/started",
+    "item/agentMessage/delta",
+    "item/reasoning/summaryTextDelta",
+    "item/reasoning/summaryPartAdded",
+    "item/reasoning/textDelta",
+    "item/plan/delta",
+    "item/commandExecution/outputDelta",
+    "item/commandExecution/terminalInteraction",
+    "item/fileChange/patchUpdated",
+    "item/mcpToolCall/progress",
+    "item/completed",
+    "turn/diff/updated",
+    "turn/plan/updated",
+    "turn/completed",
+    "serverRequest/resolved",
+    "process/outputDelta",
+    "process/exited"
+  ],
+  "serverRequests": [
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+    "item/permissions/requestApproval",
+    "applyPatchApproval",
+    "execCommandApproval"
+  ],
+  "approvalDecisions": {
+    "commandExecution": [
+      "accept",
+      "acceptForSession",
+      "decline",
+      "cancel"
+    ],
+    "fileChange": [
+      "accept",
+      "acceptForSession",
+      "decline",
+      "cancel"
+    ],
+    "legacyReview": [
+      "approved",
+      "approved_for_session",
+      "timed_out",
+      "abort"
+    ]
+  },
+  "turnStartRequired": [
+    "threadId",
+    "input"
+  ],
+  "turnInterruptRequired": [
+    "threadId",
+    "turnId"
+  ],
+  "turnStatuses": [
+    "completed",
+    "interrupted",
+    "failed",
+    "inProgress"
+  ]
+}

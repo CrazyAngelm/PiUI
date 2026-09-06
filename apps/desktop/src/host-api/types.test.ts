@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { RuntimeCapabilities, RuntimeEventEnvelope, SessionTree } from './types';
+import type { AppSnapshot, PrimeActivity, RuntimeCapabilities, RuntimeEventEnvelope, SessionTree } from './types';
 import type {
   DesktopBootstrapSnapshotV2,
   DesktopLiveRuntimeStartV3,
@@ -13,7 +13,15 @@ import type {
   HostCommandV7 as ProtocolV7Command,
   HostCommandV8 as ProtocolV8Command,
   HostCommandV9 as ProtocolV9Command,
+  HostCommandV10 as ProtocolV10Command,
   DesktopBootstrapSnapshotV8,
+  DesktopBootstrapSnapshotV10,
+  DesktopExtensionSummaryV10,
+  DesktopLiveRuntimeStartV10,
+  DesktopLiveSessionStateV10,
+  DesktopPrimeActivityV10,
+  DesktopProjectSummaryV10,
+  DesktopRuntimeEventEnvelopeV10,
   DesktopRuntimeEventEnvelopeV9,
   DesktopPiUiContributionCatalogV9,
   DesktopSessionCatalogSnapshotV7,
@@ -29,6 +37,12 @@ describe('host contract invariants', () => {
       'session.tree.navigate': false,
       'auth.headless': false,
       'ui.standardDialogs': true,
+      'prime.activity': false,
+      'runtime.liveAttach': false,
+      'runtime.residentSessions': false,
+      'runtime.eventReplay': false,
+      'runtime.multiClient': false,
+      'thinking.catalog': true,
     };
 
     const tree: SessionTree = { nodes: [], diagnosticCount: 0, navigationSupported: false };
@@ -126,8 +140,9 @@ describe('host contract invariants', () => {
     // @ts-expect-error A personal event cannot serialize a backing project id.
     personalEvent.projectId = 'host-personal-workspace';
     const uiEvent: RuntimeEventEnvelope = {
-      protocol: 9,
+      protocol: 10,
       runtimeId: 'runtime',
+      agentKind: 'pi',
       scope: 'project',
       projectId: 'project',
       sessionId: 'session',
@@ -268,6 +283,149 @@ describe('host contract invariants', () => {
     expect(response.type).toBe('runtime.extensionUi.respond');
     expect(event.action.action).toBe('dialog');
     expect(event.scope).toBe('personal');
+  });
+
+  it('versions agent kinds and bounded Prime activity in protocol v10 without changing v9', () => {
+    const addPrime: ProtocolV10Command = {
+      protocol: 10,
+      type: 'project.add.v10',
+      payload: { path: 'D:/work', agentKind: 'prime-agent' },
+    };
+    const pickAndAddPrime: ProtocolV10Command = {
+      protocol: 10,
+      type: 'project.pickAndAdd.v10',
+      payload: { agentKind: 'prime-agent' },
+    };
+    const listPrimeExtensions: ProtocolV10Command = {
+      protocol: 10,
+      type: 'extension.global.list.v10',
+      payload: { agentKind: 'prime-agent' },
+    };
+    const disablePrimeExtension: ProtocolV10Command = {
+      protocol: 10,
+      type: 'extension.global.setEnabled.v10',
+      payload: { agentKind: 'prime-agent', extensionId: 'ext-opaque', enabled: false },
+    };
+    const primeExtension: DesktopExtensionSummaryV10 = {
+      id: 'ext-opaque',
+      agentKind: 'prime-agent',
+      name: 'review-workers',
+      source: 'Global',
+      enabled: true,
+    };
+    const project: DesktopProjectSummaryV10 = {
+      id: 'project',
+      name: 'Work',
+      displayPath: 'D:/work',
+      agentKind: 'prime-agent',
+      trustState: 'restricted',
+      missing: false,
+      pinned: false,
+    };
+    const bootstrap: DesktopBootstrapSnapshotV10 = {
+      appVersion: '0.1.0',
+      safeMode: false,
+      preferences: {
+        theme: 'system', density: 'comfortable', reducedMotion: 'system',
+        fontSize: 'medium', chatWidth: 'centered',
+      },
+      projects: [project],
+    };
+    const appSnapshot: AppSnapshot = bootstrap;
+    const wireChild: DesktopPrimeActivityV10 = {
+      type: 'rlmChild', id: 'opaque-child', label: 'Subagent', status: 'running',
+      activity: 'executing',
+    };
+    const uiChild: PrimeActivity = wireChild;
+    const invalidActivity: DesktopPrimeActivityV10 = {
+      type: 'rlmChild', id: 'opaque-invalid', label: 'Subagent',
+      // @ts-expect-error Prime activity statuses are a closed v10 union.
+      status: 'future-status',
+    };
+    void invalidActivity;
+    // @ts-expect-error Pi runtime envelopes cannot carry Prime activity.
+    const invalidPiActivity: DesktopRuntimeEventEnvelopeV10 = {
+      protocol: 10, runtimeId: 'runtime', agentKind: 'pi', scope: 'project',
+      projectId: 'project', kind: 'primeActivity',
+      activity: { type: 'sessionActions', id: 'opaque', activeCount: 0, queuedCount: 0 },
+    };
+    void invalidPiActivity;
+    const unboundPrimeState: DesktopLiveSessionStateV10 = {
+      messageCount: 0,
+      pendingMessageCount: 0,
+      isStreaming: false,
+      isCompacting: false,
+      autoCompactionEnabled: true,
+      steeringMode: 'all',
+      followUpMode: 'all',
+      thinkingLevel: 'medium',
+    };
+    const started: DesktopLiveRuntimeStartV10 = {
+      runtimeId: 'runtime',
+      agentKind: 'prime-agent',
+      launchLabel: 'local Prime Agent',
+      // This remains the existing optional start field, not a v11 IPC change.
+      sessionId: 'opaque-indexed-session',
+      sessionState: unboundPrimeState,
+      runtime: {
+        runtimeId: 'runtime',
+        agentKind: 'prime-agent',
+        state: 'ready',
+        revision: 1,
+        capabilities: {
+          rpc: true,
+          'session.tree.read': true,
+          'session.tree.navigate': false,
+          'auth.headless': false,
+          'ui.standardDialogs': false,
+          'prime.activity': true,
+          'runtime.liveAttach': false,
+          'runtime.residentSessions': false,
+          'runtime.eventReplay': false,
+          'runtime.multiClient': false,
+          'thinking.catalog': false,
+        },
+      },
+    };
+    const activity: DesktopRuntimeEventEnvelopeV10 = {
+      protocol: 10,
+      runtimeId: 'runtime',
+      agentKind: 'prime-agent',
+      scope: 'project',
+      projectId: 'project',
+      sessionId: 'session',
+      kind: 'primeActivity',
+      activity: { type: 'sessionActions', id: 'opaque', activeCount: 1, queuedCount: 2 },
+    };
+    const primeStateSnapshot: DesktopRuntimeEventEnvelopeV10 = {
+      protocol: 10,
+      runtimeId: 'runtime',
+      agentKind: 'prime-agent',
+      scope: 'project',
+      projectId: 'project',
+      sessionId: 'opaque-indexed-session',
+      kind: 'stateSnapshot',
+      state: unboundPrimeState,
+      revision: 2,
+    };
+
+    expect(addPrime.payload.agentKind).toBe('prime-agent');
+    expect(pickAndAddPrime.type).toBe('project.pickAndAdd.v10');
+    expect(pickAndAddPrime.payload.agentKind).toBe('prime-agent');
+    expect(listPrimeExtensions.payload.agentKind).toBe('prime-agent');
+    expect(disablePrimeExtension.type).toBe('extension.global.setEnabled.v10');
+    expect(primeExtension.agentKind).toBe('prime-agent');
+    expect(project.agentKind).toBe('prime-agent');
+    expect(appSnapshot.projects[0]?.agentKind).toBe('prime-agent');
+    expect(uiChild.status).toBe('running');
+    expect(started.runtime.capabilities['runtime.liveAttach']).toBe(false);
+    expect(started.sessionId).toBe('opaque-indexed-session');
+    expect(Object.keys(started)).toContain('sessionId');
+    expect(Object.keys(started.sessionState)).not.toContain('sessionId');
+    expect(primeStateSnapshot.kind).toBe('stateSnapshot');
+    expect(Object.keys(primeStateSnapshot.state)).not.toContain('sessionId');
+    expect(activity.kind).toBe('primeActivity');
+    expect(Object.keys(activity.activity)).not.toContain('payload');
   });
 
   it('keeps projectless Chats commands in the additive v5 surface', () => {

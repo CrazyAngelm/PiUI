@@ -6,6 +6,7 @@ members = [
   "crates/piui-index",
   "crates/piui-platform",
   "crates/piui-runtime",
+  "crates/piui-orchestration",
 ]
 exclude = ["spikes/webview-baseline/src-tauri"]
 resolver = "2"
@@ -23,6 +24,7 @@ categories = ["development-tools", "gui"]
 [workspace.dependencies]
 chrono = { version = "0.4.42", default-features = false, features = ["clock", "serde", "std"] }
 ed25519-dalek = { version = "2.1.1", default-features = false, features = ["std"] }
+libc = "0.2.189"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.143"
 sha2 = "0.10.9"

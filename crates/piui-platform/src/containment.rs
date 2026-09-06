@@ -38,7 +38,7 @@ impl ProcessId {
     }
 }
 
-/// A process group identifier for the Unix containment design branch.
+/// A process group identifier for Unix runtime containment.
 #[cfg(unix)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct ProcessGroupId(NonZeroI32);
@@ -71,7 +71,7 @@ impl ProcessGroupId {
 pub enum ContainmentKind {
     /// Windows Job Object with `KILL_ON_JOB_CLOSE`.
     WindowsJobObject,
-    /// Unix process-group design branch.
+    /// Unix process-group containment.
     UnixProcessGroup,
 }
 
@@ -86,7 +86,7 @@ pub enum ContainmentState {
     Running,
     /// A forceful tree termination was requested.
     TreeTerminated,
-    /// The containment handle was closed or the stub was discarded.
+    /// The containment handle was closed or the process group was discarded.
     Closed,
 }
 
@@ -178,7 +178,7 @@ impl fmt::Display for ContainmentError {
 
 impl Error for ContainmentError {}
 
-/// The narrow host-side interface used by a future process supervisor.
+/// The narrow host-side interface used by runtime supervisors.
 ///
 /// There is intentionally no shell, command string, stdout, stdin, or EOF API
 /// here. EOF is a graceful runtime request represented by `ShutdownAction` and
@@ -199,7 +199,7 @@ pub trait ProcessContainment {
     fn force_terminate_tree(&mut self) -> Result<(), ContainmentError>;
 }
 
-/// A process that a future Windows supervisor created with `CREATE_SUSPENDED`.
+/// A process that a Windows supervisor created with `CREATE_SUSPENDED`.
 ///
 /// This type is a typestate declaration, not a process launcher. The caller must
 /// not resume the primary thread until `WindowsJob::assign_before_resume` returns

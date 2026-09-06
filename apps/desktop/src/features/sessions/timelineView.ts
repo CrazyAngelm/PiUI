@@ -18,6 +18,24 @@ export interface TimelineActivityGroup {
 
 export type TimelineViewItem = TimelineBlockItem | TimelineActivityGroup;
 
+const timelineLabels: Record<TimelineBlock['kind'], string> = {
+  user: 'You',
+  assistant: 'Pi',
+  thinking: 'Reasoning',
+  tool: 'Tool activity',
+  custom: 'Extension message',
+  error: 'Runtime notice',
+  compaction: 'Context compacted',
+  unknown: 'Unsupported session event',
+};
+
+export function timelineBlockDisplayLabel(block: TimelineBlock, agentLabel: string): string {
+  const sourceLabel = block.label ?? timelineLabels[block.kind];
+  return block.kind === 'assistant' && agentLabel === 'Prime Agent' && sourceLabel === 'Pi'
+    ? agentLabel
+    : sourceLabel;
+}
+
 function isActivityBlock(block: TimelineBlock): boolean {
   return block.kind === 'tool' || block.kind === 'thinking';
 }

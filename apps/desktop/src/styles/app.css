@@ -69,14 +69,7 @@ button {
 }
 
 .skeleton {
-  background: linear-gradient(90deg, var(--piui-surface-1), var(--piui-surface-2), var(--piui-surface-1));
-  background-size: 200% 100%;
-  animation: piui-shimmer 1.5s ease-in-out infinite;
-}
-
-@keyframes piui-shimmer {
-  0% { background-position: 100% 0; }
-  100% { background-position: -100% 0; }
+  background: var(--piui-surface-1);
 }
 
 :root[data-reduced-motion="reduce"] *,

@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "capturedAtUtc": "2026-09-06T09:52:32Z",
+  "passed": true,
+  "codex": {
+    "cliVersion": "0.147.0",
+    "version": "0.147.0",
+    "target": "x86_64-pc-windows-msvc",
+    "entrypoint": "bin/codex.exe",
+    "executableSha256": "935a1911ed2556e4ffcec995f4886ac2ac425863ba26fed264df62e30272ad9d"
+  },
+  "generatedProtocol": {
+    "fixtureMatched": true,
+    "requestMethodCount": 136,
+    "serverRequestMethodCount": 11,
+    "notificationMethodCount": 72,
+    "jsonrpcMemberAbsent": true,
+    "v2SchemaSha256": "ff10829cd75b67297019b39ab508ac699198574663579aa18336b7dc55ea178f",
+    "typescriptFileCount": 723,
+    "jsonSchemaFileCount": 361
+  },
+  "syntheticFixture": {
+    "frameCount": 11,
+    "approvalRoundTrips": 2,
+    "fixtureMatched": true
+  },
+  "livePromptFreeProbe": {
+    "containedByPiuiWindowsJob": true,
+    "processTreeFixture": {
+      "rootAliveBeforeTeardown": true,
+      "descendantAliveBeforeTeardown": true,
+      "rootAliveAfterTeardown": false,
+      "descendantAliveAfterTeardown": false
+    },
+    "returncode": 0,
+    "initialize": {
+      "codexHomeIsIsolated": true,
+      "platformFamily": "windows",
+      "platformOs": "windows"
+    },
+    "threadStart": {
+      "ok": true,
+      "status": "idle",
+      "turnCount": 0
+    },
+    "syntheticMaterialization": {
+      "ok": true,
+      "modelTurnStarted": false
+    },
+    "threadRead": {
+      "ok": true
+    },
+    "threadResume": {
+      "ok": true
+    },
+    "threadList": {
+      "ok": true,
+      "createdZeroTurnThreadVisible": false
+    },
+    "interruptFailure": {
+      "code": -32600,
+      "messageClass": "no_active_turn"
+    },
+    "unknownThreadFailure": {
+      "code": -32600
+    },
+    "observedNotifications": [
+      "thread/goal/cleared",
+      "thread/started"
+    ],
+    "startupRemoteAttemptObserved": false,
+    "stderrLineCount": 3,
+    "environmentAllowlistKeys": [
+      "ALL_PROXY",
+      "APPDATA",
+      "CODEX_HOME",
+      "ComSpec",
+      "HOMEDRIVE",
+      "HOMEPATH",
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "LOCALAPPDATA",
+      "NO_PROXY",
+      "NUMBER_OF_PROCESSORS",
+      "PATH",
+      "PATHEXT",
+      "PROCESSOR_ARCHITECTURE",
+      "RUST_LOG",
+      "SystemRoot",
+      "TEMP",
+      "TMP",
+      "USERNAME",
+      "USERPROFILE",
+      "WINDIR"
+    ],
+    "sensitiveEnvironmentInherited": false,
+    "disabledStartupFeatures": [
+      "apps",
+      "plugins",
+      "remote_plugin",
+      "recommended_plugins",
+      "shell_snapshot"
+    ]
+  },
+  "limitations": [
+    "No turn/start was sent and no model/auth/approval lifecycle was exercised.",
+    "The synthetic zero-turn thread was readable/resumable but absent from thread/list.",
+    "No reconnect, replay, interrupt race, or approval timeout ordering was tested."
+  ]
+}

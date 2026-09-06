@@ -1,6 +1,6 @@
 # PiUI — handoff for coding agents and contributors
 
-PiUI is a minimal desktop shell on top of the Pi agent harness. It does not replace the Pi agent loop, provider clients, tools, compaction, session storage, or authentication.
+PiUI is a minimal desktop shell on top of Pi, with a separate Prime Agent 0.8.1 lane: read-only session history plus runtime-scoped configurable global extension settings. It does not replace either runtime's agent loop, provider clients, tools, compaction, session storage, or authentication.
 
 ## Before any task
 
@@ -17,13 +17,14 @@ Read in this order:
 - Do not give the WebView a general shell/filesystem/process API.
 - Do not read or pass through `auth.json`, credentials, the full environment, or raw prompts.
 - Do not run project-local UI/JavaScript before a separate trust decision.
-- Do not represent the local live-RPC preview as a managed runtime, sandbox, or release-ready feature.
+- Do not represent the local Pi live-RPC preview as a managed runtime, sandbox, containment guarantee, or release-ready feature.
+- Keep Pi and Prime Agent project kinds, session roots, extension inventories, and opaque IDs separate. Prime live control must remain fail-closed until PiUI owns a non-default daemon lifecycle and proves containment on Windows and Linux; do not claim launch, attach, resident sessions, replay, or multi-client support.
 - Do not add a cloud backend, telemetry, an account system, or Electron without an ADR.
 - For every new core feature, evaluate the extension-first alternative first.
 
 ## Current status
 
-The foundation and temporary local live-RPC preview are implemented, but public-release gates remain open. Actual Pi/runtime/packaging/platform claims must correspond only to evidence in `docs/13_FOUNDATION_STATUS.md`, `spikes/PHASE0_GATE.md`, and `CHECKLIST_RELEASE.md`.
+The foundation and temporary local Pi live-RPC preview are implemented, but public-release gates remain open. Host protocol v10 adds an explicit Prime project kind, separate read-only session discovery, and runtime-scoped global extension inventory; Prime live control is gated because 0.8.1 uses a shared detached daemon. Legacy v9 remains Pi-only. Actual runtime and platform claims must correspond only to accepted evidence.
 
 ## Work format
 

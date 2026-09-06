@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ProjectSummary, SessionCatalogFreshness, SessionSummary } from '../../host-api/types';
+  import { liveRuntimeSupported } from '../runtime/runtimeSelection';
   import {
     PROJECT_SESSION_PAGE_SIZE,
     nextProjectSessionCount,
@@ -17,9 +18,11 @@
   export let selectedSessionId: string | undefined;
   export let sessionsLoading = false;
   export let sessionsFreshness: SessionCatalogFreshness = 'cached';
+  export let projectSessionCreationPending = false;
   export let settingsSelected = false;
   export let onAddProject: () => void;
   export let onNewChat: () => void = () => {};
+  export let onNewProjectSession: (project: ProjectSummary) => void = () => {};
   export let onSelectProject: (project: ProjectSummary) => void;
   export let onSelectSession: (session: SessionSummary) => void;
   export let onSelectPersonalSession: (session: SessionSummary) => void = () => {};
@@ -44,6 +47,8 @@
   }
   $: visibleProjectSessions = sessions.slice(0, visibleProjectSessionCount(projectSessionLimit, sessions.length));
   $: hasHiddenProjectSessions = visibleProjectSessions.length < sessions.length;
+  $: selectedProjectSupportsLiveRuntime = selectedProjectId === undefined
+    || projects.some((project) => project.id === selectedProjectId && liveRuntimeSupported(project.agentKind));
 
 </script>
 
@@ -53,7 +58,14 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Z"/><path d="m19.2 13.1 1.26.98-1.7 2.94-1.5-.6a7.7 7.7 0 0 1-1.7.98L15.34 19h-3.4l-.23-1.6a7.7 7.7 0 0 1-1.7-.98l-1.5.6-1.7-2.94 1.26-.98a7.1 7.1 0 0 1 0-2.2l-1.26-.98 1.7-2.94 1.5.6a7.7 7.7 0 0 1 1.7-.98L11.94 5h3.4l.23 1.6a7.7 7.7 0 0 1 1.7.98l1.5-.6 1.7 2.94-1.26.98a7.1 7.1 0 0 1 0 2.2Z"/></svg>
       <span>Settings</span>
     </button>
-    <button class="nav-button nav-button--primary" type="button" onclick={onNewChat} aria-label="Start a new chat">
+    <button
+      class="nav-button nav-button--primary"
+      type="button"
+      onclick={onNewChat}
+      disabled={!selectedProjectSupportsLiveRuntime || (selectedProjectId !== undefined && projectSessionCreationPending)}
+      title={!selectedProjectSupportsLiveRuntime ? 'Prime Agent history is read-only.' : projectSessionCreationPending ? 'Wait for current session history to finish syncing.' : undefined}
+      aria-label={!selectedProjectSupportsLiveRuntime ? 'New session unavailable for read-only Prime Agent history' : selectedProjectId !== undefined ? (projectSessionCreationPending ? 'New project session unavailable while current history is syncing' : 'Start a new session in the selected project') : 'Start a new personal chat'}
+    >
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
       <span>New chat</span>
     </button>
@@ -105,6 +117,7 @@
           <button class="project-row" type="button" aria-current={project.id === selectedProjectId ? 'page' : undefined} aria-expanded={project.id === expandedProjectId} onclick={() => onSelectProject(project)}>
             <svg class:expanded={project.id === expandedProjectId} class="project-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
             <span class="project-name">{project.name}</span>
+            {#if project.agentKind === 'prime-agent'}<span class="runtime-mark" aria-label="Prime Agent project">Prime</span>{/if}
             {#if project.pinned}
               <span class="pin-mark" aria-label="Project is pinned">Pinned</span>
             {/if}
@@ -117,15 +130,15 @@
           {#if project.id === expandedProjectId}
             <div class="session-list" aria-label={`Sessions in ${project.name}`} aria-busy={sessionsLoading}>
               <div class="session-list-header">
-                <span>{project.missing ? 'Folder unavailable' : 'Local sessions'}{#if sessionsLoading && sessions.length > 0}<span class="catalog-refreshing" role="status">Refreshing…</span>{/if}</span>
-                <span class="session-actions"><button class="refresh-button" type="button" onclick={() => onRefreshProject(project)} disabled={sessionsLoading} aria-label={`Refresh local sessions for ${project.name}`}>Refresh</button><button class="refresh-button" type="button" onclick={() => onManageProject(project)} aria-label={`Manage ${project.name}`}>Manage</button></span>
+                <span>{project.missing ? 'Folder unavailable' : `Local ${project.agentKind === 'prime-agent' ? 'Prime Agent' : 'Pi'} sessions`}{#if sessionsLoading && sessions.length > 0}<span class="catalog-refreshing" role="status">Refreshing…</span>{/if}</span>
+                <span class="session-actions">{#if liveRuntimeSupported(project.agentKind)}<button class="refresh-button" type="button" onclick={() => onNewProjectSession(project)} disabled={project.missing || projectSessionCreationPending} title={projectSessionCreationPending ? 'Wait for current session history to finish syncing.' : undefined} aria-label={projectSessionCreationPending ? `New session in ${project.name} unavailable while current history is syncing` : `Start a new Pi session in ${project.name}`}>New session</button>{/if}<button class="refresh-button" type="button" onclick={() => onRefreshProject(project)} disabled={sessionsLoading} aria-label={`Refresh local sessions for ${project.name}`}>Refresh</button><button class="refresh-button" type="button" onclick={() => onManageProject(project)} aria-label={`Manage ${project.name}`}>Manage</button></span>
               </div>
               {#if project.missing}
                 <p class="no-sessions">Reconnect the folder, then refresh. PiUI does not modify its session files.</p>
               {:else if sessionsLoading && sessions.length === 0}
-                <p class="no-sessions" role="status">Scanning local Pi sessions…</p>
+                <p class="no-sessions" role="status">Scanning local {project.agentKind === 'prime-agent' ? 'Prime Agent' : 'Pi'} sessions…</p>
               {:else if sessions.length === 0}
-                <p class="no-sessions">{sessionsFreshness === 'current' ? 'No indexed Pi sessions' : 'No indexed Pi sessions yet'}</p>
+                <p class="no-sessions">{sessionsFreshness === 'current' ? `No indexed ${project.agentKind === 'prime-agent' ? 'Prime Agent' : 'Pi'} sessions` : `No indexed ${project.agentKind === 'prime-agent' ? 'Prime Agent' : 'Pi'} sessions yet`}</p>
               {:else}
                 {#each visibleProjectSessions as session (session.id)}
                   <button class:selected={session.id === selectedSessionId} class="session-row" type="button" aria-current={session.id === selectedSessionId ? 'page' : undefined} onclick={() => onSelectSession(session)}>
@@ -177,7 +190,8 @@
   .nav-button--quiet { justify-content: flex-start; padding: 0 var(--piui-space-3); background: transparent; color: var(--piui-text-muted); }
   .nav-button--quiet:hover, .nav-button--quiet.selected { background: var(--piui-surface-1); color: var(--piui-text); }
   .nav-button--primary { background: var(--piui-accent); color: var(--piui-accent-ink); }
-  .nav-button--primary:hover { background: #b2cf97; }
+  .nav-button--primary:hover:not(:disabled) { background: #b2cf97; }
+  .nav-button:disabled { cursor: wait; opacity: .58; }
   .projects { flex: 1 1 0; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: var(--piui-space-3) var(--piui-space-2); }
   .section-label { margin: 0 0 var(--piui-space-2); padding: 0 var(--piui-space-2); color: var(--piui-text-faint); font-size: 10px; font-weight: 720; letter-spacing: .1em; text-transform: uppercase; }
   .chat-group { margin-bottom: var(--piui-space-3); }
@@ -189,7 +203,8 @@
   .project-chevron { width: 14px; height: 14px; flex: 0 0 auto; fill: none; stroke: var(--piui-text-muted); stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; transition: transform 140ms ease; }
   .project-chevron.expanded { transform: rotate(90deg); }
   .project-name, .session-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .trust-mark, .missing-mark, .pin-mark { font-size: 10px; font-weight: 650; }
+  .trust-mark, .missing-mark, .pin-mark, .runtime-mark { font-size: 10px; font-weight: 650; }
+  .runtime-mark { flex: 0 0 auto; padding: 1px 5px; border: 1px solid var(--piui-border-subtle); border-radius: 999px; color: var(--piui-text-faint); font-size: 9px; letter-spacing: .02em; }
   .pin-mark { margin-left: auto; color: var(--piui-accent); }
   .trust-mark { margin-left: auto; color: var(--piui-warning); }
   .missing-mark { color: var(--piui-danger); }
@@ -198,7 +213,7 @@
   .session-page-button { min-height: 28px; padding: 3px 5px; border-radius: 3px; background: transparent; color: var(--piui-text-muted); font-size: 10px; font-weight: 700; }
   .session-page-button:hover, .session-page-button:focus-visible { background: var(--piui-surface-2); color: var(--piui-text); }
   .session-list--personal { margin-top: 0; }
-  .session-list-header { display: flex; align-items: center; justify-content: space-between; min-height: 25px; padding: 0 var(--piui-space-2); color: var(--piui-text-faint); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+  .session-list-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 4px; min-height: 25px; padding: 0 var(--piui-space-2); color: var(--piui-text-faint); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
   .catalog-refreshing { margin-left: 6px; color: var(--piui-text-muted); font-size: 9px; font-weight: 600; letter-spacing: 0; text-transform: none; }
   .session-actions { display: flex; align-items: center; gap: 2px; }
   .refresh-button { padding: 2px 4px; border-radius: 3px; background: transparent; color: var(--piui-text-muted); font-size: 10px; font-weight: 700; letter-spacing: 0; text-transform: none; }

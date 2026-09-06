@@ -13,7 +13,8 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
     QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::Threading::{
@@ -105,6 +106,33 @@ impl WindowsJob {
     #[must_use]
     pub const fn kill_on_close_confirmed(&self) -> bool {
         self.kill_on_close_confirmed
+    }
+
+    /// Return the number of processes that Windows still reports as active in
+    /// this Job. The caller can keep the Job handle open while proving a forced
+    /// teardown reached zero, instead of inferring descendant cleanup from the
+    /// root process exiting.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-state error after the Job is closed, or an OS error
+    /// when Windows cannot query the accounting record.
+    pub fn active_process_count(&self) -> Result<u32, ContainmentError> {
+        let information_size = structure_size::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>()?;
+        let mut information = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+        let query_result = unsafe {
+            QueryInformationJobObject(
+                self.require_handle("query active Job processes")?,
+                JobObjectBasicAccountingInformation,
+                (&raw mut information).cast::<c_void>(),
+                information_size,
+                ptr::null_mut(),
+            )
+        };
+        if query_result == 0 {
+            return Err(last_os_error("QueryInformationJobObject(active processes)"));
+        }
+        Ok(information.ActiveProcesses)
     }
 
     /// Assign a suspended process to this Job before its primary thread resumes.
@@ -352,10 +380,16 @@ mod tests {
         assert_eq!(job.kind(), ContainmentKind::WindowsJobObject);
         assert_eq!(job.state(), ContainmentState::Prepared);
         assert_eq!(
+            job.active_process_count()
+                .expect("empty Job Object accounting can be queried"),
+            0
+        );
+        assert_eq!(
             job.close().expect("empty Job Object can be closed"),
             ShutdownAction::ContainmentClosed
         );
         assert_eq!(job.state(), ContainmentState::Closed);
+        assert!(job.active_process_count().is_err());
     }
 
     #[test]

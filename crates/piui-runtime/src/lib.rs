@@ -29,6 +29,7 @@ pub mod read_only_probe;
 pub mod real_rpc;
 pub mod supervisor;
 pub mod system_probe;
+pub mod workspace_runtime;
 
 // Deliberately crate-private: bytes-only upstream observation cannot authorize
 // a runtime and is not host/application API.
@@ -39,8 +40,8 @@ pub use codec::{
     RpcCodecError, RpcEventNormalizer, UnknownEventTypeCategory,
 };
 pub use extension_manager::{
-    ExtensionManagerError, PiExtensionOrigin, PiExtensionResource, list_global_extensions,
-    set_global_extension_enabled,
+    AgentExtensionOrigin, AgentExtensionResource, ExtensionManagerError,
+    list_global_extensions_for_agent, set_global_extension_enabled_for_agent,
 };
 pub use extension_ui::{
     ExtensionDialogOption, ExtensionDialogRequest, ExtensionUiAction, ExtensionUiResponse,

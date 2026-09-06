@@ -6,6 +6,7 @@
   export let models: ModelLite[] = [];
   export let currentModel: ModelLite | undefined;
   export let disabled = false;
+  export let agentLabel = 'Pi';
   export let onSelect: (model: ModelLite) => void | Promise<void> = () => {};
 
   const MAX_RENDERED_MODELS = 120;
@@ -127,7 +128,7 @@
   </button>
 
   {#if open}
-    <div id="model-picker-popup" class="model-menu" role="dialog" aria-label="Choose a Pi model">
+    <div id="model-picker-popup" class="model-menu" role="dialog" aria-label={`Choose a ${agentLabel} model`}>
       <label class="search">
         <svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3 3" /></svg>
         <span class="visually-hidden">Search models</span>

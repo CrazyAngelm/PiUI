@@ -34,6 +34,7 @@ Scale:
 | R-18 | Managed runtime and system Pi diverge in packages/config behavior | Medium | High | G2/G6 |
 | R-19 | Generic file references are not sufficiently understandable to models/tools | Medium | Medium | G3 |
 | R-20 | Scope creep turns PiUI into an IDE/dashboard | High | High | All gates |
+| R-21 | Prime Agent 0.8.1 shared-daemon lifecycle cannot be isolated or contained safely | High | Critical | G0/G2/G3 |
 
 ## 3. Details and Exit Criteria
 
@@ -77,11 +78,11 @@ Scale:
 
 **Signal:** `ctx.ui.custom`, header/footer/editor/theme are no-ops; custom entries lack renderer metadata.
 
-**Implemented evidence:** against Pi 0.82.1, the typed adapter now enumerates RPC commands and projects bounded `notify`, status, widget, title, editor-text, select, confirm, input, and editor actions without exposing native paths or raw RPC IDs. A live installed-package probe exercised an extension slash command and observed its notification through the adapter; an isolated project-local synthetic fixture round-tripped select, confirm, input, and editor responses through the same LF-framed runtime. The first global-package `piui.manifest.json` fixture projects only `pi-command:` declarations and composer actions; removing or invalidating it leaves the backend and generic command surface intact.
+**Implemented evidence:** against Pi 0.82.1, the typed adapter now enumerates RPC commands and projects bounded `notify`, status, widget, title, editor-text, select, confirm, input, and editor actions without exposing native paths or raw RPC IDs. A live installed-package probe exercised an extension slash command and observed its notification through the adapter; an isolated project-local synthetic fixture round-tripped select, confirm, input, and editor responses through the same LF-framed runtime. The first global-package `piui.manifest.json` fixture projects only `pi-command:` declarations and composer actions; removing or invalidating it leaves the backend and generic command surface intact. For Prime Agent 0.8.1, the static probe now records separate `.prime/agent` extension roots, Pi-named loader aliases, and Prime-only refinement hooks. Versioned host commands list and toggle Pi and Prime global inventories through the selected package's own manager; opaque IDs include runtime kind and the legacy v9 routes remain Pi-only.
 
-**Residual:** awaited dialogs emitted before the startup handshake reaches Ready are explicitly cancelled to prevent a protocol deadlock; TUI-only `ctx.ui.custom()` cannot be translated; project-local manifests, independent UI grants, renderer ownership, declarative views/renderers, and rich surfaces remain unimplemented. RPC `toolName` still does not reliably identify the owning extension.
+**Residual:** awaited dialogs emitted before the startup handshake reaches Ready are explicitly cancelled to prevent a protocol deadlock; TUI-only `ctx.ui.custom()` cannot be translated; project-local manifests, independent UI grants, renderer ownership, declarative views/renderers, and rich surfaces remain unimplemented. RPC `toolName` still does not reliably identify the owning extension. Prime's Pi-named import aliases prove only a partial source surface, not universal ABI compatibility; Pi-only hooks/context fields and Prime-only refinement events require extension-owned adapters.
 
-**Mitigation:** Tier 0 generic fallback + PiUI manifest/SDK; extension UI fixture corpus; require upstream extensions to use `ctx.mode === "tui"` only around genuinely TUI-only components.
+**Mitigation:** Tier 0 generic fallback + PiUI manifest/SDK; extension UI fixture corpus; require upstream extensions to use `ctx.mode === "tui"` only around genuinely TUI-only components. Keep runtime inventories, enablement, commands, and contributions separate; never copy or auto-enable code across roots. Any future portability bridge is owned and advertised by the destination runtime after trust, not implemented in PiUI core.
 
 **Exit:** documented compatibility matrix and dual-package example; renderer ownership decision; no claim of full automatic TUI parity.
 
@@ -206,6 +207,16 @@ Scale:
 **Mitigation:** ADR-015, extension-first review, release gates, explicit non-goals.
 
 **Exit:** ongoing; each new core feature requires an ADR.
+
+### R-21 — Prime Agent shared-daemon lifecycle
+
+**Signal:** `prime-agent@0.8.1 --mode rpc` reaches a shared detached supervisor. If PiUI starts that supervisor inside a per-runtime Job/process group, stopping PiUI can terminate unrelated Prime clients. If the supervisor already exists, the worker and its descendants are outside PiUI's containment.
+
+**Implemented evidence:** v10 registers one explicit project kind, keeps Pi and Prime roots/inventories separate, rejects root overlap, and lists root Prime sessions while excluding positive-`rlmDepth` children. Typed exact-binding, lease, and bounded activity adapter code remains covered by synthetic fixtures. The schema-v2 spike hashes the installed `dist/bundle/cli.js` literal local import closure and detects shared-daemon markers, but those hashes are not authenticated acquisition, execution, containment, or lifecycle authorization.
+
+**Current mitigation:** production Prime start/continue/prompt/stop fails closed as `NOT_SUPPORTED`; the UI retains read-only history and explains that the shared daemon is the blocker. PiUI never connects to, adopts, creates, or terminates the user's Prime supervisor.
+
+**Exit:** authenticate acquisition/provenance for the actual executable bundle, own a non-default daemon endpoint and complete lifecycle, and prove first-launch plus pre-existing-daemon containment on Windows and Linux without affecting another client. Until then, keep Prime live control disabled.
 
 ## 4. Secondary Risks
 

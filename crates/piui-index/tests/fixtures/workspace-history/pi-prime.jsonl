@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"prime-native-session","cwd":"__PIUI_CWD__","createdAt":"2026-09-01T10:00:00Z"}
+{"type":"message","id":"user-1","timestamp":"2026-09-01T10:00:01Z","message":{"role":"user","content":"Read native history"}}
+{"type":"message","id":"assistant-1","parentId":"user-1","timestamp":"2026-09-01T10:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"Final Pi result at __PIUI_CWD__/result.txt"}]}}
+{"type":"future_safe_record","id":"future-1","content":"RAW FUTURE PAYLOAD MUST NOT APPEAR"}

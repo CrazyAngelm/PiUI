@@ -1,5 +1,5 @@
 use piui_extensions::{ManifestValidator, PackageSource};
-use piui_runtime::{PiExtensionOrigin, PiExtensionResource};
+use piui_runtime::{AgentExtensionOrigin, AgentExtensionResource};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -45,7 +45,9 @@ pub struct PiUiComposerActionContribution {
 /// Validates enabled, globally installed package manifests and projects only
 /// the Tier-1A declarative fields understood by this PiUI build. A missing or
 /// invalid optional manifest disables its UI contribution, never its Pi backend.
-pub fn project_global_contributions(resources: &[PiExtensionResource]) -> PiUiContributionCatalog {
+pub fn project_global_contributions(
+    resources: &[AgentExtensionResource],
+) -> PiUiContributionCatalog {
     project_manifest_roots(package_manifest_roots(resources))
 }
 
@@ -190,14 +192,14 @@ fn version_range_matches(range: &str, current: Version) -> bool {
     saw_comparator
 }
 
-fn package_manifest_roots(resources: &[PiExtensionResource]) -> Vec<PathBuf> {
+fn package_manifest_roots(resources: &[AgentExtensionResource]) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     let mut seen = HashSet::new();
     for resource in resources {
         if roots.len() >= MAX_MANIFEST_PACKAGES {
             break;
         }
-        if !resource.enabled || resource.origin != PiExtensionOrigin::Package {
+        if !resource.enabled || resource.origin != AgentExtensionOrigin::Package {
             continue;
         }
         let Some(root) = resource.package_root() else {

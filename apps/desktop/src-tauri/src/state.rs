@@ -1,4 +1,5 @@
 use crate::catalog_watch::CatalogWatcher;
+use crate::workspace_api::WorkspaceHost;
 use piui_contracts::RuntimeId;
 use piui_index::{ProjectIndex, ScanReport, TrustState};
 use piui_platform::ProjectDirectory;
@@ -36,6 +37,7 @@ pub struct CatalogRefreshContext {
     pub index: Arc<Mutex<ProjectIndex>>,
     refresh_gates: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     pub session_roots: Vec<PathBuf>,
+    pub prime_session_roots: Vec<PathBuf>,
     catalog_watcher: Arc<Mutex<Option<CatalogWatcher>>>,
 }
 
@@ -277,6 +279,10 @@ impl Drop for LiveRuntimeTransition<'_> {
 }
 
 pub struct HostState {
+    /// Owns native workspace sessions independently of WebView navigation.
+    pub workspace: WorkspaceHost,
+    shutdown_started: AtomicBool,
+    shutdown_complete: AtomicBool,
     pub index: Arc<Mutex<ProjectIndex>>,
     pub fake_runtime: Mutex<Option<FakeRuntimeSlot>>,
     /// The single live Pi runtime; independent of the deterministic fake slot.
@@ -302,12 +308,32 @@ pub struct HostState {
     pub timeline_cursors: Mutex<TimelineCursorStore>,
     pub timeline_projection_cache: Mutex<Option<TimelineProjectionCache>>,
     pub session_roots: Vec<PathBuf>,
+    pub prime_session_roots: Vec<PathBuf>,
     pub personal_workspace: PersonalWorkspace,
     /// Safe mode is selected before the WebView loads and prevents runtime use.
     pub safe_mode: bool,
 }
 
 impl HostState {
+    /// A repeated window-close request cannot bypass in-progress cleanup.
+    pub fn begin_shutdown(&self) -> bool {
+        self.shutdown_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    pub fn is_shutting_down(&self) -> bool {
+        self.shutdown_started.load(Ordering::Acquire)
+    }
+
+    pub fn is_shutdown_complete(&self) -> bool {
+        self.shutdown_complete.load(Ordering::Acquire)
+    }
+
+    pub fn finish_shutdown(&self) {
+        self.shutdown_complete.store(true, Ordering::Release);
+    }
+
     pub fn open(app_data_dir: &Path, safe_mode: bool) -> Result<Self, std::io::Error> {
         fs::create_dir_all(app_data_dir)?;
         let database_path = app_data_dir.join("piui-foundation.sqlite");
@@ -328,6 +354,9 @@ impl HostState {
             )
             .map_err(|error| std::io::Error::other(error.to_string()))?;
         Ok(Self {
+            workspace: WorkspaceHost::open(app_data_dir)?,
+            shutdown_started: AtomicBool::new(false),
+            shutdown_complete: AtomicBool::new(false),
             index: Arc::new(Mutex::new(index)),
             fake_runtime: Mutex::new(None),
             live_runtime: Mutex::new(None),
@@ -339,6 +368,7 @@ impl HostState {
             timeline_cursors: Mutex::new(TimelineCursorStore::default()),
             timeline_projection_cache: Mutex::new(None),
             session_roots: resolved_session_roots(),
+            prime_session_roots: resolved_prime_session_roots(),
             personal_workspace: PersonalWorkspace {
                 project_id: personal_workspace.id,
                 canonical_path: personal_directory.canonical_path().to_path_buf(),
@@ -368,11 +398,22 @@ impl HostState {
             })
     }
 
+    pub fn all_session_roots(&self) -> Vec<PathBuf> {
+        let mut roots = self.session_roots.clone();
+        for root in &self.prime_session_roots {
+            if !roots.contains(root) {
+                roots.push(root.clone());
+            }
+        }
+        roots
+    }
+
     pub fn catalog_refresh_context(&self) -> CatalogRefreshContext {
         CatalogRefreshContext {
             index: Arc::clone(&self.index),
             refresh_gates: Arc::clone(&self.refresh_gates),
             session_roots: self.session_roots.clone(),
+            prime_session_roots: self.prime_session_roots.clone(),
             catalog_watcher: Arc::clone(&self.catalog_watcher),
         }
     }
@@ -427,6 +468,48 @@ fn resolved_session_roots() -> Vec<PathBuf> {
     )
 }
 
+fn resolved_prime_session_roots() -> Vec<PathBuf> {
+    prime_session_roots_from(
+        std::env::var_os("PRIME_AGENT_SESSION_DIR").map(PathBuf::from),
+        std::env::var_os("PRIME_AGENT_CODING_AGENT_SESSION_DIR").map(PathBuf::from),
+        std::env::var_os("PRIME_AGENT_CODING_AGENT_DIR").map(PathBuf::from),
+        home_directory(),
+    )
+}
+
+fn prime_session_roots_from(
+    session_dir: Option<PathBuf>,
+    legacy_session_dir: Option<PathBuf>,
+    agent_dir: Option<PathBuf>,
+    home_dir: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    session_dir
+        .or(legacy_session_dir)
+        .or_else(|| agent_dir.map(|directory| directory.join("sessions")))
+        .or_else(|| {
+            home_dir
+                .as_ref()
+                .map(|home| home.join(".prime").join("agent").join("sessions"))
+        })
+        .map(|directory| vec![expand_prime_tilde(directory, home_dir.as_deref())])
+        .unwrap_or_default()
+}
+
+fn expand_prime_tilde(path: PathBuf, home_dir: Option<&Path>) -> PathBuf {
+    let Some(home) = home_dir else {
+        return path;
+    };
+    let Some(value) = path.to_str() else {
+        return path;
+    };
+    if value == "~" {
+        return home.to_path_buf();
+    }
+    value
+        .strip_prefix("~/")
+        .map_or(path.clone(), |relative| home.join(relative))
+}
+
 fn session_roots_from(
     session_dir: Option<PathBuf>,
     agent_dir: Option<PathBuf>,
@@ -452,7 +535,7 @@ fn home_directory() -> Option<PathBuf> {
 mod tests {
     use super::{
         CatalogFreshness, CatalogRefreshStore, FULL_CATALOG_INTEGRITY_INTERVAL, HostState,
-        PERSONAL_WORKSPACE_DIRECTORY, session_roots_from,
+        PERSONAL_WORKSPACE_DIRECTORY, prime_session_roots_from, session_roots_from,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -541,6 +624,51 @@ mod tests {
     }
 
     #[test]
+    fn prime_session_root_precedence_keeps_prime_storage_separate_from_pi() {
+        let explicit = PathBuf::from("C:/prime/explicit-sessions");
+        assert_eq!(
+            prime_session_roots_from(
+                Some(explicit.clone()),
+                Some(PathBuf::from("C:/prime/legacy-sessions")),
+                Some(PathBuf::from("C:/prime/agent")),
+                Some(PathBuf::from("C:/fixture/home")),
+            ),
+            vec![explicit]
+        );
+        assert_eq!(
+            prime_session_roots_from(
+                None,
+                Some(PathBuf::from("C:/prime/legacy-sessions")),
+                Some(PathBuf::from("C:/prime/agent")),
+                Some(PathBuf::from("C:/fixture/home")),
+            ),
+            vec![PathBuf::from("C:/prime/legacy-sessions")]
+        );
+        assert_eq!(
+            prime_session_roots_from(
+                None,
+                None,
+                Some(PathBuf::from("C:/prime/agent")),
+                Some(PathBuf::from("C:/fixture/home")),
+            ),
+            vec![PathBuf::from("C:/prime/agent/sessions")]
+        );
+        assert_eq!(
+            prime_session_roots_from(None, None, None, Some(PathBuf::from("C:/fixture/home"))),
+            vec![PathBuf::from("C:/fixture/home/.prime/agent/sessions")]
+        );
+        assert_eq!(
+            prime_session_roots_from(
+                Some(PathBuf::from("~/custom-sessions")),
+                None,
+                None,
+                Some(PathBuf::from("C:/fixture/home")),
+            ),
+            vec![PathBuf::from("C:/fixture/home/custom-sessions")]
+        );
+    }
+
+    #[test]
     fn default_session_directory_uses_the_pi_agent_sessions_tree() {
         let roots = session_roots_from(
             None,
@@ -623,5 +751,38 @@ mod tests {
         assert!(state.try_begin_live_runtime_transition().is_some());
         drop(state);
         let _ = fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod workspace_shutdown_tests {
+    use super::HostState;
+
+    #[test]
+    fn repeated_exit_does_not_bypass_cleanup_or_read_only_access() {
+        let directory =
+            std::env::temp_dir().join(format!("piui-workspace-shutdown-{}", uuid::Uuid::new_v4()));
+        let state = HostState::open(&directory, false).expect("opens fresh host state");
+        let project_id = &state.personal_workspace.project_id;
+        assert!(crate::api::verified_project_directory(&state, project_id, true).is_ok());
+        assert!(!state.is_shutting_down());
+        assert!(!state.is_shutdown_complete());
+        assert!(state.begin_shutdown());
+        assert!(state.is_shutting_down());
+        assert!(
+            !state.begin_shutdown(),
+            "a repeated exit cannot start a second cleanup"
+        );
+        assert!(
+            !state.is_shutdown_complete(),
+            "only completed cleanup permits exit"
+        );
+        assert!(crate::api::verified_project_directory(&state, project_id, true).is_err());
+        assert!(crate::api::verified_project_directory(&state, project_id, false).is_ok());
+        state.finish_shutdown();
+        assert!(state.is_shutdown_complete());
+        assert!(!state.begin_shutdown());
+        drop(state);
+        std::fs::remove_dir_all(directory).expect("removes only this test's fresh data");
     }
 }

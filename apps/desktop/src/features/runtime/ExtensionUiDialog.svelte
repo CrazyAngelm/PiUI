@@ -5,6 +5,7 @@
   export let request: ExtensionDialogRequest;
   export let busy = false;
   export let error: string | undefined = undefined;
+  export let agentLabel = 'Pi';
   export let onRespond: (response: ExtensionUiResponse) => void;
 
   let dialog: HTMLDialogElement | undefined;
@@ -74,7 +75,7 @@
     onkeydown={handleKeydown}
   >
     <header>
-      <p class="extension-source">Pi extension</p>
+      <p class="extension-source">{agentLabel} extension</p>
       <h2 id="extension-dialog-title">{request.title}</h2>
       {#if request.timeoutMs !== undefined}
         <p class="extension-timeout">This request closes automatically.</p>

@@ -1,0 +1,206 @@
+{
+  "checks": {
+    "daemon_only_operations_fail_explicitly": {
+      "status": "pass"
+    },
+    "direct_sdk_does_not_require_daemon": {
+      "status": "pass"
+    },
+    "documented_custom_ui_sdk_route": {
+      "status": "pass"
+    },
+    "in_process_operation_surface": {
+      "status": "pass"
+    },
+    "injectable_isolated_services": {
+      "status": "pass"
+    },
+    "nondefault_daemon_socket_is_inert_guard_only": {
+      "status": "pass"
+    },
+    "package_identity": {
+      "status": "pass"
+    },
+    "runtime_lifecycle_and_leases": {
+      "status": "pass"
+    }
+  },
+  "overall_status": "pass",
+  "package": {
+    "name": "prime-agent",
+    "version": "0.9.2"
+  },
+  "package_artifacts": [
+    {
+      "file": "package.json",
+      "sha256": "46d8fba9e782d0a9fb3fb43ee35efacbebcfd5828544cbf3cad336be4c3b4841"
+    },
+    {
+      "file": "docs/sdk.md",
+      "sha256": "cfb5d8270774df43a8da98af63bccb7358428c43b68035017e87f94af8d21a26"
+    },
+    {
+      "file": "docs/daemon.md",
+      "sha256": "36eca6622349d817d83f6f6c0de1a6024ace4121b836aa259ad230012e6a47fb"
+    },
+    {
+      "file": "dist/index.d.ts",
+      "sha256": "f267d49d7cc12402e65acef1af0ec542921815bdff3d19aa69dfd152df92d35a"
+    },
+    {
+      "file": "dist/core/agent-session-runtime.js",
+      "sha256": "43856d943bb79b22393e01f07a6c719e062bf59e3eaa7716bc983e65c78bdcaf"
+    },
+    {
+      "file": "dist/core/agent-session-services.js",
+      "sha256": "37657f0ea46e25031002047d7577bb065fed904f2ede6b2108f1def2b18830d4"
+    },
+    {
+      "file": "dist/core/auth-storage.d.ts",
+      "sha256": "9a6b3578771d8c95c5fe3d010c5f6b988145e16c9229119dd6abf458dbf2d5c4"
+    },
+    {
+      "file": "dist/core/session-lease.js",
+      "sha256": "a2d2161b812898ba7a17fd98e9b2b0e1a20afa7c69dbe59b2ff93bea62f627f3"
+    },
+    {
+      "file": "dist/modes/agent-connection/in-process-agent-connection.js",
+      "sha256": "aff764ac985df6050bc7b15e402281ce29c0933bc0f66b2517cb491760fe817f"
+    },
+    {
+      "file": "dist/modes/agent-connection/in-process-agent-connection.d.ts",
+      "sha256": "5fb765817e0029186e2b1747194fc3ea8fdf889f6ca2c93b7f88970771126991"
+    },
+    {
+      "file": "node_modules/@earendil-works/pi-ai/package.json",
+      "sha256": "36265cacee173ee1c194a44d09605fa51f3b2c3b1f8984c22835aceb87c5bbc6"
+    },
+    {
+      "file": "node_modules/@earendil-works/pi-ai/dist/index.js",
+      "sha256": "11962349da6d4b5152387bc16758884dc873164f9703f650326408e74338488f"
+    }
+  ],
+  "route": {
+    "credential_files_read_by_probe": false,
+    "daemon_contact": "none",
+    "daemon_only_rejections": [
+      "manageHeartbeat",
+      "addCronJob",
+      "cancelCronJob",
+      "setHeartbeat",
+      "updateHeartbeat",
+      "sendAgentMessage",
+      "getAgentMessageStatus",
+      "pauseAgentMessages",
+      "resumeAgentMessages",
+      "clearAgentMessages"
+    ],
+    "default_daemon_created_connected_or_stopped": false,
+    "operation_surface": [
+      "getState",
+      "getInitialSnapshot",
+      "getRlmChildSnapshots",
+      "getMessages",
+      "getSessionHeader",
+      "getCommands",
+      "getResourceSnapshot",
+      "getAvailableModels",
+      "getModelCatalog",
+      "getSessionStats",
+      "getContextTree",
+      "getSessionContext",
+      "getSessionTree",
+      "listSavedSessions",
+      "getQueue",
+      "mutateQueuedMessage",
+      "clearQueue",
+      "abortAndClearQueue",
+      "prompt",
+      "promptAndWait",
+      "steer",
+      "followUp",
+      "abort",
+      "cancelRlmChild",
+      "waitForIdle",
+      "executeBash",
+      "executeBashAndWait",
+      "abortBash",
+      "setModel",
+      "cycleModel",
+      "setScopedModels",
+      "setThinkingLevel",
+      "setServiceTier",
+      "cycleThinkingLevel",
+      "setTransport",
+      "setSteeringMode",
+      "setFollowUpMode",
+      "setAutoCompactionEnabled",
+      "setAutoRetryEnabled",
+      "compact",
+      "refine",
+      "abortCompaction",
+      "abortBranchSummary",
+      "abortRetry",
+      "reload",
+      "newSession",
+      "switchSession",
+      "fork",
+      "navigateTree",
+      "importFromJsonl",
+      "exportToHtml",
+      "exportToJsonl",
+      "setSessionName",
+      "getRlmMaxDepthStatus",
+      "setRlmMaxDepth",
+      "renameSavedSession",
+      "deleteSavedSession",
+      "watchSession",
+      "dispose"
+    ],
+    "transport": "documented-sdk-in-piui-owned-isolated-child",
+    "user_sessions_read_by_probe": false
+  },
+  "schema_version": 1,
+  "spike_artifacts": [
+    {
+      "file": "DECISION.md",
+      "sha256": "09ee470032169a25d57fb92f829421ec18fb2dcfa4ce2eb1a24f7936246e2bf3"
+    },
+    {
+      "file": "README.md",
+      "sha256": "d4030564141d98955f3a1d57e47587cd4af45093af25bb2d1018669e27b90700"
+    },
+    {
+      "file": "sdk-host.mjs",
+      "sha256": "d7b0b25b7e4f0365fd114ca0da8dac0d1a9df79fc7b26b2c5a57b30f42a22374"
+    },
+    {
+      "file": "descendant-fixture.mjs",
+      "sha256": "03533283ffd14ddb3147787e7bc37b75d177447df19ed6f304b02b5016effdab"
+    },
+    {
+      "file": "probe.py",
+      "sha256": "90b7097269d33246aa5939936ae4af307d2f60d48c0bf1b202ec4628f60264ff"
+    },
+    {
+      "file": "run_tests.py",
+      "sha256": "83d5d9c2e3946765116a869e5cc8be3d549c27a9b9a310af183850773303f8eb"
+    },
+    {
+      "file": "tests/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "tests/test_lifecycle.py",
+      "sha256": "c363fdf065410e6c24dc64cd26f9ee2c27901561a0be40a1da840bb78bd48a7a"
+    },
+    {
+      "file": "reports/.gitignore",
+      "sha256": "e14f33494a5ebb31e677ef993a0486d92187f85ec0a7a527feaaf0c41c9f806a"
+    },
+    {
+      "file": "reports/test-results.txt",
+      "sha256": "f57ad3ec6fa099d18738d1ebc266e26f602989f5b143673bd28eb89cc060bd61"
+    }
+  ]
+}

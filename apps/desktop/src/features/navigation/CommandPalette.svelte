@@ -13,6 +13,7 @@
   export let onOpenResult: (result: SessionSummary) => void;
   export let commands: RuntimeCommand[] = [];
   export let piUiCommands: PiUiCommandContribution[] = [];
+  export let agentLabel = 'Pi';
   export let commandSelectionDisabled = false;
   export let onUseCommand: (command: RuntimeCommand) => void = () => {};
 
@@ -59,12 +60,12 @@
     <dialog bind:this={dialog} open class="dialog" aria-modal="true" aria-labelledby="search-title">
       <div class="heading">
         <div>
-          <p class="eyebrow">Navigation and Pi commands</p>
+          <p class="eyebrow">Navigation and {agentLabel} commands</p>
           <h2 id="search-title">Go to</h2>
         </div>
         <kbd>Esc</kbd>
       </div>
-      <label class="visually-hidden" for="local-search">Search Pi commands and local sessions</label>
+      <label class="visually-hidden" for="local-search">Search {agentLabel} commands and local sessions</label>
       <input
         id="local-search"
         bind:value={query}
@@ -74,13 +75,13 @@
       />
       <p class="helper">
         {commandSelectionDisabled
-          ? 'Clear the current composer draft before preparing a Pi command. Session search remains available.'
-          : 'Commands come from the active Pi runtime. Session search stays in the local index.'}
+          ? `Clear the current composer draft before preparing a ${agentLabel} command. Session search remains available.`
+          : `Commands come from the active ${agentLabel} runtime. Session search stays in the local index.`}
       </p>
 
       {#if visibleCommands.length > 0}
-        <section class="command-results" aria-label="Pi commands">
-          <p class="result-section-label">Pi commands</p>
+        <section class="command-results" aria-label={`${agentLabel} commands`}>
+          <p class="result-section-label">{agentLabel} commands</p>
           {#each visibleCommands as command (runtimeCommandKey(command))}
             <button class="command-result" type="button" disabled={commandSelectionDisabled} onclick={() => onUseCommand(command)}>
               <span class="command-name">/{command.name}</span>

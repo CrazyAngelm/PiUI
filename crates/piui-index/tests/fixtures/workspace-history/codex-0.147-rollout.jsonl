@@ -1,0 +1,12 @@
+{"timestamp":"2026-09-02T10:00:00Z","type":"session_meta","payload":{"session_id":"execution-session","id":"codex-native-thread","timestamp":"2026-09-02T10:00:00Z","cwd":"__PIUI_CWD__","originator":"codex_cli_rs","cli_version":"0.147.0","source":"cli","model_provider":"openai","base_instructions":{"text":"BASE SECRET"}}}
+{"timestamp":"2026-09-02T10:00:01Z","type":"response_item","payload":{"type":"message","role":"system","content":[{"type":"input_text","text":"SYSTEM SECRET"}]}}
+{"timestamp":"2026-09-02T10:00:02Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"DEVELOPER SECRET"}]}}
+{"timestamp":"2026-09-02T10:00:03Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Codex user"}]}}
+{"timestamp":"2026-09-02T10:00:03Z","type":"event_msg","payload":{"type":"user_message","message":"Codex user","images":[],"local_images":[]}}
+{"timestamp":"2026-09-02T10:00:04Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"Safe reasoning summary"}],"content":null,"encrypted_content":"ENCRYPTED SECRET"}}
+{"timestamp":"2026-09-02T10:00:04Z","type":"event_msg","payload":{"type":"agent_reasoning","text":"Safe reasoning summary"}}
+{"timestamp":"2026-09-02T10:00:05Z","type":"response_item","payload":{"type":"function_call","name":"read_file","arguments":"{\"path\":\"SECRET\"}","call_id":"call-1"}}
+{"timestamp":"2026-09-02T10:00:06Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","output":"Read __PIUI_CWD__/tool.txt"}}
+{"timestamp":"2026-09-02T10:00:07Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Final Codex result at __PIUI_CWD__/out.txt"}],"phase":"final_answer"}}
+{"timestamp":"2026-09-02T10:00:07Z","type":"event_msg","payload":{"type":"agent_message","message":"Final Codex result at __PIUI_CWD__/out.txt","phase":"final_answer"}}
+{"timestamp":"2026-09-02T10:00:08Z","type":"response_item","payload":{"type":"future_safe_item","secret":"RAW UNKNOWN MUST NOT APPEAR"}}

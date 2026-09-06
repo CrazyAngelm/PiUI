@@ -6,6 +6,14 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+- Added Host Protocol v10 with explicit Pi versus Prime Agent 0.8.1 project kinds, separate session roots and global extension inventories, bounded future Prime activity contracts, and a Pi-only v9 compatibility surface.
+- Added read-only Prime root-session catalogs with multiple distinct sessions per project. Prime live start/continue/prompt/stop now fails closed because 0.8.1 uses a shared detached daemon that the per-runtime supervisor cannot safely own without risking other clients.
+- Bounded Prime activity snapshots and UI helper retention to the established 256-event runtime queue, and drop raw `bash_output` chunks before event-channel backpressure while retaining typed terminal summaries.
+- Added the missing v10 folder-picker contract, replaced Prime native handshake IDs with opaque catalog IDs at start/event DTO boundaries, and made global extension toggles await and verify runtime settings persistence for both managers.
+- Upgraded the static Prime spike to hash the actual `dist/bundle/cli.js` literal local import closure (40 files in the measured 0.8.1 install) and record shared-daemon live control as unauthorized.
+- Added a passing repository-target-only Windows Tauri E2E harness. A feature-gated debug-only exact-origin loopback driver replaces unavailable WebView2 CDP, and an outside-Job controller proves an empty Job before bounded fixture removal. The Linux WebKit E2E gate remains open.
+- Re-baselined the emitted frontend asset smoke gate to 260 KiB and recorded the current v10 build at 259,817 bytes (6,423 bytes headroom); public 1.0 performance gates remain open.
+
 ## [0.1.1] - 2026-07-27
 
 - Added typed Extension UI Protocol v9, a bounded host-side dialog mailbox, declarative contribution discovery, and safe contribution projection for Pi extensions.

@@ -1,9 +1,11 @@
 use crate::contributions::{PiUiContributionCatalog, project_global_contributions};
 use crate::dto::{
-    ApiError, ApiExtensionSummary, ApiFakeScenarioResult, ApiPreferences, ApiProjectSummary,
-    ApiRuntimeSnapshot, ApiRuntimeStart, ApiSessionCatalogEvent, ApiSessionCatalogSnapshot,
-    ApiSessionSummary, ApiSessionTree, ApiSnapshot, ApiSystemPiProbe, ApiTimelineBlock,
-    ApiTimelinePage, ApiTimelineStatus, api_tree, runtime_snapshot, runtime_snapshot_named,
+    ApiError, ApiExtensionSummary, ApiExtensionSummaryV10, ApiFakeScenarioResult, ApiPreferences,
+    ApiProjectSummary, ApiProjectSummaryV2, ApiRuntimeEventEnvelope, ApiRuntimeSnapshot,
+    ApiRuntimeStart, ApiSessionCatalogEvent, ApiSessionCatalogSnapshot, ApiSessionState,
+    ApiSessionSummary, ApiSessionTree, ApiSnapshot, ApiSnapshotV8, ApiSystemPiProbe,
+    ApiTimelineBlock, ApiTimelinePage, ApiTimelineStatus, api_tree, runtime_snapshot,
+    runtime_snapshot_named_for_kind,
 };
 use crate::state::{
     CatalogFreshness, CatalogRefreshContext, CatalogRefreshStart, CatalogRefreshStatus,
@@ -12,21 +14,23 @@ use crate::state::{
 };
 use piui_contracts::RuntimeEvent;
 use piui_index::{
-    ChatWidthPreference, DensityPreference, FontSizePreference, Preferences, ProjectIndex,
-    ReducedMotionPreference, ScanReport, SessionDiscoveryLimits, SessionSummary, ThemePreference,
-    TrustState, discover_sessions_for_project_incremental, observe_project_file_bounded,
+    AgentKind, ChatWidthPreference, DensityPreference, FontSizePreference, IndexError, Preferences,
+    ProjectIndex, ReducedMotionPreference, ScanReport, SessionDiscoveryLimits, SessionSummary,
+    ThemePreference, TrustState, discover_root_agent_sessions_for_project_incremental,
+    discover_sessions_for_project_incremental, observe_project_file_bounded,
     verify_discovered_sessions_batch, verify_project_file_revision_bounded,
 };
 use piui_platform::ProjectDirectory;
 use piui_runtime::{
-    ExtensionUiResponse, FakeCommand, FakeRuntime, FakeScenario, FakeTransportEvent,
-    FakeTransportReplay, LifecycleState, ModelLite, PiExtensionOrigin, PiExtensionResource,
-    RealPiConfig, RealPiRuntime, RealRuntimeError, RuntimeCommandLite, RuntimeEventEnvelope,
-    list_global_extensions, probe_system_pi, set_global_extension_enabled,
+    AgentExtensionOrigin, AgentExtensionResource, ExtensionUiResponse, FakeCommand, FakeRuntime,
+    FakeScenario, FakeTransportEvent, FakeTransportReplay, LifecycleState, ModelLite, RealPiConfig,
+    RealPiRuntime, RealRuntimeError, RuntimeCommandLite, RuntimeEventEnvelope,
+    list_global_extensions_for_agent, probe_system_pi, set_global_extension_enabled_for_agent,
 };
 use sha2::{Digest, Sha256};
+use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::MutexGuard;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -55,7 +59,28 @@ struct CatalogRefreshAttempt {
 static NEXT_FAKE_SCENARIO_ID: AtomicU64 = AtomicU64::new(1);
 
 #[tauri::command]
-pub fn bootstrap(state: State<'_, HostState>) -> Result<ApiSnapshot, ApiError> {
+pub fn bootstrap(state: State<'_, HostState>) -> Result<ApiSnapshotV8, ApiError> {
+    let index = lock_index(&state)?;
+    let projects = index
+        .list_projects()
+        .map_err(|_| ApiError::io())?
+        .into_iter()
+        .filter(|project| !state.is_personal_workspace(&project.id))
+        .map(ApiProjectSummaryV2::from)
+        .collect();
+    let preferences = index.preferences().map_err(|_| ApiError::io())?.into();
+    Ok(ApiSnapshotV8 {
+        app_version: APP_VERSION,
+        safe_mode: state.safe_mode,
+        preferences,
+        projects,
+        selected_project_id: None,
+        selected_session_id: None,
+    })
+}
+
+#[tauri::command]
+pub fn bootstrap_v10(state: State<'_, HostState>) -> Result<ApiSnapshot, ApiError> {
     let index = lock_index(&state)?;
     let projects = index
         .list_projects()
@@ -177,22 +202,42 @@ fn parse_chat_width_preference(
     }
 }
 
-/// Lists only global extension resources resolved by Pi's own SettingsManager.
-/// Native paths and package source strings remain host-private.
+/// Legacy v9 route: lists only global Pi extension resources. Native paths and
+/// package source strings remain host-private.
 #[tauri::command]
 pub async fn list_extensions(
     state: State<'_, HostState>,
 ) -> Result<Vec<ApiExtensionSummary>, ApiError> {
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    let resources = list_global_extensions(&state.personal_workspace.canonical_path)
+    list_extensions_for_agent(&state, AgentKind::Pi)
         .await
-        .map_err(|_| ApiError::runtime())?;
-    Ok(api_extensions(resources))
+        .map(legacy_api_extensions)
+}
+
+/// Versioned v10 route: lists the selected runtime's separate global inventory.
+#[tauri::command]
+pub async fn list_extensions_v10(
+    state: State<'_, HostState>,
+    agent_kind: String,
+) -> Result<Vec<ApiExtensionSummaryV10>, ApiError> {
+    list_extensions_for_agent(&state, parse_agent_kind(&agent_kind)?).await
+}
+
+async fn list_extensions_for_agent(
+    state: &HostState,
+    agent_kind: AgentKind,
+) -> Result<Vec<ApiExtensionSummaryV10>, ApiError> {
+    let _operation_guard = state.live_runtime_operation_gate.lock().await;
+    let resources =
+        list_global_extensions_for_agent(&state.personal_workspace.canonical_path, agent_kind)
+            .await
+            .map_err(|_| ApiError::runtime())?;
+    Ok(api_extensions_v10(resources))
 }
 
 /// Projects optional declarative UI manifests for enabled global Pi packages.
-/// Invalid or absent manifests degrade to an empty contribution; their Pi
-/// extension backend remains enabled and usable through generic surfaces.
+/// Prime Agent resources never enter this Pi-only contribution surface. Invalid
+/// or absent manifests degrade to an empty contribution; their Pi extension
+/// backend remains enabled and usable through generic surfaces.
 #[tauri::command]
 pub async fn list_piui_contributions(
     state: State<'_, HostState>,
@@ -200,58 +245,116 @@ pub async fn list_piui_contributions(
     if state.safe_mode {
         return Ok(PiUiContributionCatalog::default());
     }
-    let resources = list_global_extensions(&state.personal_workspace.canonical_path)
-        .await
-        .map_err(|_| ApiError::runtime())?;
+    let resources =
+        list_global_extensions_for_agent(&state.personal_workspace.canonical_path, AgentKind::Pi)
+            .await
+            .map_err(|_| ApiError::runtime())?;
     Ok(project_global_contributions(&resources))
 }
 
-/// Enables or disables one current global extension through Pi's upstream
-/// settings setters. The WebView supplies only a host-derived opaque id.
+/// Legacy v9 route: changes one current global Pi extension through Pi's
+/// upstream settings setter.
 #[tauri::command]
 pub async fn set_extension_enabled(
     state: State<'_, HostState>,
     extension_id: String,
     enabled: bool,
 ) -> Result<Vec<ApiExtensionSummary>, ApiError> {
+    set_extension_enabled_for_agent(&state, AgentKind::Pi, extension_id, enabled)
+        .await
+        .map(legacy_api_extensions)
+}
+
+/// Versioned v10 route: changes only the named runtime's separate inventory.
+#[tauri::command]
+pub async fn set_extension_enabled_v10(
+    state: State<'_, HostState>,
+    agent_kind: String,
+    extension_id: String,
+    enabled: bool,
+) -> Result<Vec<ApiExtensionSummaryV10>, ApiError> {
+    set_extension_enabled_for_agent(
+        &state,
+        parse_agent_kind(&agent_kind)?,
+        extension_id,
+        enabled,
+    )
+    .await
+}
+
+async fn set_extension_enabled_for_agent(
+    state: &HostState,
+    agent_kind: AgentKind,
+    extension_id: String,
+    enabled: bool,
+) -> Result<Vec<ApiExtensionSummaryV10>, ApiError> {
     if extension_id.len() != 36 || !extension_id.starts_with("ext-") {
         return Err(ApiError::invalid());
     }
     let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    let current = list_global_extensions(&state.personal_workspace.canonical_path)
-        .await
-        .map_err(|_| ApiError::runtime())?;
+    let current =
+        list_global_extensions_for_agent(&state.personal_workspace.canonical_path, agent_kind)
+            .await
+            .map_err(|_| ApiError::runtime())?;
     let target = current
         .iter()
         .find(|resource| extension_resource_id(resource) == extension_id)
         .ok_or_else(ApiError::not_found)?;
-    let updated = set_global_extension_enabled(
+    let updated = set_global_extension_enabled_for_agent(
         &state.personal_workspace.canonical_path,
+        agent_kind,
         &target.path,
         enabled,
     )
     .await
     .map_err(|_| ApiError::runtime())?;
-    Ok(api_extensions(updated))
+    Ok(api_extensions_v10(updated))
 }
 
-fn api_extensions(resources: Vec<PiExtensionResource>) -> Vec<ApiExtensionSummary> {
+fn api_extensions_v10(resources: Vec<AgentExtensionResource>) -> Vec<ApiExtensionSummaryV10> {
     resources
         .into_iter()
-        .map(|resource| ApiExtensionSummary {
+        .map(|resource| ApiExtensionSummaryV10 {
             id: extension_resource_id(&resource),
+            agent_kind: match resource.agent_kind {
+                AgentKind::Pi => "pi",
+                AgentKind::PrimeAgent => "prime-agent",
+            },
             name: resource.name,
             source: match resource.origin {
-                PiExtensionOrigin::TopLevel => "Global",
-                PiExtensionOrigin::Package => "Package",
+                AgentExtensionOrigin::TopLevel => "Global",
+                AgentExtensionOrigin::Package => "Package",
             },
             enabled: resource.enabled,
         })
         .collect()
 }
 
-fn extension_resource_id(resource: &PiExtensionResource) -> String {
-    let digest = Sha256::digest(resource.path.to_string_lossy().as_bytes());
+fn legacy_api_extensions(resources: Vec<ApiExtensionSummaryV10>) -> Vec<ApiExtensionSummary> {
+    resources
+        .into_iter()
+        .map(|resource| ApiExtensionSummary {
+            id: resource.id,
+            name: resource.name,
+            source: resource.source,
+            enabled: resource.enabled,
+        })
+        .collect()
+}
+
+fn extension_resource_id(resource: &AgentExtensionResource) -> String {
+    extension_resource_id_for(resource.agent_kind, &resource.path)
+}
+
+fn extension_resource_id_for(agent_kind: AgentKind, path: &Path) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(match agent_kind {
+        AgentKind::Pi => b"pi".as_slice(),
+        AgentKind::PrimeAgent => b"prime-agent".as_slice(),
+    });
+    hasher.update([0]);
+    hasher.update(path.to_string_lossy().as_bytes());
+    let digest = hasher.finalize();
     let suffix = digest[..16]
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -264,7 +367,18 @@ pub async fn add_project(
     state: State<'_, HostState>,
     path: String,
 ) -> Result<ApiProjectSummary, ApiError> {
-    register_project(&state, path).await
+    register_project(&state, path, AgentKind::Pi).await
+}
+
+/// v10 registration requires an explicit runtime kind while the legacy command
+/// above remains an ordinary-Pi compatibility route.
+#[tauri::command]
+pub async fn add_project_v10(
+    state: State<'_, HostState>,
+    path: String,
+    agent_kind: String,
+) -> Result<ApiProjectSummary, ApiError> {
+    register_project(&state, path, parse_agent_kind(&agent_kind)?).await
 }
 
 /// Opens exactly one native folder picker in the trusted host. The WebView
@@ -274,15 +388,42 @@ pub async fn add_project(
 pub async fn pick_and_add_project(
     state: State<'_, HostState>,
 ) -> Result<Option<ApiProjectSummary>, ApiError> {
+    pick_and_register_project(&state, AgentKind::Pi).await
+}
+
+#[tauri::command]
+pub async fn pick_and_add_project_v10(
+    state: State<'_, HostState>,
+    agent_kind: String,
+) -> Result<Option<ApiProjectSummary>, ApiError> {
+    pick_and_register_project(&state, parse_agent_kind(&agent_kind)?).await
+}
+
+async fn pick_and_register_project(
+    state: &HostState,
+    agent_kind: AgentKind,
+) -> Result<Option<ApiProjectSummary>, ApiError> {
     let Some(path) = rfd::FileDialog::new().pick_folder() else {
         return Ok(None);
     };
-    register_project(&state, path.to_string_lossy().into_owned())
+    register_project(state, path.to_string_lossy().into_owned(), agent_kind)
         .await
         .map(Some)
 }
 
-async fn register_project(state: &HostState, path: String) -> Result<ApiProjectSummary, ApiError> {
+fn parse_agent_kind(value: &str) -> Result<AgentKind, ApiError> {
+    match value {
+        "pi" => Ok(AgentKind::Pi),
+        "prime-agent" => Ok(AgentKind::PrimeAgent),
+        _ => Err(ApiError::invalid()),
+    }
+}
+
+async fn register_project(
+    state: &HostState,
+    path: String,
+    agent_kind: AgentKind,
+) -> Result<ApiProjectSummary, ApiError> {
     if path.trim().is_empty() || path.len() > MAX_PROJECT_PATH_BYTES {
         return Err(ApiError::invalid());
     }
@@ -292,8 +433,11 @@ async fn register_project(state: &HostState, path: String) -> Result<ApiProjectS
         return Err(ApiError::invalid());
     }
     let summary = lock_index(state)?
-        .register_project_directory(&directory, None, TrustState::Restricted)
-        .map_err(|_| ApiError::io())?;
+        .register_project_directory_with_kind(&directory, None, TrustState::Restricted, agent_kind)
+        .map_err(|error| match error {
+            IndexError::ProjectAgentKindConflict => ApiError::project_kind_conflict(),
+            _ => ApiError::io(),
+        })?;
     if summary.trust_state != TrustState::Trusted {
         // A canonical-path collision with a different native identity resets
         // trust in the index. Advance the catalog watermark before any later
@@ -1292,9 +1436,18 @@ async fn start_runtime_for_project(
         }
     }
 
-    let cwd = verified_project_directory(state, &project_id, true)?
-        .canonical_path()
-        .to_path_buf();
+    let agent_kind = lock_index(state)?
+        .project_agent_kind(&project_id)
+        .map_err(|_| ApiError::io())?
+        .ok_or_else(ApiError::not_found)?;
+    require_live_runtime_kind(agent_kind)?;
+    let directory = verified_project_directory(state, &project_id, true)?;
+    let pi_roots = discovery_roots_for_project(&state.session_roots, &directory);
+    let prime_roots = configured_roots_for_project(&state.prime_session_roots, &directory);
+    if session_root_sets_overlap(&pi_roots, &prime_roots) {
+        return Err(ApiError::agent_session_root_conflict());
+    }
+    let cwd = directory.canonical_path().to_path_buf();
     let (session_path, mut admission) = match session_id.as_deref() {
         Some(session_id) => {
             // Capture one verified source identity/revision and use that exact
@@ -1314,10 +1467,11 @@ async fn start_runtime_for_project(
         // user's session. Session naming has its own explicit RPC command.
         session_name: None,
     };
+    // `require_live_runtime_kind` above leaves only Pi. Do not keep a
+    // production call edge to Prime's shared default daemon.
+    let spawned = RealPiRuntime::spawn(config).await;
     let (runtime, event_rx, runtime_id, session_state, _initial_revision) =
-        RealPiRuntime::spawn(config)
-            .await
-            .map_err(map_runtime_error)?;
+        spawned.map_err(map_runtime_error)?;
     if let Some(previous_admission) = admission.as_ref() {
         // Pi can legitimately migrate legacy session headers or append a
         // trusted session_start record while opening the file. Preserve the
@@ -1338,9 +1492,51 @@ async fn start_runtime_for_project(
     }
 
     let launch_label = runtime.launch_label().to_owned();
-    // PiUI session ids are opaque index ids. Pi's native session id stays in
-    // SessionStateLite and must never replace the selected UI session id.
-    let resolved_session_id = session_id.clone();
+    // PiUI session ids are opaque index ids. A fresh Prime project runtime has
+    // no caller-admitted opaque id, so synchronously reconcile only its
+    // isolated root and bind the handshake's native id to exactly one indexed
+    // opaque id before any slot or event can observe the runtime.
+    let resolved_session_id = if agent_kind == AgentKind::PrimeAgent
+        && session_id.is_none()
+        && !state.is_personal_workspace(&project_id)
+    {
+        let opened_pi_session_id = session_state.session_id.clone();
+        let opaque_session_id =
+            match resolve_new_prime_project_session_id(state, &project_id, &opened_pi_session_id)
+                .await
+            {
+                Ok(session_id) => session_id,
+                Err(error) => {
+                    let _ = runtime.terminate().await;
+                    return Err(error);
+                }
+            };
+        let new_admission = match admit_session_revision(state, &project_id, &opaque_session_id) {
+            Ok(admission)
+                if admission.pi_session_id.as_deref() == Some(opened_pi_session_id.as_str()) =>
+            {
+                admission
+            }
+            Ok(_) => {
+                let _ = runtime.terminate().await;
+                return Err(ApiError::runtime_protocol());
+            }
+            Err(error) => {
+                let _ = runtime.terminate().await;
+                return Err(error);
+            }
+        };
+        // The direct binding scan deliberately bypasses refresh coalescing so
+        // its lookup cannot use a stale snapshot. Publish a normal sequenced
+        // reconciliation afterward for the sidebar/cache lifecycle.
+        schedule_catalog_reconciliation(app.clone(), project_id.clone());
+        admission = Some(new_admission);
+        Some(opaque_session_id)
+    } else {
+        // Continued sessions retain the caller-admitted opaque ID. Ordinary Pi
+        // and personal-chat new sessions keep their existing behavior.
+        session_id.clone()
+    };
     let event_runtime_id = runtime_id.as_str().to_owned();
     let event_project_id = (!state.is_personal_workspace(&project_id)).then(|| project_id.clone());
     let event_session_id = resolved_session_id.clone();
@@ -1365,14 +1561,16 @@ async fn start_runtime_for_project(
                     ..
                 }
             );
+            let envelope = RuntimeEventEnvelope::new_for_kind(
+                event_runtime_id.clone(),
+                agent_kind,
+                event_project_id.clone(),
+                event_session_id.clone(),
+                event,
+            );
             let _ = forward_app.emit(
                 "piui://runtime-event",
-                RuntimeEventEnvelope::new(
-                    event_runtime_id.clone(),
-                    event_project_id.clone(),
-                    event_session_id.clone(),
-                    event,
-                ),
+                ApiRuntimeEventEnvelope::from(envelope),
             );
             if terminal_failure {
                 // The stdout reader is no longer trustworthy. Retire this
@@ -1406,18 +1604,32 @@ async fn start_runtime_for_project(
         retire_live_runtime_if_matches(state, runtime_id.as_str(), true).await;
         return Err(ApiError::runtime_protocol());
     }
-    let snapshot = runtime_snapshot_named(
+    let runtime_label = match agent_kind {
+        AgentKind::Pi => "Pi",
+        AgentKind::PrimeAgent => "Prime Agent",
+    };
+    let snapshot = runtime_snapshot_named_for_kind(
         runtime_id.as_str(),
+        agent_kind,
         exposed_state,
         runtime.revision(),
-        Some(format!("Pi runtime ready ({launch_label}).")),
+        Some(format!("{runtime_label} runtime ready ({launch_label}).")),
     );
 
     Ok(ApiRuntimeStart {
         runtime: snapshot,
         runtime_id: runtime_id.as_str().to_owned(),
+        agent_kind: if agent_kind == AgentKind::PrimeAgent {
+            "prime-agent"
+        } else {
+            "pi"
+        },
         launch_label,
-        session_state,
+        session_state: ApiSessionState::project(
+            agent_kind,
+            resolved_session_id.clone(),
+            session_state,
+        ),
         session_id: resolved_session_id,
     })
 }
@@ -1497,11 +1709,18 @@ pub async fn stop_live_runtime(
     (slot.catalog_reconcile)(slot.project_id.clone());
     stop_result.map_err(map_runtime_error)?;
     let revision = slot.runtime.revision();
-    Ok(runtime_snapshot_named(
+    let agent_kind = slot.runtime.agent_kind();
+    let runtime_label = if agent_kind == AgentKind::PrimeAgent {
+        "Prime Agent"
+    } else {
+        "Pi"
+    };
+    Ok(runtime_snapshot_named_for_kind(
         slot.runtime_id.as_str(),
+        agent_kind,
         LifecycleState::Dormant,
         revision,
-        Some("Pi runtime stopped.".to_owned()),
+        Some(format!("{runtime_label} runtime stopped.")),
     ))
 }
 
@@ -1740,7 +1959,21 @@ async fn retire_live_runtime_if_matches(state: &HostState, runtime_id: &str, wai
     }
 }
 
+/// Explicit application-exit cleanup. Navigation never calls this function.
+pub(crate) async fn shutdown_application_runtimes(state: &HostState) {
+    let _operation_guard = state.live_runtime_operation_gate.lock().await;
+    state.workspace.shutdown_all().await;
+    let slot = lock_live_runtime(state)
+        .ok()
+        .and_then(|mut live| live.take());
+    if let Some(slot) = slot {
+        let _ = slot.runtime.terminate().await;
+        let _ = slot.forwarding.await;
+    }
+}
+
 async fn retire_live_runtime_for_project(state: &HostState, project_id: &str) {
+    state.workspace.shutdown_workspace(project_id).await;
     let slot = match lock_live_runtime(state) {
         Ok(mut live) => match live.as_ref() {
             Some(slot) if slot.project_id == project_id => live.take(),
@@ -1794,6 +2027,7 @@ fn map_runtime_error(error: RealRuntimeError) -> ApiError {
         RealRuntimeError::Spawn(_) => ApiError::runtime_spawn(),
         RealRuntimeError::Timeout => ApiError::runtime_timeout(),
         RealRuntimeError::Command(_) => ApiError::runtime_rejected(),
+        RealRuntimeError::SessionAlreadyActive => ApiError::session_already_active(),
         RealRuntimeError::Exited(_) | RealRuntimeError::Protocol(_) => ApiError::runtime_protocol(),
         RealRuntimeError::NotRunning | RealRuntimeError::Channel => ApiError::runtime_gone(),
         RealRuntimeError::InvalidExtensionUiResponse => ApiError::invalid(),
@@ -1952,11 +2186,14 @@ fn verify_catalog_project_visibility(state: &HostState, project_id: &str) -> Res
     }
 }
 
-fn verified_project_directory(
+pub(crate) fn verified_project_directory(
     state: &HostState,
     project_id: &str,
     require_trusted: bool,
 ) -> Result<ProjectDirectory, ApiError> {
+    if require_trusted && state.is_shutting_down() {
+        return Err(ApiError::runtime_gone());
+    }
     let result =
         verified_project_directory_with_index(state.index.as_ref(), project_id, require_trusted);
     if matches!(result.as_ref(), Err(error) if error.code == "CONFLICT") {
@@ -2104,21 +2341,105 @@ fn existing_project_session_root(directory: &ProjectDirectory) -> Option<PathBuf
 /// Builds host-only roots after project identity verification. The known local
 /// Pi location is searched first; the index scanner preserves its existing
 /// no-symlink and bounded-walk guarantees for every root.
+fn configured_roots_for_project(
+    session_roots: &[PathBuf],
+    directory: &ProjectDirectory,
+) -> Vec<PathBuf> {
+    session_roots
+        .iter()
+        .map(|root| {
+            if root.is_absolute() {
+                root.clone()
+            } else {
+                directory.canonical_path().join(root)
+            }
+        })
+        .collect()
+}
+
 fn discovery_roots_for_project(
     session_roots: &[PathBuf],
     directory: &ProjectDirectory,
 ) -> Vec<PathBuf> {
     let local_root = existing_project_session_root(directory);
-    let mut roots = Vec::with_capacity(session_roots.len() + usize::from(local_root.is_some()));
+    let configured = configured_roots_for_project(session_roots, directory);
+    let mut roots = Vec::with_capacity(configured.len() + usize::from(local_root.is_some()));
     if let Some(local_root) = local_root {
         roots.push(local_root);
     }
-    for root in session_roots {
-        if !roots.iter().any(|known_root| known_root == root) {
-            roots.push(root.clone());
+    for root in configured {
+        if !roots.iter().any(|known_root| known_root == &root) {
+            roots.push(root);
         }
     }
     roots
+}
+
+fn append_normalized_tail(mut base: PathBuf, tail: &[OsString]) -> PathBuf {
+    for component in tail.iter().rev() {
+        if component == OsStr::new(".") {
+            continue;
+        }
+        if component == OsStr::new("..") {
+            base.pop();
+        } else {
+            base.push(component);
+        }
+    }
+    comparable_root_case(base)
+}
+
+fn lexically_normalized_root(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::Normal(value) => normalized.push(value),
+        }
+    }
+    comparable_root_case(normalized)
+}
+
+fn normalized_root_for_overlap(root: &Path) -> PathBuf {
+    let mut cursor = root.to_path_buf();
+    let mut missing_tail = Vec::new();
+    loop {
+        if let Ok(existing) = fs::canonicalize(&cursor) {
+            return append_normalized_tail(existing, &missing_tail);
+        }
+        let Some(name) = cursor.file_name().map(OsStr::to_os_string) else {
+            return lexically_normalized_root(root);
+        };
+        missing_tail.push(name);
+        if !cursor.pop() {
+            return lexically_normalized_root(root);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn comparable_root_case(path: PathBuf) -> PathBuf {
+    PathBuf::from(path.to_string_lossy().to_lowercase())
+}
+
+#[cfg(not(windows))]
+fn comparable_root_case(path: PathBuf) -> PathBuf {
+    path
+}
+
+fn session_root_sets_overlap(left: &[PathBuf], right: &[PathBuf]) -> bool {
+    left.iter().any(|left_root| {
+        let left = normalized_root_for_overlap(left_root);
+        right.iter().any(|right_root| {
+            let right = normalized_root_for_overlap(right_root);
+            left == right || left.starts_with(&right) || right.starts_with(&left)
+        })
+    })
 }
 
 #[cfg(test)]
@@ -2145,9 +2466,33 @@ fn refresh_project_sessions_with_context(
         .refresh_gate_for(project_id)
         .ok_or_else(ApiError::internal)?;
     let _refresh_guard = refresh_gate.lock().map_err(|_| ApiError::internal())?;
+    refresh_project_sessions_with_context_while_gated(context, project_id, force_full_integrity)
+}
+
+/// Performs one project reconciliation while the caller holds this project's
+/// catalog gate. Keeping the gate through any post-scan index lookup prevents a
+/// watcher from swapping the just-reconciled catalog before an exact binding is
+/// resolved.
+fn refresh_project_sessions_with_context_while_gated(
+    context: &CatalogRefreshContext,
+    project_id: &str,
+    force_full_integrity: bool,
+) -> Result<ProjectRefreshOutcome, ApiError> {
     let directory =
         verified_project_directory_with_index(context.index.as_ref(), project_id, false)?;
-    let roots = discovery_roots_for_project(&context.session_roots, &directory);
+    let agent_kind = lock_project_index(context.index.as_ref())?
+        .project_agent_kind(project_id)
+        .map_err(|_| ApiError::io())?
+        .ok_or_else(ApiError::not_found)?;
+    let pi_roots = discovery_roots_for_project(&context.session_roots, &directory);
+    let prime_roots = configured_roots_for_project(&context.prime_session_roots, &directory);
+    if session_root_sets_overlap(&pi_roots, &prime_roots) {
+        return Err(ApiError::agent_session_root_conflict());
+    }
+    let roots = match agent_kind {
+        AgentKind::Pi => pi_roots,
+        AgentKind::PrimeAgent => prime_roots,
+    };
     context.watch_session_roots(&roots);
     // No roots means no authoritative coverage, so preserve every cached
     // projection rather than treating an empty walk as a complete pass.
@@ -2171,12 +2516,20 @@ fn refresh_project_sessions_with_context(
         (known_sources, generation)
     };
     let project_path = directory.canonical_path().to_path_buf();
-    let discovery = discover_sessions_for_project_incremental(
-        &roots,
-        &project_path,
-        SessionDiscoveryLimits::default(),
-        &known_sources,
-    )
+    let discovery = match agent_kind {
+        AgentKind::Pi => discover_sessions_for_project_incremental(
+            &roots,
+            &project_path,
+            SessionDiscoveryLimits::default(),
+            &known_sources,
+        ),
+        AgentKind::PrimeAgent => discover_root_agent_sessions_for_project_incremental(
+            &roots,
+            &project_path,
+            SessionDiscoveryLimits::default(),
+            &known_sources,
+        ),
+    }
     .map_err(|_| ApiError::project_unavailable())?;
     // Full content/evidence verification remains outside the index mutex. The
     // opaque batch capability cannot be forged by the host/UI and is checked
@@ -2199,6 +2552,51 @@ fn refresh_project_sessions_with_context(
     Ok(ProjectRefreshOutcome {
         complete: commit.complete,
     })
+}
+
+/// Reconciles the isolated Prime root after a new runtime handshake and binds
+/// only an exact, project-scoped opaque session identity. The project gate stays
+/// held through the lookup so a watcher cannot replace the fresh catalog between
+/// its complete scan and this decision.
+fn resolve_new_prime_project_session_id_with_context(
+    context: &CatalogRefreshContext,
+    project_id: &str,
+    pi_session_id: &str,
+) -> Result<String, ApiError> {
+    let refresh_gate = context
+        .refresh_gate_for(project_id)
+        .ok_or_else(ApiError::internal)?;
+    let _refresh_guard = refresh_gate.lock().map_err(|_| ApiError::internal())?;
+    // A new or changed source is fully parsed by incremental discovery. Known
+    // sources retain only continuity evidence, whose header prefix includes the
+    // native id; `complete` below still requires full root coverage and every
+    // weak observation's transactional CAS. Avoid a needless full rehash of an
+    // unchanged project root on this runtime-start hot path.
+    let outcome = refresh_project_sessions_with_context_while_gated(context, project_id, false)?;
+    if !outcome.complete {
+        return Err(ApiError::runtime_protocol());
+    }
+    lock_project_index(context.index.as_ref())?
+        .unique_project_session_id_by_pi_session_id(project_id, pi_session_id)
+        .map_err(|_| ApiError::runtime_protocol())?
+        .ok_or_else(ApiError::runtime_protocol)
+}
+
+/// Moves the bounded, read-only Prime catalog reconciliation off the runtime
+/// task. The resulting opaque ID remains host-only until the existing runtime
+/// start DTO/event paths serialize it.
+async fn resolve_new_prime_project_session_id(
+    state: &HostState,
+    project_id: &str,
+    pi_session_id: &str,
+) -> Result<String, ApiError> {
+    let context = state.catalog_refresh_context();
+    let project_id = project_id.to_owned();
+    let pi_session_id = pi_session_id.to_owned();
+    let task = tauri::async_runtime::spawn_blocking(move || {
+        resolve_new_prime_project_session_id_with_context(&context, &project_id, &pi_session_id)
+    });
+    task.await.map_err(|_| ApiError::internal())?
 }
 
 /// Ensure the project directory resolved before filesystem work remains the
@@ -2375,6 +2773,13 @@ fn require_user_project(state: &HostState, project_id: &str) -> Result<(), ApiEr
     Ok(())
 }
 
+fn require_live_runtime_kind(agent_kind: AgentKind) -> Result<(), ApiError> {
+    match agent_kind {
+        AgentKind::Pi => Ok(()),
+        AgentKind::PrimeAgent => Err(ApiError::prime_live_runtime_unavailable()),
+    }
+}
+
 fn lock_timeline_cursors(
     state: &HostState,
 ) -> Result<MutexGuard<'_, crate::state::TimelineCursorStore>, ApiError> {
@@ -2419,6 +2824,20 @@ impl ApiError {
             recoverable: true,
         }
     }
+    const fn project_kind_conflict() -> Self {
+        Self {
+            code: "PROJECT_KIND_CONFLICT",
+            message: "This folder is registered for a different agent runtime. Remove it before adding it with another runtime.",
+            recoverable: true,
+        }
+    }
+    const fn agent_session_root_conflict() -> Self {
+        Self {
+            code: "CONFLICT",
+            message: "Pi and Prime Agent session roots overlap. Configure separate roots before refreshing or starting this workspace.",
+            recoverable: true,
+        }
+    }
     const fn session_conflict() -> Self {
         Self {
             code: "CONFLICT",
@@ -2440,6 +2859,13 @@ impl ApiError {
             recoverable: true,
         }
     }
+    const fn prime_live_runtime_unavailable() -> Self {
+        Self {
+            code: "NOT_SUPPORTED",
+            message: "Prime Agent 0.8.1 live control is disabled because its shared daemon cannot be contained without risking other active sessions. Read-only history remains available.",
+            recoverable: true,
+        }
+    }
     const fn runtime_busy() -> Self {
         Self {
             code: "RUNTIME_FAILED",
@@ -2457,28 +2883,35 @@ impl ApiError {
     const fn pi_not_found() -> Self {
         Self {
             code: "RUNTIME_FAILED",
-            message: "Pi could not be found on this machine. Install it or set the PIUI_PI_CLI environment variable, then start the runtime again.",
+            message: "The selected agent runtime could not be found. Install it or configure its PIUI_*_CLI override, then try again.",
             recoverable: true,
         }
     }
     const fn runtime_spawn() -> Self {
         Self {
             code: "RUNTIME_FAILED",
-            message: "Pi could not start. Open diagnostics for a safe status code.",
+            message: "The selected agent runtime could not start. Open diagnostics for a safe status code.",
+            recoverable: true,
+        }
+    }
+    const fn session_already_active() -> Self {
+        Self {
+            code: "SESSION_ALREADY_ACTIVE",
+            message: "This Prime Agent session is active in another client. Stop it there, then try again.",
             recoverable: true,
         }
     }
     const fn runtime_timeout() -> Self {
         Self {
             code: "RUNTIME_FAILED",
-            message: "Pi did not respond in time. You can stop and retry.",
+            message: "The agent runtime did not respond in time. You can stop and retry.",
             recoverable: true,
         }
     }
     const fn runtime_rejected() -> Self {
         Self {
             code: "RUNTIME_FAILED",
-            message: "Pi rejected the command. See diagnostics for a safe status code.",
+            message: "The agent runtime rejected the command. See diagnostics for a safe status code.",
             recoverable: true,
         }
     }
@@ -2529,29 +2962,65 @@ fn lifecycle_name(state: LifecycleState) -> &'static str {
 mod tests {
     use super::{
         SESSION_CATALOG_PROTOCOL, admit_session_revision, api_session_summaries, catalog_snapshot,
-        catalog_status, completed_fake_transport_state, last_replayed_fake_state,
+        catalog_status, completed_fake_transport_state, configured_roots_for_project,
+        extension_resource_id_for, last_replayed_fake_state, map_runtime_error, parse_agent_kind,
         parse_chat_width_preference, parse_font_size_preference, prompt_text,
         recapture_session_admission_after_start, refresh_project_sessions,
-        refresh_project_sessions_with_integrity, require_user_project,
-        revalidate_session_admission, rpc_identifier, runtime_state_is_usable, session_name,
+        refresh_project_sessions_with_integrity, require_live_runtime_kind, require_user_project,
+        resolve_new_prime_project_session_id_with_context, revalidate_session_admission,
+        rpc_identifier, runtime_state_is_usable, session_name, session_root_sets_overlap,
         thinking_level, timeline_page, valid_extension_ui_response, valid_opaque_surface_id,
         valid_runtime_id, verified_project_directory,
     };
     use crate::dto::runtime_snapshot;
     use crate::state::HostState;
     use piui_index::{
-        ChatWidthPreference, FontSizePreference, ParseState, SessionSummary, TitleSource,
-        TrustState,
+        AgentKind, ChatWidthPreference, FontSizePreference, ParseState, SessionSummary,
+        TitleSource, TrustState,
     };
     use piui_platform::ProjectDirectory;
     use piui_runtime::{
         ExtensionUiResponse, FakeCommand, FakeRuntime, FakeScenario, FakeTransportReplay,
-        LifecycleState,
+        LifecycleState, RealRuntimeError,
     };
     use std::fs;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn extension_ids_are_scoped_to_the_selected_runtime() {
+        let path = PathBuf::from("shared-extension.ts");
+        let pi_id = extension_resource_id_for(AgentKind::Pi, &path);
+        let prime_id = extension_resource_id_for(AgentKind::PrimeAgent, &path);
+        assert_ne!(pi_id, prime_id);
+        assert_eq!(pi_id.len(), 36);
+        assert_eq!(prime_id.len(), 36);
+        assert!(pi_id.starts_with("ext-"));
+        assert!(prime_id.starts_with("ext-"));
+    }
+
+    #[test]
+    fn prime_active_session_conflict_is_a_typed_path_free_host_error() {
+        let error = map_runtime_error(RealRuntimeError::SessionAlreadyActive);
+        assert_eq!(error.code, "SESSION_ALREADY_ACTIVE");
+        assert!(error.recoverable);
+        assert!(!error.message.contains('\\'));
+        assert!(!error.message.contains('/'));
+    }
+
+    #[test]
+    fn prime_live_runtime_fails_closed_before_shared_daemon_launch() {
+        assert!(require_live_runtime_kind(AgentKind::Pi).is_ok());
+        let error = require_live_runtime_kind(AgentKind::PrimeAgent)
+            .expect_err("Prime 0.8.1 live control stays gated");
+        assert_eq!(error.code, "NOT_SUPPORTED");
+        assert!(error.recoverable);
+        assert!(error.message.contains("shared daemon"));
+        assert!(!error.message.contains('\\'));
+        assert!(!error.message.contains('/'));
+    }
 
     #[test]
     fn live_runtime_control_arguments_are_bounded_and_typed() {
@@ -2567,6 +3036,17 @@ mod tests {
         assert_eq!(thinking_level("xhigh"), Some("xhigh".into()));
         assert_eq!(thinking_level("off"), Some("off".into()));
         assert!(thinking_level("not-a-level").is_none());
+        assert_eq!(parse_agent_kind("pi").expect("accepts Pi"), AgentKind::Pi);
+        assert_eq!(
+            parse_agent_kind("prime-agent").expect("accepts Prime Agent"),
+            AgentKind::PrimeAgent
+        );
+        assert_eq!(
+            parse_agent_kind("prime")
+                .expect_err("rejects ambiguous runtime kind")
+                .code,
+            "INVALID_ARGUMENT"
+        );
         assert!(runtime_state_is_usable(LifecycleState::Ready));
         assert!(runtime_state_is_usable(LifecycleState::Running));
         assert!(!runtime_state_is_usable(LifecycleState::Failed));
@@ -2874,6 +3354,275 @@ mod tests {
                 .len(),
             1
         );
+
+        drop(state);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_session_roots_resolve_per_project_and_aliases_overlap() {
+        let nonce = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "piui-api-agent-root-alias-{}-{nonce}",
+            std::process::id()
+        ));
+        let project_path = root.join("project");
+        let shared = root.join("shared-sessions");
+        let alias_parent = root.join("alias-parent");
+        for directory in [&project_path, &shared, &alias_parent] {
+            fs::create_dir_all(directory).expect("creates root alias fixture");
+        }
+        let project = ProjectDirectory::resolve(&project_path).expect("resolves project");
+        assert_eq!(
+            configured_roots_for_project(&[PathBuf::from("relative-sessions")], &project),
+            vec![project.canonical_path().join("relative-sessions")]
+        );
+        let lexical_alias = alias_parent.join("..").join("shared-sessions");
+        assert!(session_root_sets_overlap(
+            std::slice::from_ref(&shared),
+            &[lexical_alias]
+        ));
+        assert!(!session_root_sets_overlap(
+            std::slice::from_ref(&shared),
+            &[root.join("prime-sessions")]
+        ));
+        assert!(session_root_sets_overlap(
+            &[root
+                .join("missing-parent")
+                .join("..")
+                .join("future-sessions")],
+            &[root.join("future-sessions")]
+        ));
+        #[cfg(windows)]
+        assert!(session_root_sets_overlap(
+            &[root.join("Future-Case-Sessions")],
+            &[root.join("future-case-sessions")]
+        ));
+        fs::remove_dir_all(root).expect("removes root alias fixture");
+    }
+
+    #[test]
+    fn project_refresh_keeps_pi_and_prime_session_roots_isolated() {
+        let nonce = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "piui-api-agent-root-isolation-{}-{nonce}",
+            std::process::id()
+        ));
+        let data = root.join("data");
+        let pi_project_path = root.join("pi-project");
+        let prime_project_path = root.join("prime-project");
+        let pi_sessions = root.join("pi-sessions");
+        let prime_sessions = root.join("prime-sessions");
+        let _ = fs::remove_dir_all(&root);
+        for directory in [
+            &pi_project_path,
+            &prime_project_path,
+            &pi_sessions,
+            &prime_sessions,
+        ] {
+            fs::create_dir_all(directory).expect("creates isolation fixture directory");
+        }
+        let pi_directory =
+            ProjectDirectory::resolve(&pi_project_path).expect("resolves Pi project");
+        let prime_directory =
+            ProjectDirectory::resolve(&prime_project_path).expect("resolves Prime project");
+        let write_session = |root: &std::path::Path,
+                             file: &str,
+                             session_id: &str,
+                             name: &str,
+                             cwd: &std::path::Path| {
+            let source = format!(
+                "{{\"type\":\"session\",\"id\":{},\"name\":{},\"cwd\":{}}}\n",
+                serde_json::to_string(session_id).expect("encodes session id"),
+                serde_json::to_string(name).expect("encodes session name"),
+                serde_json::to_string(&cwd.to_string_lossy()).expect("encodes project cwd"),
+            );
+            fs::write(root.join(file), source).expect("writes isolation session");
+        };
+        write_session(
+            &pi_sessions,
+            "pi-right.jsonl",
+            "pi-right",
+            "Pi lane",
+            pi_directory.canonical_path(),
+        );
+        write_session(
+            &pi_sessions,
+            "prime-wrong.jsonl",
+            "prime-wrong",
+            "Wrong Pi root",
+            prime_directory.canonical_path(),
+        );
+        write_session(
+            &prime_sessions,
+            "prime-right.jsonl",
+            "prime-right",
+            "Prime lane",
+            prime_directory.canonical_path(),
+        );
+        let prime_child = format!(
+            "{{\"type\":\"session\",\"id\":\"prime-child\",\"name\":\"RLM child\",\"cwd\":{},\"parentSession\":\"prime-right\",\"rlmDepth\":1}}\n",
+            serde_json::to_string(&prime_directory.canonical_path().to_string_lossy())
+                .expect("encodes Prime child cwd"),
+        );
+        fs::write(prime_sessions.join("prime-child.jsonl"), prime_child)
+            .expect("writes Prime child session");
+        let prime_fork = format!(
+            "{{\"type\":\"session\",\"id\":\"prime-fork\",\"name\":\"Prime fork\",\"cwd\":{},\"parentSession\":\"prime-right\",\"rlmDepth\":0}}\n",
+            serde_json::to_string(&prime_directory.canonical_path().to_string_lossy())
+                .expect("encodes Prime fork cwd"),
+        );
+        fs::write(prime_sessions.join("prime-fork.jsonl"), prime_fork)
+            .expect("writes ordinary Prime fork");
+        let nested_prime_sessions = prime_sessions.join("legacy-nested");
+        fs::create_dir_all(&nested_prime_sessions).expect("creates nested Prime fixture");
+        write_session(
+            &nested_prime_sessions,
+            "nested-ghost.jsonl",
+            "nested-ghost",
+            "Nested ghost",
+            prime_directory.canonical_path(),
+        );
+        write_session(
+            &prime_sessions,
+            "pi-wrong.jsonl",
+            "pi-wrong",
+            "Wrong Prime root",
+            pi_directory.canonical_path(),
+        );
+
+        let mut state = HostState::open(&data, false).expect("opens isolated host state");
+        state.session_roots = vec![pi_sessions];
+        state.prime_session_roots = vec![prime_sessions];
+        let (pi_project, prime_project) = {
+            let mut index = state.index.lock().expect("locks index");
+            let pi_project = index
+                .register_project_directory(&pi_directory, None, TrustState::Restricted)
+                .expect("registers Pi project");
+            let prime_project = index
+                .register_project_directory_with_kind(
+                    &prime_directory,
+                    None,
+                    TrustState::Restricted,
+                    AgentKind::PrimeAgent,
+                )
+                .expect("registers Prime project");
+            (pi_project, prime_project)
+        };
+
+        refresh_project_sessions(&state, &pi_project.id).expect("refreshes Pi catalog");
+        let prime_refresh =
+            refresh_project_sessions_with_integrity(&state, &prime_project.id, false)
+                .expect("refreshes Prime catalog");
+        assert!(prime_refresh.complete);
+        let index = state.index.lock().expect("locks refreshed index");
+        let pi_titles = index
+            .list_sessions(Some(&pi_project.id))
+            .expect("lists Pi sessions")
+            .into_iter()
+            .map(|session| session.title)
+            .collect::<Vec<_>>();
+        let mut prime_titles = index
+            .list_sessions(Some(&prime_project.id))
+            .expect("lists Prime sessions")
+            .into_iter()
+            .map(|session| session.title)
+            .collect::<Vec<_>>();
+        prime_titles.sort();
+        assert_eq!(pi_titles, vec!["Pi lane"]);
+        assert_eq!(prime_titles, vec!["Prime fork", "Prime lane"]);
+        drop(index);
+
+        drop(state);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn prime_new_session_binding_requires_one_fresh_project_scoped_native_match() {
+        let nonce = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "piui-api-prime-new-session-binding-{}-{nonce}",
+            std::process::id()
+        ));
+        let data = root.join("data");
+        let project_path = root.join("project");
+        let pi_sessions = root.join("pi-sessions");
+        let prime_sessions = root.join("prime-sessions");
+        let matching_file = prime_sessions.join("matching.jsonl");
+        let other_file = prime_sessions.join("other.jsonl");
+        let duplicate_file = prime_sessions.join("duplicate.jsonl");
+        let _ = fs::remove_dir_all(&root);
+        for directory in [&project_path, &pi_sessions, &prime_sessions] {
+            fs::create_dir_all(directory).expect("creates binding fixture directory");
+        }
+        let source = |native_id: &str| {
+            format!(
+                "{{\"type\":\"session\",\"id\":{},\"cwd\":{}}}\n",
+                serde_json::to_string(native_id).expect("encodes native id"),
+                serde_json::to_string(&project_path.to_string_lossy().to_string())
+                    .expect("encodes project cwd"),
+            )
+        };
+        let matching_source = source("native-root-session");
+        fs::write(&other_file, source("other-native-session")).expect("writes other Prime root");
+
+        let mut state = HostState::open(&data, false).expect("opens isolated host state");
+        state.session_roots = vec![pi_sessions];
+        state.prime_session_roots = vec![prime_sessions];
+        let directory = ProjectDirectory::resolve(&project_path).expect("resolves project");
+        let project = state
+            .index
+            .lock()
+            .expect("locks index")
+            .register_project_directory_with_kind(
+                &directory,
+                None,
+                TrustState::Trusted,
+                AgentKind::PrimeAgent,
+            )
+            .expect("registers trusted Prime project");
+        // Seed an unchanged catalog row first. The new matching file below must
+        // still be discovered by the direct incremental binding pass.
+        refresh_project_sessions(&state, &project.id).expect("indexes existing Prime root");
+        fs::write(&matching_file, &matching_source).expect("writes newly created Prime root");
+        let context = state.catalog_refresh_context();
+
+        let opaque_session_id = resolve_new_prime_project_session_id_with_context(
+            &context,
+            &project.id,
+            "native-root-session",
+        )
+        .expect("binds exactly one fresh Prime root");
+        assert_ne!(opaque_session_id, "native-root-session");
+        let admission = admit_session_revision(&state, &project.id, &opaque_session_id)
+            .expect("captures the bound opaque session admission");
+        assert_eq!(admission.session_id, opaque_session_id);
+        assert_eq!(
+            admission.pi_session_id.as_deref(),
+            Some("native-root-session")
+        );
+        assert_eq!(
+            fs::read(&matching_file).expect("reads unchanged root source"),
+            matching_source.as_bytes()
+        );
+
+        let missing = resolve_new_prime_project_session_id_with_context(
+            &context,
+            &project.id,
+            "missing-native-session",
+        )
+        .expect_err("missing native id must not select by catalog order");
+        assert_eq!(missing.code, "RUNTIME_FAILED");
+
+        fs::write(&duplicate_file, source("native-root-session"))
+            .expect("writes ambiguous Prime root");
+        let ambiguous = resolve_new_prime_project_session_id_with_context(
+            &context,
+            &project.id,
+            "native-root-session",
+        )
+        .expect_err("duplicate native ids must fail closed");
+        assert_eq!(ambiguous.code, "RUNTIME_FAILED");
 
         drop(state);
         let _ = fs::remove_dir_all(root);

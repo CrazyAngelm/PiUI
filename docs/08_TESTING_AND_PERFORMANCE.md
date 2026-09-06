@@ -113,6 +113,7 @@ Absolute FTS duration depends on storage; the release regression gate uses ±15%
 
 ### 4.5 Package
 
+- the current emitted frontend asset smoke gate is **260 KiB**. The current v10 read-only Prime lane and project-session UI build measures **259,817 bytes**, below the 266,240-byte gate; this is a local build-size check, not a public performance or release-gate closure;
 - compressed PiUI application payload target ≤35 MiB, excluding optional WebView bootstrap and managed Pi runtime;
 - runtime and UI artifact sizes reported separately;
 - no dependency may add >5 MiB compressed without ADR;
@@ -227,7 +228,7 @@ Required Playwright/Tauri harness scenarios:
 19. keyboard-only complete chat flow;
 20. WebView reload while runtime continues.
 
-Tests should assert host state/data, not only screenshots.
+Tests should assert host state/data, not only screenshots. The Windows v10 harness uses synthetic Pi/Prime roots and debug-only app/WebView data inside a canonical `<repo>/target/piui-e2e/<run>` fixture. An outside-Job controller contains the inner Node harness, while controlled feature-gated Job runners contain the Vite, proof-build, normal-app, and safe-app trees. The harness launches only Cargo's exact forced-target artifact and reports pass only after the outer Job is empty and bounded, reparse-safe fixture removal succeeds. Because the machine-provided Evergreen WebView2 runtime accepts remote-debugging arguments without exposing a CDP listener, the harness instead uses a Cargo-feature- and debug-gated exact-origin loopback driver injected only into the manually created `main` WebView; ordinary debug and release builds cannot activate it. The passing Windows flow verifies Pi generic fallback, multiple Prime root sessions in one project, the Prime read-only/live-disabled boundary, labelled modal controls, application keyboard focus handling, extension inventory separation, WebView reload, and safe mode without reading a user profile. The observed WebView user-agent product version is reported with the result rather than treated as a repository-pinned runtime. The canonical `pnpm test:e2e` command dispatches to this real harness on Windows and still fails explicitly on Linux because no WebKit harness exists yet. The former source check is `pnpm test:smoke` and is not counted as browser/Tauri E2E evidence.
 
 ## 9. Platform matrix
 

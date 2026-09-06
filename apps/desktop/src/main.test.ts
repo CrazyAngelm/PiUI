@@ -2,10 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   mount: vi.fn(),
+  root: { name: 'DesktopRoot' },
 }));
 
 vi.mock('svelte', () => ({ mount: mocks.mount }));
-vi.mock('./app/App.svelte', () => ({ default: 'PiUIApp' }));
+vi.mock('./app/DesktopRoot.svelte', () => ({ default: mocks.root }));
 vi.mock('./styles/reset.css', () => ({}));
 vi.mock('./styles/tokens.css', () => ({}));
 vi.mock('./styles/app.css', () => ({}));
@@ -26,7 +27,7 @@ describe('desktop entrypoint', () => {
     await import('./main');
 
     expect(mocks.mount).toHaveBeenCalledOnce();
-    expect(mocks.mount).toHaveBeenCalledWith('PiUIApp', { target });
+    expect(mocks.mount).toHaveBeenCalledWith(mocks.root, { target });
   });
 
   it('fails safely when the root element is missing', async () => {
