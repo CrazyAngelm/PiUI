@@ -59,8 +59,12 @@ failures remain failures, never successful graph results. No global model change
 
 Current workspace v15 WebView proof: target/piui-evidence/17604-1788749013099/report.json.
 Unit/contract/native bridge and Rust tests pass, including read-only Hermes SQLite
-result references and denied unsupported settings. Final release installation is
-being completed after verification.
+result references and denied unsupported settings. Final release installed at C:/Users/redmi/AppData/Local/Programs/PiUI/PiUI.exe.
+The desktop shortcut targets this EXE directly, without shell arguments.
+The executable PE subsystem is 2 (Windows GUI); installed/source SHA-256 matches:
+7625347F8A68D8A1C451C17E84517174DB6AB708925B6E0FF1D03F4AEB6F3AC0.
+Previous executable retained as PiUI.before-687a0fd.exe. Native histories and
+running user sessions were not terminated for the file update.
 
 The final stable WebView run additionally verifies Hermes v3 mixed-graph import
 and atomic save. Automatic native-chat restoration now preserves a view already
