@@ -14,7 +14,7 @@ credentials, approvals and authoritative histories.
 - [x] Pause new admissions, cancellation and safe recovery with retained attempts.
 - [x] Adapter-specific preflight and actionable capability diagnostics.
 - [x] Versioned JSON compatibility, shared validator, examples, skill and architecture/style documentation.
-- [ ] Unit/contract/native WebView verification, scoped commits and installed release verification.
+- [x] Unit/contract/native WebView verification, scoped commits and installed release verification.
 
 Do not install a second coordinator. Do not execute code from imported documents.
 No inferred token prices, fabricated progress, silent retries or arbitrary iteration
@@ -46,4 +46,14 @@ explicit configuration. A native turn completing does not prove task acceptance.
   266240). Run inspector code is deferred. WebView dev shell observed at 352 ms;
   execution-screen owned process-tree working set 889413632 bytes. This is one
   dev sample, not a production memory target or a benchmark claim.
-- Release build and installed-artifact verification pending.
+- Release built with `tauri build --no-bundle --ci` in 5m10s. Installed executable
+  and desktop shortcut target match SHA256
+  `5508239BBE0EF2160CDCFA7B662FFA8201761800716884106A2FCF32E9B4F136`
+  (20114432 bytes, PE subsystem 2 / Windows GUI). Evidence:
+  `target/execution-installed-proof.json`. Previous process 30648 was left running;
+  the new executable is used after normal close and relaunch. No user session was
+  terminated to install. Actual UI automation used the isolated debug WebView; the
+  installed release received hash/format/shortcut verification, not injected automation.
+- Implementation commit: `74d2c25`. Final contract suite: 40 tests passed; full UI
+  suite 180 passed before the added round-trip case, which then passed in the
+  contract suite. Adapter fixtures: 45 passed, including all native usage mappings.
