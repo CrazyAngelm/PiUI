@@ -115,7 +115,7 @@ pub fn emit_run_changed(app: &AppHandle, workspace_id: &str, run: &Run) {
     let _ = app.emit(
         ORCHESTRATION_EVENT_V4,
         OrchestrationRunChangedEventV4 {
-            protocol: 5,
+            protocol: 6,
             event_type: "runChanged",
             workspace_id: workspace_id.to_owned(),
             run_id: run.id().to_owned(),
@@ -129,6 +129,19 @@ pub struct OrchestrationApiState {
 }
 
 impl OrchestrationApiState {
+    fn control_flow(&self, request: FlowControlRequest) -> Result<Run, OrchestrationApiError> {
+        self.lock()?
+            .transact(|workspaces| {
+                let run = mutable_run(workspaces, &request.workspace_id, &request.run_id)?;
+                Coordinator::control_flow(run, request.expected_run_revision, request.action)
+                    .map_err(|error| match error {
+                        CoordinatorError::RevisionConflict { .. } => StoreError::Conflict,
+                        _ => StoreError::Invalid,
+                    })?;
+                Ok(run.clone())
+            })
+            .map_err(Into::into)
+    }
     pub fn open(app_data_dir: &Path) -> Result<Self, OrchestrationApiError> {
         let mut store = OrchestrationStore::open(app_data_dir)?;
         store.recover_interrupted_runs()?;
@@ -243,17 +256,20 @@ impl OrchestrationApiState {
         workspace_id: &str,
         run_id: &str,
         expected_run_revision: u64,
+        step_id: Option<&str>,
     ) -> Result<Run, OrchestrationApiError> {
         let mut store = self.lock()?;
         store
             .transact(|workspaces| {
                 let run = mutable_run(workspaces, workspace_id, run_id)?;
-                Coordinator::cancel_run(run, expected_run_revision).map_err(
-                    |error| match error {
-                        CoordinatorError::RevisionConflict { .. } => StoreError::Conflict,
-                        _ => StoreError::Invalid,
-                    },
-                )?;
+                match step_id {
+                    Some(id) => Coordinator::cancel_task(run, expected_run_revision, id),
+                    None => Coordinator::cancel_run(run, expected_run_revision).map(|_| ()),
+                }
+                .map_err(|error| match error {
+                    CoordinatorError::RevisionConflict { .. } => StoreError::Conflict,
+                    _ => StoreError::Invalid,
+                })?;
                 Ok(run.clone())
             })
             .map_err(Into::into)
@@ -304,19 +320,21 @@ impl OrchestrationApiState {
         expected_task_revision: u64,
         workspace_session_id: &str,
         outcome: CompletionOutcome,
+        native_result_text: Option<&str>,
     ) -> Result<Run, OrchestrationApiError> {
         let mut store = self.lock()?;
         store
             .transact(|workspaces| {
                 let run = mutable_run(workspaces, workspace_id, run_id)?;
                 let current_run_revision = run.revision();
-                Coordinator::complete_task(
+                Coordinator::complete_checked_task(
                     run,
                     current_run_revision,
                     step_id,
                     expected_task_revision,
                     workspace_session_id,
                     outcome,
+                    native_result_text,
                 )
                 .map_err(|_| StoreError::Conflict)?;
                 Ok(run.clone())
@@ -1221,7 +1239,7 @@ fn delete_definition<T: DefinitionValue>(
 }
 
 #[tauri::command]
-pub fn orchestration_catalog_v5(
+pub fn orchestration_catalog_v6(
     state: State<'_, OrchestrationApiState>,
     host_state: State<'_, HostState>,
     request: WorkspaceRequest,
@@ -1254,6 +1272,32 @@ pub fn orchestration_catalog_v5(
         pipelines: summaries(&workspace.pipelines),
         launch_commands: summaries(&workspace.launch_commands),
     })
+}
+
+#[tauri::command]
+pub fn orchestration_run_usage_v6(
+    state: State<'_, OrchestrationApiState>,
+    host_state: State<'_, HostState>,
+    request: RunRequest,
+) -> Result<
+    std::collections::BTreeMap<String, Vec<piui_runtime::workspace_usage::NativeUsage>>,
+    OrchestrationApiError,
+> {
+    validate_workspace_scope(&host_state, &request.workspace_id)?;
+    let run = state
+        .get_run(&request.workspace_id, &request.run_id)?
+        .ok_or_else(OrchestrationApiError::not_found)?;
+    let mut usage = std::collections::BTreeMap::new();
+    for task in run.tasks().iter().chain(run.attempts()) {
+        if let Some(execution) = task.execution() {
+            let receipts = host_state
+                .workspace
+                .usage(&execution.id, &request.workspace_id)
+                .map_err(|_| OrchestrationApiError::not_found())?;
+            usage.insert(execution.id.clone(), receipts);
+        }
+    }
+    Ok(usage)
 }
 
 macro_rules! definition_commands {
@@ -1291,32 +1335,32 @@ macro_rules! definition_commands {
 }
 
 definition_commands!(
-    orchestration_get_profile_v5,
-    orchestration_save_profile_v5,
-    orchestration_delete_profile_v5,
+    orchestration_get_profile_v6,
+    orchestration_save_profile_v6,
+    orchestration_delete_profile_v6,
     AgentProfile
 );
 definition_commands!(
-    orchestration_get_team_v5,
-    orchestration_save_team_v5,
-    orchestration_delete_team_v5,
+    orchestration_get_team_v6,
+    orchestration_save_team_v6,
+    orchestration_delete_team_v6,
     TeamDefinition
 );
 definition_commands!(
-    orchestration_get_pipeline_v5,
-    orchestration_save_pipeline_v5,
-    orchestration_delete_pipeline_v5,
+    orchestration_get_pipeline_v6,
+    orchestration_save_pipeline_v6,
+    orchestration_delete_pipeline_v6,
     PipelineDefinition
 );
 definition_commands!(
-    orchestration_get_launch_command_v5,
-    orchestration_save_launch_command_v5,
-    orchestration_delete_launch_command_v5,
+    orchestration_get_launch_command_v6,
+    orchestration_save_launch_command_v6,
+    orchestration_delete_launch_command_v6,
     LaunchCommandReference
 );
 
 #[tauri::command]
-pub fn orchestration_list_runs_v5(
+pub fn orchestration_list_runs_v6(
     state: State<'_, OrchestrationApiState>,
     host_state: State<'_, HostState>,
     request: WorkspaceRequest,
@@ -1343,7 +1387,7 @@ pub fn orchestration_list_runs_v5(
 }
 
 #[tauri::command]
-pub fn orchestration_get_run_v5(
+pub fn orchestration_get_run_v6(
     state: State<'_, OrchestrationApiState>,
     host_state: State<'_, HostState>,
     request: RunRequest,
@@ -1363,7 +1407,7 @@ pub fn orchestration_get_run_v5(
 }
 
 #[tauri::command]
-pub async fn orchestration_start_run_v5(
+pub async fn orchestration_start_run_v6(
     state: State<'_, OrchestrationApiState>,
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
@@ -1389,7 +1433,7 @@ pub async fn orchestration_start_run_v5(
 }
 
 #[tauri::command]
-pub async fn orchestration_cancel_run_v5(
+pub async fn orchestration_cancel_run_v6(
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
     app: AppHandle,
@@ -1409,8 +1453,80 @@ pub async fn orchestration_cancel_run_v5(
     Ok(run)
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FlowControlRequest {
+    workspace_id: String,
+    run_id: String,
+    expected_run_revision: u64,
+    action: piui_orchestration::FlowAction,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CancelTaskRequest {
+    workspace_id: String,
+    run_id: String,
+    expected_run_revision: u64,
+    step_id: String,
+}
+
 #[tauri::command]
-pub async fn orchestration_reconcile_uncertain_task_v5(
+pub async fn orchestration_cancel_task_v6(
+    scheduler: State<'_, OrchestrationScheduler>,
+    host_state: State<'_, HostState>,
+    app: AppHandle,
+    request: CancelTaskRequest,
+) -> Result<Run, OrchestrationApiError> {
+    validate_workspace_scope(&host_state, &request.workspace_id)?;
+    let run = scheduler
+        .cancel_task(
+            &app,
+            &request.workspace_id,
+            &request.run_id,
+            request.expected_run_revision,
+            &request.step_id,
+        )
+        .await
+        .map_err(scheduler_error)?;
+    emit_run_changed(&app, &request.workspace_id, &run);
+    if run.status() == piui_orchestration::RunStatus::Running && !run.paused() {
+        scheduler
+            .schedule_run(&app, &request.workspace_id, &request.run_id)
+            .await
+            .map_err(scheduler_error)?;
+    }
+    Ok(run)
+}
+
+#[tauri::command]
+pub async fn orchestration_control_flow_v6(
+    state: State<'_, OrchestrationApiState>,
+    scheduler: State<'_, OrchestrationScheduler>,
+    host_state: State<'_, HostState>,
+    app: AppHandle,
+    request: FlowControlRequest,
+) -> Result<Run, OrchestrationApiError> {
+    let operation = host_state.live_runtime_operation_gate.lock().await;
+    validate_live_workspace_scope(&host_state, &request.workspace_id)?;
+    let workspace_id = request.workspace_id.clone();
+    let run_id = request.run_id.clone();
+    let run = state.control_flow(request)?;
+    emit_run_changed(&app, &workspace_id, &run);
+    drop(operation);
+    if !run.paused() && run.status() == piui_orchestration::RunStatus::Running {
+        scheduler
+            .schedule_run(&app, &workspace_id, &run_id)
+            .await
+            .map_err(scheduler_error)?;
+    }
+    state
+        .get_run(&workspace_id, &run_id)?
+        .ok_or_else(OrchestrationApiError::not_found)
+}
+
+#[tauri::command]
+pub async fn orchestration_reconcile_uncertain_task_v6(
     state: State<'_, OrchestrationApiState>,
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
@@ -1470,7 +1586,7 @@ pub async fn orchestration_reconcile_uncertain_task_v5(
 }
 
 #[tauri::command]
-pub async fn orchestration_retry_uncertain_task_v5(
+pub async fn orchestration_retry_uncertain_task_v6(
     state: State<'_, OrchestrationApiState>,
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
@@ -1677,6 +1793,8 @@ fn history_references_for_member(run: &Run, member_id: &str) -> Vec<NativeHistor
             references.push(reference.clone());
         } else if let Some(execution) = task.execution() {
             references.push(NativeHistoryReference {
+                fields: Vec::new(),
+
                 session_id: execution.id.clone(),
                 block_id: None,
                 content_hash: None,
@@ -1942,7 +2060,7 @@ fn save_graph(
 }
 
 #[tauri::command]
-pub async fn orchestration_save_graph_v5(
+pub async fn orchestration_save_graph_v6(
     state: State<'_, OrchestrationApiState>,
     host_state: State<'_, HostState>,
     request: SaveGraphRequest,

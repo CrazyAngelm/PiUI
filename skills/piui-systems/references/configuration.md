@@ -1,6 +1,6 @@
 # File format and workflow
 
-The canonical machine-readable contract is `contracts/system-file-v3.schema.json` in the PiUI checkout. It is a standalone versioned exchange format, not an internal store dump or new runtime protocol. JSON was chosen because PiUI already uses typed JSON contracts, schema tooling can reject misspelled fields, and Git diffs are straightforward. XML adds no needed capability here. Unknown fields and unsupported versions are rejected; there is no YAML coercion, template evaluation, include loader or automatic environment expansion.
+The canonical machine-readable contract is `contracts/system-file-v4.schema.json` in the PiUI checkout. It is a standalone versioned exchange format, not an internal store dump or new runtime protocol. JSON was chosen because PiUI already uses typed JSON contracts, schema tooling can reject misspelled fields, and Git diffs are straightforward. XML adds no needed capability here. Unknown fields and unsupported versions are rejected; there is no YAML coercion, template evaluation, include loader or automatic environment expansion.
 
 Top level: `format: "piui-system"`, `version: 3`, `name`, `agents`, `connections`, optional `orchestrator` (agent ID) and `inheritTeamConnections` (boolean). The orchestrator defaults to the first file agent when omitted. It is a coordinator identity, not automatic execution order.
 

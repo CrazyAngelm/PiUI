@@ -223,7 +223,15 @@ main()
       if (status !== 'idle' || mode !== 'prompt') throw fail('busy');
       ++turn; streamingId = undefined; put({ id: `hermes-user-${turn}`, kind: 'user', text, status: 'complete' }); setStatus('running');
       const input = config.instructions ? `Agent instructions:\n${config.instructions}\n\nTask:\n${text}` : text;
+      const usageId = randomUUID();
       void request('session/prompt', { sessionId, prompt: [{ type: 'text', text: input }] }).then(result => {
+        if (result.usage) {
+          const usage = { id: usageId };
+          for (const [source, target] of [["inputTokens","inputTokens"],["outputTokens","outputTokens"],["cachedReadTokens","cacheReadTokens"],["totalTokens","totalTokens"]]) {
+            if (Number.isSafeInteger(result.usage[source]) && result.usage[source] >= 0) usage[target] = result.usage[source];
+          }
+          emit({ type: 'usage', usage });
+        }
         for (const block of blocks.values()) if (block.status === 'streaming') put({ ...block, status: 'complete' });
         boundNativeId = result?._meta?.hermes?.sessionProvenance?.currentHermesSessionId ?? boundNativeId;
         emit({ type: 'binding', nativeId: boundNativeId, nativePath });

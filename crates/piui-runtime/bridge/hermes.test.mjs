@@ -13,6 +13,7 @@ test('native ACP streams LF-framed text and preserves generic fallback', async (
     const done = e.next(v => v.type === 'turnCompleted');
     await a.prompt({ text: 'hello', mode: 'prompt' });
     assert.equal((await done).outcome, 'succeeded');
+    assert.deepEqual(e.values.filter(v => v.type === 'usage').map(v => ({...v.usage,id:'receipt'})), [{id:'receipt',inputTokens:10,outputTokens:4,cacheReadTokens:2,totalTokens:14}]);
     assert.ok(a.snapshot().blocks.some(b => b.text === 'hello\u2028world'));
     assert.ok(a.snapshot().blocks.some(b => b.fallback));
     assert.equal((await a.catalogModels())[0].supportsFast, false);

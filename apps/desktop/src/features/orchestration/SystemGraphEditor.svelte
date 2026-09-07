@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { preflightGraph, type PreflightIssue } from './graphPreflight';
   import { performRunAction } from './runActions';
   import { onMount } from 'svelte';
   import PanelResize from '../../components/PanelResize.svelte';
@@ -6,6 +7,8 @@
   import { harnessModels } from '../../host-api/harnessModels';
   import type { HarnessCatalogModel as WorkspaceModel } from '../../../../../contracts/harness-models-v18';
   import type { HarnessModelsResult } from '../../../../../contracts/harness-models-v18';
+  import FlowSettings from './FlowSettings.svelte';
+  import ResultFields from './ResultFields.svelte';
   import ResourcePicker from './ResourcePicker.svelte';
   import { harnessConfigurations, permissionLabels } from '../../harness-adapters';
   import { t } from '../locale/language';
@@ -23,6 +26,8 @@
   let revisions = new Map<string, number>();
   let selectedId = '';
   let busy = false;
+  let preflightIssues: PreflightIssue[] = [];
+  let preflightNotice = '';
   let errors: string[] = [];
   let from = '';
   let to = '';
@@ -91,7 +96,7 @@
       link.click();
     } catch (error) { errors = [error instanceof Error ? error.message : 'Could not export system.']; }
   }
-  async function refresh(): Promise<void> { try { commands = (await client.orchestration_catalog_v5({ workspaceId })).launchCommands; } catch (error) { errors = [orchestrationError(error).message]; } }
+  async function refresh(): Promise<void> { try { commands = (await client.orchestration_catalog_v6({ workspaceId })).launchCommands; } catch (error) { errors = [orchestrationError(error).message]; } }
   function updateNode(id: string, change: Partial<GraphNode>): void { graph = { ...graph, nodes: graph.nodes.map(node => node.id === id ? { ...node, ...change } : node) }; }
   function updateProfile(change: Partial<AgentProfile>): void { if (selected) updateNode(selected.id, { profile: { ...selected.profile, ...change } }); }
   function add(): void { const node = newGraphNode(graph.nodes.length); graph = { ...graph, nodes: [...graph.nodes, node] }; selectedId = node.id; }
@@ -116,12 +121,12 @@
     if (dirty) { errors = ['Save changes before opening another system.']; return; }
     busy = true; errors = [];
     try {
-      const command = await client.orchestration_get_launch_command_v5({ workspaceId, id }); if (!command) throw new Error('Missing command');
-      const [team, pipeline, catalog] = await Promise.all([client.orchestration_get_team_v5({ workspaceId, id: command.value.teamId }), client.orchestration_get_pipeline_v5({ workspaceId, id: command.value.pipelineId }), client.orchestration_catalog_v5({ workspaceId })]);
+      const command = await client.orchestration_get_launch_command_v6({ workspaceId, id }); if (!command) throw new Error('Missing command');
+      const [team, pipeline, catalog] = await Promise.all([client.orchestration_get_team_v6({ workspaceId, id: command.value.teamId }), client.orchestration_get_pipeline_v6({ workspaceId, id: command.value.pipelineId }), client.orchestration_catalog_v6({ workspaceId })]);
       if (!team || !pipeline) throw new Error('Missing graph definition');
-      const storedProfiles = await Promise.all(catalog.profiles.map(profile => client.orchestration_get_profile_v5({ workspaceId, id: profile.id })));
+      const storedProfiles = await Promise.all(catalog.profiles.map(profile => client.orchestration_get_profile_v6({ workspaceId, id: profile.id })));
       const profiles = new Map(storedProfiles.filter((profile): profile is StoredDefinition<AgentProfile> => profile !== null).map(profile => [profile.value.id, profile]));
-      const nodes = pipeline.value.steps.map((step, index) => { const member = team.value.members.find(item => item.id === step.assignedMemberId); const profile = member && profiles.get(member.profileId); if (!profile) throw new Error('Missing agent profile'); return { id: step.id, profile: profile.value, task: step.instructions, input: step.inputInstructions, x: 60 + index * 280, y: 100 }; });
+      const nodes = pipeline.value.steps.map((step, index) => { const member = team.value.members.find(item => item.id === step.assignedMemberId); const profile = member && profiles.get(member.profileId); if (!profile) throw new Error('Missing agent profile'); return { id: step.id, profile: profile.value, task: step.instructions, inputBindings: step.inputBindings ? [...step.inputBindings] : undefined, condition: step.condition, review: step.review, requireApproval: step.requireApproval, resultFields: step.resultFields ? [...step.resultFields] : undefined, executionMode: step.executionMode, input: step.inputInstructions, x: 60 + index * 280, y: 100 }; });
       // A member may own several steps in older definitions; preserve the original editors for those graphs.
       if (new Set(nodes.map(node => node.profile.id)).size !== nodes.length || team.value.members.some(member => !pipeline.value.steps.some(step => step.id === member.id && step.assignedMemberId === member.id))) throw new Error('This definition uses reusable members. Open it in Library to preserve its assignments.');
       const next: AgentGraph = { id, name: command.value.name, teamId: team.value.id, pipelineId: pipeline.value.id, orchestratorId: team.value.orchestratorMemberId, spawnedAgentsJoinTeam: team.value.spawnedAgentsJoinTeam, nodes, edges: [
@@ -136,14 +141,26 @@
     } catch (error) { errors = [error instanceof Error && !('code' in error) ? error.message : orchestrationError(error).message]; }
     finally { busy = false; }
   }
+  async function checkSystem(): Promise<boolean> {
+    preflightNotice = ''; preflightIssues = [];
+    const issues = await preflightGraph(graph, harness => harnessModels({ workspaceId, harness }));
+    preflightIssues = issues;
+    if (!issues.length) preflightNotice = 'Native settings verified. Launch permissions are checked again by the host.';
+    return issues.length === 0;
+  }
+  async function checkOnly(): Promise<void> {
+    if (busy || safeMode) return;
+    busy = true; try { await checkSystem(); } finally { busy = false; }
+  }
   async function save(run = false): Promise<void> {
     if (safeMode || busy) return;
     errors = graphErrors(graph); if (errors.length) return;
     busy = true;
     try {
+      if (run && !await checkSystem()) return;
       const definition = compileGraph(graph);
       const request = <T extends { id: string }>(value: T): SaveDefinitionRequest<T> => ({ workspaceId, value, ...(revisions.has(value.id) ? { expectedRevision: revisions.get(value.id)! } : {}) });
-      await client.orchestration_save_graph_v5({ workspaceId, profiles: definition.profiles.map(value => request(value)), team: request(definition.team), pipeline: request(definition.pipeline), command: request(definition.command) });
+      await client.orchestration_save_graph_v6({ workspaceId, profiles: definition.profiles.map(value => request(value)), team: request(definition.team), pipeline: request(definition.pipeline), command: request(definition.command) });
       revisions = new Map([...definition.profiles, definition.team, definition.pipeline, definition.command].map(value => [value.id, (revisions.get(value.id) ?? -1) + 1]));
       baseline = JSON.stringify(graph); fileNotice = '';
       try { localStorage.setItem(`piui.graph.${workspaceId}.${graph.id}`, JSON.stringify(graph.nodes.map(({ id, x, y }) => ({ id, x, y })))); } catch { /* Definition already persisted by the host. */ }
@@ -170,9 +187,12 @@
     </div></details>
     <input class="file-input" bind:this={filePicker} type="file" accept=".json,application/json" aria-label={$t('Import JSON')} onchange={(event) => void importFile(event)} tabindex="-1" />
     <span class="save-state" aria-live="polite">{$t(busy ? 'Saving…' : dirty ? 'Unsaved changes' : 'Saved')}</span>
+    <button onclick={() => void checkOnly()} disabled={busy || safeMode || !graph.nodes.length}>{$t('Check system')}</button>
     <button onclick={() => void save()} disabled={busy || safeMode}>{$t('Save')}</button>
     <button class="primary" onclick={() => void save(true)} disabled={busy || safeMode || !graph.nodes.length}>{$t('Run')}</button>
   </header>
+  {#if preflightNotice}<p class="notice" role="status">{$t(preflightNotice)}</p>{/if}
+  {#if preflightIssues.length}<div class="errors" role="alert">{#each preflightIssues as issue}<button onclick={() => selectedId = issue.nodeId}>{graph.nodes.find(node => node.id === issue.nodeId)?.profile.name}: {$t(issue.message)}</button>{/each}</div>{/if}
   {#if fileNotice}<p class="notice" role="status">{$t(fileNotice)}</p>{/if}
   {#if safeMode}<p class="notice">{$t('Safe mode: viewing only.')}</p>{/if}
   {#if errors.length}<div class="errors" role="alert">{#each errors as error}<p>{$t(error)}</p>{/each}</div>{/if}
@@ -228,6 +248,9 @@
             {#if selected.profile.baseInstructions !== undefined}<label>{$t('Base prompt')}<textarea rows="5" value={selected.profile.baseInstructions} oninput={(event) => updateProfile({ baseInstructions: event.currentTarget.value })} disabled={safeMode || busy}></textarea></label><small>{$t('Replaces the built-in coding prompt. Leave empty for no base text. Tool descriptions, project instructions and native permission context still apply.')}</small>{/if}
           {/if}
         </section>
+        <FlowSettings node={selected} nodes={graph.nodes} edges={graph.edges} disabled={safeMode || busy} onchange={(change) => updateNode(selectedId, change)} />
+        <ResultFields fields={selected.resultFields ?? []} disabled={safeMode || busy} onchange={(resultFields) => updateNode(selectedId, { resultFields })} />
+        <label>{$t('Execution mode')}<select value={selected.executionMode ?? 'scheduled'} onchange={(event) => updateNode(selectedId, { executionMode: event.currentTarget.value as 'scheduled' | 'callable' })} disabled={safeMode || busy}><option value="scheduled">{$t('Run by dependencies')}</option><option value="callable">{$t('Only when called')}</option></select></label>
         <label>{$t('File access')}<select value={selected.profile.permissionMode} onchange={(event) => updateProfile({ permissionMode: event.currentTarget.value as AgentProfile['permissionMode'] })} disabled={safeMode || busy}>{#each configuration?.permissionModes ?? [] as mode}<option value={mode}>{$t(permissionLabels[mode])}</option>{/each}</select></label>
         {#if !configuration?.filesystemSandbox}<small>{$t('The adapter does not enforce a filesystem sandbox.')}</small>{/if}
         <section class="setting-group" aria-label={$t('Subagents')}>

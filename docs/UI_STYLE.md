@@ -33,3 +33,13 @@ content. These rules apply to chat, systems, library, settings and dialogs.
 Verify flows in the native WebView at the user's scale: dropdown contrast,
 scrolling, resizing, keyboard access and saved-state restoration. A screenshot
 does not prove that a setting reaches the harness.
+
+## Execution workbench
+
+Use dependency levels for graph layout and group parallel work in the same column.
+Selection never follows streaming events automatically. Show details only for the
+selected agent; native history is loaded on selection without reopening execution.
+Keep the inspector resizable by pointer and keyboard, with persisted width.
+Attempts are explicitly selectable; old inputs remain in their native conversation.
+Use native token counters with an unavailable dash, including for incomplete totals.
+Keep recovery records collapsed except when reconciliation needs attention.

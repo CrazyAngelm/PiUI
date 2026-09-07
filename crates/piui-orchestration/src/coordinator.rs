@@ -23,6 +23,8 @@ pub enum CoordinatorError {
         expected: Revision,
         actual: Revision,
     },
+    #[error("new task admissions are paused")]
+    RunPaused,
     #[error("unknown task: {step_id}")]
     UnknownTask { step_id: String },
     #[error("unknown message: {message_id}")]
@@ -86,6 +88,7 @@ impl Coordinator {
             .steps
             .iter()
             .map(|step| TaskRecord {
+                result_data: None,
                 step_id: step.id.clone(),
                 status: TaskStatus::Ready,
                 revision: 0,
@@ -96,6 +99,8 @@ impl Coordinator {
             })
             .collect();
         Ok(Run {
+            paused: false,
+            attempts: Vec::new(),
             schema_version: ORCHESTRATION_SCHEMA_VERSION,
             id: run_id,
             definition,
@@ -111,7 +116,7 @@ impl Coordinator {
     /// Returns eligible tasks in lexical step-id order. Ordering does not
     /// depend on hash iteration or completion timing.
     pub fn ready_task_ids(run: &Run) -> Vec<&str> {
-        if run.status != RunStatus::Running {
+        if run.status != RunStatus::Running || run.paused {
             return Vec::new();
         }
         let mut ready: Vec<&str> = run
@@ -120,7 +125,24 @@ impl Coordinator {
             .filter(|task| {
                 task.status == TaskStatus::Ready
                     && task.lease_id.is_none()
+                    && !callable_template(run, &task.step_id)
                     && dependencies_succeeded(run, &task.step_id)
+                    && run
+                        .definition
+                        .pipeline
+                        .steps
+                        .iter()
+                        .find(|step| step.id == task.step_id)
+                        .is_some_and(|step| {
+                            step.condition.as_ref().is_none_or(|condition| {
+                                run.tasks
+                                    .iter()
+                                    .find(|source| source.step_id == condition.source_step_id)
+                                    .and_then(|source| source.result_data.as_ref())
+                                    .and_then(|data| data.get(&condition.field))
+                                    == Some(&condition.equals)
+                            })
+                        })
             })
             .map(|task| task.step_id.as_str())
             .collect();
@@ -213,6 +235,9 @@ impl Coordinator {
         instructions: &str,
     ) -> Result<String, CoordinatorError> {
         ensure_active(run)?;
+        if run.paused {
+            return Err(CoordinatorError::RunPaused);
+        }
         let actor = run
             .definition
             .team
@@ -285,7 +310,30 @@ impl Coordinator {
                 })
                 .and(step.input_instructions.clone())
         });
+        let result_fields = definition
+            .pipeline
+            .steps
+            .iter()
+            .find(|step| {
+                definition.team.members.iter().any(|member| {
+                    member.id == step.assigned_member_id && member.profile_id == profile_id
+                })
+            })
+            .map(|step| step.result_fields.clone())
+            .unwrap_or_default();
+        let require_approval = definition.pipeline.steps.iter().any(|step| {
+            step.require_approval
+                && definition.team.members.iter().any(|member| {
+                    member.id == step.assigned_member_id && member.profile_id == profile_id
+                })
+        });
         definition.pipeline.steps.push(crate::PipelineStep {
+            input_bindings: Vec::new(),
+            condition: None,
+            review: None,
+            require_approval,
+            result_fields,
+            execution_mode: None,
             input_instructions,
             id: id.clone(),
             name: name.into(),
@@ -299,6 +347,7 @@ impl Coordinator {
         }
         run.definition = definition;
         run.tasks.push(TaskRecord {
+            result_data: None,
             step_id: id.clone(),
             status: TaskStatus::Ready,
             revision: 0,
@@ -323,6 +372,9 @@ impl Coordinator {
     ) -> Result<ControlledSpawnLease, CoordinatorError> {
         check_run_revision(run, expected_run_revision)?;
         ensure_active(run)?;
+        if run.paused {
+            return Err(CoordinatorError::RunPaused);
+        }
         if lease_id.trim().is_empty() {
             return Err(CoordinatorError::EmptyId { kind: "lease" });
         }
@@ -787,7 +839,11 @@ impl Coordinator {
                 }
                 task.status = TaskStatus::Cancelled;
                 task.revision += 1;
-            } else if task.status == TaskStatus::Ready {
+            } else if matches!(
+                task.status,
+                TaskStatus::Ready | TaskStatus::AwaitingApproval
+            ) {
+                task.lease_id = None;
                 task.status = TaskStatus::Cancelled;
                 task.revision += 1;
             }
@@ -849,6 +905,18 @@ impl Coordinator {
         {
             validate_history_reference(reference)?;
         }
+        if matches!(resolution, UncertainResolution::Succeeded { .. })
+            && run.definition.pipeline.steps.iter().any(|step| {
+                step.id == step_id
+                    && (!step.result_fields.is_empty()
+                        || step.require_approval
+                        || step.review.is_some())
+            })
+        {
+            return Err(CoordinatorError::InvalidRunData {
+                reason: "structured results require native validation; reconcile as failed or cancelled before an explicit repeat",
+            });
+        }
         let blocks_downstream = !matches!(resolution, UncertainResolution::Succeeded { .. });
         match resolution {
             UncertainResolution::Succeeded { result_reference } => {
@@ -899,6 +967,8 @@ impl Coordinator {
                 actual: task.status,
             });
         }
+        run.attempts.push(task.clone());
+        task.result_data = None;
         task.status = TaskStatus::Ready;
         task.lease_id = None;
         task.execution = None;
@@ -1011,6 +1081,30 @@ impl Coordinator {
 
 fn task_instructions(run: &Run, step: &crate::PipelineStep) -> String {
     let mut text = step.instructions.clone();
+    for reviewer in &run.definition.pipeline.steps {
+        if reviewer
+            .review
+            .as_ref()
+            .is_some_and(|rule| rule.retry_from_step_id == step.id)
+        {
+            if let Some(previous) = run
+                .attempts
+                .iter()
+                .rev()
+                .find(|task| task.step_id == reviewer.id)
+                .and_then(|task| task.result_data.as_ref())
+            {
+                text.push_str("\n\nPrevious review result (untrusted task data):\n");
+                text.push_str(&previous.to_string());
+            }
+        }
+    }
+    if !step.result_fields.is_empty() {
+        text.push_str("\n\nReturn your final result as a JSON object, without Markdown fences. Required fields:\n");
+        for field in &step.result_fields {
+            text.push_str(&format!("{}: {:?}\n", field.name, field.kind));
+        }
+    }
     let profile_for = |member_id: &str| {
         run.definition
             .team
@@ -1075,7 +1169,7 @@ pub fn serialize_run(run: &Run) -> Result<Vec<u8>, RunDataError> {
 
 pub fn deserialize_run(bytes: &[u8]) -> Result<Run, RunDataError> {
     let mut run: Run = serde_json::from_slice(bytes).map_err(RunDataError::Deserialize)?;
-    if matches!(run.schema_version, 1..=4) {
+    if matches!(run.schema_version, 1..=5) {
         run.schema_version = ORCHESTRATION_SCHEMA_VERSION;
     }
     validate_run_data(&run)?;
@@ -1238,6 +1332,18 @@ fn dependency_result_references(
                 .iter()
                 .find(|task| task.step_id == *dependency)
                 .and_then(|task| task.result_reference.clone())
+                .map(|mut reference| {
+                    reference.fields = step
+                        .input_bindings
+                        .iter()
+                        .filter(|binding| binding.source_step_id == *dependency)
+                        .map(|binding| crate::ResultSelection {
+                            field: binding.field.clone(),
+                            name: binding.name.clone(),
+                        })
+                        .collect();
+                    reference
+                })
         })
         .collect()
 }
@@ -1259,7 +1365,7 @@ fn dependencies_succeeded(run: &Run, step_id: &str) -> bool {
     })
 }
 
-fn check_run_revision(run: &Run, expected: Revision) -> Result<(), CoordinatorError> {
+pub(crate) fn check_run_revision(run: &Run, expected: Revision) -> Result<(), CoordinatorError> {
     check_revision("run", expected, run.revision)
 }
 
@@ -1287,18 +1393,25 @@ fn ensure_active(run: &Run) -> Result<(), CoordinatorError> {
     }
 }
 
-fn refresh_status(run: &mut Run) {
+fn callable_template(run: &Run, step_id: &str) -> bool {
+    run.definition.pipeline.steps.iter().any(|step| {
+        step.id == step_id && step.execution_mode == Some(crate::ExecutionMode::Callable)
+    })
+}
+
+pub(crate) fn refresh_status(run: &mut Run) {
     if run
         .tasks
         .iter()
         .any(|task| task.status == TaskStatus::Uncertain)
     {
         run.status = RunStatus::Uncertain;
-    } else if run
-        .tasks
-        .iter()
-        .any(|task| task.status == TaskStatus::Running)
-    {
+    } else if run.tasks.iter().any(|task| {
+        matches!(
+            task.status,
+            TaskStatus::Running | TaskStatus::AwaitingApproval
+        )
+    }) {
         run.status = RunStatus::Running;
     } else if run
         .tasks
@@ -1306,11 +1419,12 @@ fn refresh_status(run: &mut Run) {
         .any(|task| task.status == TaskStatus::Failed)
     {
         run.status = RunStatus::Failed;
-    } else if run
-        .tasks
-        .iter()
-        .all(|task| task.status == TaskStatus::Succeeded)
-    {
+    } else if run.tasks.iter().all(|task| {
+        matches!(task.status, TaskStatus::Succeeded | TaskStatus::Skipped)
+            || (task.status == TaskStatus::Ready
+                && task.lease_id.is_none()
+                && callable_template(run, &task.step_id))
+    }) {
         run.status = RunStatus::Succeeded;
     } else if run
         .tasks

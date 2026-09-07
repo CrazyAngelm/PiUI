@@ -1,12 +1,12 @@
 import type {
   AgentProfile,
   MessageStatus,
-  OrchestrationRunV5,
+  OrchestrationRunV6,
   RunStatus,
   TaskRecord,
   TaskStatus,
   TeamMember,
-} from '../../../../../contracts/orchestration-v5';
+} from '../../../../../contracts/orchestration-v6';
 
 export interface StatusPresentation {
   readonly icon: string;
@@ -27,6 +27,8 @@ export interface TaskDisplay {
 
 export function statusPresentation(status: RunStatus | TaskStatus | MessageStatus): StatusPresentation {
   switch (status) {
+    case 'awaitingApproval': return { icon: '?', label: 'Waiting for approval', tone: 'warning' };
+    case 'skipped': return { icon: '–', label: 'Skipped', tone: 'neutral' };
     case 'running': return { icon: '>', label: 'Running', tone: 'active' };
     case 'ready': return { icon: 'o', label: 'Ready', tone: 'neutral' };
     case 'succeeded': return { icon: 'OK', label: 'Succeeded', tone: 'success' };
@@ -38,11 +40,11 @@ export function statusPresentation(status: RunStatus | TaskStatus | MessageStatu
   }
 }
 
-export function memberById(run: OrchestrationRunV5, memberId: string): TeamMember | undefined {
+export function memberById(run: OrchestrationRunV6, memberId: string): TeamMember | undefined {
   return run.definition.team.members.find((member) => member.id === memberId);
 }
 
-export function profileForMember(run: OrchestrationRunV5, member: TeamMember | undefined): AgentProfile | undefined {
+export function profileForMember(run: OrchestrationRunV6, member: TeamMember | undefined): AgentProfile | undefined {
   return member === undefined ? undefined : run.definition.profiles.find((profile) => profile.id === member.profileId);
 }
 
@@ -51,7 +53,7 @@ export function sessionIdForTask(task: TaskRecord | undefined): string | undefin
   return task?.execution?.id;
 }
 
-export function taskDisplays(run: OrchestrationRunV5): readonly TaskDisplay[] {
+export function taskDisplays(run: OrchestrationRunV6): readonly TaskDisplay[] {
   const tasks = new Map(run.tasks.map(task => [task.stepId, task]));
   const members = new Map(run.definition.team.members.map(member => [member.id, member]));
   const profiles = new Map(run.definition.profiles.map(profile => [profile.id, profile]));
@@ -64,13 +66,13 @@ export function taskDisplays(run: OrchestrationRunV5): readonly TaskDisplay[] {
       stepName: step.name || step.id,
       member,
       profile: member ? profiles.get(member.profileId) : undefined,
-      status: task === undefined ? statusPresentation('uncertain') : statusPresentation(task.status),
+      status: task?.status === 'ready' && !task.leaseId && step.executionMode === 'callable' ? { icon: 'o', label: 'Only when called', tone: 'neutral' } : task === undefined ? statusPresentation('uncertain') : statusPresentation(task.status),
       sessionId: sessionIdForTask(task),
     };
   });
 }
 
-export function memberLabel(run: OrchestrationRunV5, memberId: string): string {
+export function memberLabel(run: OrchestrationRunV6, memberId: string): string {
   const member = memberById(run, memberId);
   const profile = profileForMember(run, member);
   return profile?.name || member?.id || `Unknown member (${memberId})`;

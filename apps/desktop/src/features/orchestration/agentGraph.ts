@@ -1,5 +1,5 @@
-import type { AgentProfile, PipelineDefinition, TeamDefinition, LaunchCommandReference } from '../../../../../contracts/orchestration-v5';
-export interface GraphNode { id: string; profile: AgentProfile; task: string; input?: string; x: number; y: number; }
+import type { AgentProfile, PipelineDefinition, TeamDefinition, LaunchCommandReference } from '../../../../../contracts/orchestration-v6';
+export interface GraphNode { inputBindings?: import('../../../../../contracts/orchestration-v6').InputBinding[]; condition?: import('../../../../../contracts/orchestration-v6').ResultCondition; review?: import('../../../../../contracts/orchestration-v6').ReviewRule; requireApproval?: boolean; resultFields?: import('../../../../../contracts/orchestration-v6').ResultField[]; executionMode?: 'scheduled' | 'callable'; id: string; profile: AgentProfile; task: string; input?: string; x: number; y: number; }
 export type ConnectionKind = 'result' | 'send' | 'observe' | 'spawn';
 export interface GraphEdge { from: string; to: string; kind: ConnectionKind; }
 export interface AgentGraph { id: string; name: string; teamId: string; pipelineId: string; orchestratorId?: string; spawnedAgentsJoinTeam?: boolean; nodes: GraphNode[]; edges: GraphEdge[]; }
@@ -26,12 +26,27 @@ export function compileGraph(graph: AgentGraph): { profiles: AgentProfile[]; tea
   return {
     profiles,
     team: { id: graph.teamId, name: graph.name, ...(graph.spawnedAgentsJoinTeam ? { spawnedAgentsJoinTeam: true } : {}), members: graph.nodes.map(node => ({ id: node.id, profileId: node.profile.id })), orchestratorMemberId: graph.nodes.some(node => node.id === graph.orchestratorId) ? graph.orchestratorId! : graph.nodes[0]?.id ?? '', sendEdges: graph.edges.filter(edge => edge.kind === 'send').map(edge => ({ fromMemberId: edge.from, toMemberId: edge.to })), observeEdges: graph.edges.filter(edge => edge.kind === 'observe').map(edge => ({ fromMemberId: edge.from, toMemberId: edge.to })) },
-    pipeline: { id: graph.pipelineId, name: graph.name, steps: graph.nodes.map(node => ({ id: node.id, name: node.profile.name, assignedMemberId: node.id, instructions: node.task, ...(node.input !== undefined ? { inputInstructions: node.input } : {}), dependencyStepIds: graph.edges.filter(edge => edge.kind === 'result' && edge.to === node.id).map(edge => edge.from) })) },
+    pipeline: { id: graph.pipelineId, name: graph.name, steps: graph.nodes.map(node => ({ id: node.id, name: node.profile.name, assignedMemberId: node.id, instructions: node.task, ...(node.inputBindings?.length ? { inputBindings: node.inputBindings } : {}), ...(node.condition ? { condition: node.condition } : {}), ...(node.review ? { review: node.review } : {}), ...(node.requireApproval ? { requireApproval: true } : {}), ...(node.resultFields?.length ? { resultFields: node.resultFields } : {}), ...(node.executionMode ? { executionMode: node.executionMode } : {}), ...(node.input !== undefined ? { inputInstructions: node.input } : {}), dependencyStepIds: graph.edges.filter(edge => edge.kind === 'result' && edge.to === node.id).map(edge => edge.from) })) },
     command: { id: graph.id, name: graph.name, teamId: graph.teamId, pipelineId: graph.pipelineId },
   };
 }
 export function graphErrors(graph: AgentGraph): string[] {
   const errors: string[] = [];
+  for (const node of graph.nodes) {
+    const dependencies = graph.edges.filter(edge => edge.kind === 'result' && edge.to === node.id).map(edge => edge.from);
+    const hasField = (id: string, field: string) => graph.nodes.find(source => source.id === id)?.resultFields?.some(item => item.name === field);
+    if (node.condition && (!dependencies.includes(node.condition.sourceStepId) || !hasField(node.condition.sourceStepId, node.condition.field) || (typeof node.condition.equals === 'number' && !Number.isFinite(node.condition.equals)))) errors.push('A condition must select a declared field on a result dependency.');
+    const bindings = node.inputBindings ?? [];
+    if (new Set(bindings.map(binding => binding.name)).size !== bindings.length || bindings.some(binding => !binding.name.trim() || !dependencies.includes(binding.sourceStepId) || !hasField(binding.sourceStepId, binding.field))) errors.push('Input mappings need unique names and declared dependency fields.');
+    if (node.review) {
+      const visited = new Set<string>(); const pending = [...dependencies];
+      while (pending.length) { const id = pending.pop()!; if (visited.has(id)) continue; visited.add(id); pending.push(...graph.edges.filter(edge => edge.kind === 'result' && edge.to === id).map(edge => edge.from)); }
+      if (!visited.has(node.review.retryFromStepId) || !node.resultFields?.some(field => field.name === node.review?.field && field.kind === 'boolean')) errors.push('A review needs a boolean result field and an upstream correction task.');
+    }
+  }
+  for (const node of graph.nodes) { const fields = node.resultFields ?? []; if (fields.some(field => !field.name.trim()) || new Set(fields.map(field => field.name)).size !== fields.length) errors.push('Result fields need unique non-empty names.'); }
+  if (!graph.nodes.some(node => node.executionMode !== 'callable')) errors.push('Add a scheduled agent to start this system.');
+  if (graph.edges.some(edge => edge.kind === 'result' && graph.nodes.some(node => node.executionMode === 'callable' && (node.id === edge.from || node.id === edge.to)))) errors.push('Callable agents exchange results through their caller, not pipeline dependencies.');
   if (!graph.name.trim() || !graph.nodes.length || graph.nodes.some(node => !node.profile.name.trim() || !node.profile.model.trim())) errors.push('Enter a name and model for every agent.');
   const definition = compileGraph(graph);
   if (definition.profiles.some(parent => parent.allowedSpawnProfileIds.some(id => { const child = definition.profiles.find(profile => profile.id === id); return !child || !permissionsSubset(parent, child); }))) errors.push('Child permissions must be the same or lower.');

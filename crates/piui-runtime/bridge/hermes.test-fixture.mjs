@@ -28,7 +28,8 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
     notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hello\u2028' } });
     notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'world' } });
     notify({ sessionUpdate: 'future_event' });
-    result = { stopReason: 'end_turn', ...(text === 'fail' ? { _meta: { piuiOutcome: 'failed' } } : {}) };
+    notify({ sessionUpdate: 'usage_update', used: 9000, size: 32000 });
+    result = { stopReason: 'end_turn', usage: {inputTokens:10,outputTokens:4,cachedReadTokens:2,totalTokens:14}, ...(text === 'fail' ? { _meta: { piuiOutcome: 'failed' } } : {}) };
   } else if (m.method === 'session/cancel') { send({ id: promptId, result: { stopReason: 'cancelled' } }); continue; }
   else if (m.method !== 'session/set_model') throw Error('unexpected method');
   send({ id: m.id, result });

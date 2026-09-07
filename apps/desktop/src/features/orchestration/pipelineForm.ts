@@ -1,4 +1,4 @@
-import type { PipelineDefinition, PipelineStep } from '../../../../../contracts/orchestration-v5';
+import type { PipelineDefinition, PipelineStep } from '../../../../../contracts/orchestration-v6';
 
 export interface PipelineValidation {
   readonly errors: readonly string[];

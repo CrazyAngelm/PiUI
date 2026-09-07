@@ -620,7 +620,18 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       emit({ type: "error", message: params.willRetry ? "Codex reported a retryable error." : safeCodexErrorMessage(params.error) });
       return;
     }
-    if (["thread/tokenUsage/updated", "remoteControl/status/changed", "thread/goal/cleared"].includes(method)) return;
+    if (method === "thread/tokenUsage/updated") {
+      const native = params.tokenUsage?.total;
+      if (native) {
+        const usage = { id: "codex-session-total" };
+        for (const [source, target] of [["inputTokens","inputTokens"],["outputTokens","outputTokens"],["cachedInputTokens","cacheReadTokens"],["totalTokens","totalTokens"]]) {
+          if (Number.isSafeInteger(native[source]) && native[source] >= 0) usage[target] = native[source];
+        }
+        emit({ type: "usage", usage });
+      }
+      return;
+    }
+    if ([ "remoteControl/status/changed", "thread/goal/cleared"].includes(method)) return;
     emitUnknown(method);
   };
   const acceptNativeFrame = (raw) => {

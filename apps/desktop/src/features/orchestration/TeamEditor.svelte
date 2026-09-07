@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from '../locale/language';
-  import type { AgentProfile, DirectedEdge, TeamDefinition, TeamMember } from '../../../../../contracts/orchestration-v5';
+  import type { AgentProfile, DirectedEdge, TeamDefinition, TeamMember } from '../../../../../contracts/orchestration-v6';
   import TeamConnections from './TeamConnections.svelte';
   import {
     cloneTeamDefinition,

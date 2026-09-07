@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from '../locale/language';
-  import type { PipelineDefinition, PipelineStep, TeamDefinition, AgentProfile } from '../../../../../contracts/orchestration-v5';
+  import type { PipelineDefinition, PipelineStep, TeamDefinition, AgentProfile } from '../../../../../contracts/orchestration-v6';
   import { createPipeline, createPipelineStep, removePipelineStep, validatePipeline } from './pipelineForm';
 
   export let pipeline: PipelineDefinition | undefined;

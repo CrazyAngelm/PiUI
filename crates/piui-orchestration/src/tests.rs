@@ -3,13 +3,211 @@ use serde_json::json;
 use crate::*;
 
 #[test]
+fn selected_result_fields_keep_history_identity_and_aliases() {
+    let text = r#"{"files":["app.rs"],"privateNotes":"not passed"}"#;
+    let fields = vec![ResultSelection {
+        field: "files".into(),
+        name: "changedFiles".into(),
+    }];
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&project_result(text, &fields).unwrap()).unwrap(),
+        json!({"changedFiles":["app.rs"]})
+    );
+    assert!(project_result("{}", &fields).is_err());
+}
+
+#[test]
+fn cancelling_one_task_preserves_independent_work() {
+    let mut definition = snapshot();
+    definition.pipeline.steps[1].dependency_step_ids.clear();
+    let mut run = Coordinator::new_run("cancel-one", definition).unwrap();
+    Coordinator::cancel_task(&mut run, 0, "build").unwrap();
+    assert_eq!(Coordinator::ready_task_ids(&run), vec!["review"]);
+    assert_eq!(run.status(), RunStatus::Running);
+}
+
+fn finish_checked(run: &mut Run, text: &str, execution: &str) {
+    let revision = run.revision();
+    let launch = Coordinator::dispatch_next(
+        run,
+        revision,
+        NativeExecutionReference {
+            id: execution.into(),
+        },
+    )
+    .unwrap()
+    .unwrap();
+    Coordinator::complete_checked_task(
+        run,
+        launch.run_revision,
+        &launch.step_id,
+        launch.task_revision,
+        execution,
+        CompletionOutcome::Succeeded {
+            result_reference: Some(NativeHistoryReference {
+                fields: Vec::new(),
+                session_id: execution.into(),
+                block_id: None,
+                content_hash: None,
+            }),
+        },
+        Some(text),
+    )
+    .unwrap();
+}
+
+#[test]
+fn approval_blocks_dependencies_and_pause_blocks_new_admissions() {
+    let mut definition = snapshot();
+    definition.pipeline.steps[0].require_approval = true;
+    let mut run = Coordinator::new_run("approval", definition).unwrap();
+    finish_checked(&mut run, "Implementation", "build-native");
+    assert_eq!(run.tasks[0].status, TaskStatus::AwaitingApproval);
+    assert!(Coordinator::ready_task_ids(&run).is_empty());
+    let revision = run.revision();
+    let task_revision = run.tasks[0].revision;
+    Coordinator::control_flow(
+        &mut run,
+        revision,
+        FlowAction::Decide {
+            step_id: "build".into(),
+            task_revision,
+            approved: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(Coordinator::ready_task_ids(&run), vec!["review"]);
+    let revision = run.revision();
+    Coordinator::control_flow(&mut run, revision, FlowAction::Pause).unwrap();
+    assert!(Coordinator::ready_task_ids(&run).is_empty());
+    assert!(
+        Coordinator::add_spawned_agent(
+            &mut run,
+            "lead",
+            "paused",
+            "worker-profile",
+            "Review",
+            "Review"
+        )
+        .is_err()
+    );
+    assert!(
+        deserialize_run(&serialize_run(&run).unwrap())
+            .unwrap()
+            .paused()
+    );
+}
+
+#[test]
+fn result_condition_skips_branch_without_running_a_harness() {
+    let mut definition = snapshot();
+    definition.pipeline.steps[0].result_fields = vec![ResultField {
+        name: "enabled".into(),
+        kind: ResultFieldKind::Boolean,
+    }];
+    definition.pipeline.steps[1].condition = Some(ResultCondition {
+        source_step_id: "build".into(),
+        field: "enabled".into(),
+        equals: json!(true),
+    });
+    let mut run = Coordinator::new_run("condition", definition).unwrap();
+    finish_checked(&mut run, r#"{"enabled":false}"#, "native");
+    assert_eq!(run.tasks[1].status, TaskStatus::Skipped);
+    assert_eq!(run.status(), RunStatus::Succeeded);
+}
+
+#[test]
+fn revision_cycle_retains_attempts_and_pauses_identical_feedback() {
+    let mut definition = snapshot();
+    definition.pipeline.steps[1].result_fields = vec![ResultField {
+        name: "accepted".into(),
+        kind: ResultFieldKind::Boolean,
+    }];
+    definition.pipeline.steps[1].review = Some(ReviewRule {
+        field: "accepted".into(),
+        retry_from_step_id: "build".into(),
+    });
+    let mut run = Coordinator::new_run("review", definition).unwrap();
+    finish_checked(&mut run, "First implementation", "native-1");
+    finish_checked(
+        &mut run,
+        r#"{"accepted":false,"feedback":"Missing test"}"#,
+        "review-1",
+    );
+    assert_eq!(run.attempts().len(), 2);
+    assert_eq!(Coordinator::ready_task_ids(&run), vec!["build"]);
+    finish_checked(&mut run, "Second implementation", "native-2");
+    finish_checked(
+        &mut run,
+        r#"{"accepted":false,"feedback":"Missing test"}"#,
+        "review-2",
+    );
+    assert!(run.paused());
+    assert_eq!(run.attempts().len(), 4);
+    assert_eq!(deserialize_run(&serialize_run(&run).unwrap()).unwrap(), run);
+}
+
+#[test]
+fn callable_templates_do_not_run_or_hold_completion_open() {
+    let mut definition = snapshot();
+    definition.pipeline.steps[1].execution_mode = Some(ExecutionMode::Callable);
+    definition.pipeline.steps[1].dependency_step_ids.clear();
+    let mut run = Coordinator::new_run("callable", definition).unwrap();
+    assert_eq!(Coordinator::ready_task_ids(&run), vec!["build"]);
+    let spawned = Coordinator::add_spawned_agent(
+        &mut run,
+        "lead",
+        "request",
+        "worker-profile",
+        "Review",
+        "Check output",
+    )
+    .unwrap();
+    assert!(Coordinator::ready_task_ids(&run).contains(&spawned.as_str()));
+    for task in &mut run.tasks {
+        if task.step_id != "review" {
+            task.status = TaskStatus::Succeeded;
+        }
+    }
+    // A real completed turn recalculates run status; the untouched template is not work.
+    run.tasks[0].status = TaskStatus::Running;
+    run.tasks[0].execution = Some(NativeExecutionReference {
+        id: "native".into(),
+    });
+    let revision = run.revision;
+    Coordinator::complete_task(
+        &mut run,
+        revision,
+        "build",
+        0,
+        "native",
+        CompletionOutcome::Succeeded {
+            result_reference: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(run.status(), RunStatus::Succeeded);
+    assert_eq!(deserialize_run(&serialize_run(&run).unwrap()).unwrap(), run);
+}
+
+#[test]
+fn callable_result_dependencies_are_rejected_at_host_boundary() {
+    let mut definition = snapshot();
+    definition.pipeline.steps[1].execution_mode = Some(ExecutionMode::Callable);
+    assert_eq!(
+        validate_definition(&definition),
+        Err(DefinitionError::CallableDependency)
+    );
+}
+
+#[test]
 fn v1_run_migrates_without_changing_native_prompt() {
     let run = Coordinator::new_run("old", snapshot()).unwrap();
     let mut json: serde_json::Value =
         serde_json::from_slice(&serialize_run(&run).unwrap()).unwrap();
     json["schemaVersion"] = 1.into();
     let migrated = deserialize_run(&serde_json::to_vec(&json).unwrap()).unwrap();
-    assert_eq!(migrated.schema_version(), 5);
+    assert_eq!(migrated.schema_version(), 6);
     assert!(
         migrated
             .definition()
@@ -58,7 +256,7 @@ fn input_requirements_reach_sender_and_survive_v3_migration() {
         serde_json::from_slice(&serialize_run(&old).unwrap()).unwrap();
     value["schemaVersion"] = 3.into();
     let migrated = deserialize_run(&serde_json::to_vec(&value).unwrap()).unwrap();
-    assert_eq!(migrated.schema_version(), 5);
+    assert_eq!(migrated.schema_version(), 6);
     assert_eq!(migrated.definition(), old.definition());
 }
 
@@ -201,6 +399,12 @@ fn snapshot() -> RunDefinitionSnapshot {
             name: "Build then review".to_owned(),
             steps: vec![
                 PipelineStep {
+                    input_bindings: Vec::new(),
+                    condition: None,
+                    review: None,
+                    require_approval: false,
+                    result_fields: Vec::new(),
+                    execution_mode: None,
                     input_instructions: None,
                     id: "build".to_owned(),
                     name: "Build".to_owned(),
@@ -209,6 +413,12 @@ fn snapshot() -> RunDefinitionSnapshot {
                     dependency_step_ids: vec![],
                 },
                 PipelineStep {
+                    input_bindings: Vec::new(),
+                    condition: None,
+                    review: None,
+                    require_approval: false,
+                    result_fields: Vec::new(),
+                    execution_mode: None,
                     input_instructions: None,
                     id: "review".to_owned(),
                     name: "Review".to_owned(),
@@ -236,6 +446,8 @@ impl FakeNativeExecutor {
         self.launched.push(request);
         CompletionOutcome::Succeeded {
             result_reference: Some(NativeHistoryReference {
+                fields: Vec::new(),
+
                 session_id: self
                     .launched
                     .last()
@@ -454,7 +666,7 @@ fn rust_json_matches_typescript_v1_golden_shape_and_rejects_unknown_fields() {
     let run = Coordinator::new_run("run-1", snapshot()).unwrap();
     let actual: serde_json::Value = serde_json::from_slice(&serialize_run(&run).unwrap()).unwrap();
     let golden = json!({
-        "schemaVersion": 5,
+        "schemaVersion": 6,
         "id": "run-1",
         "definition": {
             "profiles": [
@@ -612,6 +824,8 @@ fn controlled_spawn_resolves_exact_snapshot_and_commits_lease_once() {
         &request.execution.id,
         CompletionOutcome::Succeeded {
             result_reference: Some(NativeHistoryReference {
+                fields: Vec::new(),
+
                 session_id: "lead-session".to_owned(),
                 block_id: Some("final".to_owned()),
                 content_hash: Some("ab".repeat(32)),
@@ -704,6 +918,8 @@ fn native_agent_request_ids_are_durable_and_cannot_change_authority() {
 #[test]
 fn history_reference_requires_sha256_hex_when_hash_is_present() {
     let invalid = NativeHistoryReference {
+        fields: Vec::new(),
+
         session_id: "session".to_owned(),
         block_id: None,
         content_hash: Some("not-a-hash".to_owned()),
@@ -713,6 +929,8 @@ fn history_reference_requires_sha256_hex_when_hash_is_present() {
         Err(DefinitionError::InvalidHistoryReference)
     ));
     let valid = NativeHistoryReference {
+        fields: Vec::new(),
+
         session_id: "session".to_owned(),
         block_id: None,
         content_hash: Some("0f".repeat(32)),
@@ -759,6 +977,8 @@ fn uncertain_work_requires_explicit_reconcile_or_retry() {
         task_revision,
         UncertainResolution::Succeeded {
             result_reference: Some(NativeHistoryReference {
+                fields: Vec::new(),
+
                 session_id: "found-session".to_owned(),
                 block_id: None,
                 content_hash: Some("10".repeat(32)),

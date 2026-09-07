@@ -415,20 +415,33 @@ impl WorkspaceRuntimeHandle {
         self.host.snapshot(&self.session_id).await
     }
 
-    pub async fn final_history_reference(&self) -> Result<NativeHistoryReference, WorkspaceError> {
+    pub async fn final_result(
+        &self,
+    ) -> Result<(NativeHistoryReference, Option<String>), WorkspaceError> {
         let snapshot = self.snapshot().await?;
         let block = snapshot
             .blocks
             .iter()
             .rev()
             .find(|block| block.kind == BlockKind::Assistant && block.text.is_some());
-        Ok(NativeHistoryReference {
-            session_id: self.session_id.clone(),
-            block_id: block.map(|block| block.id.clone()),
-            content_hash: block
-                .and_then(|block| block.text.as_deref())
-                .map(content_hash),
-        })
+        let text = block.and_then(|block| block.text.clone());
+        Ok((
+            NativeHistoryReference {
+                fields: Vec::new(),
+                session_id: self.session_id.clone(),
+                block_id: block.map(|block| block.id.clone()),
+                content_hash: text.as_deref().map(content_hash),
+            },
+            text,
+        ))
+    }
+
+    pub async fn validate_result_artifacts(
+        &self,
+        fields: &[piui_orchestration::ResultField],
+        text: &str,
+    ) -> Result<(), WorkspaceError> {
+        validate_artifact_files(&self.project_path, fields, text).await
     }
 
     pub async fn interrupt(&self) -> Result<(), WorkspaceError> {
@@ -438,6 +451,54 @@ impl WorkspaceRuntimeHandle {
     pub async fn close(&self) -> Result<(), WorkspaceError> {
         self.host.close_session(&self.session_id).await
     }
+}
+
+async fn validate_artifact_files(
+    project_path: &Path,
+    fields: &[piui_orchestration::ResultField],
+    text: &str,
+) -> Result<(), WorkspaceError> {
+    let artifacts = fields
+        .iter()
+        .filter(|field| field.kind == piui_orchestration::ResultFieldKind::Artifact)
+        .collect::<Vec<_>>();
+    if artifacts.is_empty() {
+        return Ok(());
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|_| WorkspaceError::invalid())?;
+    let root = tokio::fs::canonicalize(project_path)
+        .await
+        .map_err(|_| WorkspaceError::not_found())?;
+    for field in artifacts {
+        let relative = value
+            .get(&field.name)
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(WorkspaceError::invalid)?;
+        let path = Path::new(relative);
+        if path.is_absolute()
+            || path.components().any(|component| {
+                !matches!(
+                    component,
+                    std::path::Component::Normal(_) | std::path::Component::CurDir
+                )
+            })
+        {
+            return Err(WorkspaceError::invalid());
+        }
+        let resolved = tokio::fs::canonicalize(root.join(path))
+            .await
+            .map_err(|_| WorkspaceError::not_found())?;
+        if !resolved.starts_with(&root)
+            || !tokio::fs::metadata(&resolved)
+                .await
+                .map_err(|_| WorkspaceError::not_found())?
+                .is_file()
+        {
+            return Err(WorkspaceError::invalid());
+        }
+    }
+    Ok(())
 }
 
 type LiveRuntimeHandle = (Arc<NativeRuntime>, Arc<LiveState>);
@@ -542,6 +603,7 @@ impl WorkspaceHost {
         let runtime_model = request.model.clone();
         let runtime_thinking_level = request.thinking_level.clone();
         let record = PersistedSession {
+            usage: Vec::new(),
             id: session_id.clone(),
             workspace_id: request.workspace_id,
             harness: request.harness,
@@ -1049,6 +1111,8 @@ impl WorkspaceHost {
             let value = self
                 .resolve_history_reference(reference, workspace_id, project_path)
                 .await?;
+            let value = piui_orchestration::project_result(&value, &reference.fields)
+                .map_err(|_| WorkspaceError::invalid())?;
             prompt.push_str(&format!(
                 "\n--- dependency {} ---\n",
                 index.saturating_add(1)
@@ -1165,6 +1229,18 @@ impl WorkspaceHost {
         Ok(lock(&self.inner.live)?
             .get(session_id)
             .map(|slot| (Arc::clone(&slot.runtime), Arc::clone(&slot.state))))
+    }
+
+    pub(crate) fn usage(
+        &self,
+        session_id: &str,
+        workspace_id: &str,
+    ) -> Result<Vec<piui_runtime::workspace_usage::NativeUsage>, WorkspaceError> {
+        let record = self.record(session_id)?;
+        if record.workspace_id != workspace_id {
+            return Err(WorkspaceError::not_found());
+        }
+        Ok(record.usage)
     }
 
     fn record(&self, session_id: &str) -> Result<PersistedSession, WorkspaceError> {
@@ -1852,6 +1928,38 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                 return;
             };
             let payload = match event {
+                NativeEvent::Usage { usage } => {
+                    let persisted = inner.registry.lock().ok().and_then(|mut registry| {
+                        registry
+                            .transact(|sessions| {
+                                let record = sessions
+                                    .iter_mut()
+                                    .find(|record| record.id == session_id)
+                                    .ok_or_else(|| std::io::Error::other("session missing"))?;
+                                piui_runtime::workspace_usage::merge_usage(
+                                    &mut record.usage,
+                                    usage,
+                                );
+                                Ok(record.clone())
+                            })
+                            .ok()
+                    });
+                    match persisted {
+                        Some(record) => WorkspaceEventPayload::Session {
+                            session: session_from_record(
+                                &record,
+                                state
+                                    .status
+                                    .lock()
+                                    .map(|v| *v)
+                                    .unwrap_or(SessionStatus::Failed),
+                            ),
+                        },
+                        None => WorkspaceEventPayload::Error {
+                            message: "Usage could not be saved.".into(),
+                        },
+                    }
+                }
                 NativeEvent::Block { block } => {
                     mark_materialized(&inner, &state, &session_id);
                     WorkspaceEventPayload::Block { block }
@@ -2323,6 +2431,31 @@ fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, WorkspaceError> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn artifacts_require_existing_project_files() {
+        let root = std::env::temp_dir().join(format!("piui-artifacts-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("evidence.txt"), "verified fixture").unwrap();
+        let fields = [piui_orchestration::ResultField {
+            name: "evidence".into(),
+            kind: piui_orchestration::ResultFieldKind::Artifact,
+        }];
+        assert!(
+            super::validate_artifact_files(&root, &fields, r#"{"evidence":"evidence.txt"}"#)
+                .await
+                .is_ok()
+        );
+        for path in ["../outside.txt", "missing.txt", "."] {
+            let text = serde_json::json!({"evidence":path}).to_string();
+            assert!(
+                super::validate_artifact_files(&root, &fields, &text)
+                    .await
+                    .is_err()
+            );
+        }
+        std::fs::remove_file(root.join("evidence.txt")).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
     use super::workspace_store::PersistedSession;
     use super::{
         ApprovalDecision, HarnessKind, HarnessModelsRequest, HarnessSummary, PermissionMode,
@@ -2605,6 +2738,7 @@ mod tests {
         fs::create_dir_all(&root).expect("creates project");
         let directory = ProjectDirectory::resolve(&root).expect("resolves project");
         let record = PersistedSession {
+            usage: Vec::new(),
             id: uuid::Uuid::new_v4().to_string(),
             workspace_id: uuid::Uuid::new_v4().to_string(),
             harness: HarnessKind::PrimeAgent,

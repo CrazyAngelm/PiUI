@@ -322,6 +322,9 @@ pub enum TurnOutcome {
     deny_unknown_fields
 )]
 pub enum NativeEvent {
+    Usage {
+        usage: crate::workspace_usage::NativeUsage,
+    },
     Block {
         block: NativeBlock,
     },

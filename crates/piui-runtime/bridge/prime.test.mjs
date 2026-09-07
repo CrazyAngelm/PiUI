@@ -73,6 +73,8 @@ test("Prime SDK adapter snapshots history and returns prompt admission", async (
   const terminalIdleIndex = events.values.findIndex((event, index) => index > completionIndex && event.type === "status" && event.status === "idle");
   assert.equal(events.values[completionIndex].outcome, "succeeded");
   assert.ok(terminalIdleIndex > completionIndex, "turn outcome must precede terminal idle");
+  const receipt = events.values.find(event => event.type === "usage")?.usage;
+  assert.deepEqual({...receipt,id:"receipt"}, {id:"receipt",inputTokens:10,outputTokens:4,cacheReadTokens:2,cacheWriteTokens:0,totalTokens:14});
   await adapter.dispose();
   assert.ok(events.values.some((event) => event.type === "status" && event.status === "closed"));
 });

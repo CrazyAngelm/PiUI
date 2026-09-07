@@ -1,10 +1,14 @@
 <script lang="ts">
+  import RunExecution from './RunExecution.svelte';
   import { t } from '../locale/language';
-  import type { OrchestrationRunV5, TaskRecord } from '../../../../../contracts/orchestration-v5';
-  import type { ReconcileUncertainTaskRequest } from '../../../../../contracts/orchestration-host-v5';
+  import type { OrchestrationRunV6, TaskRecord } from '../../../../../contracts/orchestration-v6';
+  import type { ReconcileUncertainTaskRequest } from '../../../../../contracts/orchestration-host-v6';
   import { memberLabel, statusPresentation, taskDisplays } from './runView';
 
-  export let run: OrchestrationRunV5;
+  export let run: OrchestrationRunV6;
+  export let workspaceId = "";
+  export let onCancelTask: ((stepId: string) => void) | undefined = undefined;
+  export let onFlow: ((action: import('../../../../../contracts/orchestration-host-v6').FlowAction) => void) | undefined = undefined;
   export let onClose: () => void;
   export let onOpenSession: ((sessionId: string) => void) | undefined = undefined;
   export let busy = false;
@@ -126,7 +130,7 @@
     <div>
       <p class="eyebrow">{$t('Run')}</p>
       <h2 id="run-inspector-title">{run.definition.pipeline.name || run.id}</h2>
-      <p class="metadata">Run {run.id}  /  revision {run.revision}  /  definition snapshot</p>
+      <details class="metadata"><summary>{$t('Run details')}</summary><p>{run.id} · r{run.revision}</p></details>
     </div>
     <button class="quiet-button" type="button" onclick={onClose} aria-label={$t('Close run inspector')}>{$t('Close')}</button>
   </header>
@@ -141,6 +145,8 @@
   {/if}
   {#if error !== undefined}<p class="error" role="alert">{error}</p>{/if}
 
+  {#if workspaceId}{#key run.id}<RunExecution {run} {workspaceId} {onOpenSession} {onFlow} {onCancelTask} />{/key}{/if}
+  <details open={!workspaceId || run.status === 'uncertain'}><summary>{$t('Task records and recovery')}</summary>
   <section aria-labelledby="tasks-title">
     <h3 id="tasks-title">{$t('Tasks ')}<span class="metadata">{visibleDisplays.length} / {displays.length}</span></h3>
     <div class="task-filters"><label>{$t('Find agent or task')}<input type="search" bind:value={taskQuery} placeholder={$t('Search this run')} /></label><label>{$t('Status')}<select bind:value={taskFilter}><option value="all">{$t('All tasks')}</option><option value="active">{$t('Active')}</option><option value="attention">{$t('Needs attention')}</option><option value="completed">{$t('Completed')}</option></select></label></div>
@@ -187,7 +193,7 @@
               {:else}
                 <div class="reconcile-actions" role="group" aria-label={`Reconcile uncertain task ${display.stepName}`}>
                   <p class="section-note">{$t('After checking the linked native session, record an operator assertion.')}</p>
-                  <button class="quiet-button" type="button" onclick={() => chooseReconciliation(display.task!, { status: 'succeeded' })} disabled={busy || reconcilePending}>{$t('Record succeeded')}</button>
+                  <button class="quiet-button" type="button" onclick={() => chooseReconciliation(display.task!, { status: 'succeeded' })} disabled={busy || reconcilePending || run.definition.pipeline.steps.some(step => step.id === display.stepId && ((step.resultFields?.length ?? 0) > 0 || step.requireApproval || step.review))}>{$t('Record succeeded')}</button>
                   <button class="quiet-button" type="button" onclick={() => chooseReconciliation(display.task!, { status: 'failed', failureCode: 'OPERATOR_ASSERTED_FAILURE' })} disabled={busy || reconcilePending}>{$t('Record failed')}</button>
                   <button class="quiet-button" type="button" onclick={() => chooseReconciliation(display.task!, { status: 'cancelled' })} disabled={busy || reconcilePending}>{$t('Record cancelled')}</button>
                 </div>
@@ -208,6 +214,7 @@
     {/if}
   </section>
 
+  </details>
   <section aria-labelledby="messages-title">
     <h3 id="messages-title">{$t('Messages')}</h3>
     <p class="section-note">{$t('Delivery is separate from observation. Accepted is not proof that a recipient read or acted on a message.')}</p>

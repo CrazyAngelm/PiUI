@@ -68,3 +68,4 @@ pub use supervisor::{
     ProductionRuntimeSupervisor, SupervisorError,
 };
 pub use system_probe::{SystemPiDiagnosticEligibility, probe_system_pi};
+pub mod workspace_usage;

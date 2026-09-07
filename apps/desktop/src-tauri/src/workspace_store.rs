@@ -17,6 +17,8 @@ const GENERATION_SUFFIX: &str = ".json";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PersistedSession {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub usage: Vec<piui_runtime::workspace_usage::NativeUsage>,
     pub id: String,
     pub workspace_id: String,
     pub harness: HarnessKind,
@@ -194,6 +196,7 @@ mod tests {
 
     fn session(id: &str) -> PersistedSession {
         PersistedSession {
+            usage: Vec::new(),
             id: id.into(),
             workspace_id: "workspace".into(),
             harness: HarnessKind::Codex,

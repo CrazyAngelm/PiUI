@@ -63,6 +63,7 @@ test("handshakes, streams blocks, lists models, and keeps native auth storage", 
     assert.equal(adapter.snapshot().materialized, true);
     await waitFor(() => adapter.snapshot().status === "idle" && adapter.snapshot().blocks.some((block) => block.text === "hello"));
     assert.ok(events.some((event) => event.type === "textDelta" && event.text === "hello"));
+    assert.deepEqual(events.find(event => event.type === "usage")?.usage, {id:"codex-session-total",inputTokens:10,outputTokens:4,cacheReadTokens:2,totalTokens:14});
     assert.ok(events.some((event) => event.type === "binding" && event.nativeId === "thread-fixture"));
     assert.deepEqual(await adapter.prompt({ text: "second fixture prompt", mode: "follow-up" }), { accepted: true });
   } finally {

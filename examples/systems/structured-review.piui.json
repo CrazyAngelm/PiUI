@@ -1,0 +1,82 @@
+{
+  "format": "piui-system",
+  "version": 4,
+  "name": "Structured review with human acceptance",
+  "orchestrator": "review",
+  "agents": [
+    {
+      "id": "research",
+      "profile": {
+        "name": "Research",
+        "harness": "codex",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "read-only",
+        "instructions": "When called: perform only the assigned task. Input: task instructions and dependency results. Output: evidence, conclusions and unresolved questions. Finish when the stated acceptance criteria are proven or report the concrete blocker. Do not invent findings.",
+        "toolPolicy": {
+          "rules": []
+        },
+        "serviceTier": "standard"
+      },
+      "task": "Investigate the user-defined problem. Return evidence and a proposed solution; do not edit files. Return a JSON object with summary and evidence. On repetition address the provided review feedback.",
+      "resultFields": [
+        {
+          "name": "summary",
+          "kind": "text"
+        },
+        {
+          "name": "evidence",
+          "kind": "text-list"
+        }
+      ]
+    },
+    {
+      "id": "review",
+      "profile": {
+        "name": "Review",
+        "harness": "prime-agent",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "native",
+        "instructions": "When called: perform only the assigned task. Input: task instructions and dependency results. Output: evidence, conclusions and unresolved questions. Finish when the stated acceptance criteria are proven or report the concrete blocker. Do not invent findings.",
+        "toolPolicy": {
+          "rules": []
+        }
+      },
+      "task": "Review the dependency result. Report only issues that prevent meeting the user goal, with evidence. Do not change files. Return JSON with accepted and feedback. Accept only when evidence supports the user-defined outcome; otherwise give the concrete required correction.",
+      "input": "Findings with source references, relevant artifact paths, verified facts and unresolved questions.",
+      "resultFields": [
+        {
+          "name": "accepted",
+          "kind": "boolean"
+        },
+        {
+          "name": "feedback",
+          "kind": "text"
+        }
+      ],
+      "inputBindings": [
+        {
+          "sourceStepId": "research",
+          "field": "summary",
+          "name": "proposal"
+        },
+        {
+          "sourceStepId": "research",
+          "field": "evidence",
+          "name": "evidence"
+        }
+      ],
+      "review": {
+        "field": "accepted",
+        "retryFromStepId": "research"
+      },
+      "requireApproval": true
+    }
+  ],
+  "connections": [
+    {
+      "from": "research",
+      "to": "review",
+      "kind": "result"
+    }
+  ]
+}

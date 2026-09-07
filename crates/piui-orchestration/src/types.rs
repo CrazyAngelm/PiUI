@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const ORCHESTRATION_SCHEMA_VERSION: u32 = 5;
+pub const ORCHESTRATION_SCHEMA_VERSION: u32 = 6;
 
 pub type Revision = u64;
 
@@ -153,9 +153,28 @@ pub struct TeamDefinition {
     pub orchestrator_member_id: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExecutionMode {
+    Scheduled,
+    Callable,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PipelineStep {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_bindings: Vec<crate::InputBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<crate::ResultCondition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<crate::ReviewRule>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub require_approval: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub result_fields: Vec<crate::ResultField>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_mode: Option<ExecutionMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_instructions: Option<String>,
     pub id: String,
@@ -198,6 +217,8 @@ pub struct RunDefinitionSnapshot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TaskStatus {
+    AwaitingApproval,
+    Skipped,
     Ready,
     Running,
     Succeeded,
@@ -234,6 +255,8 @@ pub struct FailureRecord {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeHistoryReference {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<crate::ResultSelection>,
     pub session_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_id: Option<String>,
@@ -245,6 +268,8 @@ pub struct NativeHistoryReference {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) result_data: Option<serde_json::Value>,
     pub(crate) step_id: String,
     pub(crate) status: TaskStatus,
     pub(crate) revision: Revision,
@@ -373,6 +398,10 @@ impl AgentRequestRecord {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Run {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) paused: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) attempts: Vec<TaskRecord>,
     pub(crate) schema_version: u32,
     pub(crate) id: String,
     pub(crate) definition: RunDefinitionSnapshot,
@@ -387,6 +416,12 @@ pub struct Run {
 }
 
 impl Run {
+    pub fn paused(&self) -> bool {
+        self.paused
+    }
+    pub fn attempts(&self) -> &[TaskRecord] {
+        &self.attempts
+    }
     pub fn schema_version(&self) -> u32 {
         self.schema_version
     }

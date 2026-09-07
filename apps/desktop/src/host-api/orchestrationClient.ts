@@ -1,20 +1,20 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
-  ORCHESTRATION_EVENT_V5,
-  type OrchestrationHostCommandsV5,
+  ORCHESTRATION_EVENT_V6,
+  type OrchestrationHostCommandsV6,
   type OrchestrationHostErrorCode,
-  type OrchestrationRunChangedEventV5,
-} from '../../../../contracts/orchestration-host-v5';
+  type OrchestrationRunChangedEventV6,
+} from '../../../../contracts/orchestration-host-v6';
 
-export type * from '../../../../contracts/orchestration-host-v5';
-export type * from '../../../../contracts/orchestration-v5';
-export { ORCHESTRATION_EVENT_V5 };
-export interface OrchestrationClient extends OrchestrationHostCommandsV5 {
-  listen(handler: (event: OrchestrationRunChangedEventV5) => void): Promise<() => void>;
+export type * from '../../../../contracts/orchestration-host-v6';
+export type * from '../../../../contracts/orchestration-v6';
+export { ORCHESTRATION_EVENT_V6 };
+export interface OrchestrationClient extends OrchestrationHostCommandsV6 {
+  listen(handler: (event: OrchestrationRunChangedEventV6) => void): Promise<() => void>;
 }
-export type OrchestrationCommandName = keyof OrchestrationHostCommandsV5;
-export type OrchestrationRequest = Parameters<OrchestrationHostCommandsV5[OrchestrationCommandName]>[0];
+export type OrchestrationCommandName = keyof OrchestrationHostCommandsV6;
+export type OrchestrationRequest = Parameters<OrchestrationHostCommandsV6[OrchestrationCommandName]>[0];
 export type OrchestrationInvoke = <T>(route: OrchestrationCommandName, args: { request: OrchestrationRequest }) => Promise<T>;
 export type OrchestrationSubscribe = (handler: (payload: unknown) => void) => Promise<() => void>;
 export type OrchestrationErrorCode = OrchestrationHostErrorCode | 'desktop-unavailable' | 'unknown';
@@ -52,13 +52,13 @@ export function orchestrationError(cause: unknown): OrchestrationOperationError 
 }
 
 /** Only versioned, scalar invalidations cross this boundary; native payload details do not. */
-export function orchestrationRunChanged(payload: unknown): OrchestrationRunChangedEventV5 | undefined {
+export function orchestrationRunChanged(payload: unknown): OrchestrationRunChangedEventV6 | undefined {
   if (typeof payload !== 'object' || payload === null) return undefined;
-  if (!('protocol' in payload) || payload.protocol !== 5 || !('type' in payload) || payload.type !== 'runChanged') return undefined;
+  if (!('protocol' in payload) || payload.protocol !== 6 || !('type' in payload) || payload.type !== 'runChanged') return undefined;
   if (!('workspaceId' in payload) || typeof payload.workspaceId !== 'string' || !payload.workspaceId.trim()) return undefined;
   if (!('runId' in payload) || typeof payload.runId !== 'string' || !payload.runId.trim()) return undefined;
   if (!('revision' in payload) || typeof payload.revision !== 'number' || !Number.isSafeInteger(payload.revision) || payload.revision < 0) return undefined;
-  return { protocol: 5, type: 'runChanged', workspaceId: payload.workspaceId, runId: payload.runId, revision: payload.revision };
+  return { protocol: 6, type: 'runChanged', workspaceId: payload.workspaceId, runId: payload.runId, revision: payload.revision };
 }
 
 async function unavailableSubscription(): Promise<() => void> {
@@ -82,26 +82,29 @@ export function createOrchestrationClient(
         });
       } catch (error) { throw orchestrationError(error); }
     },
-    orchestration_save_graph_v5: (request) => call('orchestration_save_graph_v5', request),
-    orchestration_catalog_v5: (request) => call('orchestration_catalog_v5', request),
-    orchestration_get_profile_v5: (request) => call('orchestration_get_profile_v5', request),
-    orchestration_save_profile_v5: (request) => call('orchestration_save_profile_v5', request),
-    orchestration_delete_profile_v5: (request) => call('orchestration_delete_profile_v5', request),
-    orchestration_get_team_v5: (request) => call('orchestration_get_team_v5', request),
-    orchestration_save_team_v5: (request) => call('orchestration_save_team_v5', request),
-    orchestration_delete_team_v5: (request) => call('orchestration_delete_team_v5', request),
-    orchestration_get_pipeline_v5: (request) => call('orchestration_get_pipeline_v5', request),
-    orchestration_save_pipeline_v5: (request) => call('orchestration_save_pipeline_v5', request),
-    orchestration_delete_pipeline_v5: (request) => call('orchestration_delete_pipeline_v5', request),
-    orchestration_get_launch_command_v5: (request) => call('orchestration_get_launch_command_v5', request),
-    orchestration_save_launch_command_v5: (request) => call('orchestration_save_launch_command_v5', request),
-    orchestration_delete_launch_command_v5: (request) => call('orchestration_delete_launch_command_v5', request),
-    orchestration_list_runs_v5: (request) => call('orchestration_list_runs_v5', request),
-    orchestration_get_run_v5: (request) => call('orchestration_get_run_v5', request),
-    orchestration_start_run_v5: (request) => call('orchestration_start_run_v5', request),
-    orchestration_cancel_run_v5: (request) => call('orchestration_cancel_run_v5', request),
-    orchestration_reconcile_uncertain_task_v5: (request) => call('orchestration_reconcile_uncertain_task_v5', request),
-    orchestration_retry_uncertain_task_v5: (request) => call('orchestration_retry_uncertain_task_v5', request),
+    orchestration_cancel_task_v6: (request) => call('orchestration_cancel_task_v6', request),
+    orchestration_control_flow_v6: (request) => call('orchestration_control_flow_v6', request),
+    orchestration_run_usage_v6: (request) => call('orchestration_run_usage_v6', request),
+    orchestration_save_graph_v6: (request) => call('orchestration_save_graph_v6', request),
+    orchestration_catalog_v6: (request) => call('orchestration_catalog_v6', request),
+    orchestration_get_profile_v6: (request) => call('orchestration_get_profile_v6', request),
+    orchestration_save_profile_v6: (request) => call('orchestration_save_profile_v6', request),
+    orchestration_delete_profile_v6: (request) => call('orchestration_delete_profile_v6', request),
+    orchestration_get_team_v6: (request) => call('orchestration_get_team_v6', request),
+    orchestration_save_team_v6: (request) => call('orchestration_save_team_v6', request),
+    orchestration_delete_team_v6: (request) => call('orchestration_delete_team_v6', request),
+    orchestration_get_pipeline_v6: (request) => call('orchestration_get_pipeline_v6', request),
+    orchestration_save_pipeline_v6: (request) => call('orchestration_save_pipeline_v6', request),
+    orchestration_delete_pipeline_v6: (request) => call('orchestration_delete_pipeline_v6', request),
+    orchestration_get_launch_command_v6: (request) => call('orchestration_get_launch_command_v6', request),
+    orchestration_save_launch_command_v6: (request) => call('orchestration_save_launch_command_v6', request),
+    orchestration_delete_launch_command_v6: (request) => call('orchestration_delete_launch_command_v6', request),
+    orchestration_list_runs_v6: (request) => call('orchestration_list_runs_v6', request),
+    orchestration_get_run_v6: (request) => call('orchestration_get_run_v6', request),
+    orchestration_start_run_v6: (request) => call('orchestration_start_run_v6', request),
+    orchestration_cancel_run_v6: (request) => call('orchestration_cancel_run_v6', request),
+    orchestration_reconcile_uncertain_task_v6: (request) => call('orchestration_reconcile_uncertain_task_v6', request),
+    orchestration_retry_uncertain_task_v6: (request) => call('orchestration_retry_uncertain_task_v6', request),
   };
 }
 
@@ -115,6 +118,6 @@ export const orchestrationDesktopAvailable = typeof window !== 'undefined' && '_
 export const orchestrationHost: OrchestrationClient = orchestrationDesktopAvailable
   ? createOrchestrationClient(
       (route, args) => invoke(route, args),
-      (handler) => listen<unknown>(ORCHESTRATION_EVENT_V5, ({ payload }) => handler(payload)),
+      (handler) => listen<unknown>(ORCHESTRATION_EVENT_V6, ({ payload }) => handler(payload)),
     )
   : createUnavailableOrchestrationClient();

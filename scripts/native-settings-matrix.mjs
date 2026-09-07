@@ -76,7 +76,9 @@ try {
       assert.equal(request.reasoning?.effort, 'low');
       assert(JSON.stringify(request).includes('PIUI_NATIVE_INSTRUCTION'));
       if (harness !== 'pi') assert.equal(request.service_tier, 'priority');
-      reports.push({ harness, model: selected.id, reasoning: configured.thinkingLevel, serviceTier: configured.serviceTier ?? null, outcome: outcome.outcome, resultReceived: true });
+      const receipts = events.filter(event => event.type === 'usage').map(event => event.usage);
+      assert(receipts.length && receipts.some(receipt => receipt.totalTokens === 2), `${harness} did not expose native usage`);
+      reports.push({ usage: receipts, harness, model: selected.id, reasoning: configured.thinkingLevel, serviceTier: configured.serviceTier ?? null, outcome: outcome.outcome, resultReceived: true });
       console.log(JSON.stringify(reports.at(-1)));
     } finally { await adapter.dispose(); }
   }

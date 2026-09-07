@@ -314,6 +314,15 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
         break;
       }
       case "message_end": {
+        if (event.message?.role === "assistant" && event.message.usage) {
+          const native = event.message.usage;
+          const usage = { id: createHash("sha256").update(JSON.stringify(event.message)).digest("hex") };
+          for (const [source, target] of [["input","inputTokens"],["output","outputTokens"],["cacheRead","cacheReadTokens"],["cacheWrite","cacheWriteTokens"],["totalTokens","totalTokens"]]) {
+            if (Number.isSafeInteger(native[source]) && native[source] >= 0) usage[target] = native[source];
+          }
+          emit({ type: "usage", usage });
+        }
+
         if (event.message?.role === "assistant") {
           lastAssistantStopReason = event.message.stopReason;
           const next = event.message.stopReason === "aborted" ? "interrupted" : event.message.stopReason === "error" ? "failed" : "complete";

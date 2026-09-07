@@ -218,6 +218,15 @@ export async function createPiAdapter(config, emit) {
         break;
       }
       case "message_end": {
+        if (frame.message?.role === "assistant" && frame.message.usage) {
+          const native = frame.message.usage;
+          const usage = { id: createHash("sha256").update(JSON.stringify(frame.message)).digest("hex") };
+          for (const [source, target] of [["input","inputTokens"],["output","outputTokens"],["cacheRead","cacheReadTokens"],["cacheWrite","cacheWriteTokens"],["totalTokens","totalTokens"]]) {
+            if (Number.isSafeInteger(native[source]) && native[source] >= 0) usage[target] = native[source];
+          }
+          emit({ type: "usage", usage });
+        }
+
         if (frame.message?.role === "assistant") {
           const interrupted = frame.message.stopReason === "aborted";
           const failed = frame.message.stopReason === "error";

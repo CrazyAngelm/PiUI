@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from '../locale/language';
-  import type { AgentProfile } from '../../../../../contracts/orchestration-v5';
+  import type { AgentProfile } from '../../../../../contracts/orchestration-v6';
   import type { HarnessResource } from '../../../../../contracts/harness-models-v18';
   export let profile: AgentProfile;
   export let items: HarnessResource[] = [];

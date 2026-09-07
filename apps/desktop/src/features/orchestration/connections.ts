@@ -1,4 +1,4 @@
-import type { DirectedEdge, TeamMember } from '../../../../../contracts/orchestration-v5';
+import type { DirectedEdge, TeamMember } from '../../../../../contracts/orchestration-v6';
 
 export function connectionPreset(members: readonly TeamMember[], orchestrator: string, mode: 'orchestrator' | 'everyone'): readonly DirectedEdge[] {
   return members.flatMap(from => members.flatMap(to => from.id !== to.id && (mode === 'everyone' || from.id === orchestrator || to.id === orchestrator)

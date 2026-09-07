@@ -2,7 +2,7 @@
 
 ## User-authored system files
 
-- `contracts/system-file-v3.schema.json` is the current portable graph contract;
+- `contracts/system-file-v4.schema.json` is the current portable graph contract;
   keep v1/v2 import compatibility. Keep
   UI import/export and `pnpm system:check` on the same parser; adapter-specific
   static checks belong to `src/harness-adapters/validation.ts`.

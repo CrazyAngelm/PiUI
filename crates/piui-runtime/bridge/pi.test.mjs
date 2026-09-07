@@ -26,6 +26,8 @@ test("Pi RPC adapter snapshots history and returns prompt admission", async () =
   await new Promise((resolve) => setTimeout(resolve, 60));
   assert.ok(events.some((event) => event.type === "textDelta" && event.text === "answer"));
   assert.ok(events.some((event) => event.type === "approval"));
+  const receipt = events.find(event => event.type === "usage")?.usage;
+  assert.deepEqual({...receipt,id:"receipt"}, {id:"receipt",inputTokens:10,outputTokens:4,cacheReadTokens:2,cacheWriteTokens:0,totalTokens:14});
   await adapter.dispose();
 });
 

@@ -5,7 +5,7 @@
   import { harnessModels } from '../../host-api/harnessModels';
   import ResourcePicker from './ResourcePicker.svelte';
   import type { HarnessModelsResult } from '../../../../../contracts/harness-models-v18';
-  import type { AgentProfile, Harness, PermissionMode } from '../../../../../contracts/orchestration-v5';
+  import type { AgentProfile, Harness, PermissionMode } from '../../../../../contracts/orchestration-v6';
   import {
     createProfileDraft,
     profileFromDraft,

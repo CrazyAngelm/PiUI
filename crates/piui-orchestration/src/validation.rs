@@ -9,6 +9,12 @@ use crate::{
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum DefinitionError {
+    #[error("invalid flow control: {reason}")]
+    InvalidFlow { reason: &'static str },
+    #[error("callable templates cannot participate in result dependencies")]
+    CallableDependency,
+    #[error("a pipeline needs a scheduled entry step")]
+    NoScheduledStep,
     #[error("{kind} identifier must not be empty")]
     EmptyId { kind: &'static str },
     #[error("duplicate {kind} identifier: {id}")]
@@ -174,6 +180,28 @@ fn validate_edges(
 
 fn validate_pipeline(snapshot: &RunDefinitionSnapshot) -> Result<(), DefinitionError> {
     let pipeline = &snapshot.pipeline;
+    if !pipeline
+        .steps
+        .iter()
+        .any(|step| step.execution_mode != Some(crate::ExecutionMode::Callable))
+    {
+        return Err(DefinitionError::NoScheduledStep);
+    }
+    let callable: BTreeSet<&str> = pipeline
+        .steps
+        .iter()
+        .filter(|step| step.execution_mode == Some(crate::ExecutionMode::Callable))
+        .map(|step| step.id.as_str())
+        .collect();
+    if pipeline.steps.iter().any(|step| {
+        (!step.dependency_step_ids.is_empty() && callable.contains(step.id.as_str()))
+            || step
+                .dependency_step_ids
+                .iter()
+                .any(|id| callable.contains(id.as_str()))
+    }) {
+        return Err(DefinitionError::CallableDependency);
+    }
     require_nonempty("pipeline", &pipeline.id)?;
     require_nonempty("pipeline name", &pipeline.name)?;
     let steps = unique_ids("step", pipeline.steps.iter().map(|step| step.id.as_str()))?;
@@ -186,6 +214,75 @@ fn validate_pipeline(snapshot: &RunDefinitionSnapshot) -> Result<(), DefinitionE
     let mut indegree: BTreeMap<&str, usize> = steps.iter().copied().map(|step| (step, 0)).collect();
     let mut outgoing: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for step in &pipeline.steps {
+        let mut input_names = BTreeSet::new();
+        for binding in &step.input_bindings {
+            require_nonempty("input name", &binding.name)?;
+            if !input_names.insert(binding.name.as_str())
+                || !step.dependency_step_ids.contains(&binding.source_step_id)
+                || !pipeline.steps.iter().any(|source| {
+                    source.id == binding.source_step_id
+                        && source
+                            .result_fields
+                            .iter()
+                            .any(|field| field.name == binding.field)
+                })
+            {
+                return Err(DefinitionError::InvalidFlow {
+                    reason: "input binding must select a declared dependency field with a unique input name",
+                });
+            }
+        }
+        if let Some(condition) = &step.condition {
+            let source = pipeline
+                .steps
+                .iter()
+                .find(|source| source.id == condition.source_step_id);
+            if !step.dependency_step_ids.contains(&condition.source_step_id)
+                || !source.is_some_and(|source| {
+                    source
+                        .result_fields
+                        .iter()
+                        .any(|field| field.name == condition.field)
+                })
+                || !(condition.equals.is_string()
+                    || condition.equals.is_number()
+                    || condition.equals.is_boolean())
+            {
+                return Err(DefinitionError::InvalidFlow {
+                    reason: "condition must reference a declared field on a direct dependency",
+                });
+            }
+        }
+        if let Some(review) = &step.review {
+            let mut ancestors = BTreeSet::new();
+            let mut pending = step.dependency_step_ids.clone();
+            while let Some(id) = pending.pop() {
+                if ancestors.insert(id.clone()) {
+                    if let Some(parent) = pipeline.steps.iter().find(|parent| parent.id == id) {
+                        pending.extend(parent.dependency_step_ids.clone());
+                    }
+                }
+            }
+            if !ancestors.contains(&review.retry_from_step_id)
+                || !step.result_fields.iter().any(|field| {
+                    field.name == review.field && field.kind == crate::ResultFieldKind::Boolean
+                })
+            {
+                return Err(DefinitionError::InvalidFlow {
+                    reason: "review requires a boolean result field and an upstream correction step",
+                });
+            }
+        }
+        let mut fields = BTreeSet::new();
+        for field in &step.result_fields {
+            require_nonempty("result field", &field.name)?;
+            if !fields.insert(field.name.as_str()) {
+                return Err(DefinitionError::DuplicateId {
+                    kind: "result field",
+                    id: field.name.clone(),
+                });
+            }
+        }
         require_nonempty("step name", &step.name)?;
         if !members.contains(step.assigned_member_id.as_str()) {
             return Err(DefinitionError::MissingId {

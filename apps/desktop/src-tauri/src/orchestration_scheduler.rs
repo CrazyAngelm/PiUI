@@ -226,6 +226,36 @@ impl OrchestrationScheduler {
         run_id: &str,
         expected_run_revision: u64,
     ) -> Result<Run, OrchestrationSchedulerError> {
+        self.cancel_scope(app, workspace_id, run_id, expected_run_revision, None)
+            .await
+    }
+
+    pub(crate) async fn cancel_task<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        workspace_id: &str,
+        run_id: &str,
+        expected_run_revision: u64,
+        step_id: &str,
+    ) -> Result<Run, OrchestrationSchedulerError> {
+        self.cancel_scope(
+            app,
+            workspace_id,
+            run_id,
+            expected_run_revision,
+            Some(step_id),
+        )
+        .await
+    }
+
+    pub(crate) async fn cancel_scope<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        workspace_id: &str,
+        run_id: &str,
+        expected_run_revision: u64,
+        step_id: Option<&str>,
+    ) -> Result<Run, OrchestrationSchedulerError> {
         if !self.admits_work() {
             return Err(OrchestrationSchedulerError::unavailable());
         }
@@ -240,6 +270,10 @@ impl OrchestrationScheduler {
                 .plan_cancel(workspace_id, run_id, expected_run_revision)
                 .map_err(|_| OrchestrationSchedulerError::conflict())?
         };
+        let cancels = cancels
+            .into_iter()
+            .filter(|cancel| step_id.is_none_or(|id| cancel.step_id == id))
+            .collect::<Vec<_>>();
         if cancels.is_empty() {
             let host = app.state::<HostState>();
             let _operation = host.live_runtime_operation_gate.lock().await;
@@ -250,7 +284,7 @@ impl OrchestrationScheduler {
                 .map_err(|_| OrchestrationSchedulerError::conflict())?
                 .ok_or_else(OrchestrationSchedulerError::conflict)?;
             let run = api
-                .commit_cancel_after_native_stop(workspace_id, run_id, current.revision())
+                .commit_cancel_after_native_stop(workspace_id, run_id, current.revision(), step_id)
                 .map_err(|_| OrchestrationSchedulerError::conflict())?;
             self.emit_run_invalidation(app, workspace_id, &run);
             return Ok(run);
@@ -310,8 +344,13 @@ impl OrchestrationScheduler {
                     .get_run(workspace_id, run_id)
                     .map_err(|_| OrchestrationSchedulerError::conflict())?
                     .ok_or_else(OrchestrationSchedulerError::conflict)?;
-                api.commit_cancel_after_native_stop(workspace_id, run_id, current.revision())
-                    .map_err(|_| OrchestrationSchedulerError::conflict())
+                api.commit_cancel_after_native_stop(
+                    workspace_id,
+                    run_id,
+                    current.revision(),
+                    step_id,
+                )
+                .map_err(|_| OrchestrationSchedulerError::conflict())
             };
             if let Ok(run) = result {
                 self.emit_run_invalidation(app, workspace_id, &run);
@@ -534,12 +573,43 @@ impl OrchestrationScheduler {
         if outcome == Ok(TurnOutcome::Interrupted) && cancelling.load(Ordering::Acquire) {
             return;
         }
+        let native_result = if outcome == Ok(TurnOutcome::Succeeded) {
+            handle.final_result().await.ok()
+        } else {
+            None
+        };
+        let native_result_text = native_result.as_ref().and_then(|(_, text)| text.clone());
+        let fields = app
+            .state::<OrchestrationApiState>()
+            .get_run(&workspace_id, &launch.run_id)
+            .ok()
+            .flatten()
+            .and_then(|run| {
+                run.definition()
+                    .pipeline
+                    .steps
+                    .iter()
+                    .find(|step| step.id == launch.step_id)
+                    .map(|step| step.result_fields.clone())
+            });
+        let artifacts_valid = match fields {
+            Some(fields) => handle
+                .validate_result_artifacts(&fields, native_result_text.as_deref().unwrap_or(""))
+                .await
+                .is_ok(),
+            None => false,
+        };
         let completion = match outcome {
-            Ok(TurnOutcome::Succeeded) => match handle.final_history_reference().await {
-                Ok(reference) => CompletionOutcome::Succeeded {
+            Ok(TurnOutcome::Succeeded) if !artifacts_valid => CompletionOutcome::Failed {
+                failure: FailureRecord {
+                    code: "result-artifact-unavailable".into(),
+                },
+            },
+            Ok(TurnOutcome::Succeeded) => match native_result {
+                Some((reference, _)) => CompletionOutcome::Succeeded {
                     result_reference: Some(reference),
                 },
-                Err(_) => {
+                None => {
                     self.mark_execution_uncertain(&app, &workspace_id, &launch)
                         .await;
                     self.remove_active(&launch.execution.id);
@@ -591,6 +661,7 @@ impl OrchestrationScheduler {
                 task.revision(),
                 &launch.execution.id,
                 completion,
+                native_result_text.as_deref(),
             )
         };
         self.remove_active(&launch.execution.id);
@@ -1056,7 +1127,7 @@ impl OrchestrationScheduler {
         let _ = app.emit(
             ORCHESTRATION_EVENT_V4,
             OrchestrationRunChangedEventV4 {
-                protocol: 5,
+                protocol: 6,
                 event_type: "runChanged",
                 workspace_id: workspace_id.to_owned(),
                 run_id: run.id().to_owned(),
@@ -1538,6 +1609,12 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
         name: "Prime native marker DAG".into(),
         steps: vec![
             PipelineStep {
+                input_bindings: Vec::new(),
+                condition: None,
+                review: None,
+                require_approval: false,
+                result_fields: Vec::new(),
+                execution_mode: None,
                 input_instructions: None,
                 id: "step-one".into(),
                 name: "First marker".into(),
@@ -1546,6 +1623,12 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
                 dependency_step_ids: vec![],
             },
             PipelineStep {
+                input_bindings: Vec::new(),
+                condition: None,
+                review: None,
+                require_approval: false,
+                result_fields: Vec::new(),
+                execution_mode: None,
                 input_instructions: None,
                 id: "step-two".into(),
                 name: "Second marker".into(),
@@ -1557,7 +1640,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
             },
         ],
     };
-    let store_directory = app_data.join("orchestration-v5");
+    let store_directory = app_data.join("orchestration-v6");
     fs::create_dir_all(&store_directory).unwrap();
     let document = serde_json::json!({
         "version": 1,
@@ -1905,6 +1988,12 @@ mod tests {
                 name: "Pipeline".into(),
                 steps: vec![
                     PipelineStep {
+                        input_bindings: Vec::new(),
+                        condition: None,
+                        review: None,
+                        require_approval: false,
+                        result_fields: Vec::new(),
+                        execution_mode: None,
                         input_instructions: None,
                         id: "build".into(),
                         name: "Build".into(),
@@ -1913,6 +2002,12 @@ mod tests {
                         dependency_step_ids: vec![],
                     },
                     PipelineStep {
+                        input_bindings: Vec::new(),
+                        condition: None,
+                        review: None,
+                        require_approval: false,
+                        result_fields: Vec::new(),
+                        execution_mode: None,
                         input_instructions: None,
                         id: "review".into(),
                         name: "Review".into(),
@@ -1957,6 +2052,8 @@ mod tests {
             Ok(TurnOutcome::Succeeded)
         );
         let reference = piui_orchestration::NativeHistoryReference {
+            fields: Vec::new(),
+
             session_id: "first".into(),
             block_id: Some("assistant".into()),
             content_hash: Some("ab".repeat(32)),
@@ -1993,6 +2090,8 @@ mod tests {
             &second.execution.id,
             CompletionOutcome::Succeeded {
                 result_reference: Some(piui_orchestration::NativeHistoryReference {
+                    fields: Vec::new(),
+
                     session_id: "second".into(),
                     block_id: Some("assistant".into()),
                     content_hash: Some("cd".repeat(32)),
@@ -2123,6 +2222,8 @@ mod tests {
             &first.execution.id,
             CompletionOutcome::Succeeded {
                 result_reference: Some(piui_orchestration::NativeHistoryReference {
+                    fields: Vec::new(),
+
                     session_id: "build-session".into(),
                     block_id: Some("assistant".into()),
                     content_hash: Some("ef".repeat(32)),

@@ -157,6 +157,7 @@ input.on("line", (line) => {
     if (!holdTurnFixture) {
       const requestedText = message.params.input?.[0]?.text;
       const finalStatus = requestedText === "fail fixture" ? "failed" : "completed";
+      send({ method: "thread/tokenUsage/updated", params: { threadId, tokenUsage: { total: {inputTokens:10,outputTokens:4,cachedInputTokens:2,totalTokens:14} } } });
       send({ method: "turn/completed", params: { threadId, turn: { id: "turn-fixture", status: finalStatus, items: [], ...(finalStatus === "failed" ? { error: { message: "raw fixture secret", codexErrorInfo: "unauthorized", additionalDetails: "raw fixture detail" } } : {}) } } });
     }
   } else if (message.method === "thread/unsubscribe") {

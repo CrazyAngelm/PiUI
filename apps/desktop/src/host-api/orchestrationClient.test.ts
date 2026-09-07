@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createOrchestrationClient, createUnavailableOrchestrationClient, orchestrationError,
   type OrchestrationCommandName, type OrchestrationRequest, type AgentProfile, type StoredDefinition,
-  type OrchestrationRunChangedEventV5, orchestrationRunChanged,
+  type OrchestrationRunChangedEventV6, orchestrationRunChanged,
 } from './orchestrationClient';
 
 const profile: AgentProfile = {
@@ -17,29 +17,29 @@ describe('orchestration host client', () => {
     const client = createOrchestrationClient(async <T>(route: OrchestrationCommandName, { request }: { request: OrchestrationRequest }): Promise<T> => {
       calls.push({ route, request });
       let result: unknown;
-      if (route === 'orchestration_save_profile_v5' && 'value' in request && 'harness' in request.value) {
+      if (route === 'orchestration_save_profile_v6' && 'value' in request && 'harness' in request.value) {
         if (stored && request.expectedRevision !== stored.revision) throw { code: 'conflict', message: 'private native detail' };
         stored = { revision: (stored?.revision ?? 0) + 1, value: request.value };
         result = stored;
-      } else if (route === 'orchestration_get_profile_v5') result = stored;
-      else if (route === 'orchestration_delete_profile_v5' && 'expectedRevision' in request) {
+      } else if (route === 'orchestration_get_profile_v6') result = stored;
+      else if (route === 'orchestration_delete_profile_v6' && 'expectedRevision' in request) {
         if (request.expectedRevision !== stored?.revision) throw { code: 'conflict' };
         stored = null;
       } else throw { code: 'runtime-unavailable' };
       return result as T;
     });
-    const created = await client.orchestration_save_profile_v5({ workspaceId: 'fixture-workspace', value: profile });
+    const created = await client.orchestration_save_profile_v6({ workspaceId: 'fixture-workspace', value: profile });
     expect(created.revision).toBe(1);
-    expect(calls[0]).toEqual({ route: 'orchestration_save_profile_v5', request: { workspaceId: 'fixture-workspace', value: profile } });
-    const opened = await client.orchestration_get_profile_v5({ workspaceId: 'fixture-workspace', id: profile.id });
+    expect(calls[0]).toEqual({ route: 'orchestration_save_profile_v6', request: { workspaceId: 'fixture-workspace', value: profile } });
+    const opened = await client.orchestration_get_profile_v6({ workspaceId: 'fixture-workspace', id: profile.id });
     expect(opened).toEqual(created);
     const edited = { ...profile, name: 'Updated review profile' };
-    const updated = await client.orchestration_save_profile_v5({ workspaceId: 'fixture-workspace', expectedRevision: created.revision, value: edited });
+    const updated = await client.orchestration_save_profile_v6({ workspaceId: 'fixture-workspace', expectedRevision: created.revision, value: edited });
     expect(updated.revision).toBe(2);
-    await expect(client.orchestration_save_profile_v5({ workspaceId: 'fixture-workspace', expectedRevision: created.revision, value: profile })).rejects.toMatchObject({ code: 'conflict' });
-    expect((await client.orchestration_get_profile_v5({ workspaceId: 'fixture-workspace', id: profile.id }))?.value.name).toBe(edited.name);
-    await client.orchestration_delete_profile_v5({ workspaceId: 'fixture-workspace', id: profile.id, expectedRevision: updated.revision });
-    expect(await client.orchestration_get_profile_v5({ workspaceId: 'fixture-workspace', id: profile.id })).toBeNull();
+    await expect(client.orchestration_save_profile_v6({ workspaceId: 'fixture-workspace', expectedRevision: created.revision, value: profile })).rejects.toMatchObject({ code: 'conflict' });
+    expect((await client.orchestration_get_profile_v6({ workspaceId: 'fixture-workspace', id: profile.id }))?.value.name).toBe(edited.name);
+    await client.orchestration_delete_profile_v6({ workspaceId: 'fixture-workspace', id: profile.id, expectedRevision: updated.revision });
+    expect(await client.orchestration_get_profile_v6({ workspaceId: 'fixture-workspace', id: profile.id })).toBeNull();
     expect(calls.every((call) => call.request.workspaceId === 'fixture-workspace')).toBe(true);
   });
 
@@ -49,21 +49,21 @@ describe('orchestration host client', () => {
       calls.push({ route, request });
       return null as T;
     });
-    await client.orchestration_catalog_v5({ workspaceId: 'fixture-workspace' });
-    await client.orchestration_list_runs_v5({ workspaceId: 'fixture-workspace' });
-    await client.orchestration_get_run_v5({ workspaceId: 'fixture-workspace', runId: 'fixture-run' });
-    await client.orchestration_cancel_run_v5({ workspaceId: 'fixture-workspace', runId: 'fixture-run', expectedRunRevision: 4 });
-    await client.orchestration_retry_uncertain_task_v5({ workspaceId: 'fixture-workspace', runId: 'fixture-run', expectedRunRevision: 4, stepId: 'fixture-step', expectedTaskRevision: 2 });
-    expect(calls.map((call) => call.route)).toEqual(['orchestration_catalog_v5', 'orchestration_list_runs_v5', 'orchestration_get_run_v5', 'orchestration_cancel_run_v5', 'orchestration_retry_uncertain_task_v5']);
+    await client.orchestration_catalog_v6({ workspaceId: 'fixture-workspace' });
+    await client.orchestration_list_runs_v6({ workspaceId: 'fixture-workspace' });
+    await client.orchestration_get_run_v6({ workspaceId: 'fixture-workspace', runId: 'fixture-run' });
+    await client.orchestration_cancel_run_v6({ workspaceId: 'fixture-workspace', runId: 'fixture-run', expectedRunRevision: 4 });
+    await client.orchestration_retry_uncertain_task_v6({ workspaceId: 'fixture-workspace', runId: 'fixture-run', expectedRunRevision: 4, stepId: 'fixture-step', expectedTaskRevision: 2 });
+    expect(calls.map((call) => call.route)).toEqual(['orchestration_catalog_v6', 'orchestration_list_runs_v6', 'orchestration_get_run_v6', 'orchestration_cancel_run_v6', 'orchestration_retry_uncertain_task_v6']);
     expect(calls.at(-1)?.request).toEqual({ workspaceId: 'fixture-workspace', runId: 'fixture-run', expectedRunRevision: 4, stepId: 'fixture-step', expectedTaskRevision: 2 });
   });
 
   it('never returns fake catalog, CRUD or run success without the desktop host', async () => {
     const client = createUnavailableOrchestrationClient();
-    await expect(client.orchestration_catalog_v5({ workspaceId: 'fixture-workspace' })).rejects.toMatchObject({ code: 'desktop-unavailable' });
-    await expect(client.orchestration_save_profile_v5({ workspaceId: 'fixture-workspace', value: profile })).rejects.toThrow('desktop app');
-    await expect(client.orchestration_list_runs_v5({ workspaceId: 'fixture-workspace' })).rejects.toMatchObject({ code: 'desktop-unavailable' });
-    await expect(client.orchestration_start_run_v5({ workspaceId: 'fixture-workspace', runId: 'fixture-run', teamId: 'fixture-team', pipelineId: 'fixture-pipeline' })).rejects.toMatchObject({ code: 'desktop-unavailable' });
+    await expect(client.orchestration_catalog_v6({ workspaceId: 'fixture-workspace' })).rejects.toMatchObject({ code: 'desktop-unavailable' });
+    await expect(client.orchestration_save_profile_v6({ workspaceId: 'fixture-workspace', value: profile })).rejects.toThrow('desktop app');
+    await expect(client.orchestration_list_runs_v6({ workspaceId: 'fixture-workspace' })).rejects.toMatchObject({ code: 'desktop-unavailable' });
+    await expect(client.orchestration_start_run_v6({ workspaceId: 'fixture-workspace', runId: 'fixture-run', teamId: 'fixture-team', pipelineId: 'fixture-pipeline' })).rejects.toMatchObject({ code: 'desktop-unavailable' });
   });
 
   it('shows only known safe error copy, never a native path, prompt or arbitrary error code', () => {
@@ -80,12 +80,12 @@ describe('orchestration host client', () => {
 
 
 describe('orchestration durable event boundary', () => {
-  const changed: OrchestrationRunChangedEventV5 = { protocol: 5, type: 'runChanged', workspaceId: 'fixture-workspace', runId: 'fixture-run', revision: 4 };
+  const changed: OrchestrationRunChangedEventV6 = { protocol: 6, type: 'runChanged', workspaceId: 'fixture-workspace', runId: 'fixture-run', revision: 4 };
 
   it('subscribes to versioned invalidations and exposes the real unsubscribe handle', async () => {
     let emit: (payload: unknown) => void = () => {};
     const stop = vi.fn();
-    const received: OrchestrationRunChangedEventV5[] = [];
+    const received: OrchestrationRunChangedEventV6[] = [];
     const client = createOrchestrationClient(async <T>(): Promise<T> => null as T, async (handler) => { emit = handler; return stop; });
     const unlisten = await client.listen((event) => received.push(event));
     emit({ ...changed, nativePrivateField: 'not forwarded' });

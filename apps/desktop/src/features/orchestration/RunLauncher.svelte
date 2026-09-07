@@ -1,7 +1,7 @@
 <script lang="ts">
   import { t } from '../locale/language';
-  import type { DefinitionSummary, StoredDefinition } from '../../../../../contracts/orchestration-host-v5';
-  import type { LaunchCommandReference } from '../../../../../contracts/orchestration-v5';
+  import type { DefinitionSummary, StoredDefinition } from '../../../../../contracts/orchestration-host-v6';
+  import type { LaunchCommandReference } from '../../../../../contracts/orchestration-v6';
   import { initialRunLaunchSelection, validateRunLaunchSelection, type RunLaunchSelection } from './runLaunch';
 
   export let teams: readonly DefinitionSummary[] = [];

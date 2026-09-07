@@ -1,5 +1,11 @@
 # Agent systems as files
 
+Current export: **version 4**. Versions 1–3 remain importable. See
+[execution contracts](../skills/piui-systems/references/execution.md) for callable
+nodes, mappings, typed results, artifacts, conditions, approvals and review cycles.
+The active orchestration IPC is v6; native history formats are unchanged.
+
+
 Use UTF-8 `*.piui.json`. JSON Schema is in [system-file-v1.schema.json](../contracts/system-file-v1.schema.json); [examples](../examples/systems) cover a single agent, Codex → Prime review, and parallel work followed by synthesis. Replace example model placeholders with actual available native model IDs before execution.
 
 ```powershell

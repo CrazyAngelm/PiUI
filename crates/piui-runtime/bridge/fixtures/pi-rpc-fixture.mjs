@@ -27,7 +27,7 @@ process.stdin.on("data", (chunk) => {
         write({ type: "extension_ui_request", id: "native-approval-secret", method: "confirm", title: "Allow?", message: "Continue?" });
         const stopReason = request.message === "fail" || request.message === "authfail" ? "error" : request.message === "abort" ? "aborted" : "stop";
         const errorMessage = request.message === "authfail" ? "401 missing API key SECRET-MUST-NOT-LEAK" : undefined;
-        write({ type: "message_end", message: { role: "assistant", stopReason, ...(errorMessage ? { errorMessage } : {}) } });
+        write({ type: "message_end", message: { role: "assistant", stopReason, usage: {input:10,output:4,cacheRead:2,cacheWrite:0,totalTokens:14}, ...(errorMessage ? { errorMessage } : {}) } });
         write({ type: "agent_settled" });
       }, 30);
     } else if (request.type === "set_session_name") { sessionName = request.name; write({ id: request.id, type: "response", command: request.type, success: true }); }

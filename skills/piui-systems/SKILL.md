@@ -5,7 +5,7 @@ description: Create, review, or edit PiUI agent systems as validated JSON files 
 
 # PiUI systems
 
-Turn the user's task into an importable `.piui.json` system. Work in the PiUI repository supplied by the user; on this installation it is `D:/Projects/PIUI`. Locate another checkout if that path is absent. Read its `AGENTS.md`, `contracts/system-file-v3.schema.json`, and [format and workflow](references/configuration.md). The repository schema and adapter manifests override stale examples in this skill.
+Turn the user's task into an importable `.piui.json` system. Work in the PiUI repository supplied by the user; on this installation it is `D:/Projects/PIUI`. Locate another checkout if that path is absent. Read its `AGENTS.md`, `contracts/system-file-v4.schema.json`, and [format and workflow](references/configuration.md). The repository schema and adapter manifests override stale examples in this skill.
 
 ## Design from the outcome
 
@@ -17,7 +17,7 @@ Start with the smallest workflow that can prove the requested outcome. Add an ag
 
 For each role write concise instructions covering **when called; inputs; responsibility; expected output; verification; completion/blocker condition**. Use the actual task and acceptance criteria, not generic role-playing prose. Put reusable behavior in `profile.instructions`, this execution's assignment in `task`. Include exact artifact paths, evidence format and which findings matter when known. If necessary facts are missing, ask only for those facts; continue independent design work. Never claim an unknown model, MCP server or skill exists.
 
-Choose topology from dependencies: sequence for cumulative work; independent branches then synthesis for separable work; explicit review after implementation when the outcome needs verification. Result edges alone do not grant messaging, observation or spawning. Peer messaging is not a persistent conversation or a handoff. Every file agent is initially a pipeline task; there are no template-only nodes in v1. Do not simulate conditional loops, persistent teams or runtime channels with cyclic result edges.
+Choose topology from dependencies: sequence for cumulative work; independent branches then synthesis for separable work; explicit review after implementation when the outcome needs verification. Result edges alone do not grant messaging, observation or spawning. Peer messaging is not a persistent conversation or a handoff. Version 4 separates scheduled tasks from callable templates with `executionMode`. Use acyclic result dependencies and an explicit `review` rule for correction cycles. Conditions compare declared structured results; they are not executable expressions. A dependency join waits for every predecessor to succeed; a skipped predecessor skips its descendants. Do not use this join as an either-branch merge.
 
 ## Configure and verify
 
@@ -36,7 +36,7 @@ format and prerequisites the recipient needs, separately from its `task`.
 Upstream result and message senders receive these requirements from the frozen
 run snapshot; the recipient also receives them. Missing input should be reported,
 not fabricated. This is instruction delivery, not automatic semantic validation
-of every returned artifact. Version 1 files still import; export writes version 3.
+of every returned artifact. Version 1 files still import; export writes version 4.
 
 For dynamically callable profiles, fill `profile.whenToCall`,
 `profile.inputInstructions` (the reusable input default) and
@@ -71,3 +71,11 @@ restrictions or native-subagent controls. Those required settings must fail; do
 not turn native defaults into a sandbox claim. Resource inventory is read-only.
 Use result edges for mixed-harness dependencies. Native authority is incomparable
 across harnesses, so it cannot authorize cross-harness spawning.
+
+## Execution contracts (portable v4)
+
+Read [execution semantics](references/execution.md) when configuring conditional work,
+callable agents, selected inputs, artifacts, result acceptance or revision loops.
+Use the native catalog and **Check system** before a requested run. In **Runs**,
+select an agent for its native conversation, tool activity, inputs/results and
+per-attempt usage. Missing counters are unavailable, never zero or inferred cost.

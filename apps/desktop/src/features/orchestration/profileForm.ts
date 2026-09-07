@@ -5,7 +5,7 @@ import type {
   PolicyEnforcement,
   ToolDecision,
   ToolRule,
-} from '../../../../../contracts/orchestration-v5';
+} from '../../../../../contracts/orchestration-v6';
 
 export interface ProfileDraft {
   id: string;

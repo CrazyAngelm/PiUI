@@ -5,6 +5,26 @@ import { parseSystemFile, systemFileToGraph, graphToSystemFile, serializeSystemF
 
 const example = () => JSON.parse(readFileSync(new URL('../../../../../examples/systems/mixed-review.piui.json', import.meta.url), 'utf8'));
 describe('portable system files', () => {
+  it('round-trips structured mappings and review acceptance without losing local references', () => {
+    const file = JSON.parse(readFileSync(new URL('../../../../../examples/systems/structured-review.piui.json', import.meta.url), 'utf8'));
+    const graph = systemFileToGraph(parseSystemFile(JSON.stringify(file)));
+    const reopened = systemFileToGraph(parseSystemFile(serializeSystemFile(graph)));
+    const steps = compileGraph(reopened).pipeline.steps;
+    expect(steps[1]!.review).toEqual({field:'accepted',retryFromStepId:steps[0]!.id});
+    expect(steps[1]!.requireApproval).toBe(true);
+    expect(steps[1]!.inputBindings?.[0]).toEqual({sourceStepId:steps[0]!.id,field:'summary',name:'proposal'});
+    file.agents[1].inputBindings[0].field = 'undeclared';
+    expect(() => parseSystemFile(JSON.stringify(file))).toThrow();
+  });
+  it('preserves callable-only agents in v4 and rejects them in legacy files', () => {
+    const file = example(); file.version = 4; file.connections = [];
+    file.agents[1].executionMode = 'callable';
+    const graph = systemFileToGraph(parseSystemFile(JSON.stringify(file)));
+    expect(compileGraph(graph).pipeline.steps[1]!.executionMode).toBe('callable');
+    expect(parseSystemFile(serializeSystemFile(graph)).agents[1]!.executionMode).toBe('callable');
+    file.version = 3;
+    expect(() => parseSystemFile(JSON.stringify(file))).toThrow();
+  });
   it('accepts Hermes only in v3 and preserves v2 compatibility', () => {
     const file = example(); file.version = 2;
     expect(parseSystemFile(JSON.stringify(file)).version).toBe(2);
@@ -13,7 +33,7 @@ describe('portable system files', () => {
     file.version = 3;
     const reopened = systemFileToGraph(parseSystemFile(JSON.stringify(file)));
     expect(reopened.nodes[1]!.profile.harness).toBe('hermes');
-    expect(parseSystemFile(serializeSystemFile(reopened)).version).toBe(3);
+    expect(parseSystemFile(serializeSystemFile(reopened)).version).toBe(4);
   });
   it('upgrades v1 files and preserves separate input requirements in the current version', () => {
     const legacy = example(); legacy.version = 1;
@@ -21,7 +41,7 @@ describe('portable system files', () => {
     const graph = systemFileToGraph(parseSystemFile(JSON.stringify(legacy)));
     graph.nodes[1]!.input = 'Changed file paths, test results and unresolved issues.';
     const file = parseSystemFile(serializeSystemFile(graph));
-    expect(file.version).toBe(3);
+    expect(file.version).toBe(4);
     expect(systemFileToGraph(file).nodes[1]!.input).toBe(graph.nodes[1]!.input);
     expect(file.agents[1]!.task).toBe(graph.nodes[1]!.task);
   });

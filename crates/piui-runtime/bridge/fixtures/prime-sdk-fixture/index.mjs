@@ -82,7 +82,7 @@ export class InProcessAgentConnection {
         this.emit({ type: "tool_execution_end", toolCallId: "private-tool-call", toolName: "workspace", isError: false });
       }
       const stopReason = text === "fail-turn" ? "error" : text === "tool-use-terminal" ? "toolUse" : text === "unknown-terminal" ? "futureReason" : "stop";
-      const assistant = { role: "assistant", content: answer, stopReason };
+      const assistant = { role: "assistant", content: answer, stopReason, usage: {input:10,output:4,cacheRead:2,cacheWrite:0,totalTokens:14} };
       this.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: answer } });
       this.emit({ type: "message_end", message: assistant });
       this.streaming = false;
