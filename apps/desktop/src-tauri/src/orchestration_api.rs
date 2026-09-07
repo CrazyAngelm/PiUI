@@ -115,7 +115,7 @@ pub fn emit_run_changed(app: &AppHandle, workspace_id: &str, run: &Run) {
     let _ = app.emit(
         ORCHESTRATION_EVENT_V4,
         OrchestrationRunChangedEventV4 {
-            protocol: 4,
+            protocol: 5,
             event_type: "runChanged",
             workspace_id: workspace_id.to_owned(),
             run_id: run.id().to_owned(),
@@ -1221,7 +1221,7 @@ fn delete_definition<T: DefinitionValue>(
 }
 
 #[tauri::command]
-pub fn orchestration_catalog_v4(
+pub fn orchestration_catalog_v5(
     state: State<'_, OrchestrationApiState>,
     host_state: State<'_, HostState>,
     request: WorkspaceRequest,
@@ -1291,32 +1291,32 @@ macro_rules! definition_commands {
 }
 
 definition_commands!(
-    orchestration_get_profile_v4,
-    orchestration_save_profile_v4,
-    orchestration_delete_profile_v4,
+    orchestration_get_profile_v5,
+    orchestration_save_profile_v5,
+    orchestration_delete_profile_v5,
     AgentProfile
 );
 definition_commands!(
-    orchestration_get_team_v4,
-    orchestration_save_team_v4,
-    orchestration_delete_team_v4,
+    orchestration_get_team_v5,
+    orchestration_save_team_v5,
+    orchestration_delete_team_v5,
     TeamDefinition
 );
 definition_commands!(
-    orchestration_get_pipeline_v4,
-    orchestration_save_pipeline_v4,
-    orchestration_delete_pipeline_v4,
+    orchestration_get_pipeline_v5,
+    orchestration_save_pipeline_v5,
+    orchestration_delete_pipeline_v5,
     PipelineDefinition
 );
 definition_commands!(
-    orchestration_get_launch_command_v4,
-    orchestration_save_launch_command_v4,
-    orchestration_delete_launch_command_v4,
+    orchestration_get_launch_command_v5,
+    orchestration_save_launch_command_v5,
+    orchestration_delete_launch_command_v5,
     LaunchCommandReference
 );
 
 #[tauri::command]
-pub fn orchestration_list_runs_v4(
+pub fn orchestration_list_runs_v5(
     state: State<'_, OrchestrationApiState>,
     host_state: State<'_, HostState>,
     request: WorkspaceRequest,
@@ -1343,7 +1343,7 @@ pub fn orchestration_list_runs_v4(
 }
 
 #[tauri::command]
-pub fn orchestration_get_run_v4(
+pub fn orchestration_get_run_v5(
     state: State<'_, OrchestrationApiState>,
     host_state: State<'_, HostState>,
     request: RunRequest,
@@ -1363,7 +1363,7 @@ pub fn orchestration_get_run_v4(
 }
 
 #[tauri::command]
-pub async fn orchestration_start_run_v4(
+pub async fn orchestration_start_run_v5(
     state: State<'_, OrchestrationApiState>,
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
@@ -1389,7 +1389,7 @@ pub async fn orchestration_start_run_v4(
 }
 
 #[tauri::command]
-pub async fn orchestration_cancel_run_v4(
+pub async fn orchestration_cancel_run_v5(
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
     app: AppHandle,
@@ -1410,7 +1410,7 @@ pub async fn orchestration_cancel_run_v4(
 }
 
 #[tauri::command]
-pub async fn orchestration_reconcile_uncertain_task_v4(
+pub async fn orchestration_reconcile_uncertain_task_v5(
     state: State<'_, OrchestrationApiState>,
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
@@ -1470,7 +1470,7 @@ pub async fn orchestration_reconcile_uncertain_task_v4(
 }
 
 #[tauri::command]
-pub async fn orchestration_retry_uncertain_task_v4(
+pub async fn orchestration_retry_uncertain_task_v5(
     state: State<'_, OrchestrationApiState>,
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
@@ -1942,7 +1942,7 @@ fn save_graph(
 }
 
 #[tauri::command]
-pub async fn orchestration_save_graph_v4(
+pub async fn orchestration_save_graph_v5(
     state: State<'_, OrchestrationApiState>,
     host_state: State<'_, HostState>,
     request: SaveGraphRequest,

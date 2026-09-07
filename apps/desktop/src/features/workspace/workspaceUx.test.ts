@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sessionForProject, shortcutModifier } from './workspaceUx';
-import type { WorkspaceSession } from '../../../../../contracts/workspace-v11';
+import type { WorkspaceSession } from '../../../../../contracts/workspace-v15';
 
 describe('workspace navigation context', () => {
   const sessions: WorkspaceSession[] = [{ id: 'a', workspaceId: 'project-a', harness: 'pi', title: 'Work', status: 'running', updatedAt: '2026-09-06T00:00:00Z' }];

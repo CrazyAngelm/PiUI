@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { workspaceFixture } from '../../../../contracts/fixtures/workspace-v11';
+import { workspaceFixture } from '../../../../contracts/fixtures/workspace-v15';
 
 describe('workspace v11 cross-language fixture', () => {
   it('matches the shared Rust golden JSON with compile-time checked public fields', () => {
-    const data: unknown = JSON.parse(readFileSync(new URL('../../../../contracts/fixtures/workspace-v11.json', import.meta.url), 'utf8'));
+    const data: unknown = JSON.parse(readFileSync(new URL('../../../../contracts/fixtures/workspace-v15.json', import.meta.url), 'utf8'));
     expect(workspaceFixture).toEqual(data);
   });
   it('contains no native identity, path, actor, executable, or credential fields', () => {

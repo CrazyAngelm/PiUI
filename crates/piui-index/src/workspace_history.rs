@@ -24,6 +24,7 @@ pub enum WorkspaceHistoryFormat {
     Pi,
     PrimeAgent,
     Codex,
+    Hermes,
 }
 
 /// A host-only native transcript reference.
@@ -55,6 +56,8 @@ impl std::fmt::Debug for HostNativeHistorySource {
 
 #[derive(Debug, Error)]
 pub enum WorkspaceHistoryError {
+    #[error("native SQLite history is unavailable")]
+    Database(#[from] rusqlite::Error),
     #[error("native history source path is invalid")]
     InvalidSourcePath,
     #[error("native history source must be a non-protected JSONL file")]
@@ -160,6 +163,9 @@ pub fn project_native_workspace_history(
     source: &HostNativeHistorySource,
     project: &ProjectDirectory,
 ) -> Result<WorkspaceHistoryProjection, WorkspaceHistoryError> {
+    if source.format == WorkspaceHistoryFormat::Hermes {
+        return project_hermes_history(source, project);
+    }
     validate_source_path(&source.path)?;
     let max_bytes = SessionDiscoveryLimits::default().max_file_bytes;
     let (bytes, modified) = read_stable_bounded(&source.path, max_bytes)?;
@@ -183,6 +189,7 @@ pub fn project_native_workspace_history(
         .and_then(|name| name.to_str())
         .unwrap_or("session.jsonl");
     let mut projection = match source.format {
+        WorkspaceHistoryFormat::Hermes => return Err(WorkspaceHistoryError::InvalidHeader),
         WorkspaceHistoryFormat::Pi | WorkspaceHistoryFormat::PrimeAgent => {
             project_pi_history(source_name, &bytes, Path::new(&header_cwd))?
         }
@@ -263,6 +270,7 @@ fn parse_and_validate_header(
         .as_object()
         .ok_or(WorkspaceHistoryError::InvalidHeader)?;
     match format {
+        WorkspaceHistoryFormat::Hermes => Err(WorkspaceHistoryError::InvalidHeader),
         WorkspaceHistoryFormat::Pi | WorkspaceHistoryFormat::PrimeAgent => {
             let entry_type = object.get("type").and_then(Value::as_str);
             if !matches!(entry_type, Some("session" | "session_meta")) {
@@ -1361,5 +1369,154 @@ mod tests {
             project_native_workspace_history(&source, &project(&directory)),
             Err(WorkspaceHistoryError::File(BoundedScanError::Symlink))
         ));
+    }
+}
+
+/// Native Hermes SQLite projection. Never rewrites or converts its history.
+fn project_hermes_history(
+    source: &HostNativeHistorySource,
+    project: &ProjectDirectory,
+) -> Result<WorkspaceHistoryProjection, WorkspaceHistoryError> {
+    if !source.path.is_absolute()
+        || source.path.file_name().and_then(|n| n.to_str()) != Some("state.db")
+    {
+        return Err(WorkspaceHistoryError::InvalidSourcePath);
+    }
+    let conn = rusqlite::Connection::open_with_flags(
+        &source.path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    let tx = conn.unchecked_transaction()?;
+    let (origin, meta, cwd): (String, Option<String>, Option<String>) = tx.query_row(
+        "SELECT source,model_config,cwd FROM sessions WHERE id=?1",
+        [&source.expected_native_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    if origin != "acp" {
+        return Err(WorkspaceHistoryError::NativeSessionMismatch);
+    }
+    let config: Value = serde_json::from_str(meta.as_deref().unwrap_or("{}"))
+        .map_err(|_| WorkspaceHistoryError::InvalidHeader)?;
+    let cwd = cwd
+        .as_deref()
+        .filter(|v| !v.is_empty())
+        .or_else(|| config.get("cwd").and_then(Value::as_str))
+        .ok_or(WorkspaceHistoryError::InvalidHeader)?;
+    let native_project = ProjectDirectory::resolve(Path::new(cwd))
+        .map_err(WorkspaceHistoryError::HeaderProjectUnavailable)?;
+    if !native_project.same_directory(project) {
+        return Err(WorkspaceHistoryError::HeaderProjectMismatch);
+    }
+    let mut builder = CodexProjectionBuilder::new(project.canonical_path());
+    let mut query = tx.prepare(
+        "SELECT role,content,tool_name FROM messages WHERE session_id=?1 AND active=1 ORDER BY id",
+    )?;
+    let rows = query.query_map([&source.expected_native_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+    let max_bytes = SessionDiscoveryLimits::default().max_file_bytes;
+    let mut scanned_bytes = 0usize;
+    for row in rows {
+        let (role, content, tool) = row?;
+        let text = content.unwrap_or_default();
+        scanned_bytes = scanned_bytes.saturating_add(text.len());
+        if scanned_bytes > max_bytes {
+            return Err(BoundedScanError::FileTooLarge { limit: max_bytes }.into());
+        }
+        let value = serde_json::from_str::<Value>(&text).unwrap_or(Value::String(text.clone()));
+        let text = exact_display_scalar(Some(&value)).unwrap_or(text);
+        match role.as_str() {
+            "user" | "assistant" => builder.push_text(
+                if role == "user" {
+                    GenericBlockKind::User
+                } else {
+                    GenericBlockKind::Assistant
+                },
+                "hermes-message",
+                None,
+                text,
+                CodexTextSource::Response,
+            ),
+            "tool" => {
+                let id = format!("hermes-tool-{}", builder.blocks.len());
+                builder.push_tool(None, tool.as_deref(), Some(&id));
+                builder.finish_tool(Some(&id), Some(text), false);
+            }
+            "system" => {}
+            _ => builder.push_unknown(0, b"{}", "hermes-message", None),
+        }
+    }
+    let mut report = super::scan_bytes("state.db", b"");
+    report.pi_session_id = Some(source.expected_native_id.clone());
+    report.project_cwd = Some(cwd.to_owned());
+    report.entry_count = builder.blocks.len();
+    report.parse_state = ParseState::Healthy;
+    report.diagnostics.clear();
+    trim_old_display(&mut builder.blocks);
+    report.timeline_blocks = builder.blocks;
+    Ok(WorkspaceHistoryProjection {
+        report,
+        assistant_texts: builder.assistants,
+    })
+}
+
+#[cfg(test)]
+mod hermes_tests {
+    use super::*;
+    #[test]
+    fn native_sqlite_results_are_read_only_scoped_and_hash_resolvable() {
+        let root = std::env::temp_dir().join(format!("piui-hermes-history-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join("state.db");
+        let conn = rusqlite::Connection::open(&path).expect("fixture database");
+        conn.execute_batch("CREATE TABLE sessions(id TEXT, source TEXT, model_config TEXT, cwd TEXT); CREATE TABLE messages(id INTEGER, session_id TEXT, role TEXT, content TEXT, tool_name TEXT, active INTEGER);").expect("native fixture schema");
+        conn.execute(
+            "INSERT INTO sessions VALUES ('native','acp','{}',?1)",
+            [root.to_string_lossy().as_ref()],
+        )
+        .expect("session");
+        conn.execute_batch("INSERT INTO messages VALUES (1,'native','assistant','old result',NULL,0),(2,'native','assistant','verified result',NULL,1),(3,'other','assistant','foreign result',NULL,1);").expect("messages");
+        drop(conn);
+        let before = std::fs::read(&path).expect("before");
+        let source = HostNativeHistorySource::new(
+            path.clone(),
+            "native".into(),
+            WorkspaceHistoryFormat::Hermes,
+        );
+        let project = ProjectDirectory::resolve(&root).expect("project");
+        let projection =
+            project_native_workspace_history(&source, &project).expect("read native history");
+        assert_eq!(
+            projection.final_assistant_text(None, Some(&sha256(b"verified result"))),
+            Some("verified result")
+        );
+        assert_eq!(
+            projection.final_assistant_text(None, Some(&sha256(b"old result"))),
+            None
+        );
+        assert_eq!(projection.timeline_blocks().len(), 1);
+        let other = root.join("other");
+        std::fs::create_dir(&other).expect("other project");
+        assert!(matches!(
+            project_native_workspace_history(
+                &source,
+                &ProjectDirectory::resolve(&other).expect("other")
+            ),
+            Err(WorkspaceHistoryError::HeaderProjectMismatch)
+        ));
+        let missing = HostNativeHistorySource::new(
+            path.clone(),
+            "missing".into(),
+            WorkspaceHistoryFormat::Hermes,
+        );
+        assert!(project_native_workspace_history(&missing, &project).is_err());
+        assert_eq!(std::fs::read(&path).expect("after"), before);
+        std::fs::remove_dir_all(&root).expect("cleanup fixture");
     }
 }

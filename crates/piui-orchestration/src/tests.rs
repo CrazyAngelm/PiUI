@@ -9,7 +9,7 @@ fn v1_run_migrates_without_changing_native_prompt() {
         serde_json::from_slice(&serialize_run(&run).unwrap()).unwrap();
     json["schemaVersion"] = 1.into();
     let migrated = deserialize_run(&serde_json::to_vec(&json).unwrap()).unwrap();
-    assert_eq!(migrated.schema_version(), 4);
+    assert_eq!(migrated.schema_version(), 5);
     assert!(
         migrated
             .definition()
@@ -58,7 +58,7 @@ fn input_requirements_reach_sender_and_survive_v3_migration() {
         serde_json::from_slice(&serialize_run(&old).unwrap()).unwrap();
     value["schemaVersion"] = 3.into();
     let migrated = deserialize_run(&serde_json::to_vec(&value).unwrap()).unwrap();
-    assert_eq!(migrated.schema_version(), 4);
+    assert_eq!(migrated.schema_version(), 5);
     assert_eq!(migrated.definition(), old.definition());
 }
 
@@ -454,7 +454,7 @@ fn rust_json_matches_typescript_v1_golden_shape_and_rejects_unknown_fields() {
     let run = Coordinator::new_run("run-1", snapshot()).unwrap();
     let actual: serde_json::Value = serde_json::from_slice(&serialize_run(&run).unwrap()).unwrap();
     let golden = json!({
-        "schemaVersion": 4,
+        "schemaVersion": 5,
         "id": "run-1",
         "definition": {
             "profiles": [

@@ -1075,7 +1075,7 @@ pub fn serialize_run(run: &Run) -> Result<Vec<u8>, RunDataError> {
 
 pub fn deserialize_run(bytes: &[u8]) -> Result<Run, RunDataError> {
     let mut run: Run = serde_json::from_slice(bytes).map_err(RunDataError::Deserialize)?;
-    if matches!(run.schema_version, 1..=3) {
+    if matches!(run.schema_version, 1..=4) {
         run.schema_version = ORCHESTRATION_SCHEMA_VERSION;
     }
     validate_run_data(&run)?;

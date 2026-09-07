@@ -1,4 +1,4 @@
-import type { Harness, PermissionMode, ResourceRule } from '../../../../contracts/orchestration-v4';
+import type { Harness, PermissionMode, ResourceRule } from '../../../../contracts/orchestration-v5';
 /** Presentation manifest owned by each adapter. Host validation remains authoritative. */
 export interface HarnessConfiguration {
   readonly name: string;

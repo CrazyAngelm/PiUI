@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createPipeline, createPipelineStep, removePipelineStep, validatePipeline } from './pipelineForm';
-import type { PipelineDefinition, PipelineStep } from '../../../../../contracts/orchestration-v4';
+import type { PipelineDefinition, PipelineStep } from '../../../../../contracts/orchestration-v5';
 const step = (id: string, dependencies: readonly string[] = []): PipelineStep => ({ id, name: id, assignedMemberId: 'reviewer', instructions: '', dependencyStepIds: dependencies });
 const pipeline = (steps: readonly PipelineStep[]): PipelineDefinition => ({ id: 'fixture-pipeline', name: 'Fixture pipeline', steps });
 

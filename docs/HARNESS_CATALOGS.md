@@ -1,6 +1,6 @@
 # Native settings catalogs
 
-`harness_models_v14` is an additive host route. It accepts only a trusted
+`harness_models_v18` is an additive host route. It accepts only a trusted
 workspace ID and a typed harness identity; safe mode rejects runtime discovery.
 The v11 workspace grammar and native history formats remain unchanged.
 
@@ -31,3 +31,5 @@ write native history, or submit a model prompt.
 Catalog v14 carries `supportsFast` per model from the adapter. Prime uses its
 native `supportsFastMode` resolver. Pi exposes no Fast service tier; Codex uses
 its native service-tier override. Choosing another model clears incompatible Fast.
+
+Version 18 adds Hermes; v14 remains a frozen compatibility document. Hermes uses native no-probe inventory and canonical custom-provider choice IDs. Its resource controls are read-only.

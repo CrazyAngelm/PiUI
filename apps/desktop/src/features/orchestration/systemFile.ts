@@ -1,11 +1,12 @@
 import validateV1 from '../../../../../contracts/system-file-v1-validator.mjs';
+import validateV3 from '../../../../../contracts/system-file-v3-validator.mjs';
 import validateV2 from '../../../../../contracts/system-file-v2-validator.mjs';
-import type { AgentProfile } from '../../../../../contracts/orchestration-v4';
+import type { AgentProfile } from '../../../../../contracts/orchestration-v5';
 import { profileConfigurationErrors } from '../../harness-adapters/validation';
 import { compileGraph, emptyGraph, graphErrors, type AgentGraph, type GraphEdge } from './agentGraph';
 
 export interface SystemFile {
-  format: 'piui-system'; version: 1 | 2; name: string;
+  format: 'piui-system'; version: 1 | 2 | 3; name: string;
   orchestrator?: string; inheritTeamConnections?: boolean;
   agents: { id: string; profile: Omit<AgentProfile, 'id' | 'allowedSpawnProfileIds'>; task: string; input?: string; position?: { x: number; y: number } }[];
   connections: GraphEdge[];
@@ -13,7 +14,7 @@ export interface SystemFile {
 export function parseSystemFile(text: string): SystemFile {
   let data: unknown;
   try { data = JSON.parse(text); } catch { throw new Error('Invalid JSON.'); }
-  const validate = typeof data === 'object' && data !== null && 'version' in data && data.version === 1 ? validateV1 : validateV2;
+  const validate = typeof data === 'object' && data !== null && 'version' in data && data.version === 1 ? validateV1 : typeof data === 'object' && data !== null && 'version' in data && data.version === 2 ? validateV2 : validateV3;
   if (!validate(data)) throw new Error((validate.errors ?? []).map(error => `${error.instancePath || '/'}: ${error.message}`).join('\n'));
   const value = data as SystemFile;
   const errors: string[] = [];
@@ -48,7 +49,7 @@ export function systemFileToGraph(file: SystemFile): AgentGraph {
 }
 export function graphToSystemFile(graph: AgentGraph): SystemFile {
   const definition = compileGraph(graph);
-  return { format: 'piui-system', version: 2, name: graph.name,
+  return { format: 'piui-system', version: 3, name: graph.name,
     orchestrator: definition.team.orchestratorMemberId,
     ...(graph.spawnedAgentsJoinTeam !== undefined ? { inheritTeamConnections: graph.spawnedAgentsJoinTeam } : {}),
     agents: graph.nodes.map(node => {

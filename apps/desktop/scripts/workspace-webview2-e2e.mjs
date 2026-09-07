@@ -226,8 +226,8 @@ export async function runWorkspaceWebview2Proof({
   }
 
   async function workspaceCatalog() {
-    const result = await invoke('workspace_command_v11', { command: { type: 'catalog' } });
-    assertion(result?.type === 'catalog' && result.catalog?.protocol === 11, 'The host did not return the workspace v11 catalog.');
+    const result = await invoke('workspace_command_v15', { command: { type: 'catalog' } });
+    assertion(result?.type === 'catalog' && result.catalog?.protocol === 15, 'The host did not return the workspace v11 catalog.');
     return result.catalog;
   }
 
@@ -242,7 +242,7 @@ export async function runWorkspaceWebview2Proof({
       assertion(await evaluate(`document.querySelector('.inline-error[role="alert"]') === null`), 'The native close reached Closed through error recovery instead of a graceful RPC reply.');
       return latest;
     } catch {
-      const snapshot = await invokeOutcome('workspace_command_v11', { command: { type: 'snapshot', sessionId } });
+      const snapshot = await invokeOutcome('workspace_command_v15', { command: { type: 'snapshot', sessionId } });
       const snapshotStatus = snapshot?.ok === true ? 'SUCCESS' : safeErrorCode(snapshot?.error);
       await capture(failureScreenshot);
       throw new Error(`Native close proof failed. Catalog status: ${closeCatalogStatus}. Snapshot status: ${snapshotStatus}.`);
@@ -250,15 +250,15 @@ export async function runWorkspaceWebview2Proof({
   }
 
   async function orchestrationCatalog(workspaceId) {
-    return invoke('orchestration_catalog_v4', { request: { workspaceId } });
+    return invoke('orchestration_catalog_v5', { request: { workspaceId } });
   }
 
   async function readSingle(kind, workspaceId, name) {
     const routes = {
-      profile: ['profiles', 'orchestration_get_profile_v4'],
-      team: ['teams', 'orchestration_get_team_v4'],
-      pipeline: ['pipelines', 'orchestration_get_pipeline_v4'],
-      launch: ['launchCommands', 'orchestration_get_launch_command_v4'],
+      profile: ['profiles', 'orchestration_get_profile_v5'],
+      team: ['teams', 'orchestration_get_team_v5'],
+      pipeline: ['pipelines', 'orchestration_get_pipeline_v5'],
+      launch: ['launchCommands', 'orchestration_get_launch_command_v5'],
     };
     const [collection, route] = routes[kind];
     const catalog = await orchestrationCatalog(workspaceId);
@@ -304,11 +304,11 @@ export async function runWorkspaceWebview2Proof({
     await clickButton('Save', '.system-editor .toolbar');
     await waitFor(`document.querySelector('.save-state')?.textContent === 'Saved'`, 'atomic graph save');
     const graphCommand = await readSingle('launch', workspaceId, 'Mixed graph proof');
-    const graphPipeline = await invoke('orchestration_get_pipeline_v4', { request: { workspaceId, id: graphCommand.stored.value.pipelineId } });
+    const graphPipeline = await invoke('orchestration_get_pipeline_v5', { request: { workspaceId, id: graphCommand.stored.value.pipelineId } });
     assertion(graphPipeline.value.steps[1].dependencyStepIds[0] === graphPipeline.value.steps[0].id, 'Mixed graph lost its result edge');
     const graphCatalog = await orchestrationCatalog(workspaceId);
     const graphProfiles = [];
-    for (const item of graphCatalog.profiles.filter(item => ['Agent 1', 'Agent 2'].includes(item.name))) graphProfiles.push(await invoke('orchestration_get_profile_v4', { request: { workspaceId, id: item.id } }));
+    for (const item of graphCatalog.profiles.filter(item => ['Agent 1', 'Agent 2'].includes(item.name))) graphProfiles.push(await invoke('orchestration_get_profile_v5', { request: { workspaceId, id: item.id } }));
     assertion(graphProfiles.some(item => item.value.harness === 'codex' && item.value.reasoning === 'low' && item.value.serviceTier === 'fast'), 'Graph lost Codex settings');
     assertion(graphProfiles.some(item => item.value.harness === 'prime-agent'), 'Graph lost Prime adapter');
     await capture('workspace-mixed-graph');
@@ -349,10 +349,12 @@ export async function runWorkspaceWebview2Proof({
     await waitFor(`[...document.querySelectorAll('.definition-list strong')].some((item) => item.textContent?.trim() === ${JSON.stringify(names.profile[0])})`, 'saved profile');
     let profile = await readSingle('profile', workspaceId, names.profile[0]);
     await clickButton(names.profile[0]);
-    await waitFor(`document.querySelector('#profile-name')`, 'stored profile editor');
+    await waitFor(`document.querySelector('#profile-name')?.value === ${JSON.stringify(names.profile[0])}`, 'stored profile editor');
+    // Catalog discovery owns the host runtime transition gate; await its native startup bound before timing the save itself.
+    await waitFor(`document.querySelector('#profile-model') && !document.querySelector('#profile-model').disabled`, 'reopened profile catalog', startupBoundMs);
     await setControl('#profile-name', names.profile[1]);
     await clickButton('Save profile');
-    await waitFor(`[...document.querySelectorAll('.definition-list strong')].some((item) => item.textContent?.trim() === ${JSON.stringify(names.profile[1])})`, 'updated profile');
+    try { await waitFor(`[...document.querySelectorAll('.definition-list strong')].some((item) => item.textContent?.trim() === ${JSON.stringify(names.profile[1])})`, 'updated profile'); } catch (error) { await capture('profile-update-failure'); const diagnostic = await evaluate(`JSON.stringify({alerts:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent),name:document.querySelector('#profile-name')?.value})`); throw new Error(`${error.message} ${diagnostic}`); }
     profile = await readSingle('profile', workspaceId, names.profile[1]);
     assertion(profile.summary.revision > 0, 'Profile update did not advance its host revision.');
 
@@ -442,9 +444,9 @@ export async function runWorkspaceWebview2Proof({
     await clickButton('Start run');
     await waitFor(`document.querySelector('#run-inspector-title') && document.querySelector('[aria-label="Run status: Failed"]')`, 'recorded unsupported-policy run failure', startupBoundMs);
     await waitFor(`document.querySelector('.inspector .error[role="alert"]')?.textContent?.includes(${JSON.stringify(expectedFailureCopy)})`, 'safe native preflight error');
-    const runs = await invoke('orchestration_list_runs_v4', { request: { workspaceId } });
+    const runs = await invoke('orchestration_list_runs_v5', { request: { workspaceId } });
     assertion(Array.isArray(runs) && runs.length === 1 && runs[0].status === 'failed', 'The host did not retain exactly one failed run after policy preflight rejection.');
-    const recordedRun = await invoke('orchestration_get_run_v4', { request: { workspaceId, runId: runs[0].id } });
+    const recordedRun = await invoke('orchestration_get_run_v5', { request: { workspaceId, runId: runs[0].id } });
     assertion(recordedRun?.status === 'failed' && recordedRun.tasks?.length === 1, 'The recorded policy-rejected run is not terminal failed.');
     assertion(recordedRun.tasks[0]?.status === 'failed' && recordedRun.tasks[0]?.failure?.code === expectedFailureCode, 'The failed task did not preserve the expected native preflight failure code.');
     assertion(!JSON.stringify(recordedRun).toLocaleLowerCase().includes('succeeded'), 'The policy-rejected run fabricated a succeeded outcome.');
@@ -520,6 +522,12 @@ export async function runWorkspaceWebview2Proof({
     await waitFor(`document.querySelector('.system-editor [role="alert"]')`, 'invalid system file error');
     assertion(await evaluate(`document.querySelector('.system-name').value`) === priorName, 'Failed import replaced the current system');
     imported.name = 'Imported JSON proof';
+    imported.version = 3;
+    imported.agents[1].profile.harness = 'hermes';
+    imported.agents[1].profile.permissionMode = 'native';
+    delete imported.agents[1].profile.serviceTier;
+    delete imported.agents[1].profile.reasoning;
+    delete imported.agents[1].profile.resourceRules;
     await chooseJson(JSON.stringify(imported));
     await waitFor(`document.querySelector('.system-name').value === 'Imported JSON proof' && document.querySelector('.save-state')?.textContent === 'Unsaved changes'`, 'imported system draft');
     const beforeImportSave = await orchestrationCatalog(workspaceId);
@@ -528,6 +536,10 @@ export async function runWorkspaceWebview2Proof({
     await waitFor(`document.querySelector('.save-state')?.textContent === 'Saved'`, 'save imported system');
     const importedCommand = await readSingle('launch', workspaceId, imported.name);
     assertion(importedCommand.summary.id !== graphCommand.summary.id, 'Import reused an existing system identity');
+    const importedTeam = await invoke('orchestration_get_team_v5', { request: { workspaceId, id: importedCommand.stored.value.teamId } });
+    const hermesProfile = await invoke('orchestration_get_profile_v5', { request: { workspaceId, id: importedTeam.value.members[1].profileId } });
+    assertion(hermesProfile.value.harness === 'hermes', 'Native WebView import/save lost Hermes');
+    checks.push('hermes-v3-mixed-graph-import-save');
     const afterImportSave = await orchestrationCatalog(workspaceId);
     assertion(afterImportSave.launchCommands.some(item => item.id === graphCommand.summary.id), 'Import overwrote the original system');
     await evaluate(`document.querySelector('.file-menu').open = false`);
@@ -550,10 +562,10 @@ export async function runWorkspaceWebview2Proof({
       steps: [{ id: SAFE_FIXTURE.stepId, name: 'Blocked task', assignedMemberId: SAFE_FIXTURE.memberId, instructions: 'Must not run in safe mode.', dependencyStepIds: [] }],
     };
     const launch = { id: SAFE_FIXTURE.launchId, name: 'Safe-mode launch', teamId: SAFE_FIXTURE.teamId, pipelineId: SAFE_FIXTURE.pipelineId };
-    await invoke('orchestration_save_profile_v4', { request: { workspaceId, value: profile } });
-    await invoke('orchestration_save_team_v4', { request: { workspaceId, value: team } });
-    await invoke('orchestration_save_pipeline_v4', { request: { workspaceId, value: pipeline } });
-    await invoke('orchestration_save_launch_command_v4', { request: { workspaceId, value: launch } });
+    await invoke('orchestration_save_profile_v5', { request: { workspaceId, value: profile } });
+    await invoke('orchestration_save_team_v5', { request: { workspaceId, value: team } });
+    await invoke('orchestration_save_pipeline_v5', { request: { workspaceId, value: pipeline } });
+    await invoke('orchestration_save_launch_command_v5', { request: { workspaceId, value: launch } });
   }
 
 
@@ -593,9 +605,9 @@ export async function runWorkspaceWebview2Proof({
     await automation.dispatchKey({ key: 'n', code: 'KeyN', ctrlKey: true });
     await waitFor(`document.querySelector('#new-session-title')`, 'safe-mode new-session form');
     assertion(await evaluate(`(() => { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === 'Create session'); return Boolean(button?.disabled); })()`), 'Safe mode exposed an enabled Create session action.');
-    await assertRejected('workspace_settings_v12', { command: { type: 'get', sessionId: 'safe-fixture' } }, 'Safe-mode runtime settings', 'safe');
-    await assertRejected('workspace_lifecycle_v13', { command: { type: 'deleteSession', sessionId: 'safe-fixture' } }, 'Safe-mode chat deletion', 'safe');
-    await assertRejected('workspace_command_v11', { command: { type: 'createSession', workspaceId: workspace.id, harness: 'pi', permissionMode: 'native' } }, 'Safe-mode native session creation', 'safe');
+    await assertRejected('workspace_settings_v16', { command: { type: 'get', sessionId: 'safe-fixture' } }, 'Safe-mode runtime settings', 'safe');
+    await assertRejected('workspace_lifecycle_v17', { command: { type: 'deleteSession', sessionId: 'safe-fixture' } }, 'Safe-mode chat deletion', 'safe');
+    await assertRejected('workspace_command_v15', { command: { type: 'createSession', workspaceId: workspace.id, harness: 'pi', permissionMode: 'native' } }, 'Safe-mode native session creation', 'safe');
     if (process.env.PIUI_E2E_CHAT_ONLY === '1' || process.env.PIUI_E2E_GRAPH_ONLY === '1') {
       assertion((await workspaceCatalog()).sessions.every(session => session.status === 'closed'), 'Safe mode must not auto-start a saved chat');
       await capture('automatic-chat-safe-mode');
@@ -610,7 +622,7 @@ export async function runWorkspaceWebview2Proof({
         && definitions.launchCommands.some((item) => item.id === SAFE_FIXTURE.launchId),
       'Safe-mode run fixtures did not persist from the normal host process.',
     );
-    await assertRejected('orchestration_start_run_v4', { request: {
+    await assertRejected('orchestration_start_run_v5', { request: {
       workspaceId: workspace.id, runId: `workspace-e2e-safe-run-${Date.now()}`,
       teamId: SAFE_FIXTURE.teamId, pipelineId: SAFE_FIXTURE.pipelineId, launchCommandId: SAFE_FIXTURE.launchId,
     } }, 'Safe-mode orchestration run creation', 'runtime-unavailable');
@@ -720,7 +732,7 @@ export async function runWorkspaceWebview2Proof({
   catalog = await workspaceCatalog();
   const nativeSession = catalog.sessions.find((item) => item.workspaceId === workspace.id && item.harness === eligible.kind && item.title === expectedTitle);
   assertion(nativeSession && nativeSession.status !== 'closed' && nativeSession.status !== 'failed', 'The host did not retain the prompt-free native session.');
-  const initialSnapshotResult = await invoke('workspace_command_v11', { command: { type: 'snapshot', sessionId: nativeSession.id } });
+  const initialSnapshotResult = await invoke('workspace_command_v15', { command: { type: 'snapshot', sessionId: nativeSession.id } });
   assertion(initialSnapshotResult?.type === 'session', 'The typed host did not return the native session snapshot.');
   const serializedSnapshot = JSON.stringify(initialSnapshotResult);
   assertion(!serializedSnapshot.includes('nativeId') && !serializedSnapshot.includes('nativePath'), 'The workspace snapshot leaked a native id or path.');
@@ -730,17 +742,17 @@ export async function runWorkspaceWebview2Proof({
   await setLabelledControl('Session title', 'Native lifecycle proof');
   await clickButton('Rename session', 'aside[aria-label="Session details"]');
   await waitFor(`document.querySelector('#session-title')?.textContent?.trim() === 'Native lifecycle proof'`, 'native session rename');
-  const renamedSnapshot = await invoke('workspace_command_v11', { command: { type: 'snapshot', sessionId: nativeSession.id } });
+  const renamedSnapshot = await invoke('workspace_command_v15', { command: { type: 'snapshot', sessionId: nativeSession.id } });
   assertion(renamedSnapshot?.snapshot?.session?.title === 'Native lifecycle proof', 'Rename did not reach the native workspace host.');
   end('nativeLifecycle');
   if (process.env.PIUI_E2E_CATALOGS === '1') {
     for (const harness of ['codex', 'pi', 'prime-agent']) {
-      await evaluate(`(() => { window.__catalogProof = undefined; window.__TAURI_INTERNALS__.invoke('harness_models_v14', { request: ${JSON.stringify({ workspaceId: nativeSession.workspaceId, harness })} }).then(value => window.__catalogProof = { value }, error => window.__catalogProof = { error }); return true; })()`);
+      await evaluate(`(() => { window.__catalogProof = undefined; window.__TAURI_INTERNALS__.invoke('harness_models_v18', { request: ${JSON.stringify({ workspaceId: nativeSession.workspaceId, harness })} }).then(value => window.__catalogProof = { value }, error => window.__catalogProof = { error }); return true; })()`);
       await waitFor('window.__catalogProof !== undefined', `${harness} native catalog`, startupBoundMs);
       const outcome = await evaluate('window.__catalogProof');
       assertion(!outcome.error, `${harness} catalog failed: ${JSON.stringify(outcome.error)}`);
       const result = outcome.value;
-      assertion(result.protocol === 14, 'catalog protocol');
+      assertion(result.protocol === 18, 'catalog protocol');
       assertion(result.harness === harness, 'catalog harness');
       assertion(Array.isArray(result.models), `${harness} native model catalog`);
       // Pi/Prime use isolated agent directories with no provider credentials.
@@ -775,7 +787,7 @@ export async function runWorkspaceWebview2Proof({
     await clickButton('Save', '.system-editor .toolbar');
     await waitFor(`document.querySelector('.system-editor .save-state')?.textContent === 'Saved'`, 'graph saved');
     const command = await readSingle('launch', nativeSession.workspaceId, 'Inspector proof');
-    const saved = await invoke('orchestration_get_pipeline_v4', { request: { workspaceId: nativeSession.workspaceId, id: command.stored.value.pipelineId } });
+    const saved = await invoke('orchestration_get_pipeline_v5', { request: { workspaceId: nativeSession.workspaceId, id: command.stored.value.pipelineId } });
     assertion(saved.value.steps[0].inputInstructions === 'Approved specification and affected file paths.', 'Input reaches durable pipeline');
     await clickButton('New system', '.system-editor .toolbar');
     await setControl('select[aria-label="Open system"]', command.stored.value.id, 'change');
@@ -800,15 +812,15 @@ export async function runWorkspaceWebview2Proof({
   checks.push('eligible-native-start', 'native-snapshot-no-private-reference', 'native-ui-rename');
   await clickButton('Model and reasoning');
   await waitFor(`document.querySelector('.runtime-picker select[aria-label="Model"]')?.options.length > 0 && !document.querySelector('.runtime-picker select').disabled`, 'native model catalog', startupBoundMs);
-  let beforeSettings = await invoke('workspace_settings_v12', { command: { type: 'get', sessionId: nativeSession.id } });
-  assertion(beforeSettings.protocol === 12 && beforeSettings.models.length > 0, 'Missing native model catalog');
+  let beforeSettings = await invoke('workspace_settings_v16', { command: { type: 'get', sessionId: nativeSession.id } });
+  assertion(beforeSettings.protocol === 16 && beforeSettings.models.length > 0, 'Missing native model catalog');
   if (eligible.kind === 'codex') {
     const nextIndex = beforeSettings.models.findIndex(model => model.id !== beforeSettings.model?.id && model.thinkingLevels?.length);
     assertion(nextIndex >= 0, 'Native model-switch proof requires another catalog model');
     const nextModel = beforeSettings.models[nextIndex];
     await setControl('.runtime-picker select[aria-label="Model"]', String(nextIndex), 'change');
     await waitFor(`!document.querySelector('.runtime-picker select[aria-label="Model"]').disabled && document.querySelector('.runtime-picker .trigger')?.textContent.includes(${JSON.stringify(nextModel.name)})`, 'native model switched', startupBoundMs);
-    beforeSettings = await invoke('workspace_settings_v12', { command: { type: 'get', sessionId: nativeSession.id } });
+    beforeSettings = await invoke('workspace_settings_v16', { command: { type: 'get', sessionId: nativeSession.id } });
     assertion(beforeSettings.model.id === nextModel.id && beforeSettings.model.provider === nextModel.provider, 'Native model/provider did not change');
     checks.push('native-composer-model-switch');
     const selectedModel = beforeSettings.models.find(model => model.id === beforeSettings.model?.id);
@@ -819,10 +831,10 @@ export async function runWorkspaceWebview2Proof({
     const wasFast = beforeSettings.serviceTier === 'fast';
     await evaluate(`document.querySelector('.runtime-picker .speed').click()`);
     await waitFor(`document.querySelector('.runtime-picker .speed')?.getAttribute('aria-pressed') === ${JSON.stringify(String(!wasFast))} && !document.querySelector('.runtime-picker .speed').disabled`, 'Fast saved', startupBoundMs);
-    const changed = await invoke('workspace_settings_v12', { command: { type: 'get', sessionId: nativeSession.id } });
+    const changed = await invoke('workspace_settings_v16', { command: { type: 'get', sessionId: nativeSession.id } });
     assertion(changed.thinkingLevel === effort && changed.serviceTier === (wasFast ? 'standard' : 'fast'), 'Settings did not reach native Codex');
-    await assertRejected('workspace_settings_v12', { command: { type: 'set', sessionId: nativeSession.id, model: selectedModel, thinkingLevel: 'not-a-native-level' } }, 'Invalid native reasoning');
-    const clean = await invoke('workspace_command_v11', { command: { type: 'snapshot', sessionId: nativeSession.id } });
+    await assertRejected('workspace_settings_v16', { command: { type: 'set', sessionId: nativeSession.id, model: selectedModel, thinkingLevel: 'not-a-native-level' } }, 'Invalid native reasoning');
+    const clean = await invoke('workspace_command_v15', { command: { type: 'snapshot', sessionId: nativeSession.id } });
     assertion(!clean.snapshot.blocks.some(block => block.safeSummary?.includes('mcpServer/startupStatus') || block.safeSummary?.includes('thread/settings')), 'Lifecycle notifications leaked into chat');
   }
   await capture('workspace-runtime-picker');
@@ -920,17 +932,17 @@ export async function runWorkspaceWebview2Proof({
   checks.push('profile-team-pipeline-command-ui-crud', 'definition-host-reload-persistence', 'saved-command-ui-launch', 'native-preflight-run-recorded-failed', 'policy-preflight-started-no-native-session');
 
   begin('rejections');
-  await assertRejected('workspace_command_v11', { command: { type: 'shell', command: 'whoami' } }, 'Unknown workspace command');
-  await assertRejected('workspace_command_v11', { command: { type: 'snapshot', sessionId: nativeSession.id, nativePath: projectPath } }, 'Forged native path field');
-  await assertRejected('workspace_command_v11', { command: { type: 'createSession', workspaceId: workspace.id, harness: eligible.kind, permissionMode: 'native', profileId: 'forged-profile-id' } }, 'Forged ordinary-session profile field');
-  await assertRejected('orchestration_catalog_v4', { request: { workspaceId: workspace.id, actor: 'forged-actor' } }, 'Forged orchestration actor field');
-  await assertRejected('workspace_command_v11', { command: { type: 'respond', sessionId: nativeSession.id, requestId: 'forged-approval', decision: 'approve-once' } }, 'Forged approval reply', 'approval');
+  await assertRejected('workspace_command_v15', { command: { type: 'shell', command: 'whoami' } }, 'Unknown workspace command');
+  await assertRejected('workspace_command_v15', { command: { type: 'snapshot', sessionId: nativeSession.id, nativePath: projectPath } }, 'Forged native path field');
+  await assertRejected('workspace_command_v15', { command: { type: 'createSession', workspaceId: workspace.id, harness: eligible.kind, permissionMode: 'native', profileId: 'forged-profile-id' } }, 'Forged ordinary-session profile field');
+  await assertRejected('orchestration_catalog_v5', { request: { workspaceId: workspace.id, actor: 'forged-actor' } }, 'Forged orchestration actor field');
+  await assertRejected('workspace_command_v15', { command: { type: 'respond', sessionId: nativeSession.id, requestId: 'forged-approval', decision: 'approve-once' } }, 'Forged approval reply', 'approval');
   const forgedWorkspaceProfile = {
     id: 'forged-profile', name: 'Forged profile', harness: 'pi', model: 'native', permissionMode: 'native',
     instructions: '', toolPolicy: { rules: [] }, allowedSpawnProfileIds: [],
   };
-  await assertRejected('workspace_command_v11', { command: { type: 'createSession', workspaceId: 'forged-workspace-id', harness: eligible.kind, permissionMode: 'native' } }, 'Unknown native-session workspace');
-  await assertRejected('orchestration_save_profile_v4', { request: { workspaceId: 'forged-workspace-id', value: forgedWorkspaceProfile } }, 'Unknown orchestration workspace');
+  await assertRejected('workspace_command_v15', { command: { type: 'createSession', workspaceId: 'forged-workspace-id', harness: eligible.kind, permissionMode: 'native' } }, 'Unknown native-session workspace');
+  await assertRejected('orchestration_save_profile_v5', { request: { workspaceId: 'forged-workspace-id', value: forgedWorkspaceProfile } }, 'Unknown orchestration workspace');
   end('rejections');
   checks.push('unknown-command-rejected', 'native-path-field-rejected', 'ordinary-profile-field-rejected', 'actor-field-rejected', 'forged-approval-rejected', 'unknown-native-and-orchestration-workspaces-rejected');
 
@@ -954,13 +966,13 @@ export async function runWorkspaceWebview2Proof({
     await clickButton('Session details');
     await waitFor(`document.querySelector('aside[aria-label="Session details"] button.danger-zone')?.textContent?.trim() === 'Close native session'`, 'reopened native session close control');
   } catch {
-    const catalogOutcome = await invokeOutcome('workspace_command_v11', { command: { type: 'catalog' } });
+    const catalogOutcome = await invokeOutcome('workspace_command_v15', { command: { type: 'catalog' } });
     const latest = catalogOutcome?.ok === true && catalogOutcome.value?.type === 'catalog' ? catalogOutcome.value.catalog : undefined;
     const reopened = latest?.sessions?.find((item) => item.id === nativeSession.id);
     const catalogStatus = ['starting', 'idle', 'running', 'stopping', 'closed', 'failed'].includes(reopened?.status) ? reopened.status : 'missing';
     const catalogModel = safeDiagnosticName(reopened?.model?.name);
     const catalogProvider = safeDiagnosticName(reopened?.model?.provider);
-    const snapshot = await invokeOutcome('workspace_command_v11', { command: { type: 'snapshot', sessionId: nativeSession.id } });
+    const snapshot = await invokeOutcome('workspace_command_v15', { command: { type: 'snapshot', sessionId: nativeSession.id } });
     const snapshotValue = snapshot?.ok === true && snapshot.value?.type === 'session' ? snapshot.value.snapshot : undefined;
     const snapshotStatus = snapshotValue && ['starting', 'idle', 'running', 'stopping', 'closed', 'failed'].includes(snapshotValue.session?.status)
       ? `SUCCESS_${snapshotValue.session.status.toUpperCase()}`

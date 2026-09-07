@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentProfile } from '../../../../../contracts/orchestration-v4';
+import type { AgentProfile } from '../../../../../contracts/orchestration-v5';
 import {
   createProfileDraft,
   newToolRule,

@@ -1,4 +1,4 @@
-import type { AgentProfile, PipelineDefinition, TeamDefinition, LaunchCommandReference } from '../../../../../contracts/orchestration-v4';
+import type { AgentProfile, PipelineDefinition, TeamDefinition, LaunchCommandReference } from '../../../../../contracts/orchestration-v5';
 export interface GraphNode { id: string; profile: AgentProfile; task: string; input?: string; x: number; y: number; }
 export type ConnectionKind = 'result' | 'send' | 'observe' | 'spawn';
 export interface GraphEdge { from: string; to: string; kind: ConnectionKind; }

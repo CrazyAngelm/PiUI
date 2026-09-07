@@ -48,7 +48,7 @@
         <span>Appearance</span>
       </button>
       <button type="button" class:active={activeTab === 'extensions'} aria-current={activeTab === 'extensions' ? 'page' : undefined} onclick={() => selectTab('extensions')}>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8v4h4v8h-4v4H8v-4H4V8h4V4Z"/><path d="M9.5 9.5h5v5h-5z"/></svg>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8v4h4v8h-4v4H8v-4H4V8h4V5Z"/><path d="M9.5 9.5h5v5h-5z"/></svg>
         <span>Extensions</span>
         {#if extensions.length > 0}<span class="nav-count">{extensions.length}</span>{/if}
       </button>

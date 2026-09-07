@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { SessionSnapshot, WorkspaceApproval, WorkspaceEvent } from '../../../../../contracts/workspace-v11';
+import type { SessionSnapshot, WorkspaceApproval, WorkspaceEvent } from '../../../../../contracts/workspace-v15';
 import { acceptWorkspaceSnapshot, applyWorkspaceEvent, harnessLabel, mergeCatalogSession, protectClosedCatalogSessions, resolveCloseAfterCatalog, retainSnapshotWithCatalogSession, sortedSessions } from './workspaceState';
 
 function snapshot(revision = 4): SessionSnapshot {
@@ -25,7 +25,7 @@ function snapshot(revision = 4): SessionSnapshot {
 }
 
 function event(revision: number, value: WorkspaceEvent['event']): WorkspaceEvent {
-  return { protocol: 11, sessionId: 'session-a', revision, event: value };
+  return { protocol: 15, sessionId: 'session-a', revision, event: value };
 }
 
 describe('workspace event revision handling', () => {
@@ -73,7 +73,7 @@ describe('workspace catalog projections', () => {
     const first = snapshot().session;
     const other = { ...first, id: 'session-b', harness: 'pi' as const };
     const catalog = {
-      protocol: 11 as const, safeMode: false, workspaces: [], harnesses: [], sessions: [first, other],
+      protocol: 15 as const, safeMode: false, workspaces: [], harnesses: [], sessions: [first, other],
     };
     const merged = mergeCatalogSession(catalog, { ...first, status: 'idle' });
     expect(merged.sessions).toHaveLength(2);
@@ -104,7 +104,7 @@ describe('workspace catalog projections', () => {
     expect(lateApproval.type).toBe('stale');
     expect(lateApproval.snapshot.approvals).toEqual([]);
 
-    const staleCatalog = { protocol: 11 as const, safeMode: false, workspaces: [], harnesses: [], sessions: [{ ...closedRow, status: 'idle' as const }] };
+    const staleCatalog = { protocol: 15 as const, safeMode: false, workspaces: [], harnesses: [], sessions: [{ ...closedRow, status: 'idle' as const }] };
     expect(protectClosedCatalogSessions(staleCatalog, { 'session-a': closed }).sessions[0]?.status).toBe('closed');
 
     const reopened: SessionSnapshot = { ...closed, revision: 5, session: { ...closedRow, status: 'idle' } };

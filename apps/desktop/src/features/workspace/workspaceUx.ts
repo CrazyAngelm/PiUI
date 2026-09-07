@@ -1,4 +1,4 @@
-import type { WorkspaceSession } from '../../../../../contracts/workspace-v11';
+import type { WorkspaceSession } from '../../../../../contracts/workspace-v15';
 
 /** A project switch never starts or stops a native session. */
 export function sessionForProject(sessions: WorkspaceSession[], projectId: string, currentId: string): string {

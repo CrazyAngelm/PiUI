@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createWorkspaceClient, workspaceError, type WorkspaceListen } from './workspaceClient';
-import type { WorkspaceResult } from '../../../../contracts/workspace-v11';
+import type { WorkspaceResult } from '../../../../contracts/workspace-v15';
 
 describe('workspace v11 client', () => {
   it('routes a typed native session creation without exposing an executable', async () => {
     const invoke = vi.fn(async (): Promise<WorkspaceResult> => ({ type: 'accepted', sessionId: 'opaque-session' }));
     const client = createWorkspaceClient(invoke, async () => () => {});
     await client.request({ type: 'createSession', workspaceId: 'folder', harness: 'codex', permissionMode: 'workspace-write' });
-    expect(invoke).toHaveBeenCalledWith('workspace_command_v11', { command: { type: 'createSession', workspaceId: 'folder', harness: 'codex', permissionMode: 'workspace-write' } });
+    expect(invoke).toHaveBeenCalledWith('workspace_command_v15', { command: { type: 'createSession', workspaceId: 'folder', harness: 'codex', permissionMode: 'workspace-write' } });
   });
   it('never reveals untrusted raw host errors', async () => {
     const client = createWorkspaceClient(async () => { throw { code: 'UNKNOWN', message: 'secret-token /private/path' }; }, async () => () => {});

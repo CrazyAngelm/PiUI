@@ -1,8 +1,8 @@
 <script lang="ts">
   import { t } from '../locale/language';
   import { runtimeSettings } from '../../host-api/runtimeSettings';
-  import type { RuntimeSettings } from '../../../../../contracts/workspace-settings-v12';
-  import type { WorkspaceSession } from '../../../../../contracts/workspace-v11';
+  import type { RuntimeSettings } from '../../../../../contracts/workspace-settings-v16';
+  import type { WorkspaceSession } from '../../../../../contracts/workspace-v15';
   export let session: WorkspaceSession;
   export let disabled = false;
   export let onchange: () => void = () => {};

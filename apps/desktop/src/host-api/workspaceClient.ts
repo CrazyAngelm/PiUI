@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { WorkspaceCatalog, WorkspaceCommand, WorkspaceEvent, WorkspaceResult, SessionSnapshot } from '../../../../contracts/workspace-v11';
-export type { WorkspaceCatalog, WorkspaceCommand, WorkspaceEvent, WorkspaceResult, SessionSnapshot } from '../../../../contracts/workspace-v11';
+import type { WorkspaceCatalog, WorkspaceCommand, WorkspaceEvent, WorkspaceResult, SessionSnapshot } from '../../../../contracts/workspace-v15';
+export type { WorkspaceCatalog, WorkspaceCommand, WorkspaceEvent, WorkspaceResult, SessionSnapshot } from '../../../../contracts/workspace-v15';
 export type WorkspaceInvoke = (route: string, args: { command: WorkspaceCommand }) => Promise<WorkspaceResult>;
 export type WorkspaceListen = (channel: string, handler: (event: WorkspaceEvent) => void) => Promise<() => void>;
 export interface WorkspaceClient {
@@ -37,14 +37,14 @@ export function workspaceError(cause: unknown): WorkspaceOperationError {
 }
 export function createWorkspaceClient(invokeCommand: WorkspaceInvoke, listenEvents: WorkspaceListen): WorkspaceClient {
   async function request(command: WorkspaceCommand): Promise<WorkspaceResult> {
-    try { return await invokeCommand('workspace_command_v11', { command }); }
+    try { return await invokeCommand('workspace_command_v15', { command }); }
     catch (error) { throw workspaceError(error); }
   }
   return {
     request,
     async catalog() {
       const result = await request({ type: 'catalog' });
-      if (result.type !== 'catalog' || result.catalog.protocol !== 11) throw workspaceError(undefined);
+      if (result.type !== 'catalog' || result.catalog.protocol !== 15) throw workspaceError(undefined);
       return result.catalog;
     },
     async snapshot(sessionId) {
@@ -54,7 +54,7 @@ export function createWorkspaceClient(invokeCommand: WorkspaceInvoke, listenEven
     },
     async listen(handler) {
       return listenEvents('piui://workspace-event', (event) => {
-        if (event.protocol === 11 && Number.isSafeInteger(event.revision) && event.revision >= 0) handler(event);
+        if (event.protocol === 15 && Number.isSafeInteger(event.revision) && event.revision >= 0) handler(event);
       });
     },
   };
@@ -71,7 +71,7 @@ const browser: WorkspaceClient = {
   },
   async catalog() {
     return {
-      protocol: 11, safeMode: false, workspaces: [], sessions: [],
+      protocol: 15, safeMode: false, workspaces: [], sessions: [],
       harnesses: [
         { kind: 'pi', name: 'Pi', installed: false, status: 'unavailable', reason: 'Desktop host required' },
         { kind: 'prime-agent', name: 'Prime Agent', installed: false, status: 'unavailable', reason: 'Desktop host required' },

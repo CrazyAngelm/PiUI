@@ -1,6 +1,6 @@
 import {
   orchestrationError, OrchestrationOperationError,
-  type OrchestrationRunChangedEventV4, type OrchestrationRunV4, type RunRequest, type RunSummary,
+  type OrchestrationRunChangedEventV5, type OrchestrationRunV5, type RunRequest, type RunSummary,
 } from '../../host-api/orchestrationClient';
 
 export interface RunUpdateScope {
@@ -12,12 +12,12 @@ export interface RunUpdateScope {
 
 export interface RunLiveUpdateOptions {
   readonly scope: () => RunUpdateScope;
-  readonly read: (request: RunRequest) => Promise<OrchestrationRunV4 | null>;
-  readonly apply: (run: OrchestrationRunV4) => void;
+  readonly read: (request: RunRequest) => Promise<OrchestrationRunV5 | null>;
+  readonly apply: (run: OrchestrationRunV5) => void;
   readonly failed: (error: OrchestrationOperationError, runId: string) => void;
 }
 
-export function checkedRunSnapshot(run: OrchestrationRunV4 | null, runId: string, minimumRevision: number): OrchestrationRunV4 {
+export function checkedRunSnapshot(run: OrchestrationRunV5 | null, runId: string, minimumRevision: number): OrchestrationRunV5 {
   if (run === null) throw new OrchestrationOperationError('not-found');
   if (run.id !== runId || !Number.isSafeInteger(run.revision) || run.revision < 0 || run.revision < minimumRevision) {
     throw new OrchestrationOperationError('conflict', 'A newer run revision is known. Refresh the recorded run before acting.');
@@ -25,11 +25,11 @@ export function checkedRunSnapshot(run: OrchestrationRunV4 | null, runId: string
   return run;
 }
 
-export function mergeSelectedRun(current: OrchestrationRunV4 | undefined, incoming: OrchestrationRunV4): OrchestrationRunV4 | undefined {
+export function mergeSelectedRun(current: OrchestrationRunV5 | undefined, incoming: OrchestrationRunV5): OrchestrationRunV5 | undefined {
   return current?.id === incoming.id && incoming.revision > current.revision ? incoming : current;
 }
 
-export function runSummary(run: OrchestrationRunV4): RunSummary {
+export function runSummary(run: OrchestrationRunV5): RunSummary {
   return { id: run.id, revision: run.revision, status: run.status, teamName: run.definition.team.name, pipelineName: run.definition.pipeline.name };
 }
 
@@ -45,10 +45,10 @@ export function mergeRunSummaries(current: readonly RunSummary[], incoming: read
 
 /** Coalesce only received durable invalidations. No timer, heartbeat, retry loop or synthetic event. */
 export function createRunLiveUpdates(options: RunLiveUpdateOptions): {
-  invalidate(event: OrchestrationRunChangedEventV4): void;
+  invalidate(event: OrchestrationRunChangedEventV5): void;
   dispose(): void;
 } {
-  const pending = new Map<string, OrchestrationRunChangedEventV4>();
+  const pending = new Map<string, OrchestrationRunChangedEventV5>();
   let scheduled = false;
   let running = false;
   let disposed = false;
@@ -58,7 +58,7 @@ export function createRunLiveUpdates(options: RunLiveUpdateOptions): {
     return !disposed && current.visible && current.workspaceId === before.workspaceId && current.generation === before.generation;
   }
 
-  async function refresh(event: OrchestrationRunChangedEventV4): Promise<void> {
+  async function refresh(event: OrchestrationRunChangedEventV5): Promise<void> {
     const before = options.scope();
     if (!before.visible || before.workspaceId !== event.workspaceId || before.revision(event.runId) >= event.revision) return;
     try {

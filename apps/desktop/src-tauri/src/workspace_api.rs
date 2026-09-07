@@ -41,7 +41,7 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 use workspace_store::{PersistedSession, WorkspaceRegistry};
 
-pub const WORKSPACE_PROTOCOL: u8 = 11;
+pub const WORKSPACE_PROTOCOL: u8 = 15;
 pub const WORKSPACE_EVENT_NAME: &str = "piui://workspace-event";
 const NATIVE_SESSION_DIRECTORY: &str = "workspace-native-v11";
 
@@ -1372,6 +1372,7 @@ fn history_format(harness: HarnessKind) -> WorkspaceHistoryFormat {
         HarnessKind::Pi => WorkspaceHistoryFormat::Pi,
         HarnessKind::PrimeAgent => WorkspaceHistoryFormat::PrimeAgent,
         HarnessKind::Codex => WorkspaceHistoryFormat::Codex,
+        HarnessKind::Hermes => WorkspaceHistoryFormat::Hermes,
     }
 }
 
@@ -1453,7 +1454,7 @@ pub struct RuntimeSettings {
     service_tier: Option<String>,
 }
 #[tauri::command]
-pub async fn workspace_settings_v12(
+pub async fn workspace_settings_v16(
     state: State<'_, HostState>,
     command: RuntimeSettingsCommand,
 ) -> Result<RuntimeSettings, WorkspaceError> {
@@ -1514,7 +1515,7 @@ pub async fn workspace_settings_v12(
         .await
         .map_err(|_| WorkspaceError::runtime())?;
     Ok(RuntimeSettings {
-        protocol: 12,
+        protocol: 16,
         session_id: session_id.clone(),
         model: native.model,
         models: native.models,
@@ -1549,7 +1550,7 @@ pub struct HarnessModelsResult {
 /// Query the native adapter without adding a conversation to the catalog or
 /// submitting a model turn. Prime always uses its own isolated supervisor.
 #[tauri::command]
-pub async fn harness_models_v14(
+pub async fn harness_models_v18(
     state: State<'_, HostState>,
     request: HarnessModelsRequest,
 ) -> Result<HarnessModelsResult, WorkspaceError> {
@@ -1616,7 +1617,7 @@ pub async fn harness_models_v14(
     drain.abort();
     disposed?;
     Ok(HarnessModelsResult {
-        protocol: 14,
+        protocol: 18,
         harness: request.harness,
         models: models?,
         resources: resources?,
@@ -1631,7 +1632,7 @@ pub struct WorkspaceLifecycleResult {
 }
 
 #[tauri::command]
-pub async fn workspace_lifecycle_v13(
+pub async fn workspace_lifecycle_v17(
     state: State<'_, HostState>,
     command: WorkspaceLifecycleCommand,
 ) -> Result<WorkspaceLifecycleResult, WorkspaceError> {
@@ -1666,13 +1667,13 @@ pub async fn workspace_lifecycle_v13(
         })
         .map_err(|_| WorkspaceError::io())?;
     Ok(WorkspaceLifecycleResult {
-        protocol: 13,
+        protocol: 17,
         session_id,
     })
 }
 
 #[tauri::command]
-pub async fn workspace_command_v11(
+pub async fn workspace_command_v15(
     app: AppHandle,
     state: State<'_, HostState>,
     command: WorkspaceCommand,
@@ -2257,6 +2258,7 @@ fn default_title(harness: HarnessKind) -> String {
         HarnessKind::Pi => "New Pi session",
         HarnessKind::PrimeAgent => "New Prime Agent session",
         HarnessKind::Codex => "New Codex session",
+        HarnessKind::Hermes => "New Hermes session",
     }
     .into()
 }
@@ -2371,7 +2373,7 @@ mod tests {
     #[test]
     fn rust_workspace_v11_matches_the_shared_golden_fixture() {
         let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../contracts/fixtures/workspace-v11.json"
+            "../../../../contracts/fixtures/workspace-v15.json"
         ))
         .expect("workspace v11 fixture");
         for command in fixture["commands"].as_array().expect("commands") {
@@ -2588,7 +2590,7 @@ mod tests {
         assert_eq!(
             event,
             serde_json::json!({
-                "protocol":11,
+                "protocol":15,
                 "sessionId":"opaque-session",
                 "revision":7,
                 "event":{"type":"approvalResolved","requestId":"request"}

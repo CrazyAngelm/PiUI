@@ -27,7 +27,7 @@ fn literal_native_tool_names<'a>(
     let tools = match profile.harness {
         Harness::Pi => PI_NATIVE_TOOL_NAMES,
         Harness::PrimeAgent => PRIME_NATIVE_TOOL_NAMES,
-        Harness::Codex => &[],
+        Harness::Codex | Harness::Hermes => &[],
     };
     Ok(tools.to_vec())
 }
@@ -75,13 +75,13 @@ pub(crate) fn launch_policy(
     if profile.base_instructions.is_some() && profile.harness != Harness::Codex {
         return Err(OrchestrationSchedulerError::unsupported());
     }
-    if profile.service_tier.is_some() && profile.harness == Harness::Pi {
+    if profile.service_tier.is_some() && matches!(profile.harness, Harness::Pi | Harness::Hermes) {
         return Err(OrchestrationSchedulerError::unsupported());
     }
     if profile.resource_rules.iter().any(|rule| {
         rule.id.trim().is_empty()
             || match profile.harness {
-                Harness::Pi => true,
+                Harness::Pi | Harness::Hermes => true,
                 Harness::PrimeAgent => rule.kind != piui_orchestration::ResourceKind::Skill,
                 Harness::Codex => match rule.kind {
                     piui_orchestration::ResourceKind::Skill => {
@@ -105,7 +105,7 @@ pub(crate) fn launch_policy(
             piui_orchestration::PermissionMode::ReadOnly,
             piui_orchestration::PermissionMode::FullAccess,
         ],
-        Harness::PrimeAgent => vec![piui_orchestration::PermissionMode::Native],
+        Harness::PrimeAgent | Harness::Hermes => vec![piui_orchestration::PermissionMode::Native],
         Harness::Codex => vec![
             piui_orchestration::PermissionMode::Native,
             piui_orchestration::PermissionMode::ReadOnly,
@@ -125,8 +125,10 @@ pub(crate) fn launch_policy(
                 && rule.decision == ToolDecision::Deny
                 && rule.tool == "workspace"
         });
-    let coordinator =
-        matches!(profile.harness, Harness::PrimeAgent | Harness::Codex) && !workspace_tool_denied;
+    let coordinator = matches!(
+        profile.harness,
+        Harness::PrimeAgent | Harness::Codex | Harness::Hermes
+    ) && !workspace_tool_denied;
     let agent_operations = AgentOperationCapabilities {
         roster: coordinator,
         send: coordinator,

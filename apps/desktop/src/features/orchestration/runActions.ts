@@ -1,6 +1,6 @@
 import {
   orchestrationError, OrchestrationOperationError,
-  type OrchestrationClient, type OrchestrationRunV4, type TaskRecord,
+  type OrchestrationClient, type OrchestrationRunV5, type TaskRecord,
   type StartRunRequest, type RunMutationRequest, type RetryUncertainTaskRequest, type ReconcileUncertainTaskRequest,
 } from '../../host-api/orchestrationClient';
 import { checkedRunSnapshot } from './runUpdates';
@@ -12,10 +12,10 @@ export type RunAction =
   | { readonly type: 'reconcile'; readonly request: ReconcileUncertainTaskRequest };
 
 export type RunActionResult =
-  | { readonly type: 'recorded'; readonly run: OrchestrationRunV4; readonly actionError?: OrchestrationOperationError }
+  | { readonly type: 'recorded'; readonly run: OrchestrationRunV5; readonly actionError?: OrchestrationOperationError }
   | { readonly type: 'unconfirmed'; readonly error: OrchestrationOperationError; readonly recovery: 'missing' | 'unavailable' | 'blocked' };
 
-export function uncertainTaskMutation(workspaceId: string, run: OrchestrationRunV4, task: TaskRecord): RetryUncertainTaskRequest {
+export function uncertainTaskMutation(workspaceId: string, run: OrchestrationRunV5, task: TaskRecord): RetryUncertainTaskRequest {
   const current = run.tasks.find((candidate) => candidate.stepId === task.stepId);
   if (task.status !== 'uncertain' || current?.status !== 'uncertain' || current.revision !== task.revision) {
     throw new OrchestrationOperationError('conflict', 'This task changed. Review its current native session and recorded revision before acting.');
@@ -29,19 +29,19 @@ export async function performRunAction(client: OrchestrationClient, action: RunA
   const { workspaceId, runId } = action.request;
   const minimumRevision = action.type === 'start' ? 0 : action.request.expectedRunRevision;
   try {
-    let result: OrchestrationRunV4;
+    let result: OrchestrationRunV5;
     switch (action.type) {
-      case 'start': result = await client.orchestration_start_run_v4(action.request); break;
-      case 'cancel': result = await client.orchestration_cancel_run_v4(action.request); break;
-      case 'retry': result = await client.orchestration_retry_uncertain_task_v4(action.request); break;
-      case 'reconcile': result = await client.orchestration_reconcile_uncertain_task_v4(action.request); break;
+      case 'start': result = await client.orchestration_start_run_v5(action.request); break;
+      case 'cancel': result = await client.orchestration_cancel_run_v5(action.request); break;
+      case 'retry': result = await client.orchestration_retry_uncertain_task_v5(action.request); break;
+      case 'reconcile': result = await client.orchestration_reconcile_uncertain_task_v5(action.request); break;
       default: { const exhaustive: never = action; return exhaustive; }
     }
     return { type: 'recorded', run: checkedRunSnapshot(result, runId, minimumRevision) };
   } catch (cause) {
     const error = orchestrationError(cause);
     try {
-      const recorded = await client.orchestration_get_run_v4({ workspaceId, runId });
+      const recorded = await client.orchestration_get_run_v5({ workspaceId, runId });
       if (recorded === null) return { type: 'unconfirmed', error, recovery: 'missing' };
       return { type: 'recorded', run: checkedRunSnapshot(recorded, runId, minimumRevision), actionError: error };
     } catch { return { type: 'unconfirmed', error, recovery: 'unavailable' }; }

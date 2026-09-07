@@ -1,10 +1,10 @@
 <script lang="ts">
   import { t } from '../locale/language';
-  import type { OrchestrationRunV4, TaskRecord } from '../../../../../contracts/orchestration-v4';
-  import type { ReconcileUncertainTaskRequest } from '../../../../../contracts/orchestration-host-v4';
+  import type { OrchestrationRunV5, TaskRecord } from '../../../../../contracts/orchestration-v5';
+  import type { ReconcileUncertainTaskRequest } from '../../../../../contracts/orchestration-host-v5';
   import { memberLabel, statusPresentation, taskDisplays } from './runView';
 
-  export let run: OrchestrationRunV4;
+  export let run: OrchestrationRunV5;
   export let onClose: () => void;
   export let onOpenSession: ((sessionId: string) => void) | undefined = undefined;
   export let busy = false;

@@ -4,14 +4,14 @@
   import PanelResize from '../../components/PanelResize.svelte';
   import { modalFocus } from '../workspace/workspaceUx';
   import { harnessModels } from '../../host-api/harnessModels';
-  import type { HarnessCatalogModel as WorkspaceModel } from '../../../../../contracts/harness-models-v14';
-  import type { HarnessModelsResult } from '../../../../../contracts/harness-models-v14';
+  import type { HarnessCatalogModel as WorkspaceModel } from '../../../../../contracts/harness-models-v18';
+  import type { HarnessModelsResult } from '../../../../../contracts/harness-models-v18';
   import ResourcePicker from './ResourcePicker.svelte';
   import { harnessConfigurations, permissionLabels } from '../../harness-adapters';
   import { t } from '../locale/language';
   import { orchestrationHost, orchestrationError, type OrchestrationClient, type DefinitionSummary, type AgentProfile, type SaveDefinitionRequest, type StoredDefinition } from '../../host-api/orchestrationClient';
   import { emptyGraph, newGraphNode, compileGraph, graphErrors, patternEdges, type AgentGraph, type GraphNode, type ConnectionKind } from './agentGraph';
-  export let modelsFor: (harness: AgentProfile['harness']) => import('../../../../../contracts/harness-models-v14').HarnessCatalogModel[] = () => [];
+  export let modelsFor: (harness: AgentProfile['harness']) => import('../../../../../contracts/harness-models-v18').HarnessCatalogModel[] = () => [];
   export let workspaceId: string;
   export let safeMode = false;
   export let onDirtyChange: (dirty: boolean) => void = () => {};
@@ -91,7 +91,7 @@
       link.click();
     } catch (error) { errors = [error instanceof Error ? error.message : 'Could not export system.']; }
   }
-  async function refresh(): Promise<void> { try { commands = (await client.orchestration_catalog_v4({ workspaceId })).launchCommands; } catch (error) { errors = [orchestrationError(error).message]; } }
+  async function refresh(): Promise<void> { try { commands = (await client.orchestration_catalog_v5({ workspaceId })).launchCommands; } catch (error) { errors = [orchestrationError(error).message]; } }
   function updateNode(id: string, change: Partial<GraphNode>): void { graph = { ...graph, nodes: graph.nodes.map(node => node.id === id ? { ...node, ...change } : node) }; }
   function updateProfile(change: Partial<AgentProfile>): void { if (selected) updateNode(selected.id, { profile: { ...selected.profile, ...change } }); }
   function add(): void { const node = newGraphNode(graph.nodes.length); graph = { ...graph, nodes: [...graph.nodes, node] }; selectedId = node.id; }
@@ -116,10 +116,10 @@
     if (dirty) { errors = ['Save changes before opening another system.']; return; }
     busy = true; errors = [];
     try {
-      const command = await client.orchestration_get_launch_command_v4({ workspaceId, id }); if (!command) throw new Error('Missing command');
-      const [team, pipeline, catalog] = await Promise.all([client.orchestration_get_team_v4({ workspaceId, id: command.value.teamId }), client.orchestration_get_pipeline_v4({ workspaceId, id: command.value.pipelineId }), client.orchestration_catalog_v4({ workspaceId })]);
+      const command = await client.orchestration_get_launch_command_v5({ workspaceId, id }); if (!command) throw new Error('Missing command');
+      const [team, pipeline, catalog] = await Promise.all([client.orchestration_get_team_v5({ workspaceId, id: command.value.teamId }), client.orchestration_get_pipeline_v5({ workspaceId, id: command.value.pipelineId }), client.orchestration_catalog_v5({ workspaceId })]);
       if (!team || !pipeline) throw new Error('Missing graph definition');
-      const storedProfiles = await Promise.all(catalog.profiles.map(profile => client.orchestration_get_profile_v4({ workspaceId, id: profile.id })));
+      const storedProfiles = await Promise.all(catalog.profiles.map(profile => client.orchestration_get_profile_v5({ workspaceId, id: profile.id })));
       const profiles = new Map(storedProfiles.filter((profile): profile is StoredDefinition<AgentProfile> => profile !== null).map(profile => [profile.value.id, profile]));
       const nodes = pipeline.value.steps.map((step, index) => { const member = team.value.members.find(item => item.id === step.assignedMemberId); const profile = member && profiles.get(member.profileId); if (!profile) throw new Error('Missing agent profile'); return { id: step.id, profile: profile.value, task: step.instructions, input: step.inputInstructions, x: 60 + index * 280, y: 100 }; });
       // A member may own several steps in older definitions; preserve the original editors for those graphs.
@@ -143,7 +143,7 @@
     try {
       const definition = compileGraph(graph);
       const request = <T extends { id: string }>(value: T): SaveDefinitionRequest<T> => ({ workspaceId, value, ...(revisions.has(value.id) ? { expectedRevision: revisions.get(value.id)! } : {}) });
-      await client.orchestration_save_graph_v4({ workspaceId, profiles: definition.profiles.map(value => request(value)), team: request(definition.team), pipeline: request(definition.pipeline), command: request(definition.command) });
+      await client.orchestration_save_graph_v5({ workspaceId, profiles: definition.profiles.map(value => request(value)), team: request(definition.team), pipeline: request(definition.pipeline), command: request(definition.command) });
       revisions = new Map([...definition.profiles, definition.team, definition.pipeline, definition.command].map(value => [value.id, (revisions.get(value.id) ?? -1) + 1]));
       baseline = JSON.stringify(graph); fileNotice = '';
       try { localStorage.setItem(`piui.graph.${workspaceId}.${graph.id}`, JSON.stringify(graph.nodes.map(({ id, x, y }) => ({ id, x, y })))); } catch { /* Definition already persisted by the host. */ }
@@ -204,7 +204,7 @@
       <PanelResize label={$t('Resize agent settings')} storageKey="piui.graph.inspector.width" initial={320} minimum={260} edge="left" onresize={(width) => inspectorWidth = width} />
       <div class="inspector-heading"><h2>{selected.profile.name}</h2><button class="close-inspector" aria-label={$t('Close')} onclick={(event) => { event.currentTarget.closest('.graph-layout')?.querySelector<HTMLButtonElement>('.node.selected')?.focus(); selectedId = ''; }}>×</button></div>
         <label>{$t('Name')}<input value={selected.profile.name} oninput={(event) => updateProfile({ name: event.currentTarget.value })} disabled={safeMode || busy} /></label>
-        <label>Harness<select value={selected.profile.harness} onchange={(event) => { const harness = event.currentTarget.value as AgentProfile['harness']; updateProfile({ harness, model: '', modelProvider: undefined, permissionMode: harnessConfigurations[harness].defaultPermission, serviceTier: harnessConfigurations[harness].speed ? 'standard' : undefined, baseInstructions: undefined, reasoning: undefined }); }} disabled={safeMode || busy}><option value="codex">Codex</option><option value="prime-agent">Prime Agent</option><option value="pi">Pi</option></select></label>
+        <label>Harness<select value={selected.profile.harness} onchange={(event) => { const harness = event.currentTarget.value as AgentProfile['harness']; updateProfile({ harness, model: '', modelProvider: undefined, permissionMode: harnessConfigurations[harness].defaultPermission, serviceTier: harnessConfigurations[harness].speed ? 'standard' : undefined, baseInstructions: undefined, reasoning: undefined }); }} disabled={safeMode || busy}><option value="codex">Codex</option><option value="prime-agent">Prime Agent</option><option value="pi">Pi</option><option value="hermes">Hermes</option></select></label>
         <label>{$t('Model')}<select aria-label={$t('Model')} value={JSON.stringify([selected.profile.modelProvider, selected.profile.model])} onchange={(event) => { const model = availableModels.find(entry => JSON.stringify([entry.provider, entry.id]) === event.currentTarget.value); if (model) updateProfile({ model: model.id, modelProvider: model.provider, reasoning: undefined, serviceTier: model.supportsFast && selected?.profile.serviceTier === 'fast' ? 'fast' : undefined }); }} disabled={safeMode || busy || modelsLoading}>
           {#if !nativeModel}<option disabled={!selected.profile.model} hidden={!selected.profile.model} value={JSON.stringify([selected.profile.modelProvider, selected.profile.model])}>{selected.profile.model || $t(modelsLoading ? 'Loading models…' : 'Select model')}</option>{/if}
           {#each availableModels as model}<option value={JSON.stringify([model.provider, model.id])}>{model.name}{model.provider ? ` · ${model.provider}` : ''}</option>{/each}

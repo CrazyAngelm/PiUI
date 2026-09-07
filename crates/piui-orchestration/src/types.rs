@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const ORCHESTRATION_SCHEMA_VERSION: u32 = 4;
+pub const ORCHESTRATION_SCHEMA_VERSION: u32 = 5;
 
 pub type Revision = u64;
 
@@ -10,6 +10,7 @@ pub enum Harness {
     Pi,
     PrimeAgent,
     Codex,
+    Hermes,
 }
 
 /// Native bridge permission preset. It is a runtime request, not a claim that

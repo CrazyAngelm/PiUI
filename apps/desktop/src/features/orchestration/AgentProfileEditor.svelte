@@ -4,8 +4,8 @@
   import { tick, onMount } from 'svelte';
   import { harnessModels } from '../../host-api/harnessModels';
   import ResourcePicker from './ResourcePicker.svelte';
-  import type { HarnessModelsResult } from '../../../../../contracts/harness-models-v14';
-  import type { AgentProfile, Harness, PermissionMode } from '../../../../../contracts/orchestration-v4';
+  import type { HarnessModelsResult } from '../../../../../contracts/harness-models-v18';
+  import type { AgentProfile, Harness, PermissionMode } from '../../../../../contracts/orchestration-v5';
   import {
     createProfileDraft,
     profileFromDraft,
@@ -113,7 +113,7 @@
     switch (harness) {
       case 'pi': return 'Pi';
       case 'prime-agent': return 'Prime Agent';
-      case 'codex': return 'Codex';
+      case 'codex': return 'Codex'; case 'hermes': return 'Hermes';
     }
   }
 

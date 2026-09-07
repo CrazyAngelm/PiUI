@@ -1,8 +1,8 @@
 # File format and workflow
 
-The canonical machine-readable contract is `contracts/system-file-v1.schema.json` in the PiUI checkout. It is a standalone versioned exchange format, not an internal store dump or new runtime protocol. JSON was chosen because PiUI already uses typed JSON contracts, schema tooling can reject misspelled fields, and Git diffs are straightforward. XML adds no needed capability here. Unknown fields and unsupported versions are rejected; there is no YAML coercion, template evaluation, include loader or automatic environment expansion.
+The canonical machine-readable contract is `contracts/system-file-v3.schema.json` in the PiUI checkout. It is a standalone versioned exchange format, not an internal store dump or new runtime protocol. JSON was chosen because PiUI already uses typed JSON contracts, schema tooling can reject misspelled fields, and Git diffs are straightforward. XML adds no needed capability here. Unknown fields and unsupported versions are rejected; there is no YAML coercion, template evaluation, include loader or automatic environment expansion.
 
-Top level: `format: "piui-system"`, `version: 1`, `name`, `agents`, `connections`, optional `orchestrator` (agent ID) and `inheritTeamConnections` (boolean). The orchestrator defaults to the first file agent when omitted. It is a coordinator identity, not automatic execution order.
+Top level: `format: "piui-system"`, `version: 3`, `name`, `agents`, `connections`, optional `orchestrator` (agent ID) and `inheritTeamConnections` (boolean). The orchestrator defaults to the first file agent when omitted. It is a coordinator identity, not automatic execution order.
 
 Each agent has a unique local `id`, a `profile`, a `task`, and optional `position: {x,y}` with finite nonnegative canvas coordinates. Profile fields: required `name`, `harness`, `model`, `permissionMode`, `instructions`, `toolPolicy: {rules:[]}`; optional `modelProvider`, `baseInstructions`, `reasoning`, `serviceTier`, `resourceRules`. Do not add internal profile IDs or `allowedSpawnProfileIds`: delegation edges compile those automatically.
 
@@ -23,4 +23,6 @@ Use `examples/systems/single.piui.json`, `mixed-review.piui.json` or `parallel-s
 
 Validation has layers: JSON syntax/schema → references/DAG/delegation/static adapter compatibility → host save validation → native runtime preflight. `pnpm system:check path` does not launch anything and cannot prove the last layer. The UI and CLI share the parser. Codex absolute skill paths need review when moving files between computers; exports contain user instructions and resource names/paths, so inspect their contents before sharing publicly.
 
-Runtime model/reasoning catalogs come from each adapter. The composer uses workspace settings v12; the ordinary workspace v11 grammar stays frozen. Graph suggestions reuse observed native catalogs and explicit IDs remain allowed for offline authoring. Fast is model-dependent in Prime, and an unsupported required Fast request fails at preflight. Pi native append instructions use a host-owned temporary file, never a second agent loop.
+Runtime model/reasoning catalogs come from each adapter. The composer uses workspace settings v16 and catalogs v18; workspace v15 adds Hermes while previous contracts stay frozen. Graph suggestions reuse observed native catalogs and explicit IDs remain allowed for offline authoring. Fast is model-dependent in Prime, and an unsupported required Fast request fails at preflight. Pi native append instructions use a host-owned temporary file, never a second agent loop.
+
+Version 2 added `input`; version 3 adds Hermes. Both earlier versions remain valid imports. Reusable profiles also accept `whenToCall`, `inputInstructions`, and `expectedResult`.

@@ -1346,7 +1346,7 @@ async function runIsolatedHarness() {
     passReport = {
       status: 'pass',
       target: 'isolated Tauri WebView2 dev harness',
-      scenario: WORKSPACE_SCENARIO ? 'workspace-v11' : 'classic-v10',
+      scenario: WORKSPACE_SCENARIO ? 'workspace-v15' : 'classic-v10',
       native: normalResult.native,
       timings: { normal: normalResult.timings, safe: safeResult.timings },
       ownedWindowMeasurements,

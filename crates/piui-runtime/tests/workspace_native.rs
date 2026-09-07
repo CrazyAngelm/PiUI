@@ -6,7 +6,7 @@
 
 use piui_runtime::workspace_runtime::{
     BlockKind, HarnessKind, NativeBlock, NativeEvent, NativeRuntime, NativeRuntimeConfig,
-    NativeRuntimeError, PermissionMode, PromptMode, SessionStatus, TurnOutcome,
+    NativeRuntimeError, PermissionMode, PromptMode, SessionStatus, TurnOutcome, WorkspaceModel,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -75,7 +75,7 @@ fn native_config(kind: HarnessKind, label: &str) -> NativeRuntimeConfig {
         HarnessKind::PrimeAgent => (Some(Vec::new()), Some(false)),
         // Codex 0.147.0 does not expose a restrictive built-in tool allowlist.
         // The prompt asks for no tools and the proof rejects any observed use.
-        HarnessKind::Codex => (None, None),
+        HarnessKind::Codex | HarnessKind::Hermes => (None, None),
     };
     NativeRuntimeConfig {
         harness: kind,
@@ -84,7 +84,18 @@ fn native_config(kind: HarnessKind, label: &str) -> NativeRuntimeConfig {
         native_id: None,
         native_path: None,
         title: Some("PiUI integration verification".into()),
-        model: None,
+        model: if kind == HarnessKind::Hermes {
+            std::env::var("PIUI_TEST_HERMES_MODEL")
+                .ok()
+                .map(|id| WorkspaceModel {
+                    name: id.clone(),
+                    id,
+                    provider: None,
+                    thinking_levels: None,
+                })
+        } else {
+            None
+        },
         thinking_level: None,
         base_instructions: None,
         service_tier: None,
@@ -101,8 +112,18 @@ fn native_config(kind: HarnessKind, label: &str) -> NativeRuntimeConfig {
     }
 }
 
-async fn wait_for_live_turn(events: &mut mpsc::Receiver<NativeEvent>) -> LiveTurn {
-    let deadline = Instant::now() + LIVE_OPERATION_TIMEOUT;
+async fn wait_for_live_turn(
+    events: &mut mpsc::Receiver<NativeEvent>,
+    kind: HarnessKind,
+) -> LiveTurn {
+    // Hermes 0.21 run_agent._resolved_api_call_timeout defaults to 1800s.
+    // Its provider request must not be cut off by the older Prime-only watchdog.
+    let operation_timeout = if kind == HarnessKind::Hermes {
+        Duration::from_secs(1800)
+    } else {
+        LIVE_OPERATION_TIMEOUT
+    };
+    let deadline = Instant::now() + operation_timeout;
     let mut blocks = HashMap::new();
     let mut outcome = None;
     let mut idle_after_terminal = false;
@@ -190,7 +211,7 @@ async fn verify_live_harness(kind: HarnessKind, label: &str, resume_supported: b
         )
         .await
         .expect("native runtime admits the verification turn");
-    let turn = wait_for_live_turn(&mut events).await;
+    let turn = wait_for_live_turn(&mut events, kind).await;
     let completed = runtime
         .snapshot()
         .await
@@ -273,4 +294,58 @@ async fn live_codex_native_runtime() {
     // Codex 0.147.0 supports ordinary thread resume. Managed dynamic-tool
     // resume is a separate rejected capability and is not enabled here.
     verify_live_harness(HarnessKind::Codex, "codex", true).await;
+}
+
+#[tokio::test]
+#[ignore = "explicit live verification; uses native Hermes auth/default model"]
+async fn live_hermes_native_runtime() {
+    verify_live_harness(HarnessKind::Hermes, "hermes", true).await;
+}
+
+#[tokio::test]
+#[ignore = "explicit Hermes native MCP verification; uses selected native provider"]
+async fn live_hermes_workspace_coordinator() {
+    use piui_runtime::workspace_runtime::{CoordinatorOperation, CoordinatorResponse};
+    let mut config = native_config(HarnessKind::Hermes, "hermes-managed");
+    config.coordination = true;
+    let (runtime, mut events) = NativeRuntime::spawn(config)
+        .await
+        .expect("contained managed Hermes");
+    runtime.prompt(format!("Call the piui workspace tool with type roster once, then reply exactly {MARKER}. Do not call other tools."), PromptMode::Prompt).await.expect("prompt accepted");
+    let deadline = Instant::now() + Duration::from_secs(1800); // Native Hermes request default.
+    let mut called = false;
+    let mut blocks = HashMap::new();
+    loop {
+        let event = timeout_at(deadline, events.recv())
+            .await
+            .expect("native request deadline")
+            .expect("live events");
+        match event {
+            NativeEvent::CoordinatorRequest {
+                request_id,
+                operation,
+            } => {
+                assert_eq!(operation, CoordinatorOperation::Roster);
+                called = true;
+                runtime
+                    .coordinator_response(
+                        request_id,
+                        CoordinatorResponse::Success(serde_json::json!({"members":[]})),
+                    )
+                    .await
+                    .expect("host coordinator reply");
+            }
+            NativeEvent::Block { block } => {
+                blocks.insert(block.id.clone(), block);
+            }
+            NativeEvent::TurnCompleted { outcome } => {
+                assert_eq!(outcome, TurnOutcome::Succeeded);
+                break;
+            }
+            _ => {}
+        }
+    }
+    runtime.dispose().await.expect("managed process cleanup");
+    assert!(called, "real Hermes native MCP invoked host coordinator");
+    assert_final_assistant(blocks.into_values());
 }

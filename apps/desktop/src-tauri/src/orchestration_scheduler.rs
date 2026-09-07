@@ -1056,7 +1056,7 @@ impl OrchestrationScheduler {
         let _ = app.emit(
             ORCHESTRATION_EVENT_V4,
             OrchestrationRunChangedEventV4 {
-                protocol: 4,
+                protocol: 5,
                 event_type: "runChanged",
                 workspace_id: workspace_id.to_owned(),
                 run_id: run.id().to_owned(),
@@ -1378,6 +1378,7 @@ fn harness_kind(harness: Harness) -> HarnessKind {
         Harness::Pi => HarnessKind::Pi,
         Harness::PrimeAgent => HarnessKind::PrimeAgent,
         Harness::Codex => HarnessKind::Codex,
+        Harness::Hermes => HarnessKind::Hermes,
     }
 }
 
@@ -1386,6 +1387,7 @@ fn harness_name(harness: Harness) -> &'static str {
         Harness::Pi => "pi",
         Harness::PrimeAgent => "prime-agent",
         Harness::Codex => "codex",
+        Harness::Hermes => "hermes",
     }
 }
 
@@ -1555,7 +1557,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
             },
         ],
     };
-    let store_directory = app_data.join("orchestration-v4");
+    let store_directory = app_data.join("orchestration-v5");
     fs::create_dir_all(&store_directory).unwrap();
     let document = serde_json::json!({
         "version": 1,

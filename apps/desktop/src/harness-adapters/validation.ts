@@ -1,4 +1,4 @@
-import type { AgentProfile } from '../../../../contracts/orchestration-v4';
+import type { AgentProfile } from '../../../../contracts/orchestration-v5';
 import { harnessConfigurations } from './index';
 
 /** Static file checks only. The native host remains authoritative at launch. */

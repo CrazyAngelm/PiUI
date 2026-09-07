@@ -1,0 +1,454 @@
+{
+  "catalog": {
+    "protocol": 15,
+    "safeMode": false,
+    "workspaces": [
+      {
+        "id": "22222222-2222-4222-8222-222222222222",
+        "name": "Fixture workspace",
+        "trust": "restricted",
+        "missing": false,
+        "personal": false
+      }
+    ],
+    "sessions": [
+      {
+        "id": "11111111-1111-4111-8111-111111111111",
+        "workspaceId": "22222222-2222-4222-8222-222222222222",
+        "harness": "codex",
+        "title": "Fixture session",
+        "status": "idle",
+        "updatedAt": "2026-09-06T00:00:00Z",
+        "model": {
+          "id": "fixture-model",
+          "provider": "fixture",
+          "name": "Fixture model",
+          "thinkingLevels": [
+            "off",
+            "high"
+          ]
+        },
+        "profileId": "profile-fixture",
+        "runId": "run-fixture",
+        "memberId": "member-fixture"
+      }
+    ],
+    "harnesses": [
+      {
+        "kind": "codex",
+        "name": "Codex",
+        "installed": false,
+        "status": "unavailable",
+        "reason": "Contract fixture only."
+      }
+    ]
+  },
+  "snapshot": {
+    "session": {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "workspaceId": "22222222-2222-4222-8222-222222222222",
+      "harness": "codex",
+      "title": "Fixture session",
+      "status": "idle",
+      "updatedAt": "2026-09-06T00:00:00Z",
+      "model": {
+        "id": "fixture-model",
+        "provider": "fixture",
+        "name": "Fixture model",
+        "thinkingLevels": [
+          "off",
+          "high"
+        ]
+      },
+      "profileId": "profile-fixture",
+      "runId": "run-fixture",
+      "memberId": "member-fixture"
+    },
+    "revision": 1,
+    "blocks": [
+      {
+        "id": "block-fixture",
+        "kind": "assistant",
+        "label": "Assistant",
+        "status": "complete",
+        "text": "Fixture reply."
+      }
+    ],
+    "approvals": [
+      {
+        "id": "approval-fixture",
+        "sessionId": "11111111-1111-4111-8111-111111111111",
+        "kind": "command",
+        "title": "Fixture approval",
+        "description": "A test-only native command request.",
+        "decisions": [
+          "approve-once",
+          "deny",
+          "cancel"
+        ]
+      }
+    ],
+    "capabilities": {
+      "prompt": {
+        "supported": false,
+        "enforcement": "unsupported",
+        "reason": "Contract fixture only."
+      },
+      "resume": {
+        "supported": false,
+        "enforcement": "unsupported",
+        "reason": "Contract fixture only."
+      },
+      "models": {
+        "supported": false,
+        "enforcement": "unsupported",
+        "reason": "Contract fixture only."
+      },
+      "approvals": {
+        "supported": false,
+        "enforcement": "unsupported",
+        "reason": "Contract fixture only."
+      },
+      "instructions": {
+        "supported": false,
+        "enforcement": "unsupported",
+        "reason": "Contract fixture only."
+      },
+      "toolPolicy": {
+        "supported": false,
+        "enforcement": "unsupported",
+        "reason": "Contract fixture only."
+      },
+      "nativeSubagents": {
+        "supported": false,
+        "enforcement": "unsupported",
+        "reason": "Contract fixture only."
+      }
+    },
+    "models": [
+      {
+        "id": "fixture-model",
+        "provider": "fixture",
+        "name": "Fixture model",
+        "thinkingLevels": [
+          "off",
+          "high"
+        ]
+      }
+    ]
+  },
+  "commands": [
+    {
+      "type": "catalog"
+    },
+    {
+      "type": "createSession",
+      "workspaceId": "22222222-2222-4222-8222-222222222222",
+      "harness": "pi",
+      "title": "Fixture",
+      "permissionMode": "native"
+    },
+    {
+      "type": "openSession",
+      "sessionId": "11111111-1111-4111-8111-111111111111"
+    },
+    {
+      "type": "snapshot",
+      "sessionId": "11111111-1111-4111-8111-111111111111"
+    },
+    {
+      "type": "interrupt",
+      "sessionId": "11111111-1111-4111-8111-111111111111"
+    },
+    {
+      "type": "closeSession",
+      "sessionId": "11111111-1111-4111-8111-111111111111"
+    },
+    {
+      "type": "send",
+      "sessionId": "11111111-1111-4111-8111-111111111111",
+      "text": "Fixture prompt.",
+      "mode": "prompt"
+    },
+    {
+      "type": "send",
+      "sessionId": "11111111-1111-4111-8111-111111111111",
+      "text": "Fixture prompt.",
+      "mode": "steer"
+    },
+    {
+      "type": "send",
+      "sessionId": "11111111-1111-4111-8111-111111111111",
+      "text": "Fixture prompt.",
+      "mode": "follow-up"
+    },
+    {
+      "type": "setModel",
+      "sessionId": "11111111-1111-4111-8111-111111111111",
+      "model": {
+        "id": "fixture-model",
+        "provider": "fixture",
+        "name": "Fixture model",
+        "thinkingLevels": [
+          "off",
+          "high"
+        ]
+      },
+      "thinkingLevel": "high"
+    },
+    {
+      "type": "renameSession",
+      "sessionId": "11111111-1111-4111-8111-111111111111",
+      "title": "Renamed fixture"
+    },
+    {
+      "type": "respond",
+      "sessionId": "11111111-1111-4111-8111-111111111111",
+      "requestId": "approval-fixture",
+      "decision": "deny"
+    }
+  ],
+  "results": [
+    {
+      "type": "catalog",
+      "catalog": {
+        "protocol": 15,
+        "safeMode": false,
+        "workspaces": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "name": "Fixture workspace",
+            "trust": "restricted",
+            "missing": false,
+            "personal": false
+          }
+        ],
+        "sessions": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "workspaceId": "22222222-2222-4222-8222-222222222222",
+            "harness": "codex",
+            "title": "Fixture session",
+            "status": "idle",
+            "updatedAt": "2026-09-06T00:00:00Z",
+            "model": {
+              "id": "fixture-model",
+              "provider": "fixture",
+              "name": "Fixture model",
+              "thinkingLevels": [
+                "off",
+                "high"
+              ]
+            },
+            "profileId": "profile-fixture",
+            "runId": "run-fixture",
+            "memberId": "member-fixture"
+          }
+        ],
+        "harnesses": [
+          {
+            "kind": "codex",
+            "name": "Codex",
+            "installed": false,
+            "status": "unavailable",
+            "reason": "Contract fixture only."
+          }
+        ]
+      }
+    },
+    {
+      "type": "session",
+      "snapshot": {
+        "session": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "workspaceId": "22222222-2222-4222-8222-222222222222",
+          "harness": "codex",
+          "title": "Fixture session",
+          "status": "idle",
+          "updatedAt": "2026-09-06T00:00:00Z",
+          "model": {
+            "id": "fixture-model",
+            "provider": "fixture",
+            "name": "Fixture model",
+            "thinkingLevels": [
+              "off",
+              "high"
+            ]
+          },
+          "profileId": "profile-fixture",
+          "runId": "run-fixture",
+          "memberId": "member-fixture"
+        },
+        "revision": 1,
+        "blocks": [
+          {
+            "id": "block-fixture",
+            "kind": "assistant",
+            "label": "Assistant",
+            "status": "complete",
+            "text": "Fixture reply."
+          }
+        ],
+        "approvals": [
+          {
+            "id": "approval-fixture",
+            "sessionId": "11111111-1111-4111-8111-111111111111",
+            "kind": "command",
+            "title": "Fixture approval",
+            "description": "A test-only native command request.",
+            "decisions": [
+              "approve-once",
+              "deny",
+              "cancel"
+            ]
+          }
+        ],
+        "capabilities": {
+          "prompt": {
+            "supported": false,
+            "enforcement": "unsupported",
+            "reason": "Contract fixture only."
+          },
+          "resume": {
+            "supported": false,
+            "enforcement": "unsupported",
+            "reason": "Contract fixture only."
+          },
+          "models": {
+            "supported": false,
+            "enforcement": "unsupported",
+            "reason": "Contract fixture only."
+          },
+          "approvals": {
+            "supported": false,
+            "enforcement": "unsupported",
+            "reason": "Contract fixture only."
+          },
+          "instructions": {
+            "supported": false,
+            "enforcement": "unsupported",
+            "reason": "Contract fixture only."
+          },
+          "toolPolicy": {
+            "supported": false,
+            "enforcement": "unsupported",
+            "reason": "Contract fixture only."
+          },
+          "nativeSubagents": {
+            "supported": false,
+            "enforcement": "unsupported",
+            "reason": "Contract fixture only."
+          }
+        },
+        "models": [
+          {
+            "id": "fixture-model",
+            "provider": "fixture",
+            "name": "Fixture model",
+            "thinkingLevels": [
+              "off",
+              "high"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "accepted",
+      "sessionId": "11111111-1111-4111-8111-111111111111"
+    }
+  ],
+  "events": [
+    {
+      "protocol": 15,
+      "sessionId": "11111111-1111-4111-8111-111111111111",
+      "revision": 2,
+      "event": {
+        "type": "session",
+        "session": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "workspaceId": "22222222-2222-4222-8222-222222222222",
+          "harness": "codex",
+          "title": "Fixture session",
+          "status": "idle",
+          "updatedAt": "2026-09-06T00:00:00Z",
+          "model": {
+            "id": "fixture-model",
+            "provider": "fixture",
+            "name": "Fixture model",
+            "thinkingLevels": [
+              "off",
+              "high"
+            ]
+          },
+          "profileId": "profile-fixture",
+          "runId": "run-fixture",
+          "memberId": "member-fixture"
+        }
+      }
+    },
+    {
+      "protocol": 15,
+      "sessionId": "11111111-1111-4111-8111-111111111111",
+      "revision": 3,
+      "event": {
+        "type": "block",
+        "block": {
+          "id": "block-fixture",
+          "kind": "assistant",
+          "label": "Assistant",
+          "status": "complete",
+          "text": "Fixture reply."
+        }
+      }
+    },
+    {
+      "protocol": 15,
+      "sessionId": "11111111-1111-4111-8111-111111111111",
+      "revision": 4,
+      "event": {
+        "type": "textDelta",
+        "blockId": "block-fixture",
+        "text": " More."
+      }
+    },
+    {
+      "protocol": 15,
+      "sessionId": "11111111-1111-4111-8111-111111111111",
+      "revision": 5,
+      "event": {
+        "type": "approval",
+        "approval": {
+          "id": "approval-fixture",
+          "sessionId": "11111111-1111-4111-8111-111111111111",
+          "kind": "command",
+          "title": "Fixture approval",
+          "description": "A test-only native command request.",
+          "decisions": [
+            "approve-once",
+            "deny",
+            "cancel"
+          ]
+        }
+      }
+    },
+    {
+      "protocol": 15,
+      "sessionId": "11111111-1111-4111-8111-111111111111",
+      "revision": 6,
+      "event": {
+        "type": "approvalResolved",
+        "requestId": "approval-fixture"
+      }
+    },
+    {
+      "protocol": 15,
+      "sessionId": "11111111-1111-4111-8111-111111111111",
+      "revision": 7,
+      "event": {
+        "type": "error",
+        "message": "A safe fixture error."
+      }
+    }
+  ]
+}

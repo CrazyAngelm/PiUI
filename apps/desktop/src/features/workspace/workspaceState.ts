@@ -5,7 +5,7 @@ import type {
   WorkspaceCatalog,
   WorkspaceEvent,
   WorkspaceSession,
-} from '../../../../../contracts/workspace-v11';
+} from '../../../../../contracts/workspace-v15';
 
 export type EventApplication =
   | { type: 'applied'; snapshot: SessionSnapshot }
@@ -126,6 +126,7 @@ export function harnessLabel(kind: HarnessKind): string {
     case 'pi': return 'Pi';
     case 'prime-agent': return 'Prime Agent';
     case 'codex': return 'Codex';
+    case 'hermes': return 'Hermes';
     default: return assertNever(kind);
   }
 }

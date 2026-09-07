@@ -5,7 +5,7 @@ import type {
   PolicyEnforcement,
   ToolDecision,
   ToolRule,
-} from '../../../../../contracts/orchestration-v4';
+} from '../../../../../contracts/orchestration-v5';
 
 export interface ProfileDraft {
   id: string;
@@ -83,7 +83,7 @@ export function profileFromDraft(draft: ProfileDraft): AgentProfile {
     ...(provider === '' ? {} : { modelProvider: provider }),
     model: draft.model.trim(),
     ...(draft.reasoning ? { reasoning: draft.reasoning } : {}),
-    ...(draft.harness !== 'pi' ? { serviceTier: draft.serviceTier } : {}),
+    ...(!['pi', 'hermes'].includes(draft.harness) ? { serviceTier: draft.serviceTier } : {}),
     permissionMode: draft.permissionMode,
     instructions: draft.instructions,
     ...(draft.whenToCall ? { whenToCall: draft.whenToCall } : {}),

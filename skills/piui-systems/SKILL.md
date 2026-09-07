@@ -5,7 +5,7 @@ description: Create, review, or edit PiUI agent systems as validated JSON files 
 
 # PiUI systems
 
-Turn the user's task into an importable `.piui.json` system. Work in the PiUI repository supplied by the user; on this installation it is `D:/Projects/PIUI`. Locate another checkout if that path is absent. Read its `AGENTS.md`, `contracts/system-file-v2.schema.json`, and [format and workflow](references/configuration.md). The repository schema and adapter manifests override stale examples in this skill.
+Turn the user's task into an importable `.piui.json` system. Work in the PiUI repository supplied by the user; on this installation it is `D:/Projects/PIUI`. Locate another checkout if that path is absent. Read its `AGENTS.md`, `contracts/system-file-v3.schema.json`, and [format and workflow](references/configuration.md). The repository schema and adapter manifests override stale examples in this skill.
 
 ## Design from the outcome
 
@@ -36,7 +36,7 @@ format and prerequisites the recipient needs, separately from its `task`.
 Upstream result and message senders receive these requirements from the frozen
 run snapshot; the recipient also receives them. Missing input should be reported,
 not fabricated. This is instruction delivery, not automatic semantic validation
-of every returned artifact. Version 1 files still import; export writes version 2.
+of every returned artifact. Version 1 files still import; export writes version 3.
 
 For dynamically callable profiles, fill `profile.whenToCall`,
 `profile.inputInstructions` (the reusable input default) and
@@ -47,7 +47,7 @@ caller. They describe purpose; they never grant permission to spawn a profile.
 ## Runtime boundaries
 
 - The graph and profile editors obtain native models, reasoning and resources
-  through `harness_models_v14`. Select available entries there; do not invent
+  through `harness_models_v18`. Select available entries there; do not invent
   model levels from adapter examples. Missing imported IDs remain visible until
   explicitly corrected. A catalog is not proof of authentication or isolation.
 
@@ -59,3 +59,15 @@ caller. They describe purpose; they never grant permission to spawn a profile.
 - Unsupported required features remain blockers; do not delete settings simply to make validation pass. Never probe real Prime without an explicit non-default `--daemon-socket`.
 
 For rationale and video comparison, read [research](references/research.md) when selecting a topology or explaining a tradeoff. This skill is not a guarantee of an ideal system; validate the smallest representative real task before scaling when execution is authorized.
+
+## Hermes
+
+Portable version 3 adds `harness: "hermes"`; versions 1 and 2 still import.
+Hermes 0.21 ACP keeps native SQLite history and supports model selection, prompt,
+cancellation, approvals and session-scoped coordinator MCP tools. Select encoded
+native `provider:model` IDs from its catalog. Its current ACP adapter does not
+expose per-agent reasoning/Fast, base-prompt replacement, strict tools/skills/MCP
+restrictions or native-subagent controls. Those required settings must fail; do
+not turn native defaults into a sandbox claim. Resource inventory is read-only.
+Use result edges for mixed-harness dependencies. Native authority is incomparable
+across harnesses, so it cannot authorize cross-harness spawning.

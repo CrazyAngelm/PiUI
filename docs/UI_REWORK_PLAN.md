@@ -23,7 +23,7 @@ verified result. Install the final application. Hermes is the last stage.
 6. [x] Verify native WebView, keyboard, errors, safe mode, reload, graph saves,
    native catalogs and adapter tests. Commit this verified stage. Install the final
    release after Hermes verification, retaining the GUI subsystem.
-7. [ ] Discover the user's installed Hermes Agent, inspect native integration
+7. [x] Discover the user's installed Hermes Agent, inspect native integration
    contracts, implement a separate adapter with truthful capabilities, then verify
    ordinary chats and cross-harness graph execution. No custom inference/tool loop.
 
@@ -50,4 +50,18 @@ per-model Fast capability; unsupported choices stay disabled.
 
 Hermes discovery: installed 0.21.0; `hermes acp --check` passes. The installed
 ACP implementation persists sessions in native state.db and supports load.
-Implementation and final installation remain pending.
+Hermes adapter verification completed: native model catalog (136 resources),
+real `openai-codex:gpt-5.4-mini` response and same-ID native history reload
+(51.18s), and a real native MCP workspace.roster call through the host coordinator
+(36.48s). Tests use the native authentication in place; no credentials are copied.
+Nous reported insufficient credits; local-proxy failed its model request. These
+failures remain failures, never successful graph results. No global model changed.
+
+Current workspace v15 WebView proof: target/piui-evidence/17604-1788749013099/report.json.
+Unit/contract/native bridge and Rust tests pass, including read-only Hermes SQLite
+result references and denied unsupported settings. Final release installation is
+being completed after verification.
+
+The final stable WebView run additionally verifies Hermes v3 mixed-graph import
+and atomic save. Automatic native-chat restoration now preserves a view already
+chosen by the user while startup catalog loading was pending.

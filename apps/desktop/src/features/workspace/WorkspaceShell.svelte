@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { harnessModels } from '../../host-api/harnessModels';
   import { t } from '../locale/language';
   import { onMount, tick } from 'svelte';
   import RuntimePicker from './RuntimePicker.svelte';
@@ -22,7 +23,7 @@
     WorkspaceModel,
     WorkspaceSession,
     WorkspaceSummary,
-  } from '../../../../../contracts/workspace-v11';
+  } from '../../../../../contracts/workspace-v15';
   import WorkspaceSettings from './WorkspaceSettings.svelte';
   import { modalFocus, sessionForProject, shortcutModifier } from './workspaceUx';
   import { acceptWorkspaceSnapshot, applyWorkspaceEvent, harnessLabel, mergeCatalogSession, protectClosedCatalogSessions, resolveCloseAfterCatalog, sortedSessions, statusLabel } from './workspaceState';
@@ -33,7 +34,7 @@
   type Inspector = 'approvals' | 'activity' | 'details' | undefined;
   type OrchestrationComponent = typeof import('../orchestration/OrchestrationPanel.svelte').default;
 
-  const emptyCatalog: WorkspaceCatalog = { protocol: 11, safeMode: false, workspaces: [], sessions: [], harnesses: [] };
+  const emptyCatalog: WorkspaceCatalog = { protocol: 15, safeMode: false, workspaces: [], sessions: [], harnesses: [] };
   const defaultPreferences: Preferences = {
     theme: 'system', density: 'comfortable', reducedMotion: 'system', fontSize: 'medium', chatWidth: 'wide',
   };
@@ -104,6 +105,12 @@
   let newWorkspaceId = '';
   let newHarness: HarnessKind | '' = '';
   let newModelId = '';
+  let newModelCatalog: WorkspaceModel[] = [];
+  let newCatalogKey = '';
+  let newCatalogRequest = 0;
+  let newCatalogLoading = false;
+  let newCatalogError = '';
+  $: if (newSessionOpen && newWorkspaceId && newHarness && newCatalogKey !== JSON.stringify([newWorkspaceId, newHarness])) void loadNewModels(newWorkspaceId, newHarness);
   let permissionMode: PermissionMode = 'native';
   let createBusy = false;
   let createError: string | undefined;
@@ -162,7 +169,7 @@
     const query = search.trim().toLocaleLowerCase();
     return query === '' || session.title.toLocaleLowerCase().includes(query) || harnessLabel(session.harness).toLocaleLowerCase().includes(query);
   }));
-  $: knownModels = modelChoices(newHarness);
+  $: knownModels = newModelCatalog.length ? newModelCatalog : modelChoices(newHarness);
   $: allApprovals = Object.values(snapshots).flatMap((snapshot) => snapshot.approvals.map((approval) => ({ approval, snapshot })));
   $: attentionCount = allApprovals.length;
   $: activeSessions = sortedSessions(catalog.sessions.filter((session) => ['starting', 'running', 'stopping', 'failed'].includes(session.status)));
@@ -338,15 +345,17 @@
     }
   }
 
-  async function openSession(sessionId: string): Promise<void> {
-    if (guardNavigation(() => { void openSession(sessionId); })) return;
+  async function openSession(sessionId: string, navigate = true): Promise<void> {
+    if (navigate && guardNavigation(() => { void openSession(sessionId); })) return;
     const session = catalog.sessions.find((item) => item.id === sessionId);
-    if (session) selectedWorkspaceId = session.workspaceId;
+    if (navigate && session) selectedWorkspaceId = session.workspaceId;
     selectedSessionId = sessionId;
     persistUiState();
-    navigationOpen = false;
-    mainView = 'sessions';
-    newSessionOpen = false;
+    if (navigate) {
+      navigationOpen = false;
+      mainView = 'sessions';
+      newSessionOpen = false;
+    }
     sendError = undefined;
     sessionError = undefined;
     renameDraft = catalog.sessions.find((session) => session.id === sessionId)?.title ?? '';
@@ -378,6 +387,17 @@
     createError = undefined;
     navigationOpen = false;
     void tick().then(() => document.querySelector<HTMLSelectElement>('.new-session select')?.focus());
+  }
+
+  async function loadNewModels(workspaceId: string, harness: HarnessKind): Promise<void> {
+    newCatalogKey = JSON.stringify([workspaceId, harness]);
+    const request = ++newCatalogRequest;
+    newModelCatalog = []; newCatalogError = ''; newCatalogLoading = true;
+    try {
+      const result = await harnessModels({ workspaceId, harness });
+      if (request === newCatalogRequest) newModelCatalog = result.models.map(({ supportsFast: _fast, ...model }) => model);
+    } catch { if (request === newCatalogRequest) newCatalogError = 'Could not load models.'; }
+    finally { if (request === newCatalogRequest) newCatalogLoading = false; }
   }
 
   function modelChoices(kind: HarnessKind | ''): WorkspaceModel[] {
@@ -702,7 +722,7 @@
         else {
           const restored = selectedSessionId;
           const next = await loadCatalog();
-          if (!disposed && restored && selectedSessionId === restored && next?.sessions.some(session => session.id === restored)) await openSession(restored);
+          if (!disposed && restored && selectedSessionId === restored && next?.sessions.some(session => session.id === restored)) await openSession(restored, false);
         }
       } catch (error) {
         if (!disposed) catalogError = errorMessage(error);
@@ -824,7 +844,7 @@
             {#each catalog.harnesses as harness}<li><strong>{harness.name}</strong><span>{harness.status === 'available' ? 'Available' : harness.status === 'unverified' ? 'Setup or verification required' : 'Unavailable'}{harness.reason ? ` — ${harness.reason}` : ''}</span></li>{/each}
           </ul></details>
           <details class="session-options"><summary>{$t('Model and permissions')}</summary>
-          <label>{$t('Model')}<select bind:value={newModelId} disabled={createBusy}><option value="">{$t('Native default')}</option>{#each knownModels as model}<option value={JSON.stringify([model.provider, model.id])}>{model.name}{model.provider ? ` · ${model.provider}` : ''}</option>{/each}</select></label>
+          <label>{$t('Model')}<select aria-label={$t('Model')} bind:value={newModelId} disabled={createBusy || newCatalogLoading}><option value="">{$t(newCatalogLoading ? 'Loading models…' : 'Native default')}</option>{#each knownModels as model}<option value={JSON.stringify([model.provider, model.id])}>{model.name}{model.provider ? ` · ${model.provider}` : ''}</option>{/each}</select></label>
           {#if knownModels.length === 0}<p class="field-note">{$t('The agent will use its configured model.')}</p>{/if}
           <label>{$t('Permission mode')}<select bind:value={permissionMode} disabled={createBusy}>
             <option value="native">{$t('Native permissions')}</option><option value="read-only">{$t('Read-only')}</option><option value="workspace-write">{$t('Workspace write')}</option><option value="full-access">{$t('Full access')}</option>
@@ -832,6 +852,7 @@
           <p class:warning={permissionMode === 'full-access'} class="permission-copy">{permissionMode === 'native' ? "Uses the agent’s configured permissions. Project trust is separate; this is not a sandbox." : permissionMode === 'read-only' ? 'Requests a strict read-only native policy. The host rejects it when the harness cannot enforce it.' : permissionMode === 'workspace-write' ? 'Requests writes limited to the workspace. This is not a sandbox guarantee; the host must enforce it.' : 'Requests the harness native full-access policy. This does not grant project trust or access to other harnesses.'}</p>
           </details>
           {#if createError}<p class="error" role="alert">{createError}</p>{/if}
+          {#if newCatalogError}<p role="alert">{$t(newCatalogError)}</p>{/if}
           <div class="form-actions"><button type="button" onclick={() => newSessionOpen = false} disabled={createBusy}>{$t('Cancel')}</button><button class="accent" type="button" onclick={createSession} disabled={createBusy || catalog.safeMode || !newWorkspaceId || !newHarness || catalog.harnesses.find((item) => item.kind === newHarness)?.status !== 'available'}>{createBusy ? `Starting ${newHarness ? harnessLabel(newHarness) : 'session'}…` : 'Create session'}</button></div>
         </div>
       </section>

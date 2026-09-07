@@ -5,13 +5,23 @@ import { parseSystemFile, systemFileToGraph, graphToSystemFile, serializeSystemF
 
 const example = () => JSON.parse(readFileSync(new URL('../../../../../examples/systems/mixed-review.piui.json', import.meta.url), 'utf8'));
 describe('portable system files', () => {
-  it('upgrades v1 files and preserves separate input requirements in v2', () => {
+  it('accepts Hermes only in v3 and preserves v2 compatibility', () => {
+    const file = example(); file.version = 2;
+    expect(parseSystemFile(JSON.stringify(file)).version).toBe(2);
+    file.agents[1].profile.harness = 'hermes';
+    expect(() => parseSystemFile(JSON.stringify(file))).toThrow();
+    file.version = 3;
+    const reopened = systemFileToGraph(parseSystemFile(JSON.stringify(file)));
+    expect(reopened.nodes[1]!.profile.harness).toBe('hermes');
+    expect(parseSystemFile(serializeSystemFile(reopened)).version).toBe(3);
+  });
+  it('upgrades v1 files and preserves separate input requirements in the current version', () => {
     const legacy = example(); legacy.version = 1;
     for (const agent of legacy.agents) delete agent.input;
     const graph = systemFileToGraph(parseSystemFile(JSON.stringify(legacy)));
     graph.nodes[1]!.input = 'Changed file paths, test results and unresolved issues.';
     const file = parseSystemFile(serializeSystemFile(graph));
-    expect(file.version).toBe(2);
+    expect(file.version).toBe(3);
     expect(systemFileToGraph(file).nodes[1]!.input).toBe(graph.nodes[1]!.input);
     expect(file.agents[1]!.task).toBe(graph.nodes[1]!.task);
   });

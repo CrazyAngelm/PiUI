@@ -35,6 +35,7 @@ const EVENT_CHANNEL_CAPACITY: usize = 256;
 const RUNNER_SOURCE: &str = include_str!("../bridge/runner.mjs");
 const PI_SOURCE: &str = include_str!("../bridge/pi.mjs");
 const PRIME_SOURCE: &str = include_str!("../bridge/prime.mjs");
+const HERMES_SOURCE: &str = include_str!("../bridge/hermes.mjs");
 const CODEX_SOURCE: &str = include_str!("../bridge/codex.mjs");
 const CODEX_POOL_SOURCE: &str = include_str!("../bridge/codex-pool.mjs");
 
@@ -49,6 +50,7 @@ pub enum HarnessKind {
     Pi,
     PrimeAgent,
     Codex,
+    Hermes,
 }
 
 impl HarnessKind {
@@ -57,6 +59,7 @@ impl HarnessKind {
             Self::Pi => "Pi",
             Self::PrimeAgent => "Prime Agent",
             Self::Codex => "Codex",
+            Self::Hermes => "Hermes",
         }
     }
 }
@@ -822,8 +825,15 @@ impl NativeRuntime {
             pool_host,
             catalog_only,
         };
+        // Hermes 0.21 ACP permits a 30-second late MCP discovery phase.
+        // Add that native phase to the existing 20-second transport allowance.
+        let startup_timeout = if config.harness == HarnessKind::Hermes {
+            REQUEST_TIMEOUT + Duration::from_secs(30)
+        } else {
+            REQUEST_TIMEOUT
+        };
         if let Err(error) = runtime
-            .request("initialize", json!(initialize), REQUEST_TIMEOUT, false)
+            .request("initialize", json!(initialize), startup_timeout, false)
             .await
         {
             let _ = runtime.terminate().await;
@@ -1268,6 +1278,16 @@ fn map_bridge_failure(code: &str) -> BridgeFailureCode {
 pub fn resolve_native_runtime_config(
     mut config: NativeRuntimeConfig,
 ) -> Result<NativeRuntimeConfig, NativeRuntimeError> {
+    if config.harness == HarnessKind::Hermes {
+        if config.agent_dir.is_none() {
+            config.agent_dir = Some(
+                std::env::var_os("HERMES_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or(native_home_dir()?.join(".hermes")),
+            );
+        }
+        return Ok(config);
+    }
     if config.harness != HarnessKind::PrimeAgent {
         return Ok(config);
     }
@@ -1423,6 +1443,7 @@ fn bridge_source(kind: HarnessKind) -> Result<Vec<u8>, NativeRuntimeError> {
         HarnessKind::Pi => (PI_SOURCE, "createPiAdapter"),
         HarnessKind::PrimeAgent => (PRIME_SOURCE, "createPrimeAdapter"),
         HarnessKind::Codex => (CODEX_SOURCE, "createCodexAdapter"),
+        HarnessKind::Hermes => (HERMES_SOURCE, "createHermesAdapter"),
     };
     if factory.trim().is_empty() {
         return Err(NativeRuntimeError::HarnessUnavailable);
@@ -1489,7 +1510,43 @@ fn resolve_harness_launch(kind: HarnessKind) -> Result<ResolvedHarnessLaunch, Na
         }
         HarnessKind::PrimeAgent => resolve_package_launch("prime-agent", "dist/bundle/cli.js"),
         HarnessKind::Codex => resolve_package_launch("@openai/codex", "bin/codex.js"),
+        HarnessKind::Hermes => resolve_hermes_launch(),
     }
+}
+
+fn resolve_hermes_launch() -> Result<ResolvedHarnessLaunch, NativeRuntimeError> {
+    let root = std::env::var_os("PIUI_HERMES_ROOT")
+        .map(PathBuf::from)
+        .or_else(|| {
+            if cfg!(windows) {
+                std::env::var_os("LOCALAPPDATA")
+                    .map(|base| PathBuf::from(base).join("hermes/hermes-agent"))
+            } else {
+                native_home_dir()
+                    .ok()
+                    .map(|home| home.join(".hermes/hermes-agent"))
+            }
+        })
+        .ok_or(NativeRuntimeError::HarnessUnavailable)?;
+    let python = root.join(if cfg!(windows) {
+        "venv/Scripts/python.exe"
+    } else {
+        "venv/bin/python"
+    });
+    if !python.is_file() {
+        return Err(NativeRuntimeError::HarnessUnavailable);
+    }
+    let manifest = std::fs::read_to_string(root.join("hermes_cli/__init__.py"))
+        .map_err(|_| NativeRuntimeError::HarnessUnavailable)?;
+    let version = manifest.lines().find_map(|line| {
+        line.strip_prefix("__version__ = ")
+            .map(|value| value.trim_matches('"').to_owned())
+    });
+    Ok(ResolvedHarnessLaunch {
+        program: python,
+        args: vec!["-m".into(), "acp_adapter".into()],
+        version,
+    })
 }
 
 fn resolve_package_launch(
@@ -1632,6 +1689,23 @@ pub fn offline_harness_capabilities(kind: HarnessKind) -> HarnessCapabilities {
             tool_policy: capability(true, Enforcement::Native, None),
             native_subagents: capability(true, Enforcement::Native, None),
         },
+        HarnessKind::Hermes => HarnessCapabilities {
+            prompt: capability(true, Enforcement::Native, None),
+            resume: capability(true, Enforcement::Native, None),
+            models: capability(true, Enforcement::Native, None),
+            approvals: capability(true, Enforcement::Native, None),
+            instructions: capability(true, Enforcement::Coordinator, None),
+            tool_policy: capability(
+                false,
+                Enforcement::Unsupported,
+                Some("Hermes ACP does not expose per-session tool restrictions."),
+            ),
+            native_subagents: capability(
+                false,
+                Enforcement::Unsupported,
+                Some("Hermes ACP does not expose native delegation restrictions."),
+            ),
+        },
         HarnessKind::Codex => HarnessCapabilities {
             prompt: capability(true, Enforcement::Native, None),
             resume: capability(true, Enforcement::Native, None),
@@ -1655,6 +1729,7 @@ pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
         HarnessKind::Pi,
         HarnessKind::PrimeAgent,
         HarnessKind::Codex,
+        HarnessKind::Hermes,
     ]
     .into_iter()
     .map(|kind| match resolve_harness_launch(kind) {
@@ -1663,20 +1738,28 @@ pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
                 HarnessKind::Pi => None,
                 HarnessKind::PrimeAgent => Some("0.9.2"),
                 HarnessKind::Codex => Some("0.147.0"),
+                HarnessKind::Hermes => Some("0.21.0"),
             };
             let version_supported = expected.is_none_or(|expected| {
-                launch.version.as_deref() == Some(expected) || (kind == HarnessKind::PrimeAgent && launch.version.as_deref() == Some("0.9.3"))
+                launch.version.as_deref() == Some(expected)
+                    || (kind == HarnessKind::PrimeAgent
+                        && launch.version.as_deref() == Some("0.9.3"))
             });
             let platform_verified = cfg!(windows);
             let (status, reason) = if !version_supported {
                 (
                     HarnessAvailability::Unverified,
-                    Some("The installed native harness version is not supported by this adapter.".into()),
+                    Some(
+                        "The installed native harness version is not supported by this adapter."
+                            .into(),
+                    ),
                 )
             } else if !platform_verified {
                 (
                     HarnessAvailability::Unverified,
-                    Some("Native lifecycle containment is not yet verified on this platform.".into()),
+                    Some(
+                        "Native lifecycle containment is not yet verified on this platform.".into(),
+                    ),
                 )
             } else {
                 (HarnessAvailability::Available, None)

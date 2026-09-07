@@ -1,4 +1,4 @@
-import type { AgentProfile, DirectedEdge, OrchestrationId, TeamDefinition, TeamMember } from '../../../../../contracts/orchestration-v4';
+import type { AgentProfile, DirectedEdge, OrchestrationId, TeamDefinition, TeamMember } from '../../../../../contracts/orchestration-v5';
 
 export interface TeamFormIssue {
   readonly code:
