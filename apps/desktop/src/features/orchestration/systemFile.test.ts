@@ -1,9 +1,31 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { compileGraph } from './agentGraph';
 import { parseSystemFile, systemFileToGraph, graphToSystemFile, serializeSystemFile } from './systemFile';
 
 const example = () => JSON.parse(readFileSync(new URL('../../../../../examples/systems/mixed-review.piui.json', import.meta.url), 'utf8'));
 describe('portable system files', () => {
+  it('upgrades v1 files and preserves separate input requirements in v2', () => {
+    const legacy = example(); legacy.version = 1;
+    for (const agent of legacy.agents) delete agent.input;
+    const graph = systemFileToGraph(parseSystemFile(JSON.stringify(legacy)));
+    graph.nodes[1]!.input = 'Changed file paths, test results and unresolved issues.';
+    const file = parseSystemFile(serializeSystemFile(graph));
+    expect(file.version).toBe(2);
+    expect(systemFileToGraph(file).nodes[1]!.input).toBe(graph.nodes[1]!.input);
+    expect(file.agents[1]!.task).toBe(graph.nodes[1]!.task);
+  });
+  it('preserves invocation descriptions and an explicit empty task input override', () => {
+    const graph = systemFileToGraph(parseSystemFile(JSON.stringify(example())));
+    const node = graph.nodes[0]!;
+    node.profile = { ...node.profile, whenToCall: 'When independent review is needed', inputInstructions: 'Default input', expectedResult: 'Findings with evidence' };
+    node.input = '';
+    const reopened = systemFileToGraph(parseSystemFile(serializeSystemFile(graph)));
+    expect(reopened.nodes[0]!.profile.whenToCall).toBe(node.profile.whenToCall);
+    expect(reopened.nodes[0]!.profile.expectedResult).toBe(node.profile.expectedResult);
+    expect(reopened.nodes[0]!.profile.inputInstructions).toBe('Default input');
+    expect(compileGraph(reopened).pipeline.steps[0]!.inputInstructions).toBe('');
+  });
   it('round-trips mixed harness settings, prompt distinction and positions without native identities', () => {
     const file = example();
     file.agents[0].profile.baseInstructions = '';
@@ -21,7 +43,7 @@ describe('portable system files', () => {
   });
   it.each(['version','unknown','duplicate','dangling','cycle','resource','privileges'])('rejects %s without coercing or dropping fields', failure => {
     const file = example();
-    if (failure==='version') file.version=2;
+    if (failure==='version') file.version=99;
     if (failure==='unknown') file.agents[0].profile.apiKey='not-allowed';
     if (failure==='duplicate') file.agents[1].id=file.agents[0].id;
     if (failure==='dangling') file.connections[0].to='absent';

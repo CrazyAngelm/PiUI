@@ -1,6 +1,6 @@
 {
   "format": "piui-system",
-  "version": 1,
+  "version": 2,
   "name": "mixed-review",
   "orchestrator": "review",
   "agents": [
@@ -31,7 +31,8 @@
           "rules": []
         }
       },
-      "task": "Review the dependency result. Report only issues that prevent meeting the user goal, with evidence. Do not change files."
+      "task": "Review the dependency result. Report only issues that prevent meeting the user goal, with evidence. Do not change files.",
+      "input": "Findings with source references, relevant artifact paths, verified facts and unresolved questions."
     }
   ],
   "connections": [

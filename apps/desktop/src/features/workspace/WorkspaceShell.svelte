@@ -2,6 +2,7 @@
   import { t } from '../locale/language';
   import { onMount, tick } from 'svelte';
   import RuntimePicker from './RuntimePicker.svelte';
+  import PanelResize from '../../components/PanelResize.svelte';
   import { deleteWorkspaceSession } from '../../host-api/workspaceLifecycle';
   import ConversationViewport from './ConversationViewport.svelte';
   import { host } from '../../host-api/client';
@@ -37,6 +38,8 @@
     theme: 'system', density: 'comfortable', reducedMotion: 'system', fontSize: 'medium', chatWidth: 'wide',
   };
   const uiStateKey = 'piui.workspace.ui.v11';
+  let navigationWidth = 212;
+  let inspectorWidth = 290;
   let deleteTarget: WorkspaceSession | undefined;
   let deleteBusy = false;
   let deleteError: string | undefined;
@@ -350,6 +353,10 @@
     const request = ++sessionRequest;
     sessionLoading = true;
     try {
+      if (catalog.safeMode || session?.runId) {
+        await reconcileSession(sessionId);
+        return;
+      }
       const result = await workspaceHost.request({ type: 'openSession', sessionId });
       if (disposed || request !== sessionRequest || selectedSessionId !== sessionId) return;
       if (result.type === 'session') storeSnapshot(result.snapshot, true);
@@ -692,12 +699,15 @@
       try {
         unlisten = await workspaceHost.listen(handleEvent);
         if (disposed) unlisten();
-        else if (selectedSessionId) await reconcileSession(selectedSessionId);
+        else {
+          const restored = selectedSessionId;
+          const next = await loadCatalog();
+          if (!disposed && restored && selectedSessionId === restored && next?.sessions.some(session => session.id === restored)) await openSession(restored);
+        }
       } catch (error) {
         if (!disposed) catalogError = errorMessage(error);
       }
     })();
-    void loadCatalog();
     return () => {
       persistUiState();
       narrowQuery.removeEventListener('change', updateNarrow);
@@ -709,11 +719,12 @@
   });
 </script>
 
-<div class="shell" class:with-inspector={inspector !== undefined} inert={Boolean(deleteTarget || trustTarget || requestedWorkspaceSection || requestedMainView || pendingNavigation)}>
+<div class="shell" style:--navigation-width={`${navigationWidth}px`} style:--inspector-width={`${inspectorWidth}px`} class:with-inspector={inspector !== undefined && mainView === 'sessions'} inert={Boolean(deleteTarget || trustTarget || requestedWorkspaceSection || requestedMainView || pendingNavigation)}>
   <a class="skip-link" href="#workspace-main">{$t('Skip to main content')}</a>
   {#if catalog.safeMode}<div class="safe-mode" role="status">{$t('Safe mode. Runtime actions and extensions are disabled. Local history remains read-only.')}</div>{/if}
 
   <aside class="workspace-navigation" class:open={navigationOpen} inert={narrow && !navigationOpen} aria-label={$t('Workspace navigation')}>
+    <PanelResize label={$t('Resize project sidebar')} storageKey="piui.navigation.width" initial={212} edge="right" onresize={(width) => navigationWidth = width} />
     <div class="brand-row"><div class="brand"><span class="brand-mark" aria-hidden="true">π</span><strong>{$t('PiUI')}</strong></div><button class="icon narrow-only" type="button" onclick={() => navigationOpen = false} aria-label={$t('Close navigation')}>×</button></div>
     <div class="primary-actions">
       <button type="button" class="accent" onclick={startNewSession}><span class="action-label"><span class="action-icon" aria-hidden="true">＋</span><span>{$t('New chat')}</span></span><kbd>{modifier}N</kbd></button>
@@ -743,7 +754,7 @@
           <section class:current-project={workspace.id === selectedWorkspaceId}>
             <div class="project-row">
               <button type="button" onclick={() => selectProject(workspace.id)} aria-current={workspace.id === selectedWorkspaceId ? 'true' : undefined}>
-                <span title={workspace.personal ? $t('Chats') : workspace.name}>{workspace.personal ? $t('Chats') : workspace.name}</span>{#if workspace.missing}<small>{$t('Missing')}</small>{:else if workspace.trust === 'restricted'}<small>{$t('Restricted')}</small>{/if}
+                <svg class="project-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">{#if workspace.personal}<path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 3V6a2 2 0 0 1 2-2Z" />{:else}<path d="M3 7V5a2 2 0 0 1 2-2h5l3 3h6a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/><path d="M3 8h18"/>{/if}</svg><span title={workspace.personal ? $t('Chats') : workspace.name}>{workspace.personal ? $t('Chats') : workspace.name}</span>{#if workspace.missing}<small>{$t('Missing')}</small>{:else if workspace.trust === 'restricted'}<small>{$t('Restricted')}</small>{/if}
               </button>
               {#if !workspace.personal && workspace.trust === 'restricted'}<button class="more" type="button" onclick={() => { trustTarget = workspace; trustError = undefined; }} aria-label={`Review trust for ${workspace.personal ? $t('Chats') : workspace.name}`}>⌾</button>{/if}
             </div>
@@ -789,14 +800,14 @@
             {#each ['systems', 'runs'] as section}
               <button type="button" class:active={workspaceSection === section} aria-current={workspaceSection === section ? 'page' : undefined} onclick={() => requestSection(section as WorkspaceSection)}>{$t(section[0]?.toUpperCase() + section.slice(1))}</button>
             {/each}
-            <details class="advanced-nav"><summary>{$t('Advanced')}</summary><div class="advanced-options">{#each ['agents', 'teams', 'pipelines'] as section}<button type="button" onclick={(event) => { requestSection(section as WorkspaceSection); event.currentTarget.closest('details')?.removeAttribute('open'); }}>{$t(section[0]?.toUpperCase() + section.slice(1))}</button>{/each}</div></details>
+            <details class="advanced-nav"><summary>{$t('Library')}</summary><div class="advanced-options">{#each ['agents', 'teams', 'pipelines'] as section}<button type="button" onclick={(event) => { requestSection(section as WorkspaceSection); event.currentTarget.closest('details')?.removeAttribute('open'); }}><strong>{$t(section[0]?.toUpperCase() + section.slice(1))}</strong><small>{$t(section === 'agents' ? 'Reusable agent profiles' : section === 'teams' ? 'Members and communication' : 'Tasks and dependencies')}</small></button>{/each}</div></details>
           </nav>
         </header>
         <div class="orchestration-host">
           {#if !selectedWorkspaceId}<div class="state"><h2>{$t('Select a project')}</h2><p>{$t('Agents, teams, pipelines, and runs always show their project scope.')}</p></div>
           {:else if orchestrationLoading}<div class="state" role="status"><h2>{$t('Loading workspace…')}</h2></div>
           {:else if orchestrationError}<div class="state"><h2>{$t('Workspace unavailable')}</h2><p>{orchestrationError}</p><button type="button" onclick={showWorkspace}>{$t('Try again')}</button></div>
-          {:else if OrchestrationPanel}{#key orchestrationEpoch}<OrchestrationPanel modelsFor={modelChoices} workspaceId={selectedWorkspaceId} section={workspaceSection} onSectionChange={(section: WorkspaceSection) => workspaceSection = section} safeMode={catalog.safeMode} onOpenSession={openSession} onDirtyChange={(dirty: boolean) => orchestrationDirty = dirty} />{/key}
+          {:else if OrchestrationPanel}{#key orchestrationEpoch}<OrchestrationPanel modelsFor={modelChoices} workspaceId={selectedWorkspaceId} section={workspaceSection} onSectionChange={(section: WorkspaceSection) => { workspaceSection = section; persistUiState(); }} safeMode={catalog.safeMode} onOpenSession={openSession} onDirtyChange={(dirty: boolean) => orchestrationDirty = dirty} />{/key}
           {:else}<div class="state"><h2>{$t('Workspace unavailable')}</h2><p>{$t('This optional contribution is not available. Native session history remains accessible.')}</p></div>{/if}
         </div>
       </section>
@@ -806,7 +817,7 @@
           <small>{selectedWorkspace?.name ?? 'Your workspace'}</small><h1 id="new-session-title">{$t('Create a new chat')}</h1>
           <p>{$t('Choose where to work and which agent to use.')}</p>
           <label>{$t('Project')}<select id="new-session-project" bind:value={newWorkspaceId} disabled={createBusy}><option value="">{$t('Choose project')}</option>{#each catalog.workspaces.filter((workspace) => !workspace.missing) as workspace}<option value={workspace.id}>{workspace.personal ? $t('Chats') : workspace.name}{workspace.personal ? ' · Personal' : ''}</option>{/each}</select></label>
-          <label>{$t('Harness')}<select id="new-session-harness" bind:value={newHarness} onchange={() => newModelId = ''} disabled={createBusy}><option value="">{$t('Choose harness')}</option>{#each catalog.harnesses as harness}<option value={harness.kind} disabled={harness.status !== 'available'}>{harness.name} · {harness.status === 'available' ? 'Available' : harness.status === 'unverified' ? 'Setup or verification required' : 'Unavailable'}</option>{/each}</select></label>
+          <label>{$t('Harness')}<select id="new-session-harness" bind:value={newHarness} onchange={() => newModelId = ''} disabled={createBusy}>{#if !newHarness}<option value="" disabled hidden>{$t('No harness available')}</option>{/if}{#each catalog.harnesses as harness}<option value={harness.kind} disabled={harness.status !== 'available'}>{harness.name} · {harness.status === 'available' ? 'Available' : harness.status === 'unverified' ? 'Setup or verification required' : 'Unavailable'}</option>{/each}</select></label>
           {#if newHarness && catalog.harnesses.find((item) => item.kind === newHarness)?.reason}<p class="field-note">{catalog.harnesses.find((item) => item.kind === newHarness)?.reason}</p>{/if}
           <details class="setup-details"><summary>{$t('Availability and setup')}</summary>
           <ul class="harness-readiness" aria-label={$t('Native harness readiness')}>
@@ -834,7 +845,7 @@
         <ConversationViewport blocks={selectedSnapshot.blocks} loading={sessionLoading} sessionKey={selectedSnapshot.session.id} agentLabel={harnessLabel(selectedSnapshot.session.harness)} />
         <div class="composer-shell">
           {#if catalog.safeMode}<p class="composer-notice">{$t('Runtime actions are disabled in safe mode. Your draft is preserved.')}</p>
-          {:else if selectedSnapshot.session.status === 'closed'}<div class="composer-notice">{#if selectedSnapshot.session.runId}<p>{$t('This native session is closed. Its transcript remains readable.')}</p>{:else}<button type="button" onclick={() => openSession(selectedSnapshot.session.id)} disabled={sessionLoading}>{$t(sessionLoading ? 'Starting' : 'Continue chat')}</button>{/if}</div>
+          {:else if selectedSnapshot.session.status === 'closed'}<p class="composer-notice">{$t(sessionLoading ? 'Opening chat…' : 'This native session is closed. Its transcript remains readable.')}</p>
           {:else if !selectedSnapshot.capabilities.prompt.supported}<p class="composer-notice">{selectedSnapshot.capabilities.prompt.reason ?? `${harnessLabel(selectedSnapshot.session.harness)} is read-only in this mode.`}</p>
           {:else}
             <div class="composer">
@@ -859,9 +870,9 @@
     {:else if selectedSession}
       <div class="state">
         <h1>{selectedSession.title}</h1>
-        <p>{$t('Continue this chat to load its native conversation.')}</p>
+        <p>{$t('The chat could not be opened.')}</p>
         {#if sessionError}<p class="error" role="alert">{sessionError}</p>{/if}
-        {#if !selectedSession.runId}<div class="composer-notice"><button type="button" onclick={() => openSession(selectedSession.id)} disabled={catalog.safeMode || sessionLoading}>{$t('Continue chat')}</button></div>
+        {#if !selectedSession.runId}<button type="button" onclick={() => openSession(selectedSession.id)} disabled={catalog.safeMode || sessionLoading}>{$t('Try again')}</button>
         <button type="button" onclick={() => { deleteTarget = selectedSession; deleteError = undefined; }} disabled={catalog.safeMode}>{$t('Delete chat')}</button>{/if}
       </div>
     {:else}
@@ -876,8 +887,9 @@
     {/if}
   </main>
 
-  {#if inspector}
+  {#if inspector && mainView === 'sessions'}
     <aside class="inspector" tabindex="-1" aria-label={inspector === 'approvals' ? 'Approvals' : inspector === 'activity' ? 'Activity' : 'Session details'}>
+      <PanelResize label={$t('Resize session details')} storageKey="piui.inspector.width" initial={290} edge="left" onresize={(width) => inspectorWidth = width} />
       <header><div><small>{$t('Inspector')}</small><h2>{inspector === 'approvals' ? 'Approvals' : inspector === 'activity' ? 'Activity' : 'Session details'}</h2></div><button class="icon" type="button" onclick={closeInspector} aria-label={$t('Close inspector')}>×</button></header>
       {#if inspector === 'approvals'}
         <div class="inspector-body approval-list">
@@ -950,9 +962,9 @@
 
 <style>
   :global(*) { box-sizing: border-box; }
-  .shell { position:relative; display:grid; grid-template-columns:212px minmax(0,1fr); height:100dvh; overflow:hidden; grid-template-rows:minmax(0,1fr); background:var(--piui-bg); color:var(--piui-text); font-family:var(--piui-font-ui); }
+  .shell { position:relative; display:grid; grid-template-columns:var(--navigation-width,212px) minmax(0,1fr); height:100dvh; overflow:hidden; grid-template-rows:minmax(0,1fr); background:var(--piui-bg); color:var(--piui-text); font-family:var(--piui-font-ui); }
   .shell:has(> .safe-mode) { grid-template-rows:auto minmax(0,1fr); }
-  .shell.with-inspector { grid-template-columns:212px minmax(0,1fr) 290px; }
+  .shell.with-inspector { grid-template-columns:var(--navigation-width,212px) minmax(0,1fr) var(--inspector-width,290px); }
   button, input, select, textarea { font:inherit; color:inherit; }
   button { cursor:pointer; }
   button:disabled { cursor:not-allowed; opacity:.55; }
@@ -960,7 +972,7 @@
   .skip-link { position:fixed; z-index:80; top:8px; left:8px; padding:8px 12px; border-radius:6px; background:var(--piui-text); color:var(--piui-bg); transform:translateY(-160%); }
   .skip-link:focus { transform:none; }
   .safe-mode { grid-column:1/-1; padding:8px 16px; background:var(--piui-warning-surface); border-bottom:1px solid var(--piui-warning-border); color:var(--piui-warning-text); font-size:13px; }
-  .workspace-navigation { min-height:0; display:flex; flex-direction:column; border-right:1px solid var(--piui-border-subtle); background:var(--piui-bg-raised); }
+  .workspace-navigation { position:relative; min-height:0; display:flex; flex-direction:column; border-right:1px solid var(--piui-border-subtle); background:var(--piui-bg-raised); }
   .brand-row { height:46px; padding:0 14px; display:flex; align-items:center; justify-content:space-between; }
   .brand-row strong { letter-spacing:-.02em; }
   .primary-actions { padding:0 9px 10px; display:grid; gap:3px; border-bottom:1px solid var(--piui-border-subtle); }
@@ -983,10 +995,10 @@
   .project-list section { margin-bottom:5px; }
   .project-list section.current-project { padding-bottom:5px; }
   .project-row { display:flex; gap:2px; }
-  .project-row > button:first-child { flex:1; min-width:0; padding:7px 8px; border:0; border-radius:6px; background:transparent; display:flex; justify-content:space-between; gap:7px; text-align:left; }
+  .project-row > button:first-child { flex:1; min-width:0; padding:7px 8px; border:0; border-radius:6px; background:transparent; display:flex; align-items:center; justify-content:flex-start; gap:9px; text-align:left; }
   .project-row > button:first-child:hover, .project-list section.current-project > .project-row > button:first-child { background:var(--piui-surface-1); }
   .project-row span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
-  .project-row small { color:var(--piui-text-muted); }
+  .project-icon { width:18px; height:18px; flex-shrink:0; color:var(--piui-text-faint); } .current-project .project-icon { color:var(--piui-accent); } .project-row span { flex:1; } .project-row small { color:var(--piui-text-muted); }
   .more { width:30px; flex-shrink:0; border:0; border-radius:6px; background:transparent; color:var(--piui-text-muted); }
   .session-list { display:grid; gap:1px; margin:2px 0 0 8px; padding-left:6px; border-left:1px solid var(--piui-border-subtle); }
   .session-list > button { padding:7px 8px; display:grid; gap:3px; border:0; border-radius:6px; background:transparent; text-align:left; }
@@ -1052,7 +1064,7 @@
   .workspace-header nav button { padding:7px 9px; border:0; border-radius:6px; background:transparent; color:var(--piui-text-muted); }
   .workspace-header nav button.active { background:var(--piui-surface-1); color:var(--piui-text); }
   .orchestration-host { min-height:0; overflow:auto; }
-  .inspector { min-width:0; min-height:0; border-left:1px solid var(--piui-border-subtle); background:var(--piui-bg-raised); overflow:hidden; display:grid; grid-template-rows:auto minmax(0,1fr); }
+  .inspector { position:relative; min-width:0; min-height:0; border-left:1px solid var(--piui-border-subtle); background:var(--piui-bg-raised); overflow:hidden; display:grid; grid-template-rows:auto minmax(0,1fr); }
   .inspector > header { height:46px; padding:0 12px 0 16px; border-bottom:1px solid var(--piui-border-subtle); display:flex; align-items:center; justify-content:space-between; }
   .inspector h2 { margin:2px 0 0; font-size:15px; }
   .icon { width:34px; height:34px; padding:0; border:0; border-radius:6px; background:transparent; }
@@ -1157,10 +1169,11 @@
     .form-actions { flex-wrap:wrap; }
   }
 
+  .advanced-options button { display:grid; gap:3px; } .advanced-options strong { font-size:12px; font-weight:500; } .advanced-options small { font-size:11px; color:var(--piui-text-muted); }
   .advanced-nav { position:relative; align-self:center; }
   .advanced-nav summary { padding:6px 9px; color:var(--piui-text-muted); cursor:pointer; border-radius:6px; }
   .advanced-nav summary:hover { background:var(--piui-surface-1); }
-  .advanced-options { position:absolute; right:0; top:100%; z-index:20; min-width:150px; padding:5px; border:1px solid var(--piui-border); border-radius:8px; background:var(--piui-bg-raised); box-shadow:0 8px 28px #0003; }
+  .advanced-options { position:absolute; right:0; top:100%; z-index:20; min-width:220px; padding:5px; border:1px solid var(--piui-border); border-radius:8px; background:var(--piui-bg-raised); box-shadow:0 8px 28px #0003; }
   .advanced-options button { display:block; width:100%; text-align:left; }
   .brand strong { font-size:16px; font-weight:600; }
   .primary-actions kbd { font-size:10px; }

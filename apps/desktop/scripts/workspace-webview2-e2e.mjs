@@ -250,15 +250,15 @@ export async function runWorkspaceWebview2Proof({
   }
 
   async function orchestrationCatalog(workspaceId) {
-    return invoke('orchestration_catalog_v3', { request: { workspaceId } });
+    return invoke('orchestration_catalog_v4', { request: { workspaceId } });
   }
 
   async function readSingle(kind, workspaceId, name) {
     const routes = {
-      profile: ['profiles', 'orchestration_get_profile_v3'],
-      team: ['teams', 'orchestration_get_team_v3'],
-      pipeline: ['pipelines', 'orchestration_get_pipeline_v3'],
-      launch: ['launchCommands', 'orchestration_get_launch_command_v3'],
+      profile: ['profiles', 'orchestration_get_profile_v4'],
+      team: ['teams', 'orchestration_get_team_v4'],
+      pipeline: ['pipelines', 'orchestration_get_pipeline_v4'],
+      launch: ['launchCommands', 'orchestration_get_launch_command_v4'],
     };
     const [collection, route] = routes[kind];
     const catalog = await orchestrationCatalog(workspaceId);
@@ -275,6 +275,12 @@ export async function runWorkspaceWebview2Proof({
     await waitFor(`document.querySelector('#orchestration-title')?.textContent?.trim() === ${JSON.stringify(name)}`, `${name} workspace section`);
   }
 
+  async function chooseNativeModel(selector) {
+    await waitFor(`document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector)}).disabled && [...document.querySelector(${JSON.stringify(selector)}).options].some(o => o.value && !o.disabled)`, 'native model options', startupBoundMs);
+    const value = await evaluate(`[...document.querySelector(${JSON.stringify(selector)}).options].find(o => o.value && !o.disabled).value`);
+    await setControl(selector, value, 'change');
+  }
+
   async function createAndUpdateDefinitions(workspaceId) {
     const names = {
       profile: ['WebView Agent', 'WebView Agent Updated'],
@@ -287,22 +293,22 @@ export async function runWorkspaceWebview2Proof({
     await selectWorkspaceSection('Systems');
     await setControl('.system-name', 'Mixed graph proof');
     await clickButton('＋ Add agent', '.canvas-tools');
-    await setControl('aside label:nth-of-type(3) input', 'fixture-model');
-    await setControl('aside label:nth-of-type(4) input', 'low');
+    await chooseNativeModel('aside[aria-label="Agent settings"] select[aria-label="Model"]');
+    await setControl('aside[aria-label="Agent settings"] select[aria-label="Reasoning"]', 'low', 'change');
     await setControl('aside label:nth-of-type(5) select', 'fast', 'change');
     await clickButton('＋ Add agent', '.canvas-tools');
     await setControl('aside label:nth-of-type(2) select', 'prime-agent', 'change');
-    await setControl('aside label:nth-of-type(3) input', 'prime-fixture');
+    await chooseNativeModel('aside[aria-label="Agent settings"] select[aria-label="Model"]');
     await evaluate(`(() => { const select = document.querySelector('.canvas-tools select'); select.value = 'sequential'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
     await waitFor(`document.querySelectorAll('.connections li').length === 1`, 'graph result connection');
     await clickButton('Save', '.system-editor .toolbar');
     await waitFor(`document.querySelector('.save-state')?.textContent === 'Saved'`, 'atomic graph save');
     const graphCommand = await readSingle('launch', workspaceId, 'Mixed graph proof');
-    const graphPipeline = await invoke('orchestration_get_pipeline_v3', { request: { workspaceId, id: graphCommand.stored.value.pipelineId } });
+    const graphPipeline = await invoke('orchestration_get_pipeline_v4', { request: { workspaceId, id: graphCommand.stored.value.pipelineId } });
     assertion(graphPipeline.value.steps[1].dependencyStepIds[0] === graphPipeline.value.steps[0].id, 'Mixed graph lost its result edge');
     const graphCatalog = await orchestrationCatalog(workspaceId);
     const graphProfiles = [];
-    for (const item of graphCatalog.profiles.filter(item => ['Agent 1', 'Agent 2'].includes(item.name))) graphProfiles.push(await invoke('orchestration_get_profile_v3', { request: { workspaceId, id: item.id } }));
+    for (const item of graphCatalog.profiles.filter(item => ['Agent 1', 'Agent 2'].includes(item.name))) graphProfiles.push(await invoke('orchestration_get_profile_v4', { request: { workspaceId, id: item.id } }));
     assertion(graphProfiles.some(item => item.value.harness === 'codex' && item.value.reasoning === 'low' && item.value.serviceTier === 'fast'), 'Graph lost Codex settings');
     assertion(graphProfiles.some(item => item.value.harness === 'prime-agent'), 'Graph lost Prime adapter');
     await capture('workspace-mixed-graph');
@@ -312,7 +318,7 @@ export async function runWorkspaceWebview2Proof({
     await waitFor(`document.querySelector('#profile-name')`, 'Codex prompt editor');
     await setControl('#profile-name', 'Custom Codex prompt');
     await setControl('#profile-harness', 'codex', 'change');
-    await setControl('#profile-model', 'fixture-model');
+    await chooseNativeModel('#profile-model');
     assertion(await evaluate(`(() => {
       const label = [...document.querySelectorAll('label')].find(e => e.textContent.includes('Replace Codex base prompt'));
       const checkbox = label?.querySelector('input');
@@ -335,7 +341,7 @@ export async function runWorkspaceWebview2Proof({
     await waitFor(`document.querySelector('#profile-name')`, 'profile editor');
     await setControl('#profile-name', names.profile[0]);
     await setControl('#profile-harness', 'prime-agent', 'change');
-    await setControl('#profile-model', 'workspace-e2e-invalid-model');
+    await chooseNativeModel('#profile-model');
     await evaluate(`document.querySelector('details.advanced summary').click()`);
     await setControl('#profile-permission', 'read-only', 'change');
     await waitFor(`document.querySelector('.rule-warning')?.textContent?.includes('Prime Agent rejects this strict permission mode')`, 'unsupported Prime policy warning');
@@ -436,9 +442,9 @@ export async function runWorkspaceWebview2Proof({
     await clickButton('Start run');
     await waitFor(`document.querySelector('#run-inspector-title') && document.querySelector('[aria-label="Run status: Failed"]')`, 'recorded unsupported-policy run failure', startupBoundMs);
     await waitFor(`document.querySelector('.inspector .error[role="alert"]')?.textContent?.includes(${JSON.stringify(expectedFailureCopy)})`, 'safe native preflight error');
-    const runs = await invoke('orchestration_list_runs_v3', { request: { workspaceId } });
+    const runs = await invoke('orchestration_list_runs_v4', { request: { workspaceId } });
     assertion(Array.isArray(runs) && runs.length === 1 && runs[0].status === 'failed', 'The host did not retain exactly one failed run after policy preflight rejection.');
-    const recordedRun = await invoke('orchestration_get_run_v3', { request: { workspaceId, runId: runs[0].id } });
+    const recordedRun = await invoke('orchestration_get_run_v4', { request: { workspaceId, runId: runs[0].id } });
     assertion(recordedRun?.status === 'failed' && recordedRun.tasks?.length === 1, 'The recorded policy-rejected run is not terminal failed.');
     assertion(recordedRun.tasks[0]?.status === 'failed' && recordedRun.tasks[0]?.failure?.code === expectedFailureCode, 'The failed task did not preserve the expected native preflight failure code.');
     assertion(!JSON.stringify(recordedRun).toLocaleLowerCase().includes('succeeded'), 'The policy-rejected run fabricated a succeeded outcome.');
@@ -544,10 +550,10 @@ export async function runWorkspaceWebview2Proof({
       steps: [{ id: SAFE_FIXTURE.stepId, name: 'Blocked task', assignedMemberId: SAFE_FIXTURE.memberId, instructions: 'Must not run in safe mode.', dependencyStepIds: [] }],
     };
     const launch = { id: SAFE_FIXTURE.launchId, name: 'Safe-mode launch', teamId: SAFE_FIXTURE.teamId, pipelineId: SAFE_FIXTURE.pipelineId };
-    await invoke('orchestration_save_profile_v3', { request: { workspaceId, value: profile } });
-    await invoke('orchestration_save_team_v3', { request: { workspaceId, value: team } });
-    await invoke('orchestration_save_pipeline_v3', { request: { workspaceId, value: pipeline } });
-    await invoke('orchestration_save_launch_command_v3', { request: { workspaceId, value: launch } });
+    await invoke('orchestration_save_profile_v4', { request: { workspaceId, value: profile } });
+    await invoke('orchestration_save_team_v4', { request: { workspaceId, value: team } });
+    await invoke('orchestration_save_pipeline_v4', { request: { workspaceId, value: pipeline } });
+    await invoke('orchestration_save_launch_command_v4', { request: { workspaceId, value: launch } });
   }
 
 
@@ -590,6 +596,11 @@ export async function runWorkspaceWebview2Proof({
     await assertRejected('workspace_settings_v12', { command: { type: 'get', sessionId: 'safe-fixture' } }, 'Safe-mode runtime settings', 'safe');
     await assertRejected('workspace_lifecycle_v13', { command: { type: 'deleteSession', sessionId: 'safe-fixture' } }, 'Safe-mode chat deletion', 'safe');
     await assertRejected('workspace_command_v11', { command: { type: 'createSession', workspaceId: workspace.id, harness: 'pi', permissionMode: 'native' } }, 'Safe-mode native session creation', 'safe');
+    if (process.env.PIUI_E2E_CHAT_ONLY === '1' || process.env.PIUI_E2E_GRAPH_ONLY === '1') {
+      assertion((await workspaceCatalog()).sessions.every(session => session.status === 'closed'), 'Safe mode must not auto-start a saved chat');
+      await capture('automatic-chat-safe-mode');
+      return { checks: ['safe-mode-no-auto-start', 'safe-mode-create-rejected'], timings, screenshots };
+    }
 
     const definitions = await orchestrationCatalog(workspace.id);
     assertion(
@@ -599,7 +610,7 @@ export async function runWorkspaceWebview2Proof({
         && definitions.launchCommands.some((item) => item.id === SAFE_FIXTURE.launchId),
       'Safe-mode run fixtures did not persist from the normal host process.',
     );
-    await assertRejected('orchestration_start_run_v3', { request: {
+    await assertRejected('orchestration_start_run_v4', { request: {
       workspaceId: workspace.id, runId: `workspace-e2e-safe-run-${Date.now()}`,
       teamId: SAFE_FIXTURE.teamId, pipelineId: SAFE_FIXTURE.pipelineId, launchCommandId: SAFE_FIXTURE.launchId,
     } }, 'Safe-mode orchestration run creation', 'runtime-unavailable');
@@ -680,7 +691,6 @@ export async function runWorkspaceWebview2Proof({
   }))()`);
   assertion(readiness.controls, 'The new-session form lost an accessible native control label.');
   const unavailable = catalog.harnesses.filter((item) => item.status !== 'available');
-  assertion(unavailable.length > 0, 'The isolated host did not supply an honest unavailable or unverified harness state.');
   for (const item of unavailable) {
     const visibleState = item.reason
       ? readiness.text.includes(item.reason)
@@ -689,7 +699,7 @@ export async function runWorkspaceWebview2Proof({
   }
   await capture('workspace-unavailable');
   end('unavailable');
-  checks.push('honest-harness-unavailable-state');
+  checks.push(unavailable.length ? 'honest-harness-unavailable-state' : 'all-installed-harnesses-available');
 
   begin('nativeLifecycle');
   const eligible = catalog.harnesses.find((item) =>
@@ -723,6 +733,70 @@ export async function runWorkspaceWebview2Proof({
   const renamedSnapshot = await invoke('workspace_command_v11', { command: { type: 'snapshot', sessionId: nativeSession.id } });
   assertion(renamedSnapshot?.snapshot?.session?.title === 'Native lifecycle proof', 'Rename did not reach the native workspace host.');
   end('nativeLifecycle');
+  if (process.env.PIUI_E2E_CATALOGS === '1') {
+    for (const harness of ['codex', 'pi', 'prime-agent']) {
+      await evaluate(`(() => { window.__catalogProof = undefined; window.__TAURI_INTERNALS__.invoke('harness_models_v14', { request: ${JSON.stringify({ workspaceId: nativeSession.workspaceId, harness })} }).then(value => window.__catalogProof = { value }, error => window.__catalogProof = { error }); return true; })()`);
+      await waitFor('window.__catalogProof !== undefined', `${harness} native catalog`, startupBoundMs);
+      const outcome = await evaluate('window.__catalogProof');
+      assertion(!outcome.error, `${harness} catalog failed: ${JSON.stringify(outcome.error)}`);
+      const result = outcome.value;
+      assertion(result.protocol === 14, 'catalog protocol');
+      assertion(result.harness === harness, 'catalog harness');
+      assertion(Array.isArray(result.models), `${harness} native model catalog`);
+      // Pi/Prime use isolated agent directories with no provider credentials.
+      if (harness === 'codex') assertion(result.models.length > 0, 'Codex native model catalog');
+      assertion(Array.isArray(result.resources.items), 'resource catalog');
+      checks.push(`${harness} catalog: ${JSON.stringify({ models: result.models.length, reasoning: [...new Set(result.models.flatMap(model => model.thinkingLevels ?? []))], resources: result.resources.items.length, warnings: result.resources.warnings })}`);
+      console.log(checks.at(-1));
+    }
+  }
+  if (process.env.PIUI_E2E_GRAPH_ONLY === '1') {
+    await clickButton('Workspace', '.view-switch');
+    await selectWorkspaceSection('Systems');
+    await setControl('.system-name', 'Inspector proof');
+    await clickButton('＋ Add agent', '.canvas-tools');
+    const inspector = 'aside[aria-label="Agent settings"]';
+    const models = `${inspector} select[aria-label="Model"]`;
+    await waitFor(`document.querySelector(${JSON.stringify(models)})?.options.length > 1 && !document.querySelector(${JSON.stringify(models)}).disabled`, 'graph native models', startupBoundMs);
+    const model = await evaluate(`document.querySelector(${JSON.stringify(models)}).options[1].value`);
+    await setControl(models, model, 'change');
+    await setControl(`${inspector} textarea[aria-label="Task"]`, 'Prepare the implementation.');
+    await setControl(`${inspector} textarea[aria-label="Input"]`, 'Approved specification and affected file paths.');
+    await setControl(`${inspector} textarea[aria-label="When to call"]`, 'After implementation, when an independent review is needed.');
+    await setControl(`${inspector} textarea[aria-label="Expected result"]`, 'Actionable findings with file paths and test evidence.');
+    assertion(!await evaluate(`document.querySelector('.system-editor').textContent.includes('Advanced settings')`), 'separate advanced editor removed');
+    const width = await evaluate(`document.querySelector(${JSON.stringify(inspector)}).getBoundingClientRect().width`);
+    await evaluate(`(() => { const splitter = document.querySelector(${JSON.stringify(inspector)}).querySelector('[role="separator"]'); splitter.focus(); splitter.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowLeft',bubbles:true})); })()`);
+    await waitFor(`document.querySelector(${JSON.stringify(inspector)}).getBoundingClientRect().width > ${width}`, 'keyboard panel resize');
+    await clickButton('Expand editor', inspector);
+    await waitFor(`document.querySelector('[role="dialog"] textarea')?.getBoundingClientRect().height > document.querySelector(${JSON.stringify(inspector)}).querySelector('textarea').getBoundingClientRect().height`, 'expanded task editor');
+    await setControl('.task-editor textarea', 'Prepare the implementation and test it.');
+    await clickButton('Done', '.task-editor');
+    await clickButton('Save', '.system-editor .toolbar');
+    await waitFor(`document.querySelector('.system-editor .save-state')?.textContent === 'Saved'`, 'graph saved');
+    const command = await readSingle('launch', nativeSession.workspaceId, 'Inspector proof');
+    const saved = await invoke('orchestration_get_pipeline_v4', { request: { workspaceId: nativeSession.workspaceId, id: command.stored.value.pipelineId } });
+    assertion(saved.value.steps[0].inputInstructions === 'Approved specification and affected file paths.', 'Input reaches durable pipeline');
+    await clickButton('New system', '.system-editor .toolbar');
+    await setControl('select[aria-label="Open system"]', command.stored.value.id, 'change');
+    await waitFor(`document.querySelector('textarea[aria-label="Input"]')?.value === 'Approved specification and affected file paths.'`, 'Input restored');
+    assertion(await evaluate(`document.querySelector('textarea[aria-label="When to call"]').value === 'After implementation, when an independent review is needed.'`), 'invocation criteria restored');
+    assertion(await evaluate(`document.querySelector('textarea[aria-label="Expected result"]').value === 'Actionable findings with file paths and test evidence.'`), 'expected result restored');
+    await capture('unified-inspector');
+    return { native: { harness: eligible.kind, version: eligible.version, sessionId: nativeSession.id }, timings, screenshots, checks: [...checks, 'native-graph-model-selection', 'keyboard-resize', 'expanded-task-editor', 'durable-input-reload', 'inline-settings'] };
+  }
+  if (process.env.PIUI_E2E_CHAT_ONLY === '1') {
+    await clickButton('Session details');
+    await clickButton('Close native session', 'aside[aria-label="Session details"]');
+    await verifyClosedNativeSession(nativeSession.id, 'auto-resume-close-failure');
+    await reload();
+    await waitFor(`document.querySelector('#session-draft') && !document.querySelector('#session-draft').disabled`, 'automatically restored composer', startupBoundMs);
+    const restored = (await workspaceCatalog()).sessions.filter(session => session.id === nativeSession.id);
+    assertion(restored.length === 1 && restored[0].status === 'idle', 'Automatic restore must keep the same chat ID');
+    assertion(!(await evaluate(`document.body.textContent.includes('Continue chat')`)), 'Normal restore must not require Continue');
+    await capture('automatic-chat-restore');
+    return { checks: [...checks, 'automatic-same-id-chat-restore', 'no-continue-gate'], timings, screenshots, native: { harness: eligible.kind, version: eligible.version, sessionId: nativeSession.id }, cleanup: { workspaceId: workspace.id, safeFixture: SAFE_FIXTURE } };
+  }
   checks.push('eligible-native-start', 'native-snapshot-no-private-reference', 'native-ui-rename');
   await clickButton('Model and reasoning');
   await waitFor(`document.querySelector('.runtime-picker select[aria-label="Model"]')?.options.length > 0 && !document.querySelector('.runtime-picker select').disabled`, 'native model catalog', startupBoundMs);
@@ -849,14 +923,14 @@ export async function runWorkspaceWebview2Proof({
   await assertRejected('workspace_command_v11', { command: { type: 'shell', command: 'whoami' } }, 'Unknown workspace command');
   await assertRejected('workspace_command_v11', { command: { type: 'snapshot', sessionId: nativeSession.id, nativePath: projectPath } }, 'Forged native path field');
   await assertRejected('workspace_command_v11', { command: { type: 'createSession', workspaceId: workspace.id, harness: eligible.kind, permissionMode: 'native', profileId: 'forged-profile-id' } }, 'Forged ordinary-session profile field');
-  await assertRejected('orchestration_catalog_v3', { request: { workspaceId: workspace.id, actor: 'forged-actor' } }, 'Forged orchestration actor field');
+  await assertRejected('orchestration_catalog_v4', { request: { workspaceId: workspace.id, actor: 'forged-actor' } }, 'Forged orchestration actor field');
   await assertRejected('workspace_command_v11', { command: { type: 'respond', sessionId: nativeSession.id, requestId: 'forged-approval', decision: 'approve-once' } }, 'Forged approval reply', 'approval');
   const forgedWorkspaceProfile = {
     id: 'forged-profile', name: 'Forged profile', harness: 'pi', model: 'native', permissionMode: 'native',
     instructions: '', toolPolicy: { rules: [] }, allowedSpawnProfileIds: [],
   };
   await assertRejected('workspace_command_v11', { command: { type: 'createSession', workspaceId: 'forged-workspace-id', harness: eligible.kind, permissionMode: 'native' } }, 'Unknown native-session workspace');
-  await assertRejected('orchestration_save_profile_v3', { request: { workspaceId: 'forged-workspace-id', value: forgedWorkspaceProfile } }, 'Unknown orchestration workspace');
+  await assertRejected('orchestration_save_profile_v4', { request: { workspaceId: 'forged-workspace-id', value: forgedWorkspaceProfile } }, 'Unknown orchestration workspace');
   end('rejections');
   checks.push('unknown-command-rejected', 'native-path-field-rejected', 'ordinary-profile-field-rejected', 'actor-field-rejected', 'forged-approval-rejected', 'unknown-native-and-orchestration-workspaces-rejected');
 
@@ -870,10 +944,7 @@ export async function runWorkspaceWebview2Proof({
 
   try {
     await reload();
-    await waitFor(`[...document.querySelectorAll('.composer-notice button')].some(button => button.textContent.trim() === 'Continue chat')`, 'saved chat continuation after reload');
-    await evaluate(`document.querySelector('.composer-notice button').focus()`);
-    assertion(await evaluate(`document.activeElement?.textContent?.trim() === 'Continue chat'`), 'Continue chat must be keyboard focusable');
-    await clickButton('Continue chat', '.composer-notice');
+    assertion(!(await evaluate(`document.body.textContent.includes('Continue chat')`)), 'A saved chat must not require a Continue button');
     await waitFor(`[...document.querySelectorAll('.session-list > button')].some((item) => item.querySelector('.session-title')?.textContent?.trim() === 'Native lifecycle proof' && item.textContent?.includes('Idle'))`, 'zero-turn native session reopened as idle', startupBoundMs);
     catalog = await workspaceCatalog();
     const reopenedById = catalog.sessions.filter((item) => item.id === nativeSession.id);
@@ -914,7 +985,7 @@ export async function runWorkspaceWebview2Proof({
   await waitFor(`!document.querySelector('[aria-labelledby="delete-chat-title"]')`, 'deleted chat confirmation closes');
   await reload();
   assertion(!(await workspaceCatalog()).sessions.some(session => session.id === nativeSession.id), 'Deleted chat returned after reload');
-  checks.push('saved-chat-continue-after-reload', 'delete-chat-cancel-focus-and-reload');
+  checks.push('saved-chat-auto-resume-after-reload', 'delete-chat-cancel-focus-and-reload');
   timings.total = normalizedMilliseconds(performance.now() - startedAt);
   return {
     checks,

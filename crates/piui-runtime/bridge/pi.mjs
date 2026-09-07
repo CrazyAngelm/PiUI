@@ -15,6 +15,23 @@ export async function createPiAdapter(config, emit) {
     throw fail("runtime-unavailable", "The Pi runtime is not installed.");
   }
 
+  let nativeModelFeatures;
+  try {
+    const { createRequire } = await import("node:module");
+    const { pathToFileURL } = await import("node:url");
+    const { readFile } = await import("node:fs/promises");
+    const { isAbsolute } = await import("node:path");
+    const entry = config.runtimeArgs.find(value => typeof value === "string" && isAbsolute(value) && value.endsWith(".js"));
+    if (entry) for (const base of createRequire(entry).resolve.paths("@earendil-works/pi-ai") ?? []) {
+      const root = join(base, "@earendil-works/pi-ai");
+      let manifest;
+      try { manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8")); } catch { continue; }
+      if (manifest.exports?.["."]?.import !== "./dist/index.js") break;
+      nativeModelFeatures = await import(pathToFileURL(join(root, "dist/index.js")).href);
+      break;
+    }
+  } catch { /* Older Pi builds may only report reasoning for the current model through RPC. */ }
+
   if (config.nativeSubagents === true) throw fail("unsupported-policy", "This Pi adapter cannot enforce native subagent policy.");
   if (config.coordination === true) throw fail("unsupported-policy", "This Pi RPC adapter cannot register the coordinator tool.");
   if (config.permissionMode === "workspace-write") {
@@ -108,7 +125,7 @@ export async function createPiAdapter(config, emit) {
     id: candidate.id,
     ...(typeof candidate.provider === "string" ? { provider: candidate.provider } : {}),
     name: typeof candidate.name === "string" ? candidate.name : candidate.id,
-    ...(Array.isArray(candidate.thinkingLevels) ? { thinkingLevels: candidate.thinkingLevels.filter((x) => typeof x === "string") } : {}),
+    ...(nativeModelFeatures?.getSupportedThinkingLevels ? { thinkingLevels: nativeModelFeatures.getSupportedThinkingLevels(candidate) } : Array.isArray(candidate.thinkingLevels) ? { thinkingLevels: candidate.thinkingLevels.filter((x) => typeof x === "string") } : {}),
   } : undefined;
   const historyBlock = (entry) => {
     if (entry?.type !== "message" || !entry.message) return undefined;
@@ -300,6 +317,15 @@ export async function createPiAdapter(config, emit) {
   };
 
   return {
+    async resources() {
+      const items = [...builtInTools].map(id => ({ kind: "tool", id, name: id, enabled: true, configurable: true }));
+      const warnings = [];
+      try {
+        const result = await request("get_commands");
+        for (const command of result.commands ?? []) if (command.source === "skill") items.push({ kind: "skill", id: command.name, name: command.name.replace(/^skill:/, ""), enabled: true, configurable: false });
+      } catch { warnings.push("Skills could not be loaded from Pi."); }
+      return { items, warnings };
+    },
     async snapshot() {
       if (closed) throw fail("not-running", "The Pi runtime is not running.");
       const latest = await request("get_state");
@@ -332,6 +358,7 @@ export async function createPiAdapter(config, emit) {
       return { accepted: true };
     },
     async interrupt() { cancelApprovals(); await request("abort"); },
+    async catalogModels() { return (await this.models()).map(model => ({ ...model, supportsFast: false })); },
     async models() {
       const result = await request("get_available_models");
       availableModels = (result?.models ?? []).map(mapModel).filter(Boolean);

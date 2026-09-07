@@ -5,7 +5,7 @@ description: Create, review, or edit PiUI agent systems as validated JSON files 
 
 # PiUI systems
 
-Turn the user's task into an importable `.piui.json` system. Work in the PiUI repository supplied by the user; on this installation it is `D:/Projects/PIUI`. Locate another checkout if that path is absent. Read its `AGENTS.md`, `contracts/system-file-v1.schema.json`, and [format and workflow](references/configuration.md). The repository schema and adapter manifests override stale examples in this skill.
+Turn the user's task into an importable `.piui.json` system. Work in the PiUI repository supplied by the user; on this installation it is `D:/Projects/PIUI`. Locate another checkout if that path is absent. Read its `AGENTS.md`, `contracts/system-file-v2.schema.json`, and [format and workflow](references/configuration.md). The repository schema and adapter manifests override stale examples in this skill.
 
 ## Design from the outcome
 
@@ -29,7 +29,27 @@ Choose topology from dependencies: sequence for cumulative work; independent bra
 
 If asked to modify an existing saved system, use its exported JSON as input. Import creates a fresh copy; tell the user this rather than claiming to update a running or existing saved system. Never edit PiUI's internal orchestration generations, SQLite index, native JSONL, auth files or another agent's settings to apply a config. File creation is not authorization to run a paid workload or perform external actions.
 
+## Input contracts
+
+Version 2 adds optional `agents[].input`. Describe the evidence, artifact paths,
+format and prerequisites the recipient needs, separately from its `task`.
+Upstream result and message senders receive these requirements from the frozen
+run snapshot; the recipient also receives them. Missing input should be reported,
+not fabricated. This is instruction delivery, not automatic semantic validation
+of every returned artifact. Version 1 files still import; export writes version 2.
+
+For dynamically callable profiles, fill `profile.whenToCall`,
+`profile.inputInstructions` (the reusable input default) and
+`profile.expectedResult`. A graph node's `input` overrides its reusable default.
+The authorized roster exposes invocation, input and result descriptions to the
+caller. They describe purpose; they never grant permission to spawn a profile.
+
 ## Runtime boundaries
+
+- The graph and profile editors obtain native models, reasoning and resources
+  through `harness_models_v14`. Select available entries there; do not invent
+  model levels from adapter examples. Missing imported IDs remain visible until
+  explicitly corrected. A catalog is not proof of authentication or isolation.
 
 - Standard/Fast is supported by Codex and by Prime models advertised as Fast-capable by its native SDK; Pi RPC does not expose it. Base-prompt replacement is a Codex capability. Omitted `baseInstructions` keeps the native base; `""` replaces only that base with empty text, not all native context.
 - Pi profiles can append native instructions and participate in result pipelines. Its current RPC adapter does not expose workspace messaging/delegation tools; do not promise Pi send/observe/spawn links.

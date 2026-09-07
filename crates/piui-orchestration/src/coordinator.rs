@@ -177,6 +177,7 @@ impl Coordinator {
                 reason: "member has no profile",
             });
         };
+        let task_instructions = task_instructions(run, &step);
         let dependency_result_references = dependency_result_references(run, &step);
         let Some(task) = run.tasks.iter_mut().find(|task| task.step_id == step_id) else {
             return Err(CoordinatorError::InvalidRunData {
@@ -194,7 +195,7 @@ impl Coordinator {
             step_id: step.id,
             member_id: member.id.clone(),
             profile,
-            task_instructions: step.instructions,
+            task_instructions,
             dependency_result_references,
         }))
     }
@@ -274,7 +275,18 @@ impl Coordinator {
             from_member_id: actor_member_id.into(),
             to_member_id: id.clone(),
         });
+        let input_instructions = definition.pipeline.steps.iter().find_map(|step| {
+            definition
+                .team
+                .members
+                .iter()
+                .find(|member| {
+                    member.id == step.assigned_member_id && member.profile_id == profile_id
+                })
+                .and(step.input_instructions.clone())
+        });
         definition.pipeline.steps.push(crate::PipelineStep {
+            input_instructions,
             id: id.clone(),
             name: name.into(),
             assigned_member_id: id.clone(),
@@ -369,6 +381,7 @@ impl Coordinator {
         }
         if let Some(existing_lease_id) = run.tasks[index].lease_id.as_deref() {
             if existing_lease_id == lease_id {
+                let task_instructions = task_instructions(run, &step);
                 let dependency_result_references = dependency_result_references(run, &step);
                 return Ok(ControlledSpawnLease {
                     run_id: run.id.clone(),
@@ -378,7 +391,7 @@ impl Coordinator {
                     step_id: step.id,
                     member_id: target_member.id.clone(),
                     profile,
-                    task_instructions: step.instructions,
+                    task_instructions,
                     dependency_result_references,
                 });
             }
@@ -391,6 +404,7 @@ impl Coordinator {
                 step_id: step_id.to_owned(),
             });
         }
+        let task_instructions = task_instructions(run, &step);
         let dependency_result_references = dependency_result_references(run, &step);
         run.tasks[index].lease_id = Some(lease_id.clone());
         run.tasks[index].revision += 1;
@@ -403,7 +417,7 @@ impl Coordinator {
             step_id: step.id,
             member_id: target_member.id.clone(),
             profile,
-            task_instructions: step.instructions,
+            task_instructions,
             dependency_result_references,
         })
     }
@@ -475,6 +489,7 @@ impl Coordinator {
                 reason: "member has no profile",
             });
         };
+        let task_instructions = task_instructions(run, &step);
         let dependency_result_references = dependency_result_references(run, &step);
         run.tasks[index].status = TaskStatus::Running;
         run.tasks[index].lease_id = None;
@@ -488,7 +503,7 @@ impl Coordinator {
             step_id: step.id,
             member_id: member.id.clone(),
             profile,
-            task_instructions: step.instructions,
+            task_instructions,
             dependency_result_references,
             execution,
         })
@@ -568,6 +583,7 @@ impl Coordinator {
                 reason: "member has no profile",
             });
         };
+        let task_instructions = task_instructions(run, &step);
         let dependency_result_references = dependency_result_references(run, &step);
         let Some(task) = run.tasks.iter_mut().find(|task| task.step_id == step_id) else {
             return Err(CoordinatorError::InvalidRunData {
@@ -586,7 +602,7 @@ impl Coordinator {
             step_id,
             member_id: member.id.clone(),
             profile,
-            task_instructions: step.instructions,
+            task_instructions,
             dependency_result_references,
             execution,
         }))
@@ -993,13 +1009,73 @@ impl Coordinator {
     }
 }
 
+fn task_instructions(run: &Run, step: &crate::PipelineStep) -> String {
+    let mut text = step.instructions.clone();
+    let profile_for = |member_id: &str| {
+        run.definition
+            .team
+            .members
+            .iter()
+            .find(|member| member.id == member_id)
+            .and_then(|member| {
+                run.definition
+                    .profiles
+                    .iter()
+                    .find(|profile| profile.id == member.profile_id)
+            })
+    };
+    let profile = profile_for(&step.assigned_member_id);
+    if let Some(result) = profile
+        .and_then(|profile| profile.expected_result.as_deref())
+        .filter(|value| !value.trim().is_empty())
+    {
+        text.push_str("\n\nExpected result:\n");
+        text.push_str(result);
+    }
+    if let Some(input) = step
+        .input_instructions
+        .as_deref()
+        .or_else(|| profile.and_then(|profile| profile.input_instructions.as_deref()))
+        .filter(|value| !value.trim().is_empty())
+    {
+        text.push_str("\n\nExpected input:\n");
+        text.push_str(input);
+        text.push_str("\nIf required input is missing, identify the gap rather than inventing it.");
+    }
+    for recipient in &run.definition.pipeline.steps {
+        if recipient.dependency_step_ids.contains(&step.id)
+            || run.definition.team.send_edges.iter().any(|edge| {
+                edge.from_member_id == step.assigned_member_id
+                    && edge.to_member_id == recipient.assigned_member_id
+            })
+        {
+            if let Some(input) = recipient
+                .input_instructions
+                .as_deref()
+                .or_else(|| {
+                    profile_for(&recipient.assigned_member_id)
+                        .and_then(|profile| profile.input_instructions.as_deref())
+                })
+                .filter(|value| !value.trim().is_empty())
+            {
+                text.push_str("\n\nResult handoff requirements for ");
+                text.push_str(&recipient.name);
+                text.push_str(":\n");
+                text.push_str(input);
+                text.push_str("\nInclude the requested data or artifact references in your final result. State missing evidence explicitly.");
+            }
+        }
+    }
+    text
+}
+
 pub fn serialize_run(run: &Run) -> Result<Vec<u8>, RunDataError> {
     serde_json::to_vec_pretty(run).map_err(RunDataError::Serialize)
 }
 
 pub fn deserialize_run(bytes: &[u8]) -> Result<Run, RunDataError> {
     let mut run: Run = serde_json::from_slice(bytes).map_err(RunDataError::Deserialize)?;
-    if matches!(run.schema_version, 1 | 2) {
+    if matches!(run.schema_version, 1..=3) {
         run.schema_version = ORCHESTRATION_SCHEMA_VERSION;
     }
     validate_run_data(&run)?;

@@ -161,6 +161,12 @@ input.on("line", (line) => {
     }
   } else if (message.method === "thread/unsubscribe") {
     send({id:message.id,result:{status:'unsubscribed'}});
+  } else if (message.method === "skills/list") {
+    send({ id: message.id, result: { data: [{ skills: [{ name: "Review", path: "/skills/review/SKILL.md", enabled: false }] }] } });
+  } else if (message.method === "config/read") {
+    send({ id: message.id, result: { config: { mcp_servers: { docs: { enabled: true, env: { TOKEN: "SECRET-MUST-NOT-LEAK" } } } } } });
+  } else if (message.method === "mcpServerStatus/list") {
+    send({ id: message.id, result: { data: [{ name: "docs", tools: { search_docs: { name: "Search docs" } } }], nextCursor: null } });
   } else if (message.method === "model/list") {
     if (holdModelFixture) return;
     send({ id: message.id, result: { data: [{ id: "fixture-model", model: "fixture-model", displayName: "Fixture Model", hidden: false, supportedReasoningEfforts: [{ reasoningEffort: "low" }] }], nextCursor: null } });

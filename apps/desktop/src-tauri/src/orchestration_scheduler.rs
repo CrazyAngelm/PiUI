@@ -9,7 +9,7 @@ use crate::harness_configuration::PI_NATIVE_TOOL_NAMES;
 use crate::harness_configuration::{LaunchPolicy, launch_policy};
 use crate::orchestration_api::{
     AgentRequestAdmission, AgentToolOperation, AgentToolRequest, ManagedAgentContext,
-    ORCHESTRATION_EVENT_V3, OrchestrationApiState, OrchestrationRunChangedEventV3,
+    ORCHESTRATION_EVENT_V4, OrchestrationApiState, OrchestrationRunChangedEventV4,
 };
 use crate::state::HostState;
 #[cfg(test)]
@@ -711,7 +711,7 @@ impl OrchestrationScheduler {
                 members,
                 spawn_profiles,
             } => CoordinatorResponse::Success(json!({
-                "spawnProfiles": spawn_profiles.into_iter().map(|p| json!({"profileId": p.id, "name": p.name, "harness": harness_name(p.harness)})).collect::<Vec<_>>(),
+                "spawnProfiles": spawn_profiles.into_iter().map(|p| json!({"profileId": p.id, "name": p.name, "harness": harness_name(p.harness), "whenToCall": p.when_to_call, "input": p.input_instructions, "expectedResult": p.expected_result})).collect::<Vec<_>>(),
                 "members": members.into_iter().map(|member| json!({
                     "memberId": member.member_id,
                     "profileId": member.profile_id,
@@ -1054,9 +1054,9 @@ impl OrchestrationScheduler {
 
     fn emit_run_invalidation<R: Runtime>(&self, app: &AppHandle<R>, workspace_id: &str, run: &Run) {
         let _ = app.emit(
-            ORCHESTRATION_EVENT_V3,
-            OrchestrationRunChangedEventV3 {
-                protocol: 3,
+            ORCHESTRATION_EVENT_V4,
+            OrchestrationRunChangedEventV4 {
+                protocol: 4,
                 event_type: "runChanged",
                 workspace_id: workspace_id.to_owned(),
                 run_id: run.id().to_owned(),
@@ -1492,6 +1492,9 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
     let default_model = default_model.expect("Prime default model was not reported");
 
     let profile = AgentProfile {
+        when_to_call: None,
+        input_instructions: None,
+        expected_result: None,
         id: "prime-profile".into(),
         name: "Prime marker worker".into(),
         harness: Harness::PrimeAgent,
@@ -1533,6 +1536,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
         name: "Prime native marker DAG".into(),
         steps: vec![
             PipelineStep {
+                input_instructions: None,
                 id: "step-one".into(),
                 name: "First marker".into(),
                 assigned_member_id: "prime-member".into(),
@@ -1540,6 +1544,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
                 dependency_step_ids: vec![],
             },
             PipelineStep {
+                input_instructions: None,
                 id: "step-two".into(),
                 name: "Second marker".into(),
                 assigned_member_id: "prime-member".into(),
@@ -1550,7 +1555,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
             },
         ],
     };
-    let store_directory = app_data.join("orchestration-v3");
+    let store_directory = app_data.join("orchestration-v4");
     fs::create_dir_all(&store_directory).unwrap();
     let document = serde_json::json!({
         "version": 1,
@@ -1721,6 +1726,9 @@ mod tests {
 
     fn profile(harness: Harness) -> AgentProfile {
         AgentProfile {
+            when_to_call: None,
+            input_instructions: None,
+            expected_result: None,
             id: "profile".into(),
             name: "Worker".into(),
             harness,
@@ -1895,6 +1903,7 @@ mod tests {
                 name: "Pipeline".into(),
                 steps: vec![
                     PipelineStep {
+                        input_instructions: None,
                         id: "build".into(),
                         name: "Build".into(),
                         assigned_member_id: "member".into(),
@@ -1902,6 +1911,7 @@ mod tests {
                         dependency_step_ids: vec![],
                     },
                     PipelineStep {
+                        input_instructions: None,
                         id: "review".into(),
                         name: "Review".into(),
                         assigned_member_id: "member".into(),

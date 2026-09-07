@@ -16,6 +16,10 @@ test("Pi RPC adapter snapshots history and returns prompt admission", async () =
   assert.equal(before.materialized, false);
   assert.equal(before.blocks[0].text, "hello");
   assert.notEqual(before.blocks[0].id, "entry-private");
+  const resources = await adapter.resources();
+  assert.ok(resources.items.some(item => item.kind === 'tool' && item.id === 'read' && item.configurable));
+  assert.ok(resources.items.some(item => item.kind === 'skill' && item.name === 'review' && !item.configurable));
+  assert.deepEqual(resources.warnings, []);
   const started = Date.now();
   await adapter.prompt({ text: "test", mode: "prompt" });
   assert.ok(Date.now() - started < 30, "prompt waits only for native admission");

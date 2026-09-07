@@ -5,7 +5,7 @@ import type {
   PolicyEnforcement,
   ToolDecision,
   ToolRule,
-} from '../../../../../contracts/orchestration-v3';
+} from '../../../../../contracts/orchestration-v4';
 
 export interface ProfileDraft {
   id: string;
@@ -17,6 +17,9 @@ export interface ProfileDraft {
   serviceTier: 'standard' | 'fast';
   permissionMode: PermissionMode;
   instructions: string;
+  whenToCall: string;
+  inputInstructions: string;
+  expectedResult: string;
   replaceBasePrompt: boolean;
   baseInstructions: string;
   toolRules: ToolRule[];
@@ -43,7 +46,7 @@ export function createProfileDraft(
       reasoning: '',
       serviceTier: 'standard',
       permissionMode: 'native',
-      instructions: '',
+      instructions: '', whenToCall: '', inputInstructions: '', expectedResult: '',
       replaceBasePrompt: false,
       baseInstructions: '',
       toolRules: [],
@@ -62,6 +65,7 @@ export function createProfileDraft(
     serviceTier: profile.serviceTier ?? 'standard',
     permissionMode: profile.permissionMode,
     instructions: profile.instructions,
+    whenToCall: profile.whenToCall ?? '', inputInstructions: profile.inputInstructions ?? '', expectedResult: profile.expectedResult ?? '',
     replaceBasePrompt: profile.baseInstructions !== undefined,
     baseInstructions: profile.baseInstructions ?? '',
     resourceRules: profile.resourceRules ?? [],
@@ -82,6 +86,9 @@ export function profileFromDraft(draft: ProfileDraft): AgentProfile {
     ...(draft.harness !== 'pi' ? { serviceTier: draft.serviceTier } : {}),
     permissionMode: draft.permissionMode,
     instructions: draft.instructions,
+    ...(draft.whenToCall ? { whenToCall: draft.whenToCall } : {}),
+    ...(draft.inputInstructions ? { inputInstructions: draft.inputInstructions } : {}),
+    ...(draft.expectedResult ? { expectedResult: draft.expectedResult } : {}),
     ...(draft.replaceBasePrompt && draft.harness === 'codex' ? { baseInstructions: draft.baseInstructions } : {}),
     ...(draft.resourceRules.length ? { resourceRules: draft.resourceRules } : {}),
     toolPolicy: { rules: draft.toolRules.map((rule) => ({ ...rule, tool: rule.tool.trim() })) },

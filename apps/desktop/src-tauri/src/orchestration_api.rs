@@ -98,11 +98,11 @@ fn scheduler_error(
     OrchestrationApiError { code: error.code }
 }
 
-pub const ORCHESTRATION_EVENT_V3: &str = "piui://orchestration-event";
+pub const ORCHESTRATION_EVENT_V4: &str = "piui://orchestration-event";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OrchestrationRunChangedEventV3 {
+pub struct OrchestrationRunChangedEventV4 {
     pub protocol: u8,
     #[serde(rename = "type")]
     pub event_type: &'static str,
@@ -113,9 +113,9 @@ pub struct OrchestrationRunChangedEventV3 {
 
 pub fn emit_run_changed(app: &AppHandle, workspace_id: &str, run: &Run) {
     let _ = app.emit(
-        ORCHESTRATION_EVENT_V3,
-        OrchestrationRunChangedEventV3 {
-            protocol: 3,
+        ORCHESTRATION_EVENT_V4,
+        OrchestrationRunChangedEventV4 {
+            protocol: 4,
             event_type: "runChanged",
             workspace_id: workspace_id.to_owned(),
             run_id: run.id().to_owned(),
@@ -377,7 +377,28 @@ impl OrchestrationApiState {
                                         .profiles
                                         .iter()
                                         .filter(|p| actor.allowed_spawn_profile_ids.contains(&p.id))
-                                        .cloned()
+                                        .map(|profile| {
+                                            let mut profile = profile.clone();
+                                            if let Some(input) =
+                                                run.definition().pipeline.steps.iter().find_map(
+                                                    |step| {
+                                                        run.definition()
+                                                            .team
+                                                            .members
+                                                            .iter()
+                                                            .find(|member| {
+                                                                member.id == step.assigned_member_id
+                                                                    && member.profile_id
+                                                                        == profile.id
+                                                            })
+                                                            .and(step.input_instructions.clone())
+                                                    },
+                                                )
+                                            {
+                                                profile.input_instructions = Some(input);
+                                            }
+                                            profile
+                                        })
                                         .collect()
                                 })
                                 .unwrap_or_default(),
@@ -894,7 +915,7 @@ pub struct DefinitionSummary {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OrchestrationCatalogV3 {
+pub struct OrchestrationCatalogV4 {
     pub profiles: Vec<DefinitionSummary>,
     pub teams: Vec<DefinitionSummary>,
     pub pipelines: Vec<DefinitionSummary>,
@@ -1200,15 +1221,15 @@ fn delete_definition<T: DefinitionValue>(
 }
 
 #[tauri::command]
-pub fn orchestration_catalog_v3(
+pub fn orchestration_catalog_v4(
     state: State<'_, OrchestrationApiState>,
     host_state: State<'_, HostState>,
     request: WorkspaceRequest,
-) -> Result<OrchestrationCatalogV3, OrchestrationApiError> {
+) -> Result<OrchestrationCatalogV4, OrchestrationApiError> {
     validate_workspace_scope(&host_state, &request.workspace_id)?;
     let store = state.lock()?;
     let Some(workspace) = store.workspace(&request.workspace_id) else {
-        return Ok(OrchestrationCatalogV3 {
+        return Ok(OrchestrationCatalogV4 {
             profiles: vec![],
             teams: vec![],
             pipelines: vec![],
@@ -1227,7 +1248,7 @@ pub fn orchestration_catalog_v3(
         result.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
         result
     }
-    Ok(OrchestrationCatalogV3 {
+    Ok(OrchestrationCatalogV4 {
         profiles: summaries(&workspace.profiles),
         teams: summaries(&workspace.teams),
         pipelines: summaries(&workspace.pipelines),
@@ -1270,32 +1291,32 @@ macro_rules! definition_commands {
 }
 
 definition_commands!(
-    orchestration_get_profile_v3,
-    orchestration_save_profile_v3,
-    orchestration_delete_profile_v3,
+    orchestration_get_profile_v4,
+    orchestration_save_profile_v4,
+    orchestration_delete_profile_v4,
     AgentProfile
 );
 definition_commands!(
-    orchestration_get_team_v3,
-    orchestration_save_team_v3,
-    orchestration_delete_team_v3,
+    orchestration_get_team_v4,
+    orchestration_save_team_v4,
+    orchestration_delete_team_v4,
     TeamDefinition
 );
 definition_commands!(
-    orchestration_get_pipeline_v3,
-    orchestration_save_pipeline_v3,
-    orchestration_delete_pipeline_v3,
+    orchestration_get_pipeline_v4,
+    orchestration_save_pipeline_v4,
+    orchestration_delete_pipeline_v4,
     PipelineDefinition
 );
 definition_commands!(
-    orchestration_get_launch_command_v3,
-    orchestration_save_launch_command_v3,
-    orchestration_delete_launch_command_v3,
+    orchestration_get_launch_command_v4,
+    orchestration_save_launch_command_v4,
+    orchestration_delete_launch_command_v4,
     LaunchCommandReference
 );
 
 #[tauri::command]
-pub fn orchestration_list_runs_v3(
+pub fn orchestration_list_runs_v4(
     state: State<'_, OrchestrationApiState>,
     host_state: State<'_, HostState>,
     request: WorkspaceRequest,
@@ -1322,7 +1343,7 @@ pub fn orchestration_list_runs_v3(
 }
 
 #[tauri::command]
-pub fn orchestration_get_run_v3(
+pub fn orchestration_get_run_v4(
     state: State<'_, OrchestrationApiState>,
     host_state: State<'_, HostState>,
     request: RunRequest,
@@ -1342,7 +1363,7 @@ pub fn orchestration_get_run_v3(
 }
 
 #[tauri::command]
-pub async fn orchestration_start_run_v3(
+pub async fn orchestration_start_run_v4(
     state: State<'_, OrchestrationApiState>,
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
@@ -1368,7 +1389,7 @@ pub async fn orchestration_start_run_v3(
 }
 
 #[tauri::command]
-pub async fn orchestration_cancel_run_v3(
+pub async fn orchestration_cancel_run_v4(
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
     app: AppHandle,
@@ -1389,7 +1410,7 @@ pub async fn orchestration_cancel_run_v3(
 }
 
 #[tauri::command]
-pub async fn orchestration_reconcile_uncertain_task_v3(
+pub async fn orchestration_reconcile_uncertain_task_v4(
     state: State<'_, OrchestrationApiState>,
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
@@ -1449,7 +1470,7 @@ pub async fn orchestration_reconcile_uncertain_task_v3(
 }
 
 #[tauri::command]
-pub async fn orchestration_retry_uncertain_task_v3(
+pub async fn orchestration_retry_uncertain_task_v4(
     state: State<'_, OrchestrationApiState>,
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
@@ -1693,9 +1714,9 @@ mod tests {
         let root = std::env::temp_dir().join(format!("piui-spawn-api-{}", uuid::Uuid::new_v4()));
         let state = OrchestrationApiState::open(&root).unwrap();
         let definition: RunDefinitionSnapshot = serde_json::from_value(serde_json::json!({
-            "profiles":[{"id":"profile","name":"Worker","harness":"codex","model":"native","permissionMode":"native","instructions":"","toolPolicy":{"rules":[]},"allowedSpawnProfileIds":["profile"]}],
+            "profiles":[{"id":"profile","name":"Worker","harness":"codex","model":"native","permissionMode":"native","instructions":"","whenToCall":"When review is needed","inputInstructions":"Profile default","expectedResult":"Findings with evidence","toolPolicy":{"rules":[]},"allowedSpawnProfileIds":["profile"]}],
             "team":{"id":"team","name":"Team","members":[{"id":"parent","profileId":"profile"}],"sendEdges":[],"observeEdges":[],"orchestratorMemberId":"parent"},
-            "pipeline":{"id":"pipeline","name":"Pipeline","steps":[{"id":"task","name":"Task","assignedMemberId":"parent","instructions":"Work","dependencyStepIds":[]}]}
+            "pipeline":{"id":"pipeline","name":"Pipeline","steps":[{"id":"task","name":"Task","assignedMemberId":"parent","instructions":"Work","inputInstructions":"Changed paths and tests","dependencyStepIds":[]}]}
         })).unwrap();
         let mut run = Coordinator::new_run("run", definition).unwrap();
         Coordinator::dispatch_next(
@@ -1726,6 +1747,32 @@ mod tests {
             run_id: "run".into(),
             workspace_session_id: "parent-session".into(),
         };
+        let AgentRequestAdmission::Roster { spawn_profiles, .. } = state
+            .handle_agent_request(
+                context.clone(),
+                AgentToolRequest {
+                    request_id: "roster-one".into(),
+                    operation: AgentToolOperation::Roster,
+                },
+                &capabilities,
+            )
+            .unwrap()
+        else {
+            panic!("expected roster");
+        };
+        assert_eq!(spawn_profiles.len(), 1);
+        assert_eq!(
+            spawn_profiles[0].when_to_call.as_deref(),
+            Some("When review is needed")
+        );
+        assert_eq!(
+            spawn_profiles[0].input_instructions.as_deref(),
+            Some("Changed paths and tests")
+        );
+        assert_eq!(
+            spawn_profiles[0].expected_result.as_deref(),
+            Some("Findings with evidence")
+        );
         let request = AgentToolRequest {
             request_id: "spawn-one".into(),
             operation: AgentToolOperation::SpawnAgent {
@@ -1895,7 +1942,7 @@ fn save_graph(
 }
 
 #[tauri::command]
-pub async fn orchestration_save_graph_v3(
+pub async fn orchestration_save_graph_v4(
     state: State<'_, OrchestrationApiState>,
     host_state: State<'_, HostState>,
     request: SaveGraphRequest,

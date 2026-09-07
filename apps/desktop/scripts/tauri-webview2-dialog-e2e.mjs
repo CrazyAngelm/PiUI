@@ -318,6 +318,13 @@ function createIsolatedFixture(fixtureRoot) {
     appDataLocal,
     home,
   ]) mkdirSync(path, { recursive: true });
+  if (WORKSPACE_SCENARIO) {
+    // Native catalog fixture only. No real credential or inference endpoint;
+    // the run below must be rejected by permission preflight before transport.
+    writeFileSync(join(primeAgentDir, 'models.json'), JSON.stringify({ providers: {
+      'piui-fixture': { baseUrl: 'http://piui-fixture.invalid/v1', api: 'openai-completions', apiKey: 'synthetic-test-value', models: [{ id: 'prime-fixture', name: 'Prime fixture', reasoning: false }] }
+    } }), 'utf8');
+  }
   const fixtureRootCanonical = realpathSync(fixtureRoot);
   const primeProjectCanonical = realpathSync(primeProject);
   const tauriAppDataCanonical = realpathSync(tauriAppData);
@@ -367,13 +374,13 @@ function exposeNativeCodeForWorkspaceFixture(fixture) {
   const realNpmRoot = process.env.APPDATA ? join(process.env.APPDATA, 'npm', 'node_modules') : undefined;
   const fixtureNpmRoot = join(fixture.appDataRoaming, 'npm', 'node_modules');
   mkdirSync(fixtureNpmRoot, { recursive: true });
-  for (const [name, version] of [['prime-agent', '0.9.2'], ['@openai/codex', '0.147.0']]) {
+  for (const [name, versions] of [['prime-agent', ['0.9.2', '0.9.3']], ['@openai/codex', ['0.147.0']]]) {
     if (!realNpmRoot) continue;
     const candidate = join(realNpmRoot, name);
     const manifestPath = join(candidate, 'package.json');
     if (!existsSync(manifestPath)) continue;
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-    if (manifest.name !== name || manifest.version !== version) continue;
+    if (manifest.name !== name || !versions.includes(manifest.version)) continue;
     const destination = join(fixtureNpmRoot, name);
     mkdirSync(dirname(destination), { recursive: true });
     symlinkSync(realpathSync(candidate), destination, 'junction');
@@ -1232,6 +1239,8 @@ async function runIsolatedHarness() {
       // Native workspace tests must never run the classic synthetic CLI peers.
       delete runtimeEnvironment.PIUI_PI_CLI;
       delete runtimeEnvironment.PIUI_PRIME_AGENT_CLI;
+      if (process.env.PIUI_PI_NODE) runtimeEnvironment.PIUI_PI_NODE = process.env.PIUI_PI_NODE;
+      if (process.env.PIUI_PI_CLI) runtimeEnvironment.PIUI_PI_CLI = process.env.PIUI_PI_CLI;
     }
     vite = spawnLogged(
       jobRunner,

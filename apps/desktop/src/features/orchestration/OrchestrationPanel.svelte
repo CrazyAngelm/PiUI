@@ -17,8 +17,8 @@
   import { checkedRunSnapshot, createRunLiveUpdates, mergeRunSummaries, mergeSelectedRun, runSummary } from './runUpdates';
   import { orchestrationError, orchestrationHost, OrchestrationOperationError } from '../../host-api/orchestrationClient';
   import type {
-    AgentProfile, TeamDefinition, PipelineDefinition, LaunchCommandReference, OrchestrationRunV3,
-    OrchestrationClient, OrchestrationCatalogV3, DefinitionSummary, StoredDefinition, RunSummary,
+    AgentProfile, TeamDefinition, PipelineDefinition, LaunchCommandReference, OrchestrationRunV4,
+    OrchestrationClient, OrchestrationCatalogV4, DefinitionSummary, StoredDefinition, RunSummary,
     OrchestrationDefinitionKind, StartRunRequest, TaskRecord, ReconcileUncertainTaskRequest,
   } from '../../host-api/orchestrationClient';
 
@@ -37,14 +37,14 @@
     | (EditorBase & { kind: 'profile'; stored?: StoredDefinition<AgentProfile>; profiles: readonly AgentProfile[] })
     | (EditorBase & { kind: 'team'; stored?: StoredDefinition<TeamDefinition>; profiles: readonly AgentProfile[] })
     | (EditorBase & { kind: 'pipeline'; stored?: StoredDefinition<PipelineDefinition>; profiles: readonly AgentProfile[]; teams: readonly TeamDefinition[] })
-    | (EditorBase & { kind: 'launch-command'; stored?: StoredDefinition<LaunchCommandReference>; catalog: OrchestrationCatalogV3 });
+    | (EditorBase & { kind: 'launch-command'; stored?: StoredDefinition<LaunchCommandReference>; catalog: OrchestrationCatalogV4 });
 
-  let catalog: OrchestrationCatalogV3 | undefined;
+  let catalog: OrchestrationCatalogV4 | undefined;
   let profileDetails: readonly AgentProfile[] = [];
   let runs: readonly RunSummary[] = [];
-  let selectedRun: OrchestrationRunV3 | undefined;
+  let selectedRun: OrchestrationRunV4 | undefined;
   let editor: Editor | undefined;
-  let launcher: { key: string; workspaceId: string; catalog: OrchestrationCatalogV3; command?: StoredDefinition<LaunchCommandReference>; request?: StartRunRequest } | undefined;
+  let launcher: { key: string; workspaceId: string; catalog: OrchestrationCatalogV4; command?: StoredDefinition<LaunchCommandReference>; request?: StartRunRequest } | undefined;
   let launchError: string | undefined;
   let launchRequests = new Set<string>();
   let runMutations = new Map<string, RunAction['type']>();
@@ -100,7 +100,7 @@
 
   const liveRuns = createRunLiveUpdates({
     scope: () => ({ workspaceId, generation: viewGeneration, visible: mounted && (section === 'runs' || selectedRun !== undefined) && editor === undefined && launcher === undefined, revision: knownRunRevision }),
-    read: (request) => client.orchestration_get_run_v3(request),
+    read: (request) => client.orchestration_get_run_v4(request),
     apply: applyRunSnapshot,
     failed: (error, runId) => { runUpdateError = { runId, message: error.message }; },
   });
@@ -128,7 +128,7 @@
     return Math.max(runs.find((run) => run.id === runId)?.revision ?? -1, selectedRun?.id === runId ? selectedRun.revision : -1);
   }
 
-  function applyRunSnapshot(run: OrchestrationRunV3): void {
+  function applyRunSnapshot(run: OrchestrationRunV4): void {
     runs = mergeRunSummaries(runs, [runSummary(run)]);
     selectedRun = mergeSelectedRun(selectedRun, run);
     if (runUpdateError?.runId === run.id) runUpdateError = undefined;
@@ -138,8 +138,8 @@
     if (value === null) throw new OrchestrationOperationError('not-found', 'This record is no longer available. Refresh the list.');
     return value;
   }
-  async function loadProfiles(targetWorkspace: string, value: OrchestrationCatalogV3): Promise<readonly AgentProfile[]> {
-    return Promise.all(value.profiles.map(async (summary) => found(await client.orchestration_get_profile_v3({ workspaceId: targetWorkspace, id: summary.id })).value));
+  async function loadProfiles(targetWorkspace: string, value: OrchestrationCatalogV4): Promise<readonly AgentProfile[]> {
+    return Promise.all(value.profiles.map(async (summary) => found(await client.orchestration_get_profile_v4({ workspaceId: targetWorkspace, id: summary.id })).value));
   }
   async function refresh(): Promise<void> {
     const requestEpoch = ++epoch;
@@ -152,12 +152,12 @@
     listError = undefined;
     try {
       if (targetSection === 'runs') {
-        const result = await client.orchestration_list_runs_v3({ workspaceId: targetWorkspace });
+        const result = await client.orchestration_list_runs_v4({ workspaceId: targetWorkspace });
         if (!mounted || epoch !== requestEpoch || scope !== targetScope) return;
         runs = mergeRunSummaries(runs, result);
         runUpdateError = undefined;
       } else {
-        const result = await client.orchestration_catalog_v3({ workspaceId: targetWorkspace });
+        const result = await client.orchestration_catalog_v4({ workspaceId: targetWorkspace });
         const profiles = targetSection === 'agents' ? await loadProfiles(targetWorkspace, result) : [];
         if (!mounted || epoch !== requestEpoch || scope !== targetScope) return;
         catalog = result;
@@ -175,24 +175,24 @@
     actionBusy = true;
     listError = undefined;
     try {
-      const latest = await client.orchestration_catalog_v3({ workspaceId: targetWorkspace });
+      const latest = await client.orchestration_catalog_v4({ workspaceId: targetWorkspace });
       const base: EditorBase = { key: crypto.randomUUID(), workspaceId: targetWorkspace };
       let next: Editor;
       if (kind === 'profile') {
-        const [profiles, stored] = await Promise.all([loadProfiles(targetWorkspace, latest), summary ? client.orchestration_get_profile_v3({ workspaceId: targetWorkspace, id: summary.id }).then(found) : undefined]);
+        const [profiles, stored] = await Promise.all([loadProfiles(targetWorkspace, latest), summary ? client.orchestration_get_profile_v4({ workspaceId: targetWorkspace, id: summary.id }).then(found) : undefined]);
         next = { ...base, kind, profiles, stored };
       } else if (kind === 'team') {
-        const [profiles, stored] = await Promise.all([loadProfiles(targetWorkspace, latest), summary ? client.orchestration_get_team_v3({ workspaceId: targetWorkspace, id: summary.id }).then(found) : undefined]);
+        const [profiles, stored] = await Promise.all([loadProfiles(targetWorkspace, latest), summary ? client.orchestration_get_team_v4({ workspaceId: targetWorkspace, id: summary.id }).then(found) : undefined]);
         next = { ...base, kind, profiles, stored };
       } else if (kind === 'pipeline') {
         const [profiles, teams, stored] = await Promise.all([
           loadProfiles(targetWorkspace, latest),
-          Promise.all(latest.teams.map(async (team) => found(await client.orchestration_get_team_v3({ workspaceId: targetWorkspace, id: team.id })).value)),
-          summary ? client.orchestration_get_pipeline_v3({ workspaceId: targetWorkspace, id: summary.id }).then(found) : undefined,
+          Promise.all(latest.teams.map(async (team) => found(await client.orchestration_get_team_v4({ workspaceId: targetWorkspace, id: team.id })).value)),
+          summary ? client.orchestration_get_pipeline_v4({ workspaceId: targetWorkspace, id: summary.id }).then(found) : undefined,
         ]);
         next = { ...base, kind, profiles, teams, stored };
       } else {
-        const stored = summary ? found(await client.orchestration_get_launch_command_v3({ workspaceId: targetWorkspace, id: summary.id })) : undefined;
+        const stored = summary ? found(await client.orchestration_get_launch_command_v4({ workspaceId: targetWorkspace, id: summary.id })) : undefined;
         next = { ...base, kind, catalog: latest, stored };
       }
       if (!mounted || scope !== targetScope) return;
@@ -218,16 +218,16 @@
       switch (target.kind) {
         case 'profile':
           if (!('harness' in value)) return;
-          await client.orchestration_save_profile_v3({ ...common, value }); break;
+          await client.orchestration_save_profile_v4({ ...common, value }); break;
         case 'team':
           if (!('members' in value)) return;
-          await client.orchestration_save_team_v3({ ...common, value }); break;
+          await client.orchestration_save_team_v4({ ...common, value }); break;
         case 'pipeline':
           if (!('steps' in value)) return;
-          await client.orchestration_save_pipeline_v3({ ...common, value }); break;
+          await client.orchestration_save_pipeline_v4({ ...common, value }); break;
         case 'launch-command':
           if (!('teamId' in value)) return;
-          await client.orchestration_save_launch_command_v3({ ...common, value }); break;
+          await client.orchestration_save_launch_command_v4({ ...common, value }); break;
       }
       if (mounted && editor?.key === target.key) {
         editor = undefined;
@@ -246,10 +246,10 @@
     const request = { workspaceId: target.workspaceId, id: target.summary.id, expectedRevision: target.summary.revision };
     try {
       switch (target.kind) {
-        case 'profile': await client.orchestration_delete_profile_v3(request); break;
-        case 'team': await client.orchestration_delete_team_v3(request); break;
-        case 'pipeline': await client.orchestration_delete_pipeline_v3(request); break;
-        case 'launch-command': await client.orchestration_delete_launch_command_v3(request); break;
+        case 'profile': await client.orchestration_delete_profile_v4(request); break;
+        case 'team': await client.orchestration_delete_team_v4(request); break;
+        case 'pipeline': await client.orchestration_delete_pipeline_v4(request); break;
+        case 'launch-command': await client.orchestration_delete_launch_command_v4(request); break;
       }
       if (mounted && deleteRequest === target) { deleteRequest = undefined; await refresh(); }
     } catch (error) { if (mounted && deleteRequest === target) listError = orchestrationError(error).message; }
@@ -263,7 +263,7 @@
     actionBusy = true;
     listError = undefined;
     try {
-      const result = await client.orchestration_get_run_v3({ workspaceId: targetWorkspace, runId: summary.id });
+      const result = await client.orchestration_get_run_v4({ workspaceId: targetWorkspace, runId: summary.id });
       if (!mounted || scope !== targetScope || selectedReadEpoch !== requestEpoch) return;
       selectedRun = checkedRunSnapshot(result, summary.id, Math.max(summary.revision, knownRunRevision(summary.id)));
       applyRunSnapshot(selectedRun);
@@ -284,7 +284,7 @@
     const requestEpoch = ++selectedReadEpoch;
     manualRunBusy = true;
     try {
-      const result = await client.orchestration_get_run_v3({ workspaceId, runId: target.id });
+      const result = await client.orchestration_get_run_v4({ workspaceId, runId: target.id });
       if (!mounted || scope !== targetScope || selectedRun?.id !== target.id || selectedReadEpoch !== requestEpoch) return;
       applyRunSnapshot(checkedRunSnapshot(result, target.id, target.revision));
     } catch (error) {
@@ -313,8 +313,8 @@
     listError = undefined;
     try {
       const [latest, stored] = await Promise.all([
-        client.orchestration_catalog_v3({ workspaceId: targetWorkspace }),
-        command ? client.orchestration_get_launch_command_v3({ workspaceId: targetWorkspace, id: command.id }).then(found) : undefined,
+        client.orchestration_catalog_v4({ workspaceId: targetWorkspace }),
+        command ? client.orchestration_get_launch_command_v4({ workspaceId: targetWorkspace, id: command.id }).then(found) : undefined,
       ]);
       if (!mounted || scope !== targetScope) return;
       launcher = { key: crypto.randomUUID(), workspaceId: targetWorkspace, catalog: latest, command: stored };
@@ -421,7 +421,7 @@
     <h1 id="orchestration-title" class="sr-only">{$t('Definition editor')}</h1>
     {#if staleEditorScope}<p class="notice" role="status">{$t('This draft belongs to the previous project. Return to that project to save, or cancel this editor.')}</p>{/if}
     {#key editor.key}
-      {#if editor.kind === 'profile'}<AgentProfileEditor profile={editor.stored?.value} profiles={editor.profiles} busy={actionBusy} error={editorError} readOnly={safeMode || staleEditorScope} onSave={(value) => void saveDefinition(value)} onCancel={closeEditor} {onDirtyChange} />
+      {#if editor.kind === 'profile'}<AgentProfileEditor {workspaceId} profile={editor.stored?.value} profiles={editor.profiles} busy={actionBusy} error={editorError} readOnly={safeMode || staleEditorScope} onSave={(value) => void saveDefinition(value)} onCancel={closeEditor} {onDirtyChange} />
       {:else if editor.kind === 'team'}<TeamEditor team={editor.stored?.value} profiles={editor.profiles} busy={actionBusy} error={editorError} readOnly={safeMode || staleEditorScope} onSave={(value) => void saveDefinition(value)} onCancel={closeEditor} {onDirtyChange} />
       {:else if editor.kind === 'pipeline'}<PipelineEditor pipeline={editor.stored?.value} profiles={editor.profiles} teams={editor.teams} busy={actionBusy} error={editorError} readOnly={safeMode || staleEditorScope} onSave={(value) => void saveDefinition(value)} onCancel={closeEditor} {onDirtyChange} />
       {:else}<LaunchCommandEditor command={editor.stored?.value} teams={editor.catalog.teams} pipelines={editor.catalog.pipelines} busy={actionBusy} error={editorError} readOnly={safeMode || staleEditorScope} onSave={(value) => void saveDefinition(value)} onCancel={closeEditor} {onDirtyChange} />{/if}
@@ -446,11 +446,11 @@
     {:else if dataScope === scope}
       {#if section === 'runs'}
         {#if visibleRuns.length === 0}<div class="empty"><h2>{query.trim() ? 'No matching runs' : 'No runs recorded'}</h2><p>{query.trim() ? 'Change the search to see other runs.' : 'Choose Start run to use a saved team and pipeline. Only recorded runs appear here.'}</p></div>
-        {:else}<ul class="definition-list" aria-label={$t('Recorded runs')}>{#each visibleRuns as run (run.id)}<li><button type="button" class="row-open" onclick={() => void openRun(run)} disabled={actionBusy}><strong>{run.pipelineName}</strong><span>{run.teamName} · {run.status === 'uncertain' ? 'Needs reconciliation' : run.status} · Revision {run.revision}</span></button></li>{/each}</ul>{/if}
+        {:else}<ul class="definition-list" aria-label={$t('Recorded runs')}>{#each visibleRuns as run (run.id)}<li><button type="button" class="row-open" onclick={() => void openRun(run)} disabled={actionBusy}><strong>{run.pipelineName}</strong><span>{run.teamName} · {run.status === 'uncertain' ? 'Needs reconciliation' : run.status}</span></button></li>{/each}</ul>{/if}
       {:else}
         {#if visibleRows.length === 0}<div class="empty"><h2>{query.trim() ? 'No matching definitions' : `No ${sectionTitles[section].toLowerCase()} yet`}</h2><p>{query.trim() ? 'Change the search to see other definitions.' : safeMode ? 'Create actions are disabled in safe mode.' : 'Create a definition when you are ready. Nothing runs when you save.'}</p></div>
-        {:else}<ul class="definition-list" aria-label={`${$t(sectionTitles[section])} definitions`}>{#each visibleRows as row (row.id)}{@const profile = section === 'agents' ? profileDetails.find((item) => item.id === row.id) : undefined}<li><button type="button" class="row-open" onclick={() => void openEditor(kindForSection(section), row)} disabled={actionBusy}><strong>{row.name}</strong><span>{profile ? `${harnessName(profile.harness)} · ${profile.model} · ` : ''}Revision {row.revision}</span>{#if profile?.toolPolicy.rules.some((rule) => rule.mandatory && (rule.enforcement === 'advisory' || rule.enforcement === 'unsupported'))}<span class="policy-warning">{$t('Unsupported mandatory policy — launch blocked')}</span>{/if}</button>{#if !safeMode}<button type="button" class="row-delete" disabled={actionBusy} aria-label={`Delete ${row.name}`} onclick={() => deleteRequest = { workspaceId, kind: kindForSection(section), summary: row }}>{$t('Delete')}</button>{/if}</li>{/each}</ul>{/if}
-        {#if section === 'pipelines'}<section class="commands" aria-labelledby="launch-commands-title"><header class="page-header"><div><h2 id="launch-commands-title">{$t('Launch commands')}</h2><p>{$t('Save a team and pipeline together for reuse.')}</p></div>{#if !safeMode}<button type="button" class="secondary" disabled={actionBusy || listBusy} onclick={() => void openEditor('launch-command')}>{$t('Create launch command')}</button>{/if}</header>{#if visibleCommands.length === 0}<p class="hint">{query.trim() ? 'No matching launch commands.' : 'No launch commands saved.'}</p>{:else}<ul class="definition-list" aria-label={$t('Launch commands')}>{#each visibleCommands as command (command.id)}<li><button type="button" class="row-open" onclick={() => void openEditor('launch-command', command)} disabled={actionBusy}><strong>{command.name}</strong><span>Revision {command.revision} · Saved team and pipeline</span></button><button type="button" class="secondary" aria-label={`Launch ${command.name}`} disabled={safeMode || actionBusy} onclick={() => void openLauncher(command)}>{$t('Launch')}</button>{#if !safeMode}<button type="button" class="row-delete" disabled={actionBusy} aria-label={`Delete ${command.name}`} onclick={() => deleteRequest = { workspaceId, kind: 'launch-command', summary: command }}>{$t('Delete')}</button>{/if}</li>{/each}</ul>{/if}</section>{/if}
+        {:else}<ul class="definition-list" aria-label={`${$t(sectionTitles[section])} definitions`}>{#each visibleRows as row (row.id)}{@const profile = section === 'agents' ? profileDetails.find((item) => item.id === row.id) : undefined}<li><button type="button" class="row-open" onclick={() => void openEditor(kindForSection(section), row)} disabled={actionBusy}><strong>{row.name}</strong>{#if profile}<span>{harnessName(profile.harness)} · {profile.model}</span>{#if profile.whenToCall}<span>{profile.whenToCall}</span>{/if}{/if}{#if profile?.toolPolicy.rules.some((rule) => rule.mandatory && (rule.enforcement === 'advisory' || rule.enforcement === 'unsupported'))}<span class="policy-warning">{$t('Unsupported mandatory policy — launch blocked')}</span>{/if}</button>{#if !safeMode}<button type="button" class="row-delete" disabled={actionBusy} aria-label={`Delete ${row.name}`} onclick={() => deleteRequest = { workspaceId, kind: kindForSection(section), summary: row }}>{$t('Delete')}</button>{/if}</li>{/each}</ul>{/if}
+        {#if section === 'pipelines'}<section class="commands" aria-labelledby="launch-commands-title"><header class="page-header"><div><h2 id="launch-commands-title">{$t('Launch commands')}</h2><p>{$t('Save a team and pipeline together for reuse.')}</p></div>{#if !safeMode}<button type="button" class="secondary" disabled={actionBusy || listBusy} onclick={() => void openEditor('launch-command')}>{$t('Create launch command')}</button>{/if}</header>{#if visibleCommands.length === 0}<p class="hint">{query.trim() ? 'No matching launch commands.' : 'No launch commands saved.'}</p>{:else}<ul class="definition-list" aria-label={$t('Launch commands')}>{#each visibleCommands as command (command.id)}<li><button type="button" class="row-open" onclick={() => void openEditor('launch-command', command)} disabled={actionBusy}><strong>{command.name}</strong><span>{$t('Saved team and pipeline')}</span></button><button type="button" class="secondary" aria-label={`Launch ${command.name}`} disabled={safeMode || actionBusy} onclick={() => void openLauncher(command)}>{$t('Launch')}</button>{#if !safeMode}<button type="button" class="row-delete" disabled={actionBusy} aria-label={`Delete ${command.name}`} onclick={() => deleteRequest = { workspaceId, kind: 'launch-command', summary: command }}>{$t('Delete')}</button>{/if}</li>{/each}</ul>{/if}</section>{/if}
       {/if}
     {/if}
     {#if actionBusy}<p class="loading" role="status">{$t('Loading or saving the selected record…')}</p>{/if}
@@ -463,8 +463,9 @@
   .orchestration-panel { min-width: 0; padding: var(--piui-space-6); color: var(--piui-text); }
   .page-header, .page-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--piui-space-3); }.page-header { justify-content: space-between; margin-bottom: var(--piui-space-5); }.page-header h1, .page-header h2, p { margin: 0; }.page-header h1 { font-size: 20px; letter-spacing: -.025em; }.page-header h2 { font-size: 18px; }.page-header p { margin-top: var(--piui-space-2); color: var(--piui-text-muted); font-size: 13px; line-height: 1.5; }
   button { min-height: 32px; padding: var(--piui-space-2) var(--piui-space-3); border-radius: var(--piui-radius-sm); font-size: 13px; }.secondary { border: 1px solid var(--piui-border); background: var(--piui-surface-1); color: var(--piui-text); }.primary { background: var(--piui-action); color: var(--piui-action-ink); font-weight: 600; }.danger { background: var(--piui-danger-surface); color: var(--piui-danger-text); border: 1px solid var(--piui-danger-border); }button:disabled { opacity: .6; }button:hover:not(:disabled):not(.primary):not(.danger) { background: var(--piui-surface-2); }
+  .definition-list li:hover { background:var(--piui-bg-raised); }
   .search { display: grid; gap: var(--piui-space-2); margin-bottom: var(--piui-space-4); font-size: 12px; font-weight: 600; color: var(--piui-text-muted); }.search input { width: 100%; min-width: 0; padding: var(--piui-space-3); border: 1px solid var(--piui-border); border-radius: var(--piui-radius-sm); background: var(--piui-surface-1); color: var(--piui-text); font-size: 13px; }
-  .definition-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--piui-border); }.definition-list li { display: flex; align-items: center; gap: var(--piui-space-2); border-bottom: 1px solid var(--piui-border-subtle); }.row-open { flex: 1 1 0; min-width: 0; display: grid; gap: var(--piui-space-1); padding: var(--piui-space-4) var(--piui-space-2); background: transparent; color: var(--piui-text); text-align: left; }.row-open strong { overflow-wrap: anywhere; font-size: 14px; font-weight: 600; }.row-open span { color: var(--piui-text-muted); font-size: 12px; overflow-wrap: anywhere; }.row-delete { flex: 0 0 auto; background: transparent; color: var(--piui-text-muted); }.row-open .policy-warning { color: var(--piui-warning-text); }
+  .definition-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--piui-border); }.definition-list li { border-radius:var(--piui-radius-sm); display: flex; align-items: center; gap: var(--piui-space-2); border-bottom: 1px solid var(--piui-border-subtle); }.row-open { flex: 1 1 0; min-width: 0; display: grid; gap: var(--piui-space-1); padding: var(--piui-space-4) var(--piui-space-2); background: transparent; color: var(--piui-text); text-align: left; }.row-open strong { overflow-wrap: anywhere; font-size: 14px; font-weight: 600; }.row-open span { color: var(--piui-text-muted); font-size: 12px; overflow-wrap: anywhere; }.row-delete { flex: 0 0 auto; background: transparent; color: var(--piui-text-muted); }.row-open .policy-warning { color: var(--piui-warning-text); }
   .empty { display: grid; gap: var(--piui-space-2); padding: var(--piui-space-6) 0; }.empty h2 { margin: 0; font-size: 17px; }.empty p, .loading, .hint { color: var(--piui-text-muted); font-size: 13px; line-height: 1.5; }.loading { margin: var(--piui-space-4) 0; }.commands { margin-top: var(--piui-space-7); }.commands .hint { margin-top: var(--piui-space-3); }
   .notice, .error, .delete-confirm { padding: var(--piui-space-4); margin-bottom: var(--piui-space-4); border-radius: var(--piui-radius-sm); font-size: 13px; line-height: 1.5; }.notice, .delete-confirm { background: var(--piui-warning-surface); color: var(--piui-warning-text); }.error { border: 1px solid var(--piui-danger-border); background: var(--piui-danger-surface); color: var(--piui-danger-text); }.error p, .delete-confirm p { margin: var(--piui-space-2) 0; }.error button { border: 1px solid var(--piui-danger-border); background: transparent; color: inherit; }
   .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }

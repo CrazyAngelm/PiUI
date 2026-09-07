@@ -2,7 +2,8 @@
 
 ## User-authored system files
 
-- `contracts/system-file-v1.schema.json` is the portable graph contract. Keep
+- `contracts/system-file-v2.schema.json` is the current portable graph contract;
+  keep v1 import compatibility. Keep
   UI import/export and `pnpm system:check` on the same parser; adapter-specific
   static checks belong to `src/harness-adapters/validation.ts`.
 - Import is a new draft, not authorization to run, overwrite saved definitions,
@@ -47,6 +48,8 @@ Create a minimal, fast, and extensible desktop shell on top of Pi. Do not create
 The UI does not access the `runtime`, `index`, or OS layers directly.
 
 ## Coding conventions
+
+- UI changes follow [shared interface rules](docs/UI_STYLE.md) across all screens.
 
 - Rust: stable toolchain, edition 2024, `cargo fmt`, `clippy -D warnings`, errors through typed enums; `unwrap()` is prohibited outside tests and provable startup invariants.
 - TypeScript: `strict: true`, no `any` in public contracts; discriminated unions for events; exhaustive `switch` with `never`.

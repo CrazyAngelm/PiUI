@@ -1,9 +1,8 @@
 # Chat lifecycle
 
 Closing a native process does not end the conversation. A restored ordinary
-chat exposes **Continue chat**, which uses the existing trusted `openSession`
-route and the persisted native resume binding. Reading history at startup
-remains process-free. Managed graph runs retain their coordinator-owned lifecycle.
+chat opens automatically through the existing trusted `openSession`
+route and the persisted native resume binding. Safe-mode and managed history remain process-free. Managed graph runs retain their coordinator-owned lifecycle.
 
 **Session details → Delete chat** opens a keyboard-accessible confirmation.
 Deletion removes the PiUI catalog entry and local UI draft; harness-owned history

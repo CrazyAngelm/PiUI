@@ -1530,6 +1530,99 @@ pub enum WorkspaceLifecycleCommand {
     DeleteSession { session_id: String },
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HarnessModelsRequest {
+    workspace_id: String,
+    harness: HarnessKind,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessModelsResult {
+    protocol: u8,
+    harness: HarnessKind,
+    models: Vec<piui_runtime::workspace_runtime::NativeCatalogModel>,
+    resources: piui_runtime::workspace_runtime::NativeResourceCatalog,
+}
+
+/// Query the native adapter without adding a conversation to the catalog or
+/// submitting a model turn. Prime always uses its own isolated supervisor.
+#[tauri::command]
+pub async fn harness_models_v14(
+    state: State<'_, HostState>,
+    request: HarnessModelsRequest,
+) -> Result<HarnessModelsResult, WorkspaceError> {
+    if state.safe_mode {
+        return Err(WorkspaceError::safe_mode());
+    }
+    let _operation = state.live_runtime_operation_gate.lock().await;
+    let directory = verified_project_directory(state.inner(), &request.workspace_id, true)?;
+    let id = Uuid::new_v4().to_string();
+    let session_dir = state
+        .workspace
+        .inner
+        .native_root
+        .join(format!("catalog-{id}"));
+    fs::create_dir_all(&session_dir).map_err(|_| WorkspaceError::io())?;
+    let config = NativeRuntimeConfig {
+        harness: request.harness,
+        cwd: directory.canonical_path().to_path_buf(),
+        session_dir,
+        native_id: None,
+        native_path: None,
+        title: None,
+        model: None,
+        thinking_level: None,
+        instructions: None,
+        base_instructions: None,
+        service_tier: None,
+        resource_rules: None,
+        permission_mode: PermissionMode::Native,
+        allowed_tools: None,
+        native_subagents: None,
+        coordination: false,
+        daemon_socket: isolated_daemon_socket(
+            request.harness,
+            &state.workspace.inner.native_root,
+            &id,
+        ),
+        package_root: None,
+        agent_dir: None,
+        kernel_python: None,
+    };
+    let (runtime, mut events) = NativeRuntime::spawn_catalog(config)
+        .await
+        .map_err(|error| {
+            eprintln!(
+                "event=harness_catalog_failed phase=start harness={:?} code={error:?}",
+                request.harness
+            );
+            WorkspaceError::runtime()
+        })?;
+    let drain = tokio::spawn(async move { while events.recv().await.is_some() {} });
+    let models = runtime
+        .catalog_models()
+        .await
+        .map_err(|_| WorkspaceError::runtime());
+    let resources = runtime
+        .resources()
+        .await
+        .map_err(|_| WorkspaceError::runtime());
+    let disposed = runtime
+        .dispose()
+        .await
+        .map_err(|_| WorkspaceError::runtime());
+    drain.abort();
+    disposed?;
+    Ok(HarnessModelsResult {
+        protocol: 14,
+        harness: request.harness,
+        models: models?,
+        resources: resources?,
+    })
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceLifecycleResult {
@@ -2230,8 +2323,8 @@ fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, WorkspaceError> {
 mod tests {
     use super::workspace_store::PersistedSession;
     use super::{
-        ApprovalDecision, HarnessKind, HarnessSummary, PermissionMode, PromptMode,
-        RuntimeStartOptions, SessionSnapshot, SessionStatus, TurnOutcome, TurnState,
+        ApprovalDecision, HarnessKind, HarnessModelsRequest, HarnessSummary, PermissionMode,
+        PromptMode, RuntimeStartOptions, SessionSnapshot, SessionStatus, TurnOutcome, TurnState,
         WORKSPACE_PROTOCOL, WorkspaceCatalog, WorkspaceCommand, WorkspaceEvent,
         WorkspaceEventPayload, WorkspaceEventPublisher, WorkspaceModel, WorkspaceResult,
         WorkspaceSession, WorkspaceSummary, WorkspaceTrust, advance_revision, complete_turn,
@@ -2645,6 +2738,28 @@ mod tests {
         };
         assert!(validate_model(&model, Some("high")).is_ok());
         assert!(validate_model(&model, Some("invented")).is_err());
+    }
+
+    #[test]
+    fn native_catalog_v14_rejects_private_runtime_overrides() {
+        assert!(
+            serde_json::from_value::<HarnessModelsRequest>(serde_json::json!({
+                "workspaceId": "project", "harness": "codex"
+            }))
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_value::<HarnessModelsRequest>(serde_json::json!({
+                "workspaceId": "project", "harness": "codex", "nativePath": "private"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<HarnessModelsRequest>(serde_json::json!({
+                "workspaceId": "project", "harness": "arbitrary-runtime"
+            }))
+            .is_err()
+        );
     }
 
     #[test]

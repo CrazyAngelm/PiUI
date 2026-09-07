@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentProfile } from '../../../../../contracts/orchestration-v3';
+import type { AgentProfile } from '../../../../../contracts/orchestration-v4';
 import {
   createProfileDraft,
   newToolRule,
@@ -21,6 +21,10 @@ const profile: AgentProfile = {
 };
 
 describe('profile form helpers', () => {
+  it('preserves invocation, input and output descriptions independently of instructions', () => {
+    const original = { ...profile, whenToCall: 'After implementation', inputInstructions: 'Diff and evidence', expectedResult: 'Actionable review' };
+    expect(profileFromDraft(createProfileDraft(original))).toEqual(original);
+  });
   it('distinguishes an empty replacement from native instructions and never passes it to another harness', () => {
     const draft = createProfileDraft({ ...profile, harness: 'codex', baseInstructions: '' });
     expect(draft.replaceBasePrompt).toBe(true);

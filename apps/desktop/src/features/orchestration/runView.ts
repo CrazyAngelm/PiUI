@@ -1,12 +1,12 @@
 import type {
   AgentProfile,
   MessageStatus,
-  OrchestrationRunV3,
+  OrchestrationRunV4,
   RunStatus,
   TaskRecord,
   TaskStatus,
   TeamMember,
-} from '../../../../../contracts/orchestration-v3';
+} from '../../../../../contracts/orchestration-v4';
 
 export interface StatusPresentation {
   readonly icon: string;
@@ -38,11 +38,11 @@ export function statusPresentation(status: RunStatus | TaskStatus | MessageStatu
   }
 }
 
-export function memberById(run: OrchestrationRunV3, memberId: string): TeamMember | undefined {
+export function memberById(run: OrchestrationRunV4, memberId: string): TeamMember | undefined {
   return run.definition.team.members.find((member) => member.id === memberId);
 }
 
-export function profileForMember(run: OrchestrationRunV3, member: TeamMember | undefined): AgentProfile | undefined {
+export function profileForMember(run: OrchestrationRunV4, member: TeamMember | undefined): AgentProfile | undefined {
   return member === undefined ? undefined : run.definition.profiles.find((profile) => profile.id === member.profileId);
 }
 
@@ -51,7 +51,7 @@ export function sessionIdForTask(task: TaskRecord | undefined): string | undefin
   return task?.execution?.id;
 }
 
-export function taskDisplays(run: OrchestrationRunV3): readonly TaskDisplay[] {
+export function taskDisplays(run: OrchestrationRunV4): readonly TaskDisplay[] {
   const tasks = new Map(run.tasks.map(task => [task.stepId, task]));
   const members = new Map(run.definition.team.members.map(member => [member.id, member]));
   const profiles = new Map(run.definition.profiles.map(profile => [profile.id, profile]));
@@ -70,7 +70,7 @@ export function taskDisplays(run: OrchestrationRunV3): readonly TaskDisplay[] {
   });
 }
 
-export function memberLabel(run: OrchestrationRunV3, memberId: string): string {
+export function memberLabel(run: OrchestrationRunV4, memberId: string): string {
   const member = memberById(run, memberId);
   const profile = profileForMember(run, member);
   return profile?.name || member?.id || `Unknown member (${memberId})`;

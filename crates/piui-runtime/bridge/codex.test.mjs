@@ -17,7 +17,7 @@ const config = {
 
 test("accepts the Windows canonical project path returned by the host", { skip: process.platform !== "win32" }, async () => {
   const adapter = await createCodexAdapter({ ...config, cwd: toNamespacedPath(process.cwd()), runtimeArgs: [fixture, "--plain-cwd"] }, () => {});
-  try { assert.equal(adapter.snapshot().status, "idle"); }
+  try { assert.equal(adapter.snapshot().status, "idle"); assert.equal((await adapter.catalogModels())[0].supportsFast, true); }
   finally { await adapter.dispose(); }
 });
 
@@ -51,6 +51,14 @@ test("handshakes, streams blocks, lists models, and keeps native auth storage", 
 
     const models = await adapter.models();
     assert.deepEqual(models, [{ id: "fixture-model", provider: "openai", name: "Fixture Model", thinkingLevels: ["low"] }]);
+    const resources = await adapter.resources();
+    assert.deepEqual(resources.items, [
+      { kind: "skill", id: "/skills/review/SKILL.md", name: "Review", enabled: false, configurable: true },
+      { kind: "mcp", id: "docs", name: "docs", enabled: true, configurable: true },
+      { kind: "tool", id: "search_docs", name: "Search docs", enabled: true, configurable: false },
+    ]);
+    assert.deepEqual(resources.warnings, []);
+    assert.ok(!JSON.stringify(resources).includes("SECRET-MUST-NOT-LEAK"));
     assert.deepEqual(await adapter.prompt({ text: "fixture prompt", mode: "prompt" }), { accepted: true });
     assert.equal(adapter.snapshot().materialized, true);
     await waitFor(() => adapter.snapshot().status === "idle" && adapter.snapshot().blocks.some((block) => block.text === "hello"));

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from '../locale/language';
-  import type { PipelineDefinition, PipelineStep, TeamDefinition, AgentProfile } from '../../../../../contracts/orchestration-v3';
+  import type { PipelineDefinition, PipelineStep, TeamDefinition, AgentProfile } from '../../../../../contracts/orchestration-v4';
   import { createPipeline, createPipelineStep, removePipelineStep, validatePipeline } from './pipelineForm';
 
   export let pipeline: PipelineDefinition | undefined;
@@ -65,6 +65,7 @@
             <div><label for={`step-member-${step.id}`}>{$t('Member slot')}</label><input id={`step-member-${step.id}`} list="pipeline-member-slots" value={step.assignedMemberId} oninput={(event) => updateStep(step.id, { assignedMemberId: event.currentTarget.value })} autocomplete="off" /></div>
           </div>
           <label for={`step-instructions-${step.id}`}>{$t('Task instructions')}</label><textarea id={`step-instructions-${step.id}`} rows="4" value={step.instructions} oninput={(event) => updateStep(step.id, { instructions: event.currentTarget.value })}></textarea>
+          <label for={`step-input-${step.id}`}>{$t('Input')}</label><textarea id={`step-input-${step.id}`} rows="4" value={step.inputInstructions ?? ''} placeholder={$t('What should upstream agents provide?')} oninput={(event) => updateStep(step.id, { inputInstructions: event.currentTarget.value })}></textarea>
           <fieldset class="dependencies"><legend>{$t('Run after')}</legend>
             {#each draft.steps.filter((candidate) => candidate.id !== step.id) as dependency (dependency.id)}
               <label class="checkbox"><input type="checkbox" checked={step.dependencyStepIds.includes(dependency.id)} onchange={(event) => toggleDependency(step.id, dependency.id, event.currentTarget.checked)} /><span>{dependency.name || 'Unnamed task'}</span></label>

@@ -132,6 +132,23 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
   }
 
   const authStorage = sdk.AuthStorage.create(join(config.agentDir, "auth.json"), { usePrimeCliConfig: true });
+  if (config.catalogOnly === true) {
+    const modelRegistry = sdk.ModelRegistry.create(authStorage, join(config.agentDir, 'models.json'));
+    const services = await sdk.createAgentSessionServices({ cwd: config.cwd, agentDir: config.agentDir, authStorage, modelRegistry, telemetryDisabled: true });
+    const map = candidate => ({ id: candidate.id, provider: candidate.provider, name: candidate.name ?? candidate.id, ...(nativeModelFeatures?.getSupportedThinkingLevels ? { thinkingLevels: nativeModelFeatures.getSupportedThinkingLevels(candidate) } : {}) });
+    return {
+      async models() { return services.modelRegistry.getAvailable().map(map); },
+      async catalogModels() { return services.modelRegistry.getAvailable().map(model => ({ ...map(model), supportsFast: nativeModelFeatures?.supportsFastMode?.(model) === true })); },
+      async resources() {
+        const tool = sdk.createIpythonTool(config.cwd);
+        return { items: [
+          ...services.resourceLoader.getSkills().skills.map(skill => ({ kind: 'skill', id: skill.name, name: skill.name, enabled: true, configurable: true })),
+          { kind: 'tool', id: tool.name, name: tool.name, enabled: true, configurable: true },
+        ], warnings: [] };
+      },
+      async dispose() { return { disposed: true }; },
+    };
+  }
   let selectedModel = config.model?.id ? { id: config.model.id, provider: config.model.provider } : undefined;
   if ((config.resourceRules ?? []).some(rule => rule.kind !== "skill")) throw fail("unsupported-resource-policy", "Prime does not expose per-session MCP disabling, including built-in integrations.");
   const createRuntime = async ({ cwd, sessionManager: manager, sessionStartEvent }) => {
@@ -410,6 +427,17 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
       if (disposed) throw fail("not-running", "The Prime runtime is not running.");
       modelCatalog = (await connection.getAvailableModels()).map(mapModel).filter(Boolean);
       return modelCatalog;
+    },
+    async resources() {
+      const items = []; const warnings = [];
+      try {
+        for (const skill of runtime.session.resourceLoader.getSkills().skills) items.push({ kind: "skill", id: skill.name, name: skill.name, enabled: true, configurable: true });
+      } catch { warnings.push("Skills could not be loaded from Prime Agent."); }
+      try {
+        const active = new Set(runtime.session.getActiveToolNames());
+        for (const tool of runtime.session.getAllTools()) items.push({ kind: "tool", id: tool.name, name: tool.name, enabled: active.has(tool.name), configurable: ["ipython", "workspace"].includes(tool.name) });
+      } catch { warnings.push("Tools could not be loaded from Prime Agent."); }
+      return { items, warnings };
     },
     async setModel({ model: requested, thinkingLevel, serviceTier }) {
 

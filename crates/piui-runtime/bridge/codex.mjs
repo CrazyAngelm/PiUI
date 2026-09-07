@@ -874,8 +874,30 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       .filter((value) => typeof value === "string"),
   });
   const adapter = {
+    async resources() {
+      const items = []; const warnings = [];
+      try {
+        const response = await callNative("skills/list", { cwds: [config.cwd], forceReload: false });
+        for (const group of response.data ?? []) for (const skill of group.skills ?? []) {
+          if (typeof skill.path === "string") items.push({ kind: "skill", id: skill.path, name: skill.name ?? skill.path, enabled: skill.enabled !== false, configurable: true });
+        }
+      } catch { warnings.push("Skills could not be loaded from Codex."); }
+      try {
+        const response = await callNative("config/read", { includeLayers: false, cwd: config.cwd });
+        for (const [id, server] of Object.entries(response.config?.mcp_servers ?? {})) items.push({ kind: "mcp", id, name: id, enabled: server.enabled !== false, configurable: true });
+      } catch { warnings.push("MCP servers could not be loaded from Codex."); }
+      try {
+        let cursor;
+        do {
+          const response = await callNative("mcpServerStatus/list", { ...(cursor ? { cursor } : {}) });
+          for (const server of response.data ?? []) for (const [id, tool] of Object.entries(server.tools ?? {})) items.push({ kind: "tool", id, name: tool.name ?? id, enabled: true, configurable: false });
+          cursor = response.nextCursor;
+        } while (cursor);
+      } catch { warnings.push("MCP tools could not be loaded from Codex."); }
+      return { items, warnings };
+    },
     snapshot() {
-      return {
+  return {
         nativeId,
         thinkingLevel,
         serviceTier,
@@ -952,6 +974,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       await callNative("turn/interrupt", { threadId: nativeId, turnId: activeTurnId });
       return { interrupted: true };
     },
+    async catalogModels() { return (await this.models()).map(model => ({ ...model, supportsFast: true })); },
     async models() {
       const data = [];
       let cursor = null;

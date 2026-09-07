@@ -1,5 +1,5 @@
-import type { AgentProfile, PipelineDefinition, TeamDefinition, LaunchCommandReference } from '../../../../../contracts/orchestration-v3';
-export interface GraphNode { id: string; profile: AgentProfile; task: string; x: number; y: number; }
+import type { AgentProfile, PipelineDefinition, TeamDefinition, LaunchCommandReference } from '../../../../../contracts/orchestration-v4';
+export interface GraphNode { id: string; profile: AgentProfile; task: string; input?: string; x: number; y: number; }
 export type ConnectionKind = 'result' | 'send' | 'observe' | 'spawn';
 export interface GraphEdge { from: string; to: string; kind: ConnectionKind; }
 export interface AgentGraph { id: string; name: string; teamId: string; pipelineId: string; orchestratorId?: string; spawnedAgentsJoinTeam?: boolean; nodes: GraphNode[]; edges: GraphEdge[]; }
@@ -26,7 +26,7 @@ export function compileGraph(graph: AgentGraph): { profiles: AgentProfile[]; tea
   return {
     profiles,
     team: { id: graph.teamId, name: graph.name, ...(graph.spawnedAgentsJoinTeam ? { spawnedAgentsJoinTeam: true } : {}), members: graph.nodes.map(node => ({ id: node.id, profileId: node.profile.id })), orchestratorMemberId: graph.nodes.some(node => node.id === graph.orchestratorId) ? graph.orchestratorId! : graph.nodes[0]?.id ?? '', sendEdges: graph.edges.filter(edge => edge.kind === 'send').map(edge => ({ fromMemberId: edge.from, toMemberId: edge.to })), observeEdges: graph.edges.filter(edge => edge.kind === 'observe').map(edge => ({ fromMemberId: edge.from, toMemberId: edge.to })) },
-    pipeline: { id: graph.pipelineId, name: graph.name, steps: graph.nodes.map(node => ({ id: node.id, name: node.profile.name, assignedMemberId: node.id, instructions: node.task, dependencyStepIds: graph.edges.filter(edge => edge.kind === 'result' && edge.to === node.id).map(edge => edge.from) })) },
+    pipeline: { id: graph.pipelineId, name: graph.name, steps: graph.nodes.map(node => ({ id: node.id, name: node.profile.name, assignedMemberId: node.id, instructions: node.task, ...(node.input !== undefined ? { inputInstructions: node.input } : {}), dependencyStepIds: graph.edges.filter(edge => edge.kind === 'result' && edge.to === node.id).map(edge => edge.from) })) },
     command: { id: graph.id, name: graph.name, teamId: graph.teamId, pipelineId: graph.pipelineId },
   };
 }

@@ -37,6 +37,18 @@ function eventCollector() {
   return state;
 }
 
+test("Prime catalog reads native definitions without starting a model session or refreshing credentials", async () => {
+  resetModelLookupCounts();
+  const adapter = await createPrimeAdapter(await config({ catalogOnly: true }), () => {});
+  try {
+    assert.equal((await adapter.models()).length, 1);
+    assert.equal((await adapter.catalogModels())[0].supportsFast, false);
+    assert.ok((await adapter.resources()).items.some(item => item.id === 'ipython'));
+    assert.equal(getModelLookupCounts().refreshed, 0);
+    assert.equal(adapter.prompt, undefined);
+  } finally { await adapter.dispose(); }
+});
+
 test("Prime SDK adapter snapshots history and returns prompt admission", async () => {
   const events = eventCollector();
   const adapter = await createPrimeAdapter(await config(), events.emit);
@@ -47,6 +59,11 @@ test("Prime SDK adapter snapshots history and returns prompt admission", async (
   assert.equal(snapshot.capabilities.nativeSubagents.supported, true);
   assert.match(snapshot.capabilities.nativeSubagents.reason, /cross-harness/);
   assert.equal(snapshot.capabilities.approvals.supported, false);
+  const resources = await adapter.resources();
+  assert.ok(resources.items.some(item => item.kind === 'skill' && item.id === 'alpha' && item.configurable));
+  assert.ok(resources.items.some(item => item.kind === 'tool' && item.id === 'ipython' && item.configurable));
+  assert.ok(resources.items.some(item => item.id === 'external_tool' && !item.configurable));
+  assert.deepEqual(resources.warnings, []);
   const result = await adapter.prompt({ text: "test", mode: "prompt" });
   assert.deepEqual(result, { accepted: true });
   const delta = await nextEvent(events, (event) => event.type === "textDelta");

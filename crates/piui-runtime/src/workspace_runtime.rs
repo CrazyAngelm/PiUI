@@ -81,6 +81,31 @@ pub enum PermissionMode {
     FullAccess,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NativeResourceKind {
+    Tool,
+    Skill,
+    Mcp,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeResource {
+    pub kind: NativeResourceKind,
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub configurable: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeResourceCatalog {
+    pub items: Vec<NativeResource>,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Enforcement {
@@ -120,6 +145,16 @@ pub struct WorkspaceModel {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_levels: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeCatalogModel {
+    pub id: String,
+    pub provider: Option<String>,
+    pub name: String,
+    pub thinking_levels: Option<Vec<String>>,
+    pub supports_fast: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -456,6 +491,7 @@ struct InitializeConfig<'a> {
     runtime_program: String,
     runtime_args: Vec<String>,
     pool_host: bool,
+    catalog_only: bool,
 }
 
 #[derive(Deserialize)]
@@ -573,6 +609,7 @@ impl NativeRuntime {
             runtime_program: launch.program.to_string_lossy().into_owned(),
             runtime_args: launch.args.clone(),
             pool_host: false,
+            catalog_only: false,
         });
         let pool = if let Some(pool) = pools
             .get(&key)
@@ -582,7 +619,7 @@ impl NativeRuntime {
             pool
         } else {
             let (pool, _events) =
-                Self::spawn_resolved(config.clone(), node, launch, source, true).await?;
+                Self::spawn_resolved(config.clone(), node, launch, source, true, false).await?;
             let pool = Arc::new(pool);
             pools.insert(key, Arc::downgrade(&pool));
             pool
@@ -645,7 +682,18 @@ impl NativeRuntime {
         if config.harness == HarnessKind::Codex && config.coordination {
             return Self::spawn_pooled(config, node, launch, source).await;
         }
-        Self::spawn_resolved(config, node, launch, source, false).await
+        Self::spawn_resolved(config, node, launch, source, false, false).await
+    }
+
+    pub async fn spawn_catalog(
+        config: NativeRuntimeConfig,
+    ) -> Result<(Self, mpsc::Receiver<NativeEvent>), NativeRuntimeError> {
+        let config = resolve_native_runtime_config(config)?;
+        validate_config(&config)?;
+        let node = resolve_node()?;
+        let launch = resolve_harness_launch_for_config(&config)?;
+        let source = bridge_source(config.harness)?;
+        Self::spawn_resolved(config, node, launch, source, false, true).await
     }
 
     async fn spawn_resolved(
@@ -654,6 +702,7 @@ impl NativeRuntime {
         launch: ResolvedHarnessLaunch,
         source: Vec<u8>,
         pool_host: bool,
+        catalog_only: bool,
     ) -> Result<(Self, mpsc::Receiver<NativeEvent>), NativeRuntimeError> {
         let source_len =
             u32::try_from(source.len()).map_err(|_| NativeRuntimeError::BridgeSourceTooLarge)?;
@@ -771,6 +820,7 @@ impl NativeRuntime {
             runtime_program: launch.program.to_string_lossy().into_owned(),
             runtime_args: launch.args,
             pool_host,
+            catalog_only,
         };
         if let Err(error) = runtime
             .request("initialize", json!(initialize), REQUEST_TIMEOUT, false)
@@ -821,6 +871,20 @@ impl NativeRuntime {
         self.request("interrupt", json!({}), INTERRUPT_TIMEOUT, false)
             .await
             .map(|_| ())
+    }
+
+    pub async fn resources(&self) -> Result<NativeResourceCatalog, NativeRuntimeError> {
+        let value = self
+            .request("resources", json!({}), REQUEST_TIMEOUT, false)
+            .await?;
+        serde_json::from_value(value).map_err(|_| NativeRuntimeError::Protocol)
+    }
+
+    pub async fn catalog_models(&self) -> Result<Vec<NativeCatalogModel>, NativeRuntimeError> {
+        let value = self
+            .request("catalogModels", json!({}), REQUEST_TIMEOUT, false)
+            .await?;
+        serde_json::from_value(value).map_err(|_| NativeRuntimeError::Protocol)
     }
 
     pub async fn models(&self) -> Result<Vec<WorkspaceModel>, NativeRuntimeError> {
@@ -1742,6 +1806,7 @@ mod tests {
                 version: None,
             },
             test_bridge_source(factory_body),
+            false,
             false,
         )
         .await

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { render } from 'svelte/server';
-import type { OrchestrationRunV3 } from '../../../../../contracts/orchestration-v3';
+import type { OrchestrationRunV4 } from '../../../../../contracts/orchestration-v4';
 import RunInspector from './RunInspector.svelte';
 
-const baseRun: OrchestrationRunV3 = {
-  schemaVersion: 3, id: 'run-1', status: 'running', revision: 1,
+const baseRun: OrchestrationRunV4 = {
+  schemaVersion: 4, id: 'run-1', status: 'running', revision: 1,
   definition: {
     profiles: [{ id: 'profile-1', name: 'Planner', harness: 'pi', model: 'model', permissionMode: 'native', instructions: '', toolPolicy: { rules: [] }, allowedSpawnProfileIds: [] }],
     team: { id: 'team-1', name: 'Team', members: [{ id: 'member-1', profileId: 'profile-1' }], sendEdges: [], observeEdges: [], orchestratorMemberId: 'member-1' },

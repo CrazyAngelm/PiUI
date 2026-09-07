@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from '../locale/language';
-  import type { AgentProfile, DirectedEdge, TeamDefinition } from '../../../../../contracts/orchestration-v3';
+  import type { AgentProfile, DirectedEdge, TeamDefinition } from '../../../../../contracts/orchestration-v4';
   import { connectionPreset, setConnection } from './connections';
   export let team: TeamDefinition;
   export let profiles: readonly AgentProfile[];

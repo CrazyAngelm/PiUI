@@ -25,12 +25,13 @@ class Registry {
 export const ModelRegistry = { create(authStorage) { return new Registry(authStorage.path.includes("empty-model")); } };
 export const SettingsManager = { create() { return {}; } };
 export function defineTool(tool) { return tool; }
+export function createIpythonTool() { return { name: 'ipython' }; }
 let configuredSkills = [];
 export function lastConfiguredSkills() { return configuredSkills; }
 export async function createAgentSessionServices(options) {
   const base = { skills: [{ name: "alpha" }, { name: "beta" }], diagnostics: [] };
   configuredSkills = (options.resourceLoaderOptions?.skillsOverride?.(base) ?? base).skills.map(skill => skill.name);
-  return { ...options, diagnostics: [], resourceLoader: {}, mcpManager: {} };
+  return { ...options, diagnostics: [], resourceLoader: { getSkills: () => ({ skills: configuredSkills.map(name => ({ name })) }) }, mcpManager: {} };
 }
 export async function createAgentSessionFromServices(options) {
   // Model the native SDK's authoritative initial model/auth refresh.
@@ -45,6 +46,8 @@ export async function createAgentSessionRuntime(factory, options) {
     sessionFile: options.sessionManager.getSessionFile(),
     sessionName: "Fixture Prime",
     getActiveToolNames() { return built.session.activeTools; },
+    getAllTools() { return [{ name: "ipython" }, { name: "workspace" }, { name: "external_tool" }]; },
+    resourceLoader: built.services.resourceLoader,
   };
   return { session, services: built.services };
 }

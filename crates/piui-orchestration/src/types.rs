@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const ORCHESTRATION_SCHEMA_VERSION: u32 = 3;
+pub const ORCHESTRATION_SCHEMA_VERSION: u32 = 4;
 
 pub type Revision = u64;
 
@@ -94,6 +94,12 @@ pub enum ResourceKind {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentProfile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when_to_call: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_instructions: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_result: Option<String>,
     pub id: String,
     pub name: String,
     pub harness: Harness,
@@ -149,6 +155,8 @@ pub struct TeamDefinition {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PipelineStep {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_instructions: Option<String>,
     pub id: String,
     pub name: String,
     pub assigned_member_id: String,

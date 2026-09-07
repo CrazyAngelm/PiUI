@@ -1,7 +1,7 @@
 <script lang="ts">
   import { t } from '../locale/language';
-  import type { LaunchCommandReference } from '../../../../../contracts/orchestration-v3';
-  import type { DefinitionSummary } from '../../../../../contracts/orchestration-host-v3';
+  import type { LaunchCommandReference } from '../../../../../contracts/orchestration-v4';
+  import type { DefinitionSummary } from '../../../../../contracts/orchestration-host-v4';
   export let command: LaunchCommandReference | undefined;
   export let teams: readonly DefinitionSummary[] = [];
   export let pipelines: readonly DefinitionSummary[] = [];

@@ -4,6 +4,11 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* WebView2 native option popups need explicit foreground and background. */
+select { color-scheme: inherit; }
+select option, select optgroup { background-color: var(--piui-bg-raised); color: var(--piui-text); }
+select option:disabled { color: var(--piui-text-muted); }
+
 button,
 input,
 textarea {

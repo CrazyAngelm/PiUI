@@ -287,7 +287,7 @@ mod tests {
         fs::write(&path, &source).unwrap();
         let store = OrchestrationStore::open(&root).unwrap();
         let run = &store.workspace("project").unwrap().runs[0];
-        assert_eq!(run.schema_version(), 3);
+        assert_eq!(run.schema_version(), 4);
         assert_eq!(
             run.definition().profiles[0].instructions,
             "Keep this prompt"

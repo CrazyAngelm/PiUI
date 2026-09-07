@@ -9,7 +9,7 @@ fn v1_run_migrates_without_changing_native_prompt() {
         serde_json::from_slice(&serialize_run(&run).unwrap()).unwrap();
     json["schemaVersion"] = 1.into();
     let migrated = deserialize_run(&serde_json::to_vec(&json).unwrap()).unwrap();
-    assert_eq!(migrated.schema_version(), 3);
+    assert_eq!(migrated.schema_version(), 4);
     assert!(
         migrated
             .definition()
@@ -17,6 +17,49 @@ fn v1_run_migrates_without_changing_native_prompt() {
             .iter()
             .all(|p| p.base_instructions.is_none())
     );
+}
+
+#[test]
+fn input_requirements_reach_sender_and_survive_v3_migration() {
+    let mut definition = snapshot();
+    definition.pipeline.steps[0].input_instructions = Some("Approved specification".into());
+    definition.pipeline.steps[1].input_instructions =
+        Some("Changed paths and test evidence".into());
+    definition.profiles[0].expected_result = Some("A verified implementation".into());
+    let mut run = Coordinator::new_run("input-contract", definition).unwrap();
+    let lease = Coordinator::lease_next_task(&mut run, 0, "input-lease".into())
+        .unwrap()
+        .unwrap();
+    assert!(
+        lease
+            .task_instructions
+            .contains("Expected input:\nApproved specification")
+    );
+    assert!(
+        lease
+            .task_instructions
+            .contains("Expected result:\nA verified implementation")
+    );
+    assert!(
+        lease
+            .task_instructions
+            .contains("Result handoff requirements for Review:\nChanged paths and test evidence")
+    );
+    let restored = deserialize_run(&serialize_run(&run).unwrap()).unwrap();
+    assert_eq!(
+        restored.definition().pipeline.steps[1]
+            .input_instructions
+            .as_deref(),
+        Some("Changed paths and test evidence")
+    );
+
+    let old = Coordinator::new_run("v3", snapshot()).unwrap();
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&serialize_run(&old).unwrap()).unwrap();
+    value["schemaVersion"] = 3.into();
+    let migrated = deserialize_run(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert_eq!(migrated.schema_version(), 4);
+    assert_eq!(migrated.definition(), old.definition());
 }
 
 #[test]
@@ -97,6 +140,9 @@ fn dynamic_peer_messaging_requires_explicit_team_grant() {
 
 fn profile(id: &str, harness: Harness, allowed: &[&str]) -> AgentProfile {
     AgentProfile {
+        when_to_call: None,
+        input_instructions: None,
+        expected_result: None,
         id: id.to_owned(),
         name: format!("{id} profile"),
         harness,
@@ -155,6 +201,7 @@ fn snapshot() -> RunDefinitionSnapshot {
             name: "Build then review".to_owned(),
             steps: vec![
                 PipelineStep {
+                    input_instructions: None,
                     id: "build".to_owned(),
                     name: "Build".to_owned(),
                     assigned_member_id: "lead".to_owned(),
@@ -162,6 +209,7 @@ fn snapshot() -> RunDefinitionSnapshot {
                     dependency_step_ids: vec![],
                 },
                 PipelineStep {
+                    input_instructions: None,
                     id: "review".to_owned(),
                     name: "Review".to_owned(),
                     assigned_member_id: "worker".to_owned(),
@@ -406,7 +454,7 @@ fn rust_json_matches_typescript_v1_golden_shape_and_rejects_unknown_fields() {
     let run = Coordinator::new_run("run-1", snapshot()).unwrap();
     let actual: serde_json::Value = serde_json::from_slice(&serialize_run(&run).unwrap()).unwrap();
     let golden = json!({
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "id": "run-1",
         "definition": {
             "profiles": [

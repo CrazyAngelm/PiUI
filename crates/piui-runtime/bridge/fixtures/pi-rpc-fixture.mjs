@@ -14,6 +14,7 @@ process.stdin.on("data", (chunk) => {
     if (!line.length) continue;
     const request = JSON.parse(line.toString("utf8"));
     if (request.type === "get_state") write({ id: request.id, type: "response", command: request.type, success: true, data: { sessionId: "native-fixture", sessionFile: "host/private.jsonl", sessionName, isStreaming: false, thinkingLevel: "medium" } }, true);
+    else if (request.type === "get_commands") write({ id: request.id, type: "response", command: request.type, success: true, data: { commands: [{ name: "skill:review", source: "skill" }] } });
     else if (request.type === "get_available_models") write({ id: request.id, type: "response", command: request.type, success: true, data: { models: [{ provider: "fixture", id: "model", name: "Fixture Model" }] } });
     else if (request.type === "get_entries") write({ id: request.id, type: "response", command: request.type, success: true, data: { entries: [{ id: "entry-private", type: "message", message: { role: "user", content: "hello" } }] } });
     else if (request.type === "prompt") {
