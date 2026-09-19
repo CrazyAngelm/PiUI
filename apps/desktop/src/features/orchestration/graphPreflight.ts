@@ -5,14 +5,16 @@ import { profileConfigurationErrors } from '../../harness-adapters/validation';
 export interface PreflightIssue { nodeId: string; message: string }
 /** Catalog preflight is advisory freshness; the trusted host rechecks launch authority. */
 export async function preflightGraph(graph: AgentGraph, catalog: (harness: AgentProfile['harness']) => Promise<HarnessModelsResult>): Promise<PreflightIssue[]> {
+  const nativeNodes = graph.nodes.filter(node => node.kind !== 'router' || node.router?.mode === 'agent');
   const catalogs = new Map<AgentProfile['harness'], HarnessModelsResult>();
   const failed = new Set<AgentProfile['harness']>();
-  await Promise.all([...new Set(graph.nodes.map(node => node.profile.harness))].map(async harness => {
+  await Promise.all([...new Set(nativeNodes.map(node => node.profile.harness))].map(async harness => {
     try { const result = await catalog(harness); if (result.harness !== harness) throw new Error('Catalog mismatch'); catalogs.set(harness,result); }
     catch { failed.add(harness); }
   }));
   const issues: PreflightIssue[] = [];
   for (const node of graph.nodes) {
+    if (node.kind === 'router' && node.router?.mode === 'program') continue;
     const add = (message: string) => issues.push({nodeId:node.id,message});
     const profile = node.profile;
     for (const message of profileConfigurationErrors(node.id,profile)) add(message);

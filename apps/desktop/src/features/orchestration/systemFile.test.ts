@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { compileGraph } from './agentGraph';
+import { compileGraph, emptyGraph, newGraphNode, newRouterNode } from './agentGraph';
 import { parseSystemFile, systemFileToGraph, graphToSystemFile, serializeSystemFile } from './systemFile';
 
 const example = () => JSON.parse(readFileSync(new URL('../../../../../examples/systems/mixed-review.piui.json', import.meta.url), 'utf8'));
@@ -85,9 +85,36 @@ describe('portable system files', () => {
     if (failure==='privileges') file.connections.push({from:'research',to:'review',kind:'spawn'});
     expect(() => parseSystemFile(JSON.stringify(file))).toThrow();
   });
+  it('requires the router discriminator to match its configuration', () => {
+    const file = example(); file.version = 4; file.agents[0].router = { mode: 'program', inputStepId: file.agents[1].id, branches: [{ id: 'route', label: 'Route', predicate: { op: 'exists', field: 'result' } }] };
+    expect(() => parseSystemFile(JSON.stringify(file))).toThrow(/kind=router/);
+    delete file.agents[0].router; file.agents[0].kind = 'router';
+    expect(() => parseSystemFile(JSON.stringify(file))).toThrow(/router configuration/);
+  });
+  it('requires branch IDs only on route connections', () => {
+    const file = example(); file.version = 4;
+    file.connections[0]!.branchId = 'unexpected';
+    expect(() => parseSystemFile(JSON.stringify(file))).toThrow(/Only route connections/);
+    file.connections[0]!.kind = 'route';
+    delete file.connections[0]!.branchId;
+    expect(() => parseSystemFile(JSON.stringify(file))).toThrow(/Route connections need a branch ID/);
+  });
   it('allows messaging cycles and equal-privilege delegation while preserving edge direction', () => {
     const file=example(); file.agents[1].profile.harness='codex'; file.agents[1].profile.permissionMode='read-only';
     file.connections.push({from:'research',to:'review',kind:'spawn'}, {from:'research',to:'review',kind:'send'}, {from:'review',to:'research',kind:'send'});
     expect(parseSystemFile(JSON.stringify(file)).connections).toHaveLength(4);
+  });
+  it('round-trips program routers and branch-specific route edges', () => {
+    const graph = emptyGraph(); graph.name = 'Branching';
+    const source = newGraphNode(0), router = newRouterNode(1), target = newGraphNode(2);
+    source.profile = { ...source.profile, model: 'source-model' }; target.profile = { ...target.profile, model: 'target-model' };
+    source.resultFields = [{ name: 'status', kind: 'text' }];
+    const branches = router.router!.branches.map((branch, index) => ({ ...branch, label: `Status ${index}`, predicate: { op: 'equals' as const, field: 'status', value: index === 0 ? 'ready' : 'blocked' } }));
+    router.router = { ...router.router!, inputStepId: source.id, branches };
+    graph.nodes = [source, router, target];
+    graph.edges = [{ from: source.id, to: router.id, kind: 'result' }, { from: router.id, to: target.id, kind: 'route', branchId: branches[0]!.id }];
+    const reopened = systemFileToGraph(parseSystemFile(serializeSystemFile(graph)));
+    expect(reopened.nodes.find(node => node.id === router.id)?.router?.mode).toBe('program');
+    expect(reopened.edges.find(edge => edge.kind === 'route')?.branchId).toBe(branches[0]!.id);
   });
 });

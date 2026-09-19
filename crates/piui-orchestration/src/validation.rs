@@ -4,7 +4,8 @@ use thiserror::Error;
 
 use crate::{
     AgentProfile, DirectedEdge, NativeBridgeCapabilities, NativeHistoryReference,
-    PolicyEnforcement, RunDefinitionSnapshot, TeamDefinition, ToolDecision,
+    PolicyEnforcement, ResultField, RouteGate, RouterMode, RouterPredicate, RunDefinitionSnapshot,
+    TeamDefinition, ToolDecision,
 };
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -273,6 +274,85 @@ fn validate_pipeline(snapshot: &RunDefinitionSnapshot) -> Result<(), DefinitionE
                 });
             }
         }
+        if let Some(router) = &step.router {
+            require_nonempty("router input step", &router.input_step_id)?;
+            if step.dependency_step_ids.len() != 1
+                || !step.dependency_step_ids.contains(&router.input_step_id)
+            {
+                return Err(DefinitionError::InvalidFlow {
+                    reason: "router must have exactly one direct input dependency",
+                });
+            }
+            let source = pipeline
+                .steps
+                .iter()
+                .find(|candidate| candidate.id == router.input_step_id)
+                .ok_or_else(|| DefinitionError::MissingId {
+                    kind: "router input step",
+                    id: router.input_step_id.clone(),
+                })?;
+            let mut branch_ids = BTreeSet::new();
+            for branch in &router.branches {
+                require_nonempty("router branch", &branch.id)?;
+                require_nonempty("router branch label", &branch.label)?;
+                if !branch_ids.insert(branch.id.as_str()) {
+                    return Err(DefinitionError::DuplicateId {
+                        kind: "router branch",
+                        id: branch.id.clone(),
+                    });
+                }
+                match router.mode {
+                    RouterMode::Program => {
+                        let Some(predicate) = branch.predicate.as_ref() else {
+                            return Err(DefinitionError::InvalidFlow {
+                                reason: "program router branches need predicates",
+                            });
+                        };
+                        if !valid_router_predicate(predicate, &source.result_fields) {
+                            return Err(DefinitionError::InvalidFlow {
+                                reason: "router predicate must use declared input fields",
+                            });
+                        }
+                    }
+                    RouterMode::Agent => {
+                        if branch.predicate.is_some()
+                            || branch
+                                .description
+                                .as_deref()
+                                .is_none_or(|description| description.trim().is_empty())
+                        {
+                            return Err(DefinitionError::InvalidFlow {
+                                reason: "agent router branches need descriptions and cannot contain program predicates",
+                            });
+                        }
+                    }
+                }
+            }
+            if router.mode == RouterMode::Agent {
+                let field = router
+                    .selection_field
+                    .as_deref()
+                    .filter(|field| !field.trim().is_empty())
+                    .ok_or(DefinitionError::InvalidFlow {
+                        reason: "agent router needs a selection field",
+                    })?;
+                if !step.result_fields.iter().any(|candidate| {
+                    candidate.name == field && candidate.kind == crate::ResultFieldKind::TextList
+                }) {
+                    return Err(DefinitionError::InvalidFlow {
+                        reason: "agent router selection field must be a text-list result field",
+                    });
+                }
+            }
+            if !step.route_gates.is_empty() {
+                return Err(DefinitionError::InvalidFlow {
+                    reason: "router steps cannot be gated by another router",
+                });
+            }
+        }
+        for gate in &step.route_gates {
+            validate_route_gate(pipeline, step, gate)?;
+        }
         let mut fields = BTreeSet::new();
         for field in &step.result_fields {
             require_nonempty("result field", &field.name)?;
@@ -284,7 +364,12 @@ fn validate_pipeline(snapshot: &RunDefinitionSnapshot) -> Result<(), DefinitionE
             }
         }
         require_nonempty("step name", &step.name)?;
-        if !members.contains(step.assigned_member_id.as_str()) {
+        if step
+            .router
+            .as_ref()
+            .is_none_or(|router| router.mode == RouterMode::Agent)
+            && !members.contains(step.assigned_member_id.as_str())
+        {
             return Err(DefinitionError::MissingId {
                 kind: "assigned member",
                 id: step.assigned_member_id.clone(),
@@ -342,6 +427,67 @@ fn validate_pipeline(snapshot: &RunDefinitionSnapshot) -> Result<(), DefinitionE
         return Err(DefinitionError::DependencyCycle { step_id });
     }
     Ok(())
+}
+
+fn validate_route_gate(
+    pipeline: &crate::PipelineDefinition,
+    step: &crate::PipelineStep,
+    gate: &RouteGate,
+) -> Result<(), DefinitionError> {
+    let Some(router_step) = pipeline
+        .steps
+        .iter()
+        .find(|candidate| candidate.id == gate.router_step_id)
+    else {
+        return Err(DefinitionError::MissingId {
+            kind: "route router step",
+            id: gate.router_step_id.clone(),
+        });
+    };
+    let Some(router) = router_step.router.as_ref() else {
+        return Err(DefinitionError::InvalidFlow {
+            reason: "route gate must reference a router step",
+        });
+    };
+    if !step.dependency_step_ids.contains(&gate.router_step_id) {
+        return Err(DefinitionError::InvalidFlow {
+            reason: "route gate must also be a step dependency",
+        });
+    }
+    if !router
+        .branches
+        .iter()
+        .any(|branch| branch.id == gate.branch_id)
+    {
+        return Err(DefinitionError::MissingId {
+            kind: "route branch",
+            id: gate.branch_id.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn valid_router_predicate(predicate: &RouterPredicate, fields: &[ResultField]) -> bool {
+    let has_field = |name: &str| fields.iter().any(|field| field.name == name);
+    match predicate {
+        RouterPredicate::Equals { field, value } => {
+            let Some(declared) = fields.iter().find(|candidate| candidate.name == *field) else {
+                return false;
+            };
+            value.is_null()
+                || (declared.kind == crate::ResultFieldKind::Text && value.is_string())
+                || (declared.kind == crate::ResultFieldKind::Number && value.is_number())
+                || (declared.kind == crate::ResultFieldKind::Boolean && value.is_boolean())
+        }
+        RouterPredicate::Exists { field } => has_field(field),
+        RouterPredicate::All { predicates } | RouterPredicate::Any { predicates } => {
+            !predicates.is_empty()
+                && predicates
+                    .iter()
+                    .all(|item| valid_router_predicate(item, fields))
+        }
+        RouterPredicate::Not { predicate } => valid_router_predicate(predicate, fields),
+    }
 }
 
 fn unique_ids<'a>(

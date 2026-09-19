@@ -4,6 +4,9 @@ import type { GraphEdge, GraphNode } from './agentGraph';
 export const GRAPH_NODE_WIDTH = 232;
 export const GRAPH_NODE_HEIGHT = 132;
 export const GRAPH_PORT_Y = 66;
+export function graphNodeHeight(node: Pick<GraphNode, 'kind' | 'router'>): number {
+  return node.kind === 'router' ? Math.max(GRAPH_NODE_HEIGHT, 126 + (node.router?.branches.length ?? 0) * 28) : GRAPH_NODE_HEIGHT;
+}
 
 export interface GraphBounds {
   left: number;
@@ -28,7 +31,7 @@ export function graphBounds(nodes: readonly GraphNode[], padding = 64): GraphBou
   const left = Math.max(0, Math.min(...nodes.map((node) => node.x)) - padding);
   const top = Math.max(0, Math.min(...nodes.map((node) => node.y)) - padding);
   const right = Math.max(...nodes.map((node) => node.x + GRAPH_NODE_WIDTH)) + padding;
-  const bottom = Math.max(...nodes.map((node) => node.y + GRAPH_NODE_HEIGHT)) + padding;
+  const bottom = Math.max(...nodes.map((node) => node.y + graphNodeHeight(node))) + padding;
   return { left, top, right, bottom, width: right - left, height: bottom - top };
 }
 
@@ -42,15 +45,16 @@ export function fitGraphZoom(nodes: readonly GraphNode[], viewportWidth: number,
 }
 
 /**
- * Arrange only result dependencies into execution levels. Other connection kinds
- * are permissions and intentionally do not influence the execution order.
+ * Arrange result and route dependencies into execution levels. Messaging and
+ * observation connections are permissions and intentionally do not influence
+ * the execution order.
  */
 export function arrangeResultDependencies(nodes: readonly GraphNode[], edges: readonly GraphEdge[]): DependencyLayout {
   const order = new Map(nodes.map((node, index) => [node.id, index]));
   const indegree = new Map(nodes.map((node) => [node.id, 0]));
   const outgoing = new Map<string, string[]>();
   for (const edge of edges) {
-    if (edge.kind !== 'result' || !indegree.has(edge.from) || !indegree.has(edge.to) || edge.from === edge.to) continue;
+    if ((edge.kind !== 'result' && edge.kind !== 'route') || !indegree.has(edge.from) || !indegree.has(edge.to) || edge.from === edge.to) continue;
     indegree.set(edge.to, (indegree.get(edge.to) ?? 0) + 1);
     outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge.to]);
   }

@@ -171,6 +171,10 @@ pub struct PipelineStep {
     pub input_bindings: Vec<crate::InputBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condition: Option<crate::ResultCondition>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub route_gates: Vec<crate::RouteGate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub router: Option<crate::RouterConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<crate::ReviewRule>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

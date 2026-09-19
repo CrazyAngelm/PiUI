@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { connectAgents, visibleConnections, type ConnectionDirection } from './graphConnections';
+  import { connectAgents, connectRoute, visibleConnections, type ConnectionDirection } from './graphConnections';
   import { preflightGraph, type PreflightIssue } from './graphPreflight';
   import { performRunAction } from './runActions';
   import { onMount } from 'svelte';
@@ -14,8 +14,9 @@
   import { harnessConfigurations, permissionLabels } from '../../harness-adapters';
   import { t } from '../locale/language';
   import { orchestrationHost, orchestrationError, type OrchestrationClient, type DefinitionSummary, type AgentProfile, type SaveDefinitionRequest, type StoredDefinition } from '../../host-api/orchestrationClient';
-  import { emptyGraph, newGraphNode, compileGraph, graphErrors, patternEdges, type AgentGraph, type GraphNode, type ConnectionKind } from './agentGraph';
+  import { emptyGraph, newGraphNode, newRouterNode, compileGraph, graphErrors, patternEdges, type AgentGraph, type GraphNode, type ConnectionKind } from './agentGraph';
   import { arrangeResultDependencies, fitGraphZoom, graphBounds, GRAPH_NODE_WIDTH, GRAPH_PORT_Y } from './graphLayout';
+  import RouterSettings from './RouterSettings.svelte';
   export let modelsFor: (harness: AgentProfile['harness']) => import('../../../../../contracts/harness-models-v18').HarnessCatalogModel[] = () => [];
   export let workspaceId: string;
   export let safeMode = false;
@@ -36,7 +37,7 @@
   let kind: ConnectionKind = 'result';
   let direction: ConnectionDirection = 'forward';
   let world: HTMLDivElement;
-  let connectionStart: { id: string; side: 'in' | 'out' } | undefined;
+  let connectionStart: { id: string; side: 'in' | 'out' | 'route'; branchId?: string } | undefined;
   let connectionPoint: { x: number; y: number } | undefined;
   let connectionPointer: number | undefined;
   let connectionError = '';
@@ -53,6 +54,7 @@
   let fileNotice = '';
   let pendingRunId: string | undefined;
   let mounted = false;
+  let placementKind: 'agent' | 'router' | undefined;
   let catalogHarness: AgentProfile['harness'] | undefined;
   let modelCatalogs: Partial<Record<AgentProfile['harness'], WorkspaceModel[]>> = {};
   let resourceCatalogs: Partial<Record<AgentProfile['harness'], HarnessModelsResult['resources']>> = {};
@@ -72,7 +74,7 @@
     } catch (error) { if (mounted && request === modelRequest) modelsError = error instanceof Error ? error.message : 'Could not load models.'; }
     finally { if (mounted && request === modelRequest) modelsLoading = false; }
   }
-  $: if (mounted && selected && !safeMode && selected.profile.harness !== catalogHarness) void loadModels(selected.profile.harness);
+  $: if (mounted && selected && selected.kind !== 'router' && !safeMode && selected.profile.harness !== catalogHarness) void loadModels(selected.profile.harness);
   $: nodeById = new Map(graph.nodes.map(node => [node.id, node]));
   let drag: { id: string; pointer: number; startX: number; startY: number; x: number; y: number } | undefined;
   $: availableModels = selected ? modelCatalogs[selected.profile.harness] ?? modelsFor(selected.profile.harness) : [];
@@ -110,35 +112,90 @@
     } catch (error) { errors = [error instanceof Error ? error.message : 'Could not export system.']; }
   }
   async function refresh(): Promise<void> { try { commands = (await client.orchestration_catalog_v6({ workspaceId })).launchCommands; } catch (error) { errors = [orchestrationError(error).message]; } }
+  function syncRouterInputs(nodes: GraphNode[], edges: readonly { from: string; to: string; kind?: ConnectionKind }[]): GraphNode[] {
+    return nodes.map(node => {
+      if (node.kind !== 'router' || !node.router) return node;
+      const inputStepId = edges.find(edge => edge.kind === 'result' && edge.to === node.id)?.from ?? '';
+      return node.router.inputStepId === inputStepId ? node : { ...node, router: { ...node.router, inputStepId } };
+    });
+  }
   function updateNode(id: string, change: Partial<GraphNode>): void { graph = { ...graph, nodes: graph.nodes.map(node => node.id === id ? { ...node, ...change } : node) }; }
+  function updateRouterNode(id: string, change: Partial<GraphNode>): void {
+    const requestedInput = change.router?.inputStepId;
+    if (requestedInput === undefined) { updateNode(id, change); return; }
+    let edges = graph.edges.filter(edge => !(edge.kind === 'result' && edge.to === id));
+    if (requestedInput) {
+      const result = connectAgents({ ...graph, edges }, requestedInput, id, 'result', 'forward');
+      if (result.error) { connectionError = result.error; return; }
+      edges = result.edges;
+    }
+    const nodes = graph.nodes.map(node => node.id === id ? { ...node, ...change } : node);
+    graph = { ...graph, nodes: syncRouterInputs(nodes, edges), edges };
+    connectionError = '';
+  }
   function updateProfile(change: Partial<AgentProfile>): void { if (selected) updateNode(selected.id, { profile: { ...selected.profile, ...change } }); }
-  function add(): void { const node = newGraphNode(graph.nodes.length); graph = { ...graph, nodes: [...graph.nodes, node] }; selectedId = node.id; }
-  function remove(): void { graph = { ...graph, nodes: graph.nodes.filter(node => node.id !== selectedId), edges: graph.edges.filter(edge => edge.from !== selectedId && edge.to !== selectedId) }; selectedId = ''; }
+  function add(nodeKind: 'agent' | 'router' = placementKind ?? 'agent', point: { x: number; y: number } | undefined = undefined): void {
+    const node = nodeKind === 'router' ? newRouterNode(graph.nodes.length) : newGraphNode(graph.nodes.length);
+    const center = !point && canvas ? { x: (canvas.scrollLeft + canvas.clientWidth / 2) / zoom, y: (canvas.scrollTop + canvas.clientHeight / 2) / zoom } : point;
+    if (center) { node.x = Math.max(24, center.x - 116); node.y = Math.max(24, center.y - 62); }
+    graph = { ...graph, nodes: [...graph.nodes, node] }; selectedId = node.id; placementKind = undefined; inspectorCollapsed = false;
+  }
+  function armPlacement(nodeKind: 'agent' | 'router'): void { placementKind = placementKind === nodeKind ? undefined : nodeKind; connectionError = ''; }
+  function canvasClick(event: MouseEvent): void {
+    if (!placementKind || safeMode || busy || !world) return;
+    const target = event.target as HTMLElement;
+    if (target.closest('.node-shell') || target.closest('[data-port]')) return;
+    const bounds = world.getBoundingClientRect();
+    add(placementKind, { x: (event.clientX - bounds.left) / zoom, y: (event.clientY - bounds.top) / zoom });
+  }
+  function remove(): void {
+    const edges = graph.edges.filter(edge => edge.from !== selectedId && edge.to !== selectedId);
+    const nodes = graph.nodes.filter(node => node.id !== selectedId);
+    graph = { ...graph, nodes: syncRouterInputs(nodes, edges), edges };
+    selectedId = '';
+  }
+  function removeEdge(index: number): void {
+    const edges = graph.edges.filter((_, position) => position !== index);
+    graph = { ...graph, nodes: syncRouterInputs(graph.nodes, edges), edges };
+    selectedEdgeKey = '';
+  }
   function connect(): void {
     if (safeMode || busy) return;
     const result = connectAgents(graph, from, to, kind, direction);
     connectionError = result.error ?? '';
-    if (!result.error) graph = { ...graph, edges: result.edges };
+    if (!result.error) graph = { ...graph, nodes: syncRouterInputs(graph.nodes, result.edges), edges: result.edges };
   }
   function cancelConnection(): void { connectionStart = undefined; connectionPoint = undefined; connectionPointer = undefined; }
-  function finishConnection(id: string, side: 'in' | 'out'): void {
+  function finishConnection(id: string, side: 'in' | 'out' | 'route', branchId: string | undefined = undefined): void {
     if (!connectionStart || safeMode || busy) return;
-    if (connectionStart.side === side) { connectionError = 'Connect an output to an input.'; cancelConnection(); return; }
-    from = connectionStart.side === 'out' ? connectionStart.id : id;
-    to = connectionStart.side === 'in' ? connectionStart.id : id;
-    connect(); cancelConnection();
+    const startIsOutput = connectionStart.side === 'out' || connectionStart.side === 'route';
+    const endIsOutput = side === 'out' || side === 'route';
+    if (startIsOutput === endIsOutput || (connectionStart.side === 'route' && side !== 'in') || (side === 'route' && connectionStart.side !== 'in')) { connectionError = 'Connect an output to an input.'; cancelConnection(); return; }
+    const routerId = connectionStart.side === 'route' ? connectionStart.id : side === 'route' ? id : '';
+    const selectedBranch = connectionStart.side === 'route' ? connectionStart.branchId : branchId;
+    if (routerId && selectedBranch) {
+      const targetId = connectionStart.side === 'route' ? id : connectionStart.id;
+      const result = connectRoute(graph, routerId, targetId, selectedBranch);
+      connectionError = result.error ?? '';
+      if (!result.error) graph = { ...graph, edges: result.edges };
+    } else {
+      from = connectionStart.side === 'out' ? connectionStart.id : id;
+      to = connectionStart.side === 'in' ? connectionStart.id : id;
+      connect();
+    }
+    cancelConnection();
   }
-  function portClick(event: MouseEvent, id: string, side: 'in' | 'out'): void {
+  function portClick(event: MouseEvent, id: string, side: 'in' | 'out' | 'route', branchId: string | undefined = undefined): void {
     if (safeMode || busy) return;
     // Pointer gestures are handled on release; keyboard activation uses click.
     if (event.detail !== 0) return;
-    if (connectionStart) finishConnection(id, side);
-    else { connectionStart = { id, side }; connectionError = ''; }
+    if (connectionStart) finishConnection(id, side, branchId);
+    else { connectionStart = { id, side, branchId }; connectionError = ''; }
   }
-  function portDown(event: PointerEvent, id: string, side: 'in' | 'out'): void {
+  function portDown(event: PointerEvent, id: string, side: 'in' | 'out' | 'route', branchId: string | undefined = undefined): void {
     if (safeMode || busy || event.button !== 0) return;
     event.stopPropagation();
-    if (!connectionStart) { connectionStart = { id, side }; connectionError = ''; }
+    if (!connectionStart) { connectionStart = { id, side, branchId }; connectionError = ''; }
     connectionPointer = event.pointerId;
   }
   function connectionMove(event: PointerEvent): void {
@@ -152,21 +209,23 @@
     const port = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-port]');
     if (!port) { cancelConnection(); return; }
     const id = port.dataset.nodeId, side = port.dataset.port;
-    if (!id || (side !== 'in' && side !== 'out')) { cancelConnection(); return; }
-    if (id !== connectionStart.id || side !== connectionStart.side) finishConnection(id, side);
+    const branchId = port.dataset.branchId;
+    if (!id || (side !== 'in' && side !== 'out' && side !== 'route')) { cancelConnection(); return; }
+    if (id !== connectionStart.id || side !== connectionStart.side || branchId !== connectionStart.branchId) finishConnection(id, side, branchId);
   }
-  function edgePath(source: GraphNode, target: GraphNode): string {
-    if (source.id === target.id) return `M ${source.x + GRAPH_NODE_WIDTH} ${source.y + GRAPH_PORT_Y} C ${source.x + GRAPH_NODE_WIDTH + 60} ${source.y - 60}, ${source.x - 60} ${source.y - 60}, ${source.x} ${source.y + GRAPH_PORT_Y}`;
+  function branchY(node: GraphNode, branchId: string | undefined = undefined): number { const index = node.router?.branches.findIndex(branch => branch.id === branchId) ?? -1; return index >= 0 ? 55 + index * 28 : GRAPH_PORT_Y; }
+  function edgePath(source: GraphNode, target: GraphNode, sourcePortY = GRAPH_PORT_Y, targetPortY = GRAPH_PORT_Y): string {
+    if (source.id === target.id) return `M ${source.x + GRAPH_NODE_WIDTH} ${source.y + sourcePortY} C ${source.x + GRAPH_NODE_WIDTH + 60} ${source.y - 60}, ${source.x - 60} ${source.y - 60}, ${source.x} ${source.y + targetPortY}`;
     const sign = source.x <= target.x ? 1 : -1;
     const x1 = source.x + (sign === 1 ? GRAPH_NODE_WIDTH : 0), x2 = target.x + (sign === 1 ? 0 : GRAPH_NODE_WIDTH);
-    return `M ${x1} ${source.y + GRAPH_PORT_Y} C ${x1 + sign * 50} ${source.y + GRAPH_PORT_Y}, ${x2 - sign * 50} ${target.y + GRAPH_PORT_Y}, ${x2} ${target.y + GRAPH_PORT_Y}`;
+    return `M ${x1} ${source.y + sourcePortY} C ${x1 + sign * 50} ${source.y + sourcePortY}, ${x2 - sign * 50} ${target.y + targetPortY}, ${x2} ${target.y + targetPortY}`;
   }
-  function edgeKey(edge: { from: string; to: string }): string { return `${edge.from}:${edge.to}`; }
-  function edgeIsSelected(edge: { from: string; to: string; connections?: readonly { from: string; to: string }[] }): boolean {
+  function edgeKey(edge: { from: string; to: string; kind?: ConnectionKind; branchId?: string }): string { return `${edge.from}:${edge.to}:${edge.kind ?? ''}:${edge.branchId ?? ''}`; }
+  function edgeIsSelected(edge: { from: string; to: string; kind?: ConnectionKind; branchId?: string; connections?: readonly { from: string; to: string; kind?: ConnectionKind; branchId?: string }[] }): boolean {
     return selectedEdgeKey === edgeKey(edge) || (edge.connections?.some(connection => selectedEdgeKey === edgeKey(connection)) ?? false);
   }
   function connectionLabel(connection: ConnectionKind): string {
-    return connection === 'result' ? 'Result dependency' : connection === 'send' ? 'Messaging' : connection === 'observe' ? 'Observation' : 'Delegation';
+    return connection === 'result' ? 'Result dependency' : connection === 'send' ? 'Messaging' : connection === 'observe' ? 'Observation' : connection === 'spawn' ? 'Delegation' : 'Route';
   }
   function arrange(): void {
     const result = arrangeResultDependencies(graph.nodes, graph.edges);
@@ -208,18 +267,28 @@
       if (!team || !pipeline) throw new Error('Missing graph definition');
       const storedProfiles = await Promise.all(catalog.profiles.map(profile => client.orchestration_get_profile_v6({ workspaceId, id: profile.id })));
       const profiles = new Map(storedProfiles.filter((profile): profile is StoredDefinition<AgentProfile> => profile !== null).map(profile => [profile.value.id, profile]));
-      const nodes = pipeline.value.steps.map((step, index) => { const member = team.value.members.find(item => item.id === step.assignedMemberId); const profile = member && profiles.get(member.profileId); if (!profile) throw new Error('Missing agent profile'); return { id: step.id, profile: profile.value, task: step.instructions, inputBindings: step.inputBindings ? [...step.inputBindings] : undefined, condition: step.condition, review: step.review, requireApproval: step.requireApproval, resultFields: step.resultFields ? [...step.resultFields] : undefined, executionMode: step.executionMode, input: step.inputInstructions, x: 60 + index * 280, y: 100 }; });
+      const nodes = pipeline.value.steps.map((step, index) => {
+        const isProgramRouter = step.router?.mode === 'program';
+        const member = team.value.members.find(item => item.id === step.assignedMemberId);
+        const profile = member && profiles.get(member.profileId);
+        const fallbackProfile: AgentProfile = { id: crypto.randomUUID(), name: step.name || `Router ${index + 1}`, harness: 'codex', model: 'router', permissionMode: 'read-only', instructions: '', serviceTier: 'standard', toolPolicy: { rules: [] }, allowedSpawnProfileIds: [] };
+        if (!profile && !isProgramRouter) throw new Error('Missing agent profile');
+        return { kind: step.router ? 'router' as const : 'agent' as const, id: step.id, profile: profile?.value ?? fallbackProfile, router: step.router, task: step.instructions, inputBindings: step.inputBindings ? [...step.inputBindings] : undefined, condition: step.condition, review: step.review, requireApproval: step.requireApproval, resultFields: step.resultFields ? [...step.resultFields] : undefined, executionMode: step.executionMode, input: step.inputInstructions, x: 60 + index * 280, y: 100 };
+      });
       // A member may own several steps in older definitions; preserve the original editors for those graphs.
-      if (new Set(nodes.map(node => node.profile.id)).size !== nodes.length || team.value.members.some(member => !pipeline.value.steps.some(step => step.id === member.id && step.assignedMemberId === member.id))) throw new Error('This definition uses reusable members. Open it in Library to preserve its assignments.');
+      if (new Set(nodes.filter(node => node.kind !== 'router' || node.router?.mode === 'agent').map(node => node.profile.id)).size !== nodes.filter(node => node.kind !== 'router' || node.router?.mode === 'agent').length || team.value.members.some(member => !pipeline.value.steps.some(step => step.id === member.id && step.assignedMemberId === member.id))) throw new Error('This definition uses reusable members. Open it in Library to preserve its assignments.');
       const next: AgentGraph = { id, name: command.value.name, teamId: team.value.id, pipelineId: pipeline.value.id, orchestratorId: team.value.orchestratorMemberId, spawnedAgentsJoinTeam: team.value.spawnedAgentsJoinTeam, nodes, edges: [
-        ...pipeline.value.steps.flatMap(step => step.dependencyStepIds.map(dependency => ({ from: dependency, to: step.id, kind: 'result' as const }))),
+        ...pipeline.value.steps.flatMap(step => [
+          ...step.dependencyStepIds.filter(dependency => !(step.routeGates ?? []).some(gate => gate.routerStepId === dependency)).map(dependency => ({ from: dependency, to: step.id, kind: 'result' as const })),
+          ...(step.routeGates ?? []).map(gate => ({ from: gate.routerStepId, to: step.id, kind: 'route' as const, branchId: gate.branchId })),
+        ]),
         ...team.value.sendEdges.map(edge => ({ from: edge.fromMemberId, to: edge.toMemberId, kind: 'send' as const })),
         ...team.value.observeEdges.map(edge => ({ from: edge.fromMemberId, to: edge.toMemberId, kind: 'observe' as const })),
-        ...nodes.flatMap(node => node.profile.allowedSpawnProfileIds.map(profileId => { const target = nodes.find(candidate => candidate.profile.id === profileId); if (!target) throw new Error('This definition delegates to an external profile. Open it in Library.'); return { from: node.id, to: target.id, kind: 'spawn' as const }; })),
+        ...nodes.filter(node => node.kind !== 'router' || node.router?.mode === 'agent').flatMap(node => node.profile.allowedSpawnProfileIds.map(profileId => { const target = nodes.find(candidate => candidate.profile.id === profileId); if (!target) throw new Error('This definition delegates to an external profile. Open it in Library.'); return { from: node.id, to: target.id, kind: 'spawn' as const }; })),
       ] };
       try { const positions: unknown = JSON.parse(localStorage.getItem(`piui.graph.${workspaceId}.${id}`) ?? 'null'); if (Array.isArray(positions)) for (const position of positions) if (position && typeof position.id === 'string' && Number.isFinite(position.x) && Number.isFinite(position.y)) { const node = next.nodes.find(item => item.id === position.id); if (node) { node.x = Math.max(0, position.x); node.y = Math.max(0, position.y); } } } catch { /* Positions are rebuildable UI metadata. */ }
       graph = next; baseline = JSON.stringify(graph); selectedId = nodes[0]?.id ?? '';
-      revisions = new Map([[id, command.revision], [team.value.id, team.revision], [pipeline.value.id, pipeline.revision], ...nodes.map(node => [node.profile.id, profiles.get(node.profile.id)!.revision] as [string, number])]);
+      revisions = new Map([[id, command.revision], [team.value.id, team.revision], [pipeline.value.id, pipeline.revision], ...nodes.filter(node => profiles.has(node.profile.id)).map(node => [node.profile.id, profiles.get(node.profile.id)!.revision] as [string, number])]);
     } catch (error) { errors = [error instanceof Error && !('code' in error) ? error.message : orchestrationError(error).message]; }
     finally { busy = false; }
   }
@@ -258,7 +327,7 @@
   }
 </script>
 
-<svelte:window onpointermove={connectionMove} onpointerup={connectionUp} onpointercancel={cancelConnection} onkeydown={(event) => { if (event.key === 'Escape') cancelConnection(); }} />
+<svelte:window onpointermove={connectionMove} onpointerup={connectionUp} onpointercancel={cancelConnection} onkeydown={(event) => { if (event.key === 'Escape') { cancelConnection(); placementKind = undefined; } }} />
 
 <section class="system-editor" inert={taskExpanded} aria-label={$t('Agent system')}>
   <header class="toolbar">
@@ -291,7 +360,11 @@
   <div class="graph-layout" class:has-selection={selected !== undefined && !inspectorCollapsed} class:inspector-collapsed={inspectorCollapsed} style:--graph-inspector-width={`${inspectorWidth}px`}>
     <div class="canvas-column">
       <div class="canvas-tools">
-        <button class="tool-primary" onclick={add} disabled={safeMode || busy}><span class="tool-icon" aria-hidden="true">＋</span> {$t('Add agent')}</button>
+        <div class="node-palette" role="toolbar" aria-label={$t('Node palette')}>
+          <button class:palette-selected={placementKind === 'agent'} class="palette-agent" aria-pressed={placementKind === 'agent'} onclick={() => armPlacement('agent')} disabled={safeMode || busy}><span class="palette-glyph" aria-hidden="true">●</span>{$t('Agent')}</button>
+          <button class:palette-selected={placementKind === 'router'} class="palette-router" aria-pressed={placementKind === 'router'} onclick={() => armPlacement('router')} disabled={safeMode || busy}><span class="palette-glyph" aria-hidden="true">◇</span>{$t('Router')}</button>
+        </div>
+        <button class="tool-primary" onclick={() => add()} disabled={safeMode || busy}><span class="tool-icon" aria-hidden="true">＋</span> {$t(placementKind === 'router' ? 'Add router' : 'Add agent')}</button>
         <select aria-label={$t('Pattern')} value="" onchange={(event) => { graph = { ...graph, edges: patternEdges(graph.nodes, event.currentTarget.value) }; event.currentTarget.value = ''; }} disabled={safeMode || busy || !graph.nodes.length}><option value="" disabled hidden>{$t('Pattern')}</option><option value="sequential">{$t('Sequential')}</option><option value="parallel">{$t('Parallel')}</option><option value="supervisor">{$t('Supervisor')}</option><option value="peer">{$t('Peer team')}</option></select>
         <select aria-label={$t('Connection type')} bind:value={kind} disabled={safeMode || busy}><option value="result">{$t('Result dependency')}</option><option value="send">{$t('Messaging')}</option><option value="observe">{$t('Observation')}</option><option value="spawn">{$t('Delegation')}</option></select>
         <select aria-label={$t('Direction')} bind:value={direction} disabled={safeMode || busy}><option value="forward">→ {$t('One way')}</option><option value="reverse">← {$t('Reverse')}</option><option value="both" disabled={kind === 'result'}>↔ {$t('Both ways')}</option></select>
@@ -303,39 +376,46 @@
           <span><i class="legend-line message-line"></i>{$t('Messaging')}</span>
           <span><i class="legend-line observe-line"></i>{$t('Observation')}</span>
         </div>
-        <span class="canvas-summary">{$t('Graph summary', [graph.nodes.length, graph.edges.length])}</span>
+          <span class="canvas-summary">{$t('Graph summary', [graph.nodes.length, graph.edges.length])}</span>
         <div class="zoom-controls"><button aria-label={$t('Zoom out')} onclick={() => zoom /= 1.2}>−</button><button aria-label={$t('Reset view')} onclick={() => zoom = 1}>{Math.round(zoom * 100)}%</button><button aria-label={$t('Zoom in')} onclick={() => zoom = Math.min(1.6, zoom * 1.2)}>＋</button></div>
         {#if selected && inspectorCollapsed}<button class="inspector-reopen" onclick={() => inspectorCollapsed = false}>{$t('Show inspector')}</button>{/if}
       </div>
       {#if connectionStart}<div class="connection-status" role="status">{$t('Choose another port or press Escape.')}<button onclick={cancelConnection}>{$t('Cancel')}</button></div>{/if}
       {#if connectionError}<p class="errors" role="alert">{$t(connectionError)}</p>{/if}
-      <div bind:this={canvas} class="canvas" role="region" aria-label={$t('Agent system')}>
-        {#if !graph.nodes.length}<div class="empty"><h2>{$t('Agent system')}</h2><p>{$t('Add agents, then connect their results or allow communication.')}</p><button class="primary" onclick={add} disabled={safeMode}>＋ {$t('Add agent')}</button></div>{/if}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
+      <div bind:this={canvas} class="canvas" role="application" aria-label={$t('Agent system')} tabindex="0" onclick={canvasClick} onkeydown={(event) => { if (event.key === 'Escape') placementKind = undefined; }}>
+        {#if placementKind}<div class="placement-hint" role="status">{$t(placementKind === 'router' ? 'Click the canvas to place a router.' : 'Click the canvas to place an agent.')} <button type="button" onclick={(event) => { event.stopPropagation(); placementKind = undefined; }}>{$t('Cancel')}</button></div>{/if}
+        {#if !graph.nodes.length}<div class="empty"><h2>{$t('Agent system')}</h2><p>{$t('Add agents, then connect their results or allow communication.')}</p><button class="primary" onclick={() => add()} disabled={safeMode}>＋ {$t(placementKind === 'router' ? 'Add router' : 'Add agent')}</button></div>{/if}
         <div style:width={`${width * zoom}px`} style:height={`${height * zoom}px`}>
           <div bind:this={world} class="world" style:width={`${width}px`} style:height={`${height}px`} style:transform={`scale(${zoom})`}>
             <svg width={width} height={height} aria-hidden="true"><defs><marker id="graph-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" /></marker></defs>
-              {#each renderedEdges as edge}{@const source = nodeById.get(edge.from)}{@const target = nodeById.get(edge.to)}{#if source && target}<path class:selected-edge={edgeIsSelected(edge)} class:related-edge={selected !== undefined && (edge.from === selected.id || edge.to === selected.id)} class:muted-edge={selected !== undefined && edge.from !== selected.id && edge.to !== selected.id} class:secondary-edge={edge.kind !== 'result'} class:spawn-edge={edge.kind === 'spawn'} class:observe-edge={edge.kind === 'observe'} d={edgePath(source, target)} marker-start={edge.both ? 'url(#graph-arrow)' : undefined} marker-end="url(#graph-arrow)"><title>{edge.connections.map(connection => `${nodeById.get(connection.from)?.profile.name} → ${nodeById.get(connection.to)?.profile.name}: ${$t(connectionLabel(connection.kind))}`).join('\n')}</title></path>{/if}{/each}
-              {#if connectionStart && connectionPoint}{@const source = nodeById.get(connectionStart.id)}{#if source}<path class="connection-preview" d={`M ${source.x + (connectionStart.side === 'out' ? GRAPH_NODE_WIDTH : 0)} ${source.y + GRAPH_PORT_Y} L ${connectionPoint.x} ${connectionPoint.y}`} marker-end="url(#graph-arrow)" />{/if}{/if}
+              {#each renderedEdges as edge}{@const source = nodeById.get(edge.from)}{@const target = nodeById.get(edge.to)}{#if source && target}<path class:selected-edge={edgeIsSelected(edge)} class:related-edge={selected !== undefined && (edge.from === selected.id || edge.to === selected.id)} class:muted-edge={selected !== undefined && edge.from !== selected.id && edge.to !== selected.id} class:secondary-edge={edge.kind !== 'result'} class:spawn-edge={edge.kind === 'spawn'} class:observe-edge={edge.kind === 'observe'} class:route-edge={edge.kind === 'route'} d={edgePath(source, target, edge.kind === 'route' ? branchY(source, edge.branchId) : GRAPH_PORT_Y)} marker-start={edge.both ? 'url(#graph-arrow)' : undefined} marker-end="url(#graph-arrow)"><title>{edge.connections.map(connection => `${nodeById.get(connection.from)?.profile.name} → ${nodeById.get(connection.to)?.profile.name}: ${$t(connectionLabel(connection.kind))}${connection.branchId ? ` · ${source.router?.branches.find(branch => branch.id === connection.branchId)?.label ?? connection.branchId}` : ''}`).join('\n')}</title></path>{/if}{/each}
+              {#if connectionStart && connectionPoint}{@const source = nodeById.get(connectionStart.id)}{#if source}<path class="connection-preview" d={`M ${source.x + ((connectionStart.side === 'out' || connectionStart.side === 'route') ? GRAPH_NODE_WIDTH : 0)} ${source.y + (connectionStart.side === 'route' ? branchY(source, connectionStart.branchId) : GRAPH_PORT_Y)} L ${connectionPoint.x} ${connectionPoint.y}`} marker-end="url(#graph-arrow)" />{/if}{/if}
             </svg>
-            {#each graph.nodes as node (node.id)}<div class="node-shell" style:left={`${node.x}px`} style:top={`${node.y}px`}><button class="node" class:selected={node.id === selectedId} class:node-related={selected !== undefined && node.id !== selected.id && graph.edges.some((edge) => (edge.from === selected.id && edge.to === node.id) || (edge.to === selected.id && edge.from === node.id))} aria-pressed={node.id === selectedId} onpointerdown={(event) => pointerDown(event, node)} onpointermove={pointerMove} onpointerup={() => drag = undefined} onpointercancel={() => drag = undefined} onclick={() => { selectedId = node.id; inspectorCollapsed = false; }} onkeydown={(event) => keyMove(event, node)}>
-              <span class="node-topline"><span class="harness">{harnessConfigurations[node.profile.harness].name}</span><span class="node-kind">{$t('Agent')}</span></span>
-              <strong>{node.profile.name}</strong>
-              <span class="node-model">{node.profile.model || $t('Model')}</span>
-              <span class="node-task">{node.task.trim() || $t('No task yet')}</span>
-              <small>{node.profile.reasoning ?? $t('Model default')}{node.profile.serviceTier === 'fast' ? $t(' · Fast') : ''}</small>
-            </button>{#each ['in', 'out'] as side}<button class="port" class:port-in={side === 'in'} class:port-out={side === 'out'} class:connecting={connectionStart?.id === node.id && connectionStart.side === side} data-port={side} data-node-id={node.id} aria-label={`${$t(side === 'in' ? 'Input connection' : 'Output connection')}: ${node.profile.name}`} disabled={safeMode || busy} onpointerdown={(event) => portDown(event, node.id, side as 'in' | 'out')} onclick={(event) => portClick(event, node.id, side as 'in' | 'out')} onkeydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); if (!event.repeat) event.currentTarget.click(); } }}></button>{/each}</div>{/each}
+            {#each graph.nodes as node (node.id)}<div class="node-shell" class:router-shell={node.kind === 'router'} style:left={`${node.x}px`} style:top={`${node.y}px`}>
+              <button class="node" class:router-node={node.kind === 'router'} class:agent-node={node.kind !== 'router'} class:selected={node.id === selectedId} class:node-related={selected !== undefined && node.id !== selected.id && graph.edges.some((edge) => (edge.from === selected.id && edge.to === node.id) || (edge.to === selected.id && edge.from === node.id))} aria-pressed={node.id === selectedId} onpointerdown={(event) => pointerDown(event, node)} onpointermove={pointerMove} onpointerup={() => drag = undefined} onpointercancel={() => drag = undefined} onclick={() => { selectedId = node.id; inspectorCollapsed = false; }} onkeydown={(event) => keyMove(event, node)}>
+                <span class="node-topline"><span class="harness">{node.kind === 'router' ? $t('Decision') : harnessConfigurations[node.profile.harness].name}</span><span class="node-kind">{$t(node.kind === 'router' ? 'Router' : 'Agent')}</span></span>
+                <strong>{node.profile.name}</strong>
+                {#if node.kind === 'router'}<span class="node-model">{$t(node.router?.mode === 'agent' ? 'Agent decides' : 'Programmatic')}</span><span class="node-task">{node.router?.branches.length ?? 0} {$t('routes')}</span><div class="router-branches">{#each node.router?.branches ?? [] as branch}<span><i></i>{branch.label}</span>{/each}</div>
+                {:else}<span class="node-model">{node.profile.model || $t('Model')}</span><span class="node-task">{node.task.trim() || $t('No task yet')}</span><small>{node.profile.reasoning ?? $t('Model default')}{node.profile.serviceTier === 'fast' ? $t(' · Fast') : ''}</small>{/if}
+              </button>
+              <button class="port port-in" class:connecting={connectionStart?.id === node.id && connectionStart.side === 'in'} data-port="in" data-node-id={node.id} aria-label={`${$t('Input connection')}: ${node.profile.name}`} disabled={safeMode || busy} onpointerdown={(event) => portDown(event, node.id, 'in')} onclick={(event) => portClick(event, node.id, 'in')} onkeydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); if (!event.repeat) event.currentTarget.click(); } }}></button>
+              {#if node.kind === 'router'}{#each node.router?.branches ?? [] as branch, branchIndex}<button class="port port-route" class:connecting={connectionStart?.id === node.id && connectionStart.side === 'route' && connectionStart.branchId === branch.id} style:top={`${branchY(node, branch.id) - 19}px`} data-port="route" data-branch-id={branch.id} data-node-id={node.id} aria-label={`${$t('Route output')}: ${branch.label}`} disabled={safeMode || busy} onpointerdown={(event) => portDown(event, node.id, 'route', branch.id)} onclick={(event) => portClick(event, node.id, 'route', branch.id)} onkeydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); if (!event.repeat) event.currentTarget.click(); } }}><span>{branch.label}</span></button>{/each}{:else}<button class="port port-out" class:connecting={connectionStart?.id === node.id && connectionStart.side === 'out'} data-port="out" data-node-id={node.id} aria-label={`${$t('Output connection')}: ${node.profile.name}`} disabled={safeMode || busy} onpointerdown={(event) => portDown(event, node.id, 'out')} onclick={(event) => portClick(event, node.id, 'out')} onkeydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); if (!event.repeat) event.currentTarget.click(); } }}></button>{/if}
+            </div>{/each}
           </div>
         </div>
       </div>
       <details class="connections" open={graph.nodes.length > 1}><summary>{$t('Connections')} <span>{graph.edges.length}</span></summary>
         <div class="connection-form"><select aria-label={$t('From')} bind:value={from}><option value="">{$t('From')}</option>{#each graph.nodes as node}<option value={node.id}>{node.profile.name}</option>{/each}</select><select aria-label={$t('To')} bind:value={to}><option value="">{$t('To')}</option>{#each graph.nodes as node}<option value={node.id}>{node.profile.name}</option>{/each}</select><select aria-label={$t('Connections')} bind:value={kind}><option value="result">{$t('Result dependency')}</option><option value="send">{$t('Messaging')}</option><option value="observe">{$t('Observation')}</option><option value="spawn">{$t('Delegation')}</option></select><button onclick={connect} disabled={safeMode || busy || !from || !to}>{$t('Connect')}</button></div>
-        <ul>{#each graph.edges as edge, index}<li class:selected-connection={selectedEdgeKey === edgeKey(edge)}><button class="connection-link" onclick={() => { selectedEdgeKey = edgeKey(edge); selectedId = edge.to; inspectorCollapsed = false; }}><span>{nodeById.get(edge.from)?.profile.name} <b aria-hidden="true">→</b> {nodeById.get(edge.to)?.profile.name}</span><small>{$t(connectionLabel(edge.kind))}</small></button><button class="connection-remove" aria-label={`${$t('Remove')} ${index + 1}`} disabled={safeMode || busy} onclick={() => { selectedEdgeKey = ''; graph = { ...graph, edges: graph.edges.filter((_, i) => i !== index) }; }}>×</button></li>{/each}</ul>
+        <ul>{#each graph.edges as edge, index}<li class:selected-connection={selectedEdgeKey === edgeKey(edge)}><button class="connection-link" onclick={() => { selectedEdgeKey = edgeKey(edge); selectedId = edge.to; inspectorCollapsed = false; }}><span>{nodeById.get(edge.from)?.profile.name} <b aria-hidden="true">→</b> {nodeById.get(edge.to)?.profile.name}</span><small>{$t(connectionLabel(edge.kind))}</small></button><button class="connection-remove" aria-label={`${$t('Remove')} ${index + 1}`} disabled={safeMode || busy} onclick={() => removeEdge(index)}>×</button></li>{/each}</ul>
       </details>
     </div>
     {#if selected && !inspectorCollapsed}<aside aria-label={$t('Agent settings')}>
       <PanelResize label={$t('Resize agent settings')} storageKey="piui.graph.inspector.width" initial={320} minimum={260} edge="left" onresize={(width) => inspectorWidth = width} />
       <div class="inspector-heading"><div><h2>{selected.profile.name}</h2></div><button class="close-inspector" aria-label={$t('Hide inspector')} onclick={(event) => { event.currentTarget.closest('.graph-layout')?.querySelector<HTMLButtonElement>('.node.selected')?.focus(); inspectorCollapsed = true; }}>×</button></div>
         <label>{$t('Name')}<input value={selected.profile.name} oninput={(event) => updateProfile({ name: event.currentTarget.value })} disabled={safeMode || busy} /></label>
+        {#if selected.kind === 'router'}<RouterSettings node={selected} nodes={graph.nodes} disabled={safeMode || busy} onchange={(change: Partial<GraphNode>) => updateRouterNode(selectedId, change)} />{/if}
+        {#if selected.kind !== 'router' || selected.router?.mode === 'agent'}
         <label>{$t("Harness")}<select value={selected.profile.harness} onchange={(event) => { const harness = event.currentTarget.value as AgentProfile['harness']; updateProfile({ harness, model: '', modelProvider: undefined, permissionMode: harnessConfigurations[harness].defaultPermission, networkAccess: undefined, serviceTier: harnessConfigurations[harness].speed ? 'standard' : undefined, baseInstructions: undefined, reasoning: undefined }); }} disabled={safeMode || busy}><option value="codex">Codex</option><option value="prime-agent">Prime Agent</option><option value="pi">Pi</option><option value="hermes">Hermes</option></select></label>
         <label>{$t('Model')}<select aria-label={$t('Model')} value={JSON.stringify([selected.profile.modelProvider, selected.profile.model])} onchange={(event) => { const model = availableModels.find(entry => JSON.stringify([entry.provider, entry.id]) === event.currentTarget.value); if (model) updateProfile({ model: model.id, modelProvider: model.provider, reasoning: undefined, serviceTier: model.supportsFast && selected?.profile.serviceTier === 'fast' ? 'fast' : undefined }); }} disabled={safeMode || busy || modelsLoading}>
           {#if !nativeModel}<option disabled={!selected.profile.model} hidden={!selected.profile.model} value={JSON.stringify([selected.profile.modelProvider, selected.profile.model])}>{selected.profile.model || $t(modelsLoading ? 'Loading models…' : 'Select model')}</option>{/if}
@@ -359,8 +439,8 @@
             <label class="check-row"><input type="checkbox" checked={selected.profile.baseInstructions === undefined} onchange={(event) => updateProfile({ baseInstructions: event.currentTarget.checked ? undefined : '' })} disabled={safeMode || busy} />{$t('Use base prompt')}</label>
           {/if}
         </section>
-        <FlowSettings node={selected} nodes={graph.nodes} edges={graph.edges} disabled={safeMode || busy} onchange={(change) => updateNode(selectedId, change)} />
-        <ResultFields fields={selected.resultFields ?? []} disabled={safeMode || busy} onchange={(resultFields) => updateNode(selectedId, { resultFields })} />
+        {#if selected.kind !== 'router'}<FlowSettings node={selected} nodes={graph.nodes} edges={graph.edges} disabled={safeMode || busy} onchange={(change) => updateNode(selectedId, change)} />{/if}
+        {#if selected.kind !== 'router' || selected.router?.mode === 'agent'}<ResultFields fields={selected.resultFields ?? []} disabled={safeMode || busy} onchange={(resultFields) => updateNode(selectedId, { resultFields })} />{/if}
         <label>{$t('Execution mode')}<select value={selected.executionMode ?? 'scheduled'} onchange={(event) => updateNode(selectedId, { executionMode: event.currentTarget.value as 'scheduled' | 'callable' })} disabled={safeMode || busy}><option value="scheduled">{$t('Run by dependencies')}</option><option value="callable">{$t('Only when called')}</option></select></label>
         <label>{$t('File access')}<select value={selected.profile.permissionMode} onchange={(event) => { const permissionMode = event.currentTarget.value as AgentProfile['permissionMode']; updateProfile({ permissionMode, ...(!['read-only', 'workspace-write'].includes(permissionMode) ? { networkAccess: undefined } : {}) }); }} disabled={safeMode || busy}>{#each configuration?.permissionModes ?? [] as mode}<option value={mode}>{$t(permissionLabels[mode])}</option>{/each}</select></label>
         {#if !configuration?.filesystemSandbox}<small>{$t('The adapter does not enforce a filesystem sandbox.')}</small>{/if}
@@ -372,7 +452,8 @@
         </section>
         <ResourcePicker profile={selected.profile} items={resourceCatalogs[selected.profile.harness]?.items ?? []} loading={modelsLoading} disabled={safeMode || busy} onchange={updateProfile} />
         {#each resourceCatalogs[selected.profile.harness]?.warnings ?? [] as warning}<small role="status">{$t(warning)}</small>{/each}
-<button class="danger" onclick={remove} disabled={safeMode || busy}>{$t('Remove agent')}</button>
+        {/if}
+<button class="danger" onclick={remove} disabled={safeMode || busy}>{$t(selected.kind === 'router' ? 'Remove router' : 'Remove agent')}</button>
       </aside>{/if}
   </div>
 </section>
@@ -420,16 +501,30 @@
   .graph-layout { flex:1; display:grid; grid-template-columns:minmax(0,1fr); min-height:0; } .graph-layout.has-selection { grid-template-columns:minmax(0,1fr) var(--graph-inspector-width); }
   .canvas-column { min-width:0; min-height:0; display:flex; flex-direction:column; }
   .canvas-tools { display:flex; align-items:center; gap:6px; padding:8px 14px; min-height:48px; border-bottom:1px solid var(--piui-border-subtle); background:var(--piui-surface-1); flex-wrap:wrap; font-size:12px; }
+  .node-palette { display:flex; align-items:center; gap:2px; padding:2px; border:1px solid var(--piui-border-subtle); border-radius:var(--piui-radius-sm); background:var(--piui-bg); }
+  .node-palette button { display:flex; align-items:center; gap:5px; border:0; border-radius:5px; color:var(--piui-text-muted); padding:5px 8px; background:transparent; }
+  .node-palette button:hover:not(:disabled),.node-palette button.palette-selected { color:var(--piui-text); background:var(--piui-surface-2); box-shadow:inset 0 0 0 1px var(--piui-border); }
+  .node-palette .palette-agent.palette-selected { color:var(--piui-action); } .node-palette .palette-router.palette-selected { color:var(--piui-accent); }
+  .palette-glyph { font-size:11px; line-height:1; } .palette-router .palette-glyph { font-size:15px; }
   .canvas-tools button,.canvas-tools select { border-color:transparent; background:transparent; } .canvas-tools button:hover:not(:disabled),.canvas-tools select:hover:not(:disabled) { background:var(--piui-surface-2); } .tool-primary { color:var(--piui-text); border-color:var(--piui-border) !important; background:var(--piui-bg-raised) !important; font-weight:600; } .tool-icon { color:var(--piui-accent); font-size:16px; line-height:0; } .spacer { flex:1; min-width:12px; }
   .edge-legend { display:flex; gap:10px; align-items:center; color:var(--piui-text-faint); font-size:10px; white-space:nowrap; } .edge-legend span { display:flex; align-items:center; gap:4px; } .legend-line { width:15px; height:0; border-top:2px solid var(--piui-text-muted); } .legend-line.message-line { border-top-style:dashed; } .legend-line.observe-line { border-top-style:dotted; border-color:var(--piui-accent); } .canvas-summary { color:var(--piui-text-faint); font-size:10px; white-space:nowrap; font-variant-numeric:tabular-nums; }
   .zoom-controls { display:flex; align-items:center; flex-shrink:0; border:1px solid var(--piui-border-subtle); border-radius:var(--piui-radius-sm); overflow:hidden; } .zoom-controls button { border:0; border-radius:0; min-width:30px; padding:5px 7px; } .zoom-controls button + button { border-left:1px solid var(--piui-border-subtle); } .inspector-reopen { color:var(--piui-accent); }
   .canvas { position:relative; overflow:auto; flex:1; min-height:0; background-color:var(--piui-bg); background-image:radial-gradient(var(--piui-border-subtle) .7px,transparent .7px); background-size:20px 20px; }
-  .world { position:relative; transform-origin:0 0; } svg { position:absolute; pointer-events:none; } svg > path { pointer-events:stroke; fill:none; stroke:var(--piui-text-faint); stroke-width:1.8; transition:stroke .14s ease,opacity .14s ease,stroke-width .14s ease; } svg > path.secondary-edge { stroke:var(--piui-text-muted); stroke-dasharray:5 5; } svg > path.spawn-edge { stroke:var(--piui-accent); } svg > path.observe-edge { stroke-dasharray:2 6; } svg > path.muted-edge { opacity:.18; } svg > path.related-edge { stroke-width:2.3; } svg > path.selected-edge { stroke:var(--piui-accent); stroke-width:2.8; opacity:1; }
+  .placement-hint { position:sticky; top:12px; z-index:3; width:max-content; max-width:calc(100% - 28px); margin:12px auto -42px; padding:7px 10px; border:1px solid var(--piui-border-strong); border-radius:999px; color:var(--piui-text); background:color-mix(in srgb,var(--piui-bg-raised) 92%,transparent); box-shadow:0 8px 20px color-mix(in srgb,var(--piui-bg) 40%,transparent); font-size:11px; }
+  .placement-hint button { min-height:0; margin-left:7px; padding:2px 6px; border:0; background:transparent; color:var(--piui-accent); }
+  .world { position:relative; transform-origin:0 0; } svg { position:absolute; pointer-events:none; } svg > path { pointer-events:stroke; fill:none; stroke:var(--piui-text-faint); stroke-width:1.8; transition:stroke .14s ease,opacity .14s ease,stroke-width .14s ease; } svg > path.secondary-edge { stroke:var(--piui-text-muted); stroke-dasharray:5 5; } svg > path.spawn-edge { stroke:var(--piui-accent); } svg > path.observe-edge { stroke-dasharray:2 6; } svg > path.route-edge { stroke:var(--piui-accent); stroke-dasharray:3 4; } svg > path.muted-edge { opacity:.18; } svg > path.related-edge { stroke-width:2.3; } svg > path.selected-edge { stroke:var(--piui-accent); stroke-width:2.8; opacity:1; }
   .node-shell { position:absolute; width:232px; }
   .node { position:relative; width:232px; min-height:124px; box-sizing:border-box; display:grid; gap:5px; align-content:start; text-align:left; padding:13px 16px; touch-action:none; user-select:none; background:var(--piui-bg-raised); border-radius:12px; box-shadow:0 8px 22px color-mix(in srgb,var(--piui-bg) 70%,transparent); }
   .node:hover { border-color:var(--piui-border-strong); transform:translateY(-1px); } .node.selected { border-color:var(--piui-action); background:color-mix(in srgb,var(--piui-bg-raised) 88%,var(--piui-accent-soft)); box-shadow:0 0 0 1px var(--piui-action),0 10px 26px color-mix(in srgb,var(--piui-action) 18%,transparent); } .node.node-related { border-color:color-mix(in srgb,var(--piui-accent) 55%,var(--piui-border)); }
+  .router-node { min-height:152px; border-color:color-mix(in srgb,var(--piui-accent) 42%,var(--piui-border)); background:color-mix(in srgb,var(--piui-bg-raised) 94%,var(--piui-accent-soft)); }
+  .router-node .harness { color:var(--piui-accent); } .router-node .node-kind { color:var(--piui-accent) !important; }
+  .router-branches { display:grid; gap:3px; margin-top:2px; padding-top:5px; border-top:1px solid var(--piui-border-subtle); }
+  .router-branches span { display:flex; align-items:center; gap:5px; color:var(--piui-text) !important; font-size:10px !important; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .router-branches i { width:6px; height:6px; flex:0 0 auto; border:1px solid var(--piui-accent); border-radius:2px; background:var(--piui-accent-soft); }
   .node-topline { display:flex; justify-content:space-between; align-items:center; gap:8px; } .node strong { font-size:14px; font-weight:650; letter-spacing:-.01em; overflow-wrap:anywhere; } .node span,.node small { color:var(--piui-text-muted); overflow-wrap:anywhere; font-size:11px; } .node .harness { color:var(--piui-accent); font-size:10px; letter-spacing:.04em; text-transform:uppercase; } .node-kind { color:var(--piui-text-faint) !important; font-size:9px !important; text-transform:uppercase; letter-spacing:.06em; } .node-model { color:var(--piui-text) !important; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .node-task { display:-webkit-box; line-clamp:2; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; min-height:28px; line-height:1.35; color:var(--piui-text-muted) !important; }
   .port { position:absolute; top:47px; width:38px; height:38px; min-height:38px; padding:0; border:0; background:transparent; border-radius:50%; touch-action:none; } .port::before { content:''; position:absolute; top:18px; width:13px; border-top:1px solid var(--piui-border-strong); } .port::after { content:''; position:absolute; top:13px; width:11px; height:11px; border:2px solid var(--piui-border-strong); border-radius:50%; background:var(--piui-bg); } .port-in { left:-25px; } .port-in::before { right:7px; } .port-in::after { right:0; } .port-out { right:-25px; } .port-out::before { left:7px; } .port-out::after { left:0; }
+  .port-route { right:-25px; width:76px; text-align:left; } .port-route::before { left:7px; border-color:var(--piui-accent); } .port-route::after { left:0; border-color:var(--piui-accent); border-radius:3px; } .port-route span { position:absolute; left:22px; top:11px; max-width:53px; overflow:hidden; color:var(--piui-accent); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
+  .port-route:hover span,.port-route.connecting span,.port-route:focus-visible span { color:var(--piui-text); }
   .port:hover::after,.port.connecting::after,.port:focus-visible::after { background:var(--piui-accent); border-color:var(--piui-accent); } svg > path:hover { stroke:var(--piui-accent); stroke-width:2.8; opacity:1; } svg > path.connection-preview { stroke:var(--piui-accent); stroke-dasharray:5 5; }
   .connection-status { display:flex; align-items:center; gap:8px; padding:7px 14px; font-size:12px; color:var(--piui-text-muted); background:var(--piui-accent-soft); border-bottom:1px solid var(--piui-border-subtle); }
   aside { position:relative; min-width:0; min-height:0; border-left:1px solid var(--piui-border-subtle); padding:18px; display:flex; flex-direction:column; gap:12px; overflow:auto; background:var(--piui-bg-raised); } .inspector-heading { display:flex; align-items:center; justify-content:space-between; padding-bottom:12px; border-bottom:1px solid var(--piui-border-subtle); } aside h2 { font-size:15px; margin:0; font-weight:650; overflow-wrap:anywhere; } .close-inspector { border:0; padding:0; width:28px; min-height:28px; font-size:18px; color:var(--piui-text-muted); background:transparent; }

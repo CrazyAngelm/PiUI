@@ -41,4 +41,12 @@ describe('graph layout', () => {
     expect(fitGraphZoom(graph.nodes, 320, 240)).toBeLessThan(0.45);
     expect(fitGraphZoom([], 800, 600)).toBe(1);
   });
+
+  it('places routed targets after their router', () => {
+    const router = { ...newGraphNode(0), kind: 'router' as const };
+    const target = newGraphNode(1);
+    const result = arrangeResultDependencies([router, target], [{ from: router.id, to: target.id, kind: 'route', branchId: 'ready' }]);
+    expect(result.cycle).toBe(false);
+    expect(result.nodes.find((node) => node.id === target.id)?.x).toBeGreaterThan(router.x);
+  });
 });

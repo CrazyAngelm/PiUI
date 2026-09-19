@@ -1,0 +1,97 @@
+{
+  "format": "piui-system",
+  "version": 4,
+  "name": "Routed review",
+  "orchestrator": "source",
+  "agents": [
+    {
+      "id": "source",
+      "profile": {
+        "name": "Source",
+        "harness": "codex",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "read-only",
+        "instructions": "When called: inspect the request and return a structured status. Do not change files.",
+        "toolPolicy": {
+          "rules": []
+        },
+        "serviceTier": "standard"
+      },
+      "task": "Inspect the request and return a JSON object with the current status.",
+      "resultFields": [
+        {
+          "name": "status",
+          "kind": "text"
+        }
+      ]
+    },
+    {
+      "id": "router",
+      "kind": "router",
+      "profile": {
+        "name": "Status router",
+        "harness": "codex",
+        "model": "router",
+        "permissionMode": "read-only",
+        "instructions": "Coordinator-owned programmatic router.",
+        "toolPolicy": {
+          "rules": []
+        },
+        "serviceTier": "standard"
+      },
+      "router": {
+        "mode": "program",
+        "inputStepId": "source",
+        "branches": [
+          {
+            "id": "ready",
+            "label": "Ready",
+            "predicate": {
+              "op": "equals",
+              "field": "status",
+              "value": "ready"
+            }
+          },
+          {
+            "id": "needs-review",
+            "label": "Needs review",
+            "predicate": {
+              "op": "equals",
+              "field": "status",
+              "value": "needs-review"
+            }
+          }
+        ]
+      },
+      "task": "Select the matching status route."
+    },
+    {
+      "id": "review",
+      "profile": {
+        "name": "Review",
+        "harness": "codex",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "read-only",
+        "instructions": "When called: review the dependency result and report evidence. Do not change files.",
+        "toolPolicy": {
+          "rules": []
+        },
+        "serviceTier": "standard"
+      },
+      "task": "Review the status and report the next action."
+    }
+  ],
+  "connections": [
+    {
+      "from": "source",
+      "to": "router",
+      "kind": "result"
+    },
+    {
+      "from": "router",
+      "to": "review",
+      "kind": "route",
+      "branchId": "needs-review"
+    }
+  ]
+}

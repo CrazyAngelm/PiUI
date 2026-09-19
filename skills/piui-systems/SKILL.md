@@ -19,6 +19,16 @@ For each role write concise instructions covering **when called; inputs; respons
 
 Choose topology from dependencies: sequence for cumulative work; independent branches then synthesis for separable work; explicit review after implementation when the outcome needs verification. Result edges alone do not grant messaging, observation or spawning. Peer messaging is not a persistent conversation or a handoff. Version 4 separates scheduled tasks from callable templates with `executionMode`. Use acyclic result dependencies and an explicit `review` rule for correction cycles. Conditions compare declared structured results; they are not executable expressions. A dependency join waits for every predecessor to succeed; a skipped predecessor skips its descendants. Do not use this join as an either-branch merge.
 
+Routers are distinct from execution agents. A `router` node has exactly one
+direct result input and labeled route branches. In `program` mode, each branch
+uses a declarative `equals`, `exists`, `all`, `any`, or `not` predicate evaluated
+by the trusted coordinator; no JavaScript, shell, or model loop is evaluated.
+In `agent` mode, the native harness agent must return an array of known branch
+IDs under `selectionField`; one, many, or zero IDs are valid, while unknown or
+duplicate IDs fail the router. Route edges are control gates: every ordinary
+dependency still has to succeed, and an unselected branch is explicitly
+skipped. A router never grants tools, permissions, or authority to its targets.
+
 ## Configure and verify
 
 1. Inspect existing files before editing. Read `src/harness-adapters/` under `apps/desktop` for capabilities. Verify installed model/provider identifiers through an available native catalog/configuration without exposing credentials. Examples intentionally contain `REPLACE_WITH_AVAILABLE_MODEL`; resolve that before presenting a ready-to-run system.

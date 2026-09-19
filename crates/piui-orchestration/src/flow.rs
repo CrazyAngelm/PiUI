@@ -14,6 +14,110 @@ pub struct ResultCondition {
     pub field: String,
     pub equals: Value,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "camelCase", deny_unknown_fields)]
+pub enum RouterPredicate {
+    Equals { field: String, value: Value },
+    Exists { field: String },
+    All { predicates: Vec<RouterPredicate> },
+    Any { predicates: Vec<RouterPredicate> },
+    Not { predicate: Box<RouterPredicate> },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RouterBranch {
+    pub id: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predicate: Option<RouterPredicate>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RouterMode {
+    Program,
+    Agent,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RouterConfig {
+    pub mode: RouterMode,
+    pub input_step_id: String,
+    pub branches: Vec<RouterBranch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_field: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RouteGate {
+    pub router_step_id: String,
+    pub branch_id: String,
+}
+
+pub(crate) fn evaluate_router_predicate(predicate: &RouterPredicate, input: &Value) -> bool {
+    match predicate {
+        RouterPredicate::Equals { field, value } => input.get(field) == Some(value),
+        RouterPredicate::Exists { field } => input.get(field).is_some(),
+        RouterPredicate::All { predicates } => predicates
+            .iter()
+            .all(|predicate| evaluate_router_predicate(predicate, input)),
+        RouterPredicate::Any { predicates } => predicates
+            .iter()
+            .any(|predicate| evaluate_router_predicate(predicate, input)),
+        RouterPredicate::Not { predicate } => !evaluate_router_predicate(predicate, input),
+    }
+}
+
+pub(crate) fn program_router_selection(
+    config: &RouterConfig,
+    input: &Value,
+) -> Result<Vec<String>, &'static str> {
+    let mut selected = Vec::new();
+    for branch in &config.branches {
+        let predicate = branch
+            .predicate
+            .as_ref()
+            .ok_or("router-predicate-missing")?;
+        if evaluate_router_predicate(predicate, input) {
+            selected.push(branch.id.clone());
+        }
+    }
+    Ok(selected)
+}
+
+pub(crate) fn agent_router_selection(
+    config: &RouterConfig,
+    data: &Value,
+) -> Result<Vec<String>, &'static str> {
+    let field = config
+        .selection_field
+        .as_deref()
+        .unwrap_or("selectedBranchIds");
+    let values = data
+        .get(field)
+        .and_then(Value::as_array)
+        .ok_or("router-selection-invalid")?;
+    let known = config
+        .branches
+        .iter()
+        .map(|branch| branch.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut selected = Vec::new();
+    for value in values {
+        let id = value.as_str().ok_or("router-selection-invalid")?;
+        if !known.contains(id) || selected.iter().any(|item| item == id) {
+            return Err("router-selection-invalid");
+        }
+        selected.push(id.to_owned());
+    }
+    Ok(selected)
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewRule {
@@ -202,7 +306,43 @@ impl Coordinator {
                     data = text
                         .and_then(|text| serde_json::from_str::<Value>(text).ok())
                         .filter(Value::is_object);
-                    outcome
+                    if let Some(router) = step
+                        .router
+                        .as_ref()
+                        .filter(|router| router.mode == RouterMode::Agent)
+                    {
+                        match data.as_ref() {
+                            Some(value) => match crate::agent_router_selection(router, value) {
+                                Ok(selected) => {
+                                    if let Some(object) =
+                                        data.as_mut().and_then(Value::as_object_mut)
+                                    {
+                                        let field = router
+                                            .selection_field
+                                            .as_deref()
+                                            .unwrap_or("selectedBranchIds");
+                                        object.insert(
+                                            field.into(),
+                                            Value::Array(
+                                                selected.into_iter().map(Value::String).collect(),
+                                            ),
+                                        );
+                                    }
+                                    outcome
+                                }
+                                Err(code) => CompletionOutcome::Failed {
+                                    failure: FailureRecord { code: code.into() },
+                                },
+                            },
+                            None => CompletionOutcome::Failed {
+                                failure: FailureRecord {
+                                    code: "router-selection-invalid".into(),
+                                },
+                            },
+                        }
+                    } else {
+                        outcome
+                    }
                 }
                 Err(code) => CompletionOutcome::Failed {
                     failure: FailureRecord { code: code.into() },
@@ -310,7 +450,7 @@ fn repeat_from(run: &mut Run, step_id: &str) -> Result<(), CoordinatorError> {
     Ok(())
 }
 
-fn advance_conditions(run: &mut Run) {
+pub(crate) fn advance_conditions(run: &mut Run) {
     loop {
         let skipped = run
             .definition
@@ -340,7 +480,21 @@ fn advance_conditions(run: &mut Run) {
                                     != Some(&condition.equals)
                         })
                 });
-                (inherited_skip || false_condition).then_some(step.id.clone())
+                let route_not_selected = !step.route_gates.is_empty()
+                    && step
+                        .route_gates
+                        .iter()
+                        .map(|gate| gate.router_step_id.as_str())
+                        .collect::<BTreeSet<_>>()
+                        .iter()
+                        .all(|router_id| {
+                            run.tasks
+                                .iter()
+                                .find(|candidate| candidate.step_id == *router_id)
+                                .is_some_and(|router| router.status == TaskStatus::Succeeded)
+                        })
+                    && !crate::coordinator::route_gate_satisfied(run, step);
+                (inherited_skip || false_condition || route_not_selected).then_some(step.id.clone())
             })
             .collect::<Vec<_>>();
         if skipped.is_empty() {

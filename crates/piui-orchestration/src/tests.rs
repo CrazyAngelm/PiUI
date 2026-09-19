@@ -116,6 +116,156 @@ fn result_condition_skips_branch_without_running_a_harness() {
     assert_eq!(run.status(), RunStatus::Succeeded);
 }
 
+fn router_snapshot() -> RunDefinitionSnapshot {
+    let mut definition = snapshot();
+    definition.pipeline.steps[0].result_fields = vec![ResultField {
+        name: "score".into(),
+        kind: ResultFieldKind::Number,
+    }];
+    let router_id = "router";
+    let first = "score-two";
+    let second = "has-score";
+    let router = PipelineStep {
+        input_bindings: Vec::new(),
+        condition: None,
+        route_gates: Vec::new(),
+        router: Some(RouterConfig {
+            mode: RouterMode::Program,
+            input_step_id: "build".into(),
+            branches: vec![
+                RouterBranch {
+                    id: first.into(),
+                    label: "Score is two".into(),
+                    description: None,
+                    predicate: Some(RouterPredicate::Equals {
+                        field: "score".into(),
+                        value: json!(2),
+                    }),
+                },
+                RouterBranch {
+                    id: second.into(),
+                    label: "Score exists".into(),
+                    description: None,
+                    predicate: Some(RouterPredicate::Exists {
+                        field: "score".into(),
+                    }),
+                },
+            ],
+            selection_field: None,
+        }),
+        review: None,
+        require_approval: false,
+        result_fields: Vec::new(),
+        execution_mode: None,
+        input_instructions: None,
+        id: router_id.into(),
+        name: "Router".into(),
+        assigned_member_id: router_id.into(),
+        instructions: "Route the result".into(),
+        dependency_step_ids: vec!["build".into()],
+    };
+    let mut target = definition.pipeline.steps[1].clone();
+    target.dependency_step_ids = vec![router_id.into()];
+    target.route_gates = vec![
+        RouteGate {
+            router_step_id: router_id.into(),
+            branch_id: first.into(),
+        },
+        RouteGate {
+            router_step_id: router_id.into(),
+            branch_id: second.into(),
+        },
+    ];
+    definition.pipeline.steps = vec![definition.pipeline.steps[0].clone(), router, target];
+    definition
+}
+
+#[test]
+fn program_router_selects_multiple_routes_and_skips_when_none_match() {
+    let mut run = Coordinator::new_run("router-many", router_snapshot()).unwrap();
+    finish_checked(&mut run, r#"{"score":2}"#, "build-native");
+    assert!(Coordinator::ready_task_ids(&run).is_empty());
+    Coordinator::advance_automatic_steps(&mut run);
+    assert_eq!(Coordinator::ready_task_ids(&run), vec!["review"]);
+    let revision = run.revision();
+    assert!(
+        Coordinator::dispatch_next(
+            &mut run,
+            revision,
+            NativeExecutionReference {
+                id: "review-native".into()
+            },
+        )
+        .unwrap()
+        .is_some()
+    );
+    assert_eq!(
+        run.tasks[1].result_data,
+        Some(json!({"selectedBranchIds":["score-two","has-score"]}))
+    );
+
+    let mut none_definition = router_snapshot();
+    none_definition.pipeline.steps[1]
+        .router
+        .as_mut()
+        .unwrap()
+        .branches[1]
+        .predicate = Some(RouterPredicate::Equals {
+        field: "score".into(),
+        value: json!(3),
+    });
+    let mut run = Coordinator::new_run("router-none", none_definition).unwrap();
+    finish_checked(&mut run, r#"{"score":0}"#, "build-native");
+    let revision = run.revision();
+    assert!(
+        Coordinator::dispatch_next(
+            &mut run,
+            revision,
+            NativeExecutionReference {
+                id: "router-native".into()
+            },
+        )
+        .unwrap()
+        .is_none()
+    );
+    assert_eq!(
+        run.tasks[1].result_data,
+        Some(json!({"selectedBranchIds":[]}))
+    );
+    assert_eq!(run.tasks[2].status, TaskStatus::Skipped);
+}
+
+#[test]
+fn agent_router_rejects_unknown_or_duplicate_branch_ids() {
+    let config = RouterConfig {
+        mode: RouterMode::Agent,
+        input_step_id: "build".into(),
+        branches: vec![RouterBranch {
+            id: "yes".into(),
+            label: "Yes".into(),
+            description: None,
+            predicate: None,
+        }],
+        selection_field: Some("choice".into()),
+    };
+    assert_eq!(
+        agent_router_selection(&config, &json!({"choice":[]})).unwrap(),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        agent_router_selection(&config, &json!({"choice":["yes"]})).unwrap(),
+        vec!["yes"]
+    );
+    assert_eq!(
+        agent_router_selection(&config, &json!({"choice":["no"]})),
+        Err("router-selection-invalid")
+    );
+    assert_eq!(
+        agent_router_selection(&config, &json!({"choice":["yes","yes"]})),
+        Err("router-selection-invalid")
+    );
+}
+
 #[test]
 fn revision_cycle_retains_attempts_and_pauses_identical_feedback() {
     let mut definition = snapshot();
@@ -402,6 +552,8 @@ fn snapshot() -> RunDefinitionSnapshot {
                 PipelineStep {
                     input_bindings: Vec::new(),
                     condition: None,
+                    route_gates: Vec::new(),
+                    router: None,
                     review: None,
                     require_approval: false,
                     result_fields: Vec::new(),
@@ -416,6 +568,8 @@ fn snapshot() -> RunDefinitionSnapshot {
                 PipelineStep {
                     input_bindings: Vec::new(),
                     condition: None,
+                    route_gates: Vec::new(),
+                    router: None,
                     review: None,
                     require_approval: false,
                     result_fields: Vec::new(),

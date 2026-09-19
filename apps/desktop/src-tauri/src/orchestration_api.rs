@@ -201,6 +201,24 @@ impl OrchestrationApiState {
         }))
     }
 
+    /// Persist coordinator-only transitions before the scheduler resolves a
+    /// native profile. Program routers are evaluated here and never launched.
+    pub fn advance_automatic_steps(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+    ) -> Result<Run, OrchestrationApiError> {
+        validate_workspace_id(workspace_id)?;
+        let mut store = self.lock()?;
+        store
+            .transact(|workspaces| {
+                let run = mutable_run(workspaces, workspace_id, run_id)?;
+                Coordinator::advance_automatic_steps(run);
+                Ok(run.clone())
+            })
+            .map_err(Into::into)
+    }
+
     pub fn create_run(&self, request: StartRunRequest) -> Result<Run, OrchestrationApiError> {
         validate_workspace_id(&request.workspace_id)?;
         let mut store = self.lock()?;

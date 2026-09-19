@@ -1,5 +1,5 @@
 import { it, expect } from 'vitest';
-import { emptyGraph, newGraphNode } from './agentGraph';
+import { emptyGraph, newGraphNode, newRouterNode } from './agentGraph';
 import { preflightGraph } from './graphPreflight';
 it('checks actual reasoning and Fast rather than manifest examples', async () => {
   const graph = emptyGraph(); graph.nodes = [newGraphNode(0)];
@@ -8,4 +8,8 @@ it('checks actual reasoning and Fast rather than manifest examples', async () =>
   expect(await preflightGraph(graph,async () => catalog)).toEqual([]);
   expect((await preflightGraph(graph,async () => ({...catalog,models:[{id:'native',name:'Native',thinkingLevels:['low']}]}))).map(issue => issue.message)).toContain('Fast is unavailable for this model.');
   expect(await preflightGraph(graph,async () => {throw Error('offline');})).toHaveLength(1);
+});
+it('does not require a native model catalog for program routers', async () => {
+  const graph = emptyGraph(); graph.nodes = [newRouterNode(0)];
+  expect(await preflightGraph(graph, async () => { throw Error('program routers have no native profile'); })).toEqual([]);
 });

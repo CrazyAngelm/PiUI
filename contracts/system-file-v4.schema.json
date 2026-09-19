@@ -29,8 +29,17 @@
             "type": "string",
             "pattern": "\\S"
           },
+          "kind": {
+            "enum": [
+              "agent",
+              "router"
+            ]
+          },
           "profile": {
             "$ref": "#/definitions/profile"
+          },
+          "router": {
+            "$ref": "#/definitions/router"
           },
           "task": {
             "type": "string"
@@ -195,8 +204,13 @@
               "result",
               "send",
               "observe",
-              "spawn"
+              "spawn",
+              "route"
             ]
+          },
+          "branchId": {
+            "type": "string",
+            "pattern": "\\S"
           }
         },
         "required": [
@@ -217,6 +231,145 @@
   ],
   "additionalProperties": false,
   "definitions": {
+    "router": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "enum": [
+            "program",
+            "agent"
+          ]
+        },
+        "inputStepId": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "selectionField": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "branches": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "label": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "description": {
+                "type": "string"
+              },
+              "predicate": {
+                "$ref": "#/definitions/routerPredicate"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "mode",
+        "inputStepId",
+        "branches"
+      ],
+      "additionalProperties": false
+    },
+    "routerPredicate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "equals"
+            },
+            "field": {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "value": {
+              "anyOf": [
+                { "type": "string" },
+                { "type": "number" },
+                { "type": "boolean" },
+                { "type": "null" }
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "field",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "exists"
+            },
+            "field": {
+              "type": "string",
+              "pattern": "\\S"
+            }
+          },
+          "required": [
+            "op",
+            "field"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "enum": [
+                "all",
+                "any"
+              ]
+            },
+            "predicates": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/definitions/routerPredicate"
+              }
+            }
+          },
+          "required": [
+            "op",
+            "predicates"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "not"
+            },
+            "predicate": {
+              "$ref": "#/definitions/routerPredicate"
+            }
+          },
+          "required": [
+            "op",
+            "predicate"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
     "profile": {
       "type": "object",
       "properties": {

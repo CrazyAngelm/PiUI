@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { emptyGraph, newGraphNode, compileGraph } from './agentGraph';
-import { connectAgents, visibleConnections } from './graphConnections';
+import { emptyGraph, newGraphNode, newRouterNode, compileGraph } from './agentGraph';
+import { connectAgents, connectRoute, visibleConnections } from './graphConnections';
 
 describe('graph connections', () => {
   const fixture = () => ({ ...emptyGraph(), nodes: [newGraphNode(0), newGraphNode(1), newGraphNode(2)] });
@@ -30,5 +30,31 @@ describe('graph connections', () => {
       expect(result.error).toBeTruthy();
       expect(result.edges).toBe(graph.edges);
     }
+  });
+  it('connects individual router branches and rejects route cycles', () => {
+    const source = newGraphNode(0), router = newRouterNode(1), target = newGraphNode(2);
+    router.router = { ...router.router!, inputStepId: source.id };
+    const graph = { ...emptyGraph(), nodes: [source, router, target], edges: [{ from: source.id, to: router.id, kind: 'result' as const }] };
+    const branch = router.router!.branches[0]!;
+    const routed = connectRoute(graph, router.id, target.id, branch.id);
+    expect(routed.error).toBeUndefined();
+    expect(routed.edges.at(-1)).toEqual({ from: router.id, to: target.id, kind: 'route', branchId: branch.id });
+    expect(connectRoute({ ...graph, edges: routed.edges }, router.id, source.id, branch.id).error).toContain('cycle');
+  });
+  it('keeps router result inputs singular and uses branch ports for router output', () => {
+    const source = newGraphNode(0), alternate = newGraphNode(1), router = newRouterNode(2);
+    router.router = { ...router.router!, inputStepId: source.id };
+    const graph = { ...emptyGraph(), nodes: [source, alternate, router], edges: [{ from: source.id, to: router.id, kind: 'result' as const }] };
+    expect(connectAgents(graph, alternate.id, router.id, 'result', 'forward').error).toContain('one direct result input');
+    expect(connectAgents(graph, router.id, alternate.id, 'result', 'forward').error).toContain('branch routes');
+  });
+  it('keeps separate route branches visible even when they share a target', () => {
+    const router = newRouterNode(0), target = newGraphNode(1);
+    const [first, second] = router.router!.branches;
+    const edges = [
+      { from: router.id, to: target.id, kind: 'route' as const, branchId: first!.id },
+      { from: router.id, to: target.id, kind: 'route' as const, branchId: second!.id },
+    ];
+    expect(visibleConnections(edges)).toHaveLength(2);
   });
 });

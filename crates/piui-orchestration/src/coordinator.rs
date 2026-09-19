@@ -1,7 +1,9 @@
 use std::collections::BTreeSet;
 
+use serde_json::{Value, json};
 use thiserror::Error;
 
+use crate::flow::{advance_conditions, program_router_selection};
 use crate::{
     AgentRequestKind, AgentRequestRecord, AuthenticatedSender, AuthorizationError, CancelRequest,
     CompletionOutcome, ControlledSpawnLease, DefinitionError, FailureRecord, LaunchRequest,
@@ -74,6 +76,12 @@ pub enum RunDataError {
 pub struct Coordinator;
 
 impl Coordinator {
+    /// Materializes coordinator-owned steps (currently program routers) before
+    /// a host chooses a native profile. These steps never produce a launch.
+    pub fn advance_automatic_steps(run: &mut Run) {
+        advance_program_routers(run);
+    }
+
     pub fn new_run(
         run_id: impl Into<String>,
         definition: RunDefinitionSnapshot,
@@ -134,14 +142,19 @@ impl Coordinator {
                         .iter()
                         .find(|step| step.id == task.step_id)
                         .is_some_and(|step| {
-                            step.condition.as_ref().is_none_or(|condition| {
-                                run.tasks
-                                    .iter()
-                                    .find(|source| source.step_id == condition.source_step_id)
-                                    .and_then(|source| source.result_data.as_ref())
-                                    .and_then(|data| data.get(&condition.field))
-                                    == Some(&condition.equals)
-                            })
+                            !step
+                                .router
+                                .as_ref()
+                                .is_some_and(|router| router.mode == crate::RouterMode::Program)
+                                && step.condition.as_ref().is_none_or(|condition| {
+                                    run.tasks
+                                        .iter()
+                                        .find(|source| source.step_id == condition.source_step_id)
+                                        .and_then(|source| source.result_data.as_ref())
+                                        .and_then(|data| data.get(&condition.field))
+                                        == Some(&condition.equals)
+                                })
+                                && route_gate_satisfied(run, step)
                         })
             })
             .map(|task| task.step_id.as_str())
@@ -162,6 +175,7 @@ impl Coordinator {
         if lease_id.trim().is_empty() {
             return Err(CoordinatorError::EmptyId { kind: "lease" });
         }
+        advance_program_routers(run);
         let Some(step_id) = Self::ready_task_ids(run).first().map(|id| (*id).to_owned()) else {
             return Ok(None);
         };
@@ -330,6 +344,8 @@ impl Coordinator {
         definition.pipeline.steps.push(crate::PipelineStep {
             input_bindings: Vec::new(),
             condition: None,
+            route_gates: Vec::new(),
+            router: None,
             review: None,
             require_approval,
             result_fields,
@@ -598,6 +614,7 @@ impl Coordinator {
         if execution.id.trim().is_empty() {
             return Err(CoordinatorError::EmptyId { kind: "execution" });
         }
+        advance_program_routers(run);
         let Some(step_id) = Self::ready_task_ids(run).first().map(|id| (*id).to_owned()) else {
             return Ok(None);
         };
@@ -1105,6 +1122,29 @@ fn task_instructions(run: &Run, step: &crate::PipelineStep) -> String {
             text.push_str(&format!("{}: {:?}\n", field.name, field.kind));
         }
     }
+    if let Some(router) = step
+        .router
+        .as_ref()
+        .filter(|router| router.mode == crate::RouterMode::Agent)
+    {
+        let selection_field = router
+            .selection_field
+            .as_deref()
+            .unwrap_or("selectedBranchIds");
+        text.push_str(&format!("\n\nRouting decision: return {selection_field} as a JSON array. Use only these branch ids; an empty array is valid:\n"));
+        for branch in &router.branches {
+            text.push_str(&format!(
+                "{}: {}{}\n",
+                branch.id,
+                branch.label,
+                branch
+                    .description
+                    .as_deref()
+                    .map(|description| format!(" — {description}"))
+                    .unwrap_or_default()
+            ));
+        }
+    }
     let profile_for = |member_id: &str| {
         run.definition
             .team
@@ -1363,6 +1403,133 @@ fn dependencies_succeeded(run: &Run, step_id: &str) -> bool {
             .iter()
             .any(|task| task.step_id == *dependency && task.status == TaskStatus::Succeeded)
     })
+}
+
+pub(crate) fn route_gate_satisfied(run: &Run, step: &crate::PipelineStep) -> bool {
+    if step.route_gates.is_empty() {
+        return true;
+    }
+    let router_ids = step
+        .route_gates
+        .iter()
+        .map(|gate| gate.router_step_id.as_str())
+        .collect::<BTreeSet<_>>();
+    router_ids.iter().all(|router_id| {
+        let Some(router_task) = run.tasks.iter().find(|task| task.step_id == *router_id) else {
+            return false;
+        };
+        if router_task.status != TaskStatus::Succeeded {
+            return false;
+        }
+        let selected = router_task
+            .result_data
+            .as_ref()
+            .and_then(|value| {
+                run.definition
+                    .pipeline
+                    .steps
+                    .iter()
+                    .find(|candidate| candidate.id == *router_id)
+                    .and_then(|router_step| router_step.router.as_ref())
+                    .and_then(|router| {
+                        value.get(
+                            router
+                                .selection_field
+                                .as_deref()
+                                .unwrap_or("selectedBranchIds"),
+                        )
+                    })
+            })
+            .and_then(Value::as_array);
+        step.route_gates
+            .iter()
+            .filter(|gate| gate.router_step_id == *router_id)
+            .any(|gate| {
+                selected.is_some_and(|values| {
+                    values
+                        .iter()
+                        .any(|value| value.as_str() == Some(gate.branch_id.as_str()))
+                })
+            })
+    })
+}
+
+fn advance_program_routers(run: &mut Run) {
+    loop {
+        let candidates = run
+            .definition
+            .pipeline
+            .steps
+            .iter()
+            .filter(|step| {
+                step.router
+                    .as_ref()
+                    .is_some_and(|router| router.mode == crate::RouterMode::Program)
+                    && run
+                        .tasks
+                        .iter()
+                        .find(|task| task.step_id == step.id)
+                        .is_some_and(|task| {
+                            task.status == TaskStatus::Ready
+                                && task.lease_id.is_none()
+                                && dependencies_succeeded(run, &step.id)
+                        })
+            })
+            .map(|step| step.id.clone())
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            break;
+        }
+        for step_id in candidates {
+            let Some(step) = run
+                .definition
+                .pipeline
+                .steps
+                .iter()
+                .find(|step| step.id == step_id)
+                .cloned()
+            else {
+                continue;
+            };
+            let Some(router) = step.router.as_ref() else {
+                continue;
+            };
+            let input = run
+                .tasks
+                .iter()
+                .find(|task| task.step_id == router.input_step_id)
+                .and_then(|task| task.result_data.as_ref())
+                .cloned();
+            let result = input
+                .filter(Value::is_object)
+                .ok_or("router-input-invalid")
+                .and_then(|value| program_router_selection(router, &value));
+            if let Some(task) = run.tasks.iter_mut().find(|task| task.step_id == step_id) {
+                match result {
+                    Ok(selected) => {
+                        task.status = TaskStatus::Succeeded;
+                        let field = router
+                            .selection_field
+                            .as_deref()
+                            .unwrap_or("selectedBranchIds");
+                        let mut result = serde_json::Map::new();
+                        result.insert(field.to_owned(), json!(selected));
+                        task.result_data = Some(Value::Object(result));
+                        task.failure = None;
+                    }
+                    Err(code) => {
+                        task.status = TaskStatus::Failed;
+                        task.failure = Some(FailureRecord { code: code.into() });
+                        task.result_data = None;
+                    }
+                }
+                task.revision += 1;
+                run.revision += 1;
+            }
+        }
+        advance_conditions(run);
+        refresh_status(run);
+    }
 }
 
 pub(crate) fn check_run_revision(run: &Run, expected: Revision) -> Result<(), CoordinatorError> {

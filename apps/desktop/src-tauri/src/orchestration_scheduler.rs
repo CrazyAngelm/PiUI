@@ -275,6 +275,10 @@ impl OrchestrationScheduler {
                 let _operation = host.live_runtime_operation_gate.lock().await;
                 authorize_live_workspace(&host, workspace_id)?;
                 let api = app.state::<OrchestrationApiState>();
+                let advanced = api
+                    .advance_automatic_steps(workspace_id, run_id)
+                    .map_err(|_| OrchestrationSchedulerError::conflict())?;
+                self.emit_run_invalidation(app, workspace_id, &advanced);
                 let run = api
                     .get_run(workspace_id, run_id)
                     .map_err(|_| OrchestrationSchedulerError::conflict())?
@@ -1741,6 +1745,8 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
             PipelineStep {
                 input_bindings: Vec::new(),
                 condition: None,
+                route_gates: Vec::new(),
+                router: None,
                 review: None,
                 require_approval: false,
                 result_fields: Vec::new(),
@@ -1755,6 +1761,8 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
             PipelineStep {
                 input_bindings: Vec::new(),
                 condition: None,
+                route_gates: Vec::new(),
+                router: None,
                 review: None,
                 require_approval: false,
                 result_fields: Vec::new(),
@@ -2148,6 +2156,8 @@ mod tests {
                     PipelineStep {
                         input_bindings: Vec::new(),
                         condition: None,
+                        route_gates: Vec::new(),
+                        router: None,
                         review: None,
                         require_approval: false,
                         result_fields: Vec::new(),
@@ -2162,6 +2172,8 @@ mod tests {
                     PipelineStep {
                         input_bindings: Vec::new(),
                         condition: None,
+                        route_gates: Vec::new(),
+                        router: None,
                         review: None,
                         require_approval: false,
                         result_fields: Vec::new(),

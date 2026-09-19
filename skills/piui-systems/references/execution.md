@@ -21,6 +21,14 @@ remain importable. Orchestration IPC v6 is separate from portable JSON.
   a JSON primitive. A false condition skips that task and downstream dependents.
   Joins require every dependency to succeed; they do not merge alternative skipped
   branches. There is no executable expression interpreter.
+- A `kind: "router"` node is a coordinator step, not another agent loop. It has
+  exactly one direct result predecessor and stable branch IDs. In `program` mode,
+  declarative predicates (`equals`, `exists`, `all`, `any`, `not`) select zero or
+  more branch IDs without evaluating code. In `agent` mode, the native agent must
+  return a declared text-list field containing unique known branch IDs; unknown or
+  duplicate IDs fail the step. Route connections gate their downstream tasks, so
+  an unselected branch is skipped while selected branches may run in parallel.
+  Router selection grants no additional tools, files, or delegation authority.
 - `requireApproval: true` waits for the operator to accept the result before
   releasing dependencies. Reject fails the task. Native tool approvals are separate.
 - `review: {field,retryFromStepId}` uses a required boolean result field. True

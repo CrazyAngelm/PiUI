@@ -98,9 +98,44 @@ export interface ResultField { readonly name: string; readonly kind: 'text' | 'n
 export interface ResultCondition { readonly sourceStepId: string; readonly field: string; readonly equals: string | number | boolean; }
 export interface ReviewRule { readonly field: string; readonly retryFromStepId: string; }
 export interface InputBinding { readonly sourceStepId: string; readonly field: string; readonly name: string; }
+
+/** Declarative routing predicates. These are evaluated by the trusted coordinator; they are never executable code. */
+export type RouterPredicate =
+  | { readonly op: 'equals'; readonly field: string; readonly value: string | number | boolean | null }
+  | { readonly op: 'exists'; readonly field: string }
+  | { readonly op: 'all'; readonly predicates: readonly RouterPredicate[] }
+  | { readonly op: 'any'; readonly predicates: readonly RouterPredicate[] }
+  | { readonly op: 'not'; readonly predicate: RouterPredicate };
+
+export interface RouterBranch {
+  readonly id: string;
+  readonly label: string;
+  readonly description?: string;
+  /** Required for program routers and intentionally absent for agent routers. */
+  readonly predicate?: RouterPredicate;
+}
+
+export type RouterMode = 'program' | 'agent';
+
+export interface RouterConfig {
+  readonly mode: RouterMode;
+  /** Exactly one direct result dependency supplies the structured input. */
+  readonly inputStepId: string;
+  readonly branches: readonly RouterBranch[];
+  /** Agent routers must return an array of branch ids under this field. */
+  readonly selectionField?: string;
+}
+
+export interface RouteGate {
+  readonly routerStepId: string;
+  readonly branchId: string;
+}
+
 export interface PipelineStep {
   readonly inputBindings?: readonly InputBinding[];
   readonly condition?: ResultCondition;
+  readonly routeGates?: readonly RouteGate[];
+  readonly router?: RouterConfig;
   readonly review?: ReviewRule;
   readonly requireApproval?: boolean;
   readonly resultFields?: readonly ResultField[];
