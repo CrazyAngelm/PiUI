@@ -882,7 +882,7 @@
         <span class="welcome-mark" aria-hidden="true">π</span>
         {#if selectedWorkspace}<p class="welcome-project">{selectedWorkspace.name}</p>{/if}
         <h1>{catalogLoading ? $t('Opening your workspace…') : $t('What are we working on?')}</h1>
-        <p>{catalog.safeMode ? $t('Browse your conversations in read-only safe mode.') : $t('Start a chat, or pick up a conversation from the sidebar.')}</p>
+        {#if catalog.safeMode}<p>{$t('Browse your conversations in read-only safe mode.')}</p>{/if}
         <div><button class="accent" type="button" onclick={startNewSession} disabled={catalog.safeMode || catalogLoading}>{$t('New chat')}<kbd>{modifier}N</kbd></button></div>
         {#if sessionError}<p class="error" role="alert">{$t(sessionError)}</p>{/if}
       </div>

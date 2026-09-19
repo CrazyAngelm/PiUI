@@ -58,9 +58,7 @@
       {#if activeTab === 'appearance'}
         <section class="settings-section" aria-labelledby="appearance-title">
           <div class="section-heading">
-            <p class="section-eyebrow">{$t("Interface")}</p>
             <h2 id="appearance-title">{$t("Appearance")}</h2>
-            <p>{$t("Choose how PiUI looks and how much room the conversation uses. These local settings never modify Pi configuration.")}</p>
           </div>
 
           <div class="settings-card">

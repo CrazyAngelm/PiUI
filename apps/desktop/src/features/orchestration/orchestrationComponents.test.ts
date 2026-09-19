@@ -7,8 +7,10 @@ import LaunchCommandEditor from './LaunchCommandEditor.svelte';
 import ScheduleEditor from './ScheduleEditor.svelte';
 import OrchestrationPanel from './OrchestrationPanel.svelte';
 import RouterSettings from './RouterSettings.svelte';
+import ResultFields from './ResultFields.svelte';
 import { newGraphNode, newRouterNode } from './agentGraph';
 import type { AgentProfile, TeamDefinition, PipelineDefinition } from '../../../../../contracts/orchestration-v6';
+import { readFileSync } from 'node:fs';
 
 const profile: AgentProfile = {
   id: 'fixture-profile', name: 'Fixture review', harness: 'prime-agent', model: 'fixture-model', permissionMode: 'read-only',
@@ -83,9 +85,44 @@ describe('orchestration component integration', () => {
     const router = newRouterNode(1);
     router.router = { ...router.router!, inputStepId: source.id, branches: [{ ...router.router!.branches[0]!, id: 'internal-branch-id', label: 'Ready' }] };
     const { body } = render(RouterSettings, { props: { node: router, nodes: [source, router], onchange: noAction, onselectinput: noAction } });
-    expect(body).toContain('Edit input fields');
+    expect(body).toContain('Set up input fields');
     expect(body).toContain('status');
     expect(body).toContain('Ready');
     expect(body).not.toContain('internal-branch-id');
+  });
+  it('keeps field creation visible while moving router internals into named details', () => {
+    const source = newGraphNode(0);
+    source.profile = { ...source.profile, name: 'Source' };
+    source.resultFields = [{ name: 'status', kind: 'text' }];
+    const router = newRouterNode(1);
+    router.router = { ...router.router!, inputStepId: source.id };
+    const { body } = render(RouterSettings, { props: { node: router, nodes: [source, router], onchange: noAction, onselectinput: noAction } });
+    expect(body).toContain('Choose by');
+    expect(body).toContain('Input from');
+    expect(body).toContain('Set up input fields');
+    expect(body).toContain('Connect each route output to an agent.');
+    expect(body).toContain('How routes work');
+    expect(body).not.toContain('Select one or more downstream routes from one structured input.');
+    expect(body).not.toContain('Name each route, then connect its output port to an agent.');
+
+    const emptyFields = render(ResultFields, { props: { fields: [], onchange: noAction } }).body;
+    expect(emptyFields).toContain('Result fields');
+    expect(emptyFields).toContain('Add field');
+    expect(emptyFields).toContain('Add fields for conditions and other agents.');
+    const declaredFields = render(ResultFields, { props: { fields: source.resultFields, onchange: noAction } }).body;
+    expect(declaredFields).toContain('About result fields');
+  });
+  it('groups secondary graph controls under named disclosures', () => {
+    const source = readFileSync(new URL('./SystemGraphEditor.svelte', import.meta.url), 'utf8');
+    expect(source).toContain('<details class="canvas-menu">');
+    expect(source).toContain('<details class="edge-help">');
+    expect(source).toContain("$t('Model options')");
+    expect(source).toContain("$t('Access and tools')");
+    expect(source).toContain('bind:open={accessOptionsOpen}');
+    expect(source).toContain("selected.router?.mode === 'agent'");
+    expect(source).not.toContain('<span class="canvas-summary">');
+
+    const profileEditorSource = readFileSync(new URL('./AgentProfileEditor.svelte', import.meta.url), 'utf8');
+    expect(profileEditorSource).toContain('bind:open={modelOptionsOpen}');
   });
 });

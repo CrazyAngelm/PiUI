@@ -36,6 +36,7 @@
   let catalogLoading = false;
   let catalogError = '';
   let catalogHarness: Harness | undefined;
+  let modelOptionsOpen = profile?.serviceTier === 'fast';
   let mounted = false;
   let catalogRequest = 0;
   onMount(() => { mounted = true; return () => mounted = false; });
@@ -64,6 +65,7 @@
     baseline = fingerprint(draft);
     validationErrors = [];
     confirmDiscard = false;
+    modelOptionsOpen = profile?.serviceTier === 'fast';
     lastReportedDirty = undefined;
   }
   $: if (error !== undefined && error !== lastError) {
@@ -71,6 +73,7 @@
     void tick().then(() => errorSummary?.focus());
   }
   $: if (error === undefined) lastError = undefined;
+  $: if (catalogError) modelOptionsOpen = true;
 
   function fingerprint(value: ProfileDraft): string {
     return JSON.stringify(value);
@@ -169,6 +172,8 @@
 
   </section>
 
+  <details class="advanced" bind:open={modelOptionsOpen}>
+    <summary>{$t('Model options')}</summary>
   <section aria-label={$t('Inference settings')}>
     <div class="field-grid">
       <label>{$t("Reasoning")}
@@ -184,6 +189,7 @@
     </div>
 
   </section>
+  </details>
 
   <section aria-labelledby="instructions-heading">
     <h2 id="instructions-heading">{$t('Instructions')}</h2>
@@ -192,7 +198,7 @@
     {/if}
     <label for="profile-instructions">{$t('Additional instructions')}</label>
     <textarea id="profile-instructions" value={draft.instructions} oninput={(event) => updateDraft({ instructions: event.currentTarget.value })} disabled={disabled} spellcheck="true"></textarea>
-    <details class="advanced"><summary>{$t('Role and expected result')}</summary>    <label for="profile-when">{$t('When to call')}</label><textarea id="profile-when" rows="3" value={draft.whenToCall} oninput={(event) => updateDraft({ whenToCall: event.currentTarget.value })} disabled={disabled}></textarea>
+    <details class="advanced"><summary>{$t('Role and result')}</summary>    <label for="profile-when">{$t('When to call')}</label><textarea id="profile-when" rows="3" value={draft.whenToCall} oninput={(event) => updateDraft({ whenToCall: event.currentTarget.value })} disabled={disabled}></textarea>
     <label for="profile-input">{$t('Input')}</label><textarea id="profile-input" rows="4" value={draft.inputInstructions} oninput={(event) => updateDraft({ inputInstructions: event.currentTarget.value })} disabled={disabled}></textarea>
     <label for="profile-result">{$t('Expected result')}</label><textarea id="profile-result" rows="4" value={draft.expectedResult} oninput={(event) => updateDraft({ expectedResult: event.currentTarget.value })} disabled={disabled}></textarea>
 </details>
