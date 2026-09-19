@@ -1135,8 +1135,8 @@
   .project-heading-toggle svg { width:15px; height:15px; flex:0 0 auto; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; transition:transform .14s ease; }
   .project-heading-toggle svg.collapsed { transform:rotate(-90deg); }
   .project-heading-toggle:hover, .project-heading-toggle:focus-visible { color:var(--piui-text); }
-  .project-heading-actions { display:flex; align-items:center; gap:2px; opacity:.34; transition:opacity .14s ease; }
-  .project-heading:hover .project-heading-actions, .project-heading:focus-within .project-heading-actions, .project-heading-menu[open] ~ .project-heading-action { opacity:1; }
+  .project-heading-actions { display:flex; align-items:center; gap:2px; }
+  .project-heading:hover .project-heading-action, .project-heading:focus-within .project-heading-action, .project-heading-menu[open] summary { color:var(--piui-text); }
   .project-heading-action, .project-heading-menu summary { width:28px; height:28px; display:grid; place-items:center; padding:0; border:0; border-radius:6px; background:transparent; color:var(--piui-text-muted); font-size:20px; line-height:1; cursor:pointer; list-style:none; }
   .project-heading-menu summary::-webkit-details-marker { display:none; }
   .project-heading-action:hover, .project-heading-action:focus-visible, .project-heading-menu summary:hover, .project-heading-menu summary:focus-visible, .project-heading-menu[open] summary { background:var(--piui-surface-1); color:var(--piui-text); }
@@ -1190,6 +1190,6 @@
   .primary-actions kbd { font-size:10px; }
   .project-row span { font-weight:500; }
   .composer:focus-within { border-color:var(--piui-border-strong); }
-  @media (prefers-reduced-motion: reduce) { .project-heading-toggle svg, .project-heading-actions { transition:none; } }
-  :global(:root[data-reduced-motion="reduce"]) .project-heading-toggle svg, :global(:root[data-reduced-motion="reduce"]) .project-heading-actions { transition:none; }
+  @media (prefers-reduced-motion: reduce) { .project-heading-toggle svg { transition:none; } }
+  :global(:root[data-reduced-motion="reduce"]) .project-heading-toggle svg { transition:none; }
 </style>
