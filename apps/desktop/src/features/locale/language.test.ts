@@ -7,6 +7,8 @@ afterEach(() => setLanguage('en'));
 it('switches interface copy without translating user content or model IDs', () => {
   setLanguage('ru');
   expect(get(t)('Message queue')).toBe('Очередь сообщений');
+  expect(get(t)('Choose a project from the sidebar.')).toBe('Выберите проект в боковой панели.');
+  expect(get(t)('Runs use the latest saved team and pipeline.')).toBe('Запуски используют последние сохранённые команду и пайплайн.');
   expect(get(t)('Delete {0}', ['My task {1} / gpt-5.5'])).toBe('Удалить My task {1} / gpt-5.5');
   expect(translate('User supplied instruction', 'ru')).toBe('User supplied instruction');
   setLanguage('en');

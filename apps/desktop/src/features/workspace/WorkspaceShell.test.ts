@@ -18,4 +18,14 @@ describe('WorkspaceShell visible primary actions', () => {
     expect(source).not.toContain('--workspace-action-ink');
     expect(source).not.toContain('button.accent kbd { color:currentColor; opacity:');
   });
+
+  it('keeps empty workspace and primary labels contextual without duplicate copy', () => {
+    const source = readFileSync(new URL('./WorkspaceShell.svelte', import.meta.url), 'utf8');
+    expect(source).toContain("$t('Workspace')");
+    expect(source).toContain("$t('Choose a project from the sidebar.')");
+    expect(source).not.toContain("$t('Agents, teams, pipelines, and runs always show their project scope.')");
+    expect(source).not.toContain("$t('Settings ')");
+    expect(source).not.toContain("$t('New chat ')");
+    expect(source).not.toContain("$t('Inspector')");
+  });
 });

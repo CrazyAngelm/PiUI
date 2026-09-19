@@ -60,7 +60,7 @@
 
 <form class="editor" onsubmit={save} aria-labelledby="schedule-editor-title">
   <header>
-    <div><p class="eyebrow">{$t('Automation')}</p><h2 id="schedule-editor-title">{schedule ? $t('Edit schedule') : $t('Create schedule')}</h2></div>
+    <div><h2 id="schedule-editor-title">{schedule ? $t('Edit schedule') : $t('Create schedule')}</h2></div>
     <span>{readOnly ? $t('Read-only') : dirty ? $t('Unsaved changes') : $t('No unsaved changes')}</span>
   </header>
   <p class="notice">{$t('Schedules run only while the PiUI host is open. They do not wake the computer or start PiUI.')}</p>
@@ -118,7 +118,6 @@
   .editor { display:grid; gap:var(--piui-space-4); max-width:720px; color:var(--piui-text); }
   header, footer { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:var(--piui-space-3); }
   h2, p { margin:0; } h2 { font-size:22px; letter-spacing:-.02em; }
-  .eyebrow { color:var(--piui-accent); font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
   header span, .hint, .field-note { color:var(--piui-text-muted); font-size:12px; line-height:1.5; }
   fieldset { display:grid; gap:var(--piui-space-2); margin:0; padding:0; border:0; min-width:0; }
   label { margin-top:var(--piui-space-3); font-size:13px; font-weight:650; }

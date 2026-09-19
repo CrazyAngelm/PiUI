@@ -768,7 +768,7 @@
     <div class="utilities">
       {#if attentionCount}<button type="button" onclick={(event) => openInspector('approvals', event)}><span>{$t('Approvals')}</span><strong>{attentionCount}</strong></button>{/if}
       {#if activeSessions.length}<button type="button" onclick={(event) => openInspector('activity', event)}><span>{$t('Activity')}</span><strong>{activeSessions.length}</strong></button>{/if}
-      <button type="button" class:current-utility={mainView === 'settings'} onclick={showSettings}>{$t('Settings ')}<kbd>{modifier},</kbd></button>
+      <button type="button" class:current-utility={mainView === 'settings'} onclick={showSettings}>{$t('Settings')}<kbd>{modifier},</kbd></button>
     </div>
   </aside>
   {#if navigationOpen}<button class="nav-scrim" type="button" onclick={() => navigationOpen = false} aria-label={$t('Close navigation')}></button>{/if}
@@ -787,7 +787,7 @@
     {:else if mainView === 'workspace'}
       <section class="workspace-view" aria-labelledby="workspace-view-title">
         <header class="workspace-header">
-          <div><h1 id="workspace-view-title">{selectedWorkspace?.name ?? $t('Select a project')}</h1></div>
+          <div><h1 id="workspace-view-title">{selectedWorkspace?.name ?? $t('Workspace')}</h1></div>
           <nav aria-label={$t('Workspace sections')}>
             {#each ['systems', 'runs', 'schedules'] as section}
               <button type="button" class:active={workspaceSection === section} aria-current={workspaceSection === section ? 'page' : undefined} onclick={() => requestSection(section as WorkspaceSection)}>{$t(section[0]?.toUpperCase() + section.slice(1))}</button>
@@ -796,7 +796,7 @@
           </nav>
         </header>
         <div class="orchestration-host">
-          {#if !selectedWorkspaceId}<div class="state"><h2>{$t('Select a project')}</h2><p>{$t('Agents, teams, pipelines, and runs always show their project scope.')}</p></div>
+          {#if !selectedWorkspaceId}<div class="state"><h2>{$t('Select a project')}</h2><p>{$t('Choose a project from the sidebar.')}</p></div>
           {:else if orchestrationLoading}<div class="state" role="status"><h2>{$t('Loading workspace…')}</h2></div>
           {:else if orchestrationError}<div class="state"><h2>{$t('Workspace unavailable')}</h2><p>{$t(orchestrationError)}</p><button type="button" onclick={showWorkspace}>{$t('Try again')}</button></div>
           {:else if OrchestrationPanel}{#key orchestrationEpoch}<OrchestrationPanel modelsFor={modelChoices} workspaceId={selectedWorkspaceId} section={workspaceSection} onSectionChange={(section: WorkspaceSection) => { workspaceSection = section; persistUiState(); }} safeMode={catalog.safeMode} onOpenSession={openSession} onDirtyChange={(dirty: boolean) => orchestrationDirty = dirty} />{/key}
@@ -806,8 +806,7 @@
     {:else if newSessionOpen}
       <section class="new-session" aria-labelledby="new-session-title">
         <div class="new-session-card">
-          <small>{selectedWorkspace?.name ?? $t('Your workspace')}</small><h1 id="new-session-title">{$t('Create a new chat')}</h1>
-          <p>{$t('Choose where to work and which agent to use.')}</p>
+          <h1 id="new-session-title">{$t('New chat')}</h1>
           <label>{$t('Project')}<select id="new-session-project" bind:value={newWorkspaceId} disabled={createBusy}><option value="">{$t('Choose project')}</option>{#each catalog.workspaces.filter((workspace) => !workspace.missing) as workspace}<option value={workspace.id}>{workspace.personal ? $t('Chats') : workspace.name}{workspace.personal ? $t(' · Personal') : ''}</option>{/each}</select></label>
           <label>{$t('Harness')}<select id="new-session-harness" bind:value={newHarness} onchange={() => newModelId = ''} disabled={createBusy}>{#if !newHarness}<option value="" disabled hidden>{$t('No harness available')}</option>{/if}{#each catalog.harnesses as harness}<option value={harness.kind} disabled={harness.status !== 'available'}>{harness.name} · {harness.status === 'available' ? $t('Available') : harness.status === 'unverified' ? $t('Setup or verification required') : $t('Unavailable')}</option>{/each}</select></label>
           {#if newHarness && catalog.harnesses.find((item) => item.kind === newHarness)?.reason}<p class="field-note">{$t(catalog.harnesses.find((item) => item.kind === newHarness)?.reason ?? '')}</p>{/if}
@@ -848,7 +847,7 @@
         </div>
       </section>
     {:else if sessionLoading}
-      <div class="state" role="status"><h1>{$t('Opening chat…')}</h1><p>{$t('Your conversation is loading.')}</p></div>
+      <div class="state" role="status"><h1>{$t('Opening chat…')}</h1></div>
     {:else if selectedSession}
       <div class="state">
         <h1>{selectedSession.title}</h1>
@@ -860,10 +859,10 @@
     {:else}
       <div class="state empty">
         <span class="welcome-mark" aria-hidden="true">π</span>
-        <p class="welcome-project">{selectedWorkspace?.name ?? $t('PiUI')}</p>
+        {#if selectedWorkspace}<p class="welcome-project">{selectedWorkspace.name}</p>{/if}
         <h1>{catalogLoading ? $t('Opening your workspace…') : $t('What are we working on?')}</h1>
         <p>{catalog.safeMode ? $t('Browse your conversations in read-only safe mode.') : $t('Start a chat, or pick up a conversation from the sidebar.')}</p>
-        <div><button class="accent" type="button" onclick={startNewSession} disabled={catalog.safeMode || catalogLoading}>{$t('New chat ')}<kbd>{modifier}N</kbd></button></div>
+        <div><button class="accent" type="button" onclick={startNewSession} disabled={catalog.safeMode || catalogLoading}>{$t('New chat')}<kbd>{modifier}N</kbd></button></div>
         {#if sessionError}<p class="error" role="alert">{$t(sessionError)}</p>{/if}
       </div>
     {/if}
@@ -872,7 +871,7 @@
   {#if inspector && mainView === 'sessions'}
     <aside class="inspector" tabindex="-1" aria-label={inspector === 'approvals' ? $t('Approvals') : inspector === 'activity' ? $t('Activity') : $t('Session details')}>
       <PanelResize label={$t('Resize session details')} storageKey="piui.inspector.width" initial={290} edge="left" onresize={(width) => inspectorWidth = width} />
-      <header><div><small>{$t('Inspector')}</small><h2>{inspector === 'approvals' ? $t('Approvals') : inspector === 'activity' ? $t('Activity') : $t('Session details')}</h2></div><button class="icon" type="button" onclick={closeInspector} aria-label={$t('Close inspector')}>×</button></header>
+      <header><div><h2>{inspector === 'approvals' ? $t('Approvals') : inspector === 'activity' ? $t('Activity') : $t('Session details')}</h2></div><button class="icon" type="button" onclick={closeInspector} aria-label={$t('Close inspector')}>×</button></header>
       {#if inspector === 'approvals'}
         <div class="inspector-body approval-list">
           {#if allApprovals.length === 0}<div class="state compact"><h3>{$t('You’re all caught up')}</h3><p>{$t('Requests from all projects appear here when they need your attention.')}</p></div>{/if}
@@ -1021,7 +1020,7 @@
   .state.compact h3 { font-size:15px; }
   .new-session { flex:1; min-height:0; padding:clamp(28px,8vh,82px) 24px; overflow:auto; }
   .new-session-card { width:min(100%,570px); margin:0 auto; }
-  .new-session-card > small, .inspector header small, .modal > small { color:var(--piui-text-muted); font-size:11px; letter-spacing:.08em; text-transform:uppercase; }
+  .modal > small { color:var(--piui-text-muted); font-size:11px; letter-spacing:.08em; text-transform:uppercase; }
   .new-session-card h1 { margin:7px 0 9px; font-size:22px; }
   .new-session-card > p { color:var(--piui-text-muted); line-height:1.5; }
   .new-session-card > label, .session-options label, .details > label, .approval label { margin-top:15px; display:grid; gap:6px; font-size:13px; font-weight:600; }

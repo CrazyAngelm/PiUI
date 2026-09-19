@@ -47,8 +47,7 @@
 </script>
 
 <form class="editor" onsubmit={save} aria-labelledby="pipeline-editor-title">
-  <header><div><p class="context">{$t('Pipeline definition')}</p><h2 id="pipeline-editor-title">{pipeline ? pipeline.name : $t('Create pipeline')}</h2></div><span class="draft-state">{readOnly ? $t('Read-only') : dirty ? $t('Unsaved changes') : $t('No unsaved changes')}</span></header>
-  <p class="description">{$t('Give each task a name, an agent, and a clear result.')}</p>
+  <header><div><h2 id="pipeline-editor-title">{pipeline ? pipeline.name : $t('Create pipeline')}</h2></div><span class="draft-state">{readOnly ? $t('Read-only') : dirty ? $t('Unsaved changes') : $t('No unsaved changes')}</span></header>
   <fieldset disabled={busy || readOnly}>
     <label for="pipeline-name">{$t('Name')}</label>
     <input id="pipeline-name" value={draft.name} oninput={(event) => draft = { ...draft, name: event.currentTarget.value }} autocomplete="off" />
@@ -84,7 +83,7 @@
     <section class="dependency-preview" aria-labelledby="dependency-preview-title"><h3 id="dependency-preview-title">{$t('Dependency order')}</h3>
       {#if validation.orderedStepIds.length > 0}<ol>{#each validation.orderedStepIds as id (id)}{@const step = draft.steps.find((item) => item.id === id)}<li><strong>{step?.name}</strong><span>{step?.dependencyStepIds.length ? $t("After {0}", [step.dependencyStepIds.map((dependency) => draft.steps.find((item) => item.id === dependency)?.name ?? dependency).join(', ')]) : $t('Ready when the run starts')}</span></li>{/each}</ol>
       {:else}<p class="hint">{$t('Complete task names and member slots, then resolve any missing or cyclic dependencies to preview execution order.')}</p>{/if}
-      <p class="hint">{$t('Independent tasks may run in parallel when the host supports it. This list is a dependency preview, not an execution journal.')}</p>
+      <p class="hint">{$t('Independent tasks may run in parallel.')}</p>
     </section>
   {/if}
   {#if showValidation && validation.errors.length > 0}<div class="error" role="alert"><strong>{$t('Check this pipeline')}</strong><ul>{#each validation.errors as issue}<li>{issue}</li>{/each}</ul></div>{/if}
@@ -101,7 +100,7 @@
   .editor { display: grid; gap: var(--piui-space-4); min-width: 0; color: var(--piui-text); }
   header, .section-heading, footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--piui-space-3); }
   h2, h3, h4, p { margin: 0; } h2 { font-size: 22px; letter-spacing: -.02em; } h3 { font-size: 15px; } h4 { font-size: 13px; }
-  .context, .description, .hint, .draft-state { color: var(--piui-text-muted); font-size: 12px; line-height: 1.5; }.context { margin-bottom: var(--piui-space-1); }
+  .hint, .draft-state { color: var(--piui-text-muted); font-size: 12px; line-height: 1.5; }
   fieldset { display: grid; min-width: 0; margin: 0; padding: 0; border: 0; gap: var(--piui-space-2); }
   label, legend { color: var(--piui-text); font-size: 13px; font-weight: 600; }
   input:not([type="checkbox"]), textarea { width: 100%; min-width: 0; padding: var(--piui-space-3); border: 1px solid var(--piui-border); border-radius: var(--piui-radius-sm); background: var(--piui-surface-1); color: var(--piui-text); font: inherit; font-size: 13px; }textarea { resize: vertical; line-height: 1.5; }

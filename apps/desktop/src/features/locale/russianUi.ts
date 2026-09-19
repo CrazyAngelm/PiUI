@@ -317,4 +317,8 @@ export const russianUi: Readonly<Record<string, string>> = {
   "This launch request is locked to the selected definitions. Retrying reuses the same run ID; it does not replay a task.": "Запрос связан с выбранными настройками. Повтор использует тот же идентификатор запуска и не выполняет задачу повторно.",
   "A retry starts a new attempt; it does not automatically replay the prior attempt. Native side effects may already exist. Check the native session before retrying.": "Повтор создаёт новую попытку. Предыдущая могла уже изменить файлы или выполнить действия. Сначала проверьте беседу агента.",
   "A folder keeps this runtime choice. Registering the same folder with a different runtime is blocked so Pi and Prime Agent sessions never mix.": "Выбор агента закрепляется за папкой. Повторная регистрация с другим агентом недоступна, чтобы не смешивать беседы Pi и Prime Agent.",
+  "Choose a project from the sidebar.": "Выберите проект в боковой панели.",
+  "Choose the agent that coordinates the team.": "Выберите агента, который координирует команду.",
+  "Independent tasks may run in parallel.": "Независимые задачи могут выполняться параллельно.",
+  "Runs use the latest saved team and pipeline.": "Запуски используют последние сохранённые команду и пайплайн.",
 };

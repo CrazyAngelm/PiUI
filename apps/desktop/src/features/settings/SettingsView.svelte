@@ -36,7 +36,6 @@
 <section class="settings-view" aria-labelledby="settings-title">
   <header class="settings-header">
     <div>
-      <p class="settings-kicker">PiUI</p>
       <h1 id="settings-title">{$t("Settings")}</h1>
     </div>
     <button type="button" class="settings-close" onclick={onClose} aria-label={$t("Close settings")}>{$t("Done")}</button>
@@ -66,7 +65,7 @@
 
           <div class="settings-card">
             <label class="setting-row" for="theme-preference">
-              <span><strong>{$t("Theme")}</strong><small>{$t("Choose a fixed theme or follow Windows.")}</small></span>
+              <span><strong>{$t("Theme")}</strong></span>
               <select id="theme-preference" value={preferences.theme} onchange={onTheme} disabled={preferencesBusy}>
                 <option value="system">{$t("System")}</option>
                 <option value="dark">{$t("Dark")}</option>
@@ -74,7 +73,7 @@
               </select>
             </label>
             <label class="setting-row" for="font-size-preference">
-              <span><strong>{$t("Chat text size")}</strong><small>{$t("Changes message and composer text without changing your Pi prompts.")}</small></span>
+              <span><strong>{$t("Chat text size")}</strong></span>
               <select id="font-size-preference" value={preferences.fontSize} onchange={onFontSize} disabled={preferencesBusy}>
                 <option value="small">{$t("Small")}</option>
                 <option value="medium">{$t("Medium")}</option>
@@ -82,7 +81,7 @@
               </select>
             </label>
             <label class="setting-row" for="chat-width-preference">
-              <span><strong>{$t("Conversation width")}</strong><small>{$t("Wide uses more workspace. Centered and focused add more space at the sides.")}</small></span>
+              <span><strong>{$t("Conversation width")}</strong></span>
               <select id="chat-width-preference" value={preferences.chatWidth} onchange={onChatWidth} disabled={preferencesBusy}>
                 <option value="wide">{$t("Wide")}</option>
                 <option value="centered">{$t("Centered")}</option>
@@ -90,14 +89,14 @@
               </select>
             </label>
             <label class="setting-row" for="density-preference">
-              <span><strong>{$t("Density")}</strong><small>{$t("Adjust spacing throughout the workspace.")}</small></span>
+              <span><strong>{$t("Density")}</strong></span>
               <select id="density-preference" value={preferences.density} onchange={onDensity} disabled={preferencesBusy}>
                 <option value="comfortable">{$t("Comfortable")}</option>
                 <option value="compact">{$t("Compact")}</option>
               </select>
             </label>
             <label class="setting-row" for="motion-preference">
-              <span><strong>{$t("Motion")}</strong><small>{$t("Reduce nonessential interface transitions.")}</small></span>
+              <span><strong>{$t("Motion")}</strong></span>
               <select id="motion-preference" value={preferences.reducedMotion} onchange={onMotion} disabled={preferencesBusy}>
                 <option value="system">{$t("Follow system")}</option>
                 <option value="reduce">{$t("Reduce motion")}</option>
@@ -178,7 +177,6 @@
 <style>
   .settings-view { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; background: var(--piui-bg); }
   .settings-header { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; min-height: 86px; padding: 18px clamp(24px, 4vw, 56px); border-bottom: 1px solid var(--piui-border-subtle); }
-  .settings-kicker { margin: 0 0 3px; color: var(--piui-text-faint); font-size: 10px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
   .settings-header h1 { margin: 0; font-size: 25px; letter-spacing: -.035em; }
   .settings-close { min-height: 34px; padding: 0 14px; border: 1px solid var(--piui-border); border-radius: 9px; background: var(--piui-surface-1); color: var(--piui-text); font-size: 12px; font-weight: 700; }
   .settings-close:hover { border-color: var(--piui-accent); background: var(--piui-surface-2); }
@@ -201,7 +199,6 @@
   .setting-row + .setting-row, .extension-row + .extension-row { border-top: 1px solid var(--piui-border-subtle); }
   .setting-row > span { display: grid; gap: 4px; min-width: 0; }
   .setting-row strong { font-size: 13px; }
-  .setting-row small { color: var(--piui-text-muted); font-size: 11px; line-height: 1.4; }
   .setting-row select { width: min(190px, 42%); min-height: 36px; padding: 0 30px 0 10px; border: 1px solid var(--piui-border); border-radius: 8px; background: var(--piui-surface-1); color: var(--piui-text); font-size: 12px; }
   .runtime-inventory { display: inline-flex; gap: 3px; margin: -8px 0 14px; padding: 3px; border: 1px solid var(--piui-border); border-radius: 10px; background: var(--piui-bg-raised); }
   .runtime-inventory button { min-height: 32px; padding: 0 13px; border-radius: 7px; background: transparent; color: var(--piui-text-muted); font-size: 11px; font-weight: 720; }
