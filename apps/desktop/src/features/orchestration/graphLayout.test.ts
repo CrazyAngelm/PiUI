@@ -38,7 +38,7 @@ describe('graph layout', () => {
     const bounds = graphBounds(graph.nodes);
     expect(bounds.width).toBeGreaterThan(1000);
     expect(fitGraphZoom(graph.nodes, 800, 600)).toBeLessThan(1);
+    expect(fitGraphZoom(graph.nodes, 320, 240)).toBeLessThan(0.45);
     expect(fitGraphZoom([], 800, 600)).toBe(1);
   });
 });
-

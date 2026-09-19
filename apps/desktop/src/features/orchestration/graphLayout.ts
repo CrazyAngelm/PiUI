@@ -3,6 +3,7 @@ import type { GraphEdge, GraphNode } from './agentGraph';
 /** The canvas reserves a little more space than the visible card so long labels remain readable. */
 export const GRAPH_NODE_WIDTH = 232;
 export const GRAPH_NODE_HEIGHT = 132;
+export const GRAPH_PORT_Y = 66;
 
 export interface GraphBounds {
   left: number;
@@ -37,7 +38,7 @@ export function fitGraphZoom(nodes: readonly GraphNode[], viewportWidth: number,
   const bounds = graphBounds(nodes, padding);
   const width = Math.max(1, viewportWidth - padding * 2);
   const height = Math.max(1, viewportHeight - padding * 2);
-  return Math.min(1.15, Math.max(0.45, Math.min(width / bounds.width, height / bounds.height)));
+  return Math.min(1.15, Math.min(width / bounds.width, height / bounds.height));
 }
 
 /**
@@ -83,4 +84,3 @@ export function arrangeResultDependencies(nodes: readonly GraphNode[], edges: re
   });
   return { nodes: arranged, cycle: false, levels: Math.max(...levels.values(), 0) + 1 };
 }
-

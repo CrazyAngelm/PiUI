@@ -15,7 +15,7 @@
   import { t } from '../locale/language';
   import { orchestrationHost, orchestrationError, type OrchestrationClient, type DefinitionSummary, type AgentProfile, type SaveDefinitionRequest, type StoredDefinition } from '../../host-api/orchestrationClient';
   import { emptyGraph, newGraphNode, compileGraph, graphErrors, patternEdges, type AgentGraph, type GraphNode, type ConnectionKind } from './agentGraph';
-  import { arrangeResultDependencies, fitGraphZoom, graphBounds } from './graphLayout';
+  import { arrangeResultDependencies, fitGraphZoom, graphBounds, GRAPH_NODE_WIDTH, GRAPH_PORT_Y } from './graphLayout';
   export let modelsFor: (harness: AgentProfile['harness']) => import('../../../../../contracts/harness-models-v18').HarnessCatalogModel[] = () => [];
   export let workspaceId: string;
   export let safeMode = false;
@@ -156,12 +156,15 @@
     if (id !== connectionStart.id || side !== connectionStart.side) finishConnection(id, side);
   }
   function edgePath(source: GraphNode, target: GraphNode): string {
-    if (source.id === target.id) return `M ${source.x + 200} ${source.y + 48} C ${source.x + 260} ${source.y - 60}, ${source.x - 60} ${source.y - 60}, ${source.x} ${source.y + 48}`;
+    if (source.id === target.id) return `M ${source.x + GRAPH_NODE_WIDTH} ${source.y + GRAPH_PORT_Y} C ${source.x + GRAPH_NODE_WIDTH + 60} ${source.y - 60}, ${source.x - 60} ${source.y - 60}, ${source.x} ${source.y + GRAPH_PORT_Y}`;
     const sign = source.x <= target.x ? 1 : -1;
-    const x1 = source.x + (sign === 1 ? 200 : 0), x2 = target.x + (sign === 1 ? 0 : 200);
-    return `M ${x1} ${source.y + 48} C ${x1 + sign * 50} ${source.y + 48}, ${x2 - sign * 50} ${target.y + 48}, ${x2} ${target.y + 48}`;
+    const x1 = source.x + (sign === 1 ? GRAPH_NODE_WIDTH : 0), x2 = target.x + (sign === 1 ? 0 : GRAPH_NODE_WIDTH);
+    return `M ${x1} ${source.y + GRAPH_PORT_Y} C ${x1 + sign * 50} ${source.y + GRAPH_PORT_Y}, ${x2 - sign * 50} ${target.y + GRAPH_PORT_Y}, ${x2} ${target.y + GRAPH_PORT_Y}`;
   }
   function edgeKey(edge: { from: string; to: string }): string { return `${edge.from}:${edge.to}`; }
+  function edgeIsSelected(edge: { from: string; to: string; connections?: readonly { from: string; to: string }[] }): boolean {
+    return selectedEdgeKey === edgeKey(edge) || (edge.connections?.some(connection => selectedEdgeKey === edgeKey(connection)) ?? false);
+  }
   function connectionLabel(connection: ConnectionKind): string {
     return connection === 'result' ? 'Result dependency' : connection === 'send' ? 'Messaging' : connection === 'observe' ? 'Observation' : 'Delegation';
   }
@@ -301,7 +304,7 @@
           <span><i class="legend-line observe-line"></i>{$t('Observation')}</span>
         </div>
         <span class="canvas-summary">{$t('Graph summary', [graph.nodes.length, graph.edges.length])}</span>
-        <div class="zoom-controls"><button aria-label={$t('Zoom out')} onclick={() => zoom = Math.max(.45, zoom / 1.2)}>−</button><button aria-label={$t('Reset view')} onclick={() => zoom = 1}>{Math.round(zoom * 100)}%</button><button aria-label={$t('Zoom in')} onclick={() => zoom = Math.min(1.6, zoom * 1.2)}>＋</button></div>
+        <div class="zoom-controls"><button aria-label={$t('Zoom out')} onclick={() => zoom /= 1.2}>−</button><button aria-label={$t('Reset view')} onclick={() => zoom = 1}>{Math.round(zoom * 100)}%</button><button aria-label={$t('Zoom in')} onclick={() => zoom = Math.min(1.6, zoom * 1.2)}>＋</button></div>
         {#if selected && inspectorCollapsed}<button class="inspector-reopen" onclick={() => inspectorCollapsed = false}>{$t('Show inspector')}</button>{/if}
       </div>
       {#if connectionStart}<div class="connection-status" role="status">{$t('Choose another port or press Escape.')}<button onclick={cancelConnection}>{$t('Cancel')}</button></div>{/if}
@@ -311,8 +314,8 @@
         <div style:width={`${width * zoom}px`} style:height={`${height * zoom}px`}>
           <div bind:this={world} class="world" style:width={`${width}px`} style:height={`${height}px`} style:transform={`scale(${zoom})`}>
             <svg width={width} height={height} aria-hidden="true"><defs><marker id="graph-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" /></marker></defs>
-              {#each renderedEdges as edge}{@const source = nodeById.get(edge.from)}{@const target = nodeById.get(edge.to)}{@const key = edgeKey(edge)}{#if source && target}<path class:selected-edge={selectedEdgeKey === key} class:related-edge={selected !== undefined && (edge.from === selected.id || edge.to === selected.id)} class:muted-edge={selected !== undefined && edge.from !== selected.id && edge.to !== selected.id} class:secondary-edge={edge.kind !== 'result'} class:spawn-edge={edge.kind === 'spawn'} class:observe-edge={edge.kind === 'observe'} d={edgePath(source, target)} marker-start={edge.both ? 'url(#graph-arrow)' : undefined} marker-end="url(#graph-arrow)"><title>{edge.connections.map(connection => `${nodeById.get(connection.from)?.profile.name} → ${nodeById.get(connection.to)?.profile.name}: ${$t(connectionLabel(connection.kind))}`).join('\n')}</title></path>{/if}{/each}
-              {#if connectionStart && connectionPoint}{@const source = nodeById.get(connectionStart.id)}{#if source}<path class="connection-preview" d={`M ${source.x + (connectionStart.side === 'out' ? 200 : 0)} ${source.y + 48} L ${connectionPoint.x} ${connectionPoint.y}`} marker-end="url(#graph-arrow)" />{/if}{/if}
+              {#each renderedEdges as edge}{@const source = nodeById.get(edge.from)}{@const target = nodeById.get(edge.to)}{#if source && target}<path class:selected-edge={edgeIsSelected(edge)} class:related-edge={selected !== undefined && (edge.from === selected.id || edge.to === selected.id)} class:muted-edge={selected !== undefined && edge.from !== selected.id && edge.to !== selected.id} class:secondary-edge={edge.kind !== 'result'} class:spawn-edge={edge.kind === 'spawn'} class:observe-edge={edge.kind === 'observe'} d={edgePath(source, target)} marker-start={edge.both ? 'url(#graph-arrow)' : undefined} marker-end="url(#graph-arrow)"><title>{edge.connections.map(connection => `${nodeById.get(connection.from)?.profile.name} → ${nodeById.get(connection.to)?.profile.name}: ${$t(connectionLabel(connection.kind))}`).join('\n')}</title></path>{/if}{/each}
+              {#if connectionStart && connectionPoint}{@const source = nodeById.get(connectionStart.id)}{#if source}<path class="connection-preview" d={`M ${source.x + (connectionStart.side === 'out' ? GRAPH_NODE_WIDTH : 0)} ${source.y + GRAPH_PORT_Y} L ${connectionPoint.x} ${connectionPoint.y}`} marker-end="url(#graph-arrow)" />{/if}{/if}
             </svg>
             {#each graph.nodes as node (node.id)}<div class="node-shell" style:left={`${node.x}px`} style:top={`${node.y}px`}><button class="node" class:selected={node.id === selectedId} class:node-related={selected !== undefined && node.id !== selected.id && graph.edges.some((edge) => (edge.from === selected.id && edge.to === node.id) || (edge.to === selected.id && edge.from === node.id))} aria-pressed={node.id === selectedId} onpointerdown={(event) => pointerDown(event, node)} onpointermove={pointerMove} onpointerup={() => drag = undefined} onpointercancel={() => drag = undefined} onclick={() => { selectedId = node.id; inspectorCollapsed = false; }} onkeydown={(event) => keyMove(event, node)}>
               <span class="node-topline"><span class="harness">{harnessConfigurations[node.profile.harness].name}</span><span class="node-kind">{$t('Agent')}</span></span>
