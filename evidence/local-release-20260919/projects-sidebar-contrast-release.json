@@ -1,0 +1,20 @@
+{
+  "builtAt": "2026-09-19T22:22:16+07:00",
+  "sourceCommit": "6a7b6ba0df14a82168da6b4c2b8d746fd9dd3a28",
+  "portableArtifact": "D:\\Projects\\PIUI\\artifacts\\PiUI_0.1.1_windows_x86_64.exe",
+  "portableSha256": "9babfa79a4897b88fa425af0dff447055664a118f357266d2cee620a7b021964",
+  "installerArtifact": "D:\\Projects\\PIUI\\artifacts\\PiUI_0.1.1_x64-setup.exe",
+  "installerSha256": "19c1f3c49280217feb7667cea636b787c2a1ee2e7f8a015d0df6d32d01c951fd",
+  "sha256ManifestVerified": true,
+  "installedPath": "C:\\Users\\redmi\\AppData\\Local\\PiUI\\piui-desktop.exe",
+  "installedSha256": "9babfa79a4897b88fa425af0dff447055664a118f357266d2cee620a7b021964",
+  "processId": 11336,
+  "responding": true,
+  "mainWindowTitle": "PiUI",
+  "targetRemoved": true,
+  "freeBytesBeforeCleanup": null,
+  "freeBytesAfterCleanup": 288559697920,
+  "freeSpaceMeasurementNote": "The exact pre-delete reading was not emitted by the host command; target removal and the post-delete volume reading were independently verified.",
+  "rollbackCopy": "D:\\Projects\\PIUI\\artifacts\\PiUI.before-projects-contrast-20260919.exe",
+  "rollbackSha256": "0e1ae5916c8c4b071bec6b41657574f3a1efb82ffeb4d4c7b54f68d7eaeca99e"
+}
