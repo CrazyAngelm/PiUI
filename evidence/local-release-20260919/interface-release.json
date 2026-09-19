@@ -1,0 +1,18 @@
+{
+  "builtAt": "2026-09-19T21:13:30+07:00",
+  "sourceCommit": "c14bc89",
+  "portableArtifact": "D:\\Projects\\PIUI\\artifacts\\PiUI_0.1.1_windows_x86_64.exe",
+  "portableSha256": "c92db4cca8ddd7ba943f3180b3655aef1522239e0597b406ef55bd7c0defb550",
+  "installerArtifact": "D:\\Projects\\PIUI\\artifacts\\PiUI_0.1.1_x64-setup.exe",
+  "installerSha256": "33162c3364518a687b61102605a5580df33e3b6f48520c50095a11a839f07cae",
+  "installedPath": "C:\\Users\\redmi\\AppData\\Local\\PiUI\\piui-desktop.exe",
+  "installedSha256": "c92db4cca8ddd7ba943f3180b3655aef1522239e0597b406ef55bd7c0defb550",
+  "processId": 36064,
+  "targetRemoved": true,
+  "freeBytesBeforeCleanup": 286991491072,
+  "freeBytesAfterCleanup": 288652394496,
+  "rollbackCopies": [
+    "D:\\Projects\\PIUI\\artifacts\\PiUI.before-update-20260919.exe",
+    "D:\\Projects\\PIUI\\artifacts\\PiUI.installed-before-interface-20260919.exe"
+  ]
+}
