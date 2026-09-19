@@ -592,6 +592,10 @@ export async function runWorkspaceWebview2Proof({
     await waitFor(`document.querySelector('select[aria-label="Open system"] option[value="${graphCommand.summary.id}"]')`, 'saved graph catalog loaded');
     await setControl('select[aria-label="Open system"]', graphCommand.summary.id, 'change');
     await waitFor(`document.querySelectorAll('.node').length === 2 && document.querySelectorAll('.connections li').length === 3`, 'reopened mixed graph');
+    const fitBefore = await evaluate(`document.querySelector('.world')?.style.transform ?? ''`);
+    await clickButton('Fit graph', '.canvas-tools');
+    await waitFor(`Boolean(document.querySelector('.world')?.style.transform) && document.querySelector('.world')?.style.transform !== ${JSON.stringify(fitBefore)}`, 'fit graph viewport');
+    checks.push('graph-fit-viewport');
     await capture('workspace-mixed-graph-reopened');
     await evaluate(`document.querySelector('.close-inspector').focus()`);
     assertion(await evaluate(`document.activeElement?.matches('button.close-inspector[aria-label]')`), 'Inspector close must be a labelled, keyboard-focusable native button');

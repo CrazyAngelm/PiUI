@@ -100,3 +100,23 @@ the isolated real adapter then reached Idle and its Job Object closed empty.
 - Initial frontend asset graph: 167,623 bytes before the pass; 177,451 bytes after the UI changes, under the existing 266,240-byte smoke ceiling. No new dependency.
 
 Native model turns with user credentials and Linux WebKitGTK were not exercised.
+
+## Graph workbench pass
+
+The agent-system editor now gives the graph the available workspace and separates
+document actions (open, new, import, save, check, run) from canvas actions. Agent
+cards expose the harness, model, task summary and reasoning in a compact hierarchy;
+ports have visible stems and keyboard focus; related nodes and selected connections
+retain a readable non-colour-only text list. The inspector can be hidden and
+reopened without losing the selected agent.
+
+Fit graph uses the actual canvas viewport and a bounded zoom. Arrange uses only
+result dependencies to build stable execution levels, preserving positions when
+the result graph is cyclic. Messaging, observation and delegation remain
+permissions and do not silently become execution order. The draft, typed host
+save/check/run path, safe mode and generic fallback are unchanged.
+
+New graph unit coverage checks level layout, cycle preservation, graph bounds and
+fit zoom. Native WebView verification should still capture a populated graph,
+keyboard port connection, inspector collapse/reopen, Fit graph after resize, and
+a rejected cyclic Arrange operation before a release claim is made.

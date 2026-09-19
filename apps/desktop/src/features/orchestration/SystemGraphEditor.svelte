@@ -15,6 +15,7 @@
   import { t } from '../locale/language';
   import { orchestrationHost, orchestrationError, type OrchestrationClient, type DefinitionSummary, type AgentProfile, type SaveDefinitionRequest, type StoredDefinition } from '../../host-api/orchestrationClient';
   import { emptyGraph, newGraphNode, compileGraph, graphErrors, patternEdges, type AgentGraph, type GraphNode, type ConnectionKind } from './agentGraph';
+  import { arrangeResultDependencies, fitGraphZoom, graphBounds } from './graphLayout';
   export let modelsFor: (harness: AgentProfile['harness']) => import('../../../../../contracts/harness-models-v18').HarnessCatalogModel[] = () => [];
   export let workspaceId: string;
   export let safeMode = false;
@@ -39,6 +40,9 @@
   let connectionPoint: { x: number; y: number } | undefined;
   let connectionPointer: number | undefined;
   let connectionError = '';
+  let selectedEdgeKey = '';
+  let canvas: HTMLDivElement;
+  let inspectorCollapsed = false;
   $: renderedEdges = visibleConnections(graph.edges);
   $: if (kind === 'result' && direction === 'both') direction = 'forward';
   let zoom = 1;
@@ -157,7 +161,27 @@
     const x1 = source.x + (sign === 1 ? 200 : 0), x2 = target.x + (sign === 1 ? 0 : 200);
     return `M ${x1} ${source.y + 48} C ${x1 + sign * 50} ${source.y + 48}, ${x2 - sign * 50} ${target.y + 48}, ${x2} ${target.y + 48}`;
   }
-  function arrange(): void { graph = { ...graph, nodes: graph.nodes.map((node, index) => ({ ...node, x: 60 + index * 280, y: 100 })) }; }
+  function edgeKey(edge: { from: string; to: string }): string { return `${edge.from}:${edge.to}`; }
+  function connectionLabel(connection: ConnectionKind): string {
+    return connection === 'result' ? 'Result dependency' : connection === 'send' ? 'Messaging' : connection === 'observe' ? 'Observation' : 'Delegation';
+  }
+  function arrange(): void {
+    const result = arrangeResultDependencies(graph.nodes, graph.edges);
+    if (result.cycle) { connectionError = 'Arrange requires an acyclic result graph.'; return; }
+    graph = { ...graph, nodes: result.nodes };
+    connectionError = '';
+    selectedEdgeKey = '';
+  }
+  function fit(): void {
+    if (!graph.nodes.length || !canvas) { zoom = 1; return; }
+    const bounds = graphBounds(graph.nodes);
+    zoom = fitGraphZoom(graph.nodes, canvas.clientWidth, canvas.clientHeight);
+    requestAnimationFrame(() => {
+      const centerX = ((bounds.left + bounds.right) / 2) * zoom;
+      const centerY = ((bounds.top + bounds.bottom) / 2) * zoom;
+      canvas.scrollTo({ left: Math.max(0, centerX - canvas.clientWidth / 2), top: Math.max(0, centerY - canvas.clientHeight / 2), behavior: 'smooth' });
+    });
+  }
   function pointerDown(event: PointerEvent, node: GraphNode): void {
     selectedId = node.id;
     if (safeMode || busy || event.button !== 0) return;
@@ -235,56 +259,79 @@
 
 <section class="system-editor" inert={taskExpanded} aria-label={$t('Agent system')}>
   <header class="toolbar">
-    <input class="system-name" aria-label={$t('Name')} placeholder={$t('Agent system')} bind:value={graph.name} disabled={safeMode || busy} />
-    <select aria-label={$t('Open system')} value={revisions.has(graph.id) ? graph.id : ''} onchange={(event) => void open(event.currentTarget.value)} disabled={busy}><option value="">{$t('Open system')}</option>{#each commands as command}<option value={command.id}>{command.name}</option>{/each}</select>
-    <button onclick={requestNew} disabled={busy || safeMode}>{$t('New system')}</button>
-    <details class="file-menu"><summary>{$t('File')}</summary><div>
-      <button onclick={() => filePicker.click()} disabled={safeMode || busy}>{$t('Import JSON')}</button>
-      <button onclick={() => void exportFile()} disabled={busy || !graph.nodes.length}>{$t('Export JSON')}</button>
-    </div></details>
-    <input class="file-input" bind:this={filePicker} type="file" accept=".json,application/json" aria-label={$t('Import JSON')} onchange={(event) => void importFile(event)} tabindex="-1" />
-    <span class="save-state" aria-live="polite">{$t(busy ? 'Saving…' : dirty ? 'Unsaved changes' : 'Saved')}</span>
-    <button onclick={() => void checkOnly()} disabled={busy || safeMode || !graph.nodes.length}>{$t('Check system')}</button>
-    <button onclick={() => void save()} disabled={busy || safeMode}>{$t('Save')}</button>
-    <button class="primary" onclick={() => void save(true)} disabled={busy || safeMode || !graph.nodes.length}>{$t('Run')}</button>
+    <div class="document-identity">
+      <span class:dirty-dot={dirty} class="document-dot" aria-hidden="true"></span>
+      <div class="document-title">
+        <input class="system-name" aria-label={$t('Name')} placeholder={$t('Agent system')} bind:value={graph.name} disabled={safeMode || busy} />
+        <span class="save-state" aria-live="polite">{$t(busy ? 'Saving…' : dirty ? 'Unsaved changes' : 'Saved')}</span>
+      </div>
+    </div>
+    <div class="document-actions">
+      <select aria-label={$t('Open system')} value={revisions.has(graph.id) ? graph.id : ''} onchange={(event) => void open(event.currentTarget.value)} disabled={busy}><option value="">{$t('Open system')}</option>{#each commands as command}<option value={command.id}>{command.name}</option>{/each}</select>
+      <button class="toolbar-secondary" onclick={requestNew} disabled={busy || safeMode}>{$t('New system')}</button>
+      <details class="file-menu"><summary>{$t('File')}</summary><div>
+        <button onclick={() => filePicker.click()} disabled={safeMode || busy}>{$t('Import JSON')}</button>
+        <button onclick={() => void exportFile()} disabled={busy || !graph.nodes.length}>{$t('Export JSON')}</button>
+      </div></details>
+      <input class="file-input" bind:this={filePicker} type="file" accept=".json,application/json" aria-label={$t('Import JSON')} onchange={(event) => void importFile(event)} tabindex="-1" />
+      <span class="action-divider" aria-hidden="true"></span>
+      <button class="toolbar-secondary" onclick={() => void checkOnly()} disabled={busy || safeMode || !graph.nodes.length}>{$t('Check system')}</button>
+      <button class="toolbar-secondary" onclick={() => void save()} disabled={busy || safeMode}>{$t('Save')}</button>
+      <button class="primary run-action" onclick={() => void save(true)} disabled={busy || safeMode || !graph.nodes.length}>{$t('Run')} <span aria-hidden="true">↗</span></button>
+    </div>
   </header>
   {#if preflightNotice}<p class="notice" role="status">{$t(preflightNotice)}</p>{/if}
-  {#if preflightIssues.length}<div class="errors" role="alert">{#each preflightIssues as issue}<button onclick={() => selectedId = issue.nodeId}>{graph.nodes.find(node => node.id === issue.nodeId)?.profile.name}: {$t(issue.message)}</button>{/each}</div>{/if}
+  {#if preflightIssues.length}<div class="errors" role="alert">{#each preflightIssues as issue}<button onclick={() => { selectedId = issue.nodeId; inspectorCollapsed = false; }}>{graph.nodes.find(node => node.id === issue.nodeId)?.profile.name}: {$t(issue.message)}</button>{/each}</div>{/if}
   {#if fileNotice}<p class="notice" role="status">{$t(fileNotice)}</p>{/if}
   {#if safeMode}<p class="notice">{$t('Safe mode: viewing only.')}</p>{/if}
   {#if errors.length}<div class="errors" role="alert">{#each errors as error}<p>{$t(error)}</p>{/each}</div>{/if}
-  <div class="graph-layout" class:has-selection={selected !== undefined} style:--graph-inspector-width={`${inspectorWidth}px`}>
+  <div class="graph-layout" class:has-selection={selected !== undefined && !inspectorCollapsed} class:inspector-collapsed={inspectorCollapsed} style:--graph-inspector-width={`${inspectorWidth}px`}>
     <div class="canvas-column">
       <div class="canvas-tools">
-        <button onclick={add} disabled={safeMode || busy}>＋ {$t('Add agent')}</button>
+        <button class="tool-primary" onclick={add} disabled={safeMode || busy}><span class="tool-icon" aria-hidden="true">＋</span> {$t('Add agent')}</button>
         <select aria-label={$t('Pattern')} value="" onchange={(event) => { graph = { ...graph, edges: patternEdges(graph.nodes, event.currentTarget.value) }; event.currentTarget.value = ''; }} disabled={safeMode || busy || !graph.nodes.length}><option value="" disabled hidden>{$t('Pattern')}</option><option value="sequential">{$t('Sequential')}</option><option value="parallel">{$t('Parallel')}</option><option value="supervisor">{$t('Supervisor')}</option><option value="peer">{$t('Peer team')}</option></select>
         <select aria-label={$t('Connection type')} bind:value={kind} disabled={safeMode || busy}><option value="result">{$t('Result dependency')}</option><option value="send">{$t('Messaging')}</option><option value="observe">{$t('Observation')}</option><option value="spawn">{$t('Delegation')}</option></select>
         <select aria-label={$t('Direction')} bind:value={direction} disabled={safeMode || busy}><option value="forward">→ {$t('One way')}</option><option value="reverse">← {$t('Reverse')}</option><option value="both" disabled={kind === 'result'}>↔ {$t('Both ways')}</option></select>
-        <button onclick={arrange} disabled={safeMode || busy}>{$t('Arrange')}</button>
-        <span class="spacer"></span><div class="zoom-controls"><button aria-label={$t('Zoom out')} onclick={() => zoom = zoom / 1.2}>−</button><button aria-label={$t('Reset view')} onclick={() => zoom = 1}>{Math.round(zoom * 100)}%</button><button aria-label={$t('Zoom in')} onclick={() => zoom = zoom * 1.2}>＋</button></div>
+        <button onclick={arrange} disabled={safeMode || busy || graph.nodes.length < 2}>{$t('Arrange')}</button>
+        <button onclick={fit} disabled={safeMode || busy || !graph.nodes.length}>{$t('Fit graph')}</button>
+        <span class="spacer"></span>
+        <div class="edge-legend" aria-label={$t('Connection legend')}>
+          <span><i class="legend-line result-line"></i>{$t('Result dependency')}</span>
+          <span><i class="legend-line message-line"></i>{$t('Messaging')}</span>
+          <span><i class="legend-line observe-line"></i>{$t('Observation')}</span>
+        </div>
+        <span class="canvas-summary">{$t('Graph summary', [graph.nodes.length, graph.edges.length])}</span>
+        <div class="zoom-controls"><button aria-label={$t('Zoom out')} onclick={() => zoom = Math.max(.45, zoom / 1.2)}>−</button><button aria-label={$t('Reset view')} onclick={() => zoom = 1}>{Math.round(zoom * 100)}%</button><button aria-label={$t('Zoom in')} onclick={() => zoom = Math.min(1.6, zoom * 1.2)}>＋</button></div>
+        {#if selected && inspectorCollapsed}<button class="inspector-reopen" onclick={() => inspectorCollapsed = false}>{$t('Show inspector')}</button>{/if}
       </div>
       {#if connectionStart}<div class="connection-status" role="status">{$t('Choose another port or press Escape.')}<button onclick={cancelConnection}>{$t('Cancel')}</button></div>{/if}
       {#if connectionError}<p class="errors" role="alert">{$t(connectionError)}</p>{/if}
-      <div class="canvas" role="region" aria-label={$t('Agent system')}>
+      <div bind:this={canvas} class="canvas" role="region" aria-label={$t('Agent system')}>
         {#if !graph.nodes.length}<div class="empty"><h2>{$t('Agent system')}</h2><p>{$t('Add agents, then connect their results or allow communication.')}</p><button class="primary" onclick={add} disabled={safeMode}>＋ {$t('Add agent')}</button></div>{/if}
         <div style:width={`${width * zoom}px`} style:height={`${height * zoom}px`}>
           <div bind:this={world} class="world" style:width={`${width}px`} style:height={`${height}px`} style:transform={`scale(${zoom})`}>
             <svg width={width} height={height} aria-hidden="true"><defs><marker id="graph-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" /></marker></defs>
-              {#each renderedEdges as edge}{@const source = nodeById.get(edge.from)}{@const target = nodeById.get(edge.to)}{#if source && target}<path class:secondary-edge={edge.kind !== 'result'} class:spawn-edge={edge.kind === 'spawn'} class:observe-edge={edge.kind === 'observe'} d={edgePath(source, target)} marker-start={edge.both ? 'url(#graph-arrow)' : undefined} marker-end="url(#graph-arrow)"><title>{edge.connections.map(connection => `${nodeById.get(connection.from)?.profile.name} → ${nodeById.get(connection.to)?.profile.name}: ${$t(connection.kind === 'result' ? 'Result dependency' : connection.kind === 'send' ? 'Messaging' : connection.kind === 'observe' ? 'Observation' : 'Delegation')}`).join('\n')}</title></path>{/if}{/each}
+              {#each renderedEdges as edge}{@const source = nodeById.get(edge.from)}{@const target = nodeById.get(edge.to)}{@const key = edgeKey(edge)}{#if source && target}<path class:selected-edge={selectedEdgeKey === key} class:related-edge={selected !== undefined && (edge.from === selected.id || edge.to === selected.id)} class:muted-edge={selected !== undefined && edge.from !== selected.id && edge.to !== selected.id} class:secondary-edge={edge.kind !== 'result'} class:spawn-edge={edge.kind === 'spawn'} class:observe-edge={edge.kind === 'observe'} d={edgePath(source, target)} marker-start={edge.both ? 'url(#graph-arrow)' : undefined} marker-end="url(#graph-arrow)"><title>{edge.connections.map(connection => `${nodeById.get(connection.from)?.profile.name} → ${nodeById.get(connection.to)?.profile.name}: ${$t(connectionLabel(connection.kind))}`).join('\n')}</title></path>{/if}{/each}
               {#if connectionStart && connectionPoint}{@const source = nodeById.get(connectionStart.id)}{#if source}<path class="connection-preview" d={`M ${source.x + (connectionStart.side === 'out' ? 200 : 0)} ${source.y + 48} L ${connectionPoint.x} ${connectionPoint.y}`} marker-end="url(#graph-arrow)" />{/if}{/if}
             </svg>
-            {#each graph.nodes as node (node.id)}<div class="node-shell" style:left={`${node.x}px`} style:top={`${node.y}px`}><button class="node" class:selected={node.id === selectedId} aria-pressed={node.id === selectedId} onpointerdown={(event) => pointerDown(event, node)} onpointermove={pointerMove} onpointerup={() => drag = undefined} onpointercancel={() => drag = undefined} onclick={() => selectedId = node.id} onkeydown={(event) => keyMove(event, node)}><span class="harness">{harnessConfigurations[node.profile.harness].name}</span><strong>{node.profile.name}</strong><span>{node.profile.model || $t('Model')}</span><small>{node.profile.reasoning ?? $t('Model default')}{node.profile.serviceTier === 'fast' ? $t(' · Fast') : ''}</small></button>{#each ['in', 'out'] as side}<button class="port" class:port-in={side === 'in'} class:port-out={side === 'out'} class:connecting={connectionStart?.id === node.id && connectionStart.side === side} data-port={side} data-node-id={node.id} aria-label={`${$t(side === 'in' ? 'Input connection' : 'Output connection')}: ${node.profile.name}`} disabled={safeMode || busy} onpointerdown={(event) => portDown(event, node.id, side as 'in' | 'out')} onclick={(event) => portClick(event, node.id, side as 'in' | 'out')} onkeydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); if (!event.repeat) event.currentTarget.click(); } }}></button>{/each}</div>{/each}
+            {#each graph.nodes as node (node.id)}<div class="node-shell" style:left={`${node.x}px`} style:top={`${node.y}px`}><button class="node" class:selected={node.id === selectedId} class:node-related={selected !== undefined && node.id !== selected.id && graph.edges.some((edge) => (edge.from === selected.id && edge.to === node.id) || (edge.to === selected.id && edge.from === node.id))} aria-pressed={node.id === selectedId} onpointerdown={(event) => pointerDown(event, node)} onpointermove={pointerMove} onpointerup={() => drag = undefined} onpointercancel={() => drag = undefined} onclick={() => { selectedId = node.id; inspectorCollapsed = false; }} onkeydown={(event) => keyMove(event, node)}>
+              <span class="node-topline"><span class="harness">{harnessConfigurations[node.profile.harness].name}</span><span class="node-kind">{$t('Agent')}</span></span>
+              <strong>{node.profile.name}</strong>
+              <span class="node-model">{node.profile.model || $t('Model')}</span>
+              <span class="node-task">{node.task.trim() || $t('No task yet')}</span>
+              <small>{node.profile.reasoning ?? $t('Model default')}{node.profile.serviceTier === 'fast' ? $t(' · Fast') : ''}</small>
+            </button>{#each ['in', 'out'] as side}<button class="port" class:port-in={side === 'in'} class:port-out={side === 'out'} class:connecting={connectionStart?.id === node.id && connectionStart.side === side} data-port={side} data-node-id={node.id} aria-label={`${$t(side === 'in' ? 'Input connection' : 'Output connection')}: ${node.profile.name}`} disabled={safeMode || busy} onpointerdown={(event) => portDown(event, node.id, side as 'in' | 'out')} onclick={(event) => portClick(event, node.id, side as 'in' | 'out')} onkeydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); if (!event.repeat) event.currentTarget.click(); } }}></button>{/each}</div>{/each}
           </div>
         </div>
       </div>
       <details class="connections" open={graph.nodes.length > 1}><summary>{$t('Connections')} <span>{graph.edges.length}</span></summary>
         <div class="connection-form"><select aria-label={$t('From')} bind:value={from}><option value="">{$t('From')}</option>{#each graph.nodes as node}<option value={node.id}>{node.profile.name}</option>{/each}</select><select aria-label={$t('To')} bind:value={to}><option value="">{$t('To')}</option>{#each graph.nodes as node}<option value={node.id}>{node.profile.name}</option>{/each}</select><select aria-label={$t('Connections')} bind:value={kind}><option value="result">{$t('Result dependency')}</option><option value="send">{$t('Messaging')}</option><option value="observe">{$t('Observation')}</option><option value="spawn">{$t('Delegation')}</option></select><button onclick={connect} disabled={safeMode || busy || !from || !to}>{$t('Connect')}</button></div>
-        <ul>{#each graph.edges as edge, index}<li><span>{nodeById.get(edge.from)?.profile.name} → {nodeById.get(edge.to)?.profile.name}</span><small>{$t(edge.kind === 'result' ? 'Result dependency' : edge.kind === 'send' ? 'Messaging' : edge.kind === 'observe' ? 'Observation' : 'Delegation')}</small><button aria-label={`${$t('Remove')} ${index + 1}`} disabled={safeMode || busy} onclick={() => graph = { ...graph, edges: graph.edges.filter((_, i) => i !== index) }}>×</button></li>{/each}</ul>
+        <ul>{#each graph.edges as edge, index}<li class:selected-connection={selectedEdgeKey === edgeKey(edge)}><button class="connection-link" onclick={() => { selectedEdgeKey = edgeKey(edge); selectedId = edge.to; inspectorCollapsed = false; }}><span>{nodeById.get(edge.from)?.profile.name} <b aria-hidden="true">→</b> {nodeById.get(edge.to)?.profile.name}</span><small>{$t(connectionLabel(edge.kind))}</small></button><button class="connection-remove" aria-label={`${$t('Remove')} ${index + 1}`} disabled={safeMode || busy} onclick={() => { selectedEdgeKey = ''; graph = { ...graph, edges: graph.edges.filter((_, i) => i !== index) }; }}>×</button></li>{/each}</ul>
       </details>
     </div>
-    {#if selected}<aside aria-label={$t('Agent settings')}>
+    {#if selected && !inspectorCollapsed}<aside aria-label={$t('Agent settings')}>
       <PanelResize label={$t('Resize agent settings')} storageKey="piui.graph.inspector.width" initial={320} minimum={260} edge="left" onresize={(width) => inspectorWidth = width} />
-      <div class="inspector-heading"><h2>{selected.profile.name}</h2><button class="close-inspector" aria-label={$t('Close')} onclick={(event) => { event.currentTarget.closest('.graph-layout')?.querySelector<HTMLButtonElement>('.node.selected')?.focus(); selectedId = ''; }}>×</button></div>
+      <div class="inspector-heading"><div><span class="eyebrow">{$t('Selected agent')}</span><h2>{selected.profile.name}</h2></div><button class="close-inspector" aria-label={$t('Hide inspector')} onclick={(event) => { event.currentTarget.closest('.graph-layout')?.querySelector<HTMLButtonElement>('.node.selected')?.focus(); inspectorCollapsed = true; }}>×</button></div>
         <label>{$t('Name')}<input value={selected.profile.name} oninput={(event) => updateProfile({ name: event.currentTarget.value })} disabled={safeMode || busy} /></label>
         <label>{$t("Harness")}<select value={selected.profile.harness} onchange={(event) => { const harness = event.currentTarget.value as AgentProfile['harness']; updateProfile({ harness, model: '', modelProvider: undefined, permissionMode: harnessConfigurations[harness].defaultPermission, networkAccess: undefined, serviceTier: harnessConfigurations[harness].speed ? 'standard' : undefined, baseInstructions: undefined, reasoning: undefined }); }} disabled={safeMode || busy}><option value="codex">Codex</option><option value="prime-agent">Prime Agent</option><option value="pi">Pi</option><option value="hermes">Hermes</option></select></label>
         <label>{$t('Model')}<select aria-label={$t('Model')} value={JSON.stringify([selected.profile.modelProvider, selected.profile.model])} onchange={(event) => { const model = availableModels.find(entry => JSON.stringify([entry.provider, entry.id]) === event.currentTarget.value); if (model) updateProfile({ model: model.id, modelProvider: model.provider, reasoning: undefined, serviceTier: model.supportsFast && selected?.profile.serviceTier === 'fast' ? 'fast' : undefined }); }} disabled={safeMode || busy || modelsLoading}>
@@ -353,32 +400,40 @@
   .file-menu { position:relative; } .file-menu summary { cursor:pointer; padding:5px 9px; }
   .file-menu > div { position:absolute; right:0; top:100%; z-index:10; min-width:140px; padding:4px; border:1px solid var(--piui-border); border-radius:6px; background:var(--piui-bg-raised); }
   .file-menu button { display:block; width:100%; border:0; text-align:left; }
-  .system-editor { color:var(--piui-text); height:100%; min-height:0; display:flex; flex-direction:column; }
-  .toolbar,.canvas-tools { display:flex; gap:6px; align-items:center; padding:8px 14px; border-bottom:1px solid var(--piui-border-subtle); flex-wrap:wrap; }
-  input,select,textarea,button { font:inherit; color:var(--piui-text); border:1px solid var(--piui-border); background:var(--piui-bg-raised); border-radius:6px; padding:5px 9px; min-width:0; min-height:30px; }
-  button { cursor:pointer; transition:background-color 120ms ease,border-color 120ms ease; } button:hover:not(:disabled) { background:var(--piui-surface-2); } button:disabled { opacity:.5; cursor:default; }
+  .system-editor { color:var(--piui-text); height:100%; min-height:0; display:flex; flex-direction:column; background:var(--piui-bg); }
+  .toolbar { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:10px 16px; min-height:58px; border-bottom:1px solid var(--piui-border-subtle); background:var(--piui-bg-raised); }
+  .document-identity,.document-actions,.document-title { display:flex; align-items:center; min-width:0; }
+  .document-identity { gap:10px; flex:1 1 auto; }
+  .document-title { flex-direction:column; align-items:flex-start; gap:1px; }
+  .document-dot { width:8px; height:8px; flex:0 0 auto; border-radius:50%; background:var(--piui-success); box-shadow:0 0 0 3px color-mix(in srgb,var(--piui-success) 16%,transparent); }
+  .document-dot.dirty-dot { background:var(--piui-accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--piui-accent) 16%,transparent); }
+  .document-actions { justify-content:flex-end; flex-wrap:wrap; gap:6px; }
+  .action-divider { width:1px; height:22px; margin:0 4px; background:var(--piui-border-subtle); }
+  input,select,textarea,button { font:inherit; color:var(--piui-text); border:1px solid var(--piui-border); background:var(--piui-bg-raised); border-radius:var(--piui-radius-sm); padding:6px 9px; min-width:0; min-height:30px; }
+  button { cursor:pointer; transition:background-color 140ms ease,border-color 140ms ease,transform 140ms ease; } button:hover:not(:disabled) { background:var(--piui-surface-2); } button:active:not(:disabled) { transform:translateY(1px); } button:disabled { opacity:.5; cursor:default; }
   input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-visible,.canvas:focus-visible,summary:focus-visible { outline:2px solid var(--piui-focus); outline-offset:2px; }
-  .system-name { font-size:13px; font-weight:600; border-color:transparent; background:transparent; flex:1; min-width:120px; } .system-name:focus { background:var(--piui-bg-raised); border-color:var(--piui-border); }
-  .toolbar > select { max-width:180px; } .save-state { color:var(--piui-text-faint); font-size:11px; } .primary { background:var(--piui-action); color:var(--piui-action-ink); border-color:transparent; font-weight:600; } .primary:hover:not(:disabled) { background:var(--piui-action); filter:brightness(1.1); }
+  .system-name { font-size:15px; font-weight:650; letter-spacing:-.01em; border-color:transparent; background:transparent; padding:1px 3px; flex:1; min-width:180px; } .system-name:focus { background:var(--piui-bg); border-color:var(--piui-border); }
+  .document-actions > select { max-width:180px; } .save-state { color:var(--piui-text-faint); font-size:11px; padding-left:3px; } .toolbar-secondary { background:transparent; border-color:var(--piui-border-subtle); } .primary { background:var(--piui-action); color:var(--piui-action-ink); border-color:transparent; font-weight:650; } .primary:hover:not(:disabled) { background:var(--piui-action); filter:brightness(1.1); } .run-action span { margin-left:3px; font-size:14px; }
   .graph-layout { flex:1; display:grid; grid-template-columns:minmax(0,1fr); min-height:0; } .graph-layout.has-selection { grid-template-columns:minmax(0,1fr) var(--graph-inspector-width); }
-  .canvas-column { min-width:0; min-height:0; display:flex; flex-direction:column; } .canvas-tools { padding:6px 12px; font-size:12px; } .canvas-tools button,.canvas-tools select { border-color:transparent; background:transparent; } .canvas-tools button:hover,.canvas-tools select:hover { background:var(--piui-surface-1); } .spacer { flex:1; }
-  .canvas { position:relative; overflow:auto; flex:1; min-height:0; background-color:var(--piui-bg); background-image:radial-gradient(var(--piui-border-subtle) .7px,transparent .7px); background-size:20px 20px; } .world { position:relative; transform-origin:0 0; } svg { position:absolute; pointer-events:none; } svg > path { pointer-events:stroke; fill:none; stroke:var(--piui-text-faint); stroke-width:1.5; } svg > path.secondary-edge { stroke:var(--piui-text-muted); stroke-dasharray:5 5; } svg > path.spawn-edge { stroke:var(--piui-accent); } svg > path.observe-edge { stroke-dasharray:2 6; }
-  .node-shell { position:absolute; width:200px; }
-  .node { position:relative; width:200px; min-height:96px; display:grid; gap:3px; text-align:left; padding:11px 14px; touch-action:none; user-select:none; background:var(--piui-bg-raised); border-radius:8px; box-shadow:0 3px 12px #0001; }
-  .node.selected { border-color:var(--piui-action); background:color-mix(in srgb,var(--piui-bg-raised) 90%,var(--piui-accent-soft)); box-shadow:0 0 0 1px var(--piui-accent-soft); }
-  .node strong { font-size:13px; font-weight:600; overflow-wrap:anywhere; } .node span,.node small { color:var(--piui-text-muted); overflow-wrap:anywhere; font-size:11px; } .node .harness { font-size:10px; letter-spacing:.03em; }
-  .port { position:absolute; top:33px; width:30px; height:30px; min-height:30px; padding:0; border:0; background:transparent; border-radius:50%; touch-action:none; }
-  .port::after { content:''; position:absolute; inset:10px; border:1px solid var(--piui-border-strong); border-radius:50%; background:var(--piui-bg); }
-  .port-in { left:-15px; } .port-out { right:-15px; }
-  .port:hover::after,.port.connecting::after,.port:focus-visible::after { background:var(--piui-accent); border-color:var(--piui-accent); }
-  svg > path.connection-preview { stroke:var(--piui-accent); stroke-dasharray:5 5; }
-  .zoom-controls { display:flex; align-items:center; flex-shrink:0; }
-  .connection-status { display:flex; align-items:center; gap:8px; padding:6px 12px; font-size:12px; color:var(--piui-text-muted); }
-  aside { position:relative; min-width:0; min-height:0; border-left:1px solid var(--piui-border-subtle); padding:14px; display:flex; flex-direction:column; gap:11px; overflow:auto; background:var(--piui-bg-raised); }
-  .inspector-heading { display:flex; align-items:center; justify-content:space-between; padding-bottom:10px; border-bottom:1px solid var(--piui-border-subtle); } aside h2 { font-size:13px; margin:0; font-weight:600; } .close-inspector { border:0; padding:0; width:28px; min-height:28px; font-size:18px; color:var(--piui-text-muted); }
+  .canvas-column { min-width:0; min-height:0; display:flex; flex-direction:column; }
+  .canvas-tools { display:flex; align-items:center; gap:6px; padding:8px 14px; min-height:48px; border-bottom:1px solid var(--piui-border-subtle); background:var(--piui-surface-1); flex-wrap:wrap; font-size:12px; }
+  .canvas-tools button,.canvas-tools select { border-color:transparent; background:transparent; } .canvas-tools button:hover:not(:disabled),.canvas-tools select:hover:not(:disabled) { background:var(--piui-surface-2); } .tool-primary { color:var(--piui-text); border-color:var(--piui-border) !important; background:var(--piui-bg-raised) !important; font-weight:600; } .tool-icon { color:var(--piui-accent); font-size:16px; line-height:0; } .spacer { flex:1; min-width:12px; }
+  .edge-legend { display:flex; gap:10px; align-items:center; color:var(--piui-text-faint); font-size:10px; white-space:nowrap; } .edge-legend span { display:flex; align-items:center; gap:4px; } .legend-line { width:15px; height:0; border-top:2px solid var(--piui-text-muted); } .legend-line.message-line { border-top-style:dashed; } .legend-line.observe-line { border-top-style:dotted; border-color:var(--piui-accent); } .canvas-summary { color:var(--piui-text-faint); font-size:10px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .zoom-controls { display:flex; align-items:center; flex-shrink:0; border:1px solid var(--piui-border-subtle); border-radius:var(--piui-radius-sm); overflow:hidden; } .zoom-controls button { border:0; border-radius:0; min-width:30px; padding:5px 7px; } .zoom-controls button + button { border-left:1px solid var(--piui-border-subtle); } .inspector-reopen { color:var(--piui-accent); }
+  .canvas { position:relative; overflow:auto; flex:1; min-height:0; background-color:var(--piui-bg); background-image:radial-gradient(var(--piui-border-subtle) .7px,transparent .7px); background-size:20px 20px; }
+  .world { position:relative; transform-origin:0 0; } svg { position:absolute; pointer-events:none; } svg > path { pointer-events:stroke; fill:none; stroke:var(--piui-text-faint); stroke-width:1.8; transition:stroke .14s ease,opacity .14s ease,stroke-width .14s ease; } svg > path.secondary-edge { stroke:var(--piui-text-muted); stroke-dasharray:5 5; } svg > path.spawn-edge { stroke:var(--piui-accent); } svg > path.observe-edge { stroke-dasharray:2 6; } svg > path.muted-edge { opacity:.18; } svg > path.related-edge { stroke-width:2.3; } svg > path.selected-edge { stroke:var(--piui-accent); stroke-width:2.8; opacity:1; }
+  .node-shell { position:absolute; width:232px; }
+  .node { position:relative; width:232px; min-height:124px; box-sizing:border-box; display:grid; gap:5px; align-content:start; text-align:left; padding:13px 16px; touch-action:none; user-select:none; background:var(--piui-bg-raised); border-radius:12px; box-shadow:0 8px 22px color-mix(in srgb,var(--piui-bg) 70%,transparent); }
+  .node:hover { border-color:var(--piui-border-strong); transform:translateY(-1px); } .node.selected { border-color:var(--piui-action); background:color-mix(in srgb,var(--piui-bg-raised) 88%,var(--piui-accent-soft)); box-shadow:0 0 0 1px var(--piui-action),0 10px 26px color-mix(in srgb,var(--piui-action) 18%,transparent); } .node.node-related { border-color:color-mix(in srgb,var(--piui-accent) 55%,var(--piui-border)); }
+  .node-topline { display:flex; justify-content:space-between; align-items:center; gap:8px; } .node strong { font-size:14px; font-weight:650; letter-spacing:-.01em; overflow-wrap:anywhere; } .node span,.node small { color:var(--piui-text-muted); overflow-wrap:anywhere; font-size:11px; } .node .harness { color:var(--piui-accent); font-size:10px; letter-spacing:.04em; text-transform:uppercase; } .node-kind { color:var(--piui-text-faint) !important; font-size:9px !important; text-transform:uppercase; letter-spacing:.06em; } .node-model { color:var(--piui-text) !important; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .node-task { display:-webkit-box; line-clamp:2; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; min-height:28px; line-height:1.35; color:var(--piui-text-muted) !important; }
+  .port { position:absolute; top:47px; width:38px; height:38px; min-height:38px; padding:0; border:0; background:transparent; border-radius:50%; touch-action:none; } .port::before { content:''; position:absolute; top:18px; width:13px; border-top:1px solid var(--piui-border-strong); } .port::after { content:''; position:absolute; top:13px; width:11px; height:11px; border:2px solid var(--piui-border-strong); border-radius:50%; background:var(--piui-bg); } .port-in { left:-25px; } .port-in::before { right:7px; } .port-in::after { right:0; } .port-out { right:-25px; } .port-out::before { left:7px; } .port-out::after { left:0; }
+  .port:hover::after,.port.connecting::after,.port:focus-visible::after { background:var(--piui-accent); border-color:var(--piui-accent); } svg > path:hover { stroke:var(--piui-accent); stroke-width:2.8; opacity:1; } svg > path.connection-preview { stroke:var(--piui-accent); stroke-dasharray:5 5; }
+  .connection-status { display:flex; align-items:center; gap:8px; padding:7px 14px; font-size:12px; color:var(--piui-text-muted); background:var(--piui-accent-soft); border-bottom:1px solid var(--piui-border-subtle); }
+  aside { position:relative; min-width:0; min-height:0; border-left:1px solid var(--piui-border-subtle); padding:18px; display:flex; flex-direction:column; gap:12px; overflow:auto; background:var(--piui-bg-raised); } .inspector-heading { display:flex; align-items:center; justify-content:space-between; padding-bottom:12px; border-bottom:1px solid var(--piui-border-subtle); } .eyebrow { display:block; color:var(--piui-text-faint); font-size:10px; letter-spacing:.08em; text-transform:uppercase; margin-bottom:4px; } aside h2 { font-size:15px; margin:0; font-weight:650; overflow-wrap:anywhere; } .close-inspector { border:0; padding:0; width:28px; min-height:28px; font-size:18px; color:var(--piui-text-muted); background:transparent; }
   aside label { display:grid; gap:5px; font-size:12px; color:var(--piui-text-muted); } aside label input,aside label select,textarea { background:var(--piui-bg); } aside small { color:var(--piui-text-faint); font-size:11px; line-height:1.45; } textarea { min-height:78px; resize:vertical; } .danger { color:var(--piui-danger-text); background:transparent; border-color:transparent; margin-top:auto; text-align:left; }
-  .connections { border-top:1px solid var(--piui-border-subtle); padding:8px 12px; font-size:12px; background:var(--piui-bg-raised); } summary { cursor:pointer; } summary span { color:var(--piui-text-faint); margin-left:8px; } .connection-form { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; } .connection-form select { flex:1; } ul { list-style:none; margin:6px 0 0; padding:0; max-height:180px; overflow:auto; } li { display:flex; gap:10px; align-items:center; padding:2px 0; } li span { flex:1; } li small { color:var(--piui-text-faint); } li button { border:0; background:transparent; }
-  .empty { position:absolute; top:80px; left:10%; right:10%; z-index:1; text-align:center; } .empty h2 { font-size:20px; font-weight:500; } .empty p { font-size:13px; color:var(--piui-text-muted); margin-bottom:20px; } .notice,.errors { padding:8px 14px; font-size:12px; } .errors { color:var(--piui-danger-text); background:var(--piui-danger-surface); } .errors p { margin:4px 0; }
-  @media(max-width:900px) { .save-state { display:none; } .toolbar > select { max-width:140px; } }
-  @media(max-width:700px) { .graph-layout.has-selection { grid-template-columns:1fr; grid-template-rows:minmax(160px,1fr) minmax(0,1fr); } aside { border-left:0; border-top:1px solid var(--piui-border-subtle); } }
+  .connections { border-top:1px solid var(--piui-border-subtle); padding:10px 14px; font-size:12px; background:var(--piui-bg-raised); } summary { cursor:pointer; } summary span { color:var(--piui-text-faint); margin-left:8px; } .connection-form { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; } .connection-form select { flex:1; } ul { list-style:none; margin:7px 0 0; padding:0; max-height:180px; overflow:auto; } li { display:flex; gap:6px; align-items:center; padding:2px 0; border-radius:var(--piui-radius-sm); } li.selected-connection { background:var(--piui-accent-soft); } .connection-link { flex:1; display:grid; gap:2px; min-width:0; border:0; background:transparent; text-align:left; padding:6px 8px; } .connection-link span { overflow-wrap:anywhere; } .connection-link b { color:var(--piui-accent); font-weight:500; } li small { color:var(--piui-text-faint); } .connection-remove { flex:0 0 auto; border:0; background:transparent; color:var(--piui-text-faint); }
+  .empty { position:absolute; top:80px; left:10%; right:10%; z-index:1; text-align:center; padding:30px; border:1px dashed var(--piui-border); border-radius:var(--piui-radius-lg); background:color-mix(in srgb,var(--piui-bg-raised) 70%,transparent); } .empty h2 { font-size:20px; font-weight:600; margin:0 0 8px; } .empty p { font-size:13px; color:var(--piui-text-muted); margin-bottom:20px; } .notice,.errors { padding:8px 14px; font-size:12px; } .errors { color:var(--piui-danger-text); background:var(--piui-danger-surface); } .errors p { margin:4px 0; }
+  @media(max-width:1100px) { .edge-legend { display:none; } .toolbar { align-items:flex-start; flex-direction:column; } .document-actions { width:100%; justify-content:flex-start; } }
+  @media(max-width:900px) { .canvas-summary { display:none; } .document-actions > select { max-width:140px; } }
+  @media(max-width:700px) { .graph-layout.has-selection { grid-template-columns:1fr; grid-template-rows:minmax(160px,1fr) minmax(0,1fr); } aside { border-left:0; border-top:1px solid var(--piui-border-subtle); } .canvas-tools { align-items:flex-start; } .zoom-controls { margin-left:auto; } }
 </style>
