@@ -11,8 +11,6 @@
   "targetRemoved": true,
   "freeBytesBeforeCleanup": 286991491072,
   "freeBytesAfterCleanup": 288652394496,
-  "rollbackCopies": [
-    "D:\\Projects\\PIUI\\artifacts\\PiUI.before-update-20260919.exe",
-    "D:\\Projects\\PIUI\\artifacts\\PiUI.installed-before-interface-20260919.exe"
-  ]
+  "rollbackCopies": [],
+  "rollbackStatus": "Superseded by the projects-sidebar release record."
 }
