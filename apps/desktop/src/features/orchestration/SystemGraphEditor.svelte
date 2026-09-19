@@ -2,7 +2,7 @@
   import { connectAgents, connectRoute, visibleConnections, type ConnectionDirection } from './graphConnections';
   import { preflightGraph, type PreflightIssue } from './graphPreflight';
   import { performRunAction } from './runActions';
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import PanelResize from '../../components/PanelResize.svelte';
   import { modalFocus } from '../workspace/workspaceUx';
   import { harnessModels } from '../../host-api/harnessModels';
@@ -118,6 +118,12 @@
       const inputStepId = edges.find(edge => edge.kind === 'result' && edge.to === node.id)?.from ?? '';
       return node.router.inputStepId === inputStepId ? node : { ...node, router: { ...node.router, inputStepId } };
     });
+  }
+  async function selectRouterInput(nodeId: string): Promise<void> {
+    selectedId = nodeId;
+    inspectorCollapsed = false;
+    await tick();
+    canvas?.querySelector<HTMLButtonElement>('.node.selected')?.focus();
   }
   function updateNode(id: string, change: Partial<GraphNode>): void { graph = { ...graph, nodes: graph.nodes.map(node => node.id === id ? { ...node, ...change } : node) }; }
   function updateRouterNode(id: string, change: Partial<GraphNode>): void {
@@ -414,7 +420,7 @@
       <PanelResize label={$t('Resize agent settings')} storageKey="piui.graph.inspector.width" initial={320} minimum={260} edge="left" onresize={(width) => inspectorWidth = width} />
       <div class="inspector-heading"><div><h2>{selected.profile.name}</h2></div><button class="close-inspector" aria-label={$t('Hide inspector')} onclick={(event) => { event.currentTarget.closest('.graph-layout')?.querySelector<HTMLButtonElement>('.node.selected')?.focus(); inspectorCollapsed = true; }}>×</button></div>
         <label>{$t('Name')}<input value={selected.profile.name} oninput={(event) => updateProfile({ name: event.currentTarget.value })} disabled={safeMode || busy} /></label>
-        {#if selected.kind === 'router'}<RouterSettings node={selected} nodes={graph.nodes} disabled={safeMode || busy} onchange={(change: Partial<GraphNode>) => updateRouterNode(selectedId, change)} onselectinput={(nodeId) => { selectedId = nodeId; inspectorCollapsed = false; }} />{/if}
+        {#if selected.kind === 'router'}<RouterSettings node={selected} nodes={graph.nodes} disabled={safeMode || busy} onchange={(change: Partial<GraphNode>) => updateRouterNode(selectedId, change)} onselectinput={(nodeId) => void selectRouterInput(nodeId)} />{/if}
         {#if selected.kind !== 'router' || selected.router?.mode === 'agent'}
         <label>{$t("Harness")}<select value={selected.profile.harness} onchange={(event) => { const harness = event.currentTarget.value as AgentProfile['harness']; updateProfile({ harness, model: '', modelProvider: undefined, permissionMode: harnessConfigurations[harness].defaultPermission, networkAccess: undefined, serviceTier: harnessConfigurations[harness].speed ? 'standard' : undefined, baseInstructions: undefined, reasoning: undefined }); }} disabled={safeMode || busy}><option value="codex">Codex</option><option value="prime-agent">Prime Agent</option><option value="pi">Pi</option><option value="hermes">Hermes</option></select></label>
         <label>{$t('Model')}<select aria-label={$t('Model')} value={JSON.stringify([selected.profile.modelProvider, selected.profile.model])} onchange={(event) => { const model = availableModels.find(entry => JSON.stringify([entry.provider, entry.id]) === event.currentTarget.value); if (model) updateProfile({ model: model.id, modelProvider: model.provider, reasoning: undefined, serviceTier: model.supportsFast && selected?.profile.serviceTier === 'fast' ? 'fast' : undefined }); }} disabled={safeMode || busy || modelsLoading}>
