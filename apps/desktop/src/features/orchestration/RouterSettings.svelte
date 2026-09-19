@@ -7,6 +7,7 @@
   export let nodes: GraphNode[] = [];
   export let disabled = false;
   export let onchange: (change: Partial<GraphNode>) => void;
+  export let onselectinput: (nodeId: string) => void = () => {};
 
   let router: RouterConfig;
   $: router = node.router ?? { mode: 'program', inputStepId: '', branches: [] };
@@ -65,14 +66,19 @@
 
 <section class="router-settings" aria-label={$t('Router settings')}>
   <div class="section-heading"><div><h3>{$t('Router')}</h3><small>{$t('Select one or more downstream routes from one structured input.')}</small></div><span class="router-badge">{$t(router.mode === 'program' ? 'Program' : 'Agent')}</span></div>
-  <label>{$t('Routing mode')}<select value={router.mode} {disabled} onchange={(event) => { const mode = event.currentTarget.value as RouterConfig['mode']; update({ mode, selectionField: mode === 'agent' ? router.selectionField ?? 'selectedBranchIds' : undefined, branches: router.branches.map(branch => ({ ...branch, ...(mode === 'program' ? { predicate: branch.predicate ?? { op: 'exists', field: fields[0]?.name ?? '' } } : { predicate: undefined }) })) }); }}><option value="program">{$t('Programmatic')}</option><option value="agent">{$t('Agent decides')}</option></select></label>
-  <label>{$t('Input agent')}<select value={router.inputStepId} {disabled} onchange={(event) => update({ inputStepId: event.currentTarget.value })}><option value="">{$t('Select upstream result')}</option>{#each sources as source}<option value={source.id}>{source.profile.name}</option>{/each}</select></label>
+  <label>{$t('Routing mode')}<select value={router.mode} {disabled} onchange={(event) => { const mode = event.currentTarget.value as RouterConfig['mode']; update({ mode, selectionField: mode === 'agent' ? router.selectionField ?? 'selectedRoutes' : undefined, branches: router.branches.map(branch => ({ ...branch, ...(mode === 'program' ? { predicate: branch.predicate ?? { op: 'exists', field: fields[0]?.name ?? '' } } : { predicate: undefined }) })) }); }}><option value="program">{$t('Programmatic')}</option><option value="agent">{$t('Agent decides')}</option></select></label>
+  <label>{$t('Input source')}<select value={router.inputStepId} {disabled} onchange={(event) => update({ inputStepId: event.currentTarget.value })}><option value="">{$t('Select upstream result')}</option>{#each sources as source}<option value={source.id}>{source.profile.name}</option>{/each}</select></label>
+  {#if input}
+    <div class="input-help"><span>{$t("Fields come from the input agent's result contract.")}</span><button type="button" {disabled} onclick={() => onselectinput(input!.id)}>{$t('Edit input fields')}</button></div>
+  {:else}
+    <small>{$t('Connect one result output to this node. Its declared fields will appear here.')}</small>
+  {/if}
   {#if router.mode === 'agent'}
-    <label>{$t('Selection field')}<input value={router.selectionField ?? 'selectedBranchIds'} {disabled} oninput={(event) => update({ selectionField: event.currentTarget.value })} /></label>
-    <small>{$t('The agent must return an array of branch IDs. An empty array skips every route.')}</small>
+    <label>{$t('Result field')}<input value={router.selectionField ?? 'selectedBranchIds'} placeholder="selectedRoutes" {disabled} oninput={(event) => update({ selectionField: event.currentTarget.value })} /></label>
+    <small>{$t('This list is created automatically in the router result. The agent fills it with the routes to run.')}</small>
   {/if}
   <div class="branch-list">
-    <div class="section-heading"><h4>{$t('Routes')}</h4><button type="button" {disabled} onclick={addBranch}>＋ {$t('Add route')}</button></div>
+    <div class="section-heading"><div><h4>{$t('Routes')}</h4><small>{$t('Name each route, then connect its output port to an agent.')}</small></div><button type="button" {disabled} onclick={addBranch}>＋ {$t('Add route')}</button></div>
     {#each router.branches as branch, index (branch.id)}
       <article class="branch">
         <div class="branch-heading"><span class="branch-index">{index + 1}</span><input aria-label={`${$t('Route')} ${index + 1}`} value={branch.label} {disabled} oninput={(event) => updateBranch(index, { label: event.currentTarget.value })} /><button type="button" aria-label={`${$t('Remove route')} ${index + 1}`} disabled={disabled || router.branches.length <= 1} onclick={() => removeBranch(index)}>×</button></div>
@@ -86,7 +92,6 @@
         {:else}
           <label>{$t('Route description')}<textarea rows="2" value={branch.description ?? ''} {disabled} oninput={(event) => updateBranch(index, { description: event.currentTarget.value })} placeholder={$t('When should this route run?')}></textarea></label>
         {/if}
-        <code>{branch.id}</code>
       </article>
     {/each}
   </div>
@@ -100,6 +105,8 @@
   label { display:grid; gap:5px; font-size:12px; color:var(--piui-text-muted); }
   input,select,textarea,button { font:inherit; min-width:0; color:var(--piui-text); background:var(--piui-surface-1); border:1px solid var(--piui-border); border-radius:var(--piui-radius-sm); padding:var(--piui-space-2); }
   button { cursor:pointer; } button:disabled { opacity:.55; cursor:default; }
+  .input-help { display:flex; align-items:flex-start; justify-content:space-between; gap:var(--piui-space-2); color:var(--piui-text-faint); font-size:11px; line-height:1.4; }
+  .input-help button { flex:0 0 auto; padding:4px 7px; color:var(--piui-text-muted); font-size:11px; }
   .router-badge { flex:0 0 auto; padding:3px 7px; border-radius:999px; color:var(--piui-accent); background:var(--piui-accent-soft); font-size:10px; font-weight:650; text-transform:uppercase; letter-spacing:.05em; }
   .branch-list { display:grid; gap:var(--piui-space-2); }
   .branch-list > .section-heading { align-items:center; }

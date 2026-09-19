@@ -6,6 +6,8 @@ import PipelineEditor from './PipelineEditor.svelte';
 import LaunchCommandEditor from './LaunchCommandEditor.svelte';
 import ScheduleEditor from './ScheduleEditor.svelte';
 import OrchestrationPanel from './OrchestrationPanel.svelte';
+import RouterSettings from './RouterSettings.svelte';
+import { newGraphNode, newRouterNode } from './agentGraph';
 import type { AgentProfile, TeamDefinition, PipelineDefinition } from '../../../../../contracts/orchestration-v6';
 
 const profile: AgentProfile = {
@@ -73,5 +75,17 @@ describe('orchestration component integration', () => {
     expect(body).toContain('Safe mode. Definitions and recorded runs are read-only.');
     expect(body).not.toContain('Create profile');
     expect(body).not.toContain('Fixture pipeline');
+  });
+  it('keeps router settings user-facing and hides internal branch identifiers', () => {
+    const source = newGraphNode(0);
+    source.profile = { ...source.profile, name: 'Source' };
+    source.resultFields = [{ name: 'status', kind: 'text' }];
+    const router = newRouterNode(1);
+    router.router = { ...router.router!, inputStepId: source.id, branches: [{ ...router.router!.branches[0]!, id: 'internal-branch-id', label: 'Ready' }] };
+    const { body } = render(RouterSettings, { props: { node: router, nodes: [source, router], onchange: noAction, onselectinput: noAction } });
+    expect(body).toContain('Edit input fields');
+    expect(body).toContain('status');
+    expect(body).toContain('Ready');
+    expect(body).not.toContain('internal-branch-id');
   });
 });
