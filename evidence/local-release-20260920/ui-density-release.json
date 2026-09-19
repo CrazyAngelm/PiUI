@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-09-20T02:39:25.2157431+07:00",
+  "commit": "8f15982",
+  "release": {
+    "portable": {
+      "path": "artifacts/PiUI_0.1.1_windows_x86_64.exe",
+      "sha256": "04f75b226a50d30b6fe2b212dde17d610c9c222ffa3cc771bd3622aa66d82f8c"
+    },
+    "installer": {
+      "path": "artifacts/PiUI_0.1.1_x64-setup.exe",
+      "sha256": "a19a41f77f4bca3565502862d4c87dc372420e11d98849c688979828e34b62d4"
+    },
+    "installed": {
+      "path": "C:/Users/redmi/AppData/Local/PiUI/piui-desktop.exe",
+      "sha256": "04f75b226a50d30b6fe2b212dde17d610c9c222ffa3cc771bd3622aa66d82f8c",
+      "processId": 23388,
+      "responding": true
+    }
+  },
+  "verification": {
+    "desktopCheck": "svelte-check found 0 errors and 0 warnings",
+    "desktopTests": "46 files, 219 tests passed",
+    "contractTests": "8 files, 47 tests passed",
+    "systemExamples": "6 valid examples",
+    "astraLiteReview": "no blocking findings after fixes",
+    "soloReview": "no P0/P1/P2 findings after fixes"
+  },
+  "cleanup": {
+    "target": "D:/Projects/PIUI/target",
+    "targetBytesBefore": 1803563570,
+    "freeBytesBefore": 280060456960,
+    "targetRemoved": true,
+    "freeBytesAfter": 281697579008,
+    "freedBytes": 1637122048
+  }
+}
