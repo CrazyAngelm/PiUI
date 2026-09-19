@@ -27,5 +27,9 @@ describe('WorkspaceShell visible primary actions', () => {
     expect(source).not.toContain("$t('Settings ')");
     expect(source).not.toContain("$t('New chat ')");
     expect(source).not.toContain("$t('Inspector')");
+    expect(source).not.toContain("$t('No projects registered.')");
+    expect(source).toContain('class="project-heading"');
+    expect(source).toContain('aria-controls="project-list"');
+    expect(source).toContain("aria-label={$t('Add project')}");
   });
 });

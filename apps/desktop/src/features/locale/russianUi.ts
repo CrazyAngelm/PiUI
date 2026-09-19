@@ -164,7 +164,7 @@ export const russianUi: Readonly<Record<string, string>> = {
   "Pinned project": "Закреплённый проект", "Prime Agent history is read-only.": "История Prime Agent доступна только для чтения.", "Prime Agent resources": "Ресурсы Prime Agent",
   "Project order": "Порядок проектов", "Queue a follow-up with Enter, or steer below": "Enter — добавить в очередь; ниже можно уточнить текущий ход",
   "Ready when the run starts": "Готова к началу запуска", "Receive": "Получать", "Reconcile uncertain task {0}": "Проверить результат задачи {0}",
-  "Recording assertion...": "Сохраняем подтверждение…", "Refresh local sessions for {0}": "Обновить локальные беседы {0}", "Refresh {0}": "Обновить {0}",
+  "Recording assertion...": "Сохраняем подтверждение…", "Refresh local sessions for {0}": "Обновить локальные беседы {0}", "Refresh {0}": "Обновить {0}", "Project options": "Параметры проектов", "Refresh projects": "Обновить проекты",
   "Remove member {0}": "Убрать участника {0}", "Remove registry entry": "Убрать запись из списка", "Remove task {0}": "Убрать задачу {0}",
   "Removing…": "Удаляем…", "Requesting launch…": "Запрашиваем запуск…", "Responding…": "Отвечаем…", "Retry same launch request": "Повторить тот же запрос запуска",
   "Retry uncertain task {0}": "Повторить задачу {0} с неизвестным результатом", "Retrying task...": "Повторяем задачу…", "Review trust for {0}": "Проверить доверие: {0}",

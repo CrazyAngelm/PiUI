@@ -70,6 +70,7 @@
     selectedSessionId?: string;
     drafts?: Record<string, string>;
     workspaceSection?: WorkspaceSection;
+    projectsCollapsed?: boolean;
   }
 
   let catalog = emptyCatalog;
@@ -137,6 +138,7 @@
   let modifier = 'Ctrl+';
   let narrow = false;
   let pendingNavigation: (() => void) | undefined;
+  let projectsCollapsed = false;
 
   function guardNavigation(action: () => void): boolean {
     if (!orchestrationDirty) return false;
@@ -180,6 +182,7 @@
       if (typeof value.selectedWorkspaceId === 'string') selectedWorkspaceId = value.selectedWorkspaceId;
       if (typeof value.selectedSessionId === 'string') selectedSessionId = value.selectedSessionId;
       if (value.workspaceSection && ['systems', 'agents', 'teams', 'pipelines', 'schedules', 'runs'].includes(value.workspaceSection)) workspaceSection = value.workspaceSection;
+      if (typeof value.projectsCollapsed === 'boolean') projectsCollapsed = value.projectsCollapsed;
       if (value.drafts && typeof value.drafts === 'object') {
         drafts = Object.fromEntries(Object.entries(value.drafts).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
       }
@@ -190,7 +193,7 @@
 
   function persistUiState(): void {
     try {
-      const value: PersistedUiState = { selectedWorkspaceId, selectedSessionId, drafts, workspaceSection };
+      const value: PersistedUiState = { selectedWorkspaceId, selectedSessionId, drafts, workspaceSection, projectsCollapsed };
       sessionStorage.setItem(uiStateKey, JSON.stringify(value));
     } catch {
       // Draft persistence failure must not block native session controls.
@@ -583,6 +586,12 @@
     }
   }
 
+  function refreshProjects(event: Event): void {
+    if (catalogLoading) return;
+    (event.currentTarget as HTMLElement).closest('details')?.removeAttribute('open');
+    void loadCatalog();
+  }
+
   async function trustProject(): Promise<void> {
     if (!trustTarget || trustBusy) return;
     trustBusy = true;
@@ -720,7 +729,6 @@
     <div class="brand-row"><div class="brand"><span class="brand-mark" aria-hidden="true">π</span><strong>{$t('PiUI')}</strong></div><button class="icon narrow-only" type="button" onclick={() => navigationOpen = false} aria-label={$t('Close navigation')}>×</button></div>
     <div class="primary-actions">
       <button type="button" class="accent" onclick={startNewSession}><span class="action-label"><span class="action-icon" aria-hidden="true">＋</span><span>{$t('New chat')}</span></span><kbd>{modifier}N</kbd></button>
-      <button type="button" onclick={addProject} disabled={addingProject}>{$t(addingProject ? 'Opening picker…' : 'Add project')}</button>
     </div>
     <div class="view-switch" aria-label={$t('Workspace view')}>
       <button type="button" class:active={mainView === 'sessions'} aria-current={mainView === 'sessions' ? 'page' : undefined} onclick={() => requestMainView('sessions')}>{$t('Sessions')}</button>
@@ -737,10 +745,23 @@
     {/if}
     {/if}
 
-    <div class="list-heading"><span>{$t('Projects')}</span><span>{catalog.workspaces.length || ''}</span></div>
-    <nav class="project-list" aria-label={$t('Projects and native sessions')}>
+    <div class="project-heading">
+      <button class="project-heading-toggle" type="button" aria-expanded={!projectsCollapsed} aria-controls="project-list" onclick={() => { projectsCollapsed = !projectsCollapsed; persistUiState(); }}>
+        <span>{$t('Projects')}</span>
+        <svg class:collapsed={projectsCollapsed} viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+      </button>
+      <div class="project-heading-actions">
+        <details class="project-heading-menu">
+          <summary aria-label={$t('Project options')} title={$t('Project options')}>…</summary>
+          <div class="project-heading-popover">
+            <button type="button" onclick={refreshProjects} disabled={catalogLoading}>{$t('Refresh projects')}</button>
+          </div>
+        </details>
+        <button class="project-heading-action project-heading-action--add" type="button" onclick={addProject} disabled={addingProject} aria-label={$t('Add project')} title={$t('Add project')}>+</button>
+      </div>
+    </div>
+    <nav id="project-list" class="project-list" aria-label={$t('Projects and native sessions')} hidden={projectsCollapsed}>
       {#if catalogLoading}<p class="muted" role="status">{$t('Loading local workspace…')}</p>
-      {:else if catalog.workspaces.length === 0}<p class="muted">{$t('No projects registered.')}</p>
       {:else}
         {#each catalog.workspaces as workspace (workspace.id)}
           <section class:current-project={workspace.id === selectedWorkspaceId}>
@@ -1108,7 +1129,24 @@
   @media (forced-colors: active) { button, input, select, textarea, .composer, .modal { forced-color-adjust:auto; } }
   .brand { display:flex; align-items:center; gap:8px; }
   .brand-mark { font:600 22px Georgia, serif; color:var(--piui-accent); }
-  .list-heading { display:flex; justify-content:space-between; padding:10px 16px 5px; color:var(--piui-text-faint); font-size:11px; font-weight:600; }
+  .project-heading { min-height:38px; margin:4px 8px 0; padding:3px 4px 3px 8px; display:flex; align-items:center; justify-content:space-between; gap:4px; color:var(--piui-text-muted); }
+  .project-heading-toggle { min-width:0; flex:1; display:flex; align-items:center; gap:6px; padding:4px 0; border:0; border-radius:5px; background:transparent; color:inherit; text-align:left; }
+  .project-heading-toggle span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; font-weight:650; letter-spacing:-.01em; }
+  .project-heading-toggle svg { width:15px; height:15px; flex:0 0 auto; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; transition:transform .14s ease; }
+  .project-heading-toggle svg.collapsed { transform:rotate(-90deg); }
+  .project-heading-toggle:hover, .project-heading-toggle:focus-visible { color:var(--piui-text); }
+  .project-heading-actions { display:flex; align-items:center; gap:2px; opacity:.34; transition:opacity .14s ease; }
+  .project-heading:hover .project-heading-actions, .project-heading:focus-within .project-heading-actions, .project-heading-menu[open] ~ .project-heading-action { opacity:1; }
+  .project-heading-action, .project-heading-menu summary { width:28px; height:28px; display:grid; place-items:center; padding:0; border:0; border-radius:6px; background:transparent; color:var(--piui-text-muted); font-size:20px; line-height:1; cursor:pointer; list-style:none; }
+  .project-heading-menu summary::-webkit-details-marker { display:none; }
+  .project-heading-action:hover, .project-heading-action:focus-visible, .project-heading-menu summary:hover, .project-heading-menu summary:focus-visible, .project-heading-menu[open] summary { background:var(--piui-surface-1); color:var(--piui-text); }
+  .project-heading-action--add { font-size:23px; font-weight:300; }
+  .project-heading-menu { position:relative; }
+  .project-heading-popover { position:absolute; z-index:25; top:calc(100% + 4px); right:0; min-width:150px; padding:4px; border:1px solid var(--piui-border); border-radius:8px; background:var(--piui-bg-raised); box-shadow:0 8px 28px #0003; }
+  .project-heading-popover button { width:100%; padding:7px 9px; border:0; border-radius:5px; background:transparent; color:var(--piui-text); text-align:left; font-size:12px; }
+  .project-heading-popover button:hover:not(:disabled), .project-heading-popover button:focus-visible { background:var(--piui-surface-1); }
+  .project-heading-popover button:disabled { cursor:wait; }
+  .project-list[hidden] { display:none; }
   .utilities .current-utility { background:var(--piui-surface-1); }
   .session-empty { padding:8px; font-size:12px; color:var(--piui-text-muted); }
   .session-empty p { margin:0 0 6px; }
@@ -1152,4 +1190,6 @@
   .primary-actions kbd { font-size:10px; }
   .project-row span { font-weight:500; }
   .composer:focus-within { border-color:var(--piui-border-strong); }
+  @media (prefers-reduced-motion: reduce) { .project-heading-toggle svg, .project-heading-actions { transition:none; } }
+  :global(:root[data-reduced-motion="reduce"]) .project-heading-toggle svg, :global(:root[data-reduced-motion="reduce"]) .project-heading-actions { transition:none; }
 </style>
