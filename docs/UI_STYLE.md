@@ -43,3 +43,28 @@ Keep the inspector resizable by pointer and keyboard, with persisted width.
 Attempts are explicitly selectable; old inputs remain in their native conversation.
 Use native token counters with an unavailable dash, including for incomplete totals.
 Keep recovery records collapsed except when reconciliation needs attention.
+
+Library menu entries show only their names. Codex editors expose a checked-by-default
+Use base prompt checkbox: checked omits baseInstructions (native defaults), unchecked
+sends an empty string (no built-in base text). Additional instructions remain separate.
+There is no base-prompt text editor; existing imported custom replacements remain in
+the portable contract and are preserved until the user changes this setting.
+
+Graph ports support dragging and two-step activation with Enter or Space; Escape
+cancels. The selected connection type and direction apply to both ports and the
+connection form. Two-way edges persist as two existing directed permissions,
+shown with arrowheads at both ends. Each agent pair has one visible line even
+when several connection types apply; its tooltip and Connections list retain
+the exact type and direction of every permission. Result dependencies remain acyclic and
+one-way. Messaging permits sending to the target; observation permits reading
+the target's activity; delegation permits spawning the target profile subject
+to the existing host permission checks.
+
+
+Library lists show the saved name and useful summary: model, members/coordinator,
+or tasks/dependencies. Empty lists explain the first action; saved launches use
+a named expandable section. Agent role/result metadata, resource permissions and
+subagent permissions remain available in named sections. Pipeline tasks have
+expandable summaries. Keep refresh secondary to Save, and preserve drafts on
+validation or native catalog failures. Model selection in the chat stays a
+labelled button without a decorative downward arrow.

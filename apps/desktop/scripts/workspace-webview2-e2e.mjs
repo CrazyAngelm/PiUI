@@ -60,6 +60,7 @@ export async function runWorkspaceWebview2Proof({
   startupBoundMs,
   captureScreenshot,
   resizeWindow,
+  composerProvider,
 }) {
   if (!automation || typeof automation.evaluate !== 'function' || typeof automation.dispatchKey !== 'function') {
     throw new TypeError('Workspace E2E requires the authenticated WebView automation client.');
@@ -119,7 +120,8 @@ export async function runWorkspaceWebview2Proof({
       }
       await new Promise((resolveWait) => setTimeout(resolveWait, 50));
     }
-    throw new Error(`${label} did not become true within the launcher bound.${lastError ? ` Last error: ${lastError.message}` : ''}`);
+    const diagnostic = await evaluate(`JSON.stringify({title:document.querySelector('#session-title')?.textContent,alerts:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent),queue:document.querySelector('.outbox')?.textContent})`).catch(() => 'unavailable');
+    throw new Error(`${label} ${diagnostic} did not become true within the launcher bound.${lastError ? ` Last error: ${lastError.message}` : ''}`);
   }
 
   async function invoke(command, args) {
@@ -152,7 +154,7 @@ export async function runWorkspaceWebview2Proof({
         const wanted = ${JSON.stringify(name)};
         return candidate.getAttribute('aria-label') === wanted
           || candidate.textContent?.trim() === wanted
-          || candidate.querySelector('strong')?.textContent?.trim() === wanted
+          || candidate.querySelector('strong, .session-title')?.textContent?.trim() === wanted
           || [...candidate.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim() === wanted);
       });
       if (!button || button.disabled) return false;
@@ -294,13 +296,55 @@ export async function runWorkspaceWebview2Proof({
     await setControl('.system-name', 'Mixed graph proof');
     await clickButton('＋ Add agent', '.canvas-tools');
     await chooseNativeModel('aside[aria-label="Agent settings"] select[aria-label="Model"]');
+    const catalogReuse = await evaluate(`(async () => {
+      const { harnessModels } = await import('/src/host-api/harnessModels.ts');
+      const request = { workspaceId: ${JSON.stringify(workspaceId)}, harness: 'codex' };
+      const original = await harnessModels(request);
+      const start = performance.now();
+      const cached = await harnessModels(request);
+      const cachedMs = performance.now() - start;
+      const refreshed = await harnessModels(request, true);
+      return { cachedMs, reused: original === cached, refreshed: refreshed !== cached, models: refreshed.models.length };
+    })()`);
+    assertion(catalogReuse.models > 0 && catalogReuse.reused && catalogReuse.refreshed, `Catalog reuse and explicit native refresh failed: ${JSON.stringify(catalogReuse)}`);
+    timings.cachedCatalogMs = catalogReuse.cachedMs;
+
+    assertion(await evaluate(`(() => {
+      const label = [...document.querySelectorAll('aside label')].find(e => e.textContent.trim() === 'Use base prompt');
+      const checkbox = label?.querySelector('input');
+      if (!checkbox?.checked) return false;
+      checkbox.focus(); checkbox.click(); checkbox.click();
+      return checkbox.checked && document.activeElement === checkbox && !label.querySelector('textarea');
+    })()`), 'Graph base prompt must default on and toggle without a text editor.');
     await setControl('aside[aria-label="Agent settings"] select[aria-label="Reasoning"]', 'low', 'change');
     await setControl('aside label:nth-of-type(5) select', 'fast', 'change');
     await clickButton('＋ Add agent', '.canvas-tools');
     await setControl('aside label:nth-of-type(2) select', 'prime-agent', 'change');
     await chooseNativeModel('aside[aria-label="Agent settings"] select[aria-label="Model"]');
-    await evaluate(`(() => { const select = document.querySelector('.canvas-tools select'); select.value = 'sequential'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
-    await waitFor(`document.querySelectorAll('.connections li').length === 1`, 'graph result connection');
+    // DOM pointer events exercise the real WebView hit testing and graph handlers.
+    await evaluate(`(() => {
+      const start = document.querySelectorAll('[data-port="out"]')[0];
+      const end = document.querySelectorAll('[data-port="in"]')[1];
+      end.scrollIntoView({block:'nearest',inline:'nearest'});
+      const a = start.getBoundingClientRect(), b = end.getBoundingClientRect();
+      start.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true,pointerId:1,button:0,clientX:a.x+a.width/2,clientY:a.y+a.height/2}));
+      end.dispatchEvent(new PointerEvent('pointermove', {bubbles:true,pointerId:1,clientX:b.x+b.width/2,clientY:b.y+b.height/2}));
+      end.dispatchEvent(new PointerEvent('pointerup', {bubbles:true,pointerId:1,clientX:b.x+b.width/2,clientY:b.y+b.height/2}));
+    })()`);
+    await waitFor(`document.querySelectorAll('.connections li').length === 1`, 'dragged result connection');
+    await setControl('.canvas-tools select[aria-label="Connection type"]', 'send', 'change');
+    await setControl('.canvas-tools select[aria-label="Direction"]', 'both', 'change');
+    await evaluate(`document.querySelectorAll('[data-port="out"]')[0].focus()`);
+    await automation.dispatchKey({key:'Enter',code:'Enter'});
+    await evaluate(`document.querySelectorAll('[data-port="in"]')[1].focus()`);
+    await automation.dispatchKey({key:'Enter',code:'Enter'});
+    await waitFor(`document.querySelectorAll('.connections li').length === 3`, 'keyboard two-way messaging');
+    assertion(await evaluate(`!!document.querySelector('.world svg path[marker-start]')`), 'Two-way connection needs arrowheads at both ends.');
+    assertion(await evaluate(`document.querySelectorAll('.world svg > path').length === 1`), 'Multiple permissions between a pair must render as a single line.');
+    await evaluate(`document.querySelectorAll('[data-port="out"]')[0].focus()`);
+    await automation.dispatchKey({key:'Enter',code:'Enter'});
+    await automation.dispatchKey({key:'Escape',code:'Escape'});
+    assertion(await evaluate(`!document.querySelector('.connection-status') && document.querySelectorAll('.connections li').length === 3`), 'Escape must cancel without adding a connection.');
     await clickButton('Save', '.system-editor .toolbar');
     await waitFor(`document.querySelector('.save-state')?.textContent === 'Saved'`, 'atomic graph save');
     const graphCommand = await readSingle('launch', workspaceId, 'Mixed graph proof');
@@ -310,22 +354,43 @@ export async function runWorkspaceWebview2Proof({
     const graphProfiles = [];
     for (const item of graphCatalog.profiles.filter(item => ['Agent 1', 'Agent 2'].includes(item.name))) graphProfiles.push(await invoke('orchestration_get_profile_v6', { request: { workspaceId, id: item.id } }));
     assertion(graphProfiles.some(item => item.value.harness === 'codex' && item.value.reasoning === 'low' && item.value.serviceTier === 'fast'), 'Graph lost Codex settings');
+    assertion(graphProfiles.filter(item => item.value.harness === 'codex').every(item => item.value.baseInstructions === undefined), 'Enabled base prompt must preserve native defaults.');
     assertion(graphProfiles.some(item => item.value.harness === 'prime-agent'), 'Graph lost Prime adapter');
+    const savedGraphTeam = await invoke('orchestration_get_team_v6', { request: { workspaceId, id: graphCommand.stored.value.teamId } });
+    assertion(savedGraphTeam.value.sendEdges.length === 2, 'Two-way graph permissions must reach the host.');
     await capture('workspace-mixed-graph');
     await selectWorkspaceSection('Agents');
 
+    await clickButton('Create profile');
+    await waitFor(`document.querySelector('#profile-name')`, 'Hermes profile selector');
+    assertion(await evaluate(`document.querySelector('#profile-harness option[value="hermes"]')?.textContent === 'Hermes'`), 'Hermes must be offered in Create profile');
+    await setControl('#profile-name', 'Hermes unavailable model proof');
+    await setControl('#profile-harness', 'hermes', 'change');
+    await waitFor(`!document.querySelector('#profile-model').disabled`, 'Hermes catalog result', startupBoundMs);
+    await clickButton('Save profile');
+    await waitFor(`document.querySelector('#profile-error-summary') || [...document.querySelectorAll('[role="alert"]')].some(e => e.textContent.includes('Enter a model'))`, 'Hermes missing-model validation');
+    await evaluate(`import('/src/features/locale/language.ts').then(module => module.setLanguage('ru'))`);
+    await waitFor(`document.documentElement.lang === 'ru'`, 'Russian profile');
+    await evaluate(`document.querySelector('#profile-editor-title').scrollIntoView({block:'start'})`);
+    assertion(await evaluate(`document.body.textContent.includes('Выберите модель.') && !document.body.textContent.includes('Could not load models.') && !document.body.textContent.includes('Enter a model.')`), 'Russian profile validation must translate dynamic errors');
+    await capture('library-hermes-profile-ru');
+    await evaluate(`import('/src/features/locale/language.ts').then(module => module.setLanguage('en'))`);
+    await waitFor(`document.documentElement.lang === 'en'`, 'English profile');
+    await clickButton('Cancel');
+    await clickButton('Discard changes');
     await clickButton('Create profile');
     await waitFor(`document.querySelector('#profile-name')`, 'Codex prompt editor');
     await setControl('#profile-name', 'Custom Codex prompt');
     await setControl('#profile-harness', 'codex', 'change');
     await chooseNativeModel('#profile-model');
     assertion(await evaluate(`(() => {
-      const label = [...document.querySelectorAll('label')].find(e => e.textContent.includes('Replace Codex base prompt'));
+      const label = [...document.querySelectorAll('label')].find(e => e.textContent.trim() === 'Use base prompt');
       const checkbox = label?.querySelector('input');
-      checkbox?.focus(); checkbox?.click();
-      return checkbox?.checked && document.activeElement === checkbox;
+      if (!checkbox?.checked) return false;
+      checkbox.focus(); checkbox.click();
+      return !checkbox.checked && document.activeElement === checkbox;
     })()`), 'Codex base prompt toggle must be focusable and labelled.');
-    await waitFor(`document.querySelector('#profile-base-instructions')`, 'explicit empty Codex prompt');
+    assertion(await evaluate(`!document.querySelector('#profile-base-instructions')`), 'Base prompt must not have a text editor.');
     await evaluate(`document.querySelector('#profile-editor-title').scrollIntoView({block:'start'})`);
     await capture('workspace-codex-profile');
     await clickButton('Save profile');
@@ -397,7 +462,7 @@ export async function runWorkspaceWebview2Proof({
     await clickButton('Add task');
     await waitFor(`document.querySelector('.task')`, 'pipeline task editor');
     await setLabelledControl('Task name', 'Verify workspace');
-    await setLabelledControl('Member slot', 'lead');
+    await setLabelledControl('Assigned agent', 'lead');
     await setLabelledControl('Task instructions', 'Verify the isolated native workspace.');
     await clickButton('Save pipeline');
     await waitFor(`[...document.querySelectorAll('.definition-list strong')].some((item) => item.textContent?.trim() === ${JSON.stringify(names.pipeline[0])})`, 'saved pipeline');
@@ -410,6 +475,7 @@ export async function runWorkspaceWebview2Proof({
     pipeline = await readSingle('pipeline', workspaceId, names.pipeline[1]);
     assertion(pipeline.summary.revision > 0, 'Pipeline update did not advance its host revision.');
 
+    await evaluate(`document.querySelector('details.commands').open = true`);
     await clickButton('Create launch command');
     await waitFor(`document.querySelector('#launch-name')`, 'launch command editor');
     await setControl('#launch-name', names.launch[0]);
@@ -425,6 +491,31 @@ export async function runWorkspaceWebview2Proof({
     await waitFor(`[...document.querySelectorAll('ul[aria-label="Launch commands"] strong')].some((item) => item.textContent?.trim() === ${JSON.stringify(names.launch[1])})`, 'updated launch command');
     launch = await readSingle('launch', workspaceId, names.launch[1]);
     assertion(launch.summary.revision > 0, 'Launch command update did not advance its host revision.');
+
+    const scheduleName = 'WebView schedule';
+    await selectWorkspaceSection('Schedules');
+    await clickButton('Create schedule');
+    await waitFor(`document.querySelector('#schedule-editor-title')`, 'schedule editor');
+    assertion(await evaluate(`document.body.textContent.includes('Schedules run only while the PiUI host is open.')`), 'The schedule editor did not disclose its host-active execution boundary.');
+    await setControl('#schedule-name', scheduleName);
+    await setControl('#schedule-launch', launch.summary.id, 'change');
+    await setControl('#schedule-at', '2099-12-31T23:59');
+    await setControl('#schedule-missed', 'coalesce', 'change');
+    await setControl('#schedule-overlap', 'skip', 'change');
+    await clickButton('Save schedule');
+    await waitFor(`[...document.querySelectorAll('ul[aria-label="Schedules"] strong')].some((item) => item.textContent?.trim() === ${JSON.stringify(scheduleName)})`, 'saved disabled schedule');
+    let schedules = await invoke('orchestration_list_schedules_v7', { request: { workspaceId } });
+    assertion(schedules.length === 1 && schedules[0].enabled === false && schedules[0].value.launchCommandId === launch.summary.id, 'The disabled schedule did not persist through the v7 host API.');
+    assertion(await evaluate(`(() => { const button = document.querySelector(${JSON.stringify(`[aria-label="Enable ${scheduleName}"]`)}); button?.focus(); return button instanceof HTMLButtonElement && document.activeElement === button; })()`), 'The schedule enable action is not a focusable native button.');
+    // Synthetic keyboard events cannot trigger the browser's trusted default
+    // button activation, so invoke the focused native button after proving focus.
+    await evaluate(`document.activeElement.click()`);
+    await waitFor(`[...document.querySelectorAll('ul[aria-label="Schedules"] li')].some((item) => item.textContent?.includes(${JSON.stringify(scheduleName)}) && item.textContent?.includes('Enabled'))`, 'focused schedule enable action');
+    schedules = await invoke('orchestration_list_schedules_v7', { request: { workspaceId } });
+    assertion(schedules.length === 1 && schedules[0].enabled === true && schedules[0].nextDueAt, 'The explicit enable action did not reach durable schedule state.');
+    checks.push('schedule-ui-api-disabled-by-default', 'schedule-keyboard-focus-native-button');
+    await capture('workspace-schedule-enabled');
+    await selectWorkspaceSection('Pipelines');
 
     const beforeRunCatalog = await workspaceCatalog();
     const sessionsBeforeRun = beforeRunCatalog.sessions.map((session) => session.id).sort();
@@ -472,6 +563,17 @@ export async function runWorkspaceWebview2Proof({
     for (const name of [names.pipeline[1], names.launch[1]]) {
       await waitFor(`[...document.querySelectorAll('.definition-list strong')].some((item) => item.textContent?.trim() === ${JSON.stringify(name)})`, `reloaded ${name}`);
     }
+    await selectWorkspaceSection('Schedules');
+    await waitFor(`[...document.querySelectorAll('ul[aria-label="Schedules"] strong')].some((item) => item.textContent?.trim() === ${JSON.stringify(scheduleName)})`, 'reloaded schedule');
+    schedules = await invoke('orchestration_list_schedules_v7', { request: { workspaceId } });
+    assertion(schedules.length === 1 && schedules[0].enabled, 'The enabled schedule did not survive native WebView reload.');
+    await clickButton(`Delete ${scheduleName}`);
+    await waitFor(`document.querySelector('[aria-label="Confirm definition deletion"]')`, 'schedule deletion confirmation');
+    await clickButton('Delete definition', '[aria-label="Confirm definition deletion"]');
+    await waitFor(`![...document.querySelectorAll('ul[aria-label="Schedules"] strong')].some((item) => item.textContent?.trim() === ${JSON.stringify(scheduleName)})`, 'deleted schedule');
+    assertion((await invoke('orchestration_list_schedules_v7', { request: { workspaceId } })).length === 0, 'Schedule deletion did not reach durable state.');
+    checks.push('schedule-reload-delete');
+    await selectWorkspaceSection('Pipelines');
     await capture('workspace-definitions');
 
     for (const [name, section] of [
@@ -489,7 +591,7 @@ export async function runWorkspaceWebview2Proof({
     await selectWorkspaceSection('Systems');
     await waitFor(`document.querySelector('select[aria-label="Open system"] option[value="${graphCommand.summary.id}"]')`, 'saved graph catalog loaded');
     await setControl('select[aria-label="Open system"]', graphCommand.summary.id, 'change');
-    await waitFor(`document.querySelectorAll('.node').length === 2 && document.querySelectorAll('.connections li').length === 1`, 'reopened mixed graph');
+    await waitFor(`document.querySelectorAll('.node').length === 2 && document.querySelectorAll('.connections li').length === 3`, 'reopened mixed graph');
     await capture('workspace-mixed-graph-reopened');
     await evaluate(`document.querySelector('.close-inspector').focus()`);
     assertion(await evaluate(`document.activeElement?.matches('button.close-inspector[aria-label]')`), 'Inspector close must be a labelled, keyboard-focusable native button');
@@ -706,6 +808,49 @@ export async function runWorkspaceWebview2Proof({
   end('projectTrust');
   checks.push('typed-host-project-registration', 'explicit-ui-project-trust');
 
+  if (process.env.PIUI_E2E_SCHEDULE_ONLY === '1') {
+    await seedSafeModeRunDefinitions(workspace.id);
+    const scheduleName = 'Native schedule proof';
+    await clickButton('Workspace', '.view-switch');
+    await selectWorkspaceSection('Schedules');
+    await clickButton('Create schedule');
+    await waitFor(`document.querySelector('#schedule-editor-title')`, 'schedule editor');
+    assertion(await evaluate(`document.body.textContent.includes('Schedules run only while the PiUI host is open.')`), 'The schedule editor hid its host-active execution boundary.');
+    await setControl('#schedule-name', scheduleName);
+    await setControl('#schedule-launch', SAFE_FIXTURE.launchId, 'change');
+    await setControl('#schedule-at', '2099-12-31T23:59');
+    await setControl('#schedule-missed', 'coalesce', 'change');
+    await setControl('#schedule-overlap', 'skip', 'change');
+    await clickButton('Save schedule');
+    await waitFor(`[...document.querySelectorAll('ul[aria-label="Schedules"] strong')].some((item) => item.textContent?.trim() === ${JSON.stringify(scheduleName)})`, 'saved disabled schedule');
+    let schedules = await invoke('orchestration_list_schedules_v7', { request: { workspaceId: workspace.id } });
+    assertion(schedules.length === 1 && !schedules[0].enabled && schedules[0].value.launchCommandId === SAFE_FIXTURE.launchId, 'The UI did not persist a disabled schedule through the v7 host API.');
+    assertion(await evaluate(`(() => { const button = document.querySelector(${JSON.stringify(`[aria-label="Enable ${scheduleName}"]`)}); button?.focus(); return button instanceof HTMLButtonElement && document.activeElement === button; })()`), 'The schedule enable action is not a focusable native button.');
+    // Synthetic keyboard events cannot trigger the browser's trusted default
+    // button activation, so invoke the focused native button after proving focus.
+    await evaluate(`document.activeElement.click()`);
+    await waitFor(`[...document.querySelectorAll('ul[aria-label="Schedules"] li')].some((item) => item.textContent?.includes(${JSON.stringify(scheduleName)}) && item.textContent?.includes('Enabled'))`, 'focused schedule enable action');
+    schedules = await invoke('orchestration_list_schedules_v7', { request: { workspaceId: workspace.id } });
+    assertion(schedules.length === 1 && schedules[0].enabled && schedules[0].nextDueAt, 'The explicit enable action did not reach durable state.');
+    await capture('workspace-schedule-enabled');
+    await reload();
+    await clickButton('Workspace', '.view-switch');
+    await selectWorkspaceSection('Schedules');
+    await waitFor(`[...document.querySelectorAll('ul[aria-label="Schedules"] strong')].some((item) => item.textContent?.trim() === ${JSON.stringify(scheduleName)})`, 'reloaded enabled schedule');
+    await clickButton(`Delete ${scheduleName}`);
+    await waitFor(`document.querySelector('[aria-label="Confirm definition deletion"]')`, 'schedule deletion confirmation');
+    await clickButton('Delete definition', '[aria-label="Confirm definition deletion"]');
+    await waitFor(`![...document.querySelectorAll('ul[aria-label="Schedules"] strong')].some((item) => item.textContent?.trim() === ${JSON.stringify(scheduleName)})`, 'deleted schedule');
+    assertion((await invoke('orchestration_list_schedules_v7', { request: { workspaceId: workspace.id } })).length === 0, 'Schedule deletion did not reach durable state.');
+    timings.total = normalizedMilliseconds(performance.now() - startedAt);
+    return {
+      checks: [...checks, 'schedule-ui-api-disabled-by-default', 'schedule-keyboard-focus-native-button', 'schedule-reload-delete'],
+      timings,
+      screenshots,
+      cleanup: { workspaceId: workspace.id, safeFixture: SAFE_FIXTURE },
+    };
+  }
+
   begin('unavailable');
   await automation.dispatchKey({ key: 'n', code: 'KeyN', ctrlKey: true });
   await waitFor(`document.querySelector('#new-session-title')`, 'new native session form');
@@ -729,7 +874,7 @@ export async function runWorkspaceWebview2Proof({
   begin('nativeLifecycle');
   const eligible = catalog.harnesses.find((item) =>
     item.status === 'available'
-    && ((item.kind === 'prime-agent' && item.version === '0.9.2') || (item.kind === 'codex' && item.version === '0.147.0')));
+    && ((item.kind === 'prime-agent' && item.version === '0.9.2') || (item.kind === 'codex' && ['0.147.0', '0.153.4'].includes(item.version))));
   assertion(eligible, 'No eligible prompt-free native lifecycle adapter is available: require Prime Agent SDK 0.9.2 with the host isolated-daemon guard, or Codex app-server 0.147.0.');
   // The sidebar also has a Harness filter; choose the creation form's control.
   await setControl('#new-session-project', workspace.id, 'change');
@@ -824,22 +969,27 @@ export async function runWorkspaceWebview2Proof({
   }
   checks.push('eligible-native-start', 'native-snapshot-no-private-reference', 'native-ui-rename');
   await clickButton('Model and reasoning');
-  await waitFor(`document.querySelector('.runtime-picker select[aria-label="Model"]')?.options.length > 0 && !document.querySelector('.runtime-picker select').disabled`, 'native model catalog', startupBoundMs);
+  await waitFor(`document.querySelector('.runtime-picker .model-heading') && !document.querySelector('.runtime-picker .model-heading').disabled`, 'native model catalog', startupBoundMs);
+  await capture('workspace-effort-current');
+  await clickButton('Select model', '.runtime-picker');
+  assertion(await evaluate(`document.querySelector('.runtime-picker [aria-checked="true"]')?.textContent.trim().length > 0`), 'Current model is missing from the picker');
+  await capture('workspace-model-selected');
   let beforeSettings = await invoke('workspace_settings_v16', { command: { type: 'get', sessionId: nativeSession.id } });
   assertion(beforeSettings.protocol === 16 && beforeSettings.models.length > 0, 'Missing native model catalog');
   if (eligible.kind === 'codex') {
     const nextIndex = beforeSettings.models.findIndex(model => model.id !== beforeSettings.model?.id && model.thinkingLevels?.length);
     assertion(nextIndex >= 0, 'Native model-switch proof requires another catalog model');
     const nextModel = beforeSettings.models[nextIndex];
-    await setControl('.runtime-picker select[aria-label="Model"]', String(nextIndex), 'change');
-    await waitFor(`!document.querySelector('.runtime-picker select[aria-label="Model"]').disabled && document.querySelector('.runtime-picker .trigger')?.textContent.includes(${JSON.stringify(nextModel.name)})`, 'native model switched', startupBoundMs);
+    await evaluate(`document.querySelectorAll('.runtime-picker .model-option')[${nextIndex}].click()`);
+    await waitFor(`document.querySelector('.runtime-picker .model-heading') && !document.querySelector('.runtime-picker .model-heading').disabled && document.querySelector('.runtime-picker .trigger')?.textContent.includes(${JSON.stringify(nextModel.name)})`, 'native model switched', startupBoundMs);
     beforeSettings = await invoke('workspace_settings_v16', { command: { type: 'get', sessionId: nativeSession.id } });
     assertion(beforeSettings.model.id === nextModel.id && beforeSettings.model.provider === nextModel.provider, 'Native model/provider did not change');
     checks.push('native-composer-model-switch');
     const selectedModel = beforeSettings.models.find(model => model.id === beforeSettings.model?.id);
     assertion(selectedModel?.thinkingLevels?.length, 'Codex reasoning metadata missing');
-    const effort = selectedModel.thinkingLevels[0];
-    await setControl('.runtime-picker select[aria-label="Reasoning"]', effort, 'change');
+    const effort = selectedModel.thinkingLevels.at(-1);
+    await setControl('.runtime-picker input[aria-label="Reasoning"]', String(selectedModel.thinkingLevels.length - 1), 'input');
+    await setControl('.runtime-picker input[aria-label="Reasoning"]', String(selectedModel.thinkingLevels.length - 1), 'change');
     await waitFor(`!document.querySelector('.runtime-picker .speed')?.disabled`, 'reasoning saved', startupBoundMs);
     const wasFast = beforeSettings.serviceTier === 'fast';
     await evaluate(`document.querySelector('.runtime-picker .speed').click()`);
@@ -850,8 +1000,12 @@ export async function runWorkspaceWebview2Proof({
     const clean = await invoke('workspace_command_v15', { command: { type: 'snapshot', sessionId: nativeSession.id } });
     assertion(!clean.snapshot.blocks.some(block => block.safeSummary?.includes('mcpServer/startupStatus') || block.safeSummary?.includes('thread/settings')), 'Lifecycle notifications leaked into chat');
   }
+  if (eligible.kind === 'codex') {
+    assertion(await evaluate(`document.querySelector('.runtime-picker .energy')?.classList.contains('overflowing') && document.querySelector('.chaos-field .lightning') && document.querySelector('.chaos-field')?.getAttribute('aria-hidden') === 'true'`), 'Maximum effort must show decorative chaos');
+    assertion(await evaluate(`(() => { const root = document.documentElement; const old = root.getAttribute('data-reduced-motion'); root.setAttribute('data-reduced-motion', 'reduce'); const stopped = [...document.querySelectorAll('.chaos-field .vortex, .chaos-field .lightning')].every(node => getComputedStyle(node).animationName === 'none'); if (old === null) root.removeAttribute('data-reduced-motion'); else root.setAttribute('data-reduced-motion', old); return stopped; })()`), 'Reduced motion must stop the chaos animation');
+  }
   await capture('workspace-runtime-picker');
-  assertion(await evaluate(`(() => { const popup = document.querySelector('.runtime-picker .popover'); const model = popup?.querySelector('select'); if (!popup || !model) return false; const rect = model.getBoundingClientRect(); return document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2) === model; })()`), 'Model picker is clipped or covered');
+  assertion(await evaluate(`(() => { const popup = document.querySelector('.runtime-picker .popover'); const model = popup?.querySelector('.model-heading'); if (!popup || !model) return false; const rect = model.getBoundingClientRect(); return model.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)); })()`), 'Model picker is clipped or covered');
   await automation.dispatchKey({ key: 'Escape', code: 'Escape' });
   await waitFor(`!document.querySelector('.runtime-picker .popover')`, 'model picker Escape');
   assertion(await evaluate(`document.activeElement?.getAttribute('aria-label') === 'Model and reasoning'`), 'Model picker lost keyboard focus');
@@ -915,7 +1069,7 @@ export async function runWorkspaceWebview2Proof({
   await reload();
   assertion(await evaluate(`document.documentElement.lang === 'ru'`), 'Language choice was not persisted');
   await clickButton('Настройки', '.utilities');
-  await setControl('select[aria-label="Language"]', 'en', 'change');
+  await setControl('select[aria-label="Язык"]', 'en', 'change');
   await waitFor(`document.documentElement.lang === 'en'`, 'English settings');
   await clickButton('Done');
 
@@ -1011,6 +1165,62 @@ export async function runWorkspaceWebview2Proof({
   await reload();
   assertion(!(await workspaceCatalog()).sessions.some(session => session.id === nativeSession.id), 'Deleted chat returned after reload');
   checks.push('saved-chat-auto-resume-after-reload', 'delete-chat-cancel-focus-and-reload');
+  if (composerProvider) {
+    // This session is separate from the zero-turn lifecycle proof above.
+    const created = await invoke('workspace_command_v15', { command: { type: 'createSession', workspaceId: workspace.id, harness: 'codex', permissionMode: 'native', title: 'Composer delivery proof', model: { id: 'gpt-5.5', provider: 'piui_composer', name: 'gpt-5.5' } } });
+    const composerId = created.snapshot.session.id;
+    await reload();
+    await clickButton('Composer delivery proof', '.session-list');
+    await waitFor(`document.querySelector('#session-draft')`, 'composer input', startupBoundMs);
+    await setControl('#session-draft', 'PIUI_QUEUE_A');
+    await waitFor(`!document.querySelector('.composer button.accent')?.disabled`, 'composer ready', startupBoundMs);
+    assertion(await evaluate(`!document.querySelector('.composer select')`), 'Idle composer must not offer Prompt/Steer mode selection');
+    assertion(await evaluate(`!document.querySelector('.runtime-picker .chevron')`), 'Model picker arrow must be removed');
+    composerProvider.holdNext();
+    await setControl('#session-draft', 'PIUI_QUEUE_A');
+    await clickButton('Send', '.composer');
+    await waitFor(`document.querySelector('.composer select')?.value === 'follow-up'`, 'busy defaults to queue', startupBoundMs);
+    await setControl('#session-draft', 'PIUI_QUEUE_B');
+    await clickButton('Follow up', '.composer');
+    await waitFor(`document.querySelector('.outbox')?.textContent.includes('PIUI_QUEUE_B')`, 'queued B');
+    await clickButton('Edit', '.outbox');
+    await setControl('.outbox textarea', 'PIUI_QUEUE_B_EDITED');
+    await clickButton('Save', '.outbox');
+    await setControl('#session-draft', 'PIUI_QUEUE_C');
+    await clickButton('Follow up', '.composer');
+    await waitFor(`document.querySelectorAll('.outbox article').length === 2`, 'two queued items');
+    await reload();
+    await waitFor(`document.querySelectorAll('.outbox article').length === 2`, 'queue survives WebView reload', startupBoundMs);
+    assertion(await evaluate(`document.querySelector('.outbox')?.textContent.includes('PIUI_QUEUE_B_EDITED')`), 'Queued edit was lost on reload');
+    await evaluate(`(() => { const row = [...document.querySelectorAll('.outbox article')].find(item => item.textContent.includes('PIUI_QUEUE_C')); const button = [...row.querySelectorAll('button')].find(item => item.textContent === 'Send now as Steer'); button.click(); return true; })()`);
+    await waitFor(`document.querySelectorAll('.outbox article').length === 1`, 'promotion removes queued copy');
+    await evaluate(`(async () => { const { setLanguage } = await import('/src/features/locale/language.ts'); setLanguage('ru'); return true; })()`);
+    await waitFor(`document.querySelector('.outbox')?.textContent.includes('Очередь сообщений')`, 'Russian queue');
+    assertion(await evaluate(`document.querySelector('#session-draft').placeholder === 'Добавить сообщение в очередь…' && !document.querySelector('.composer').textContent.includes('Follow up')`), 'Russian composer copy');
+    assertion(await evaluate(`!document.querySelector('.session-context')?.textContent.includes('Running') && !document.querySelector('.timeline').textContent.includes('You')`), 'Russian status and speaker labels');
+    await capture('composer-queue-ru');
+    const deadline = Date.now() + startupBoundMs;
+    while (!composerProvider.ready() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+    assertion(composerProvider.ready(), 'Synthetic native request did not reach the local provider');
+    composerProvider.release();
+    await waitFor(`!document.querySelector('.outbox') && !document.querySelector('.composer select')`, 'queue drains into a separate completed native turn', startupBoundMs);
+    assertion(composerProvider.requests.some(payload => JSON.stringify(payload).includes('PIUI_QUEUE_B_EDITED')), 'Edited queued text did not reach the native provider');
+    assertion(composerProvider.requests.some(payload => JSON.stringify(payload).includes('PIUI_QUEUE_C')), 'Steer did not reach the native provider');
+    const registryRoot = join(harness.fixture.tauriAppData, 'workspace-registry-v11');
+    const generation = (await import('node:fs')).readdirSync(registryRoot).filter(name => name.endsWith('.json')).sort().at(-1);
+    const record = JSON.parse(readFileSync(join(registryRoot, generation), 'utf8')).sessions.find(item => item.id === composerId);
+    assertion(record.nativePath && !relative(harness.fixture.fixtureRoot, record.nativePath).startsWith('..'), 'Native proof history must stay in fixture');
+    const events = readFileSync(record.nativePath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    assertion(events.filter(event => event.type === 'event_msg' && event.payload.type === 'task_started').length === 2, 'A, steered C and queued B must produce exactly two native turns');
+    await setControl('#session-draft', '/');
+    await waitFor(`document.querySelector('[role="listbox"]')?.textContent.includes('Сжать контекст беседы')`, 'Russian slash commands');
+    await capture('composer-slash-ru');
+    await setControl('#session-draft', '');
+    await evaluate(`(async () => { const { setLanguage } = await import('/src/features/locale/language.ts'); setLanguage('en'); return true; })()`);
+    await waitFor(`document.querySelector('#session-draft').placeholder === 'Write a message…'`, 'English restored');
+    await invoke('workspace_command_v15', { command: { type: 'closeSession', sessionId: composerId } });
+    checks.push('native-codex-synthetic-provider-two-turn-fifo', 'queue-edit-reload-steer-promotion-no-duplicate', 'composer-ru-en-native-webview', 'slash-command-native-capabilities', 'model-arrow-removed');
+  }
   timings.total = normalizedMilliseconds(performance.now() - startedAt);
   return {
     checks,

@@ -6,16 +6,21 @@
 //! are available only on `OrchestrationApiState` for trusted host integration.
 
 use crate::api::verified_project_directory;
+use crate::orchestration_schedule::{
+    MissedRunPolicy, OverlapPolicy, ScheduleDefinition, ScheduleOccurrence,
+    ScheduleOccurrenceOutcome, ScheduleSnapshot, StoredSchedule, occurrence_id,
+};
 use crate::orchestration_scheduler::OrchestrationScheduler;
 use crate::orchestration_store::{
     OrchestrationStore, StoreError, StoredDefinition, WorkspaceOrchestration,
 };
 use crate::state::HostState;
+use chrono::{DateTime, Utc};
 use piui_orchestration::{
     AgentProfile, AgentRequestKind, AuthenticatedSender, CompletionOutcome, ControlledSpawnLease,
     Coordinator, CoordinatorError, FailureRecord, Harness, LaunchCommandReference, LaunchRequest,
     MessageIntent, NativeBridgeCapabilities, NativeExecutionReference, NativeHistoryReference,
-    PipelineDefinition, Run, RunDefinitionSnapshot, TaskStatus, TeamDefinition,
+    PipelineDefinition, Run, RunDefinitionSnapshot, RunStatus, TaskStatus, TeamDefinition,
     UncertainResolution, UncertaintyIdentity, authorize_coordinator_tool, authorize_observe,
     authorize_send, validate_profile_capabilities,
 };
@@ -27,7 +32,7 @@ use tauri::{AppHandle, Emitter, State};
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OrchestrationApiError {
-    code: &'static str,
+    pub(crate) code: &'static str,
 }
 
 impl OrchestrationApiError {
@@ -99,6 +104,7 @@ fn scheduler_error(
 }
 
 pub const ORCHESTRATION_EVENT_V4: &str = "piui://orchestration-event";
+pub const ORCHESTRATION_SCHEDULE_EVENT_V7: &str = "piui://orchestration-schedule-event";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -111,7 +117,7 @@ pub struct OrchestrationRunChangedEventV4 {
     pub revision: u64,
 }
 
-pub fn emit_run_changed(app: &AppHandle, workspace_id: &str, run: &Run) {
+pub fn emit_run_changed<R: tauri::Runtime>(app: &AppHandle<R>, workspace_id: &str, run: &Run) {
     let _ = app.emit(
         ORCHESTRATION_EVENT_V4,
         OrchestrationRunChangedEventV4 {
@@ -120,6 +126,35 @@ pub fn emit_run_changed(app: &AppHandle, workspace_id: &str, run: &Run) {
             workspace_id: workspace_id.to_owned(),
             run_id: run.id().to_owned(),
             revision: run.revision(),
+        },
+    );
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OrchestrationScheduleChangedEventV7 {
+    pub protocol: u8,
+    #[serde(rename = "type")]
+    pub event_type: &'static str,
+    pub workspace_id: String,
+    pub schedule_id: String,
+    pub revision: u64,
+}
+
+pub fn emit_schedule_changed<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    workspace_id: &str,
+    schedule_id: &str,
+    revision: u64,
+) {
+    let _ = app.emit(
+        ORCHESTRATION_SCHEDULE_EVENT_V7,
+        OrchestrationScheduleChangedEventV7 {
+            protocol: 7,
+            event_type: "scheduleChanged",
+            workspace_id: workspace_id.to_owned(),
+            schedule_id: schedule_id.to_owned(),
+            revision,
         },
     );
 }
@@ -171,6 +206,189 @@ impl OrchestrationApiState {
         let mut store = self.lock()?;
         store
             .transact(|workspaces| create_run_in(workspaces, request))
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn next_schedule_due(&self) -> Result<Option<DateTime<Utc>>, OrchestrationApiError> {
+        let store = self.lock()?;
+        Ok(store
+            .workspaces()
+            .iter()
+            .flat_map(|workspace| workspace.schedules.iter())
+            .filter(|schedule| schedule.enabled)
+            .filter_map(|schedule| schedule.next_due_at)
+            .min())
+    }
+
+    pub(crate) fn due_schedule_keys(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<(String, String, u64)>, OrchestrationApiError> {
+        let store = self.lock()?;
+        let mut due = Vec::new();
+        for workspace in store.workspaces() {
+            for schedule in &workspace.schedules {
+                if schedule.enabled && schedule.next_due_at.is_some_and(|value| value <= now) {
+                    due.push((
+                        workspace.workspace_id.clone(),
+                        schedule.value.id.clone(),
+                        schedule.revision,
+                    ));
+                }
+            }
+        }
+        due.sort();
+        Ok(due)
+    }
+
+    pub(crate) fn recoverable_schedule_runs(
+        &self,
+    ) -> Result<Vec<(String, String)>, OrchestrationApiError> {
+        let store = self.lock()?;
+        let mut result = Vec::new();
+        for workspace in store.workspaces() {
+            for schedule in &workspace.schedules {
+                for run_id in schedule
+                    .occurrences
+                    .iter()
+                    .filter(|occurrence| occurrence.outcome == ScheduleOccurrenceOutcome::Started)
+                    .filter_map(|occurrence| occurrence.run_id.as_deref())
+                {
+                    let Some(run) = workspace.runs.iter().find(|run| run.id() == run_id) else {
+                        continue;
+                    };
+                    let has_ready = run.tasks().iter().any(|task| {
+                        task.status() == TaskStatus::Ready && task.lease_id().is_none()
+                    });
+                    let crossed_native_boundary = run.tasks().iter().any(|task| {
+                        matches!(task.status(), TaskStatus::Running | TaskStatus::Uncertain)
+                            || task.lease_id().is_some()
+                    });
+                    if run.status() == RunStatus::Running && has_ready && !crossed_native_boundary {
+                        result.push((workspace.workspace_id.clone(), run_id.to_owned()));
+                    }
+                }
+            }
+        }
+        result.sort();
+        result.dedup();
+        Ok(result)
+    }
+
+    pub(crate) fn claim_due_schedule(
+        &self,
+        workspace_id: &str,
+        schedule_id: &str,
+        expected_revision: u64,
+        now: DateTime<Utc>,
+        host_started_at: DateTime<Utc>,
+        admission_failure: Option<&str>,
+    ) -> Result<ScheduleClaim, OrchestrationApiError> {
+        let mut store = self.lock()?;
+        store
+            .transact(|workspaces| {
+                let workspace_index = workspaces
+                    .iter()
+                    .position(|workspace| workspace.workspace_id == workspace_id)
+                    .ok_or(StoreError::NotFound)?;
+                let schedule_index = workspaces[workspace_index]
+                    .schedules
+                    .iter()
+                    .position(|schedule| schedule.value.id == schedule_id)
+                    .ok_or(StoreError::NotFound)?;
+                let current = workspaces[workspace_index].schedules[schedule_index].clone();
+                if current.revision != expected_revision || !current.enabled {
+                    return Err(StoreError::Conflict);
+                }
+                let next_due = current.next_due_at.ok_or(StoreError::Conflict)?;
+                if next_due > now {
+                    return Err(StoreError::Conflict);
+                }
+                let current_launch_command_revision = workspaces[workspace_index]
+                    .launch_commands
+                    .iter()
+                    .find(|command| command.value.id == current.value.launch_command_id)
+                    .map(|command| command.revision);
+                let launch_command_changed =
+                    current.enabled_launch_command_revision != current_launch_command_revision;
+
+                let nominal_at = current
+                    .value
+                    .trigger
+                    .latest_at_or_before(now)
+                    .unwrap_or(next_due);
+                let missed = next_due < host_started_at || nominal_at > next_due;
+                let active_overlap = current.value.overlap_policy == OverlapPolicy::Skip
+                    && current.occurrences.iter().any(|occurrence| {
+                        occurrence.run_id.as_ref().is_some_and(|run_id| {
+                            workspaces[workspace_index]
+                                .runs
+                                .iter()
+                                .find(|run| run.id() == run_id)
+                                .is_some_and(|run| {
+                                    matches!(
+                                        run.status(),
+                                        RunStatus::Running | RunStatus::Uncertain
+                                    )
+                                })
+                        })
+                    });
+                let occurrence_key =
+                    occurrence_id(&current.value.id, current.trigger_revision, nominal_at);
+                let mut occurrence = ScheduleOccurrence {
+                    id: occurrence_key.clone(),
+                    nominal_at,
+                    recorded_at: now,
+                    outcome: ScheduleOccurrenceOutcome::Failed,
+                    run_id: None,
+                    failure_code: None,
+                };
+                let mut run = None;
+
+                if launch_command_changed {
+                    occurrence.failure_code = Some("launch-command-changed".to_owned());
+                } else if let Some(code) = admission_failure {
+                    occurrence.failure_code = Some(code.to_owned());
+                } else if active_overlap {
+                    occurrence.outcome = ScheduleOccurrenceOutcome::SkippedOverlap;
+                } else if missed && current.value.missed_run_policy == MissedRunPolicy::Skip {
+                    occurrence.outcome = ScheduleOccurrenceOutcome::SkippedMissed;
+                } else {
+                    let request = schedule_run_request(
+                        &workspaces[workspace_index],
+                        workspace_id,
+                        &current.value.launch_command_id,
+                        occurrence_key,
+                    );
+                    match request.and_then(|request| create_run_in(workspaces, request)) {
+                        Ok(created) => {
+                            occurrence.outcome = ScheduleOccurrenceOutcome::Started;
+                            occurrence.run_id = Some(created.id().to_owned());
+                            run = Some(created);
+                        }
+                        Err(error) => {
+                            occurrence.failure_code = Some(store_error_code(&error).to_owned());
+                        }
+                    }
+                }
+
+                let next = current.value.trigger.first_after(nominal_at);
+                let schedule = &mut workspaces[workspace_index].schedules[schedule_index];
+                schedule.revision = schedule
+                    .revision
+                    .checked_add(1)
+                    .ok_or(StoreError::Invalid)?;
+                schedule.next_due_at = next;
+                if next.is_none() || launch_command_changed {
+                    schedule.enabled = false;
+                    schedule.enabled_launch_command_revision = None;
+                }
+                schedule.occurrences.push(occurrence);
+                Ok(ScheduleClaim {
+                    schedule: schedule.snapshot(),
+                    run,
+                })
+            })
             .map_err(Into::into)
     }
 
@@ -872,6 +1090,31 @@ pub struct StartRunRequest {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SaveScheduleRequest {
+    pub workspace_id: String,
+    pub expected_revision: Option<u64>,
+    pub value: ScheduleDefinition,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ScheduleMutationRequest {
+    pub workspace_id: String,
+    pub id: String,
+    pub expected_revision: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetScheduleEnabledRequest {
+    pub workspace_id: String,
+    pub id: String,
+    pub expected_revision: u64,
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunRequest {
     pub workspace_id: String,
     pub run_id: String,
@@ -950,6 +1193,11 @@ pub struct RunSummary {
     pub pipeline_name: String,
 }
 
+pub(crate) struct ScheduleClaim {
+    pub schedule: ScheduleSnapshot,
+    pub run: Option<Run>,
+}
+
 trait DefinitionValue: Clone + Sized {
     fn id(&self) -> &str;
     fn name(&self) -> &str;
@@ -957,6 +1205,13 @@ trait DefinitionValue: Clone + Sized {
     fn values_mut(workspace: &mut WorkspaceOrchestration) -> &mut Vec<StoredDefinition<Self>>;
     fn valid_for_workspace(&self, workspace: &WorkspaceOrchestration) -> bool;
     fn can_delete(workspace: &WorkspaceOrchestration, id: &str) -> bool;
+    fn after_save(
+        _workspace: &mut WorkspaceOrchestration,
+        _previous: Option<&StoredDefinition<Self>>,
+        _saved: &StoredDefinition<Self>,
+    ) -> Result<(), StoreError> {
+        Ok(())
+    }
 }
 
 impl DefinitionValue for AgentProfile {
@@ -1105,8 +1360,44 @@ impl DefinitionValue for LaunchCommandReference {
                 .iter()
                 .any(|pipeline| pipeline.value.id == self.pipeline_id)
     }
-    fn can_delete(_workspace: &WorkspaceOrchestration, _id: &str) -> bool {
-        true
+    fn can_delete(workspace: &WorkspaceOrchestration, id: &str) -> bool {
+        !workspace
+            .schedules
+            .iter()
+            .any(|schedule| schedule.value.launch_command_id == id)
+    }
+    fn after_save(
+        workspace: &mut WorkspaceOrchestration,
+        previous: Option<&StoredDefinition<Self>>,
+        saved: &StoredDefinition<Self>,
+    ) -> Result<(), StoreError> {
+        let Some(previous) = previous else {
+            return Ok(());
+        };
+        let execution_changed = previous.value.team_id != saved.value.team_id
+            || previous.value.pipeline_id != saved.value.pipeline_id;
+        for schedule in workspace
+            .schedules
+            .iter_mut()
+            .filter(|schedule| schedule.value.launch_command_id == saved.value.id)
+        {
+            if execution_changed && schedule.enabled {
+                schedule.revision = schedule
+                    .revision
+                    .checked_add(1)
+                    .ok_or(StoreError::Invalid)?;
+                schedule.trigger_revision = schedule
+                    .trigger_revision
+                    .checked_add(1)
+                    .ok_or(StoreError::Invalid)?;
+                schedule.enabled = false;
+                schedule.enabled_launch_command_revision = None;
+                schedule.next_due_at = Some(schedule.value.trigger.initial_due());
+            } else if schedule.enabled {
+                schedule.enabled_launch_command_revision = Some(saved.revision);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1128,7 +1419,7 @@ fn validate_workspace_scope(
         .map_err(|_| OrchestrationApiError::not_found())
 }
 
-fn validate_live_workspace_scope(
+pub(crate) fn validate_live_workspace_scope(
     host_state: &HostState,
     workspace_id: &str,
 ) -> Result<(), OrchestrationApiError> {
@@ -1139,6 +1430,16 @@ fn validate_live_workspace_scope(
     verified_project_directory(host_state, workspace_id, true)
         .map(|_| ())
         .map_err(|_| OrchestrationApiError::runtime_unavailable())
+}
+
+fn validate_schedule_mutation_scope(
+    host_state: &HostState,
+    workspace_id: &str,
+) -> Result<(), OrchestrationApiError> {
+    if host_state.safe_mode || host_state.is_shutting_down() {
+        return Err(OrchestrationApiError::runtime_unavailable());
+    }
+    validate_workspace_scope(host_state, workspace_id)
 }
 
 fn get_definition<T: DefinitionValue>(
@@ -1186,7 +1487,8 @@ fn save_definition<T: DefinitionValue>(
             let existing = T::values(workspace)
                 .iter()
                 .position(|stored| stored.value.id() == value.id());
-            match (existing, expected_revision) {
+            let previous = existing.map(|index| T::values(workspace)[index].clone());
+            let saved = match (existing, expected_revision) {
                 (None, None) => {
                     let stored = StoredDefinition { revision: 0, value };
                     T::values_mut(workspace).push(stored.clone());
@@ -1204,7 +1506,9 @@ fn save_definition<T: DefinitionValue>(
                     values[index] = stored.clone();
                     Ok(stored)
                 }
-            }
+            }?;
+            T::after_save(workspace, previous.as_ref(), &saved)?;
+            Ok(saved)
         })
         .map_err(Into::into)
 }
@@ -1233,6 +1537,164 @@ fn delete_definition<T: DefinitionValue>(
                 return Err(StoreError::Conflict);
             }
             values.remove(index);
+            Ok(())
+        })
+        .map_err(Into::into)
+}
+
+fn save_schedule(
+    state: &OrchestrationApiState,
+    request: SaveScheduleRequest,
+) -> Result<ScheduleSnapshot, OrchestrationApiError> {
+    validate_workspace_id(&request.workspace_id)?;
+    if !request.value.validate() {
+        return Err(OrchestrationApiError::invalid());
+    }
+    let mut store = state.lock()?;
+    store
+        .transact(|workspaces| {
+            let workspace = workspaces
+                .iter_mut()
+                .find(|workspace| workspace.workspace_id == request.workspace_id)
+                .ok_or(StoreError::NotFound)?;
+            if !workspace
+                .launch_commands
+                .iter()
+                .any(|command| command.value.id == request.value.launch_command_id)
+            {
+                return Err(StoreError::Invalid);
+            }
+            let existing = workspace
+                .schedules
+                .iter()
+                .position(|schedule| schedule.value.id == request.value.id);
+            match (existing, request.expected_revision) {
+                (None, None) => {
+                    let stored = StoredSchedule {
+                        revision: 0,
+                        trigger_revision: 0,
+                        next_due_at: Some(request.value.trigger.initial_due()),
+                        value: request.value,
+                        enabled: false,
+                        enabled_launch_command_revision: None,
+                        occurrences: Vec::new(),
+                    };
+                    let snapshot = stored.snapshot();
+                    workspace.schedules.push(stored);
+                    Ok(snapshot)
+                }
+                (None, Some(_)) => Err(StoreError::NotFound),
+                (Some(_), None) => Err(StoreError::AlreadyExists),
+                (Some(index), Some(expected_revision)) => {
+                    let current = &workspace.schedules[index];
+                    if current.revision != expected_revision {
+                        return Err(StoreError::Conflict);
+                    }
+                    let execution_changed = !current.value.execution_equals(&request.value);
+                    let mut stored = current.clone();
+                    stored.revision = stored.revision.checked_add(1).ok_or(StoreError::Invalid)?;
+                    stored.value = request.value;
+                    if execution_changed {
+                        stored.trigger_revision = stored
+                            .trigger_revision
+                            .checked_add(1)
+                            .ok_or(StoreError::Invalid)?;
+                        stored.enabled = false;
+                        stored.enabled_launch_command_revision = None;
+                        stored.next_due_at = Some(stored.value.trigger.initial_due());
+                    }
+                    let snapshot = stored.snapshot();
+                    workspace.schedules[index] = stored;
+                    Ok(snapshot)
+                }
+            }
+        })
+        .map_err(Into::into)
+}
+
+fn set_schedule_enabled(
+    state: &OrchestrationApiState,
+    request: SetScheduleEnabledRequest,
+) -> Result<ScheduleSnapshot, OrchestrationApiError> {
+    validate_workspace_id(&request.workspace_id)?;
+    let mut store = state.lock()?;
+    store
+        .transact(|workspaces| {
+            let workspace = workspaces
+                .iter_mut()
+                .find(|workspace| workspace.workspace_id == request.workspace_id)
+                .ok_or(StoreError::NotFound)?;
+            let schedule_index = workspace
+                .schedules
+                .iter()
+                .position(|schedule| schedule.value.id == request.id)
+                .ok_or(StoreError::NotFound)?;
+            let schedule = &workspace.schedules[schedule_index];
+            if schedule.revision != request.expected_revision {
+                return Err(StoreError::Conflict);
+            }
+            let launch_command_revision = workspace
+                .launch_commands
+                .iter()
+                .find(|command| {
+                    command.value.id == schedule.value.launch_command_id
+                        && workspace
+                            .teams
+                            .iter()
+                            .any(|team| team.value.id == command.value.team_id)
+                        && workspace
+                            .pipelines
+                            .iter()
+                            .any(|pipeline| pipeline.value.id == command.value.pipeline_id)
+                })
+                .map(|command| command.revision);
+            if request.enabled
+                && (schedule.next_due_at.is_none() || launch_command_revision.is_none())
+            {
+                return Err(StoreError::Invalid);
+            }
+            let schedule = &mut workspace.schedules[schedule_index];
+            let enabled_launch_command_revision = if request.enabled {
+                launch_command_revision
+            } else {
+                None
+            };
+            if schedule.enabled != request.enabled
+                || schedule.enabled_launch_command_revision != enabled_launch_command_revision
+            {
+                schedule.revision = schedule
+                    .revision
+                    .checked_add(1)
+                    .ok_or(StoreError::Invalid)?;
+                schedule.enabled = request.enabled;
+                schedule.enabled_launch_command_revision = enabled_launch_command_revision;
+            }
+            Ok(schedule.snapshot())
+        })
+        .map_err(Into::into)
+}
+
+fn delete_schedule(
+    state: &OrchestrationApiState,
+    request: &ScheduleMutationRequest,
+) -> Result<(), OrchestrationApiError> {
+    validate_workspace_id(&request.workspace_id)?;
+    let mut store = state.lock()?;
+    store
+        .transact(|workspaces| {
+            let workspace = workspaces
+                .iter_mut()
+                .find(|workspace| workspace.workspace_id == request.workspace_id)
+                .ok_or(StoreError::NotFound)?;
+            let index = workspace
+                .schedules
+                .iter()
+                .position(|schedule| schedule.value.id == request.id)
+                .ok_or(StoreError::NotFound)?;
+            if workspace.schedules[index].revision != request.expected_revision {
+                return Err(StoreError::Conflict);
+            }
+            workspace.schedules.remove(index);
             Ok(())
         })
         .map_err(Into::into)
@@ -1358,6 +1820,90 @@ definition_commands!(
     orchestration_delete_launch_command_v6,
     LaunchCommandReference
 );
+
+#[tauri::command]
+pub fn orchestration_list_schedules_v7(
+    state: State<'_, OrchestrationApiState>,
+    host_state: State<'_, HostState>,
+    request: WorkspaceRequest,
+) -> Result<Vec<ScheduleSnapshot>, OrchestrationApiError> {
+    validate_workspace_scope(&host_state, &request.workspace_id)?;
+    let store = state.lock()?;
+    let mut schedules: Vec<_> = store
+        .workspace(&request.workspace_id)
+        .map(|workspace| {
+            workspace
+                .schedules
+                .iter()
+                .map(StoredSchedule::snapshot)
+                .collect()
+        })
+        .unwrap_or_default();
+    schedules.sort_by(|left, right| {
+        left.value
+            .name
+            .cmp(&right.value.name)
+            .then(left.value.id.cmp(&right.value.id))
+    });
+    Ok(schedules)
+}
+
+#[tauri::command]
+pub async fn orchestration_save_schedule_v7(
+    state: State<'_, OrchestrationApiState>,
+    scheduler: State<'_, OrchestrationScheduler>,
+    host_state: State<'_, HostState>,
+    app: AppHandle,
+    request: SaveScheduleRequest,
+) -> Result<ScheduleSnapshot, OrchestrationApiError> {
+    let _operation = host_state.live_runtime_operation_gate.lock().await;
+    validate_schedule_mutation_scope(&host_state, &request.workspace_id)?;
+    let workspace_id = request.workspace_id.clone();
+    let schedule_id = request.value.id.clone();
+    let saved = save_schedule(&state, request)?;
+    emit_schedule_changed(&app, &workspace_id, &schedule_id, saved.revision);
+    scheduler.wake_timed_schedules();
+    Ok(saved)
+}
+
+#[tauri::command]
+pub async fn orchestration_set_schedule_enabled_v7(
+    state: State<'_, OrchestrationApiState>,
+    scheduler: State<'_, OrchestrationScheduler>,
+    host_state: State<'_, HostState>,
+    app: AppHandle,
+    request: SetScheduleEnabledRequest,
+) -> Result<ScheduleSnapshot, OrchestrationApiError> {
+    let _operation = host_state.live_runtime_operation_gate.lock().await;
+    if request.enabled {
+        validate_live_workspace_scope(&host_state, &request.workspace_id)?;
+    } else {
+        validate_schedule_mutation_scope(&host_state, &request.workspace_id)?;
+    }
+    let workspace_id = request.workspace_id.clone();
+    let schedule_id = request.id.clone();
+    let saved = set_schedule_enabled(&state, request)?;
+    emit_schedule_changed(&app, &workspace_id, &schedule_id, saved.revision);
+    scheduler.wake_timed_schedules();
+    Ok(saved)
+}
+
+#[tauri::command]
+pub async fn orchestration_delete_schedule_v7(
+    state: State<'_, OrchestrationApiState>,
+    scheduler: State<'_, OrchestrationScheduler>,
+    host_state: State<'_, HostState>,
+    app: AppHandle,
+    request: ScheduleMutationRequest,
+) -> Result<(), OrchestrationApiError> {
+    let _operation = host_state.live_runtime_operation_gate.lock().await;
+    validate_schedule_mutation_scope(&host_state, &request.workspace_id)?;
+    let next_revision = request.expected_revision.saturating_add(1);
+    delete_schedule(&state, &request)?;
+    emit_schedule_changed(&app, &request.workspace_id, &request.id, next_revision);
+    scheduler.wake_timed_schedules();
+    Ok(())
+}
 
 #[tauri::command]
 pub fn orchestration_list_runs_v6(
@@ -1699,6 +2245,38 @@ fn create_run_in(
     Ok(run)
 }
 
+fn schedule_run_request(
+    workspace: &WorkspaceOrchestration,
+    workspace_id: &str,
+    launch_command_id: &str,
+    run_id: String,
+) -> Result<StartRunRequest, StoreError> {
+    let command = workspace
+        .launch_commands
+        .iter()
+        .find(|command| command.value.id == launch_command_id)
+        .map(|command| &command.value)
+        .ok_or(StoreError::NotFound)?;
+    Ok(StartRunRequest {
+        workspace_id: workspace_id.to_owned(),
+        run_id,
+        team_id: command.team_id.clone(),
+        pipeline_id: command.pipeline_id.clone(),
+        launch_command_id: Some(command.id.clone()),
+    })
+}
+
+fn store_error_code(error: &StoreError) -> &'static str {
+    match error {
+        StoreError::Conflict => "conflict",
+        StoreError::AlreadyExists => "already-exists",
+        StoreError::NotFound => "not-found",
+        StoreError::Invalid => "invalid",
+        StoreError::Denied => "denied",
+        StoreError::Io(_) => "io",
+    }
+}
+
 fn retry_uncertain_in(
     workspaces: &mut [WorkspaceOrchestration],
     request: RetryUncertainTaskRequest,
@@ -1982,25 +2560,28 @@ fn put_graph_definition<T: DefinitionValue>(
     if request.workspace_id != workspace.workspace_id {
         return Err(StoreError::Invalid);
     }
-    let values = T::values_mut(workspace);
-    match (
-        values
-            .iter()
-            .position(|stored| stored.value.id() == request.value.id()),
-        request.expected_revision,
-    ) {
-        (None, None) => values.push(StoredDefinition {
+    let existing = T::values(workspace)
+        .iter()
+        .position(|stored| stored.value.id() == request.value.id());
+    let previous = existing.map(|index| T::values(workspace)[index].clone());
+    let saved = match (existing, request.expected_revision) {
+        (None, None) => StoredDefinition {
             revision: 0,
             value: request.value,
-        }),
-        (Some(index), Some(expected)) if values[index].revision == expected => {
-            values[index] = StoredDefinition {
+        },
+        (Some(index), Some(expected)) if T::values(workspace)[index].revision == expected => {
+            StoredDefinition {
                 revision: expected.checked_add(1).ok_or(StoreError::Invalid)?,
                 value: request.value,
-            };
+            }
         }
         _ => return Err(StoreError::Conflict),
+    };
+    match existing {
+        Some(index) => T::values_mut(workspace)[index] = saved.clone(),
+        None => T::values_mut(workspace).push(saved.clone()),
     }
+    T::after_save(workspace, previous.as_ref(), &saved)?;
     Ok(())
 }
 
@@ -2107,5 +2688,344 @@ mod graph_tests {
         );
         assert!(!workspace.profiles[0].value.resource_rules[0].enabled);
         assert_eq!(workspace.launch_commands.len(), 1);
+    }
+
+    #[test]
+    fn due_schedule_atomically_creates_one_run_and_skips_overlap() {
+        let root = std::env::temp_dir().join(format!("piui-schedule-{}", uuid::Uuid::new_v4()));
+        let state = OrchestrationApiState::open(&root).unwrap();
+        save_graph(&state, request()).unwrap();
+        let anchor: DateTime<Utc> = "2026-09-09T10:00:00Z".parse().unwrap();
+        let saved = save_schedule(
+            &state,
+            SaveScheduleRequest {
+                workspace_id: "workspace".into(),
+                expected_revision: None,
+                value: ScheduleDefinition {
+                    id: "schedule".into(),
+                    name: "Every hour".into(),
+                    launch_command_id: "command".into(),
+                    trigger: crate::orchestration_schedule::ScheduleTrigger::Interval {
+                        every: 1,
+                        unit: crate::orchestration_schedule::IntervalUnit::Hours,
+                        anchor_at: anchor,
+                        time_zone: "UTC".into(),
+                    },
+                    missed_run_policy: MissedRunPolicy::Coalesce,
+                    overlap_policy: OverlapPolicy::Skip,
+                },
+            },
+        )
+        .unwrap();
+        assert!(!saved.enabled);
+        let enabled = set_schedule_enabled(
+            &state,
+            SetScheduleEnabledRequest {
+                workspace_id: "workspace".into(),
+                id: "schedule".into(),
+                expected_revision: saved.revision,
+                enabled: true,
+            },
+        )
+        .unwrap();
+        let first = state
+            .claim_due_schedule(
+                "workspace",
+                "schedule",
+                enabled.revision,
+                anchor,
+                anchor,
+                None,
+            )
+            .unwrap();
+        let run_id = first.run.as_ref().unwrap().id().to_owned();
+        assert_eq!(
+            first
+                .schedule
+                .last_occurrence
+                .as_ref()
+                .unwrap()
+                .run_id
+                .as_deref(),
+            Some(run_id.as_str())
+        );
+        assert!(
+            state
+                .claim_due_schedule(
+                    "workspace",
+                    "schedule",
+                    enabled.revision,
+                    anchor,
+                    anchor,
+                    None,
+                )
+                .is_err()
+        );
+
+        let next = first.schedule.next_due_at.unwrap();
+        let overlap = state
+            .claim_due_schedule(
+                "workspace",
+                "schedule",
+                first.schedule.revision,
+                next,
+                anchor,
+                None,
+            )
+            .unwrap();
+        assert!(overlap.run.is_none());
+        assert_eq!(
+            overlap.schedule.last_occurrence.unwrap().outcome,
+            ScheduleOccurrenceOutcome::SkippedOverlap
+        );
+        drop(state);
+
+        let reopened = OrchestrationApiState::open(&root).unwrap();
+        assert_eq!(
+            reopened.recoverable_schedule_runs().unwrap(),
+            vec![("workspace".into(), run_id.clone())]
+        );
+        let store = reopened.lock().unwrap();
+        let workspace = store.workspace("workspace").unwrap();
+        assert_eq!(workspace.runs.len(), 1);
+        assert_eq!(workspace.runs[0].id(), run_id);
+        assert_eq!(workspace.schedules[0].occurrences.len(), 2);
+        drop(store);
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn launch_target_change_disables_schedule_until_explicit_reenable() {
+        let root = std::env::temp_dir().join(format!(
+            "piui-schedule-target-change-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let state = OrchestrationApiState::open(&root).unwrap();
+        save_graph(&state, request()).unwrap();
+        let at: DateTime<Utc> = "2026-09-09T10:00:00Z".parse().unwrap();
+        let saved = save_schedule(
+            &state,
+            SaveScheduleRequest {
+                workspace_id: "workspace".into(),
+                expected_revision: None,
+                value: ScheduleDefinition {
+                    id: "schedule".into(),
+                    name: "Schedule".into(),
+                    launch_command_id: "command".into(),
+                    trigger: crate::orchestration_schedule::ScheduleTrigger::Once {
+                        at,
+                        time_zone: "UTC".into(),
+                    },
+                    missed_run_policy: MissedRunPolicy::Coalesce,
+                    overlap_policy: OverlapPolicy::Skip,
+                },
+            },
+        )
+        .unwrap();
+        let enabled = set_schedule_enabled(
+            &state,
+            SetScheduleEnabledRequest {
+                workspace_id: "workspace".into(),
+                id: "schedule".into(),
+                expected_revision: saved.revision,
+                enabled: true,
+            },
+        )
+        .unwrap();
+        assert!(enabled.enabled);
+
+        let mut second_pipeline = request().pipeline.value;
+        second_pipeline.id = "pipeline-2".into();
+        second_pipeline.name = "Second pipeline".into();
+        save_definition(
+            &state,
+            SaveDefinitionRequest {
+                workspace_id: "workspace".into(),
+                expected_revision: None,
+                value: second_pipeline,
+            },
+        )
+        .unwrap();
+        let mut retargeted_command = request().command.value;
+        retargeted_command.pipeline_id = "pipeline-2".into();
+        save_definition(
+            &state,
+            SaveDefinitionRequest {
+                workspace_id: "workspace".into(),
+                expected_revision: Some(0),
+                value: retargeted_command,
+            },
+        )
+        .unwrap();
+
+        let store = state.lock().unwrap();
+        let schedule = &store.workspace("workspace").unwrap().schedules[0];
+        assert!(!schedule.enabled);
+        assert_eq!(schedule.trigger_revision, 1);
+        assert_eq!(schedule.enabled_launch_command_revision, None);
+        assert_eq!(schedule.next_due_at, Some(at));
+        drop(store);
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missed_skip_and_admission_failure_advance_without_creating_runs() {
+        let root =
+            std::env::temp_dir().join(format!("piui-schedule-failure-{}", uuid::Uuid::new_v4()));
+        let state = OrchestrationApiState::open(&root).unwrap();
+        save_graph(&state, request()).unwrap();
+        let anchor: DateTime<Utc> = "2026-09-09T10:00:00Z".parse().unwrap();
+        let saved = save_schedule(
+            &state,
+            SaveScheduleRequest {
+                workspace_id: "workspace".into(),
+                expected_revision: None,
+                value: ScheduleDefinition {
+                    id: "missed".into(),
+                    name: "Skip missed".into(),
+                    launch_command_id: "command".into(),
+                    trigger: crate::orchestration_schedule::ScheduleTrigger::Interval {
+                        every: 1,
+                        unit: crate::orchestration_schedule::IntervalUnit::Hours,
+                        anchor_at: anchor,
+                        time_zone: "UTC".into(),
+                    },
+                    missed_run_policy: MissedRunPolicy::Skip,
+                    overlap_policy: OverlapPolicy::Allow,
+                },
+            },
+        )
+        .unwrap();
+        let enabled = set_schedule_enabled(
+            &state,
+            SetScheduleEnabledRequest {
+                workspace_id: "workspace".into(),
+                id: "missed".into(),
+                expected_revision: saved.revision,
+                enabled: true,
+            },
+        )
+        .unwrap();
+        let now: DateTime<Utc> = "2026-09-09T12:30:00Z".parse().unwrap();
+        let host_start: DateTime<Utc> = "2026-09-09T12:00:00Z".parse().unwrap();
+        let missed = state
+            .claim_due_schedule(
+                "workspace",
+                "missed",
+                enabled.revision,
+                now,
+                host_start,
+                None,
+            )
+            .unwrap();
+        assert!(missed.run.is_none());
+        assert_eq!(
+            missed.schedule.last_occurrence.unwrap().outcome,
+            ScheduleOccurrenceOutcome::SkippedMissed
+        );
+        assert_eq!(
+            missed.schedule.next_due_at,
+            Some("2026-09-09T13:00:00Z".parse().unwrap())
+        );
+
+        let due = missed.schedule.next_due_at.unwrap();
+        let denied = state
+            .claim_due_schedule(
+                "workspace",
+                "missed",
+                missed.schedule.revision,
+                due,
+                host_start,
+                Some("runtime-unavailable"),
+            )
+            .unwrap();
+        assert!(denied.run.is_none());
+        assert_eq!(
+            denied
+                .schedule
+                .last_occurrence
+                .as_ref()
+                .unwrap()
+                .failure_code
+                .as_deref(),
+            Some("runtime-unavailable")
+        );
+        assert!(
+            state
+                .lock()
+                .unwrap()
+                .workspace("workspace")
+                .unwrap()
+                .runs
+                .is_empty()
+        );
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn durable_schedule_claim_failure_keeps_due_occurrence_unclaimed() {
+        let root =
+            std::env::temp_dir().join(format!("piui-schedule-claim-io-{}", uuid::Uuid::new_v4()));
+        let state = OrchestrationApiState::open(&root).unwrap();
+        save_graph(&state, request()).unwrap();
+        let at: DateTime<Utc> = "2026-09-09T10:00:00Z".parse().unwrap();
+        let saved = save_schedule(
+            &state,
+            SaveScheduleRequest {
+                workspace_id: "workspace".into(),
+                expected_revision: None,
+                value: ScheduleDefinition {
+                    id: "io-failure".into(),
+                    name: "IO failure".into(),
+                    launch_command_id: "command".into(),
+                    trigger: crate::orchestration_schedule::ScheduleTrigger::Once {
+                        at,
+                        time_zone: "UTC".into(),
+                    },
+                    missed_run_policy: MissedRunPolicy::Coalesce,
+                    overlap_policy: OverlapPolicy::Skip,
+                },
+            },
+        )
+        .unwrap();
+        let enabled = set_schedule_enabled(
+            &state,
+            SetScheduleEnabledRequest {
+                workspace_id: "workspace".into(),
+                id: "io-failure".into(),
+                expected_revision: saved.revision,
+                enabled: true,
+            },
+        )
+        .unwrap();
+
+        let journal = root.join("orchestration-v1");
+        std::fs::remove_dir_all(&journal).unwrap();
+        std::fs::write(&journal, b"blocks generation creation").unwrap();
+        let error = match state.claim_due_schedule(
+            "workspace",
+            "io-failure",
+            enabled.revision,
+            at,
+            at,
+            None,
+        ) {
+            Ok(_) => panic!("the blocked journal unexpectedly accepted a schedule claim"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "io");
+        let store = state.lock().unwrap();
+        let workspace = store.workspace("workspace").unwrap();
+        assert!(workspace.runs.is_empty());
+        assert!(workspace.schedules[0].occurrences.is_empty());
+        assert_eq!(workspace.schedules[0].revision, enabled.revision);
+        assert_eq!(workspace.schedules[0].next_due_at, Some(at));
+        drop(store);
+        drop(state);
+        std::fs::remove_file(journal).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -347,6 +347,7 @@ fn profile(id: &str, harness: Harness, allowed: &[&str]) -> AgentProfile {
         model_provider: Some("example-provider".to_owned()),
         model: format!("{id}-model"),
         permission_mode: PermissionMode::ReadOnly,
+        network_access: false,
         base_instructions: None,
         reasoning: None,
         service_tier: None,
@@ -1042,6 +1043,10 @@ fn child_authority_cannot_widen_files_tools_resources_or_delegation() {
     });
     assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_err());
     definition.profiles[1].resource_rules = definition.profiles[0].resource_rules.clone();
+    assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_ok());
+    definition.profiles[1].network_access = true;
+    assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_err());
+    definition.profiles[0].network_access = true;
     assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_ok());
     definition.profiles[1]
         .allowed_spawn_profile_ids

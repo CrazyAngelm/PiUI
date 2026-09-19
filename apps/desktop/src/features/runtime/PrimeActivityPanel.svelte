@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../locale/language';
   import type { PrimeActivity } from '../../host-api/types';
   import {
     primeActivityDetail,
@@ -11,16 +12,16 @@
 </script>
 
 {#if activities.length > 0}
-  <details class="prime-activity" aria-label="Prime Agent activity">
+  <details class="prime-activity" aria-label={$t("Prime Agent activity")}>
     <summary>
       <span class="activity-mark" aria-hidden="true"></span>
-      <span>Prime activity</span>
+      <span>{$t("Prime activity")}</span>
       <span
         class="activity-count"
         role="status"
         aria-live="polite"
         aria-atomic="true"
-        aria-label={`${activities.length} Prime Agent activities`}
+        aria-label={$t("{0} Prime Agent activities", [activities.length])}
       >{activities.length}</span>
       <span class="activity-chevron" aria-hidden="true">›</span>
     </summary>

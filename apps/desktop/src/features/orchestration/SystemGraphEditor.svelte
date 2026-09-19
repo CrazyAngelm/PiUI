@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { connectAgents, visibleConnections, type ConnectionDirection } from './graphConnections';
   import { preflightGraph, type PreflightIssue } from './graphPreflight';
   import { performRunAction } from './runActions';
   import { onMount } from 'svelte';
@@ -32,6 +33,14 @@
   let from = '';
   let to = '';
   let kind: ConnectionKind = 'result';
+  let direction: ConnectionDirection = 'forward';
+  let world: HTMLDivElement;
+  let connectionStart: { id: string; side: 'in' | 'out' } | undefined;
+  let connectionPoint: { x: number; y: number } | undefined;
+  let connectionPointer: number | undefined;
+  let connectionError = '';
+  $: renderedEdges = visibleConnections(graph.edges);
+  $: if (kind === 'result' && direction === 'both') direction = 'forward';
   let zoom = 1;
   let inspectorWidth = 320;
   let taskExpanded = false;
@@ -46,12 +55,12 @@
   let modelsLoading = false;
   let modelsError = '';
   let modelRequest = 0;
-  async function loadModels(harness: AgentProfile['harness']): Promise<void> {
+  async function loadModels(harness: AgentProfile['harness'], refresh = false): Promise<void> {
     catalogHarness = harness;
     const request = ++modelRequest;
     modelsLoading = true; modelsError = '';
     try {
-      const catalog = await harnessModels({ workspaceId, harness });
+      const catalog = await harnessModels({ workspaceId, harness }, refresh);
       if (mounted && request === modelRequest) {
         modelCatalogs = { ...modelCatalogs, [harness]: catalog.models };
         resourceCatalogs = { ...resourceCatalogs, [harness]: catalog.resources };
@@ -101,7 +110,53 @@
   function updateProfile(change: Partial<AgentProfile>): void { if (selected) updateNode(selected.id, { profile: { ...selected.profile, ...change } }); }
   function add(): void { const node = newGraphNode(graph.nodes.length); graph = { ...graph, nodes: [...graph.nodes, node] }; selectedId = node.id; }
   function remove(): void { graph = { ...graph, nodes: graph.nodes.filter(node => node.id !== selectedId), edges: graph.edges.filter(edge => edge.from !== selectedId && edge.to !== selectedId) }; selectedId = ''; }
-  function connect(): void { if (!from || !to || (from === to && kind !== 'spawn')) return; if (graph.edges.some(edge => edge.from === from && edge.to === to && edge.kind === kind)) return; graph = { ...graph, edges: [...graph.edges, { from, to, kind }] }; }
+  function connect(): void {
+    if (safeMode || busy) return;
+    const result = connectAgents(graph, from, to, kind, direction);
+    connectionError = result.error ?? '';
+    if (!result.error) graph = { ...graph, edges: result.edges };
+  }
+  function cancelConnection(): void { connectionStart = undefined; connectionPoint = undefined; connectionPointer = undefined; }
+  function finishConnection(id: string, side: 'in' | 'out'): void {
+    if (!connectionStart || safeMode || busy) return;
+    if (connectionStart.side === side) { connectionError = 'Connect an output to an input.'; cancelConnection(); return; }
+    from = connectionStart.side === 'out' ? connectionStart.id : id;
+    to = connectionStart.side === 'in' ? connectionStart.id : id;
+    connect(); cancelConnection();
+  }
+  function portClick(event: MouseEvent, id: string, side: 'in' | 'out'): void {
+    if (safeMode || busy) return;
+    // Pointer gestures are handled on release; keyboard activation uses click.
+    if (event.detail !== 0) return;
+    if (connectionStart) finishConnection(id, side);
+    else { connectionStart = { id, side }; connectionError = ''; }
+  }
+  function portDown(event: PointerEvent, id: string, side: 'in' | 'out'): void {
+    if (safeMode || busy || event.button !== 0) return;
+    event.stopPropagation();
+    if (!connectionStart) { connectionStart = { id, side }; connectionError = ''; }
+    connectionPointer = event.pointerId;
+  }
+  function connectionMove(event: PointerEvent): void {
+    if (!connectionStart) return;
+    const bounds = world.getBoundingClientRect();
+    connectionPoint = { x: (event.clientX - bounds.left) / zoom, y: (event.clientY - bounds.top) / zoom };
+  }
+  function connectionUp(event: PointerEvent): void {
+    if (!connectionStart || connectionPointer !== event.pointerId) return;
+    connectionPointer = undefined;
+    const port = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-port]');
+    if (!port) { cancelConnection(); return; }
+    const id = port.dataset.nodeId, side = port.dataset.port;
+    if (!id || (side !== 'in' && side !== 'out')) { cancelConnection(); return; }
+    if (id !== connectionStart.id || side !== connectionStart.side) finishConnection(id, side);
+  }
+  function edgePath(source: GraphNode, target: GraphNode): string {
+    if (source.id === target.id) return `M ${source.x + 200} ${source.y + 48} C ${source.x + 260} ${source.y - 60}, ${source.x - 60} ${source.y - 60}, ${source.x} ${source.y + 48}`;
+    const sign = source.x <= target.x ? 1 : -1;
+    const x1 = source.x + (sign === 1 ? 200 : 0), x2 = target.x + (sign === 1 ? 0 : 200);
+    return `M ${x1} ${source.y + 48} C ${x1 + sign * 50} ${source.y + 48}, ${x2 - sign * 50} ${target.y + 48}, ${x2} ${target.y + 48}`;
+  }
   function arrange(): void { graph = { ...graph, nodes: graph.nodes.map((node, index) => ({ ...node, x: 60 + index * 280, y: 100 })) }; }
   function pointerDown(event: PointerEvent, node: GraphNode): void {
     selectedId = node.id;
@@ -143,7 +198,7 @@
   }
   async function checkSystem(): Promise<boolean> {
     preflightNotice = ''; preflightIssues = [];
-    const issues = await preflightGraph(graph, harness => harnessModels({ workspaceId, harness }));
+    const issues = await preflightGraph(graph, harness => harnessModels({ workspaceId, harness }, true));
     preflightIssues = issues;
     if (!issues.length) preflightNotice = 'Native settings verified. Launch permissions are checked again by the host.';
     return issues.length === 0;
@@ -176,6 +231,8 @@
   }
 </script>
 
+<svelte:window onpointermove={connectionMove} onpointerup={connectionUp} onpointercancel={cancelConnection} onkeydown={(event) => { if (event.key === 'Escape') cancelConnection(); }} />
+
 <section class="system-editor" inert={taskExpanded} aria-label={$t('Agent system')}>
   <header class="toolbar">
     <input class="system-name" aria-label={$t('Name')} placeholder={$t('Agent system')} bind:value={graph.name} disabled={safeMode || busy} />
@@ -201,17 +258,22 @@
       <div class="canvas-tools">
         <button onclick={add} disabled={safeMode || busy}>＋ {$t('Add agent')}</button>
         <select aria-label={$t('Pattern')} value="" onchange={(event) => { graph = { ...graph, edges: patternEdges(graph.nodes, event.currentTarget.value) }; event.currentTarget.value = ''; }} disabled={safeMode || busy || !graph.nodes.length}><option value="" disabled hidden>{$t('Pattern')}</option><option value="sequential">{$t('Sequential')}</option><option value="parallel">{$t('Parallel')}</option><option value="supervisor">{$t('Supervisor')}</option><option value="peer">{$t('Peer team')}</option></select>
+        <select aria-label={$t('Connection type')} bind:value={kind} disabled={safeMode || busy}><option value="result">{$t('Result dependency')}</option><option value="send">{$t('Messaging')}</option><option value="observe">{$t('Observation')}</option><option value="spawn">{$t('Delegation')}</option></select>
+        <select aria-label={$t('Direction')} bind:value={direction} disabled={safeMode || busy}><option value="forward">→ {$t('One way')}</option><option value="reverse">← {$t('Reverse')}</option><option value="both" disabled={kind === 'result'}>↔ {$t('Both ways')}</option></select>
         <button onclick={arrange} disabled={safeMode || busy}>{$t('Arrange')}</button>
-        <span class="spacer"></span><button aria-label={$t('Zoom out')} onclick={() => zoom = zoom / 1.2}>−</button><button aria-label={$t('Reset view')} onclick={() => zoom = 1}>{Math.round(zoom * 100)}%</button><button aria-label={$t('Zoom in')} onclick={() => zoom = zoom * 1.2}>＋</button>
+        <span class="spacer"></span><div class="zoom-controls"><button aria-label={$t('Zoom out')} onclick={() => zoom = zoom / 1.2}>−</button><button aria-label={$t('Reset view')} onclick={() => zoom = 1}>{Math.round(zoom * 100)}%</button><button aria-label={$t('Zoom in')} onclick={() => zoom = zoom * 1.2}>＋</button></div>
       </div>
+      {#if connectionStart}<div class="connection-status" role="status">{$t('Choose another port or press Escape.')}<button onclick={cancelConnection}>{$t('Cancel')}</button></div>{/if}
+      {#if connectionError}<p class="errors" role="alert">{$t(connectionError)}</p>{/if}
       <div class="canvas" role="region" aria-label={$t('Agent system')}>
         {#if !graph.nodes.length}<div class="empty"><h2>{$t('Agent system')}</h2><p>{$t('Add agents, then connect their results or allow communication.')}</p><button class="primary" onclick={add} disabled={safeMode}>＋ {$t('Add agent')}</button></div>{/if}
         <div style:width={`${width * zoom}px`} style:height={`${height * zoom}px`}>
-          <div class="world" style:width={`${width}px`} style:height={`${height}px`} style:transform={`scale(${zoom})`}>
+          <div bind:this={world} class="world" style:width={`${width}px`} style:height={`${height}px`} style:transform={`scale(${zoom})`}>
             <svg width={width} height={height} aria-hidden="true"><defs><marker id="graph-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" /></marker></defs>
-              {#each graph.edges as edge}{@const source = nodeById.get(edge.from)}{@const target = nodeById.get(edge.to)}{#if source && target}<path class:secondary-edge={edge.kind !== 'result'} class:spawn-edge={edge.kind === 'spawn'} class:observe-edge={edge.kind === 'observe'} d={`M ${source.x + 200} ${source.y + 48} C ${source.x + 245} ${source.y + 48}, ${target.x - 50} ${target.y + 48}, ${target.x} ${target.y + 48}`} marker-end="url(#graph-arrow)" />{/if}{/each}
+              {#each renderedEdges as edge}{@const source = nodeById.get(edge.from)}{@const target = nodeById.get(edge.to)}{#if source && target}<path class:secondary-edge={edge.kind !== 'result'} class:spawn-edge={edge.kind === 'spawn'} class:observe-edge={edge.kind === 'observe'} d={edgePath(source, target)} marker-start={edge.both ? 'url(#graph-arrow)' : undefined} marker-end="url(#graph-arrow)"><title>{edge.connections.map(connection => `${nodeById.get(connection.from)?.profile.name} → ${nodeById.get(connection.to)?.profile.name}: ${$t(connection.kind === 'result' ? 'Result dependency' : connection.kind === 'send' ? 'Messaging' : connection.kind === 'observe' ? 'Observation' : 'Delegation')}`).join('\n')}</title></path>{/if}{/each}
+              {#if connectionStart && connectionPoint}{@const source = nodeById.get(connectionStart.id)}{#if source}<path class="connection-preview" d={`M ${source.x + (connectionStart.side === 'out' ? 200 : 0)} ${source.y + 48} L ${connectionPoint.x} ${connectionPoint.y}`} marker-end="url(#graph-arrow)" />{/if}{/if}
             </svg>
-            {#each graph.nodes as node (node.id)}<button class="node" class:selected={node.id === selectedId} style:left={`${node.x}px`} style:top={`${node.y}px`} aria-pressed={node.id === selectedId} onpointerdown={(event) => pointerDown(event, node)} onpointermove={pointerMove} onpointerup={() => drag = undefined} onpointercancel={() => drag = undefined} onclick={() => selectedId = node.id} onkeydown={(event) => keyMove(event, node)}><span class="port port-in" aria-hidden="true"></span><span class="port port-out" aria-hidden="true"></span><span class="harness">{harnessConfigurations[node.profile.harness].name}</span><strong>{node.profile.name}</strong><span>{node.profile.model || $t('Model')}</span><small>{node.profile.reasoning ?? $t('Model default')}{node.profile.serviceTier === 'fast' ? ' · Fast' : ''}</small></button>{/each}
+            {#each graph.nodes as node (node.id)}<div class="node-shell" style:left={`${node.x}px`} style:top={`${node.y}px`}><button class="node" class:selected={node.id === selectedId} aria-pressed={node.id === selectedId} onpointerdown={(event) => pointerDown(event, node)} onpointermove={pointerMove} onpointerup={() => drag = undefined} onpointercancel={() => drag = undefined} onclick={() => selectedId = node.id} onkeydown={(event) => keyMove(event, node)}><span class="harness">{harnessConfigurations[node.profile.harness].name}</span><strong>{node.profile.name}</strong><span>{node.profile.model || $t('Model')}</span><small>{node.profile.reasoning ?? $t('Model default')}{node.profile.serviceTier === 'fast' ? $t(' · Fast') : ''}</small></button>{#each ['in', 'out'] as side}<button class="port" class:port-in={side === 'in'} class:port-out={side === 'out'} class:connecting={connectionStart?.id === node.id && connectionStart.side === side} data-port={side} data-node-id={node.id} aria-label={`${$t(side === 'in' ? 'Input connection' : 'Output connection')}: ${node.profile.name}`} disabled={safeMode || busy} onpointerdown={(event) => portDown(event, node.id, side as 'in' | 'out')} onclick={(event) => portClick(event, node.id, side as 'in' | 'out')} onkeydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); if (!event.repeat) event.currentTarget.click(); } }}></button>{/each}</div>{/each}
           </div>
         </div>
       </div>
@@ -224,18 +286,18 @@
       <PanelResize label={$t('Resize agent settings')} storageKey="piui.graph.inspector.width" initial={320} minimum={260} edge="left" onresize={(width) => inspectorWidth = width} />
       <div class="inspector-heading"><h2>{selected.profile.name}</h2><button class="close-inspector" aria-label={$t('Close')} onclick={(event) => { event.currentTarget.closest('.graph-layout')?.querySelector<HTMLButtonElement>('.node.selected')?.focus(); selectedId = ''; }}>×</button></div>
         <label>{$t('Name')}<input value={selected.profile.name} oninput={(event) => updateProfile({ name: event.currentTarget.value })} disabled={safeMode || busy} /></label>
-        <label>Harness<select value={selected.profile.harness} onchange={(event) => { const harness = event.currentTarget.value as AgentProfile['harness']; updateProfile({ harness, model: '', modelProvider: undefined, permissionMode: harnessConfigurations[harness].defaultPermission, serviceTier: harnessConfigurations[harness].speed ? 'standard' : undefined, baseInstructions: undefined, reasoning: undefined }); }} disabled={safeMode || busy}><option value="codex">Codex</option><option value="prime-agent">Prime Agent</option><option value="pi">Pi</option><option value="hermes">Hermes</option></select></label>
+        <label>{$t("Harness")}<select value={selected.profile.harness} onchange={(event) => { const harness = event.currentTarget.value as AgentProfile['harness']; updateProfile({ harness, model: '', modelProvider: undefined, permissionMode: harnessConfigurations[harness].defaultPermission, networkAccess: undefined, serviceTier: harnessConfigurations[harness].speed ? 'standard' : undefined, baseInstructions: undefined, reasoning: undefined }); }} disabled={safeMode || busy}><option value="codex">Codex</option><option value="prime-agent">Prime Agent</option><option value="pi">Pi</option><option value="hermes">Hermes</option></select></label>
         <label>{$t('Model')}<select aria-label={$t('Model')} value={JSON.stringify([selected.profile.modelProvider, selected.profile.model])} onchange={(event) => { const model = availableModels.find(entry => JSON.stringify([entry.provider, entry.id]) === event.currentTarget.value); if (model) updateProfile({ model: model.id, modelProvider: model.provider, reasoning: undefined, serviceTier: model.supportsFast && selected?.profile.serviceTier === 'fast' ? 'fast' : undefined }); }} disabled={safeMode || busy || modelsLoading}>
           {#if !nativeModel}<option disabled={!selected.profile.model} hidden={!selected.profile.model} value={JSON.stringify([selected.profile.modelProvider, selected.profile.model])}>{selected.profile.model || $t(modelsLoading ? 'Loading models…' : 'Select model')}</option>{/if}
           {#each availableModels as model}<option value={JSON.stringify([model.provider, model.id])}>{model.name}{model.provider ? ` · ${model.provider}` : ''}</option>{/each}
         </select></label>
-        {#if modelsError}<small class="model-error" role="alert">{modelsError}</small><button type="button" onclick={() => loadModels(selected.profile.harness)} disabled={modelsLoading}>{$t('Try again')}</button>{/if}
+        {#if modelsError}<small class="model-error" role="alert">{$t(modelsError)}</small><button type="button" onclick={() => loadModels(selected.profile.harness, true)} disabled={modelsLoading}>{$t('Try again')}</button>{:else}<button type="button" onclick={() => loadModels(selected.profile.harness, true)} disabled={modelsLoading || safeMode || busy}>{$t(modelsLoading ? 'Loading models…' : 'Refresh models')}</button>{/if}
         <label>{$t('Reasoning')}<select aria-label={$t('Reasoning')} value={selected.profile.reasoning ?? ''} onchange={(event) => updateProfile({ reasoning: event.currentTarget.value || undefined })} disabled={safeMode || busy || !nativeModel?.thinkingLevels?.length}>
           <option value="">{$t('Model default')}</option>
           {#if selected.profile.reasoning && !nativeModel?.thinkingLevels?.includes(selected.profile.reasoning)}<option value={selected.profile.reasoning}>{selected.profile.reasoning}</option>{/if}
           {#each nativeModel?.thinkingLevels ?? [] as level}<option value={level}>{$t(level)}</option>{/each}
         </select></label>
-        {#if configuration?.speed}<label>{$t('Speed')}<select value={selected.profile.serviceTier ?? 'standard'} onchange={(event) => updateProfile({ serviceTier: event.currentTarget.value as 'standard' | 'fast' })} disabled={safeMode || busy}><option value="standard">{$t('Standard')}</option><option value="fast" disabled={!nativeModel?.supportsFast}>Fast</option></select></label>{#if selected.profile.serviceTier === 'fast'}<small>{$t('Fast may use additional credits.')}</small>{/if}{/if}
+        {#if configuration?.speed}<label>{$t('Speed')}<select value={selected.profile.serviceTier ?? 'standard'} onchange={(event) => updateProfile({ serviceTier: event.currentTarget.value as 'standard' | 'fast' })} disabled={safeMode || busy}><option value="standard">{$t('Standard')}</option><option value="fast" disabled={!nativeModel?.supportsFast}>{$t("Fast")}</option></select></label>{#if selected.profile.serviceTier === 'fast'}<small>{$t('Fast may use additional credits.')}</small>{/if}{/if}
         <div class="task-heading"><span>{$t('Task')}</span><button type="button" onclick={() => taskExpanded = true}>{$t('Expand editor')}</button></div>
         <textarea class="task-input" aria-label={$t('Task')} rows="9" placeholder={$t('Describe the goal, expected result and constraints…')} value={selected.task} oninput={(event) => updateNode(selectedId, { task: event.currentTarget.value })} disabled={safeMode || busy}></textarea>
         <label>{$t('Input')}<textarea aria-label={$t('Input')} rows="5" placeholder={$t('What should upstream agents provide?')} value={selected.input ?? ''} oninput={(event) => updateNode(selectedId, { input: event.currentTarget.value })} disabled={safeMode || busy}></textarea></label>
@@ -244,15 +306,15 @@
           <label>{$t('Expected result')}<textarea aria-label={$t('Expected result')} rows="4" value={selected.profile.expectedResult ?? ''} placeholder={$t('What should this agent return?')} oninput={(event) => updateProfile({ expectedResult: event.currentTarget.value })} disabled={safeMode || busy}></textarea></label>
           <label>{$t('Additional instructions')}<textarea rows="5" value={selected.profile.instructions} oninput={(event) => updateProfile({ instructions: event.currentTarget.value })} disabled={safeMode || busy}></textarea></label>
           {#if configuration?.basePrompt}
-            <label class="check-row"><input type="checkbox" checked={selected.profile.baseInstructions !== undefined} onchange={(event) => updateProfile({ baseInstructions: event.currentTarget.checked ? '' : undefined })} disabled={safeMode || busy} />{$t('Replace base prompt')}</label>
-            {#if selected.profile.baseInstructions !== undefined}<label>{$t('Base prompt')}<textarea rows="5" value={selected.profile.baseInstructions} oninput={(event) => updateProfile({ baseInstructions: event.currentTarget.value })} disabled={safeMode || busy}></textarea></label><small>{$t('Replaces the built-in coding prompt. Leave empty for no base text. Tool descriptions, project instructions and native permission context still apply.')}</small>{/if}
+            <label class="check-row"><input type="checkbox" checked={selected.profile.baseInstructions === undefined} onchange={(event) => updateProfile({ baseInstructions: event.currentTarget.checked ? undefined : '' })} disabled={safeMode || busy} />{$t('Use base prompt')}</label>
           {/if}
         </section>
         <FlowSettings node={selected} nodes={graph.nodes} edges={graph.edges} disabled={safeMode || busy} onchange={(change) => updateNode(selectedId, change)} />
         <ResultFields fields={selected.resultFields ?? []} disabled={safeMode || busy} onchange={(resultFields) => updateNode(selectedId, { resultFields })} />
         <label>{$t('Execution mode')}<select value={selected.executionMode ?? 'scheduled'} onchange={(event) => updateNode(selectedId, { executionMode: event.currentTarget.value as 'scheduled' | 'callable' })} disabled={safeMode || busy}><option value="scheduled">{$t('Run by dependencies')}</option><option value="callable">{$t('Only when called')}</option></select></label>
-        <label>{$t('File access')}<select value={selected.profile.permissionMode} onchange={(event) => updateProfile({ permissionMode: event.currentTarget.value as AgentProfile['permissionMode'] })} disabled={safeMode || busy}>{#each configuration?.permissionModes ?? [] as mode}<option value={mode}>{$t(permissionLabels[mode])}</option>{/each}</select></label>
+        <label>{$t('File access')}<select value={selected.profile.permissionMode} onchange={(event) => { const permissionMode = event.currentTarget.value as AgentProfile['permissionMode']; updateProfile({ permissionMode, ...(!['read-only', 'workspace-write'].includes(permissionMode) ? { networkAccess: undefined } : {}) }); }} disabled={safeMode || busy}>{#each configuration?.permissionModes ?? [] as mode}<option value={mode}>{$t(permissionLabels[mode])}</option>{/each}</select></label>
         {#if !configuration?.filesystemSandbox}<small>{$t('The adapter does not enforce a filesystem sandbox.')}</small>{/if}
+        {#if configuration?.networkAccess}<label class="check-row"><input type="checkbox" checked={selected.profile.networkAccess ?? false} onchange={(event) => updateProfile({ networkAccess: event.currentTarget.checked || undefined })} disabled={safeMode || busy || !['read-only', 'workspace-write'].includes(selected.profile.permissionMode)} />{$t('Allow network access')}</label><small>{$t('Grants this Codex profile native outbound network access. It is disabled by default.')}</small>{/if}
         <section class="setting-group" aria-label={$t('Subagents')}>
           <h3>{$t('Subagents')}</h3>
           <small>{$t('Choose which agents this profile may create. This controls workspace delegation, not native processes or OS access.')}</small>
@@ -300,11 +362,18 @@
   .toolbar > select { max-width:180px; } .save-state { color:var(--piui-text-faint); font-size:11px; } .primary { background:var(--piui-action); color:var(--piui-action-ink); border-color:transparent; font-weight:600; } .primary:hover:not(:disabled) { background:var(--piui-action); filter:brightness(1.1); }
   .graph-layout { flex:1; display:grid; grid-template-columns:minmax(0,1fr); min-height:0; } .graph-layout.has-selection { grid-template-columns:minmax(0,1fr) var(--graph-inspector-width); }
   .canvas-column { min-width:0; min-height:0; display:flex; flex-direction:column; } .canvas-tools { padding:6px 12px; font-size:12px; } .canvas-tools button,.canvas-tools select { border-color:transparent; background:transparent; } .canvas-tools button:hover,.canvas-tools select:hover { background:var(--piui-surface-1); } .spacer { flex:1; }
-  .canvas { position:relative; overflow:auto; flex:1; min-height:0; background-color:var(--piui-bg); background-image:radial-gradient(var(--piui-border-subtle) .7px,transparent .7px); background-size:20px 20px; } .world { position:relative; transform-origin:0 0; } svg { position:absolute; pointer-events:none; } svg > path { fill:none; stroke:var(--piui-text-faint); stroke-width:1.5; } svg > path.secondary-edge { stroke:var(--piui-text-muted); stroke-dasharray:5 5; } svg > path.spawn-edge { stroke:var(--piui-accent); } svg > path.observe-edge { stroke-dasharray:2 6; }
-  .node { position:absolute; width:200px; min-height:96px; display:grid; gap:3px; text-align:left; padding:11px 14px; touch-action:none; user-select:none; background:var(--piui-bg-raised); border-radius:8px; box-shadow:0 3px 12px #0001; }
+  .canvas { position:relative; overflow:auto; flex:1; min-height:0; background-color:var(--piui-bg); background-image:radial-gradient(var(--piui-border-subtle) .7px,transparent .7px); background-size:20px 20px; } .world { position:relative; transform-origin:0 0; } svg { position:absolute; pointer-events:none; } svg > path { pointer-events:stroke; fill:none; stroke:var(--piui-text-faint); stroke-width:1.5; } svg > path.secondary-edge { stroke:var(--piui-text-muted); stroke-dasharray:5 5; } svg > path.spawn-edge { stroke:var(--piui-accent); } svg > path.observe-edge { stroke-dasharray:2 6; }
+  .node-shell { position:absolute; width:200px; }
+  .node { position:relative; width:200px; min-height:96px; display:grid; gap:3px; text-align:left; padding:11px 14px; touch-action:none; user-select:none; background:var(--piui-bg-raised); border-radius:8px; box-shadow:0 3px 12px #0001; }
   .node.selected { border-color:var(--piui-action); background:color-mix(in srgb,var(--piui-bg-raised) 90%,var(--piui-accent-soft)); box-shadow:0 0 0 1px var(--piui-accent-soft); }
   .node strong { font-size:13px; font-weight:600; overflow-wrap:anywhere; } .node span,.node small { color:var(--piui-text-muted); overflow-wrap:anywhere; font-size:11px; } .node .harness { font-size:10px; letter-spacing:.03em; }
-  .node .port { position:absolute; top:43px; width:8px; height:8px; border:1px solid var(--piui-border-strong); border-radius:50%; background:var(--piui-bg); } .port-in { left:-5px; } .port-out { right:-5px; } .node.selected .port { border-color:var(--piui-accent); }
+  .port { position:absolute; top:33px; width:30px; height:30px; min-height:30px; padding:0; border:0; background:transparent; border-radius:50%; touch-action:none; }
+  .port::after { content:''; position:absolute; inset:10px; border:1px solid var(--piui-border-strong); border-radius:50%; background:var(--piui-bg); }
+  .port-in { left:-15px; } .port-out { right:-15px; }
+  .port:hover::after,.port.connecting::after,.port:focus-visible::after { background:var(--piui-accent); border-color:var(--piui-accent); }
+  svg > path.connection-preview { stroke:var(--piui-accent); stroke-dasharray:5 5; }
+  .zoom-controls { display:flex; align-items:center; flex-shrink:0; }
+  .connection-status { display:flex; align-items:center; gap:8px; padding:6px 12px; font-size:12px; color:var(--piui-text-muted); }
   aside { position:relative; min-width:0; min-height:0; border-left:1px solid var(--piui-border-subtle); padding:14px; display:flex; flex-direction:column; gap:11px; overflow:auto; background:var(--piui-bg-raised); }
   .inspector-heading { display:flex; align-items:center; justify-content:space-between; padding-bottom:10px; border-bottom:1px solid var(--piui-border-subtle); } aside h2 { font-size:13px; margin:0; font-weight:600; } .close-inspector { border:0; padding:0; width:28px; min-height:28px; font-size:18px; color:var(--piui-text-muted); }
   aside label { display:grid; gap:5px; font-size:12px; color:var(--piui-text-muted); } aside label input,aside label select,textarea { background:var(--piui-bg); } aside small { color:var(--piui-text-faint); font-size:11px; line-height:1.45; } textarea { min-height:78px; resize:vertical; } .danger { color:var(--piui-danger-text); background:transparent; border-color:transparent; margin-top:auto; text-align:left; }

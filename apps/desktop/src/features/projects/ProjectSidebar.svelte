@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../locale/language';
   import type { ProjectSummary, SessionCatalogFreshness, SessionSummary } from '../../host-api/types';
   import { liveRuntimeSupported } from '../runtime/runtimeSelection';
   import {
@@ -52,50 +53,50 @@
 
 </script>
 
-<aside class="sidebar" aria-label="Project navigation">
+<aside class="sidebar" aria-label={$t("Project navigation")}>
   <div class="side-actions">
-    <button class:selected={settingsSelected} class="nav-button nav-button--quiet" type="button" onclick={onSettings} aria-label="Open PiUI settings">
+    <button class:selected={settingsSelected} class="nav-button nav-button--quiet" type="button" onclick={onSettings} aria-label={$t("Open PiUI settings")}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Z"/><path d="m19.2 13.1 1.26.98-1.7 2.94-1.5-.6a7.7 7.7 0 0 1-1.7.98L15.34 19h-3.4l-.23-1.6a7.7 7.7 0 0 1-1.7-.98l-1.5.6-1.7-2.94 1.26-.98a7.1 7.1 0 0 1 0-2.2l-1.26-.98 1.7-2.94 1.5.6a7.7 7.7 0 0 1 1.7-.98L11.94 5h3.4l.23 1.6a7.7 7.7 0 0 1 1.7.98l1.5-.6 1.7 2.94-1.26.98a7.1 7.1 0 0 1 0 2.2Z"/></svg>
-      <span>Settings</span>
+      <span>{$t("Settings")}</span>
     </button>
     <button
       class="nav-button nav-button--primary"
       type="button"
       onclick={onNewChat}
       disabled={!selectedProjectSupportsLiveRuntime || (selectedProjectId !== undefined && projectSessionCreationPending)}
-      title={!selectedProjectSupportsLiveRuntime ? 'Prime Agent history is read-only.' : projectSessionCreationPending ? 'Wait for current session history to finish syncing.' : undefined}
-      aria-label={!selectedProjectSupportsLiveRuntime ? 'New session unavailable for read-only Prime Agent history' : selectedProjectId !== undefined ? (projectSessionCreationPending ? 'New project session unavailable while current history is syncing' : 'Start a new session in the selected project') : 'Start a new personal chat'}
+      title={!selectedProjectSupportsLiveRuntime ? $t('Prime Agent history is read-only.') : projectSessionCreationPending ? $t('Wait for current session history to finish syncing.') : undefined}
+      aria-label={!selectedProjectSupportsLiveRuntime ? $t('New session unavailable for read-only Prime Agent history') : selectedProjectId !== undefined ? projectSessionCreationPending ? $t('New project session unavailable while current history is syncing') : $t('Start a new session in the selected project') : $t('Start a new personal chat')}
     >
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-      <span>New chat</span>
+      <span>{$t("New chat")}</span>
     </button>
-    <button class="nav-button nav-button--quiet" type="button" onclick={onAddProject} aria-label="Add a project folder">
+    <button class="nav-button nav-button--quiet" type="button" onclick={onAddProject} aria-label={$t("Add a project folder")}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-      <span>Add project</span>
+      <span>{$t("Add project")}</span>
     </button>
-    <button class="nav-button nav-button--quiet" type="button" onclick={onSearch} aria-label="Search local session titles and previews">
+    <button class="nav-button nav-button--quiet" type="button" onclick={onSearch} aria-label={$t("Search local session titles and previews")}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 4 4"/></svg>
-      <span>Search</span>
+      <span>{$t("Search")}</span>
     </button>
   </div>
 
-  <nav class="projects" aria-label="Chats and projects">
+  <nav class="projects" aria-label={$t("Chats and projects")}>
     <section class="chat-group" class:selected={personalSelected}>
-      <p class="section-label">Chats</p>
-      <div class="session-list session-list--personal" aria-label="Personal chats">
+      <p class="section-label">{$t("Chats")}</p>
+      <div class="session-list session-list--personal" aria-label={$t("Personal chats")}>
         {#if personalSessions.length === 0 && !personalDraftActive}
-          <p class="no-sessions">No personal chats yet</p>
+          <p class="no-sessions">{$t("No personal chats yet")}</p>
         {:else}
           {#if personalDraftActive}
             <div class="session-row session-row--draft selected" aria-current="page" role="status">
               <span class="status-dot status-dot--pending" aria-hidden="true"></span>
-              <span class="session-copy"><span class="session-title">New chat</span></span>
+              <span class="session-copy"><span class="session-title">{$t("New chat")}</span></span>
             </div>
           {/if}
           {#each personalSessions as session (session.id)}
             <button class:selected={personalSelected && session.id === selectedPersonalSessionId} class="session-row" type="button" aria-current={personalSelected && session.id === selectedPersonalSessionId ? 'page' : undefined} onclick={() => onSelectPersonalSession(session)}>
               {#if session.parseState === 'corrupt'}
-                <span class="status-dot status-dot--dormant status-dot--failed" role="img" aria-label="Session data may be incomplete"></span>
+                <span class="status-dot status-dot--dormant status-dot--failed" role="img" aria-label={$t("Session data may be incomplete")}></span>
               {:else}
                 <span class="status-dot status-dot--dormant" aria-hidden="true"></span>
               {/if}
@@ -108,42 +109,42 @@
       </div>
     </section>
 
-    <p class="section-label">Projects</p>
+    <p class="section-label">{$t("Projects")}</p>
     {#if projects.length === 0}
-      <p class="no-projects">Your folders stay local. Add one when you are ready.</p>
+      <p class="no-projects">{$t("Your folders stay local. Add one when you are ready.")}</p>
     {:else}
       {#each projects as project (project.id)}
         <section class:selected={project.id === selectedProjectId} class:expanded={project.id === expandedProjectId} class="project-group">
           <button class="project-row" type="button" aria-current={project.id === selectedProjectId ? 'page' : undefined} aria-expanded={project.id === expandedProjectId} onclick={() => onSelectProject(project)}>
             <svg class:expanded={project.id === expandedProjectId} class="project-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
             <span class="project-name">{project.name}</span>
-            {#if project.agentKind === 'prime-agent'}<span class="runtime-mark" aria-label="Prime Agent project">Prime</span>{/if}
+            {#if project.agentKind === 'prime-agent'}<span class="runtime-mark" aria-label={$t("Prime Agent project")}>{$t("Prime")}</span>{/if}
             {#if project.pinned}
-              <span class="pin-mark" aria-label="Project is pinned">Pinned</span>
+              <span class="pin-mark" aria-label={$t("Project is pinned")}>{$t("Pinned")}</span>
             {/if}
             {#if project.missing}
-              <span class="missing-mark" aria-label="Project folder is unavailable">Unavailable</span>
+              <span class="missing-mark" aria-label={$t("Project folder is unavailable")}>{$t("Unavailable")}</span>
             {:else if project.trustState !== 'trusted'}
-              <span class="trust-mark" aria-label="Project is restricted">Restricted</span>
+              <span class="trust-mark" aria-label={$t("Project is restricted")}>{$t("Restricted")}</span>
             {/if}
           </button>
           {#if project.id === expandedProjectId}
-            <div class="session-list" aria-label={`Sessions in ${project.name}`} aria-busy={sessionsLoading}>
+            <div class="session-list" aria-label={$t("Sessions in {0}", [project.name])} aria-busy={sessionsLoading}>
               <div class="session-list-header">
-                <span>{project.missing ? 'Folder unavailable' : `Local ${project.agentKind === 'prime-agent' ? 'Prime Agent' : 'Pi'} sessions`}{#if sessionsLoading && sessions.length > 0}<span class="catalog-refreshing" role="status">Refreshing…</span>{/if}</span>
-                <span class="session-actions">{#if liveRuntimeSupported(project.agentKind)}<button class="refresh-button" type="button" onclick={() => onNewProjectSession(project)} disabled={project.missing || projectSessionCreationPending} title={projectSessionCreationPending ? 'Wait for current session history to finish syncing.' : undefined} aria-label={projectSessionCreationPending ? `New session in ${project.name} unavailable while current history is syncing` : `Start a new Pi session in ${project.name}`}>New session</button>{/if}<button class="refresh-button" type="button" onclick={() => onRefreshProject(project)} disabled={sessionsLoading} aria-label={`Refresh local sessions for ${project.name}`}>Refresh</button><button class="refresh-button" type="button" onclick={() => onManageProject(project)} aria-label={`Manage ${project.name}`}>Manage</button></span>
+                <span>{project.missing ? $t('Folder unavailable') : $t("Local {0} sessions", [project.agentKind === 'prime-agent' ? 'Prime Agent' : 'Pi'])}{#if sessionsLoading && sessions.length > 0}<span class="catalog-refreshing" role="status">{$t("Refreshing…")}</span>{/if}</span>
+                <span class="session-actions">{#if liveRuntimeSupported(project.agentKind)}<button class="refresh-button" type="button" onclick={() => onNewProjectSession(project)} disabled={project.missing || projectSessionCreationPending} title={projectSessionCreationPending ? $t('Wait for current session history to finish syncing.') : undefined} aria-label={projectSessionCreationPending ? $t("New session in {0} unavailable while current history is syncing", [project.name]) : $t("Start a new Pi session in {0}", [project.name])}>{$t("New session")}</button>{/if}<button class="refresh-button" type="button" onclick={() => onRefreshProject(project)} disabled={sessionsLoading} aria-label={$t("Refresh local sessions for {0}", [project.name])}>{$t("Refresh")}</button><button class="refresh-button" type="button" onclick={() => onManageProject(project)} aria-label={$t("Manage {0}", [project.name])}>{$t("Manage")}</button></span>
               </div>
               {#if project.missing}
-                <p class="no-sessions">Reconnect the folder, then refresh. PiUI does not modify its session files.</p>
+                <p class="no-sessions">{$t("Reconnect the folder, then refresh. PiUI does not modify its session files.")}</p>
               {:else if sessionsLoading && sessions.length === 0}
-                <p class="no-sessions" role="status">Scanning local {project.agentKind === 'prime-agent' ? 'Prime Agent' : 'Pi'} sessions…</p>
+                <p class="no-sessions" role="status">{$t("Scanning local")} {project.agentKind === 'prime-agent' ? $t('Prime Agent') : $t('Pi')} {$t("sessions…")}</p>
               {:else if sessions.length === 0}
-                <p class="no-sessions">{sessionsFreshness === 'current' ? `No indexed ${project.agentKind === 'prime-agent' ? 'Prime Agent' : 'Pi'} sessions` : `No indexed ${project.agentKind === 'prime-agent' ? 'Prime Agent' : 'Pi'} sessions yet`}</p>
+                <p class="no-sessions">{sessionsFreshness === 'current' ? $t("No indexed {0} sessions", [project.agentKind === 'prime-agent' ? 'Prime Agent' : 'Pi']) : $t("No indexed {0} sessions yet", [project.agentKind === 'prime-agent' ? 'Prime Agent' : 'Pi'])}</p>
               {:else}
                 {#each visibleProjectSessions as session (session.id)}
                   <button class:selected={session.id === selectedSessionId} class="session-row" type="button" aria-current={session.id === selectedSessionId ? 'page' : undefined} onclick={() => onSelectSession(session)}>
                     {#if session.parseState === 'corrupt'}
-                      <span class="status-dot status-dot--dormant status-dot--failed" role="img" aria-label="Session data may be incomplete"></span>
+                      <span class="status-dot status-dot--dormant status-dot--failed" role="img" aria-label={$t("Session data may be incomplete")}></span>
                     {:else}
                       <span class="status-dot status-dot--dormant" aria-hidden="true"></span>
                     {/if}
@@ -153,12 +154,12 @@
                   </button>
                 {/each}
                 {#if hasHiddenProjectSessions}
-                  <div class="session-pagination" aria-label="More project sessions">
+                  <div class="session-pagination" aria-label={$t("More project sessions")}>
                     <button class="session-page-button" type="button" onclick={() => projectSessionLimit = nextProjectSessionCount(projectSessionLimit, sessions.length)}>
-                      Show {Math.min(PROJECT_SESSION_PAGE_SIZE, sessions.length - visibleProjectSessions.length)} more
+                      {$t("Show")} {Math.min(PROJECT_SESSION_PAGE_SIZE, sessions.length - visibleProjectSessions.length)} {$t("more")}
                     </button>
                     <button class="session-page-button" type="button" onclick={() => projectSessionLimit = sessions.length}>
-                      Show all ({sessions.length})
+                      {$t("Show all (")}{sessions.length})
                     </button>
                   </div>
                 {/if}

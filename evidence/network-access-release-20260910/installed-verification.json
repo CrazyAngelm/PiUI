@@ -1,0 +1,25 @@
+{
+  "installedPath": "C:/Users/redmi/AppData/Local/PiUI/piui-desktop.exe",
+  "installedSha256": "13a5251752d6d13042fd5830fea1cad87c99ee6624e6c5d1378d1af0b9d60c7e",
+  "newNetworkPolicyEmbedded": true,
+  "nativeBridgeMatchesSource": true,
+  "bridgeSourceSha256": "166a10cfd5dc76d40de18fd6d387144933f41c7414952e5506d6c9d143072808",
+  "pid": 26156,
+  "address": "127.0.0.1:62335",
+  "ping": {
+    "api": "piui-agent",
+    "version": 1
+  },
+  "profileId": "322bf4e9-dddf-4834-90ae-6029e11e5242",
+  "nativeRunsStarted": 0,
+  "savedTrueAndReadBack": true,
+  "savedFalseAndReadBack": true,
+  "reenabledAndReadBack": true,
+  "portableV4ToNativeProfileRoundTrip": true,
+  "moneySchedule": {
+    "id": "8b7f12a0-2cfb-4fd8-8e2b-150f52f97e9b",
+    "enabled": false,
+    "revision": 3
+  },
+  "verificationProfileRemoved": true
+}

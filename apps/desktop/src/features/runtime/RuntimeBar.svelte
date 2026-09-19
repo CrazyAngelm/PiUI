@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../locale/language';
   import type { RuntimeSnapshot } from '../../host-api/types';
   export let runtime: RuntimeSnapshot | undefined;
   export let canStart = false;
@@ -10,12 +11,12 @@
 </script>
 
 <div class="runtime-bar" aria-live="polite">
-  <div class="status"><span class:status-dot--ready={runtime?.state === 'ready' || runtime?.state === 'running'} class:status-dot--failed={runtime?.state === 'failed'} class="status-dot status-dot--dormant" aria-hidden="true"></span><span>{runtime ? label[runtime.state] : 'Read-only'}</span></div>
-  <p>{runtime?.safeSummary ?? 'The deterministic fake runtime does not send prompts or modify sessions.'}</p>
+  <div class="status"><span class:status-dot--ready={runtime?.state === 'ready' || runtime?.state === 'running'} class:status-dot--failed={runtime?.state === 'failed'} class="status-dot status-dot--dormant" aria-hidden="true"></span><span>{runtime ? label[runtime.state] : $t('Read-only')}</span></div>
+  <p>{runtime?.safeSummary ?? $t('The deterministic fake runtime does not send prompts or modify sessions.')}</p>
   {#if runtime?.state === 'ready' || runtime?.state === 'running'}
-    <button type="button" class="runtime-button" onclick={onStop} disabled={busy}>Stop fake runtime</button>
+    <button type="button" class="runtime-button" onclick={onStop} disabled={busy}>{$t("Stop fake runtime")}</button>
   {:else}
-    <button type="button" class="runtime-button" onclick={onStart} disabled={!canStart || busy}>{busy ? 'Working…' : 'Run fake runtime'}</button>
+    <button type="button" class="runtime-button" onclick={onStart} disabled={!canStart || busy}>{busy ? $t('Working…') : $t('Run fake runtime')}</button>
   {/if}
 </div>
 

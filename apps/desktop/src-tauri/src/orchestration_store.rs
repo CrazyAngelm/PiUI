@@ -4,6 +4,7 @@
 //! complete generation is create-only and fsynced before it becomes current in
 //! memory. A failed write leaves the previous generation authoritative.
 
+use crate::orchestration_schedule::StoredSchedule;
 use piui_orchestration::{
     AgentProfile, Coordinator, LaunchCommandReference, PipelineDefinition, Run, TeamDefinition,
     deserialize_run, serialize_run,
@@ -14,7 +15,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-const STORE_VERSION: u32 = 1;
+const STORE_VERSION: u32 = 2;
+const MIN_STORE_VERSION: u32 = 1;
 const STORE_DIRECTORY: &str = "orchestration-v1";
 const GENERATION_PREFIX: &str = "orchestration-";
 const GENERATION_SUFFIX: &str = ".json";
@@ -34,6 +36,8 @@ pub(crate) struct WorkspaceOrchestration {
     pub teams: Vec<StoredDefinition<TeamDefinition>>,
     pub pipelines: Vec<StoredDefinition<PipelineDefinition>>,
     pub launch_commands: Vec<StoredDefinition<LaunchCommandReference>>,
+    #[serde(default)]
+    pub schedules: Vec<StoredSchedule>,
     pub runs: Vec<Run>,
 }
 
@@ -45,6 +49,7 @@ impl WorkspaceOrchestration {
             teams: Vec::new(),
             pipelines: Vec::new(),
             launch_commands: Vec::new(),
+            schedules: Vec::new(),
             runs: Vec::new(),
         }
     }
@@ -110,7 +115,7 @@ impl OrchestrationStore {
                 .ok()
                 .and_then(|bytes| serde_json::from_slice::<StoreDocument>(&bytes).ok())
                 .and_then(|mut document| {
-                    let valid = document.version == STORE_VERSION
+                    let valid = (MIN_STORE_VERSION..=STORE_VERSION).contains(&document.version)
                         && document.generation == generation
                         && migrate_document(&mut document);
                     valid.then_some(document)
@@ -138,6 +143,10 @@ impl OrchestrationStore {
             .workspaces
             .iter()
             .find(|workspace| workspace.workspace_id == workspace_id)
+    }
+
+    pub fn workspaces(&self) -> &[WorkspaceOrchestration] {
+        &self.document.workspaces
     }
 
     pub fn transact<T>(
@@ -231,6 +240,7 @@ fn migrate_document(document: &mut StoreDocument) -> bool {
             *run = migrated;
         }
     }
+    document.version = STORE_VERSION;
     true
 }
 

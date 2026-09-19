@@ -15,6 +15,19 @@ const config = {
   daemonSocket: "fixture-reserved-endpoint",
 };
 
+test("composer commands use native compaction and steer without inventing a queued native turn", async () => {
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--hold-turn"] }, () => {});
+  try {
+    assert.deepEqual(adapter.composerCapabilities(), { steer: true, compact: true });
+    await adapter.compact();
+    await waitFor(() => adapter.snapshot().blocks.some(block => block.kind === "compaction") && adapter.snapshot().status === "idle");
+    await adapter.prompt({ text: "first", mode: "prompt" });
+    await assert.rejects(adapter.compact(), { bridgeCode: "turn-active" });
+    await assert.rejects(adapter.prompt({ text: "queued by host only", mode: "follow-up" }), { bridgeCode: "turn-active" });
+    assert.deepEqual(await adapter.prompt({ text: "clarify this turn", mode: "steer" }), { accepted: true });
+  } finally { await adapter.dispose(); }
+});
+
 test("accepts the Windows canonical project path returned by the host", { skip: process.platform !== "win32" }, async () => {
   const adapter = await createCodexAdapter({ ...config, cwd: toNamespacedPath(process.cwd()), runtimeArgs: [fixture, "--plain-cwd"] }, () => {});
   try { assert.equal(adapter.snapshot().status, "idle"); assert.equal((await adapter.catalogModels())[0].supportsFast, true); }
@@ -143,14 +156,23 @@ test("renders one safe user-input question and declines unsupported structured i
   }
 });
 
-test("uses generic fallback for unsupported item types and labels commands without output", async () => {
+test("renders web search items as safe tool activity and keeps other unknown types on fallback", async () => {
   const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--unknown-items"] }, () => {});
   try {
-    await waitFor(() => adapter.snapshot().blocks.some((block) => block.id === "unsupported-imageGeneration"));
+    await waitFor(() => adapter.snapshot().blocks.some((block) => block.id === "web-search-item"));
     const command = adapter.snapshot().blocks.find((block) => block.id === "command-display");
     assert.match(command.text, /Command: display command/);
     assert.match(command.text, /Working directory:/);
-    for (const type of ["mcpToolCall", "collabAgentToolCall", "webSearch", "imageView", "imageGeneration"]) {
+    const webSearch = adapter.snapshot().blocks.find((block) => block.id === "web-search-item");
+    assert.equal(webSearch.kind, "tool");
+    assert.equal(webSearch.label, "Web search");
+    assert.equal(webSearch.toolName, "web-search");
+    assert.equal(webSearch.fallback, undefined);
+    assert.match(webSearch.text, /Query: latest fixture news/);
+    assert.match(webSearch.text, /Action: search/);
+    assert.match(webSearch.text, /Results: 1/);
+    assert.doesNotMatch(webSearch.text, /SECRET-MUST-NOT-LEAK/);
+    for (const type of ["mcpToolCall", "collabAgentToolCall", "imageView", "imageGeneration"]) {
       const block = adapter.snapshot().blocks.find((value) => value.id === `unsupported-${type}`);
       assert.equal(block.kind, "unknown");
       assert.equal(block.fallback, true);
@@ -349,13 +371,38 @@ for (const [mode, tier] of [["standard", "default"], ["fast", "fast"]]) {
   });
 }
 
-test("MCP startup is lifecycle metadata, failures are safe errors", async () => {
+test("MCP startup failures stay with resource status instead of becoming session errors", async () => {
   const events = [];
   const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--mcp-startup"] }, event => events.push(event));
   try {
     assert.equal(adapter.snapshot().blocks.some(block => block.safeSummary?.includes("startupStatus")), false);
-    assert.equal(events.filter(event => event.type === "error" && event.message.includes("MCP")).length, 1);
+    assert.equal(events.filter(event => event.type === "error" && event.message.includes("MCP")).length, 0);
+    const resources = await adapter.resources();
+    assert.deepEqual(resources.warnings, ["MCP server fixture could not start."]);
     assert.equal(JSON.stringify(events).includes("PRIVATE_MCP_DETAIL"), false);
+  } finally { await adapter.dispose(); }
+});
+
+test("forwards explicit network access through the Codex workspace sandbox", async () => {
+  const adapter = await createCodexAdapter({
+    ...config,
+    permissionMode: "workspace-write",
+    networkAccess: true,
+    runtimeArgs: [fixture, "--expect-permission", "workspace-write", "--expect-network"],
+  }, () => {});
+  try {
+    assert.deepEqual(await adapter.prompt({ text: "network prefilter", mode: "prompt" }), { accepted: true });
+  } finally {
+    await adapter.dispose();
+  }
+});
+
+test("MCP recovery clears its resource warning", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--mcp-recovery"] }, event => events.push(event));
+  try {
+    assert.equal(events.some(event => event.type === "error"), false);
+    assert.equal((await adapter.resources()).warnings.some(warning => warning.includes("fixture")), false);
   } finally { await adapter.dispose(); }
 });
 test("ordinary Codex settings change Fast and reasoning without transcript noise", async () => {
@@ -370,5 +417,28 @@ test("ordinary Codex settings change Fast and reasoning without transcript noise
     await assert.rejects(adapter.setModel({ model, thinkingLevel: "invented", serviceTier: "fast" }));
     assert.equal(adapter.snapshot().serviceTier, "standard");
     assert.equal(adapter.snapshot().blocks.some(block => block.safeSummary?.includes("settings/updated")), false);
+  } finally { await adapter.dispose(); }
+});
+
+test("retains the native current model and reasoning metadata when hidden from discovery", async () => {
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, '--latest-version', '--hidden-current-model'] }, () => {});
+  try { assert.deepEqual(await adapter.models(), [{ id: 'fixture-model', provider: 'openai', name: 'Hidden current', thinkingLevels: ['low', 'ultra'] }]); }
+  finally { await adapter.dispose(); }
+});
+
+test("keeps an absent native current model visible without inventing reasoning support", async () => {
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, '--missing-current-model'] }, () => {});
+  try { assert.deepEqual(await adapter.models(), [{ id: 'fixture-model', provider: 'openai', name: 'fixture-model', thinkingLevels: [] }]); }
+  finally { await adapter.dispose(); }
+});
+
+test('account quota updates stay out of the transcript without hiding unknown conversation events', async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, '--rate-limits'] }, event => events.push(event));
+  try {
+    await adapter.models();
+    assert.ok(!JSON.stringify(events).includes('account/rateLimits/updated'));
+    assert.ok(!JSON.stringify(adapter.snapshot().blocks).includes('account/rateLimits/updated'));
+    assert.ok(adapter.snapshot().blocks.some(block => block.safeSummary === 'Unsupported Codex event: future/conversation/event'));
   } finally { await adapter.dispose(); }
 });

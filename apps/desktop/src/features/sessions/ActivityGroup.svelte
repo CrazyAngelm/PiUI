@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../locale/language';
   import { onMount } from 'svelte';
   import MarkdownContent from '../../components/MarkdownContent.svelte';
   import type { TimelineBlock } from '../../host-api/types';
@@ -13,6 +14,7 @@
   export let initialOpen: boolean | undefined = undefined;
   export let onOpenChange: (open: boolean) => void = () => {};
 
+  $: summaryLabel = group.blocks.length === 1 ? (group.blocks[0]?.kind === 'thinking' && group.summary === 'Reasoning' ? $t('Reasoning') : group.summary) : [$t('Actions: {0}', [group.blocks.length]), $t('Tools: {0}', [group.blocks.filter(block => block.kind === 'tool').length]), $t('Reasoning steps: {0}', [group.blocks.filter(block => block.kind === 'thinking').length]), ...(group.status === 'complete' ? [$t('Completed')] : [])].join(' · ');
   let groupOpen = initialOpen ?? group.autoOpen;
   let groupTouched = false;
   let mounted = false;
@@ -86,11 +88,11 @@
   data-timeline-block={group.blocks[0]?.id}
   data-timeline-blocks={group.blocks.map((block) => block.id).join(' ')}
 >
-  <summary aria-label={`Activity: ${group.summary}${activityStatusLabel(group.status) ? `, ${activityStatusLabel(group.status)}` : ''}`}>
+  <summary aria-label={$t("Activity: {0}{1}", [summaryLabel, activityStatusLabel(group.status) ? `, ${$t(activityStatusLabel(group.status) ?? '')}` : ''])}>
     <span class="activity-chevron" aria-hidden="true">›</span>
-    <span class="activity-summary-title">{group.summary}</span>
+    <span class="activity-summary-title">{summaryLabel}</span>
     {#if activityStatusLabel(group.status)}
-      <span class={`activity-status ${groupStatusClass(group.status)}`}>{activityStatusLabel(group.status)}</span>
+      <span class={`activity-status ${groupStatusClass(group.status)}`}>{$t(activityStatusLabel(group.status) ?? '')}</span>
     {/if}
   </summary>
 
@@ -103,11 +105,11 @@
           ontoggle={(event) => onRowToggle(block.id, event)}
           data-timeline-block={block.id}
         >
-          <summary aria-label={`${activityBlockTitle(block)}${activityStatusLabel(block.status) ? `, ${activityStatusLabel(block.status)}` : ''}`}>
+          <summary aria-label={`${activityBlockTitle(block)}${activityStatusLabel(block.status) ? `, ${$t(activityStatusLabel(block.status) ?? '')}` : ''}`}>
             <span class="row-chevron" aria-hidden="true">›</span>
             <span class="activity-title">{activityBlockTitle(block)}</span>
             {#if activityStatusLabel(block.status)}
-              <span class={`activity-status ${groupStatusClass(block.status)}`}>{activityStatusLabel(block.status)}</span>
+              <span class={`activity-status ${groupStatusClass(block.status)}`}>{$t(activityStatusLabel(block.status) ?? '')}</span>
             {/if}
           </summary>
 
@@ -116,14 +118,14 @@
               {#if block.text}
                 <div class="tool-output">
                   <header class="tool-output-header">
-                    <span>Output</span>
-                    <button type="button" onclick={() => void copyOutput(block.id, block.text ?? '')} aria-label={`Copy ${activityBlockTitle(block)} output`}>
-                      {copiedOutputId === block.id ? 'Copied' : 'Copy'}
+                    <span>{$t("Output")}</span>
+                    <button type="button" onclick={() => void copyOutput(block.id, block.text ?? '')} aria-label={$t("Copy {0} output", [activityBlockTitle(block)])}>
+                      {copiedOutputId === block.id ? $t('Copied') : $t('Copy')}
                     </button>
                   </header>
                   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-                  <pre tabindex="0" role="region" aria-label={`${activityBlockTitle(block)} output`}><code>{block.text}</code></pre>
-                  {#if block.truncated}<p class="truncation-note">Long output was shortened to keep this session responsive.</p>{/if}
+                  <pre tabindex="0" role="region" aria-label={$t("{0} output", [activityBlockTitle(block)])}><code>{block.text}</code></pre>
+                  {#if block.truncated}<p class="truncation-note">{$t("Long output was shortened to keep this session responsive.")}</p>{/if}
                 </div>
               {:else if block.safeSummary}
                 <p class="activity-detail">{block.safeSummary}</p>

@@ -1,0 +1,13 @@
+{
+  "verifiedAt": "2026-09-09T06:59:22.426Z",
+  "ping": {
+    "api": "piui-agent",
+    "version": 1
+  },
+  "workspaces": 4,
+  "sessions": 1,
+  "runs": 0,
+  "unknownMethodRejected": true,
+  "wrongTokenRejected": true,
+  "mutations": 0
+}

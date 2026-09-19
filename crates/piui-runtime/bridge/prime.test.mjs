@@ -211,3 +211,13 @@ test("Prime filters one skill per session and rejects unsupported MCP isolation"
   try { assert.deepEqual(lastConfiguredSkills(), ["beta"]); } finally { await adapter.dispose(); }
   await assert.rejects(createPrimeAdapter(await config({ resourceRules: [{ kind: "mcp", id: "example", enabled: false }] }), () => {}), { bridgeCode: "unsupported-resource-policy" });
 });
+
+
+test("Prime composer reflects SDK capability and refuses idle steer", async () => {
+  const adapter = await createPrimeAdapter(await config(), () => {});
+  try {
+    assert.deepEqual(await adapter.composerCapabilities(), {steer:true, compact:false});
+    await assert.rejects(adapter.prompt({text:"cannot start a turn",mode:"steer"}), {bridgeCode:"no-active-turn"});
+    await assert.rejects(adapter.compact(), {bridgeCode:"unsupported-method"});
+  } finally { await adapter.dispose(); }
+});

@@ -124,11 +124,11 @@
     {#if readOnly}<p class="state" role="status">{$t('This team is read-only.')}</p>{:else if busy}<p class="state" role="status">{$t('Saving team…')}</p>{:else if isDirty}<p class="state" role="status">{$t('Unsaved changes')}</p>{/if}
   </header>
 
-  {#if error}<div class="error" role="alert"><strong>{$t('Could not save team.')}</strong> {error}</div>{/if}
-  {#if issues.length > 0 && !readOnly}
+  {#if error}<div class="error" role="alert"><strong>{$t('Could not save team.')}</strong> {$t(error)}</div>{/if}
+  {#if issues.length > 0 && isDirty && !readOnly}
     <div class="validation" role="alert" aria-label={$t('Team validation issues')}>
       <strong>{$t('Complete the team before saving.')}</strong>
-      <ul>{#each issues as issue}<li>{issue.message}</li>{/each}</ul>
+      <ul>{#each issues as issue}<li>{$t(issue.message)}</li>{/each}</ul>
     </div>
   {/if}
 
@@ -147,7 +147,7 @@
           <article class="member-row">
             <label><span>{$t('Role name')}</span><input value={member.id} oninput={(event) => updateMember(memberIndex, 'id', (event.currentTarget as HTMLInputElement).value)} /></label>
             <label><span>{$t('Profile')}</span><select value={member.profileId} oninput={(event) => updateMember(memberIndex, 'profileId', (event.currentTarget as HTMLSelectElement).value)}>{#each profiles as profile}<option value={profile.id}>{profile.name} · {profile.harness}</option>{/each}</select></label>
-            <button type="button" class="remove" aria-label={`Remove member ${member.id}`} onclick={() => removeMember(member.id)}>{$t('Remove')}</button>
+            <button type="button" class="remove" aria-label={$t("Remove member {0}", [member.id])} onclick={() => removeMember(member.id)}>{$t('Remove')}</button>
           </article>
         {/each}
       </div>
@@ -170,7 +170,7 @@
       <h2 id="spawning-title">{$t('Allowed profiles')}</h2>
       <p>{$t('Each agent can create only the profiles allowed in its settings.')}</p>
       {#if draft.members.length === 0}<p class="empty">{$t('Add a member to see its profile-owned workspace child templates.')}</p>
-      {:else}<ul class="spawn-list">{#each draft.members as member}<li><strong>{memberLabel(member)}</strong><span>{#if profileById(profiles, member.profileId)?.allowedSpawnProfileIds.length}{profileById(profiles, member.profileId)?.allowedSpawnProfileIds.map((id) => profileById(profiles, id)?.name ?? `Unavailable profile ${id}`).join(', ')}{:else}Disabled.{/if}</span></li>{/each}</ul>{/if}
+      {:else}<ul class="spawn-list">{#each draft.members as member}<li><strong>{memberLabel(member)}</strong><span>{#if profileById(profiles, member.profileId)?.allowedSpawnProfileIds.length}{profileById(profiles, member.profileId)?.allowedSpawnProfileIds.map((id) => profileById(profiles, id)?.name ?? `Unavailable profile ${id}`).join(', ')}{:else}{$t("Disabled.")}{/if}</span></li>{/each}</ul>{/if}
     </section>
 
   </fieldset>
@@ -180,7 +180,7 @@
   {#if cancelConfirmation}
     <aside class="cancel-confirmation" aria-live="polite"><strong>{$t('Discard unsaved changes?')}</strong><span>{$t('Keep editing to return to this draft.')}</span><div><button type="button" onclick={() => (cancelConfirmation = false)}>{$t('Keep editing')}</button><button type="button" class="remove" onclick={discardChanges}>{$t('Discard changes')}</button></div></aside>
   {/if}
-  <footer><button type="button" onclick={requestCancel} disabled={busy}>{readOnly ? 'Close' : 'Cancel'}</button>{#if !readOnly}<button type="button" class="primary" onclick={save} disabled={!canSave}>{$t('Save team')}</button>{/if}</footer>
+  <footer><button type="button" onclick={requestCancel} disabled={busy}>{readOnly ? $t('Close') : $t('Cancel')}</button>{#if !readOnly}<button type="button" class="primary" onclick={save} disabled={!canSave}>{$t('Save team')}</button>{/if}</footer>
 </section>
 
 <style>

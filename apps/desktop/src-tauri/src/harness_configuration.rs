@@ -78,6 +78,16 @@ pub(crate) fn launch_policy(
     if profile.service_tier.is_some() && matches!(profile.harness, Harness::Pi | Harness::Hermes) {
         return Err(OrchestrationSchedulerError::unsupported());
     }
+    if profile.network_access
+        && (profile.harness != Harness::Codex
+            || !matches!(
+                profile.permission_mode,
+                piui_orchestration::PermissionMode::ReadOnly
+                    | piui_orchestration::PermissionMode::WorkspaceWrite
+            ))
+    {
+        return Err(OrchestrationSchedulerError::unsupported());
+    }
     if profile.resource_rules.iter().any(|rule| {
         rule.id.trim().is_empty()
             || match profile.harness {

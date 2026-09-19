@@ -1,0 +1,17 @@
+{
+  "workspaceId": "c4058dea-fa79-4cb5-b5c2-f93ff365ba8c",
+  "value": {
+    "id": "322bf4e9-dddf-4834-90ae-6029e11e5242",
+    "name": "PiUI networkAccess persistence verification (never executed)",
+    "harness": "codex",
+    "model": "gpt-5.6-sol",
+    "modelProvider": "openai",
+    "permissionMode": "read-only",
+    "networkAccess": true,
+    "instructions": "Verification fixture only. This profile must never be executed.",
+    "toolPolicy": {
+      "rules": []
+    },
+    "allowedSpawnProfileIds": []
+  }
+}

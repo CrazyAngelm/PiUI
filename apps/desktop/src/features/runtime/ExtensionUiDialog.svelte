@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../locale/language';
   import { tick } from 'svelte';
   import type { ExtensionDialogRequest, ExtensionUiResponse } from '../../host-api/types';
 
@@ -75,10 +76,10 @@
     onkeydown={handleKeydown}
   >
     <header>
-      <p class="extension-source">{agentLabel} extension</p>
+      <p class="extension-source">{agentLabel} {$t("extension")}</p>
       <h2 id="extension-dialog-title">{request.title}</h2>
       {#if request.timeoutMs !== undefined}
-        <p class="extension-timeout">This request closes automatically.</p>
+        <p class="extension-timeout">{$t("This request closes automatically.")}</p>
       {/if}
     </header>
 
@@ -98,31 +99,31 @@
         {/each}
       </div>
       <div class="extension-dialog-actions">
-        <button type="button" class="quiet" disabled={busy} onclick={() => respond({ kind: 'cancelled' })}>Cancel</button>
+        <button type="button" class="quiet" disabled={busy} onclick={() => respond({ kind: 'cancelled' })}>{$t("Cancel")}</button>
       </div>
     {:else if request.kind === 'confirm'}
       <p id="extension-dialog-message" class="extension-message">{request.message}</p>
       <div class="extension-dialog-actions">
-        <button type="button" class="quiet" disabled={busy} onclick={() => respond({ kind: 'confirmed', value: false })}>No</button>
-        <button type="button" class="primary" data-primary-action disabled={busy} onclick={() => respond({ kind: 'confirmed', value: true })}>{busy ? 'Responding…' : 'Yes'}</button>
+        <button type="button" class="quiet" disabled={busy} onclick={() => respond({ kind: 'confirmed', value: false })}>{$t("No")}</button>
+        <button type="button" class="primary" data-primary-action disabled={busy} onclick={() => respond({ kind: 'confirmed', value: true })}>{busy ? $t('Responding…') : $t('Yes')}</button>
       </div>
     {:else}
       <form onsubmit={submit}>
         {#if request.kind === 'input'}
-          <label for="extension-input">Response</label>
+          <label for="extension-input">{$t("Response")}</label>
           <input id="extension-input" bind:value={inputValue} placeholder={request.placeholder} disabled={busy} autocomplete="off" />
         {:else}
-          <label for="extension-editor">Response</label>
+          <label for="extension-editor">{$t("Response")}</label>
           <textarea id="extension-editor" bind:value={inputValue} rows="10" disabled={busy}></textarea>
         {/if}
         <div class="extension-dialog-actions">
-          <button type="button" class="quiet" disabled={busy} onclick={() => respond({ kind: 'cancelled' })}>Cancel</button>
-          <button type="submit" class="primary" data-primary-action disabled={busy}>{busy ? 'Submitting…' : 'Submit'}</button>
+          <button type="button" class="quiet" disabled={busy} onclick={() => respond({ kind: 'cancelled' })}>{$t("Cancel")}</button>
+          <button type="submit" class="primary" data-primary-action disabled={busy}>{busy ? $t('Submitting…') : $t('Submit')}</button>
         </div>
       </form>
     {/if}
 
-    {#if error}<p class="extension-error" role="alert">{error}</p>{/if}
+    {#if error}<p class="extension-error" role="alert">{$t(error)}</p>{/if}
   </dialog>
 </div>
 

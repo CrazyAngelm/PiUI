@@ -223,7 +223,7 @@ async function runController() {
   try {
     child = spawn(jobRunner, [
       '--controlled', '--cleanup-bound-ms', String(COMMAND_BOUND_MS), '--log', outerLog,
-      '--', process.execPath, innerHarness, ...(process.argv.includes('--workspace') ? ['--workspace'] : []),
+      '--', process.execPath, innerHarness, ...process.argv.filter(argument => ['--workspace', '--agent-api'].includes(argument)),
     ], {
       cwd: REPOSITORY_ROOT,
       env: { ...process.env, PIUI_E2E_RUN_ROOT: canonicalRunRoot },

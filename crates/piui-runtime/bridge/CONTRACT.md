@@ -5,7 +5,7 @@ This is HOST-PRIVATE, not WebView IPC. Runtime-owned session paths/native ids ar
 ## Embedding and ownership
 Rust embeds factory source bytes and common runner, concatenates them into one ESM source, and launches a fixed small `node --input-type=module -e <bootstrap>` inside a Windows Job assigned before resume or Unix process group. To avoid Windows' command-line limit, Rust writes an exact checked 4-byte little-endian source length followed by those trusted source bytes to stdin; the bootstrap reads exactly that prefix and imports it as an in-memory data module, leaving subsequent LF JSON untouched. No writable temp JavaScript files. Each adapter file exports ONLY its unique top-level function; put imports/constants/helpers inside the factory to avoid collisions in concatenation. Native children inherit containment. Script modules must not print to stdout except common runner protocol. Do not expose raw errors, environment, auth or raw native protocol to UI/logs.
 
-Factories: `export async function createPrimeAdapter(config, emit)`, `createCodexAdapter`, `createPiAdapter`. Config: `{cwd: absolute trusted workspace, sessionDir: host-owned native storage directory, nativeId?: string, nativePath?: string, title?: string, model?: {id,provider?,name}, thinkingLevel?:string, instructions?:string, permissionMode:'native'|'read-only'|'workspace-write'|'full-access', allowedTools?:string[], nativeSubagents?:boolean, daemonSocket:explicit nondefault reserved endpoint}`. Runtime resolution is host-side/system install; no arbitrary executable/path from frontend. Prime must avoid default daemon. Do not silently accept unsupported mandatory instructions/tools/permissions.
+Factories: `export async function createPrimeAdapter(config, emit)`, `createCodexAdapter`, `createPiAdapter`. Config: `{cwd: absolute trusted workspace, sessionDir: host-owned native storage directory, nativeId?: string, nativePath?: string, title?: string, model?: {id,provider?,name}, thinkingLevel?:string, instructions?:string, permissionMode:'native'|'read-only'|'workspace-write'|'full-access', networkAccess?:boolean, allowedTools?:string[], nativeSubagents?:boolean, daemonSocket:explicit nondefault reserved endpoint}`. `networkAccess` is an explicit Codex-only native capability for `read-only` or `workspace-write`; omission is network-denied and child admission cannot widen it. Runtime resolution is host-side/system install; no arbitrary executable/path from frontend. Prime must avoid default daemon. Do not silently accept unsupported mandatory instructions/tools/permissions.
 
 Factory returns adapter:
 - `snapshot()` -> NativeSnapshot
@@ -56,3 +56,16 @@ Codex implementation uses negotiated experimental dynamic tools and `item/tool/c
 
 ## Terminal turn outcome
 `idle` is a session readiness state, NOT proof of task success. Native providers may end failed/interrupted turns by returning to idle. Each adapter MUST emit `{type:'turnCompleted',outcome:'succeeded'|'failed'|'interrupted'}` exactly once after an admitted turn reaches its native terminal outcome, before final idle. Native stop reasons/turn status determine outcome, not absence of transport errors. A failed command that was never admitted rejects normally; a transport loss with no terminal proof stays uncertain. Host tracks outcome with turn generation; initial idle or later idle cannot overwrite it. Scheduler success requires explicit succeeded, never status-only idle. This is host-private metadata, not a persisted replacement transcript.
+
+
+## Composer operations
+
+`composerCapabilities()` returns `{steer:boolean,compact:boolean}`. `compact()`
+accepts an idle native context compaction and never emits a literal `/compact`
+user prompt. Unsupported methods reject before execution. Native completion or
+error updates the session state. `prompt({mode:"steer"})` requires an active
+native turn and must not create a new turn when it races completion.
+
+The workspace host owns the durable user Follow up outbox. Native adapters do
+not add a second persistent message format or model loop. Pi and Codex expose
+compact and steer, Prime reports actual SDK methods, Hermes ACP reports neither.

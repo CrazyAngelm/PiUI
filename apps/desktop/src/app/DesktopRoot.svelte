@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../features/locale/language';
   import WorkspaceShell from '../features/workspace/WorkspaceShell.svelte';
 
   // The classic entry is retained for explicit backwards-compatibility checks.
@@ -8,11 +9,11 @@
 
 {#if classic}
   {#await import('./App.svelte')}
-    <p role="status">Loading classic view…</p>
+    <p role="status">{$t("Loading classic view…")}</p>
   {:then legacy}
     <legacy.default />
   {:catch}
-    <p role="alert">The classic view could not be loaded. <a href="/">Open sessions</a></p>
+    <p role="alert">{$t("The classic view could not be loaded.")} <a href="/">{$t("Open sessions")}</a></p>
   {/await}
 {:else}
   <WorkspaceShell />

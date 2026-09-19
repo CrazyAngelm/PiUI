@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../features/locale/language';
   import { parseMarkdown, type InlineNode } from './markdown';
 
   export let source: string;
@@ -53,7 +54,7 @@
       <p>{@render inline(block.inline)}</p>
     {:else if block.kind === 'code'}
       <figure class="code-block">
-        <figcaption><span>{languageLabel(block.language)}</span><button type="button" onclick={() => void copyCode(block.text)} aria-label={`Copy ${languageLabel(block.language)} code`}>{copiedCode === block.text ? 'Copied' : 'Copy'}</button></figcaption>
+        <figcaption><span>{languageLabel(block.language)}</span><button type="button" onclick={() => void copyCode(block.text)} aria-label={$t("Copy {0} code", [languageLabel(block.language)])}>{copiedCode === block.text ? $t('Copied') : $t('Copy')}</button></figcaption>
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
         <pre tabindex="0" role="region" aria-label={`${languageLabel(block.language)} code`}><code>{block.text}</code></pre>
       </figure>

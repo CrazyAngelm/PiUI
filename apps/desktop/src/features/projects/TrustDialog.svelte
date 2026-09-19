@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../locale/language';
   import type { ProjectSummary } from '../../host-api/types';
 
   export let project: ProjectSummary | undefined;
@@ -17,16 +18,16 @@
 {#if open && project}
   <div class="backdrop" role="presentation" onclick={closeOnBackdrop}>
     <dialog open class="dialog" aria-labelledby="trust-title" aria-describedby="trust-description">
-      <p class="eyebrow">Trust decision</p>
-      <h2 id="trust-title">Trust {project.name}?</h2>
-      <p id="trust-description">{agentLabel} and trusted project integrations may read and modify files and run processes with your user permissions. Trust is not a sandbox.</p>
+      <p class="eyebrow">{$t("Trust decision")}</p>
+      <h2 id="trust-title">{$t("Trust")} {project.name}?</h2>
+      <p id="trust-description">{agentLabel} {$t("and trusted project integrations may read and modify files and run processes with your user permissions. Trust is not a sandbox.")}</p>
       <dl>
-        <div><dt>Folder</dt><dd class="mono">{project.displayPath}</dd></div>
-        <div><dt>Current access</dt><dd>Read-only history until you explicitly start a runtime.</dd></div>
+        <div><dt>{$t("Folder")}</dt><dd class="mono">{project.displayPath}</dd></div>
+        <div><dt>{$t("Current access")}</dt><dd>{$t("Read-only history until you explicitly start a runtime.")}</dd></div>
       </dl>
       <div class="actions">
-        <button class="button button--quiet" type="button" onclick={onClose} disabled={busy}>Keep restricted</button>
-        <button class="button button--primary" type="button" onclick={onTrust} disabled={busy}>{busy ? 'Updating trust…' : 'Trust project'}</button>
+        <button class="button button--quiet" type="button" onclick={onClose} disabled={busy}>{$t("Keep restricted")}</button>
+        <button class="button button--primary" type="button" onclick={onTrust} disabled={busy}>{busy ? $t('Updating trust…') : $t('Trust project')}</button>
       </div>
     </dialog>
   </div>

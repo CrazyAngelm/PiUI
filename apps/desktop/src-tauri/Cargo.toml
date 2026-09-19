@@ -28,6 +28,7 @@ native-prime-scheduler-test = []
 tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
+chrono.workspace = true
 piui-contracts = { path = "../../../crates/piui-contracts" }
 piui-extensions = { path = "../../../crates/piui-extensions" }
 piui-index = { path = "../../../crates/piui-index" }
@@ -38,7 +39,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["net"] }
 uuid.workspace = true
 tauri = { version = "=2.11.5", features = [] }
 rfd = "0.17.2"

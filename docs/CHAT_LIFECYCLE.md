@@ -4,6 +4,32 @@ Closing a native process does not end the conversation. A restored ordinary
 chat opens automatically through the existing trusted `openSession`
 route and the persisted native resume binding. Safe-mode and managed history remain process-free. Managed graph runs retain their coordinator-owned lifecycle.
 
+An empty ordinary chat is a durable PiUI draft even before Codex writes native
+history. After a host restart, a known unmaterialized draft whose reserved file
+is absent starts a new native draft under the same PiUI ID and title. Missing
+previously materialized history is not automatically replaced with an empty chat.
+The installed-Codex regression `native_codex_empty_chat_reopens_after_host_restart`
+exercises open, close, registry reload, reopen and reclose without a model request.
+Run it explicitly with `PIUI_DRAFT_REOPEN_TEST_ROOT` set to a disposable directory
+and `CODEX_HOME` set to its `codex-home` child.
+
+The composer model picker shows the current native model even when discovery
+omits it. Codex 0.147.0 and 0.153.4 are supported; the latter supplies the current
+Astra catalog. Hidden current models retain their native reasoning metadata;
+an absent model remains visible without invented effort levels. Model changes,
+effort and Fast use `workspace_settings_v16` and the native adapter.
+
+The compact picker opens an effort panel and a separate model list with the
+current selection checked. The native range control supports arrow keys, Home
+and End. Its chaos-energy fill increases with the model's supported effort
+levels; the highest level adds a dark crimson absorbing vortex and lightning.
+Reduced motion keeps the effect static. Errors retain the previous confirmed settings, and
+Escape returns focus to the composer control.
+
+Codex `account/rateLimits/updated` notifications are account metadata, not
+transcript entries. They never create compatibility-view blocks. Actual turn
+errors (including quota failures) and unknown conversation events remain visible.
+
 **Session details → Delete chat** opens a keyboard-accessible confirmation.
 Deletion removes the PiUI catalog entry and local UI draft; harness-owned history
 is retained, as the confirmation states. The additive `workspace_lifecycle_v13`
@@ -19,3 +45,56 @@ not create a console. Debug builds retain their console for development.
 Verification: lifecycle client response/error tests, registry reload/failure
 tests, and native WebView reload → continue the same session → close → cancel
 deletion → delete → reload, including keyboard focus and safe-mode rejection.
+
+### Skill context overrides
+
+Codex passes per-thread `skills.config` rules and Prime filters the native
+resource loader with `skillsOverride`. `scripts/native-skills-matrix.mjs
+--daemon-socket <explicit-piui-test-socket>` checks actual native requests against
+an isolated local Responses endpoint: the enabled control skill is listed and
+the disabled skill is absent, with existing Codex disabled settings preserved.
+These are synthetic provider requests through installed native harnesses, not
+paid model turns. Pi RPC and Hermes ACP currently do not expose per-session skill
+filtering: their controls are managed by the harness and unsupported rules fail
+before execution. Disabling a skill controls automatic context loading; it does
+not erase earlier messages or revoke filesystem access to the skill file.
+
+### Model catalog loading
+
+Catalog reads use isolated native probes independently of the active-session
+operation gate. Completed probes retire their owned process trees without waiting
+for native session shutdown hooks; a shutdown timeout must not discard a catalog
+that was already returned. The host-api client shares in-flight reads and keeps
+successful results by workspace and harness for the current UI lifetime. Errors
+are retryable and are not cached. Refresh models and launch preflight bypass the
+completed cache. No TTL or guessed model capabilities are introduced. Cold reads
+still follow native inventory discovery, including Hermes provider discovery.
+The ignored `installed_four_harness_catalogs` test exercises all four installed
+harnesses without inference or changes to native configuration.
+
+
+## Message outbox and commands
+
+The idle composer has one Send action. While running it defaults to Follow up,
+which records a separate next turn. Steer is an explicit choice only when the
+native adapter supports it; it never silently becomes a later turn. PiUI owns
+admission of user messages, while native harnesses own inference and history.
+
+Pending messages appear above the composer. Editing updates the same request;
+promotion sends that request as Steer under the same admission lock as draining.
+Delivered and dismissed IDs remain tombstones with their text cleared, preventing
+replay after a lost response. Definitive refusal preserves queued text with a
+reason. Ambiguous delivery pauses the queue and requires checking native history.
+Stop, failure, close and host restart pause pending work. Restart converts an
+in-flight request to uncertain; it never retries an unknown outcome automatically.
+
+Queue generations live in `workspace-registry-v11/composer-v19/<session-id>/`,
+separate from the unchanged session registry format and all native transcripts.
+The additive `workspace_composer_v19` command and `piui://composer-v19` event
+carry revisioned snapshots. Safe mode and managed run sessions deny these actions.
+
+Slash suggestions expose typed operations only: `/stop`, and `/compact` where
+supported. Unsupported slash input remains a draft and is not a model prompt.
+Pi uses RPC compact/steer; Codex uses thread/compact/start and turn/steer; Prime
+checks the installed SDK methods. Hermes ACP currently exposes neither compact
+nor active steering, but uses the same host Follow up queue.

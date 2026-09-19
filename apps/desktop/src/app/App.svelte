@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../features/locale/language';
   import { onMount, tick } from 'svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import CommandPalette from '../features/navigation/CommandPalette.svelte';
@@ -1834,7 +1835,7 @@
 
   <main class="workspace">
     {#if state.loading}
-      <section class="booting" aria-label="Loading PiUI"><span class="skeleton title"></span><span class="skeleton copy"></span><span class="skeleton copy copy--short"></span></section>
+      <section class="booting" aria-label={$t("Loading PiUI")}><span class="skeleton title"></span><span class="skeleton copy"></span><span class="skeleton copy copy--short"></span></section>
     {:else if settingsOpen}
       <SettingsView
         {preferences}
@@ -1857,16 +1858,16 @@
       />
     {:else if personalSelected}
       {#if state.safeMode}
-        <div class="safe-mode-banner" role="status"><strong>Safe mode.</strong><span>Extensions and runtime actions are disabled. Your local history remains read only.</span></div>
+        <div class="safe-mode-banner" role="status"><strong>{$t("Safe mode.")}</strong><span>{$t("Extensions and runtime actions are disabled. Your local history remains read only.")}</span></div>
       {/if}
       {#if state.error}
-        <div class="error-banner" role="alert"><strong>Recovery needed.</strong><span>{state.error}</span><button type="button" onclick={() => state = { ...state, error: undefined }}>Dismiss</button></div>
+        <div class="error-banner" role="alert"><strong>{$t("Recovery needed.")}</strong><span>{$t(state.error)}</span><button type="button" onclick={() => state = { ...state, error: undefined }}>{$t("Dismiss")}</button></div>
       {/if}
 
       {#if selectedPersonalSession || liveTimeline.length > 0}
         <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
-        <div class="history-scroll" bind:this={historyScroller} onscroll={handleHistoryScroll} onwheel={handleHistoryWheel} onkeydown={handleHistoryKeydown} tabindex="0" role="feed" aria-label="Session history; scroll upward to load older messages">
-          {#if timelinePageBusy}<p class="history-load-status" role="status">Loading older history…</p>{/if}
+        <div class="history-scroll" bind:this={historyScroller} onscroll={handleHistoryScroll} onwheel={handleHistoryWheel} onkeydown={handleHistoryKeydown} tabindex="0" role="feed" aria-label={$t("Session history; scroll upward to load older messages")}>
+          {#if timelinePageBusy}<p class="history-load-status" role="status">{$t("Loading older history…")}</p>{/if}
           {#if timelineWindowNotice}
             <p class="timeline-window-notice" role="status">{timelineWindowNotice}</p>
           {/if}
@@ -1878,7 +1879,7 @@
           />
         </div>
       {:else}
-        <EmptyState fill={true} eyebrow="Chats" title="New chat" description="Send a message below. This chat will appear in Chats after Pi replies." />
+        <EmptyState fill={true} eyebrow={$t('Chats')} title={$t("New chat")} description={$t('Send a message below. This chat will appear in Chats after Pi replies.')} />
       {/if}
 
       {#if !historyOnly}
@@ -1903,27 +1904,27 @@
         />
       {/key}
       {:else}
-        <p class="history-only-notice">Indexed native history is read only. <button type="button" onclick={onNewWorkspaceChat}>Return to sessions</button></p>
+        <p class="history-only-notice">{$t("Indexed native history is read only.")} <button type="button" onclick={onNewWorkspaceChat}>{$t("Return to sessions")}</button></p>
       {/if}
     {:else if state.projects.length === 0}
-      <EmptyState eyebrow="Chats" title="Start a new chat" description="Talk to Pi without attaching a user folder. Add a project later when you want Pi session history from that folder." actionLabel="New chat" action={() => void openNewChat(undefined)} />
+      <EmptyState eyebrow={$t('Chats')} title={$t("Start a new chat")} description={$t('Talk to Pi without attaching a user folder. Add a project later when you want Pi session history from that folder.')} actionLabel={$t('New chat')} action={() => void openNewChat(undefined)} />
     {:else if selectedProject === undefined}
-      <EmptyState eyebrow="Projects" title="Select a project" description="Choose a folder in the sidebar to inspect its local agent session history." />
+      <EmptyState eyebrow={$t('Projects')} title={$t("Select a project")} description={$t('Choose a folder in the sidebar to inspect its local agent session history.')} />
     {:else}
       {#if selectedProject.missing}
-        <div class="offline-banner" role="status"><strong>Folder unavailable.</strong><span>Reconnect the folder and use Refresh. PiUI has not changed any agent session files.</span></div>
+        <div class="offline-banner" role="status"><strong>{$t("Folder unavailable.")}</strong><span>{$t("Reconnect the folder and use Refresh. PiUI has not changed any agent session files.")}</span></div>
       {/if}
       {#if state.safeMode}
-        <div class="safe-mode-banner" role="status"><strong>Safe mode.</strong><span>Extensions and runtime actions are disabled. Your local history remains read only.</span></div>
+        <div class="safe-mode-banner" role="status"><strong>{$t("Safe mode.")}</strong><span>{$t("Extensions and runtime actions are disabled. Your local history remains read only.")}</span></div>
       {/if}
       {#if state.error}
-        <div class="error-banner" role="alert"><strong>Recovery needed.</strong><span>{state.error}</span><button type="button" onclick={() => state = { ...state, error: undefined }}>Dismiss</button></div>
+        <div class="error-banner" role="alert"><strong>{$t("Recovery needed.")}</strong><span>{$t(state.error)}</span><button type="button" onclick={() => state = { ...state, error: undefined }}>{$t("Dismiss")}</button></div>
       {/if}
 
       {#if selectedSession || liveTimeline.length > 0}
         <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
-        <div class="history-scroll" bind:this={historyScroller} onscroll={handleHistoryScroll} onwheel={handleHistoryWheel} onkeydown={handleHistoryKeydown} tabindex="0" role="feed" aria-label="Session history; scroll upward to load older messages">
-          {#if timelinePageBusy}<p class="history-load-status" role="status">Loading older history…</p>{/if}
+        <div class="history-scroll" bind:this={historyScroller} onscroll={handleHistoryScroll} onwheel={handleHistoryWheel} onkeydown={handleHistoryKeydown} tabindex="0" role="feed" aria-label={$t("Session history; scroll upward to load older messages")}>
+          {#if timelinePageBusy}<p class="history-load-status" role="status">{$t("Loading older history…")}</p>{/if}
           {#if timelineWindowNotice}
             <p class="timeline-window-notice" role="status">{timelineWindowNotice}</p>
           {/if}
@@ -1936,11 +1937,11 @@
         </div>
       {:else if sessionsLoading}
         <section class="session-scan-state" aria-live="polite">
-          <p class="eyebrow">Session history</p>
-          <p>Scanning local {selectedAgentLabel} sessions…</p>
+          <p class="eyebrow">{$t("Session history")}</p>
+          <p>{$t("Scanning local")} {selectedAgentLabel} {$t("sessions…")}</p>
         </section>
       {:else}
-        <EmptyState fill={true} eyebrow="Session history" title={`No ${selectedAgentLabel} sessions here yet`} description={`Trust this project, then start a new ${selectedAgentLabel} chat below. PiUI discovers the authoritative ${selectedAgentLabel} session after the runtime stops.`} />
+        <EmptyState fill={true} eyebrow={$t('Session history')} title={$t("No {0} sessions here yet", [selectedAgentLabel])} description={$t("Trust this project, then start a new {0} chat below. PiUI discovers the authoritative {0} session after the runtime stops.", [selectedAgentLabel])} />
       {/if}
 
       {#if !historyOnly}
@@ -1970,7 +1971,7 @@
         />
       {/key}
       {:else}
-        <p class="history-only-notice">Indexed native history is read only. <button type="button" onclick={onNewWorkspaceChat}>Return to sessions</button></p>
+        <p class="history-only-notice">{$t("Indexed native history is read only.")} <button type="button" onclick={onNewWorkspaceChat}>{$t("Return to sessions")}</button></p>
       {/if}
 
     {/if}
@@ -1991,28 +1992,28 @@
     onclick={(event) => { if (event.target === event.currentTarget && !addProjectBusy) void closeAddProject(); }}
   >
     <form class="add-dialog" onsubmit={(event) => { event.preventDefault(); void addProject(); }}>
-      <p class="eyebrow">Local project</p>
-      <h2 id="add-project-title">Add an existing folder</h2>
+      <p class="eyebrow">{$t("Local project")}</p>
+      <h2 id="add-project-title">{$t("Add an existing folder")}</h2>
       <fieldset class="agent-kind-fieldset" disabled={addProjectBusy}>
-        <legend>Agent runtime</legend>
+        <legend>{$t("Agent runtime")}</legend>
         <div class="agent-kind-options">
           <label class:selected={projectAgentKind === 'pi'}>
             <input type="radio" name="agent-kind" value="pi" bind:group={projectAgentKind} />
-            <span><strong>Pi</strong><small>Standard Pi sessions and extensions</small></span>
+            <span><strong>Pi</strong><small>{$t("Standard Pi sessions and extensions")}</small></span>
           </label>
           <label class:selected={projectAgentKind === 'prime-agent'}>
             <input type="radio" name="agent-kind" value="prime-agent" bind:group={projectAgentKind} />
-            <span><strong>Prime Agent</strong><small>Prime sessions, goals, RLM and schedules</small></span>
+            <span><strong>Prime Agent</strong><small>{$t("Prime sessions, goals, RLM and schedules")}</small></span>
           </label>
         </div>
       </fieldset>
       {#if !hasNativeFolderPicker}
-        <label for="project-path">Folder path</label>
-        <input type="text" id="project-path" bind:value={projectPath} autocomplete="off" placeholder="D:\work\project" disabled={addProjectBusy} />
+        <label for="project-path">{$t("Folder path")}</label>
+        <input type="text" id="project-path" bind:value={projectPath} autocomplete="off" placeholder={$t("D:\\work\\project")} disabled={addProjectBusy} />
       {/if}
-      <p class="helper" id="add-project-description">A folder keeps this runtime choice. Registering the same folder with a different runtime is blocked so Pi and Prime Agent sessions never mix.</p>
-      {#if addProjectError}<p class="add-project-error" role="alert">{addProjectError}</p>{/if}
-      <div class="dialog-actions"><button type="button" class="quiet" onclick={() => void closeAddProject()} disabled={addProjectBusy}>Cancel</button><button type="submit" class="primary" disabled={addProjectBusy || (!hasNativeFolderPicker && projectPath.trim().length === 0)}>{addProjectBusy ? 'Adding…' : hasNativeFolderPicker ? 'Choose folder' : 'Add restricted'}</button></div>
+      <p class="helper" id="add-project-description">{$t("A folder keeps this runtime choice. Registering the same folder with a different runtime is blocked so Pi and Prime Agent sessions never mix.")}</p>
+      {#if addProjectError}<p class="add-project-error" role="alert">{$t(addProjectError)}</p>{/if}
+      <div class="dialog-actions"><button type="button" class="quiet" onclick={() => void closeAddProject()} disabled={addProjectBusy}>{$t("Cancel")}</button><button type="submit" class="primary" disabled={addProjectBusy || (!hasNativeFolderPicker && projectPath.trim().length === 0)}>{addProjectBusy ? $t('Adding…') : hasNativeFolderPicker ? $t('Choose folder') : $t('Add restricted')}</button></div>
     </form>
   </dialog>
 {/if}

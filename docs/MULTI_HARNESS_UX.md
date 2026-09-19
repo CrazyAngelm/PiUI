@@ -314,7 +314,7 @@ Shared Activity is a scoped chronological event list, not a chat room. Each row 
 - Filtering does not acknowledge approvals. Dismissing a toast does not remove the recorded error or answer a runtime question.
 - Streaming text stays in the session timeline. Activity records meaningful task, delivery, lifecycle and approval changes, not every token or prompt body.
 - While reading older activity, new events do not jump focus or scroll position. A **New activity** affordance follows the existing timeline behavior.
-- Native schedules/goals may contribute display-safe status, but their presence is not a new PiUI scheduler or proof of native control. Show only supported controls.
+- Native harness schedules/goals may contribute display-safe status, but they remain distinct from PiUI launch schedules. PiUI v7 schedules target saved launch commands and always execute through the host coordinator; do not present adapter-native status as a PiUI-controllable schedule.
 
 ## 10. Shared approvals and input requests
 

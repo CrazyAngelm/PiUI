@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../locale/language';
   import { tick } from 'svelte';
   import type { ModelLite } from '../../host-api/types';
   import { filterModelPickerOptions, modelDisplayName, modelIsAvailable, orderModelPickerOptions, providerDisplayName } from './modelPicker';
@@ -108,11 +109,11 @@
   <button
     type="button"
     class="model-trigger"
-    aria-label={displayedModel === undefined ? 'Choose model' : `Choose model, current ${modelDisplayName(displayedModel)}${currentModelAvailable ? '' : ', unavailable'}`}
+    aria-label={displayedModel === undefined ? $t('Choose model') : $t("Choose model, current {0}{1}", [modelDisplayName(displayedModel), currentModelAvailable ? '' : ', unavailable'])}
     aria-haspopup="dialog"
     aria-controls={open ? 'model-picker-popup' : undefined}
     aria-expanded={open}
-    title={displayedModel === undefined ? 'Choose model' : `${displayedModel.provider}/${displayedModel.id}${currentModelAvailable ? '' : ' — unavailable'}`}
+    title={displayedModel === undefined ? $t('Choose model') : `${displayedModel.provider}/${displayedModel.id}${currentModelAvailable ? '' : ' — unavailable'}`}
     {disabled}
     onclick={() => open ? closePicker(false) : void openPicker()}
     onkeydown={handleTriggerKeydown}
@@ -122,33 +123,33 @@
       <rect x="8" y="8" width="4" height="4" rx=".5" />
       <path d="M7 2v2m6-2v2M7 16v2m6-2v2M2 7h2m-2 6h2m12-6h2m-2 6h2" />
     </svg>
-    <span>{displayedModel === undefined ? 'Select model' : modelDisplayName(displayedModel)}</span>
+    <span>{displayedModel === undefined ? $t('Select model') : modelDisplayName(displayedModel)}</span>
     {#if displayedModel !== undefined && !currentModelAvailable}<span class="unavailable-mark" aria-hidden="true">!</span>{/if}
     <svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
   </button>
 
   {#if open}
-    <div id="model-picker-popup" class="model-menu" role="dialog" aria-label={`Choose a ${agentLabel} model`}>
+    <div id="model-picker-popup" class="model-menu" role="dialog" aria-label={$t("Choose a {0} model", [agentLabel])}>
       <label class="search">
         <svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="4.75" /><path d="m11.5 11.5 3 3" /></svg>
-        <span class="visually-hidden">Search models</span>
+        <span class="visually-hidden">{$t("Search models")}</span>
         <input
           bind:this={searchInput}
           bind:value={query}
           type="search"
-          placeholder="Find a model…"
+          placeholder={$t("Find a model…")}
           autocomplete="off"
           aria-controls="model-options"
           aria-activedescendant={filteredModels.length > 0 ? `model-option-${activeIndex}` : undefined}
           oninput={() => (activeIndex = 0)}
           onkeydown={handleMenuKeydown}
         />
-        {#if query.length > 0}<button type="button" class="clear-search" aria-label="Clear model search" onclick={() => { query = ''; activeIndex = 0; searchInput?.focus(); }}>×</button>{/if}
+        {#if query.length > 0}<button type="button" class="clear-search" aria-label={$t("Clear model search")} onclick={() => { query = ''; activeIndex = 0; searchInput?.focus(); }}>×</button>{/if}
       </label>
 
-      <div id="model-options" class="model-options" role="listbox" aria-label="Available models">
+      <div id="model-options" class="model-options" role="listbox" aria-label={$t("Available models")}>
         {#if filteredModels.length === 0}
-          <p class="no-results">No matching models</p>
+          <p class="no-results">{$t("No matching models")}</p>
         {:else}
           {#each filteredModels as model, index (`${modelKey(model)}:${index}`)}
             {#if index === 0 || filteredModels[index - 1]?.provider !== model.provider}
@@ -170,11 +171,11 @@
                 {#if modelKey(model) === currentModelKey}<svg viewBox="0 0 16 16"><path d="m3 8 3 3 7-7" /></svg>{/if}
               </span>
               <span class="model-name">{modelDisplayName(model)}</span>
-              {#if modelKey(model) === currentModelKey && !currentModelAvailable}<span class="availability">Unavailable</span>{/if}
+              {#if modelKey(model) === currentModelKey && !currentModelAvailable}<span class="availability">{$t("Unavailable")}</span>{/if}
             </button>
           {/each}
         {/if}
-        {#if hiddenModelCount > 0}<p class="result-limit">{hiddenModelCount} more — refine your search</p>{/if}
+        {#if hiddenModelCount > 0}<p class="result-limit">{hiddenModelCount} {$t("more — refine your search")}</p>{/if}
       </div>
     </div>
   {/if}

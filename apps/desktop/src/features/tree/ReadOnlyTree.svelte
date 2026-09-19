@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../locale/language';
   import type { SessionTree } from '../../host-api/types';
 
   export let tree: SessionTree | undefined;
@@ -7,16 +8,16 @@
 </script>
 
 {#if open}
-  <aside class="panel" aria-label="Read-only session tree">
+  <aside class="panel" aria-label={$t("Read-only session tree")}>
     <header>
-      <div><p class="eyebrow">Branch history</p><h2>Read-only tree</h2></div>
-      <button type="button" class="close" onclick={onClose} aria-label="Close branch tree">Close</button>
+      <div><p class="eyebrow">{$t("Branch history")}</p><h2>{$t("Read-only tree")}</h2></div>
+      <button type="button" class="close" onclick={onClose} aria-label={$t("Close branch tree")}>{$t("Close")}</button>
     </header>
-    <p class="notice">Navigation is unavailable until an official Pi capability is verified. PiUI never rewrites entry parents.</p>
+    <p class="notice">{$t("Navigation is unavailable until an official Pi capability is verified. PiUI never rewrites entry parents.")}</p>
     {#if tree === undefined}
       <div class="tree-loading"><span class="skeleton"></span><span class="skeleton"></span></div>
     {:else if tree.nodes.length === 0}
-      <p class="empty">No readable tree entries.</p>
+      <p class="empty">{$t("No readable tree entries.")}</p>
     {:else}
       <ul class="tree">
         {#each tree.nodes as node (node.entryId)}
@@ -27,7 +28,7 @@
           </li>
         {/each}
       </ul>
-      {#if tree.diagnosticCount > 0}<p class="diagnostic">{tree.diagnosticCount} projection diagnostics retained safely.</p>{/if}
+      {#if tree.diagnosticCount > 0}<p class="diagnostic">{tree.diagnosticCount} {$t("projection diagnostics retained safely.")}</p>{/if}
     {/if}
   </aside>
 {/if}

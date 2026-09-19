@@ -57,6 +57,8 @@ export interface AgentProfile {
   readonly modelProvider?: string;
   readonly model: string;
   readonly permissionMode: PermissionMode;
+  /** Explicit native Codex network access. Omitted/false remains network-denied. */
+  readonly networkAccess?: boolean;
   readonly instructions: string;
   /** Codex base prompt replacement. Omit to retain the native prompt; an empty string explicitly replaces it with no base text. */
   readonly baseInstructions?: string;

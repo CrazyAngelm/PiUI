@@ -47,14 +47,14 @@
 <form class="launcher" aria-labelledby="run-launcher-title" onsubmit={(event) => { event.preventDefault(); start(); }}>
   <header>
     <p class="eyebrow">{$t('Run')}</p>
-    <h1 id="run-launcher-title">{command === undefined ? 'Start run' : command.value.name}</h1>
+    <h1 id="run-launcher-title">{command === undefined ? $t('Start run') : command.value.name}</h1>
     {#if command !== undefined}<p class="command-note">{$t('Named launch command. Its saved team and pipeline references are locked.')}</p>{/if}
   </header>
 
   {#if error || validationErrors.length > 0}
     <div class="error-summary" role="alert">
       <strong>{$t('Launch request needs attention.')}</strong>
-      {#if error}<p>{error}</p>{/if}
+      {#if error}<p>{$t(error)}</p>{/if}
       {#if validationErrors.length > 0}<ul>{#each validationErrors as issue}<li>{issue}</li>{/each}</ul>{/if}
     </div>
   {/if}
@@ -66,14 +66,14 @@
     <label for="run-team">{$t('Team')}</label>
     <select id="run-team" value={selection.teamId} onchange={selectTeam} disabled={disabled}>
       <option value="">{$t('Select a team')}</option>
-      {#if selection.teamId && !teams.some((team) => team.id === selection.teamId)}<option value={selection.teamId}>Unavailable team ({selection.teamId})</option>{/if}
+      {#if selection.teamId && !teams.some((team) => team.id === selection.teamId)}<option value={selection.teamId}>{$t("Unavailable team (")}{selection.teamId})</option>{/if}
       {#each teams as team (team.id)}<option value={team.id}>{team.name}</option>{/each}
     </select>
 
     <label for="run-pipeline">{$t('Pipeline')}</label>
     <select id="run-pipeline" value={selection.pipelineId} onchange={selectPipeline} disabled={disabled}>
       <option value="">{$t('Select a pipeline')}</option>
-      {#if selection.pipelineId && !pipelines.some((pipeline) => pipeline.id === selection.pipelineId)}<option value={selection.pipelineId}>Unavailable pipeline ({selection.pipelineId})</option>{/if}
+      {#if selection.pipelineId && !pipelines.some((pipeline) => pipeline.id === selection.pipelineId)}<option value={selection.pipelineId}>{$t("Unavailable pipeline (")}{selection.pipelineId})</option>{/if}
       {#each pipelines as pipeline (pipeline.id)}<option value={pipeline.id}>{pipeline.name}</option>{/each}
     </select>
   </section>
@@ -85,7 +85,7 @@
 
   <footer>
     <button class="button button--quiet" type="button" onclick={onCancel} disabled={busy}>{$t('Back')}</button>
-    {#if !readOnly}<button class="button button--primary" type="submit" disabled={busy}>{busy ? 'Requesting launch…' : locked ? 'Retry same launch request' : 'Start run'}</button>{/if}
+    {#if !readOnly}<button class="button button--primary" type="submit" disabled={busy}>{busy ? $t('Requesting launch…') : locked ? $t('Retry same launch request') : $t('Start run')}</button>{/if}
   </footer>
 </form>
 

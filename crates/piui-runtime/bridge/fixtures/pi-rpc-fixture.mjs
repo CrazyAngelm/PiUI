@@ -31,7 +31,7 @@ process.stdin.on("data", (chunk) => {
         write({ type: "agent_settled" });
       }, 30);
     } else if (request.type === "set_session_name") { sessionName = request.name; write({ id: request.id, type: "response", command: request.type, success: true }); }
-    else if (request.type === "abort" || request.type === "set_model" || request.type === "set_thinking_level") write({ id: request.id, type: "response", command: request.type, success: true, data: request.type === "set_model" ? { provider: request.provider, id: request.modelId, name: request.modelId } : undefined });
+    else if (request.type === "compact" || request.type === "steer" || request.type === "abort" || request.type === "set_model" || request.type === "set_thinking_level") write({ id: request.id, type: "response", command: request.type, success: true, data: request.type === "set_model" ? { provider: request.provider, id: request.modelId, name: request.modelId } : undefined });
     else if (request.type === "extension_ui_response") {}
     else write({ id: request.id, type: "response", command: request.type, success: false, error: "fixture rejected secret" });
   }

@@ -8,6 +8,12 @@ function config(overrides = {}) {
   return { harness: "pi", cwd: process.cwd(), sessionDir: process.cwd(), permissionMode: "native", runtimeProgram: process.execPath, runtimeArgs: [fixture], ...overrides };
 }
 
+test("Pi rejects per-session resource filtering before starting the native process", async () => {
+  for (const kind of ["skill", "mcp"]) {
+    await assert.rejects(createPiAdapter(config({ runtimeProgram: "must-not-launch", resourceRules: [{ kind, id: "canary", enabled: false }] }), () => {}), { bridgeCode: "unsupported-resource-policy" });
+  }
+});
+
 test("Pi RPC adapter snapshots history and returns prompt admission", async () => {
   const events = [];
   const adapter = await createPiAdapter(config(), (event) => events.push(event));
@@ -20,9 +26,8 @@ test("Pi RPC adapter snapshots history and returns prompt admission", async () =
   assert.ok(resources.items.some(item => item.kind === 'tool' && item.id === 'read' && item.configurable));
   assert.ok(resources.items.some(item => item.kind === 'skill' && item.name === 'review' && !item.configurable));
   assert.deepEqual(resources.warnings, []);
-  const started = Date.now();
   await adapter.prompt({ text: "test", mode: "prompt" });
-  assert.ok(Date.now() - started < 30, "prompt waits only for native admission");
+  assert.ok(!events.some(event => event.type === "turnCompleted"), "prompt returns before the fixture completes its turn");
   await new Promise((resolve) => setTimeout(resolve, 60));
   assert.ok(events.some((event) => event.type === "textDelta" && event.text === "answer"));
   assert.ok(events.some((event) => event.type === "approval"));
@@ -110,4 +115,19 @@ test("Pi appends managed instructions through a native file argument", async () 
   const adapter = await createPiAdapter(config({ instructions: "Follow the assigned graph task." }), () => {});
   try { assert.equal((await adapter.snapshot()).capabilities.instructions.supported, true); }
   finally { await adapter.dispose(); }
+});
+
+
+test("Pi composer exposes typed compact and rejects idle steer", async () => {
+  const events = [];
+  let settled;
+  const completed = new Promise(resolve => settled = resolve);
+  const adapter = await createPiAdapter(config(), event => { events.push(event); if (event.type === "status" && event.status === "idle") settled(); });
+  try {
+    assert.deepEqual(await adapter.composerCapabilities(), {steer:true, compact:true});
+    await assert.rejects(adapter.prompt({text:"cannot start a turn",mode:"steer"}), {bridgeCode:"no-active-turn"});
+    await adapter.compact();
+    await completed;
+    assert.ok(!events.some(event => event.type === "textDelta"), "compaction never becomes a literal prompt");
+  } finally { await adapter.dispose(); }
 });

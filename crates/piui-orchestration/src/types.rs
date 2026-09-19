@@ -108,6 +108,10 @@ pub struct AgentProfile {
     pub model_provider: Option<String>,
     pub model: String,
     pub permission_mode: PermissionMode,
+    /// Explicit native Codex network capability. Disabled by default and
+    /// valid only with read-only or workspace-write permissions.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub network_access: bool,
     pub instructions: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_instructions: Option<String>,

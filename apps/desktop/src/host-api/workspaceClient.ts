@@ -17,6 +17,10 @@ const SAFE_ERRORS: Record<string, string> = {
   INVALID_ARGUMENT: 'Check the required fields and try again.',
   NOT_SUPPORTED: 'This operation is not supported by the selected harness or current mode.',
   UNAVAILABLE: 'The selected harness is unavailable. Check its installation and native sign-in.',
+  TURN_ACTIVE: 'Wait for the current turn.',
+  NO_ACTIVE_TURN: 'There is no active turn to steer.',
+  QUEUE_PENDING: 'Resolve queued messages before compacting.',
+  DELIVERY_UNCERTAIN: 'Check native history before dismissing the uncertain message.',
   RUNTIME_FAILED: 'The harness could not complete the operation. Its saved history has not been removed.',
   SESSION_ALREADY_ACTIVE: 'This session is already active in another client. Stop it there before reopening it.',
   SAFE_MODE: 'Runtime actions are disabled in safe mode.',
@@ -76,6 +80,7 @@ const browser: WorkspaceClient = {
         { kind: 'pi', name: 'Pi', installed: false, status: 'unavailable', reason: 'Desktop host required' },
         { kind: 'prime-agent', name: 'Prime Agent', installed: false, status: 'unavailable', reason: 'Desktop host required' },
         { kind: 'codex', name: 'Codex', installed: false, status: 'unavailable', reason: 'Desktop host required' },
+        { kind: 'hermes', name: 'Hermes', installed: false, status: 'unavailable', reason: 'Desktop host required' },
       ],
     };
   },

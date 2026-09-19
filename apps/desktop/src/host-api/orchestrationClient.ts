@@ -2,19 +2,22 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
   ORCHESTRATION_EVENT_V6,
-  type OrchestrationHostCommandsV6,
+  ORCHESTRATION_SCHEDULE_EVENT_V7,
+  type OrchestrationHostCommandsV7,
   type OrchestrationHostErrorCode,
   type OrchestrationRunChangedEventV6,
-} from '../../../../contracts/orchestration-host-v6';
+  type OrchestrationScheduleChangedEventV7,
+} from '../../../../contracts/orchestration-host-v7';
 
-export type * from '../../../../contracts/orchestration-host-v6';
+export type * from '../../../../contracts/orchestration-host-v7';
 export type * from '../../../../contracts/orchestration-v6';
-export { ORCHESTRATION_EVENT_V6 };
-export interface OrchestrationClient extends OrchestrationHostCommandsV6 {
+export { ORCHESTRATION_EVENT_V6, ORCHESTRATION_SCHEDULE_EVENT_V7 };
+export interface OrchestrationClient extends OrchestrationHostCommandsV7 {
   listen(handler: (event: OrchestrationRunChangedEventV6) => void): Promise<() => void>;
+  listenSchedules(handler: (event: OrchestrationScheduleChangedEventV7) => void): Promise<() => void>;
 }
-export type OrchestrationCommandName = keyof OrchestrationHostCommandsV6;
-export type OrchestrationRequest = Parameters<OrchestrationHostCommandsV6[OrchestrationCommandName]>[0];
+export type OrchestrationCommandName = keyof OrchestrationHostCommandsV7;
+export type OrchestrationRequest = Parameters<OrchestrationHostCommandsV7[OrchestrationCommandName]>[0];
 export type OrchestrationInvoke = <T>(route: OrchestrationCommandName, args: { request: OrchestrationRequest }) => Promise<T>;
 export type OrchestrationSubscribe = (handler: (payload: unknown) => void) => Promise<() => void>;
 export type OrchestrationErrorCode = OrchestrationHostErrorCode | 'desktop-unavailable' | 'unknown';
@@ -61,6 +64,15 @@ export function orchestrationRunChanged(payload: unknown): OrchestrationRunChang
   return { protocol: 6, type: 'runChanged', workspaceId: payload.workspaceId, runId: payload.runId, revision: payload.revision };
 }
 
+export function orchestrationScheduleChanged(payload: unknown): OrchestrationScheduleChangedEventV7 | undefined {
+  if (typeof payload !== 'object' || payload === null) return undefined;
+  if (!('protocol' in payload) || payload.protocol !== 7 || !('type' in payload) || payload.type !== 'scheduleChanged') return undefined;
+  if (!('workspaceId' in payload) || typeof payload.workspaceId !== 'string' || !payload.workspaceId.trim()) return undefined;
+  if (!('scheduleId' in payload) || typeof payload.scheduleId !== 'string' || !payload.scheduleId.trim()) return undefined;
+  if (!('revision' in payload) || typeof payload.revision !== 'number' || !Number.isSafeInteger(payload.revision) || payload.revision < 0) return undefined;
+  return { protocol: 7, type: 'scheduleChanged', workspaceId: payload.workspaceId, scheduleId: payload.scheduleId, revision: payload.revision };
+}
+
 async function unavailableSubscription(): Promise<() => void> {
   throw new OrchestrationOperationError('runtime-unavailable');
 }
@@ -68,6 +80,7 @@ async function unavailableSubscription(): Promise<() => void> {
 export function createOrchestrationClient(
   invokeCommand: OrchestrationInvoke,
   subscribe: OrchestrationSubscribe = unavailableSubscription,
+  subscribeSchedules: OrchestrationSubscribe = unavailableSubscription,
 ): OrchestrationClient {
   async function call<T>(route: OrchestrationCommandName, request: OrchestrationRequest): Promise<T> {
     try { return await invokeCommand<T>(route, { request }); }
@@ -78,6 +91,14 @@ export function createOrchestrationClient(
       try {
         return await subscribe((payload) => {
           const event = orchestrationRunChanged(payload);
+          if (event !== undefined) handler(event);
+        });
+      } catch (error) { throw orchestrationError(error); }
+    },
+    async listenSchedules(handler) {
+      try {
+        return await subscribeSchedules((payload) => {
+          const event = orchestrationScheduleChanged(payload);
           if (event !== undefined) handler(event);
         });
       } catch (error) { throw orchestrationError(error); }
@@ -99,6 +120,10 @@ export function createOrchestrationClient(
     orchestration_get_launch_command_v6: (request) => call('orchestration_get_launch_command_v6', request),
     orchestration_save_launch_command_v6: (request) => call('orchestration_save_launch_command_v6', request),
     orchestration_delete_launch_command_v6: (request) => call('orchestration_delete_launch_command_v6', request),
+    orchestration_list_schedules_v7: (request) => call('orchestration_list_schedules_v7', request),
+    orchestration_save_schedule_v7: (request) => call('orchestration_save_schedule_v7', request),
+    orchestration_set_schedule_enabled_v7: (request) => call('orchestration_set_schedule_enabled_v7', request),
+    orchestration_delete_schedule_v7: (request) => call('orchestration_delete_schedule_v7', request),
     orchestration_list_runs_v6: (request) => call('orchestration_list_runs_v6', request),
     orchestration_get_run_v6: (request) => call('orchestration_get_run_v6', request),
     orchestration_start_run_v6: (request) => call('orchestration_start_run_v6', request),
@@ -119,5 +144,6 @@ export const orchestrationHost: OrchestrationClient = orchestrationDesktopAvaila
   ? createOrchestrationClient(
       (route, args) => invoke(route, args),
       (handler) => listen<unknown>(ORCHESTRATION_EVENT_V6, ({ payload }) => handler(payload)),
+      (handler) => listen<unknown>(ORCHESTRATION_SCHEDULE_EVENT_V7, ({ payload }) => handler(payload)),
     )
   : createUnavailableOrchestrationClient();

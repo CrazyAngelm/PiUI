@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../locale/language';
   import type { FakeScenario } from '../../host-api/types';
 
   export let enabled = false;
@@ -16,25 +17,25 @@
   }
 </script>
 
-<form class="composer" aria-label="Deterministic fake runtime composer" onsubmit={submit}>
+<form class="composer" aria-label={$t("Deterministic fake runtime composer")} onsubmit={submit}>
   <div class="composer-heading">
-    <span>Deterministic fake runtime</span>
-    <span class="local-only">Local only · not sent to Pi</span>
+    <span>{$t("Deterministic fake runtime")}</span>
+    <span class="local-only">{$t("Local only · not sent to Pi")}</span>
   </div>
-  <label class="visually-hidden" for="fake-scenario-text">Fake scenario input</label>
-  <textarea id="fake-scenario-text" bind:value={text} rows="2" disabled={!enabled || busy} placeholder="Describe a deterministic fake turn"></textarea>
+  <label class="visually-hidden" for="fake-scenario-text">{$t("Fake scenario input")}</label>
+  <textarea id="fake-scenario-text" bind:value={text} rows="2" disabled={!enabled || busy} placeholder={$t("Describe a deterministic fake turn")}></textarea>
   <div class="composer-controls">
-    <label for="fake-scenario">Scenario</label>
+    <label for="fake-scenario">{$t("Scenario")}</label>
     <select id="fake-scenario" bind:value={scenario} disabled={!enabled || busy}>
-      <option value="stream">Stream</option>
-      <option value="abort">Abort</option>
-      <option value="crash">Crash</option>
-      <option value="malformed">Malformed protocol</option>
+      <option value="stream">{$t("Stream")}</option>
+      <option value="abort">{$t("Abort")}</option>
+      <option value="crash">{$t("Crash")}</option>
+      <option value="malformed">{$t("Malformed protocol")}</option>
     </select>
-    <button type="submit" disabled={!enabled || busy || text.trim().length === 0}>{busy ? 'Running…' : 'Run scenario'}</button>
+    <button type="submit" disabled={!enabled || busy || text.trim().length === 0}>{busy ? $t('Running…') : $t('Run scenario')}</button>
   </div>
   {#if !enabled}
-    <p>Trust this project and select an indexed session to run the local fake runtime.</p>
+    <p>{$t("Trust this project and select an indexed session to run the local fake runtime.")}</p>
   {/if}
 </form>
 

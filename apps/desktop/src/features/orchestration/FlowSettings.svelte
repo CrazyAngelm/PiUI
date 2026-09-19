@@ -32,7 +32,7 @@
     {#if node.condition}
       <label>{$t('Result field')}<select {disabled} value={node.condition.field} onchange={(event) => { if (node.condition) onchange({condition:{...node.condition,field:event.currentTarget.value,equals:source?.resultFields?.find(field => field.name === event.currentTarget.value)?.kind === 'boolean' ? true : ''}}); }}><option value="" disabled>{$t('Select field')}</option>{#each source?.resultFields?.filter(field => field.kind !== 'text-list') ?? [] as field}<option value={field.name}>{field.name}</option>{/each}</select></label>
       <label>{$t('Equals')}
-        {#if conditionField?.kind === 'boolean'}<select {disabled} value={String(node.condition.equals)} onchange={(event) => node.condition && onchange({condition:{...node.condition,equals:event.currentTarget.value === 'true'}})}><option value="true">true</option><option value="false">false</option></select>
+        {#if conditionField?.kind === 'boolean'}<select {disabled} value={String(node.condition.equals)} onchange={(event) => node.condition && onchange({condition:{...node.condition,equals:event.currentTarget.value === 'true'}})}><option value="true">{$t("true")}</option><option value="false">{$t("false")}</option></select>
         {:else}<input {disabled} value={String(node.condition.equals)} oninput={(event) => node.condition && onchange({condition:{...node.condition,equals:conditionField?.kind === 'number' ? Number(event.currentTarget.value) : event.currentTarget.value}})} />{/if}
       </label>
     {/if}

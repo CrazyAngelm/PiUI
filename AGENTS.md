@@ -102,6 +102,29 @@ pnpm contract:test  # schema fixtures and backward compatibility
 pnpm perf:smoke     # startup, idle RSS, long-session scroll, stream batching
 ```
 
+## Build and release storage hygiene (mandatory)
+
+- `target/` is reproducible build output, not a release archive. A release task
+  is not complete while superseded `target/debug` or `target/release` trees are
+  retained merely for convenience.
+- Before cleanup, prove that no PiUI, Cargo, or Rust compiler process is using
+  the repository target directory. Verify that the installed executable and
+  every release file that must survive (installer, portable executable,
+  checksums, and required evidence) already exist outside `target/` under the
+  fixed repository `artifacts/` or `evidence/` directories.
+- After successful packaging, installation, hash comparison, and launch/health
+  verification, delete obsolete build trees. Remove the whole repository
+  `target/` when no build output is still required; otherwise remove only the
+  exact superseded `target/debug` or `target/release` tree after preserving the
+  current verified deliverables.
+- Cleanup commands must resolve and verify the exact repository root and target
+  path before recursive deletion. Never accept an arbitrary cleanup path, never
+  follow a reparse point, and never delete the installed application, source,
+  user data, native histories, `artifacts/`, or `evidence/` as build cleanup.
+- Report measured free space before and after cleanup. If verification fails or
+  an output is still the only rollback/evidence copy, retain that exact output
+  and report the blocker instead of claiming the release or cleanup complete.
+
 ## Before implementation begins
 
 The first task is to complete the spikes in `docs/12_OPEN_RISKS.md`. Do not build UI on assumptions about RPC-process termination, initial session creation, OAuth, or tree navigation.

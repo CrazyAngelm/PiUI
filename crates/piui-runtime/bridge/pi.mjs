@@ -11,6 +11,7 @@ export async function createPiAdapter(config, emit) {
     catch { return false; }
   };
   if (config.harness !== "pi") throw fail("wrong-harness", "The Pi adapter received an invalid harness configuration.");
+  if (config.resourceRules?.length) throw fail("unsupported-resource-policy", "Pi RPC does not expose per-session skill or MCP filtering.");
   if (typeof config.runtimeProgram !== "string" || !Array.isArray(config.runtimeArgs)) {
     throw fail("runtime-unavailable", "The Pi runtime is not installed.");
   }
@@ -357,13 +358,27 @@ export async function createPiAdapter(config, emit) {
         capabilities, models: availableModels,
       };
     },
+    composerCapabilities() { return { steer: true, compact: true }; },
+    async compact() {
+      if (status !== "idle") throw fail("turn-active", "Wait for the current turn before compacting.");
+      setStatus("running");
+      void request("compact", {}).catch(() => emit({ type: "error", message: "Context compaction failed." })).finally(() => setStatus("idle"));
+      return { accepted: true };
+    },
     async prompt({ text, mode }) {
       if (typeof text !== "string" || !text.trim()) throw fail("invalid-request", "A non-empty prompt is required.");
-      if (mode === "steer") await request("steer", { message: text });
-      else if (mode === "follow-up") await request("follow_up", { message: text });
-      else if (mode === "prompt") await request("prompt", { message: text, streamingBehavior: "followUp" });
-      else throw fail("invalid-request", "The prompt mode is invalid.");
-      admittedTurns += 1;
+      if (mode === "steer") {
+        if (status !== "running") throw fail("no-active-turn", "There is no active turn to steer.");
+        await request("steer", { message: text });
+      } else {
+        if (!["prompt", "follow-up"].includes(mode)) throw fail("invalid-request", "The prompt mode is invalid.");
+        // Admission must precede native events, which may arrive before ACK.
+        admittedTurns += 1;
+        try {
+          if (mode === "follow-up") await request("follow_up", { message: text });
+          else await request("prompt", { message: text, streamingBehavior: "followUp" });
+        } catch (error) { admittedTurns = Math.max(0, admittedTurns - 1); throw error; }
+      }
       return { accepted: true };
     },
     async interrupt() { cancelApprovals(); await request("abort"); },

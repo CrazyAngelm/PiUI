@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../locale/language';
   import { tick } from 'svelte';
   import type { ProjectSummary } from '../../host-api/types';
 
@@ -56,46 +57,46 @@
 {#if open && project}
   <div class="backdrop" role="presentation" onclick={closeOnBackdrop}>
     <dialog bind:this={dialog} open class="dialog" aria-modal="true" aria-labelledby="project-settings-title" aria-describedby="project-settings-description">
-      <p class="eyebrow">Local project</p>
-      <h2 id="project-settings-title">Project settings</h2>
-      <p id="project-settings-description">These actions change PiUI’s local registry only. They never rename or delete the folder or {agentLabel} session files.</p>
+      <p class="eyebrow">{$t("Local project")}</p>
+      <h2 id="project-settings-title">{$t("Project settings")}</h2>
+      <p id="project-settings-description">{$t("These actions change PiUI’s local registry only. They never rename or delete the folder or")} {agentLabel} {$t("session files.")}</p>
 
-      <section class="rename-section" aria-label="Project display name">
-        <label for="project-display-name">Display name</label>
+      <section class="rename-section" aria-label={$t("Project display name")}>
+        <label for="project-display-name">{$t("Display name")}</label>
         <input id="project-display-name" bind:value={draftName} autocomplete="off" disabled={busy} />
         <div class="actions">
-          <button class="button button--quiet" type="button" onclick={onClose} disabled={busy}>Cancel</button>
-          <button class="button button--primary" type="button" onclick={() => onRename(draftName)} disabled={busy || draftName.trim().length === 0}>{busy ? 'Saving…' : 'Save name'}</button>
+          <button class="button button--quiet" type="button" onclick={onClose} disabled={busy}>{$t("Cancel")}</button>
+          <button class="button button--primary" type="button" onclick={() => onRename(draftName)} disabled={busy || draftName.trim().length === 0}>{busy ? $t('Saving…') : $t('Save name')}</button>
         </div>
       </section>
 
-      <section class="registry-section" aria-label="Project registry controls">
+      <section class="registry-section" aria-label={$t("Project registry controls")}>
         <div>
-          <strong>{project.pinned ? 'Pinned project' : 'Project order'}</strong>
-          <p>{project.pinned ? 'This project stays at the top of your local list.' : 'Pin it to keep it at the top of your local list.'}</p>
+          <strong>{project.pinned ? $t('Pinned project') : $t('Project order')}</strong>
+          <p>{project.pinned ? $t('This project stays at the top of your local list.') : $t('Pin it to keep it at the top of your local list.')}</p>
         </div>
-        <button class="button button--quiet" type="button" onclick={onTogglePin} disabled={busy}>{project.pinned ? 'Unpin' : 'Pin project'}</button>
+        <button class="button button--quiet" type="button" onclick={onTogglePin} disabled={busy}>{project.pinned ? $t('Unpin') : $t('Pin project')}</button>
       </section>
 
-      <section class="danger-section" aria-label="Remove project from PiUI">
+      <section class="danger-section" aria-label={$t("Remove project from PiUI")}>
         <div>
-          <strong>Remove from PiUI</strong>
-          <p>Removes the local registry record and rebuildable cache. The folder and {agentLabel} JSONL files remain untouched.</p>
+          <strong>{$t("Remove from PiUI")}</strong>
+          <p>{$t("Removes the local registry record and rebuildable cache. The folder and")} {agentLabel} {$t("JSONL files remain untouched.")}</p>
         </div>
         {#if removeConfirmation}
           <div class="remove-confirmation">
-            <p>Remove <span class="mono">{project.name}</span> from this PiUI installation?</p>
+            <p>{$t("Remove")} <span class="mono">{project.name}</span> {$t("from this PiUI installation?")}</p>
             <div class="actions">
-              <button class="button button--quiet" type="button" onclick={() => removeConfirmation = false} disabled={busy}>Keep project</button>
-              <button class="button button--danger" type="button" onclick={onRemove} disabled={busy}>{busy ? 'Removing…' : 'Remove registry entry'}</button>
+              <button class="button button--quiet" type="button" onclick={() => removeConfirmation = false} disabled={busy}>{$t("Keep project")}</button>
+              <button class="button button--danger" type="button" onclick={onRemove} disabled={busy}>{busy ? $t('Removing…') : $t('Remove registry entry')}</button>
             </div>
           </div>
         {:else}
-          <button class="button button--danger-outline" type="button" onclick={() => removeConfirmation = true} disabled={busy}>Remove…</button>
+          <button class="button button--danger-outline" type="button" onclick={() => removeConfirmation = true} disabled={busy}>{$t("Remove…")}</button>
         {/if}
       </section>
 
-      {#if error}<p class="error" role="alert">{error}</p>{/if}
+      {#if error}<p class="error" role="alert">{$t(error)}</p>{/if}
     </dialog>
   </div>
 {/if}

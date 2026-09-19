@@ -1,0 +1,28 @@
+{
+  "verifiedAt": "2026-09-10T06:49:43.9059669Z",
+  "installedExe": "C:\\Users\\redmi\\AppData\\Local\\Programs\\PiUI\\PiUI.exe",
+  "installedSha256": "A4429AEEF230657C19F55CC67A246C59BAE61BF15A6347563BB865398324E956",
+  "matchesPreviouslyAcceptedBinary": true,
+  "priorInstalledAcceptance": {
+    "date": "2026-09-09T06:59:22.426Z",
+    "ping": {
+      "api": "piui-agent",
+      "version": 1
+    },
+    "mutations": 0
+  },
+  "currentProcess": {
+    "untouched": true,
+    "pid": 22068,
+    "startedAt": "2026-09-10T12:47:16.6304613+07:00"
+  },
+  "currentApi": "offline; no fresh ping possible without operator safe restart",
+  "shortcut": {
+    "arguments": "-NoProfile -NoExit -ExecutionPolicy Bypass -File \"D:\\Projects\\PIUI\\scripts\\start-agent-api.ps1\" -Executable \"C:\\Users\\redmi\\AppData\\Local\\Programs\\PiUI\\PiUI.exe\"",
+    "path": "C:\\Users\\redmi\\Desktop\\PiUI (Operator API).lnk",
+    "target": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+  },
+  "starterFixture": "PASS: ping before publication; owner-only ACL; live-host cleanup refusal; closed-host cleanup",
+  "binaryReplaced": false,
+  "nextStep": "After live work finishes, close PiUI normally and use PiUI (Operator API).lnk; expect readiness ready and authenticated ping."
+}

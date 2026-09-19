@@ -16,6 +16,7 @@ export interface ProfileDraft {
   reasoning: string;
   serviceTier: 'standard' | 'fast';
   permissionMode: PermissionMode;
+  networkAccess: boolean;
   instructions: string;
   whenToCall: string;
   inputInstructions: string;
@@ -46,6 +47,7 @@ export function createProfileDraft(
       reasoning: '',
       serviceTier: 'standard',
       permissionMode: 'native',
+      networkAccess: false,
       instructions: '', whenToCall: '', inputInstructions: '', expectedResult: '',
       replaceBasePrompt: false,
       baseInstructions: '',
@@ -64,6 +66,7 @@ export function createProfileDraft(
     reasoning: profile.reasoning ?? '',
     serviceTier: profile.serviceTier ?? 'standard',
     permissionMode: profile.permissionMode,
+    networkAccess: profile.networkAccess ?? false,
     instructions: profile.instructions,
     whenToCall: profile.whenToCall ?? '', inputInstructions: profile.inputInstructions ?? '', expectedResult: profile.expectedResult ?? '',
     replaceBasePrompt: profile.baseInstructions !== undefined,
@@ -85,6 +88,7 @@ export function profileFromDraft(draft: ProfileDraft): AgentProfile {
     ...(draft.reasoning ? { reasoning: draft.reasoning } : {}),
     ...(!['pi', 'hermes'].includes(draft.harness) ? { serviceTier: draft.serviceTier } : {}),
     permissionMode: draft.permissionMode,
+    ...(draft.networkAccess ? { networkAccess: true } : {}),
     instructions: draft.instructions,
     ...(draft.whenToCall ? { whenToCall: draft.whenToCall } : {}),
     ...(draft.inputInstructions ? { inputInstructions: draft.inputInstructions } : {}),
@@ -103,6 +107,7 @@ export function validateProfileDraft(draft: ProfileDraft): ProfileDraftValidatio
   if (draft.name.trim() === '') errors.push('Enter a profile name.');
   if (draft.model.trim() === '') errors.push('Enter a model.');
   if (draft.toolRules.some((rule) => rule.tool.trim() === '')) errors.push('Name every declared tool rule or remove it.');
+  if (draft.networkAccess && (draft.harness !== 'codex' || !['read-only', 'workspace-write'].includes(draft.permissionMode))) errors.push('Network access requires Codex read-only or workspace-write permissions.');
   return { valid: errors.length === 0, errors };
 }
 

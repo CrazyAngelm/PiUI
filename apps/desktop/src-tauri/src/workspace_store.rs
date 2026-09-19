@@ -17,6 +17,8 @@ const GENERATION_SUFFIX: &str = ".json";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PersistedSession {
+    #[serde(skip)]
+    pub composer: super::composer::QueueState,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub usage: Vec<piui_runtime::workspace_usage::NativeUsage>,
     pub id: String,
@@ -99,9 +101,13 @@ impl WorkspaceRegistry {
                 newest = Some((generation, document));
             }
         }
+        let mut document = newest.map(|(_, document)| document).unwrap_or_default();
+        for session in &mut document.sessions {
+            session.composer = load_composer(&directory, &session.id)?;
+        }
         Ok(Self {
             directory,
-            document: newest.map(|(_, document)| document).unwrap_or_default(),
+            document,
             next_generation,
         })
     }
@@ -116,6 +122,41 @@ impl WorkspaceRegistry {
             .iter()
             .find(|session| session.id == session_id)
             .cloned()
+    }
+
+    pub(super) fn save_composer(
+        &mut self,
+        id: &str,
+        queue: super::composer::QueueState,
+    ) -> io::Result<()> {
+        let session = self
+            .document
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == id)
+            .ok_or_else(|| io::Error::other("session missing"))?;
+        let directory = self.directory.join("composer-v19").join(id);
+        fs::create_dir_all(&directory)?;
+        let path = generation_path(&directory, queue.revision);
+        let bytes = serde_json::to_vec(&queue).map_err(io::Error::other)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        if let Err(error) = write_complete(&mut file, &bytes) {
+            drop(file);
+            let _ = fs::remove_file(&path);
+            return Err(error);
+        }
+        session.composer = queue;
+        for entry in fs::read_dir(&directory)?.flatten() {
+            if generation_from_path(&entry.path())
+                .is_some_and(|revision| revision < session.composer.revision)
+            {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+        Ok(())
     }
 
     /// Writes a complete next generation before publishing it in memory.
@@ -163,6 +204,34 @@ impl WorkspaceRegistry {
     }
 }
 
+fn load_composer(directory: &Path, id: &str) -> io::Result<super::composer::QueueState> {
+    let directory = directory.join("composer-v19").join(id);
+    if !directory.exists() {
+        return Ok(Default::default());
+    }
+    let mut newest = None;
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        if let Some(revision) = generation_from_path(&entry.path())
+            && newest
+                .as_ref()
+                .is_none_or(|(current, _)| revision > *current)
+        {
+            newest = Some((revision, entry.path()));
+        }
+    }
+    let Some((revision, path)) = newest else {
+        return Ok(Default::default());
+    };
+    // A damaged outbox must never silently replay an older generation.
+    let queue: super::composer::QueueState =
+        serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)?;
+    if queue.revision != revision {
+        return Err(io::Error::other("outbox revision mismatch"));
+    }
+    Ok(queue)
+}
+
 fn write_complete(file: &mut File, bytes: &[u8]) -> io::Result<()> {
     file.write_all(bytes)?;
     file.flush()?;
@@ -190,12 +259,69 @@ mod tests {
     use std::fs;
     use uuid::Uuid;
 
+    #[test]
+    fn composer_is_durable_without_changing_the_session_registry_format() {
+        let root = test_root();
+        let mut registry = WorkspaceRegistry::open(&root).expect("open");
+        registry
+            .transact(|sessions| {
+                sessions.push(session("composer-test"));
+                Ok(())
+            })
+            .expect("session");
+        let queue = crate::workspace_api::composer::QueueState {
+            revision: 1,
+            paused: true,
+            items: vec![crate::workspace_api::composer::QueuedMessage {
+                id: "request".into(),
+                text: "preserved draft".into(),
+                status: crate::workspace_api::composer::Delivery::Queued,
+                error: None,
+            }],
+        };
+        registry
+            .save_composer("composer-test", queue)
+            .expect("queue");
+        registry
+            .transact(|sessions| {
+                sessions[0].title = "Renamed".into();
+                Ok(())
+            })
+            .expect("rename");
+        let bytes = fs::read(generation_path(
+            &registry.directory,
+            registry.document.generation,
+        ))
+        .expect("registry");
+        let document: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert!(document["sessions"][0].get("composer").is_none());
+        let restored = WorkspaceRegistry::open(&root).expect("reopen");
+        let record = restored.session("composer-test").expect("restored session");
+        assert_eq!(record.title, "Renamed");
+        assert_eq!(record.composer.items[0].text, "preserved draft");
+        assert!(record.composer.paused);
+        let corrupt = generation_path(
+            &registry
+                .directory
+                .join("composer-v19")
+                .join("composer-test"),
+            2,
+        );
+        fs::write(corrupt, b"partial").expect("corrupt generation");
+        assert!(
+            WorkspaceRegistry::open(&root).is_err(),
+            "never replay an older queue after corrupt delivery state"
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
     fn test_root() -> std::path::PathBuf {
         std::env::temp_dir().join(format!("piui-workspace-store-{}", Uuid::new_v4()))
     }
 
     fn session(id: &str) -> PersistedSession {
         PersistedSession {
+            composer: Default::default(),
             usage: Vec::new(),
             id: id.into(),
             workspace_id: "workspace".into(),

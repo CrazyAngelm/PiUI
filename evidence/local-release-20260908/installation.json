@@ -1,0 +1,13 @@
+{
+  "builtAt": "2026-09-08T23:49:31.7438502+07:00",
+  "version": "0.1.1",
+  "shortcut": "C:\\Users\\redmi\\Desktop\\PiUI.lnk",
+  "installedExe": "C:\\Users\\redmi\\AppData\\Local\\Programs\\PiUI\\PiUI.exe",
+  "oldSha256": "FF0C760556AE8D18202708646554D20BFFC2114289152FEC567F026B96055FA0",
+  "sha256": "1FFB32D86CEB16F16F4522298A338D3A7A314DD30EAF70A5CD9326A78577DCB1",
+  "rollback": "C:\\Users\\redmi\\AppData\\Local\\Programs\\PiUI\\PiUI.before-update-20260908-234927.exe",
+  "releaseSource": "D:\\Projects\\PIUI\\target\\release\\piui-desktop.exe",
+  "artifacts": "D:\\Projects\\PIUI\\artifacts",
+  "verifiedProcessId": 26620,
+  "uiVerified": "PiUI home screen rendered after shortcut launch. Further Computer Use was stopped by user Escape."
+}

@@ -7,6 +7,9 @@
 #[path = "workspace_store.rs"]
 mod workspace_store;
 
+#[path = "workspace_composer.rs"]
+pub mod composer;
+
 use crate::api::verified_project_directory;
 use crate::dto::ApiError;
 use crate::state::HostState;
@@ -316,6 +319,7 @@ pub(crate) struct WorkspaceLaunchRequest {
     pub service_tier: Option<String>,
     pub resource_rules: Option<serde_json::Value>,
     pub permission_mode: PermissionMode,
+    pub network_access: bool,
     pub allowed_tools: Option<Vec<String>>,
     pub native_subagents: Option<bool>,
     pub dependency_history_references: Vec<NativeHistoryReference>,
@@ -350,6 +354,10 @@ struct CoordinatorBinding {
 }
 
 struct LiveState {
+    composer_gate: tokio::sync::Mutex<()>,
+    composer_notify: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    composer_waiting: Mutex<Option<u64>>,
+    composer_paused: AtomicBool,
     status: Mutex<SessionStatus>,
     approvals: Mutex<HashMap<String, WorkspaceApproval>>,
     revision: AtomicU64,
@@ -510,6 +518,7 @@ struct RuntimeStartOptions {
     base_instructions: Option<String>,
     service_tier: Option<String>,
     resource_rules: Option<serde_json::Value>,
+    network_access: bool,
     allowed_tools: Option<Vec<String>>,
     native_subagents: Option<bool>,
     coordinator: Option<CoordinatorBinding>,
@@ -525,6 +534,7 @@ impl RuntimeStartOptions {
             base_instructions: None,
             service_tier: None,
             resource_rules: None,
+            network_access: false,
             allowed_tools: None,
             native_subagents: None,
             coordinator: None,
@@ -566,13 +576,15 @@ impl WorkspaceHost {
     pub fn open(app_data_dir: &Path) -> Result<Self, std::io::Error> {
         let native_root = app_data_dir.join(NATIVE_SESSION_DIRECTORY);
         fs::create_dir_all(&native_root)?;
-        Ok(Self {
+        let host = Self {
             inner: Arc::new(WorkspaceHostInner {
                 registry: Mutex::new(WorkspaceRegistry::open(app_data_dir)?),
                 live: Mutex::new(HashMap::new()),
                 native_root,
             }),
-        })
+        };
+        host.recover_queues()?;
+        Ok(host)
     }
 
     #[must_use]
@@ -603,6 +615,7 @@ impl WorkspaceHost {
         let runtime_model = request.model.clone();
         let runtime_thinking_level = request.thinking_level.clone();
         let record = PersistedSession {
+            composer: Default::default(),
             usage: Vec::new(),
             id: session_id.clone(),
             workspace_id: request.workspace_id,
@@ -633,6 +646,7 @@ impl WorkspaceHost {
                     base_instructions: request.base_instructions,
                     service_tier: request.service_tier,
                     resource_rules: request.resource_rules,
+                    network_access: request.network_access,
                     allowed_tools: request.allowed_tools,
                     native_subagents: request.native_subagents,
                     coordinator,
@@ -729,6 +743,7 @@ impl WorkspaceHost {
             base_instructions,
             service_tier,
             resource_rules,
+            network_access,
             allowed_tools,
             native_subagents,
             coordinator,
@@ -751,6 +766,7 @@ impl WorkspaceHost {
             service_tier,
             resource_rules,
             permission_mode: record.permission_mode,
+            network_access,
             allowed_tools,
             native_subagents,
             coordination: coordinator.is_some(),
@@ -781,6 +797,10 @@ impl WorkspaceHost {
             return Err(error);
         }
         let state = Arc::new(LiveState {
+            composer_gate: tokio::sync::Mutex::new(()),
+            composer_notify: Mutex::new(None),
+            composer_waiting: Mutex::new(None),
+            composer_paused: AtomicBool::new(false),
             status: Mutex::new(native.status),
             approvals: Mutex::new(approval_map(&record.id, &native.approvals)),
             revision: AtomicU64::new(record.revision),
@@ -957,9 +977,11 @@ impl WorkspaceHost {
     }
 
     async fn interrupt(&self, session_id: &str) -> Result<(), WorkspaceError> {
-        let (runtime, _) = self
+        self.pause_queue(session_id);
+        let (runtime, state) = self
             .live_runtime(session_id)?
             .ok_or_else(WorkspaceError::closed)?;
+        let _admission = state.composer_gate.lock().await;
         runtime
             .interrupt()
             .await
@@ -1053,6 +1075,7 @@ impl WorkspaceHost {
     /// Stops one runtime without deleting its native transcript or binding.
     async fn close_session(&self, session_id: &str) -> Result<(), WorkspaceError> {
         validate_session_id(session_id)?;
+        self.pause_queue(session_id);
         let slot = lock(&self.inner.live)?.remove(session_id);
         let Some(slot) = slot else {
             self.record(session_id)?;
@@ -1633,7 +1656,6 @@ pub async fn harness_models_v18(
     if state.safe_mode {
         return Err(WorkspaceError::safe_mode());
     }
-    let _operation = state.live_runtime_operation_gate.lock().await;
     let directory = verified_project_directory(state.inner(), &request.workspace_id, true)?;
     let id = Uuid::new_v4().to_string();
     let session_dir = state
@@ -1656,6 +1678,7 @@ pub async fn harness_models_v18(
         service_tier: None,
         resource_rules: None,
         permission_mode: PermissionMode::Native,
+        network_access: false,
         allowed_tools: None,
         native_subagents: None,
         coordination: false,
@@ -1686,8 +1709,10 @@ pub async fn harness_models_v18(
         .resources()
         .await
         .map_err(|_| WorkspaceError::runtime());
+    // Catalog probes admit no turns and own no saved session. Retire their
+    // process tree directly; native session shutdown can wait on unrelated hooks.
     let disposed = runtime
-        .dispose()
+        .terminate()
         .await
         .map_err(|_| WorkspaceError::runtime());
     drain.abort();
@@ -1810,6 +1835,7 @@ pub async fn workspace_command_v15(
                         base_instructions: None,
                         service_tier: None,
                         resource_rules: None,
+                        network_access: false,
                         instructions: None,
                         permission_mode,
                         allowed_tools: None,
@@ -1976,6 +2002,18 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                         status,
                         ..previous_turn
                     });
+                    let queue_host = WorkspaceHost {
+                        inner: inner.clone(),
+                    };
+                    if matches!(
+                        status,
+                        SessionStatus::Failed | SessionStatus::Closed | SessionStatus::Stopping
+                    ) {
+                        queue_host.pause_queue(&session_id);
+                    }
+                    if status == SessionStatus::Idle {
+                        queue_host.drain_queue(&session_id);
+                    }
                     let record = inner
                         .registry
                         .lock()
@@ -1992,6 +2030,12 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                     }
                 }
                 NativeEvent::TurnCompleted { outcome } => {
+                    if outcome != TurnOutcome::Succeeded {
+                        WorkspaceHost {
+                            inner: inner.clone(),
+                        }
+                        .pause_queue(&session_id);
+                    }
                     let previous_turn = *state.turns.borrow();
                     state
                         .turns
@@ -2085,9 +2129,15 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                     }
                     continue;
                 }
-                NativeEvent::Error { message } => WorkspaceEventPayload::Error {
-                    message: safe_runtime_message(&message),
-                },
+                NativeEvent::Error { message } => {
+                    WorkspaceHost {
+                        inner: inner.clone(),
+                    }
+                    .pause_queue(&session_id);
+                    WorkspaceEventPayload::Error {
+                        message: safe_runtime_message(&message),
+                    }
+                }
             };
             publish(&publisher, &state, &session_id, payload);
         }
@@ -2738,6 +2788,7 @@ mod tests {
         fs::create_dir_all(&root).expect("creates project");
         let directory = ProjectDirectory::resolve(&root).expect("resolves project");
         let record = PersistedSession {
+            composer: Default::default(),
             usage: Vec::new(),
             id: uuid::Uuid::new_v4().to_string(),
             workspace_id: uuid::Uuid::new_v4().to_string(),
@@ -2857,6 +2908,71 @@ mod tests {
         assert!(hash_matches("final assistant text", &hash.to_uppercase()));
         assert!(!hash_matches("edited assistant text", &hash));
         assert!(!valid_content_hash("short"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires installed Codex and an isolated PIUI_DRAFT_REOPEN_TEST_ROOT/CODEX_HOME"]
+    async fn native_codex_empty_chat_reopens_after_host_restart() {
+        let root = PathBuf::from(
+            std::env::var_os("PIUI_DRAFT_REOPEN_TEST_ROOT").expect("isolated test root"),
+        );
+        assert_eq!(
+            PathBuf::from(std::env::var_os("CODEX_HOME").expect("isolated Codex home")),
+            root.join("codex-home")
+        );
+        fs::create_dir_all(root.join("project")).expect("project");
+        let directory = ProjectDirectory::resolve(&root.join("project")).expect("directory");
+        let app_data = root.join("app-data");
+        let host = super::WorkspaceHost::open(&app_data).expect("host");
+        let id = uuid::Uuid::new_v4().to_string();
+        host.insert_record(PersistedSession {
+            composer: Default::default(),
+            usage: Vec::new(),
+            id: id.clone(),
+            workspace_id: uuid::Uuid::new_v4().to_string(),
+            harness: HarnessKind::Codex,
+            title: "Empty restart proof".into(),
+            updated_at: "0".into(),
+            model: None,
+            thinking_level: None,
+            permission_mode: PermissionMode::Native,
+            profile_id: None,
+            run_id: None,
+            member_id: None,
+            native_id: None,
+            native_path: None,
+            revision: 0,
+            materialized: Some(false),
+        })
+        .expect("draft");
+        let first = host
+            .open_session(&directory, &id, Arc::new(|_| {}))
+            .await
+            .expect("first open");
+        assert!(first.blocks.is_empty());
+        host.close_session(&id).await.expect("close");
+        let before = host.record(&id).expect("saved draft");
+        assert_eq!(before.materialized, Some(false));
+        assert_eq!(
+            resume_binding(&before).expect("absent draft binding"),
+            (None, None)
+        );
+        drop(host);
+
+        let restored = super::WorkspaceHost::open(&app_data).expect("restarted host");
+        let reopened = restored
+            .open_session(&directory, &id, Arc::new(|_| {}))
+            .await
+            .expect("reopen empty chat");
+        assert_eq!(reopened.session.id, id);
+        assert_eq!(reopened.session.title, "Empty restart proof");
+        assert_eq!(reopened.session.status, SessionStatus::Idle);
+        assert!(reopened.blocks.is_empty());
+        restored.close_session(&id).await.expect("reclose");
+        assert_eq!(
+            restored.record(&id).expect("still draft").materialized,
+            Some(false)
+        );
     }
 
     #[test]

@@ -482,6 +482,9 @@ pub fn spawn_permissions_subset(parent: &AgentProfile, child: &AgentProfile) -> 
     if !files {
         return false;
     }
+    if child.network_access && !parent.network_access {
+        return false;
+    }
     // Denials cannot disappear or become advisory on a child.
     if parent.tool_policy.rules.iter().any(|rule| {
         rule.decision == ToolDecision::Deny

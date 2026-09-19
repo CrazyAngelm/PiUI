@@ -23,6 +23,12 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   if (!new Set(["native", "read-only", "workspace-write", "full-access"]).has(config.permissionMode)) {
     throw fail("unsupported-permission-mode", "The requested Codex permission mode is not supported.");
   }
+  if (config.networkAccess !== undefined && typeof config.networkAccess !== "boolean") {
+    throw fail("unsupported-network-policy", "The requested Codex network policy is invalid.");
+  }
+  if (config.networkAccess === true && !new Set(["read-only", "workspace-write"]).has(config.permissionMode)) {
+    throw fail("unsupported-network-policy", "Explicit Codex network access requires read-only or workspace-write permissions.");
+  }
   if (Array.isArray(config.allowedTools)) {
     throw fail("unsupported-tool-policy", "Codex cannot enforce the requested tool allowlist.");
   }
@@ -75,6 +81,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   let currentProvider = currentModel?.provider;
   let modelCatalog = [];
   const modelDefaults = new Map();
+  const mcpStartupFailures = new Set();
   let serviceTier = config.serviceTier;
 
   const setStatus = (next) => {
@@ -157,12 +164,25 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     const move = change.kind?.type === "update" && change.kind.move_path ? ` -> ${change.kind.move_path}` : "";
     return `${change.kind?.type || "change"}: ${change.path || "unknown path"}${move}${change.diff ? `\n${change.diff}` : ""}`;
   }).join("\n");
+  const webSearchText = (item) => {
+    // Search result DTOs are provider-shaped and may contain private or very
+    // large fields; expose only the activity metadata the timeline needs.
+    const lines = [];
+    if (typeof item?.query === "string" && item.query.trim()) lines.push(`Query: ${item.query.trim()}`);
+    const actionType = item?.action && typeof item.action === "object" && typeof item.action.type === "string"
+      ? item.action.type
+      : undefined;
+    if (actionType) lines.push(`Action: ${actionType}`);
+    if (Array.isArray(item?.results)) lines.push(`Results: ${item.results.length}`);
+    return lines.join("\n");
+  };
   const itemText = (item) => {
     if (item?.type === "userMessage") {
       return (item.content || []).filter((value) => value?.type === "text").map((value) => value.text).join("\n");
     }
     if (item?.type === "agentMessage" || item?.type === "plan") return item.text || "";
     if (item?.type === "reasoning") return [...(item.summary || []), ...(item.content || [])].join("\n");
+    if (item?.type === "webSearch") return webSearchText(item);
     if (item?.type === "commandExecution") {
       return [
         typeof item.command === "string" && item.command ? `Command: ${item.command}` : "",
@@ -178,7 +198,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     if (type === "agentMessage") return "assistant";
     if (type === "reasoning" || type === "plan") return "thinking";
     if (type === "contextCompaction") return "compaction";
-    if (["commandExecution", "fileChange"].includes(type)) return "tool";
+    if (["commandExecution", "fileChange", "webSearch"].includes(type)) return "tool";
     return "unknown";
   };
   const itemLabel = (type) => ({
@@ -188,6 +208,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     plan: "Plan",
     commandExecution: "Command",
     fileChange: "File change",
+    webSearch: "Web search",
     mcpToolCall: "MCP tool",
     dynamicToolCall: "Tool",
     collabAgentToolCall: "Agent tool",
@@ -203,7 +224,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       label: itemLabel(item.type),
       status: overrideStatus || mapStatus(item.status),
       text: itemText(item),
-      ...(kind === "tool" ? { toolName: item.tool || item.type, collapsible: true } : {}),
+      ...(kind === "tool" ? { toolName: item.type === "webSearch" ? "web-search" : item.tool || item.type, collapsible: true } : {}),
       ...(kind === "unknown" ? {
         safeSummary: `Unsupported Codex item: ${typeof item.type === "string" ? item.type : "unknown"}`,
         fallback: true,
@@ -490,8 +511,15 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       return;
     }
     if (nativeId && typeof params.threadId === "string" && params.threadId !== nativeId) return;
+    // Account quota notifications are control-plane state, not conversation
+    // items. Actual turn failures (including usage limits) still surface below.
+    if (method === "account/rateLimits/updated") return;
     if (method === "mcpServer/startupStatus/updated") {
-      if (params.status === "failed") emit({ type: "error", message: "A Codex MCP server failed to start. Check its native configuration." });
+      const name = typeof params.name === "string" && params.name.trim()
+        ? params.name.trim().replace(/\s+/g, " ")
+        : "Codex MCP";
+      if (params.status === "failed") mcpStartupFailures.add(name);
+      else if (["starting", "ready", "disabled", "stopped"].includes(params.status)) mcpStartupFailures.delete(name);
       return;
     }
     if (method === "thread/settings/updated") {
@@ -764,8 +792,8 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   if (!initialize || typeof initialize.codexHome !== "string") {
     throw cleanupStartupFailure(fail("native-handshake-failed", "The Codex app server handshake failed."));
   }
-  if (typeof initialize.userAgent !== "string" || !/(?:^|\/)0\.147\.0(?:\s|\(|$)/.test(initialize.userAgent)) {
-    throw cleanupStartupFailure(fail("unsupported-native-version", "PiUI requires Codex app-server 0.147.0 for this adapter."));
+  if (typeof initialize.userAgent !== "string" || !/(?:^|\/)0\.(?:147\.0|153\.4)(?:\s|\(|$)/.test(initialize.userAgent)) {
+    throw cleanupStartupFailure(fail("unsupported-native-version", "PiUI requires a supported Codex app-server version (0.147.0 or 0.153.4)."));
   }
   try {
     await notifyNative("initialized");
@@ -780,6 +808,17 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       : config.permissionMode === "full-access"
         ? { permissions: ":danger-full-access", approvalPolicy: "never" }
         : {};
+  const turnSandboxPolicy = config.networkAccess === true
+    ? config.permissionMode === "read-only"
+      ? { type: "readOnly", networkAccess: true }
+      : {
+          type: "workspaceWrite",
+          writableRoots: [config.cwd],
+          networkAccess: true,
+          excludeTmpdirEnvVar: false,
+          excludeSlashTmp: false,
+        }
+    : undefined;
   const workspaceTools = coordinationEnabled ? [{
     type: "namespace",
     name: "workspace",
@@ -886,7 +925,10 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   });
   const adapter = {
     async resources() {
-      const items = []; const warnings = [];
+      const items = [];
+      const warnings = [...mcpStartupFailures]
+        .sort((left, right) => left.localeCompare(right))
+        .map((name) => `MCP server ${name} could not start.`);
       try {
         const response = await callNative("skills/list", { cwds: [config.cwd], forceReload: false });
         for (const group of response.data ?? []) for (const skill of group.skills ?? []) {
@@ -933,6 +975,13 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
         models: modelCatalog,
       };
     },
+    composerCapabilities() { return { steer: true, compact: true }; },
+    async compact() {
+      if (status !== "idle" || activeTurnId || startingTurn) throw fail("turn-active", "Wait for the current turn before compacting.");
+      startingTurn = true;
+      try { await callNative("thread/compact/start", { threadId: nativeId }); return { accepted: true }; }
+      finally { startingTurn = false; }
+    },
     async prompt({ text, mode }) {
       if (typeof text !== "string" || !new Set(["prompt", "steer", "follow-up"]).has(mode)) {
         throw fail("invalid-prompt", "The Codex prompt request is invalid.");
@@ -950,6 +999,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
         return { accepted: true };
       }
       if (startingTurn) throw fail("turn-active", "Codex is already starting a turn.");
+      if (mode === "steer") throw fail("no-active-turn", "There is no active turn to steer.");
       startingTurn = true;
       try {
         const response = await callNative("turn/start", {
@@ -958,6 +1008,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
           ...(serviceTier ? { serviceTier: serviceTier === "fast" ? "fast" : "default" } : {}),
           ...(currentModel ? { model: currentModel.id } : {}),
           ...(thinkingLevel ? { effort: thinkingLevel } : {}),
+          ...(turnSandboxPolicy ? { sandboxPolicy: turnSandboxPolicy } : {}),
         });
         const acceptedTurnId = response?.turn?.id;
         if (!acceptedTurnId) throw safeNativeError();
@@ -990,11 +1041,16 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       const data = [];
       let cursor = null;
       do {
-        const page = await callNative("model/list", { cursor, includeHidden: false });
+        // A native default/resumed model may be hidden from new-model discovery.
+        // Keep its authoritative reasoning metadata and selected menu entry.
+        const page = await callNative("model/list", { cursor, includeHidden: true });
         for (const model of page?.data || []) modelDefaults.set(model.model || model.id, model.defaultReasoningEffort);
-        data.push(...(page?.data || []).filter((model) => !model.hidden).map(mapModel));
+        data.push(...(page?.data || []).filter((model) => !model.hidden || (model.model || model.id) === currentModel?.id).map(mapModel));
         cursor = page?.nextCursor || null;
       } while (cursor);
+      if (currentModel && !data.some((model) => model.id === currentModel.id && model.provider === currentModel.provider)) {
+        data.unshift({ ...currentModel, thinkingLevels: [] });
+      }
       modelCatalog = data;
       return data;
     },

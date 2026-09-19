@@ -248,6 +248,9 @@
             "full-access"
           ]
         },
+        "networkAccess": {
+          "type": "boolean"
+        },
         "instructions": {
           "type": "string"
         },

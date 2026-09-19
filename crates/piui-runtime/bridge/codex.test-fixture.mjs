@@ -8,6 +8,7 @@ const poolFixture = process.argv.includes("--pool");
 let threadSerial = 0;
 const permissionIndex = process.argv.indexOf("--expect-permission");
 const expectedPermission = permissionIndex >= 0 ? process.argv[permissionIndex + 1] : "native";
+const expectNetwork = process.argv.includes("--expect-network");
 const coordinatorFixture = process.argv.includes("--coordinator");
 const activeResumeFixture = process.argv.includes("--active-resume");
 const holdTurnFixture = process.argv.includes("--hold-turn");
@@ -32,11 +33,19 @@ input.on("line", (line) => {
   const message = JSON.parse(line);
   if (poolFixture && message.params?.threadId) threadId = message.params.threadId;
   if (message.method === "initialize") {
-    const userAgent = process.argv.includes("--wrong-version") ? "fixture/0.148.0" : "fixture/0.147.0";
+    const userAgent = process.argv.includes("--wrong-version") ? "fixture/0.148.0" : process.argv.includes("--latest-version") ? "fixture/0.153.4" : "fixture/0.147.0";
     send({ id: message.id, result: { userAgent, codexHome: "/fixture", platformFamily: "fixture", platformOs: "fixture" } });
   } else if (message.method === "initialized") {
+    if (process.argv.includes("--rate-limits")) {
+      send({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 20 } } } });
+      send({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 21 } } } });
+      send({ method: "future/conversation/event", params: {} });
+    }
     if (process.argv.includes("--mcp-startup")) {
       for (const status of ["starting", "ready", "failed"]) send({ method: "mcpServer/startupStatus/updated", params: { name: "fixture", status, error: "PRIVATE_MCP_DETAIL" } });
+    }
+    if (process.argv.includes("--mcp-recovery")) {
+      for (const status of ["starting", "failed", "ready"]) send({ method: "mcpServer/startupStatus/updated", params: { name: "fixture", status, error: "PRIVATE_MCP_DETAIL" } });
     }
     // Handshake notification has no response.
   } else if (message.method === "thread/start" || message.method === "thread/resume") {
@@ -106,9 +115,17 @@ input.on("line", (line) => {
     }
     if (unknownItemsFixture) {
       send({ method: "item/started", params: { threadId, turnId: "turn-items", startedAtMs: 7, item: { type: "commandExecution", id: "command-display", command: "display command", cwd: process.cwd(), aggregatedOutput: "", status: "inProgress" } } });
-      for (const type of ["mcpToolCall", "collabAgentToolCall", "webSearch", "imageView", "imageGeneration"]) {
+      for (const type of ["mcpToolCall", "collabAgentToolCall", "imageView", "imageGeneration"]) {
         send({ method: "item/started", params: { threadId, turnId: "turn-items", startedAtMs: 8, item: { type, id: `unsupported-${type}`, status: "inProgress" } } });
       }
+      send({ method: "item/started", params: { threadId, turnId: "turn-items", startedAtMs: 8, item: {
+        type: "webSearch",
+        id: "web-search-item",
+        query: "latest fixture news",
+        action: { type: "search" },
+        results: [{ title: "Fixture result", secret: "SECRET-MUST-NOT-LEAK" }],
+        status: "inProgress",
+      } } });
     }
     if (coordinatorFixture) {
       const tools = message.params.dynamicTools?.[0]?.tools?.map((tool) => tool.name).sort();
@@ -144,6 +161,13 @@ input.on("line", (line) => {
   } else if (message.id === 911 && message.result?.success === false) {
     send({ method: "warning", params: { threadId, message: "invalid coordinator call rejected" } });
   } else if (message.method === "turn/start") {
+    if (expectNetwork && (
+      message.params.sandboxPolicy?.type !== "workspaceWrite"
+      || message.params.sandboxPolicy?.networkAccess !== true
+      || !message.params.sandboxPolicy?.writableRoots?.includes(process.cwd())
+    )) {
+      send({ id: message.id, error: { code: -32602, message: "network sandbox policy not forwarded" } }); return;
+    }
     if (expectedSettings && (message.params.serviceTier !== expectedSettings.tier || message.params.effort !== "low")) {
       send({ id: message.id, error: { code: -32602, message: "turn settings not forwarded" } }); return;
     }
@@ -170,7 +194,22 @@ input.on("line", (line) => {
     send({ id: message.id, result: { data: [{ name: "docs", tools: { search_docs: { name: "Search docs" } } }], nextCursor: null } });
   } else if (message.method === "model/list") {
     if (holdModelFixture) return;
+    if (process.argv.includes("--missing-current-model")) { send({ id: message.id, result: { data: [], nextCursor: null } }); return; }
+    if (process.argv.includes("--hidden-current-model")) {
+      const data = message.params.includeHidden ? [
+        { id: "fixture-model", displayName: "Hidden current", hidden: true, supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "ultra" }] },
+        { id: "other-hidden", hidden: true },
+      ] : [];
+      send({ id: message.id, result: { data, nextCursor: null } }); return;
+    }
     send({ id: message.id, result: { data: [{ id: "fixture-model", model: "fixture-model", displayName: "Fixture Model", hidden: false, supportedReasoningEfforts: [{ reasoningEffort: "low" }] }], nextCursor: null } });
+  } else if (message.method === "thread/compact/start") {
+    send({ id: message.id, result: {} });
+    send({ method: "turn/started", params: { threadId, turn: { id: "compact-fixture", status: "inProgress" } } });
+    send({ method: "item/completed", params: { threadId, item: { id: "compact-item", type: "contextCompaction" } } });
+    send({ method: "turn/completed", params: { threadId, turn: { id: "compact-fixture", status: "completed" } } });
+  } else if (message.method === "turn/steer") {
+    send({ id: message.id, result: { turnId: message.params.expectedTurnId } });
   } else if (message.method === "thread/settings/update" || message.method === "thread/name/set" || message.method === "turn/interrupt") {
     send({ id: message.id, result: {} });
     if (message.method === "thread/settings/update") send({ method: "thread/settings/updated", params: { threadId, model: message.params.model, reasoningEffort: message.params.effort, serviceTier: message.params.serviceTier } });

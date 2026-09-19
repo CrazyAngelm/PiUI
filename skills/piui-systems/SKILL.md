@@ -22,7 +22,7 @@ Choose topology from dependencies: sequence for cumulative work; independent bra
 ## Configure and verify
 
 1. Inspect existing files before editing. Read `src/harness-adapters/` under `apps/desktop` for capabilities. Verify installed model/provider identifiers through an available native catalog/configuration without exposing credentials. Examples intentionally contain `REPLACE_WITH_AVAILABLE_MODEL`; resolve that before presenting a ready-to-run system.
-2. Choose permissions from the task. Codex read-only is suitable for actual filesystem read restrictions; Prime `native` is not a filesystem sandbox. Native tool rules form an allowlist when present; include required allowed tools explicitly. Never silently substitute prompt-only instructions for enforced restrictions.
+2. Choose permissions from the task. Codex read-only is suitable for actual filesystem read restrictions; Prime `native` is not a filesystem sandbox. Set `networkAccess: true` only when the task explicitly needs outbound network access and only on a Codex `read-only` or `workspace-write` profile; omission remains network-denied. Native tool rules form an allowlist when present; include required allowed tools explicitly. Never silently substitute prompt-only instructions for enforced restrictions.
 3. Add only required edges. Child authority must not exceed the parent, including further spawn grants. For a multi-generation chain, ancestors must also be allowed to spawn the descendants their children can spawn. Native defaults across different harnesses are not comparable. Use result edges for Codex/Prime handoffs of results; do not invent a cross-harness privilege order.
 4. Write UTF-8 JSON, then run from PiUI: `pnpm system:check <absolute-file-path>`. It uses the same parser as the UI. Fix errors and run again after changes. Inspect the resulting configuration against the user's intent; schema success does not prove good task decomposition, model availability, credentials or runtime isolation.
 5. Deliver the file, explain its task order and authority, and list only unresolved native requirements. In PiUI: Workspace → Systems → File → Import JSON; review the new draft, Save, then Run when execution is requested. Import never starts agents and never overwrites existing definitions. Export JSON captures current draft settings.
@@ -53,7 +53,7 @@ caller. They describe purpose; they never grant permission to spawn a profile.
 
 - Standard/Fast is supported by Codex and by Prime models advertised as Fast-capable by its native SDK; Pi RPC does not expose it. Base-prompt replacement is a Codex capability. Omitted `baseInstructions` keeps the native base; `""` replaces only that base with empty text, not all native context.
 - Pi profiles can append native instructions and participate in result pipelines. Its current RPC adapter does not expose workspace messaging/delegation tools; do not promise Pi send/observe/spawn links.
-- Codex skill IDs are absolute paths; MCP IDs are existing configured server names. Prime skill IDs are names. Per-agent Prime MCP disabling is unsupported; skills depend on its ipython tool and native RLM cannot be treated as an independent workspace spawn switch.
+- Codex skill IDs are absolute paths; MCP IDs are existing configured server names. Codex `networkAccess` is native sandbox egress permission, not a domain allowlist or secret grant, and child profiles cannot enable it unless the parent also has it. Prime skill IDs are names. Per-agent Prime MCP disabling is unsupported; skills depend on its ipython tool and native RLM cannot be treated as an independent workspace spawn switch.
 - Disabling a skill controls discovery, not file access. No file contains API keys, credentials, native session IDs, shell commands for startup or executable plugins.
 - Workspace-managed child permission checks do not govern arbitrary native subprocesses/RLM. Be explicit if a requested isolation guarantee cannot be provided.
 - Unsupported required features remain blockers; do not delete settings simply to make validation pass. Never probe real Prime without an explicit non-default `--daemon-socket`.
@@ -79,3 +79,11 @@ callable agents, selected inputs, artifacts, result acceptance or revision loops
 Use the native catalog and **Check system** before a requested run. In **Runs**,
 select an agent for its native conversation, tool activity, inputs/results and
 per-attempt usage. Missing counters are unavailable, never zero or inferred cost.
+
+## Programmatic execution
+
+When execution or API control is requested, use `skills/piui-control/SKILL.md` in
+the repository and `docs/AGENT_API.md`. The CLI prepares a fresh validated plan,
+atomically saves it, then explicitly starts it through the existing host. Retain
+its IDs for recovery. API save is not import-time execution; the ordinary UI import
+continues to create a draft. Use native catalogs and snapshots through the API.

@@ -58,9 +58,11 @@ describe('portable system files', () => {
   });
   it('round-trips mixed harness settings, prompt distinction and positions without native identities', () => {
     const file = example();
+    file.version = 4;
     file.agents[0].profile.baseInstructions = '';
     file.agents[0].profile.reasoning = 'high';
     file.agents[0].profile.serviceTier = 'fast';
+    file.agents[0].profile.networkAccess = true;
     file.agents[0].profile.resourceRules = [{kind:'mcp',id:'search',enabled:false}];
     file.agents[0].position = {x:0,y:250}; file.inheritTeamConnections = false;
     const original = systemFileToGraph(parseSystemFile(JSON.stringify(file)));
@@ -69,6 +71,7 @@ describe('portable system files', () => {
     expect(reopened.id).not.toBe(original.id);
     expect(reopened.nodes[0]!.profile.id).not.toBe(original.nodes[0]!.profile.id);
     expect(reopened.nodes[0]!.profile.baseInstructions).toBe('');
+    expect(reopened.nodes[0]!.profile.networkAccess).toBe(true);
     expect(reopened.nodes[1]!.profile.baseInstructions).toBeUndefined();
   });
   it.each(['version','unknown','duplicate','dangling','cycle','resource','privileges'])('rejects %s without coercing or dropping fields', failure => {

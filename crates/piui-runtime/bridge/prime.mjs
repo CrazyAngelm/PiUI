@@ -418,11 +418,22 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
         models: modelCatalog,
       };
     },
+    composerCapabilities() { return { steer: typeof connection.steer === "function", compact: typeof connection.compact === "function" }; },
+    async compact() {
+      if (typeof connection.compact !== "function") throw fail("unsupported-method", "This SDK does not support compaction.");
+      if (status !== "idle") throw fail("turn-active", "Wait for the current turn before compacting.");
+      setStatus("running");
+      void connection.compact().catch(() => emit({ type: "error", message: "Context compaction failed." })).finally(() => setStatus("idle"));
+      return { accepted: true };
+    },
     async prompt({ text, mode }) {
       if (disposed) throw fail("not-running", "The Prime runtime is not running.");
       if (typeof text !== "string" || !text.trim()) throw fail("invalid-request", "A non-empty prompt is required.");
       if (mode === "prompt") await connection.prompt(text);
-      else if (mode === "steer") await connection.steer(text);
+      else if (mode === "steer") {
+        if (status !== "running") throw fail("no-active-turn", "There is no active turn to steer.");
+        await connection.steer(text);
+      }
       else if (mode === "follow-up") await connection.followUp(text);
       else throw fail("invalid-request", "The prompt mode is invalid.");
       return { accepted: true };

@@ -586,6 +586,10 @@ impl RealPiRuntime {
             RealRuntimeError::Spawn("Windows process containment is unavailable.".into())
         })?;
         let mut std_command = std::process::Command::new(&launch.program);
+        // Keep the external operator capability out of native child environments.
+        std_command.env_remove("PIUI_AGENT_API_TOKEN");
+        std_command.env_remove("PIUI_AGENT_API_PORT");
+        std_command.env_remove("PIUI_AGENT_API_CONNECTION");
         std_command
             .args(&launch.leading_args)
             .args(runtime_launch_args(

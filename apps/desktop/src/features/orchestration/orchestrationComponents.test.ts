@@ -4,6 +4,7 @@ import AgentProfileEditor from './AgentProfileEditor.svelte';
 import TeamEditor from './TeamEditor.svelte';
 import PipelineEditor from './PipelineEditor.svelte';
 import LaunchCommandEditor from './LaunchCommandEditor.svelte';
+import ScheduleEditor from './ScheduleEditor.svelte';
 import OrchestrationPanel from './OrchestrationPanel.svelte';
 import type { AgentProfile, TeamDefinition, PipelineDefinition } from '../../../../../contracts/orchestration-v6';
 
@@ -42,7 +43,7 @@ describe('orchestration component integration', () => {
   it('renders a saved pipeline dependency view and keeps a failed-save notice beside the draft', () => {
     const { body } = render(PipelineEditor, { props: { pipeline, teams: [team], profiles: [profile], error: 'Revision conflict. Keep your draft.', onSave: noAction, onCancel: noAction } });
     expect(body).toContain('Dependency order');
-    expect(body).toContain('Member slot');
+    expect(body).toContain('Assigned agent');
     expect(body).toContain('Review the result');
     expect(body).toContain('Revision conflict. Keep your draft.');
     expect(body).toContain('Save pipeline');
@@ -53,6 +54,19 @@ describe('orchestration component integration', () => {
     expect(body).toContain('Create a team and a pipeline');
     expect(body).toContain('Save launch command');
     expect(body).not.toContain('>Start run<');
+  });
+  it('renders schedule timing and policy choices without enabling execution on save', () => {
+    const { body } = render(ScheduleEditor, { props: {
+      schedule: undefined,
+      launchCommands: [{ id: 'launch', name: 'Nightly review', revision: 2 }],
+      onSave: noAction,
+      onCancel: noAction,
+    } });
+    expect(body).toContain('Once at a date and time');
+    expect(body).toContain('After PiUI was closed');
+    expect(body).toContain('While a previous run is active');
+    expect(body).toContain('Saving does not enable execution');
+    expect(body).not.toContain('Enable schedule');
   });
   it('keeps the core-safe panel read-only and does not fabricate a run for empty server rendering', () => {
     const { body } = render(OrchestrationPanel, { props: { workspaceId: 'fixture-workspace', section: 'runs', safeMode: true } });

@@ -139,6 +139,14 @@ pub struct HarnessCapabilities {
     pub native_subagents: Capability,
 }
 
+/// Additive host-private composer contract; absence never implies support.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComposerCapabilities {
+    pub steer: bool,
+    pub compact: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkspaceModel {
@@ -383,6 +391,8 @@ pub struct NativeRuntimeConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_rules: Option<serde_json::Value>,
     pub permission_mode: PermissionMode,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub network_access: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -415,6 +425,7 @@ impl fmt::Debug for NativeRuntimeConfig {
             .field("has_thinking_level", &self.thinking_level.is_some())
             .field("has_instructions", &self.instructions.is_some())
             .field("permission_mode", &self.permission_mode)
+            .field("network_access", &self.network_access)
             .field("has_tool_policy", &self.allowed_tools.is_some())
             .field("native_subagents", &self.native_subagents)
             .field("has_daemon_socket", &self.daemon_socket.is_some())
@@ -449,6 +460,9 @@ pub struct NativeHarnessSummary {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BridgeFailureCode {
+    TurnActive,
+    NoActiveTurn,
+    UnsupportedMethod,
     UnsupportedPolicy,
     InvalidRequest,
     InvalidResponse,
@@ -716,6 +730,10 @@ impl NativeRuntime {
         let mut windows_job = WindowsJob::new().map_err(|_| NativeRuntimeError::Containment)?;
 
         let mut standard = std::process::Command::new(node);
+        // Operator capabilities must never be inherited by managed agents.
+        standard.env_remove("PIUI_AGENT_API_TOKEN");
+        standard.env_remove("PIUI_AGENT_API_PORT");
+        standard.env_remove("PIUI_AGENT_API_CONNECTION");
         standard
             .args(["--input-type=module", "-e", NODE_BOOTSTRAP])
             .current_dir(&config.cwd)
@@ -878,6 +896,19 @@ impl NativeRuntime {
         )
         .await
         .map(|_| ())
+    }
+
+    pub async fn composer_capabilities(&self) -> Result<ComposerCapabilities, NativeRuntimeError> {
+        let value = self
+            .request("composerCapabilities", json!({}), REQUEST_TIMEOUT, false)
+            .await?;
+        serde_json::from_value(value).map_err(|_| NativeRuntimeError::Protocol)
+    }
+
+    pub async fn compact(&self) -> Result<(), NativeRuntimeError> {
+        self.request("compact", json!({}), REQUEST_TIMEOUT, false)
+            .await
+            .map(|_| ())
     }
 
     pub async fn interrupt(&self) -> Result<(), NativeRuntimeError> {
@@ -1262,6 +1293,9 @@ async fn fail_pending(shared: &Arc<RuntimeShared>, error: NativeRuntimeError) {
 
 fn map_bridge_failure(code: &str) -> BridgeFailureCode {
     match code {
+        "turn-active" | "busy" => BridgeFailureCode::TurnActive,
+        "no-active-turn" => BridgeFailureCode::NoActiveTurn,
+        "unsupported-method" => BridgeFailureCode::UnsupportedMethod,
         "unsupported-policy" => BridgeFailureCode::UnsupportedPolicy,
         "invalid-request" => BridgeFailureCode::InvalidRequest,
         "invalid-response" => BridgeFailureCode::InvalidResponse,
@@ -1468,7 +1502,7 @@ fn resolve_harness_launch_for_config(
 ) -> Result<ResolvedHarnessLaunch, NativeRuntimeError> {
     if config.harness == HarnessKind::Codex {
         let launch = resolve_harness_launch(HarnessKind::Codex)?;
-        if launch.version.as_deref() != Some("0.147.0") {
+        if !matches!(launch.version.as_deref(), Some("0.147.0" | "0.153.4")) {
             return Err(NativeRuntimeError::HarnessUnavailable);
         }
         return Ok(launch);
@@ -1745,6 +1779,7 @@ pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
             };
             let version_supported = expected.is_none_or(|expected| {
                 launch.version.as_deref() == Some(expected)
+                    || (kind == HarnessKind::Codex && launch.version.as_deref() == Some("0.153.4"))
                     || (kind == HarnessKind::PrimeAgent
                         && launch.version.as_deref() == Some("0.9.3"))
             });
@@ -1828,6 +1863,7 @@ mod tests {
             resource_rules: None,
             instructions: None,
             permission_mode: PermissionMode::Native,
+            network_access: false,
             allowed_tools: None,
             native_subagents: None,
             daemon_socket: None,

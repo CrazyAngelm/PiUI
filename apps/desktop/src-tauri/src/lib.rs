@@ -6,12 +6,14 @@
 //! host adapter; the WebView receives neither a general shell/filesystem API
 //! nor credentials, raw process handles, or raw Pi RPC frames.
 
+mod agent_api;
 mod api;
 mod catalog_watch;
 mod contributions;
 mod dto;
 mod harness_configuration;
 mod orchestration_api;
+mod orchestration_schedule;
 mod orchestration_scheduler;
 #[cfg(feature = "native-prime-scheduler-test")]
 pub use orchestration_scheduler::run_native_prime_scheduler_two_step_dependency_dag;
@@ -673,6 +675,7 @@ mod tests {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> Result<(), tauri::Error> {
+    let agent_server = agent_api::Server::from_environment()?;
     let safe_mode = std::env::args().any(|argument| argument == "--safe-mode");
     #[cfg(debug_assertions)]
     let e2e_directories = resolved_e2e_data_directories()?;
@@ -735,18 +738,27 @@ pub fn run() -> Result<(), tauri::Error> {
             let orchestration = orchestration_api::OrchestrationApiState::open(&app_data_dir)
                 .map_err(|_| std::io::Error::other("Could not open local orchestration data"))?;
             app.manage(orchestration);
-            app.manage(orchestration_scheduler::OrchestrationScheduler::default());
+            let orchestration_scheduler =
+                orchestration_scheduler::OrchestrationScheduler::default();
+            app.manage(orchestration_scheduler.clone());
             let watcher = catalog_watch::start_catalog_watcher(
                 app.handle().clone(),
                 state.all_session_roots(),
             );
             state.set_catalog_watcher(watcher);
             app.manage(state);
+            if !safe_mode {
+                orchestration_scheduler.start_timed_schedule_worker(app.handle().clone());
+            }
+            if let Some(server) = agent_server {
+                server.start(app.handle().clone());
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             workspace_api::workspace_command_v15,
             workspace_api::workspace_settings_v16,
+            workspace_api::composer::workspace_composer_v19,
             workspace_api::workspace_lifecycle_v17,
             workspace_api::harness_models_v18,
             api::bootstrap,
@@ -814,6 +826,10 @@ pub fn run() -> Result<(), tauri::Error> {
             orchestration_api::orchestration_get_launch_command_v6,
             orchestration_api::orchestration_save_launch_command_v6,
             orchestration_api::orchestration_delete_launch_command_v6,
+            orchestration_api::orchestration_list_schedules_v7,
+            orchestration_api::orchestration_save_schedule_v7,
+            orchestration_api::orchestration_set_schedule_enabled_v7,
+            orchestration_api::orchestration_delete_schedule_v7,
             orchestration_api::orchestration_list_runs_v6,
             orchestration_api::orchestration_get_run_v6,
             orchestration_api::orchestration_start_run_v6,

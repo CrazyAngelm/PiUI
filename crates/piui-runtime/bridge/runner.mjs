@@ -5,7 +5,7 @@ const MAX_FRAME_BYTES = 32 * 1024 * 1024;
 const METHODS = new Set([
   "initialize", "snapshot", "prompt", "interrupt", "models", "resources", "catalogModels",
   "setModel", "respond", "rename", "dispose", "coordinatorResponse",
-  "openSession", "sessionRequest",
+  "openSession", "sessionRequest", "composerCapabilities", "compact",
 ]);
 
 function safeFailure(id, code, message) {

@@ -144,6 +144,10 @@ async fn run_helper(
     let dist_path = runtime_dist_path(&cli_path).ok_or(ExtensionManagerError::Unavailable)?;
 
     let mut standard = std::process::Command::new(&launch.program);
+    // Keep the external operator capability out of native child environments.
+    standard.env_remove("PIUI_AGENT_API_TOKEN");
+    standard.env_remove("PIUI_AGENT_API_PORT");
+    standard.env_remove("PIUI_AGENT_API_CONNECTION");
     standard
         .arg("--input-type=module")
         .arg("--eval")

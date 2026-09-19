@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../locale/language';
   import { tick } from 'svelte';
   import type { PiUiCommandContribution, RuntimeCommand, SessionSummary } from '../../host-api/types';
   import { applyPiUiCommandContributions, filterRuntimeCommands, runtimeCommandKey, runtimeCommandProvenance } from '../runtime/runtimeCommands';
@@ -60,47 +61,45 @@
     <dialog bind:this={dialog} open class="dialog" aria-modal="true" aria-labelledby="search-title">
       <div class="heading">
         <div>
-          <p class="eyebrow">Navigation and {agentLabel} commands</p>
-          <h2 id="search-title">Go to</h2>
+          <p class="eyebrow">{$t("Navigation and")} {agentLabel} {$t("commands")}</p>
+          <h2 id="search-title">{$t("Go to")}</h2>
         </div>
-        <kbd>Esc</kbd>
+        <kbd>{$t("Esc")}</kbd>
       </div>
-      <label class="visually-hidden" for="local-search">Search {agentLabel} commands and local sessions</label>
+      <label class="visually-hidden" for="local-search">{$t("Search")} {agentLabel} {$t("commands and local sessions")}</label>
       <input
         id="local-search"
         bind:value={query}
         oninput={() => onQuery(query)}
         autocomplete="off"
-        placeholder="Search commands and sessions…"
+        placeholder={$t("Search commands and sessions…")}
       />
       <p class="helper">
-        {commandSelectionDisabled
-          ? `Clear the current composer draft before preparing a ${agentLabel} command. Session search remains available.`
-          : `Commands come from the active ${agentLabel} runtime. Session search stays in the local index.`}
+        {commandSelectionDisabled ? $t("Clear the current composer draft before preparing a {0} command. Session search remains available.", [agentLabel]) : $t("Commands come from the active {0} runtime. Session search stays in the local index.", [agentLabel])}
       </p>
 
       {#if visibleCommands.length > 0}
-        <section class="command-results" aria-label={`${agentLabel} commands`}>
-          <p class="result-section-label">{agentLabel} commands</p>
+        <section class="command-results" aria-label={$t("{0} commands", [agentLabel])}>
+          <p class="result-section-label">{agentLabel} {$t("commands")}</p>
           {#each visibleCommands as command (runtimeCommandKey(command))}
             <button class="command-result" type="button" disabled={commandSelectionDisabled} onclick={() => onUseCommand(command)}>
               <span class="command-name">/{command.name}</span>
               {#if command.description}<span class="command-description">{command.description}</span>{/if}
-              <span class="command-source">{runtimeCommandProvenance(command)}</span>
+              <span class="command-source">{$t(runtimeCommandProvenance(command))}</span>
             </button>
           {/each}
         </section>
       {/if}
 
-      <section class="results" aria-live="polite" aria-label="Session search results">
+      <section class="results" aria-live="polite" aria-label={$t("Session search results")}>
         {#if busy}
-          <p class="status">Searching local history…</p>
+          <p class="status">{$t("Searching local history…")}</p>
         {:else if error}
-          <p class="error" role="alert">{error}</p>
+          <p class="error" role="alert">{$t(error)}</p>
         {:else if query.trim().length === 0}
-          <p class="status">Type to search indexed local sessions.</p>
+          <p class="status">{$t("Type to search indexed local sessions.")}</p>
         {:else if results.length === 0}
-          <p class="status">No matching indexed sessions.</p>
+          <p class="status">{$t("No matching indexed sessions.")}</p>
         {:else}
           {#each results as result (result.id)}
             <button class="result" type="button" onclick={() => onOpenResult(result)}>

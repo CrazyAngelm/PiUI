@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../locale/language';
   import MarkdownContent from '../../components/MarkdownContent.svelte';
   import type { TimelineBlock } from '../../host-api/types';
   import ActivityGroup from './ActivityGroup.svelte';
@@ -42,15 +43,15 @@
   }
 </script>
 
-<section class="timeline" aria-label="Session timeline">
+<section class="timeline" aria-label={$t("Session timeline")}>
   {#if blocks.length === 0 && loading}
-    <div class="loading-block" aria-label="Loading session timeline">
+    <div class="loading-block" aria-label={$t("Loading session timeline")}>
       <span class="skeleton line line--short"></span>
       <span class="skeleton line"></span>
       <span class="skeleton line line--wide"></span>
     </div>
   {:else if blocks.length === 0}
-    <p class="empty-timeline">No messages to display.</p>
+    <p class="empty-timeline">{$t("No messages to display.")}</p>
   {:else}
     {#each viewItems as item (item.type === 'activity-group' ? item.id : item.block.id)}
       {#if item.type === 'activity-group'}
@@ -61,30 +62,31 @@
         />
       {:else}
         {@const block = item.block}
+        {@const displayLabel = block.kind === 'user' && (!block.label || block.label === 'You') ? $t('You') : !block.label ? $t(timelineBlockDisplayLabel(block, agentLabel)) : timelineBlockDisplayLabel(block, agentLabel)}
         <article class={`block ${kindClass(block.kind)}`} class:block--fallback={block.fallback} class:block--failed={block.status === 'failed'} class:block--interrupted={block.status === 'interrupted'} data-timeline-block={block.id}>
           {#if block.kind === 'compaction'}
-            <div class="event-row"><span></span><strong>{timelineBlockDisplayLabel(block, agentLabel)}</strong>{#if block.text || block.safeSummary}<span>{block.text ?? block.safeSummary}</span>{/if}</div>
+            <div class="event-row"><span></span><strong>{displayLabel}</strong>{#if block.text || block.safeSummary}<span>{block.text ?? block.safeSummary}</span>{/if}</div>
           {:else if block.kind === 'custom' || block.kind === 'unknown'}
             <details class="activity-disclosure fallback-disclosure">
               <summary>
                 <span class="activity-chevron" aria-hidden="true">›</span>
-                <span class="activity-title">{timelineBlockDisplayLabel(block, agentLabel)}</span>
-                {#if block.fallback}<span class="fallback-label">Compatibility view</span>{/if}
+                <span class="activity-title">{displayLabel}</span>
+                {#if block.fallback}<span class="fallback-label">{$t("Compatibility view")}</span>{/if}
               </summary>
               {#if block.text}<div class="extension-content"><MarkdownContent source={block.text} compact={true} /></div>
-              {:else}<p class="activity-summary">{block.safeSummary ?? 'This session event is not supported by a richer renderer yet.'}</p>{/if}
+              {:else}<p class="activity-summary">{block.safeSummary ?? $t('This session event is not supported by a richer renderer yet.')}</p>{/if}
             </details>
           {:else}
             <header>
-              <span>{timelineBlockDisplayLabel(block, agentLabel)}</span>
-              {#if block.status === 'streaming'}<span class="streaming-label">Writing…</span>
-              {:else if block.status === 'failed'}<span class="failure-label">Failed</span>
-              {:else if block.status === 'interrupted'}<span class="interrupted-label">Stopped</span>{/if}
+              <span>{displayLabel}</span>
+              {#if block.status === 'streaming'}<span class="streaming-label">{$t("Writing…")}</span>
+              {:else if block.status === 'failed'}<span class="failure-label">{$t("Failed")}</span>
+              {:else if block.status === 'interrupted'}<span class="interrupted-label">{$t("Stopped")}</span>{/if}
               {#if block.createdAt}<time datetime={block.createdAt} title={fullTime(block.createdAt)}>{displayTime(block.createdAt)}</time>{/if}
             </header>
             {#if block.text}
               <MarkdownContent source={block.text} />
-              {#if block.truncated}<p class="truncation-note">Long message was shortened to keep this session responsive.</p>{/if}
+              {#if block.truncated}<p class="truncation-note">{$t("Long message was shortened to keep this session responsive.")}</p>{/if}
             {:else if block.safeSummary}
               <p class="safe-summary">{block.safeSummary}</p>
             {/if}

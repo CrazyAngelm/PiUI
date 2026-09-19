@@ -3,6 +3,7 @@ import {
   createOrchestrationClient, createUnavailableOrchestrationClient, orchestrationError,
   type OrchestrationCommandName, type OrchestrationRequest, type AgentProfile, type StoredDefinition,
   type OrchestrationRunChangedEventV6, orchestrationRunChanged,
+  type OrchestrationScheduleChangedEventV7, orchestrationScheduleChanged,
 } from './orchestrationClient';
 
 const profile: AgentProfile = {
@@ -101,6 +102,13 @@ describe('orchestration durable event boundary', () => {
     for (const value of [null, {}, { ...changed, workspaceId: ' ' }, { ...changed, runId: '' }, { ...changed, revision: -1 }, { ...changed, revision: 1.5 }, { ...changed, revision: Number.MAX_SAFE_INTEGER + 1 }]) {
       expect(orchestrationRunChanged(value)).toBeUndefined();
     }
+  });
+
+  it('keeps schedule invalidations on their version 7 scalar contract', () => {
+    const changed: OrchestrationScheduleChangedEventV7 = { protocol: 7, type: 'scheduleChanged', workspaceId: 'fixture-workspace', scheduleId: 'fixture-schedule', revision: 3 };
+    expect(orchestrationScheduleChanged({ ...changed, privateTrigger: 'not forwarded' })).toEqual(changed);
+    expect(orchestrationScheduleChanged({ ...changed, protocol: 6 })).toBeUndefined();
+    expect(orchestrationScheduleChanged({ ...changed, scheduleId: '' })).toBeUndefined();
   });
 
   it('reports unavailable or rejected subscriptions with safe code-only copy', async () => {

@@ -20,7 +20,7 @@
   </header>
   <div class="body">
     <div class="rows">
-      <label><span><strong>{$t('Language')}</strong></span><select aria-label="Language" value={$language} onchange={(event) => setLanguage(event.currentTarget.value as 'en' | 'ru')}><option value="en">{$t('English')}</option><option value="ru">Русский</option></select></label>
+      <label><span><strong>{$t('Language')}</strong></span><select aria-label={$t("Language")} value={$language} onchange={(event) => setLanguage(event.currentTarget.value as 'en' | 'ru')}><option value="en">{$t('English')}</option><option value="ru">Русский</option></select></label>
       <label><span><strong>{$t('Theme')}</strong><small>{$t('Choose a theme or follow the operating system.')}</small></span>
         <select value={preferences.theme} onchange={(event) => change('theme', event)} disabled={busy}>
           <option value="system">{$t('System')}</option><option value="light">{$t('Light')}</option><option value="dark">{$t('Dark')}</option>
@@ -47,7 +47,7 @@
         </select>
       </label>
     </div>
-    {#if error}<p class="error" role="alert">{error}</p>{/if}
+    {#if error}<p class="error" role="alert">{$t(error)}</p>{/if}
   </div>
 </section>
 

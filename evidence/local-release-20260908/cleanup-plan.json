@@ -1,0 +1,46 @@
+{
+  "targets": [
+    {
+      "path": "D:\\Projects\\PIUI\\target\\debug",
+      "files": 7972,
+      "bytes": 7123610427.0
+    },
+    {
+      "path": "D:\\Projects\\PIUI\\target\\release",
+      "files": 3862,
+      "bytes": 1772351026.0
+    },
+    {
+      "path": "C:\\Users\\redmi\\AppData\\Local\\Programs\\PiUI\\PiUI.before-687a0fd.exe",
+      "files": 1,
+      "bytes": 19366912
+    },
+    {
+      "path": "C:\\Users\\redmi\\AppData\\Local\\Programs\\PiUI\\PiUI.before-74d2c25.exe",
+      "files": 1,
+      "bytes": 19589632
+    },
+    {
+      "path": "C:\\Users\\redmi\\AppData\\Local\\Programs\\PiUI\\PiUI.before-native-settings-20260906.exe",
+      "files": 1,
+      "bytes": 19236864
+    },
+    {
+      "path": "C:\\Users\\redmi\\AppData\\Local\\Programs\\PiUI\\PiUI.before-update-20260908-234927.exe",
+      "files": 1,
+      "bytes": 20382720
+    },
+    {
+      "path": "C:\\Users\\redmi\\AppData\\Local\\Programs\\PiUI\\PiUI.exe.before-01ff383",
+      "files": 1,
+      "bytes": 19318272
+    },
+    {
+      "path": "C:\\Users\\redmi\\AppData\\Local\\Programs\\PiUI\\PiUI.exe.before-windowed-20260907",
+      "files": 1,
+      "bytes": 19318272
+    }
+  ],
+  "freeC": 19896496128,
+  "freeD": 382906052608
+}

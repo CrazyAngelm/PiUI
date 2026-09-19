@@ -1,13 +1,17 @@
 // Windows WebView2 interaction proof for an isolated Tauri dev harness.
+import { randomBytes } from 'node:crypto';
+import { runAgentApiProof, setupAgentWorkspace } from './agent-api-e2e.mjs';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createWebviewAutomationServer } from './webview-automation.mjs';
+import { startComposerProvider } from './composer-provider.mjs';
 import { runWorkspaceWebview2Proof } from './workspace-webview2-e2e.mjs';
 
-const WORKSPACE_SCENARIO = process.argv.includes('--workspace');
+const AGENT_API_SCENARIO = process.argv.includes('--agent-api');
+const WORKSPACE_SCENARIO = process.argv.includes('--workspace') || AGENT_API_SCENARIO;
 
 if (process.platform !== 'win32') {
   throw new Error('This WebView2 proof is Windows-only; run the Linux WebKit harness separately.');
@@ -374,7 +378,7 @@ function exposeNativeCodeForWorkspaceFixture(fixture) {
   const realNpmRoot = process.env.APPDATA ? join(process.env.APPDATA, 'npm', 'node_modules') : undefined;
   const fixtureNpmRoot = join(fixture.appDataRoaming, 'npm', 'node_modules');
   mkdirSync(fixtureNpmRoot, { recursive: true });
-  for (const [name, versions] of [['prime-agent', ['0.9.2', '0.9.3']], ['@openai/codex', ['0.147.0']]]) {
+  for (const [name, versions] of [['prime-agent', ['0.9.2', '0.9.3']], ['@openai/codex', ['0.147.0', '0.153.4']]]) {
     if (!realNpmRoot) continue;
     const candidate = join(realNpmRoot, name);
     const manifestPath = join(candidate, 'package.json');
@@ -1152,6 +1156,7 @@ function printLogTails(paths) {
 async function runIsolatedHarness() {
   const jobRunner = resolveJobRunner();
   const devPort = await allocateLoopbackPort();
+  const agentConnection = { port: await allocateLoopbackPort(), token: randomBytes(32).toString("hex") };
   const pageOrigin = `http://127.0.0.1:${devPort}`;
   const identifier = `dev.piui.desktop.e2e${process.pid}`;
   // Keep every fixture on the workspace volume. Rust accepts only a canonical
@@ -1169,12 +1174,14 @@ async function runIsolatedHarness() {
   let runFailed = false;
   let cleanupFailure;
   let passReport;
+  let composerProvider;
   try {
     automation = await createWebviewAutomationServer({
       allowedOrigin: pageOrigin,
       commandBoundMs: COMMAND_BOUND_MS,
     });
     const fixture = createIsolatedFixture(fixtureRoot);
+    if (WORKSPACE_SCENARIO) composerProvider = await startComposerProvider();
     // Cargo itself writes only to the canonical workspace target. The fixture
     // remains a sibling-owned run directory below that target.
     const cargoTargetDirectory = canonicalRepositoryTarget();
@@ -1206,6 +1213,7 @@ async function runIsolatedHarness() {
       : process.env;
     const runtimeEnvironment = {
       ...inheritedEnvironment,
+      ...(WORKSPACE_SCENARIO ? { PIUI_AGENT_API_PORT: String(agentConnection.port), PIUI_AGENT_API_TOKEN: agentConnection.token } : {}),
       // Every app, session, agent, profile, and temporary root is an owned fixture path.
       // The debug automation seam accepts only canonical paths below this fixture.
       USERPROFILE: fixture.home,
@@ -1235,6 +1243,13 @@ async function runIsolatedHarness() {
     };
     if (WORKSPACE_SCENARIO) {
       runtimeEnvironment.CODEX_HOME = exposeNativeCodeForWorkspaceFixture(fixture);
+      writeFileSync(join(runtimeEnvironment.CODEX_HOME, 'config.toml'), `model_provider = "piui_composer"
+model = "gpt-5.5"
+[model_providers.piui_composer]
+name = "PiUI synthetic provider"
+base_url = "${composerProvider.baseUrl}"
+wire_api = "responses"
+`);
       runtimeEnvironment.PIUI_NODE = process.execPath;
       // Native workspace tests must never run the classic synthetic CLI peers.
       delete runtimeEnvironment.PIUI_PI_CLI;
@@ -1308,14 +1323,16 @@ async function runIsolatedHarness() {
         await ownedWindowOperation(['--resize', String(width), String(height), '--resize-only']);
       },
     };
-    const normalResult = WORKSPACE_SCENARIO
+    const apiWorkspace = AGENT_API_SCENARIO ? await setupAgentWorkspace(agentConnection, fixture.primeProjectCanonical) : undefined;
+    const normalResult = AGENT_API_SCENARIO ? { checks: [], cleanup: {workspaceId: apiWorkspace} } : WORKSPACE_SCENARIO
       ? await runWorkspaceWebview2Proof({ automation, expectedPageUrl: pageOrigin,
           harness: { fixture, ownedChild: app, appOwnerPid: app.child.pid }, mode: 'normal',
-          commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, ...workspaceCallbacks })
+          commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, ...workspaceCallbacks, composerProvider })
       : { checks: await runDialogProof(automation, pageOrigin, {
           fixture, ownedChild: app, setupProjects: true, regression: 'normal',
         }) };
     const normalChecks = normalResult.checks;
+    if (WORKSPACE_SCENARIO) normalChecks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, automation, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
 
     // A separate contained process proves that safe mode prevents the same
     // project from exposing a live runtime surface.
@@ -1336,17 +1353,18 @@ async function runIsolatedHarness() {
       app,
       safeModeMinimumGeneration,
     );
-    const safeResult = WORKSPACE_SCENARIO
+    const safeResult = AGENT_API_SCENARIO ? {checks: []} : WORKSPACE_SCENARIO
       ? await runWorkspaceWebview2Proof({ automation, expectedPageUrl: pageOrigin,
           harness: { fixture, ownedChild: app, appOwnerPid: app.child.pid }, mode: 'safe',
-          commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, ...workspaceCallbacks })
+          commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, ...workspaceCallbacks, composerProvider })
       : { checks: await runDialogProof(automation, pageOrigin, { fixture, ownedChild: app, regression: 'safe' }) };
     const safeChecks = safeResult.checks;
+    if (WORKSPACE_SCENARIO) safeChecks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, safe: true, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
     if (!WORKSPACE_SCENARIO) assertPrimeRuntimeWasNotLaunched(fixture);
     passReport = {
       status: 'pass',
       target: 'isolated Tauri WebView2 dev harness',
-      scenario: WORKSPACE_SCENARIO ? 'workspace-v15' : 'classic-v10',
+      scenario: AGENT_API_SCENARIO ? 'agent-api-v1' : WORKSPACE_SCENARIO ? 'workspace-v15' : 'classic-v10',
       native: normalResult.native,
       timings: { normal: normalResult.timings, safe: safeResult.timings },
       ownedWindowMeasurements,
@@ -1363,6 +1381,7 @@ async function runIsolatedHarness() {
     runFailed = true;
     runFailure = error;
   } finally {
+    await composerProvider?.close();
     const cleanupResults = await Promise.allSettled([
       terminateContained(app, 'Tauri WebView2'),
       terminateContained(build, 'Tauri E2E build'),

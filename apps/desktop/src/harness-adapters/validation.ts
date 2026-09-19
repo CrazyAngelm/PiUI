@@ -8,6 +8,7 @@ export function profileConfigurationErrors(id: string, profile: Omit<AgentProfil
     if (!configuration.permissionModes.includes(profile.permissionMode)) errors.push(`${id}: unsupported file permissions.`);
     if (profile.serviceTier !== undefined && !configuration.speed) errors.push(`${id}: speed is not supported.`);
     if (profile.baseInstructions !== undefined && !configuration.basePrompt) errors.push(`${id}: base prompt replacement is not supported.`);
+    if (profile.networkAccess && (!configuration.networkAccess || !['read-only', 'workspace-write'].includes(profile.permissionMode))) errors.push(`${id}: network access is not supported with these permissions.`);
     const resources = new Set<string>();
     for (const rule of profile.resourceRules ?? []) {
       if (!configuration.resourceKinds.includes(rule.kind)) errors.push(`${id}: unsupported resource kind.`);

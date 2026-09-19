@@ -10,6 +10,7 @@ use crate::harness_configuration::{LaunchPolicy, launch_policy};
 use crate::orchestration_api::{
     AgentRequestAdmission, AgentToolOperation, AgentToolRequest, ManagedAgentContext,
     ORCHESTRATION_EVENT_V4, OrchestrationApiState, OrchestrationRunChangedEventV4,
+    emit_run_changed, emit_schedule_changed, validate_live_workspace_scope,
 };
 use crate::state::HostState;
 #[cfg(test)]
@@ -36,7 +37,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
-use tokio::sync::{Mutex as AsyncMutex, watch};
+use tokio::sync::{Mutex as AsyncMutex, Notify, watch};
 
 // NativeRuntime uses this bound for interrupt admission. The scheduler uses the
 // same established bound when waiting for proof that the admitted turn stopped.
@@ -82,6 +83,8 @@ type RunGateMap = HashMap<RunKey, RunGate>;
 #[derive(Default)]
 struct SchedulerInner {
     shutting_down: AtomicBool,
+    timed_worker_started: AtomicBool,
+    timed_wake: Notify,
     active: Mutex<HashMap<String, ActiveExecution>>,
     #[cfg(feature = "native-prime-scheduler-test")]
     completed: Mutex<HashMap<String, WorkspaceRuntimeHandle>>,
@@ -113,6 +116,130 @@ impl OrchestrationScheduler {
     /// Stops all new scheduler admissions before native workspace cleanup starts.
     pub(crate) fn begin_shutdown(&self) {
         self.inner.shutting_down.store(true, Ordering::Release);
+        self.inner.timed_wake.notify_waiters();
+    }
+
+    pub(crate) fn wake_timed_schedules(&self) {
+        self.inner.timed_wake.notify_one();
+    }
+
+    pub(crate) fn start_timed_schedule_worker<R: Runtime>(&self, app: AppHandle<R>) {
+        if self
+            .inner
+            .timed_worker_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        let scheduler = self.clone();
+        let future: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+            Box::pin(async move {
+                scheduler.timed_schedule_loop(app, chrono::Utc::now()).await;
+            });
+        std::mem::drop(tauri::async_runtime::spawn(future));
+    }
+
+    async fn timed_schedule_loop<R: Runtime>(
+        &self,
+        app: AppHandle<R>,
+        host_started_at: chrono::DateTime<chrono::Utc>,
+    ) {
+        if let Ok(runs) = app
+            .state::<OrchestrationApiState>()
+            .recoverable_schedule_runs()
+        {
+            for (workspace_id, run_id) in runs {
+                if !self.admits_work() {
+                    return;
+                }
+                let _ = self.schedule_run(&app, &workspace_id, &run_id).await;
+            }
+        }
+        while self.admits_work() {
+            let next_due = app
+                .state::<OrchestrationApiState>()
+                .next_schedule_due()
+                .ok()
+                .flatten();
+            let now = chrono::Utc::now();
+            match next_due {
+                Some(due) if due <= now => {
+                    if !self.process_due_schedules(&app, now, host_started_at).await {
+                        // A durable claim that cannot commit must not become a
+                        // hot retry loop. Schedule mutations retain a Notify
+                        // permit and explicitly wake the worker after recovery.
+                        self.inner.timed_wake.notified().await;
+                    }
+                }
+                Some(due) => {
+                    let wait = (due - now).to_std().unwrap_or(Duration::ZERO);
+                    tokio::select! {
+                        _ = tokio::time::sleep(wait) => {},
+                        _ = self.inner.timed_wake.notified() => {},
+                    }
+                }
+                None => self.inner.timed_wake.notified().await,
+            }
+        }
+    }
+
+    async fn process_due_schedules<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        now: chrono::DateTime<chrono::Utc>,
+        host_started_at: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        let due = match app.state::<OrchestrationApiState>().due_schedule_keys(now) {
+            Ok(due) => due,
+            Err(error) => {
+                eprintln!(
+                    "event=orchestration_schedule_worker_paused code={}",
+                    error.code
+                );
+                return false;
+            }
+        };
+        let mut progressed = false;
+        let mut stalled_code = None;
+        for (workspace_id, schedule_id, revision) in due {
+            if !self.admits_work() {
+                return progressed;
+            }
+            let claim = {
+                let host = app.state::<HostState>();
+                let _operation = host.live_runtime_operation_gate.lock().await;
+                let admission_failure = validate_live_workspace_scope(&host, &workspace_id)
+                    .err()
+                    .map(|error| error.code);
+                app.state::<OrchestrationApiState>().claim_due_schedule(
+                    &workspace_id,
+                    &schedule_id,
+                    revision,
+                    now,
+                    host_started_at,
+                    admission_failure,
+                )
+            };
+            let claim = match claim {
+                Ok(claim) => claim,
+                Err(error) => {
+                    stalled_code = Some(error.code);
+                    continue;
+                }
+            };
+            progressed = true;
+            emit_schedule_changed(app, &workspace_id, &schedule_id, claim.schedule.revision);
+            if let Some(run) = claim.run {
+                let run_id = run.id().to_owned();
+                emit_run_changed(app, &workspace_id, &run);
+                let _ = self.schedule_run(app, &workspace_id, &run_id).await;
+            }
+        }
+        if !progressed && let Some(code) = stalled_code {
+            eprintln!("event=orchestration_schedule_worker_paused code={code}");
+        }
+        progressed
     }
 
     fn admits_work(&self) -> bool {
@@ -1270,6 +1397,7 @@ fn workspace_launch_request(
         base_instructions: lease.profile.base_instructions.clone(),
         service_tier: lease.profile.service_tier.clone(),
         resource_rules: serde_json::to_value(&lease.profile.resource_rules).ok(),
+        network_access: lease.profile.network_access,
         instructions: (!lease.profile.instructions.trim().is_empty())
             .then(|| lease.profile.instructions.clone()),
         permission_mode: workspace_permission(lease.profile.permission_mode),
@@ -1544,6 +1672,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
                     base_instructions: None,
                     service_tier: None,
                     resource_rules: None,
+                    network_access: false,
                     instructions: None,
                     permission_mode: WorkspacePermissionMode::Native,
                     allowed_tools: Some(vec![]),
@@ -1574,6 +1703,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
         model_provider: default_model.provider.clone(),
         model: default_model.id.clone(),
         permission_mode: piui_orchestration::PermissionMode::Native,
+        network_access: false,
         base_instructions: None,
         service_tier: None,
         resource_rules: None,
@@ -1820,6 +1950,7 @@ mod tests {
             model_provider: Some("provider".into()),
             model: "model".into(),
             permission_mode: piui_orchestration::PermissionMode::Native,
+            network_access: false,
             base_instructions: None,
             service_tier: None,
             resource_rules: vec![],
@@ -1898,6 +2029,33 @@ mod tests {
         let mut capabilities = native_capabilities();
         capabilities.instructions = capability(false, Enforcement::Unsupported);
         assert!(launch_policy(&profile(Harness::Pi), &capabilities).is_err());
+    }
+
+    #[test]
+    fn network_access_is_explicit_codex_authority_and_reaches_the_runtime() {
+        let mut codex = profile(Harness::Codex);
+        codex.permission_mode = piui_orchestration::PermissionMode::WorkspaceWrite;
+        codex.network_access = true;
+        let (_, policy) = launch_policy(&codex, &native_capabilities()).unwrap();
+        let lease = ControlledSpawnLease {
+            run_id: "run".into(),
+            run_revision: 1,
+            task_revision: 1,
+            lease_id: "lease".into(),
+            step_id: "step".into(),
+            member_id: "member".into(),
+            profile: codex,
+            task_instructions: "Fetch public metadata".into(),
+            dependency_result_references: vec![],
+        };
+        let request =
+            workspace_launch_request("workspace", "session", &lease, policy.allowed_tools, None);
+        assert!(request.network_access);
+
+        let mut pi = profile(Harness::Pi);
+        pi.permission_mode = piui_orchestration::PermissionMode::ReadOnly;
+        pi.network_access = true;
+        assert!(launch_policy(&pi, &native_capabilities()).is_err());
     }
 
     struct FakeTurnAdapter {

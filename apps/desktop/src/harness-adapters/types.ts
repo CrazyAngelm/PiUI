@@ -11,5 +11,6 @@ export interface HarnessConfiguration {
   readonly skillIdentifier: 'path' | 'name';
   readonly nativeTools: readonly string[];
   readonly filesystemSandbox: boolean;
+  readonly networkAccess: boolean;
 }
 export type HarnessConfigurations = Readonly<Record<Harness, HarnessConfiguration>>;

@@ -27,7 +27,7 @@
 </script>
 
 <form class="editor" onsubmit={save} aria-labelledby="launch-editor-title">
-  <header><h2 id="launch-editor-title">{command ? 'Edit launch command' : 'Create launch command'}</h2><span>{readOnly ? 'Read-only' : dirty ? 'Unsaved changes' : 'No unsaved changes'}</span></header>
+  <header><h2 id="launch-editor-title">{command ? $t('Edit launch command') : $t('Create launch command')}</h2><span>{readOnly ? $t('Read-only') : dirty ? $t('Unsaved changes') : $t('No unsaved changes')}</span></header>
   <p class="hint">{$t('Save a name for a team and pipeline. This is a reusable definition reference, not a shell command. Saving does not start a run.')}</p>
   <fieldset disabled={busy || readOnly}>
     <label for="launch-name">{$t('Launch name')}</label><input id="launch-name" value={draft.name} oninput={(event) => draft = { ...draft, name: event.currentTarget.value }} autocomplete="off" />
@@ -38,7 +38,7 @@
   <p class="hint">{$t('Launch execution and parameter inputs are not available in this editor contract. No native work starts here.')}</p>
   {#if validation || error}<p class="error" role="alert">{error ?? validation}</p>{/if}
   {#if discardPrompt}<div class="discard" role="group" aria-label={$t('Unsaved launch command changes')}><p>{$t('Discard unsaved changes?')}</p><button type="button" onclick={() => discardPrompt = false}>{$t('Keep editing')}</button><button type="button" onclick={onCancel}>{$t('Discard changes')}</button></div>{/if}
-  <footer><button type="button" disabled={busy} onclick={() => { if (dirty && !readOnly) discardPrompt = true; else onCancel(); }}>{readOnly ? 'Back' : 'Cancel'}</button>{#if !readOnly}<button type="submit" class="primary" disabled={busy}>{busy ? 'Saving…' : 'Save launch command'}</button>{/if}</footer>
+  <footer><button type="button" disabled={busy} onclick={() => { if (dirty && !readOnly) discardPrompt = true; else onCancel(); }}>{readOnly ? $t('Back') : $t('Cancel')}</button>{#if !readOnly}<button type="submit" class="primary" disabled={busy}>{busy ? $t('Saving…') : $t('Save launch command')}</button>{/if}</footer>
 </form>
 
 <style>

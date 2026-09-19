@@ -219,6 +219,7 @@ main()
     async models() { return models; },
     async catalogModels() { return models.map(m => ({ ...m, supportsFast: false })); },
     async resources() { return (await readCatalog()).resources; },
+    composerCapabilities() { return { steer: false, compact: false }; },
     async prompt({ text, mode }) {
       if (status !== 'idle' || mode !== 'prompt') throw fail('busy');
       ++turn; streamingId = undefined; put({ id: `hermes-user-${turn}`, kind: 'user', text, status: 'complete' }); setStatus('running');

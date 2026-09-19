@@ -102,6 +102,7 @@ fn native_config(kind: HarnessKind, label: &str) -> NativeRuntimeConfig {
         resource_rules: None,
         instructions: None,
         permission_mode: PermissionMode::Native,
+        network_access: false,
         allowed_tools,
         native_subagents,
         daemon_socket,
@@ -348,4 +349,53 @@ async fn live_hermes_workspace_coordinator() {
     runtime.dispose().await.expect("managed process cleanup");
     assert!(called, "real Hermes native MCP invoked host coordinator");
     assert_final_assistant(blocks.into_values());
+}
+
+#[tokio::test]
+#[ignore = "Reads installed native catalogs with isolated session storage; no inference"]
+async fn installed_four_harness_catalogs() {
+    let mut failures = Vec::new();
+    for kind in [
+        HarnessKind::Pi,
+        HarnessKind::Codex,
+        HarnessKind::PrimeAgent,
+        HarnessKind::Hermes,
+    ] {
+        let mut config = native_config(kind, "catalog");
+        if let Some(cwd) = std::env::var_os("PIUI_TEST_CATALOG_CWD") {
+            config.cwd = PathBuf::from(cwd);
+        }
+        config.allowed_tools = None;
+        config.native_subagents = None;
+        let started = Instant::now();
+        match NativeRuntime::spawn_catalog(config).await {
+            Ok((runtime, mut events)) => {
+                let drain = tokio::spawn(async move { while events.recv().await.is_some() {} });
+                let models = runtime.catalog_models().await;
+                let resources = runtime.resources().await;
+                eprintln!(
+                    "catalog harness={kind:?} models={:?} resources={:?} elapsed_ms={}",
+                    models.as_ref().map(Vec::len),
+                    resources.as_ref().map(|catalog| catalog.items.len()),
+                    started.elapsed().as_millis()
+                );
+                if !models.as_ref().is_ok_and(|models| !models.is_empty()) || resources.is_err() {
+                    failures.push(kind);
+                }
+                runtime
+                    .terminate()
+                    .await
+                    .expect("catalog process tree retired");
+                drain.abort();
+            }
+            Err(error) => {
+                eprintln!(
+                    "catalog harness={kind:?} error={error:?} elapsed_ms={}",
+                    started.elapsed().as_millis()
+                );
+                failures.push(kind);
+            }
+        }
+    }
+    assert!(failures.is_empty(), "Failed native catalogs: {failures:?}");
 }

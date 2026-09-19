@@ -1,4 +1,5 @@
 import { derived, writable } from 'svelte/store';
+import { russianUi } from './russianUi';
 export type Language = 'en' | 'ru';
 const key = 'piui.language';
 function restored(): Language { try { return localStorage.getItem(key) === 'ru' ? 'ru' : 'en'; } catch { return 'en'; } }
@@ -9,6 +10,16 @@ export function setLanguage(value: Language): void {
 }
 language.subscribe(value => { if (typeof document !== 'undefined') document.documentElement.lang = value; });
 const russian: Readonly<Record<string, string>> = {
+  "Back to reasoning": "К уровню размышлений",
+  "Chaos energy": "Энергия хаоса",
+  "Overflowing": "Через край",
+  "Reasoning options are unavailable for this model.": "Для этой модели нет доступных уровней размышлений.",
+  "Low": "Лёгкий",
+  "High": "Высокий",
+  "Very high": "Очень высокий",
+  "Maximum": "Максимальный",
+  "Ultra": "Ультра",
+  "Minimal": "Минимальный",
   "Result contract": "Контракт результата",
   "Add field": "Добавить поле",
   "Field name": "Имя поля",
@@ -60,14 +71,38 @@ const russian: Readonly<Record<string, string>> = {
   'Chat text size': 'Размер текста', 'Small': 'Маленький', 'Medium': 'Средний', 'Large': 'Большой', 'Conversation width': 'Ширина диалога', 'Wide': 'Широкая', 'Centered': 'По центру', 'Focused': 'Узкая',
   'Choose a theme or follow the operating system.': 'Выберите тему оформления.', 'Adjust spacing without reducing control labels.': 'Настройте расстояние между элементами.', 'Reduce nonessential interface transitions.': 'Уменьшите анимацию интерфейса.', 'Change local conversation text size.': 'Настройте размер текста диалогов.', 'Choose how much of the main workspace chat uses.': 'Настройте ширину области сообщений.',
   'Workspace': 'Рабочая область', 'Sessions': 'Диалоги', 'Projects': 'Проекты', 'New chat': 'Новый диалог', 'Add project': 'Добавить проект', 'Select a project': 'Выберите проект',
-  'Systems': 'Системы', 'Agents': 'Агенты', 'Teams': 'Команды', 'Pipelines': 'Пайплайны', 'Runs': 'Запуски', 'Advanced': 'Дополнительно',
+  'Systems': 'Системы', 'Agents': 'Агенты', 'Teams': 'Команды', 'Pipelines': 'Пайплайны', 'Schedules': 'Расписания', 'Runs': 'Запуски', 'Advanced': 'Дополнительно',
+  'Automation': 'Автоматизация', 'Create schedule': 'Создать расписание', 'Edit schedule': 'Редактировать расписание', 'Schedule name': 'Название расписания',
+  'Saved launch': 'Сохранённый запуск', 'Choose launch command': 'Выберите сохранённый запуск', 'Timing': 'Время запуска',
+  'Once at a date and time': 'Один раз в указанное время', 'Every interval': 'Через заданный интервал', 'Run at': 'Запустить в', 'First run at': 'Первый запуск в',
+  'Local time zone': 'Часовой пояс', 'Repeat every': 'Повторять каждые', 'Interval unit': 'Единица интервала', 'Minutes': 'Минуты', 'Hours': 'Часы',
+  'After PiUI was closed': 'После перерыва в работе PiUI', 'Choose a policy': 'Выберите правило', 'Skip missed occurrences': 'Пропустить пропущенные запуски', 'Run once when PiUI returns': 'Один запуск после возврата PiUI',
+  'While a previous run is active': 'Пока предыдущий запуск активен', 'Skip the new occurrence': 'Пропустить новый запуск', 'Allow another run': 'Разрешить параллельный запуск',
+  'Save schedule': 'Сохранить расписание', 'Unsaved schedule changes': 'Несохранённые изменения расписания', 'Disabled': 'Выключено',
+  'Enable': 'Включить', 'Disable': 'Выключить', 'Enable {0}': 'Включить {0}', 'Disable {0}': 'Выключить {0}', 'Next': 'Следующий запуск', 'Last': 'Последний результат',
+  'No further occurrence': 'Больше запусков не запланировано', 'Open run': 'Открыть запуск', 'No matching schedules': 'Расписания не найдены',
+  'Change the search to see other schedules.': 'Измените запрос, чтобы увидеть другие расписания.', 'Create your first schedule': 'Создайте первое расписание',
+  'Choose a saved launch, timing, and explicit missed-run and overlap policies.': 'Выберите сохранённый запуск, время и правила для пропусков и пересечений.',
+  'Start saved launches at a date and time or on a fixed interval.': 'Автоматически запускайте системы в заданное время или через фиксированный интервал.',
+  'Schedules run only while the PiUI host is open. They do not wake the computer or start PiUI.': 'Расписания работают, только пока PiUI запущен. Они не включают компьютер и не запускают PiUI.',
+  'Saving does not enable execution. New schedules and execution-affecting edits must be enabled separately.': 'Сохранение не включает автозапуск. Новое расписание и изменения времени или цели нужно включить отдельно.',
+  'Create a saved launch command before adding a schedule.': 'Перед созданием расписания сохраните команду запуска.',
+  'Enter a schedule name.': 'Введите название расписания.', 'Choose an available launch command.': 'Выберите доступную команду запуска.', 'Choose a date and time.': 'Выберите дату и время.',
+  'Choose a valid date and time.': 'Укажите корректные дату и время.', 'Enter a positive whole-number interval.': 'Интервал должен быть целым положительным числом.',
+  'Choose what happens after PiUI was closed.': 'Выберите действие после перерыва в работе PiUI.', 'Choose what happens while the previous run is active.': 'Выберите действие, пока предыдущий запуск активен.',
+  'This local time does not exist because the clock changes. Choose another time.': 'Этого локального времени нет из-за перевода часов. Выберите другое время.',
+  'This local time occurs twice because the clock changes. Choose another time.': 'Это локальное время повторяется из-за перевода часов. Выберите другое время.',
+  'started': 'Запуск создан', 'skippedMissed': 'Пропущено после перерыва', 'skippedOverlap': 'Пропущено из-за активного запуска', 'failed': 'Ошибка',
+  'launch-command-changed': 'Команда запуска изменилась; расписание выключено', 'runtime-unavailable': 'Среда выполнения недоступна', 'conflict': 'Данные были изменены другим действием',
+  'already-exists': 'Такая запись уже существует', 'not-found': 'Запись не найдена', 'invalid': 'Некорректные данные расписания', 'denied': 'Операция запрещена', 'io': 'Не удалось сохранить расписание',
   'New system': 'Новая система', 'Agent system': 'Система агентов', 'Open system': 'Открыть систему', 'Save': 'Сохранить', 'Run': 'Запустить', 'Saving…': 'Сохранение…', 'Saved': 'Сохранено', 'Unsaved changes': 'Есть изменения',
   'Name': 'Название', 'Add agent': 'Добавить агента', 'Remove agent': 'Удалить агента', 'Arrange': 'Упорядочить', 'Zoom in': 'Приблизить', 'Zoom out': 'Отдалить', 'Reset view': 'Сбросить вид',
   'Select an agent to edit its settings.': 'Выберите агента для настройки.', 'Task': 'Задача', 'Instructions': 'Инструкции', 'Model': 'Модель', 'Provider': 'Провайдер', 'Reasoning': 'Уровень рассуждений', 'Model default': 'По умолчанию', 'Speed': 'Скорость', 'Standard': 'Обычная', 'Fast': 'Fast',
   'File access': 'Доступ к файлам', 'Native permissions': 'Права harness', 'Read-only': 'Только чтение', 'Workspace write': 'Запись в проект', 'Full access': 'Полный доступ', 'Subagents': 'Сабагенты',
   'Connections': 'Связи', 'Result dependency': 'Передача результата', 'Messaging': 'Сообщения', 'Observation': 'Наблюдение', 'Delegation': 'Делегирование', 'Connect': 'Соединить', 'Remove': 'Удалить',
   'From': 'Откуда', 'To': 'Куда', 'Sequential': 'Последовательно', 'Parallel': 'Параллельно', 'Supervisor': 'Оркестратор', 'Peer team': 'Общая команда', 'Pattern': 'Схема',
-  'Replace base prompt': 'Заменить базовый промпт', 'Base prompt': 'Базовый промпт', 'Advanced settings': 'Дополнительные настройки', 'Cancel': 'Отмена', 'Save profile': 'Сохранить профиль',
+  'Direction': 'Направление', 'One way': 'В одну сторону', 'Reverse': 'Обратно', 'Both ways': 'В обе стороны', 'Input connection': 'Вход связи', 'Output connection': 'Выход связи', 'Choose another port or press Escape.': 'Выберите другой порт или нажмите Escape.', 'Choose two agents.': 'Выберите двух агентов.', 'Choose two different agents.': 'Выберите двух разных агентов.', 'Connect an output to an input.': 'Соедините выход со входом.',
+  'Use base prompt': 'Использовать базовый промпт', 'Replace base prompt': 'Заменить базовый промпт', 'Base prompt': 'Базовый промпт', 'Advanced settings': 'Дополнительные настройки', 'Cancel': 'Отмена', 'Save profile': 'Сохранить профиль',
   'Loading…': 'Загрузка…', 'Try again': 'Повторить', 'Close': 'Закрыть', 'Refresh': 'Обновить', 'No saved systems': 'Нет сохранённых систем',
   'Add agents, then connect their results or allow communication.': 'Добавьте агентов и настройте передачу результатов или обмен сообщениями.',
   'Safe mode: viewing only.': 'Безопасный режим: только просмотр.', 'Save changes before opening another system.': 'Сохраните изменения перед открытием другой системы.',
@@ -321,6 +356,7 @@ const russian: Readonly<Record<string, string>> = {
   'Expand editor': 'Развернуть редактор',
   'Describe the goal, expected result and constraints…': 'Опишите цель, ожидаемый результат и ограничения…',
   'Agent resources': 'Ресурсы агента', 'Resource category': 'Категория ресурсов',
+  'Refresh models': 'Обновить модели',
   'Loading resources…': 'Загрузка ресурсов…', 'Loading models…': 'Загрузка моделей…',
   'Select model': 'Выберите модель', 'No harness available': 'Нет доступных harness',
   'No resources listed by this harness.': 'Harness не предоставил список ресурсов.',
@@ -378,5 +414,5 @@ const russian: Readonly<Record<string, string>> = {
   "Task records and recovery": "Записи задач и восстановление",
   "Skipped": "Пропущено",
 };
-export function translate(value: string, locale: Language): string { return locale === 'ru' ? russian[value] ?? value : value; }
-export const t = derived(language, locale => (value: string) => translate(value, locale));
+export function translate(value: string, locale: Language): string { return locale === 'ru' ? russianUi[value] ?? russian[value] ?? value : value; }
+export const t = derived(language, locale => (value: string, parameters: readonly unknown[] = []) => translate(value, locale).replace(/\{(\d+)\}/g, (token, index: string) => Number(index) < parameters.length ? String(parameters[Number(index)]) : token));

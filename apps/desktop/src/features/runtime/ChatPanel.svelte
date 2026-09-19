@@ -108,6 +108,7 @@
 </script>
 
 <script lang="ts">
+  import { t } from '../locale/language';
   import { onDestroy, onMount, tick } from 'svelte';
   import { host } from '../../host-api/client';
   import type { AgentKind, ExtensionUiResponse, ModelLite, PiUiComposerActionContribution, ProjectSummary, RuntimeCommand, RuntimeEventEnvelope, RuntimeState, SessionStateLite, SurfaceEvent, TimelineBlock } from '../../host-api/types';
@@ -1171,73 +1172,73 @@
   }
 </script>
 
-<section class="chat-panel" aria-label={`Live ${agentLabel} conversation`}>
+<section class="chat-panel" aria-label={$t("Live {0} conversation", [agentLabel])}>
   {#if !surfaceAvailable}
-    <div class="chat-notice"><p>Safe mode is on. Runtime actions are disabled.</p></div>
+    <div class="chat-notice"><p>{$t("Safe mode is on. Runtime actions are disabled.")}</p></div>
   {:else if !liveRuntimeAvailable}
     <div class="chat-notice" role="status">
-      <p>Prime Agent 0.8.1 live control is disabled because its shared daemon cannot be contained without risking other active sessions. Read-only history remains available.</p>
+      <p>{$t("Prime Agent 0.8.1 live control is disabled because its shared daemon cannot be contained without risking other active sessions. Read-only history remains available.")}</p>
     </div>
   {:else}
     {#if !runtimeAllowed}
       <div class="chat-trust-note" role="status">
-        <span>Trust this project before {agentLabel} can read files or run tools.</span>
-        {#if onRequestTrust}<button type="button" onclick={onRequestTrust}>Review trust</button>{/if}
+        <span>{$t("Trust this project before")} {agentLabel} {$t("can read files or run tools.")}</span>
+        {#if onRequestTrust}<button type="button" onclick={onRequestTrust}>{$t("Review trust")}</button>{/if}
       </div>
     {/if}
     {#if persistenceResolutionError && persistenceFeedbackPending}
       <div class="chat-sync-banner" role="status">
-        <span><span class="sync-dot" aria-hidden="true"></span>Finishing history sync…</span>
-        {#if onRetryPersistedSession}<button type="button" onclick={onRetryPersistedSession}>Try again</button>{/if}
-        <button type="button" class="sync-dismiss" aria-label="Hide history sync status" onclick={clearPersistenceFeedback}>×</button>
+        <span><span class="sync-dot" aria-hidden="true"></span>{$t("Finishing history sync…")}</span>
+        {#if onRetryPersistedSession}<button type="button" onclick={onRetryPersistedSession}>{$t("Try again")}</button>{/if}
+        <button type="button" class="sync-dismiss" aria-label={$t("Hide history sync status")} onclick={clearPersistenceFeedback}>×</button>
       </div>
     {:else if persistenceResolutionError}
-      <div class="chat-error-banner" role="alert">{persistenceResolutionError}<button type="button" onclick={clearPersistenceFeedback}>Dismiss</button></div>
+      <div class="chat-error-banner" role="alert">{$t(persistenceResolutionError)}<button type="button" onclick={clearPersistenceFeedback}>{$t("Dismiss")}</button></div>
     {:else if error}
-      <div class="chat-error-banner" role="alert">{error}<button type="button" onclick={() => (error = undefined)}>Dismiss</button></div>
+      <div class="chat-error-banner" role="alert">{$t(error)}<button type="button" onclick={() => (error = undefined)}>{$t("Dismiss")}</button></div>
     {/if}
-    {#if compactionActive}<div class="chat-compaction-banner" role="status">{agentLabel} is compacting the context…</div>{/if}
+    {#if compactionActive}<div class="chat-compaction-banner" role="status">{agentLabel} {$t("is compacting the context…")}</div>{/if}
 
     {#if extensionUi.notifications.length > 0}
-      <div class="extension-notifications" aria-live="polite" aria-label="Extension notifications">
+      <div class="extension-notifications" aria-live="polite" aria-label={$t("Extension notifications")}>
         {#each extensionUi.notifications as notification (notification.id)}
           <div class={`extension-notification extension-notification--${notification.level}`} role={notification.level === 'error' ? 'alert' : 'status'}>
             <span>{notification.message}</span>
-            <button type="button" aria-label="Dismiss extension notification" onclick={() => dismissNotification(notification.id)}>Dismiss</button>
+            <button type="button" aria-label={$t("Dismiss extension notification")} onclick={() => dismissNotification(notification.id)}>{$t("Dismiss")}</button>
           </div>
         {/each}
       </div>
     {/if}
 
     {#if extensionUi.statuses.length > 0}
-      <div class="extension-statuses" aria-label="Extension status">
+      <div class="extension-statuses" aria-label={$t("Extension status")}>
         {#each extensionUi.statuses as status (status.key)}<span>{status.text}</span>{/each}
       </div>
     {/if}
 
     {#each extensionUi.widgets.filter((widget) => widget.placement === 'aboveEditor') as widget (widget.key)}
-      <aside class="extension-widget" aria-label="Extension widget">
+      <aside class="extension-widget" aria-label={$t("Extension widget")}>
         {#each widget.lines as line}<p>{line}</p>{/each}
       </aside>
     {/each}
 
     {#if extensionUi.editorSuggestion !== undefined}
       <div class="extension-draft-suggestion" role="status">
-        <span>An extension prepared composer text. Your current draft was not overwritten.</span>
-        <button type="button" onclick={rejectEditorSuggestion}>Discard</button>
-        <button type="button" class="extension-draft-apply" onclick={acceptEditorSuggestion}>Replace draft</button>
+        <span>{$t("An extension prepared composer text. Your current draft was not overwritten.")}</span>
+        <button type="button" onclick={rejectEditorSuggestion}>{$t("Discard")}</button>
+        <button type="button" class="extension-draft-apply" onclick={acceptEditorSuggestion}>{$t("Replace draft")}</button>
       </div>
     {/if}
 
     <form class="composer" onsubmit={onSubmit}>
       {#if activePiUiComposerActions.length > 0}
-        <div class="piui-composer-actions" aria-label="Extension composer actions">
-          <span class="piui-composer-actions-label">Extensions</span>
+        <div class="piui-composer-actions" aria-label={$t("Extension composer actions")}>
+          <span class="piui-composer-actions-label">{$t("Extensions")}</span>
           {#each activePiUiComposerActions as action (action.id)}
             <button
               type="button"
               title={action.description ?? `${action.title} — ${action.extensionName}`}
-              aria-label={`${action.title} from ${action.extensionName}`}
+              aria-label={$t("{0} from {1}", [action.title, action.extensionName])}
               disabled={!enabled || draft.trim().length > 0 || startBusy || sendBusy}
               onclick={() => void selectPiUiComposerAction(action)}
             >
@@ -1248,7 +1249,7 @@
         </div>
       {/if}
       {#if slashCommands.length > 0}
-        <div id="pi-command-suggestions" class="slash-command-menu" role="listbox" aria-label={`${agentLabel} commands`}>
+        <div id="pi-command-suggestions" class="slash-command-menu" role="listbox" aria-label={$t("{0} commands", [agentLabel])}>
           {#each slashCommands as command, index (runtimeCommandKey(command))}
             <button
               id={`pi-command-suggestion-${index}`}
@@ -1260,40 +1261,40 @@
             >
               <span class="slash-command-name">/{command.name}</span>
               {#if command.description}<span class="slash-command-description">{command.description}</span>{/if}
-              <span class="slash-command-source">{runtimeCommandProvenance(command)}</span>
+              <span class="slash-command-source">{$t(runtimeCommandProvenance(command))}</span>
             </button>
           {/each}
         </div>
       {/if}
-      <label class="visually-hidden" for="chat-draft">Message</label>
+      <label class="visually-hidden" for="chat-draft">{$t("Message")}</label>
       <textarea
         id="chat-draft"
         bind:this={composerTextarea}
         bind:value={draft}
         rows="2"
-        placeholder={running ? 'Queue a follow-up with Enter, or steer below' : `Message ${agentLabel}…`}
+        placeholder={running ? $t('Queue a follow-up with Enter, or steer below') : $t("Message {0}…", [agentLabel])}
         aria-autocomplete="list"
         aria-controls={slashCommands.length > 0 ? 'pi-command-suggestions' : undefined}
         aria-activedescendant={slashCommands.length > 0 ? `pi-command-suggestion-${slashCommandSelection}` : undefined}
         onkeydown={handleComposerKeydown}
       ></textarea>
       <div class="composer-footer">
-        <div class="composer-options" aria-label="Runtime options">
+        <div class="composer-options" aria-label={$t("Runtime options")}>
           {#if sessionId === undefined}
             <div class="composer-picker">
-              <span class="picker-label">Project</span>
-              <select aria-label="Project" value={personal ? '' : projectId ?? ''} onchange={changeNewChatProject} disabled={startBusy || sendBusy || running}>
-                <option value="">No project</option>
+              <span class="picker-label">{$t("Project")}</span>
+              <select aria-label={$t("Project")} value={personal ? '' : projectId ?? ''} onchange={changeNewChatProject} disabled={startBusy || sendBusy || running}>
+                <option value="">{$t("No project")}</option>
                 {#each projects as project}
-                  <option value={project.id} disabled={project.missing}>{project.name} · {project.agentKind === 'prime-agent' ? 'Prime Agent' : 'Pi'}{project.missing ? ' — unavailable' : ''}</option>
+                  <option value={project.id} disabled={project.missing}>{project.name} · {project.agentKind === 'prime-agent' ? $t('Prime Agent') : $t('Pi')}{project.missing ? $t(' — unavailable') : ''}</option>
                 {/each}
               </select>
             </div>
           {/if}
           <div class="composer-picker">
-            <span class="picker-label">Model</span>
+            <span class="picker-label">{$t("Model")}</span>
             {#if models.length === 0}
-              <button type="button" class="catalog-load" onclick={() => void loadCatalogFromCurrentRuntime()} disabled={startBusy} aria-label={`Load available models from ${agentLabel}`}>{startBusy ? 'Loading models…' : 'Load models…'}</button>
+              <button type="button" class="catalog-load" onclick={() => void loadCatalogFromCurrentRuntime()} disabled={startBusy} aria-label={$t("Load available models from {0}", [agentLabel])}>{startBusy ? $t('Loading models…') : $t('Load models…')}</button>
             {:else}
               <ModelPicker
                 {models}
@@ -1305,22 +1306,22 @@
             {/if}
           </div>
           <div class="composer-picker">
-            <span class="picker-label">Thinking</span>
+            <span class="picker-label">{$t("Thinking")}</span>
             {#if thinkingLevels.length === 0}
-              <button type="button" class="catalog-load" onclick={() => void loadCatalogFromCurrentRuntime()} disabled={startBusy} aria-label={`Load thinking levels from ${agentLabel}`}>{startBusy ? 'Loading…' : 'Load thinking…'}</button>
+              <button type="button" class="catalog-load" onclick={() => void loadCatalogFromCurrentRuntime()} disabled={startBusy} aria-label={$t("Load thinking levels from {0}", [agentLabel])}>{startBusy ? $t('Loading…') : $t('Load thinking…')}</button>
             {:else}
-              <select aria-label="Thinking" value={effectiveThinkingLevel} onchange={(event) => void changeThinking(event)} disabled={startBusy}>
-                {#each thinkingLevels as level}<option value={level}>{level}</option>{/each}
+              <select aria-label={$t("Thinking")} value={effectiveThinkingLevel} onchange={(event) => void changeThinking(event)} disabled={startBusy}>
+                {#each thinkingLevels as level}<option value={level}>{$t(level)}</option>{/each}
               </select>
             {/if}
           </div>
           {#if queue}
-            <span class="composer-runtime-state">{queue.steering} steer / {queue.followUp} queued</span>
+            <span class="composer-runtime-state">{queue.steering} {$t("steer /")} {queue.followUp} {$t("queued")}</span>
           {/if}
         </div>
         <div class="composer-actions">
           {#if running && draft.trim().length > 0}
-            <button type="button" class="composer-steer" onclick={() => void steer()} disabled={!canSend}>{sendBusy ? 'Sending…' : 'Steer'}</button>
+            <button type="button" class="composer-steer" onclick={() => void steer()} disabled={!canSend}>{sendBusy ? $t('Sending…') : $t('Steer')}</button>
           {/if}
           <button
             type="button"
@@ -1328,8 +1329,8 @@
             class:composer-submit--stop={running}
             onclick={submitOrAbort}
             disabled={running ? abortBusy : !canSend}
-            aria-label={running ? 'Stop current turn' : 'Send message'}
-            title={running ? 'Stop current turn' : 'Send message'}
+            aria-label={running ? $t('Stop current turn') : $t('Send message')}
+            title={running ? $t('Stop current turn') : $t('Send message')}
           >
             {#if running}
               <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
@@ -1342,7 +1343,7 @@
     </form>
 
     {#each extensionUi.widgets.filter((widget) => widget.placement === 'belowEditor') as widget (widget.key)}
-      <aside class="extension-widget extension-widget--below" aria-label="Extension widget">
+      <aside class="extension-widget extension-widget--below" aria-label={$t("Extension widget")}>
         {#each widget.lines as line}<p>{line}</p>{/each}
       </aside>
     {/each}
