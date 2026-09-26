@@ -561,7 +561,7 @@ a document, which that policy refuses, but uses constructable stylesheets in a
 shadow root, so the editor always mounts in its own shadow root. If it cannot
 load, the plain text field remains.
 
-## ADR-034 — Signed updates are compiled in but off until a release configures them
+## ADR-039 — Signed updates are compiled in but off until a release configures them
 
 **Status:** Accepted 2026-09-27 (release 0.2.0; decisions delegated by the owner).
 
