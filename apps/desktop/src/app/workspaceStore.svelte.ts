@@ -12,6 +12,7 @@ import type { Preferences } from '../host-api/types';
 import { composerRequest } from '../host-api/composerClient';
 import { runtimeSettings } from '../host-api/runtimeSettings';
 import { deleteWorkspaceSession } from '../host-api/workspaceLifecycle';
+import { harnessRegistryHost } from '../host-api/harnessRegistry';
 import {
   workspaceHost,
   WorkspaceOperationError,
@@ -160,6 +161,7 @@ export class WorkspaceStore {
   private deleted = new Set<string>();
   private draftTimer: ReturnType<typeof setTimeout> | undefined;
   private unlisten: (() => void) | undefined;
+  private unlistenRegistry: (() => void) | undefined;
   private disposed = false;
 
   // ---- derived views -------------------------------------------------------
@@ -221,6 +223,11 @@ export class WorkspaceStore {
   async start(): Promise<void> {
     this.restoreUiState();
     void this.loadPreferences();
+    // ACP discovery and registry changes alter the catalog's harness rows (ADR-034).
+    void harnessRegistryHost.listen(() => void this.loadCatalog()).then((stop) => {
+      if (this.disposed) stop();
+      else this.unlistenRegistry = stop;
+    }, () => undefined);
     try {
       this.unlisten = await workspaceHost.listen((event) => this.enqueueEvent(event));
       if (this.disposed) {
@@ -244,6 +251,7 @@ export class WorkspaceStore {
     this.persistDraftsNow();
     this.disposed = true;
     this.unlisten?.();
+    this.unlistenRegistry?.();
   }
 
   // ---- navigation -----------------------------------------------------------
