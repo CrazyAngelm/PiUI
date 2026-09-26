@@ -13,6 +13,7 @@
   import ApprovalCard from './ApprovalCard.svelte';
   import HarnessMark from './HarnessMark.svelte';
   import ChatDetails from './ChatDetails.svelte';
+  import ChatComposer from '../chat/ChatComposer.svelte';
   import { useWorkspace } from './context';
 
   interface Props {
@@ -164,7 +165,7 @@
               <p class="notice">{snapshot.capabilities.prompt.reason ?? $t('{0} is read-only in this mode.', [harnessMeta(session.harness).label])}</p>
             {:else}
               {#key snapshot.session.id}
-                <conversation.SessionComposer
+                <ChatComposer
                   {snapshot}
                   draft={store.draftFor(snapshot.session.id)}
                   updateDraft={(text: string) => store.updateDraft(snapshot.session.id, text)}

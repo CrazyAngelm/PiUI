@@ -1,5 +1,6 @@
 import { derived, writable } from 'svelte/store';
 import { russianUi } from './russianUi';
+import { shellRu } from './shellRu';
 export type Language = 'en' | 'ru';
 const key = 'piui.language';
 function restored(): Language { try { return localStorage.getItem(key) === 'ru' ? 'ru' : 'en'; } catch { return 'en'; } }
@@ -415,5 +416,5 @@ const russian: Readonly<Record<string, string>> = {
   "Task records and recovery": "Записи задач и восстановление",
   "Skipped": "Пропущено",
 };
-export function translate(value: string, locale: Language): string { return locale === 'ru' ? russianUi[value] ?? russian[value] ?? value : value; }
+export function translate(value: string, locale: Language): string { return locale === 'ru' ? russianUi[value] ?? shellRu[value] ?? russian[value] ?? value : value; }
 export const t = derived(language, locale => (value: string, parameters: readonly unknown[] = []) => translate(value, locale).replace(/\{(\d+)\}/g, (token, index: string) => Number(index) < parameters.length ? String(parameters[Number(index)]) : token));
