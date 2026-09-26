@@ -333,6 +333,7 @@ Then show the actual request kind, safe action/resource summary, requested scope
 - Response failure retains the request and typed input. A retry follows the host's replay/idempotency contract; uncertain resolution first checks status.
 - Approval/input content is treated as potentially sensitive. Ordinary notifications/logs contain safe metadata, not full commands, secrets, prompt bodies or filesystem paths.
 - A successful approval is not proof that execution succeeded. Follow the resulting native task state separately.
+- MCP requests (Codex `mcpServer/elicitation/request`) are labelled **MCP server** with the server name. A form request shows its primitive fields with the server's own labels, native defaults and per-field errors; focus moves to the first value that cannot be sent. The decisions are **Accept**, **Decline** and **Dismiss**, mapped exactly to the protocol's accept, decline and cancel; an MCP tool approval accepts one call only. Values PiUI cannot show are named in the card: optional ones stay empty, a required one leaves only Decline and Dismiss. A pipeline step waiting on such a request appears in the Inbox like any other approval; nothing is accepted automatically.
 
 ## 11. Visual system
 
