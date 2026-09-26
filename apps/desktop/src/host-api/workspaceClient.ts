@@ -1,5 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { desktopAvailable, hostInvoke, hostListen } from './transport';
 import type { WorkspaceCatalog, WorkspaceCommand, WorkspaceEvent, WorkspaceResult, SessionSnapshot } from '../../../../contracts/workspace-v15';
 export type { WorkspaceCatalog, WorkspaceCommand, WorkspaceEvent, WorkspaceResult, SessionSnapshot } from '../../../../contracts/workspace-v15';
 export type WorkspaceInvoke = (route: string, args: { command: WorkspaceCommand }) => Promise<WorkspaceResult>;
@@ -63,28 +62,8 @@ export function createWorkspaceClient(invokeCommand: WorkspaceInvoke, listenEven
     },
   };
 }
-export const workspaceDesktopAvailable = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-const desktop = createWorkspaceClient(
-  (route, args) => invoke<WorkspaceResult>(route, args),
-  (channel, handler) => listen<WorkspaceEvent>(channel, (event) => handler(event.payload)),
+export const workspaceDesktopAvailable = desktopAvailable;
+export const workspaceHost: WorkspaceClient = createWorkspaceClient(
+  (route, args) => hostInvoke<WorkspaceResult>(route, args),
+  (channel, handler) => hostListen<WorkspaceEvent>(channel, handler),
 );
-const browser: WorkspaceClient = {
-  async request(command) {
-    if (command.type === 'catalog') return { type: 'catalog', catalog: await browser.catalog() };
-    throw new WorkspaceOperationError('UNAVAILABLE', 'Open the PiUI desktop app to start a native harness. Browser preview does not execute agents.');
-  },
-  async catalog() {
-    return {
-      protocol: 15, safeMode: false, workspaces: [], sessions: [],
-      harnesses: [
-        { kind: 'pi', name: 'Pi', installed: false, status: 'unavailable', reason: 'Desktop host required' },
-        { kind: 'prime-agent', name: 'Prime Agent', installed: false, status: 'unavailable', reason: 'Desktop host required' },
-        { kind: 'codex', name: 'Codex', installed: false, status: 'unavailable', reason: 'Desktop host required' },
-        { kind: 'hermes', name: 'Hermes', installed: false, status: 'unavailable', reason: 'Desktop host required' },
-      ],
-    };
-  },
-  async snapshot() { throw workspaceError({ code: 'UNAVAILABLE' }); },
-  async listen() { return () => {}; },
-};
-export const workspaceHost: WorkspaceClient = workspaceDesktopAvailable ? desktop : browser;

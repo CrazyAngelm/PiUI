@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { RuntimeSettings } from '../../../../contracts/workspace-settings-v16';
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
-vi.mock('@tauri-apps/api/core', () => ({ invoke }));
+vi.mock('./transport', () => ({ hostInvoke: invoke, hostListen: vi.fn(), desktopAvailable: true }));
 import { runtimeSettings } from './runtimeSettings';
 describe('runtime settings v12', () => {
   it('keeps the model provider identity and uses the versioned allowlisted route', async () => {

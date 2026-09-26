@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { hostInvoke } from './transport';
 import type { HarnessModelsRequest, HarnessModelsResult } from '../../../../contracts/harness-models-v18';
 import { workspaceError } from './workspaceClient';
 
@@ -9,7 +9,7 @@ export function harnessModels(request: HarnessModelsRequest, refresh = false): P
   const key = JSON.stringify([request.workspaceId, request.harness]);
   const cached = catalogs.get(key);
   if (cached && (!refresh || cached.pending)) return cached.promise;
-  const promise = invoke<HarnessModelsResult>('harness_models_v18', { request }).then(result => {
+  const promise = hostInvoke<HarnessModelsResult>('harness_models_v18', { request }).then(result => {
     if (result.protocol !== 18 || result.harness !== request.harness) throw new Error('Invalid model catalog');
     entry.pending = false;
     return result;

@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
-vi.mock('@tauri-apps/api/core', () => ({ invoke }));
+vi.mock('./transport', () => ({ hostInvoke: invoke, hostListen: vi.fn(), desktopAvailable: true }));
 import { deleteWorkspaceSession } from './workspaceLifecycle';
 
 it('deletes only the addressed session through the versioned route', async () => {

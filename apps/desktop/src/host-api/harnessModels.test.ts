@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
-vi.mock('@tauri-apps/api/core', () => ({ invoke }));
+vi.mock('./transport', () => ({ hostInvoke: invoke, hostListen: vi.fn(), desktopAvailable: true }));
 let harnessModels: typeof import('./harnessModels').harnessModels;
 beforeEach(async () => { vi.resetModules(); invoke.mockReset(); ({ harnessModels } = await import('./harnessModels')); });
 

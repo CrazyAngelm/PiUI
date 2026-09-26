@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 const invoke = vi.hoisted(() => vi.fn());
-vi.mock('@tauri-apps/api/core', () => ({ invoke }));
+vi.mock('./transport', () => ({ hostInvoke: invoke, hostListen: vi.fn(), desktopAvailable: true }));
 import { composerRequest } from './composerClient';
 beforeEach(() => { invoke.mockReset(); });
 it('keeps request identity and queue revision across typed admission', async () => {

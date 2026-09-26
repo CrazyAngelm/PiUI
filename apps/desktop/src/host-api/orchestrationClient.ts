@@ -1,5 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { desktopAvailable, hostInvoke, hostListen } from './transport';
 import {
   ORCHESTRATION_EVENT_V6,
   ORCHESTRATION_SCHEDULE_EVENT_V7,
@@ -139,11 +138,9 @@ export function createUnavailableOrchestrationClient(): OrchestrationClient {
   return createOrchestrationClient(unavailable, unavailable);
 }
 
-export const orchestrationDesktopAvailable = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-export const orchestrationHost: OrchestrationClient = orchestrationDesktopAvailable
-  ? createOrchestrationClient(
-      (route, args) => invoke(route, args),
-      (handler) => listen<unknown>(ORCHESTRATION_EVENT_V6, ({ payload }) => handler(payload)),
-      (handler) => listen<unknown>(ORCHESTRATION_SCHEDULE_EVENT_V7, ({ payload }) => handler(payload)),
-    )
-  : createUnavailableOrchestrationClient();
+export const orchestrationDesktopAvailable = desktopAvailable;
+export const orchestrationHost: OrchestrationClient = createOrchestrationClient(
+  (route, args) => hostInvoke(route, args),
+  (handler) => hostListen<unknown>(ORCHESTRATION_EVENT_V6, handler),
+  (handler) => hostListen<unknown>(ORCHESTRATION_SCHEDULE_EVENT_V7, handler),
+);
