@@ -76,6 +76,10 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   Ctrl+K "Run pipeline…" with a chat trigger, and background mode (tray with
   Open/Pause/Quit, keep-in-tray and start-at-sign-in, both off by default, in
   Settings -> Background). UI Lab parity; golden JSON shared by Rust and TS.
+- `feat/triggers-2` — one PiUI per user session (`tauri-plugin-single-instance`;
+  a second launch shows the running window, restoring it from the tray; E2E
+  hosts stay outside) and a quoted Windows sign-in `Run` value written by the
+  host itself, with legacy unquoted entries rewritten at startup.
 - `main` fast-forwarded to `rework/piui-2` (local only, not pushed).
 - `feat/step-editing` (`ed824b2`…`9e72213`) — executor tails. A node's type
   changes between agent, model call and script from a chip in the inspector
@@ -176,12 +180,14 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   axe flags the palette list (`scrollable-region-focusable`, reviewed
   exception). The Ubuntu full-workspace Rust job has not run yet.
 
-- Triggers: no single-instance guard yet, so launching PiUI while it waits in
-  the tray starts a second process (its journal writes then fail instead of
-  double-claiming). Tray, sign-in start and file watching are verified by
-  unit tests and fakes only; the native tray, the real `Run` registration and
-  Linux/macOS paths still need a manual check. The UI Lab never fires "files
-  changed" rules (no project folders) and fires no timed schedules.
+- Triggers: tray, sign-in start, the single-instance hand-off and file
+  watching are verified by unit tests and fakes only; the native tray, the
+  real quoted `Run` value, a second launch restoring the window from the tray
+  and Linux/macOS paths still need a manual check. The UI Lab never fires
+  "files changed" rules (no project folders) and fires no timed schedules.
+  With the opt-in local API configured (`PIUI_AGENT_API_PORT`), a second
+  launch fails on the taken port before the single-instance hand-off. Linux
+  still gets the plugin's unquoted `.desktop` `Exec` line.
 
 ## Next
 
