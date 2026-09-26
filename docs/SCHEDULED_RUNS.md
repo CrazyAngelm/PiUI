@@ -2,8 +2,9 @@
 
 Status: implemented host, desktop UI and local operator API contract.
 
-PiUI can start a saved launch command once at an absolute time or repeatedly on
-a fixed elapsed interval in minutes or hours. A launch command identifies the
+PiUI can start a saved launch command once at an absolute time, repeatedly on
+a fixed elapsed interval in minutes or hours, or at a local wall-clock time on
+chosen days of the week. A launch command identifies the
 team and pipeline; every occurrence snapshots their latest saved definitions into
 an ordinary orchestration run. Native harnesses still own inference, tools,
 credentials, approvals, processes and history.
@@ -59,13 +60,23 @@ UI metadata cache under ADR-023.
 - `interval` stores a positive integer, `minutes` or `hours`, an absolute anchor,
   and a display time zone. Occurrences stay anchored and do not drift with task
   completion time.
+- `calendar` (additive in host v7.1) stores a local `time` (`HH:MM`), ISO
+  weekdays `days` (1 = Monday ... 7 = Sunday, distinct, at least one), an IANA
+  `timeZone` and `startsAt`. Occurrences follow the zone's wall clock across
+  daylight-saving changes: a skipped local time fires at the first valid minute
+  after the gap, and a repeated local time fires once, at its first occurrence.
+  No occurrence precedes `startsAt`. The desktop sets `startsAt` to the save
+  time whenever the time, days or zone change, so an edit never claims an
+  occurrence that already passed; an unchanged rule keeps its start. The host
+  (`CalendarRule`, chrono-tz) is authoritative; `host-api/scheduleCalendar.ts`
+  mirrors it with the same fixtures for previews and the UI Lab.
 - Missed `skip` records one skipped outcome and advances to the first future
   nominal occurrence. `coalesce` creates one run for the latest elapsed occurrence.
 - Overlap `skip` treats running and uncertain prior runs as active. `allow` creates
   another independent run.
 - PiUI evaluates schedules only while its host process is running. OS startup,
-  background services, machine wake and calendar/cron expressions are outside
-  this contract.
+  background services, machine wake and cron expressions are outside this
+  contract.
 
 The desktop uses orchestration host v7 schedule commands and scalar invalidation
 events while retaining every v6 definition/run command. The opt-in loopback API

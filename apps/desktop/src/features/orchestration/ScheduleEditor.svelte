@@ -18,7 +18,7 @@
   export let onCancel: () => void;
   export let onCreateSystem: (() => void) | undefined = undefined;
   let pendingNavigation: (() => void) | undefined;
-  function navigate(action: () => void): void { if (dirty && !readOnly) { pendingNavigation = action; discardPrompt = true; } else action(); }
+  function navigate(action: () => void): void { if (dirty && !locked) { pendingNavigation = action; discardPrompt = true; } else action(); }
   export let onDirtyChange: (dirty: boolean) => void = () => {};
 
   const source = schedule?.value;
@@ -27,8 +27,10 @@
   let id = source?.id ?? crypto.randomUUID();
   let name = source?.name ?? '';
   let launchCommandId = source?.launchCommandId ?? '';
-  let triggerType: 'once' | 'interval' = sourceTrigger?.type ?? 'once';
-  let localAt = sourceTrigger === undefined ? '' : localDateTimeValue(sourceTrigger.type === 'once' ? sourceTrigger.at : sourceTrigger.anchorAt, timeZone);
+  // Day-of-week rules (v7.1) are edited only in the new Automations screen.
+  const calendarRule = sourceTrigger?.type === 'calendar';
+  let triggerType: 'once' | 'interval' = sourceTrigger?.type === 'interval' ? 'interval' : 'once';
+  let localAt = sourceTrigger === undefined || sourceTrigger.type === 'calendar' ? '' : localDateTimeValue(sourceTrigger.type === 'once' ? sourceTrigger.at : sourceTrigger.anchorAt, timeZone);
   let every = sourceTrigger?.type === 'interval' ? String(sourceTrigger.every) : '1';
   let unit: 'minutes' | 'hours' = sourceTrigger?.type === 'interval' ? sourceTrigger.unit : 'minutes';
   let missedRunPolicy: MissedRunPolicy | '' = source?.missedRunPolicy ?? '';
@@ -41,6 +43,7 @@
   const baseline = JSON.stringify({ id, name, launchCommandId, triggerType, localAt, every, unit, missedRunPolicy, overlapPolicy });
   $: dirty = JSON.stringify({ id, name, launchCommandId, triggerType, localAt, every, unit, missedRunPolicy, overlapPolicy }) !== baseline;
   $: onDirtyChange(dirty);
+  $: locked = readOnly || calendarRule;
 
   function save(event: SubmitEvent): void {
     event.preventDefault();
@@ -56,7 +59,7 @@
       : !missedRunPolicy ? 'Choose what happens after PiUI was closed.'
       : !overlapPolicy ? 'Choose what happens while the previous run is active.'
       : undefined;
-    if (validation || !instant.ok || interval === undefined || !missedRunPolicy || !overlapPolicy || busy || readOnly) return;
+    if (validation || !instant.ok || interval === undefined || !missedRunPolicy || !overlapPolicy || busy || locked) return;
     const trigger = triggerType === 'once'
       ? { type: 'once' as const, at: instant.instant, timeZone }
       : { type: 'interval' as const, every: interval, unit, anchorAt: instant.instant, timeZone };
@@ -68,11 +71,12 @@
 <form class="editor" onsubmit={save} aria-labelledby="schedule-editor-title">
   <header>
     <div><h2 id="schedule-editor-title">{schedule ? $t('Edit schedule') : $t('Create schedule')}</h2></div>
-    <span>{readOnly ? $t('Read-only') : dirty ? $t('Unsaved changes') : $t(source ? 'No unsaved changes' : 'New draft')}</span>
+    <span>{locked ? $t('Read-only') : dirty ? $t('Unsaved changes') : $t(source ? 'No unsaved changes' : 'New draft')}</span>
   </header>
   <p class="notice">{$t('Schedules run only while the PiUI host is open. They do not wake the computer or start PiUI.')}</p>
   <p class="hint">{$t('Saving does not enable execution. New schedules and execution-affecting edits must be enabled separately.')}</p>
-  <fieldset disabled={busy || readOnly}>
+  {#if calendarRule}<p class="notice" role="status">{$t('This schedule repeats on days of the week. Edit it in Automations.')}</p>{/if}
+  <fieldset disabled={busy || locked}>
     <label for="schedule-name">{$t('Schedule name')}</label>
     <input id="schedule-name" bind:value={name} autocomplete="off" />
 
@@ -119,7 +123,7 @@
   {#if validation || error}<p class="error" role="alert">{$t(error ?? validation ?? '')}</p>{/if}
   {#if launchCommands.length === 0}<p class="notice" role="status">{$t('Create a saved launch command before adding a schedule.')}{#if onCreateSystem}<button type="button" onclick={() => onCreateSystem && navigate(onCreateSystem)}>{$t('Create system')}</button>{/if}</p>{/if}
   {#if discardPrompt}<div class="discard" role="group" aria-label={$t('Unsaved schedule changes')}><p>{$t('Discard unsaved changes?')}</p><button type="button" onclick={() => discardPrompt = false}>{$t('Keep editing')}</button><button type="button" onclick={() => { const action = pendingNavigation ?? onCancel; pendingNavigation = undefined; action(); }}>{$t('Discard changes')}</button></div>{/if}
-  <footer><button type="button" disabled={busy} onclick={() => navigate(onCancel)}>{readOnly ? $t('Back') : $t('Cancel')}</button>{#if !readOnly}<button class="primary" type="submit" disabled={busy || launchCommands.length === 0}>{busy ? $t('Saving…') : $t('Save schedule')}</button>{/if}</footer>
+  <footer><button type="button" disabled={busy} onclick={() => navigate(onCancel)}>{locked ? $t('Back') : $t('Cancel')}</button>{#if !locked}<button class="primary" type="submit" disabled={busy || launchCommands.length === 0}>{busy ? $t('Saving…') : $t('Save schedule')}</button>{/if}</footer>
 </form>
 
 <style>

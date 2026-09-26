@@ -22,6 +22,19 @@ export type ScheduleTrigger =
       readonly unit: 'minutes' | 'hours';
       readonly anchorAt: string;
       readonly timeZone: string;
+    }
+  /**
+   * Additive (v7.1): local wall-clock `time` (`HH:MM`) on ISO weekdays `days`
+   * (1 = Monday ... 7 = Sunday) in the IANA `timeZone`, never before
+   * `startsAt`. Clock-change gaps fire at the first valid minute after them;
+   * repeated local times fire once, at the first.
+   */
+  | {
+      readonly type: 'calendar';
+      readonly time: string;
+      readonly days: readonly number[];
+      readonly startsAt: string;
+      readonly timeZone: string;
     };
 
 export type MissedRunPolicy = 'skip' | 'coalesce';

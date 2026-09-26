@@ -3,7 +3,9 @@
 //! This module computes nominal occurrence times only. Native execution still
 //! goes through the existing orchestration run journal and runtime adapters.
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::offset::LocalResult;
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, TimeZone, Utc};
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -33,6 +35,117 @@ pub enum ScheduleTrigger {
         anchor_at: DateTime<Utc>,
         time_zone: String,
     },
+    /// Wall-clock occurrences (v7.1): `time` (`HH:MM`) on the ISO weekdays in
+    /// `days` (1 = Monday ... 7 = Sunday), in the IANA `time_zone`, never
+    /// before `starts_at`. A local time skipped by a clock change runs at the
+    /// first valid minute after the gap; a repeated local time runs once, first.
+    Calendar {
+        time: String,
+        days: Vec<u8>,
+        starts_at: DateTime<Utc>,
+        time_zone: String,
+    },
+}
+
+/// Parsed calendar trigger: local time, weekday mask (Monday first) and zone.
+struct CalendarRule {
+    time: NaiveTime,
+    days: [bool; 7],
+    zone: Tz,
+    starts_at: DateTime<Utc>,
+}
+
+/// Longest civil-time gap stepped over when a local time does not exist.
+const MAX_GAP_MINUTES: i64 = 180;
+/// Every selected weekday recurs within this many local days of any instant.
+const SEARCH_DAYS: i64 = 9;
+
+fn parse_local_time(value: &str) -> Option<NaiveTime> {
+    let (hour, minute) = value.split_once(':')?;
+    if hour.len() != 2
+        || minute.len() != 2
+        || !hour.bytes().all(|byte| byte.is_ascii_digit())
+        || !minute.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    NaiveTime::from_hms_opt(hour.parse().ok()?, minute.parse().ok()?, 0)
+}
+
+impl CalendarRule {
+    fn parse(time: &str, days: &[u8], starts_at: DateTime<Utc>, time_zone: &str) -> Option<Self> {
+        let time = parse_local_time(time)?;
+        let zone: Tz = time_zone.parse().ok()?;
+        if days.is_empty() || days.len() > 7 {
+            return None;
+        }
+        let mut mask = [false; 7];
+        for day in days {
+            let index = usize::from(day.checked_sub(1)?);
+            if index >= 7 || mask[index] {
+                return None;
+            }
+            mask[index] = true;
+        }
+        Some(Self {
+            time,
+            days: mask,
+            zone,
+            starts_at,
+        })
+    }
+
+    fn runs_on(&self, date: NaiveDate) -> bool {
+        usize::try_from(date.weekday().num_days_from_monday())
+            .ok()
+            .and_then(|index| self.days.get(index).copied())
+            .unwrap_or(false)
+    }
+
+    /// The instant this rule fires on a local date, if it runs that day.
+    fn occurrence_on(&self, date: NaiveDate) -> Option<DateTime<Utc>> {
+        if !self.runs_on(date) {
+            return None;
+        }
+        let local = date.and_time(self.time);
+        let resolve = |result: LocalResult<DateTime<Tz>>| match result {
+            LocalResult::Single(value) => Some(value.with_timezone(&Utc)),
+            LocalResult::Ambiguous(earliest, _) => Some(earliest.with_timezone(&Utc)),
+            LocalResult::None => None,
+        };
+        resolve(self.zone.from_local_datetime(&local)).or_else(|| {
+            (1..=MAX_GAP_MINUTES).find_map(|minutes| {
+                resolve(
+                    self.zone
+                        .from_local_datetime(&(local + Duration::minutes(minutes))),
+                )
+            })
+        })
+    }
+
+    fn local_date(&self, instant: DateTime<Utc>) -> NaiveDate {
+        instant.with_timezone(&self.zone).date_naive()
+    }
+
+    /// First occurrence strictly after `instant` and not before `starts_at`.
+    fn first_after(&self, instant: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        let floor = instant.max(self.starts_at - Duration::milliseconds(1));
+        let start = self.local_date(floor) - Duration::days(1);
+        (0..=SEARCH_DAYS)
+            .filter_map(|offset| self.occurrence_on(start + Duration::days(offset)))
+            .find(|candidate| *candidate > floor && *candidate >= self.starts_at)
+    }
+
+    /// Latest occurrence at or before `instant`, not before `starts_at`.
+    fn latest_at_or_before(&self, instant: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        if instant < self.starts_at {
+            return None;
+        }
+        let end = self.local_date(instant) + Duration::days(1);
+        (0..=SEARCH_DAYS)
+            .filter_map(|offset| self.occurrence_on(end - Duration::days(offset)))
+            .find(|candidate| *candidate <= instant && *candidate >= self.starts_at)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +184,7 @@ impl ScheduleDefinition {
             && !self.launch_command_id.trim().is_empty()
             && !self.trigger.time_zone().trim().is_empty()
             && self.trigger.interval_duration().is_some()
+            && self.trigger.calendar_valid()
     }
 
     /// Input values change what agents are asked to do, so they are part of
@@ -87,14 +201,38 @@ impl ScheduleDefinition {
 impl ScheduleTrigger {
     pub(crate) fn time_zone(&self) -> &str {
         match self {
-            Self::Once { time_zone, .. } | Self::Interval { time_zone, .. } => time_zone,
+            Self::Once { time_zone, .. }
+            | Self::Interval { time_zone, .. }
+            | Self::Calendar { time_zone, .. } => time_zone,
         }
+    }
+
+    fn calendar(&self) -> Option<CalendarRule> {
+        match self {
+            Self::Calendar {
+                time,
+                days,
+                starts_at,
+                time_zone,
+            } => CalendarRule::parse(time, days, *starts_at, time_zone),
+            _ => None,
+        }
+    }
+
+    /// Calendar triggers need a strict `HH:MM`, 1-7 unique ISO weekdays and
+    /// a known IANA zone; the other triggers have nothing to check here.
+    pub(crate) fn calendar_valid(&self) -> bool {
+        !matches!(self, Self::Calendar { .. }) || self.calendar().is_some()
     }
 
     pub(crate) fn initial_due(&self) -> DateTime<Utc> {
         match self {
             Self::Once { at, .. } => *at,
             Self::Interval { anchor_at, .. } => *anchor_at,
+            Self::Calendar { starts_at, .. } => self
+                .calendar()
+                .and_then(|rule| rule.first_after(*starts_at - Duration::milliseconds(1)))
+                .unwrap_or(*starts_at),
         }
     }
 
@@ -110,8 +248,11 @@ impl ScheduleTrigger {
         Duration::try_seconds(seconds)
     }
 
-    /// Latest fixed-rate nominal occurrence at or before `instant`.
+    /// Latest nominal occurrence at or before `instant`.
     pub(crate) fn latest_at_or_before(&self, instant: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        if let Self::Calendar { .. } = self {
+            return self.calendar()?.latest_at_or_before(instant);
+        }
         let Self::Interval { anchor_at, .. } = self else {
             return (self.initial_due() <= instant).then_some(self.initial_due());
         };
@@ -126,10 +267,11 @@ impl ScheduleTrigger {
         add_milliseconds(*anchor_at, duration_ms.checked_mul(steps)?)
     }
 
-    /// First fixed-rate nominal occurrence strictly after `instant`.
+    /// First nominal occurrence strictly after `instant`.
     pub(crate) fn first_after(&self, instant: DateTime<Utc>) -> Option<DateTime<Utc>> {
         match self {
             Self::Once { .. } => None,
+            Self::Calendar { .. } => self.calendar()?.first_after(instant),
             Self::Interval { anchor_at, .. } if *anchor_at > instant => Some(*anchor_at),
             Self::Interval { anchor_at, .. } => {
                 let duration_ms = self.interval_duration()?.num_milliseconds();
@@ -234,6 +376,102 @@ mod tests {
 
     fn at(value: &str) -> DateTime<Utc> {
         value.parse().expect("valid fixture instant")
+    }
+
+    fn calendar(time: &str, days: &[u8], starts_at: &str, zone: &str) -> ScheduleTrigger {
+        ScheduleTrigger::Calendar {
+            time: time.into(),
+            days: days.to_vec(),
+            starts_at: at(starts_at),
+            time_zone: zone.into(),
+        }
+    }
+
+    #[test]
+    fn calendar_runs_at_local_wall_time_on_selected_weekdays() {
+        // 2026-09-25 is a Friday; weekdays at 09:00 in Moscow (UTC+3).
+        let trigger = calendar(
+            "09:00",
+            &[1, 2, 3, 4, 5],
+            "2026-09-25T10:00:00Z",
+            "Europe/Moscow",
+        );
+        assert!(trigger.calendar_valid());
+        // Friday 09:00 MSK is 06:00Z, before the start, so Monday comes next.
+        assert_eq!(trigger.initial_due(), at("2026-09-28T06:00:00Z"));
+        assert_eq!(
+            trigger.first_after(at("2026-09-28T06:00:00Z")),
+            Some(at("2026-09-29T06:00:00Z"))
+        );
+        assert_eq!(
+            trigger.latest_at_or_before(at("2026-10-03T12:00:00Z")),
+            Some(at("2026-10-02T06:00:00Z"))
+        );
+        assert_eq!(
+            trigger.latest_at_or_before(at("2026-09-25T12:00:00Z")),
+            None
+        );
+    }
+
+    #[test]
+    fn calendar_follows_daylight_saving_changes() {
+        // Berlin leaves summer time on 2026-10-25: 08:00 local moves from 06:00Z to 07:00Z.
+        let trigger = calendar(
+            "08:00",
+            &[1, 2, 3, 4, 5, 6, 7],
+            "2026-10-23T00:00:00Z",
+            "Europe/Berlin",
+        );
+        assert_eq!(
+            trigger.first_after(at("2026-10-24T12:00:00Z")),
+            Some(at("2026-10-25T07:00:00Z"))
+        );
+        assert_eq!(
+            trigger.first_after(at("2026-10-23T12:00:00Z")),
+            Some(at("2026-10-24T06:00:00Z"))
+        );
+        // 02:30 does not exist on 2026-03-29 in Berlin: it runs at 03:00 local (01:00Z).
+        let gap = calendar("02:30", &[7], "2026-03-01T00:00:00Z", "Europe/Berlin");
+        assert_eq!(
+            gap.first_after(at("2026-03-28T00:00:00Z")),
+            Some(at("2026-03-29T01:00:00Z"))
+        );
+        // 02:30 occurs twice on 2026-10-25: the first occurrence (CEST, 00:30Z) wins.
+        let repeated = calendar("02:30", &[7], "2026-10-01T00:00:00Z", "Europe/Berlin");
+        assert_eq!(
+            repeated.first_after(at("2026-10-24T00:00:00Z")),
+            Some(at("2026-10-25T00:30:00Z"))
+        );
+    }
+
+    #[test]
+    fn calendar_rejects_malformed_rules() {
+        for trigger in [
+            calendar("9:00", &[1], "2026-09-25T00:00:00Z", "UTC"),
+            calendar("24:00", &[1], "2026-09-25T00:00:00Z", "UTC"),
+            calendar("09:60", &[1], "2026-09-25T00:00:00Z", "UTC"),
+            calendar("09:00", &[], "2026-09-25T00:00:00Z", "UTC"),
+            calendar("09:00", &[0], "2026-09-25T00:00:00Z", "UTC"),
+            calendar("09:00", &[8], "2026-09-25T00:00:00Z", "UTC"),
+            calendar("09:00", &[1, 1], "2026-09-25T00:00:00Z", "UTC"),
+            calendar("09:00", &[1], "2026-09-25T00:00:00Z", "Mars/Olympus"),
+        ] {
+            assert!(!trigger.calendar_valid(), "{trigger:?}");
+        }
+    }
+
+    #[test]
+    fn calendar_trigger_round_trips_in_camel_case() {
+        let trigger = calendar("07:30", &[6, 7], "2026-09-25T00:00:00Z", "Asia/Bangkok");
+        let json = serde_json::to_value(&trigger).expect("serializes");
+        assert_eq!(
+            json,
+            serde_json::json!({"type": "calendar", "time": "07:30", "days": [6, 7], "startsAt": "2026-09-25T00:00:00Z", "timeZone": "Asia/Bangkok"})
+        );
+        assert_eq!(
+            serde_json::from_value::<ScheduleTrigger>(json).expect("parses"),
+            trigger
+        );
     }
 
     #[test]

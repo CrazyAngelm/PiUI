@@ -7,6 +7,7 @@ import type {
 import { orchestrationFailure } from '../labErrors';
 import type { LabOrchestrationWorkspace, LabSchedule } from '../labState';
 import { resolveRunInputs, type RunInputResolution } from '../../runInputs';
+import { calendarInitialDue, calendarValid } from '../../scheduleCalendar';
 import {
   definitionIssue, launchCommandValid, normalizePipeline, normalizeProfile, normalizeTeam, pipelineValid, profileValid,
   spawnSubset, teamValid,
@@ -191,7 +192,18 @@ export function saveGraph(workspace: LabOrchestrationWorkspace, request: SaveGra
 }
 
 export function initialDue(trigger: ScheduleTrigger): string {
-  return labIso(Date.parse(trigger.type === 'once' ? trigger.at : trigger.anchorAt));
+  switch (trigger.type) {
+    case 'once':
+      return labIso(Date.parse(trigger.at));
+    case 'interval':
+      return labIso(Date.parse(trigger.anchorAt));
+    case 'calendar':
+      return labIso(calendarInitialDue(trigger));
+    default: {
+      const exhaustive: never = trigger;
+      return exhaustive;
+    }
+  }
 }
 
 /**
@@ -201,7 +213,9 @@ export function initialDue(trigger: ScheduleTrigger): string {
 function normalizeSchedule(value: ScheduleDefinition): ScheduleDefinition {
   const trigger: ScheduleTrigger = value.trigger.type === 'once'
     ? { ...value.trigger, at: labIso(Date.parse(value.trigger.at)) }
-    : { ...value.trigger, anchorAt: labIso(Date.parse(value.trigger.anchorAt)) };
+    : value.trigger.type === 'interval'
+      ? { ...value.trigger, anchorAt: labIso(Date.parse(value.trigger.anchorAt)) }
+      : { ...value.trigger, startsAt: labIso(Date.parse(value.trigger.startsAt)) };
   const { inputs, ...rest } = value;
   const entries = Object.entries(inputs ?? {}).sort(([left], [right]) => compareText(left, right));
   return { ...rest, trigger, ...(entries.length ? { inputs: Object.fromEntries(entries) } : {}) };
@@ -217,7 +231,9 @@ export function scheduleRunInputs(workspace: LabOrchestrationWorkspace, value: S
 function scheduleValid(value: ScheduleDefinition): boolean {
   const blank = (text: string): boolean => text.trim() === '';
   return !blank(value.id) && !blank(value.name) && !blank(value.launchCommandId) && !blank(value.trigger.timeZone)
-    && (value.trigger.type === 'once' || value.trigger.every > 0);
+    && (value.trigger.type === 'once'
+      || (value.trigger.type === 'interval' && value.trigger.every > 0)
+      || (value.trigger.type === 'calendar' && calendarValid(value.trigger)));
 }
 
 /** Both sides are normalized, so input maps compare in sorted key order. */

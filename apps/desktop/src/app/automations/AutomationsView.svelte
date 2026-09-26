@@ -7,6 +7,7 @@
   import { onMount, untrack } from 'svelte';
   import { language, t } from '../../features/locale/language';
   import type { OrchestrationClient, ScheduleSnapshot } from '../../host-api/orchestrationClient';
+  import { daySet, sortDays, weekdayNames } from '../../host-api/scheduleCalendar';
   import { Badge, Button, Dialog, EmptyState, IconButton, Skeleton, Switch } from '../../lib/ui';
   import { AutomationsStore } from './automationsStore.svelte';
   import ScheduleDialog from './ScheduleDialog.svelte';
@@ -37,8 +38,23 @@
 
   function cadence(schedule: ScheduleSnapshot): string {
     const trigger = schedule.value.trigger;
-    if (trigger.type === 'once') return $t('Once');
-    return trigger.unit === 'hours' ? $t('Every {0} h', [trigger.every]) : $t('Every {0} min', [trigger.every]);
+    switch (trigger.type) {
+      case 'once':
+        return $t('Once');
+      case 'interval':
+        return trigger.unit === 'hours' ? $t('Every {0} h', [trigger.every]) : $t('Every {0} min', [trigger.every]);
+      case 'calendar': {
+        const preset = daySet(trigger.days);
+        if (preset === 'every') return $t('Every day at {0}', [trigger.time]);
+        if (preset === 'workdays') return $t('Weekdays at {0}', [trigger.time]);
+        const names = weekdayNames(locale);
+        return $t('{0} at {1}', [sortDays(trigger.days).map((day) => names[day - 1]).join(', '), trigger.time]);
+      }
+      default: {
+        const exhaustive: never = trigger;
+        return exhaustive;
+      }
+    }
   }
 
   const OUTCOME: Record<string, { label: string; tone: 'success' | 'neutral' | 'warning' | 'danger' }> = {

@@ -151,6 +151,7 @@ export const scheduleSchema = object({
   trigger: tagged('type', {
     once: { at: datetime, timeZone: string },
     interval: { every: u64, unit: enumOf(['minutes', 'hours']), anchorAt: datetime, timeZone: string },
+    calendar: { time: string, days: arrayOf(u64), startsAt: datetime, timeZone: string },
   }),
   missedRunPolicy: enumOf(['skip', 'coalesce']),
   overlapPolicy: enumOf(['allow', 'skip']),

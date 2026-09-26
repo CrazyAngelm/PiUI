@@ -29,6 +29,7 @@ tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
 chrono.workspace = true
+chrono-tz.workspace = true
 piui-contracts = { path = "../../../crates/piui-contracts" }
 piui-extensions = { path = "../../../crates/piui-extensions" }
 piui-index = { path = "../../../crates/piui-index" }

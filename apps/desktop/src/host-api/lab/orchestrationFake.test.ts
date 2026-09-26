@@ -331,6 +331,25 @@ describe('UI Lab orchestration host', () => {
     }))).toMatchObject({ code: 'runtime-unavailable' });
   });
 
+  it('saves day-of-week schedules at local wall time and refuses malformed rules', async () => {
+    const host = labHost();
+    const piui = projectId(host, 'piui');
+    const [nightly] = await call<ScheduleSnapshot[]>(host, 'orchestration_list_schedules_v7', { workspaceId: piui });
+    const value = {
+      id: 'lab-weekdays', name: 'Weekday review', launchCommandId: nightly?.value.launchCommandId,
+      trigger: { type: 'calendar', time: '09:00', days: [1, 2, 3, 4, 5], startsAt: '2026-09-25T10:00:00.000Z', timeZone: 'Europe/Moscow' },
+      missedRunPolicy: 'skip', overlapPolicy: 'skip', inputs: REVIEW_INPUTS,
+    };
+    const created = await call<ScheduleSnapshot>(host, 'orchestration_save_schedule_v7', { workspaceId: piui, value });
+    // Friday 13:00 Moscow time: the next weekday 09:00 is Monday, 06:00 UTC.
+    expect(created).toMatchObject({ enabled: false, nextDueAt: '2026-09-28T06:00:00Z' });
+    expect(created.value.trigger).toMatchObject({ startsAt: '2026-09-25T10:00:00Z' });
+    for (const trigger of [{ ...value.trigger, days: [] }, { ...value.trigger, time: '9:00' }, { ...value.trigger, timeZone: 'Mars/Olympus' }]) {
+      expect(await rejection(call(host, 'orchestration_save_schedule_v7', { workspaceId: piui, value: { ...value, id: 'lab-bad', trigger } })))
+        .toMatchObject({ code: 'invalid' });
+    }
+  });
+
   it('keeps safe mode read-only: recorded runs are visible, interrupted ones need reconciliation', async () => {
     const host = labHost('safe');
     const piui = projectId(host, 'piui');

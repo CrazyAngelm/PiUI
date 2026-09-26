@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { t } from '../../features/locale/language';
+  import { language, t } from '../../features/locale/language';
   import { localDateTimeToInstant, localDateTimeValue, positiveInteger } from '../../features/orchestration/scheduleForm';
-  import type { DefinitionSummary, MissedRunPolicy, OverlapPolicy, PipelineInput, ScheduleDefinition, ScheduleSnapshot } from '../../host-api/orchestrationClient';
+  import type { DefinitionSummary, MissedRunPolicy, OverlapPolicy, PipelineInput, ScheduleDefinition, ScheduleSnapshot, ScheduleTrigger } from '../../host-api/orchestrationClient';
+  import { calendarFirstAfter, daySet, sortDays, validTime, weekdayNames, WEEKDAYS, WORKDAYS, type CalendarTrigger } from '../../host-api/scheduleCalendar';
   import { Button, Dialog, Field, Input, Segmented, Spinner } from '../../lib/ui';
   import InputFields, { formState, formValues, type InputFormState } from '../pipelines/inputs/InputFields.svelte';
   import { checkValues, initialValues } from '../pipelines/inputs/runInputs';
@@ -28,7 +29,9 @@
   let name = $state('');
   let nameTouched = $state(false);
   let launchCommandId = $state('');
-  let kind = $state<'once' | 'interval'>('interval');
+  let kind = $state<ScheduleTrigger['type']>('calendar');
+  let time = $state('09:00');
+  let days = $state<number[]>([...WEEKDAYS]);
   let localAt = $state('');
   let every = $state('1');
   let unit = $state<'minutes' | 'hours'>('hours');
@@ -51,11 +54,14 @@
     name = value?.name ?? '';
     nameTouched = !!value;
     launchCommandId = value?.launchCommandId ?? launchCommands[0]?.id ?? '';
-    timeZone = value?.trigger.timeZone ?? zone;
-    kind = value?.trigger.type ?? 'interval';
-    localAt = value ? localDateTimeValue(value.trigger.type === 'once' ? value.trigger.at : value.trigger.anchorAt, timeZone) : soon();
-    every = value?.trigger.type === 'interval' ? String(value.trigger.every) : '1';
-    unit = value?.trigger.type === 'interval' ? value.trigger.unit : 'hours';
+    const trigger = value?.trigger;
+    timeZone = trigger?.timeZone ?? zone;
+    kind = trigger?.type ?? 'calendar';
+    localAt = trigger && trigger.type !== 'calendar' ? localDateTimeValue(trigger.type === 'once' ? trigger.at : trigger.anchorAt, timeZone) : soon();
+    every = trigger?.type === 'interval' ? String(trigger.every) : '1';
+    unit = trigger?.type === 'interval' ? trigger.unit : 'hours';
+    time = trigger?.type === 'calendar' ? trigger.time : '09:00';
+    days = trigger?.type === 'calendar' ? sortDays(trigger.days) : [...WEEKDAYS];
     missed = value?.missedRunPolicy ?? 'skip';
     overlap = value?.overlapPolicy ?? 'skip';
     problem = '';
@@ -94,38 +100,75 @@
   const instant = $derived(localDateTimeToInstant(localAt, timeZone));
   const interval = $derived(positiveInteger(every));
 
+  const locale = $derived($language === 'ru' ? 'ru-RU' : 'en-US');
+  const shortDays = $derived(weekdayNames(locale));
+  const longDays = $derived(weekdayNames(locale, 'long'));
+  const preset = $derived(daySet(days));
+
+  function toggleDay(day: number): void {
+    days = days.includes(day) ? days.filter((item) => item !== day) : sortDays([...days, day]);
+  }
+
+  /** A changed rule applies from the moment it is saved; an unchanged one keeps its start. */
+  function calendarTrigger(): CalendarTrigger {
+    const previous = schedule?.value.trigger;
+    const sorted = sortDays(days);
+    const unchanged = previous?.type === 'calendar' && previous.time === time && previous.timeZone === timeZone
+      && sortDays(previous.days).join() === sorted.join();
+    const startsAt = unchanged ? previous.startsAt : new Date(Math.floor(Date.now() / 1000) * 1000).toISOString().replace('.000Z', 'Z');
+    return { type: 'calendar', time, days: sorted, startsAt, timeZone };
+  }
+
+  const nextRun = $derived.by(() => {
+    if (kind !== 'calendar' || !validTime(time) || days.length === 0) return '';
+    const now = Date.now();
+    const at = calendarFirstAfter({ type: 'calendar', time, days, startsAt: new Date(now).toISOString(), timeZone }, now);
+    return at === undefined
+      ? ''
+      : new Date(at).toLocaleString(locale, { timeZone, weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+  });
+
+  function timingProblem(): string {
+    if (kind === 'calendar') return !validTime(time) ? 'Choose a time.' : days.length === 0 ? 'Choose at least one day.' : '';
+    if (!instant.ok) {
+      return instant.reason === 'nonexistent'
+        ? 'This local time does not exist because the clock changes. Choose another time.'
+        : instant.reason === 'ambiguous'
+          ? 'This local time occurs twice because the clock changes. Choose another time.'
+          : 'Choose a valid date and time.';
+    }
+    return kind === 'interval' && interval === undefined ? 'Enter a positive whole-number interval.' : '';
+  }
+
+  function trigger(): ScheduleTrigger | undefined {
+    if (kind === 'calendar') return calendarTrigger();
+    if (!instant.ok) return undefined;
+    return kind === 'once'
+      ? { type: 'once', at: instant.instant, timeZone }
+      : { type: 'interval', every: interval ?? 1, unit, anchorAt: instant.instant, timeZone };
+  }
+
   function build(): ScheduleDefinition | undefined {
     problem = !name.trim()
       ? 'Enter a schedule name.'
       : !launchCommands.some((command) => command.id === launchCommandId)
         ? 'Choose a pipeline.'
-        : !instant.ok && instant.reason === 'nonexistent'
-          ? 'This local time does not exist because the clock changes. Choose another time.'
-          : !instant.ok && instant.reason === 'ambiguous'
-            ? 'This local time occurs twice because the clock changes. Choose another time.'
-            : !instant.ok
-              ? 'Choose a valid date and time.'
-              : kind === 'interval' && interval === undefined
-                ? 'Enter a positive whole-number interval.'
-                : '';
-    if (problem || !instant.ok) return undefined;
+        : timingProblem();
+    const timing = problem ? undefined : trigger();
+    if (!timing) return undefined;
     const checked = checkValues(inputs, formValues(inputs, form));
     inputErrors = checked.errors;
     if (Object.keys(checked.errors).length) {
       problem = 'Fill in the pipeline inputs below.';
       return undefined;
     }
-    const trigger =
-      kind === 'once'
-        ? { type: 'once' as const, at: instant.instant, timeZone }
-        : { type: 'interval' as const, every: interval ?? 1, unit, anchorAt: instant.instant, timeZone };
     const { inputs: _previousInputs, ...previous } = schedule?.value ?? ({} as Partial<ScheduleDefinition>);
     return {
       ...previous,
       id,
       name: name.trim(),
       launchCommandId,
-      trigger,
+      trigger: timing,
       missedRunPolicy: missed,
       overlapPolicy: overlap,
       ...(Object.keys(checked.values).length ? { inputs: checked.values } : {}),
@@ -157,27 +200,53 @@
         label={$t('When')}
         bind:value={kind}
         options={[
-          { value: 'interval', label: $t('Repeat') },
+          { value: 'calendar', label: $t('On days') },
+          { value: 'interval', label: $t('Interval') },
           { value: 'once', label: $t('Once') },
         ]}
       />
     </Field>
-    <div class="row">
-      <Field label={kind === 'once' ? $t('Run at') : $t('First run at')} for="schedule-at" description={$t('Time zone: {0}', [timeZone])}>
-        <input id="schedule-at" class="select" type="datetime-local" bind:value={localAt} disabled={busy} />
-      </Field>
-      {#if kind === 'interval'}
-        <Field label={$t('Repeat every')} for="schedule-every">
-          <div class="every">
-            <Input id="schedule-every" inputmode="numeric" value={every} disabled={busy} oninput={(event) => (every = event.currentTarget.value)} />
-            <select class="select" aria-label={$t('Interval unit')} bind:value={unit} disabled={busy}>
-              <option value="minutes">{$t('minutes')}</option>
-              <option value="hours">{$t('hours')}</option>
-            </select>
+    {#if kind === 'calendar'}
+      <fieldset class="days" disabled={busy}>
+        <legend>{$t('Days')}</legend>
+        <div class="days__line">
+          <div class="days__toggles">
+            {#each WEEKDAYS as day, index (day)}
+              <button type="button" class="day" aria-pressed={days.includes(day)} aria-label={longDays[index]} title={longDays[index]} onclick={() => toggleDay(day)}>
+                {shortDays[index]}
+              </button>
+            {/each}
           </div>
+          <div class="days__presets">
+            <button type="button" class="preset" aria-pressed={preset === 'every'} onclick={() => (days = [...WEEKDAYS])}>{$t('Every day')}</button>
+            <button type="button" class="preset" aria-pressed={preset === 'workdays'} onclick={() => (days = [...WORKDAYS])}>{$t('Weekdays')}</button>
+          </div>
+        </div>
+      </fieldset>
+      <div class="row">
+        <Field label={$t('Time')} for="schedule-time" description={$t('Time zone: {0}', [timeZone])}>
+          <input id="schedule-time" class="select" type="time" bind:value={time} disabled={busy} />
         </Field>
-      {/if}
-    </div>
+      </div>
+      {#if nextRun}<p class="note">{$t('Next run: {0}', [nextRun])}</p>{/if}
+    {:else}
+      <div class="row">
+        <Field label={kind === 'once' ? $t('Run at') : $t('First run at')} for="schedule-at" description={$t('Time zone: {0}', [timeZone])}>
+          <input id="schedule-at" class="select" type="datetime-local" bind:value={localAt} disabled={busy} />
+        </Field>
+        {#if kind === 'interval'}
+          <Field label={$t('Repeat every')} for="schedule-every">
+            <div class="every">
+              <Input id="schedule-every" inputmode="numeric" value={every} disabled={busy} oninput={(event) => (every = event.currentTarget.value)} />
+              <select class="select" aria-label={$t('Interval unit')} bind:value={unit} disabled={busy}>
+                <option value="minutes">{$t('minutes')}</option>
+                <option value="hours">{$t('hours')}</option>
+              </select>
+            </div>
+          </Field>
+        {/if}
+      </div>
+    {/if}
     <Field label={$t('If PiUI was closed at that time')}>
       <Segmented
         label={$t('If PiUI was closed at that time')}
@@ -230,6 +299,77 @@
     display: grid;
     grid-template-columns: 80px 1fr;
     gap: var(--piui-space-2);
+  }
+  .days {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+  .days legend {
+    margin-bottom: 6px;
+    padding: 0;
+    color: var(--piui-text);
+    font-size: var(--piui-text-sm);
+    font-weight: var(--piui-weight-medium);
+  }
+  .days__line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--piui-space-3);
+  }
+  .days__toggles,
+  .days__presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .day,
+  .preset {
+    height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--piui-border);
+    border-radius: var(--piui-radius-sm);
+    background: var(--piui-surface-1);
+    color: var(--piui-text-muted);
+    font: inherit;
+    font-size: var(--piui-text-sm);
+    cursor: pointer;
+  }
+  .day {
+    min-width: 44px;
+  }
+  .preset {
+    border-color: var(--piui-border-subtle);
+    border-radius: var(--piui-radius-full);
+    background: transparent;
+  }
+  .day:hover:not(:disabled),
+  .preset:hover:not(:disabled) {
+    color: var(--piui-text);
+  }
+  .day[aria-pressed='true'] {
+    border-color: var(--piui-accent);
+    background: var(--piui-accent-soft);
+    color: var(--piui-text);
+  }
+  .preset[aria-pressed='true'] {
+    border-color: var(--piui-border);
+    background: var(--piui-surface-2);
+    color: var(--piui-text);
+  }
+  .day:focus-visible,
+  .preset:focus-visible {
+    outline: 2px solid var(--piui-focus);
+    outline-offset: 1px;
+  }
+  .day:disabled,
+  .preset:disabled {
+    cursor: default;
+    opacity: 0.6;
   }
   .select {
     width: 100%;
