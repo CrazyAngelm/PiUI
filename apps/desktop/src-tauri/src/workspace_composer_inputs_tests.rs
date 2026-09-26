@@ -272,6 +272,45 @@ fn the_golden_fixture_matches_the_rust_contract() {
     assert!(serde_json::from_value::<ComposerCommand>(fixture["composer"]["send"].clone()).is_ok());
 }
 
+#[test]
+fn closed_history_lists_an_image_prompt_like_a_live_block() {
+    let block = |kind, preview: Option<&str>, has_image| piui_index::GenericTimelineBlock {
+        id: "timeline-0".into(),
+        parent_id: None,
+        kind,
+        source_type: "claude_user".into(),
+        created_at: None,
+        preview: preview.map(str::to_owned),
+        has_image,
+        title: None,
+        tool_name: None,
+        collapsible: false,
+        truncated: false,
+        fallback: false,
+        status: GenericBlockStatus::Complete,
+    };
+    let text = |kind, preview, has_image| {
+        super::super::history_block(&block(kind, preview, has_image)).text
+    };
+    assert_eq!(
+        text(GenericBlockKind::User, Some("Why is this red?"), true).as_deref(),
+        Some("Why is this red?\n\n[image]")
+    );
+    assert_eq!(
+        text(GenericBlockKind::User, None, true).as_deref(),
+        Some("[image]")
+    );
+    assert_eq!(
+        text(GenericBlockKind::User, Some("Plain"), false).as_deref(),
+        Some("Plain")
+    );
+    // Only user prompts carry the marker.
+    assert_eq!(
+        text(GenericBlockKind::Assistant, Some("Answer"), true).as_deref(),
+        Some("Answer")
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn safe_mode_refuses_every_composer_input() {
     let root = test_root("inputs-safe");

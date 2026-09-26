@@ -2154,7 +2154,7 @@ fn history_block(block: &GenericTimelineBlock) -> NativeBlock {
         kind,
         created_at: block.created_at.clone(),
         label: history_block_label(kind).into(),
-        text: block.preview.clone(),
+        text: history_block_text(kind, block),
         safe_summary: (kind == BlockKind::Unknown).then(|| {
             "An unsupported native history entry is shown by the generic fallback.".into()
         }),
@@ -2165,6 +2165,18 @@ fn history_block(block: &GenericTimelineBlock) -> NativeBlock {
         fallback: block.fallback.then_some(true),
         status,
     }
+}
+
+/// A user entry that carried images reads like a live bridge block: its text
+/// and an `[image]` line (the history index records only that images exist).
+fn history_block_text(kind: BlockKind, block: &GenericTimelineBlock) -> Option<String> {
+    if kind != BlockKind::User || !block.has_image {
+        return block.preview.clone();
+    }
+    Some(match block.preview.as_deref() {
+        Some(text) if !text.is_empty() => format!("{text}\n\n[image]"),
+        _ => "[image]".to_owned(),
+    })
 }
 
 fn history_block_label(kind: BlockKind) -> &'static str {
