@@ -3649,9 +3649,9 @@ mod tests {
         WORKSPACE_PROTOCOL, WorkspaceCatalog, WorkspaceCommand, WorkspaceEvent,
         WorkspaceEventPayload, WorkspaceEventPublisher, WorkspaceModel, WorkspaceResult,
         WorkspaceSession, WorkspaceSummary, WorkspaceTrust, advance_revision, complete_turn,
-        content_hash, hash_matches, historical_snapshot_blocking, isolated_daemon_socket,
-        merge_materialization, normalized_title, resume_binding, safe_runtime_message,
-        valid_content_hash, validate_model, workspace_approval,
+        content_hash, hash_matches, historical_snapshot_blocking, merge_materialization,
+        normalized_title, resume_binding, safe_runtime_message, valid_content_hash, validate_model,
+        workspace_approval,
     };
     use piui_platform::ProjectDirectory;
     use piui_runtime::workspace_runtime::{
@@ -3825,7 +3825,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn prime_daemon_socket_is_an_explicit_windows_named_pipe() {
-        let socket = isolated_daemon_socket(
+        let socket = super::isolated_daemon_socket(
             HarnessKind::PrimeAgent,
             Path::new(r"C:\host-private"),
             "00000000-0000-0000-0000-000000000000",

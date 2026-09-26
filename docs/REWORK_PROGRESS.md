@@ -230,8 +230,10 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   folder in evidence scripts/records and on test values outside the audit
   allowlist (redacted in `feat/release-0.2`). The update feed is unsigned and
   `requireSignedVersion` stays off because Tauri CLI 2.11 does not record the
-  signed version. The desktop crate is not compiled for Linux in CI (only the
-  release workflow's `tauri build` does). `PiUI_MASTER_SPEC.md` is generated
+  signed version. A Linux `cargo clippy --workspace --all-targets -- -D
+  warnings` (Docker, rust:1.94.1-bookworm with the Tauri packages) passes after
+  three Unix-only lint fixes; `ci.yml` still never compiles the desktop crate
+  for Linux (only the release workflow's `tauri build` does). `PiUI_MASTER_SPEC.md` is generated
   (`tools/build_master.py`) and still quotes the 0.1.1 README; rebuild it after
   the release branches merge.
 
