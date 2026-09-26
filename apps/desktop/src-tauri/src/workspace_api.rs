@@ -49,6 +49,9 @@ pub const WORKSPACE_EVENT_NAME: &str = "piui://workspace-event";
 const NATIVE_SESSION_DIRECTORY: &str = "workspace-native-v11";
 /// Upper bound for one forwarded text delta built from already-queued deltas.
 const MAX_COALESCED_DELTA_BYTES: usize = 64 * 1024;
+/// Longest time a cached usage receipt waits for its durable registry write
+/// while a turn is still running. Turn completion and close write at once.
+const USAGE_PERSIST_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2047,13 +2050,32 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
         // waits for it under backpressure. It therefore never awaits a native
         // response while it still owns an undrained stream.
         let mut next: Option<NativeEvent> = None;
+        // Deadline of the pending durable write for cached usage receipts.
+        let mut usage_persist_at: Option<tokio::time::Instant> = None;
         loop {
             let event = match next.take() {
                 Some(event) => event,
-                None => match events.recv().await {
-                    Some(event) => event,
-                    None => break,
-                },
+                None => {
+                    // `None` means the usage deadline passed before an event.
+                    let received = match usage_persist_at {
+                        Some(deadline) => tokio::select! {
+                            event = events.recv() => Some(event),
+                            () = tokio::time::sleep_until(deadline) => None,
+                        },
+                        None => Some(events.recv().await),
+                    };
+                    match received {
+                        Some(Some(event)) => event,
+                        Some(None) => break,
+                        None => {
+                            usage_persist_at = None;
+                            if let Some(inner) = host.upgrade() {
+                                persist_cached_usage(&inner, &publisher, &state, &session_id);
+                            }
+                            continue;
+                        }
+                    }
+                }
             };
             let Some(inner) = host.upgrade() else {
                 abort_coordinator_tasks(&state);
@@ -2064,9 +2086,13 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
             };
             let payload = match event {
                 NativeEvent::Usage { usage } => {
-                    let persisted = inner.registry.lock().ok().and_then(|mut registry| {
+                    // Receipts are cached at once and written in batches: on
+                    // turn completion, after USAGE_PERSIST_DELAY, with any
+                    // other registry write, and when the runtime stops. A
+                    // stream of usage events no longer fsyncs per event.
+                    let cached = inner.registry.lock().ok().and_then(|mut registry| {
                         registry
-                            .transact(|sessions| {
+                            .update_cached(|sessions| {
                                 let record = sessions
                                     .iter_mut()
                                     .find(|record| record.id == session_id)
@@ -2079,17 +2105,22 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                             })
                             .ok()
                     });
-                    match persisted {
-                        Some(record) => WorkspaceEventPayload::Session {
-                            session: session_from_record(
-                                &record,
-                                state
-                                    .status
-                                    .lock()
-                                    .map(|v| *v)
-                                    .unwrap_or(SessionStatus::Failed),
-                            ),
-                        },
+                    match cached {
+                        Some(record) => {
+                            usage_persist_at.get_or_insert_with(|| {
+                                tokio::time::Instant::now() + USAGE_PERSIST_DELAY
+                            });
+                            WorkspaceEventPayload::Session {
+                                session: session_from_record(
+                                    &record,
+                                    state
+                                        .status
+                                        .lock()
+                                        .map(|v| *v)
+                                        .unwrap_or(SessionStatus::Failed),
+                                ),
+                            }
+                        }
                         None => WorkspaceEventPayload::Error {
                             message: "Usage could not be saved.".into(),
                         },
@@ -2146,6 +2177,11 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                         }
                         .pause_queue(&session_id);
                     }
+                    // A finished turn's usage is durable before any observer
+                    // (such as the run scheduler) sees the outcome.
+                    if usage_persist_at.take().is_some() {
+                        persist_cached_usage(&inner, &publisher, &state, &session_id);
+                    }
                     let previous_turn = *state.turns.borrow();
                     state
                         .turns
@@ -2170,6 +2206,18 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                     native_path,
                 } => {
                     let persisted = inner.registry.lock().ok().and_then(|mut registry| {
+                        // Bindings are only ever changed by durable writes, so
+                        // the cached binding is the durable one and a repeated
+                        // unchanged binding (Hermes sends one per turn) needs
+                        // no write. A changed binding is written immediately.
+                        let unchanged = registry.sessions().iter().any(|record| {
+                            record.id == session_id
+                                && record.native_id.as_deref() == Some(native_id.as_str())
+                                && (native_path.is_none() || record.native_path == native_path)
+                        });
+                        if unchanged {
+                            return Some(());
+                        }
                         registry
                             .transact(|sessions| {
                                 let record = sessions
@@ -2258,6 +2306,7 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
         abort_coordinator_tasks(&state);
         if let Some(inner) = host.upgrade() {
             let revision = state.revision.load(Ordering::Acquire);
+            // This durable write also persists any cached usage receipts.
             if let Ok(mut registry) = inner.registry.lock() {
                 let _ = registry.transact(|sessions| {
                     if let Some(record) = sessions.iter_mut().find(|record| record.id == session_id)
@@ -2297,6 +2346,30 @@ fn coalesce_text_deltas(
         }
     }
     None
+}
+
+/// Writes cached usage receipts as one registry generation.
+fn persist_cached_usage(
+    host: &WorkspaceHostInner,
+    publisher: &WorkspaceEventPublisher,
+    state: &LiveState,
+    session_id: &str,
+) {
+    let persisted = host
+        .registry
+        .lock()
+        .ok()
+        .is_some_and(|mut registry| registry.flush_cached().is_ok());
+    if !persisted {
+        publish(
+            publisher,
+            state,
+            session_id,
+            WorkspaceEventPayload::Error {
+                message: "Usage could not be saved.".into(),
+            },
+        );
+    }
 }
 
 /// Retires a runtime that was never published to commands. Admission stops
@@ -3528,6 +3601,61 @@ mod native_host_tests {
                 .status,
             SessionStatus::Idle
         );
+        host.shutdown_all().await;
+        drop(host);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn registry_generation(host: &WorkspaceHost) -> u64 {
+        host.inner.registry.lock().expect("registry").generation()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn usage_bursts_cause_a_bounded_number_of_durable_registry_writes() {
+        const RECEIPTS: usize = 200;
+        let root = test_root("usage-batch");
+        let app_data = root.join("app-data");
+        let host = WorkspaceHost::open(&app_data).expect("host");
+        test_adapter_spawner(&host);
+        let directory = project_directory(&root);
+        let workspace_id = uuid::Uuid::new_v4().to_string();
+        let session_events = Arc::new(Mutex::new(0_usize));
+        let publisher: WorkspaceEventPublisher = {
+            let session_events = Arc::clone(&session_events);
+            Arc::new(move |event: WorkspaceEvent| {
+                if matches!(event.event, WorkspaceEventPayload::Session { .. }) {
+                    *session_events.lock().expect("count") += 1;
+                }
+            })
+        };
+        let session_id = host
+            .launch_session(&directory, chat_request(&workspace_id, "Usage"), publisher)
+            .await
+            .expect("launch")
+            .session
+            .id;
+        let before = registry_generation(&host);
+        run_turn(&host, &session_id, &format!("usage:{RECEIPTS}")).await;
+        let writes = registry_generation(&host) - before;
+        // The prompt's own catalog update plus one flush of the turn's usage;
+        // a slow machine may add one debounce flush. Previously: one per event.
+        assert!(
+            (1..=3).contains(&writes),
+            "{RECEIPTS} usage events caused {writes} registry writes"
+        );
+        let cached = host.usage(&session_id, &workspace_id).expect("usage");
+        assert_eq!(cached.len(), 3, "receipts are replaced by identity");
+        let durable = super::workspace_store::WorkspaceRegistry::open(&app_data)
+            .expect("reopens registry")
+            .session(&session_id)
+            .expect("durable session")
+            .usage;
+        assert_eq!(
+            durable, cached,
+            "the finished turn's usage is durable before its outcome is observed"
+        );
+        // The WebView is still notified for every receipt.
+        assert!(*session_events.lock().expect("count") >= RECEIPTS);
         host.shutdown_all().await;
         drop(host);
         let _ = std::fs::remove_dir_all(root);

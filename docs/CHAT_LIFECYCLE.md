@@ -119,3 +119,12 @@ A forwarder that fell behind sends the already-queued consecutive text deltas of
 one block as a single `textDelta` of at most 64 KiB. It never waits for more
 input, so content, order and contiguous revisions are unchanged; the workspace
 IPC contract is unchanged.
+
+Native bindings, catalog metadata and lifecycle changes are written to the
+session registry immediately, each as one fsynced generation; a repeated
+unchanged binding needs no write. Usage receipts are cached in memory at once
+(readers and `Session` notifications see them) and written in batches: when the
+turn completes and before its outcome is observed, at most two seconds after
+the first unsaved receipt while a turn runs, with any other registry write, and
+when the runtime closes or stops. A host crash can lose at most that last
+window of usage receipts, never a binding.
