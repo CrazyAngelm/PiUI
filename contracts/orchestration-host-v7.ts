@@ -10,7 +10,7 @@ import type {
   OrchestrationHostCommandsV6,
   WorkspaceRequest,
 } from './orchestration-host-v6';
-import type { Revision } from './orchestration-v6';
+import type { Revision, RunInputValue } from './orchestration-v6';
 
 export * from './orchestration-host-v6';
 
@@ -35,6 +35,8 @@ export interface ScheduleDefinition {
   readonly trigger: ScheduleTrigger;
   readonly missedRunPolicy: MissedRunPolicy;
   readonly overlapPolicy: OverlapPolicy;
+  /** Additive: input values for every run this schedule starts. */
+  readonly inputs?: Readonly<Record<string, RunInputValue>>;
 }
 
 export interface ScheduleOccurrence {

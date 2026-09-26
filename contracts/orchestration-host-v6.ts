@@ -14,6 +14,7 @@ import type {
   OrchestrationRunV6,
   PipelineDefinition,
   Revision,
+  RunInputValue,
   TeamDefinition,
 } from './orchestration-v6';
 
@@ -61,6 +62,8 @@ export interface StartRunRequest extends WorkspaceRequest {
   readonly teamId: OrchestrationId;
   readonly pipelineId: OrchestrationId;
   readonly launchCommandId?: OrchestrationId;
+  /** Additive (v6.1): values for the pipeline's declared inputs. */
+  readonly inputs?: Readonly<Record<string, RunInputValue>>;
 }
 
 export interface RunRequest extends WorkspaceRequest {

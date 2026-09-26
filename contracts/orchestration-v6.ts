@@ -96,7 +96,16 @@ export interface TeamDefinition {
 export interface ResultField { readonly name: string; readonly kind: 'text' | 'number' | 'boolean' | 'text-list' | 'artifact'; }
 
 export interface ResultCondition { readonly sourceStepId: string; readonly field: string; readonly equals: string | number | boolean; }
-export interface ReviewRule { readonly field: string; readonly retryFromStepId: string; }
+export interface ReviewRule {
+  readonly field: string;
+  readonly retryFromStepId: string;
+  /**
+   * Upper bound on review rounds (1-20). When a rejection would start another
+   * round beyond it, the reviewer's task waits for a person instead of
+   * looping again. Absent means no bound (pre-v6.1 definitions).
+   */
+  readonly maxIterations?: number;
+}
 export interface InputBinding { readonly sourceStepId: string; readonly field: string; readonly name: string; }
 
 /** Declarative routing predicates. These are evaluated by the trusted coordinator; they are never executable code. */
@@ -150,10 +159,31 @@ export interface PipelineStep {
   readonly dependencyStepIds: readonly OrchestrationId[];
 }
 
+export type RunInputValue = string | number | boolean;
+export type PipelineInputKind = 'text' | 'long-text' | 'number' | 'boolean' | 'choice';
+
+/**
+ * A value supplied by the person (or schedule) that starts a run. Inputs are
+ * task data: agents receive them as untrusted context, never as policy.
+ */
+export interface PipelineInput {
+  /** Identifier used in `{{input.name}}` templates: [a-z][A-Za-z0-9_]{0,63}. */
+  readonly name: string;
+  readonly label: string;
+  readonly kind: PipelineInputKind;
+  readonly required?: boolean;
+  readonly description?: string;
+  /** Allowed values for `choice`. */
+  readonly options?: readonly string[];
+  readonly defaultValue?: RunInputValue;
+}
+
 export interface PipelineDefinition {
   readonly id: OrchestrationId;
   readonly name: string;
   readonly steps: readonly PipelineStep[];
+  /** Additive (v6.1): values requested when a run starts. */
+  readonly inputs?: readonly PipelineInput[];
 }
 
 /** Reusable definition references only. This is never a shell command. */
@@ -238,6 +268,8 @@ export interface AgentRequestRecord {
 }
 
 export interface OrchestrationRunV6 {
+  /** Additive (v6.1): validated run inputs, frozen when the run starts. */
+  readonly inputs?: Readonly<Record<string, RunInputValue>>;
   readonly paused?: boolean;
   readonly attempts?: readonly TaskRecord[];
   readonly schemaVersion: 6;
