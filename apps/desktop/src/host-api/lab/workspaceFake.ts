@@ -62,7 +62,12 @@ export function catalog(state: LabState): WorkspaceCatalog {
   return {
     protocol: 15,
     safeMode: state.safeMode,
-    workspaces: state.projects.map(workspaceSummary),
+    // Host registry order: pinned folders first (stable); personal Chats keeps its place.
+    workspaces: [
+      ...state.projects.filter((project) => project.personal),
+      ...state.projects.filter((project) => !project.personal && project.pinned),
+      ...state.projects.filter((project) => !project.personal && !project.pinned),
+    ].map(workspaceSummary),
     sessions: [...state.sessions.values()].map(sessionSummary),
     harnesses: state.harnesses.map((summary) => ({ ...summary })),
   };

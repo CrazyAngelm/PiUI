@@ -15,10 +15,16 @@
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import ShieldCheck from '@lucide/svelte/icons/shield-check';
   import ScrollText from '@lucide/svelte/icons/scroll-text';
+  import Pencil from '@lucide/svelte/icons/pencil';
+  import Pin from '@lucide/svelte/icons/pin';
+  import PinOff from '@lucide/svelte/icons/pin-off';
+  import FolderMinus from '@lucide/svelte/icons/folder-minus';
   import { t, language } from '../../features/locale/language';
-  import { Kbd, Menu, StatusDot, Skeleton, type MenuEntry, type Status } from '../../lib/ui';
+  import { Kbd, Menu, StatusDot, Skeleton, toasts, type MenuEntry, type Status } from '../../lib/ui';
   import type { WorkspaceSession, WorkspaceSummary } from '../../../../../contracts/workspace-v15';
   import { relativeTime } from '../format';
+  import ProjectDialogs from '../projects/ProjectDialogs.svelte';
+  import { isPinned, type ProjectDialogRequest } from '../projects/projectActions';
   import { useWorkspace } from './context';
 
   interface Props {
@@ -65,8 +71,30 @@
     };
   }
 
+  let projectDialog = $state<ProjectDialogRequest | undefined>();
+  /** Rename, pin and remove act on PiUI's registry only, never on the folder. */
+  function manageItems(workspace: WorkspaceSummary): MenuEntry[] {
+    const pinned = isPinned(store.projectSummaries, workspace.id);
+    return [
+      { type: 'separator' },
+      { label: $t('Rename…'), icon: Pencil, onSelect: () => (projectDialog = { kind: 'rename', workspace }) },
+      {
+        label: pinned ? $t('Unpin') : $t('Pin to top'),
+        icon: pinned ? PinOff : Pin,
+        onSelect: () => void store.setProjectPinned(workspace.id, !pinned).catch(() => toasts.error($t('Could not update the project'))),
+      },
+      { label: $t('Remove from PiUI…'), icon: FolderMinus, danger: true, disabled: store.safeMode, onSelect: () => (projectDialog = { kind: 'remove', workspace }) },
+    ];
+  }
+
   const route = $derived(store.route);
 </script>
+
+{#if projectDialog}
+  {#key projectDialog}
+    <ProjectDialogs request={projectDialog} onClose={() => (projectDialog = undefined)} />
+  {/key}
+{/if}
 
 <nav class="sidebar" aria-label={$t('Workspace navigation')}>
   <div class="brand">
@@ -183,6 +211,7 @@
               { label: $t('Pipelines'), icon: Workflow, onSelect: () => go(() => { store.selectWorkspace(workspace.id); store.navigate({ name: 'pipelines', section: 'systems' }); }) },
               historyItem(workspace),
               { label: $t('Refresh projects'), icon: RefreshCw, onSelect: () => void store.loadCatalog(workspace.id) },
+              ...manageItems(workspace),
             ]}
           >
             {#snippet trigger(props)}

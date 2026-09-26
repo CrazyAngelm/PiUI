@@ -78,4 +78,23 @@ export const classicRu: Readonly<Record<string, string>> = {
   'Project extensions are not managed here. A harness loads a folder’s own extensions only after you trust that folder.': 'Расширения проектов здесь не настраиваются. Харнес загружает собственные расширения папки только после того, как вы доверите эту папку.',
   'Could not read the installed extensions. Try again.': 'Не удалось прочитать установленные расширения. Попробуйте ещё раз.',
   'Could not change the extension. Its previous state is kept.': 'Не удалось изменить расширение. Прежнее состояние сохранено.',
+
+  // Project folder settings
+  'Rename…': 'Переименовать…',
+  'Pin to top': 'Закрепить сверху',
+  Unpin: 'Открепить',
+  'Remove from PiUI…': 'Убрать из PiUI…',
+  'Remove from PiUI': 'Убрать из PiUI',
+  'Could not update the project': 'Не удалось изменить проект',
+  'Rename project': 'Переименовать проект',
+  'Changes the name shown in PiUI. The folder on disk keeps its name.': 'Меняет название в PiUI. Папка на диске сохраняет своё имя.',
+  'Project name': 'Название проекта',
+  'Save name': 'Сохранить название',
+  'Remove {0} from PiUI?': 'Убрать {0} из PiUI?',
+  'PiUI forgets this folder. Its chats, pipelines and automations disappear from PiUI, and automations stop running.': 'PiUI забудет эту папку. Её чаты, пайплайны и автоматизации исчезнут из PiUI, а автоматизации перестанут запускаться.',
+  'Nothing is deleted from disk.': 'С диска ничего не удаляется.',
+  'The folder, its files and each harness’s own history stay where they are. Adding the folder again starts a new entry.': 'Папка, её файлы и собственная история каждого харнеса остаются на месте. Если добавить папку снова, появится новая запись.',
+  'Stop the agents running in this folder first ({0}).': 'Сначала остановите агентов, работающих в этой папке ({0}).',
+  '{0} chats will be hidden.': 'Будут скрыты чаты: {0}.',
+  'Folder removed from PiUI': 'Папка убрана из PiUI',
 };

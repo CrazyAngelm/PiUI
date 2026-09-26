@@ -5,9 +5,10 @@ import { projectSummary, type LabProject, type LabState } from './labState';
 import type { LabSessions } from './sessionRuntime';
 
 /**
- * The four classic `api.rs` commands the workspace shell needs, with the same
- * top-level argument names as `client.ts` sends. Other classic routes stay in
- * `mockClient.ts`.
+ * The classic `api.rs` project and preference commands the workspace shell
+ * needs, with the same top-level argument names as `client.ts` sends. The
+ * index history routes live in `piHistoryFake.ts`; other classic routes stay
+ * in `mockClient.ts`.
  */
 function stringArgument(args: LabArgs, name: string): string {
   const value = args[name];
@@ -81,11 +82,49 @@ function setProjectTrust(runtime: LabSessions, args: LabArgs): ProjectSummary {
   return projectSummary(project);
 }
 
+/** `require_user_project`: the personal Chats workspace is not a registry project. */
+function userProject(state: LabState, projectId: string): LabProject {
+  const project = state.projects.find((candidate) => candidate.id === projectId);
+  if (project?.personal) throw apiFailure('INVALID_ARGUMENT');
+  if (project === undefined) throw apiFailure('NOT_FOUND');
+  return project;
+}
+
+/** `rename_project`: PiUI's label only; control characters are dropped, empty names refused. */
+function renameProject(state: LabState, args: LabArgs): ProjectSummary {
+  const project = userProject(state, stringArgument(args, 'projectId'));
+  const name = stringArgument(args, 'name').replace(/\p{Cc}/gu, '').trim().slice(0, 240);
+  if (!name) throw apiFailure('INVALID_ARGUMENT');
+  project.name = name;
+  return projectSummary(project);
+}
+
+function setProjectPinned(state: LabState, args: LabArgs): ProjectSummary {
+  const project = userProject(state, stringArgument(args, 'projectId'));
+  if (typeof args.pinned !== 'boolean') throw new LabDecodeFailure('invalid type: expected a boolean', 'pinned');
+  project.pinned = args.pinned;
+  return projectSummary(project);
+}
+
+/** `remove_project`: stops the folder's runtimes, then forgets the registry row only. */
+function removeProject(runtime: LabSessions, args: LabArgs): null {
+  const { state } = runtime;
+  const project = userProject(state, stringArgument(args, 'projectId'));
+  for (const record of state.sessions.values()) {
+    if (record.workspaceId === project.id && record.live !== undefined) runtime.close(record);
+  }
+  state.projects = state.projects.filter((candidate) => candidate.id !== project.id);
+  return null;
+}
+
 export function classicHandlers(runtime: LabSessions): LabHandlers {
   return {
     bootstrap_v10: () => bootstrap(runtime.state),
     update_preferences_v8: (args) => updatePreferences(runtime.state, args),
     pick_and_add_project_v10: (args) => pickAndAddProject(runtime, args),
     set_project_trust: (args) => setProjectTrust(runtime, args),
+    rename_project: (args) => renameProject(runtime.state, args),
+    set_project_pinned: (args) => setProjectPinned(runtime.state, args),
+    remove_project: (args) => removeProject(runtime, args),
   };
 }

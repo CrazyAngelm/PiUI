@@ -729,7 +729,7 @@ export class WorkspaceStore {
     this.catalogError = undefined;
     try {
       const project = await host.pickAndAddProject();
-      if (project) await this.loadCatalog(project.id);
+      if (project) await Promise.all([this.loadCatalog(project.id), this.loadProjects()]);
     } catch (error) {
       this.catalogError = errorMessage(error);
     } finally {
@@ -740,5 +740,46 @@ export class WorkspaceStore {
   async trustProject(workspaceId: string): Promise<void> {
     await host.setProjectTrust(workspaceId, 'trusted');
     await this.loadCatalog(workspaceId);
+  }
+
+  /** Registry rows for agent kind and pin state; the catalog carries names and trust. */
+  async loadProjects(): Promise<void> {
+    try {
+      const bootstrap = await host.bootstrap();
+      if (!this.disposed) this.projectSummaries = bootstrap.projects;
+    } catch {
+      // Menus keep the last rows; the next load refreshes pin labels.
+    }
+  }
+
+  /** Renames PiUI's label only; the folder on disk keeps its name. */
+  async renameProject(workspaceId: string, name: string): Promise<void> {
+    await host.renameProject(workspaceId, name);
+    await Promise.all([this.loadCatalog(workspaceId), this.loadProjects()]);
+  }
+
+  /** Pinned folders sort first in the host registry order. */
+  async setProjectPinned(workspaceId: string, pinned: boolean): Promise<void> {
+    await host.setProjectPinned(workspaceId, pinned);
+    await Promise.all([this.loadCatalog(), this.loadProjects()]);
+  }
+
+  /**
+   * Forgets a folder in PiUI. The host stops that folder's agents first; the
+   * folder, its files and every harness's own history stay on disk.
+   */
+  async removeProject(workspaceId: string): Promise<void> {
+    await host.removeProject(workspaceId);
+    const route = this.route;
+    const affected =
+      (route.name === 'chat' && this.catalog.sessions.find((session) => session.id === route.sessionId)?.workspaceId === workspaceId) ||
+      (route.name === 'history' && route.workspaceId === workspaceId) ||
+      (route.name === 'pipelines' && this.selectedWorkspaceId === workspaceId);
+    if (affected) {
+      this.pipelineDirty = false;
+      this.route = { name: 'home' };
+      writeJson(ROUTE_KEY, this.route);
+    }
+    await Promise.all([this.loadCatalog(), this.loadProjects()]);
   }
 }
