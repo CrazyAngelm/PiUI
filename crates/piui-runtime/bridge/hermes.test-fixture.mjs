@@ -25,6 +25,22 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       continue;
     }
     if (text === 'wait') { promptId = m.id; continue; }
+    const providerError = { code: -32603, message: 'provider exploded SECRET-MUST-NOT-LEAK' };
+    if (text === 'reject') { send({ id: m.id, error: providerError }); continue; }
+    if (text === 'slow' || text === 'slow-reject') {
+      // Keeps the turn running long enough for the test to queue follow-ups.
+      setTimeout(() => {
+        if (text === 'slow-reject') { send({ id: m.id, error: providerError }); return; }
+        notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'ack slow' } });
+        send({ id: m.id, result: { stopReason: 'end_turn' } });
+      }, 80);
+      continue;
+    }
+    if (text.startsWith('follow:')) {
+      notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `ack ${text}` } });
+      send({ id: m.id, result: { stopReason: 'end_turn' } });
+      continue;
+    }
     notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hello\u2028' } });
     notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'world' } });
     notify({ sessionUpdate: 'future_event' });

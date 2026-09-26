@@ -8,6 +8,23 @@ function config(overrides = {}) {
   return { harness: "pi", cwd: process.cwd(), sessionDir: process.cwd(), permissionMode: "native", runtimeProgram: process.execPath, runtimeArgs: [fixture], ...overrides };
 }
 
+async function waitFor(predicate) {
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    const value = await predicate();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("fixture condition timed out");
+}
+
+// Runs one fixture scenario and waits until its native run settles to idle.
+async function runScenario(adapter, events, text) {
+  const start = events.length;
+  await adapter.prompt({ text, mode: "prompt" });
+  await waitFor(() => events.slice(start).some((event) => event.type === "status" && event.status === "idle"));
+}
+
 test("Pi rejects per-session resource filtering before starting the native process", async () => {
   for (const kind of ["skill", "mcp"]) {
     await assert.rejects(createPiAdapter(config({ runtimeProgram: "must-not-launch", resourceRules: [{ kind, id: "canary", enabled: false }] }), () => {}), { bridgeCode: "unsupported-resource-policy" });
@@ -129,5 +146,115 @@ test("Pi composer exposes typed compact and rejects idle steer", async () => {
     await adapter.compact();
     await completed;
     assert.ok(!events.some(event => event.type === "textDelta"), "compaction never becomes a literal prompt");
+  } finally { await adapter.dispose(); }
+});
+
+test("Pi tool blocks show a one-line title and bounded output, never raw payloads", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    await runScenario(adapter, events, "tools");
+    const tools = (await adapter.snapshot()).blocks.filter((block) => block.kind === "tool");
+    assert.equal(tools.length, 5);
+    const [bash, read, emoji, custom, untyped] = tools;
+
+    assert.equal(bash.title, "bash: npm test --silent");
+    assert.equal(bash.status, "complete");
+    assert.ok(events.some((event) => event.type === "block" && event.block.id === bash.id
+      && event.block.status === "streaming" && event.block.text === "partial output"));
+    assert.equal(bash.truncated, true);
+    assert.ok(bash.text.startsWith("head line\n"));
+    assert.ok(bash.text.endsWith("tail line\n"));
+    assert.ok(bash.text.includes(`\n… ${24000 - 16 * 1024} characters omitted …\n`));
+    assert.ok(bash.text.length <= 16 * 1024 + 64);
+
+    assert.equal(read.title, "read: src/main.rs");
+    assert.equal(read.text, "fn main() {}\n[image]");
+    assert.equal(read.truncated, false);
+
+    assert.equal(emoji.truncated, true);
+    assert.ok(emoji.text.isWellFormed(), "cuts never split a surrogate pair");
+
+    assert.equal(custom.title, "deploy: target: staging, retries: 2, options: {…}");
+    assert.equal(custom.status, "failed");
+    assert.equal(custom.text, "deploy failed");
+    assert.equal(custom.safeSummary, "The tool failed.");
+
+    assert.equal(untyped.title, "extension_tool");
+    assert.equal(untyped.text, "");
+    assert.equal(untyped.status, "complete");
+
+    assert.doesNotMatch(JSON.stringify(events), /SECRET-MUST-NOT-LEAK|fullOutputPath|call-bash/);
+  } finally { await adapter.dispose(); }
+});
+
+test("Pi compaction blocks complete on native end events with turn and response fallbacks", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  const compactions = async () => (await adapter.snapshot()).blocks.filter((block) => block.kind === "compaction");
+  try {
+    await runScenario(adapter, events, "compaction");
+    assert.deepEqual((await compactions()).map((block) => [block.status, block.safeSummary]), [
+      ["complete", "Context was compacted."],
+      ["failed", "Context compaction failed."],
+      ["interrupted", "Context compaction was cancelled."],
+      ["failed", "Context compaction failed."],
+      ["complete", "Context compaction ended."],
+    ]);
+
+    const start = events.length;
+    await adapter.compact();
+    await waitFor(() => events.slice(start).some((event) => event.type === "status" && event.status === "idle"));
+    const manual = (await compactions()).at(-1);
+    assert.deepEqual([manual.status, manual.safeSummary], ["complete", "Context was compacted."]);
+    assert.doesNotMatch(JSON.stringify(events), /SECRET-MUST-NOT-LEAK/);
+  } finally { await adapter.dispose(); }
+});
+
+test("Pi select dialogs expose opaque options and reply with the exact native value", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    await adapter.prompt({ text: "select", mode: "prompt" });
+    const [first, second, empty] = await waitFor(() => {
+      const approvals = events.filter((event) => event.type === "approval").map((event) => event.approval);
+      return approvals.length === 3 && approvals;
+    });
+    assert.deepEqual(first.options, [
+      { id: "option-1", label: "Allow" },
+      { id: "option-2", label: "Block" },
+      { id: "option-3", label: "Line one line two" },
+    ]);
+    assert.deepEqual(first.decisions, ["approve-once", "cancel"]);
+    assert.equal(first.inputLabel, undefined);
+    assert.deepEqual(empty.options, []);
+    assert.deepEqual(empty.decisions, ["cancel"]);
+    assert.doesNotMatch(JSON.stringify(events), /native-select/);
+
+    for (const text of ["Maybe", undefined, "option-9"]) {
+      await assert.rejects(
+        adapter.respond({ requestId: first.id, decision: "approve-once", text }),
+        { bridgeCode: "invalid-response" },
+      );
+    }
+    const pending = (await adapter.snapshot()).approvals.map((approval) => approval.id);
+    assert.ok(pending.includes(first.id), "an invalid answer keeps the dialog pending");
+
+    await adapter.respond({ requestId: first.id, decision: "approve-once", text: "option-2" });
+    assert.equal((await adapter.snapshot()).title, "ui:Block");
+    await assert.rejects(
+      adapter.respond({ requestId: first.id, decision: "approve-once", text: "option-1" }),
+      { bridgeCode: "stale-approval" },
+    );
+
+    await adapter.respond({ requestId: second.id, decision: "approve-once", text: "Line one line two" });
+    assert.equal((await adapter.snapshot()).title, "ui:Line one\nline two");
+
+    await assert.rejects(
+      adapter.respond({ requestId: empty.id, decision: "approve-once", text: "option-1" }),
+      { bridgeCode: "stale-approval" },
+    );
+    await adapter.respond({ requestId: empty.id, decision: "cancel" });
+    assert.equal((await adapter.snapshot()).title, "ui:cancelled");
   } finally { await adapter.dispose(); }
 });

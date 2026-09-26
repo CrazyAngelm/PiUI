@@ -172,12 +172,51 @@ test("renders web search items as safe tool activity and keeps other unknown typ
     assert.match(webSearch.text, /Action: search/);
     assert.match(webSearch.text, /Results: 1/);
     assert.doesNotMatch(webSearch.text, /SECRET-MUST-NOT-LEAK/);
-    for (const type of ["mcpToolCall", "collabAgentToolCall", "imageView", "imageGeneration"]) {
+    for (const type of ["collabAgentToolCall", "imageView", "imageGeneration"]) {
       const block = adapter.snapshot().blocks.find((value) => value.id === `unsupported-${type}`);
       assert.equal(block.kind, "unknown");
       assert.equal(block.fallback, true);
       assert.match(block.safeSummary, new RegExp(type));
     }
+  } finally {
+    await adapter.dispose();
+  }
+});
+
+test("maps MCP and dynamic tool calls to bounded tool blocks", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--tool-items"] }, (event) => events.push(event));
+  try {
+    await waitFor(() => adapter.snapshot().blocks.some((block) => block.id === "dynamic-denied"));
+    const block = (id) => adapter.snapshot().blocks.find((value) => value.id === id);
+    const started = (id) => events.find((event) => event.type === "block" && event.block.id === id).block;
+
+    assert.equal(started("mcp-item").status, "streaming");
+    assert.ok(events.some((event) => event.type === "textDelta" && event.blockId === "mcp-item" && event.text === "\nSearching"));
+    const mcp = block("mcp-item");
+    assert.deepEqual(
+      [mcp.kind, mcp.label, mcp.title, mcp.toolName, mcp.status, mcp.fallback],
+      ["tool", "MCP tool", "docs.search_docs", "search_docs", "complete", undefined],
+    );
+    assert.equal(mcp.text, "Arguments: query: fixture, limit: 3, filters: {…}\nfound 3 docs\n[image]");
+    assert.equal(mcp.truncated, false);
+
+    const failed = block("mcp-failed");
+    assert.equal(failed.status, "failed");
+    assert.match(failed.text, /\nError: docs server unavailable$/);
+
+    assert.equal(started("dynamic-item").status, "streaming");
+    const dynamic = block("dynamic-item");
+    assert.deepEqual([dynamic.kind, dynamic.label, dynamic.title, dynamic.status], ["tool", "Tool", "workspace.spawn_agent", "complete"]);
+    assert.ok(dynamic.text.startsWith("Arguments: profileId: reviewer, name: Helper, instructions: Review the change\n"));
+    assert.equal(dynamic.truncated, true);
+    assert.match(dynamic.text, /\n… \d+ characters omitted …\n/);
+    assert.ok(dynamic.text.endsWith("\n[image]"));
+    assert.ok(dynamic.text.length <= 16 * 1024 + 64);
+
+    const denied = block("dynamic-denied");
+    assert.deepEqual([denied.title, denied.status], ["send", "failed"]);
+    assert.doesNotMatch(JSON.stringify(events), /SECRET-MUST-NOT-LEAK/);
   } finally {
     await adapter.dispose();
   }

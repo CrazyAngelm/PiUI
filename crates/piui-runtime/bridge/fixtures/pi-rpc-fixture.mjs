@@ -6,6 +6,49 @@ const write = (value, fragmented = false) => {
   if (!fragmented) process.stdout.write(bytes);
   else { process.stdout.write(bytes.subarray(0, 5)); setImmediate(() => process.stdout.write(bytes.subarray(5))); }
 };
+
+// Prompt texts that select a native event scenario instead of the default turn.
+const secret = "SECRET-MUST-NOT-LEAK";
+const longOutput = `${"head line\n".repeat(1200)}${"tail line\n".repeat(1200)}`;
+// Both 8 KiB cut points of this output fall inside a surrogate pair.
+const emojiOutput = `${"a".repeat(8191)}\u{1F600}${"b".repeat(100)}\u{1F600}${"c".repeat(8191)}`;
+const tool = (type, toolCallId, toolName, fields) => ({ type, toolCallId, toolName, ...fields });
+const textResult = (text) => ({ content: [{ type: "text", text }], details: { fullOutputPath: `/private/${secret}.log` } });
+const scenarios = {
+  tools: [
+    { type: "agent_start" },
+    tool("tool_execution_start", "call-bash", "bash", { args: { command: "npm test\n  --silent" } }),
+    tool("tool_execution_update", "call-bash", "bash", { args: { command: "npm test\n  --silent" }, partialResult: textResult("partial output") }),
+    tool("tool_execution_end", "call-bash", "bash", { result: textResult(longOutput), isError: false }),
+    tool("tool_execution_start", "call-read", "read", { args: { path: "src/main.rs", offset: 10 } }),
+    tool("tool_execution_end", "call-read", "read", { result: { content: [{ type: "text", text: "fn main() {}" }, { type: "image", data: secret, mimeType: "image/png" }] }, isError: false }),
+    tool("tool_execution_start", "call-emoji", "bash", { args: { command: "print emoji" } }),
+    tool("tool_execution_end", "call-emoji", "bash", { result: textResult(emojiOutput), isError: false }),
+    tool("tool_execution_start", "call-custom", "deploy", { args: { target: "staging", retries: 2, options: { token: secret } } }),
+    tool("tool_execution_end", "call-custom", "deploy", { result: { content: [{ type: "text", text: "deploy failed" }] }, isError: true }),
+    tool("tool_execution_start", "call-untyped", "extension_tool", { args: {} }),
+    tool("tool_execution_end", "call-untyped", "extension_tool", { result: { content: null }, isError: false }),
+    { type: "agent_settled" },
+  ],
+  compaction: [
+    { type: "agent_start" },
+    { type: "compaction_start", reason: "threshold" },
+    { type: "compaction_end", reason: "threshold", result: { summary: secret, tokensBefore: 10, estimatedTokensAfter: 2 }, aborted: false, willRetry: false },
+    { type: "compaction_start", reason: "threshold" },
+    { type: "compaction_end", reason: "threshold", result: null, aborted: false, willRetry: false, errorMessage: `Auto-compaction failed: 429 ${secret}` },
+    { type: "compaction_start", reason: "threshold" },
+    { type: "compaction_end", reason: "threshold", result: null, aborted: true, willRetry: false },
+    { type: "compaction_end", reason: "overflow", aborted: false, willRetry: false, errorMessage: `Context overflow recovery failed ${secret}` },
+    { type: "auto_compaction_start", reason: "threshold" },
+    { type: "agent_settled" },
+  ],
+  select: [
+    { type: "agent_start" },
+    { type: "extension_ui_request", id: "native-select-one", method: "select", title: "Allow dangerous command?", options: ["Allow", "Block", "Line one\nline two"], timeout: 10000 },
+    { type: "extension_ui_request", id: "native-select-two", method: "select", title: "Choose again", options: ["Allow", "Block", "Line one\nline two"] },
+    { type: "extension_ui_request", id: "native-select-empty", method: "select", title: "Nothing to choose", options: [] },
+  ],
+};
 process.stdin.on("data", (chunk) => {
   pending = Buffer.concat([pending, chunk]);
   let lf;
@@ -17,7 +60,10 @@ process.stdin.on("data", (chunk) => {
     else if (request.type === "get_commands") write({ id: request.id, type: "response", command: request.type, success: true, data: { commands: [{ name: "skill:review", source: "skill" }] } });
     else if (request.type === "get_available_models") write({ id: request.id, type: "response", command: request.type, success: true, data: { models: [{ provider: "fixture", id: "model", name: "Fixture Model" }] } });
     else if (request.type === "get_entries") write({ id: request.id, type: "response", command: request.type, success: true, data: { entries: [{ id: "entry-private", type: "message", message: { role: "user", content: "hello" } }] } });
-    else if (request.type === "prompt") {
+    else if (request.type === "prompt" && scenarios[request.message]) {
+      write({ id: request.id, type: "response", command: request.type, success: true });
+      setTimeout(() => { for (const event of scenarios[request.message]) write(event); }, 30);
+    } else if (request.type === "prompt") {
       write({ id: request.id, type: "response", command: request.type, success: true });
       setTimeout(() => {
         write({ type: "agent_start" });
@@ -31,8 +77,14 @@ process.stdin.on("data", (chunk) => {
         write({ type: "agent_settled" });
       }, 30);
     } else if (request.type === "set_session_name") { sessionName = request.name; write({ id: request.id, type: "response", command: request.type, success: true }); }
-    else if (request.type === "compact" || request.type === "steer" || request.type === "abort" || request.type === "set_model" || request.type === "set_thinking_level") write({ id: request.id, type: "response", command: request.type, success: true, data: request.type === "set_model" ? { provider: request.provider, id: request.modelId, name: request.modelId } : undefined });
-    else if (request.type === "extension_ui_response") {}
+    else if (request.type === "compact") {
+      // Models an older build that reports only the start of manual compaction.
+      write({ type: "compaction_start", reason: "manual" });
+      write({ id: request.id, type: "response", command: request.type, success: true });
+    }
+    else if (request.type === "steer" || request.type === "abort" || request.type === "set_model" || request.type === "set_thinking_level") write({ id: request.id, type: "response", command: request.type, success: true, data: request.type === "set_model" ? { provider: request.provider, id: request.modelId, name: request.modelId } : undefined });
+    // The session name records the last dialog reply so tests can read it back.
+    else if (request.type === "extension_ui_response") sessionName = `ui:${request.cancelled ? "cancelled" : request.value ?? request.confirmed}`;
     else write({ id: request.id, type: "response", command: request.type, success: false, error: "fixture rejected secret" });
   }
 });

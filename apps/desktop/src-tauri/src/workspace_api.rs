@@ -21,8 +21,8 @@ use piui_index::{GenericBlockKind, GenericBlockStatus, GenericTimelineBlock};
 use piui_orchestration::NativeHistoryReference;
 use piui_platform::ProjectDirectory;
 pub use piui_runtime::workspace_runtime::{
-    ApprovalDecision, HarnessCapabilities, HarnessKind, PermissionMode, PromptMode, SessionStatus,
-    TurnOutcome, WorkspaceModel,
+    ApprovalDecision, ApprovalOption, HarnessCapabilities, HarnessKind, PermissionMode, PromptMode,
+    SessionStatus, TurnOutcome, WorkspaceModel,
 };
 use piui_runtime::workspace_runtime::{
     BlockKind, BlockStatus, CoordinatorOperation, CoordinatorResponse, HarnessAvailability,
@@ -108,6 +108,10 @@ pub struct WorkspaceApproval {
     pub decisions: Vec<ApprovalDecision>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_label: Option<String>,
+    /// Additive v15 field: choices of a select-style request, answered by
+    /// sending one option id as `respond.text`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<ApprovalOption>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2306,6 +2310,7 @@ fn workspace_approval(session_id: &str, approval: &NativeApproval) -> WorkspaceA
         description: approval.description.clone(),
         decisions: approval.decisions.clone(),
         input_label: approval.input_label.clone(),
+        options: approval.options.clone(),
     }
 }
 

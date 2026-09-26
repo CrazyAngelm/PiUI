@@ -176,6 +176,62 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     if (Array.isArray(item?.results)) lines.push(`Results: ${item.results.length}`);
     return lines.join("\n");
   };
+  // MCP and dynamic tool payloads are arbitrary JSON. Their blocks carry a
+  // compact argument summary and bounded result text, never raw native objects.
+  const TOOL_TEXT_LIMIT = 16 * 1024;
+  const isHighSurrogate = (code) => code >= 0xd800 && code <= 0xdbff;
+  const isLowSurrogate = (code) => code >= 0xdc00 && code <= 0xdfff;
+  // Cuts never split a surrogate pair: the host rejects lone surrogates.
+  const headEnd = (text, end) => (isHighSurrogate(text.charCodeAt(end - 1)) ? end - 1 : end);
+  const tailStart = (text, start) => (isLowSurrogate(text.charCodeAt(start)) ? start + 1 : start);
+  const oneLine = (value, limit) => {
+    const line = String(value).replace(/\s+/g, " ").trim();
+    return line.length <= limit ? line : `${line.slice(0, headEnd(line, limit - 1))}…`;
+  };
+  const boundText = (value) => {
+    const text = value.toWellFormed?.() ?? value;
+    if (text.length <= TOOL_TEXT_LIMIT) return { text, truncated: false };
+    const half = Math.floor(TOOL_TEXT_LIMIT / 2);
+    const head = headEnd(text, half);
+    const tail = tailStart(text, text.length - half);
+    const marker = `\n… ${tail - head} characters omitted …\n`;
+    return { text: `${text.slice(0, head)}${marker}${text.slice(tail)}`, truncated: true };
+  };
+  const argumentSummary = (value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+    const entries = Object.entries(value).slice(0, 8).map(([key, entry]) => {
+      if (typeof entry === "string") return `${key}: ${oneLine(entry, 60)}`;
+      if (["number", "boolean"].includes(typeof entry) || entry === null) return `${key}: ${entry}`;
+      return `${key}: ${Array.isArray(entry) ? "[…]" : "{…}"}`;
+    });
+    return oneLine(entries.join(", "), 400);
+  };
+  const isToolCall = (item) => item?.type === "mcpToolCall" || item?.type === "dynamicToolCall";
+  const toolCallTitle = (item) => {
+    const scope = item.type === "mcpToolCall" ? item.server : item.namespace;
+    const name = [scope, item.tool].filter((part) => typeof part === "string" && part).join(".");
+    return name ? oneLine(name, 160) : undefined;
+  };
+  const toolCallStatus = (item) => {
+    const settled = item.status !== "inProgress";
+    if (item.status === "failed" || (settled && (item.error || item.success === false))) return "failed";
+    return mapStatus(item.status);
+  };
+  const toolCallFields = (item) => {
+    const parts = item.type === "mcpToolCall" ? item.result?.content : item.contentItems;
+    const lines = (Array.isArray(parts) ? parts : []).map((part) => {
+      if (["text", "inputText"].includes(part?.type) && typeof part.text === "string") return part.text;
+      if (["image", "inputImage"].includes(part?.type)) return "[image]";
+      if (["audio", "inputAudio"].includes(part?.type)) return "[audio]";
+      return "[unsupported content]";
+    });
+    const summary = argumentSummary(item.arguments);
+    if (summary) lines.unshift(`Arguments: ${summary}`);
+    if (typeof item.error?.message === "string") lines.push(`Error: ${item.error.message}`);
+    const output = boundText(lines.join("\n"));
+    const title = toolCallTitle(item);
+    return { text: output.text, truncated: output.truncated, ...(title ? { title } : {}) };
+  };
   const itemText = (item) => {
     if (item?.type === "userMessage") {
       return (item.content || []).filter((value) => value?.type === "text").map((value) => value.text).join("\n");
@@ -198,7 +254,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     if (type === "agentMessage") return "assistant";
     if (type === "reasoning" || type === "plan") return "thinking";
     if (type === "contextCompaction") return "compaction";
-    if (["commandExecution", "fileChange", "webSearch"].includes(type)) return "tool";
+    if (["commandExecution", "fileChange", "webSearch", "mcpToolCall", "dynamicToolCall"].includes(type)) return "tool";
     return "unknown";
   };
   const itemLabel = (type) => ({
@@ -222,9 +278,10 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       id: item.id,
       kind,
       label: itemLabel(item.type),
-      status: overrideStatus || mapStatus(item.status),
+      status: overrideStatus || (isToolCall(item) ? toolCallStatus(item) : mapStatus(item.status)),
       text: itemText(item),
       ...(kind === "tool" ? { toolName: item.type === "webSearch" ? "web-search" : item.tool || item.type, collapsible: true } : {}),
+      ...(isToolCall(item) ? toolCallFields(item) : {}),
       ...(kind === "unknown" ? {
         safeSummary: `Unsupported Codex item: ${typeof item.type === "string" ? item.type : "unknown"}`,
         fallback: true,
@@ -608,8 +665,10 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       if (typeof blockId === "string" && typeof delta === "string") {
         if (!blocks.has(blockId)) putItem({ id: blockId, type: method.includes("mcp") ? "mcpToolCall" : "commandExecution" }, "streaming");
         const block = blocks.get(blockId);
-        block.text = `${block.text || ""}${delta}`;
-        emit({ type: "textDelta", blockId, text: delta });
+        // MCP progress messages are discrete status lines, not an output stream.
+        const text = method === "item/mcpToolCall/progress" && block.text ? `\n${delta}` : delta;
+        block.text = `${block.text || ""}${text}`;
+        emit({ type: "textDelta", blockId, text });
       }
       return;
     }

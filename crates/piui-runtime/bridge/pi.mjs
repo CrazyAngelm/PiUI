@@ -86,6 +86,7 @@ export async function createPiAdapter(config, emit) {
   let stdoutBytes = Buffer.alloc(0);
   let admittedTurns = 0;
   let lastTurnOutcome;
+  let compactionId;
   const pending = new Map();
   const blocks = new Map();
   const approvals = new Map();
@@ -106,6 +107,66 @@ export async function createPiAdapter(config, emit) {
     if (current) putBlock({ ...current, ...patch });
   };
   const safeToolName = (name) => typeof name === "string" && name.length <= 160 ? name : "tool";
+
+  // Tool arguments and results are arbitrary native values. Blocks carry only a
+  // one-line title and bounded output text, never the raw objects.
+  const TOOL_TEXT_LIMIT = 16 * 1024;
+  const isHighSurrogate = (code) => code >= 0xd800 && code <= 0xdbff;
+  const isLowSurrogate = (code) => code >= 0xdc00 && code <= 0xdfff;
+  // Cuts never split a surrogate pair: the host rejects lone surrogates.
+  const headEnd = (text, end) => (isHighSurrogate(text.charCodeAt(end - 1)) ? end - 1 : end);
+  const tailStart = (text, start) => (isLowSurrogate(text.charCodeAt(start)) ? start + 1 : start);
+  const oneLine = (value, limit) => {
+    const line = String(value).replace(/\s+/g, " ").trim();
+    return line.length <= limit ? line : `${line.slice(0, headEnd(line, limit - 1))}…`;
+  };
+  const boundToolText = (value) => {
+    const text = value.toWellFormed?.() ?? value;
+    if (text.length <= TOOL_TEXT_LIMIT) return { text, truncated: false };
+    const half = Math.floor(TOOL_TEXT_LIMIT / 2);
+    const head = headEnd(text, half);
+    const tail = tailStart(text, text.length - half);
+    const marker = `\n… ${tail - head} characters omitted …\n`;
+    return { text: `${text.slice(0, head)}${marker}${text.slice(tail)}`, truncated: true };
+  };
+  const compactArgs = (args) => Object.entries(args).slice(0, 8).map(([key, value]) => {
+    if (typeof value === "string") return `${key}: ${oneLine(value, 60)}`;
+    if (["number", "boolean"].includes(typeof value) || value === null) return `${key}: ${value}`;
+    return `${key}: ${Array.isArray(value) ? "[…]" : "{…}"}`;
+  }).join(", ");
+  const toolTitle = (toolName, args) => {
+    const input = args && typeof args === "object" && !Array.isArray(args) ? args : {};
+    const text = (value) => (typeof value === "string" && value.trim() ? value : "");
+    let detail;
+    if (toolName === "bash") detail = text(input.command);
+    else if (["read", "edit", "write", "ls"].includes(toolName)) detail = text(input.path);
+    else if (toolName === "grep" || toolName === "find") {
+      detail = [text(input.pattern), text(input.path)].filter(Boolean).join(" in ");
+    } else detail = compactArgs(input);
+    return oneLine(detail ? `${toolName}: ${detail}` : toolName, 200);
+  };
+  const toolResultText = (result) => {
+    const parts = Array.isArray(result?.content) ? result.content : [];
+    return parts.map((part) => {
+      if (part?.type === "text" && typeof part.text === "string") return part.text;
+      return part?.type === "image" ? "[image]" : "[unsupported content]";
+    }).join("\n");
+  };
+
+  // Completes the in-flight compaction block. Native end events are
+  // authoritative; turn settlement and the compact response are fallbacks.
+  const finishCompaction = (nextStatus, safeSummary) => {
+    if (!compactionId) return;
+    updateBlock(compactionId, { status: nextStatus, safeSummary });
+    compactionId = undefined;
+  };
+  // The native summary and error text stay private; only the outcome is shown.
+  const compactionOutcome = (frame) => {
+    if (frame.aborted === true) return { status: "interrupted", summary: "Context compaction was cancelled." };
+    if (frame.result) return { status: "complete", summary: "Context was compacted." };
+    return { status: "failed", summary: "Context compaction failed." };
+  };
+
   const writeNative = (value) => {
     if (closed || !child.stdin.writable) throw fail("not-running", "The Pi runtime is not running.");
     child.stdin.write(`${JSON.stringify(value)}\n`);
@@ -144,22 +205,59 @@ export async function createPiAdapter(config, emit) {
     };
   };
 
+  // Select values stay adapter-private. The host sees opaque option ids with
+  // bounded one-line labels and answers with an id (or label) in `text`.
+  const MAX_SELECT_OPTIONS = 200;
+  const selectChoices = (values) => values.slice(0, MAX_SELECT_OPTIONS).map((value, index) => ({
+    id: `option-${index + 1}`,
+    label: oneLine(value, 200) || `Option ${index + 1}`,
+    value,
+  }));
+
   const handleExtensionRequest = (frame) => {
     if (!["select", "confirm", "input", "editor"].includes(frame.method) || typeof frame.id !== "string") {
       if (typeof frame.id === "string") writeNative({ type: "extension_ui_response", id: frame.id, cancelled: true });
       return;
     }
     const id = `pi-approval-${++blockSequence}`;
+    const offered = frame.method === "select" && Array.isArray(frame.options)
+      ? frame.options.filter((value) => typeof value === "string")
+      : [];
+    const choices = frame.method === "select" ? selectChoices(offered) : undefined;
+    let description = typeof frame.message === "string" ? frame.message : "Pi needs a response to continue.";
+    if (offered.length > MAX_SELECT_OPTIONS) {
+      description = `${description} Only the first ${MAX_SELECT_OPTIONS} options can be chosen here.`;
+    }
+    let decisions = ["approve-once", "cancel"];
+    if (frame.method === "confirm") decisions = ["approve-once", "deny", "cancel"];
+    else if (choices?.length === 0) decisions = ["cancel"];
     const approval = {
       id,
       kind: frame.method === "confirm" ? "permission" : "input",
       title: typeof frame.title === "string" ? frame.title : "Pi request",
-      description: typeof frame.message === "string" ? frame.message : "Pi needs a response to continue.",
-      decisions: frame.method === "confirm" ? ["approve-once", "deny", "cancel"] : ["approve-once", "cancel"],
+      description,
+      decisions,
       ...(frame.method === "input" || frame.method === "editor" ? { inputLabel: frame.placeholder ?? "Response" } : {}),
+      ...(choices ? { options: choices.map((choice) => ({ id: choice.id, label: choice.label })) } : {}),
     };
-    approvals.set(id, { nativeId: frame.id, method: frame.method, approval });
+    approvals.set(id, { nativeId: frame.id, method: frame.method, approval, choices });
     emit({ type: "approval", approval });
+  };
+
+  // Builds the native reply before the request is retired, so an invalid
+  // answer is rejected and the dialog stays answerable.
+  const extensionResponse = (item, decision, text) => {
+    const id = item.nativeId;
+    if (decision === "cancel") return { type: "extension_ui_response", id, cancelled: true };
+    if (item.method === "confirm") return { type: "extension_ui_response", id, confirmed: decision === "approve-once" };
+    if (item.method === "select") {
+      const choice = item.choices.find((option) => option.id === text)
+        ?? item.choices.find((option) => option.label === text || option.value === text);
+      if (!choice) throw fail("invalid-response", "Choose one of the offered options.");
+      return { type: "extension_ui_response", id, value: choice.value };
+    }
+    if (typeof text === "string") return { type: "extension_ui_response", id, value: text };
+    throw fail("invalid-response", "This approval response requires text.");
   };
 
   const classifyTurnError = (message) => {
@@ -190,7 +288,11 @@ export async function createPiAdapter(config, emit) {
   const handleNativeEvent = (frame) => {
     switch (frame.type) {
       case "agent_start": lastTurnOutcome = undefined; setStatus("running"); break;
-      case "agent_settled": case "agent_end": settleTurn(); setStatus("idle"); break;
+      case "agent_settled": case "agent_end":
+        finishCompaction("complete", "Context compaction ended.");
+        settleTurn();
+        setStatus("idle");
+        break;
       case "message_start": {
         if (frame.message?.role === "user") {
           const id = opaque("pi-message", frame.message.id ?? `user-${++blockSequence}`);
@@ -241,14 +343,42 @@ export async function createPiAdapter(config, emit) {
       case "tool_execution_start": case "tool_execution_update": case "tool_execution_end": {
         if (typeof frame.toolCallId !== "string") break;
         const id = opaque("pi-tool", frame.toolCallId);
-        const toolName = safeToolName(frame.toolName);
-        const next = frame.type === "tool_execution_end" ? (frame.isError ? "failed" : "complete") : "streaming";
         const existing = blocks.get(id);
-        putBlock({ ...(existing ?? { id, kind: "tool", label: toolName, toolName, collapsible: true }), status: next,
-          ...(frame.type === "tool_execution_end" ? { safeSummary: frame.isError ? "The tool failed." : "The tool completed." } : {}) });
+        const toolName = existing?.toolName ?? safeToolName(frame.toolName);
+        const ended = frame.type === "tool_execution_end";
+        // Updates carry the accumulated partial result, so each replaces the text.
+        const result = ended ? frame.result : frame.partialResult;
+        const output = result === undefined ? undefined : boundToolText(toolResultText(result));
+        putBlock({
+          ...(existing ?? { id, kind: "tool", label: toolName, toolName, collapsible: true }),
+          status: ended ? (frame.isError ? "failed" : "complete") : "streaming",
+          ...(frame.args !== undefined ? { title: toolTitle(toolName, frame.args) } : {}),
+          ...(output ? { text: output.text, truncated: output.truncated } : {}),
+          ...(ended ? { safeSummary: frame.isError ? "The tool failed." : "The tool completed." } : {}),
+        });
         break;
       }
-      case "compaction_start": putBlock({ id: `pi-compaction-${++blockSequence}`, kind: "compaction", label: "Compaction", status: "streaming", safeSummary: "Context is being compacted." }); break;
+      // Older Pi builds report automatic compaction with the auto_ prefix.
+      case "compaction_start": case "auto_compaction_start":
+        finishCompaction("complete", "Context compaction ended.");
+        compactionId = `pi-compaction-${++blockSequence}`;
+        putBlock({
+          id: compactionId, kind: "compaction", label: "Compaction", status: "streaming",
+          safeSummary: "Context is being compacted.",
+        });
+        break;
+      case "compaction_end": case "auto_compaction_end": {
+        const outcome = compactionOutcome(frame);
+        if (compactionId) finishCompaction(outcome.status, outcome.summary);
+        else if (outcome.status === "failed") {
+          // Overflow recovery can report a failure without a matching start.
+          putBlock({
+            id: `pi-compaction-${++blockSequence}`, kind: "compaction", label: "Compaction",
+            status: "failed", safeSummary: outcome.summary,
+          });
+        }
+        break;
+      }
       case "extension_ui_request": handleExtensionRequest(frame); break;
       case "session_info_changed": if (typeof frame.name === "string") state.sessionName = frame.name; break;
       case "thinking_level_changed": state.thinkingLevel = frame.level; break;
@@ -362,7 +492,13 @@ export async function createPiAdapter(config, emit) {
     async compact() {
       if (status !== "idle") throw fail("turn-active", "Wait for the current turn before compacting.");
       setStatus("running");
-      void request("compact", {}).catch(() => emit({ type: "error", message: "Context compaction failed." })).finally(() => setStatus("idle"));
+      void request("compact", {})
+        .then(() => finishCompaction("complete", "Context was compacted."))
+        .catch(() => {
+          finishCompaction("failed", "Context compaction failed.");
+          emit({ type: "error", message: "Context compaction failed." });
+        })
+        .finally(() => setStatus("idle"));
       return { accepted: true };
     },
     async prompt({ text, mode }) {
@@ -397,12 +533,8 @@ export async function createPiAdapter(config, emit) {
     async respond({ requestId, decision, text }) {
       const item = approvals.get(requestId);
       if (!item || !item.approval.decisions.includes(decision)) throw fail("stale-approval", "The approval request is invalid or no longer pending.");
+      const response = extensionResponse(item, decision, text);
       approvals.delete(requestId);
-      let response;
-      if (decision === "cancel") response = { type: "extension_ui_response", id: item.nativeId, cancelled: true };
-      else if (item.method === "confirm") response = { type: "extension_ui_response", id: item.nativeId, confirmed: decision === "approve-once" };
-      else if (decision === "approve-once" && typeof text === "string") response = { type: "extension_ui_response", id: item.nativeId, value: text };
-      else throw fail("invalid-response", "This approval response requires text.");
       writeNative(response);
       emit({ type: "approvalResolved", requestId });
     },

@@ -26,9 +26,13 @@ export interface WorkspaceSession {
   profileId?: string; runId?: string; memberId?: string;
 }
 export type ApprovalDecision = 'approve-once' | 'approve-session' | 'deny' | 'cancel';
+/** One select-style choice; answer with `respond.text` set to its opaque `id`. */
+export interface WorkspaceApprovalOption { id: string; label: string }
 export interface WorkspaceApproval {
   id: string; sessionId: string; kind: 'command' | 'file-change' | 'permission' | 'input';
   title: string; description: string; decisions: ApprovalDecision[]; inputLabel?: string;
+  /** Additive v15 field; absent for approvals without native choices. */
+  options?: WorkspaceApprovalOption[];
 }
 export interface SessionSnapshot {
   session: WorkspaceSession; revision: number; blocks: DesktopTimelineBlock[];
