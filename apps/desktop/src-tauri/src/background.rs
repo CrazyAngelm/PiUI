@@ -92,7 +92,7 @@ impl BackgroundError {
     fn read_only() -> Self {
         Self { code: "read-only" }
     }
-    fn unavailable() -> Self {
+    pub(crate) fn unavailable() -> Self {
         Self {
             code: "unavailable",
         }
@@ -253,6 +253,9 @@ impl PreferenceStore for IndexPreferences<'_> {
     }
 }
 
+/// Sign-in registration on Linux and macOS. Windows writes its own quoted
+/// Run value (`autostart.rs`); this stays compiled there for type checking.
+#[cfg_attr(windows, allow(dead_code))]
 struct PluginAutostart<'a, R: Runtime>(&'a AppHandle<R>);
 
 impl<R: Runtime> AutostartBackend for PluginAutostart<'_, R> {
@@ -307,7 +310,18 @@ fn with_controller<R: Runtime, T>(
         .ok_or_else(BackgroundError::unavailable)?;
     let store = IndexPreferences(&host);
     let tray = RuntimeTray(app);
+    #[cfg(windows)]
+    let run_key = state
+        .autostart_allowed
+        .then(|| windows_autostart(app))
+        .flatten();
+    #[cfg(windows)]
+    let autostart = run_key
+        .as_ref()
+        .map(|backend| backend as &dyn AutostartBackend);
+    #[cfg(not(windows))]
     let plugin = PluginAutostart(app);
+    #[cfg(not(windows))]
     let autostart = (state.autostart_allowed
         && app
             .try_state::<tauri_plugin_autostart::AutoLaunchManager>()
@@ -319,6 +333,22 @@ fn with_controller<R: Runtime, T>(
         tray: &tray,
         read_only: state.safe_mode,
     })
+}
+
+/// The quoted HKCU Run value for this executable, named after the app like
+/// the entries earlier builds wrote through the plugin.
+#[cfg(windows)]
+fn windows_autostart<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Option<crate::autostart::RunKeyAutostart<crate::autostart::WindowsRunKey>> {
+    let executable = std::env::current_exe().ok()?;
+    crate::autostart::RunKeyAutostart::new(
+        crate::autostart::WindowsRunKey,
+        &app.package_info().name,
+        executable.to_str()?,
+        &[AUTOSTART_ARG],
+    )
+    .ok()
 }
 
 /// What a second launch of PiUI asks the running one to do.
@@ -354,8 +384,9 @@ pub(crate) fn single_instance_guard(e2e_isolated: bool) -> bool {
 }
 
 /// Manages background state at startup, shows the tray when it is on and
-/// keeps a sign-in start hidden in it. Nothing here blocks first paint: the
-/// OS registration is read only when Settings asks for it.
+/// keeps a sign-in start hidden in it. Nothing here blocks first paint: on
+/// Windows it reads one registry value (quoting a legacy entry), elsewhere
+/// the OS registration is read only when Settings asks for it.
 pub(crate) fn setup<R: Runtime>(app: &AppHandle<R>, safe_mode: bool, autostart_allowed: bool) {
     app.manage(BackgroundState {
         safe_mode,
@@ -365,6 +396,14 @@ pub(crate) fn setup<R: Runtime>(app: &AppHandle<R>, safe_mode: bool, autostart_a
     });
     if safe_mode {
         return;
+    }
+    // An earlier build wrote the sign-in command unquoted; quote it now.
+    #[cfg(windows)]
+    if autostart_allowed
+        && let Some(run_key) = windows_autostart(app)
+        && matches!(run_key.repair(), Ok(true))
+    {
+        eprintln!("event=background_autostart_quoted");
     }
     let keep_in_tray = app
         .try_state::<HostState>()

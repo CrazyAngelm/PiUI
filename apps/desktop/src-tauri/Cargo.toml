@@ -45,10 +45,15 @@ uuid.workspace = true
 tauri = { version = "=2.11.5", features = ["tray-icon"] }
 rfd = "0.17.2"
 notify = "8.2.0"
-# Sign-in registration for background mode; driven only from host code.
+# Sign-in registration for background mode on Linux and macOS; driven only
+# from host code. Windows writes its quoted Run value itself (autostart.rs).
 tauri-plugin-autostart = "=2.5.1"
 # One PiUI process per user session: a second launch shows the first one.
 tauri-plugin-single-instance = "=2.4.5"
+
+[target.'cfg(windows)'.dependencies]
+# The quoted HKCU Run value for "start PiUI when I sign in".
+winreg = "=0.10.1"
 
 [dev-dependencies]
 tauri = { version = "=2.11.5", features = ["test"] }

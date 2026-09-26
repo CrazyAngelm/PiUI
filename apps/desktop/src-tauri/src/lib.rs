@@ -9,6 +9,7 @@
 mod agent_api;
 mod api;
 mod automation_paths;
+mod autostart;
 mod background;
 mod catalog_watch;
 mod contributions;
@@ -721,12 +722,16 @@ pub fn run() -> Result<(), tauri::Error> {
             background::on_second_launch(app, &args);
         }));
     }
-    // Host-driven only: the WebView has no autostart permission.
-    builder = builder.plugin(
-        tauri_plugin_autostart::Builder::new()
-            .arg(background::AUTOSTART_ARG)
-            .build(),
-    );
+    // Host-driven only: the WebView has no autostart permission. Windows
+    // writes its own quoted Run value instead (autostart.rs).
+    #[cfg(not(windows))]
+    {
+        builder = builder.plugin(
+            tauri_plugin_autostart::Builder::new()
+                .arg(background::AUTOSTART_ARG)
+                .build(),
+        );
+    }
     let app = builder
         .on_window_event(background::on_window_event)
         .setup(move |app| {
