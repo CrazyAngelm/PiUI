@@ -127,10 +127,13 @@ test.describe('plugins', () => {
   });
 
   test.describe('isolation', () => {
-    // The blocked connection below is logged by the browser on purpose.
-    test.use({ allowConsoleErrors: true });
-
     test('the panel frame has an opaque origin, no PiUI document, no Tauri bridge and no network', async ({ lab, page }) => {
+      // The browser reports the blocked connection below; the lab fixture
+      // treats plugin-frame policy reports as expected, so collect them here.
+      const reports: string[] = [];
+      page.on('console', (message) => {
+        if (/Content Security Policy/.test(message.text())) reports.push(message.text());
+      });
       await lab.open();
       await lab.chat(/Plan a weekend in Lisbon/).click();
       await page.getByRole('button', { name: 'Details' }).click();
@@ -154,9 +157,8 @@ test.describe('plugins', () => {
         return { origin: window.origin, parent, network, tauri: '__TAURI_INTERNALS__' in window };
       });
       expect(isolation).toEqual({ origin: 'null', parent: 'blocked', network: 'blocked', tauri: false });
-      // The only errors are the browser's reports of that blocked connection.
-      expect(lab.errors.length).toBeGreaterThan(0);
-      expect(lab.errors.every((error) => /Content Security Policy/.test(error))).toBe(true);
+      // It was the panel's own policy that refused the request.
+      await expect.poll(() => reports.some((report) => report.includes("connect-src 'none'"))).toBe(true);
     });
   });
 
@@ -178,6 +180,37 @@ test.describe('plugins', () => {
     await form.getByRole('textbox', { name: 'Wrap in field' }).fill('summary');
     await expect(form.getByRole('textbox', { name: 'Keep fields' })).toHaveValue('changes');
     await expect(editor.getByRole('application').getByRole('group', { name: 'JSON transform', exact: true })).toBeVisible();
+  });
+
+  test('the review, a plugin switch and a plugin command work from the keyboard', async ({ lab, page }) => {
+    await openPlugins(lab, page);
+    await page.getByRole('button', { name: 'Install from folder…' }).focus();
+    await page.keyboard.press('Enter');
+    const review = page.getByRole('dialog', { name: 'Install Word count?' });
+    await expect(review).toBeVisible();
+    await expect(review.locator(':focus')).toHaveCount(1);
+    // Escape is Cancel: nothing is installed and focus returns to the page.
+    await page.keyboard.press('Escape');
+    await expect(review).toBeHidden();
+    await expect(card(page, 'Word count')).toHaveCount(0);
+
+    const toggle = card(page, 'Hello command').getByRole('switch', { name: 'Enable Hello command' });
+    await toggle.focus();
+    await page.keyboard.press('Space');
+    await expect(toggle).not.toBeChecked();
+    await page.keyboard.press('Space');
+    await expect(toggle).toBeChecked();
+
+    const details = card(page, 'Hello command').getByText('Permissions and backend');
+    await details.focus();
+    await page.keyboard.press('Enter');
+    await expect(card(page, 'Hello command').getByRole('listitem').filter({ hasText: 'Show panels in chat details' })).toBeVisible();
+
+    await lab.chat(/Plan a weekend in Lisbon/).click();
+    await page.keyboard.press('Control+k');
+    await page.getByRole('dialog', { name: 'Search and commands' }).getByPlaceholder('Search chats, projects and commands…').fill('say hello');
+    await page.keyboard.press('Enter');
+    await expect(lab.toast('Hello to “Plan a weekend in Lisbon” from the Hello command plugin!')).toBeVisible();
   });
 
   test('safe mode lists plugins read-only', async ({ lab, page }) => {

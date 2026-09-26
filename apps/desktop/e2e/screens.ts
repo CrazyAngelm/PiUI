@@ -119,4 +119,23 @@ export const SCREENS: readonly Screen[] = [
       await settled(lab.page);
     },
   },
+  {
+    name: 'settings-plugins',
+    async open(lab) {
+      const nav = await lab.openSettings();
+      await nav.getByRole('button', { name: 'Plugins' }).click();
+      await expect(lab.page.getByRole('heading', { level: 2, name: 'Plugins' })).toBeVisible();
+      await settled(lab.page);
+    },
+  },
+  {
+    name: 'plugin-trust-review',
+    async open(lab) {
+      const nav = await lab.openSettings();
+      await nav.getByRole('button', { name: 'Plugins' }).click();
+      await lab.page.getByRole('button', { name: 'Install from .zip…' }).click();
+      await expect(lab.page.getByRole('dialog', { name: 'Install Word count?' })).toBeVisible();
+      await settled(lab.page);
+    },
+  },
 ];
