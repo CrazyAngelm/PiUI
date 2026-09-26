@@ -2,7 +2,7 @@
   import Info from '@lucide/svelte/icons/info';
   import type { Harness } from '../../../../../contracts/orchestration-v6';
   import { t } from '../../features/locale/language';
-  import { harnessConfigurations } from '../../harness-adapters';
+  import { harnessConfiguration } from '../../harness-adapters';
 
   /**
    * What the selected harness cannot do, from its adapter manifest. The list
@@ -13,7 +13,7 @@
     harness: Harness;
   }
   let { harness }: Props = $props();
-  const configuration = $derived(harnessConfigurations[harness]);
+  const configuration = $derived(harnessConfiguration(harness));
   const limitations = $derived(configuration?.limitations ?? []);
 </script>
 

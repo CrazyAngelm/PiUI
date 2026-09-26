@@ -2,9 +2,13 @@
  * Native ids, session paths, process handles and credentials never cross this boundary.
  */
 import type { DesktopTimelineBlock } from './runtime-protocol';
+import type { HarnessId } from './harness-identity-v2';
 export const WORKSPACE_PROTOCOL = 15 as const;
-/** `claude-code` is additive within v15 (ADR-028); no command or event shape changed. */
-export type HarnessKind = 'pi' | 'prime-agent' | 'codex' | 'hermes' | 'claude-code';
+/**
+ * `claude-code` and `acp:<descriptor id>` (harness identity grammar v2) are
+ * additive within v15 (ADR-028, ADR-034); no command or event shape changed.
+ */
+export type HarnessKind = HarnessId;
 export type SessionStatus = 'starting' | 'idle' | 'running' | 'stopping' | 'closed' | 'failed';
 export type PermissionMode = 'native' | 'read-only' | 'workspace-write' | 'full-access';
 export type Enforcement = 'native' | 'coordinator' | 'advisory' | 'unsupported';
@@ -75,6 +79,8 @@ export interface WorkspaceApproval {
 export interface SessionSnapshot {
   session: WorkspaceSession; revision: number; blocks: DesktopTimelineBlock[];
   approvals: WorkspaceApproval[]; capabilities: HarnessCapabilities; models: WorkspaceModel[];
+  /** Additive v15 field: modes a live ACP agent advertises (`workspace-session-mode-v1`). */
+  modes?: import('./workspace-session-mode-v1').SessionModesV1;
 }
 export interface WorkspaceCatalog {
   protocol: 15; safeMode: boolean; workspaces: WorkspaceSummary[];

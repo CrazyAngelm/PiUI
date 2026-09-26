@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { harnessConfigurations } from '../../harness-adapters';
+  import { harnessConfiguration } from '../../harness-adapters';
   import { t } from '../locale/language';
   import { tick, onMount } from 'svelte';
   import { harnessModels } from '../../host-api/harnessModels';
@@ -50,7 +50,7 @@
     finally { if (mounted && request === catalogRequest) catalogLoading = false; }
   }
 
-  $: configuration = harnessConfigurations[draft.harness];
+  $: configuration = harnessConfiguration(draft.harness);
   $: disabled = busy || readOnly;
   $: dirty = fingerprint(draft) !== baseline;
   $: spawnOptions = spawnProfileOptions(profiles, draft.id);
@@ -118,6 +118,7 @@
       case 'prime-agent': return 'Prime Agent';
       case 'codex': return 'Codex'; case 'hermes': return 'Hermes';
       case 'claude-code': return 'Claude Code';
+      default: return harness;
     }
   }
 

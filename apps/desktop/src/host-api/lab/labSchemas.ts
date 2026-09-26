@@ -1,10 +1,15 @@
 import {
-  arrayOf, boolean, datetime, enumOf, json, lazy, mapOf, object, option, string, tagged, u32, u64, withDefault,
+  arrayOf, boolean, custom, datetime, enumOf, json, lazy, mapOf, object, option, string, tagged, u32, u64, withDefault,
   type Schema,
 } from './labSchema';
+import { BUILTIN_HARNESSES, isHarnessId } from '../../../../../contracts/harness-identity-v2';
 
 /** Request schemas transcribed from the Rust DTOs (`deny_unknown_fields` everywhere). */
-const harness = enumOf(['pi', 'prime-agent', 'codex', 'hermes', 'claude-code']);
+// Harness identity v2 (`parse_harness_identity`): a built-in name or `acp:<agent id>`.
+const harness = custom((value) => isHarnessId(value)
+  ? undefined
+  : `unknown harness \`${[...value].slice(0, 64).join('')}\`; expected one of ${BUILTIN_HARNESSES.join(', ')} or acp:<agent id>`);
+export const harnessIdentitySchema = harness;
 const permissionMode = enumOf(['native', 'read-only', 'workspace-write', 'full-access']);
 const promptMode = enumOf(['prompt', 'steer', 'follow-up']);
 const decision = enumOf(['approve-once', 'approve-session', 'deny', 'cancel']);

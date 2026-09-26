@@ -10,6 +10,7 @@
   import type { Capability, HarnessCapabilities } from '../../../../../contracts/workspace-v15';
   import { Button, IconButton } from '../../lib/ui';
   import { harnessMeta } from '../harnessMeta';
+  import AgentModePicker from './AgentModePicker.svelte';
   import { useWorkspace } from './context';
 
   interface Props {
@@ -57,6 +58,7 @@
     <dl>
       <div><dt>{$t('Agent')}</dt><dd>{harnessMeta(session.harness).label}{#if harness?.version} <span class="muted">v{harness.version}</span>{/if}</dd></div>
       <div><dt>{$t('Model')}</dt><dd>{session.model?.name ?? $t('Harness default')}{#if session.model?.provider} <span class="muted">· {session.model.provider}</span>{/if}</dd></div>
+      {#if snapshot.modes}<div><dt>{$t('Mode')}</dt><dd><AgentModePicker sessionId={session.id} modes={snapshot.modes} disabled={store.safeMode || session.status === 'closed' || session.status === 'failed'} onChanged={() => store.reconcileSession(session.id)} /></dd></div>{/if}
       <div><dt>{$t('Status')}</dt><dd>{$t(statusLabel(session.status))}</dd></div>
       <div><dt>{$t('Project')}</dt><dd>{workspace ? (workspace.personal ? $t('Personal chats') : workspace.name) : '—'}{#if workspace && !workspace.personal} <span class="muted">· {workspace.trust === 'trusted' ? $t('trusted') : $t('restricted')}</span>{/if}</dd></div>
       <div><dt>{$t('Updated')}</dt><dd>{Number.isFinite(parseTimestamp(session.updatedAt)) ? new Date(parseTimestamp(session.updatedAt)).toLocaleString() : '—'}</dd></div>

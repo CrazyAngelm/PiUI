@@ -1,4 +1,5 @@
-import type { Harness, PermissionMode, ResourceRule } from '../../../../contracts/orchestration-v6';
+import type { PermissionMode, ResourceRule } from '../../../../contracts/orchestration-v6';
+import type { BuiltinHarness } from '../../../../contracts/harness-identity-v2';
 /**
  * How a single-call `llm` step (orchestration v6.2) runs on a harness.
  * - `disabled`: the adapter starts the turn with an empty native tool
@@ -30,4 +31,5 @@ export interface HarnessConfiguration {
   readonly limitations?: readonly string[];
   readonly oneShot?: OneShotSupport;
 }
-export type HarnessConfigurations = Readonly<Record<Harness, HarnessConfiguration>>;
+/** Built-in adapters only; ACP agents share one generic manifest (`harnessConfiguration`). */
+export type HarnessConfigurations = Readonly<Record<BuiltinHarness, HarnessConfiguration>>;

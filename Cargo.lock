@@ -2655,6 +2655,7 @@ dependencies = [
 name = "piui-orchestration"
 version = "0.1.1"
 dependencies = [
+ "piui-contracts",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
@@ -2677,6 +2678,7 @@ dependencies = [
  "ed25519-dalek",
  "piui-contracts",
  "piui-platform",
+ "regex",
  "serde",
  "serde_json",
  "sha2",

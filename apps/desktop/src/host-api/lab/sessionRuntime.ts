@@ -12,6 +12,7 @@ import {
   type LabQueue, type LabSessionRecord, type LabState,
 } from './labState';
 import { chatTurn, compactionTurn, type ApprovalStep, type TurnContext, type TurnStep } from './turnScripts';
+import { isAcpHarness } from '../../../../../contracts/harness-identity-v2';
 
 /** `lost`: the runtime was disposed before a terminal outcome (the host records uncertainty). */
 export type TurnOutcome = 'succeeded' | 'failed' | 'interrupted' | 'lost';
@@ -193,7 +194,7 @@ export class LabSessions {
   }
 
   private steer(record: LabSessionRecord, text: string): void {
-    if (record.harness === 'hermes') throw new NativeRejection('unsupported');
+    if (record.harness === 'hermes' || isAcpHarness(record.harness)) throw new NativeRejection('unsupported');
     if (!this.turns.has(record.id) || record.live?.status !== 'running') throw new NativeRejection('no-active-turn');
     const serial = record.blocks.filter((block) => block.id.includes('-steer-')).length + 1;
     this.putBlock(record, {

@@ -11,6 +11,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value;
 use thiserror::Error;
 
+pub mod harness_identity;
+
 macro_rules! opaque_id {
     ($name:ident) => {
         #[derive(

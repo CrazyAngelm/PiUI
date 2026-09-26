@@ -2,6 +2,8 @@ import type {
   Capability, DesktopTimelineBlock, HarnessCapabilities, HarnessCatalogModel, HarnessKind, HarnessModelsResult,
   HarnessSummary, PermissionMode, WorkspaceModel,
 } from './labContracts';
+import { isAcpHarness } from '../../../../../contracts/harness-identity-v2';
+import { ACP_DEFAULT_MODEL } from '../../harness-adapters/acp';
 
 /**
  * Native harness inventory for the lab. Model and resource names are clearly
@@ -81,6 +83,18 @@ export function harnessCapabilities(kind: HarnessKind, summary: HarnessSummary |
     return {
       prompt: blocked, resume: blocked, models: blocked, approvals: blocked,
       instructions: blocked, toolPolicy: blocked, nativeSubagents: blocked,
+    };
+  }
+  // Mirrors `acp_harness_capabilities`.
+  if (isAcpHarness(kind)) {
+    return {
+      prompt: supported(),
+      resume: { ...supported(), reason: 'Only when the agent advertises session/load.' },
+      models: { ...supported(), reason: "Models, modes and reasoning come from the agent's own session options." },
+      approvals: supported(),
+      instructions: { ...supported('coordinator'), reason: 'Sent with the first prompt; the agent keeps its own system prompt.' },
+      toolPolicy: unsupported('ACP does not expose per-session tool restrictions.'),
+      nativeSubagents: unsupported('ACP does not expose native delegation restrictions.'),
     };
   }
   switch (kind) {
@@ -176,6 +190,7 @@ export const HARNESS_MODELS: Readonly<Record<HarnessKind, readonly HarnessCatalo
 
 /** The live runtime's `models()` projection: catalog models without Fast metadata. */
 export function runtimeModels(kind: HarnessKind): WorkspaceModel[] {
+  if (isAcpHarness(kind)) return ACP_LAB_MODELS.map((model) => ({ ...model }));
   return HARNESS_MODELS[kind].map(({ supportsFast: _fast, ...model }) => ({ ...model }));
 }
 
@@ -186,7 +201,7 @@ export function defaultModel(kind: HarnessKind): WorkspaceModel {
 }
 
 export function catalogModel(kind: HarnessKind, id: string, provider: string | undefined): HarnessCatalogModel | undefined {
-  return HARNESS_MODELS[kind].find((model) => model.id === id && model.provider === provider);
+  return catalogModels(kind).find((model) => model.id === id && model.provider === provider);
 }
 
 type Resource = HarnessModelsResult['resources']['items'][number];
@@ -255,7 +270,7 @@ export const NATIVE_PERMISSION_MODES: Readonly<Record<HarnessKind, readonly Perm
 
 /** Claude Code steers natively; compaction is only a literal `/compact` prompt headlessly. */
 export function composerCapabilities(kind: HarnessKind): { steer: boolean; compact: boolean } {
-  if (kind === 'hermes') return { steer: false, compact: false };
+  if (kind === 'hermes' || isAcpHarness(kind)) return { steer: false, compact: false };
   return kind === 'claude-code' ? { steer: true, compact: false } : { steer: true, compact: true };
 }
 
@@ -270,6 +285,7 @@ type BlockKind = DesktopTimelineBlock['kind'];
 
 /** Labels the live bridges put on blocks (Hermes uses the raw ACP kind). */
 export function liveLabel(harness: HarnessKind, kind: BlockKind): string {
+  if (isAcpHarness(harness)) return acpLabel(harness, kind);
   const labels: Readonly<Record<HarnessKind, Partial<Record<BlockKind, string>>>> = {
     pi: { user: 'You', assistant: 'Pi', thinking: 'Thinking', compaction: 'Compaction', error: 'Error' },
     'prime-agent': {
@@ -304,5 +320,73 @@ export function historyLabel(kind: BlockKind): string {
 }
 
 export function defaultSessionTitle(kind: HarnessKind): string {
-  return `New ${HARNESS_NAMES[kind]} session`;
+  return `New ${isAcpHarness(kind) ? acpLabName(kind) : HARNESS_NAMES[kind]} session`;
+}
+
+// ---- ACP agents (ADR-034) -------------------------------------------------------
+// The registry fake (acpFake.ts) owns which agents exist and whether they are
+// ready; these are the per-agent native answers of the generic ACP bridge.
+
+/** Names of the agents the lab registry ships or seeds; user-added agents are "Agent". */
+const ACP_LAB_NAMES: Readonly<Record<string, string>> = {
+  'acp:gemini-cli': 'Gemini CLI',
+  'acp:qwen-code': 'Qwen Code',
+  'acp:lab-agent': 'Lab Agent',
+};
+
+export function acpLabName(kind: HarnessKind): string {
+  return ACP_LAB_NAMES[kind] ?? 'Agent';
+}
+
+/** The models an ACP agent advertises inside a session (no provider, no Fast). */
+const ACP_LAB_MODELS: readonly WorkspaceModel[] = [
+  { id: 'lab-pro', name: 'Lab Pro' },
+  { id: 'lab-flash', name: 'Lab Flash' },
+];
+
+/** The agent's own session modes (ACP `session/set_mode` or a `mode` config option). */
+export const ACP_LAB_MODES: readonly { id: string; name: string; description?: string }[] = [
+  { id: 'default', name: 'Default', description: 'Ask before editing files or running commands' },
+  { id: 'auto-edit', name: 'Auto edit', description: 'Edit files without asking' },
+  { id: 'plan', name: 'Plan', description: 'Read-only planning' },
+];
+
+/**
+ * `harness_models_v18`: "Agent default" first, then the models the agent
+ * advertised in an earlier session; the host starts no probe conversation.
+ */
+export function catalogModels(kind: HarnessKind): HarnessCatalogModel[] {
+  if (!isAcpHarness(kind)) return HARNESS_MODELS[kind].map((model) => ({ ...model }));
+  return [
+    { id: ACP_DEFAULT_MODEL, name: 'Agent default', supportsFast: false },
+    ...ACP_LAB_MODELS.map((model) => ({ ...model, supportsFast: false })),
+  ];
+}
+
+/** ACP exposes no per-session skill, MCP or tool inventory. */
+export function harnessResources(kind: HarnessKind): HarnessModelsResult['resources'] {
+  return isAcpHarness(kind) ? { items: [], warnings: [] } : structuredClone(HARNESS_RESOURCES[kind]);
+}
+
+/** An ACP agent keeps its own permissions: only `native`. */
+export function permissionModes(kind: HarnessKind): readonly PermissionMode[] {
+  return isAcpHarness(kind) ? ['native'] : NATIVE_PERMISSION_MODES[kind];
+}
+
+/** Block labels of the generic ACP bridge: the agent's name on its own messages. */
+function acpLabel(harness: HarnessKind, kind: BlockKind): string {
+  switch (kind) {
+    case 'user': return 'You';
+    case 'assistant':
+    case 'custom':
+    case 'unknown': return acpLabName(harness);
+    case 'thinking': return 'Thinking';
+    case 'tool': return 'Tool';
+    case 'compaction': return 'Compaction';
+    case 'error': return 'Error';
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
 }

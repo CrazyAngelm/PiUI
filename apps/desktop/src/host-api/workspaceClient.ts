@@ -26,6 +26,9 @@ const SAFE_ERRORS: Record<string, string> = {
   SAFE_MODE: 'Runtime actions are disabled in safe mode.',
   APPROVAL_EXPIRED: 'This approval is no longer pending. Refresh the session.',
   IO_ERROR: 'The local workspace data could not be saved. Your native session history has not been removed.',
+  ACP_TRUST_REQUIRED: 'Review and trust this agent in Settings → Harnesses before starting it.',
+  ACP_VERSION_UNCONFIRMED: "Confirm this agent's version in Settings → Harnesses before starting it.",
+  ACP_SIGN_IN_REQUIRED: 'Sign in to this agent with its own app, then try again. Settings → Harnesses shows how.',
 };
 export class WorkspaceOperationError extends Error {
   constructor(readonly code: string, message: string) { super(message); this.name = 'WorkspaceOperationError'; }

@@ -3,9 +3,14 @@
 //! Native session references and paths in this module must be mapped to opaque
 //! workspace ids before any WebView IPC. The bridge owns no model or tool loop.
 
+use crate::acp::{AcpLaunch, acp_environment};
 use crate::codec::{RpcCodec, RpcCodecConfig};
 use crate::native_version::{CODEX_APP_SERVER, VersionCheck};
 use crate::real_rpc::resolve_pi_launch;
+pub use piui_contracts::harness_identity::AcpAgentId;
+use piui_contracts::harness_identity::{
+    ACP_HARNESS_PREFIX, parse_harness_identity, unknown_harness_identity,
+};
 #[cfg(any(unix, windows))]
 use piui_platform::ProcessContainment;
 #[cfg(unix)]
@@ -43,6 +48,9 @@ const HERMES_SOURCE: &str = include_str!("../bridge/hermes.mjs");
 const CODEX_SOURCE: &str = include_str!("../bridge/codex.mjs");
 const CODEX_POOL_SOURCE: &str = include_str!("../bridge/codex-pool.mjs");
 const CLAUDE_SOURCE: &str = include_str!("../bridge/claude.mjs");
+const ACP_SOURCE: &str = include_str!("../bridge/acp.mjs");
+/// Longest list of sign-in method names an ACP agent may report.
+const MAX_SIGN_IN_METHODS: usize = 6;
 
 /// Fixed, user-facing sign-in guidance for a Claude Code login that is not
 /// the user's Claude subscription. PiUI never signs in on the user's behalf.
@@ -166,30 +174,46 @@ const CLAUDE_VERSION_OUTPUT_LIMIT: u64 = 4 * 1024;
 /// `initialize` control request; add that native phase to the transport
 /// allowance, like the Hermes ACP startup below.
 const CLAUDE_STARTUP_ALLOWANCE: Duration = Duration::from_secs(25);
+/// An ACP agent answers `session/new` or `session/load` only after its own
+/// startup (sign-in refresh, MCP servers, history replay); add that native
+/// phase to the transport allowance, like the Hermes ACP startup below.
+const ACP_STARTUP_ALLOWANCE: Duration = Duration::from_secs(40);
 
 // The full bridge source is sent through stdin because CreateProcess has a
 // 32767 UTF--16 command-line limit. This fixed ESM bootstrap reads exactly the
 // trusted length-prefixed source bytes, leaving subsequent LF JSON untouched.
 const NODE_BOOTSTRAP: &str = r#"const fs=await import('node:fs');const h=Buffer.alloc(4);let o=0;while(o<4){const n=fs.readSync(0,h,o,4-o,null);if(n===0)throw new Error('bridge source EOF');o+=n}const z=h.readUInt32LE(0),b=Buffer.alloc(z);o=0;while(o<z){const n=fs.readSync(0,b,o,z-o,null);if(n===0)throw new Error('bridge source EOF');o+=n}await import('data:text/javascript;base64,'+b.toString('base64'));"#;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+/// Harness identity (grammar v2, see `piui_contracts::harness_identity`):
+/// the built-in names, serialized in kebab-case, or `acp:<descriptor id>`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HarnessKind {
     Pi,
     PrimeAgent,
     Codex,
     Hermes,
     ClaudeCode,
+    /// An Agent Client Protocol agent from the host descriptor registry.
+    Acp(AcpAgentId),
 }
 
 impl HarnessKind {
-    /// Every harness in presentation order.
+    /// Every built-in harness in presentation order. ACP agents come from
+    /// the host descriptor registry.
     pub const ALL: [Self; 5] = [
         Self::Pi,
         Self::PrimeAgent,
         Self::Codex,
         Self::Hermes,
         Self::ClaudeCode,
+    ];
+
+    const BUILTIN: [(&'static str, Self); 5] = [
+        ("pi", Self::Pi),
+        ("prime-agent", Self::PrimeAgent),
+        ("codex", Self::Codex),
+        ("hermes", Self::Hermes),
+        ("claude-code", Self::ClaudeCode),
     ];
 
     const fn display_name(self) -> &'static str {
@@ -199,7 +223,51 @@ impl HarnessKind {
             Self::Codex => "Codex",
             Self::Hermes => "Hermes",
             Self::ClaudeCode => "Claude Code",
+            Self::Acp(_) => "ACP agent",
         }
+    }
+
+    /// The ACP descriptor id of an ACP identity.
+    #[must_use]
+    pub const fn acp_agent(self) -> Option<AcpAgentId> {
+        match self {
+            Self::Acp(id) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// Parses a v2 harness identity.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        parse_harness_identity(value, &Self::BUILTIN, Self::Acp)
+    }
+}
+
+impl fmt::Display for HarnessKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Acp(id) => write!(formatter, "{ACP_HARNESS_PREFIX}{id}"),
+            builtin => formatter.write_str(
+                Self::BUILTIN
+                    .iter()
+                    .find(|(_, kind)| kind == builtin)
+                    .map_or("", |(name, _)| name),
+            ),
+        }
+    }
+}
+
+impl Serialize for HarnessKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for HarnessKind {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value)
+            .ok_or_else(|| unknown_harness_identity(&value, &Self::BUILTIN.map(|(name, _)| name)))
     }
 }
 
@@ -524,6 +592,28 @@ pub struct NativeSnapshot {
     pub approvals: Vec<NativeApproval>,
     pub capabilities: HarnessCapabilities,
     pub models: Vec<WorkspaceModel>,
+    /// Session modes the agent advertises (ACP). Additive: other adapters
+    /// never report it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modes: Option<NativeSessionModes>,
+}
+
+/// One agent-defined session mode (ACP `session/set_mode` or a `mode`
+/// config option). Names and descriptions are the agent's own text.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeSessionMode {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeSessionModes {
+    pub current: String,
+    pub available: Vec<NativeSessionMode>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -719,6 +809,22 @@ pub struct NativeHarnessSummary {
     pub status: HarnessAvailability,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The detected executable or entry script, for Settings only. It is not
+    /// part of the workspace catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<PathBuf>,
+}
+
+/// The versions each built-in adapter was tested with, for display.
+#[must_use]
+pub const fn builtin_verified_versions(kind: HarnessKind) -> Option<&'static str> {
+    match kind {
+        HarnessKind::Codex => Some("0.147.0 – 0.157.x"),
+        HarnessKind::ClaudeCode => Some("2.1.0 – 2.x"),
+        HarnessKind::PrimeAgent => Some("0.9.2, 0.9.3"),
+        HarnessKind::Hermes => Some("0.21.0"),
+        HarnessKind::Pi | HarnessKind::Acp(_) => None,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -767,6 +873,11 @@ pub enum NativeRuntimeError {
     Channel,
     #[error("The native runtime rejected the request: {0:?}")]
     Bridge(BridgeFailureCode),
+    /// An ACP agent refused to create or load a session until the user signs
+    /// in through the agent's own flow. `methods` are the agent's advertised
+    /// sign-in method names (bounded plain text); PiUI never authenticates.
+    #[error("The agent requires sign-in")]
+    AgentSignInRequired { methods: Vec<String> },
 }
 
 #[derive(Serialize)]
@@ -778,6 +889,44 @@ struct InitializeConfig<'a> {
     runtime_args: Vec<String>,
     pool_host: bool,
     catalog_only: bool,
+    /// Descriptor data the generic ACP adapter needs: identity, display name
+    /// and restriction overrides. Never the command line or environment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    acp: Option<AcpBridgeConfig<'a>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AcpBridgeConfig<'a> {
+    id: &'a str,
+    display_name: &'a str,
+    disable: AcpBridgeDisable,
+}
+
+/// Features a descriptor switched off (restrictions only).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AcpBridgeDisable {
+    load_session: bool,
+    models: bool,
+    modes: bool,
+    mcp_http: bool,
+}
+
+impl<'a> AcpBridgeConfig<'a> {
+    fn from_launch(launch: &'a AcpLaunch) -> Self {
+        let off = |value: Option<bool>| value == Some(false);
+        Self {
+            id: launch.agent.as_str(),
+            display_name: &launch.display_name,
+            disable: AcpBridgeDisable {
+                load_session: off(launch.capabilities.load_session),
+                models: off(launch.capabilities.models),
+                modes: off(launch.capabilities.modes),
+                mcp_http: off(launch.capabilities.mcp_http),
+            },
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -803,6 +952,41 @@ struct BridgeError {
     code: String,
     #[allow(dead_code)]
     message: String,
+    /// Optional adapter-built safe details (the runner bounds them).
+    #[serde(default)]
+    details: Option<Value>,
+}
+
+/// Maps a failure frame. Only an ACP sign-in refusal carries details: the
+/// agent's sign-in method names, kept as bounded single-line text.
+fn bridge_failure(error: BridgeError) -> NativeRuntimeError {
+    if error.code == "acp-sign-in-required" {
+        let methods = error
+            .details
+            .as_ref()
+            .and_then(|details| details.get("authMethods"))
+            .and_then(Value::as_array)
+            .map(|methods| {
+                methods
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(|method| {
+                        method
+                            .chars()
+                            .filter(|character| !character.is_control())
+                            .take(80)
+                            .collect::<String>()
+                            .trim()
+                            .to_owned()
+                    })
+                    .filter(|method| !method.is_empty())
+                    .take(MAX_SIGN_IN_METHODS)
+                    .collect()
+            })
+            .unwrap_or_default();
+        return NativeRuntimeError::AgentSignInRequired { methods };
+    }
+    NativeRuntimeError::Bridge(map_bridge_failure(&error.code))
 }
 
 type SessionEventRoute = (mpsc::Sender<NativeEvent>, Arc<AtomicBool>);
@@ -896,6 +1080,7 @@ impl NativeRuntime {
             runtime_args: launch.args.clone(),
             pool_host: false,
             catalog_only: false,
+            acp: None,
         });
         let pool = if let Some(pool) = pools
             .get(&key)
@@ -905,7 +1090,8 @@ impl NativeRuntime {
             pool
         } else {
             let (pool, _events) =
-                Self::spawn_resolved(config.clone(), node, launch, source, true, false).await?;
+                Self::spawn_resolved(config.clone(), node, launch, source, true, false, None)
+                    .await?;
             let pool = Arc::new(pool);
             pools.insert(key, Arc::downgrade(&pool));
             pool
@@ -987,10 +1173,33 @@ impl NativeRuntime {
         let spawned = if harness == HarnessKind::Codex && config.coordination {
             Self::spawn_pooled(config, node, launch, source).await
         } else {
-            Self::spawn_resolved(config, node, launch, source, false, false).await
+            Self::spawn_resolved(config, node, launch, source, false, false, None).await
         };
         record_native_account(harness, spawned.as_ref().map(|_| ()));
         spawned
+    }
+
+    /// Starts an ACP agent from a host-resolved descriptor launch. The bridge
+    /// and the agent receive only the base environment plus the launch's
+    /// allowlisted names, the program starts without a shell, and the whole
+    /// tree is contained like every other runtime.
+    pub async fn spawn_acp(
+        config: NativeRuntimeConfig,
+        launch: AcpLaunch,
+    ) -> Result<(Self, NativeEventReceiver), NativeRuntimeError> {
+        if config.harness != HarnessKind::Acp(launch.agent) || !launch.command.program.is_absolute()
+        {
+            return Err(NativeRuntimeError::InvalidConfiguration);
+        }
+        validate_config(&config)?;
+        let node = resolve_node()?;
+        let source = bridge_source(config.harness)?;
+        let resolved = ResolvedHarnessLaunch {
+            program: launch.command.program.clone(),
+            args: launch.command.args.clone(),
+            version: None,
+        };
+        Self::spawn_resolved(config, node, resolved, source, false, false, Some(&launch)).await
     }
 
     pub async fn spawn_catalog(
@@ -1002,7 +1211,7 @@ impl NativeRuntime {
         let launch = resolve_harness_launch_for_config(&config)?;
         let source = bridge_source(config.harness)?;
         let harness = config.harness;
-        let spawned = Self::spawn_resolved(config, node, launch, source, false, true).await;
+        let spawned = Self::spawn_resolved(config, node, launch, source, false, true, None).await;
         record_native_account(harness, spawned.as_ref().map(|_| ()));
         spawned
     }
@@ -1014,13 +1223,15 @@ impl NativeRuntime {
         source: Vec<u8>,
         pool_host: bool,
         catalog_only: bool,
+        acp: Option<&AcpLaunch>,
     ) -> Result<(Self, NativeEventReceiver), NativeRuntimeError> {
         let source_len =
             u32::try_from(source.len()).map_err(|_| NativeRuntimeError::BridgeSourceTooLarge)?;
         #[cfg(windows)]
         let mut windows_job = WindowsJob::new().map_err(|_| NativeRuntimeError::Containment)?;
 
-        let mut command = Command::from(bridge_command(&node, &config));
+        let environment = acp.map(|launch| launch.environment.as_slice());
+        let mut command = Command::from(bridge_command(&node, &config, environment));
         command.kill_on_drop(false);
         #[cfg(unix)]
         command.process_group(0);
@@ -1119,12 +1330,14 @@ impl NativeRuntime {
             runtime_args: launch.args,
             pool_host,
             catalog_only,
+            acp: acp.map(AcpBridgeConfig::from_launch),
         };
         // Hermes 0.21 ACP permits a 30-second late MCP discovery phase.
         // Add that native phase to the existing 20-second transport allowance.
         let startup_timeout = match config.harness {
             HarnessKind::Hermes => REQUEST_TIMEOUT + Duration::from_secs(30),
             HarnessKind::ClaudeCode => REQUEST_TIMEOUT + CLAUDE_STARTUP_ALLOWANCE,
+            HarnessKind::Acp(_) => REQUEST_TIMEOUT + ACP_STARTUP_ALLOWANCE,
             HarnessKind::Pi | HarnessKind::PrimeAgent | HarnessKind::Codex => REQUEST_TIMEOUT,
         };
         // An adapter may replay native history while it initializes (a Hermes
@@ -1226,6 +1439,19 @@ impl NativeRuntime {
         self.request(
             "setModel",
             json!({ "model": model, "thinkingLevel": thinking_level, "serviceTier": service_tier }),
+            REQUEST_TIMEOUT,
+            false,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Selects one of the session modes the agent advertised (ACP). Adapters
+    /// without modes reject the request as an unsupported method.
+    pub async fn set_mode(&self, mode_id: String) -> Result<(), NativeRuntimeError> {
+        self.request(
+            "setMode",
+            json!({ "modeId": mode_id }),
             REQUEST_TIMEOUT,
             false,
         )
@@ -1454,6 +1680,7 @@ impl NativeRuntime {
             source,
             false,
             false,
+            None,
         )
         .await
     }
@@ -1704,7 +1931,7 @@ async fn route_bridge_frame(
                     Ok(frame.result.unwrap_or(Value::Null))
                 }
             } else if let Some(error) = frame.error {
-                Err(NativeRuntimeError::Bridge(map_bridge_failure(&error.code)))
+                Err(bridge_failure(error))
             } else {
                 Err(NativeRuntimeError::Protocol)
             };
@@ -1925,6 +2152,9 @@ fn bridge_source(kind: HarnessKind) -> Result<Vec<u8>, NativeRuntimeError> {
         HarnessKind::Codex => (CODEX_SOURCE, "createCodexAdapter"),
         HarnessKind::Hermes => (HERMES_SOURCE, "createHermesAdapter"),
         HarnessKind::ClaudeCode => (CLAUDE_SOURCE, "createClaudeAdapter"),
+        // One generic adapter; the agent itself comes from a host-resolved
+        // descriptor (`NativeRuntime::spawn_acp`).
+        HarnessKind::Acp(_) => (ACP_SOURCE, "createAcpAdapter"),
     };
     if factory.trim().is_empty() {
         return Err(NativeRuntimeError::HarnessUnavailable);
@@ -2003,6 +2233,8 @@ fn resolve_harness_launch(kind: HarnessKind) -> Result<ResolvedHarnessLaunch, Na
         HarnessKind::Codex => resolve_package_launch("@openai/codex", "bin/codex.js"),
         HarnessKind::Hermes => resolve_hermes_launch(),
         HarnessKind::ClaudeCode => resolve_claude_launch(),
+        // Resolved by the host from its descriptor registry, never here.
+        HarnessKind::Acp(_) => Err(NativeRuntimeError::HarnessUnavailable),
     }
 }
 
@@ -2153,14 +2385,25 @@ fn probe_claude_version(program: &Path) -> Option<String> {
 /// The contained bridge process: the fixed bootstrap reads the bridge source
 /// from stdin. Operator capabilities are never inherited; a Claude Code
 /// bridge additionally starts without any non-subscription credential,
-/// provider switch, billing override or parent-session coupling.
-fn bridge_command(node: &Path, config: &NativeRuntimeConfig) -> std::process::Command {
+/// provider switch, billing override or parent-session coupling. An ACP
+/// bridge (`acp_environment` = the launch's allowlisted names) starts from
+/// a cleared environment: the base locations plus exactly those names, which
+/// its agent inherits.
+fn bridge_command(
+    node: &Path,
+    config: &NativeRuntimeConfig,
+    acp_names: Option<&[String]>,
+) -> std::process::Command {
     let mut standard = std::process::Command::new(node);
     for name in OPERATOR_ENVIRONMENT {
         standard.env_remove(name);
     }
     if config.harness == HarnessKind::ClaudeCode {
         scrub_claude_environment(&mut standard);
+    }
+    if let Some(names) = acp_names {
+        let host = std::env::vars_os().collect::<Vec<_>>();
+        standard.env_clear().envs(acp_environment(&host, names));
     }
     standard
         .args(["--input-type=module", "-e", NODE_BOOTSTRAP])
@@ -2560,6 +2803,43 @@ fn verified_harness_capabilities(kind: HarnessKind) -> HarnessCapabilities {
                 ),
             ),
         },
+        HarnessKind::Acp(_) => acp_harness_capabilities(),
+    }
+}
+
+/// Capabilities of an available generic ACP agent. The protocol has no
+/// per-session tool, file or delegation restriction; instructions travel with
+/// the first prompt (PiUI-composed text, not a replacement system prompt).
+#[must_use]
+pub fn acp_harness_capabilities() -> HarnessCapabilities {
+    HarnessCapabilities {
+        prompt: capability(true, Enforcement::Native, None),
+        resume: capability(
+            true,
+            Enforcement::Native,
+            Some("Only when the agent advertises session/load."),
+        ),
+        models: capability(
+            true,
+            Enforcement::Native,
+            Some("Models, modes and reasoning come from the agent's own session options."),
+        ),
+        approvals: capability(true, Enforcement::Native, None),
+        instructions: capability(
+            true,
+            Enforcement::Coordinator,
+            Some("Sent with the first prompt; the agent keeps its own system prompt."),
+        ),
+        tool_policy: capability(
+            false,
+            Enforcement::Unsupported,
+            Some("ACP does not expose per-session tool restrictions."),
+        ),
+        native_subagents: capability(
+            false,
+            Enforcement::Unsupported,
+            Some("ACP does not expose native delegation restrictions."),
+        ),
     }
 }
 
@@ -2572,6 +2852,8 @@ fn harness_version_supported(kind: HarnessKind, version: Option<&str>) -> bool {
         HarnessKind::Codex => CODEX_APP_SERVER.check(version).is_verified(),
         HarnessKind::Hermes => version == Some("0.21.0"),
         HarnessKind::ClaudeCode => claude_version_supported(version),
+        // Each ACP descriptor declares its own verified range (host registry).
+        HarnessKind::Acp(_) => false,
     }
 }
 
@@ -2619,6 +2901,13 @@ pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
             } else {
                 (HarnessAvailability::Available, None)
             };
+            // The entry script of a Node package, else the executable.
+            let location = launch
+                .args
+                .first()
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .unwrap_or(launch.program);
             NativeHarnessSummary {
                 kind,
                 name: kind.display_name().into(),
@@ -2626,6 +2915,7 @@ pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
                 version: launch.version,
                 status,
                 reason,
+                location: Some(location),
             }
         }
         Err(NativeRuntimeError::NodeUnavailable) => NativeHarnessSummary {
@@ -2635,6 +2925,7 @@ pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
             version: None,
             status: HarnessAvailability::Unavailable,
             reason: Some("Node is unavailable.".into()),
+            location: None,
         },
         Err(_) => NativeHarnessSummary {
             kind,
@@ -2643,6 +2934,7 @@ pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
             version: None,
             status: HarnessAvailability::Unavailable,
             reason: Some("The native harness is not installed.".into()),
+            location: None,
         },
     })
     .collect()
@@ -3409,6 +3701,183 @@ mod tests {
         assert_eq!(HarnessKind::ALL.len(), 5);
     }
 
+    async fn completed_turn(events: &mut NativeEventReceiver) -> TurnOutcome {
+        loop {
+            match timeout(Duration::from_secs(20), events.recv()).await {
+                Ok(Some(NativeEvent::TurnCompleted { outcome })) => return outcome,
+                Ok(Some(_)) => {}
+                other => panic!("turn did not complete: {}", other.is_ok()),
+            }
+        }
+    }
+
+    /// Full stack: production runner and ACP bridge, the fake ACP agent, the
+    /// cleared environment and process containment.
+    #[tokio::test]
+    async fn acp_agents_start_contained_with_only_allowlisted_environment() {
+        use crate::acp::{AcpCapabilityOverrides, AcpResolvedCommand};
+        let Ok(node) = resolve_node() else {
+            return;
+        };
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("bridge/acp.test-fixture.mjs")
+            .to_string_lossy()
+            .into_owned();
+        let agent = AcpAgentId::new("fixture-agent").expect("agent id");
+        let launch = |extra: &[&str], environment: Vec<String>| AcpLaunch {
+            agent,
+            display_name: "Fixture Agent".into(),
+            command: AcpResolvedCommand::test_command(
+                node.clone(),
+                std::iter::once(fixture.clone())
+                    .chain(extra.iter().map(|arg| (*arg).to_owned()))
+                    .collect(),
+            ),
+            environment,
+            capabilities: AcpCapabilityOverrides::default(),
+        };
+        let mut config = test_config();
+        config.harness = HarnessKind::Acp(agent);
+        // A name the test process has but the base environment never passes.
+        let probe = ["CARGO_MANIFEST_DIR", "CARGO", "CARGO_HOME", "RUSTUP_HOME"]
+            .into_iter()
+            .find(|name| std::env::var_os(name).is_some());
+
+        let (runtime, mut events) =
+            NativeRuntime::spawn_acp(config.clone(), launch(&[], Vec::new()))
+                .await
+                .expect("ACP agent starts");
+        let snapshot = runtime.snapshot().await.expect("snapshot");
+        assert_eq!(snapshot.status, SessionStatus::Idle);
+        assert_eq!(snapshot.native_id, "fixture-session");
+        assert_eq!(snapshot.models.len(), 2);
+        let modes = snapshot.modes.expect("advertised modes");
+        assert_eq!(modes.current, "default");
+        runtime.set_mode("plan".into()).await.expect("mode");
+        assert_eq!(
+            runtime
+                .snapshot()
+                .await
+                .expect("snapshot")
+                .modes
+                .map(|modes| modes.current),
+            Some("plan".into())
+        );
+        if let Some(name) = probe {
+            runtime
+                .prompt(format!("env {name}"), PromptMode::Prompt)
+                .await
+                .expect("prompt");
+            assert_eq!(completed_turn(&mut events).await, TurnOutcome::Succeeded);
+            let text = runtime.snapshot().await.expect("snapshot").blocks;
+            assert!(
+                text.iter()
+                    .any(|block| block.text.as_deref() == Some(&format!("{name}=absent"))),
+                "an unlisted variable never reaches the agent"
+            );
+        }
+        runtime.dispose().await.expect("dispose");
+
+        if let Some(name) = probe {
+            let (runtime, mut events) =
+                NativeRuntime::spawn_acp(config.clone(), launch(&[], vec![name.to_owned()]))
+                    .await
+                    .expect("ACP agent starts");
+            runtime
+                .prompt(format!("env {name}"), PromptMode::Prompt)
+                .await
+                .expect("prompt");
+            assert_eq!(completed_turn(&mut events).await, TurnOutcome::Succeeded);
+            assert!(
+                runtime
+                    .snapshot()
+                    .await
+                    .expect("snapshot")
+                    .blocks
+                    .iter()
+                    .any(|block| block.text.as_deref() == Some(&format!("{name}=visible"))),
+                "an allowlisted variable passes through"
+            );
+            runtime.dispose().await.expect("dispose");
+        }
+
+        match NativeRuntime::spawn_acp(config.clone(), launch(&["--auth-required"], Vec::new()))
+            .await
+        {
+            Err(NativeRuntimeError::AgentSignInRequired { methods }) => {
+                assert_eq!(methods, ["Agent login", "API key"]);
+            }
+            other => panic!("expected a typed sign-in refusal: {:?}", other.err()),
+        }
+        let mut codex = config.clone();
+        codex.harness = HarnessKind::Codex;
+        assert_eq!(
+            NativeRuntime::spawn_acp(codex, launch(&[], Vec::new()))
+                .await
+                .err(),
+            Some(NativeRuntimeError::InvalidConfiguration)
+        );
+        let mut other = config;
+        other.harness = HarnessKind::Acp(AcpAgentId::new("other-agent").expect("id"));
+        assert_eq!(
+            NativeRuntime::spawn_acp(other, launch(&[], Vec::new()))
+                .await
+                .err(),
+            Some(NativeRuntimeError::InvalidConfiguration)
+        );
+    }
+
+    #[test]
+    fn acp_identities_extend_the_grammar_without_changing_builtin_names() {
+        let gemini = HarnessKind::Acp(AcpAgentId::new("gemini-cli").expect("slug"));
+        assert_eq!(
+            serde_json::to_value(gemini).ok(),
+            Some(json!("acp:gemini-cli"))
+        );
+        assert_eq!(
+            serde_json::from_value::<HarnessKind>(json!("acp:gemini-cli")).ok(),
+            Some(gemini)
+        );
+        assert_eq!(gemini.to_string(), "acp:gemini-cli");
+        assert_eq!(
+            gemini.acp_agent().map(|id| id.to_string()),
+            Some("gemini-cli".into())
+        );
+        assert_eq!(HarnessKind::Codex.acp_agent(), None);
+        // Built-in names never resolve to an ACP agent, and `acp:` needs a slug.
+        for kind in HarnessKind::ALL {
+            assert_eq!(HarnessKind::parse(&kind.to_string()), Some(kind));
+        }
+        for invalid in [
+            "acp:",
+            "acp:Gemini",
+            "acp:gemini_cli",
+            "gemini-cli",
+            "ACP:gemini-cli",
+        ] {
+            assert!(
+                serde_json::from_value::<HarnessKind>(json!(invalid)).is_err(),
+                "{invalid}"
+            );
+        }
+        assert!(!HarnessKind::ALL.contains(&gemini));
+        // One generic adapter serves every ACP agent, but an agent never
+        // starts without a host-resolved descriptor launch (`spawn_acp`).
+        let source = String::from_utf8(bridge_source(gemini).expect("ACP bridge source"))
+            .expect("bridge source is UTF-8");
+        assert!(source.contains("export async function createAcpAdapter"));
+        assert!(source.contains("globalThis.__PIUI_BRIDGE_FACTORY__=createAcpAdapter;"));
+        assert!(source.contains("export function runBridge"));
+        assert!(resolve_harness_launch(gemini).is_err());
+        assert!(!harness_version_supported(gemini, Some("1.0.0")));
+        let offline = offline_harness_capabilities(gemini);
+        assert!(!offline.prompt.supported && !offline.models.supported);
+        let verified = verified_harness_capabilities(gemini);
+        assert!(verified.prompt.supported && verified.approvals.supported);
+        assert!(!verified.tool_policy.supported && !verified.native_subagents.supported);
+        assert_eq!(verified.instructions.enforcement, Enforcement::Coordinator);
+    }
+
     #[test]
     fn claude_bridge_embeds_the_claude_factory_and_common_runner() {
         let source = String::from_utf8(
@@ -3536,7 +4005,7 @@ mod tests {
     fn claude_bridge_command_removes_every_billing_and_parent_override() {
         let mut config = test_config();
         config.harness = HarnessKind::ClaudeCode;
-        let command = bridge_command(Path::new("node"), &config);
+        let command = bridge_command(Path::new("node"), &config, None);
         let removed = command
             .get_envs()
             .filter(|(_, value)| value.is_none())
@@ -3571,7 +4040,7 @@ mod tests {
         );
         // Other harnesses keep the user's environment minus operator capabilities.
         config.harness = HarnessKind::Codex;
-        let other = bridge_command(Path::new("node"), &config);
+        let other = bridge_command(Path::new("node"), &config, None);
         let other_removed = other
             .get_envs()
             .map(|(key, _)| key.to_string_lossy().into_owned())

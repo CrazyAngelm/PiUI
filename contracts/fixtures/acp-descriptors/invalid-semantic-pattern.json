@@ -1,0 +1,1 @@
+{"schemaVersion":1,"id":"lab-agent","displayName":"Lab Agent","command":{"program":"lab-agent"},"version":{"args":["--version"],"pattern":"("}}

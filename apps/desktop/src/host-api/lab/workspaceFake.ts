@@ -1,7 +1,9 @@
 import {
-  catalogModel, claudeSignInRequired, defaultModel, defaultSessionTitle, HARNESS_MODELS, HARNESS_RESOURCES,
-  NATIVE_PERMISSION_MODES, reportsServiceTier, runtimeModels,
+  catalogModel, catalogModels, claudeSignInRequired, defaultModel, defaultSessionTitle, harnessResources,
+  permissionModes, reportsServiceTier, runtimeModels,
 } from './catalogFake';
+import { assertAcpStartable, isAgentDefault } from './acpFake';
+import { isAcpHarness } from '../../../../../contracts/harness-identity-v2';
 import type {
   HarnessModelsRequest, HarnessModelsResult, HarnessKind, RuntimeSettings, RuntimeSettingsCommand, SessionSnapshot,
   WorkspaceCatalog, WorkspaceCommand, WorkspaceHistoryRequestV1, WorkspaceHistoryResultV1, WorkspaceLifecycleCommand,
@@ -91,13 +93,14 @@ function createSession(runtime: LabSessions, command: Extract<WorkspaceCommand, 
   const title = command.title === undefined ? undefined : normalizedTitle(command.title);
   if (command.title !== undefined && title === undefined) throw workspaceFailure('INVALID_ARGUMENT');
   if (command.model) validateModel(command.model, undefined);
+  assertAcpStartable(state, command.harness);
   assertHarnessAvailable(state, command.harness);
-  if (!NATIVE_PERMISSION_MODES[command.harness].includes(command.permissionMode)) throw workspaceFailure('RUNTIME_FAILED');
+  if (!permissionModes(command.harness).includes(command.permissionMode)) throw workspaceFailure('RUNTIME_FAILED');
   assertSignedIn(state, command.harness);
   if (command.model && catalogModel(command.harness, command.model.id, command.model.provider) === undefined) {
     throw workspaceFailure('RUNTIME_FAILED');
   }
-  const model = command.model ? { ...command.model } : defaultModel(command.harness);
+  const model = command.model && !isAgentDefault(command.harness, command.model) ? { ...command.model } : defaultModel(command.harness);
   const record: LabSessionRecord = {
     id: state.ids.next('session'),
     workspaceId: command.workspaceId,
@@ -131,6 +134,7 @@ function openSession(runtime: LabSessions, sessionId: string): WorkspaceResult {
   if (record.live !== undefined) return { type: 'session', snapshot: liveSnapshot(state, record) };
   // Managed run sessions stay readable through the process-free snapshot path only.
   if (record.runId !== undefined) throw workspaceFailure('NOT_SUPPORTED');
+  assertAcpStartable(state, record.harness);
   assertHarnessAvailable(state, record.harness);
   runtime.open(record);
   const result: SessionSnapshotResult = { type: 'session', snapshot: liveSnapshot(state, record) };
@@ -292,14 +296,18 @@ async function harnessModels(runtime: LabSessions, request: HarnessModelsRequest
   const { state } = runtime;
   assertNotSafe(state);
   verifiedProject(state, request.workspaceId, true);
+  // ACP: no probe conversation; the agent default plus remembered models.
+  if (isAcpHarness(request.harness)) {
+    return { protocol: 18, harness: request.harness, models: catalogModels(request.harness), resources: harnessResources(request.harness) };
+  }
   assertHarnessAvailable(state, request.harness);
   await runtime.clock.delay(CATALOG_LATENCY_MS);
   assertSignedIn(state, request.harness);
   return {
     protocol: 18,
     harness: request.harness,
-    models: HARNESS_MODELS[request.harness].map((model) => ({ ...model })),
-    resources: structuredClone(HARNESS_RESOURCES[request.harness]),
+    models: catalogModels(request.harness),
+    resources: harnessResources(request.harness),
   };
 }
 

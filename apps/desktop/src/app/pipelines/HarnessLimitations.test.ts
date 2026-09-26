@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { render } from 'svelte/server';
 import type { Harness } from '../../../../../contracts/orchestration-v6';
 import { harnessConfigurations } from '../../harness-adapters';
+import type { HarnessConfiguration } from '../../harness-adapters/types';
 import HarnessLimitations from './HarnessLimitations.svelte';
 
 const html = (harness: Harness): string =>
@@ -9,7 +10,7 @@ const html = (harness: Harness): string =>
 
 describe('HarnessLimitations', () => {
   it('lists the manifest limitations of every harness in a collapsed, keyboard-operable disclosure', () => {
-    for (const [harness, configuration] of Object.entries(harnessConfigurations) as [Harness, (typeof harnessConfigurations)[Harness]][]) {
+    for (const [harness, configuration] of Object.entries(harnessConfigurations) as [Harness, HarnessConfiguration][]) {
       const limitations = configuration.limitations ?? [];
       expect(limitations.length, harness).toBeGreaterThan(0);
       const body = html(harness);

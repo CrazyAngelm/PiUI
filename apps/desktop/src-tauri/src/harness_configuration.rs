@@ -61,7 +61,8 @@ fn literal_native_tool_names<'a>(
         Harness::Pi => PI_NATIVE_TOOL_NAMES,
         Harness::PrimeAgent => PRIME_NATIVE_TOOL_NAMES,
         Harness::ClaudeCode => CLAUDE_NATIVE_TOOL_NAMES,
-        Harness::Codex | Harness::Hermes => &[],
+        // ACP has no per-session tool restriction contract.
+        Harness::Codex | Harness::Hermes | Harness::Acp(_) => &[],
     };
     Ok(tools.to_vec())
 }
@@ -128,7 +129,7 @@ pub(crate) fn launch_policy(
     if profile.service_tier.is_some()
         && matches!(
             profile.harness,
-            Harness::Pi | Harness::Hermes | Harness::ClaudeCode
+            Harness::Pi | Harness::Hermes | Harness::ClaudeCode | Harness::Acp(_)
         )
     {
         return Err(OrchestrationSchedulerError::unsupported());
@@ -160,8 +161,8 @@ pub(crate) fn launch_policy(
     if profile.resource_rules.iter().any(|rule| {
         rule.id.trim().is_empty()
             || match profile.harness {
-                // Claude Code exposes no per-session skill or MCP overrides.
-                Harness::Pi | Harness::Hermes | Harness::ClaudeCode => true,
+                // Claude Code and ACP expose no per-session skill or MCP overrides.
+                Harness::Pi | Harness::Hermes | Harness::ClaudeCode | Harness::Acp(_) => true,
                 Harness::PrimeAgent => rule.kind != piui_orchestration::ResourceKind::Skill,
                 Harness::Codex => match rule.kind {
                     piui_orchestration::ResourceKind::Skill => {
@@ -192,9 +193,15 @@ pub(crate) fn launch_policy(
                 && rule.decision == ToolDecision::Deny
                 && rule.tool == "workspace"
         });
+    // An ACP agent receives the workspace tool as an HTTP MCP server; the
+    // bridge refuses a managed start when the agent does not accept one.
     let coordinator = matches!(
         profile.harness,
-        Harness::PrimeAgent | Harness::Codex | Harness::Hermes | Harness::ClaudeCode
+        Harness::PrimeAgent
+            | Harness::Codex
+            | Harness::Hermes
+            | Harness::ClaudeCode
+            | Harness::Acp(_)
     ) && !workspace_tool_denied;
     let agent_operations = AgentOperationCapabilities {
         roster: coordinator,
@@ -269,7 +276,11 @@ fn permission_modes(harness: Harness) -> Vec<piui_orchestration::PermissionMode>
             piui_orchestration::PermissionMode::ReadOnly,
             piui_orchestration::PermissionMode::FullAccess,
         ],
-        Harness::PrimeAgent | Harness::Hermes => vec![piui_orchestration::PermissionMode::Native],
+        // ACP agents keep their own permission settings; the protocol cannot
+        // prove a read-only or workspace-write preset.
+        Harness::PrimeAgent | Harness::Hermes | Harness::Acp(_) => {
+            vec![piui_orchestration::PermissionMode::Native]
+        }
         // Claude Code: the user's configured mode, plan, acceptEdits and
         // bypassPermissions. Its permission engine is not an OS sandbox.
         Harness::Codex | Harness::ClaudeCode => vec![

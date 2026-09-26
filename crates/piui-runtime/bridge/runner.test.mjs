@@ -162,3 +162,31 @@ test("interrupt settles a waiting coordinator tool", async () => {
   assert.equal(rejected, "coordinator-cancelled");
   bridge.input.end();
 });
+
+test("failure frames carry only bounded adapter-built safe details", async () => {
+  const signIn = Object.assign(new Error("raw native text"), {
+    bridgeCode: "acp-sign-in-required",
+    safeMessage: "Sign in first.",
+    safeDetails: { authMethods: ["Agent login"] },
+  });
+  const bridge = harness(async () => { throw signIn; });
+  bridge.send(config);
+  await bridge.wait(1);
+  assert.deepEqual(bridge.frames[0].error, { code: "acp-sign-in-required", message: "Sign in first.", details: { authMethods: ["Agent login"] } });
+  bridge.input.end();
+
+  const oversized = Object.assign(new Error("x"), { bridgeCode: "failed", safeMessage: "Failed.", safeDetails: { text: "x".repeat(5000) } });
+  const other = harness(async () => ({
+    async setMode() { throw oversized; },
+    async snapshot() { throw Object.assign(new Error("secret"), { safeDetails: ["not", "an", "object"] }); },
+    dispose() {},
+  }));
+  other.send(config);
+  await other.wait(1);
+  other.send({ id: "mode", method: "setMode", params: { modeId: "plan" } });
+  other.send({ id: "snapshot", method: "snapshot", params: {} });
+  await other.wait(3);
+  assert.deepEqual(other.frames.find((frame) => frame.id === "mode").error, { code: "failed", message: "Failed." });
+  assert.deepEqual(Object.keys(other.frames.find((frame) => frame.id === "snapshot").error).sort(), ["code", "message"]);
+  other.input.end();
+});

@@ -1,0 +1,116 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PiUI ACP agent descriptor v1",
+  "description": "One Agent Client Protocol agent that PiUI starts without code in core (ADR-034). The host validates the same rules in crates/piui-runtime/src/acp.rs and adds semantic checks (regular expression, version range order, case-insensitive duplicate names). A descriptor carries names only: never credentials, environment values, shell strings or scripts.",
+  "type": "object",
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": {
+      "description": "Lowercase slug; the harness identity is acp:<id>.",
+      "type": "string",
+      "pattern": "^(?!.*--)[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$"
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^\\S(?:[^\\u0000-\\u001f\\u007f]*\\S)?$"
+    },
+    "command": {
+      "type": "object",
+      "properties": {
+        "program": {
+          "description": "A file name searched on PATH (Windows tries .exe, then npm/pnpm .cmd shims) or an absolute path. Never a shell string.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 260,
+          "pattern": "^(?:[A-Za-z0-9._+-]+|/[^\\u0000-\\u001f\\u007f\"'`]*|[A-Za-z]:[\\\\/][^\\u0000-\\u001f\\u007f\"'`]*|\\\\\\\\[^\\u0000-\\u001f\\u007f\"'`]+)$"
+        },
+        "args": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/definitions/argument" }
+        }
+      },
+      "required": ["program"],
+      "additionalProperties": false
+    },
+    "version": {
+      "type": "object",
+      "properties": {
+        "args": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/definitions/argument" }
+        },
+        "pattern": {
+          "description": "Regular expression; its first group (or the whole match) is the version.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "verified": {
+          "description": "Versions tested with PiUI: minimum <= version < ceiling.",
+          "type": "object",
+          "properties": {
+            "minimum": { "$ref": "#/definitions/coreVersion" },
+            "ceiling": { "$ref": "#/definitions/coreVersion" }
+          },
+          "required": ["minimum", "ceiling"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["args"],
+      "additionalProperties": false
+    },
+    "environment": {
+      "description": "Variable names passed through from the user's environment. Secret-like names (KEY, TOKEN, SECRET, ...) pass only after an explicit confirmation.",
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "maxLength": 128,
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+        "not": { "pattern": "^(?:[Pp][Ii][Uu][Ii]_.*|NODE_OPTIONS|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_INSERT_LIBRARIES|DYLD_LIBRARY_PATH)$" }
+      }
+    },
+    "authHint": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 400,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "docsUrl": {
+      "type": "string",
+      "maxLength": 300,
+      "pattern": "^https://[^\\s]+$"
+    },
+    "capabilities": {
+      "description": "Restrictions only: switch an advertised agent feature off.",
+      "type": "object",
+      "properties": {
+        "loadSession": { "const": false },
+        "models": { "const": false },
+        "modes": { "const": false },
+        "mcpHttp": { "const": false }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["schemaVersion", "id", "displayName", "command", "version"],
+  "additionalProperties": false,
+  "definitions": {
+    "argument": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "coreVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    }
+  }
+}

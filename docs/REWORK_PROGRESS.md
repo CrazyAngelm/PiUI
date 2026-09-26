@@ -134,6 +134,20 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
     `5a07a69` timestamp contrast, palette search label and matching, named
     canvas nodes and connections.
 
+- `7db21ac`, `ad53173`, `f3aac6b`, `915a650`, `e972703`, `3afc50a` (branch
+  `feat/acp-registry`, ADR-034) — ACP agents and Settings → Harnesses: harness
+  identity `acp:<descriptor id>` (additive in workspace v15, orchestration
+  v6.3, system files v4); versioned ACP descriptors with a shipped Gemini CLI
+  descriptor; no-shell resolution (PATH, npm/pnpm shims), contained version
+  probes and tested ranges; generic ACP v1 bridge (`bridge/acp.mjs`: streaming,
+  permissions, cancel, modes/models, sign-in hint, resume, generic fallback);
+  host registry with trust of the exact command line, version and secret-name
+  confirmations (`harness_registry_v1`, `workspace_session_mode_v1`);
+  Settings → Harnesses for every harness (status, location, version vs tested
+  range, sign-in guidance, check again, add/trust/remove ACP agents) and agent
+  modes in chat details; UI Lab fakes (ready Gemini, missing and untrusted
+  descriptors). No real ACP model turn was run.
+
 ## In progress
 
 - Nothing; next steps wait for the owner's review of the remaining-work plan.
@@ -182,6 +196,13 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   unit tests and fakes only; the native tray, the real `Run` registration and
   Linux/macOS paths still need a manual check. The UI Lab never fires "files
   changed" rules (no project folders) and fires no timed schedules.
+
+- ACP agents (ADR-034): Gemini CLI has no tested version range yet, so every
+  version needs the user's confirmation; the bridge is verified only against
+  the fake agent fixture. Coordinated (managed) runs need an agent with HTTP
+  MCP support. Pickers learn an agent's models only after one of its sessions
+  started in this host process. Mode changes the agent makes by itself appear
+  on the next snapshot. A crash mid-turn is recorded as uncertain.
 
 ## Next
 

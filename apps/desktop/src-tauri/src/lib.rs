@@ -6,6 +6,7 @@
 //! host adapter; the WebView receives neither a general shell/filesystem API
 //! nor credentials, raw process handles, or raw Pi RPC frames.
 
+mod acp_agents;
 mod agent_api;
 mod api;
 mod automation_paths;
@@ -14,6 +15,7 @@ mod catalog_watch;
 mod contributions;
 mod dto;
 mod harness_configuration;
+mod harness_registry_api;
 mod orchestration_api;
 mod orchestration_schedule;
 mod orchestration_scheduler;
@@ -777,6 +779,7 @@ pub fn run() -> Result<(), tauri::Error> {
             if !safe_mode {
                 orchestration_scheduler.start_timed_schedule_worker(app.handle().clone());
                 trigger_engine.start(app.handle().clone());
+                harness_registry_api::start_background_discovery(app.handle().clone());
             }
             if let Some(server) = agent_server {
                 server.start(app.handle().clone());
@@ -790,6 +793,8 @@ pub fn run() -> Result<(), tauri::Error> {
             workspace_api::composer::workspace_composer_v19,
             workspace_api::workspace_lifecycle_v17,
             workspace_api::harness_models_v18,
+            workspace_api::workspace_session_mode_v1,
+            harness_registry_api::harness_registry_v1,
             api::bootstrap,
             api::bootstrap_v10,
             api::update_preferences,

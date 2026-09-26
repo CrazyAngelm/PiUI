@@ -1,5 +1,6 @@
 import type { HostTransport } from '../transport';
 import { backgroundHandlers } from './backgroundFake';
+import { acpHandlers } from './acpFake';
 import { classicHandlers } from './classicFake';
 import { composerHandlers } from './composerFake';
 import { demoExtensions, extensionHandlers } from './extensionsFake';
@@ -115,6 +116,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     ...piHistoryHandlers(runtime, seed.nativeHistory ?? EMPTY_NATIVE_HISTORY, bus),
     ...extensionHandlers(scenario === 'empty' ? [] : demoExtensions()),
     ...backgroundHandlers(state),
+    ...acpHandlers(runtime, bus),
   };
   startActivity(seed.activity, runtime, scheduler, options.ambient ?? true);
 

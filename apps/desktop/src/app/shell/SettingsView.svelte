@@ -4,7 +4,6 @@
   import FolderCog from '@lucide/svelte/icons/folder-cog';
   import Keyboard from '@lucide/svelte/icons/keyboard';
   import Info from '@lucide/svelte/icons/info';
-  import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import ShieldCheck from '@lucide/svelte/icons/shield-check';
   import ShieldAlert from '@lucide/svelte/icons/shield-alert';
   import Plus from '@lucide/svelte/icons/plus';
@@ -16,9 +15,9 @@
   import type { WorkspaceSummary } from '../../../../../contracts/workspace-v15';
   import { Badge, Button, Kbd, Segmented } from '../../lib/ui';
   import type { SettingsSection } from '../workspaceStore.svelte';
-  import HarnessMark from './HarnessMark.svelte';
   import ExtensionsSettings from '../settings/ExtensionsSettings.svelte';
   import ClassicViewEntry from '../settings/ClassicViewEntry.svelte';
+  import HarnessesSettings from '../settings/HarnessesSettings.svelte';
   import { useWorkspace } from './context';
 
   interface Props {
@@ -149,36 +148,7 @@
         </div>
       </div>
     {:else if section === 'harnesses'}
-      <div class="title-row">
-        <h2>{$t('Harnesses')}</h2>
-        <Button size="sm" onclick={() => void store.loadCatalog()}>
-          {#snippet leading()}<RefreshCw />{/snippet}
-          {$t('Check again')}
-        </Button>
-      </div>
-      <p class="lead">{$t('PiUI drives the agent tools installed on this computer. Each harness keeps its own sign-in, models and history.')}</p>
-      <div class="cards">
-        {#each store.catalog.harnesses as harness (harness.kind)}
-          <article class="card">
-            <HarnessMark kind={harness.kind} size={28} />
-            <div class="card__main">
-              <div class="card__title">
-                <strong>{harness.name}</strong>
-                {#if harness.version}<span class="muted">v{harness.version}</span>{/if}
-                {#if harness.status === 'available'}
-                  <Badge tone="success">{$t('Ready')}</Badge>
-                {:else if harness.status === 'unverified'}
-                  <Badge tone="warning">{$t('Needs setup')}</Badge>
-                {:else}
-                  <Badge>{$t('Not found')}</Badge>
-                {/if}
-              </div>
-              {#if harness.reason}<p class="muted">{$t(harness.reason)}</p>{/if}
-            </div>
-          </article>
-        {/each}
-      </div>
-      <p class="muted small">{$t('Sign in inside each harness (for example in its terminal app). PiUI never reads or stores credentials.')}</p>
+      <HarnessesSettings />
     {:else if section === 'extensions'}
       <ExtensionsSettings safeMode={store.safeMode} />
     {:else if section === 'projects'}
@@ -344,9 +314,6 @@
     flex-wrap: wrap;
     align-items: center;
     gap: var(--piui-space-2);
-  }
-  .card p {
-    margin: 4px 0 0;
   }
   .card :global(.ok) {
     color: var(--piui-success);

@@ -27,7 +27,7 @@
   import NodeInspector from './NodeInspector.svelte';
   import StartInspector from './StartInspector.svelte';
   import { profileForHarness } from '../../harness-adapters/normalize';
-  import { harnessConfigurations } from '../../harness-adapters';
+  import { harnessConfiguration } from '../../harness-adapters';
   import RunInputsDialog from './inputs/RunInputsDialog.svelte';
   import { START_NODE_ID } from './canvas/StartNodeCard.svelte';
   import { PipelineEditorStore } from './editorStore.svelte';
@@ -82,10 +82,10 @@
   );
   /** A model call needs a harness that can run one read-only turn without tools. */
   const oneShotHarness = $derived<AgentProfile['harness']>(
-    harnessConfigurations[defaultHarness].oneShot
+    harnessConfiguration(defaultHarness).oneShot
       ? defaultHarness
       : ((workspace.catalog.harnesses.find(
-          (item) => item.status === 'available' && harnessConfigurations[item.kind as AgentProfile['harness']]?.oneShot,
+          (item) => item.status === 'available' && harnessConfiguration(item.kind).oneShot,
         )?.kind as AgentProfile['harness'] | undefined) ?? 'codex'),
   );
   const systemItems = $derived<PickerItem[]>(editor.systems.map((item) => ({ value: item.id, label: item.name || $t('Untitled pipeline') })));

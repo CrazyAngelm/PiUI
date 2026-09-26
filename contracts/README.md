@@ -134,3 +134,37 @@ instead of becoming uncertain. A step spawned by an agent returns to ready and
 its caller receives the same code. Commands keep their established
 `runtime-unavailable` error code. A cached signed-out verdict is not a
 capability: running the step again after signing in starts it normally.
+
+# ACP agent descriptors (v1)
+
+`acp-agent-descriptor-v1.schema.json` describes one Agent Client Protocol agent
+(ADR-034): `id`, `displayName`, `command` (`program` on PATH or absolute, fixed
+`args`; never a shell string), `version` (`args`, optional `pattern`, optional
+`verified` range `minimum <= v < ceiling`), `environment` (names passed through
+from the user's environment; values are never stored), `authHint`, `docsUrl`
+and `capabilities` (restrictions only). Unknown fields are rejected, never
+dropped. The host validator (`crates/piui-runtime/src/acp.rs`) and the TS
+contract test share `fixtures/acp-descriptors`: `valid-*` pass both,
+`invalid-*` fail both and `invalid-semantic-*` have a valid shape that only
+the host rules reject. `valid-builtin-gemini-cli.json` is the shipped Gemini
+CLI descriptor, the exact JSON value the host serializes.
+
+`harness-registry-v1.ts` is the Settings → Harnesses protocol (command
+`harness_registry_v1`, event `piui://harness-registry-v1`): harness readiness,
+detected location, version and verified range for built-in adapters and ACP
+agents, plus add / trust (the exact command line) / confirm version / allow
+secret-like environment names / remove for ACP descriptors, each with an
+`expectedRevision`. Listing never runs an agent; checks and changes are refused
+in safe mode. `fixtures/harness-registry-v1.{json,ts}` is the shared golden
+fixture. `workspace-session-mode-v1.ts` adds `workspace_session_mode_v1` and the
+optional v15 `SessionSnapshot.modes` field for agent-advertised session modes;
+no other workspace shape changed.
+
+`harness-identity-v2.ts` versions the identity grammar itself (ADR-034): v1 was
+the closed built-in set; v2 keeps every v1 value and adds `acp:<descriptor id>`
+(a lowercase slug of 1-32 letters, digits and inner hyphens) for Agent Client
+Protocol agents from the host descriptor registry. Workspace v15 `HarnessKind`,
+orchestration v6 `Harness` (v6.3, additive) and portable system files v4 accept
+v2 additively with the same compatibility rules as `claude-code`; v1-v3 system
+files stay closed. Stored workspace registries and orchestration definitions
+decode unchanged (`piui_contracts::harness_identity`, Rust and TS tests).

@@ -246,3 +246,42 @@ describe('step executors in system files (v4, orchestration v6.2)', () => {
     expect(reopened.agents[0]!.executor).toEqual({ type: 'agent' });
   });
 });
+
+describe('ACP agents in system files (harness identity v2, orchestration v6.3)', () => {
+  const acpReview = () => JSON.parse(readFileSync(new URL('../../../../../examples/systems/codex-gemini-acp-review.piui.json', import.meta.url), 'utf8'));
+  it('round-trips an ACP profile with the native permission and agent default model', () => {
+    const file = acpReview();
+    const graph = systemFileToGraph(parseSystemFile(JSON.stringify(file)));
+    expect(graph.nodes.map((node) => node.profile.harness)).toEqual(['codex', 'acp:gemini-cli', 'pi']);
+    const reopened = parseSystemFile(serializeSystemFile(graph));
+    expect(reopened.version).toBe(4);
+    expect(reopened.agents[1]!.profile).toMatchObject({ harness: 'acp:gemini-cli', model: 'default', permissionMode: 'native' });
+    expect(compileGraph(systemFileToGraph(reopened)).pipeline.steps.map((step) => step.dependencyStepIds.length)).toEqual([0, 1, 1]);
+  });
+  it('keeps v1-v3 closed to ACP identities', () => {
+    const file = acpReview();
+    for (const version of [1, 2, 3]) {
+      expect(() => parseSystemFile(JSON.stringify({ ...file, version })), `v${version}`).toThrow();
+    }
+  });
+  it.each([
+    ['an invalid descriptor id', { harness: 'acp:Gemini' }, /harness/],
+    ['an empty descriptor id', { harness: 'acp:' }, /harness/],
+    ['a bare descriptor id', { harness: 'gemini-cli' }, /harness/],
+    ['a read-only preset', { permissionMode: 'read-only' }, /unsupported file permissions/],
+    ['a speed setting', { serviceTier: 'standard' }, /speed is not supported/],
+    ['network access', { networkAccess: true }, /network access/],
+    ['a base prompt', { baseInstructions: '' }, /base prompt/],
+    ['resource rules', { resourceRules: [{ kind: 'mcp', id: 'docs', enabled: false }] }, /resource kind/],
+    ['a native tool rule', { toolPolicy: { rules: [{ tool: 'shell', decision: 'deny', enforcement: 'native', mandatory: true }] } }, /unknown native tool/],
+  ])('rejects %s without dropping it', (_case, patch, message) => {
+    const file = acpReview();
+    Object.assign(file.agents[1].profile, patch);
+    expect(() => parseSystemFile(JSON.stringify(file))).toThrow(message);
+  });
+  it('refuses a single model call on an ACP agent', () => {
+    const file = acpReview();
+    file.agents[1].executor = { type: 'llm' };
+    expect(() => parseSystemFile(JSON.stringify(file))).toThrow(/cannot run a single model call read-only/);
+  });
+});

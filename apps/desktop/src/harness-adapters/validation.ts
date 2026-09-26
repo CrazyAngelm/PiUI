@@ -1,6 +1,6 @@
 import type { AgentProfile, StepExecutor } from '../../../../contracts/orchestration-v6';
 import { CLAUDE_CODE_EFFORT_LEVELS } from './claude-code';
-import { harnessConfigurations } from './index';
+import { harnessConfiguration } from './index';
 
 /** Claude Code asks before running these; read-only and workspace-write can only deny. */
 const CLAUDE_PROMPTED_COMMAND_TOOLS = ['Bash', 'PowerShell'];
@@ -9,7 +9,7 @@ const CLAUDE_FILE_WRITE_TOOLS = ['Edit', 'Write', 'NotebookEdit'];
 /** Static file checks only. The native host remains authoritative at launch. */
 export function profileConfigurationErrors(id: string, profile: Omit<AgentProfile, 'id' | 'allowedSpawnProfileIds'>): string[] {
   const errors: string[] = [];
-    const configuration = harnessConfigurations[profile.harness];
+    const configuration = harnessConfiguration(profile.harness);
     if (!configuration.permissionModes.includes(profile.permissionMode)) errors.push(`${id}: unsupported file permissions.`);
     if (profile.serviceTier !== undefined && !configuration.speed) errors.push(`${id}: speed is not supported.`);
     if (profile.baseInstructions !== undefined && !configuration.basePrompt) errors.push(`${id}: base prompt replacement is not supported.`);
@@ -53,7 +53,7 @@ export function executorConfigurationErrors(
   profile: Pick<AgentProfile, 'harness'>,
 ): string[] {
   if (executor?.type !== 'llm') return [];
-  const configuration = harnessConfigurations[profile.harness];
+  const configuration = harnessConfiguration(profile.harness);
   return configuration.oneShot && configuration.permissionModes.includes('read-only')
     ? []
     : [`${id}: ${configuration.name} cannot run a single model call read-only.`];

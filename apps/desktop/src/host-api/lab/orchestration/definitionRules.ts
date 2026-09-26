@@ -3,6 +3,7 @@ import type {
   ResultField, RouterPredicate, RunDefinitionSnapshot, TeamDefinition,
 } from '../labContracts';
 import type { LabOrchestrationWorkspace } from '../labState';
+import { isAcpHarness, isBuiltinHarness, type BuiltinHarness } from '../../../../../../contracts/harness-identity-v2';
 import { pipelineInputIssues, reviewLimitValid } from '../../runInputs';
 import { executorAuthorityIssue, isScriptStep, LLM_READ_ONLY_UNSUPPORTED, llmProfileIssue, stepExecutorIssue } from '../../stepExecutors';
 
@@ -226,7 +227,7 @@ export function launchCommandValid(command: LaunchCommandReference, workspace: L
     && workspace.pipelines.some((pipeline) => pipeline.value.id === command.pipelineId);
 }
 
-const NATIVE_TOOLS: Readonly<Record<AgentProfile['harness'], readonly string[]>> = {
+const NATIVE_TOOLS: Readonly<Record<BuiltinHarness, readonly string[]>> = {
   pi: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'],
   'prime-agent': ['ipython', 'workspace'],
   codex: [],
@@ -238,13 +239,22 @@ const NATIVE_TOOLS: Readonly<Record<AgentProfile['harness'], readonly string[]>>
   ],
 };
 
-const PERMISSION_MODES: Readonly<Record<AgentProfile['harness'], readonly AgentProfile['permissionMode'][]>> = {
+const PERMISSION_MODES: Readonly<Record<BuiltinHarness, readonly AgentProfile['permissionMode'][]>> = {
   pi: ['native', 'read-only', 'full-access'],
   'prime-agent': ['native'],
   codex: ['native', 'read-only', 'workspace-write', 'full-access'],
   hermes: ['native'],
   'claude-code': ['native', 'read-only', 'workspace-write', 'full-access'],
 };
+
+/** An ACP agent restricts no tool and keeps its own (native) permissions. */
+function nativeTools(harness: AgentProfile['harness']): readonly string[] {
+  return isBuiltinHarness(harness) ? NATIVE_TOOLS[harness] : [];
+}
+
+function permissionModes(harness: AgentProfile['harness']): readonly AgentProfile['permissionMode'][] {
+  return isBuiltinHarness(harness) ? PERMISSION_MODES[harness] : ['native'];
+}
 
 const CLAUDE_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -260,6 +270,8 @@ const MCP_NAME = /^[A-Za-z0-9_-]+$/;
 
 function resourceRuleUnsupported(profile: AgentProfile, rule: NonNullable<AgentProfile['resourceRules']>[number]): boolean {
   if (blank(rule.id)) return true;
+  // ACP exposes no per-session skill or MCP overrides.
+  if (isAcpHarness(profile.harness)) return true;
   switch (profile.harness) {
     case 'pi':
     case 'hermes':
@@ -291,13 +303,13 @@ export function launchPolicyIssue(profile: AgentProfile, summary: HarnessSummary
     || (profile.permissionMode !== 'read-only' && profile.permissionMode !== 'workspace-write'));
   const claude = profile.harness === 'claude-code';
   const unsupported = (profile.baseInstructions !== undefined && profile.harness !== 'codex')
-    || (profile.serviceTier !== undefined && (profile.harness === 'pi' || profile.harness === 'hermes' || claude))
+    || (profile.serviceTier !== undefined && (profile.harness === 'pi' || profile.harness === 'hermes' || claude || isAcpHarness(profile.harness)))
     || (claude && profile.reasoning !== undefined && !CLAUDE_EFFORT_LEVELS.includes(profile.reasoning))
     || (claude && profile.modelProvider !== undefined && profile.modelProvider !== 'anthropic')
     || networkUnsupported
     || (profile.resourceRules ?? []).some((rule) => resourceRuleUnsupported(profile, rule))
-    || !PERMISSION_MODES[profile.harness].includes(profile.permissionMode)
-    || profile.toolPolicy.rules.some((rule) => rule.enforcement === 'native' && !NATIVE_TOOLS[profile.harness].includes(rule.tool))
+    || !permissionModes(profile.harness).includes(profile.permissionMode)
+    || profile.toolPolicy.rules.some((rule) => rule.enforcement === 'native' && !nativeTools(profile.harness).includes(rule.tool))
     || (claude && profile.toolPolicy.rules.some((rule) => rule.enforcement === 'native' && rule.decision === 'allow'
       && claudeAllowUnsatisfiable(profile, rule.tool)));
   return unsupported ? 'unsupported-policy' : undefined;
@@ -311,7 +323,7 @@ export function oneShotPolicyIssue(
   profile: AgentProfile,
   summary: HarnessSummary | undefined,
 ): OrchestrationHostErrorCode | typeof LLM_READ_ONLY_UNSUPPORTED | undefined {
-  if (!PERMISSION_MODES[profile.harness].includes('read-only')) return LLM_READ_ONLY_UNSUPPORTED;
+  if (!permissionModes(profile.harness).includes('read-only')) return LLM_READ_ONLY_UNSUPPORTED;
   if (llmProfileIssue(profile) !== undefined) return 'unsupported-policy';
   return launchPolicyIssue(profile, summary);
 }

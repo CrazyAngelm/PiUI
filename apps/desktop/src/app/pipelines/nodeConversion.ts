@@ -10,7 +10,8 @@
  * harness and model). One conversion is one undo step in the editor.
  */
 import type { AgentProfile } from '../../host-api/orchestrationClient';
-import { harnessConfigurations } from '../../harness-adapters';
+import { harnessConfiguration, harnessConfigurations } from '../../harness-adapters';
+import { isBuiltinHarness } from '../../../../../contracts/harness-identity-v2';
 import { profileForHarness } from '../../harness-adapters/normalize';
 import {
   newGraphNode,
@@ -71,9 +72,9 @@ export interface ConversionPlan {
 export function conversionContext(harnesses: readonly { readonly kind: string; readonly status: string }[]): ConversionContext {
   const available = harnesses.filter((item) => item.status === 'available' && item.kind in harnessConfigurations).map((item) => item.kind as Harness);
   const agentHarness = available[0] ?? 'codex';
-  const modelCallHarness = harnessConfigurations[agentHarness].oneShot
+  const modelCallHarness = harnessConfiguration(agentHarness).oneShot
     ? agentHarness
-    : (available.find((kind) => harnessConfigurations[kind].oneShot !== undefined) ?? 'codex');
+    : (available.find((kind) => harnessConfiguration(kind).oneShot !== undefined) ?? 'codex');
   return { agentHarness, modelCallHarness };
 }
 
@@ -97,11 +98,12 @@ function nodeName(graph: AgentGraph, id: string): string {
 
 /** The harness a model call needs: its own when it can answer read-only, otherwise the context's. */
 function modelCallHarnessFor(node: GraphNode, context: ConversionContext): Harness {
-  return harnessConfigurations[node.profile.harness]?.oneShot ? node.profile.harness : context.modelCallHarness;
+  return harnessConfiguration(node.profile.harness).oneShot ? node.profile.harness : context.modelCallHarness;
 }
 
 function harnessName(harness: Harness): string {
-  return harnessConfigurations[harness]?.name ?? harnessMeta(harness).label;
+  // An ACP agent is named by its catalog entry, not by the generic ACP manifest.
+  return isBuiltinHarness(harness) ? harnessConfigurations[harness].name : harnessMeta(harness).label;
 }
 
 /**

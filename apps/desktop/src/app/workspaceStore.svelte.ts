@@ -13,6 +13,7 @@ import { composerRequest } from '../host-api/composerClient';
 import { runtimeSettings } from '../host-api/runtimeSettings';
 import { workspaceModel } from '../host-api/harnessModels';
 import { deleteWorkspaceSession } from '../host-api/workspaceLifecycle';
+import { harnessRegistryHost } from '../host-api/harnessRegistry';
 import {
   workspaceHost,
   WorkspaceOperationError,
@@ -37,6 +38,7 @@ import {
   resolveCloseAfterCatalog,
   sortedSessions,
 } from '../features/workspace/workspaceState';
+import { rememberHarnessNames } from './harnessMeta';
 
 export type PipelineSection = 'systems' | 'runs' | 'schedules' | 'agents' | 'teams' | 'pipelines';
 export type SettingsSection = 'general' | 'harnesses' | 'extensions' | 'projects' | 'background' | 'shortcuts' | 'about';
@@ -169,6 +171,7 @@ export class WorkspaceStore {
   private draftTimer: ReturnType<typeof setTimeout> | undefined;
   private unlisten: (() => void) | undefined;
   private stopSurfaces: (() => void) | undefined;
+  private unlistenRegistry: (() => void) | undefined;
   private disposed = false;
 
   // ---- derived views -------------------------------------------------------
@@ -231,6 +234,11 @@ export class WorkspaceStore {
     this.restoreUiState();
     void this.loadPreferences();
     void this.startExtensionSurfaces();
+    // ACP discovery and registry changes alter the catalog's harness rows (ADR-034).
+    void harnessRegistryHost.listen(() => void this.loadCatalog()).then((stop) => {
+      if (this.disposed) stop();
+      else this.unlistenRegistry = stop;
+    }, () => undefined);
     try {
       this.unlisten = await workspaceHost.listen((event) => this.enqueueEvent(event));
       if (this.disposed) {
@@ -255,6 +263,7 @@ export class WorkspaceStore {
     this.disposed = true;
     this.unlisten?.();
     this.stopSurfaces?.();
+    this.unlistenRegistry?.();
   }
 
   /** Extension notices, statuses and widgets of native sessions; loaded off the first-paint path. */
@@ -417,6 +426,7 @@ export class WorkspaceStore {
       if (this.disposed || request !== this.catalogRequest) return undefined;
       const next = protectClosedCatalogSessions(received, this.snapshots);
       next.sessions = next.sessions.filter((session) => !this.deleted.has(session.id));
+      rememberHarnessNames(next.harnesses);
       this.catalog = next;
       const candidate = preferredWorkspaceId ?? this.selectedWorkspaceId;
       const workspaceId = next.workspaces.some((workspace) => workspace.id === candidate)

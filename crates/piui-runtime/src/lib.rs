@@ -20,6 +20,7 @@
 
 pub use piui_contracts as contracts;
 
+pub mod acp;
 pub mod codec;
 mod extension_manager;
 pub mod extension_ui;

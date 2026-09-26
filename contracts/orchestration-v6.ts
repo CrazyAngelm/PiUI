@@ -11,13 +11,21 @@
  * `TaskRecord.output` for script results and `FailureRecord.detail`. Stored
  * v6.0/v6.1 data decodes unchanged and is re-encoded without the new fields.
  * v6.3 (additive) records what started a run in `OrchestrationRunV6.trigger`;
- * runs without one (started by a person in the editor) keep their shape.
+ * runs without one (started by a person in the editor) keep their shape. It
+ * also lets a profile name an ACP agent (`harness: 'acp:<id>'`).
  */
+
+import type { HarnessId } from './harness-identity-v2';
 
 export type OrchestrationId = string;
 export type Revision = number;
-/** `claude-code` is additive within v6 (ADR-028): earlier definitions are unchanged. */
-export type Harness = 'pi' | 'prime-agent' | 'codex' | 'hermes' | 'claude-code';
+/**
+ * `claude-code` and, from v6.3, `acp:<descriptor id>` (harness identity grammar
+ * v2) are additive within v6 (ADR-028, ADR-034): earlier definitions are
+ * unchanged. An ACP profile keeps `permissionMode: 'native'`; `model:
+ * 'default'` keeps the agent's own configured model.
+ */
+export type Harness = HarnessId;
 export type PermissionMode = 'native' | 'read-only' | 'workspace-write' | 'full-access';
 export type ToolDecision = 'allow' | 'deny';
 
