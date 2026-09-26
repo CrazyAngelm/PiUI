@@ -1773,6 +1773,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
                 dependency_step_ids: vec!["step-one".into()],
             },
         ],
+        inputs: Vec::new(),
     };
     let store_directory = app_data.join("orchestration-v6");
     fs::create_dir_all(&store_directory).unwrap();
@@ -1810,6 +1811,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
             team_id: "prime-team".into(),
             pipeline_id: "prime-pipeline".into(),
             launch_command_id: None,
+            inputs: Default::default(),
         })
         .unwrap();
     assert_eq!(run.status(), RunStatus::Running);
@@ -2182,6 +2184,7 @@ mod tests {
                         dependency_step_ids: vec!["build".into()],
                     },
                 ],
+                inputs: Vec::new(),
             },
             launch_command: None,
         }
