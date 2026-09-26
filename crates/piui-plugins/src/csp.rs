@@ -104,4 +104,17 @@ mod tests {
         assert_eq!(content_type("backend/main.exe"), None);
         assert_eq!(content_type("README"), None);
     }
+
+    /// Shared with `apps/desktop/src/host-api/pluginFrame.ts`.
+    #[test]
+    fn policy_matches_the_shared_fixture() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../contracts/fixtures/plugin-panel-csp.json"
+        ))
+        .expect("fixture");
+        let text = |key: &str| fixture[key].as_str().expect(key).to_owned();
+        let base = ui_base(&text("id"), &text("uiEntry"));
+        assert_eq!(base, text("base"));
+        assert_eq!(panel_policy(&text("origin"), &base), text("policy"));
+    }
 }

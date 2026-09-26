@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { PLUGIN_PERMISSIONS, PLUGIN_THEME_TOKENS } from '../../../../contracts/piui-plugin-v1';
+import { PLUGIN_PERMISSIONS, PLUGIN_THEME_TOKENS, type PluginFieldV1 } from '../../../../contracts/piui-plugin-v1';
 import validateSchema from '../../../../contracts/piui-plugin-v1-validator.mjs';
 import {
   checkPluginManifest,
@@ -59,12 +59,12 @@ describe('plugin manifest v1 fixtures (shared with crates/piui-plugins)', () => 
 });
 
 describe('plugin values, versions and colors', () => {
-  const fields = [
+  const fields: PluginFieldV1[] = [
     { key: 'greeting', label: 'Greeting', type: 'text', default: 'Hello', maxLength: 10 },
     { key: 'count', label: 'Count', type: 'number', minimum: 1, maximum: 10 },
     { key: 'name', label: 'Name', type: 'text', required: true },
     { key: 'tone', label: 'Tone', type: 'choice', options: [{ value: 'warm', label: 'Warm' }] },
-  ] as const;
+  ];
 
   it('resolves values like the host and refuses unknown keys', () => {
     expect(resolvePluginValues(fields, { name: 'Ada' })).toEqual({ ok: true, values: { greeting: 'Hello', name: 'Ada' } });

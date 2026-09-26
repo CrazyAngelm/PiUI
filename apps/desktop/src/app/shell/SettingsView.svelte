@@ -18,6 +18,9 @@
   import ExtensionsSettings from '../settings/ExtensionsSettings.svelte';
   import ClassicViewEntry from '../settings/ClassicViewEntry.svelte';
   import HarnessesSettings from '../settings/HarnessesSettings.svelte';
+  import Blocks from '@lucide/svelte/icons/blocks';
+  import PluginsSettings from '../plugins/PluginsSettings.svelte';
+  import PluginThemeRow from '../plugins/PluginThemeRow.svelte';
   import { useWorkspace } from './context';
 
   interface Props {
@@ -31,6 +34,7 @@
     { id: 'general', label: 'General', icon: SlidersHorizontal },
     { id: 'harnesses', label: 'Harnesses', icon: Bot },
     { id: 'extensions', label: 'Extensions', icon: Puzzle },
+    { id: 'plugins', label: 'Plugins', icon: Blocks },
     { id: 'projects', label: 'Projects', icon: FolderCog },
     { id: 'background', label: 'Background', icon: Power },
     { id: 'shortcuts', label: 'Shortcuts', icon: Keyboard },
@@ -96,6 +100,7 @@
             onValueChange={(value) => update('theme', value)}
           />
         </div>
+        <PluginThemeRow />
         <div class="row">
           <div><strong>{$t('Density')}</strong><small>{$t('Compact fits more rows in lists and panels.')}</small></div>
           <Segmented
@@ -151,6 +156,8 @@
       <HarnessesSettings />
     {:else if section === 'extensions'}
       <ExtensionsSettings safeMode={store.safeMode} />
+    {:else if section === 'plugins'}
+      <PluginsSettings />
     {:else if section === 'projects'}
       <div class="title-row">
         <h2>{$t('Projects')}</h2>

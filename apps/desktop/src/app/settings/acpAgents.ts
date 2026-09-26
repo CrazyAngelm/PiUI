@@ -59,7 +59,8 @@ export function versionNote(agent: AcpAgentEntryV1): [string, string[]] | undefi
   }
 }
 
-export const canTrust = (agent: AcpAgentEntryV1): boolean => agent.source === 'user' && agent.state === 'untrusted' && agent.commandLine !== undefined;
+// A plugin's agent (ADR-032) is trusted like one you added: by its exact command line.
+export const canTrust = (agent: AcpAgentEntryV1): boolean => agent.source !== 'built-in' && agent.state === 'untrusted' && agent.commandLine !== undefined;
 export const canConfirmVersion = (agent: AcpAgentEntryV1): boolean => agent.state === 'unverified-version' && agent.version !== undefined;
 export const canChooseSecrets = (agent: AcpAgentEntryV1): boolean => agent.trusted && agent.secretEnvironment.length > 0;
 export const canRemove = (agent: AcpAgentEntryV1): boolean => agent.source === 'user';

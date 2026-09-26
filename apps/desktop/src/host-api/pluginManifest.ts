@@ -289,7 +289,7 @@ export const MANIFEST_MESSAGES = {
   acpDescriptor: 'ACP agent “{0}” is not a valid descriptor.',
 } as const;
 
-const PERMISSION_HINTS: Readonly<Partial<Record<PluginPermission, string>>> = {
+export const PERMISSION_HINTS: Readonly<Partial<Record<PluginPermission, string>>> = {
   commands: 'Add the permission “commands”.',
   'ui.panel': 'Add the permission “ui.panel”.',
   'ui.settings': 'Add the permission “ui.settings”.',

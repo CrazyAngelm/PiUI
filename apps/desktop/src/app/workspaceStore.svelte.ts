@@ -41,7 +41,7 @@ import {
 import { rememberHarnessNames } from './harnessMeta';
 
 export type PipelineSection = 'systems' | 'runs' | 'schedules' | 'agents' | 'teams' | 'pipelines';
-export type SettingsSection = 'general' | 'harnesses' | 'extensions' | 'projects' | 'background' | 'shortcuts' | 'about';
+export type SettingsSection = 'general' | 'harnesses' | 'extensions' | 'projects' | 'background' | 'shortcuts' | 'about' | 'plugins';
 
 export type Route =
   | { name: 'home' }
@@ -103,7 +103,7 @@ function writeJson(key: string, value: unknown): void {
 }
 
 const PIPELINE_SECTIONS: readonly PipelineSection[] = ['systems', 'runs', 'schedules', 'agents', 'teams', 'pipelines'];
-const SETTINGS_SECTIONS: readonly SettingsSection[] = ['general', 'harnesses', 'extensions', 'projects', 'background', 'shortcuts', 'about'];
+const SETTINGS_SECTIONS: readonly SettingsSection[] = ['general', 'harnesses', 'extensions', 'projects', 'background', 'shortcuts', 'about', 'plugins'];
 
 function isRoute(value: unknown): value is Route {
   if (typeof value !== 'object' || value === null || !('name' in value)) return false;

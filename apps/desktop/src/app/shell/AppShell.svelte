@@ -42,6 +42,8 @@
   onMount(() => {
     void store.start();
     lazyViews.prefetch();
+    // An active plugin theme applies after first paint; plugin code is its own chunk.
+    setTimeout(() => void import('../plugins/pluginTheme.svelte').then((module) => module.startPluginTheme()).catch(() => undefined), 800);
     const query = window.matchMedia('(max-width: 760px)');
     const update = () => (narrow = query.matches);
     update();

@@ -46,7 +46,7 @@
   <div class="card__main">
     <div class="card__title">
       <strong id={titleId}>{name}</strong>
-      <Badge>{agent.source === 'built-in' ? $t('Ships with PiUI') : $t('Added by you')}</Badge>
+      <Badge>{agent.source === 'built-in' ? $t('Ships with PiUI') : agent.source === 'plugin' ? $t('From plugin {0}', [agent.plugin?.name ?? '']) : $t('Added by you')}</Badge>
       {#if agent.version}<span class="muted">v{agent.version}</span>{/if}
       <Badge tone={badge.tone}>{$t(badge.label)}</Badge>
     </div>
