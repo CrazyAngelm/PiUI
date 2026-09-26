@@ -42,6 +42,22 @@ const scenarios = {
     { type: "auto_compaction_start", reason: "threshold" },
     { type: "agent_settled" },
   ],
+  surfaces: [
+    { type: "agent_start" },
+    { type: "extension_ui_request", id: "native-notify", method: "notify", message: "Deployed to /srv/app", notifyType: "warning" },
+    { type: "extension_ui_request", id: "native-status", method: "setStatus", statusKey: "build", statusText: "Building" },
+    { type: "extension_ui_request", id: "native-widget", method: "setWidget", widgetKey: "todo", widgetLines: ["a", "b"], widgetPlacement: "belowEditor", extra: secret },
+    { type: "extension_ui_request", id: "native-huge", method: "setWidget", widgetKey: "huge", widgetLines: Array.from({ length: 500 }, () => "x") },
+    { type: "extension_ui_request", id: "native-title", method: "setTitle", title: "PR 42" },
+    { type: "extension_ui_request", id: "native-editor-text", method: "set_editor_text", text: "/review" },
+    { type: "extension_ui_request", id: "native-editor", method: "editor", title: "Edit message", prefill: "feat: draft", timeout: 40 },
+    { type: "agent_settled" },
+  ],
+  unknownui: [
+    { type: "agent_start" },
+    { type: "extension_ui_request", id: "native-custom", method: "custom", payload: secret },
+    { type: "agent_settled" },
+  ],
   select: [
     { type: "agent_start" },
     { type: "extension_ui_request", id: "native-select-one", method: "select", title: "Allow dangerous command?", options: ["Allow", "Block", "Line one\nline two"], timeout: 10000 },

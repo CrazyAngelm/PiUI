@@ -47,6 +47,9 @@ use workspace_store::{PersistedSession, WorkspaceRegistry};
 
 pub const WORKSPACE_PROTOCOL: u8 = 15;
 pub const WORKSPACE_EVENT_NAME: &str = "piui://workspace-event";
+/// Additive, ephemeral extension UI surface channel (workspace-extension-ui-v1).
+pub const WORKSPACE_EXTENSION_UI_EVENT: &str = "piui://workspace-extension-ui";
+pub const WORKSPACE_EXTENSION_UI_PROTOCOL: u8 = 1;
 const NATIVE_SESSION_DIRECTORY: &str = "workspace-native-v11";
 /// Upper bound for one forwarded text delta built from already-queued deltas.
 const MAX_COALESCED_DELTA_BYTES: usize = 64 * 1024;
@@ -118,6 +121,12 @@ pub struct WorkspaceApproval {
     /// sending one option id as `respond.text`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<ApprovalOption>>,
+    /// Additive v15 field: initial answer text (a Pi `editor` dialog's prefill).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefill: Option<String>,
+    /// Additive v15 field: the harness resolves the request itself afterwards.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -224,6 +233,19 @@ pub struct WorkspaceEvent {
     pub revision: u64,
     pub event: WorkspaceEventPayload,
 }
+
+/// One projected fire-and-forget extension UI action of an opaque session.
+/// It is presentation state only: never persisted, replayed or counted in
+/// the v15 session revision.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceExtensionUiEvent {
+    pub protocol: u8,
+    pub session_id: String,
+    pub action: piui_runtime::ExtensionUiAction,
+}
+
+pub(crate) type ExtensionUiPublisher = Arc<dyn Fn(WorkspaceExtensionUiEvent) + Send + Sync>;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -791,6 +813,8 @@ struct WorkspaceHostInner {
     /// Sessions whose native runtime is starting outside the operation gate.
     starting: Mutex<HashMap<String, StartSlot>>,
     native_root: PathBuf,
+    /// Receives extension UI surface events; unset until the app is set up.
+    extension_ui: Mutex<Option<ExtensionUiPublisher>>,
     /// Test builds only: replaces native harness resolution with a test
     /// adapter that still runs the production bridge runner and transport.
     #[cfg(test)]
@@ -824,12 +848,21 @@ impl WorkspaceHost {
                 live: Mutex::new(HashMap::new()),
                 starting: Mutex::new(HashMap::new()),
                 native_root,
+                extension_ui: Mutex::new(None),
                 #[cfg(test)]
                 test_spawner: Mutex::new(None),
             }),
         };
         host.recover_queues()?;
         Ok(host)
+    }
+
+    /// Routes projected extension UI surface events of every session, e.g.
+    /// to the WebView. Without a publisher the events are dropped.
+    pub(crate) fn set_extension_ui_publisher(&self, publisher: ExtensionUiPublisher) {
+        if let Ok(mut slot) = self.inner.extension_ui.lock() {
+            *slot = Some(publisher);
+        }
     }
 
     async fn spawn_native(&self, config: NativeRuntimeConfig) -> NativeSpawnResult {
@@ -2841,6 +2874,12 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                     }
                     continue;
                 }
+                NativeEvent::ExtensionUi { request } => {
+                    // Projected here, before any value can leave the host; the
+                    // v15 session revision is untouched by presentation state.
+                    publish_extension_ui(&inner, &session_id, &request);
+                    continue;
+                }
                 NativeEvent::Error { message } => {
                     WorkspaceHost {
                         inner: inner.clone(),
@@ -2876,6 +2915,25 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
             }
         }
     })
+}
+
+fn publish_extension_ui(
+    inner: &WorkspaceHostInner,
+    session_id: &str,
+    request: &serde_json::Map<String, serde_json::Value>,
+) {
+    let publisher = inner
+        .extension_ui
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(Arc::clone));
+    if let Some(publisher) = publisher {
+        publisher(WorkspaceExtensionUiEvent {
+            protocol: WORKSPACE_EXTENSION_UI_PROTOCOL,
+            session_id: session_id.to_owned(),
+            action: piui_runtime::extension_ui::project_surface_request(request),
+        });
+    }
 }
 
 /// Appends the already-queued consecutive deltas of the same block, so a
@@ -3017,6 +3075,8 @@ fn workspace_approval(session_id: &str, approval: &NativeApproval) -> WorkspaceA
         decisions: approval.decisions.clone(),
         input_label: approval.input_label.clone(),
         options: approval.options.clone(),
+        prefill: approval.prefill.clone(),
+        timeout_ms: approval.timeout_ms,
     }
 }
 
@@ -3248,6 +3308,35 @@ fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, WorkspaceError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn editor_approvals_carry_additive_prefill_and_timeout_fields() {
+        let native: super::NativeApproval = serde_json::from_value(serde_json::json!({
+            "id": "pi-approval-1", "kind": "input", "title": "Edit message", "description": "Pi needs a response to continue.",
+            "decisions": ["approve-once", "cancel"], "inputLabel": "Response", "prefill": "feat: draft", "timeoutMs": 40,
+        }))
+        .expect("native approval with additive fields");
+        let approval =
+            serde_json::to_value(super::workspace_approval("session", &native)).expect("approval");
+        assert_eq!(approval["prefill"], "feat: draft");
+        assert_eq!(approval["timeoutMs"], 40);
+        // Absent fields stay absent, so older readers see the unchanged v15 shape.
+        let plain: super::NativeApproval = serde_json::from_value(serde_json::json!({
+            "id": "pi-approval-2", "kind": "permission", "title": "Allow?", "description": "Continue?",
+            "decisions": ["approve-once", "deny", "cancel"],
+        }))
+        .expect("plain native approval");
+        let plain =
+            serde_json::to_value(super::workspace_approval("session", &plain)).expect("approval");
+        assert!(plain.get("prefill").is_none() && plain.get("timeoutMs").is_none());
+        assert!(
+            serde_json::from_value::<super::NativeApproval>(serde_json::json!({
+                "id": "x", "kind": "input", "title": "t", "description": "d", "decisions": [], "prefillHtml": "<b>"
+            }))
+            .is_err(),
+            "unknown approval fields are still rejected"
+        );
+    }
+
     #[tokio::test]
     async fn artifacts_require_existing_project_files() {
         let root = std::env::temp_dir().join(format!("piui-artifacts-{}", uuid::Uuid::new_v4()));
@@ -4054,8 +4143,8 @@ mod native_host_tests {
     use super::{
         HarnessKind, NativeSpawnResult, PermissionMode, PromptMode, SessionSnapshot, SessionStatus,
         WorkspaceCommand, WorkspaceError, WorkspaceEvent, WorkspaceEventPayload,
-        WorkspaceEventPublisher, WorkspaceHost, WorkspaceLaunchRequest, WorkspaceResult,
-        coalesce_text_deltas, dispatch_workspace_command,
+        WorkspaceEventPublisher, WorkspaceExtensionUiEvent, WorkspaceHost, WorkspaceLaunchRequest,
+        WorkspaceResult, coalesce_text_deltas, dispatch_workspace_command,
     };
     use crate::state::HostState;
     use piui_index::TrustState;
@@ -4085,6 +4174,10 @@ mod native_host_tests {
             setStatus('running');
             const deltas = Number(/deltas:(\d+)/.exec(text)?.[1] ?? 0);
             const usage = Number(/usage:(\d+)/.exec(text)?.[1] ?? 0);
+            if (text.includes('surfaces')) {
+              emit({type:'extensionUi',request:{id:'rpc-status-1',method:'setStatus',statusKey:'build',statusText:'Building…'}});
+              emit({type:'extensionUi',request:{id:'rpc-custom-1',method:'custom'}});
+            }
             if (deltas > 0) emit({type:'block',block:{id:'answer',kind:'assistant',label:'Assistant',status:'streaming',text:''}});
             for (let i = 0; i < deltas; i += 1) emit({type:'textDelta',blockId:'answer',text:`${i},`});
             for (let i = 0; i < usage; i += 1) emit({type:'usage',usage:{id:`receipt-${i % 3}`,inputTokens:i,outputTokens:i * 2}});
@@ -4276,6 +4369,65 @@ mod native_host_tests {
                 .session
                 .status,
             SessionStatus::Idle
+        );
+        host.shutdown_all().await;
+        drop(host);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn extension_ui_surfaces_are_projected_outside_the_session_revision() {
+        let root = test_root("extension-surfaces");
+        let host = WorkspaceHost::open(&root.join("app-data")).expect("host");
+        test_adapter_spawner(&host);
+        let directory = project_directory(&root);
+        let surfaces = Arc::new(Mutex::new(Vec::<WorkspaceExtensionUiEvent>::new()));
+        {
+            let surfaces = Arc::clone(&surfaces);
+            host.set_extension_ui_publisher(Arc::new(move |event| {
+                surfaces.lock().expect("surfaces").push(event);
+            }));
+        }
+        let recorded = Arc::new(Mutex::new(Vec::<WorkspaceEvent>::new()));
+        let publisher: WorkspaceEventPublisher = {
+            let recorded = Arc::clone(&recorded);
+            Arc::new(move |event: WorkspaceEvent| recorded.lock().expect("events").push(event))
+        };
+        let snapshot = host
+            .launch_session(
+                &directory,
+                chat_request(&uuid::Uuid::new_v4().to_string(), "Surfaces"),
+                publisher,
+            )
+            .await
+            .expect("launch");
+        let session_id = snapshot.session.id;
+        run_turn(&host, &session_id, "surfaces").await;
+
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/fixtures/workspace-extension-ui-v1.json"
+        ))
+        .expect("surface fixture");
+        let surfaces = surfaces.lock().expect("surfaces").clone();
+        let serialized = surfaces
+            .iter()
+            .map(|event| serde_json::to_value(event).expect("surface event"))
+            .collect::<Vec<_>>();
+        assert_eq!(serialized.len(), 2);
+        for (event, case) in serialized
+            .iter()
+            .zip([&fixture["cases"][1], &fixture["cases"][6]])
+        {
+            assert_eq!(event["protocol"], 1);
+            assert_eq!(event["sessionId"], session_id.as_str());
+            assert_eq!(event["action"], case["event"]["action"]);
+        }
+        // Presentation state never consumes a v15 revision.
+        let recorded = recorded.lock().expect("events").clone();
+        assert!(
+            recorded
+                .windows(2)
+                .all(|pair| pair[1].revision == pair[0].revision + 1)
         );
         host.shutdown_all().await;
         drop(host);

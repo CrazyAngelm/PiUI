@@ -13,7 +13,7 @@ use piui_platform::{ProcessGroupId, UnixProcessGroup};
 #[cfg(windows)]
 use piui_platform::{ProcessId, SuspendedProcess, WindowsJob};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::future::Future;
@@ -395,6 +395,12 @@ pub struct NativeApproval {
     pub input_label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<ApprovalOption>>,
+    /// Initial answer text, e.g. a Pi `editor` dialog's prefill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefill: Option<String>,
+    /// The harness resolves the request itself after this many milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -510,6 +516,14 @@ pub enum NativeEvent {
     CoordinatorRequest {
         request_id: String,
         operation: CoordinatorOperation,
+    },
+    /// A fire-and-forget extension UI request (Pi `notify`, `setStatus`,
+    /// `setWidget`, `setTitle`, `set_editor_text`, or an unknown method).
+    /// The bridge forwards only known presentation fields; the host projects
+    /// it with [`crate::extension_ui::project_surface_request`] before any
+    /// value can reach a WebView.
+    ExtensionUi {
+        request: Map<String, Value>,
     },
     Error {
         message: String,

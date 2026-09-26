@@ -214,9 +214,45 @@ export async function createPiAdapter(config, emit) {
     value,
   }));
 
+  // Fire-and-forget extension UI expects no reply. Only known presentation
+  // fields are forwarded; the host bounds, sanitizes and projects them to an
+  // ephemeral surface event. Oversized values are dropped here so a frame
+  // stays small; the host then reports the request as unsupported.
+  const SURFACE_METHODS = new Set(["notify", "setStatus", "setWidget", "setTitle", "set_editor_text"]);
+  const SURFACE_TEXT_FIELDS = ["message", "notifyType", "statusKey", "statusText", "widgetKey", "widgetPlacement", "title", "text"];
+  const MAX_SURFACE_TEXT = 128 * 1024;
+  const MAX_SURFACE_LINES = 101;
+  const surfaceRequest = (frame) => {
+    const request = { method: typeof frame.method === "string" ? frame.method.slice(0, 64) : "unsupported" };
+    if (typeof frame.id === "string" && frame.id.length <= 256) request.id = frame.id;
+    if (!SURFACE_METHODS.has(request.method)) return request;
+    for (const field of SURFACE_TEXT_FIELDS) {
+      const value = frame[field];
+      if (value === null || (typeof value === "string" && value.length <= MAX_SURFACE_TEXT)) request[field] = value;
+    }
+    if (frame.widgetLines === null) request.widgetLines = null;
+    else if (Array.isArray(frame.widgetLines) && frame.widgetLines.length <= MAX_SURFACE_LINES
+      && frame.widgetLines.every((line) => typeof line === "string" && line.length <= MAX_SURFACE_TEXT)) {
+      request.widgetLines = frame.widgetLines;
+    }
+    return request;
+  };
+  // Pi resolves a timed dialog itself; its approval then retires here too.
+  const MAX_DIALOG_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+  const retireApproval = (id) => {
+    const item = approvals.get(id);
+    if (!item) return;
+    if (item.timer) clearTimeout(item.timer);
+    approvals.delete(id);
+    emit({ type: "approvalResolved", requestId: id });
+  };
+
   const handleExtensionRequest = (frame) => {
     if (!["select", "confirm", "input", "editor"].includes(frame.method) || typeof frame.id !== "string") {
-      if (typeof frame.id === "string") writeNative({ type: "extension_ui_response", id: frame.id, cancelled: true });
+      const known = SURFACE_METHODS.has(frame.method);
+      // Unknown methods may wait for an answer; cancel them so the extension continues.
+      if (!known && typeof frame.id === "string") writeNative({ type: "extension_ui_response", id: frame.id, cancelled: true });
+      emit({ type: "extensionUi", request: surfaceRequest(frame) });
       return;
     }
     const id = `pi-approval-${++blockSequence}`;
@@ -231,6 +267,9 @@ export async function createPiAdapter(config, emit) {
     let decisions = ["approve-once", "cancel"];
     if (frame.method === "confirm") decisions = ["approve-once", "deny", "cancel"];
     else if (choices?.length === 0) decisions = ["cancel"];
+    const timeoutMs = Number.isSafeInteger(frame.timeout) && frame.timeout > 0 && frame.timeout <= MAX_DIALOG_TIMEOUT_MS
+      ? frame.timeout
+      : undefined;
     const approval = {
       id,
       kind: frame.method === "confirm" ? "permission" : "input",
@@ -239,8 +278,17 @@ export async function createPiAdapter(config, emit) {
       decisions,
       ...(frame.method === "input" || frame.method === "editor" ? { inputLabel: frame.placeholder ?? "Response" } : {}),
       ...(choices ? { options: choices.map((choice) => ({ id: choice.id, label: choice.label })) } : {}),
+      ...(frame.method === "editor" && typeof frame.prefill === "string" && frame.prefill.length <= MAX_SURFACE_TEXT
+        ? { prefill: frame.prefill }
+        : {}),
+      ...(timeoutMs ? { timeoutMs } : {}),
     };
-    approvals.set(id, { nativeId: frame.id, method: frame.method, approval, choices });
+    const item = { nativeId: frame.id, method: frame.method, approval, choices };
+    if (timeoutMs) {
+      item.timer = setTimeout(() => retireApproval(id), timeoutMs);
+      item.timer.unref?.();
+    }
+    approvals.set(id, item);
     emit({ type: "approval", approval });
   };
 
@@ -450,6 +498,7 @@ export async function createPiAdapter(config, emit) {
 
   const cancelApprovals = () => {
     for (const [requestId, item] of approvals) {
+      if (item.timer) clearTimeout(item.timer);
       try { writeNative({ type: "extension_ui_response", id: item.nativeId, cancelled: true }); } catch {}
       approvals.delete(requestId);
       emit({ type: "approvalResolved", requestId });
@@ -534,6 +583,7 @@ export async function createPiAdapter(config, emit) {
       const item = approvals.get(requestId);
       if (!item || !item.approval.decisions.includes(decision)) throw fail("stale-approval", "The approval request is invalid or no longer pending.");
       const response = extensionResponse(item, decision, text);
+      if (item.timer) clearTimeout(item.timer);
       approvals.delete(requestId);
       writeNative(response);
       emit({ type: "approvalResolved", requestId });
