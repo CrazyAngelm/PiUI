@@ -19,6 +19,24 @@ describe('workspace v11 cross-language fixture', () => {
   });
 });
 
+it('accepts Claude Code as an additive v15 harness value without changing the catalog shape', async () => {
+  const { createWorkspaceClient } = await import('./workspaceClient');
+  const kind: import('../../../../contracts/workspace-v15').HarnessKind = 'claude-code';
+  const catalog: import('../../../../contracts/workspace-v15').WorkspaceCatalog = {
+    ...workspaceFixture.catalog,
+    harnesses: [...workspaceFixture.catalog.harnesses, {
+      kind, name: 'Claude Code', installed: true, version: '2.1.232', status: 'available',
+      reason: 'Sign in to Claude Code with your Claude subscription: run `claude` in a terminal and use /login.',
+    }],
+  };
+  const client = createWorkspaceClient(async () => ({ type: 'catalog', catalog }), async () => () => undefined);
+  expect((await client.catalog()).harnesses.map((harness) => harness.kind)).toEqual(['codex', 'claude-code']);
+  const command: import('../../../../contracts/workspace-v15').WorkspaceCommand = {
+    type: 'createSession', workspaceId: 'workspace', harness: kind, permissionMode: 'read-only',
+  };
+  expect(Object.keys(command).sort()).toEqual(['harness', 'permissionMode', 'type', 'workspaceId']);
+});
+
 it('keeps the explicit history read independently versioned without changing workspace v15', async () => {
   const { default: fixture } = await import('../../../../contracts/fixtures/workspace-history-v1.json');
   const request: import('../../../../contracts/workspace-history-v1').WorkspaceHistoryRequestV1 = fixture.request;

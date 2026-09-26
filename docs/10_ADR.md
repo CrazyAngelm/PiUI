@@ -470,6 +470,14 @@ auth is not the first-party subscription login. Sign-in happens only in Claude
 Code's own flow; PiUI never reads, copies or stores credentials. Pipeline agents
 on Claude Code run under the same subscription.
 
+**Consequences (2026-09-26):** paid extra usage is never used either: fast mode
+is unsupported (refused before launch, pinned off per session with
+`CLAUDE_CODE_DISABLE_FAST_MODE=1` and an inline `--settings` layer) and a session
+that reports extra-usage billing is stopped. A refused login is the typed
+`SIGN_IN_REQUIRED` status with fixed guidance to run `claude` and `/login`. The
+host accepts Claude Code by version range (`>=2.1.0 <3.0.0`) and adds
+`claude-code` as an additive harness identity (ADR-028).
+
 ## ADR-030 — Pipeline document v5 (planned)
 
 **Decision:** the pipeline becomes a first-class stored document (nodes, edges,

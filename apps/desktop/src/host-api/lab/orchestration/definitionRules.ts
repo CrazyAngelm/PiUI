@@ -2,6 +2,7 @@ import type {
   AgentProfile, HarnessSummary, LaunchCommandReference, OrchestrationHostErrorCode, PipelineDefinition, PipelineStep,
   ResultField, RouterPredicate, RunDefinitionSnapshot, TeamDefinition,
 } from '../labContracts';
+import { CLAUDE_SIGN_IN_MESSAGE } from '../catalogFake';
 import type { LabOrchestrationWorkspace } from '../labState';
 import { pipelineInputIssues, reviewLimitValid } from '../../runInputs';
 
@@ -225,6 +226,11 @@ const NATIVE_TOOLS: Readonly<Record<AgentProfile['harness'], readonly string[]>>
   'prime-agent': ['ipython', 'workspace'],
   codex: [],
   hermes: [],
+  // `Agent` is never allowable: managed Claude Code runs delegate through the coordinator.
+  'claude-code': [
+    'AskUserQuestion', 'Bash', 'Edit', 'ExitPlanMode', 'Glob', 'Grep', 'NotebookEdit', 'PowerShell', 'Read', 'Skill',
+    'TaskOutput', 'TaskStop', 'TodoWrite', 'WebFetch', 'WebSearch', 'Write', 'workspace',
+  ],
 };
 
 const PERMISSION_MODES: Readonly<Record<AgentProfile['harness'], readonly AgentProfile['permissionMode'][]>> = {
@@ -232,7 +238,17 @@ const PERMISSION_MODES: Readonly<Record<AgentProfile['harness'], readonly AgentP
   'prime-agent': ['native'],
   codex: ['native', 'read-only', 'workspace-write', 'full-access'],
   hermes: ['native'],
+  'claude-code': ['native', 'read-only', 'workspace-write', 'full-access'],
 };
+
+const CLAUDE_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+/** Allow rules Claude Code's permission engine can never satisfy in the requested mode. */
+function claudeAllowUnsatisfiable(profile: AgentProfile, tool: string): boolean {
+  const strict = profile.permissionMode === 'read-only' || profile.permissionMode === 'workspace-write';
+  return (strict && ['Bash', 'PowerShell'].includes(tool))
+    || (profile.permissionMode === 'read-only' && ['Edit', 'Write', 'NotebookEdit'].includes(tool));
+}
 
 const ABSOLUTE_PATH = /^(?:\/|[A-Za-z]:[\\/]|\\\\)/;
 const MCP_NAME = /^[A-Za-z0-9_-]+$/;
@@ -242,6 +258,7 @@ function resourceRuleUnsupported(profile: AgentProfile, rule: NonNullable<AgentP
   switch (profile.harness) {
     case 'pi':
     case 'hermes':
+    case 'claude-code':
       return true;
     case 'prime-agent':
       return rule.kind !== 'skill';
@@ -257,14 +274,21 @@ function resourceRuleUnsupported(profile: AgentProfile, rule: NonNullable<AgentP
 /** `launch_policy`: adapter refusals recorded before any native process starts. */
 export function launchPolicyIssue(profile: AgentProfile, summary: HarnessSummary | undefined): OrchestrationHostErrorCode | undefined {
   if (summary?.status !== 'available') return 'runtime-unavailable';
+  // The host reports every Claude Code capability unsupported until a start verifies the subscription.
+  if (profile.harness === 'claude-code' && summary.reason === CLAUDE_SIGN_IN_MESSAGE) return 'runtime-unavailable';
   const networkUnsupported = profile.networkAccess === true && (profile.harness !== 'codex'
     || (profile.permissionMode !== 'read-only' && profile.permissionMode !== 'workspace-write'));
+  const claude = profile.harness === 'claude-code';
   const unsupported = (profile.baseInstructions !== undefined && profile.harness !== 'codex')
-    || (profile.serviceTier !== undefined && (profile.harness === 'pi' || profile.harness === 'hermes'))
+    || (profile.serviceTier !== undefined && (profile.harness === 'pi' || profile.harness === 'hermes' || claude))
+    || (claude && profile.reasoning !== undefined && !CLAUDE_EFFORT_LEVELS.includes(profile.reasoning))
+    || (claude && profile.modelProvider !== undefined && profile.modelProvider !== 'anthropic')
     || networkUnsupported
     || (profile.resourceRules ?? []).some((rule) => resourceRuleUnsupported(profile, rule))
     || !PERMISSION_MODES[profile.harness].includes(profile.permissionMode)
-    || profile.toolPolicy.rules.some((rule) => rule.enforcement === 'native' && !NATIVE_TOOLS[profile.harness].includes(rule.tool));
+    || profile.toolPolicy.rules.some((rule) => rule.enforcement === 'native' && !NATIVE_TOOLS[profile.harness].includes(rule.tool))
+    || (claude && profile.toolPolicy.rules.some((rule) => rule.enforcement === 'native' && rule.decision === 'allow'
+      && claudeAllowUnsatisfiable(profile, rule.tool)));
   return unsupported ? 'unsupported-policy' : undefined;
 }
 

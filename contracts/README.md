@@ -31,3 +31,15 @@ schema/semantic checks; the existing typed host remains authoritative for
 save and execution. See `docs/SYSTEM_FILES.md`.
 
 Workspace runtime settings use the additive `workspace_settings_v12` route and `workspace-settings-v12.ts`. The v11 command/event route remains frozen. Get/set are live trusted-session actions, blocked in safe mode. See `docs/RUNTIME_SETTINGS.md`.
+
+# Harness identities (ADR-028)
+
+A harness value is an open registry identity, not a protocol revision. Rule 3
+above applies to command, event and field shapes; adding a harness identity is
+additive within the current versions: `claude-code` extends workspace v15
+(`HarnessKind`, and so settings v16, lifecycle v17 and catalogs v18),
+orchestration v6 (`Harness`) and portable system files v4. No command, event or
+field changed, earlier documents keep their exact meaning, and v1-v3 system
+files stay closed (their schemas never accept it). Older builds reject the new
+value with an explicit validation error instead of misreading it. Round-trip and
+compatibility tests cover every extended contract.

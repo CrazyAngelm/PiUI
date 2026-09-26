@@ -117,6 +117,7 @@
       case 'pi': return 'Pi';
       case 'prime-agent': return 'Prime Agent';
       case 'codex': return 'Codex'; case 'hermes': return 'Hermes';
+      case 'claude-code': return 'Claude Code';
     }
   }
 
@@ -157,9 +158,15 @@
         <option value="prime-agent">{$t('Prime Agent')}</option>
         <option value="codex">{$t('Codex')}</option>
         <option value="hermes">Hermes</option>
+        <option value="claude-code">Claude Code</option>
       </select>
     {:else}
       <p class="static-field"><strong>{$t('Harness')}</strong><span>{harnessLabel(draft.harness)}</span></p>
+    {/if}
+    {#if configuration.limitations?.length}
+      <ul class="field-note harness-limitations" aria-label={$t('Harness limitations')}>
+        {#each configuration.limitations as limitation}<li>{$t(limitation)}</li>{/each}
+      </ul>
     {/if}
 
     <label for="profile-model">{$t('Model')}</label>
@@ -257,6 +264,7 @@
   .advanced summary span { margin-left:.6rem; color:var(--piui-text-muted); font-size:12px; font-weight:400; }
   .advanced summary:focus-visible { outline:2px solid var(--piui-focus); outline-offset:2px; }
   .advanced section { border:0; margin-bottom:var(--piui-space-4); padding-top:0; }
+  .harness-limitations { display:grid; gap:var(--piui-space-1); margin:0; padding-left:18px; }
 
   .static-field { display: grid; gap: 5px; margin: 0; font-size: 13px; }.static-field strong { font-weight: 650; }.static-field span { min-height: 32px; padding: 6px 9px; border: 1px solid var(--piui-border); border-radius: var(--piui-radius-sm); background: var(--piui-surface-1); color: var(--piui-text-muted); }
   .editor { max-width: 840px; padding: 0; color: var(--piui-text); }

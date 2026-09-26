@@ -29,6 +29,17 @@ describe('profile form helpers', () => {
     draft.model = '';
     expect(validateProfileDraft(draft).valid).toBe(false);
   });
+  it('round trips a Claude Code profile and never stores a speed for it', () => {
+    const claude: AgentProfile = {
+      ...profile, harness: 'claude-code', modelProvider: 'anthropic', model: 'sonnet', reasoning: 'xhigh', permissionMode: 'read-only',
+      toolPolicy: { rules: [{ tool: 'Read', decision: 'allow', enforcement: 'native', mandatory: true }] },
+    };
+    const draft = createProfileDraft(claude);
+    expect(validateProfileDraft(draft).valid).toBe(true);
+    expect(profileFromDraft(draft)).toEqual(claude);
+    draft.serviceTier = 'fast';
+    expect(profileFromDraft(draft).serviceTier, 'fast mode can use paid extra usage').toBeUndefined();
+  });
   it('preserves invocation, input and output descriptions independently of instructions', () => {
     const original = { ...profile, whenToCall: 'After implementation', inputInstructions: 'Diff and evidence', expectedResult: 'Actionable review' };
     expect(profileFromDraft(createProfileDraft(original))).toEqual(original);

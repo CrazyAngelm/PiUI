@@ -3,7 +3,8 @@
  */
 import type { DesktopTimelineBlock } from './runtime-protocol';
 export const WORKSPACE_PROTOCOL = 15 as const;
-export type HarnessKind = 'pi' | 'prime-agent' | 'codex' | 'hermes';
+/** `claude-code` is additive within v15 (ADR-028); no command or event shape changed. */
+export type HarnessKind = 'pi' | 'prime-agent' | 'codex' | 'hermes' | 'claude-code';
 export type SessionStatus = 'starting' | 'idle' | 'running' | 'stopping' | 'closed' | 'failed';
 export type PermissionMode = 'native' | 'read-only' | 'workspace-write' | 'full-access';
 export type Enforcement = 'native' | 'coordinator' | 'advisory' | 'unsupported';

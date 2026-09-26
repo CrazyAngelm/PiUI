@@ -1,5 +1,10 @@
 import type { AgentProfile } from '../../../../contracts/orchestration-v6';
+import { CLAUDE_CODE_EFFORT_LEVELS } from './claude-code';
 import { harnessConfigurations } from './index';
+
+/** Claude Code asks before running these; read-only and workspace-write can only deny. */
+const CLAUDE_PROMPTED_COMMAND_TOOLS = ['Bash', 'PowerShell'];
+const CLAUDE_FILE_WRITE_TOOLS = ['Edit', 'Write', 'NotebookEdit'];
 
 /** Static file checks only. The native host remains authoritative at launch. */
 export function profileConfigurationErrors(id: string, profile: Omit<AgentProfile, 'id' | 'allowedSpawnProfileIds'>): string[] {
@@ -21,6 +26,18 @@ export function profileConfigurationErrors(id: string, profile: Omit<AgentProfil
     for (const rule of profile.toolPolicy.rules) {
       if (rule.enforcement === 'native' && !configuration.nativeTools.includes(rule.tool)) errors.push(`${id}: unknown native tool.`);
       if (rule.mandatory && ['advisory', 'unsupported'].includes(rule.enforcement)) errors.push(`${id}: mandatory policy cannot be advisory or unsupported.`);
+      if (profile.harness === 'claude-code' && rule.enforcement === 'native' && rule.decision === 'allow'
+        && ((['read-only', 'workspace-write'].includes(profile.permissionMode) && CLAUDE_PROMPTED_COMMAND_TOOLS.includes(rule.tool))
+          || (profile.permissionMode === 'read-only' && CLAUDE_FILE_WRITE_TOOLS.includes(rule.tool)))) {
+        errors.push(`${id}: ${rule.tool} cannot run with these Claude Code permissions.`);
+      }
+    }
+    // The adapter's effort vocabulary; the native catalog narrows it per model.
+    if (profile.harness === 'claude-code' && profile.reasoning !== undefined && !CLAUDE_CODE_EFFORT_LEVELS.includes(profile.reasoning)) {
+      errors.push(`${id}: unsupported Claude Code effort level.`);
+    }
+    if (profile.harness === 'claude-code' && profile.modelProvider !== undefined && profile.modelProvider !== 'anthropic') {
+      errors.push(`${id}: Claude Code runs only Anthropic models.`);
     }
   return errors;
 }

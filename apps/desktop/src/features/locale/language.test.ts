@@ -15,7 +15,7 @@ it('switches interface copy without translating user content or model IDs', () =
   expect(get(t)('Message queue')).toBe('Message queue');
 });
 it('translates safe composer errors without forwarding host details', () => {
-  for (const code of ['TURN_ACTIVE','NO_ACTIVE_TURN','QUEUE_PENDING','DELIVERY_UNCERTAIN','NOT_SUPPORTED','RUNTIME_FAILED']) {
+  for (const code of ['TURN_ACTIVE','NO_ACTIVE_TURN','QUEUE_PENDING','DELIVERY_UNCERTAIN','NOT_SUPPORTED','RUNTIME_FAILED','SIGN_IN_REQUIRED']) {
     const message = workspaceError({code,message:'secret native payload'}).message;
     expect(translate(message,'ru')).not.toBe(message);
     expect(translate(message,'ru')).not.toContain('secret');

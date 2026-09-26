@@ -11,6 +11,9 @@ pub enum Harness {
     PrimeAgent,
     Codex,
     Hermes,
+    /// The user's own Claude Code CLI, on the user's Claude subscription only.
+    /// Additive within schema v6: stored definitions without it are unchanged.
+    ClaudeCode,
 }
 
 /// Native bridge permission preset. It is a runtime request, not a claim that

@@ -19,7 +19,7 @@ describe('UI Lab host scenarios', () => {
     vi.useRealTimers();
   });
 
-  it('seeds the demo: four projects, ten chats on all harnesses and linked run sessions', async () => {
+  it('seeds the demo: four projects, eleven chats on all harnesses and linked run sessions', async () => {
     const catalog = await catalogOf('demo');
     expect(catalog.protocol).toBe(15);
     expect(catalog.safeMode).toBe(false);
@@ -30,8 +30,8 @@ describe('UI Lab host scenarios', () => {
       ['legacy-repo', 'restricted', false],
     ]);
     const chats = catalog.sessions.filter((session) => session.runId === undefined);
-    expect(chats).toHaveLength(10);
-    expect(new Set(chats.map((session) => session.harness))).toEqual(new Set(['pi', 'prime-agent', 'codex', 'hermes']));
+    expect(chats).toHaveLength(11);
+    expect(new Set(chats.map((session) => session.harness))).toEqual(new Set(['pi', 'prime-agent', 'codex', 'hermes', 'claude-code']));
     expect(chats.filter((session) => session.status === 'running').map((session) => session.title).sort())
       .toEqual(['Fix flaky scheduler test', 'Streaming markdown renderer spike']);
     expect(chats.filter((session) => session.status === 'failed').map((session) => session.harness)).toEqual(['hermes']);
@@ -40,6 +40,7 @@ describe('UI Lab host scenarios', () => {
     expect(linked.every((session) => session.memberId !== undefined && session.profileId !== undefined)).toBe(true);
     expect(catalog.harnesses.map((harness) => [harness.kind, harness.status])).toEqual([
       ['pi', 'available'], ['prime-agent', 'available'], ['codex', 'available'], ['hermes', 'available'],
+      ['claude-code', 'available'],
     ]);
     const ids = catalog.sessions.map((session) => session.id);
     expect(ids.every(isUuid)).toBe(true);
@@ -51,7 +52,9 @@ describe('UI Lab host scenarios', () => {
     const catalog = await catalogOf('empty');
     expect(catalog.workspaces).toEqual([expect.objectContaining({ name: 'Chats', personal: true, trust: 'trusted' })]);
     expect(catalog.sessions).toEqual([]);
-    expect(catalog.harnesses.map((harness) => harness.status)).toEqual(['available', 'unverified', 'available', 'unavailable']);
+    expect(catalog.harnesses.map((harness) => harness.status)).toEqual(['available', 'unverified', 'available', 'unavailable', 'available']);
+    // Claude Code is installed but signed out: still startable, with the host's typed sign-in reason.
+    expect(catalog.harnesses.at(-1)).toMatchObject({ kind: 'claude-code', reason: 'Sign in to Claude Code with your Claude subscription: run `claude` in a terminal and use /login.' });
     const bootstrap = await labHost('empty').invoke<AppSnapshot>('bootstrap_v10');
     expect(bootstrap.projects).toEqual([]);
   });

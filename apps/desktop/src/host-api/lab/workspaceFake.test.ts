@@ -294,6 +294,44 @@ describe('UI Lab workspace host', () => {
       .toMatchObject({ code: 'RUNTIME_FAILED' });
   });
 
+  it('runs Claude Code on the subscription only: effort catalog, no fast mode, typed sign-in status', async () => {
+    const host = labHost();
+    const created = await create(host, 'claude-code', { permissionMode: 'workspace-write' });
+    expect(created.session).toMatchObject({ harness: 'claude-code', title: 'New Claude Code session', model: { id: 'lab-sonnet', provider: 'anthropic' } });
+    expect(created.models.map((model) => model.name)).toEqual(['Claude Lab Sonnet', 'Claude Lab Opus', 'Claude Lab Haiku']);
+    expect(created.models[1]?.thinkingLevels).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(created.capabilities.nativeSubagents).toMatchObject({ supported: true, enforcement: 'coordinator' });
+    const pending = host.invoke<HarnessModelsResult>('harness_models_v18', { request: { workspaceId: projectId(host, 'piui'), harness: 'claude-code' } });
+    await vi.advanceTimersByTimeAsync(400);
+    const catalog = await pending;
+    expect(catalog.models.every((model) => model.provider === 'anthropic' && model.supportsFast === false)).toBe(true);
+    expect(catalog.resources.items.every((item) => item.kind === 'skill' && !item.configurable)).toBe(true);
+
+    const id = created.session.id;
+    const opus = { id: 'lab-opus', provider: 'anthropic', name: 'Claude Lab Opus', thinkingLevels: ['low', 'medium', 'high', 'xhigh', 'max'] };
+    expect(await rejection(host.invoke('workspace_settings_v16', { command: { type: 'set', sessionId: id, model: opus, thinkingLevel: 'max', serviceTier: 'fast' } })))
+      .toMatchObject({ code: 'NOT_SUPPORTED' });
+    const settings = await host.invoke<RuntimeSettings>('workspace_settings_v16', {
+      command: { type: 'set', sessionId: id, model: opus, thinkingLevel: 'max', serviceTier: 'standard' },
+    });
+    expect(settings).toMatchObject({ model: { id: 'lab-opus' }, thinkingLevel: 'max', serviceTier: null });
+
+    const demoChat = sessionId(host, 'Map pipeline editor shortcuts');
+    expect((await snapshot(host, demoChat)).session).toMatchObject({ harness: 'claude-code', status: 'idle' });
+
+    const empty = labHost('empty');
+    const chats = empty.state.projects[0]?.id;
+    expect(await rejection(empty.invoke('workspace_command_v15', {
+      command: { type: 'createSession', workspaceId: chats, harness: 'claude-code', permissionMode: 'native' },
+    }))).toMatchObject({ code: 'SIGN_IN_REQUIRED' });
+    const refused = rejection(empty.invoke('harness_models_v18', { request: { workspaceId: chats, harness: 'claude-code' } }));
+    await vi.advanceTimersByTimeAsync(400);
+    expect(await refused).toMatchObject({
+      code: 'SIGN_IN_REQUIRED',
+      message: 'Sign in to Claude Code with your Claude subscription: run `claude` in a terminal and use /login.',
+    });
+  });
+
   it('rejects every runtime action in safe mode while history stays readable', async () => {
     const host = labHost('safe');
     const id = sessionId(host, 'Route host calls through one transport');

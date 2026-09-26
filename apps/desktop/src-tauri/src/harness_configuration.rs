@@ -10,12 +10,45 @@ use piui_runtime::workspace_runtime::Enforcement;
 pub(crate) struct LaunchPolicy {
     pub(crate) allowed_tools: Option<Vec<String>>,
     pub(crate) coordinator: bool,
+    /// Adapter-owned native subagent setting of a managed run; `None` keeps
+    /// the native default.
+    pub(crate) native_subagents: Option<bool>,
 }
 
 pub(crate) const PI_NATIVE_TOOL_NAMES: &[&str] =
     &["read", "bash", "edit", "write", "grep", "find", "ls"];
 const PI_READ_ONLY_TOOL_NAMES: &[&str] = &["read", "grep", "find", "ls"];
 const PRIME_NATIVE_TOOL_NAMES: &[&str] = &["ipython", "workspace"];
+/// Claude Code built-in tools that `--tools` can restrict, plus the managed
+/// `workspace` coordinator. `Agent` is absent on purpose: managed runs always
+/// disable native subagents and delegate through the coordinator instead.
+pub(crate) const CLAUDE_NATIVE_TOOL_NAMES: &[&str] = &[
+    "AskUserQuestion",
+    "Bash",
+    "Edit",
+    "ExitPlanMode",
+    "Glob",
+    "Grep",
+    "NotebookEdit",
+    "PowerShell",
+    "Read",
+    "Skill",
+    "TaskOutput",
+    "TaskStop",
+    "TodoWrite",
+    "WebFetch",
+    "WebSearch",
+    "Write",
+    "workspace",
+];
+/// Claude Code asks before running these; read-only and workspace-write
+/// sessions can only deny such prompts, so the tools can never run there.
+const CLAUDE_PROMPTED_COMMAND_TOOLS: &[&str] = &["Bash", "PowerShell"];
+/// Plan mode (read-only) never changes files.
+const CLAUDE_FILE_WRITE_TOOLS: &[&str] = &["Edit", "Write", "NotebookEdit"];
+/// The effort vocabulary of the Claude Code adapter. The native catalog
+/// decides which of these a selected model actually supports.
+pub(crate) const CLAUDE_EFFORT_LEVELS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 fn literal_native_tool_names<'a>(
     profile: &AgentProfile,
@@ -27,9 +60,18 @@ fn literal_native_tool_names<'a>(
     let tools = match profile.harness {
         Harness::Pi => PI_NATIVE_TOOL_NAMES,
         Harness::PrimeAgent => PRIME_NATIVE_TOOL_NAMES,
+        Harness::ClaudeCode => CLAUDE_NATIVE_TOOL_NAMES,
         Harness::Codex | Harness::Hermes => &[],
     };
     Ok(tools.to_vec())
+}
+
+/// An allow rule that Claude Code's permission engine can never satisfy in the
+/// requested mode. This is Claude Code's own engine, not an OS sandbox.
+fn claude_allow_is_unsatisfiable(mode: piui_orchestration::PermissionMode, tool: &str) -> bool {
+    use piui_orchestration::PermissionMode::{ReadOnly, WorkspaceWrite};
+    (matches!(mode, ReadOnly | WorkspaceWrite) && CLAUDE_PROMPTED_COMMAND_TOOLS.contains(&tool))
+        || (mode == ReadOnly && CLAUDE_FILE_WRITE_TOOLS.contains(&tool))
 }
 
 fn validate_native_tool_rules(
@@ -55,6 +97,12 @@ fn validate_native_tool_rules(
         {
             return Err(OrchestrationSchedulerError::unsupported());
         }
+        if profile.harness == Harness::ClaudeCode
+            && rule.decision == ToolDecision::Allow
+            && claude_allow_is_unsatisfiable(profile.permission_mode, &rule.tool)
+        {
+            return Err(OrchestrationSchedulerError::unsupported());
+        }
         if native_rules
             .iter()
             .any(|other| other.tool == rule.tool && other.decision != rule.decision)
@@ -75,7 +123,28 @@ pub(crate) fn launch_policy(
     if profile.base_instructions.is_some() && profile.harness != Harness::Codex {
         return Err(OrchestrationSchedulerError::unsupported());
     }
-    if profile.service_tier.is_some() && matches!(profile.harness, Harness::Pi | Harness::Hermes) {
+    // Claude Code runs only at standard speed: fast mode can use paid extra
+    // usage, so a speed setting is refused before anything is launched.
+    if profile.service_tier.is_some()
+        && matches!(
+            profile.harness,
+            Harness::Pi | Harness::Hermes | Harness::ClaudeCode
+        )
+    {
+        return Err(OrchestrationSchedulerError::unsupported());
+    }
+    // Claude Code runs only Anthropic models (through the user's subscription)
+    // and only its own effort vocabulary.
+    if profile.harness == Harness::ClaudeCode
+        && (profile
+            .reasoning
+            .as_deref()
+            .is_some_and(|level| !CLAUDE_EFFORT_LEVELS.contains(&level))
+            || profile
+                .model_provider
+                .as_deref()
+                .is_some_and(|provider| provider != "anthropic"))
+    {
         return Err(OrchestrationSchedulerError::unsupported());
     }
     if profile.network_access
@@ -91,7 +160,8 @@ pub(crate) fn launch_policy(
     if profile.resource_rules.iter().any(|rule| {
         rule.id.trim().is_empty()
             || match profile.harness {
-                Harness::Pi | Harness::Hermes => true,
+                // Claude Code exposes no per-session skill or MCP overrides.
+                Harness::Pi | Harness::Hermes | Harness::ClaudeCode => true,
                 Harness::PrimeAgent => rule.kind != piui_orchestration::ResourceKind::Skill,
                 Harness::Codex => match rule.kind {
                     piui_orchestration::ResourceKind::Skill => {
@@ -116,7 +186,9 @@ pub(crate) fn launch_policy(
             piui_orchestration::PermissionMode::FullAccess,
         ],
         Harness::PrimeAgent | Harness::Hermes => vec![piui_orchestration::PermissionMode::Native],
-        Harness::Codex => vec![
+        // Claude Code: the user's configured mode, plan, acceptEdits and
+        // bypassPermissions. Its permission engine is not an OS sandbox.
+        Harness::Codex | Harness::ClaudeCode => vec![
             piui_orchestration::PermissionMode::Native,
             piui_orchestration::PermissionMode::ReadOnly,
             piui_orchestration::PermissionMode::WorkspaceWrite,
@@ -137,7 +209,7 @@ pub(crate) fn launch_policy(
         });
     let coordinator = matches!(
         profile.harness,
-        Harness::PrimeAgent | Harness::Codex | Harness::Hermes
+        Harness::PrimeAgent | Harness::Codex | Harness::Hermes | Harness::ClaudeCode
     ) && !workspace_tool_denied;
     let agent_operations = AgentOperationCapabilities {
         roster: coordinator,
@@ -191,11 +263,15 @@ pub(crate) fn launch_policy(
     } else {
         None
     };
+    // Managed Claude Code runs never use the native Agent tool, with or
+    // without the coordinator: delegation must stay admission-checked.
+    let native_subagents = (profile.harness == Harness::ClaudeCode).then_some(false);
     Ok((
         capabilities,
         LaunchPolicy {
             allowed_tools,
             coordinator,
+            native_subagents,
         },
     ))
 }

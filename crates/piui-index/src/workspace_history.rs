@@ -25,6 +25,8 @@ pub enum WorkspaceHistoryFormat {
     PrimeAgent,
     Codex,
     Hermes,
+    /// Claude Code's own `<config>/projects/<cwd key>/<session id>.jsonl`.
+    ClaudeCode,
 }
 
 /// A host-only native transcript reference.
@@ -166,6 +168,9 @@ pub fn project_native_workspace_history(
     if source.format == WorkspaceHistoryFormat::Hermes {
         return project_hermes_history(source, project);
     }
+    if source.format == WorkspaceHistoryFormat::ClaudeCode {
+        return project_claude_code_history(source, project);
+    }
     validate_source_path(&source.path)?;
     let max_bytes = SessionDiscoveryLimits::default().max_file_bytes;
     let (bytes, modified) = read_stable_bounded(&source.path, max_bytes)?;
@@ -189,7 +194,9 @@ pub fn project_native_workspace_history(
         .and_then(|name| name.to_str())
         .unwrap_or("session.jsonl");
     let mut projection = match source.format {
-        WorkspaceHistoryFormat::Hermes => return Err(WorkspaceHistoryError::InvalidHeader),
+        WorkspaceHistoryFormat::Hermes | WorkspaceHistoryFormat::ClaudeCode => {
+            return Err(WorkspaceHistoryError::InvalidHeader);
+        }
         WorkspaceHistoryFormat::Pi | WorkspaceHistoryFormat::PrimeAgent => {
             project_pi_history(source_name, &bytes, Path::new(&header_cwd))?
         }
@@ -270,7 +277,9 @@ fn parse_and_validate_header(
         .as_object()
         .ok_or(WorkspaceHistoryError::InvalidHeader)?;
     match format {
-        WorkspaceHistoryFormat::Hermes => Err(WorkspaceHistoryError::InvalidHeader),
+        WorkspaceHistoryFormat::Hermes | WorkspaceHistoryFormat::ClaudeCode => {
+            Err(WorkspaceHistoryError::InvalidHeader)
+        }
         WorkspaceHistoryFormat::Pi | WorkspaceHistoryFormat::PrimeAgent => {
             let entry_type = object.get("type").and_then(Value::as_str);
             if !matches!(entry_type, Some("session" | "session_meta")) {
@@ -1044,8 +1053,272 @@ mod tests {
             "codex" => {
                 include_str!("../tests/fixtures/workspace-history/codex-0.147-rollout.jsonl")
             }
+            "claude" => include_str!("../tests/fixtures/workspace-history/claude-code-2.1.jsonl"),
             _ => panic!("unknown fixture"),
         }
+    }
+
+    const CLAUDE_SESSION: &str = "7b0c2a4e-1f3d-4c5b-9a8e-2d6f0e1c3b5a";
+
+    fn claude_source(path: PathBuf, id: &str) -> HostNativeHistorySource {
+        HostNativeHistorySource::new(path, id.into(), WorkspaceHistoryFormat::ClaudeCode)
+    }
+
+    fn claude_line(directory: &TemporaryDirectory, value: serde_json::Value) -> String {
+        let mut value = value;
+        if let Some(object) = value.as_object_mut() {
+            object
+                .entry("sessionId")
+                .or_insert_with(|| serde_json::json!(CLAUDE_SESSION));
+            object
+                .entry("cwd")
+                .or_insert_with(|| serde_json::json!(directory.path().to_string_lossy()));
+        }
+        value.to_string()
+    }
+
+    #[test]
+    fn projects_the_active_claude_code_branch_read_only() {
+        let directory = TemporaryDirectory::new();
+        let path = directory.write_fixture(&format!("{CLAUDE_SESSION}.jsonl"), fixture("claude"));
+        let before = fs::read(&path).expect("fixture bytes");
+        let projection = project_native_workspace_history(
+            &claude_source(path.clone(), CLAUDE_SESSION),
+            &project(&directory),
+        )
+        .expect("Claude Code history projects");
+        assert_eq!(
+            fs::read(&path).expect("fixture bytes"),
+            before,
+            "never written"
+        );
+        let blocks = projection.timeline_blocks();
+        let summary = blocks
+            .iter()
+            .map(|block| {
+                (
+                    block.kind,
+                    block.status,
+                    block.preview.clone().unwrap_or_default(),
+                    block.title.clone().unwrap_or_default(),
+                )
+            })
+            .collect::<Vec<_>>();
+        use GenericBlockKind as K;
+        use GenericBlockStatus as S;
+        let expected = [
+            (K::User, S::Complete, "Fix the build", ""),
+            (
+                K::Thinking,
+                S::Complete,
+                "Check the logs first",
+                "Reasoning",
+            ),
+            (
+                K::Tool,
+                S::Failed,
+                "build failed at <workspace>/src/main.rs",
+                "Bash",
+            ),
+            // A parallel call: its result hangs beside the active branch.
+            (K::Tool, S::Complete, "src/main.rs", "Glob"),
+            (K::Unknown, S::Complete, "", "Unrecognized session entry"),
+            (K::Assistant, S::Complete, "Retrying.", ""),
+            (K::User, S::Complete, "Try a different fix", ""),
+            (K::Compaction, S::Complete, "", "Context compacted"),
+            (K::User, S::Complete, "Continue please", ""),
+            (K::Custom, S::Failed, CLAUDE_API_ERROR_NOTICE, "Error"),
+            (
+                K::Assistant,
+                S::Complete,
+                "Fixed at <workspace>/out.txt",
+                "",
+            ),
+            (K::Tool, S::Interrupted, "", "Read"),
+            (K::Unknown, S::Complete, "", "Unrecognized session entry"),
+            (K::Unknown, S::Complete, "", "Unrecognized session entry"),
+            (K::Assistant, S::Complete, "Done.", ""),
+        ];
+        assert_eq!(
+            summary,
+            expected
+                .iter()
+                .map(|(kind, status, preview, title)| {
+                    (*kind, *status, (*preview).to_owned(), (*title).to_owned())
+                })
+                .collect::<Vec<_>>()
+        );
+        let visible = format!("{:?}", blocks);
+        for hidden in [
+            "SECRET",
+            "An abandoned branch",
+            "Abandoned answer",
+            "Request interrupted",
+            "command-name",
+            "torn",
+        ] {
+            assert!(!visible.contains(hidden), "{hidden} must stay hidden");
+        }
+        assert!(blocks.iter().filter(|block| block.fallback).count() == 3);
+        let unknown = projection
+            .report
+            .unknown_entries
+            .iter()
+            .map(|entry| entry.entry_type.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            unknown,
+            [
+                "unreadable",
+                "future-chain-entry",
+                "future-chain-entry",
+                "content:server_tool_use"
+            ]
+        );
+        assert_eq!(projection.report.parse_state, ParseState::Unsupported);
+        assert_eq!(projection.report.image_entry_count, 1);
+        assert_eq!(projection.report.compaction_entry_count, 1);
+        assert_eq!(projection.report.branch_count, 1);
+        assert_eq!(
+            projection.report.pi_session_id.as_deref(),
+            Some(CLAUDE_SESSION)
+        );
+
+        // Exact, unredacted assistant text resolves dependency references.
+        let exact = format!("Fixed at {}/out.txt", directory.path().display());
+        assert_eq!(
+            projection.final_assistant_text(None, Some(&sha256(exact.as_bytes()))),
+            Some(exact.as_str())
+        );
+        assert_eq!(projection.final_assistant_text(None, None), Some("Done."));
+        assert_eq!(
+            projection.final_assistant_text(None, Some(&sha256(b"Abandoned answer"))),
+            None,
+            "abandoned branches never resolve"
+        );
+    }
+
+    #[test]
+    fn claude_code_history_rejects_foreign_names_sessions_and_projects() {
+        let directory = TemporaryDirectory::new();
+        let path = directory.write_fixture(&format!("{CLAUDE_SESSION}.jsonl"), fixture("claude"));
+        let other_id = "11111111-2222-4333-8444-555555555555";
+        assert!(matches!(
+            project_native_workspace_history(
+                &claude_source(path.clone(), other_id),
+                &project(&directory)
+            ),
+            Err(WorkspaceHistoryError::NativeSessionMismatch)
+        ));
+        let renamed = directory.write_fixture(&format!("{other_id}.jsonl"), fixture("claude"));
+        assert!(matches!(
+            project_native_workspace_history(
+                &claude_source(renamed, other_id),
+                &project(&directory)
+            ),
+            Err(WorkspaceHistoryError::NativeSessionMismatch)
+        ));
+        let not_uuid = directory.write_fixture("not-a-uuid.jsonl", fixture("claude"));
+        assert!(matches!(
+            project_native_workspace_history(
+                &claude_source(not_uuid, "not-a-uuid"),
+                &project(&directory)
+            ),
+            Err(WorkspaceHistoryError::NativeSessionMismatch)
+        ));
+        let other = TemporaryDirectory::new();
+        assert!(matches!(
+            project_native_workspace_history(
+                &claude_source(path.clone(), CLAUDE_SESSION),
+                &project(&other)
+            ),
+            Err(WorkspaceHistoryError::HeaderProjectMismatch)
+        ));
+
+        let metadata_only = directory
+            .path()
+            .join("22222222-2222-4333-8444-555555555555.jsonl");
+        fs::write(
+            &metadata_only,
+            "{\"type\":\"queue-operation\",\"operation\":\"enqueue\",\"sessionId\":\"22222222-2222-4333-8444-555555555555\"}\n",
+        )
+        .expect("metadata fixture");
+        assert!(matches!(
+            project_native_workspace_history(
+                &claude_source(metadata_only, "22222222-2222-4333-8444-555555555555"),
+                &project(&directory)
+            ),
+            Err(WorkspaceHistoryError::NoTimelineRecords)
+        ));
+    }
+
+    #[test]
+    fn claude_code_history_keeps_a_torn_tail_readable_and_bounds_tool_output() {
+        let directory = TemporaryDirectory::new();
+        let path = directory.path().join(format!("{CLAUDE_SESSION}.jsonl"));
+        let huge = format!("head {} tail", "x".repeat(40 * 1024));
+        let lines = [
+            claude_line(
+                &directory,
+                serde_json::json!({"type":"user","uuid":"u1","parentUuid":null,"message":{"role":"user","content":"Read the log"}}),
+            ),
+            claude_line(
+                &directory,
+                serde_json::json!({"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_log","name":"Read","input":{}}]}}),
+            ),
+            claude_line(
+                &directory,
+                serde_json::json!({"type":"user","uuid":"u2","parentUuid":"a1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_log","content":[{"type":"text","text":huge},{"type":"image","source":{"data":"SECRET"}}]}]}}),
+            ),
+            claude_line(
+                &directory,
+                serde_json::json!({"type":"assistant","uuid":"a2","parentUuid":"u2","message":{"role":"assistant","content":[{"type":"text","text":"Summarized."}]}}),
+            ),
+        ];
+        // A crash tore the final line: the conversation stays readable.
+        let torn = "{\"type\":\"assistant\",\"uuid\":\"a3\"";
+        fs::write(&path, format!("{}\n{torn}", lines.join("\n"))).expect("torn fixture");
+        let projection = project_native_workspace_history(
+            &claude_source(path.clone(), CLAUDE_SESSION),
+            &project(&directory),
+        )
+        .expect("a torn tail is not fatal");
+        let blocks = projection.timeline_blocks();
+        let tool = blocks
+            .iter()
+            .find(|block| block.kind == GenericBlockKind::Tool)
+            .expect("tool block");
+        assert_eq!(tool.status, GenericBlockStatus::Complete);
+        assert!(tool.truncated);
+        let preview = tool.preview.as_deref().expect("bounded preview");
+        assert!(preview.starts_with("head "));
+        assert!(preview.len() <= super::super::DISPLAY_DETAIL_LIMIT);
+        assert_eq!(
+            blocks.last().map(|block| block.kind),
+            Some(GenericBlockKind::Unknown),
+            "the torn line is shown as unreadable"
+        );
+        assert_eq!(
+            projection.final_assistant_text(None, None),
+            Some("Summarized.")
+        );
+        assert_eq!(projection.report.partial_tail_bytes, torn.len());
+
+        // A complete final entry without its LF is kept as an entry.
+        fs::write(&path, lines.join("\n")).expect("unterminated fixture");
+        let projection = project_native_workspace_history(
+            &claude_source(path, CLAUDE_SESSION),
+            &project(&directory),
+        )
+        .expect("an unterminated complete entry projects");
+        assert_eq!(
+            projection
+                .timeline_blocks()
+                .last()
+                .and_then(|block| block.preview.as_deref()),
+            Some("Summarized.")
+        );
+        assert!(projection.report.unknown_entries.is_empty());
     }
 
     #[test]
@@ -1518,4 +1791,643 @@ mod hermes_tests {
         assert_eq!(std::fs::read(&path).expect("after"), before);
         std::fs::remove_dir_all(&root).expect("cleanup fixture");
     }
+}
+
+/// Safe fixed summary of a Claude Code API failure. Native error text can
+/// contain provider or account details and is never projected.
+const CLAUDE_API_ERROR_NOTICE: &str = "Claude Code could not complete this turn.";
+
+/// Tool output is capped while reading: only a bounded preview is displayed,
+/// so a transcript never holds more than this per result in memory.
+const CLAUDE_TOOL_OUTPUT_CAP: usize = super::DISPLAY_DETAIL_LIMIT + 8;
+
+/// One entry of a Claude Code conversation chain (`uuid`/`parentUuid`).
+struct ClaudeChainEntry {
+    line: u64,
+    uuid: String,
+    parent: Option<String>,
+    created_at: Option<String>,
+    cwd: Option<String>,
+    /// A main-conversation user or assistant entry: a possible active leaf.
+    conversational: bool,
+    content: ClaudeEntryContent,
+}
+
+enum ClaudeEntryContent {
+    User {
+        text: Option<String>,
+        results: Vec<ClaudeToolResult>,
+        has_image: bool,
+    },
+    Assistant(Vec<ClaudeAssistantPart>),
+    ApiError,
+    Compaction,
+    /// Meta, sidechain, compact-summary, attachment and other system entries.
+    Internal,
+    Unknown {
+        entry_type: String,
+        byte_length: usize,
+        sha256: String,
+    },
+}
+
+enum ClaudeAssistantPart {
+    Text(String),
+    Thinking(String),
+    ToolUse { id: String, name: Option<String> },
+    Unsupported(String),
+}
+
+struct ClaudeToolResult {
+    tool_use_id: String,
+    output: Option<String>,
+    failed: bool,
+}
+
+enum ClaudeLine {
+    Chain(Box<ClaudeChainEntry>),
+    /// Session metadata outside the conversation chain (queue operations,
+    /// titles, prompts, file snapshots and future metadata kinds).
+    Metadata,
+    Malformed,
+}
+
+/// Claude Code session ids are lowercase-or-uppercase hyphenated UUIDs.
+fn is_claude_session_id(value: &str) -> bool {
+    value.len() == 36
+        && value.char_indices().all(|(index, character)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                character == '-'
+            } else {
+                character.is_ascii_hexdigit()
+            }
+        })
+}
+
+/// Claude Code's own rule for internal user entries: command wrappers,
+/// reminders and notifications start with a lowercase tag, and interrupt
+/// markers are bracketed. Neither is a user prompt.
+fn is_internal_claude_text(text: &str) -> bool {
+    if let Some(rest) = text.trim_start().strip_prefix('<') {
+        let mut characters = rest.chars();
+        if !characters
+            .next()
+            .is_some_and(|character| character.is_ascii_lowercase())
+        {
+            return false;
+        }
+        for character in characters {
+            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+                continue;
+            }
+            return character.is_whitespace() || character == '>';
+        }
+        return false;
+    }
+    text.strip_prefix("[Request interrupted by user")
+        .is_some_and(|rest| rest.contains(']'))
+}
+
+fn capped_tool_output(mut text: String) -> String {
+    if text.len() > CLAUDE_TOOL_OUTPUT_CAP {
+        let mut end = CLAUDE_TOOL_OUTPUT_CAP;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+    text
+}
+
+/// Mirrors the live bridge: text parts are kept, images and other binary
+/// parts become fixed placeholders and are never forwarded.
+fn claude_tool_result_text(content: Option<&Value>) -> Option<String> {
+    match content? {
+        Value::String(text) => Some(capped_tool_output(text.clone())),
+        Value::Array(parts) => {
+            let mut output = String::new();
+            for (index, part) in parts.iter().enumerate() {
+                if index > 0 {
+                    output.push('\n');
+                }
+                let part = part.as_object();
+                match part
+                    .and_then(|part| part.get("type"))
+                    .and_then(Value::as_str)
+                {
+                    Some("text") => output.push_str(
+                        part.and_then(|part| part.get("text"))
+                            .and_then(Value::as_str)
+                            .unwrap_or(""),
+                    ),
+                    Some("image") => output.push_str("[image]"),
+                    _ => output.push_str("[unsupported content]"),
+                }
+                if output.len() > CLAUDE_TOOL_OUTPUT_CAP {
+                    break;
+                }
+            }
+            Some(capped_tool_output(output))
+        }
+        _ => None,
+    }
+}
+
+fn claude_user_content(message: &Map<String, Value>) -> ClaudeEntryContent {
+    let mut texts = Vec::new();
+    let mut results = Vec::new();
+    let mut has_image = false;
+    match message.get("content") {
+        Some(Value::String(text)) => texts.push(text.as_str()),
+        Some(Value::Array(parts)) => {
+            for part in parts.iter().filter_map(Value::as_object) {
+                match part.get("type").and_then(Value::as_str) {
+                    Some("text") => {
+                        if let Some(text) = part.get("text").and_then(Value::as_str) {
+                            texts.push(text);
+                        }
+                    }
+                    Some("tool_result") => {
+                        if let Some(id) = part.get("tool_use_id").and_then(Value::as_str) {
+                            results.push(ClaudeToolResult {
+                                tool_use_id: id.to_owned(),
+                                output: claude_tool_result_text(part.get("content")),
+                                failed: part.get("is_error").and_then(Value::as_bool) == Some(true),
+                            });
+                        }
+                    }
+                    Some("image") => has_image = true,
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    let text = texts
+        .into_iter()
+        .filter(|text| !is_internal_claude_text(text))
+        .collect::<Vec<_>>()
+        .join("\n");
+    ClaudeEntryContent::User {
+        text: (!text.trim().is_empty()).then_some(text),
+        results,
+        has_image,
+    }
+}
+
+fn claude_assistant_content(message: &Map<String, Value>) -> ClaudeEntryContent {
+    let mut parts = Vec::new();
+    for part in message
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object)
+    {
+        let text_of = |key: &str| {
+            part.get(key)
+                .and_then(Value::as_str)
+                .filter(|text| !text.trim().is_empty())
+                .map(str::to_owned)
+        };
+        match part.get("type").and_then(Value::as_str) {
+            Some("text") => parts.extend(text_of("text").map(ClaudeAssistantPart::Text)),
+            Some("thinking") => {
+                parts.extend(text_of("thinking").map(ClaudeAssistantPart::Thinking));
+            }
+            Some("tool_use") => {
+                if let Some(id) = part.get("id").and_then(Value::as_str) {
+                    parts.push(ClaudeAssistantPart::ToolUse {
+                        id: id.to_owned(),
+                        name: part.get("name").and_then(Value::as_str).map(str::to_owned),
+                    });
+                }
+            }
+            // Redacted reasoning is encrypted and never readable.
+            Some("redacted_thinking") => {}
+            other => parts.push(ClaudeAssistantPart::Unsupported(format!(
+                "content:{}",
+                other.unwrap_or("unknown")
+            ))),
+        }
+    }
+    ClaudeEntryContent::Assistant(parts)
+}
+
+fn read_claude_line(
+    line: u64,
+    frame: &[u8],
+    expected_native_id: &str,
+) -> Result<ClaudeLine, WorkspaceHistoryError> {
+    if frame.iter().all(u8::is_ascii_whitespace) {
+        return Ok(ClaudeLine::Metadata);
+    }
+    let Ok(value) = serde_json::from_slice::<Value>(frame) else {
+        return Ok(ClaudeLine::Malformed);
+    };
+    let Some(object) = value.as_object() else {
+        return Ok(ClaudeLine::Malformed);
+    };
+    // Every entry that names a session must name this one.
+    if let Some(session_id) = object.get("sessionId").and_then(Value::as_str)
+        && session_id != expected_native_id
+    {
+        return Err(WorkspaceHistoryError::NativeSessionMismatch);
+    }
+    let Some(uuid) = object
+        .get("uuid")
+        .and_then(Value::as_str)
+        .filter(|uuid| !uuid.is_empty())
+    else {
+        return Ok(ClaudeLine::Metadata);
+    };
+    let flag = |name: &str| object.get(name).and_then(Value::as_bool) == Some(true);
+    let entry_type = object.get("type").and_then(Value::as_str).unwrap_or("");
+    let sidechain = flag("isSidechain");
+    let message = object.get("message").and_then(Value::as_object);
+    let content = match (entry_type, message) {
+        ("user", Some(message)) if !sidechain && !flag("isMeta") && !flag("isCompactSummary") => {
+            claude_user_content(message)
+        }
+        ("assistant", _)
+            if !sidechain
+                && (flag("isApiErrorMessage")
+                    || object.get("error").is_some_and(Value::is_string)) =>
+        {
+            ClaudeEntryContent::ApiError
+        }
+        ("assistant", Some(message)) if !sidechain => claude_assistant_content(message),
+        ("system", _)
+            if object.get("subtype").and_then(Value::as_str) == Some("compact_boundary") =>
+        {
+            ClaudeEntryContent::Compaction
+        }
+        ("user" | "assistant" | "system" | "attachment" | "progress", _) => {
+            ClaudeEntryContent::Internal
+        }
+        (other, _) => ClaudeEntryContent::Unknown {
+            entry_type: if other.is_empty() {
+                "unknown".into()
+            } else {
+                other.to_owned()
+            },
+            byte_length: frame.len(),
+            sha256: sha256(frame),
+        },
+    };
+    let text_field = |name: &str| {
+        object
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    Ok(ClaudeLine::Chain(Box::new(ClaudeChainEntry {
+        line,
+        uuid: uuid.to_owned(),
+        // A compaction boundary starts a new root and names the earlier
+        // history through `logicalParentUuid`.
+        parent: text_field("parentUuid").or_else(|| text_field("logicalParentUuid")),
+        created_at: text_field("timestamp"),
+        cwd: text_field("cwd").filter(|cwd| Path::new(cwd).is_absolute()),
+        conversational: matches!(entry_type, "user" | "assistant") && !sidechain,
+        content,
+    })))
+}
+
+impl CodexProjectionBuilder<'_> {
+    /// A generic fallback that is shown once per unknown entry kind; every
+    /// occurrence is still recorded in the report's unknown-entry summary.
+    fn push_claude_unknown(
+        &mut self,
+        shown: &mut std::collections::HashSet<String>,
+        summary: UnknownEntrySummary,
+        created_at: Option<String>,
+    ) {
+        let first = shown.insert(summary.entry_type.clone());
+        if first {
+            let id = format!("timeline-{}", self.blocks.len());
+            self.blocks.push(GenericTimelineBlock {
+                id,
+                parent_id: None,
+                kind: GenericBlockKind::Unknown,
+                source_type: "claude_unknown".into(),
+                created_at,
+                preview: None,
+                has_image: false,
+                title: Some("Unrecognized session entry".into()),
+                tool_name: None,
+                collapsible: true,
+                truncated: false,
+                fallback: true,
+                status: GenericBlockStatus::Complete,
+            });
+            self.last_visible = None;
+        }
+        self.unknown_entries.push(summary);
+    }
+
+    fn push_claude_notice(&mut self, created_at: Option<String>) {
+        let id = format!("timeline-{}", self.blocks.len());
+        self.blocks.push(GenericTimelineBlock {
+            id,
+            parent_id: None,
+            kind: GenericBlockKind::Custom,
+            source_type: "claude_api_error".into(),
+            created_at,
+            preview: Some(CLAUDE_API_ERROR_NOTICE.into()),
+            has_image: false,
+            title: Some("Error".into()),
+            tool_name: None,
+            collapsible: false,
+            truncated: false,
+            fallback: false,
+            status: GenericBlockStatus::Failed,
+        });
+        self.last_visible = None;
+    }
+}
+
+fn unknown_summary(line: u64, entry_type: &str, frame: &[u8]) -> UnknownEntrySummary {
+    UnknownEntrySummary {
+        line,
+        entry_type: super::safe_text(entry_type, super::TYPE_LIMIT),
+        byte_length: frame.len(),
+        sha256: sha256(frame),
+    }
+}
+
+/// Native Claude Code JSONL projection. It follows the active branch back
+/// from the newest main-conversation entry through `parentUuid` (compaction
+/// boundaries through `logicalParentUuid`), skips meta, sidechain, summary
+/// and other internal entries, and never writes or converts the history.
+fn project_claude_code_history(
+    source: &HostNativeHistorySource,
+    project: &ProjectDirectory,
+) -> Result<WorkspaceHistoryProjection, WorkspaceHistoryError> {
+    validate_source_path(&source.path)?;
+    // Claude Code names every transcript after its immutable session id.
+    if !is_claude_session_id(&source.expected_native_id)
+        || source.path.file_stem().and_then(|stem| stem.to_str())
+            != Some(source.expected_native_id.as_str())
+    {
+        return Err(WorkspaceHistoryError::NativeSessionMismatch);
+    }
+    let max_bytes = SessionDiscoveryLimits::default().max_file_bytes;
+    let (bytes, modified) = read_stable_bounded(&source.path, max_bytes)?;
+    let (frames, tail_start) = lf_frames(&bytes);
+    let mut entries = Vec::new();
+    let mut unreadable = Vec::new();
+    let mut next_line = 1;
+    for (line, frame) in frames {
+        next_line = line.saturating_add(1);
+        match read_claude_line(line, frame, &source.expected_native_id)? {
+            ClaudeLine::Chain(entry) => entries.push(*entry),
+            ClaudeLine::Metadata => {}
+            ClaudeLine::Malformed => unreadable.push((line, frame)),
+        }
+    }
+    // A crash can leave a final line without its LF. A complete entry is
+    // kept; a torn one is shown as unreadable, never hiding the rest.
+    if tail_start < bytes.len() {
+        let tail = &bytes[tail_start..];
+        match read_claude_line(next_line, tail, &source.expected_native_id)? {
+            ClaudeLine::Chain(entry) => entries.push(*entry),
+            ClaudeLine::Metadata => {}
+            ClaudeLine::Malformed => unreadable.push((next_line, tail)),
+        }
+    }
+    let leaf = entries
+        .iter()
+        .rposition(|entry| entry.conversational)
+        .ok_or(WorkspaceHistoryError::NoTimelineRecords)?;
+    // The conversation must have started in the registered project.
+    let cwd = entries
+        .iter()
+        .find_map(|entry| entry.cwd.clone())
+        .ok_or(WorkspaceHistoryError::InvalidHeader)?;
+    let native_project = ProjectDirectory::resolve(Path::new(&cwd))
+        .map_err(WorkspaceHistoryError::HeaderProjectUnavailable)?;
+    if !native_project.same_directory(project) {
+        return Err(WorkspaceHistoryError::HeaderProjectMismatch);
+    }
+
+    let by_uuid = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| (entry.uuid.as_str(), index))
+        .collect::<HashMap<_, _>>();
+    let mut chain = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut cursor = Some(leaf);
+    while let Some(index) = cursor {
+        if !seen.insert(index) {
+            break;
+        }
+        chain.push(index);
+        cursor = entries[index]
+            .parent
+            .as_deref()
+            .and_then(|parent| by_uuid.get(parent).copied());
+    }
+    chain.reverse();
+    // Parallel tool calls: Claude Code chains the calls of one message and
+    // hangs each result off its own call, so a result can sit beside the
+    // active branch. A tool_use id names exactly one call, so its result is
+    // looked up across the whole transcript.
+    let mut results_by_call = HashMap::<&str, &ClaudeToolResult>::new();
+    for entry in &entries {
+        if let ClaudeEntryContent::User { results, .. } = &entry.content {
+            for result in results {
+                results_by_call
+                    .entry(result.tool_use_id.as_str())
+                    .or_insert(result);
+            }
+        }
+    }
+    // A branch is a parent with several user prompts or replies, not the
+    // side result of a parallel tool call.
+    let mut children = HashMap::<&str, usize>::new();
+    for entry in entries.iter().filter(|entry| entry.conversational) {
+        let tool_result_only = matches!(
+            &entry.content,
+            ClaudeEntryContent::User { text: None, results, .. } if !results.is_empty()
+        );
+        if let Some(parent) = entry.parent.as_deref()
+            && !tool_result_only
+        {
+            *children.entry(parent).or_default() += 1;
+        }
+    }
+
+    // Paths are redacted against the directory as Claude Code spelled it.
+    let project_root = PathBuf::from(&cwd);
+    let mut builder = CodexProjectionBuilder::new(&project_root);
+    let mut shown_unknown = std::collections::HashSet::new();
+    let mut unreadable = unreadable.into_iter().peekable();
+    let mut created_at = None;
+    let mut updated_at = None;
+    for &index in &chain {
+        let entry = &entries[index];
+        while let Some((line, frame)) = unreadable.next_if(|(line, _)| *line < entry.line) {
+            builder.push_claude_unknown(
+                &mut shown_unknown,
+                unknown_summary(line, "unreadable", frame),
+                None,
+            );
+        }
+        if created_at.is_none() {
+            created_at.clone_from(&entry.created_at);
+        }
+        if entry.created_at.is_some() {
+            updated_at.clone_from(&entry.created_at);
+        }
+        let at = entry.created_at.clone();
+        match &entry.content {
+            ClaudeEntryContent::User {
+                text,
+                results,
+                has_image,
+            } => {
+                for result in results {
+                    // Results of calls outside the active branch are ignored.
+                    if builder.tools.contains_key(&result.tool_use_id) {
+                        builder.finish_tool(
+                            Some(&result.tool_use_id),
+                            result.output.clone(),
+                            result.failed,
+                        );
+                    }
+                }
+                builder.image_entry_count = builder
+                    .image_entry_count
+                    .saturating_add(usize::from(*has_image));
+                if let Some(text) = text {
+                    builder.push_text(
+                        GenericBlockKind::User,
+                        "claude_user",
+                        at,
+                        text.clone(),
+                        CodexTextSource::Response,
+                    );
+                }
+            }
+            ClaudeEntryContent::Assistant(parts) => {
+                for part in parts {
+                    match part {
+                        ClaudeAssistantPart::Text(text) => builder.push_text(
+                            GenericBlockKind::Assistant,
+                            "claude_assistant",
+                            at.clone(),
+                            text.clone(),
+                            CodexTextSource::Response,
+                        ),
+                        ClaudeAssistantPart::Thinking(text) => builder.push_text(
+                            GenericBlockKind::Thinking,
+                            "claude_thinking",
+                            at.clone(),
+                            text.clone(),
+                            CodexTextSource::Response,
+                        ),
+                        ClaudeAssistantPart::ToolUse { id, name } => {
+                            builder.push_tool(at.clone(), name.as_deref(), Some(id));
+                        }
+                        ClaudeAssistantPart::Unsupported(kind) => builder.push_claude_unknown(
+                            &mut shown_unknown,
+                            unknown_summary(entry.line, kind, b""),
+                            at.clone(),
+                        ),
+                    }
+                }
+            }
+            ClaudeEntryContent::ApiError => builder.push_claude_notice(at),
+            ClaudeEntryContent::Compaction => builder.push_compaction(at, None),
+            ClaudeEntryContent::Internal => {}
+            ClaudeEntryContent::Unknown {
+                entry_type,
+                byte_length,
+                sha256,
+            } => builder.push_claude_unknown(
+                &mut shown_unknown,
+                UnknownEntrySummary {
+                    line: entry.line,
+                    entry_type: super::safe_text(entry_type, super::TYPE_LIMIT),
+                    byte_length: *byte_length,
+                    sha256: sha256.clone(),
+                },
+                at,
+            ),
+        }
+    }
+    for (line, frame) in unreadable {
+        builder.push_claude_unknown(
+            &mut shown_unknown,
+            unknown_summary(line, "unreadable", frame),
+            None,
+        );
+    }
+    let pending_calls = builder
+        .tools
+        .iter()
+        .filter(|(_, index)| builder.blocks[**index].status == GenericBlockStatus::Running)
+        .map(|(call, _)| call.clone())
+        .collect::<Vec<_>>();
+    for call in pending_calls {
+        if let Some(result) = results_by_call.get(call.as_str()) {
+            builder.finish_tool(Some(&call), result.output.clone(), result.failed);
+        }
+    }
+    // A call without a recorded result never finished.
+    for block in &mut builder.blocks {
+        if block.kind == GenericBlockKind::Tool && block.status == GenericBlockStatus::Running {
+            block.status = GenericBlockStatus::Interrupted;
+        }
+    }
+    trim_old_display(&mut builder.blocks);
+    if builder.blocks.is_empty() {
+        return Err(WorkspaceHistoryError::NoTimelineRecords);
+    }
+
+    let source_name = source
+        .path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("session.jsonl");
+    let mut report = super::scan_bytes(source_name, b"");
+    report.file_revision = sha256(&bytes);
+    report.source_modified = modified;
+    report.complete_bytes = tail_start;
+    report.partial_tail_bytes = bytes.len().saturating_sub(tail_start);
+    report.pi_session_id = Some(source.expected_native_id.clone());
+    report.project_cwd = Some(cwd);
+    report.created_at = created_at;
+    report.updated_at = updated_at.or_else(|| report.created_at.clone());
+    report.first_user_preview = builder.blocks.iter().find_map(|block| {
+        (block.kind == GenericBlockKind::User)
+            .then(|| block.preview.clone())
+            .flatten()
+    });
+    report.last_message_preview = builder.blocks.iter().rev().find_map(|block| {
+        matches!(
+            block.kind,
+            GenericBlockKind::User | GenericBlockKind::Assistant
+        )
+        .then(|| block.preview.clone())
+        .flatten()
+    });
+    report.entry_count = builder.blocks.len();
+    report.image_entry_count = builder.image_entry_count;
+    report.compaction_entry_count = builder.compaction_entry_count;
+    report.branch_count = children.values().filter(|count| **count > 1).count();
+    report.parse_state = if builder.unknown_entries.is_empty() {
+        ParseState::Healthy
+    } else {
+        ParseState::Unsupported
+    };
+    report.unknown_entries = builder.unknown_entries;
+    report.timeline_blocks = builder.blocks;
+    Ok(WorkspaceHistoryProjection {
+        report,
+        assistant_texts: builder.assistants,
+    })
 }

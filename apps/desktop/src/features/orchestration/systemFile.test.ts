@@ -80,6 +80,31 @@ describe('portable system files', () => {
     expect(reopened.nodes[1]!.profile.harness).toBe('hermes');
     expect(parseSystemFile(serializeSystemFile(reopened)).version).toBe(4);
   });
+  it('accepts Claude Code only in v4, round-trips it and keeps v1-v3 closed', () => {
+    const file = JSON.parse(readFileSync(new URL('../../../../../examples/systems/codex-claude-pi-review.piui.json', import.meta.url), 'utf8'));
+    const graph = systemFileToGraph(parseSystemFile(JSON.stringify(file)));
+    expect(graph.nodes.map((node) => node.profile.harness)).toEqual(['codex', 'claude-code', 'pi']);
+    const reopened = parseSystemFile(serializeSystemFile(graph));
+    expect(reopened.version).toBe(4);
+    expect(reopened.agents[1]!.profile).toMatchObject({ harness: 'claude-code', reasoning: 'high', permissionMode: 'read-only' });
+    expect(compileGraph(systemFileToGraph(reopened)).pipeline.steps.map((step) => step.dependencyStepIds.length)).toEqual([0, 1, 1]);
+    for (const version of [1, 2, 3]) {
+      expect(() => parseSystemFile(JSON.stringify({ ...file, version })), `v${version}`).toThrow();
+    }
+    const invalid = (patch: Record<string, unknown>) => {
+      const changed = structuredClone(file);
+      Object.assign(changed.agents[1].profile, patch);
+      return () => parseSystemFile(JSON.stringify(changed));
+    };
+    expect(invalid({ serviceTier: 'fast' }), 'fast mode can use paid extra usage').toThrow(/speed is not supported/);
+    expect(invalid({ reasoning: 'minimal' })).toThrow(/effort level/);
+    expect(invalid({ modelProvider: 'openai' })).toThrow(/only Anthropic models/);
+    expect(invalid({ resourceRules: [{ kind: 'mcp', id: 'docs', enabled: false }] })).toThrow(/resource kind/);
+    expect(invalid({ toolPolicy: { rules: [{ tool: 'Bash', decision: 'allow', enforcement: 'native', mandatory: true }] } }))
+      .toThrow(/Bash cannot run/);
+    expect(invalid({ toolPolicy: { rules: [{ tool: 'Agent', decision: 'allow', enforcement: 'native', mandatory: true }] } }))
+      .toThrow(/unknown native tool/);
+  });
   it('upgrades v1 files and preserves separate input requirements in the current version', () => {
     const legacy = example(); legacy.version = 1;
     for (const agent of legacy.agents) delete agent.input;

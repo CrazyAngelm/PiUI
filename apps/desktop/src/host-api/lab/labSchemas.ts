@@ -4,7 +4,7 @@ import {
 } from './labSchema';
 
 /** Request schemas transcribed from the Rust DTOs (`deny_unknown_fields` everywhere). */
-const harness = enumOf(['pi', 'prime-agent', 'codex', 'hermes']);
+const harness = enumOf(['pi', 'prime-agent', 'codex', 'hermes', 'claude-code']);
 const permissionMode = enumOf(['native', 'read-only', 'workspace-write', 'full-access']);
 const promptMode = enumOf(['prompt', 'steer', 'follow-up']);
 const decision = enumOf(['approve-once', 'approve-session', 'deny', 'cancel']);

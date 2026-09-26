@@ -15,6 +15,14 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
   const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
   const SUBSCRIPTION_MESSAGE = "Sign in to Claude Code with your Claude subscription. API keys and cloud providers are not used by PiUI.";
   const subscriptionRequired = () => fail("claude-subscription-required", SUBSCRIPTION_MESSAGE);
+  // Fast mode and extra usage are billed beyond the base subscription, so PiUI
+  // never enables them: a request for fast mode is refused before anything
+  // spawns, every launch pins it off, and a session that starts consuming
+  // extra usage is stopped.
+  const FAST_MODE_MESSAGE = "Claude Code fast mode is not available in PiUI because it can use paid extra usage. PiUI runs Claude Code only on your base Claude subscription.";
+  const FAST_MODE_ACTIVE_MESSAGE = "Claude Code reported fast mode as active, so PiUI did not start the session. PiUI runs Claude Code only on your base Claude subscription.";
+  const EXTRA_USAGE_MESSAGE = "Claude Code started using paid extra usage, so PiUI stopped this session. PiUI runs Claude Code only on your base Claude subscription.";
+  const unsupportedSpeed = (tier) => fail("unsupported-settings", tier === "fast" ? FAST_MODE_MESSAGE : "The requested Claude Code speed is not supported.");
   const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
   const COORDINATOR_SERVER = "piui-workspace";
@@ -30,14 +38,16 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
   if (typeof config.cwd !== "string" || !isAbsolute(config.cwd)) {
     throw fail("invalid-configuration", "The Claude Code workspace is invalid.");
   }
+  // `native` passes no --permission-mode, so Claude Code applies the user's own
+  // configured default mode; the other presets are requested and verified.
   const PERMISSION_MODES = new Map([
-    ["native", "default"],
+    ["native", undefined],
     ["read-only", "plan"],
     ["workspace-write", "acceptEdits"],
     ["full-access", "bypassPermissions"],
   ]);
+  if (!PERMISSION_MODES.has(config.permissionMode)) throw fail("unsupported-policy", "The requested Claude Code permission mode is not supported.");
   const permissionMode = PERMISSION_MODES.get(config.permissionMode);
-  if (!permissionMode) throw fail("unsupported-policy", "The requested Claude Code permission mode is not supported.");
   // Approvals must never widen a restrictive profile: they can only be denied.
   const strictPermissions = config.permissionMode === "read-only" || config.permissionMode === "workspace-write";
   if (config.networkAccess === true) {
@@ -52,9 +62,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
   if (config.thinkingLevel != null && !EFFORT_LEVELS.has(config.thinkingLevel)) {
     throw fail("unsupported-settings", "The requested Claude Code effort level is not supported.");
   }
-  if (config.serviceTier != null && config.serviceTier !== "standard" && config.serviceTier !== "fast") {
-    throw fail("unsupported-settings", "The requested Claude Code speed is not supported.");
-  }
+  if (config.serviceTier != null && config.serviceTier !== "standard") throw unsupportedSpeed(config.serviceTier);
   // Model values become CLI arguments, so they must never look like a flag.
   const MODEL_PATTERN = /^[A-Za-z0-9][\w.:@[\]/-]{0,127}$/;
   if (config.model != null && (!isRecord(config.model) || typeof config.model.id !== "string"
@@ -105,28 +113,63 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
     return value;
   })();
 
-  // Only the native subscription login may reach the CLI: provider switches,
-  // API keys and PiUI operator credentials are removed from its environment,
-  // and so is the coupling a parent Claude Code host injects into its own
-  // children (messaging socket and token, host-routed auth, session identity),
-  // which would otherwise bind this CLI to an unrelated host session.
+  // Only the native subscription login may reach the CLI: API keys, bearer and
+  // identity tokens, provider switches, base-URL/socket/header routing and
+  // billing overrides are removed from its environment, together with PiUI
+  // operator credentials and the coupling a parent Claude Code host injects
+  // into its own children (messaging socket and token, host-routed auth,
+  // session identity), which would otherwise bind this CLI to an unrelated
+  // host session. The Rust launcher strips the same list before the bridge
+  // starts; keep both lists identical (a host test compares them).
   const SCRUBBED_ENVIRONMENT = new Set([
-    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_BEDROCK_BASE_URL",
-    "ANTHROPIC_VERTEX_PROJECT_ID", "ANTHROPIC_VERTEX_BASE_URL", "ANTHROPIC_FOUNDRY_API_KEY",
-    "ANTHROPIC_FOUNDRY_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
-    "CLAUDE_CODE_USE_FOUNDRY", "AWS_BEARER_TOKEN_BEDROCK", "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
-    "CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID",
-    "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN",
-    "CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH", "CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH", "CLAUDE_CODE_OAUTH_SCOPES",
-    "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_EXECPATH",
-    "CLAUDE_AGENT_SDK_VERSION", "CLAUDE_PID",
+    // Non-subscription credentials, provider switches and API routing.
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_HOST",
+    "ANTHROPIC_UNIX_SOCKET", "ANTHROPIC_CUSTOM_HEADERS", "ANTHROPIC_BEDROCK_BASE_URL",
+    "ANTHROPIC_BEDROCK_MANTLE_BASE_URL", "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_VERTEX_PROJECT_ID",
+    "ANTHROPIC_VERTEX_BASE_URL", "ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_FOUNDRY_AUTH_TOKEN",
+    "ANTHROPIC_FOUNDRY_BASE_URL", "ANTHROPIC_FOUNDRY_RESOURCE", "ANTHROPIC_AWS_API_KEY", "ANTHROPIC_AWS_BASE_URL",
+    "ANTHROPIC_GOOGLE_CLOUD_BASE_URL", "ANTHROPIC_IDENTITY_TOKEN", "ANTHROPIC_IDENTITY_TOKEN_FILE",
+    "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_SERVICE_ACCOUNT_ID", "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_MANTLE", "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD", "CLAUDE_CODE_USE_GATEWAY", "CLAUDE_CODE_SKIP_BEDROCK_AUTH",
+    "CLAUDE_CODE_SKIP_VERTEX_AUTH", "CLAUDE_CODE_SKIP_FOUNDRY_AUTH", "CLAUDE_CODE_SKIP_MANTLE_AUTH",
+    "CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH", "CLAUDE_CODE_SKIP_ANTHROPIC_GOOGLE_CLOUD_AUTH",
+    "CLAUDE_CODE_API_BASE_URL", "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR", "CLAUDE_CODE_HFI_BEARER_TOKEN",
+    "CLAUDE_CODE_CUSTOM_OAUTH_URL", "CLAUDE_CODE_OAUTH_CLIENT_ID", "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+    // Billing, account and speed overrides.
+    "CLAUDE_CODE_EXTRA_BODY", "CLAUDE_CODE_SUBSCRIPTION_TYPE", "CLAUDE_CODE_RATE_LIMIT_TIER",
+    "CLAUDE_CODE_ACCOUNT_UUID", "CLAUDE_CODE_ACCOUNT_TAGGED_ID", "CLAUDE_CODE_ORGANIZATION_UUID",
+    "CLAUDE_CODE_USER_EMAIL", "CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK", "CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS",
+    // Coupling a parent Claude Code session or host injects into its children.
+    "CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT",
+    "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH", "CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH",
+    "CLAUDE_CODE_OAUTH_SCOPES", "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR", "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_EXECPATH", "CLAUDE_AGENT_SDK_VERSION", "CLAUDE_AGENT_SDK_CLIENT_APP", "CLAUDE_PID",
+    "CLAUDE_CODE_HOST_AUTH_ENV_VAR", "CLAUDE_CODE_HOST_CREDS_FILE", "CLAUDE_CODE_HOST_HTTP_PROXY_PORT",
+    "CLAUDE_CODE_HOST_SOCKS_PROXY_PORT", "CLAUDE_CODE_SESSION_ACCESS_TOKEN", "CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID", "CLAUDE_BRIDGE_REATTACH_SESSION", "CLAUDE_BRIDGE_SESSION_INGRESS_URL",
+    "CLAUDE_SESSION_INGRESS_TOKEN_FILE", "CLAUDE_CODE_REMOTE", "CLAUDE_CODE_REMOTE_SESSION_ID",
+    "CLAUDE_CODE_REMOTE_SESSION_UUID", "CLAUDE_SESSION_ID", "CLAUDE_RUNNER_SESSION_ID", "CLAUDE_RUNNER_SESSION_UUID",
+    "CLAUDE_CODE_IDE_HOST_OVERRIDE",
   ]);
+  // An effort environment override would silently win over a per-session effort.
+  const EFFORT_OVERRIDE = "CLAUDE_CODE_EFFORT_LEVEL";
   const childEnvironment = {};
   for (const [key, value] of Object.entries(process.env)) {
     const name = key.toUpperCase();
     if (SCRUBBED_ENVIRONMENT.has(name) || name.startsWith("PIUI_AGENT_API_")) continue;
+    if (name === EFFORT_OVERRIDE && config.thinkingLevel != null) continue;
+    // Replaced below with PiUI's own fixed value.
+    if (name === "CLAUDE_CODE_DISABLE_FAST_MODE") continue;
     childEnvironment[key] = value;
   }
+  // Fast mode is disabled for the whole CLI process, not just this session's settings.
+  childEnvironment.CLAUDE_CODE_DISABLE_FAST_MODE = "1";
+  const effortOverridden = () => Object.keys(childEnvironment).some((key) => key.toUpperCase() === EFFORT_OVERRIDE);
+  const dropEffortOverride = () => {
+    for (const key of Object.keys(childEnvironment)) if (key.toUpperCase() === EFFORT_OVERRIDE) delete childEnvironment[key];
+  };
 
   // Native history location, derived exactly like Claude Code derives it.
   const configHome = (() => {
@@ -219,7 +262,6 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
         thinkingLevels: row.supportsEffort === true && Array.isArray(row.supportedEffortLevels)
           ? row.supportedEffortLevels.filter((level) => EFFORT_LEVELS.has(level))
           : [],
-        supportsFast: row.supportsFastMode === true,
         resolvedModel: typeof row.resolvedModel === "string" ? row.resolvedModel : undefined,
       });
     }
@@ -233,6 +275,8 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
     return [...names];
   };
   const workspaceModel = (entry) => ({ id: entry.id, provider: "anthropic", name: entry.name, thinkingLevels: [...entry.thinkingLevels] });
+  // Native fast-mode support is never advertised: PiUI does not offer it.
+  const catalogModel = (entry) => ({ ...workspaceModel(entry), supportsFast: false });
   const findModel = (id) => catalog.find((entry) => entry.id === id);
   const resourceCatalog = () => ({
     items: commands.map((name) => ({ kind: "skill", id: name, name, enabled: true, configurable: false })),
@@ -348,7 +392,6 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
   const launchSettings = {
     model: config.model?.id,
     effort: config.thinkingLevel ?? undefined,
-    fast: config.serviceTier === "fast" ? true : config.serviceTier === "standard" ? false : undefined,
   };
   let staticArgs = [];
   const buildArgs = (sessionArgs) => [
@@ -362,12 +405,13 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
     // consumed, which keeps turn accounting exact for steer and follow-up.
     "--replay-user-messages",
     "--permission-prompt-tool", "stdio",
-    "--permission-mode", permissionMode,
+    ...(permissionMode ? ["--permission-mode", permissionMode] : []),
     ...sessionArgs,
     ...(launchSettings.model ? ["--model", launchSettings.model] : []),
     ...(launchSettings.effort ? ["--effort", launchSettings.effort] : []),
     // An inline --settings layer is a per-session override, never a file edit.
-    ...(launchSettings.fast !== undefined ? ["--settings", JSON.stringify({ fastMode: launchSettings.fast })] : []),
+    // It pins standard speed even when the user's own settings enable fast mode.
+    "--settings", JSON.stringify({ fastMode: false }),
     ...staticArgs,
   ];
   const launch = async (sessionArgs) => {
@@ -411,9 +455,14 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
     if (!isRecord(initialized)) throw fail("native-handshake-failed", "The Claude Code handshake failed.");
     if (!subscriptionVerified(initialized.account)) throw subscriptionRequired();
     if (!catalogOnly) {
-      const mode = initialized.current_permission_mode;
-      if (typeof mode === "string" ? mode !== permissionMode : config.permissionMode !== "native") {
+      // A requested preset must be the mode Claude Code actually applied;
+      // `native` keeps whatever mode the user configured.
+      if (permissionMode !== undefined && initialized.current_permission_mode !== permissionMode) {
         throw fail("unsupported-policy", "Claude Code did not apply the requested permission mode.");
+      }
+      // Fast mode must be off (`on` or `cooldown` means it is enabled).
+      if (initialized.fast_mode_state != null && initialized.fast_mode_state !== "off") {
+        throw fail("unsupported-policy", FAST_MODE_ACTIVE_MESSAGE);
       }
     }
     catalog = mapModels(initialized.models);
@@ -773,7 +822,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
       stopForPolicy(SUBSCRIPTION_MESSAGE);
       return;
     }
-    if (config.permissionMode !== "native" && typeof message.permissionMode === "string" && message.permissionMode !== permissionMode) {
+    if (permissionMode !== undefined && typeof message.permissionMode === "string" && message.permissionMode !== permissionMode) {
       stopForPolicy("Claude Code left the requested permission mode; the session was stopped.");
       return;
     }
@@ -830,6 +879,13 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
   const handleRateLimit = (message) => {
     const info = message.rate_limit_info;
     if (!isRecord(info)) return;
+    // Past the subscription limit Claude Code may continue on paid extra usage.
+    // That is never allowed: the session stops at the first report. The
+    // request that reported it may already have been billed.
+    if (info.isUsingOverage === true) {
+      stopForPolicy(EXTRA_USAGE_MESSAGE);
+      return;
+    }
     if (info.status !== "allowed_warning" && info.status !== "rejected") {
       if (info.status === "allowed") rateLimitStatus = "allowed";
       return;
@@ -1053,6 +1109,12 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
     }
     const result = [];
     const toolIndex = new Map();
+    const applyResult = (part) => {
+      const index = toolIndex.get(part.tool_use_id);
+      const output = boundText(toolResultText(part.content));
+      const failedTool = part.is_error === true;
+      result[index] = { ...result[index], status: failedTool ? "failed" : "complete", text: output.text, truncated: output.truncated, safeSummary: failedTool ? "The tool failed." : "The tool completed." };
+    };
     let lineSerial = 0;
     for (const entry of chain) {
       const key = typeof entry.uuid === "string" ? entry.uuid : `line-${++lineSerial}`;
@@ -1072,12 +1134,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
           for (const part of content) {
             if (!isRecord(part)) continue;
             if (part.type === "text" && typeof part.text === "string") texts.push(part.text);
-            else if (part.type === "tool_result" && typeof part.tool_use_id === "string" && toolIndex.has(part.tool_use_id)) {
-              const index = toolIndex.get(part.tool_use_id);
-              const output = boundText(toolResultText(part.content));
-              const failedTool = part.is_error === true;
-              result[index] = { ...result[index], status: failedTool ? "failed" : "complete", text: output.text, truncated: output.truncated, safeSummary: failedTool ? "The tool failed." : "The tool completed." };
-            }
+            else if (part.type === "tool_result" && typeof part.tool_use_id === "string" && toolIndex.has(part.tool_use_id)) applyResult(part);
           }
         }
         const text = texts.filter((value) => !INTERNAL_USER_TEXT.test(value)).join("\n");
@@ -1101,6 +1158,16 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
           result.push({ id: toolBlockId(part.id), kind: "tool", label: toolName, toolName, collapsible: true, status: "interrupted", title: toolTitle(toolName, isRecord(part.input) ? part.input : {}), ...createdAt });
         }
       });
+    }
+    // Parallel tool calls: Claude Code chains the calls of one message and hangs
+    // each result off its own call, so a result can sit beside the active
+    // branch. A tool_use id names exactly one call.
+    for (const entry of entries) {
+      if (entry.type !== "user" || entry.isSidechain === true || !Array.isArray(entry.message?.content)) continue;
+      for (const part of entry.message.content) {
+        if (!isRecord(part) || part.type !== "tool_result" || typeof part.tool_use_id !== "string") continue;
+        if (toolIndex.has(part.tool_use_id) && result[toolIndex.get(part.tool_use_id)].status === "interrupted") applyResult(part);
+      }
     }
     // Snapshots are single host frames: keep the newest history within budget.
     let budget = HISTORY_TEXT_BUDGET;
@@ -1221,7 +1288,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
     }
     return {
       async models() { return catalog.map(workspaceModel); },
-      async catalogModels() { return catalog.map((entry) => ({ ...workspaceModel(entry), supportsFast: entry.supportsFast })); },
+      async catalogModels() { return catalog.map(catalogModel); },
       async resources() { return resourceCatalog(); },
       async dispose() { return { disposed: true }; },
     };
@@ -1268,9 +1335,6 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
     const effective = findModel(currentModelId ?? "default") ?? catalog[0];
     if (config.thinkingLevel && !effective?.thinkingLevels.includes(config.thinkingLevel)) {
       throw fail("unsupported-settings", "The selected Claude model does not support this effort level.");
-    }
-    if (config.serviceTier === "fast" && !effective?.supportsFast) {
-      throw fail("unsupported-settings", "The selected Claude model does not support fast mode.");
     }
     currentModelId ??= effective?.id;
   } catch (error) {
@@ -1381,7 +1445,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
       };
     },
     async models() { return catalog.map(workspaceModel); },
-    async catalogModels() { return catalog.map((entry) => ({ ...workspaceModel(entry), supportsFast: entry.supportsFast })); },
+    async catalogModels() { return catalog.map(catalogModel); },
     async resources() { return resourceCatalog(); },
     // Claude Code folds a message written during a turn into that turn at the
     // next tool boundary, which is native steering. Compaction is only a
@@ -1442,35 +1506,43 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
     async setModel({ model, thinkingLevel, serviceTier } = {}) {
       if (!isRecord(model) || typeof model.id !== "string") throw fail("invalid-request", "A Claude model id is required.");
       if (model.provider != null && model.provider !== "anthropic") throw fail("unsupported-settings", "Claude Code only runs Anthropic models.");
+      // Standard speed is always pinned; fast mode is refused before any native request.
+      if (serviceTier != null && serviceTier !== "standard") throw unsupportedSpeed(serviceTier);
       if (disposed || sessionFailed || !proc || proc.ended || restarting) throw fail("not-running", "Claude Code is not running.");
       const entry = findModel(model.id);
       if (!entry) throw fail("model-unavailable", "The selected Claude model is unavailable for this account.");
       if (thinkingLevel != null && !entry.thinkingLevels.includes(thinkingLevel)) {
         throw fail("unsupported-settings", "The selected Claude model does not support this effort level.");
       }
-      if (serviceTier != null && serviceTier !== "standard" && serviceTier !== "fast") throw fail("unsupported-settings", "The requested Claude Code speed is not supported.");
-      if (serviceTier === "fast" && !entry.supportsFast) throw fail("unsupported-settings", "The selected Claude model does not support fast mode.");
       if (entry.id !== currentModelId) {
         await controlRequest({ subtype: "set_model", model: entry.id });
         currentModelId = entry.id;
         observedModel = undefined;
         launchSettings.model = entry.id;
       }
-      const settings = {};
-      if (thinkingLevel != null && thinkingLevel !== currentEffort) settings.effortLevel = thinkingLevel;
-      if (serviceTier != null && serviceTier !== currentTier) settings.fastMode = serviceTier === "fast";
-      if (Object.keys(settings).length > 0) {
-        try {
-          await controlRequest({ subtype: "apply_flag_settings", settings });
-        } catch (error) {
-          if (error?.bridgeCode !== "native-command-rejected") throw error;
+      if (serviceTier === "standard") currentTier = "standard";
+      if (thinkingLevel != null && thinkingLevel !== currentEffort) {
+        const restartForEffort = async () => {
           if (running() || approvals.size > 0) throw fail("turn-active", "Wait for the current turn before changing these settings.");
-          if (settings.effortLevel) launchSettings.effort = settings.effortLevel;
-          if (settings.fastMode !== undefined) launchSettings.fast = settings.fastMode;
+          // An inherited effort environment override would win over the
+          // explicit --effort of the restarted CLI.
+          dropEffortOverride();
+          launchSettings.effort = thinkingLevel;
           await restartWithSettings();
+        };
+        if (effortOverridden()) {
+          // The override would also win over the runtime setting.
+          await restartForEffort();
+        } else {
+          try {
+            await controlRequest({ subtype: "apply_flag_settings", settings: { effortLevel: thinkingLevel } });
+          } catch (error) {
+            if (error?.bridgeCode !== "native-command-rejected") throw error;
+            await restartForEffort();
+          }
         }
-        if (settings.effortLevel) { currentEffort = settings.effortLevel; launchSettings.effort = settings.effortLevel; }
-        if (settings.fastMode !== undefined) { currentTier = serviceTier; launchSettings.fast = settings.fastMode; }
+        currentEffort = thinkingLevel;
+        launchSettings.effort = thinkingLevel;
       }
       return { model: workspaceModel(entry), ...(currentEffort ? { thinkingLevel: currentEffort } : {}) };
     },

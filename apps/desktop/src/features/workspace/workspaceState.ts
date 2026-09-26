@@ -128,6 +128,7 @@ export function harnessLabel(kind: HarnessKind): string {
     case 'prime-agent': return 'Prime Agent';
     case 'codex': return 'Codex';
     case 'hermes': return 'Hermes';
+    case 'claude-code': return 'Claude Code';
     default: return assertNever(kind);
   }
 }

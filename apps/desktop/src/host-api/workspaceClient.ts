@@ -16,6 +16,7 @@ const SAFE_ERRORS: Record<string, string> = {
   INVALID_ARGUMENT: 'Check the required fields and try again.',
   NOT_SUPPORTED: 'This operation is not supported by the selected harness or current mode.',
   UNAVAILABLE: 'The selected harness is unavailable. Check its installation and native sign-in.',
+  SIGN_IN_REQUIRED: 'Sign in to Claude Code with your Claude subscription: run `claude` in a terminal and use /login.',
   TURN_ACTIVE: 'Wait for the current turn.',
   NO_ACTIVE_TURN: 'There is no active turn to steer.',
   QUEUE_PENDING: 'Resolve queued messages before compacting.',
