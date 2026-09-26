@@ -6,6 +6,7 @@ import {
   orchestrationError,
   type DefinitionSummary,
   type OrchestrationClient,
+  type PipelineInput,
   type ScheduleDefinition,
   type ScheduleSnapshot,
 } from '../../host-api/orchestrationClient';
@@ -70,6 +71,14 @@ export class AutomationsStore {
     } finally {
       if (generation === this.generation) this.loading = false;
     }
+  }
+
+  /** The run inputs the scheduled pipeline asks for (empty when it has none). */
+  async pipelineInputs(launchCommandId: string): Promise<PipelineInput[]> {
+    const command = await this.client.orchestration_get_launch_command_v6({ workspaceId: this.workspaceId, id: launchCommandId });
+    if (!command) return [];
+    const pipeline = await this.client.orchestration_get_pipeline_v6({ workspaceId: this.workspaceId, id: command.value.pipelineId });
+    return pipeline?.value.inputs ? pipeline.value.inputs.map((input) => ({ ...input })) : [];
   }
 
   pipelineName(launchCommandId: string): string {

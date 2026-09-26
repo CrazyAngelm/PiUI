@@ -3,7 +3,8 @@
  * real edges and settings — nothing hidden is attached to the name.
  */
 import { emptyGraph, newGraphNode, newRouterNode, type AgentGraph, type GraphEdge, type GraphNode } from '../../features/orchestration/agentGraph';
-import type { AgentProfile } from '../../host-api/orchestrationClient';
+import type { AgentProfile, PipelineInput } from '../../host-api/orchestrationClient';
+import { profileForHarness } from '../../harness-adapters/normalize';
 
 export type TemplateId = 'chain' | 'parallel' | 'orchestrator' | 'review' | 'router';
 
@@ -25,7 +26,7 @@ type Translate = (value: string) => string;
 
 function agent(index: number, harness: AgentProfile['harness'], name: string, task: string, x: number, y: number): GraphNode {
   const node = newGraphNode(index);
-  node.profile = { ...node.profile, name, harness };
+  node.profile = { ...profileForHarness(node.profile, harness), name };
   node.task = task;
   node.x = x;
   node.y = y;
@@ -72,7 +73,8 @@ export function buildTemplate(id: TemplateId, harness: AgentProfile['harness'], 
         { name: 'approved', kind: 'boolean' },
         { name: 'feedback', kind: 'text' },
       ];
-      review.review = { field: 'approved', retryFromStepId: dev.id };
+      // Explicit, visible bound: a person decides after three rejected rounds.
+      review.review = { field: 'approved', retryFromStepId: dev.id, maxIterations: 3 };
       nodes = [dev, review];
       edges.push({ from: dev.id, to: review.id, kind: 'result' });
       break;
@@ -104,5 +106,14 @@ export function buildTemplate(id: TemplateId, harness: AgentProfile['harness'], 
       break;
     }
   }
-  return { ...graph, name: t(TEMPLATES.find((item) => item.id === id)?.title ?? 'Pipeline'), nodes, edges };
+  // Every template asks for its goal when it starts; agents receive it as run input.
+  const inputs: PipelineInput[] = [
+    {
+      name: 'task',
+      label: id === 'router' ? t('Request to classify') : id === 'parallel' ? t('Question to research') : t('What should the pipeline do?'),
+      kind: 'long-text',
+      required: true,
+    },
+  ];
+  return { ...graph, name: t(TEMPLATES.find((item) => item.id === id)?.title ?? 'Pipeline'), inputs, nodes, edges };
 }

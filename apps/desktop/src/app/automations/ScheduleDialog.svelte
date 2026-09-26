@@ -1,8 +1,10 @@
 <script lang="ts">
   import { t } from '../../features/locale/language';
   import { localDateTimeToInstant, localDateTimeValue, positiveInteger } from '../../features/orchestration/scheduleForm';
-  import type { DefinitionSummary, MissedRunPolicy, OverlapPolicy, ScheduleDefinition, ScheduleSnapshot } from '../../host-api/orchestrationClient';
-  import { Button, Dialog, Field, Input, Segmented } from '../../lib/ui';
+  import type { DefinitionSummary, MissedRunPolicy, OverlapPolicy, PipelineInput, ScheduleDefinition, ScheduleSnapshot } from '../../host-api/orchestrationClient';
+  import { Button, Dialog, Field, Input, Segmented, Spinner } from '../../lib/ui';
+  import InputFields, { formState, formValues, type InputFormState } from '../pipelines/inputs/InputFields.svelte';
+  import { checkValues, initialValues } from '../pipelines/inputs/runInputs';
 
   interface Props {
     open: boolean;
@@ -10,9 +12,16 @@
     launchCommands: readonly DefinitionSummary[];
     busy: boolean;
     error: string;
+    loadInputs: (launchCommandId: string) => Promise<PipelineInput[]>;
     onSave: (value: ScheduleDefinition, enable: boolean) => Promise<boolean>;
   }
-  let { open = $bindable(false), schedule, launchCommands, busy, error, onSave }: Props = $props();
+  let { open = $bindable(false), schedule, launchCommands, busy, error, loadInputs, onSave }: Props = $props();
+
+  let inputs = $state.raw<PipelineInput[]>([]);
+  let inputsLoading = $state(false);
+  let form = $state<InputFormState>({ values: {}, numbers: {} });
+  let inputErrors = $state<Record<string, string>>({});
+  let loadedFor = '';
 
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   let id = $state('');
@@ -52,6 +61,31 @@
     problem = '';
   });
 
+  // Each pipeline declares its own inputs; a schedule stores values for them.
+  $effect(() => {
+    if (!open || !launchCommandId || loadedFor === launchCommandId) return;
+    const target = launchCommandId;
+    loadedFor = target;
+    inputsLoading = true;
+    void loadInputs(target)
+      .then((declared) => {
+        if (loadedFor !== target) return;
+        inputs = declared;
+        const saved = schedule?.value.launchCommandId === target ? (schedule.value.inputs ?? {}) : {};
+        form = formState(declared, { ...initialValues(declared), ...saved });
+        inputErrors = {};
+      })
+      .catch(() => {
+        if (loadedFor === target) inputs = [];
+      })
+      .finally(() => {
+        if (loadedFor === target) inputsLoading = false;
+      });
+  });
+  $effect(() => {
+    if (!open) loadedFor = '';
+  });
+
   // Until the person names it, the schedule is named after its pipeline.
   $effect(() => {
     if (!nameTouched) name = launchCommands.find((command) => command.id === launchCommandId)?.name ?? '';
@@ -75,12 +109,27 @@
                 ? 'Enter a positive whole-number interval.'
                 : '';
     if (problem || !instant.ok) return undefined;
+    const checked = checkValues(inputs, formValues(inputs, form));
+    inputErrors = checked.errors;
+    if (Object.keys(checked.errors).length) {
+      problem = 'Fill in the pipeline inputs below.';
+      return undefined;
+    }
     const trigger =
       kind === 'once'
         ? { type: 'once' as const, at: instant.instant, timeZone }
         : { type: 'interval' as const, every: interval ?? 1, unit, anchorAt: instant.instant, timeZone };
-    const previous = schedule?.value;
-    return { ...(previous ?? {}), id, name: name.trim(), launchCommandId, trigger, missedRunPolicy: missed, overlapPolicy: overlap };
+    const { inputs: _previousInputs, ...previous } = schedule?.value ?? ({} as Partial<ScheduleDefinition>);
+    return {
+      ...previous,
+      id,
+      name: name.trim(),
+      launchCommandId,
+      trigger,
+      missedRunPolicy: missed,
+      overlapPolicy: overlap,
+      ...(Object.keys(checked.values).length ? { inputs: checked.values } : {}),
+    };
   }
 
   async function submit(enable: boolean): Promise<void> {
@@ -149,6 +198,14 @@
         ]}
       />
     </Field>
+    {#if inputsLoading}
+      <p class="note"><Spinner size={12} /> {$t('Loading pipeline inputs…')}</p>
+    {:else if inputs.length}
+      <fieldset class="inputs">
+        <legend>{$t('Inputs for every run')}</legend>
+        <InputFields {inputs} bind:form errors={inputErrors} idPrefix="schedule-input" disabled={busy} />
+      </fieldset>
+    {/if}
     <p class="note">{$t('Automations run only while PiUI is open; they do not wake the computer. Each run uses your harness subscriptions like a manual run.')}</p>
     {#if problem || error}<p class="error" role="alert">{$t(problem || error)}</p>{/if}
   </form>
@@ -184,7 +241,24 @@
     color: var(--piui-text);
     font: inherit;
   }
+  .inputs {
+    display: grid;
+    gap: var(--piui-space-3);
+    margin: 0;
+    padding: var(--piui-space-3);
+    border: 1px solid var(--piui-border-subtle);
+    border-radius: var(--piui-radius-md);
+  }
+  .inputs legend {
+    padding: 0 4px;
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
+    font-weight: var(--piui-weight-semibold);
+  }
   .note {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     margin: 0;
     color: var(--piui-text-muted);
     font-size: var(--piui-text-sm);

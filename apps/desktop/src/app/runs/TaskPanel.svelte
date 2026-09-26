@@ -28,6 +28,7 @@
     type StepView,
   } from './runPresentation';
   import type { RunsStore } from './runsStore.svelte';
+  import { completedReviewRounds } from '../../host-api/runInputs';
   import RunInputsView from './RunInputsView.svelte';
 
   interface Props {
@@ -69,6 +70,9 @@
   const receipts = $derived(sessionId ? (runs.usage[sessionId] ?? []) : []);
   const tokens = $derived(usageTotal(receipts, 'totalTokens'));
   const live = $derived(attempt < 0);
+  const review = $derived(view.step.review);
+  const rounds = $derived(review ? completedReviewRounds(run, view.stepId) : 0);
+  const limitReached = $derived(view.task?.status === 'awaitingApproval' && view.task.failure?.code === 'review-limit-reached');
   const busyKey = $derived(runs.busy);
   const dependencies = $derived(
     view.step.dependencyStepIds.map((id) => {
@@ -138,6 +142,9 @@
       </div>
     {/if}
     <span class="spacer"></span>
+    {#if review}
+      <span class="muted small" title={$t('Review rounds')}>{review.maxIterations ? $t('Round {0} of {1}', [Math.max(rounds, 1), review.maxIterations]) : $t('Round {0}', [Math.max(rounds, 1)])}</span>
+    {/if}
     {#if tokens !== undefined}<span class="muted small" title={$t('Tokens used by this step')}>{compactNumber(tokens)} {$t('tokens')}</span>{/if}
   </div>
 
@@ -156,8 +163,14 @@
       {#if view.state === 'awaitingApproval'}
         <Button size="sm" variant="primary" loading={busyKey === `decide:${view.stepId}`} disabled={!!busyKey || runs.safeMode} onclick={() => void runs.decide(view.stepId, true)}>
           {#snippet leading()}<Check />{/snippet}
-          {$t('Approve result')}
+          {limitReached ? $t('Accept last result') : $t('Approve result')}
         </Button>
+        {#if limitReached && review}
+          <Button size="sm" loading={busyKey === `repeat:${review.retryFromStepId}`} disabled={!!busyKey || runs.safeMode} onclick={() => void runs.repeat(review.retryFromStepId)}>
+            {#snippet leading()}<RotateCcw />{/snippet}
+            {$t('One more round')}
+          </Button>
+        {/if}
         <Button size="sm" variant="danger" disabled={!!busyKey || runs.safeMode} onclick={() => void runs.decide(view.stepId, false)}>{$t('Reject')}</Button>
       {/if}
       {#if view.state === 'uncertain' && view.sessionId}
@@ -170,7 +183,7 @@
           {$t('Record outcome…')}
         </Button>
       {/if}
-      {#if canRepeat(view.task) && run.status !== 'cancelled'}
+      {#if canRepeat(view.task) && run.status !== 'cancelled' && !limitReached}
         <Button size="sm" variant="ghost" disabled={!!busyKey || runs.safeMode} onclick={() => (confirmRepeat = true)}>
           {#snippet leading()}<RotateCcw />{/snippet}
           {$t('Run again from here')}

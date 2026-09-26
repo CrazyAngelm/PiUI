@@ -36,10 +36,11 @@
         {:else}<input {disabled} value={String(node.condition.equals)} oninput={(event) => node.condition && onchange({condition:{...node.condition,equals:conditionField?.kind === 'number' ? Number(event.currentTarget.value) : event.currentTarget.value}})} />{/if}
       </label>
     {/if}
-    <label>{$t('Review verdict')}<select {disabled} value={node.review?.field ?? ''} onchange={(event) => onchange({ review:event.currentTarget.value ? { field:event.currentTarget.value,retryFromStepId:node.review?.retryFromStepId ?? '' } : undefined })}><option value="">{$t('No revision loop')}</option>{#each verdicts as field}<option value={field.name}>{field.name}</option>{/each}</select></label>
+    <label>{$t('Review verdict')}<select {disabled} value={node.review?.field ?? ''} onchange={(event) => onchange({ review:event.currentTarget.value ? { field:event.currentTarget.value,retryFromStepId:node.review?.retryFromStepId ?? '',maxIterations:node.review?.maxIterations ?? 3 } : undefined })}><option value="">{$t('No revision loop')}</option>{#each verdicts as field}<option value={field.name}>{field.name}</option>{/each}</select></label>
     {#if node.review}
       <label>{$t('If false, return to')}<select {disabled} value={node.review.retryFromStepId} onchange={(event) => node.review && onchange({review:{...node.review,retryFromStepId:event.currentTarget.value}})}><option value="" disabled>{$t('Select agent')}</option>{#each nodes.filter(candidate => candidate.id !== node.id && candidate.executionMode !== 'callable') as candidate}<option value={candidate.id}>{candidate.profile.name}</option>{/each}</select></label>
-      <small>{$t('True accepts the review. False repeats the upstream work with feedback. Repeated identical feedback pauses scheduling.')}</small>
+      <label>{$t('Maximum rounds')}<input {disabled} type="number" min="1" max="20" step="1" inputmode="numeric" placeholder={$t('No limit')} value={node.review.maxIterations ?? ''} onchange={(event) => { if (!node.review) return; const raw = event.currentTarget.value.trim(); const limit = Number(raw); const { maxIterations: _previous, ...rest } = node.review; onchange({ review: raw === '' ? rest : { ...rest, maxIterations: Number.isInteger(limit) ? Math.min(20, Math.max(1, limit)) : 3 } }); }} /></label>
+      <small>{$t('True accepts the review. False repeats the upstream work with feedback. After the maximum rounds a person decides; repeated identical feedback pauses scheduling.')}</small>
     {/if}
   {/if}
 </section>

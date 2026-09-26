@@ -8,6 +8,7 @@
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import { t } from '../../features/locale/language';
   import { harnessConfigurations, permissionLabels } from '../../harness-adapters';
+  import { profileForHarness } from '../../harness-adapters/normalize';
   import type { AgentProfile } from '../../host-api/orchestrationClient';
   import type { GraphNode } from '../../features/orchestration/agentGraph';
   import ResourcePicker from '../../features/orchestration/ResourcePicker.svelte';
@@ -97,17 +98,16 @@
 
   function setHarness(harness: AgentProfile['harness']): void {
     if (harness === profile.harness) return;
-    const next = harnessConfigurations[harness];
+    const next = profileForHarness(profile, harness);
+    // Explicit undefined clears settings the new harness cannot honour.
     patch({
-      harness,
-      model: '',
-      modelProvider: undefined,
-      reasoning: undefined,
-      serviceTier: 'standard',
-      resourceRules: undefined,
-      baseInstructions: undefined,
-      networkAccess: next.networkAccess ? profile.networkAccess : undefined,
-      permissionMode: next.permissionModes.includes(profile.permissionMode) ? profile.permissionMode : next.defaultPermission,
+      ...next,
+      modelProvider: next.modelProvider,
+      reasoning: next.reasoning,
+      serviceTier: next.serviceTier,
+      resourceRules: next.resourceRules,
+      baseInstructions: next.baseInstructions,
+      networkAccess: next.networkAccess,
     });
   }
 
@@ -118,7 +118,7 @@
       model: id,
       modelProvider: provider || undefined,
       reasoning: next?.thinkingLevels?.includes(profile.reasoning ?? '') ? profile.reasoning : undefined,
-      serviceTier: next?.supportsFast ? profile.serviceTier : 'standard',
+      serviceTier: configuration.speed ? (next?.supportsFast ? profile.serviceTier : 'standard') : undefined,
     });
   }
 
@@ -162,7 +162,7 @@
   {#if problems.length}
     <ul class="problems" role="list">
       {#each problems as problem (problem)}
-        <li><CircleAlert size={13} /> {$t(problem)}</li>
+        <li><CircleAlert size={13} /> {editor.describeIssue(problem, (value) => $t(value))}</li>
       {/each}
     </ul>
   {/if}

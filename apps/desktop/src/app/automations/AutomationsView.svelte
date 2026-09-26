@@ -138,6 +138,7 @@
   launchCommands={automations.launchCommands}
   busy={automations.busy.startsWith('save') || automations.busy.startsWith('enable')}
   error={automations.actionError}
+  loadInputs={(id) => automations.pipelineInputs(id)}
   onSave={(value, enable) => automations.save(value, enable)}
 />
 

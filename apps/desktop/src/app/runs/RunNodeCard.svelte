@@ -74,7 +74,9 @@
       {:else}<Clock size={13} />{/if}
     </span>
     <span class="status__label">{$t(STEP_LABEL[view.state])}</span>
-    {#if rounds > 0}
+    {#if view.step.review?.maxIterations}
+      <span class="chip" title={$t('Review rounds')}><Repeat size={10} /> {Math.min(rounds + 1, view.step.review.maxIterations)}/{view.step.review.maxIterations}</span>
+    {:else if rounds > 0}
       <span class="chip" title={$t('Earlier attempts: {0}', [rounds])}><Repeat size={10} /> {rounds + 1}</span>
     {/if}
     {#if view.spawned}

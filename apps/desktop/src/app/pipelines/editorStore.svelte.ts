@@ -14,6 +14,8 @@ import {
   type DefinitionSummary,
   type OrchestrationClient,
   type OrchestrationRunV6,
+  type PipelineInput,
+  type RunInputValue,
 } from '../../host-api/orchestrationClient';
 import type { HarnessModelsResult } from '../../../../../contracts/harness-models-v18';
 import {
@@ -53,6 +55,28 @@ function syncRouterInputs(graph: AgentGraph): AgentGraph {
 
 export function edgeKey(edge: { from: string; to: string; kind: ConnectionKind; branchId?: string }): string {
   return `${edge.from}:${edge.to}:${edge.kind}:${edge.branchId ?? ''}`;
+}
+
+/** Dagre layout of result and route edges, left to right; returns a new graph. */
+export function autoLayout(graph: AgentGraph, heights: ReadonlyMap<string, number> = new Map()): AgentGraph {
+  if (!graph.nodes.length) return graph;
+  const layout = new dagre.graphlib.Graph();
+  layout.setGraph({ rankdir: 'LR', nodesep: 48, ranksep: 96, marginx: 40, marginy: 40 });
+  layout.setDefaultEdgeLabel(() => ({}));
+  for (const node of graph.nodes) {
+    layout.setNode(node.id, { width: NODE_WIDTH, height: heights.get(node.id) ?? graphNodeHeight(node) });
+  }
+  for (const edge of graph.edges) {
+    if (edge.kind === 'result' || edge.kind === 'route' || edge.kind === 'spawn') layout.setEdge(edge.from, edge.to);
+  }
+  dagre.layout(layout);
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node) => {
+      const placed = layout.node(node.id);
+      return placed ? { ...node, x: Math.round(placed.x - NODE_WIDTH / 2), y: Math.round(placed.y - placed.height / 2) } : node;
+    }),
+  };
 }
 
 export class PipelineEditorStore {
@@ -172,7 +196,9 @@ export class PipelineEditorStore {
       this.operation = 'open';
       try {
         const opened = await openGraph(this.client, this.workspaceId, id);
-        this.load(opened.graph, opened.revisions);
+        // Lay out graphs that have no canvas positions yet, before the baseline,
+        // so opening one never reports unsaved changes.
+        this.load(opened.needsLayout ? autoLayout(opened.graph) : opened.graph, opened.revisions);
       } catch (error) {
         this.errors = [message(error)];
       } finally {
@@ -374,23 +400,14 @@ export class PipelineEditorStore {
   /** Layered left-to-right layout over result and route edges. */
   arrange(heights: ReadonlyMap<string, number> = new Map()): void {
     if (!this.graph.nodes.length) return;
-    const layout = new dagre.graphlib.Graph();
-    layout.setGraph({ rankdir: 'LR', nodesep: 48, ranksep: 96, marginx: 40, marginy: 40 });
-    layout.setDefaultEdgeLabel(() => ({}));
-    for (const node of this.graph.nodes) {
-      layout.setNode(node.id, { width: NODE_WIDTH, height: heights.get(node.id) ?? graphNodeHeight(node) });
-    }
-    for (const edge of this.graph.edges) {
-      if (edge.kind === 'result' || edge.kind === 'route') layout.setEdge(edge.from, edge.to);
-    }
-    dagre.layout(layout);
-    this.commit({
-      ...this.graph,
-      nodes: this.graph.nodes.map((node) => {
-        const placed = layout.node(node.id);
-        return placed ? { ...node, x: Math.round(placed.x - NODE_WIDTH / 2), y: Math.round(placed.y - placed.height / 2) } : node;
-      }),
-    });
+    this.commit(autoLayout(this.graph, heights));
+  }
+
+  /** Declared run inputs (asked for when the pipeline starts). */
+  setInputs(inputs: PipelineInput[], live = false): void {
+    const next = { ...this.graph, inputs: inputs.length ? inputs : undefined };
+    if (live) this.setLive(next);
+    else this.commit(next);
   }
 
   // ---- catalogs ------------------------------------------------------------
@@ -434,7 +451,7 @@ export class PipelineEditorStore {
     }
   }
 
-  async save(run = false): Promise<boolean> {
+  async save(run = false, inputs: Readonly<Record<string, RunInputValue>> | undefined = undefined): Promise<boolean> {
     if (this.readOnly) return false;
     this.validationShown = true;
     this.errors = [];
@@ -459,6 +476,7 @@ export class PipelineEditorStore {
               teamId: this.graph.teamId,
               pipelineId: this.graph.pipelineId,
               launchCommandId: this.graph.id,
+              ...(inputs && Object.keys(inputs).length ? { inputs } : {}),
             },
           },
           this.safeMode,
@@ -482,6 +500,18 @@ export class PipelineEditorStore {
 
   problemCount(): number {
     return this.issues.length + this.preflight.length;
+  }
+
+  /**
+   * Issue text for people: validators name agents by their stable id, which
+   * means nothing on screen. Localizes first, then shows agent names instead.
+   */
+  describeIssue(message: string, translate: (value: string) => string = (value) => value): string {
+    const colon = message.indexOf(': ');
+    const head = colon > 0 ? message.slice(0, colon) : '';
+    const node = head ? this.graph.nodes.find((item) => item.id === head) : undefined;
+    if (!node) return translate(message);
+    return `${node.profile.name || head}: ${translate(message.slice(colon + 2))}`;
   }
 
   nodeProblems(id: string): string[] {

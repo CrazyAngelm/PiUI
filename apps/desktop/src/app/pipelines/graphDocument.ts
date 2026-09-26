@@ -17,6 +17,8 @@ export type Revisions = Map<string, number>;
 export interface OpenedGraph {
   graph: AgentGraph;
   revisions: Revisions;
+  /** No saved canvas positions (e.g. created by the assistant, CLI or another device). */
+  needsLayout: boolean;
 }
 
 export class GraphDocumentError extends Error {
@@ -137,10 +139,12 @@ export async function openGraph(client: OrchestrationClient, workspaceId: string
     pipelineId: pipeline.value.id,
     orchestratorId: team.value.orchestratorMemberId,
     spawnedAgentsJoinTeam: team.value.spawnedAgentsJoinTeam,
+    ...(pipeline.value.inputs?.length ? { inputs: pipeline.value.inputs.map((input) => ({ ...input })) } : {}),
     nodes,
     edges,
   };
   const positions = readPositions(workspaceId, commandId);
+  const needsLayout = graph.nodes.length > 1 && !graph.nodes.some((node) => positions.has(node.id));
   graph.nodes = graph.nodes.map((node) => {
     const position = positions.get(node.id);
     return position ? { ...node, x: Math.max(0, position.x), y: Math.max(0, position.y) } : node;
@@ -154,7 +158,7 @@ export async function openGraph(client: OrchestrationClient, workspaceId: string
       .filter((node) => profiles.has(node.profile.id))
       .map((node) => [node.profile.id, profiles.get(node.profile.id)!.revision] as [string, number]),
   ]);
-  return { graph, revisions };
+  return { graph, revisions, needsLayout };
 }
 
 /** Saves the whole graph atomically; returns the revisions to use next time. */

@@ -18,11 +18,15 @@
   import Sparkles from '@lucide/svelte/icons/sparkles';
   import { t } from '../../features/locale/language';
   import { Badge, Button, Dialog, Menu, Picker, Spinner, matchesShortcut, toasts, type PickerItem } from '../../lib/ui';
-  import type { AgentProfile, OrchestrationRunV6 } from '../../host-api/orchestrationClient';
+  import type { AgentProfile, OrchestrationRunV6, RunInputValue } from '../../host-api/orchestrationClient';
   import { orchestrationHost } from '../../host-api/orchestrationClient';
   import FlowCanvas from './canvas/FlowCanvas.svelte';
   import type { FlowApi } from './canvas/FlowBridge.svelte';
   import NodeInspector from './NodeInspector.svelte';
+  import StartInspector from './StartInspector.svelte';
+  import { profileForHarness } from '../../harness-adapters/normalize';
+  import RunInputsDialog from './inputs/RunInputsDialog.svelte';
+  import { START_NODE_ID } from './canvas/StartNodeCard.svelte';
   import { PipelineEditorStore } from './editorStore.svelte';
   import { TEMPLATES, buildTemplate, type TemplateId } from './templates';
   import { useWorkspace } from '../shell/context';
@@ -41,6 +45,7 @@
   let api = $state.raw<FlowApi | undefined>();
   let filePicker = $state<HTMLInputElement | null>(null);
   let addMenuOpen = $state(false);
+  let inputsOpen = $state(false);
   const ASSISTANT_KEY = 'piui.pipeline.assistant.open';
   let assistantOpen = $state(readAssistantOpen());
   let assistantModule = $state<Promise<typeof import('./assistant/AssistantPanel.svelte')> | undefined>();
@@ -86,11 +91,23 @@
     return () => onDirtyChange(false);
   });
 
-  function addAt(kind: 'agent' | 'router', screen: { x: number; y: number } | undefined = undefined): void {
+  /** First model of the harness's native catalog, so new agents can run at once. */
+  async function defaultModel(harness: AgentProfile['harness']): Promise<Pick<AgentProfile, 'model' | 'modelProvider'> | undefined> {
+    if (!editor.catalogs[harness]) await editor.loadCatalog(harness);
+    const model = editor.catalogs[harness]?.models[0];
+    return model ? { model: model.id, ...(model.provider ? { modelProvider: model.provider } : {}) } : undefined;
+  }
+
+  async function addAt(kind: 'agent' | 'router', screen: { x: number; y: number } | undefined = undefined): Promise<void> {
     if (editor.readOnly) return;
     const point = screen && api ? api.toFlow(screen) : (api?.viewportCenter() ?? { x: 80, y: 80 });
     const id = editor.addNode(kind, { x: point.x - 124, y: point.y - 50 });
-    if (kind === 'agent') editor.updateProfile(id, { harness: defaultHarness });
+    if (kind !== 'agent') return;
+    const harness = defaultHarness;
+    const current = editor.graph.nodes.find((node) => node.id === id)?.profile;
+    if (!current) return;
+    const moved = profileForHarness(current, harness);
+    editor.updateProfile(id, { ...moved, serviceTier: moved.serviceTier, networkAccess: moved.networkAccess, ...((await defaultModel(harness)) ?? {}) });
   }
 
   async function addFromLibrary(profileId: string): Promise<void> {
@@ -104,8 +121,15 @@
     }
   }
 
-  function useTemplate(id: TemplateId): void {
-    editor.startFrom(buildTemplate(id, defaultHarness, (value) => $t(value)));
+  async function useTemplate(id: TemplateId): Promise<void> {
+    const harness = defaultHarness;
+    const model = await defaultModel(harness);
+    const graph = buildTemplate(id, harness, (value) => $t(value));
+    editor.startFrom(
+      model
+        ? { ...graph, nodes: graph.nodes.map((node) => (node.kind === 'router' && node.router?.mode === 'program' ? node : { ...node, profile: { ...node.profile, ...model } })) }
+        : graph,
+    );
     setTimeout(() => api?.fitView(), 60);
   }
 
@@ -136,8 +160,19 @@
   }
 
   async function run(): Promise<void> {
-    const ok = await editor.save(true);
+    // Pipelines that ask for inputs start from the form; the rest start now.
+    if (editor.graph.inputs?.length) {
+      inputsOpen = true;
+      return;
+    }
+    await startRun(undefined);
+  }
+
+  async function startRun(values: Record<string, RunInputValue> | undefined): Promise<boolean> {
+    const ok = await editor.save(true, values);
     if (!ok && problemCount) toasts.error($t('The pipeline has problems'), $t('Open a highlighted node to see what to fix.'));
+    else if (!ok && editor.errors.length) toasts.error($t('Could not start the run'), $t(editor.errors[0]!));
+    return ok;
   }
 
   function focusNode(id: string): void {
@@ -245,7 +280,7 @@
 
   <div class="workspace">
     <div class="editor__canvas">
-      <FlowCanvas {editor} onready={(next) => (api = next)} onAddRequest={(point) => addAt('agent', point)} />
+      <FlowCanvas {editor} onready={(next) => (api = next)} onAddRequest={(point) => void addAt('agent', point)} />
 
       <div class="add">
         <Menu
@@ -253,8 +288,8 @@
           align="start"
           items={[
             { type: 'label', label: $t('Add to canvas') },
-            { label: $t('Agent'), icon: Bot, onSelect: () => addAt('agent') },
-            { label: $t('Router'), icon: Split, onSelect: () => addAt('router') },
+            { label: $t('Agent'), icon: Bot, onSelect: () => void addAt('agent') },
+            { label: $t('Router'), icon: Split, onSelect: () => void addAt('router') },
             ...(profileItems.length
               ? [{ type: 'separator' as const }, { type: 'label' as const, label: $t('From library') }, ...profileItems.slice(0, 8).map((item) => ({ label: item.label, icon: Library, onSelect: () => void addFromLibrary(item.value) }))]
               : []),
@@ -282,7 +317,7 @@
           </button>
           <div class="templates">
             {#each TEMPLATES as template (template.id)}
-              <button type="button" class="template" onclick={() => useTemplate(template.id)} disabled={editor.readOnly}>
+              <button type="button" class="template" onclick={() => void useTemplate(template.id)} disabled={editor.readOnly}>
                 <strong>{$t(template.title)}</strong>
                 <span>{$t(template.description)}</span>
               </button>
@@ -296,10 +331,10 @@
           <strong><CircleAlert size={14} /> {$t('{0} problems', [problemCount])}</strong>
           <ul>
             {#each editor.issues as issue, index (index)}
-              <li><button type="button" onclick={() => issue.nodeIds[0] && focusNode(issue.nodeIds[0])}>{$t(issue.message)}</button></li>
+              <li><button type="button" onclick={() => issue.nodeIds[0] && focusNode(issue.nodeIds[0])}>{editor.describeIssue(issue.message, (value) => $t(value))}</button></li>
             {/each}
             {#each editor.preflight as issue, index (index)}
-              <li><button type="button" onclick={() => focusNode(issue.nodeId)}>{$t(issue.message)}</button></li>
+              <li><button type="button" onclick={() => focusNode(issue.nodeId)}>{editor.describeIssue(issue.message, (value) => $t(value))}</button></li>
             {/each}
           </ul>
         </div>
@@ -310,6 +345,8 @@
       {#key selected.id}
         <NodeInspector {editor} node={selected} onClose={() => (editor.selectedId = '')} onFocusNode={focusNode} />
       {/key}
+    {:else if editor.selectedId === START_NODE_ID}
+      <StartInspector {editor} onClose={() => (editor.selectedId = '')} />
     {/if}
     {#if assistantOpen && assistantModule}
       {#await assistantModule then module}
@@ -320,6 +357,14 @@
     {/if}
   </div>
 </section>
+
+<RunInputsDialog
+  bind:open={inputsOpen}
+  pipelineName={editor.graph.name}
+  inputs={editor.graph.inputs ?? []}
+  busy={editor.operation === 'run'}
+  onStart={(values) => startRun(values)}
+/>
 
 <Dialog
   open={editor.pending !== undefined}

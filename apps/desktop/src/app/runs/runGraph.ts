@@ -149,11 +149,14 @@ export function failureText(code: string): string {
   const known: Record<string, string> = {
     'result-rejected': 'A person rejected the result.',
     'result-invalid': 'The agent returned a result that does not match the declared fields.',
-    'review-retry-conflict': 'The review could not restart work that was still running.',
     'native-turn-failed': 'The agent’s turn failed in the harness.',
     'native-unavailable': 'The harness was not available.',
     'dependency-failed': 'An earlier step failed.',
     'cancelled': 'The step was cancelled.',
+    'review-limit-reached': 'The review loop reached its round limit. Accept the last result, reject it, or allow one more round.',
+    'review-verdict-missing': 'The reviewer did not return its verdict field.',
+    'review-retry-conflict': 'The review could not restart work that was still running.',
+    'OPERATOR_ASSERTED_FAILURE': 'A person recorded this step as failed.',
   };
   return known[code] ?? code;
 }

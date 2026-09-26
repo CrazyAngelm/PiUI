@@ -1,15 +1,15 @@
 /**
- * Client-side mirror of the coordinator's run-input rules, used to give
- * immediate feedback in forms. The host validates again and is authoritative.
+ * Form helpers for run inputs. Validation delegates to the shared rules in
+ * `host-api/runInputs.ts`, which mirror the Rust coordinator; the host checks
+ * again and stays authoritative. This file only adds per-field presentation.
  */
 import type { PipelineInput, PipelineInputKind, RunInputValue } from '../../../host-api/orchestrationClient';
-
-export const INPUT_NAME = /^[a-z][A-Za-z0-9_]{0,63}$/u;
-export const MAX_INPUTS = 20;
-export const MAX_LABEL = 120;
-export const MAX_OPTIONS = 50;
-export const MAX_TEXT_BYTES = 32 * 1024;
-export const MAX_TOTAL_BYTES = 128 * 1024;
+import {
+  MAX_PIPELINE_INPUTS,
+  pipelineInputIssues,
+  resolveRunInputs,
+  type RunInputError,
+} from '../../../host-api/runInputs';
 
 export const INPUT_KINDS: readonly PipelineInputKind[] = ['long-text', 'text', 'number', 'boolean', 'choice'];
 
@@ -20,8 +20,6 @@ export const INPUT_KIND_LABEL: Record<PipelineInputKind, string> = {
   boolean: 'Yes / no',
   choice: 'Choice',
 };
-
-const bytes = (value: string) => new TextEncoder().encode(value).length;
 
 /** "What should be reviewed?" -> "whatShouldBeReviewed", unique among `taken`. */
 export function inputNameFrom(label: string, taken: ReadonlySet<string>): string {
@@ -45,49 +43,17 @@ export interface DeclarationProblem {
   message: string;
 }
 
-/** Problems in the pipeline's input declarations (editor side). */
+/** The coordinator's declaration rules, attributed to the input they concern. */
 export function declarationProblems(inputs: readonly PipelineInput[]): DeclarationProblem[] {
   const problems: DeclarationProblem[] = [];
-  if (inputs.length > MAX_INPUTS) problems.push({ index: MAX_INPUTS, message: 'A pipeline can ask for at most 20 inputs.' });
   const seen = new Set<string>();
   inputs.forEach((input, index) => {
-    if (!input.label.trim()) problems.push({ index, message: 'Give the input a label.' });
-    else if (input.label.length > MAX_LABEL) problems.push({ index, message: 'Keep the label under 120 characters.' });
-    if (!INPUT_NAME.test(input.name)) problems.push({ index, message: 'The name must start with a lowercase letter and use only letters, digits and _.' });
-    else if (seen.has(input.name)) problems.push({ index, message: 'Two inputs use the same name.' });
+    for (const message of pipelineInputIssues([input])) problems.push({ index, message });
+    if (seen.has(input.name)) problems.push({ index, message: 'Two inputs use the same name.' });
     seen.add(input.name);
-    if (input.kind === 'choice') {
-      const options = input.options ?? [];
-      if (options.length === 0 || options.length > MAX_OPTIONS) problems.push({ index, message: 'A choice needs between 1 and 50 options.' });
-      else if (options.some((option) => !option.trim()) || new Set(options).size !== options.length) {
-        problems.push({ index, message: 'Choice options must be unique and not empty.' });
-      }
-    }
-    if (input.defaultValue !== undefined && valueProblem(input, input.defaultValue)) {
-      problems.push({ index, message: 'The default value does not fit the input type.' });
-    }
   });
+  if (inputs.length > MAX_PIPELINE_INPUTS) problems.push({ index: MAX_PIPELINE_INPUTS, message: 'A pipeline can ask for at most 20 inputs.' });
   return problems;
-}
-
-function valueProblem(input: PipelineInput, value: RunInputValue): string {
-  switch (input.kind) {
-    case 'text':
-    case 'long-text':
-      if (typeof value !== 'string') return 'Enter text.';
-      if (bytes(value) > MAX_TEXT_BYTES) return 'This text is too long (32 KB at most).';
-      return '';
-    case 'number':
-      return typeof value === 'number' && Number.isFinite(value) ? '' : 'Enter a number.';
-    case 'boolean':
-      return typeof value === 'boolean' ? '' : 'Choose yes or no.';
-    case 'choice':
-      return typeof value === 'string' && (input.options ?? []).includes(value) ? '' : 'Choose one of the options.';
-    default: {
-      const exhaustive: never = input.kind;
-      return exhaustive;
-    }
-  }
 }
 
 export function initialValues(inputs: readonly PipelineInput[]): Record<string, RunInputValue | undefined> {
@@ -96,37 +62,60 @@ export function initialValues(inputs: readonly PipelineInput[]): Record<string, 
   );
 }
 
+export function inputErrorMessage(error: RunInputError): string {
+  switch (error.kind) {
+    case 'undeclared':
+      return 'This pipeline does not ask for this value.';
+    case 'missing-required':
+      return 'This input is required.';
+    case 'wrong-kind':
+      return error.inputKind === 'number'
+        ? 'Enter a number.'
+        : error.inputKind === 'boolean'
+          ? 'Choose yes or no.'
+          : error.inputKind === 'choice'
+            ? 'Choose one of the options.'
+            : 'Enter text.';
+    case 'not-an-option':
+      return 'Choose one of the options.';
+    case 'too-long':
+      return 'This text is too long (32 KB at most).';
+    case 'total-too-long':
+      return 'All inputs together are too long (128 KB at most).';
+    default: {
+      const exhaustive: never = error;
+      return exhaustive;
+    }
+  }
+}
+
 export interface ValuesCheck {
   values: Record<string, RunInputValue>;
   errors: Record<string, string>;
 }
 
-/** Drops empty optional values, applies defaults and reports per-field errors. */
+/**
+ * Per-field errors for a start form. Blank optional text is left out; the
+ * resulting values are exactly what the shared rules accept.
+ */
 export function checkValues(inputs: readonly PipelineInput[], raw: Readonly<Record<string, RunInputValue | undefined>>): ValuesCheck {
-  const values: Record<string, RunInputValue> = {};
-  const errors: Record<string, string> = {};
-  let total = 0;
+  const supplied: Record<string, RunInputValue> = {};
   for (const input of inputs) {
-    let value = raw[input.name];
-    if (typeof value === 'string' && input.kind !== 'choice' && value.trim() === '') value = undefined;
-    value ??= input.defaultValue;
-    if (value === undefined) {
-      if (input.required) errors[input.name] = 'This input is required.';
-      continue;
-    }
-    const problem = valueProblem(input, value);
-    if (problem) {
-      errors[input.name] = problem;
-      continue;
-    }
-    if (typeof value === 'string') total += bytes(value);
-    values[input.name] = value;
+    const value = raw[input.name];
+    if (value === undefined || (typeof value === 'string' && input.kind !== 'choice' && value.trim() === '')) continue;
+    supplied[input.name] = value;
   }
-  if (total > MAX_TOTAL_BYTES) {
-    const last = [...inputs].reverse().find((input) => typeof values[input.name] === 'string');
-    if (last) errors[last.name] = 'All inputs together are too long (128 KB at most).';
+  const errors: Record<string, string> = {};
+  for (const input of inputs) {
+    const single = resolveRunInputs([input], Object.hasOwn(supplied, input.name) ? { [input.name]: supplied[input.name] } : {});
+    if (!single.ok) errors[input.name] = inputErrorMessage(single.error);
   }
-  return { values, errors };
+  const whole = resolveRunInputs(inputs, supplied);
+  if (!whole.ok && whole.error.kind === 'total-too-long') {
+    const last = [...inputs].reverse().find((input) => typeof supplied[input.name] === 'string');
+    if (last) errors[last.name] = inputErrorMessage(whole.error);
+  }
+  return { values: whole.ok ? { ...whole.values } : supplied, errors };
 }
 
 /** The default first input for new pipelines: the task itself. */
