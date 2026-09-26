@@ -27,6 +27,11 @@ schedule never adds or widens capabilities.
 - If the durable journal cannot commit a due claim, the worker logs one paused
   state and waits for an explicit schedule mutation or host restart. It neither
   spins on the failed write nor starts native work without the commit.
+- Journal writers are serialized and each commit is still one complete fsynced
+  generation, checked against the latest committed revisions. Readers (catalog,
+  definitions, runs, schedules, usage) are served the last committed generation
+  without waiting for a writer's copy, serialization or fsync, and these read
+  commands run on the blocking pool instead of the WebView main thread.
 - Safe mode is read-only and never starts the schedule worker.
 - Disable or delete before a claim prevents that occurrence. It does not cancel a
   run already created; use the ordinary run cancellation flow for that.
