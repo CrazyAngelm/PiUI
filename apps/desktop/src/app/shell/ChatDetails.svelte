@@ -11,14 +11,17 @@
   import { Button, IconButton } from '../../lib/ui';
   import { harnessMeta } from '../harnessMeta';
   import AgentModePicker from './AgentModePicker.svelte';
+  import ChatOrigin from '../worktrees/ChatOrigin.svelte';
   import { useWorkspace } from './context';
 
   interface Props {
     snapshot: SessionSnapshot;
     onClose: () => void;
     onDelete: () => void;
+    /** Opens the review panel of this chat. */
+    onReview?: () => void;
   }
-  let { snapshot, onClose, onDelete }: Props = $props();
+  let { snapshot, onClose, onDelete, onReview }: Props = $props();
   const store = useWorkspace();
 
   const session = $derived(snapshot.session);
@@ -70,6 +73,8 @@
         {$t('Part of a pipeline run')}
       </Button>
     {/if}
+
+    <ChatOrigin sessionId={session.id} {onReview} />
 
     <section>
       <h3>{$t('What this agent can do here')}</h3>

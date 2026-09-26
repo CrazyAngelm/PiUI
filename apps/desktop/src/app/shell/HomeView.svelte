@@ -8,6 +8,7 @@
   import { relativeTime } from '../format';
   import HarnessMark from './HarnessMark.svelte';
   import NewChatComposer from './NewChatComposer.svelte';
+  import { newChatPlacement } from '../worktrees/newChatPlacement.svelte';
   import { useWorkspace } from './context';
 
   interface Props {
@@ -15,6 +16,7 @@
   }
   let { onTrust }: Props = $props();
   const store = useWorkspace();
+  const loadHandoffBanner = () => import('../handoff/HandoffBanner.svelte');
 
   const recent = $derived(
     [...store.catalog.sessions]
@@ -43,7 +45,14 @@
       {/if}
     </div>
 
-    <NewChatComposer {onTrust} />
+    {#if newChatPlacement.handoff}
+      <!-- "Continue in another harness": loaded only when one is pending. -->
+      {#await loadHandoffBanner() then banner}<banner.default />{/await}
+    {/if}
+    <!-- A handoff replaces the draft: the composer remounts to read it. -->
+    {#key newChatPlacement.epoch}
+      <NewChatComposer {onTrust} />
+    {/key}
 
     <div class="shortcuts">
       <button type="button" class="card" onclick={() => store.navigate({ name: 'pipelines', section: 'systems' })}>

@@ -19,7 +19,7 @@ describe('UI Lab host scenarios', () => {
     vi.useRealTimers();
   });
 
-  it('seeds the demo: four projects, thirteen chats on all harnesses and linked run sessions', async () => {
+  it('seeds the demo: four projects, fourteen chats on all harnesses and linked run sessions', async () => {
     const catalog = await catalogOf('demo');
     expect(catalog.protocol).toBe(15);
     expect(catalog.safeMode).toBe(false);
@@ -30,7 +30,9 @@ describe('UI Lab host scenarios', () => {
       ['legacy-repo', 'restricted', false],
     ]);
     const chats = catalog.sessions.filter((session) => session.runId === undefined);
-    expect(chats).toHaveLength(13);
+    // Thirteen seeded chats plus the worktree chat of the session tools fake.
+    expect(chats).toHaveLength(14);
+    expect(chats.some((session) => session.title === 'Try a denser review layout')).toBe(true);
     expect(new Set(chats.map((session) => session.harness))).toEqual(new Set(['pi', 'prime-agent', 'codex', 'hermes', 'claude-code']));
     expect(chats.filter((session) => session.status === 'running').map((session) => session.title).sort())
       .toEqual(['File an issue for the broken docs link', 'Fix flaky scheduler test', 'Streaming markdown renderer spike']);

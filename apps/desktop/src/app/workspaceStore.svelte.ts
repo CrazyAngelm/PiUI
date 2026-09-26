@@ -20,6 +20,7 @@ import {
   type SessionSnapshot,
   type WorkspaceCatalog,
   type WorkspaceEvent,
+  type WorkspaceResult,
 } from '../host-api/workspaceClient';
 import type {
   ApprovalDecision,
@@ -39,6 +40,8 @@ import {
   sortedSessions,
 } from '../features/workspace/workspaceState';
 import { rememberHarnessNames } from './harnessMeta';
+import { newChatPlacement, type PlacementRequest } from './worktrees/newChatPlacement.svelte';
+import { placementRequest, placements } from './worktrees/placements.svelte';
 
 export type PipelineSection = 'systems' | 'runs' | 'schedules' | 'agents' | 'teams' | 'pipelines';
 export type SettingsSection = 'general' | 'harnesses' | 'extensions' | 'projects' | 'background' | 'shortcuts' | 'about';
@@ -66,6 +69,8 @@ export interface NewChatRequest {
   thinkingLevel?: string;
   serviceTier?: 'standard' | 'fast';
   text: string;
+  /** A worktree and/or handoff link (workspace placement v1). */
+  placement?: PlacementRequest;
 }
 
 const EMPTY_CATALOG: WorkspaceCatalog = { protocol: 15, safeMode: false, workspaces: [], sessions: [], harnesses: [] };
@@ -577,9 +582,34 @@ export class WorkspaceStore {
    * composer outbox, so the prompt is delivered once the harness is idle.
    */
   async startChat(request: NewChatRequest): Promise<string> {
-    const outcome = await this.createChat(request, { open: true });
+    // The new chat composer's worktree and handoff choices apply here only.
+    const placement = request.placement ?? newChatPlacement.requestFor(request.workspaceId);
+    const outcome = await this.createChat(placement ? { ...request, placement } : request, { open: true });
+    if (placement) newChatPlacement.started(request.workspaceId);
     if (outcome.error) this.sessionError = outcome.error;
     return outcome.sessionId;
+  }
+
+  /** A chat created through placement v1, as a v15 create result. */
+  private async createPlacedSession(
+    request: NewChatRequest,
+    placement: PlacementRequest,
+    model: WorkspaceModel | undefined,
+    title: string | undefined,
+  ): Promise<WorkspaceResult> {
+    const result = await placementRequest({
+      type: 'createChat',
+      workspaceId: request.workspaceId,
+      harness: request.harness,
+      permissionMode: request.permissionMode,
+      ...(model ? { model } : {}),
+      ...(title ? { title } : {}),
+      ...(placement.worktree ? { worktree: placement.worktree } : {}),
+      ...(placement.continuedFrom ? { continuedFrom: placement.continuedFrom } : {}),
+    });
+    if (result.type !== 'created') throw new WorkspaceOperationError('CONFLICT', 'The host returned an unexpected create-session result.');
+    placements.put(result.placement);
+    return { type: 'session', snapshot: result.snapshot };
   }
 
   /**
@@ -595,14 +625,16 @@ export class WorkspaceStore {
     }
     // A catalog entry may carry catalog-only fields the session contract rejects.
     const model = request.model ? workspaceModel(request.model) : undefined;
-    const result = await workspaceHost.request({
-      type: 'createSession',
-      workspaceId: request.workspaceId,
-      harness: request.harness,
-      permissionMode: request.permissionMode,
-      ...(model ? { model } : {}),
-      ...(options.title ? { title: options.title } : {}),
-    });
+    const result = request.placement
+      ? await this.createPlacedSession(request, request.placement, model, options.title)
+      : await workspaceHost.request({
+          type: 'createSession',
+          workspaceId: request.workspaceId,
+          harness: request.harness,
+          permissionMode: request.permissionMode,
+          ...(model ? { model } : {}),
+          ...(options.title ? { title: options.title } : {}),
+        });
     if (result.type !== 'session' && result.type !== 'accepted') {
       throw new WorkspaceOperationError('CONFLICT', 'The host returned an unexpected create-session result.');
     }

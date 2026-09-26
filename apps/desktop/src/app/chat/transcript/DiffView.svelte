@@ -1,26 +1,38 @@
 <script lang="ts">
+  import type { Snippet } from 'svelte';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import FileCode from '@lucide/svelte/icons/file-code';
   import { t } from '../../../features/locale/language';
-  import { parseDiff } from './diff';
+  import { parseDiff, type DiffLine } from './diff';
 
   interface Props {
     text: string;
     /** Files longer than this start collapsed. */
     collapseAfter?: number;
+    /** Review panel: actions shown in each hunk header (0-based hunk index). */
+    hunkActions?: Snippet<[number]>;
+    /** Review panel: a control in front of each changed or context line. */
+    lineAction?: Snippet<[DiffLine, number]>;
   }
-  let { text, collapseAfter = 80 }: Props = $props();
+  let { text, collapseAfter = 80, hunkActions, lineAction }: Props = $props();
   const files = $derived(parseDiff(text));
   let collapsed = $state<Record<number, boolean>>({});
 
   function isCollapsed(index: number, lines: number): boolean {
     return collapsed[index] ?? lines > collapseAfter;
   }
+
+  /** The 0-based hunk each line belongs to (-1 before the first hunk). */
+  function hunkIndexes(lines: readonly DiffLine[]): number[] {
+    let current = -1;
+    return lines.map((line) => (line.kind === 'hunk' ? ++current : current));
+  }
 </script>
 
 <div class="diff">
   {#each files as file, index (index)}
     {@const closed = isCollapsed(index, file.lines.length)}
+    {@const hunks = hunkIndexes(file.lines)}
     <section class="file">
       <button type="button" class="file__head" aria-expanded={!closed} onclick={() => (collapsed = { ...collapsed, [index]: !closed })}>
         <span class="chevron" class:chevron--open={!closed}><ChevronRight size={12} /></span>
@@ -39,10 +51,22 @@
             <tbody>
               {#each file.lines as line, lineIndex (lineIndex)}
                 <tr class="line line--{line.kind}">
+                  {#if lineAction}
+                    <td class="act">{#if line.kind === 'add' || line.kind === 'remove' || line.kind === 'context'}{@render lineAction(line, hunks[lineIndex] ?? -1)}{/if}</td>
+                  {/if}
                   <td class="num">{line.oldNumber ?? ''}</td>
                   <td class="num">{line.newNumber ?? ''}</td>
                   <td class="sign">{line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ''}</td>
-                  <td class="code">{line.text}</td>
+                  <td class="code">
+                    {#if line.kind === 'hunk' && hunkActions}
+                      <span class="hunk-head">
+                        <span class="hunk-head__text">{line.text}</span>
+                        <span class="hunk-head__actions">{@render hunkActions(hunks[lineIndex] ?? 0)}</span>
+                      </span>
+                    {:else}
+                      {line.text}
+                    {/if}
+                  </td>
                 </tr>
               {/each}
             </tbody>
@@ -169,5 +193,28 @@
   }
   .line--meta .code {
     color: var(--piui-text-disabled);
+  }
+  .act {
+    width: 1%;
+    padding: 0 2px;
+    vertical-align: middle;
+  }
+  .hunk-head {
+    position: sticky;
+    left: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--piui-space-2);
+    max-width: 100%;
+  }
+  .hunk-head__text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .hunk-head__actions {
+    display: inline-flex;
+    gap: 2px;
+    font-family: var(--piui-font-sans, inherit);
+    white-space: nowrap;
   }
 </style>
