@@ -153,7 +153,7 @@ index 7c41d2a..9e0f6b3 100644
 
 export const CHECK_COMMAND = 'pnpm --filter @piui/desktop check';
 
-export const CHECK_OUTPUT = `> @piui/desktop@0.1.1 check
+export const CHECK_OUTPUT = `> @piui/desktop@0.2.0 check
 > svelte-check --tsconfig ./tsconfig.json
 
 Loading svelte-check in workspace: apps/desktop
@@ -311,7 +311,7 @@ export const CRASH_PROMPT = 'PiUI crashes on startup after I restored my user pr
 
 export const CRASH_LOG_COMMAND = 'Get-Content $env:APPDATA\\piui-lab\\logs\\startup.log -Tail 12';
 
-export const CRASH_LOG_OUTPUT = `2026-09-25T08:14:02Z INFO  host starting version=0.1.1 safe_mode=false
+export const CRASH_LOG_OUTPUT = `2026-09-25T08:14:02Z INFO  host starting version=0.2.0 safe_mode=false
 2026-09-25T08:14:02Z INFO  index opened path=<app-data>/index.sqlite3
 2026-09-25T08:14:02Z WARN  index schema version mismatch expected=14 found=12
 2026-09-25T08:14:02Z INFO  running migration 12 -> 13

@@ -216,7 +216,7 @@
     {:else}
       <h2>{$t('About')}</h2>
       <div class="rows">
-        <div class="row row--tight"><span>PiUI</span><span class="muted">0.1.1</span></div>
+        <div class="row row--tight"><span>PiUI</span><span class="muted">0.2.0</span></div>
         <div class="row row--tight"><span>{$t('Safe mode')}</span><span class="muted">{store.safeMode ? $t('On') : $t('Off')}</span></div>
       </div>
       <p class="muted small">{$t('Local-first: no account, cloud backend or telemetry. Harnesses talk to their own providers.')}</p>

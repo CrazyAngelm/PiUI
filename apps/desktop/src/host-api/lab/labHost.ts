@@ -95,7 +95,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
   const state: LabState = {
     scenario,
     safeMode: seed.safeMode,
-    appVersion: '0.1.1-lab',
+    appVersion: '0.2.0-lab',
     preferences: { theme: 'system', density: 'comfortable', reducedMotion: 'system', fontSize: 'medium', chatWidth: 'wide' },
     projects: seed.projects,
     harnesses: seed.harnesses,

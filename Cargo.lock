@@ -2561,7 +2561,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "piui-contracts"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2570,7 +2570,7 @@ dependencies = [
 
 [[package]]
 name = "piui-desktop"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -2594,7 +2594,7 @@ dependencies = [
 
 [[package]]
 name = "piui-extensions"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "jsonschema",
  "libc",
@@ -2605,7 +2605,7 @@ dependencies = [
 
 [[package]]
 name = "piui-index"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "libc",
  "piui-contracts",
@@ -2621,7 +2621,7 @@ dependencies = [
 
 [[package]]
 name = "piui-orchestration"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2630,7 +2630,7 @@ dependencies = [
 
 [[package]]
 name = "piui-platform"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "libc",
  "sha2",
@@ -2639,7 +2639,7 @@ dependencies = [
 
 [[package]]
 name = "piui-runtime"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "ed25519-dalek",
  "piui-contracts",
