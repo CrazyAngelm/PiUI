@@ -179,13 +179,17 @@ read-only. The lab's git is an in-memory model (`host-api/lab/gitFake.ts`).
 ## Tests
 
 - Rust: git runner, parsers and exact hunk patches on temporary repositories
-  (including hooks that must not run and literal pathspecs); review, placement
+  (including hooks that must not run, literal pathspecs and CRLF work trees
+  under `core.autocrlf`); review, placement
   and adoption host tests with real git and the production bridge runner
   around a test adapter; placement store; the shared contract fixture.
 - TypeScript: clients against the fixture, the lab git and fakes, review and
   placement stores, the comment and handoff builders, Russian completeness.
 - Playwright (`e2e/session-tools.spec.ts`): review, worktrees, handoffs and
-  adoption with their failure paths and keyboard use.
+  adoption with their failure paths and keyboard use, and an axe-core audit
+  (serious and critical fail) of the new panels and dialogs in both themes.
+  Diff line numbers use the faint text token so they keep 4.5:1 contrast in
+  the review panel and the transcript.
 
 ## Known gaps
 

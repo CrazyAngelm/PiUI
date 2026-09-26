@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
 import { expect, test, type Lab } from './fixtures';
 
@@ -23,6 +24,14 @@ function changedFiles(review: Locator): Locator {
 
 function home(page: Page): Locator {
   return page.getByRole('region', { name: 'What should we work on?' });
+}
+
+/** Serious and critical WCAG 2.1 A/AA violations inside one element. */
+async function axeBlocking(page: Page, selector: string): Promise<readonly { id: string; nodes: string[] }[]> {
+  const results = await new AxeBuilder({ page }).include(selector).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
+  return results.violations
+    .filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')
+    .map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => node.target.join(' ')) }));
 }
 
 test.describe('review panel', () => {
@@ -229,3 +238,62 @@ test.describe('continue elsewhere', () => {
     await expect(page.getByRole('complementary', { name: 'Chat details' })).toContainText('Started in the Pi terminal app.');
   });
 });
+
+for (const theme of ['light', 'dark'] as const) {
+  test.describe(`session tools accessibility (${theme})`, () => {
+    test.use({ colorScheme: theme, reducedMotion: 'reduce' });
+
+    test('review panel, comment form, worktree details and dialogs pass axe', async ({ lab, page }) => {
+      test.slow(); // axe's contrast pass is CPU-heavy.
+      await lab.open();
+      const review = await openReview(lab, /Route host calls through one transport/);
+      await changedFiles(review).getByRole('button', { name: /^transport\.ts/ }).click();
+      await review.getByRole('button', { name: 'Comment on change 1…' }).click();
+      await expect(review.getByRole('form', { name: /Comment for the agent/ })).toBeVisible();
+      expect(await axeBlocking(page, 'aside[aria-label="Review changes"]'), 'review panel').toEqual([]);
+
+      await review.getByRole('button', { name: 'Revert change 1…' }).click();
+      const revert = page.getByRole('dialog', { name: /Revert this change in/ });
+      await expect(revert).toBeVisible();
+      expect(await axeBlocking(page, '[role="dialog"]'), 'revert dialog').toEqual([]);
+      await revert.getByRole('button', { name: 'Cancel' }).click();
+
+      await lab.chat(/Try a denser review layout/).click();
+      await page.getByRole('button', { name: 'Details' }).click();
+      const details = page.getByRole('complementary', { name: 'Chat details' });
+      await expect(details).toContainText('piui/review-layout');
+      expect(await axeBlocking(page, 'aside[aria-label="Chat details"]'), 'worktree details').toEqual([]);
+      await details.getByRole('button', { name: 'Remove worktree…' }).click();
+      await page.getByRole('dialog', { name: 'Remove this worktree?' }).getByRole('button', { name: 'Remove worktree' }).click();
+      const dirty = page.getByRole('dialog', { name: 'Remove the worktree and lose its changes?' });
+      await expect(dirty.getByRole('list', { name: 'Changes that will be lost' })).toBeVisible();
+      expect(await axeBlocking(page, '[role="dialog"]'), 'remove worktree dialog').toEqual([]);
+      await dirty.getByRole('button', { name: 'Cancel' }).click();
+
+      await lab.nav('New chat').click();
+      await home(page).getByRole('button', { name: 'Where the chat works: Local' }).click();
+      await page.getByRole('menuitem', { name: /New worktree/ }).click();
+      const worktree = page.getByRole('dialog', { name: 'New chat in a worktree' });
+      await expect(worktree).toContainText('Uncommitted changes in the project folder are not included');
+      expect(await axeBlocking(page, '[role="dialog"]'), 'worktree dialog').toEqual([]);
+    });
+
+    test('handoff banner and the continue in PiUI dialog pass axe', async ({ lab, page }) => {
+      test.slow(); // axe's contrast pass is CPU-heavy.
+      await lab.open();
+      await lab.chat(/Route host calls through one transport/).click();
+      await page.getByRole('button', { name: 'Chat actions' }).click();
+      await page.getByRole('menuitem', { name: 'Continue in another harness…' }).click();
+      await expect(page.getByText(/Continuing "Route host calls through one transport" from Codex/)).toBeVisible();
+      expect(await axeBlocking(page, 'section.home'), 'handoff composer').toEqual([]);
+
+      await lab.sidebar.getByRole('button', { name: 'Options for piui' }).click();
+      await page.getByRole('menuitem', { name: 'Pi session history' }).click();
+      const history = page.getByRole('complementary', { name: 'Sessions' });
+      await history.getByRole('button', { name: /^Make the session index incremental/ }).click({ timeout: LAZY_VIEW_MS });
+      await page.getByRole('button', { name: 'Continue in PiUI' }).click();
+      await expect(page.getByRole('dialog', { name: 'Continue this session in PiUI?' })).toBeVisible();
+      expect(await axeBlocking(page, '[role="dialog"]'), 'continue in PiUI dialog').toEqual([]);
+    });
+  });
+}
