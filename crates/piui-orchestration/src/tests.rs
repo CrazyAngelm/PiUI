@@ -1289,3 +1289,80 @@ fn claude_code_native_defaults_are_incomparable_with_other_harnesses() {
     definition.profiles[1].permission_mode = PermissionMode::ReadOnly;
     assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_ok());
 }
+
+fn acp(slug: &str) -> Harness {
+    Harness::Acp(AcpAgentId::new(slug).unwrap())
+}
+
+#[test]
+fn acp_agents_are_an_additive_v6_identity() {
+    let gemini = acp("gemini-cli");
+    assert_eq!(
+        serde_json::to_value(gemini).unwrap(),
+        json!("acp:gemini-cli")
+    );
+    let profile = profile("gemini-profile", gemini, &[]);
+    let stored = serde_json::to_value(&profile).unwrap();
+    assert_eq!(stored["harness"], json!("acp:gemini-cli"));
+    assert_eq!(
+        serde_json::from_value::<AgentProfile>(stored).unwrap(),
+        profile
+    );
+    // Every earlier identity keeps its exact spelling and meaning.
+    for (name, harness) in [
+        ("pi", Harness::Pi),
+        ("prime-agent", Harness::PrimeAgent),
+        ("codex", Harness::Codex),
+        ("hermes", Harness::Hermes),
+        ("claude-code", Harness::ClaudeCode),
+    ] {
+        assert_eq!(
+            serde_json::from_value::<Harness>(json!(name)).unwrap(),
+            harness
+        );
+        assert_eq!(harness.to_string(), name);
+    }
+    for invalid in [
+        "acp:",
+        "acp:Gemini",
+        "acp:-x",
+        "gemini-cli",
+        "acp/gemini-cli",
+    ] {
+        assert!(
+            serde_json::from_value::<Harness>(json!(invalid)).is_err(),
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
+fn acp_native_defaults_are_comparable_only_within_the_same_agent() {
+    let others = [
+        Harness::Pi,
+        Harness::PrimeAgent,
+        Harness::Codex,
+        Harness::Hermes,
+        Harness::ClaudeCode,
+        acp("qwen-code"),
+    ];
+    for other in others {
+        for (lead, worker) in [(acp("gemini-cli"), other), (other, acp("gemini-cli"))] {
+            let mut definition = snapshot();
+            definition.profiles[0].harness = lead;
+            definition.profiles[1].harness = worker;
+            definition.profiles[0].permission_mode = PermissionMode::Native;
+            definition.profiles[1].permission_mode = PermissionMode::Native;
+            assert!(
+                authorize_spawn(&definition, "lead-profile", "worker-profile").is_err(),
+                "native {lead:?} -> native {worker:?} must be rejected"
+            );
+        }
+    }
+    let mut definition = snapshot();
+    definition.profiles[0].harness = acp("gemini-cli");
+    definition.profiles[1].harness = acp("gemini-cli");
+    definition.profiles[0].permission_mode = PermissionMode::Native;
+    definition.profiles[1].permission_mode = PermissionMode::Native;
+    assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_ok());
+}

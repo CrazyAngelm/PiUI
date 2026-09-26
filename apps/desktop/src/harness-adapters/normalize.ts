@@ -1,5 +1,5 @@
 import type { AgentProfile } from '../../../../contracts/orchestration-v6';
-import { harnessConfigurations } from './index';
+import { harnessConfiguration } from './index';
 
 type Portable = Pick<AgentProfile, 'harness' | 'permissionMode' | 'model'> & Partial<AgentProfile>;
 
@@ -10,7 +10,7 @@ type Portable = Pick<AgentProfile, 'harness' | 'permissionMode' | 'model'> & Par
  * being sent and rejected; imports never use this and keep failing loudly.
  */
 export function profileForHarness<T extends Portable>(profile: T, harness: AgentProfile['harness']): T {
-  const next = harnessConfigurations[harness];
+  const next = harnessConfiguration(harness);
   const moved = profile.harness !== harness;
   const {
     serviceTier,

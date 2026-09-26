@@ -18,7 +18,7 @@
   } from '../../host-api/stepExecutors';
   import { RUNTIME_LABEL, SCRIPT_EXAMPLES, sourceBytes } from './executors';
   import { t } from '../../features/locale/language';
-  import { harnessConfigurations, permissionLabels } from '../../harness-adapters';
+  import { harnessConfiguration, permissionLabels, profileHarnesses } from '../../harness-adapters';
   import { profileForHarness } from '../../harness-adapters/normalize';
   import type { AgentProfile } from '../../host-api/orchestrationClient';
   import type { GraphNode } from '../../features/orchestration/agentGraph';
@@ -53,7 +53,7 @@
   });
   const agentRouter = $derived(isRouter && node.router?.mode === 'agent');
   const profile = $derived(node.profile);
-  const configuration = $derived(harnessConfigurations[profile.harness]);
+  const configuration = $derived(harnessConfiguration(profile.harness));
   const catalog = $derived(editor.catalogs[profile.harness]);
   const catalogError = $derived(editor.catalogErrors[profile.harness]);
   const models = $derived(catalog?.models ?? []);
@@ -104,12 +104,12 @@
   );
 
   const harnessItems = $derived<PickerItem[]>(
-    (Object.keys(harnessConfigurations) as AgentProfile['harness'][]).map((kind) => {
+    profileHarnesses(workspace.catalog.harnesses).map((kind) => {
       const status = workspace.catalog.harnesses.find((item) => item.kind === kind);
-      const oneShotMissing = llm && !harnessConfigurations[kind].oneShot;
+      const oneShotMissing = llm && !harnessConfiguration(kind).oneShot;
       return {
         value: kind,
-        label: harnessConfigurations[kind].name,
+        label: status?.name ?? harnessConfiguration(kind).name,
         description: status?.status === 'available' ? (status.version ? `v${status.version}` : $t('Ready')) : status?.reason ?? $t('Not found on this computer'),
         ...(oneShotMissing ? { disabled: true, disabledReason: $t('Cannot answer read-only without tools') } : {}),
       };
@@ -291,7 +291,7 @@
                 {#snippet trigger(props)}
                   <button type="button" class="select" {...props} disabled={readOnly}>
                     <HarnessMark kind={profile.harness} size={16} />
-                    <span>{configuration.name}</span>
+                    <span>{harnessItems.find((item) => item.value === profile.harness)?.label ?? configuration.name}</span>
                     <ChevronDown size={13} />
                   </button>
                 {/snippet}

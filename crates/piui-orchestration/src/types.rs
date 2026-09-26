@@ -1,19 +1,71 @@
+pub use piui_contracts::harness_identity::AcpAgentId;
+use piui_contracts::harness_identity::{
+    ACP_HARNESS_PREFIX, parse_harness_identity, unknown_harness_identity,
+};
 use serde::{Deserialize, Serialize};
 
 pub const ORCHESTRATION_SCHEMA_VERSION: u32 = 6;
 
 pub type Revision = u64;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+/// Harness identity (grammar v2): built-in names in kebab-case or
+/// `acp:<descriptor id>`. Both extensions are additive within schema v6:
+/// stored definitions without them read back unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Harness {
     Pi,
     PrimeAgent,
     Codex,
     Hermes,
     /// The user's own Claude Code CLI, on the user's Claude subscription only.
-    /// Additive within schema v6: stored definitions without it are unchanged.
     ClaudeCode,
+    /// An Agent Client Protocol agent from the host descriptor registry
+    /// (v6.3). Its native defaults are comparable only with the same agent.
+    Acp(AcpAgentId),
+}
+
+impl Harness {
+    const BUILTIN: [(&'static str, Self); 5] = [
+        ("pi", Self::Pi),
+        ("prime-agent", Self::PrimeAgent),
+        ("codex", Self::Codex),
+        ("hermes", Self::Hermes),
+        ("claude-code", Self::ClaudeCode),
+    ];
+
+    /// Parses a v2 harness identity.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        parse_harness_identity(value, &Self::BUILTIN, Self::Acp)
+    }
+}
+
+impl std::fmt::Display for Harness {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Acp(id) => write!(formatter, "{ACP_HARNESS_PREFIX}{id}"),
+            builtin => formatter.write_str(
+                Self::BUILTIN
+                    .iter()
+                    .find(|(_, harness)| harness == builtin)
+                    .map_or("", |(name, _)| name),
+            ),
+        }
+    }
+}
+
+impl Serialize for Harness {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Harness {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value)
+            .ok_or_else(|| unknown_harness_identity(&value, &Self::BUILTIN.map(|(name, _)| name)))
+    }
 }
 
 /// Native bridge permission preset. It is a runtime request, not a claim that

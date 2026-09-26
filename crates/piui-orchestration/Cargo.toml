@@ -8,6 +8,7 @@ authors.workspace = true
 description = "Harness-neutral orchestration policy and deterministic run coordination for PiUI"
 
 [dependencies]
+piui-contracts = { path = "../piui-contracts" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

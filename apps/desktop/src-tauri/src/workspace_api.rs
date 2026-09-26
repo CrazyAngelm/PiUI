@@ -1961,13 +1961,10 @@ async fn historical_reference_text(
     reference: NativeHistoryReference,
 ) -> Result<String, WorkspaceError> {
     tokio::task::spawn_blocking(move || {
+        let format = history_format(record.harness).ok_or_else(WorkspaceError::not_found)?;
         let native_id = record.native_id.ok_or_else(WorkspaceError::not_found)?;
         let native_path = record.native_path.ok_or_else(WorkspaceError::not_found)?;
-        let source = HostNativeHistorySource::new(
-            PathBuf::from(native_path),
-            native_id,
-            history_format(record.harness),
-        );
+        let source = HostNativeHistorySource::new(PathBuf::from(native_path), native_id, format);
         let projection = project_native_workspace_history(&source, &directory)
             .map_err(|_| WorkspaceError::not_found())?;
         projection
@@ -1994,6 +1991,11 @@ fn historical_content_blocking(
     directory: &ProjectDirectory,
     full_answers: bool,
 ) -> Result<SessionSnapshot, WorkspaceError> {
+    // A closed ACP chat has no host-readable history: opening it replays the
+    // conversation through the agent's own `session/load`.
+    let Some(format) = history_format(record.harness) else {
+        return Ok(empty_closed_snapshot(record));
+    };
     if known_absent_draft(&record)? {
         return Ok(empty_closed_snapshot(record));
     }
@@ -2005,11 +2007,7 @@ fn historical_content_blocking(
         .native_path
         .clone()
         .ok_or_else(WorkspaceError::not_found)?;
-    let source = HostNativeHistorySource::new(
-        PathBuf::from(native_path),
-        native_id,
-        history_format(record.harness),
-    );
+    let source = HostNativeHistorySource::new(PathBuf::from(native_path), native_id, format);
     project_native_workspace_history(&source, directory)
         .map(|projection| {
             let mut snapshot = snapshot_from_history(record, &projection);
@@ -2057,14 +2055,17 @@ fn snapshot_from_history(
     }
 }
 
-fn history_format(harness: HarnessKind) -> WorkspaceHistoryFormat {
-    match harness {
+/// The host-readable history format of a harness. An ACP agent keeps its
+/// history behind the protocol (`session/load`), never in a file PiUI reads.
+fn history_format(harness: HarnessKind) -> Option<WorkspaceHistoryFormat> {
+    Some(match harness {
         HarnessKind::Pi => WorkspaceHistoryFormat::Pi,
         HarnessKind::PrimeAgent => WorkspaceHistoryFormat::PrimeAgent,
         HarnessKind::Codex => WorkspaceHistoryFormat::Codex,
         HarnessKind::Hermes => WorkspaceHistoryFormat::Hermes,
         HarnessKind::ClaudeCode => WorkspaceHistoryFormat::ClaudeCode,
-    }
+        HarnessKind::Acp(_) => return None,
+    })
 }
 
 fn history_block(block: &GenericTimelineBlock) -> NativeBlock {
@@ -3184,6 +3185,7 @@ fn default_title(harness: HarnessKind) -> String {
         HarnessKind::Codex => "New Codex session",
         HarnessKind::Hermes => "New Hermes session",
         HarnessKind::ClaudeCode => "New Claude Code session",
+        HarnessKind::Acp(_) => "New agent session",
     }
     .into()
 }
@@ -3527,8 +3529,38 @@ mod tests {
         );
         assert_eq!(
             super::history_format(HarnessKind::ClaudeCode),
-            piui_index::workspace_history::WorkspaceHistoryFormat::ClaudeCode
+            Some(piui_index::workspace_history::WorkspaceHistoryFormat::ClaudeCode)
         );
+    }
+
+    #[test]
+    fn acp_agents_are_an_additive_v15_harness_value() {
+        let command: WorkspaceCommand = serde_json::from_value(serde_json::json!({
+            "type": "createSession",
+            "workspaceId": "workspace-id",
+            "harness": "acp:gemini-cli",
+            "permissionMode": "native"
+        }))
+        .expect("the v15 command grammar accepts an ACP identity");
+        let WorkspaceCommand::CreateSession { harness, .. } = command else {
+            panic!("create session");
+        };
+        assert_eq!(harness.to_string(), "acp:gemini-cli");
+        for invalid in ["acp:", "acp:Gemini", "gemini-cli"] {
+            assert!(
+                serde_json::from_value::<WorkspaceCommand>(serde_json::json!({
+                    "type": "createSession",
+                    "workspaceId": "workspace-id",
+                    "harness": invalid,
+                    "permissionMode": "native"
+                }))
+                .is_err(),
+                "{invalid}"
+            );
+        }
+        assert_eq!(super::default_title(harness), "New agent session");
+        // ACP history lives behind the protocol, never in a host-read file.
+        assert_eq!(super::history_format(harness), None);
     }
 
     #[test]

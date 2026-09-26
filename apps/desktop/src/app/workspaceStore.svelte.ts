@@ -36,6 +36,7 @@ import {
   resolveCloseAfterCatalog,
   sortedSessions,
 } from '../features/workspace/workspaceState';
+import { rememberHarnessNames } from './harnessMeta';
 
 export type PipelineSection = 'systems' | 'runs' | 'schedules' | 'agents' | 'teams' | 'pipelines';
 export type SettingsSection = 'general' | 'harnesses' | 'projects' | 'shortcuts' | 'about';
@@ -389,6 +390,7 @@ export class WorkspaceStore {
       if (this.disposed || request !== this.catalogRequest) return undefined;
       const next = protectClosedCatalogSessions(received, this.snapshots);
       next.sessions = next.sessions.filter((session) => !this.deleted.has(session.id));
+      rememberHarnessNames(next.harnesses);
       this.catalog = next;
       const candidate = preferredWorkspaceId ?? this.selectedWorkspaceId;
       const workspaceId = next.workspaces.some((workspace) => workspace.id === candidate)

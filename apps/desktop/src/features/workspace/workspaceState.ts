@@ -7,6 +7,7 @@ import type {
   WorkspaceEvent,
   WorkspaceSession,
 } from '../../../../../contracts/workspace-v15';
+import { acpAgentId } from '../../../../../contracts/harness-identity-v2';
 
 export type EventApplication =
   | { type: 'applied'; snapshot: SessionSnapshot }
@@ -129,7 +130,8 @@ export function harnessLabel(kind: HarnessKind): string {
     case 'codex': return 'Codex';
     case 'hermes': return 'Hermes';
     case 'claude-code': return 'Claude Code';
-    default: return assertNever(kind);
+    // `acp:<id>` (harness identity v2): the registry names the agent.
+    default: return acpAgentId(kind);
   }
 }
 

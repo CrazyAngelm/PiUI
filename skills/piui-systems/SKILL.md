@@ -164,6 +164,37 @@ a terminal and use /login." Do not set `serviceTier`; it is refused.
 - See `examples/systems/codex-claude-pi-review.piui.json` for a Codex -> Claude
   Code -> Pi result pipeline.
 
+## ACP agents
+
+Portable version 4 accepts `harness: "acp:<descriptor id>"` (harness identity
+v2, additive; versions 1-3 never contain it). The id names an Agent Client
+Protocol agent registered in PiUI **Settings → Harnesses**: the built-in Gemini
+CLI (`acp:gemini-cli`) or a descriptor the user added and trusted. A file only
+names the agent; it never carries the command line, environment or trust
+decision, and importing it never adds or trusts an agent. An unknown or
+untrusted id fails at launch with a visible reason.
+
+- Verified configuration: `model` (`"default"` keeps the agent's own configured
+  model; any other ID must be advertised by the agent's session options at
+  start, otherwise the launch fails before the first prompt), optional
+  `reasoning` when the agent advertises a reasoning option (checked at start),
+  and appended `instructions` (sent with the first message; the agent keeps its
+  own system prompt). The only permission preset is `native`: the agent keeps
+  its own permission, tool and MCP settings and PiUI answers its permission
+  requests in the Inbox.
+- Unsupported, refused at preflight: `read-only`/`workspace-write`/`full-access`,
+  `serviceTier`, `baseInstructions`, `networkAccess`, `resourceRules`, native
+  tool rules, and `{"type": "llm"}` model calls (no enforceable read-only mode).
+  Never describe an ACP agent as sandboxed.
+- Managed runs give the agent PiUI's workspace tool as an HTTP MCP server; an
+  agent that does not accept one fails that launch. Native defaults of different
+  ACP agents (and of any other harness) are incomparable, so delegation between
+  them is rejected; use result edges. A closed ACP conversation is read back
+  through the agent's own `session/load`; an agent without it cannot reopen
+  chats or serve dependency results after a restart.
+- See `examples/systems/codex-gemini-acp-review.piui.json` for a Codex -> Gemini
+  CLI (ACP) -> Pi result pipeline.
+
 ## Execution contracts (portable v4)
 
 Read [execution semantics](references/execution.md) when configuring conditional work,

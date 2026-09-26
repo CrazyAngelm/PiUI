@@ -6,6 +6,10 @@
 use crate::codec::{RpcCodec, RpcCodecConfig};
 use crate::native_version::{CODEX_APP_SERVER, VersionCheck};
 use crate::real_rpc::resolve_pi_launch;
+pub use piui_contracts::harness_identity::AcpAgentId;
+use piui_contracts::harness_identity::{
+    ACP_HARNESS_PREFIX, parse_harness_identity, unknown_harness_identity,
+};
 #[cfg(any(unix, windows))]
 use piui_platform::ProcessContainment;
 #[cfg(unix)]
@@ -166,30 +170,46 @@ const CLAUDE_VERSION_OUTPUT_LIMIT: u64 = 4 * 1024;
 /// `initialize` control request; add that native phase to the transport
 /// allowance, like the Hermes ACP startup below.
 const CLAUDE_STARTUP_ALLOWANCE: Duration = Duration::from_secs(25);
+/// An ACP agent answers `session/new` or `session/load` only after its own
+/// startup (sign-in refresh, MCP servers, history replay); add that native
+/// phase to the transport allowance, like the Hermes ACP startup below.
+const ACP_STARTUP_ALLOWANCE: Duration = Duration::from_secs(40);
 
 // The full bridge source is sent through stdin because CreateProcess has a
 // 32767 UTF--16 command-line limit. This fixed ESM bootstrap reads exactly the
 // trusted length-prefixed source bytes, leaving subsequent LF JSON untouched.
 const NODE_BOOTSTRAP: &str = r#"const fs=await import('node:fs');const h=Buffer.alloc(4);let o=0;while(o<4){const n=fs.readSync(0,h,o,4-o,null);if(n===0)throw new Error('bridge source EOF');o+=n}const z=h.readUInt32LE(0),b=Buffer.alloc(z);o=0;while(o<z){const n=fs.readSync(0,b,o,z-o,null);if(n===0)throw new Error('bridge source EOF');o+=n}await import('data:text/javascript;base64,'+b.toString('base64'));"#;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+/// Harness identity (grammar v2, see `piui_contracts::harness_identity`):
+/// the built-in names, serialized in kebab-case, or `acp:<descriptor id>`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HarnessKind {
     Pi,
     PrimeAgent,
     Codex,
     Hermes,
     ClaudeCode,
+    /// An Agent Client Protocol agent from the host descriptor registry.
+    Acp(AcpAgentId),
 }
 
 impl HarnessKind {
-    /// Every harness in presentation order.
+    /// Every built-in harness in presentation order. ACP agents come from
+    /// the host descriptor registry.
     pub const ALL: [Self; 5] = [
         Self::Pi,
         Self::PrimeAgent,
         Self::Codex,
         Self::Hermes,
         Self::ClaudeCode,
+    ];
+
+    const BUILTIN: [(&'static str, Self); 5] = [
+        ("pi", Self::Pi),
+        ("prime-agent", Self::PrimeAgent),
+        ("codex", Self::Codex),
+        ("hermes", Self::Hermes),
+        ("claude-code", Self::ClaudeCode),
     ];
 
     const fn display_name(self) -> &'static str {
@@ -199,7 +219,51 @@ impl HarnessKind {
             Self::Codex => "Codex",
             Self::Hermes => "Hermes",
             Self::ClaudeCode => "Claude Code",
+            Self::Acp(_) => "ACP agent",
         }
+    }
+
+    /// The ACP descriptor id of an ACP identity.
+    #[must_use]
+    pub const fn acp_agent(self) -> Option<AcpAgentId> {
+        match self {
+            Self::Acp(id) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// Parses a v2 harness identity.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        parse_harness_identity(value, &Self::BUILTIN, Self::Acp)
+    }
+}
+
+impl fmt::Display for HarnessKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Acp(id) => write!(formatter, "{ACP_HARNESS_PREFIX}{id}"),
+            builtin => formatter.write_str(
+                Self::BUILTIN
+                    .iter()
+                    .find(|(_, kind)| kind == builtin)
+                    .map_or("", |(name, _)| name),
+            ),
+        }
+    }
+}
+
+impl Serialize for HarnessKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for HarnessKind {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value)
+            .ok_or_else(|| unknown_harness_identity(&value, &Self::BUILTIN.map(|(name, _)| name)))
     }
 }
 
@@ -1012,6 +1076,7 @@ impl NativeRuntime {
         let startup_timeout = match config.harness {
             HarnessKind::Hermes => REQUEST_TIMEOUT + Duration::from_secs(30),
             HarnessKind::ClaudeCode => REQUEST_TIMEOUT + CLAUDE_STARTUP_ALLOWANCE,
+            HarnessKind::Acp(_) => REQUEST_TIMEOUT + ACP_STARTUP_ALLOWANCE,
             HarnessKind::Pi | HarnessKind::PrimeAgent | HarnessKind::Codex => REQUEST_TIMEOUT,
         };
         // An adapter may replay native history while it initializes (a Hermes
@@ -1812,6 +1877,8 @@ fn bridge_source(kind: HarnessKind) -> Result<Vec<u8>, NativeRuntimeError> {
         HarnessKind::Codex => (CODEX_SOURCE, "createCodexAdapter"),
         HarnessKind::Hermes => (HERMES_SOURCE, "createHermesAdapter"),
         HarnessKind::ClaudeCode => (CLAUDE_SOURCE, "createClaudeAdapter"),
+        // An ACP agent starts only from a host-resolved registry descriptor.
+        HarnessKind::Acp(_) => return Err(NativeRuntimeError::HarnessUnavailable),
     };
     if factory.trim().is_empty() {
         return Err(NativeRuntimeError::HarnessUnavailable);
@@ -1890,6 +1957,8 @@ fn resolve_harness_launch(kind: HarnessKind) -> Result<ResolvedHarnessLaunch, Na
         HarnessKind::Codex => resolve_package_launch("@openai/codex", "bin/codex.js"),
         HarnessKind::Hermes => resolve_hermes_launch(),
         HarnessKind::ClaudeCode => resolve_claude_launch(),
+        // Resolved by the host from its descriptor registry, never here.
+        HarnessKind::Acp(_) => Err(NativeRuntimeError::HarnessUnavailable),
     }
 }
 
@@ -2447,6 +2516,43 @@ fn verified_harness_capabilities(kind: HarnessKind) -> HarnessCapabilities {
                 ),
             ),
         },
+        HarnessKind::Acp(_) => acp_harness_capabilities(),
+    }
+}
+
+/// Capabilities of an available generic ACP agent. The protocol has no
+/// per-session tool, file or delegation restriction; instructions travel with
+/// the first prompt (PiUI-composed text, not a replacement system prompt).
+#[must_use]
+pub fn acp_harness_capabilities() -> HarnessCapabilities {
+    HarnessCapabilities {
+        prompt: capability(true, Enforcement::Native, None),
+        resume: capability(
+            true,
+            Enforcement::Native,
+            Some("Only when the agent advertises session/load."),
+        ),
+        models: capability(
+            true,
+            Enforcement::Native,
+            Some("Models, modes and reasoning come from the agent's own session options."),
+        ),
+        approvals: capability(true, Enforcement::Native, None),
+        instructions: capability(
+            true,
+            Enforcement::Coordinator,
+            Some("Sent with the first prompt; the agent keeps its own system prompt."),
+        ),
+        tool_policy: capability(
+            false,
+            Enforcement::Unsupported,
+            Some("ACP does not expose per-session tool restrictions."),
+        ),
+        native_subagents: capability(
+            false,
+            Enforcement::Unsupported,
+            Some("ACP does not expose native delegation restrictions."),
+        ),
     }
 }
 
@@ -2459,6 +2565,8 @@ fn harness_version_supported(kind: HarnessKind, version: Option<&str>) -> bool {
         HarnessKind::Codex => CODEX_APP_SERVER.check(version).is_verified(),
         HarnessKind::Hermes => version == Some("0.21.0"),
         HarnessKind::ClaudeCode => claude_version_supported(version),
+        // Each ACP descriptor declares its own verified range (host registry).
+        HarnessKind::Acp(_) => false,
     }
 }
 
@@ -3234,6 +3342,55 @@ mod tests {
             assert!(serde_json::from_value::<HarnessKind>(json!(alias)).is_err());
         }
         assert_eq!(HarnessKind::ALL.len(), 5);
+    }
+
+    #[test]
+    fn acp_identities_extend_the_grammar_without_changing_builtin_names() {
+        let gemini = HarnessKind::Acp(AcpAgentId::new("gemini-cli").expect("slug"));
+        assert_eq!(
+            serde_json::to_value(gemini).ok(),
+            Some(json!("acp:gemini-cli"))
+        );
+        assert_eq!(
+            serde_json::from_value::<HarnessKind>(json!("acp:gemini-cli")).ok(),
+            Some(gemini)
+        );
+        assert_eq!(gemini.to_string(), "acp:gemini-cli");
+        assert_eq!(
+            gemini.acp_agent().map(|id| id.to_string()),
+            Some("gemini-cli".into())
+        );
+        assert_eq!(HarnessKind::Codex.acp_agent(), None);
+        // Built-in names never resolve to an ACP agent, and `acp:` needs a slug.
+        for kind in HarnessKind::ALL {
+            assert_eq!(HarnessKind::parse(&kind.to_string()), Some(kind));
+        }
+        for invalid in [
+            "acp:",
+            "acp:Gemini",
+            "acp:gemini_cli",
+            "gemini-cli",
+            "ACP:gemini-cli",
+        ] {
+            assert!(
+                serde_json::from_value::<HarnessKind>(json!(invalid)).is_err(),
+                "{invalid}"
+            );
+        }
+        assert!(!HarnessKind::ALL.contains(&gemini));
+        // An ACP agent never starts without a host-resolved descriptor.
+        assert_eq!(
+            bridge_source(gemini).err(),
+            Some(NativeRuntimeError::HarnessUnavailable)
+        );
+        assert!(resolve_harness_launch(gemini).is_err());
+        assert!(!harness_version_supported(gemini, Some("1.0.0")));
+        let offline = offline_harness_capabilities(gemini);
+        assert!(!offline.prompt.supported && !offline.models.supported);
+        let verified = verified_harness_capabilities(gemini);
+        assert!(verified.prompt.supported && verified.approvals.supported);
+        assert!(!verified.tool_policy.supported && !verified.native_subagents.supported);
+        assert_eq!(verified.instructions.enforcement, Enforcement::Coordinator);
     }
 
     #[test]

@@ -77,7 +77,7 @@ fn native_config(kind: HarnessKind, label: &str) -> NativeRuntimeConfig {
         HarnessKind::ClaudeCode => (Some(Vec::new()), Some(false)),
         // Codex 0.147.0 does not expose a restrictive built-in tool allowlist.
         // The prompt asks for no tools and the proof rejects any observed use.
-        HarnessKind::Codex | HarnessKind::Hermes => (None, None),
+        HarnessKind::Codex | HarnessKind::Hermes | HarnessKind::Acp(_) => (None, None),
     };
     NativeRuntimeConfig {
         harness: kind,

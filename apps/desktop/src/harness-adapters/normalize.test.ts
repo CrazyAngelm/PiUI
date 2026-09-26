@@ -44,4 +44,28 @@ describe('profileForHarness', () => {
     const moved = profileForHarness({ ...codex, harness: 'pi', serviceTier: undefined }, 'codex');
     expect(moved.serviceTier).toBe('standard');
   });
+
+  it('moves to an ACP agent with native permissions and nothing the protocol cannot enforce', () => {
+    const gemini = profileForHarness(codex, 'acp:gemini-cli');
+    expect(gemini).toMatchObject({ harness: 'acp:gemini-cli', model: '', permissionMode: 'native', instructions: 'Be exact' });
+    for (const key of ['serviceTier', 'baseInstructions', 'networkAccess', 'reasoning', 'resourceRules', 'modelProvider']) {
+      expect(gemini, key).not.toHaveProperty(key);
+    }
+    const { id: _id, allowedSpawnProfileIds: _spawn, ...portable } = { ...gemini, model: 'default' };
+    expect(profileConfigurationErrors('gemini', portable)).toEqual([]);
+    expect(profileConfigurationErrors('gemini', { ...portable, permissionMode: 'read-only' })).toEqual(['gemini: unsupported file permissions.']);
+  });
+});
+
+describe('harnessConfiguration', () => {
+  it('returns built-in manifests and one generic manifest for every ACP agent', async () => {
+    const { harnessConfiguration, harnessConfigurations, profileHarnesses } = await import('./index');
+    const { acpConfiguration } = await import('./acp');
+    expect(harnessConfiguration('codex')).toBe(harnessConfigurations.codex);
+    expect(harnessConfiguration('acp:gemini-cli')).toBe(acpConfiguration);
+    expect(harnessConfiguration('acp:other-agent')).toBe(acpConfiguration);
+    expect(acpConfiguration).toMatchObject({ permissionModes: ['native'], speed: false, basePrompt: false, networkAccess: false, filesystemSandbox: false, nativeTools: [], resourceKinds: [] });
+    expect(acpConfiguration.oneShot).toBeUndefined();
+    expect(profileHarnesses([{ kind: 'codex' }, { kind: 'acp:gemini-cli' }])).toEqual(['pi', 'prime-agent', 'codex', 'hermes', 'claude-code', 'acp:gemini-cli']);
+  });
 });

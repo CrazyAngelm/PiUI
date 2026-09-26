@@ -2,6 +2,7 @@ import type {
   Capability, DesktopTimelineBlock, HarnessCapabilities, HarnessCatalogModel, HarnessKind, HarnessModelsResult,
   HarnessSummary, PermissionMode, WorkspaceModel,
 } from './labContracts';
+import { isAcpHarness } from '../../../../../contracts/harness-identity-v2';
 
 /**
  * Native harness inventory for the lab. Model and resource names are clearly
@@ -79,6 +80,18 @@ export function harnessCapabilities(kind: HarnessKind, summary: HarnessSummary |
     return {
       prompt: blocked, resume: blocked, models: blocked, approvals: blocked,
       instructions: blocked, toolPolicy: blocked, nativeSubagents: blocked,
+    };
+  }
+  // Mirrors `acp_harness_capabilities`.
+  if (isAcpHarness(kind)) {
+    return {
+      prompt: supported(),
+      resume: { ...supported(), reason: 'Only when the agent advertises session/load.' },
+      models: { ...supported(), reason: "Models, modes and reasoning come from the agent's own session options." },
+      approvals: supported(),
+      instructions: { ...supported('coordinator'), reason: 'Sent with the first prompt; the agent keeps its own system prompt.' },
+      toolPolicy: unsupported('ACP does not expose per-session tool restrictions.'),
+      nativeSubagents: unsupported('ACP does not expose native delegation restrictions.'),
     };
   }
   switch (kind) {

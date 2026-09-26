@@ -2178,17 +2178,13 @@ fn harness_kind(harness: Harness) -> HarnessKind {
         Harness::Codex => HarnessKind::Codex,
         Harness::Hermes => HarnessKind::Hermes,
         Harness::ClaudeCode => HarnessKind::ClaudeCode,
+        Harness::Acp(agent) => HarnessKind::Acp(agent),
     }
 }
 
-fn harness_name(harness: Harness) -> &'static str {
-    match harness {
-        Harness::Pi => "pi",
-        Harness::PrimeAgent => "prime-agent",
-        Harness::Codex => "codex",
-        Harness::Hermes => "hermes",
-        Harness::ClaudeCode => "claude-code",
-    }
+/// The harness identity as the roster reports it (`codex`, `acp:gemini-cli`).
+fn harness_name(harness: Harness) -> String {
+    harness.to_string()
 }
 
 fn workspace_permission(mode: piui_orchestration::PermissionMode) -> WorkspacePermissionMode {

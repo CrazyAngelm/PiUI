@@ -11,7 +11,7 @@
   import FlowSettings from './FlowSettings.svelte';
   import ResultFields from './ResultFields.svelte';
   import ResourcePicker from './ResourcePicker.svelte';
-  import { harnessConfigurations, permissionLabels } from '../../harness-adapters';
+  import { harnessConfiguration, permissionLabels } from '../../harness-adapters';
   import { t } from '../locale/language';
   import { orchestrationHost, orchestrationError, type OrchestrationClient, type DefinitionSummary, type AgentProfile, type SaveDefinitionRequest, type StoredDefinition } from '../../host-api/orchestrationClient';
   import { emptyGraph, newGraphNode, newRouterNode, compileGraph, graphIssues, patternEdges, placeholderProfile, type AgentGraph, type GraphNode, type ConnectionKind } from './agentGraph';
@@ -128,7 +128,7 @@
   let drag: { id: string; pointer: number; startX: number; startY: number; x: number; y: number } | undefined;
   $: availableModels = selected ? modelCatalogs[selected.profile.harness] ?? modelsFor(selected.profile.harness) : [];
   $: nativeModel = selected ? availableModels.find(model => model.id === selected.profile.model && model.provider === selected.profile.modelProvider) : undefined;
-  $: configuration = selected ? harnessConfigurations[selected.profile.harness] : undefined;
+  $: configuration = selected ? harnessConfiguration(selected.profile.harness) : undefined;
   $: selected = graph.nodes.find(node => node.id === selectedId);
   $: if (selectedId !== inspectedNodeId) {
     inspectedNodeId = selectedId; modelQuery = '';
@@ -461,7 +461,7 @@
             </svg>
             {#each graph.nodes as node (node.id)}<div class="node-shell" use:measureNode={node.id} class:router-shell={node.kind === 'router'} style:left={`${node.x}px`} style:top={`${node.y}px`} style:min-height={`${graphNodeHeight(node)}px`}>
               <button class="node" class:router-node={node.kind === 'router'} class:agent-node={node.kind !== 'router'} class:selected={node.id === selectedId} class:node-related={selected !== undefined && node.id !== selected.id && graph.edges.some((edge) => (edge.from === selected.id && edge.to === node.id) || (edge.to === selected.id && edge.from === node.id))} aria-pressed={node.id === selectedId} onpointerdown={(event) => pointerDown(event, node)} onpointermove={pointerMove} onpointerup={() => drag = undefined} onpointercancel={() => drag = undefined} onclick={() => { selectedId = node.id; inspectorCollapsed = false; }} onkeydown={(event) => keyMove(event, node)}>
-                <span class="node-topline"><span class="harness">{node.kind === 'router' ? $t('Decision') : harnessConfigurations[node.profile.harness].name}</span><span class="node-kind">{$t(node.kind === 'router' ? 'Router' : 'Agent')}</span></span>
+                <span class="node-topline"><span class="harness">{node.kind === 'router' ? $t('Decision') : harnessConfiguration(node.profile.harness).name}</span><span class="node-kind">{$t(node.kind === 'router' ? 'Router' : 'Agent')}</span></span>
                 <strong>{node.profile.name}</strong>
                 {#if node.kind === 'router'}<span class="node-model">{$t(node.router?.mode === 'agent' ? 'Agent decides' : 'Programmatic')}</span><span class="node-task">{node.router?.branches.length ?? 0} {$t('routes')}</span><div class="router-branches">{#each node.router?.branches ?? [] as branch}<span><i></i>{branch.label}</span>{/each}</div>
                 {:else}<span class="node-model">{node.profile.model || $t('Model')}</span><span class="node-task">{node.task.trim() || $t('No task yet')}</span><small>{node.profile.reasoning ?? $t('Model default')}{node.profile.serviceTier === 'fast' ? $t(' · Fast') : ''}</small>{/if}
@@ -481,7 +481,7 @@
         <label>{$t('Name')}<input value={selected.profile.name} oninput={(event) => updateProfile({ name: event.currentTarget.value })} disabled={safeMode || busy} /></label>
         {#if selected.kind === 'router'}<RouterSettings node={selected} nodes={graph.nodes} disabled={safeMode || busy} onchange={(change: Partial<GraphNode>) => updateRouterNode(selectedId, change)} onselectinput={(nodeId) => void selectRouterInput(nodeId)} />{/if}
         {#if selected.kind !== 'router' || selected.router?.mode === 'agent'}
-        <label>{$t("Harness")}<select value={selected.profile.harness} onchange={(event) => { const harness = event.currentTarget.value as AgentProfile['harness']; updateProfile({ harness, model: '', modelProvider: undefined, permissionMode: harnessConfigurations[harness].defaultPermission, networkAccess: undefined, serviceTier: harnessConfigurations[harness].speed ? 'standard' : undefined, baseInstructions: undefined, reasoning: undefined }); }} disabled={safeMode || busy}><option value="codex">Codex</option><option value="prime-agent">Prime Agent</option><option value="pi">Pi</option><option value="hermes">Hermes</option><option value="claude-code">Claude Code</option></select></label>
+        <label>{$t("Harness")}<select value={selected.profile.harness} onchange={(event) => { const harness = event.currentTarget.value as AgentProfile['harness']; updateProfile({ harness, model: '', modelProvider: undefined, permissionMode: harnessConfiguration(harness).defaultPermission, networkAccess: undefined, serviceTier: harnessConfiguration(harness).speed ? 'standard' : undefined, baseInstructions: undefined, reasoning: undefined }); }} disabled={safeMode || busy}><option value="codex">Codex</option><option value="prime-agent">Prime Agent</option><option value="pi">Pi</option><option value="hermes">Hermes</option><option value="claude-code">Claude Code</option></select></label>
         <label>{$t('Find model')}<input type="search" bind:value={modelQuery} /></label><label>{$t('Model')}<select aria-label={$t('Model')} value={JSON.stringify([selected.profile.modelProvider, selected.profile.model])} onchange={(event) => { const model = availableModels.find(entry => JSON.stringify([entry.provider, entry.id]) === event.currentTarget.value); if (model) updateProfile({ model: model.id, modelProvider: model.provider, reasoning: undefined, serviceTier: model.supportsFast && selected?.profile.serviceTier === 'fast' ? 'fast' : undefined }); }} disabled={safeMode || busy || modelsLoading}>
           {#if !nativeModel}<option disabled={!selected.profile.model} hidden={!selected.profile.model} value={JSON.stringify([selected.profile.modelProvider, selected.profile.model])}>{selected.profile.model || $t(modelsLoading ? 'Loading models…' : 'Select model')}</option>{/if}
           {#each availableModels.filter(model => model.id === selected?.profile.model || `${model.name} ${model.id} ${model.provider ?? ''}`.toLocaleLowerCase().includes(modelQuery.toLocaleLowerCase())) as model}<option value={JSON.stringify([model.provider, model.id])}>{model.name}{model.provider ? ` · ${model.provider}` : ''}</option>{/each}

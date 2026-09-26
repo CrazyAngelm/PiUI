@@ -490,7 +490,7 @@
     switch (value) { case 'systems': return 'pipeline'; case 'agents': return 'profile'; case 'teams': return 'team'; case 'pipelines': return 'pipeline'; case 'schedules': return 'pipeline'; case 'runs': return 'pipeline'; }
   }
   function harnessName(value: AgentProfile['harness']): string {
-    switch (value) { case 'pi': return 'Pi'; case 'prime-agent': return 'Prime Agent'; case 'codex': return 'Codex'; case 'hermes': return 'Hermes'; case 'claude-code': return 'Claude Code'; }
+    switch (value) { case 'pi': return 'Pi'; case 'prime-agent': return 'Prime Agent'; case 'codex': return 'Codex'; case 'hermes': return 'Hermes'; case 'claude-code': return 'Claude Code'; default: return value; }
   }
 </script>
 

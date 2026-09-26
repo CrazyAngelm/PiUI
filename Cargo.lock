@@ -2623,6 +2623,7 @@ dependencies = [
 name = "piui-orchestration"
 version = "0.1.1"
 dependencies = [
+ "piui-contracts",
  "serde",
  "serde_json",
  "thiserror 2.0.19",

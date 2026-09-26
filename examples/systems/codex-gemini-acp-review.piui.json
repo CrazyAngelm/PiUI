@@ -1,0 +1,72 @@
+{
+  "format": "piui-system",
+  "version": 4,
+  "name": "codex-gemini-acp-review",
+  "orchestrator": "research",
+  "agents": [
+    {
+      "id": "research",
+      "profile": {
+        "name": "Research",
+        "harness": "codex",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "read-only",
+        "instructions": "When called: perform only the assigned task. Input: task instructions and dependency results. Output: evidence, conclusions and unresolved questions. Finish when the stated acceptance criteria are proven or report the concrete blocker. Do not invent findings.",
+        "toolPolicy": {
+          "rules": []
+        },
+        "serviceTier": "standard"
+      },
+      "task": "Investigate the user-defined problem. Return evidence and a proposed solution; do not edit files."
+    },
+    {
+      "id": "review",
+      "profile": {
+        "name": "Gemini review",
+        "harness": "acp:gemini-cli",
+        "model": "default",
+        "permissionMode": "native",
+        "instructions": "When called: perform only the assigned task. Input: task instructions and dependency results. Output: evidence, conclusions and unresolved questions. Do not change files. Do not invent findings.",
+        "toolPolicy": {
+          "rules": []
+        }
+      },
+      "task": "Review the dependency result against the repository. Report only issues that prevent meeting the user goal, with evidence. Do not change files.",
+      "input": "Findings with source references, relevant artifact paths, verified facts and unresolved questions."
+    },
+    {
+      "id": "summary",
+      "profile": {
+        "name": "Summary",
+        "harness": "pi",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "read-only",
+        "instructions": "When called: perform only the assigned task. Input: task instructions and dependency results. Output: a short decision summary with the evidence it relies on. Do not invent findings.",
+        "toolPolicy": {
+          "rules": [
+            {
+              "tool": "read",
+              "decision": "allow",
+              "enforcement": "native",
+              "mandatory": true
+            }
+          ]
+        }
+      },
+      "task": "Summarize the reviewed proposal and the blocking issues for the user.",
+      "input": "The review findings with their evidence."
+    }
+  ],
+  "connections": [
+    {
+      "from": "research",
+      "to": "review",
+      "kind": "result"
+    },
+    {
+      "from": "review",
+      "to": "summary",
+      "kind": "result"
+    }
+  ]
+}
