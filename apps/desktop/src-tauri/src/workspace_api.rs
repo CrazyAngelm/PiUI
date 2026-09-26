@@ -26,8 +26,8 @@ pub use piui_runtime::workspace_runtime::{
 };
 use piui_runtime::workspace_runtime::{
     BlockKind, BlockStatus, CoordinatorOperation, CoordinatorResponse, HarnessAvailability,
-    NativeApproval, NativeBlock, NativeEvent, NativeRuntime, NativeRuntimeConfig, NativeSnapshot,
-    offline_harness_capabilities, probe_native_harnesses,
+    NativeApproval, NativeBlock, NativeEvent, NativeEventReceiver, NativeRuntime,
+    NativeRuntimeConfig, NativeSnapshot, offline_harness_capabilities, probe_native_harnesses,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -39,7 +39,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use tauri::{AppHandle, Emitter, State};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 use workspace_store::{PersistedSession, WorkspaceRegistry};
@@ -47,6 +47,8 @@ use workspace_store::{PersistedSession, WorkspaceRegistry};
 pub const WORKSPACE_PROTOCOL: u8 = 15;
 pub const WORKSPACE_EVENT_NAME: &str = "piui://workspace-event";
 const NATIVE_SESSION_DIRECTORY: &str = "workspace-native-v11";
+/// Upper bound for one forwarded text delta built from already-queued deltas.
+const MAX_COALESCED_DELTA_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -549,7 +551,7 @@ struct EventForwarding {
     instance_id: Uuid,
     runtime: Arc<NativeRuntime>,
     state: Arc<LiveState>,
-    events: mpsc::Receiver<NativeEvent>,
+    events: NativeEventReceiver,
     coordinator: Option<CoordinatorBinding>,
     publisher: WorkspaceEventPublisher,
 }
@@ -565,7 +567,23 @@ struct WorkspaceHostInner {
     registry: Mutex<WorkspaceRegistry>,
     live: Mutex<HashMap<String, LiveSession>>,
     native_root: PathBuf,
+    /// Test builds only: replaces native harness resolution with a test
+    /// adapter that still runs the production bridge runner and transport.
+    #[cfg(test)]
+    test_spawner: Mutex<Option<TestRuntimeSpawner>>,
 }
+
+type NativeSpawnResult = Result<
+    (NativeRuntime, NativeEventReceiver),
+    piui_runtime::workspace_runtime::NativeRuntimeError,
+>;
+
+#[cfg(test)]
+type TestRuntimeSpawner = Arc<
+    dyn Fn(NativeRuntimeConfig) -> Pin<Box<dyn Future<Output = NativeSpawnResult> + Send>>
+        + Send
+        + Sync,
+>;
 
 #[derive(Clone)]
 pub struct WorkspaceHost {
@@ -581,10 +599,28 @@ impl WorkspaceHost {
                 registry: Mutex::new(WorkspaceRegistry::open(app_data_dir)?),
                 live: Mutex::new(HashMap::new()),
                 native_root,
+                #[cfg(test)]
+                test_spawner: Mutex::new(None),
             }),
         };
         host.recover_queues()?;
         Ok(host)
+    }
+
+    async fn spawn_native(&self, config: NativeRuntimeConfig) -> NativeSpawnResult {
+        #[cfg(test)]
+        {
+            let spawner = self
+                .inner
+                .test_spawner
+                .lock()
+                .ok()
+                .and_then(|slot| slot.clone());
+            if let Some(spawner) = spawner {
+                return spawner(config).await;
+            }
+        }
+        NativeRuntime::spawn(config).await
     }
 
     #[must_use]
@@ -779,21 +815,24 @@ impl WorkspaceHost {
             agent_dir: None,
             kernel_python: None,
         };
-        let (runtime, events) = NativeRuntime::spawn(config)
+        let (runtime, mut events) = self
+            .spawn_native(config)
             .await
             .map_err(|_| WorkspaceError::runtime())?;
         let runtime = Arc::new(runtime);
-        let native = match runtime.snapshot().await {
+        // No forwarder drains the events yet: keep draining them while the
+        // first snapshot is awaited, or backpressure could hold its response.
+        let native = match events.buffer_while(runtime.snapshot()).await {
             Ok(snapshot) => snapshot,
             Err(_) => {
-                let _ = runtime.dispose().await;
+                retire_unpublished_runtime(&runtime, events).await;
                 return Err(WorkspaceError::runtime());
             }
         };
         let binding_persisted = record.native_id.is_some() || record.harness != HarnessKind::Codex;
         if let Err(error) = self.update_binding_and_metadata(&record.id, &native, binding_persisted)
         {
-            let _ = runtime.dispose().await;
+            retire_unpublished_runtime(&runtime, events).await;
             return Err(error);
         }
         let state = Arc::new(LiveState {
@@ -844,6 +883,8 @@ impl WorkspaceHost {
             }
         };
         if !inserted {
+            // The forwarder of this unpublished instance keeps draining until
+            // disposal closes its stream, so disposal is never held by it.
             let _ = runtime.dispose().await;
             return Err(WorkspaceError::conflict());
         }
@@ -2002,9 +2043,22 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
         publisher,
     } = forwarding;
     tokio::spawn(async move {
-        while let Some(event) = events.recv().await {
+        // This task is the only consumer of `events` and the bridge reader
+        // waits for it under backpressure. It therefore never awaits a native
+        // response while it still owns an undrained stream.
+        let mut next: Option<NativeEvent> = None;
+        loop {
+            let event = match next.take() {
+                Some(event) => event,
+                None => match events.recv().await {
+                    Some(event) => event,
+                    None => break,
+                },
+            };
             let Some(inner) = host.upgrade() else {
                 abort_coordinator_tasks(&state);
+                runtime.begin_retirement();
+                drop(events);
                 let _ = runtime.dispose().await;
                 return;
             };
@@ -2045,7 +2099,8 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                     mark_materialized(&inner, &state, &session_id);
                     WorkspaceEventPayload::Block { block }
                 }
-                NativeEvent::TextDelta { block_id, text } => {
+                NativeEvent::TextDelta { block_id, mut text } => {
+                    next = coalesce_text_deltas(&mut events, &block_id, &mut text);
                     WorkspaceEventPayload::TextDelta { block_id, text }
                 }
                 NativeEvent::Status { status } => {
@@ -2131,6 +2186,10 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                     });
                     if persisted.is_none() {
                         abort_coordinator_tasks(&state);
+                        // Close this consumer's stream before disposal: the
+                        // reader may be waiting on it ahead of the response.
+                        runtime.begin_retirement();
+                        drop(events);
                         let _ = runtime.dispose().await;
                         if let Ok(mut status) = state.status.lock() {
                             *status = SessionStatus::Failed;
@@ -2218,6 +2277,35 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
             }
         }
     })
+}
+
+/// Appends the already-queued consecutive deltas of the same block, so a
+/// consumer that fell behind forwards them as one payload. It never waits for
+/// more input; the first different event is returned to be forwarded next.
+fn coalesce_text_deltas(
+    events: &mut NativeEventReceiver,
+    block_id: &str,
+    text: &mut String,
+) -> Option<NativeEvent> {
+    while text.len() < MAX_COALESCED_DELTA_BYTES {
+        match events.try_recv()? {
+            NativeEvent::TextDelta {
+                block_id: next_block,
+                text: more,
+            } if next_block == block_id => text.push_str(&more),
+            other => return Some(other),
+        }
+    }
+    None
+}
+
+/// Retires a runtime that was never published to commands. Admission stops
+/// before its stream closes, so the reader treats the closed sink as expected
+/// and routes the disposal response instead of waiting for capacity.
+async fn retire_unpublished_runtime(runtime: &NativeRuntime, events: NativeEventReceiver) {
+    runtime.begin_retirement();
+    drop(events);
+    let _ = runtime.dispose().await;
 }
 
 fn mark_materialized(host: &WorkspaceHostInner, state: &LiveState, session_id: &str) {
@@ -3212,5 +3300,236 @@ mod tests {
         let decision: ApprovalDecision =
             serde_json::from_str("\"approve-once\"").expect("decision");
         assert_eq!(decision, ApprovalDecision::ApproveOnce);
+    }
+}
+
+/// Host tests that drive the production bridge runner, transport and event
+/// forwarder through a deterministic test adapter instead of a harness.
+#[cfg(test)]
+mod native_host_tests {
+    use super::{
+        HarnessKind, NativeSpawnResult, PermissionMode, PromptMode, SessionStatus, WorkspaceEvent,
+        WorkspaceEventPayload, WorkspaceEventPublisher, WorkspaceHost, WorkspaceLaunchRequest,
+        coalesce_text_deltas,
+    };
+    use piui_platform::ProjectDirectory;
+    use piui_runtime::workspace_runtime::{
+        NativeEvent, NativeEventReceiver, NativeRuntime, NativeRuntimeConfig,
+    };
+    use std::future::Future;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    /// `prompt` streams one assistant block as `deltas:<n>` text deltas and
+    /// `usage:<n>` usage receipts, then completes the turn and returns idle.
+    pub(super) const TEST_ADAPTER: &str = r#"
+        let status = 'idle';
+        const native = {supported:true,enforcement:'native'};
+        const unsupported = {supported:false,enforcement:'unsupported'};
+        const setStatus = (next) => { status = next; emit({type:'status',status:next}); };
+        return {
+          snapshot() {
+            return {nativeId:'native-test',materialized:false,title:config.title ?? 'Test session',status,blocks:[],approvals:[],
+              capabilities:{prompt:native,resume:native,models:native,approvals:native,instructions:unsupported,toolPolicy:native,nativeSubagents:unsupported},models:[]};
+          },
+          prompt({ text }) {
+            setStatus('running');
+            const deltas = Number(/deltas:(\d+)/.exec(text)?.[1] ?? 0);
+            const usage = Number(/usage:(\d+)/.exec(text)?.[1] ?? 0);
+            if (deltas > 0) emit({type:'block',block:{id:'answer',kind:'assistant',label:'Assistant',status:'streaming',text:''}});
+            for (let i = 0; i < deltas; i += 1) emit({type:'textDelta',blockId:'answer',text:`${i},`});
+            for (let i = 0; i < usage; i += 1) emit({type:'usage',usage:{id:`receipt-${i % 3}`,inputTokens:i,outputTokens:i * 2}});
+            emit({type:'turnCompleted',outcome:'succeeded'});
+            setStatus('idle');
+            return {accepted:true};
+          },
+          interrupt() { return null; },
+          dispose() { return null; },
+        };
+    "#;
+
+    pub(super) fn test_root(purpose: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("piui-{purpose}-{}", uuid::Uuid::new_v4()))
+    }
+
+    pub(super) fn install_test_spawner<F, Fut>(host: &WorkspaceHost, spawner: F)
+    where
+        F: Fn(NativeRuntimeConfig) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = NativeSpawnResult> + Send + 'static,
+    {
+        *host.inner.test_spawner.lock().expect("test spawner slot") =
+            Some(Arc::new(move |config| Box::pin(spawner(config))));
+    }
+
+    pub(super) fn test_adapter_spawner(host: &WorkspaceHost) {
+        install_test_spawner(host, |config| {
+            NativeRuntime::spawn_test_adapter(config, TEST_ADAPTER)
+        });
+    }
+
+    fn project_directory(root: &Path) -> ProjectDirectory {
+        let path = root.join("project");
+        std::fs::create_dir_all(&path).expect("creates project");
+        ProjectDirectory::resolve(&path).expect("resolves project")
+    }
+
+    pub(super) fn chat_request(workspace_id: &str, title: &str) -> WorkspaceLaunchRequest {
+        WorkspaceLaunchRequest {
+            session_id: None,
+            workspace_id: workspace_id.into(),
+            harness: HarnessKind::Pi,
+            title: Some(title.into()),
+            profile_id: None,
+            run_id: None,
+            member_id: None,
+            task_id: None,
+            model: None,
+            thinking_level: None,
+            instructions: None,
+            base_instructions: None,
+            service_tier: None,
+            resource_rules: None,
+            permission_mode: PermissionMode::Native,
+            network_access: false,
+            allowed_tools: None,
+            native_subagents: None,
+            dependency_history_references: Vec::new(),
+            coordinator: None,
+        }
+    }
+
+    /// Sends one prompt and waits for its explicit terminal outcome.
+    pub(super) async fn run_turn(host: &WorkspaceHost, session_id: &str, text: &str) {
+        let (_, state) = host
+            .live_runtime(session_id)
+            .expect("session lookup")
+            .expect("live session");
+        let mut turns = state.turns.subscribe();
+        let baseline = turns.borrow().generation;
+        host.send(session_id, text.into(), PromptMode::Prompt)
+            .await
+            .expect("prompt accepted");
+        let completed = tokio::time::timeout(
+            Duration::from_secs(30),
+            turns.wait_for(|turn| turn.generation > baseline),
+        )
+        .await
+        .expect("turn completes")
+        .map(|turn| turn.outcome);
+        assert!(completed.is_ok());
+    }
+
+    fn delta(block_id: &str, text: &str) -> NativeEvent {
+        NativeEvent::TextDelta {
+            block_id: block_id.into(),
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn queued_deltas_of_one_block_coalesce_without_reordering() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(8);
+        for event in [
+            delta("answer", "1"),
+            delta("answer", "2"),
+            NativeEvent::Status {
+                status: SessionStatus::Idle,
+            },
+            delta("answer", "3"),
+            delta("other", "4"),
+        ] {
+            sender.try_send(event).expect("queued");
+        }
+        let mut events = NativeEventReceiver::from(receiver);
+        let mut text = String::from("0");
+        let next = coalesce_text_deltas(&mut events, "answer", &mut text);
+        assert_eq!(text, "012");
+        assert!(matches!(next, Some(NativeEvent::Status { .. })));
+        let mut text = String::from("3");
+        let Some(NativeEvent::TextDelta { .. }) = events.try_recv() else {
+            panic!("the third delta stays queued behind the status");
+        };
+        let next = coalesce_text_deltas(&mut events, "answer", &mut text);
+        assert_eq!(text, "3");
+        assert!(matches!(
+            next,
+            Some(NativeEvent::TextDelta { ref block_id, ref text }) if block_id == "other" && text == "4"
+        ));
+        // Nothing is waited for when the queue is empty.
+        assert!(coalesce_text_deltas(&mut events, "answer", &mut text).is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn slow_consumer_gets_a_delta_burst_intact_and_the_runtime_survives() {
+        const DELTAS: usize = 3_000;
+        let root = test_root("delta-burst");
+        let host = WorkspaceHost::open(&root.join("app-data")).expect("host");
+        test_adapter_spawner(&host);
+        let directory = project_directory(&root);
+        let recorded = Arc::new(Mutex::new(Vec::<WorkspaceEvent>::new()));
+        let publisher: WorkspaceEventPublisher = {
+            let recorded = Arc::clone(&recorded);
+            Arc::new(move |event: WorkspaceEvent| {
+                // A deliberately slow WebView consumer.
+                if matches!(event.event, WorkspaceEventPayload::TextDelta { .. }) {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                recorded.lock().expect("events").push(event);
+            })
+        };
+        let snapshot = host
+            .launch_session(
+                &directory,
+                chat_request(&uuid::Uuid::new_v4().to_string(), "Burst"),
+                publisher,
+            )
+            .await
+            .expect("launch");
+        let session_id = snapshot.session.id;
+        run_turn(&host, &session_id, &format!("deltas:{DELTAS}")).await;
+
+        let recorded = recorded.lock().expect("events").clone();
+        let text = recorded
+            .iter()
+            .filter_map(|event| match &event.event {
+                WorkspaceEventPayload::TextDelta { block_id, text } => {
+                    assert_eq!(block_id, "answer");
+                    Some(text.as_str())
+                }
+                _ => None,
+            })
+            .collect::<String>();
+        let expected = (0..DELTAS)
+            .map(|index| format!("{index},"))
+            .collect::<String>();
+        assert_eq!(text, expected);
+        let forwarded = recorded
+            .iter()
+            .filter(|event| matches!(event.event, WorkspaceEventPayload::TextDelta { .. }))
+            .count();
+        assert!(forwarded <= DELTAS);
+        // Revisions stay contiguous for the WebView reducer.
+        assert!(
+            recorded
+                .windows(2)
+                .all(|pair| pair[1].revision == pair[0].revision + 1)
+        );
+        assert!(
+            !recorded
+                .iter()
+                .any(|event| matches!(event.event, WorkspaceEventPayload::Error { .. }))
+        );
+        assert_eq!(
+            host.snapshot(&session_id)
+                .await
+                .expect("the runtime survives the burst")
+                .session
+                .status,
+            SessionStatus::Idle
+        );
+        host.shutdown_all().await;
+        drop(host);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

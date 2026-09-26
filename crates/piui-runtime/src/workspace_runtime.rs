@@ -13,8 +13,9 @@ use piui_platform::{ProcessGroupId, UnixProcessGroup};
 use piui_platform::{ProcessId, SuspendedProcess, WindowsJob};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
@@ -30,6 +31,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const INTERRUPT_TIMEOUT: Duration = Duration::from_secs(10);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(6);
 const READ_BUFFER_BYTES: usize = 16 * 1024;
+/// Bound of each runtime's event queue. A full queue is backpressure: the
+/// bridge reader waits for capacity, it never fails the runtime.
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
 const RUNNER_SOURCE: &str = include_str!("../bridge/runner.mjs");
@@ -614,7 +617,7 @@ impl NativeRuntime {
         node: PathBuf,
         launch: ResolvedHarnessLaunch,
         source: Vec<u8>,
-    ) -> Result<(Self, mpsc::Receiver<NativeEvent>), NativeRuntimeError> {
+    ) -> Result<(Self, NativeEventReceiver), NativeRuntimeError> {
         type PoolKey = (PathBuf, Option<std::ffi::OsString>);
         type Pools = Mutex<HashMap<PoolKey, Weak<NativeRuntime>>>;
         static POOLS: OnceLock<Pools> = OnceLock::new();
@@ -646,25 +649,40 @@ impl NativeRuntime {
         };
         drop(pools);
         let session_id = config.session_dir.to_string_lossy().into_owned();
-        let (events, receiver) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
+        let (sender, receiver) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
+        let mut events = NativeEventReceiver::from(receiver);
         let accepting = Arc::new(AtomicBool::new(true));
         pool.shared
             .session_events
             .lock()
             .await
-            .insert(session_id.clone(), (events, accepting.clone()));
-        if let Err(error) = pool
-            .request(
-                "openSession",
-                json!({"sessionId":session_id,"config":initialize}),
-                REQUEST_TIMEOUT,
-                false,
-            )
+            .insert(session_id.clone(), (sender, accepting.clone()));
+        // If this start is dropped before it completes, its route stops
+        // accepting: a late event of the abandoned session is discarded
+        // instead of failing every session that shares the pool.
+        let route = UnfinishedPooledRoute(Some(Arc::clone(&accepting)));
+        // The shared-stdin request runs detached, so dropping this start can
+        // never truncate a frame that the other pooled sessions depend on.
+        let open = tokio::spawn({
+            let pool = Arc::clone(&pool);
+            let params = json!({"sessionId":session_id,"config":initialize});
+            async move {
+                pool.request("openSession", params, REQUEST_TIMEOUT, false)
+                    .await
+            }
+        });
+        // Events of this session routed during `openSession` (for example a
+        // resumed history page) must be drained: the shared reader would
+        // otherwise wait on them before it can route the response.
+        let opened = events
+            .buffer_while(open)
             .await
-        {
+            .unwrap_or(Err(NativeRuntimeError::Channel));
+        if let Err(error) = opened {
             pool.shared.session_events.lock().await.remove(&session_id);
             return Err(error);
         }
+        route.complete();
         Ok((
             Self {
                 pooled: Some((pool, session_id)),
@@ -687,13 +705,16 @@ impl NativeRuntime {
                     windows_job: StdMutex::new(None),
                 }),
             },
-            receiver,
+            events,
         ))
     }
 
+    /// Starts one native runtime. Dropping the returned future before it
+    /// completes terminates the partially started process tree and never
+    /// affects another session.
     pub async fn spawn(
         config: NativeRuntimeConfig,
-    ) -> Result<(Self, mpsc::Receiver<NativeEvent>), NativeRuntimeError> {
+    ) -> Result<(Self, NativeEventReceiver), NativeRuntimeError> {
         let config = resolve_native_runtime_config(config)?;
         validate_config(&config)?;
         let node = resolve_node()?;
@@ -707,7 +728,7 @@ impl NativeRuntime {
 
     pub async fn spawn_catalog(
         config: NativeRuntimeConfig,
-    ) -> Result<(Self, mpsc::Receiver<NativeEvent>), NativeRuntimeError> {
+    ) -> Result<(Self, NativeEventReceiver), NativeRuntimeError> {
         let config = resolve_native_runtime_config(config)?;
         validate_config(&config)?;
         let node = resolve_node()?;
@@ -723,7 +744,7 @@ impl NativeRuntime {
         source: Vec<u8>,
         pool_host: bool,
         catalog_only: bool,
-    ) -> Result<(Self, mpsc::Receiver<NativeEvent>), NativeRuntimeError> {
+    ) -> Result<(Self, NativeEventReceiver), NativeRuntimeError> {
         let source_len =
             u32::try_from(source.len()).map_err(|_| NativeRuntimeError::BridgeSourceTooLarge)?;
         #[cfg(windows)]
@@ -809,6 +830,7 @@ impl NativeRuntime {
             windows_job: StdMutex::new(Some(windows_job)),
         });
         let (event_tx, event_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
+        let mut events = NativeEventReceiver::from(event_rx);
         let reader_shared = Arc::clone(&shared);
         let reader_containment = Arc::clone(&containment);
         let reader = tokio::spawn(async move {
@@ -853,14 +875,19 @@ impl NativeRuntime {
         } else {
             REQUEST_TIMEOUT
         };
-        if let Err(error) = runtime
-            .request("initialize", json!(initialize), startup_timeout, false)
-            .await
-        {
+        // An adapter may replay native history while it initializes (a Hermes
+        // `session/load` or a resumed Codex page). Those events are retained
+        // so the reader can route the initialize response queued behind them.
+        let initialized = events
+            .buffer_while(runtime.request("initialize", json!(initialize), startup_timeout, false))
+            .await;
+        if let Err(error) = initialized {
+            runtime.begin_retirement();
+            drop(events);
             let _ = runtime.terminate().await;
             return Err(error);
         }
-        Ok((runtime, event_rx))
+        Ok((runtime, events))
     }
 
     async fn write_source(&self, length: u32, source: &[u8]) -> Result<(), NativeRuntimeError> {
@@ -1001,7 +1028,8 @@ impl NativeRuntime {
 
     /// Stops new command admission before the host retires its event consumer.
     /// During this explicit retirement window a closed event sink is expected,
-    /// while a full sink or a closed sink during active operation remains fatal.
+    /// while a closed sink during active operation remains fatal. A full sink
+    /// is never fatal: the reader waits for capacity.
     pub fn begin_retirement(&self) {
         self.shared.accepting.store(false, Ordering::Release);
     }
@@ -1148,6 +1176,134 @@ impl Drop for NativeRuntime {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
+impl NativeRuntime {
+    /// Test support only: runs the production runner, transport and process
+    /// containment around a caller-supplied adapter factory body. It is not
+    /// compiled into application builds, so bridge code cannot be injected.
+    #[doc(hidden)]
+    pub async fn spawn_test_adapter(
+        config: NativeRuntimeConfig,
+        factory_body: &str,
+    ) -> Result<(Self, NativeEventReceiver), NativeRuntimeError> {
+        let node = resolve_node()?;
+        let source = format!(
+            "export async function createTestAdapter(config,emit,coordinatorRequest){{{factory_body}}}\nglobalThis.__PIUI_BRIDGE_FACTORY__=createTestAdapter;\n{RUNNER_SOURCE}"
+        )
+        .into_bytes();
+        Self::spawn_resolved(
+            config,
+            node.clone(),
+            ResolvedHarnessLaunch {
+                program: node,
+                args: Vec::new(),
+                version: None,
+            },
+            source,
+            false,
+            false,
+        )
+        .await
+    }
+}
+
+/// Ordered stream of one runtime's native events.
+///
+/// The bridge reader applies backpressure: while this stream is not drained it
+/// stops reading the bridge's stdout, so the native pipe throttles the bridge
+/// instead of a full queue failing the runtime. The owner must therefore never
+/// await a response from the same runtime without draining the stream;
+/// [`NativeEventReceiver::buffer_while`] keeps it draining for such waits.
+pub struct NativeEventReceiver {
+    /// Events retained while the owner awaited a response, in arrival order.
+    retained: VecDeque<NativeEvent>,
+    live: mpsc::Receiver<NativeEvent>,
+    live_closed: bool,
+}
+
+impl NativeEventReceiver {
+    /// Receives the next event in arrival order. Cancel-safe.
+    pub async fn recv(&mut self) -> Option<NativeEvent> {
+        if let Some(event) = self.retained.pop_front() {
+            return Some(event);
+        }
+        if self.live_closed {
+            return None;
+        }
+        self.live.recv().await
+    }
+
+    /// Returns the next event only if it is already available.
+    pub fn try_recv(&mut self) -> Option<NativeEvent> {
+        self.retained
+            .pop_front()
+            .or_else(|| self.live.try_recv().ok())
+    }
+
+    /// Drives `future` to completion while retaining every event that
+    /// arrives meanwhile, so the reader can always route an awaited response
+    /// that the bridge wrote after those events. Consecutive text deltas of
+    /// one block are merged while retained; order is otherwise unchanged.
+    pub async fn buffer_while<F: Future>(&mut self, future: F) -> F::Output {
+        let mut future = std::pin::pin!(future);
+        loop {
+            if self.live_closed {
+                return future.await;
+            }
+            tokio::select! {
+                biased;
+                output = &mut future => return output,
+                event = self.live.recv() => match event {
+                    Some(event) => self.retain(event),
+                    None => self.live_closed = true,
+                },
+            }
+        }
+    }
+
+    fn retain(&mut self, event: NativeEvent) {
+        if let NativeEvent::TextDelta { block_id, text } = &event
+            && let Some(NativeEvent::TextDelta {
+                block_id: previous_block,
+                text: previous_text,
+            }) = self.retained.back_mut()
+            && previous_block == block_id
+        {
+            previous_text.push_str(text);
+            return;
+        }
+        self.retained.push_back(event);
+    }
+}
+
+impl From<mpsc::Receiver<NativeEvent>> for NativeEventReceiver {
+    fn from(live: mpsc::Receiver<NativeEvent>) -> Self {
+        Self {
+            retained: VecDeque::new(),
+            live,
+            live_closed: false,
+        }
+    }
+}
+
+/// Route of a pooled session whose start has not completed. Dropping it stops
+/// the route from accepting, so an abandoned start never fails the pool.
+struct UnfinishedPooledRoute(Option<Arc<AtomicBool>>);
+
+impl UnfinishedPooledRoute {
+    fn complete(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for UnfinishedPooledRoute {
+    fn drop(&mut self) {
+        if let Some(accepting) = self.0.take() {
+            accepting.store(false, Ordering::Release);
+        }
+    }
+}
+
 async fn read_bridge_stdout<R: tokio::io::AsyncRead + Unpin>(
     mut stdout: R,
     shared: Arc<RuntimeShared>,
@@ -1199,29 +1355,63 @@ async fn read_bridge_stdout<R: tokio::io::AsyncRead + Unpin>(
             NativeRuntimeError::UnexpectedExit
         };
         fail_pending(&shared, error.clone()).await;
-        for (sender, _) in shared.session_events.lock().await.values() {
-            let _ = sender.try_send(NativeEvent::Status {
-                status: SessionStatus::Failed,
-            });
-            let _ = sender.try_send(NativeEvent::Error {
-                message: "The shared Codex runtime stopped.".into(),
-            });
-        }
-        let _ = events.try_send(NativeEvent::Status {
-            status: SessionStatus::Failed,
-        });
-        let _ = events.try_send(NativeEvent::Error {
-            message: if failed {
-                "The native bridge protocol failed."
-            } else {
-                "The native runtime exited unexpectedly."
-            }
-            .into(),
-        });
-        *shared.stdin.lock().await = None;
+        // Retire the process tree before awaiting anything it could hold: a
+        // bridge blocked on its stdout pipe no longer drains its stdin.
         if let Some(containment) = containment {
             let _ = containment.terminate();
         }
+        *shared.stdin.lock().await = None;
+        let routes = shared
+            .session_events
+            .lock()
+            .await
+            .values()
+            .map(|(sender, _)| sender.clone())
+            .collect::<Vec<_>>();
+        for sender in routes {
+            notify_failure(sender, "The shared Codex runtime stopped.");
+        }
+        notify_failure(
+            events,
+            if failed {
+                "The native bridge protocol failed."
+            } else {
+                "The native runtime exited unexpectedly."
+            },
+        );
+    }
+}
+
+/// Delivers the terminal notifications of a failed transport with the same
+/// backpressure as every other event, from a detached task so that a stalled
+/// consumer cannot keep the failed reader alive.
+fn notify_failure(sender: mpsc::Sender<NativeEvent>, message: &'static str) {
+    tokio::spawn(async move {
+        let _ = sender
+            .send(NativeEvent::Status {
+                status: SessionStatus::Failed,
+            })
+            .await;
+        let _ = sender
+            .send(NativeEvent::Error {
+                message: message.into(),
+            })
+            .await;
+    });
+}
+
+/// Waits for queue capacity instead of failing: a slow consumer throttles the
+/// bridge through its stdout pipe and never kills the runtime. A closed queue
+/// is expected only after explicit retirement stopped command admission.
+async fn deliver_event(
+    sender: &mpsc::Sender<NativeEvent>,
+    accepting: &AtomicBool,
+    event: NativeEvent,
+) -> Result<(), NativeRuntimeError> {
+    match sender.send(event).await {
+        Ok(()) => Ok(()),
+        Err(_) if !accepting.load(Ordering::Acquire) => Ok(()),
+        Err(_) => Err(NativeRuntimeError::Protocol),
     }
 }
 
@@ -1237,27 +1427,16 @@ async fn route_bridge_frame(
             return Err(NativeRuntimeError::Protocol);
         }
         let event = frame.event.ok_or(NativeRuntimeError::Protocol)?;
-        let sessions = shared.session_events.lock().await;
-        if let Some((sender, accepting)) = sessions.get(&session_id) {
-            match sender.try_send(event) {
-                Ok(()) => {}
-                Err(mpsc::error::TrySendError::Closed(_)) if !accepting.load(Ordering::Acquire) => {
-                }
-                Err(_) => return Err(NativeRuntimeError::Protocol),
-            }
+        // Release the route table before waiting for capacity: opening or
+        // retiring another pooled session never queues behind this consumer.
+        let route = shared.session_events.lock().await.get(&session_id).cloned();
+        if let Some((sender, accepting)) = route {
+            deliver_event(&sender, &accepting, event).await?;
         }
         return Ok(());
     }
     match (frame.id, frame.ok, frame.event) {
-        (None, None, Some(event)) => match events.try_send(event) {
-            Ok(()) => Ok(()),
-            Err(mpsc::error::TrySendError::Closed(_))
-                if !shared.accepting.load(Ordering::Acquire) =>
-            {
-                Ok(())
-            }
-            Err(_) => Err(NativeRuntimeError::Protocol),
-        },
+        (None, None, Some(event)) => deliver_event(events, &shared.accepting, event).await,
         (Some(id), Some(ok), None) => {
             let slot = shared.pending.lock().await.remove(&id);
             let Some(slot) = slot else {
@@ -1908,30 +2087,323 @@ mod tests {
         two.dispose().await.expect("close second");
     }
 
-    fn test_bridge_source(factory_body: &str) -> Vec<u8> {
-        format!(
-            "export async function createTestAdapter(config,emit,coordinatorRequest){{{factory_body}}}\nglobalThis.__PIUI_BRIDGE_FACTORY__=createTestAdapter;\n{RUNNER_SOURCE}"
-        )
-        .into_bytes()
-    }
-
     async fn spawn_test_bridge(
         factory_body: &str,
-    ) -> Result<(NativeRuntime, mpsc::Receiver<NativeEvent>), NativeRuntimeError> {
-        let node = resolve_node()?;
-        NativeRuntime::spawn_resolved(
-            test_config(),
-            node.clone(),
-            ResolvedHarnessLaunch {
-                program: node,
-                args: Vec::new(),
-                version: None,
+    ) -> Result<(NativeRuntime, NativeEventReceiver), NativeRuntimeError> {
+        NativeRuntime::spawn_test_adapter(test_config(), factory_body).await
+    }
+
+    fn test_shared(shutting_down: bool) -> Arc<RuntimeShared> {
+        Arc::new(RuntimeShared {
+            session_events: Mutex::new(HashMap::new()),
+            stdin: Mutex::new(None),
+            pending: Mutex::new(HashMap::new()),
+            timed_out: Mutex::new(HashSet::new()),
+            next_id: AtomicU64::new(1),
+            accepting: Arc::new(AtomicBool::new(true)),
+            shutting_down: AtomicBool::new(shutting_down),
+        })
+    }
+
+    fn delta_frame(session_id: Option<&str>, block_id: &str, text: &str) -> Vec<u8> {
+        let event = json!({"type":"textDelta","blockId":block_id,"text":text});
+        let frame = match session_id {
+            Some(session_id) => json!({"sessionId":session_id,"event":event}),
+            None => json!({"event":event}),
+        };
+        let mut bytes = serde_json::to_vec(&frame).expect("frame");
+        bytes.push(b'\n');
+        bytes
+    }
+
+    fn delta_text(event: Option<NativeEvent>, expected_block: &str) -> String {
+        match event {
+            Some(NativeEvent::TextDelta { block_id, text }) if block_id == expected_block => text,
+            other => panic!("expected a text delta for {expected_block}, got {other:?}"),
+        }
+    }
+
+    const MOCK_SNAPSHOT: &str = r#"{nativeId:'native-private',materialized:false,title:'Mock',status:'idle',blocks:[],approvals:[],capabilities:{prompt:{supported:true,enforcement:'native'},resume:{supported:true,enforcement:'native'},models:{supported:true,enforcement:'native'},approvals:{supported:true,enforcement:'native'},instructions:{supported:false,enforcement:'unsupported'},toolPolicy:{supported:true,enforcement:'native'},nativeSubagents:{supported:false,enforcement:'unsupported'}},models:[]}"#;
+
+    #[tokio::test]
+    async fn burst_beyond_the_event_queue_waits_for_a_slow_consumer_in_order() {
+        const BURST: usize = EVENT_CHANNEL_CAPACITY * 8;
+        let shared = test_shared(true);
+        let bytes = (0..BURST)
+            .flat_map(|index| delta_frame(None, "answer", &format!("{index},")))
+            .collect::<Vec<_>>();
+        let (events, mut receiver) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
+        let reader = tokio::spawn(read_bridge_stdout(
+            std::io::Cursor::new(bytes),
+            Arc::clone(&shared),
+            events,
+            None,
+        ));
+        // The reader fills the queue and then waits instead of failing.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while receiver.len() < EVENT_CHANNEL_CAPACITY {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the reader fills the queue");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!reader.is_finished(), "a full queue is backpressure");
+        assert!(shared.accepting.load(Ordering::Acquire));
+        let mut received = Vec::with_capacity(BURST);
+        while received.len() < BURST {
+            received.push(delta_text(receiver.recv().await, "answer"));
+            if received.len() % 64 == 0 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        }
+        reader.await.expect("reader finishes after the burst");
+        assert!(
+            received
+                .iter()
+                .enumerate()
+                .all(|(index, text)| *text == format!("{index},"))
+        );
+        assert!(receiver.recv().await.is_none(), "no failure notification");
+        assert!(shared.accepting.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn pooled_backpressure_waits_outside_the_route_table_and_keeps_order() {
+        const FRAMES: usize = 40;
+        let shared = test_shared(true);
+        let (first_sender, mut first) = mpsc::channel(2);
+        let (second_sender, mut second) = mpsc::channel(FRAMES);
+        for (session_id, sender) in [("first", first_sender), ("second", second_sender)] {
+            shared
+                .session_events
+                .lock()
+                .await
+                .insert(session_id.into(), (sender, Arc::new(AtomicBool::new(true))));
+        }
+        let bytes = (0..FRAMES)
+            .flat_map(|index| {
+                let mut frames = delta_frame(Some("first"), "first", &index.to_string());
+                frames.extend(delta_frame(Some("second"), "second", &index.to_string()));
+                frames
+            })
+            .collect::<Vec<_>>();
+        let (own_events, _own_receiver) = mpsc::channel(1);
+        let reader = tokio::spawn(read_bridge_stdout(
+            std::io::Cursor::new(bytes),
+            Arc::clone(&shared),
+            own_events,
+            None,
+        ));
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while first.len() < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the stalled session queue fills");
+        assert!(
+            !reader.is_finished(),
+            "a stalled pooled consumer is backpressure"
+        );
+        // Opening or retiring another pooled session is not blocked by it.
+        drop(
+            tokio::time::timeout(Duration::from_secs(1), shared.session_events.lock())
+                .await
+                .expect("the route table is free while the reader waits"),
+        );
+        let mut first_texts = Vec::new();
+        while first_texts.len() < FRAMES {
+            first_texts.push(delta_text(first.recv().await, "first"));
+        }
+        reader.await.expect("reader finishes");
+        let mut second_texts = Vec::new();
+        while let Ok(event) = second.try_recv() {
+            second_texts.push(delta_text(Some(event), "second"));
+        }
+        let expected = (0..FRAMES)
+            .map(|index| index.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(first_texts, expected);
+        assert_eq!(second_texts, expected);
+        assert!(shared.accepting.load(Ordering::Acquire));
+    }
+
+    fn delta(block_id: &str, text: &str) -> NativeEvent {
+        NativeEvent::TextDelta {
+            block_id: block_id.into(),
+            text: text.into(),
+        }
+    }
+
+    /// Joins adjacent deltas of one block, the only transformation retention
+    /// may apply, so streams can be compared independent of scheduling.
+    fn normalized(events: Vec<NativeEvent>) -> Vec<NativeEvent> {
+        let mut merged: Vec<NativeEvent> = Vec::new();
+        for event in events {
+            if let NativeEvent::TextDelta { block_id, text } = &event
+                && let Some(NativeEvent::TextDelta {
+                    block_id: previous_block,
+                    text: previous_text,
+                }) = merged.last_mut()
+                && previous_block == block_id
+            {
+                previous_text.push_str(text);
+                continue;
+            }
+            merged.push(event);
+        }
+        merged
+    }
+
+    #[tokio::test]
+    async fn buffer_while_drains_beyond_capacity_and_preserves_order() {
+        let (sender, receiver) = mpsc::channel(2);
+        let mut events = NativeEventReceiver::from(receiver);
+        let sent = vec![
+            delta("one", "a"),
+            delta("one", "b"),
+            delta("one", "c"),
+            NativeEvent::Status {
+                status: SessionStatus::Idle,
             },
-            test_bridge_source(factory_body),
-            false,
-            false,
+            delta("one", "d"),
+            delta("two", "e"),
+            delta("two", "f"),
+        ];
+        // More events than the queue holds: the awaited work can only finish
+        // because `buffer_while` keeps draining meanwhile.
+        let response = tokio::time::timeout(
+            Duration::from_secs(10),
+            events.buffer_while(async {
+                for event in sent.clone() {
+                    sender.send(event).await.expect("receiver alive");
+                }
+                "response"
+            }),
         )
         .await
+        .expect("the awaited work is never blocked by its own events");
+        assert_eq!(response, "response");
+        drop(sender);
+        let mut received = Vec::new();
+        while let Some(event) = events.recv().await {
+            received.push(event);
+        }
+        assert_eq!(normalized(received), normalized(sent));
+    }
+
+    #[test]
+    fn retained_deltas_merge_only_within_one_consecutive_block() {
+        let (_sender, receiver) = mpsc::channel(1);
+        let mut events = NativeEventReceiver::from(receiver);
+        for event in [
+            delta("one", "a"),
+            delta("one", "b"),
+            NativeEvent::Status {
+                status: SessionStatus::Running,
+            },
+            delta("one", "c"),
+            delta("two", "d"),
+            delta("two", "e"),
+        ] {
+            events.retain(event);
+        }
+        assert_eq!(delta_text(events.try_recv(), "one"), "ab");
+        assert!(matches!(
+            events.try_recv(),
+            Some(NativeEvent::Status {
+                status: SessionStatus::Running
+            })
+        ));
+        assert_eq!(delta_text(events.try_recv(), "one"), "c");
+        assert_eq!(delta_text(events.try_recv(), "two"), "de");
+        assert!(events.try_recv().is_none());
+    }
+
+    #[tokio::test]
+    async fn native_burst_beyond_queue_capacity_keeps_the_runtime_alive() {
+        const BURST: usize = 5_000;
+        let factory = format!(
+            "return {{snapshot(){{return {MOCK_SNAPSHOT}}},prompt(){{for(let i=0;i<{BURST};i+=1)emit({{type:'textDelta',blockId:'answer',text:`${{i}},`}});return {{accepted:true}}}},dispose(){{}}}}"
+        );
+        let (runtime, mut events) = spawn_test_bridge(&factory)
+            .await
+            .expect("spawn mock bridge");
+        let runtime = Arc::new(runtime);
+        let prompt = tokio::spawn({
+            let runtime = Arc::clone(&runtime);
+            async move { runtime.prompt("burst".into(), PromptMode::Prompt).await }
+        });
+        let mut text = String::new();
+        for index in 0..BURST {
+            text.push_str(&delta_text(events.recv().await, "answer"));
+            if index % 250 == 0 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        }
+        prompt
+            .await
+            .expect("prompt task")
+            .expect("a slow consumer never fails the runtime");
+        let expected = (0..BURST)
+            .map(|index| format!("{index},"))
+            .collect::<String>();
+        assert_eq!(text, expected);
+        assert_eq!(
+            runtime.snapshot().await.expect("still healthy").status,
+            SessionStatus::Idle
+        );
+        runtime.dispose().await.expect("dispose");
+    }
+
+    #[tokio::test]
+    async fn initialize_history_replay_beyond_queue_capacity_is_retained_in_order() {
+        const HISTORY: usize = EVENT_CHANNEL_CAPACITY * 4;
+        let factory = format!(
+            "for(let i=0;i<{HISTORY};i+=1)emit({{type:'block',block:{{id:`history-${{i}}`,kind:'user',label:'You',status:'complete',text:`message ${{i}}`}}}});return {{dispose(){{}}}}"
+        );
+        let (runtime, mut events) = spawn_test_bridge(&factory)
+            .await
+            .expect("initialize is not blocked by its own history replay");
+        for index in 0..HISTORY {
+            match events.recv().await {
+                Some(NativeEvent::Block { block }) => {
+                    assert_eq!(block.id, format!("history-{index}"));
+                }
+                other => panic!("expected replayed history, got {other:?}"),
+            }
+        }
+        runtime.dispose().await.expect("dispose");
+    }
+
+    #[tokio::test]
+    async fn retirement_releases_a_reader_waiting_on_an_undrained_queue() {
+        let factory = format!(
+            "return {{snapshot(){{for(let i=0;i<2000;i+=1)emit({{type:'textDelta',blockId:'b',text:'x'}});return {MOCK_SNAPSHOT}}},dispose(){{}}}}"
+        );
+        let (runtime, events) = spawn_test_bridge(&factory)
+            .await
+            .expect("spawn mock bridge");
+        let runtime = Arc::new(runtime);
+        let snapshot = tokio::spawn({
+            let runtime = Arc::clone(&runtime);
+            async move { runtime.snapshot().await }
+        });
+        // Nobody drains: the response stays queued behind the burst.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!snapshot.is_finished());
+        runtime.begin_retirement();
+        drop(events);
+        tokio::time::timeout(Duration::from_secs(10), snapshot)
+            .await
+            .expect("the response is routed after retirement")
+            .expect("snapshot task")
+            .expect("in-flight snapshot completes");
+        tokio::time::timeout(Duration::from_secs(10), runtime.dispose())
+            .await
+            .expect("dispose is not blocked by the retired queue")
+            .expect("dispose");
     }
 
     #[test]

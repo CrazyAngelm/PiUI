@@ -47,3 +47,5 @@ notify = "8.2.0"
 
 [dev-dependencies]
 tauri = { version = "=2.11.5", features = ["test"] }
+# Test-only adapter constructor that runs the real bridge runner and transport.
+piui-runtime = { path = "../../../crates/piui-runtime", features = ["test-support"] }

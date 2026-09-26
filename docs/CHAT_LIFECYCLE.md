@@ -98,3 +98,24 @@ supported. Unsupported slash input remains a draft and is not a model prompt.
 Pi uses RPC compact/steer; Codex uses thread/compact/start and turn/steer; Prime
 checks the installed SDK methods. Hermes ACP currently exposes neither compact
 nor active steering, but uses the same host Follow up queue.
+
+## Native event delivery
+
+Each native runtime delivers events through a bounded queue of 256 events. A
+full queue is backpressure, not a protocol failure: the bridge reader stops
+reading the bridge's stdout until the host forwarder drains, so a slow WebView
+or a large burst throttles the native process instead of killing it. In the
+shared Codex pool one slow session delays the pool's other sessions but never
+fails them. An unexpectedly closed queue during active operation still fails
+closed.
+
+Code that owns an undrained queue never awaits a response from the same
+runtime. Events that arrive while PiUI awaits `initialize`, the pooled
+`openSession` or the first snapshot are retained in arrival order; Hermes
+`session/load` and resumed Codex pages may replay long histories there.
+Retirement stops command admission and closes the queue before disposal.
+
+A forwarder that fell behind sends the already-queued consecutive text deltas of
+one block as a single `textDelta` of at most 64 KiB. It never waits for more
+input, so content, order and contiguous revisions are unchanged; the workspace
+IPC contract is unchanged.
