@@ -9,18 +9,6 @@
   import HarnessMark from './HarnessMark.svelte';
   import { useWorkspace } from './context';
 
-  interface ApprovalOption {
-    id: string;
-    label: string;
-  }
-  type ApprovalWithOptions = WorkspaceApproval & { options?: ApprovalOption[] };
-
-  /** Optional native choice list (e.g. Pi `select` dialogs); older hosts omit it. */
-  function approvalOptions(value: WorkspaceApproval): ApprovalOption[] {
-    const withOptions: ApprovalWithOptions = value;
-    return withOptions.options ?? [];
-  }
-
   interface Props {
     approval: WorkspaceApproval;
     session: WorkspaceSession;
@@ -34,7 +22,8 @@
   const key = $derived(store.approvalKey(session.id, approval.id));
   const busy = $derived(store.approvalBusy === key);
   const error = $derived(store.approvalErrors[key] ?? '');
-  const options = $derived(approvalOptions(approval));
+  // Native choice list (e.g. Pi `select` dialogs); absent for other requests.
+  const options = $derived(approval.options ?? []);
   let input = $state('');
 
   const icons = { command: Terminal, 'file-change': FilePen, permission: KeyRound, input: MessageCircleQuestion };
