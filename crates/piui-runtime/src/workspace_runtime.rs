@@ -235,6 +235,15 @@ pub enum ApprovalKind {
     Input,
 }
 
+/// One choice of a native select-style request. The id is adapter-owned and
+/// opaque; the host answers with it through the `text` of `respond`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApprovalOption {
+    pub id: String,
+    pub label: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeApproval {
@@ -245,6 +254,8 @@ pub struct NativeApproval {
     pub decisions: Vec<ApprovalDecision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<ApprovalOption>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -2039,6 +2050,46 @@ mod tests {
                 status: SessionStatus::Failed
             })
         ));
+    }
+
+    #[test]
+    fn approval_options_are_optional_and_strict() {
+        let legacy: NativeEvent = serde_json::from_value(json!({
+            "type": "approval",
+            "approval": {"id":"a","kind":"input","title":"t","description":"d","decisions":["cancel"]}
+        }))
+        .expect("approval without options");
+        assert!(matches!(
+            legacy,
+            NativeEvent::Approval { approval } if approval.options.is_none()
+        ));
+
+        let select = json!({
+            "id": "a", "kind": "input", "title": "Allow?", "description": "d",
+            "decisions": ["approve-once", "cancel"],
+            "options": [{"id":"option-1","label":"Allow"},{"id":"option-2","label":"Block"}]
+        });
+        let approval: NativeApproval = serde_json::from_value(select.clone()).expect("select");
+        assert_eq!(
+            approval.options,
+            Some(vec![
+                ApprovalOption {
+                    id: "option-1".into(),
+                    label: "Allow".into()
+                },
+                ApprovalOption {
+                    id: "option-2".into(),
+                    label: "Block".into()
+                },
+            ])
+        );
+        assert_eq!(serde_json::to_value(&approval).ok(), Some(select));
+
+        let leaked = json!({
+            "id": "a", "kind": "input", "title": "t", "description": "d", "decisions": ["cancel"],
+            "options": [{"id":"option-1","label":"Allow","value":"native"}]
+        });
+        assert!(serde_json::from_value::<NativeApproval>(leaked).is_err());
     }
 
     #[test]

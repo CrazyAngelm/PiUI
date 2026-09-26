@@ -89,6 +89,27 @@ export const workspaceFixture = {
           "deny",
           "cancel"
         ]
+      },
+      {
+        "id": "approval-select-fixture",
+        "sessionId": "11111111-1111-4111-8111-111111111111",
+        "kind": "input",
+        "title": "Fixture choice",
+        "description": "A test-only native select request.",
+        "decisions": [
+          "approve-once",
+          "cancel"
+        ],
+        "options": [
+          {
+            "id": "option-1",
+            "label": "Allow"
+          },
+          {
+            "id": "option-2",
+            "label": "Block"
+          }
+        ]
       }
     ],
     "capabilities": {
@@ -303,6 +324,27 @@ export const workspaceFixture = {
               "approve-once",
               "deny",
               "cancel"
+            ]
+          },
+          {
+            "id": "approval-select-fixture",
+            "sessionId": "11111111-1111-4111-8111-111111111111",
+            "kind": "input",
+            "title": "Fixture choice",
+            "description": "A test-only native select request.",
+            "decisions": [
+              "approve-once",
+              "cancel"
+            ],
+            "options": [
+              {
+                "id": "option-1",
+                "label": "Allow"
+              },
+              {
+                "id": "option-2",
+                "label": "Block"
+              }
             ]
           }
         ],
