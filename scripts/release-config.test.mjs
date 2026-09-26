@@ -101,15 +101,15 @@ test('a certificate thumbprint signs Windows builds only', () => {
   );
 });
 
-test('Azure Trusted Signing needs every setting and cannot be combined with a certificate', () => {
+test('Azure Artifact Signing needs every setting and cannot be combined with a certificate', () => {
   const result = releaseConfig({ ...AZURE, ...UPDATER }, 'windows');
   assert.equal(result.windowsSigning, 'azure');
   assert.deepEqual(result.config.bundle, {
     createUpdaterArtifacts: true,
     windows: {
       signCommand: {
-        cmd: 'trusted-signing-cli',
-        args: ['-e', AZURE.PIUI_AZURE_SIGNING_ENDPOINT, '-a', 'piui-signing', '-c', 'piui-public', '-d', 'PiUI', '%1'],
+        cmd: 'artifact-signing-cli',
+        args: ['-e', AZURE.PIUI_AZURE_SIGNING_ENDPOINT, '-a', 'piui-signing', '-c', 'piui-public', '%1'],
       },
     },
   });

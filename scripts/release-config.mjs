@@ -10,7 +10,8 @@
 // Windows Authenticode (one of):
 //   PIUI_WINDOWS_CERTIFICATE_THUMBPRINT  SHA-1 thumbprint of a certificate in the Windows store
 //   PIUI_AZURE_SIGNING_ENDPOINT, PIUI_AZURE_SIGNING_ACCOUNT, PIUI_AZURE_SIGNING_PROFILE
-//                              Azure Trusted Signing through `trusted-signing-cli`; it reads
+//                              Azure Artifact Signing (formerly Trusted Signing) through
+//                              `artifact-signing-cli`; it reads
 //                              AZURE_CLIENT_ID, AZURE_CLIENT_SECRET and AZURE_TENANT_ID itself
 //   PIUI_WINDOWS_TIMESTAMP_URL           RFC 3161 timestamp server (default DigiCert)
 //
@@ -97,7 +98,7 @@ function windowsSigning(env, notices) {
   const azure = ['PIUI_AZURE_SIGNING_ENDPOINT', 'PIUI_AZURE_SIGNING_ACCOUNT', 'PIUI_AZURE_SIGNING_PROFILE'].map((name) => [name, value(env, name)]);
   const azureRequested = azure.some(([, setting]) => setting !== undefined);
   if (thumbprint !== undefined && azureRequested) {
-    throw new ReleaseConfigError('Choose one Windows signing method: a certificate thumbprint or Azure Trusted Signing.');
+    throw new ReleaseConfigError('Choose one Windows signing method: a certificate thumbprint or Azure Artifact Signing.');
   }
   const timestampUrl = value(env, 'PIUI_WINDOWS_TIMESTAMP_URL') ?? DEFAULT_TIMESTAMP_URL;
   if (!/^https?:\/\/[^\s/@]+(\/\S*)?$/.test(timestampUrl)) {
@@ -117,17 +118,17 @@ function windowsSigning(env, notices) {
       ...['AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_TENANT_ID'].filter((name) => value(env, name) === undefined),
     ];
     if (missing.length > 0) {
-      throw new ReleaseConfigError(`Azure Trusted Signing needs ${missing.join(', ')}.`);
+      throw new ReleaseConfigError(`Azure Artifact Signing needs ${missing.join(', ')}.`);
     }
     const [[, endpoint], [, account], [, profile]] = azure;
     for (const [name, setting] of azure) {
       if (!/^[A-Za-z0-9:/._-]+$/.test(setting)) throw new ReleaseConfigError(`${name} contains unsupported characters.`);
     }
-    notices.push('Windows signing: Authenticode with Azure Trusted Signing (trusted-signing-cli).');
+    notices.push('Windows signing: Authenticode with Azure Artifact Signing (artifact-signing-cli).');
     return {
       signCommand: {
-        cmd: 'trusted-signing-cli',
-        args: ['-e', endpoint, '-a', account, '-c', profile, '-d', 'PiUI', '%1'],
+        cmd: 'artifact-signing-cli',
+        args: ['-e', endpoint, '-a', account, '-c', profile, '%1'],
       },
     };
   }
