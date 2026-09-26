@@ -171,7 +171,10 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   sessions (`workspace_adopt_v1`, gap 1 closed). Placement lives in
   per-session sidecar files; the v11 registry format is unchanged. UI Lab
   fakes (in-memory git, worktree chat, adoptable session), Rust tests on real
-  temporary repositories, Vitest and Playwright flows with failure paths.
+  temporary repositories, Vitest and Playwright flows with failure paths and
+  axe audits. First paint (`perf:smoke` graph): 408,833 → 417,164 B raw,
+  117,872 → 120,596 B gzip (the worktree chip, placement store and sidebar
+  marker; the review panel, dialogs, clients and handoff are lazy).
 
 ## In progress
 
