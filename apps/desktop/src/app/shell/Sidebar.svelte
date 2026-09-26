@@ -23,7 +23,6 @@
   import { Kbd, Menu, StatusDot, Skeleton, toasts, type MenuEntry, type Status } from '../../lib/ui';
   import type { WorkspaceSession, WorkspaceSummary } from '../../../../../contracts/workspace-v15';
   import { relativeTime } from '../format';
-  import ProjectDialogs from '../projects/ProjectDialogs.svelte';
   import { isPinned, type ProjectDialogRequest } from '../projects/projectActions';
   import { useWorkspace } from './context';
 
@@ -91,9 +90,12 @@
 </script>
 
 {#if projectDialog}
-  {#key projectDialog}
-    <ProjectDialogs request={projectDialog} onClose={() => (projectDialog = undefined)} />
-  {/key}
+  <!-- Loaded on first use so the first paint keeps its asset budget. -->
+  {#await import('../projects/ProjectDialogs.svelte') then dialogs}
+    {#key projectDialog}
+      <dialogs.default request={projectDialog} onClose={() => (projectDialog = undefined)} />
+    {/key}
+  {/await}
 {/if}
 
 <nav class="sidebar" aria-label={$t('Workspace navigation')}>
