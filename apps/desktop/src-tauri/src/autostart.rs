@@ -3,7 +3,7 @@
 //! executable path in double quotes, then `--autostart`.
 //!
 //! `tauri-plugin-autostart` writes the path unquoted. For a path with spaces
-//! (`C:\Users\John Smith\...`) Windows then tries `C:\Users\John.exe` first,
+//! (`C:\Users\example\My Apps\...`) Windows then tries `C:\Users\example\My.exe` first,
 //! a known hijack risk, so PiUI writes the value itself on Windows. Every
 //! decision here is pure and tested against a fake store; only
 //! `WindowsRunKey` touches the registry, and tests never use it.
@@ -253,7 +253,7 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::BTreeMap;
 
-    const EXE: &str = r"C:\Users\John Smith\AppData\Local\Programs\PiUI\PiUI.exe";
+    const EXE: &str = r"C:\Users\example\My Apps\PiUI\PiUI.exe";
     const ARGS: &[&str] = &["--autostart"];
 
     /// An in-memory Run key and StartupApproved key.
@@ -304,7 +304,7 @@ mod tests {
     fn the_run_value_quotes_the_executable_path() {
         assert_eq!(
             run_command(EXE, ARGS).as_deref(),
-            Ok(r#""C:\Users\John Smith\AppData\Local\Programs\PiUI\PiUI.exe" --autostart"#)
+            Ok(r#""C:\Users\example\My Apps\PiUI\PiUI.exe" --autostart"#)
         );
         assert_eq!(
             run_command(r"C:\PiUI\piui-desktop.exe", &[]).as_deref(),
@@ -350,7 +350,7 @@ mod tests {
         autostart.set_enabled(true).expect("turns on");
         assert_eq!(
             store.run.borrow().get("PiUI").map(String::as_str),
-            Some(r#""C:\Users\John Smith\AppData\Local\Programs\PiUI\PiUI.exe" --autostart"#)
+            Some(r#""C:\Users\example\My Apps\PiUI\PiUI.exe" --autostart"#)
         );
         assert_eq!(
             store
@@ -439,7 +439,7 @@ mod tests {
             EXE
         ));
         assert!(!is_unquoted_entry_for(&format!("{EXE}x --autostart"), EXE));
-        assert!(!is_unquoted_entry_for(r"C:\Users\John", EXE));
+        assert!(!is_unquoted_entry_for(r"C:\Users\example\My", EXE));
         assert!(!is_unquoted_entry_for("", EXE));
     }
 

@@ -189,9 +189,9 @@ Settings -> Background offers, all off by default:
 - **Start PiUI when I sign in.** On Windows PiUI writes one value named
   `PiUI` in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` itself
   (`autostart.rs`): the executable path in double quotes, then `--autostart`,
-  for example `"C:\Users\John Smith\AppData\Local\PiUI\piui-desktop.exe"
+  for example `"C:\Users\example\My Apps\PiUI\piui-desktop.exe"
   --autostart`. An unquoted path with spaces would let Windows try
-  `C:\Users\John.exe` first. Turning it on also marks the entry enabled in
+  `C:\Users\example\My.exe` first. Turning it on also marks the entry enabled in
   Task Manager's `StartupApproved\Run` record when that key exists; turning
   it off removes the value. At startup an unquoted value an earlier build
   wrote for the same executable is rewritten quoted; another installation's

@@ -131,7 +131,7 @@ describe('background mode client (background-v1)', () => {
   it('never trusts a malformed reply or a host detail', async () => {
     const malformed = createBackgroundClient(async <T>() => ({ ...settings, protocol: 2 }) as T);
     await expect(malformed.settings()).rejects.toMatchObject({ code: 'io' });
-    const refused = createBackgroundClient(async () => { throw JSON.stringify({ code: 'read-only', message: 'C:/Users/private' }); });
+    const refused = createBackgroundClient(async () => { throw JSON.stringify({ code: 'read-only', message: 'C:/Users/example/private' }); });
     await expect(refused.update({ launchAtLogin: true })).rejects.toMatchObject({ code: 'read-only' });
     const error = backgroundError({ code: 'registry-denied', message: 'HKCU secret' });
     expect(error.code).toBe('unknown');
