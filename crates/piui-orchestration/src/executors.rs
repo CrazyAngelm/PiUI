@@ -5,7 +5,9 @@
 //! the least authority the adapter can enforce: no collaboration, read-only
 //! files, no network, and no tools where the harness can disable them. `script`
 //! is user code that the trusted host runs in the project folder under process
-//! containment; it is not a sandbox.
+//! containment; it is not a sandbox. `plugin` (v6.5) is a node type of an
+//! installed plugin that the plugin's contained backend runs; like a script
+//! it is host work outside the team (see `plugin_steps`).
 //!
 //! The coordinator owns the durable lease, the dependency hand-off and the
 //! result checks for every executor. It never starts a process, resolves an
@@ -88,6 +90,13 @@ pub enum StepExecutor {
         source: String,
         timeout_seconds: u32,
     },
+    /// A node type of an installed plugin, run by its contained backend
+    /// (v6.5). `config` is flat: strings, numbers and booleans.
+    Plugin {
+        plugin_id: String,
+        node_type: String,
+        config: serde_json::Map<String, Value>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,6 +104,7 @@ pub enum ExecutorKind {
     Agent,
     Llm,
     Script,
+    Plugin,
 }
 
 impl StepExecutor {
@@ -103,6 +113,7 @@ impl StepExecutor {
             Self::Agent {} => ExecutorKind::Agent,
             Self::Llm {} => ExecutorKind::Llm,
             Self::Script { .. } => ExecutorKind::Script,
+            Self::Plugin { .. } => ExecutorKind::Plugin,
         }
     }
 }
@@ -115,9 +126,24 @@ impl PipelineStep {
             .map_or(ExecutorKind::Agent, StepExecutor::kind)
     }
 
-    /// Host-executed work with no native session.
+    /// A script step (v6.2).
     pub fn is_script(&self) -> bool {
         self.executor_kind() == ExecutorKind::Script
+    }
+
+    /// A plugin node step (v6.5).
+    pub fn is_plugin(&self) -> bool {
+        self.executor_kind() == ExecutorKind::Plugin
+    }
+
+    /// Host-executed work with no native session and no team member: a
+    /// script or a plugin node. Its result exists only when the host
+    /// observed it, and a restart leaves it uncertain.
+    pub fn is_host_executed(&self) -> bool {
+        matches!(
+            self.executor_kind(),
+            ExecutorKind::Script | ExecutorKind::Plugin
+        )
     }
 }
 
@@ -345,6 +371,21 @@ pub(crate) fn validate_step_executor(step: &PipelineStep) -> Result<(), Definiti
             ));
         }
     }
+    if let Some(StepExecutor::Plugin {
+        plugin_id,
+        node_type,
+        config,
+    }) = &step.executor
+    {
+        crate::plugin_steps::validate_plugin_executor(plugin_id, node_type, config)
+            .map_err(|reason| invalid(step, reason))?;
+        if !step.input_bindings.is_empty() {
+            return Err(invalid(
+                step,
+                "a plugin node reads every dependency result; input bindings apply to agent and llm steps",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -362,6 +403,15 @@ pub(crate) fn validate_executor_authority(
                 return Err(invalid(
                     step,
                     "a script runs on the host, not as a team member",
+                ));
+            }
+            Ok(())
+        }
+        ExecutorKind::Plugin => {
+            if members.contains(step.assigned_member_id.as_str()) {
+                return Err(invalid(
+                    step,
+                    "a plugin node runs on the host, not as a team member",
                 ));
             }
             Ok(())
@@ -431,8 +481,8 @@ pub(crate) fn validate_executor_authority(
     }
 }
 
-/// Every direct dependency of a script step, in declared order.
-fn script_dependencies(run: &Run, step: &PipelineStep) -> Vec<ScriptDependency> {
+/// Every direct dependency of a host-executed step, in declared order.
+pub(crate) fn script_dependencies(run: &Run, step: &PipelineStep) -> Vec<ScriptDependency> {
     step.dependency_step_ids
         .iter()
         .map(|dependency| {
@@ -457,7 +507,7 @@ pub(crate) fn dependency_outputs(run: &Run, step: &PipelineStep) -> Vec<Dependen
                 .pipeline
                 .steps
                 .iter()
-                .any(|source| source.id == **dependency && source.is_script())
+                .any(|source| source.id == **dependency && source.is_host_executed())
         })
         .filter_map(|dependency| {
             let task = run
@@ -485,7 +535,8 @@ pub(crate) fn dependency_outputs(run: &Run, step: &PipelineStep) -> Vec<Dependen
         .collect()
 }
 
-fn script_step(run: &Run, step_id: &str) -> Result<PipelineStep, CoordinatorError> {
+/// A host-executed step of the run (a script or a plugin node).
+pub(crate) fn host_step(run: &Run, step_id: &str) -> Result<PipelineStep, CoordinatorError> {
     let step = run
         .definition
         .pipeline
@@ -496,7 +547,7 @@ fn script_step(run: &Run, step_id: &str) -> Result<PipelineStep, CoordinatorErro
         .ok_or_else(|| CoordinatorError::UnknownTask {
             step_id: step_id.to_owned(),
         })?;
-    if !step.is_script() {
+    if !step.is_host_executed() {
         return Err(CoordinatorError::ExecutorMismatch {
             step_id: step_id.to_owned(),
         });
@@ -523,7 +574,7 @@ impl Coordinator {
         let Some(step_id) = Self::ready_task_ids(run).first().map(|id| (*id).to_owned()) else {
             return Ok(None);
         };
-        let step = script_step(run, &step_id)?;
+        let step = host_step(run, &step_id)?;
         let Some(StepExecutor::Script {
             runtime,
             source,
@@ -572,7 +623,7 @@ impl Coordinator {
         if execution.id.trim().is_empty() {
             return Err(CoordinatorError::EmptyId { kind: "execution" });
         }
-        script_step(run, step_id)?;
+        host_step(run, step_id)?;
         let Some(task) = run.tasks.iter_mut().find(|task| task.step_id == step_id) else {
             return Err(CoordinatorError::UnknownTask {
                 step_id: step_id.to_owned(),
@@ -612,7 +663,7 @@ impl Coordinator {
         execution_id: &str,
         completion: ScriptCompletion,
     ) -> Result<(), CoordinatorError> {
-        let step = script_step(run, step_id)?;
+        let step = host_step(run, step_id)?;
         let succeeded = CompletionOutcome::Succeeded {
             result_reference: None,
         };

@@ -301,7 +301,7 @@ impl Coordinator {
             .ok_or(CoordinatorError::UnknownTask {
                 step_id: step_id.into(),
             })?;
-        if step.is_script() {
+        if step.is_host_executed() {
             return Err(CoordinatorError::ExecutorMismatch {
                 step_id: step_id.into(),
             });

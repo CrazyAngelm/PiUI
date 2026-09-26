@@ -293,6 +293,51 @@
             "timeoutSeconds"
           ],
           "additionalProperties": false
+        },
+        {
+          "description": "A node type of an installed PiUI plugin (orchestration v6.5). Importing never installs or runs a plugin; the host checks the plugin when the step is admitted.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "plugin"
+            },
+            "pluginId": {
+              "type": "string",
+              "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?){0,7}$"
+            },
+            "nodeType": {
+              "type": "string",
+              "pattern": "^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$"
+            },
+            "config": {
+              "type": "object",
+              "maxProperties": 30,
+              "propertyNames": {
+                "type": "string",
+                "pattern": "^[a-z][A-Za-z0-9_]{0,63}$"
+              },
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "type",
+            "pluginId",
+            "nodeType",
+            "config"
+          ],
+          "additionalProperties": false
         }
       ]
     },

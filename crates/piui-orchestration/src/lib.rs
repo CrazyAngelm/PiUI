@@ -19,6 +19,12 @@ pub use executors::{
 };
 mod flow;
 pub use flow::*;
+mod plugin_steps;
+pub use plugin_steps::{
+    HostStepLease, MAX_PLUGIN_CONFIG_BYTES, MAX_PLUGIN_CONFIG_KEYS, PLUGIN_CONFIG_INVALID,
+    PLUGIN_INPUT_UNAVAILABLE, PLUGIN_NODE_FAILED, PLUGIN_NODE_TIMEOUT, PLUGIN_START_FAILED,
+    PLUGIN_UNAVAILABLE, PluginStepLease,
+};
 mod inputs;
 pub use inputs::{
     MAX_CHOICE_OPTIONS, MAX_INPUT_LABEL_CHARS, MAX_INPUT_NAME_LEN, MAX_INPUT_TEXT_BYTES,
@@ -45,5 +51,7 @@ pub use validation::{
 mod executor_tests;
 #[cfg(test)]
 mod input_tests;
+#[cfg(test)]
+mod plugin_step_tests;
 #[cfg(test)]
 mod tests;

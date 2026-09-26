@@ -378,13 +378,13 @@ fn validate_pipeline(snapshot: &RunDefinitionSnapshot) -> Result<(), DefinitionE
             }
         }
         require_nonempty("step name", &step.name)?;
-        // Program routers and scripts are coordinator and host work; every
+        // Program routers, scripts and plugin nodes are coordinator and host work; every
         // other step runs as a team member's native session.
         if step
             .router
             .as_ref()
             .is_none_or(|router| router.mode == RouterMode::Agent)
-            && !step.is_script()
+            && !step.is_host_executed()
             && !members.contains(step.assigned_member_id.as_str())
         {
             return Err(DefinitionError::MissingId {
