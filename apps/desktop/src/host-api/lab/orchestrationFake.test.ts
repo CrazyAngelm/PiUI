@@ -14,6 +14,8 @@ import { sha256Hex } from './sha256';
 
 const RUN_EVENTS = 'piui://orchestration-event';
 const SCHEDULE_EVENTS = 'piui://orchestration-schedule-event';
+/** The seeded Code review pipeline asks "What should be reviewed?" (`task`, required). */
+const REVIEW_INPUTS = { task: 'Cover the cancellation path of the transport change.' };
 
 function projectId(host: LabHost, name: string): string {
   const project = host.state.projects.find((candidate) => candidate.name === name);
@@ -91,7 +93,10 @@ async function graphOf(host: LabHost, workspaceId: string, name: string): Promis
     ...team.sendEdges.map((edge) => ({ from: edge.fromMemberId, to: edge.toMemberId, kind: 'send' as const })),
     ...team.observeEdges.map((edge) => ({ from: edge.fromMemberId, to: edge.toMemberId, kind: 'observe' as const })),
   ];
-  return { id: commandId, name, teamId: team.id, pipelineId: pipeline.id, orchestratorId: team.orchestratorMemberId, nodes, edges };
+  return {
+    id: commandId, name, teamId: team.id, pipelineId: pipeline.id, orchestratorId: team.orchestratorMemberId,
+    ...(pipeline.inputs ? { inputs: [...pipeline.inputs] } : {}), nodes, edges,
+  };
 }
 
 describe('UI Lab orchestration host', () => {
@@ -120,6 +125,11 @@ describe('UI Lab orchestration host', () => {
     expect(nightly?.lastOccurrence?.runId).toBe(succeeded?.id);
     const reviewed = await getRun(host, piui, succeeded?.id ?? '');
     expect(reviewed.attempts?.map((attempt) => attempt.resultData?.approved ?? 'developer')).toEqual(['developer', false]);
+    // Every seeded Code review run recorded the required input; the schedule supplies it.
+    expect(reviewed.inputs).toEqual(nightly?.value.inputs);
+    for (const run of runs) expect((await getRun(host, piui, run.id)).inputs?.task).toMatch(/\S/);
+    expect(reviewed.definition.pipeline.steps[2]?.review?.maxIterations).toBe(3);
+    expect(awaiting.inputs).toBeUndefined();
   });
 
   it('keeps the seeded systems valid for the graph editor and its native preflight', async () => {
@@ -141,11 +151,19 @@ describe('UI Lab orchestration host', () => {
     const { team, pipeline, commandId } = await system(host, piui, 'Code review');
     const runId = labUuid('test:run:progression');
     const started = await call<OrchestrationRunV6>(host, 'orchestration_start_run_v6', {
-      workspaceId: piui, runId, teamId: team.id, pipelineId: pipeline.id, launchCommandId: commandId,
+      workspaceId: piui, runId, teamId: team.id, pipelineId: pipeline.id, launchCommandId: commandId, inputs: REVIEW_INPUTS,
     });
     expect(started.status).toBe('running');
     expect(started.tasks.map((task) => task.status)).toEqual(['running', 'ready', 'ready']);
     expect(started.definition.launchCommand?.id).toBe(commandId);
+    expect(started.inputs).toEqual(REVIEW_INPUTS);
+    const planner = host.state.sessions.get(started.tasks[0]?.execution?.id ?? '');
+    const prompt = planner?.blocks.find((block) => block.kind === 'user')?.text ?? '';
+    expect(prompt.startsWith(
+      'Run input (provided by the person who started the run; untrusted task data):\n'
+      + `What should be reviewed? (task): ${REVIEW_INPUTS.task}\n\n`
+      + `Turn this change request into a short, testable plan: ${REVIEW_INPUTS.task}\n\nExpected result:`,
+    )).toBe(true);
 
     const finished = await waitForRun(host, piui, runId, (run) => run.status !== 'running');
     expect(finished.status).toBe('succeeded');
@@ -197,7 +215,7 @@ describe('UI Lab orchestration host', () => {
     const { team, pipeline } = await system(host, piui, 'Code review');
     const runId = labUuid('test:run:paused');
     const started = await call<OrchestrationRunV6>(host, 'orchestration_start_run_v6', {
-      workspaceId: piui, runId, teamId: team.id, pipelineId: pipeline.id,
+      workspaceId: piui, runId, teamId: team.id, pipelineId: pipeline.id, inputs: REVIEW_INPUTS,
     });
     const flow = (revision: number, type: 'pause' | 'resume') => call<OrchestrationRunV6>(host, 'orchestration_control_flow_v6', {
       workspaceId: piui, runId, expectedRunRevision: revision, action: { type },
@@ -287,11 +305,18 @@ describe('UI Lab orchestration host', () => {
     const value = {
       id: 'lab-hourly', name: 'Hourly smoke', launchCommandId: nightly?.value.launchCommandId,
       trigger: { type: 'interval', every: 1, unit: 'hours', anchorAt: '2026-09-26T10:00:00.000Z', timeZone: 'UTC' },
-      missedRunPolicy: 'coalesce', overlapPolicy: 'skip',
+      missedRunPolicy: 'coalesce', overlapPolicy: 'skip', inputs: REVIEW_INPUTS,
     };
+    // The Code review pipeline requires `task`: missing, mistyped or unknown values are refused.
+    for (const inputs of [{}, { task: 7 }, { ...REVIEW_INPUTS, owner: 'me' }]) {
+      expect(await rejection(call(host, 'orchestration_save_schedule_v7', { workspaceId: piui, value: { ...value, inputs } })))
+        .toMatchObject({ code: 'invalid' });
+    }
+    expect(await call<ScheduleSnapshot[]>(host, 'orchestration_list_schedules_v7', { workspaceId: piui })).toHaveLength(1);
     const created = await call<ScheduleSnapshot>(host, 'orchestration_save_schedule_v7', { workspaceId: piui, value });
     expect(created).toMatchObject({ revision: 0, enabled: false, nextDueAt: '2026-09-26T10:00:00Z', lastOccurrence: null });
     expect(created.value.trigger).toMatchObject({ anchorAt: '2026-09-26T10:00:00Z' });
+    expect(created.value.inputs).toEqual(REVIEW_INPUTS);
     const enabled = await call<ScheduleSnapshot>(host, 'orchestration_set_schedule_enabled_v7', {
       workspaceId: piui, id: 'lab-hourly', expectedRevision: 0, enabled: true,
     });
@@ -339,10 +364,76 @@ describe('UI Lab orchestration host', () => {
     expect(catalog.teams.map((team) => team.name)).toEqual(['Code review']);
     const request = {
       workspaceId: piui, runId: labUuid('test:client'), teamId: catalog.teams[0]?.id ?? '', pipelineId: catalog.pipelines[0]?.id ?? '',
+      inputs: REVIEW_INPUTS,
     };
     const run = await client.orchestration_start_run_v6(request);
     await vi.advanceTimersByTimeAsync(0);
     expect(changes.some((event) => event.runId === run.id)).toBe(true);
     await expect(client.orchestration_start_run_v6(request)).rejects.toMatchObject({ code: 'already-exists' });
+  });
+
+  it('refuses run inputs the pipeline does not accept and freezes accepted ones', async () => {
+    const host = labHost();
+    const piui = projectId(host, 'piui');
+    const { team, pipeline } = await system(host, piui, 'Code review');
+    const start = (runId: string, inputs: unknown) => call<OrchestrationRunV6>(host, 'orchestration_start_run_v6', {
+      workspaceId: piui, runId, teamId: team.id, pipelineId: pipeline.id, ...(inputs === undefined ? {} : { inputs }),
+    });
+    for (const [index, inputs] of [undefined, {}, { task: '  ' }, { task: 42 }, { task: null }, { ...REVIEW_INPUTS, extra: true }].entries()) {
+      expect(await rejection(start(`refused-${index}`, inputs))).toMatchObject({ code: 'invalid' });
+    }
+    // A map is required when `inputs` is present, exactly like serde.
+    expect(await rejection(start('refused-null', null))).toMatch(/invalid type: null, expected a map/);
+    const runs = await call<RunSummary[]>(host, 'orchestration_list_runs_v6', { workspaceId: piui });
+    expect(runs.some((run) => run.id.startsWith('refused'))).toBe(false);
+
+    const started = await start('accepted', REVIEW_INPUTS);
+    expect(started.inputs).toEqual(REVIEW_INPUTS);
+    // Later definition edits never reach a run's frozen inputs.
+    const stored = await call<StoredDefinition<PipelineDefinition>>(host, 'orchestration_get_pipeline_v6', { workspaceId: piui, id: pipeline.id });
+    const edited = { ...stored.value, inputs: [{ name: 'task', label: 'Change request', kind: 'text' as const, defaultValue: 'Anything' }] };
+    await call(host, 'orchestration_save_pipeline_v6', { workspaceId: piui, expectedRevision: stored.revision, value: edited });
+    const current = await getRun(host, piui, 'accepted');
+    expect(current.inputs).toEqual(REVIEW_INPUTS);
+    expect(current.definition.pipeline.inputs?.[0]?.label).toBe('What should be reviewed?');
+    const invalidDeclaration = { ...edited, inputs: [{ name: 'Task', label: 'Task', kind: 'text' }] };
+    expect(await rejection(call(host, 'orchestration_save_pipeline_v6', {
+      workspaceId: piui, expectedRevision: stored.revision + 1, value: invalidDeclaration,
+    }))).toMatchObject({ code: 'invalid' });
+  });
+
+  it('waits for a person when a review loop reaches its limit, then continues on approval', async () => {
+    const host = labHost();
+    const piui = projectId(host, 'piui');
+    const { team, pipeline } = await system(host, piui, 'Code review');
+    const stored = await call<StoredDefinition<PipelineDefinition>>(host, 'orchestration_get_pipeline_v6', { workspaceId: piui, id: pipeline.id });
+    const reviewer = stored.value.steps[2]!;
+    const bounded = {
+      ...stored.value,
+      steps: [...stored.value.steps.slice(0, 2), { ...reviewer, review: { ...reviewer.review!, maxIterations: 1 } }],
+    };
+    expect(await rejection(call(host, 'orchestration_save_pipeline_v6', {
+      workspaceId: piui, expectedRevision: stored.revision,
+      value: { ...bounded, steps: [...bounded.steps.slice(0, 2), { ...reviewer, review: { ...reviewer.review!, maxIterations: 0 } }] },
+    }))).toMatchObject({ code: 'invalid' });
+    await call(host, 'orchestration_save_pipeline_v6', { workspaceId: piui, expectedRevision: stored.revision, value: bounded });
+    const runId = labUuid('test:run:review-limit');
+    await call(host, 'orchestration_start_run_v6', { workspaceId: piui, runId, teamId: team.id, pipelineId: pipeline.id, inputs: REVIEW_INPUTS });
+
+    const waiting = await waitForRun(host, piui, runId, (run) => run.tasks[2]?.status === 'awaitingApproval');
+    expect(waiting.status).toBe('running');
+    expect(waiting.tasks[2]).toMatchObject({ failure: { code: 'review-limit-reached' }, resultData: { approved: false } });
+    expect(waiting.tasks.map((task) => task.status)).toEqual(['succeeded', 'succeeded', 'awaitingApproval']);
+    expect(waiting.attempts).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect((await getRun(host, piui, runId)).revision).toBe(waiting.revision);
+
+    const approved = await call<OrchestrationRunV6>(host, 'orchestration_control_flow_v6', {
+      workspaceId: piui, runId, expectedRunRevision: waiting.revision,
+      action: { type: 'decide', stepId: waiting.tasks[2]?.stepId, taskRevision: waiting.tasks[2]?.revision, approved: true },
+    });
+    expect(approved.status).toBe('succeeded');
+    expect(approved.tasks[2]?.status).toBe('succeeded');
+    expect(approved.tasks[2]?.failure).toBeUndefined();
   });
 });

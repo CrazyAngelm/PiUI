@@ -6,6 +6,7 @@ import type {
 } from '../labContracts';
 import { orchestrationFailure } from '../labErrors';
 import type { LabOrchestrationWorkspace, LabSchedule } from '../labState';
+import { resolveRunInputs, type RunInputResolution } from '../../runInputs';
 import {
   definitionIssue, launchCommandValid, normalizePipeline, normalizeProfile, normalizeTeam, pipelineValid, profileValid,
   spawnSubset, teamValid,
@@ -193,12 +194,24 @@ export function initialDue(trigger: ScheduleTrigger): string {
   return labIso(Date.parse(trigger.type === 'once' ? trigger.at : trigger.anchorAt));
 }
 
-/** chrono serializes instants without fractional seconds when they are whole. */
+/**
+ * chrono serializes instants without fractional seconds when they are whole;
+ * input values are a `BTreeMap` (sorted keys, omitted when empty).
+ */
 function normalizeSchedule(value: ScheduleDefinition): ScheduleDefinition {
   const trigger: ScheduleTrigger = value.trigger.type === 'once'
     ? { ...value.trigger, at: labIso(Date.parse(value.trigger.at)) }
     : { ...value.trigger, anchorAt: labIso(Date.parse(value.trigger.anchorAt)) };
-  return { ...value, trigger };
+  const { inputs, ...rest } = value;
+  const entries = Object.entries(inputs ?? {}).sort(([left], [right]) => compareText(left, right));
+  return { ...rest, trigger, ...(entries.length ? { inputs: Object.fromEntries(entries) } : {}) };
+}
+
+/** `schedule_run_inputs`: the launch target's current pipeline decides which values are valid. */
+export function scheduleRunInputs(workspace: LabOrchestrationWorkspace, value: ScheduleDefinition): RunInputResolution | undefined {
+  const command = workspace.launchCommands.find((item) => item.value.id === value.launchCommandId);
+  const pipeline = workspace.pipelines.find((item) => item.value.id === command?.value.pipelineId);
+  return pipeline === undefined ? undefined : resolveRunInputs(pipeline.value.inputs, value.inputs);
 }
 
 function scheduleValid(value: ScheduleDefinition): boolean {
@@ -207,11 +220,13 @@ function scheduleValid(value: ScheduleDefinition): boolean {
     && (value.trigger.type === 'once' || value.trigger.every > 0);
 }
 
+/** Both sides are normalized, so input maps compare in sorted key order. */
 function executionEquals(left: ScheduleDefinition, right: ScheduleDefinition): boolean {
   return left.launchCommandId === right.launchCommandId
     && JSON.stringify(left.trigger) === JSON.stringify(right.trigger)
     && left.missedRunPolicy === right.missedRunPolicy
-    && left.overlapPolicy === right.overlapPolicy;
+    && left.overlapPolicy === right.overlapPolicy
+    && JSON.stringify(left.inputs ?? {}) === JSON.stringify(right.inputs ?? {});
 }
 
 export function scheduleSnapshot(schedule: LabSchedule): ScheduleSnapshot {
@@ -236,6 +251,7 @@ export function saveSchedule(workspace: LabOrchestrationWorkspace | undefined, r
   if (workspace === undefined) throw orchestrationFailure('not-found');
   const launches = workspace.launchCommands.some((command) => command.value.id === request.value.launchCommandId);
   if (!launches) throw orchestrationFailure('invalid');
+  if (scheduleRunInputs(workspace, request.value)?.ok !== true) throw orchestrationFailure('invalid');
   const value = normalizeSchedule(request.value);
   const index = workspace.schedules.findIndex((schedule) => schedule.value.id === value.id);
   const current = index >= 0 ? workspace.schedules[index] : undefined;
@@ -271,6 +287,8 @@ export function setScheduleEnabled(workspace: LabOrchestrationWorkspace | undefi
     && workspace.teams.some((team) => team.value.id === item.value.teamId)
     && workspace.pipelines.some((pipeline) => pipeline.value.id === item.value.pipelineId));
   if (request.enabled && (schedule.nextDueAt === null || command === undefined)) throw orchestrationFailure('invalid');
+  // The pipeline may have gained declarations since the schedule was saved.
+  if (request.enabled && scheduleRunInputs(workspace, schedule.value)?.ok !== true) throw orchestrationFailure('invalid');
   const commandRevision = request.enabled ? command?.revision ?? null : null;
   if (schedule.enabled !== request.enabled || schedule.enabledLaunchCommandRevision !== commandRevision) {
     schedule.revision += 1;

@@ -3,6 +3,7 @@ import type {
   ResultField, RouterPredicate, RunDefinitionSnapshot, TeamDefinition,
 } from '../labContracts';
 import type { LabOrchestrationWorkspace } from '../labState';
+import { pipelineInputIssues, reviewLimitValid } from '../../runInputs';
 
 /**
  * Definition rules from `piui-orchestration/validation.rs`, the per-kind
@@ -119,6 +120,13 @@ function acyclic(steps: readonly PipelineStep[]): boolean {
   return visited === steps.length;
 }
 
+/** `validate_pipeline_declarations`: run input declarations, then review loop bounds. */
+export function pipelineDeclarationIssue(pipeline: PipelineDefinition): string | undefined {
+  if (pipelineInputIssues(pipeline.inputs).length > 0) return 'run inputs';
+  if (pipeline.steps.some((step) => !reviewLimitValid(step.review))) return 'review limit';
+  return undefined;
+}
+
 /** `validate_definition`: the whole snapshot a run or graph save would capture. */
 export function definitionIssue(snapshot: RunDefinitionSnapshot): string | undefined {
   const profileIds = snapshot.profiles.map((profile) => profile.id);
@@ -149,6 +157,8 @@ export function definitionIssue(snapshot: RunDefinitionSnapshot): string | undef
   if (steps.some((step) => (callable.has(step.id) && step.dependencyStepIds.length > 0)
     || step.dependencyStepIds.some((id) => callable.has(id)))) return 'callable dependency';
   if (blank(pipeline.id) || blank(pipeline.name)) return 'pipeline';
+  const declarations = pipelineDeclarationIssue(pipeline);
+  if (declarations !== undefined) return declarations;
   const stepIds = steps.map((step) => step.id);
   if (stepIds.some(blank) || duplicates(stepIds)) return 'step ids';
   const members = new Set(memberIds);
@@ -201,7 +211,7 @@ export function teamValid(team: TeamDefinition, workspace: LabOrchestrationWorks
 }
 
 export function pipelineValid(pipeline: PipelineDefinition): boolean {
-  return !blank(pipeline.id) && !blank(pipeline.name);
+  return !blank(pipeline.id) && !blank(pipeline.name) && pipelineDeclarationIssue(pipeline) === undefined;
 }
 
 export function launchCommandValid(command: LaunchCommandReference, workspace: LabOrchestrationWorkspace): boolean {
@@ -278,8 +288,19 @@ export function normalizeTeam(team: TeamDefinition): TeamDefinition {
 }
 
 export function normalizePipeline(pipeline: PipelineDefinition): PipelineDefinition {
+  const { inputs, ...definition } = pipeline;
+  // Serde field order; `null` options are absent and empty defaults are skipped.
+  const declared = dropNulls(inputs ?? []).map(({ name, label, kind, required, description, options, defaultValue }) => ({
+    name,
+    label,
+    kind,
+    ...(required ? { required } : {}),
+    ...(description === undefined ? {} : { description }),
+    ...(options?.length ? { options } : {}),
+    ...(defaultValue === undefined ? {} : { defaultValue }),
+  }));
   return {
-    ...pipeline,
+    ...definition,
     steps: dropNulls(pipeline.steps).map((step) => {
       const { inputBindings, routeGates, resultFields, requireApproval, ...rest } = step;
       return {
@@ -290,5 +311,6 @@ export function normalizePipeline(pipeline: PipelineDefinition): PipelineDefinit
         ...(requireApproval ? { requireApproval } : {}),
       };
     }),
+    ...(declared.length ? { inputs: declared } : {}),
   };
 }

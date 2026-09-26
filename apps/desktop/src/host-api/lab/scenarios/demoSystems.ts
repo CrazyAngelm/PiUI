@@ -13,6 +13,7 @@ import {
   type LabRun,
 } from '../orchestration/runEngine';
 import { taskPrompt, taskResultText } from '../orchestration/taskContent';
+import { resolveRunInputs } from '../../runInputs';
 import { DEMO_FOLDERS, DEMO_PROJECTS } from './demoChats';
 import { seededUsage, sessionRecord, type SeedActivity } from './seedTypes';
 
@@ -30,6 +31,10 @@ const NODE = {
   render: id('node:render-planner'),
 };
 const BRANCH = { short: id('branch:short-form'), long: id('branch:long-form') };
+
+/** Recorded "What should be reviewed?" values of the seeded Code review runs. */
+const TRANSPORT_REVIEW = 'Route every host event listener through src/host-api/transport.ts and cover the cancellation path with a test.';
+const NIGHTLY_REVIEW = 'Review the changes merged since the last nightly run and check that every failure path has a test.';
 
 type ProfilePatch = Omit<AgentProfile, 'id' | 'name' | 'toolPolicy' | 'allowedSpawnProfileIds'> & Partial<AgentProfile>;
 
@@ -88,14 +93,18 @@ function codeReview(): System {
     name: 'Code review',
     steps: [
       { id: NODE.planner, name: 'Planner', assignedMemberId: NODE.planner, dependencyStepIds: [],
-        instructions: 'Turn the requested change into a short, testable plan.' },
+        instructions: 'Turn this change request into a short, testable plan: {{input.task}}' },
       { id: NODE.developer, name: 'Developer', assignedMemberId: NODE.developer, dependencyStepIds: [NODE.planner],
         instructions: 'Implement the plan and run the focused tests.' },
       { id: NODE.reviewer, name: 'Reviewer', assignedMemberId: NODE.reviewer, dependencyStepIds: [NODE.developer],
         instructions: 'Review the implementation. Reject it if the failure path is untested.',
         resultFields: [{ name: 'approved', kind: 'boolean' }, { name: 'summary', kind: 'text' }],
-        review: { field: 'approved', retryFromStepId: NODE.developer } },
+        review: { field: 'approved', retryFromStepId: NODE.developer, maxIterations: 3 } },
     ],
+    inputs: [{
+      name: 'task', label: 'What should be reviewed?', kind: 'long-text', required: true,
+      description: 'The change to plan, implement and review, with any files or acceptance criteria.',
+    }],
   };
   const command: LaunchCommandReference = { id: id('system:code-review'), name: 'Code review', teamId: team.id, pipelineId: pipeline.id };
   return { profiles: [planner, developer, reviewer], team, pipeline, command };
@@ -197,8 +206,11 @@ function seedRun(
   definition: RunDefinitionSnapshot,
   start: number,
   launches: readonly Launch[],
+  inputs: Readonly<Record<string, string>> = {},
 ): SeededRun {
-  const run = newRun(runId, structuredClone(definition));
+  const recorded = resolveRunInputs(definition.pipeline.inputs, inputs);
+  if (!recorded.ok) throw new Error(`Seed run ${runId} has invalid inputs.`);
+  const run = newRun(runId, structuredClone(definition), recorded.values);
   const folder = workspaceId === DEMO_PROJECTS.video ? DEMO_FOLDERS.video : DEMO_FOLDERS.piui;
   const records = new Map<string, LabSessionRecord>();
   const activity: SeedActivity[] = [];
@@ -286,13 +298,13 @@ export function demoSystems(): { orchestration: LabOrchestrationWorkspace[]; ses
   const nightly = seedRun(DEMO_PROJECTS.piui, nightlyRunId, reviewSnapshot, Date.parse(NIGHTLY_OCCURRENCE) + 5 * SECOND, [
     [NODE.planner, 'succeeded'], [NODE.developer, 'succeeded'], [NODE.reviewer, 'succeeded'],
     [NODE.developer, 'succeeded'], [NODE.reviewer, 'succeeded'],
-  ]);
+  ], { task: NIGHTLY_REVIEW });
   const failed = seedRun(DEMO_PROJECTS.piui, id('run:failed'), reviewSnapshot, LAB_BASE_TIME - 18 * HOUR - 20 * MINUTE, [
     [NODE.planner, 'succeeded'], [NODE.developer, 'failed'],
-  ]);
+  ], { task: TRANSPORT_REVIEW });
   const running = seedRun(DEMO_PROJECTS.piui, id('run:running'), reviewSnapshot, LAB_BASE_TIME - 6 * MINUTE, [
     [NODE.planner, 'succeeded'], [NODE.developer, 'running'],
-  ]);
+  ], { task: TRANSPORT_REVIEW });
   const awaiting = seedRun(DEMO_PROJECTS.video, id('run:video'), snapshotOf(video, video.profiles), LAB_BASE_TIME - 70 * MINUTE, [
     [NODE.script, 'succeeded'], [NODE.storyboard, 'succeeded'],
   ]);
@@ -306,6 +318,7 @@ export function demoSystems(): { orchestration: LabOrchestrationWorkspace[]; ses
       id: id('schedule:nightly'), name: 'Nightly code review', launchCommandId: review.command.id,
       trigger: { type: 'interval', every: 24, unit: 'hours', anchorAt: NIGHTLY_ANCHOR, timeZone: 'Asia/Bangkok' },
       missedRunPolicy: 'skip', overlapPolicy: 'skip',
+      inputs: { task: NIGHTLY_REVIEW },
     },
     enabled: true,
     enabledLaunchCommandRevision: 0,

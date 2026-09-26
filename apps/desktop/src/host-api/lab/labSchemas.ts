@@ -1,5 +1,5 @@
 import {
-  arrayOf, boolean, datetime, enumOf, json, lazy, object, option, string, tagged, u64, withDefault,
+  arrayOf, boolean, datetime, enumOf, json, lazy, mapOf, object, option, string, tagged, u32, u64, withDefault,
   type Schema,
 } from './labSchema';
 
@@ -113,7 +113,7 @@ const step = object({
   condition: option(object({ sourceStepId: string, field: string, equals: json })),
   routeGates: withDefault(arrayOf(object({ routerStepId: string, branchId: string }))),
   router: option(router),
-  review: option(object({ field: string, retryFromStepId: string })),
+  review: option(object({ field: string, retryFromStepId: string, maxIterations: option(u32) })),
   requireApproval: withDefault(boolean),
   resultFields: withDefault(arrayOf(object({
     name: string,
@@ -128,7 +128,20 @@ const step = object({
   dependencyStepIds: arrayOf(string),
 });
 
-export const pipelineSchema = object({ id: string, name: string, steps: arrayOf(step) });
+const pipelineInput = object({
+  name: string,
+  label: string,
+  kind: enumOf(['text', 'long-text', 'number', 'boolean', 'choice']),
+  required: withDefault(boolean),
+  description: option(string),
+  options: withDefault(arrayOf(string)),
+  defaultValue: option(json),
+});
+
+/** Run input values are `BTreeMap<String, serde_json::Value>`; the coordinator checks their kinds. */
+const runInputValues = withDefault(mapOf(json));
+
+export const pipelineSchema = object({ id: string, name: string, steps: arrayOf(step), inputs: withDefault(arrayOf(pipelineInput)) });
 export const launchCommandSchema = object({ id: string, name: string, teamId: string, pipelineId: string });
 
 export const scheduleSchema = object({
@@ -141,6 +154,7 @@ export const scheduleSchema = object({
   }),
   missedRunPolicy: enumOf(['skip', 'coalesce']),
   overlapPolicy: enumOf(['allow', 'skip']),
+  inputs: runInputValues,
 });
 
 const historyReference = object({
@@ -167,6 +181,7 @@ export const startRunSchema = object({
   teamId: string,
   pipelineId: string,
   launchCommandId: option(string),
+  inputs: runInputValues,
 });
 export const cancelTaskSchema = object({ workspaceId: string, runId: string, expectedRunRevision: u64, stepId: string });
 export const flowControlSchema = object({
