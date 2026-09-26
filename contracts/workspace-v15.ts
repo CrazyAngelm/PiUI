@@ -34,6 +34,10 @@ export interface WorkspaceApproval {
   title: string; description: string; decisions: ApprovalDecision[]; inputLabel?: string;
   /** Additive v15 field; absent for approvals without native choices. */
   options?: WorkspaceApprovalOption[];
+  /** Additive v15 field: initial answer text, e.g. a Pi `editor` dialog's prefill. */
+  prefill?: string;
+  /** Additive v15 field: the harness resolves the request itself after this many ms. */
+  timeoutMs?: number;
 }
 export interface SessionSnapshot {
   session: WorkspaceSession; revision: number; blocks: DesktopTimelineBlock[];

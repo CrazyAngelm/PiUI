@@ -1,0 +1,96 @@
+{
+  "sessionId": "opaque-session",
+  "cases": [
+    {
+      "request": { "id": "rpc-notify-1", "method": "notify", "message": "Build finished in /home/user/app/dist", "notifyType": "info" },
+      "event": {
+        "protocol": 1,
+        "sessionId": "opaque-session",
+        "action": {
+          "action": "notify",
+          "id": "piui-extension-94524021132c583cc9be0e186174af0199038d5cb9a8358e1bdca89823eb3118",
+          "message": "Build finished in <external-path>/dist",
+          "level": "info"
+        }
+      }
+    },
+    {
+      "request": { "id": "rpc-status-1", "method": "setStatus", "statusKey": "build", "statusText": "Building…" },
+      "event": {
+        "protocol": 1,
+        "sessionId": "opaque-session",
+        "action": {
+          "action": "status",
+          "key": "piui-extension-status-44575cf5b28512d75644bf54a517dcef304ff809fd511747621b4d64f19aac66",
+          "text": "Building…"
+        }
+      }
+    },
+    {
+      "request": { "id": "rpc-status-2", "method": "setStatus", "statusKey": "build" },
+      "event": {
+        "protocol": 1,
+        "sessionId": "opaque-session",
+        "action": {
+          "action": "status",
+          "key": "piui-extension-status-44575cf5b28512d75644bf54a517dcef304ff809fd511747621b4d64f19aac66"
+        }
+      }
+    },
+    {
+      "request": { "id": "rpc-widget-1", "method": "setWidget", "widgetKey": "todo", "widgetLines": ["1. Fix tests", "2. Ship"], "widgetPlacement": "belowEditor" },
+      "event": {
+        "protocol": 1,
+        "sessionId": "opaque-session",
+        "action": {
+          "action": "widget",
+          "key": "piui-extension-widget-602fae580f5863abfb31bf356decfdc73bf1224a62aacf6b4829ffa2dbe58390",
+          "lines": ["1. Fix tests", "2. Ship"],
+          "placement": "belowEditor"
+        }
+      }
+    },
+    {
+      "request": { "id": "rpc-title-1", "method": "setTitle", "title": "Reviewing PR 42" },
+      "event": {
+        "protocol": 1,
+        "sessionId": "opaque-session",
+        "action": { "action": "title", "title": "Reviewing PR 42" }
+      }
+    },
+    {
+      "request": { "id": "rpc-editor-1", "method": "set_editor_text", "text": "Review the staged diff" },
+      "event": {
+        "protocol": 1,
+        "sessionId": "opaque-session",
+        "action": { "action": "editorText", "text": "Review the staged diff" }
+      }
+    },
+    {
+      "request": { "id": "rpc-custom-1", "method": "custom" },
+      "event": {
+        "protocol": 1,
+        "sessionId": "opaque-session",
+        "action": {
+          "action": "unsupported",
+          "id": "piui-extension-3f52d64601f474a8d081abec57057c202ac0af048bff2915b92ab8c8f6732c48",
+          "method": "unsupported",
+          "safeSummary": "This extension UI request is not supported."
+        }
+      }
+    },
+    {
+      "request": { "id": "rpc-select-1", "method": "select", "title": "Pick", "options": ["a"] },
+      "event": {
+        "protocol": 1,
+        "sessionId": "opaque-session",
+        "action": {
+          "action": "unsupported",
+          "id": "piui-extension-56c1f4ef367f509562708409e70ff2dbef9c4e510e7175dc86ab08118f0cfc43",
+          "method": "select",
+          "safeSummary": "This extension dialog could not be displayed safely."
+        }
+      }
+    }
+  ]
+}

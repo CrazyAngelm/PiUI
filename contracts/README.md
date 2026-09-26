@@ -55,3 +55,19 @@ field changed, earlier documents keep their exact meaning, and v1-v3 system
 files stay closed (their schemas never accept it). Older builds reject the new
 value with an explicit validation error instead of misreading it. Round-trip and
 compatibility tests cover every extended contract.
+
+# Workspace extension UI surface (v1) and editor prefill
+
+`workspace-extension-ui-v1.ts` is an additive, ephemeral event channel
+(`piui://workspace-extension-ui`, `protocol: 1`). It carries the host's
+bounded plain-text projection of a native session's fire-and-forget
+extension UI (Pi RPC `notify`, `setStatus`, `setWidget`, `setTitle`,
+`set_editor_text`) for one opaque workspace session. Events are not
+persisted, replayed or counted in the v15 session revision; the v15 command
+and event shapes are unchanged. The golden fixture
+`fixtures/workspace-extension-ui-v1.json` pins the raw request → projected
+event mapping on both sides (opaque ids, path redaction, unsupported methods).
+Dialog methods stay v15 approvals; `WorkspaceApproval.prefill` (an editor
+dialog's initial text) and `WorkspaceApproval.timeoutMs` (the harness resolves
+the request itself afterwards) are additive optional v15 fields, absent
+otherwise, so older readers ignore them.
