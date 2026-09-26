@@ -345,7 +345,7 @@ impl AttachmentStore {
 }
 
 /// A path without Windows' verbatim prefix, for display in message text.
-fn display_path(path: &Path) -> String {
+pub(crate) fn display_path(path: &Path) -> String {
     let text = path.to_string_lossy();
     if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
         format!(r"\\{rest}")

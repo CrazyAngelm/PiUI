@@ -12,6 +12,7 @@
 use super::attachments::{
     AttachmentError, AttachmentStore, Classified, FileReference, ImageType, MAX_FILES_PER_BATCH,
     MAX_IMAGE_BYTES, Rejection, RejectionReason, StoredImage, classify_user_file, display_name,
+    display_path,
 };
 use super::*;
 use base64::Engine as _;
@@ -234,7 +235,12 @@ fn project_root(host: &HostState, workspace_id: &str) -> Result<PathBuf, Workspa
 pub(crate) type PickFiles = Box<dyn FnOnce(PathBuf) -> Option<Vec<PathBuf>> + Send>;
 
 fn native_pick() -> PickFiles {
-    Box::new(|directory| rfd::FileDialog::new().set_directory(directory).pick_files())
+    // The shell dialog wants an ordinary path, not Windows' verbatim spelling.
+    Box::new(|directory| {
+        rfd::FileDialog::new()
+            .set_directory(display_path(&directory))
+            .pick_files()
+    })
 }
 
 /// The command without the Tauri boundary.

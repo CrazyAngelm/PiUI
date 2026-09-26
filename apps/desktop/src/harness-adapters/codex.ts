@@ -1,3 +1,4 @@
+import { COMPOSER_SUPPORT } from './composer';
 import type { HarnessConfiguration } from './types';
 export const codexConfiguration: HarnessConfiguration = {
   name: 'Codex', reasoningExamples: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'], speed: true, basePrompt: true,
@@ -6,12 +7,7 @@ export const codexConfiguration: HarnessConfiguration = {
     tools: 'read-only-sandbox',
     note: 'Codex cannot turn its tools off. A model call runs in the read-only sandbox without network access, so the model can still read files and run read-only commands.',
   },
-  composer: {
-    images: 'native',
-    imagesNote: 'Codex sends images to models that accept image input.',
-    nativeCommands: false,
-    skillMentions: true,
-  },
+  composer: COMPOSER_SUPPORT.codex,
   limitations: [
     'Tools cannot be limited per agent; only the sandbox and permissions bound them.',
     'Never asks for approval with read-only, workspace-write or full access: actions that need one, MCP tools included, are refused.',

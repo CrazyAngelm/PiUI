@@ -17,10 +17,6 @@
   import { errorMessage } from '../workspaceStore.svelte';
   import { workspaceError } from '../../host-api/workspaceClient';
   import AttachButton from '../chat/composer/AttachButton.svelte';
-  import AttachmentChips from '../chat/composer/AttachmentChips.svelte';
-  import AttachmentNotices from '../chat/composer/AttachmentNotices.svelte';
-  import MentionMenu from '../chat/composer/MentionMenu.svelte';
-  import ReferenceDialog from '../chat/composer/ReferenceDialog.svelte';
   import { ComposerAttachments } from '../chat/composer/composerAttachments.svelte';
   import { FileMentions } from '../chat/composer/composerLookups.svelte';
   import { composerDropTargets } from '../chat/composer/dropTargets.svelte';
@@ -371,22 +367,33 @@
   ondragleave={() => (htmlDragging = false)}
   ondrop={dropped}
 >
+  <!-- Menus, chips, notices and the reference dialog load on first use: the Home composer is on the first paint. -->
   {#if menu}
-    <MentionMenu
-      id="new-chat-menu"
-      label={menu.kind === 'file' ? $t('Project files') : $t('Skills')}
-      items={menu.items}
-      active={activeIndex}
-      loading={menu.kind === 'file' && fileMentions.loading}
-      emptyText={menuEmpty}
-      onPick={choose}
-    />
+    {#await import('../chat/composer/MentionMenu.svelte') then view}
+      <view.default
+        id="new-chat-menu"
+        label={menu.kind === 'file' ? $t('Project files') : $t('Skills')}
+        items={menu.items}
+        active={activeIndex}
+        loading={menu.kind === 'file' && fileMentions.loading}
+        emptyText={menuEmpty}
+        onPick={choose}
+      />
+    {/await}
   {/if}
-  <AttachmentChips images={attachments.images} disabled={busy} onRemove={(id) => void attachments.remove(id)} />
+  {#if attachments.images.length}
+    {#await import('../chat/composer/AttachmentChips.svelte') then view}
+      <view.default images={attachments.images} disabled={busy} onRemove={(id: string) => void attachments.remove(id)} />
+    {/await}
+  {/if}
   {#if attachments.images.length && !imageState.supported}
     <p class="composer__warning" role="alert">{$t(imageState.reason ?? '')} {$t('Remove the images to send this message.')}</p>
   {/if}
-  <AttachmentNotices notices={attachments.notices} onDismiss={() => attachments.dismissNotices()} />
+  {#if attachments.notices.length}
+    {#await import('../chat/composer/AttachmentNotices.svelte') then view}
+      <view.default notices={attachments.notices} onDismiss={() => attachments.dismissNotices()} />
+    {/await}
+  {/if}
   <Textarea
     bind:ref={textarea}
     value={text}
@@ -507,7 +514,9 @@
   <p class="notice notice--error">{modelsError}</p>
 {/if}
 {#if attachments.references.length}
-  <ReferenceDialog references={attachments.references} onConfirm={insertReferences} onCancel={() => attachments.cancelReferences()} />
+  {#await import('../chat/composer/ReferenceDialog.svelte') then view}
+    <view.default references={attachments.references} onConfirm={insertReferences} onCancel={() => attachments.cancelReferences()} />
+  {/await}
 {/if}
 
 <style>

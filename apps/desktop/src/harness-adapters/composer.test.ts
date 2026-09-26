@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { harnessConfigurations } from './index';
-import { MODEL_WITHOUT_IMAGES, TEXT_ONLY_COMPOSER, composerSupport, imageSupport } from './composer';
+import { COMPOSER_SUPPORT, MODEL_WITHOUT_IMAGES, TEXT_ONLY_COMPOSER, composerSupport, imageSupport } from './composer';
 
 describe('composer support manifests', () => {
   it('declares every harness composer inputs, never claiming more than its bridge', () => {
@@ -11,6 +11,11 @@ describe('composer support manifests', () => {
       hermes: { images: 'native', imagesNote: expect.any(String), nativeCommands: true, skillMentions: false },
       'claude-code': { images: 'native', imagesNote: expect.any(String), nativeCommands: true, skillMentions: false },
     });
+    // Each manifest declares exactly the entry the composer looks up.
+    for (const [harness, configuration] of Object.entries(harnessConfigurations)) {
+      expect(configuration.composer, harness).toBe(COMPOSER_SUPPORT[harness as keyof typeof COMPOSER_SUPPORT]);
+      expect(composerSupport(harness)).toBe(configuration.composer);
+    }
   });
 
   it('treats an undeclared harness (e.g. a registry ACP agent) as text only', () => {
