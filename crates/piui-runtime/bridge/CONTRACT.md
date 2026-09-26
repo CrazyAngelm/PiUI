@@ -5,7 +5,7 @@ This is HOST-PRIVATE, not WebView IPC. Runtime-owned session paths/native ids ar
 ## Embedding and ownership
 Rust embeds factory source bytes and common runner, concatenates them into one ESM source, and launches a fixed small `node --input-type=module -e <bootstrap>` inside a Windows Job assigned before resume or Unix process group. To avoid Windows' command-line limit, Rust writes an exact checked 4-byte little-endian source length followed by those trusted source bytes to stdin; the bootstrap reads exactly that prefix and imports it as an in-memory data module, leaving subsequent LF JSON untouched. No writable temp JavaScript files. Each adapter file exports ONLY its unique top-level function; put imports/constants/helpers inside the factory to avoid collisions in concatenation. Native children inherit containment. Script modules must not print to stdout except common runner protocol. Do not expose raw errors, environment, auth or raw native protocol to UI/logs.
 
-Factories: `export async function createPrimeAdapter(config, emit)`, `createCodexAdapter`, `createPiAdapter`, `createClaudeAdapter` (see Claude Code below). Config: `{cwd: absolute trusted workspace, sessionDir: host-owned native storage directory, nativeId?: string, nativePath?: string, title?: string, model?: {id,provider?,name}, thinkingLevel?:string, instructions?:string, permissionMode:'native'|'read-only'|'workspace-write'|'full-access', networkAccess?:boolean, allowedTools?:string[], nativeSubagents?:boolean, daemonSocket:explicit nondefault reserved endpoint}`. `networkAccess` is an explicit Codex-only native capability for `read-only` or `workspace-write`; omission is network-denied and child admission cannot widen it. Runtime resolution is host-side/system install; no arbitrary executable/path from frontend. Prime must avoid default daemon. Do not silently accept unsupported mandatory instructions/tools/permissions.
+Factories: `export async function createPrimeAdapter(config, emit)`, `createCodexAdapter`, `createPiAdapter`, `createClaudeAdapter` (see Claude Code below), `createHermesAdapter`, `createAcpAdapter` (see ACP agents below). Config: `{cwd: absolute trusted workspace, sessionDir: host-owned native storage directory, nativeId?: string, nativePath?: string, title?: string, model?: {id,provider?,name}, thinkingLevel?:string, instructions?:string, permissionMode:'native'|'read-only'|'workspace-write'|'full-access', networkAccess?:boolean, allowedTools?:string[], nativeSubagents?:boolean, daemonSocket:explicit nondefault reserved endpoint}`. `networkAccess` is an explicit Codex-only native capability for `read-only` or `workspace-write`; omission is network-denied and child admission cannot widen it. Runtime resolution is host-side/system install; no arbitrary executable/path from frontend. Prime must avoid default daemon. Do not silently accept unsupported mandatory instructions/tools/permissions.
 
 Factory returns adapter:
 - `snapshot()` -> NativeSnapshot
@@ -34,7 +34,7 @@ Pi tool blocks and Codex MCP/dynamic tool blocks are built from arbitrary native
 - `{type:'binding',nativeId,nativePath?}` (host-private only)
 - `{type:'error',message:safeFixedSummary}`
 
-Runner request LF JSON: `{id:string,method:'initialize'|'snapshot'|'prompt'|'interrupt'|'models'|'setModel'|'respond'|'rename'|'dispose',params:object}`. Initialize params add `harness:'pi'|'prime-agent'|'codex'|'hermes'|'claude-code'` to config; exactly once. Return `{id,ok:true,result}` or `{id,ok:false,error:{code,message}}`; event `{event:NativeEvent}`. Buffer raw bytes, split only LF. Pending native operations must not serialize interruption/approval behind an active turn. EOF closes admission, calls dispose, then exits; Rust handles hung descendants. No generic evaluate/exec/file method.
+Runner request LF JSON: `{id:string,method:'initialize'|'snapshot'|'prompt'|'interrupt'|'models'|'setModel'|'setMode'|'respond'|'rename'|'dispose',params:object}`. Initialize params add `harness:'pi'|'prime-agent'|'codex'|'hermes'|'claude-code'|'acp:<descriptor id>'` to config; exactly once. Return `{id,ok:true,result}` or `{id,ok:false,error:{code,message,details?}}` (`details`: optional bounded plain data an adapter sets as `safeDetails`, today only an ACP sign-in refusal's method names); event `{event:NativeEvent}`. Buffer raw bytes, split only LF. Pending native operations must not serialize interruption/approval behind an active turn. EOF closes admission, calls dispose, then exits; Rust handles hung descendants. No generic evaluate/exec/file method.
 
 Fixtures may inject fake adapters/transport only via separate test module imports; never production env switches. Runtime proofs use native installed harness with synthetic provider where supported, not a replacement agent loop. Missing package/auth/platform behavior is explicit.
 
@@ -163,6 +163,78 @@ is identical.
 | `CodexErrorInfo` | 0.153.4 adds `rateLimitExceeded`, `misalignmentPolicyViolation` | **Fixed**: mapped to the usage-limit and provider-policy summaries |
 | Not used | `thread/rollback` removed in 0.157.1; `turn/settings/update` added in 0.153.4; `item/fileChange/outputDelta` and `thread/compacted` are never emitted | — |
 
+
+## ACP agents (`acp.mjs`, harness `acp:<descriptor id>`)
+
+One generic adapter drives every Agent Client Protocol v1 agent described by a
+registry descriptor (ADR-034, `contracts/acp-agent-descriptor-v1.schema.json`).
+The host resolves the descriptor (PATH or absolute program, Windows `.exe` or an
+npm/pnpm `.cmd` shim started as `node <script>`; never a shell), checks trust and
+confirmations, and starts the bridge with `NativeRuntime::spawn_acp`: the bridge
+process starts from a cleared environment (the base locations in
+`acp::ACP_BASE_ENVIRONMENT` plus the descriptor's allowlisted names; secret-like
+names only after an explicit confirmation), and the agent inherits exactly that
+environment inside the same Job / process group. `initialize` params add
+`acp: {id, displayName, disable: {loadSession, models, modes, mcpHttp}}`; the
+command line itself arrives as `runtimeProgram`/`runtimeArgs`.
+
+- Transport: JSON-RPC 2.0 over the agent's stdio, one JSON object per LF; split
+  on LF bytes only (U+2028 stays inside a frame), a trailing CR is dropped, a
+  partial frame above 32 MiB or an unparseable frame stops the agent (status
+  `failed`, no turn outcome). Up to 64 stray non-JSON log lines are ignored.
+  Stderr is drained and discarded.
+- Start: `initialize {protocolVersion: 1, clientCapabilities: {fs: {readTextFile:
+  false, writeTextFile: false}, terminal: false}}`; any other negotiated version
+  fails with `unsupported-protocol`. The agent uses its own tools, so `fs/*`,
+  `terminal/*` and every other client method answer `-32601`. A new chat sends
+  `session/new {cwd, mcpServers}` (the plain, non-verbatim project path). An
+  `auth_required` error (`-32000`) from `session/new` or `session/load` fails with
+  `acp-sign-in-required`; the failure's `details.authMethods` carries the agent's
+  advertised method names (bounded text) and the host maps it to
+  `NativeRuntimeError::AgentSignInRequired`. PiUI never calls `authenticate` and
+  never handles credentials; the user signs in with the agent's own flow.
+- Resume: a stored binding reopens with `session/load` only when the agent
+  advertises `loadSession` (and the descriptor does not switch it off), else
+  `resume-unsupported`; a failed load is `invalid-session`, never a new
+  conversation. The replayed history arrives as whole `block` events (never text
+  deltas) before the load response. A new conversation is bound (`binding`
+  event) when its first prompt is admitted.
+- Settings: models, modes and reasoning come from `configOptions` (categories
+  `model`, `mode`, `thought_level`; set with `session/set_config_option`), else
+  from the legacy `models`/`modes` states (`session/set_model`,
+  `session/set_mode`). A requested model or reasoning level that the agent does
+  not advertise fails before the first prompt (`invalid-model`,
+  `unsupported-settings`); the model id `default` keeps the agent's own model.
+  `setMode({modeId})` selects an advertised mode; the snapshot reports
+  `modes: {current, available}`. Only `permissionMode: 'native'` exists; tool
+  allowlists, resource rules, base instructions, speed, network and subagent
+  settings fail before the agent starts. Instructions are sent once, prefixed to
+  the first prompt of a new conversation.
+- Turns: `session/prompt` with one text block. `end_turn` succeeds, `cancelled`
+  is interrupted; `max_tokens`, `max_turn_requests`, `refusal`, an error response
+  or an unknown stop reason fail the turn with a fixed error block (the session
+  stays usable). `usage` maps to a usage receipt. A crash or protocol failure
+  mid-turn emits no outcome (uncertain). Follow-ups queue like Hermes; steer and
+  compaction are unsupported.
+- Updates: `agent_message_chunk`/`agent_thought_chunk` stream as blocks plus text
+  deltas; `user_message_chunk` only during a replay; `tool_call` and
+  `tool_call_update` become one tool block per call (text content, a unified
+  diff built from `diff` content, a scalar summary of `rawInput`; at most ~16
+  KiB); `plan` is one checklist block per turn; `available_commands_update`
+  feeds `resources()` (as skills); `current_mode_update` and
+  `config_option_update` update the settings; `usage_update` and
+  `session_info_update` are ignored; anything else is a generic fallback block.
+  Non-text content is a fallback block.
+- Approvals: `session/request_permission` becomes an approval whose `options`
+  are the agent's options (native ids stay adapter-private) with decisions
+  `approve-once` (answered with one option id or exact label) and `cancel`
+  (the `cancelled` outcome). An interrupt sends `session/cancel` and answers every
+  pending request `cancelled`; requests still open when a turn ends are
+  cancelled too.
+- Managed runs: the workspace tool is a session-scoped HTTP MCP server
+  (`piui-workspace`, bearer token, loopback) in `mcpServers`. An agent that does
+  not advertise `mcpCapabilities.http` (or a descriptor with `mcpHttp: false`)
+  fails the managed start with `unsupported-coordinator`.
 
 ## Claude Code (`claude.mjs`, harness `claude-code`)
 

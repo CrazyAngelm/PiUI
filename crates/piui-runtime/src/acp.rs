@@ -581,6 +581,19 @@ pub fn resolve_acp_command_in(
     }
 }
 
+impl AcpResolvedCommand {
+    /// Test support only: a launch that bypasses resolution, for fixtures.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn test_command(program: PathBuf, args: Vec<String>) -> Self {
+        Self {
+            identity: program.clone(),
+            program,
+            args,
+        }
+    }
+}
+
 fn executable_command(file: PathBuf, args: &[String]) -> AcpResolvedCommand {
     AcpResolvedCommand {
         identity: file.clone(),

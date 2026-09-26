@@ -5,11 +5,12 @@ const MAX_FRAME_BYTES = 32 * 1024 * 1024;
 const METHODS = new Set([
   "initialize", "snapshot", "prompt", "interrupt", "models", "resources", "catalogModels",
   "setModel", "respond", "rename", "dispose", "coordinatorResponse",
-  "openSession", "sessionRequest", "composerCapabilities", "compact",
+  "openSession", "sessionRequest", "composerCapabilities", "compact", "setMode",
 ]);
+const MAX_DETAILS_BYTES = 4 * 1024;
 
-function safeFailure(id, code, message) {
-  return { id, ok: false, error: { code, message } };
+function safeFailure(id, code, message, details) {
+  return { id, ok: false, error: { code, message, ...(details ? { details } : {}) } };
 }
 
 function writeFrame(output, value) {
@@ -21,6 +22,13 @@ function safeAdapterError(error) {
   const message = typeof error?.safeMessage === "string"
     ? error.safeMessage
     : "The native runtime could not complete the request.";
+  // Optional adapter-built safe details (for example an ACP agent's sign-in
+  // method names). Bounded plain data only; never a raw native error.
+  const details = error?.safeDetails;
+  if (details && typeof details === "object" && !Array.isArray(details)) {
+    const text = JSON.stringify(details);
+    if (text.length <= MAX_DETAILS_BYTES) return { code, message, details: JSON.parse(text) };
+  }
   return { code, message };
 }
 
@@ -127,7 +135,7 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
         writeFrame(output, { id, ok: true, result: { initialized: true } });
       } catch (error) {
         const failure = safeAdapterError(error);
-        writeFrame(output, safeFailure(id, failure.code, failure.message));
+        writeFrame(output, safeFailure(id, failure.code, failure.message, failure.details));
         accepting = false;
       }
       return;
@@ -187,7 +195,7 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
       writeFrame(output, { id, ok: true, result: result ?? null });
     } catch (error) {
       const failure = safeAdapterError(error);
-      writeFrame(output, safeFailure(id, failure.code, failure.message));
+      writeFrame(output, safeFailure(id, failure.code, failure.message, failure.details));
     }
   };
 
