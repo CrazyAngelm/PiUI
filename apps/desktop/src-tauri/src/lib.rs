@@ -8,6 +8,8 @@
 
 mod agent_api;
 mod api;
+#[doc(hidden)]
+pub mod app_update;
 mod catalog_watch;
 mod contributions;
 mod dto;
@@ -756,6 +758,7 @@ pub fn run() -> Result<(), tauri::Error> {
             );
             state.set_catalog_watcher(watcher);
             app.manage(state);
+            app_update::install(app, &app_data_dir, safe_mode);
             if !safe_mode {
                 orchestration_scheduler.start_timed_schedule_worker(app.handle().clone());
             }
@@ -771,6 +774,11 @@ pub fn run() -> Result<(), tauri::Error> {
             workspace_api::composer::workspace_composer_v19,
             workspace_api::workspace_lifecycle_v17,
             workspace_api::harness_models_v18,
+            app_update::app_update_status_v1,
+            app_update::app_update_check_v1,
+            app_update::app_update_install_v1,
+            app_update::app_update_set_auto_check_v1,
+            app_update::app_update_restart_v1,
             api::bootstrap,
             api::bootstrap_v10,
             api::update_preferences,

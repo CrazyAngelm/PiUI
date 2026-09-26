@@ -44,6 +44,11 @@ tokio = { workspace = true, features = ["net"] }
 uuid.workspace = true
 tauri = { version = "=2.11.5", features = [] }
 rfd = "0.17.2"
+# Signed updates. Registered only when the build config carries the updater
+# public key and an HTTPS endpoint (see app_update.rs and docs/RELEASING.md).
+tauri-plugin-updater = { version = "=2.12.0", default-features = false, features = ["rustls-tls", "system-proxy"] }
+base64 = "0.22.1"
+minisign-verify = "0.2.5"
 notify = "8.2.0"
 
 [dev-dependencies]

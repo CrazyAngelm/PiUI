@@ -114,3 +114,18 @@ instead of becoming uncertain. A step spawned by an agent returns to ready and
 its caller receives the same code. Commands keep their established
 `runtime-unavailable` error code. A cached signed-out verdict is not a
 capability: running the step again after signing in starts it normally.
+
+# App update v1
+
+`app-update-v1.ts` is an independently versioned set of commands and one event
+channel (`piui://app-update`) for signed application updates. Every build
+answers `app_update_status_v1`, but only a build whose Tauri configuration
+carries `plugins.updater` (a minisign public key and HTTPS endpoints, added by
+`scripts/release-config.mjs` at release time) registers the Tauri updater;
+otherwise `configured` is false and nothing contacts the network. Automatic
+checks follow the host-saved `autoCheck` preference (off by default) and never
+install. `app_update_install_v1` names the exact version the last check found;
+the updater verifies the minisign signature before anything is written or run.
+Refusals are typed `{code}` values (`not-configured`, `signature-invalid`, …);
+requests reject unknown fields. `fixtures/app-update-v1.json` is checked by the
+Rust host and the TypeScript client.
