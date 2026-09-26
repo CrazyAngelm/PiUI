@@ -32,6 +32,18 @@ save and execution. See `docs/SYSTEM_FILES.md`.
 
 Workspace runtime settings use the additive `workspace_settings_v12` route and `workspace-settings-v12.ts`. The v11 command/event route remains frozen. Get/set are live trusted-session actions, blocked in safe mode. See `docs/RUNTIME_SETTINGS.md`.
 
+# Step executors (orchestration v6.2)
+
+`PipelineStep.executor` is additive within orchestration v6 and portable system
+files v4: absent (or `{type:"agent"}`) keeps the native agent step, `llm` is one
+read-only native turn without tools, collaboration or delegation, and `script`
+(`runtime`, `source` up to 64 KiB, `timeoutSeconds` 1-3600) runs trusted user
+code on the host in the project folder under process containment. A script is
+not a sandbox. `TaskRecord.output`, `FailureRecord.detail` and
+`LaunchRequest.dependencyOutputs` are additive record fields written by the
+host. Older builds reject a document with an executor instead of running it as
+an agent. See `crates/piui-orchestration/src/executors.rs`.
+
 # Harness identities (ADR-028)
 
 A harness value is an open registry identity, not a protocol revision. Rule 3

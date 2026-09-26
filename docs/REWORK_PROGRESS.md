@@ -62,16 +62,22 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
 - `86b8e98` — Claude Code as a first-class harness on the subscription only:
   launcher/version range, wide env scrub, Fast pinned off, extra-usage guard,
   sign-in status, pipeline delegation through PiUI, native history projection.
+- `d45f7c3` — one-shot model calls and host-run scripts (orchestration v6.2,
+  additive) in the engine and the new shell: Add menu, node cards, inspector
+  (read-only model call; script runtime, code, time limit, result fields, "not
+  a sandbox" warning), run panel (stdout, stderr tail, failure texts). Claude
+  Code runs a model call with `--tools "" --strict-mcp-config`.
 - `main` fast-forwarded to `rework/piui-2` (local only, not pushed).
 
 ## In progress
 
-- Engine for one-shot LLM and script steps is done on `feat/step-executors`
-  (orchestration v6.2, additive; not merged until the editor and run view
-  support it, since opening a graph with a script step fails today).
+- Nothing; next steps wait for the owner's review of the remaining-work plan.
 
 ## Known issues found on the way
 
+- An existing node cannot change its executor type; add a new node instead.
+- A Codex model call keeps its native tools (read-only sandbox only); the
+  inspector says so. Pi and Claude Code run model calls without tools.
 - Codex asks for MCP tool approvals via `mcpServer/elicitation/request`; the
   bridge answers with an error, so such MCP tools are always declined.
 - A pipeline step whose first Claude Code launch hits a signed-out CLI is

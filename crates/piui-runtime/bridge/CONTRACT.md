@@ -215,7 +215,9 @@ model loop.
   pre-approval and never expresses a restriction. `nativeSubagents:false` and
   managed runs add `--disallowed-tools Agent`. Resource rules, network policy,
   base-instruction replacement and unknown effort/speed values are rejected
-  before spawning.
+  before spawning. An `llm` pipeline step (orchestration v6.2) passes an empty
+  allowlist, so it runs as `--tools "" --strict-mcp-config` in `plan` mode: no
+  built-in tool and no MCP server can run.
 - Instructions use `--append-system-prompt-file`; the coordinator is a
   session-scoped HTTP MCP server (`piui-workspace`, bearer token) passed with
   `--mcp-config <file>` and pre-approved by `--allowed-tools
