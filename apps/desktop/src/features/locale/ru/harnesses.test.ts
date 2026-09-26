@@ -1,8 +1,18 @@
 import { expect, it } from 'vitest';
 import { SIGNED_OUT_COPY } from '../../../app/chat/claudeSignIn.svelte';
+import { harnessConfigurations } from '../../../harness-adapters';
 import { failureText } from '../../../app/runs/runGraph';
 import { APPROVAL_FIELD_ISSUES } from '../../../host-api/approvalForms';
 import { translate } from '../language';
+
+it('translates the node inspector limitations of every harness', () => {
+  expect(translate('Limitations of {0}', 'ru')).not.toBe('Limitations of {0}');
+  for (const configuration of Object.values(harnessConfigurations)) {
+    for (const limitation of configuration.limitations ?? []) {
+      expect(translate(limitation, 'ru'), limitation).not.toBe(limitation);
+    }
+  }
+});
 
 it('translates the composer sign-in status and keeps both command placeholders', () => {
   for (const message of [

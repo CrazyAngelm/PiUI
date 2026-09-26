@@ -31,6 +31,8 @@ export const claudeCodeConfiguration: HarnessConfiguration = {
   limitations: [
     'Runs only on your Claude subscription. API keys, cloud providers, fast mode and paid extra usage are never used.',
     "Read-only and workspace-write can only deny Claude Code permission prompts, so prompted tools such as Bash never run there. This is Claude Code's permission engine, not a sandbox.",
+    'Skills, MCP servers and plugins come from your Claude Code configuration and cannot be switched per agent.',
+    'A step fails before it starts when Claude Code is not signed in: run `claude` in a terminal and use /login.',
   ],
 };
 

@@ -6,4 +6,9 @@ export const codexConfiguration: HarnessConfiguration = {
     tools: 'read-only-sandbox',
     note: 'Codex cannot turn its tools off. A model call runs in the read-only sandbox without network access, so the model can still read files and run read-only commands.',
   },
+  limitations: [
+    'Codex cannot limit its tools per agent: only its sandbox and permissions bound them.',
+    'With read-only, workspace-write or full-access permissions Codex never asks for approval: actions that would need it, including MCP tools that ask first, are refused.',
+    'Network access stays off unless you allow it, and only with read-only or workspace-write permissions.',
+  ],
 };
