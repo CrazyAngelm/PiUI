@@ -100,6 +100,11 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
 - Extension text is path-redacted by the shared sanitizer, so prepared
   composer text that starts with a slash command shows `<external-path>/…`
   (same in the classic view).
+- `perf:smoke` first-paint budget: the base (`84f6021`) was at 163 556 of
+  163 840 gzip bytes; the classic port brings it to 166 657 (Russian copy in
+  the statically bundled locale catalogs +1 454, sidebar/store +1 647). Any
+  further visible copy exceeds it until per-language catalogs load lazily or
+  the budget is revised.
 
 ## Next
 
