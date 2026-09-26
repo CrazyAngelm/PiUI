@@ -46,49 +46,45 @@ describe('Claude Code sign-in state', () => {
     ]);
   });
 
-  it('checks again with a fresh catalog-only request and refreshes the host catalog on a new verdict', async () => {
+  it('checks again with one fresh catalog-only request and lets its verdict win over the cached one', async () => {
     let answer: (value: unknown) => void = () => {};
     const load = vi.fn((_workspaceId: string, _refresh: boolean) => new Promise((resolve) => { answer = resolve; }));
-    const reload = vi.fn(async () => undefined);
-    const check = new ClaudeSignInCheck(load, reload);
-    const pending = check.check('workspace', true);
+    const check = new ClaudeSignInCheck(load);
+    expect(check.signedOut(true)).toBe(true);
+    const pending = check.check('workspace');
     expect(check.checking).toBe(true);
-    await check.check('workspace', true);
+    // A second click while checking starts nothing.
+    await check.check('workspace');
     expect(load).toHaveBeenCalledTimes(1);
     expect(load).toHaveBeenCalledWith('workspace', true);
     answer({ protocol: 18 });
     await pending;
-    expect([check.checking, check.confirmed, check.failed]).toEqual([false, true, false]);
-    expect(reload).toHaveBeenCalledTimes(1);
+    expect([check.checking, check.confirmed, check.failed, check.verdict]).toEqual([false, true, false, 'signed-in']);
+    expect(check.signedOut(true)).toBe(false);
 
-    // Still signed out: the cached verdict already says so, nothing to refresh.
-    const refused = new ClaudeSignInCheck(async () => { throw signInError(); }, reload);
-    await refused.check('workspace', true);
-    expect([refused.confirmed, refused.failed]).toEqual([false, false]);
-    expect(reload).toHaveBeenCalledTimes(1);
-    // A first refusal the catalog did not know yet refreshes it.
-    await refused.check('workspace', false);
-    expect(reload).toHaveBeenCalledTimes(2);
+    // Still signed out after /login was not run.
+    const refused = new ClaudeSignInCheck(async () => { throw signInError(); });
+    await refused.check('workspace');
+    expect([refused.confirmed, refused.failed, refused.signedOut(false)]).toEqual([false, false, true]);
 
-    // A check that could not run is not a verdict.
-    const broken = new ClaudeSignInCheck(async () => { throw new Error('Could not load models.'); }, reload);
-    await broken.check('workspace', true);
-    expect([broken.confirmed, broken.failed]).toEqual([false, true]);
-    expect(reload).toHaveBeenCalledTimes(2);
+    // A check that could not run is not a verdict: the cached one stays.
+    const broken = new ClaudeSignInCheck(async () => { throw new Error('Could not load models.'); });
+    await broken.check('workspace');
+    expect([broken.confirmed, broken.failed, broken.verdict]).toEqual([false, true, undefined]);
+    expect(broken.signedOut(true)).toBe(true);
   });
 
-  it('follows the composer catalog request without a second check', async () => {
-    const reload = vi.fn(async () => undefined);
+  it('follows the composer catalog request without starting a second check', async () => {
     const load = vi.fn(async () => { throw signInError(); });
-    const check = new ClaudeSignInCheck(load, reload);
-    let signedOut = false;
-    await check.observe('workspace', () => signedOut);
+    const check = new ClaudeSignInCheck(load);
+    await check.observe('workspace');
     expect(load).toHaveBeenCalledWith('workspace', false);
-    expect(reload).toHaveBeenCalledTimes(1);
-    signedOut = true;
-    await check.observe('workspace', () => signedOut);
-    expect(reload).toHaveBeenCalledTimes(1);
+    expect(check.signedOut(false)).toBe(true);
     expect([check.checking, check.confirmed, check.failed]).toEqual([false, false, false]);
+    // A shared request that failed for another reason proves nothing.
+    const other = new ClaudeSignInCheck(async () => { throw new WorkspaceOperationError('NOT_TRUSTED', 'x'); });
+    await other.observe('workspace');
+    expect(other.verdict).toBeUndefined();
   });
 });
 
@@ -98,7 +94,7 @@ describe('ClaudeSignInStatus', () => {
     workspaces: [{ id: 'workspace', name: 'piui', trust, missing: false, personal: false }],
   });
   const html = (value: WorkspaceCatalog): string => {
-    const store = { catalog: value, safeMode: value.safeMode, loadCatalog: async () => value } as unknown as WorkspaceStore;
+    const store = { catalog: value, safeMode: value.safeMode } as unknown as WorkspaceStore;
     const { body } = render(ClaudeSignInStatus, { props: { workspaceId: 'workspace' }, context: new Map([[WORKSPACE_CONTEXT, store]]) });
     // Hydration markers are not content.
     return body.replace(/<!--[\s\S]*?-->/g, '');

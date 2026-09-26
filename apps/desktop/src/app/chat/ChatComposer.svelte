@@ -10,7 +10,6 @@
   import type { SessionSnapshot } from '../../host-api/workspaceClient';
   import { Button, IconButton, Segmented, Spinner, Textarea } from '../../lib/ui';
   import { errorMessage } from '../workspaceStore.svelte';
-  import ClaudeSignInStatus from './ClaudeSignInStatus.svelte';
   import RuntimeChip from './RuntimeChip.svelte';
 
   interface Props {
@@ -327,7 +326,6 @@
     </div>
   </div>
   {#if error}<p class="error" role="alert">{$t(error)}</p>{/if}
-  {#if snapshot.session.harness === 'claude-code'}<ClaudeSignInStatus workspaceId={snapshot.session.workspaceId} />{/if}
 </div>
 
 <style>

@@ -8,10 +8,10 @@
   import { ClaudeSignInCheck, SIGNED_OUT_COPY, cachedSignedOut, copyParts } from './claudeSignIn.svelte';
 
   /**
-   * Compact Claude Code sign-in status under a composer. It shows the host's
-   * cached verdict and never checks on its own: "Check again" runs a
-   * catalog-only check of the user's `claude` CLI (no conversation, no model
-   * turn). With `observe`, it also follows the catalog request the composer
+   * Compact Claude Code sign-in status under the new-chat composer. It starts
+   * from the host's cached verdict and never checks on its own: "Check again"
+   * runs a catalog-only check of the user's `claude` CLI (no conversation, no
+   * model turn). With `observe`, it follows the catalog request the composer
    * makes for its model picker, sharing it instead of starting another.
    */
   interface Props {
@@ -21,19 +21,19 @@
   let { workspaceId, observe = false }: Props = $props();
   const uid = $props.id();
   const store = useWorkspace();
-  const status = new ClaudeSignInCheck(
-    (id, refresh) => harnessModels({ workspaceId: id, harness: 'claude-code' }, refresh),
-    () => store.loadCatalog(),
-  );
+  const status = new ClaudeSignInCheck((id, refresh) => harnessModels({ workspaceId: id, harness: 'claude-code' }, refresh));
 
-  const signedOut = $derived(cachedSignedOut(store.catalog.harnesses));
-  const workspace = $derived(store.catalog.workspaces.find((item) => item.id === workspaceId));
-  const checkable = $derived(Boolean(workspace && !workspace.missing && (workspace.personal || workspace.trust === 'trusted')));
+  const cached = $derived(cachedSignedOut(store.catalog.harnesses));
+  const signedOut = $derived(status.signedOut(cached));
+  // Booleans, so catalog updates that change nothing here never re-run the effect.
+  const checkable = $derived.by(() => {
+    const workspace = store.catalog.workspaces.find((item) => item.id === workspaceId);
+    return Boolean(workspace && !workspace.missing && (workspace.personal || workspace.trust === 'trusted')) && !store.safeMode;
+  });
   const COMMANDS = ['claude', '/login'];
 
   $effect(() => {
-    if (!observe || !checkable || store.safeMode) return;
-    void status.observe(workspaceId, () => cachedSignedOut(store.catalog.harnesses));
+    if (observe && checkable) void status.observe(workspaceId);
   });
 </script>
 
@@ -57,14 +57,14 @@
         <span>{$t('Claude Code is signed in with your Claude subscription.')}</span>
       {/if}
     </span>
-    {#if (signedOut || status.failed || status.checking) && checkable && !store.safeMode}
+    {#if (signedOut || status.failed || status.checking) && checkable}
       <Button
         size="sm"
         variant="ghost"
         loading={status.checking}
         disabled={status.checking}
         aria-describedby="{uid}-status"
-        onclick={() => void status.check(workspaceId, signedOut)}
+        onclick={() => void status.check(workspaceId)}
       >
         {$t('Check again')}
       </Button>
