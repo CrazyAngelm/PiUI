@@ -26,10 +26,10 @@ deleted.
 
 | Status | Count |
 | --- | --- |
-| Ported | 16 |
+| Ported | 17 |
 | Present | 27 |
 | Dropped | 9 |
-| Gap | 3 |
+| Gap | 2 |
 
 ## Pi-only classic view (`?view=classic`)
 
@@ -61,7 +61,7 @@ deleted.
 | Add a folder by typed path (browser preview only) | Add project dialog without native picker | UI Lab folder picker fake | Dropped (development-only path) |
 | Live Pi chat: send, steer, follow-up queue, stop, model and thinking pickers, compaction | `features/runtime/ChatPanel.svelte` (classic RPC path) | Workspace Pi chats: `ChatComposer`, `RuntimeChip`, queue, `/compact`, `/stop` | Present |
 | New chat in a project or as a personal chat | Sidebar "New chat" / "New session" | Home composer, sidebar "New chat in …" | Present |
-| Continue a session found in the index (started in the Pi terminal app) live in PiUI | `ChatPanel` with `start_runtime(projectId, sessionId)` | Not available; the history view is read only | **Gap** — needs a versioned host command to adopt an indexed Pi session into the workspace registry (see below) |
+| Continue a session found in the index (started in the Pi terminal app) live in PiUI | `ChatPanel` with `start_runtime(projectId, sessionId)` | History reader → "Continue in PiUI" (`app/history/ContinueInPiui.svelte`) → `workspace_adopt_v1`, then the ordinary `openSession` ([SESSION_TOOLS.md](SESSION_TOOLS.md)) | Ported (`feat/session-tools`; classic admission checks, never writes or renames the file; concurrent writers stay R-06) |
 | Pi runtime slash-command discovery (`get_commands`, provenance) in the composer and palette | `ChatPanel` slash menu, `CommandPalette` | Composer `/` menu: PiUI commands plus Pi extension commands, prompt templates and `skill:` commands from `get_commands` (source badge, inserted as text for Pi to run; paths never cross) | Ported in the composer; the palette does not list them yet |
 | PiUI "Tier 1A" contributions: composer action buttons and palette commands from `piui.manifest.json` | `ChatPanel`, `CommandPalette` (`list_piui_contributions`) | Not available | **Gap** — superseded by the plugin registry (plan Ф8, ADR-032) or a small port on top of the dynamic slash commands |
 | Prime Agent live chat | Disabled (fail-closed) | Workspace Prime harness chats | Present (the new shell is ahead) |
@@ -98,15 +98,17 @@ deleted.
 
 ## Gaps before deleting the classic code
 
-1. **Continue an indexed Pi session live.** Proposal: an additive, versioned
-   `workspace_adopt_v1` command `{ projectId?, sessionId }` (absent `projectId`
-   = personal) that, in a trusted folder and outside safe mode, resolves the
-   index session to its host-private JSONL with the classic admission checks
-   (`admit_session_revision`, root overlap), refuses Prime Agent folders,
-   returns the existing workspace session when one already points at that
-   file, otherwise registers a Pi workspace session bound to the file, and
-   lets the ordinary `openSession` resume it. The UI adds "Continue in PiUI"
-   to the history reader. Concurrent CLI and PiUI writers stay risk R-06.
+1. ~~**Continue an indexed Pi session live.**~~ Closed on `feat/session-tools`:
+   the versioned `workspace_adopt_v1` command `{ projectId?, sessionId }`
+   (absent `projectId` = personal) resolves the index session to its
+   host-private JSONL in a trusted folder outside safe mode with the classic
+   admission checks (`admit_session_revision` plus revalidation, root
+   overlap), refuses Prime Agent folders, a session the classic live runtime
+   holds and one written in the last 10 s (`SESSION_ALREADY_ACTIVE`), returns
+   the existing workspace session bound to that file or registers a Pi
+   workspace session bound to it, and the ordinary `openSession` resumes it
+   without `--name`. The history reader has "Continue in PiUI". Concurrent CLI
+   and PiUI writers stay risk R-06.
 2. **Pi slash-command discovery** — done in the composer
    (`workspace_composer_inputs_v1` `catalog` over the bridge's
    `get_commands`, merged with PiUI's commands); the palette still lacks it.
@@ -134,6 +136,8 @@ Host routes the new shell calls (all existing, unchanged): `bootstrap_v10`,
 `piui://session-catalog` / `piui://session-root-hint` events. New in this
 change: the `piui://workspace-extension-ui` event
 ([contracts/workspace-extension-ui-v1.ts](../contracts/workspace-extension-ui-v1.ts)).
+Gap 1 added `workspace_adopt_v1`
+([contracts/workspace-adopt-v1.ts](../contracts/workspace-adopt-v1.ts)).
 
 Classic-only routes that can go with the classic code once the gaps are
 closed: the classic live runtime (`start_runtime`, `start_personal_chat`,
@@ -169,3 +173,6 @@ Run the lab (`pnpm --filter @piui/desktop dev`, `?lab=demo`):
    their Settings → "New interface" returns.
 6. `?lab=safe`: history and the extension list stay readable; project removal
    is unavailable.
+7. `piui` history → "Make the session index incremental" → "Continue in PiUI":
+   the chat opens in the sidebar and resumes; "Draft release notes for 0.2.0"
+   is refused as still open in the terminal.

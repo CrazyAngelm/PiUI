@@ -18,6 +18,7 @@ import { LabRunScheduler } from './orchestration/runScheduler';
 import { scriptTestHandlers } from './orchestration/scriptTestFake';
 import { runDebuggingHandlers } from './orchestration/runDebuggingFake';
 import { buildSeed, type SeedActivity } from './scenarios';
+import { sessionToolsHandlers } from './sessionToolsFake';
 import { withSignedOutClaude } from './scenarios/signedOutClaude';
 import { LabSessions } from './sessionRuntime';
 import { ambientSegment } from './turnScripts';
@@ -129,6 +130,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
       bus,
       clock,
     ),
+    ...sessionToolsHandlers(runtime, seed.nativeHistory ?? EMPTY_NATIVE_HISTORY),
   };
   startActivity(seed.activity, runtime, scheduler, options.ambient ?? true);
 

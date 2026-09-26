@@ -2167,6 +2167,68 @@ fn recapture_session_admission_after_start(
     Ok(refreshed)
 }
 
+/// An indexed Pi session admitted for continuing in the workspace
+/// (`workspace_adopt_v1`). The path stays host-private.
+pub(crate) struct AdoptionAdmission {
+    pub session_file: PathBuf,
+    pub pi_session_id: String,
+    pub title: String,
+}
+
+/// The classic live-start checks for continuing an indexed Pi session in the
+/// workspace: a trusted Pi folder, separate Pi and Prime roots, an indexed
+/// file owned by the project whose header names it, stable across two
+/// observations, and not held by the classic live runtime. Never writes JSONL.
+pub(crate) fn admit_adoption(
+    state: &HostState,
+    project_id: &str,
+    session_id: &str,
+) -> Result<AdoptionAdmission, ApiError> {
+    let agent_kind = lock_index(state)?
+        .project_agent_kind(project_id)
+        .map_err(|_| ApiError::io())?
+        .ok_or_else(ApiError::not_found)?;
+    require_live_runtime_kind(agent_kind)?;
+    let directory = verified_project_directory(state, project_id, true)?;
+    let pi_roots = discovery_roots_for_project(&state.session_roots, &directory);
+    let prime_roots = configured_roots_for_project(&state.prime_session_roots, &directory);
+    if session_root_sets_overlap(&pi_roots, &prime_roots) {
+        return Err(ApiError::agent_session_root_conflict());
+    }
+    let admission = admit_session_revision(state, project_id, session_id)?;
+    if lock_live_runtime(state)?
+        .as_ref()
+        .is_some_and(|slot| slot.project_id == project_id)
+    {
+        return Err(ApiError::session_already_active());
+    }
+    revalidate_session_admission(state, &admission)?;
+    let pi_session_id = admission
+        .pi_session_id
+        .clone()
+        .ok_or_else(ApiError::session_conflict)?;
+    let title = lock_index(state)?
+        .list_sessions(Some(project_id))
+        .map_err(|_| ApiError::io())?
+        .into_iter()
+        .find(|session| session.id == session_id)
+        .map(|session| session.title)
+        .ok_or_else(ApiError::not_found)?;
+    Ok(AdoptionAdmission {
+        session_file: admission.session_file,
+        pi_session_id,
+        title,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn refresh_project_sessions_for_tests(
+    state: &HostState,
+    project_id: &str,
+) -> Result<(), ApiError> {
+    refresh_project_sessions(state, project_id)
+}
+
 fn safe_file_revision(value: &str) -> bool {
     value.len() == 64
         && value

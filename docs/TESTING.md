@@ -101,6 +101,15 @@ Covered flows, each with at least one failure path:
   also from Settings → Background.
 - Settings: Background (tray and sign-in switches in the lab, read-only in
   safe mode), Extensions (Pi and Prime Agent inventories, empty inventory).
+- Session tools (`session-tools.spec.ts`): review panel stage of one hunk,
+  revert with a preview (cancel, then confirm), a line comment into the draft,
+  an untracked file to the trash, keyboard resizing, no repository and safe
+  mode; a worktree chat with an existing and an invalid branch name, details
+  and removal of a dirty worktree; a handoff that links back and a cancelled
+  one; continuing a terminal Pi session and refusing one still open there;
+  axe-core (serious and critical fail) on the review panel with its comment
+  form, the revert, worktree and continue dialogs, worktree details and the
+  handoff composer, in light and dark.
 - Keyboard: skip link, sidebar tab order and activation, global shortcuts,
   dialog focus trap with Escape and focus return (also from a menu), pickers.
 - Accessibility: axe-core (WCAG 2.1 A/AA) on 23 screens (including the MCP

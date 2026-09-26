@@ -19,7 +19,9 @@
   import Pin from '@lucide/svelte/icons/pin';
   import PinOff from '@lucide/svelte/icons/pin-off';
   import FolderMinus from '@lucide/svelte/icons/folder-minus';
+  import GitBranch from '@lucide/svelte/icons/git-branch';
   import { t, language } from '../../features/locale/language';
+  import { placements } from '../worktrees/placements.svelte';
   import { Kbd, Menu, StatusDot, Skeleton, toasts, type MenuEntry, type Status } from '../../lib/ui';
   import type { WorkspaceSession, WorkspaceSummary } from '../../../../../contracts/workspace-v15';
   import { relativeTime } from '../format';
@@ -47,6 +49,8 @@
     const timer = setInterval(() => (now = Date.now()), 30_000);
     return () => clearInterval(timer);
   });
+  // Worktree markers: placement v1 is loaded whenever the chat list changes.
+  $effect(() => placements.sync(store.catalog.sessions.map((session) => session.id)));
 
   function sessionStatus(session: WorkspaceSession): Status | undefined {
     if (approvalsBySession.has(session.id)) return 'waiting';
@@ -242,15 +246,20 @@
       <ul class="chats">
         {#each sessions as session (session.id)}
           {@const status = sessionStatus(session)}
+          {@const worktree = placements.get(session.id)?.worktree}
           <li><button
             type="button"
             class="chat"
             class:chat--current={store.selectedSessionId === session.id}
             aria-current={store.selectedSessionId === session.id ? 'page' : undefined}
             onclick={() => go(() => void store.openSession(session.id))}
-            title={session.title}
+            title={worktree ? `${session.title} · ${worktree.branch}` : session.title}
           >
+            {#if worktree}
+              <span class="chat__worktree" class:chat__worktree--gone={worktree.state !== 'ready'}><GitBranch size={12} /></span>
+            {/if}
             <span class="chat__title">{session.title}</span>
+            {#if worktree}<span class="visually-hidden">{$t('in worktree {0}', [worktree.branch])}</span>{/if}
             {#if status}
               <StatusDot {status} label={status === 'waiting' ? $t('Needs your decision') : status === 'running' ? $t('Running') : $t('Failed')} />
             {:else}
@@ -515,6 +524,14 @@
     flex: none;
     color: var(--piui-text-faint);
     font-size: var(--piui-text-xs);
+  }
+  .chat__worktree {
+    display: inline-flex;
+    flex: none;
+    color: var(--piui-accent);
+  }
+  .chat__worktree--gone {
+    color: var(--piui-text-faint);
   }
   .chats__empty {
     margin: 2px 0 6px;

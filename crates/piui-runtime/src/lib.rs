@@ -25,6 +25,7 @@ pub mod codec;
 mod extension_manager;
 pub mod extension_ui;
 pub mod fake;
+pub mod git;
 mod native_version;
 pub mod provenance;
 pub mod read_only_probe;

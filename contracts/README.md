@@ -250,3 +250,39 @@ images a message carried as trailing `[image]` lines (live bridges and the
 closed-session projection); image bytes never cross into blocks.
 `fixtures/workspace-composer-inputs-v1.json` is checked by the Rust host and
 the TypeScript client.
+
+# Session tools: review v1, placement v1, adopt v1
+
+Three new, independently versioned commands (`protocol: 1`); workspace v15
+commands, events and catalog and the v11 session registry format are
+unchanged. See `docs/SESSION_TOOLS.md`.
+
+- `workspace-review-v1.ts` (`workspace_review_v1`): `status`, `diff`, `stage`,
+  `unstage`, `revert` for the git folder a chat works in (trusted project
+  folder or its verified worktree, limited to the project's part of the
+  repository). A diff carries the SHA-256 `fingerprint` of the exact change;
+  every action repeats it (and optionally a `hunk` index) and is refused with
+  `STALE` when the change is no longer the reviewed one. Reads work in safe
+  mode (`readOnly: true`); actions are refused there. Reverting an untracked
+  file moves it to the system trash; nothing is deleted permanently. Paths are
+  repository-relative with `/` and must be in the current status.
+- `workspace-placement-v1.ts` (`workspace_placement_v1`): `list` (safe mode,
+  no trust needed), `previewWorktree`, `createChat` (a worktree `new` exactly as
+  previewed — branch, folder and `expectedBase` — or `shared` with another
+  chat, and/or `continuedFrom`) and `removeWorktree` (answers `dirty` with a
+  count and fingerprint until `discardChanges: true` repeats that
+  fingerprint). Worktree paths cross the boundary only as home-relative
+  display text. Branches are never deleted.
+- `workspace-adopt-v1.ts` (`workspace_adopt_v1`): `{ projectId?, sessionId }`
+  (index session id; no `projectId` = personal chats) returns the workspace
+  chat bound to that Pi session file, `created` when it was registered now.
+  Open it with v15 `openSession`. Refusals include `NOT_SUPPORTED` (Prime Agent
+  folder) and `SESSION_ALREADY_ACTIVE`.
+
+All requests reject unknown fields. Refusals are `{ code, message,
+recoverable }`; clients show fixed copy per code. The golden fixture
+`fixtures/workspace-session-tools-v1.json` is decoded by the host DTOs
+(`session_tools_contract_tests.rs`) and by the TypeScript clients
+(`sessionTools.test.ts`). Placement is stored host-side in per-session sidecar
+files, so an older build ignores it (a worktree chat would then open in the
+project folder; see the rollback note in `docs/SESSION_TOOLS.md`).

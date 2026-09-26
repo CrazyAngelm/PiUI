@@ -18,7 +18,15 @@
   import { extensionSurfaces } from '../chat/extensions/extensionSurfaces.svelte';
   import Transcript from '../chat/transcript/Transcript.svelte';
   import SearchIcon from '@lucide/svelte/icons/search';
+  import GitCompare from '@lucide/svelte/icons/git-compare';
+  import ArrowRightLeft from '@lucide/svelte/icons/arrow-right-left';
+  import { composerInserts } from '../review/composerInserts.svelte';
+  import { placements } from '../worktrees/placements.svelte';
+  import { startHandoff } from '../handoff/startHandoff';
   import { useWorkspace } from './context';
+
+  // Loaded on first use; a script-level import lets the dev server see its dependencies.
+  const loadReviewPanel = () => import('../review/ReviewPanel.svelte');
 
   interface Props {
     sessionId: string;
@@ -33,6 +41,8 @@
   const running = $derived(session ? ['starting', 'running', 'stopping'].includes(session.status) : false);
 
   let detailsOpen = $state(readDetailsOpen());
+  /** The review panel replaces the details panel while open (one inspector). */
+  let reviewOpen = $state(false);
   let searchOpen = $state(false);
   let renaming = $state(false);
   let titleDraft = $state('');
@@ -46,12 +56,16 @@
     }
   }
   function toggleDetails(): void {
-    detailsOpen = !detailsOpen;
+    detailsOpen = reviewOpen ? true : !detailsOpen;
+    reviewOpen = false;
     try {
       localStorage.setItem('piui.shell.details', detailsOpen ? '1' : '0');
     } catch {
       // Optional UI preference.
     }
+  }
+  function toggleReview(): void {
+    reviewOpen = !reviewOpen;
   }
 
   function beginRename(): void {
@@ -73,6 +87,9 @@
     } else if (matchesShortcut(event, 'Mod+F')) {
       event.preventDefault();
       searchOpen = true;
+    } else if (matchesShortcut(event, 'Mod+Shift+G')) {
+      event.preventDefault();
+      toggleReview();
     }
   }
 
@@ -84,7 +101,7 @@
 <svelte:window onkeydown={keydown} />
 
 {#if session}
-  <div class="chat" class:chat--details={detailsOpen}>
+  <div class="chat" class:chat--details={detailsOpen && !reviewOpen} class:chat--review={reviewOpen}>
     <section class="chat__main" aria-labelledby="chat-title">
       <header class="chat__head">
         <HarnessMark kind={session.harness} size={20} decorative={false} />
@@ -118,12 +135,16 @@
             </Button>
           {/if}
           <IconButton label={$t('Search this chat')} shortcut="Mod+F" active={searchOpen} onclick={() => (searchOpen = !searchOpen)}><SearchIcon /></IconButton>
-          <IconButton label={$t('Details')} shortcut="Mod+Alt+B" active={detailsOpen} onclick={toggleDetails}><PanelRight /></IconButton>
+          <IconButton label={$t('Review changes')} shortcut="Mod+Shift+G" active={reviewOpen} onclick={toggleReview}><GitCompare /></IconButton>
+          <IconButton label={$t('Details')} shortcut="Mod+Alt+B" active={detailsOpen && !reviewOpen} onclick={toggleDetails}><PanelRight /></IconButton>
           <Menu
             align="end"
             items={[
               { label: $t('Rename'), icon: Pencil, onSelect: beginRename },
               { label: $t('Refresh from history'), icon: RefreshCw, onSelect: () => void store.reconcileSession(session.id) },
+              ...(snapshot && !session.runId
+                ? [{ label: $t('Continue in another harness…'), icon: ArrowRightLeft, disabled: store.safeMode, onSelect: () => startHandoff(store, snapshot, $t) }]
+                : []),
               ...(session.status !== 'closed'
                 ? [{ label: $t('Stop agent process'), icon: Power, onSelect: () => void store.close(session.id) }]
                 : []),
@@ -163,6 +184,8 @@
             <ExtensionSurface sessionId={snapshot.session.id} status={snapshot.session.status} placement="above" agentLabel={harnessMeta(snapshot.session.harness).label} />
             {#if store.safeMode}
               <p class="notice">{$t('Runtime actions are disabled in safe mode. Your draft is preserved.')}</p>
+            {:else if snapshot.session.status === 'closed' && placements.get(session.id)?.worktree?.state === 'removed'}
+              <p class="notice">{$t("This chat's worktree was removed. Its history stays readable; start a new chat to keep working.")}</p>
             {:else if snapshot.session.status === 'closed'}
               <p class="notice">
                 {$t('The agent process is stopped. The transcript stays readable.')}
@@ -172,7 +195,7 @@
               <p class="notice">{snapshot.capabilities.prompt.reason ?? $t('{0} is read-only in this mode.', [harnessMeta(session.harness).label])}</p>
             {:else}
               <!-- Extension-prepared text remounts the composer with the new draft. -->
-              {#key `${snapshot.session.id}:${extensionSurfaces.composerEpoch(snapshot.session.id)}`}
+              {#key `${snapshot.session.id}:${extensionSurfaces.composerEpoch(snapshot.session.id)}:${composerInserts.epoch(snapshot.session.id)}`}
                 <ChatComposer
                   {snapshot}
                   draft={store.draftFor(snapshot.session.id)}
@@ -198,8 +221,15 @@
         {/if}
     </section>
 
-    {#if detailsOpen && snapshot}
-      <ChatDetails {snapshot} onClose={toggleDetails} onDelete={() => onDelete(session.id)} />
+    {#if reviewOpen}
+      <!-- Loaded on first use; keyed so each chat gets its own review state. -->
+      {#await loadReviewPanel() then review}
+        {#key session.id}
+          <review.default sessionId={session.id} status={session.status} onClose={toggleReview} />
+        {/key}
+      {/await}
+    {:else if detailsOpen && snapshot}
+      <ChatDetails {snapshot} onClose={toggleDetails} onDelete={() => onDelete(session.id)} onReview={toggleReview} />
     {/if}
   </div>
 {:else}
@@ -219,6 +249,9 @@
   }
   .chat--details {
     grid-template-columns: minmax(0, 1fr) var(--piui-panel-width);
+  }
+  .chat--review {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
   .chat__main {
     display: flex;

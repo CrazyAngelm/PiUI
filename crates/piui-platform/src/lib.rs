@@ -2,8 +2,8 @@
 //!
 //! This crate deliberately has no shell launcher, frontend API, session format,
 //! or session-writing capability. It exposes only canonical project-directory,
-//! static eligibility, process-containment, project-watch and project file
-//! name listing building blocks.
+//! static eligibility, process-containment, project-watch, project file
+//! name listing and move-to-trash building blocks.
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -15,6 +15,7 @@ mod project_files;
 mod project_watch;
 #[cfg(windows)]
 mod system_pi_probe;
+mod trash;
 #[cfg(windows)]
 mod windows_stable_file_lease;
 
@@ -34,6 +35,7 @@ pub use project_watch::{
     ChangeBatch, IGNORED_DIRECTORY_NAMES, MAX_BATCH_PATHS, ProjectWatch, ProjectWatchError,
     is_ignored_path, relative_change_path, watch_project,
 };
+pub use trash::{TrashError, move_file_to_trash};
 
 #[cfg(unix)]
 pub use containment::{ProcessGroupId, UnixProcessGroup};

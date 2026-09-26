@@ -216,6 +216,30 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   - Fix: the new-chat composer no longer puts the remembered harness and
     model back over the user's pick when the host catalog refreshes.
 
+- `feat/session-tools` (plan P3.11 second half, classic parity gap 1,
+  ADR-036, [SESSION_TOOLS.md](SESSION_TOOLS.md)): a contained host git runner
+  (hooks and fsmonitor off, literal pathspecs, bounded output) and three
+  versioned commands. **Review panel** (`workspace_review_v1`, `Mod+Shift+G`):
+  staged/unstaged/untracked files of the chat's folder, the transcript diff
+  viewer with stage, unstage, revert and comment per hunk; every action
+  repeats the reviewed diff's SHA-256 and replays exactly those bytes through
+  `git apply` (a change in between is `STALE`); revert previews what is lost;
+  untracked files go to the system trash through the platform layer; line
+  comments go into the draft, never sent; read-only in safe mode.
+  **Worktree chats** (`workspace_placement_v1`): "New worktree…" in the new
+  chat composer with a confirmed branch, folder under app data and base
+  commit; trust through the project's common git dir; details with copy,
+  review and remove (dirty changes listed and acknowledged, branch kept);
+  sidebar marker. **Continue in another harness**: an editable draft from the
+  visible chat, the new chat links back. **Continue in PiUI** for terminal Pi
+  sessions (`workspace_adopt_v1`, gap 1 closed). Placement lives in
+  per-session sidecar files; the v11 registry format is unchanged. UI Lab
+  fakes (in-memory git, worktree chat, adoptable session), Rust tests on real
+  temporary repositories, Vitest and Playwright flows with failure paths and
+  axe audits. First paint (`perf:smoke` graph): 408,833 → 417,164 B raw,
+  117,872 → 120,596 B gzip (the worktree chip, placement store and sidebar
+  marker; the review panel, dialogs, clients and handoff are lazy).
+
 ## In progress
 
 - Nothing; next steps wait for the owner's review of the remaining-work plan.
@@ -291,6 +315,13 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   without them stays readable by the previous build.
 - Pinned artifact paths are not re-checked when a run uses them. An automation's
   history still names a deleted run; opening it says the run is gone.
+
+- Session tools: reverting an untracked file is refused on macOS (no trash
+  support yet); repository clean/smudge filters still run during reads; hunks
+  cannot be split; a worktree left by a deleted chat has no management screen;
+  an older PiUI build ignores placement files (a worktree chat would start in
+  the project folder). The native Windows Recycle Bin path was probed once;
+  the WebView2 E2E does not cover the review panel yet.
 
 ## Next
 

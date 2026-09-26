@@ -654,6 +654,48 @@ sessions or project files; running and uncertain runs are refused and safe
 mode is read-only. Additive within orchestration v6 (v6.4) plus the
 independent run debugging v1 commands. See [RUN_DEBUGGING.md](RUN_DEBUGGING.md).
 
+## ADR-036 — Session tools run git on the host with exact, confirmed changes
+
+**Context:** ADR-026 made diff review and worktrees core chat features. They
+need git in the user's project, which is a program PiUI executes in a trusted
+folder, and they change user files: staging, reverting and deleting worktrees
+must never lose more than the person saw.
+
+**Decision:**
+
+- **Git on the host, never in the WebView.** Three allowlisted, versioned
+  commands (`workspace_review_v1`, `workspace_placement_v1`,
+  `workspace_adopt_v1`) run git through one contained runner: PATH resolution
+  without a shell, fixed argument vectors, literal pathspecs, repository hooks
+  and fsmonitor off, no `GIT_*` redirection, bounded output and timeouts, the
+  process tree in a Job Object or process group. Reads need the project's
+  trust and work in safe mode; every change is refused in safe mode.
+- **Exact changes.** A diff carries the SHA-256 of git's exact output; an
+  action repeats it and replays exactly those bytes (or one hunk of them)
+  through `git apply`. A change in between is refused, never merged.
+- **Nothing is deleted without its preview.** Reverts show the lines that will
+  be lost; untracked files go to the system trash through the platform layer
+  (never a permanent delete; unsupported platforms refuse). Removing a
+  worktree lists its uncommitted changes and needs an explicit acknowledgement
+  of exactly those changes; its branch is never deleted.
+- **Worktrees outside the project.** PiUI-managed worktrees live under app
+  data on a new branch the person confirms (branch, folder and base commit);
+  nothing is copied from the project folder. A worktree chat inherits the
+  project's trust only while git confirms the same common git directory.
+- **Placement beside the registry.** Worktree bindings, handoff links and
+  adopted sessions are per-session sidecar files; the v11 session registry
+  keeps its format. A damaged placement fails that chat's start closed.
+- **Terminal sessions are adopted, not converted.** Continuing a terminal Pi
+  session registers the same file with the classic admission checks, refuses
+  recent writes and never passes a title Pi would write into the file.
+  Handoffs between harnesses are a new chat with an editable draft built from
+  visible text; no history is translated.
+
+**Consequences:** repository filters configured by the user still run during
+reads. macOS cannot trash files yet. Concurrent terminal and PiUI writers
+remain risk R-06; the adoption check catches active turns only. Worktrees left
+by deleted chats need a later management screen. See `docs/SESSION_TOOLS.md`.
+
 ## ADR-038 — Composer attachments stay host-owned and native-only
 
 **Decision:** the chat composers send images to a harness only through its

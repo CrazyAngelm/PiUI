@@ -23,6 +23,7 @@
   import { activeMention, fileMention, rankFiles, rankNamed, replaceMention } from '../chat/composer/mentions';
   import type { ComposerMenuItem } from '../chat/composer/menuItems';
   import HarnessMark from './HarnessMark.svelte';
+  import WorktreeChip from '../worktrees/WorktreeChip.svelte';
   import { useWorkspace } from './context';
   import { reconcileSelection, restoredSelection, type NewChatChoice, type NewChatSelection } from './newChatChoice';
 
@@ -495,6 +496,8 @@
           </button>
         {/snippet}
       </Picker>
+
+      <WorktreeChip {workspace} disabled={store.safeMode} />
     </div>
     <button type="button" class="send" onclick={() => void send()} disabled={!canSend} aria-label={$t('Start chat')}>
       {#if busy}<Spinner size={14} />{:else}<ArrowUp size={16} />{/if}

@@ -14,6 +14,7 @@
   import { runLauncher } from '../triggers/runLauncher.svelte';
   import { syncTrayLabels } from '../settings/trayLabels';
   import { scheduleUpdateNotices } from '../settings/updateNoticeLoader';
+  import { placements } from '../worktrees/placements.svelte';
 
   const store = provideWorkspace(new WorkspaceStore());
   // The tray menu (background mode) speaks the interface language.
@@ -212,6 +213,9 @@
     }}
   >
     <p class="dialog-text">{$t('The chat is removed from PiUI. The harness keeps its own history.')}</p>
+    {#if deleteTarget && placements.get(deleteTarget)?.worktree?.state === 'ready'}
+      <p class="dialog-text">{$t('Its worktree folder and branch stay on disk. Remove the worktree from the chat details first if you no longer need it.')}</p>
+    {/if}
     {#snippet footer()}
       <Button variant="ghost" onclick={() => (deleteTarget = undefined)} disabled={deleteBusy}>{$t('Cancel')}</Button>
       <Button variant="danger" onclick={() => void confirmDelete()} loading={deleteBusy}>{$t('Delete chat')}</Button>
