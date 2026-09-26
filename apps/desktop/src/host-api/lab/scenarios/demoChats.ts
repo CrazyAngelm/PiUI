@@ -16,6 +16,7 @@ import {
   STORYBOARD_PROMPT, TEST_COMMAND, TRANSPORT_DIFF, TRANSPORT_FOLLOW_UP, TRANSPORT_PLAN, TRANSPORT_PROMPT, TRANSPORT_SUMMARY,
   vitestReport,
 } from '../transcriptSamples';
+import { EXTENSION_DEMO_COMMAND } from '../extensionDemo';
 import { commandOutputSteps, streamSteps, usageStep, type ApprovalStep } from '../turnScripts';
 import { sessionRecord, seededUsage, type LabSeed, type SeedActivity } from './seedTypes';
 
@@ -271,14 +272,30 @@ function keymap(): LabSeed['sessions'][number] {
   });
 }
 
-/** Eleven chat sessions across all five harnesses and every block kind. */
+/** A live Pi chat for replaying extension UI; see `extensionDemo.ts`. */
+function extensionPlayground(): LabSeed['sessions'][number] {
+  const transcript = new TranscriptBuilder('pi', 'extensions', LAB_BASE_TIME - 7 * MINUTE)
+    .user('What can Pi extensions show in PiUI?')
+    .assistant(
+      `Send **${EXTENSION_DEMO_COMMAND}** in this chat. A lab extension then shows a notice, two statuses, a checklist `
+      + 'panel, a window title and prepared text for the message box, and asks four questions the way Pi extensions do: '
+      + 'confirm, choose, answer and edit a draft.',
+    );
+  return sessionRecord({
+    id: demoSessionId('extensions'), workspaceId: DEMO_PROJECTS.piui, harness: 'pi', title: 'Pi extension playground',
+    blocks: transcript.build(), updatedAt: transcript.lastInstant(), model: model('pi', 'anthropic-lab', 'claude-lab-haiku'),
+    thinkingLevel: 'low', live: 'idle',
+  });
+}
+
+/** Twelve chat sessions across all five harnesses and every block kind. */
 export function demoChats(): { sessions: LabSeed['sessions']; activity: SeedActivity[] } {
   const pending = scheduler();
   const streaming = renderer();
   return {
     sessions: [
       lisbon(), lifetimes(), transport(), pending.record, streaming.record,
-      crash(), compaction(), storyboard(), renderFarm(), audit(), keymap(),
+      crash(), compaction(), storyboard(), renderFarm(), audit(), keymap(), extensionPlayground(),
     ],
     activity: [pending.activity, streaming.activity],
   };

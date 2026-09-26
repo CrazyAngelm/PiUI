@@ -14,6 +14,8 @@
   import HarnessMark from './HarnessMark.svelte';
   import ChatDetails from './ChatDetails.svelte';
   import ChatComposer from '../chat/ChatComposer.svelte';
+  import ExtensionSurface from '../chat/extensions/ExtensionSurface.svelte';
+  import { extensionSurfaces } from '../chat/extensions/extensionSurfaces.svelte';
   import Transcript from '../chat/transcript/Transcript.svelte';
   import SearchIcon from '@lucide/svelte/icons/search';
   import { useWorkspace } from './context';
@@ -158,6 +160,7 @@
             {#each snapshot.approvals as approval (approval.id)}
               <ApprovalCard {approval} session={snapshot.session} />
             {/each}
+            <ExtensionSurface sessionId={snapshot.session.id} status={snapshot.session.status} placement="above" agentLabel={harnessMeta(snapshot.session.harness).label} />
             {#if store.safeMode}
               <p class="notice">{$t('Runtime actions are disabled in safe mode. Your draft is preserved.')}</p>
             {:else if snapshot.session.status === 'closed'}
@@ -168,7 +171,8 @@
             {:else if !snapshot.capabilities.prompt.supported}
               <p class="notice">{snapshot.capabilities.prompt.reason ?? $t('{0} is read-only in this mode.', [harnessMeta(session.harness).label])}</p>
             {:else}
-              {#key snapshot.session.id}
+              <!-- Extension-prepared text remounts the composer with the new draft. -->
+              {#key `${snapshot.session.id}:${extensionSurfaces.composerEpoch(snapshot.session.id)}`}
                 <ChatComposer
                   {snapshot}
                   draft={store.draftFor(snapshot.session.id)}
@@ -179,6 +183,7 @@
                 />
               {/key}
             {/if}
+            <ExtensionSurface sessionId={snapshot.session.id} status={snapshot.session.status} placement="below" agentLabel={harnessMeta(snapshot.session.harness).label} />
           </div>
         {:else if store.sessionLoading}
           <div class="loading"><Skeleton lines={6} /></div>

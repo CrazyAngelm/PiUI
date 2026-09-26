@@ -3,6 +3,7 @@
   import FilePen from '@lucide/svelte/icons/file-pen';
   import KeyRound from '@lucide/svelte/icons/key-round';
   import MessageCircleQuestion from '@lucide/svelte/icons/message-circle-question';
+  import { untrack } from 'svelte';
   import { t } from '../../features/locale/language';
   import type { ApprovalDecision, WorkspaceApproval, WorkspaceSession } from '../../../../../contracts/workspace-v15';
   import { Button, Textarea, toasts } from '../../lib/ui';
@@ -24,7 +25,8 @@
   const error = $derived(store.approvalErrors[key] ?? '');
   // Native choice list (e.g. Pi `select` dialogs); absent for other requests.
   const options = $derived(approval.options ?? []);
-  let input = $state('');
+  // An editor dialog may arrive with prepared text (additive v15 `prefill`).
+  let input = $state(untrack(() => approval.prefill ?? ''));
 
   const icons = { command: Terminal, 'file-change': FilePen, permission: KeyRound, input: MessageCircleQuestion };
   const Icon = $derived(icons[approval.kind] ?? KeyRound);
@@ -81,6 +83,7 @@
     <Textarea bind:value={input} minRows={2} maxRows={8} aria-label={approval.inputLabel} placeholder={approval.inputLabel} disabled={busy} />
   {/if}
 
+  {#if approval.timeoutMs}<p class="approval__note">{$t('This request closes automatically if you do not answer.')}</p>{/if}
   {#if error}<p class="approval__error" role="alert">{error}</p>{/if}
 
   <footer>
@@ -169,6 +172,11 @@
   .approval__error {
     margin: 0;
     color: var(--piui-danger);
+  }
+  .approval__note {
+    margin: 0;
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
   }
   footer {
     display: flex;

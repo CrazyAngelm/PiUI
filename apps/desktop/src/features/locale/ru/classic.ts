@@ -97,4 +97,12 @@ export const classicRu: Readonly<Record<string, string>> = {
   'Stop the agents running in this folder first ({0}).': 'Сначала остановите агентов, работающих в этой папке ({0}).',
   '{0} chats will be hidden.': 'Будут скрыты чаты: {0}.',
   'Folder removed from PiUI': 'Папка убрана из PiUI',
+
+  // Extension UI in chats
+  'Extension notices': 'Уведомления расширений',
+  '{0} extension': 'Расширение {0}',
+  'Dismiss notice': 'Скрыть уведомление',
+  'Extension panel': 'Панель расширения',
+  'An extension prepared text for the message box. Your draft was kept.': 'Расширение подготовило текст для поля сообщения. Ваш черновик сохранён.',
+  'This request closes automatically if you do not answer.': 'Запрос закроется сам, если не ответить.',
 };

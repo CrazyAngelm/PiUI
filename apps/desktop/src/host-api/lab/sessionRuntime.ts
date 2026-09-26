@@ -2,8 +2,9 @@ import { liveLabel } from './catalogFake';
 import type { LabEventBus } from './labBus';
 import type { LabClock } from './labClock';
 import {
-  COMPOSER_EVENT_CHANNEL, WORKSPACE_EVENT_CHANNEL,
+  COMPOSER_EVENT_CHANNEL, WORKSPACE_EVENT_CHANNEL, WORKSPACE_EXTENSION_UI_EVENT,
   type ApprovalDecision, type DesktopTimelineBlock, type SessionStatus, type WorkspaceEvent, type WorkspaceEventPayload,
+  type WorkspaceExtensionUiAction, type WorkspaceExtensionUiEventV1,
 } from './labContracts';
 import { NativeRejection } from './labErrors';
 import {
@@ -54,6 +55,12 @@ export class LabSessions {
     record.revision += 1;
     const payload: WorkspaceEvent = { protocol: 15, sessionId: record.id, revision: record.revision, event };
     this.bus.emit(WORKSPACE_EVENT_CHANNEL, payload);
+  }
+
+  /** Extension UI surfaces are ephemeral: no revision, nothing stored on the record. */
+  publishSurface(record: LabSessionRecord, action: WorkspaceExtensionUiAction): void {
+    const event: WorkspaceExtensionUiEventV1 = { protocol: 1, sessionId: record.id, action };
+    this.bus.emit(WORKSPACE_EXTENSION_UI_EVENT, event);
   }
 
   publishSession(record: LabSessionRecord): void {
@@ -228,6 +235,9 @@ export class LabSessions {
         case 'approval':
           this.requestApproval(record, turn, step);
           return;
+        case 'extensionUi':
+          this.publishSurface(record, step.action);
+          break;
         case 'continue':
           turn.queue.unshift(...step.next());
           break;

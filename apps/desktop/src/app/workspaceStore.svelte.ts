@@ -167,6 +167,7 @@ export class WorkspaceStore {
   private deleted = new Set<string>();
   private draftTimer: ReturnType<typeof setTimeout> | undefined;
   private unlisten: (() => void) | undefined;
+  private stopSurfaces: (() => void) | undefined;
   private disposed = false;
 
   // ---- derived views -------------------------------------------------------
@@ -228,6 +229,7 @@ export class WorkspaceStore {
   async start(): Promise<void> {
     this.restoreUiState();
     void this.loadPreferences();
+    void this.startExtensionSurfaces();
     try {
       this.unlisten = await workspaceHost.listen((event) => this.enqueueEvent(event));
       if (this.disposed) {
@@ -251,6 +253,20 @@ export class WorkspaceStore {
     this.persistDraftsNow();
     this.disposed = true;
     this.unlisten?.();
+    this.stopSurfaces?.();
+  }
+
+  /** Extension notices, statuses and widgets of native sessions; loaded off the first-paint path. */
+  private async startExtensionSurfaces(): Promise<void> {
+    try {
+      const { extensionSurfaces } = await import('./chat/extensions/extensionSurfaces.svelte');
+      if (this.disposed) return;
+      const stop = await extensionSurfaces.start(this);
+      if (this.disposed) stop();
+      else this.stopSurfaces = stop;
+    } catch {
+      // Chats work without extension surfaces; approvals still arrive through v15.
+    }
   }
 
   // ---- navigation -----------------------------------------------------------
