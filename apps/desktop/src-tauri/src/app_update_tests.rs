@@ -95,7 +95,7 @@ fn incomplete_or_unsafe_sections_keep_updates_off() {
         (
             section(
                 &key,
-                json!(["https://user:secret@updates.example.test/latest.json"]),
+                json!(["https://user:secret@example.test/latest.json"]),
             ),
             GateRefusal::Endpoints,
         ),

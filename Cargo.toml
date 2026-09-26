@@ -17,7 +17,7 @@ edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 authors = ["PiUI contributors"]
-description = "A minimal desktop shell for Pi sessions"
+description = "A desktop workbench for native agent harnesses and multi-agent pipelines"
 keywords = ["pi", "tauri", "desktop", "agent"]
 categories = ["development-tools", "gui"]
 
