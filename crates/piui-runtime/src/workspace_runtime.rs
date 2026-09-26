@@ -4,6 +4,7 @@
 //! workspace ids before any WebView IPC. The bridge owns no model or tool loop.
 
 use crate::codec::{RpcCodec, RpcCodecConfig};
+use crate::native_version::{CODEX_APP_SERVER, VersionCheck};
 use crate::real_rpc::resolve_pi_launch;
 #[cfg(any(unix, windows))]
 use piui_platform::ProcessContainment;
@@ -1692,7 +1693,10 @@ fn resolve_harness_launch_for_config(
 ) -> Result<ResolvedHarnessLaunch, NativeRuntimeError> {
     if config.harness == HarnessKind::Codex {
         let launch = resolve_harness_launch(HarnessKind::Codex)?;
-        if !matches!(launch.version.as_deref(), Some("0.147.0" | "0.153.4")) {
+        if !CODEX_APP_SERVER
+            .check(launch.version.as_deref())
+            .is_verified()
+        {
             return Err(NativeRuntimeError::HarnessUnavailable);
         }
         return Ok(launch);
@@ -1964,17 +1968,22 @@ pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
             let expected = match kind {
                 HarnessKind::Pi => None,
                 HarnessKind::PrimeAgent => Some("0.9.2"),
-                HarnessKind::Codex => Some("0.147.0"),
+                // Codex is checked against its verified version range below.
+                HarnessKind::Codex => None,
                 HarnessKind::Hermes => Some("0.21.0"),
             };
             let version_supported = expected.is_none_or(|expected| {
                 launch.version.as_deref() == Some(expected)
-                    || (kind == HarnessKind::Codex && launch.version.as_deref() == Some("0.153.4"))
                     || (kind == HarnessKind::PrimeAgent
                         && launch.version.as_deref() == Some("0.9.3"))
             });
+            let codex_version_reason = (kind == HarnessKind::Codex)
+                .then(|| CODEX_APP_SERVER.check(launch.version.as_deref()))
+                .and_then(VersionCheck::unverified_reason);
             let platform_verified = cfg!(windows);
-            let (status, reason) = if !version_supported {
+            let (status, reason) = if let Some(reason) = codex_version_reason {
+                (HarnessAvailability::Unverified, Some(reason.into()))
+            } else if !version_supported {
                 (
                     HarnessAvailability::Unverified,
                     Some(

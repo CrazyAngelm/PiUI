@@ -1016,10 +1016,11 @@ export async function runWorkspaceWebview2Proof({
   checks.push(unavailable.length ? 'honest-harness-unavailable-state' : 'all-installed-harnesses-available');
 
   begin('nativeLifecycle');
+  // The host reports Codex as available only inside its verified version range.
   const eligible = catalog.harnesses.find((item) =>
     item.status === 'available'
-    && ((item.kind === 'prime-agent' && item.version === '0.9.2') || (item.kind === 'codex' && ['0.147.0', '0.153.4'].includes(item.version))));
-  assertion(eligible, 'No eligible prompt-free native lifecycle adapter is available: require Prime Agent SDK 0.9.2 with the host isolated-daemon guard, or Codex app-server 0.147.0.');
+    && ((item.kind === 'prime-agent' && item.version === '0.9.2') || item.kind === 'codex'));
+  assertion(eligible, 'No eligible prompt-free native lifecycle adapter is available: require Prime Agent SDK 0.9.2 with the host isolated-daemon guard, or a Codex app-server inside the verified version range.');
   // The sidebar also has a Harness filter; choose the creation form's control.
   await setControl('#new-session-project', workspace.id, 'change');
   await setControl('#new-session-harness', eligible.kind, 'change');

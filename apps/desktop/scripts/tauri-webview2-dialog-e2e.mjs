@@ -378,13 +378,15 @@ function exposeNativeCodeForWorkspaceFixture(fixture) {
   const realNpmRoot = process.env.APPDATA ? join(process.env.APPDATA, 'npm', 'node_modules') : undefined;
   const fixtureNpmRoot = join(fixture.appDataRoaming, 'npm', 'node_modules');
   mkdirSync(fixtureNpmRoot, { recursive: true });
-  for (const [name, versions] of [['prime-agent', ['0.9.2', '0.9.3']], ['@openai/codex', ['0.147.0', '0.153.4']]]) {
+  // Codex is exposed at any version: the host itself reports versions outside
+  // its verified range as unverified and refuses to launch them.
+  for (const [name, versions] of [['prime-agent', ['0.9.2', '0.9.3']], ['@openai/codex', undefined]]) {
     if (!realNpmRoot) continue;
     const candidate = join(realNpmRoot, name);
     const manifestPath = join(candidate, 'package.json');
     if (!existsSync(manifestPath)) continue;
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-    if (manifest.name !== name || !versions.includes(manifest.version)) continue;
+    if (manifest.name !== name || (versions && !versions.includes(manifest.version))) continue;
     const destination = join(fixtureNpmRoot, name);
     mkdirSync(dirname(destination), { recursive: true });
     symlinkSync(realpathSync(candidate), destination, 'junction');

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
-import { toNamespacedPath } from "node:path";
+import { isAbsolute, toNamespacedPath } from "node:path";
 import test from "node:test";
 import { createCodexAdapter } from "./codex.mjs";
 
@@ -172,7 +174,9 @@ test("renders web search items as safe tool activity and keeps other unknown typ
     assert.match(webSearch.text, /Action: search/);
     assert.match(webSearch.text, /Results: 1/);
     assert.doesNotMatch(webSearch.text, /SECRET-MUST-NOT-LEAK/);
-    for (const type of ["collabAgentToolCall", "imageView", "imageGeneration"]) {
+    // Item types without a dedicated projection (including 0.153's
+    // functionCallOutput) stay readable through the generic fallback.
+    for (const type of ["collabAgentToolCall", "imageView", "imageGeneration", "sleep", "subAgentActivity", "hookPrompt", "functionCallOutput"]) {
       const block = adapter.snapshot().blocks.find((value) => value.id === `unsupported-${type}`);
       assert.equal(block.kind, "unknown");
       assert.equal(block.fallback, true);
@@ -390,12 +394,43 @@ test("fails closed for unsupported mandatory policy", async () => {
     (error) => error.bridgeCode === "unsupported-permission-mode",
   );
   await assert.rejects(
-    createCodexAdapter({ ...config, runtimeArgs: [fixture, "--wrong-version"] }, () => {}),
-    (error) => error.bridgeCode === "unsupported-native-version",
-  );
-  await assert.rejects(
     createCodexAdapter({ ...config, runtimeProgram: "piui-definitely-missing-codex" }, () => {}),
     (error) => error.bridgeCode === "native-unavailable",
+  );
+});
+
+test("admits app-server versions only inside the verified range", async () => {
+  // Audited protocols (0.147.0, 0.153.4, 0.157.1) and releases between them.
+  for (const version of ["0.147.0", "0.148.0", "0.153.4", "0.157.1", "0.157.1-alpha", "0.157.9"]) {
+    const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, `--codex-version=${version}`] }, () => {});
+    try { assert.equal(adapter.snapshot().status, "idle", version); }
+    finally { await adapter.dispose(); }
+  }
+  const rejected = [
+    // Older than the minimum; a pre-release precedes its release.
+    ["0.146.9", /requires a verified Codex/],
+    ["0.147.0-alpha.1", /requires a verified Codex/],
+    // Newer than tested, including previews of the untested release line.
+    ["0.158.0", /newer than the versions tested/],
+    ["0.158.0-alpha.2", /newer than the versions tested/],
+    ["0.159.0-alpha.4", /newer than the versions tested/],
+    ["1.0.0", /newer than the versions tested/],
+    // Only the leading product token names Codex: the trailing client version
+    // `(piui; 0.1.1)` never stands in for an unrecognized Codex version.
+    ["latest", /requires a verified Codex/],
+  ];
+  for (const [version, message] of rejected) {
+    const events = [];
+    await assert.rejects(
+      createCodexAdapter({ ...config, runtimeArgs: [fixture, `--codex-version=${version}`] }, (event) => events.push(event)),
+      (error) => error.bridgeCode === "unsupported-native-version" && message.test(error.safeMessage),
+      version,
+    );
+    assert.equal(events.some((event) => event.type === "binding"), false, version);
+  }
+  await assert.rejects(
+    createCodexAdapter({ ...config, runtimeArgs: [fixture, "--raw-user-agent"] }, () => {}),
+    (error) => error.bridgeCode === "unsupported-native-version",
   );
 });
 
@@ -440,7 +475,9 @@ test("MCP recovery clears its resource warning", async () => {
   const events = [];
   const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--mcp-recovery"] }, event => events.push(event));
   try {
-    assert.equal(events.some(event => event.type === "error"), false);
+    // Only MCP errors matter here: the fixture's unsupported attestation request
+    // may or may not have produced its own error by this point.
+    assert.equal(events.some(event => event.type === "error" && /MCP/.test(event.message)), false);
     assert.equal((await adapter.resources()).warnings.some(warning => warning.includes("fixture")), false);
   } finally { await adapter.dispose(); }
 });
@@ -460,7 +497,7 @@ test("ordinary Codex settings change Fast and reasoning without transcript noise
 });
 
 test("retains the native current model and reasoning metadata when hidden from discovery", async () => {
-  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, '--latest-version', '--hidden-current-model'] }, () => {});
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, '--codex-version=0.153.4', '--hidden-current-model'] }, () => {});
   try { assert.deepEqual(await adapter.models(), [{ id: 'fixture-model', provider: 'openai', name: 'Hidden current', thinkingLevels: ['low', 'ultra'] }]); }
   finally { await adapter.dispose(); }
 });
@@ -480,4 +517,178 @@ test('account quota updates stay out of the transcript without hiding unknown co
     assert.ok(!JSON.stringify(adapter.snapshot().blocks).includes('account/rateLimits/updated'));
     assert.ok(adapter.snapshot().blocks.some(block => block.safeSummary === 'Unsupported Codex event: future/conversation/event'));
   } finally { await adapter.dispose(); }
+});
+
+for (const version of ["0.147.0", "0.153.4", "0.157.1"]) {
+  test(`keeps the session flow and settings in sync on the ${version} protocol`, async () => {
+    const events = [];
+    const adapter = await createCodexAdapter({
+      ...config,
+      runtimeArgs: [fixture, `--codex-version=${version}`, "--external-settings", "--mcp-startup"],
+    }, (event) => events.push(event));
+    try {
+      await waitFor(() => adapter.snapshot().approvals.length === 2);
+      const command = adapter.snapshot().approvals.find((approval) => approval.kind === "command");
+      assert.equal(command.title, "Run command");
+      await adapter.respond({ requestId: command.id, decision: "approve-once" });
+      await waitFor(() => adapter.snapshot().title === "command:accept");
+      assert.deepEqual((await adapter.resources()).warnings, ["MCP server fixture could not start."]);
+      assert.deepEqual(await adapter.prompt({ text: "fixture prompt", mode: "prompt" }), { accepted: true });
+      await waitFor(() => events.some((event) => event.type === "turnCompleted"));
+      // Another client changed the thread settings; the snapshot follows the
+      // nested `threadSettings` (with `effort`) that every version sends.
+      const snapshot = adapter.snapshot();
+      assert.deepEqual(snapshot.model, { id: "fixture-model-2", provider: "openai", name: "fixture-model-2" });
+      assert.equal(snapshot.thinkingLevel, "high");
+      assert.equal(snapshot.serviceTier, "fast");
+      // Only the fixture's generic `warning` stays on the fallback path.
+      assert.deepEqual(snapshot.blocks.filter((block) => block.fallback).map((block) => block.safeSummary), ["Unsupported Codex event: warning"]);
+      assert.deepEqual(events.filter((event) => event.type === "turnCompleted"), [{ type: "turnCompleted", outcome: "succeeded" }]);
+    } finally { await adapter.dispose(); }
+  });
+}
+
+test("configuration and deprecation warnings become fixed resource warnings", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--config-warning", "--deprecation-notice"] }, (event) => events.push(event));
+  try {
+    assert.equal(adapter.snapshot().blocks.some((block) => /configWarning|deprecationNotice/.test(block.safeSummary ?? "")), false);
+    assert.deepEqual((await adapter.resources()).warnings, [
+      "Codex reported a configuration warning. Review your Codex config.toml.",
+      "Codex reported a deprecated setting or feature. Review your Codex configuration.",
+    ]);
+    const visible = JSON.stringify({ events, snapshot: adapter.snapshot(), resources: await adapter.resources() });
+    assert.doesNotMatch(visible, /PRIVATE_CONFIG|PRIVATE_DEPRECATION/);
+    // The fixture's unsupported attestation request is the only session error.
+    assert.deepEqual(events.filter((event) => event.type === "error").map((event) => event.message), ["Codex requested an unsupported host operation."]);
+  } finally { await adapter.dispose(); }
+});
+
+test("presents a write-stdin approval as terminal input, not a new command", async () => {
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--write-stdin"] }, () => {});
+  try {
+    const stdin = await waitFor(() => adapter.snapshot().approvals.find((approval) => approval.title === "Send input to a running command"));
+    assert.equal(stdin.kind, "command");
+    assert.match(stdin.description, /^Terminal input: write_stdin --session-id 7 'y'$/m);
+    assert.doesNotMatch(stdin.description, /^Command:/m);
+    assert.deepEqual(stdin.decisions, ["approve-once", "cancel"]);
+    await adapter.respond({ requestId: stdin.id, decision: "approve-once" });
+    await waitFor(() => adapter.snapshot().title === "stdin:accept");
+    assert.equal(adapter.snapshot().approvals.find((approval) => approval.kind === "command").title, "Run command");
+  } finally { await adapter.dispose(); }
+});
+
+test("grants a requested permission profile for the session only when approved", async () => {
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--permissions-request"] }, () => {});
+  try {
+    const request = await waitFor(() => adapter.snapshot().approvals.find((approval) => approval.kind === "permission"));
+    assert.equal(request.title, "Grant permissions");
+    assert.match(request.description, /Additional network access requested/);
+    await adapter.respond({ requestId: request.id, decision: "approve-session" });
+    await waitFor(() => adapter.snapshot().title === "permissions:session");
+  } finally { await adapter.dispose(); }
+});
+
+test("answers the current-time request for the thread and its descendants", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--current-time"] }, (event) => events.push(event));
+  try {
+    await waitFor(() => adapter.snapshot().title.startsWith("time:"));
+    assert.equal(adapter.snapshot().title, "time:ok,ok");
+    assert.equal(events.some((event) => event.type === "error" && /unsupported host operation/.test(event.message)), true, "attestation stays unsupported");
+    assert.equal(events.filter((event) => event.type === "error").length, 1);
+  } finally { await adapter.dispose(); }
+});
+
+test("maps the 0.153+ rate-limit and policy turn errors to fixed summaries", async () => {
+  for (const [text, message] of [
+    ["rate limit fixture", "A Codex usage limit prevents this turn."],
+    ["policy fixture", "Codex blocked this turn under provider policy."],
+  ]) {
+    const events = [];
+    const adapter = await createCodexAdapter(config, (event) => events.push(event));
+    try {
+      await adapter.prompt({ text, mode: "prompt" });
+      await waitFor(() => events.some((event) => event.type === "turnCompleted"));
+      assert.deepEqual(events.filter((event) => event.type === "turnCompleted"), [{ type: "turnCompleted", outcome: "failed" }]);
+      assert.ok(events.some((event) => event.type === "error" && event.message === message), text);
+      assert.equal(JSON.stringify(events).includes("raw fixture"), false);
+    } finally { await adapter.dispose(); }
+  }
+});
+
+test("a cancelled MCP startup clears its earlier failure warning", async () => {
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--mcp-cancelled"] }, () => {});
+  try { assert.deepEqual((await adapter.resources()).warnings, []); }
+  finally { await adapter.dispose(); }
+});
+
+// Real evidence, never part of the default run: set PIUI_CODEX_LIVE_HANDSHAKE
+// to the absolute path of the installed `@openai/codex/bin/codex.js`. Only
+// `initialize` reaches the real app-server. The bridge writes `initialized`
+// only after its version check passed; the probe records that, closes the
+// app-server and refuses to forward anything else, so no thread or turn starts.
+const liveEntry = process.env.PIUI_CODEX_LIVE_HANDSHAKE;
+test("live: the installed Codex app-server passes the bridge handshake (initialize only)", {
+  skip: liveEntry ? false : "set PIUI_CODEX_LIVE_HANDSHAKE to the installed bin/codex.js",
+}, async (t) => {
+  assert.ok(isAbsolute(liveEntry), "PIUI_CODEX_LIVE_HANDSHAKE must be an absolute path");
+  const forwarded = [];
+  let accepted = false;
+  let product;
+  let real;
+  const openChild = (program, args, options) => {
+    real = spawn(program, args, options);
+    let buffered = "";
+    real.stdout.on("data", (chunk) => {
+      buffered += chunk.toString("utf8");
+      const response = buffered.split("\n").map((line) => { try { return JSON.parse(line); } catch { return undefined; } })
+        .find((message) => message?.id === "piui-1" && message.result);
+      if (response && typeof response.result.userAgent === "string") product ??= response.result.userAgent.split(/\s+/, 1)[0];
+    });
+    // Killing only the Node launcher could orphan the native app-server on
+    // Windows, so every close path ends its stdin and `exited` bounds the wait.
+    const closeReal = () => {
+      if (!real.stdin.destroyed && !real.stdin.writableEnded) real.stdin.end();
+    };
+    const stdin = new EventEmitter();
+    stdin.writable = true;
+    stdin.write = (frame, callback) => {
+      const message = JSON.parse(frame);
+      forwarded.push(message.method);
+      if (message.method === "initialize") return real.stdin.write(frame, callback);
+      if (message.method === "initialized") {
+        accepted = true;
+        stdin.writable = false;
+        closeReal();
+        callback?.();
+        return true;
+      }
+      callback?.(new Error("the live probe forwards only initialize"));
+      return false;
+    };
+    stdin.end = () => { stdin.writable = false; closeReal(); };
+    stdin.destroy = stdin.end;
+    const proxy = new EventEmitter();
+    Object.assign(proxy, { stdin, stdout: real.stdout, stderr: real.stderr, kill: closeReal });
+    real.once("error", (error) => proxy.emit("error", error));
+    real.once("close", (...values) => { stdin.emit("close"); proxy.emit("close", ...values); });
+    return proxy;
+  };
+  const exited = () => new Promise((resolve) => {
+    if (!real || real.exitCode !== null || real.signalCode !== null) return resolve();
+    const timer = setTimeout(() => { real.kill(); resolve(); }, 10000);
+    real.once("close", () => { clearTimeout(timer); resolve(); });
+  });
+  try {
+    await assert.rejects(
+      createCodexAdapter({ ...config, runtimeArgs: [liveEntry] }, () => {}, undefined, openChild),
+      (error) => error.bridgeCode !== "unsupported-native-version",
+    );
+  } finally {
+    await exited();
+  }
+  t.diagnostic(`installed app-server product token: ${product}`);
+  assert.ok(accepted, "the bridge must accept the installed version before any thread request");
+  assert.deepEqual(forwarded.slice(0, 2), ["initialize", "initialized"]);
 });

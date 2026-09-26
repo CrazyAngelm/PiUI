@@ -22,6 +22,22 @@ const settingsIndex = process.argv.indexOf("--expect-settings");
 const expectedSettings = settingsIndex >= 0 ? JSON.parse(process.argv[settingsIndex + 1]) : undefined;
 const unknownItemsFixture = process.argv.includes("--unknown-items");
 const toolItemsFixture = process.argv.includes("--tool-items");
+// Emulated app-server version (default: the newest verified protocol). Shapes
+// that changed between versions follow it; see CONTRACT.md (Codex section).
+const codexVersion = process.argv.find((argument) => argument.startsWith("--codex-version="))?.slice("--codex-version=".length) ?? "0.157.1";
+const [versionMajor, versionMinor] = codexVersion.split(".").map((part) => Number.parseInt(part, 10));
+const protocolAtLeast = (minor) => versionMajor > 0 || versionMinor >= minor;
+const timeReplies = {};
+// Every verified version nests the effective ThreadSettings (`effort`, not
+// `reasoningEffort`); 0.157 adds `disabledPluginIds`.
+const settingsUpdated = ({ model, effort, serviceTier }) => ({ threadId, threadSettings: {
+  ...(protocolAtLeast(157) ? { disabledPluginIds: [] } : {}),
+  cwd: process.cwd(), approvalPolicy: "on-request", approvalsReviewer: "user",
+  sandboxPolicy: { type: "readOnly", networkAccess: false }, activePermissionProfile: null,
+  model, modelProvider: "openai", serviceTier: serviceTier ?? null, effort: effort ?? null, summary: null,
+  collaborationMode: { mode: "default", settings: { model, reasoning_effort: effort ?? null, developer_instructions: null } },
+  multiAgentMode: "explicitRequestOnly", personality: null,
+} });
 
 const permissionMatches = (params) => {
   if (expectedPermission === "native") return params.permissions === undefined && params.approvalPolicy === undefined;
@@ -34,19 +50,40 @@ input.on("line", (line) => {
   const message = JSON.parse(line);
   if (poolFixture && message.params?.threadId) threadId = message.params.threadId;
   if (message.method === "initialize") {
-    const userAgent = process.argv.includes("--wrong-version") ? "fixture/0.148.0" : process.argv.includes("--latest-version") ? "fixture/0.153.4" : "fixture/0.147.0";
+    // Real shape: `<client name>/<codex version> (<os>; <arch>) <terminal> (<client name>; <client version>)`.
+    const userAgent = process.argv.includes("--raw-user-agent")
+      ? codexVersion
+      : `${message.params?.clientInfo?.name}/${codexVersion} (Fixture OS 1.0; x86_64) fixture-terminal (${message.params?.clientInfo?.name}; ${message.params?.clientInfo?.version})`;
     send({ id: message.id, result: { userAgent, codexHome: "/fixture", platformFamily: "fixture", platformOs: "fixture" } });
+    // Observed from the real 0.157.1 app-server right after the initialize
+    // response, before `initialized`: remote-control state and, for a user
+    // config.toml with unrecognized keys, a configuration warning.
+    if (protocolAtLeast(157)) {
+      send({ method: "remoteControl/status/changed", params: { status: "disabled", serverName: "fixture", installationId: "fixture-installation", environmentId: null } });
+    }
+    if (process.argv.includes("--config-warning")) {
+      send({ method: "configWarning", params: { summary: "PRIVATE_CONFIG_DETAIL `features.fixture` is ignored.", details: null, path: "C:\\PRIVATE_CONFIG_PATH\\config.toml" } });
+    }
+    if (process.argv.includes("--deprecation-notice")) {
+      send({ method: "deprecationNotice", params: { summary: "PRIVATE_DEPRECATION_DETAIL", details: null } });
+    }
   } else if (message.method === "initialized") {
     if (process.argv.includes("--rate-limits")) {
       send({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 20 } } } });
       send({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 21 } } } });
       send({ method: "future/conversation/event", params: {} });
     }
+    // MCP startup is scoped to the thread runtime (`threadId`, all verified
+    // versions), so the bridge must defer these until its thread is known.
+    const mcpScope = { threadId, failureReason: null };
     if (process.argv.includes("--mcp-startup")) {
-      for (const status of ["starting", "ready", "failed"]) send({ method: "mcpServer/startupStatus/updated", params: { name: "fixture", status, error: "PRIVATE_MCP_DETAIL" } });
+      for (const status of ["starting", "ready", "failed"]) send({ method: "mcpServer/startupStatus/updated", params: { ...mcpScope, name: "fixture", status, error: "PRIVATE_MCP_DETAIL" } });
     }
     if (process.argv.includes("--mcp-recovery")) {
-      for (const status of ["starting", "failed", "ready"]) send({ method: "mcpServer/startupStatus/updated", params: { name: "fixture", status, error: "PRIVATE_MCP_DETAIL" } });
+      for (const status of ["starting", "failed", "ready"]) send({ method: "mcpServer/startupStatus/updated", params: { ...mcpScope, name: "fixture", status, error: "PRIVATE_MCP_DETAIL" } });
+    }
+    if (process.argv.includes("--mcp-cancelled")) {
+      for (const status of ["starting", "failed", "cancelled"]) send({ method: "mcpServer/startupStatus/updated", params: { ...mcpScope, name: "fixture", status, error: "PRIVATE_MCP_DETAIL" } });
     }
     // Handshake notification has no response.
   } else if (message.method === "thread/start" || message.method === "thread/resume") {
@@ -100,15 +137,28 @@ input.on("line", (line) => {
     } });
     send({ method: "item/started", params: { threadId, turnId: "turn-approval", startedAtMs: 1, item: { type: "fileChange", id: "file-item", changes: [{ path: "/workspace/file.txt", kind: { type: "update", move_path: null }, diff: "+fixture" }], status: "inProgress" } } });
     send({ method: "item/fileChange/patchUpdated", params: { threadId, turnId: "turn-approval", itemId: "file-item", changes: [{ path: "/workspace/file.txt", kind: { type: "update", move_path: null }, diff: "+updated" }] } });
-    send({ method: "item/commandExecution/requestApproval", id: 900, params: { threadId, turnId: "turn-approval", itemId: "command-item", startedAtMs: 1, environmentId: null, command: "fixture command", cwd: "/workspace", reason: "fixture reason", networkApprovalContext: { host: "example.invalid", protocol: "https" }, additionalPermissions: { network: { enabled: true }, fileSystem: { read: [], write: ["/workspace/out"], entries: [] } }, availableDecisions: ["accept", { acceptWithExecpolicyAmendment: { execpolicy_amendment: { command: ["fixture", "command"] } } }, "acceptForSession", "decline", "cancel"] } });
+    // 0.153 added `kind` ("command" | "writeStdin") to command approvals.
+    const commandKind = protocolAtLeast(153) ? { kind: "command" } : {};
+    send({ method: "item/commandExecution/requestApproval", id: 900, params: { ...commandKind, threadId, turnId: "turn-approval", itemId: "command-item", startedAtMs: 1, environmentId: null, command: "fixture command", cwd: "/workspace", reason: "fixture reason", networkApprovalContext: { host: "example.invalid", protocol: "https" }, additionalPermissions: { network: { enabled: true }, fileSystem: { read: [], write: ["/workspace/out"], entries: [] } }, availableDecisions: ["accept", { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["fixture", "command"] } }, "acceptForSession", "decline", "cancel"] } });
     send({ method: "item/fileChange/requestApproval", id: 901, params: { threadId, turnId: "turn-approval", itemId: "file-item", startedAtMs: 2, reason: "fixture edit" } });
     send({ method: "attestation/generate", id: 902, params: {} });
+    if (process.argv.includes("--current-time")) {
+      send({ method: "currentTime/read", id: 930, params: { threadId } });
+      send({ method: "currentTime/read", id: 931, params: { threadId: "child-thread" } });
+    }
+    if (process.argv.includes("--permissions-request")) {
+      send({ method: "item/permissions/requestApproval", id: 950, params: { threadId, turnId: "turn-approval", itemId: "permissions-item", environmentId: null, startedAtMs: 4, cwd: "/workspace", reason: "fixture network", permissions: { network: { enabled: true }, fileSystem: null } } });
+    }
+    if (process.argv.includes("--write-stdin") && protocolAtLeast(153)) {
+      // write_stdin_approval: `command` is the shell-joined write request.
+      send({ method: "item/commandExecution/requestApproval", id: 940, params: { kind: "writeStdin", threadId, turnId: "turn-approval", itemId: "command-item", approvalId: "stdin-call", startedAtMs: 3, environmentId: null, command: "write_stdin --session-id 7 'y'", cwd: "/workspace", availableDecisions: ["accept", "cancel"] } });
+    }
     if (childEventsFixture) {
       send({ method: "thread/started", params: { thread: { id: "child-thread", path: "/fixture/child.jsonl" } } });
       send({ method: "turn/started", params: { threadId: "child-thread", turn: { id: "child-turn", status: "inProgress", items: [] } } });
       send({ method: "item/started", params: { threadId: "child-thread", turnId: "child-turn", startedAtMs: 5, item: { type: "agentMessage", id: "child-item", text: "child secret", phase: null, memoryCitation: null } } });
       send({ method: "turn/completed", params: { threadId: "child-thread", turn: { id: "child-turn", status: "completed", items: [] } } });
-      send({ method: "item/commandExecution/requestApproval", id: 920, params: { threadId: "child-thread", turnId: "child-turn", itemId: "child-command", startedAtMs: 6, environmentId: null, command: "child command", availableDecisions: ["accept", "decline", "cancel"] } });
+      send({ method: "item/commandExecution/requestApproval", id: 920, params: { ...commandKind, threadId: "child-thread", turnId: "child-turn", itemId: "child-command", startedAtMs: 6, environmentId: null, command: "child command", availableDecisions: ["accept", "decline", "cancel"] } });
     }
     if (userInputFixture) {
       send({ method: "item/tool/requestUserInput", id: 905, params: { threadId, turnId: "turn-input", itemId: "input-item", isBlocking: true, autoResolutionMs: null, questions: [{ id: "choice", header: "Choose mode", question: "Which mode should Codex use?", isOther: false, isSecret: false, options: [{ label: "Safe", description: "Use safe mode" }] }] } });
@@ -116,7 +166,8 @@ input.on("line", (line) => {
     }
     if (unknownItemsFixture) {
       send({ method: "item/started", params: { threadId, turnId: "turn-items", startedAtMs: 7, item: { type: "commandExecution", id: "command-display", command: "display command", cwd: process.cwd(), aggregatedOutput: "", status: "inProgress" } } });
-      for (const type of ["collabAgentToolCall", "imageView", "imageGeneration"]) {
+      // ThreadItem types without a dedicated projection; 0.153 added functionCallOutput.
+      for (const type of ["collabAgentToolCall", "imageView", "imageGeneration", "sleep", "subAgentActivity", "hookPrompt", ...(protocolAtLeast(153) ? ["functionCallOutput"] : [])]) {
         send({ method: "item/started", params: { threadId, turnId: "turn-items", startedAtMs: 8, item: { type, id: `unsupported-${type}`, status: "inProgress" } } });
       }
       send({ method: "item/started", params: { threadId, turnId: "turn-items", startedAtMs: 8, item: {
@@ -183,6 +234,19 @@ input.on("line", (line) => {
     send({ method: "thread/name/updated", params: { threadId, threadName: "file:cancel" } });
   } else if (message.id === 902 && message.error?.code === -32601) {
     send({ method: "warning", params: { threadId, message: "unsupported request rejected" } });
+  } else if (message.id === 930 || message.id === 931) {
+    const now = Math.floor(Date.now() / 1000);
+    timeReplies[message.id] = Number.isSafeInteger(message.result?.currentTimeAt)
+      && Math.abs(message.result.currentTimeAt - now) <= 5
+      && Object.keys(message.result).join(",") === "currentTimeAt" ? "ok" : "invalid";
+    if (timeReplies[930] && timeReplies[931]) send({ method: "thread/name/updated", params: { threadId, threadName: `time:${timeReplies[930]},${timeReplies[931]}` } });
+  } else if (message.id === 950) {
+    const granted = message.result?.scope === "session" && message.result?.permissions?.network?.enabled === true;
+    send({ method: "serverRequest/resolved", params: { threadId, requestId: 950 } });
+    send({ method: "thread/name/updated", params: { threadId, threadName: `permissions:${granted ? "session" : "other"}` } });
+  } else if (message.id === 940 && message.result?.decision === "accept") {
+    send({ method: "serverRequest/resolved", params: { threadId, requestId: 940 } });
+    send({ method: "thread/name/updated", params: { threadId, threadName: "stdin:accept" } });
   } else if (message.id === 920 && message.result?.decision === "cancel") {
     send({ method: "thread/name/updated", params: { threadId, threadName: "child:cancelled" } });
   } else if (message.id === 905 && message.result?.answers?.choice?.answers?.[0] === "Safe") {
@@ -214,9 +278,15 @@ input.on("line", (line) => {
     send({ method: "item/completed", params: { threadId, turnId: "turn-fixture", completedAtMs: 4, item: { type: "agentMessage", id: "agent-fixture", text: responseText, phase: null, memoryCitation: null } } });
     if (!holdTurnFixture) {
       const requestedText = message.params.input?.[0]?.text;
-      const finalStatus = requestedText === "fail fixture" ? "failed" : "completed";
+      // `rateLimitExceeded` and `misalignmentPolicyViolation` are 0.153+ error infos.
+      const failureInfo = { "fail fixture": "unauthorized", "rate limit fixture": "rateLimitExceeded", "policy fixture": "misalignmentPolicyViolation" }[requestedText];
+      const finalStatus = failureInfo ? "failed" : "completed";
       send({ method: "thread/tokenUsage/updated", params: { threadId, tokenUsage: { total: {inputTokens:10,outputTokens:4,cachedInputTokens:2,totalTokens:14} } } });
-      send({ method: "turn/completed", params: { threadId, turn: { id: "turn-fixture", status: finalStatus, items: [], ...(finalStatus === "failed" ? { error: { message: "raw fixture secret", codexErrorInfo: "unauthorized", additionalDetails: "raw fixture detail" } } : {}) } } });
+      if (process.argv.includes("--external-settings")) {
+        // Settings changed by another client of the same thread.
+        send({ method: "thread/settings/updated", params: settingsUpdated({ model: "fixture-model-2", effort: "high", serviceTier: "fast" }) });
+      }
+      send({ method: "turn/completed", params: { threadId, turn: { id: "turn-fixture", status: finalStatus, items: [], ...(failureInfo ? { error: { message: "raw fixture secret", codexErrorInfo: failureInfo, additionalDetails: "raw fixture detail" } } : {}) } } });
     }
   } else if (message.method === "thread/unsubscribe") {
     send({id:message.id,result:{status:'unsubscribed'}});
@@ -246,7 +316,7 @@ input.on("line", (line) => {
     send({ id: message.id, result: { turnId: message.params.expectedTurnId } });
   } else if (message.method === "thread/settings/update" || message.method === "thread/name/set" || message.method === "turn/interrupt") {
     send({ id: message.id, result: {} });
-    if (message.method === "thread/settings/update") send({ method: "thread/settings/updated", params: { threadId, model: message.params.model, reasoningEffort: message.params.effort, serviceTier: message.params.serviceTier } });
+    if (message.method === "thread/settings/update") send({ method: "thread/settings/updated", params: settingsUpdated({ model: message.params.model, effort: message.params.effort, serviceTier: message.params.serviceTier }) });
     if (message.method === "thread/name/set") send({ method: "thread/name/updated", params: { threadId, threadName: message.params.name } });
     if (message.method === "turn/interrupt" && holdTurnFixture) send({ method: "turn/completed", params: { threadId, turn: { id: "turn-fixture", status: "interrupted", items: [] } } });
   } else if (message.id !== undefined) {

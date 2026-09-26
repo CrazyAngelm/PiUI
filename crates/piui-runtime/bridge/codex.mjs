@@ -40,7 +40,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     throw fail("coordinator-unavailable", "The managed Codex coordinator is unavailable.");
   }
   if (coordinationEnabled && config.nativeId) {
-    throw fail("unsupported-coordinator-resume", "Codex 0.147.0 cannot re-register the managed workspace tool while resuming.");
+    throw fail("unsupported-coordinator-resume", "Codex app-server thread/resume cannot re-register the managed workspace tool.");
   }
   if (coordinationEnabled && config.nativeSubagents === true) {
     throw fail("unsupported-managed-native-subagents", "Managed Codex runs use coordinator-only spawning and cannot also enable native subagents.");
@@ -48,6 +48,34 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   if (config.nativeSubagents === true) {
     throw fail("unsupported-native-subagent-policy", "Codex cannot prove that native subagents are enabled for this session.");
   }
+
+  // Verified Codex app-server range, mirrored from CODEX_APP_SERVER in
+  // crates/piui-runtime/src/native_version.rs (a Rust unit test keeps both
+  // equal): minimum <= version < ceiling on MAJOR.MINOR.PATCH. A pre-release
+  // precedes its release; one at or above the ceiling previews an untested
+  // release line and is newer than tested. See CONTRACT.md (Codex section).
+  const VERIFIED_CODEX_VERSIONS = { minimum: "0.147.0", ceiling: "0.158.0" };
+  const parseVersion = (text) => {
+    const match = /^v?(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(text);
+    if (!match) return undefined;
+    const core = match.slice(1, 4).map(Number);
+    return core.every(Number.isSafeInteger) ? { core, prerelease: match[4] !== undefined } : undefined;
+  };
+  // The initialize user agent is `<originator>/<version> (<os>; <arch>) ...
+  // (<client name>; <client version>)`; only the first token names Codex.
+  const userAgentVersion = (userAgent) => {
+    const product = userAgent.trim().split(/\s+/, 1)[0] ?? "";
+    const slash = product.lastIndexOf("/");
+    return slash > 0 ? parseVersion(product.slice(slash + 1)) : undefined;
+  };
+  const compareCore = (left, right) => left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
+  const checkCodexVersion = (version) => {
+    if (!version) return "unrecognized";
+    const minimum = compareCore(version.core, parseVersion(VERIFIED_CODEX_VERSIONS.minimum).core);
+    if (minimum < 0 || (minimum === 0 && version.prerelease)) return "older";
+    if (compareCore(version.core, parseVersion(VERIFIED_CODEX_VERSIONS.ceiling).core) >= 0) return "newer";
+    return "verified";
+  };
 
   const MAX_FRAME_BYTES = 32 * 1024 * 1024;
   const pending = new Map();
@@ -82,6 +110,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   let modelCatalog = [];
   const modelDefaults = new Map();
   const mcpStartupFailures = new Set();
+  const controlPlaneWarnings = new Set();
   let serviceTier = config.serviceTier;
 
   const setStatus = (next) => {
@@ -146,14 +175,14 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     const detail = tag && typeof info?.[tag] === "object" ? info[tag] : undefined;
     const httpStatus = Number.isInteger(detail?.httpStatusCode) ? detail.httpStatusCode : undefined;
     if (tag === "unauthorized" || httpStatus === 401 || httpStatus === 403) return "Codex authentication is unavailable.";
-    if (tag === "usageLimitExceeded" || tag === "sessionBudgetExceeded" || httpStatus === 429) return "A Codex usage limit prevents this turn.";
+    if (["usageLimitExceeded", "sessionBudgetExceeded", "rateLimitExceeded"].includes(tag) || httpStatus === 429) return "A Codex usage limit prevents this turn.";
     if (tag === "contextWindowExceeded") return "This Codex thread exceeds the model context window.";
     if (["httpConnectionFailed", "responseStreamConnectionFailed", "responseStreamDisconnected", "responseTooManyFailedAttempts"].includes(tag)) {
       return httpStatus && httpStatus >= 500 ? "The Codex model provider is unavailable." : "Codex could not reach the model provider.";
     }
     if (tag === "serverOverloaded" || tag === "internalServerError" || (httpStatus && httpStatus >= 500)) return "The Codex model provider is unavailable.";
     if (tag === "badRequest") return "Codex rejected the model request.";
-    if (tag === "cyberPolicy") return "Codex blocked this turn under provider policy.";
+    if (tag === "cyberPolicy" || tag === "misalignmentPolicyViolation") return "Codex blocked this turn under provider policy.";
     if (tag === "sandboxError") return "Codex could not apply the local execution policy.";
     if (tag === "threadRollbackFailed") return "Codex could not restore the thread state.";
     if (tag === "activeTurnNotSteerable") return "The active Codex turn cannot accept more input.";
@@ -347,7 +376,10 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       }
     }
     const command = Array.isArray(params.command) ? undefined : params.command;
-    if (kind === "command" && typeof command === "string" && command) parts.push(`Command: ${command}`);
+    // `kind: "writeStdin"` (0.153+, behind write_stdin_approval) asks to send
+    // input to a running process; `command` then names that write.
+    const commandLabel = params.kind === "writeStdin" ? "Terminal input" : "Command";
+    if (kind === "command" && typeof command === "string" && command) parts.push(`${commandLabel}: ${command}`);
     if (kind === "command" && Array.isArray(params.command)) parts.push(`Command argv: ${params.command.map((argument) => JSON.stringify(argument)).join(" ")}`);
     if (typeof params.cwd === "string" && params.cwd) parts.push(`Working directory: ${params.cwd}`);
     if (typeof params.reason === "string" && params.reason) parts.push(`Reason: ${params.reason}`);
@@ -432,7 +464,9 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     const approval = {
       id,
       kind,
-      title: kind === "command" ? "Run command" : kind === "file-change" ? "Apply file changes" : kind === "permission" ? "Grant permissions" : "Codex needs input",
+      title: kind === "command"
+        ? params.kind === "writeStdin" ? "Send input to a running command" : "Run command"
+        : kind === "file-change" ? "Apply file changes" : kind === "permission" ? "Grant permissions" : "Codex needs input",
       description: approvalDescription(method, params, kind),
       decisions,
       ...(kind === "input" ? { inputLabel: params.questions?.[0]?.isSecret ? "Secret response" : params.questions?.[0]?.question || "Response" } : {}),
@@ -551,6 +585,13 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       registerApproval(message);
       return;
     }
+    if (method === "currentTime/read" && message.id !== undefined) {
+      // Sent when the user's config selects an external clock for the current
+      // time reminder; Codex treats an error reply as fatal. Wall-clock time
+      // grants no authority, so the thread and its descendants get the answer.
+      void writeNative({ id: message.id, result: { currentTimeAt: Math.floor(Date.now() / 1000) } }).catch(() => {});
+      return;
+    }
     if (message.id !== undefined && method) {
       void writeNative({
         id: message.id,
@@ -568,21 +609,40 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       return;
     }
     if (nativeId && typeof params.threadId === "string" && params.threadId !== nativeId) return;
-    // Account quota notifications are control-plane state, not conversation
-    // items. Actual turn failures (including usage limits) still surface below.
-    if (method === "account/rateLimits/updated") return;
+    // Account quota and gateway sign-in state (the latter new in 0.157) are
+    // control-plane state, not conversation items. Actual turn failures
+    // (including usage limits and authentication) still surface below.
+    if (method === "account/rateLimits/updated" || method === "account/gatewayOAuth/changed") return;
+    // Configuration and deprecation warnings describe the user's native Codex
+    // configuration (0.157.1 sends startup warnings right after initialize).
+    // They become fixed resource warnings; native text and config paths are
+    // not forwarded.
+    if (method === "configWarning" || method === "deprecationNotice") {
+      controlPlaneWarnings.add(method === "configWarning"
+        ? "Codex reported a configuration warning. Review your Codex config.toml."
+        : "Codex reported a deprecated setting or feature. Review your Codex configuration.");
+      return;
+    }
     if (method === "mcpServer/startupStatus/updated") {
       const name = typeof params.name === "string" && params.name.trim()
         ? params.name.trim().replace(/\s+/g, " ")
         : "Codex MCP";
+      // McpServerStartupState is starting|ready|failed|cancelled (0.147.0-0.157.1).
       if (params.status === "failed") mcpStartupFailures.add(name);
-      else if (["starting", "ready", "disabled", "stopped"].includes(params.status)) mcpStartupFailures.delete(name);
+      else if (["starting", "ready", "cancelled"].includes(params.status)) mcpStartupFailures.delete(name);
       return;
     }
     if (method === "thread/settings/updated") {
-      const settings = params.settings ?? params;
-      if (typeof settings.model === "string") currentModel = { id: settings.model, name: settings.model, ...(currentProvider ? { provider: currentProvider } : {}) };
-      if (typeof settings.reasoningEffort === "string") thinkingLevel = settings.reasoningEffort;
+      // Every verified version (0.147.0-0.157.1) sends the effective settings
+      // nested as `threadSettings`, with the reasoning level as `effort`.
+      const settings = params.threadSettings;
+      if (!settings || typeof settings !== "object") return;
+      if (typeof settings.modelProvider === "string") currentProvider = settings.modelProvider;
+      if (typeof settings.model === "string") {
+        const name = currentModel?.id === settings.model ? currentModel.name : settings.model;
+        currentModel = { id: settings.model, name, ...(currentProvider ? { provider: currentProvider } : {}) };
+      }
+      if (typeof settings.effort === "string") thinkingLevel = settings.effort;
       if ("serviceTier" in settings) serviceTier = settings.serviceTier === "fast" ? "fast" : "standard";
       return;
     }
@@ -851,8 +911,14 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   if (!initialize || typeof initialize.codexHome !== "string") {
     throw cleanupStartupFailure(fail("native-handshake-failed", "The Codex app server handshake failed."));
   }
-  if (typeof initialize.userAgent !== "string" || !/(?:^|\/)0\.(?:147\.0|153\.4)(?:\s|\(|$)/.test(initialize.userAgent)) {
-    throw cleanupStartupFailure(fail("unsupported-native-version", "PiUI requires a supported Codex app-server version (0.147.0 or 0.153.4)."));
+  const versionCheck = checkCodexVersion(typeof initialize.userAgent === "string" ? userAgentVersion(initialize.userAgent) : undefined);
+  if (versionCheck !== "verified") {
+    throw cleanupStartupFailure(fail(
+      "unsupported-native-version",
+      versionCheck === "newer"
+        ? "Unverified: this Codex app-server is newer than the versions tested with PiUI."
+        : "PiUI requires a verified Codex app-server version.",
+    ));
   }
   try {
     await notifyNative("initialized");
@@ -988,6 +1054,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       const warnings = [...mcpStartupFailures]
         .sort((left, right) => left.localeCompare(right))
         .map((name) => `MCP server ${name} could not start.`);
+      warnings.push(...controlPlaneWarnings);
       try {
         const response = await callNative("skills/list", { cwds: [config.cwd], forceReload: false });
         for (const group of response.data ?? []) for (const skill of group.skills ?? []) {
@@ -1026,7 +1093,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
           models: { supported: true, enforcement: "native" },
           approvals: { supported: true, enforcement: "native" },
           instructions: { supported: true, enforcement: "native" },
-          toolPolicy: { supported: false, enforcement: "unsupported", reason: "Codex app-server 0.147.0 has no restrictive tool allowlist contract." },
+          toolPolicy: { supported: false, enforcement: "unsupported", reason: "Codex app-server has no restrictive tool allowlist contract." },
           nativeSubagents: coordinationEnabled
             ? { supported: true, enforcement: "coordinator" }
             : { supported: true, enforcement: "native" },

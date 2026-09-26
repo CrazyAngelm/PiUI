@@ -14,8 +14,10 @@ Run it explicitly with `PIUI_DRAFT_REOPEN_TEST_ROOT` set to a disposable directo
 and `CODEX_HOME` set to its `codex-home` child.
 
 The composer model picker shows the current native model even when discovery
-omits it. Codex 0.147.0 and 0.153.4 are supported; the latter supplies the current
-Astra catalog. Hidden current models retain their native reasoning metadata;
+omits it. Codex app-server versions inside the verified range (0.147.0 up to,
+not including, 0.158.0; see `crates/piui-runtime/bridge/CONTRACT.md`) are
+supported; newer versions are reported as unverified until audited. Hidden
+current models retain their native reasoning metadata;
 an absent model remains visible without invented effort levels. Model changes,
 effort and Fast use `workspace_settings_v16` and the native adapter.
 
