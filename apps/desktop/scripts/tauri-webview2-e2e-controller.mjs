@@ -1,5 +1,12 @@
 // Outside-Job controller for the isolated Windows Tauri/WebView2 E2E proof.
-import { spawn } from 'node:child_process';
+//
+// Default: the new shell (default view). `--classic` keeps the retained
+// compatibility proof, `--workspace` the legacy workspace shell and
+// `--agent-api` the agent API proof. Cargo builds go to
+// PIUI_E2E_CARGO_TARGET_DIR, else CARGO_TARGET_DIR, else <repo>/target; the
+// isolated fixture always lives in <repo>/target/piui-e2e (the debug host
+// accepts no other root).
+import { spawn, spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { removeDirectoryWithRetries, removeOwnedFixtureRoot } from './webview-automation.mjs';
@@ -15,6 +22,8 @@ const COMMAND_BOUND_MS = 5_000;
 // its bounded commands plus outer teardown. e2e-platform.mjs retains 20 s
 // beyond this before its own 720 s terminal bound.
 const INNER_HARNESS_BOUND_MS = 700_000;
+const JOB_RUNNER_BUILD_BOUND_MS = 600_000;
+const SCENARIO_FLAGS = ['--workspace', '--agent-api', '--classic'];
 
 function waitFor(milliseconds) {
   return new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
@@ -42,6 +51,7 @@ function isPathInside(root, candidate) {
 function canonicalRepositoryTarget() {
   const canonicalRepository = realpathSync(REPOSITORY_ROOT);
   const expectedTarget = join(canonicalRepository, 'target');
+  mkdirSync(expectedTarget, { recursive: true });
   const canonicalTarget = realpathSync(expectedTarget);
   if (relative(expectedTarget, canonicalTarget) !== '') {
     throw new Error('The repository target must not resolve through a reparse escape.');
@@ -60,12 +70,35 @@ function canonicalRepositoryE2eArea() {
   return canonicalArea;
 }
 
-function resolveJobRunner() {
-  const expected = join(canonicalRepositoryTarget(), 'debug', 'piui-e2e-job.exe');
+/** Cargo output directory: a private one when configured, else <repo>/target. */
+function canonicalCargoTarget() {
+  const configured = process.env.PIUI_E2E_CARGO_TARGET_DIR || process.env.CARGO_TARGET_DIR;
+  if (!configured) return canonicalRepositoryTarget();
+  if (!isAbsolute(configured)) throw new Error('The E2E cargo target directory must be an absolute path.');
+  mkdirSync(configured, { recursive: true });
+  const canonical = realpathSync(configured);
+  if (relative(resolve(configured), canonical) !== '') {
+    throw new Error('The E2E cargo target directory must not resolve through a reparse point.');
+  }
+  return canonical;
+}
+
+function buildJobRunner(cargoTarget) {
+  // Built outside the Job, as before; only the feature-gated runner binary.
+  const result = spawnSync('cargo', [
+    'build', '--quiet', '--target-dir', cargoTarget,
+    '-p', 'piui-platform', '--features', 'e2e-harness', '--bin', 'piui-e2e-job',
+  ], { cwd: REPOSITORY_ROOT, stdio: 'inherit', timeout: JOB_RUNNER_BUILD_BOUND_MS, windowsHide: true });
+  if (result.error) throw new Error(`The E2E Job runner build could not start: ${result.error.message}`);
+  if (result.status !== 0) throw new Error(`The E2E Job runner build failed with exit code ${result.status}.`);
+}
+
+function resolveJobRunner(cargoTarget) {
+  const expected = join(cargoTarget, 'debug', 'piui-e2e-job.exe');
   if (!existsSync(expected)) throw new Error('The feature-gated E2E Job runner was not built.');
   const canonical = realpathSync(expected);
-  if (relative(expected, canonical) !== '' || !isPathInside(canonicalRepositoryTarget(), canonical)) {
-    throw new Error('The E2E Job runner escaped its exact repository target artifact.');
+  if (relative(expected, canonical) !== '' || !isPathInside(cargoTarget, canonical)) {
+    throw new Error('The E2E Job runner escaped its exact cargo target artifact.');
   }
   return canonical;
 }
@@ -196,6 +229,8 @@ function persistRunEvidence(runRoot) {
 }
 
 async function runController() {
+  const cargoTarget = canonicalCargoTarget();
+  buildJobRunner(cargoTarget);
   const canonicalArea = canonicalRepositoryE2eArea();
   const runRoot = join(canonicalArea, String(process.pid));
   await removeDirectoryWithRetries(runRoot, {
@@ -211,7 +246,7 @@ async function runController() {
   }
 
   const outerLog = join(canonicalRunRoot, 'outer-harness.log');
-  const jobRunner = resolveJobRunner();
+  const jobRunner = resolveJobRunner(cargoTarget);
   const innerHarness = resolve(import.meta.dirname, 'tauri-webview2-dialog-e2e.mjs');
   let child;
   let childClosed;
@@ -223,10 +258,10 @@ async function runController() {
   try {
     child = spawn(jobRunner, [
       '--controlled', '--cleanup-bound-ms', String(COMMAND_BOUND_MS), '--log', outerLog,
-      '--', process.execPath, innerHarness, ...process.argv.filter(argument => ['--workspace', '--agent-api'].includes(argument)),
+      '--', process.execPath, innerHarness, ...process.argv.filter(argument => SCENARIO_FLAGS.includes(argument)),
     ], {
       cwd: REPOSITORY_ROOT,
-      env: { ...process.env, PIUI_E2E_RUN_ROOT: canonicalRunRoot },
+      env: { ...process.env, PIUI_E2E_RUN_ROOT: canonicalRunRoot, PIUI_E2E_CARGO_TARGET_DIR: cargoTarget },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     });
