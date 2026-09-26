@@ -6,6 +6,7 @@ import {
   newLiveState, newQueue,
   type LabOrchestrationWorkspace, type LabProject, type LabSessionRecord,
 } from '../labState';
+import type { LabNativeHistory } from '../piHistoryFake';
 import type { ApprovalStep, TurnStep } from '../turnScripts';
 
 /** Live activity a scenario starts once the runtime exists (timers only run when ambient). */
@@ -27,6 +28,8 @@ export interface LabSeed {
   sessions: LabSessionRecord[];
   orchestration: LabOrchestrationWorkspace[];
   activity: SeedActivity[];
+  /** Sessions the host index would find in each folder (read-only history browser). */
+  nativeHistory?: LabNativeHistory;
 }
 
 export interface SessionSeed {

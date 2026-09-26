@@ -3,6 +3,7 @@ import { labUuid } from '../labRandom';
 import type { LabScenarioName } from '../labState';
 import { restoreInterrupted } from '../orchestration/runEngine';
 import { demoChats, demoProjects } from './demoChats';
+import { demoPiHistory } from './demoPiHistory';
 import { demoSystems } from './demoSystems';
 import { longSeed } from './longScenario';
 import type { LabSeed } from './seedTypes';
@@ -27,6 +28,7 @@ function demoSeed(): LabSeed {
     sessions: [...chats.sessions, ...systems.sessions],
     orchestration: systems.orchestration,
     activity: [...chats.activity, ...systems.activity],
+    nativeHistory: demoPiHistory(),
   };
 }
 

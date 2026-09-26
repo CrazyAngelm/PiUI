@@ -14,8 +14,9 @@
   import ShieldAlert from '@lucide/svelte/icons/shield-alert';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import ShieldCheck from '@lucide/svelte/icons/shield-check';
+  import ScrollText from '@lucide/svelte/icons/scroll-text';
   import { t, language } from '../../features/locale/language';
-  import { Kbd, Menu, StatusDot, Skeleton, type Status } from '../../lib/ui';
+  import { Kbd, Menu, StatusDot, Skeleton, type MenuEntry, type Status } from '../../lib/ui';
   import type { WorkspaceSession, WorkspaceSummary } from '../../../../../contracts/workspace-v15';
   import { relativeTime } from '../format';
   import { useWorkspace } from './context';
@@ -52,6 +53,16 @@
   function go(action: () => void): void {
     action();
     onNavigate();
+  }
+
+  /** Read-only native history the index found in this folder (or personal chats). */
+  function historyItem(workspace: WorkspaceSummary): MenuEntry {
+    const prime = store.projectSummaries.some((project) => project.id === workspace.id && project.agentKind === 'prime-agent');
+    return {
+      label: $t('{0} session history', [prime ? 'Prime Agent' : 'Pi']),
+      icon: ScrollText,
+      onSelect: () => go(() => store.navigate({ name: 'history', workspaceId: workspace.id })),
+    };
   }
 
   const route = $derived(store.route);
@@ -170,9 +181,16 @@
                 ? [{ label: $t('Trust this folder…'), icon: ShieldCheck, onSelect: () => onTrust(workspace) }]
                 : []),
               { label: $t('Pipelines'), icon: Workflow, onSelect: () => go(() => { store.selectWorkspace(workspace.id); store.navigate({ name: 'pipelines', section: 'systems' }); }) },
+              historyItem(workspace),
               { label: $t('Refresh projects'), icon: RefreshCw, onSelect: () => void store.loadCatalog(workspace.id) },
             ]}
           >
+            {#snippet trigger(props)}
+              <button type="button" class="tiny-action" aria-label={$t('Options for {0}', [name])} {...props}><Ellipsis size={14} /></button>
+            {/snippet}
+          </Menu>
+        {:else}
+          <Menu align="end" items={[historyItem(workspace)]}>
             {#snippet trigger(props)}
               <button type="button" class="tiny-action" aria-label={$t('Options for {0}', [name])} {...props}><Ellipsis size={14} /></button>
             {/snippet}

@@ -8,7 +8,7 @@
  * the whole transcript for every token.
  */
 import { projectsHost as host } from '../host-api/projectsClient';
-import type { Preferences } from '../host-api/types';
+import type { Preferences, ProjectSummary } from '../host-api/types';
 import { composerRequest } from '../host-api/composerClient';
 import { runtimeSettings } from '../host-api/runtimeSettings';
 import { deleteWorkspaceSession } from '../host-api/workspaceLifecycle';
@@ -45,7 +45,9 @@ export type Route =
   | { name: 'chat'; sessionId: string }
   | { name: 'inbox' }
   | { name: 'pipelines'; section: PipelineSection; runId?: string }
-  | { name: 'settings'; section: SettingsSection };
+  | { name: 'settings'; section: SettingsSection }
+  /** Read-only native session history of one folder (or personal chats). */
+  | { name: 'history'; workspaceId: string; sessionId?: string };
 
 export interface InboxApproval {
   approval: WorkspaceApproval;
@@ -114,6 +116,10 @@ function isRoute(value: unknown): value is Route {
     }
     case 'settings':
       return SETTINGS_SECTIONS.includes((value as { section?: unknown }).section as SettingsSection);
+    case 'history': {
+      const { workspaceId, sessionId } = value as { workspaceId?: unknown; sessionId?: unknown };
+      return typeof workspaceId === 'string' && (sessionId === undefined || typeof sessionId === 'string');
+    }
     default:
       return false;
   }
@@ -136,6 +142,8 @@ export class WorkspaceStore {
   drafts = $state.raw<Record<string, string>>({});
   collapsedProjects = $state.raw<string[]>([]);
   preferences = $state.raw<Preferences>(DEFAULT_PREFERENCES);
+  /** Registry rows (agent kind, pin) that the v15 workspace catalog does not carry. */
+  projectSummaries = $state.raw<ProjectSummary[]>([]);
   preferencesError = $state<string>();
   preferencesBusy = $state(false);
   interruptBusy = $state(false);
@@ -357,7 +365,10 @@ export class WorkspaceStore {
   async loadPreferences(): Promise<void> {
     try {
       const bootstrap = await host.bootstrap();
-      if (!this.disposed) this.applyPreferences(bootstrap.preferences);
+      if (!this.disposed) {
+        this.applyPreferences(bootstrap.preferences);
+        this.projectSummaries = bootstrap.projects;
+      }
     } catch (error) {
       if (!this.disposed) this.preferencesError = errorMessage(error);
     }

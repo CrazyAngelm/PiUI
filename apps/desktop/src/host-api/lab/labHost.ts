@@ -8,6 +8,7 @@ import type { LabHandlers } from './labHandlers';
 import { LabIdSource } from './labRandom';
 import { LAB_SCENARIOS, wire, type LabScenarioName, type LabState } from './labState';
 import { orchestrationHandlers } from './orchestration/orchestrationFake';
+import { EMPTY_NATIVE_HISTORY, piHistoryHandlers } from './piHistoryFake';
 import { LabRunScheduler } from './orchestration/runScheduler';
 import { buildSeed, type SeedActivity } from './scenarios';
 import { LabSessions } from './sessionRuntime';
@@ -97,6 +98,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     ...composerHandlers(runtime),
     ...classicHandlers(runtime),
     ...orchestrationHandlers(runtime, scheduler, bus),
+    ...piHistoryHandlers(runtime, seed.nativeHistory ?? EMPTY_NATIVE_HISTORY, bus),
   };
   startActivity(seed.activity, runtime, scheduler, options.ambient ?? true);
 

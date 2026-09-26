@@ -10,6 +10,7 @@
   import Search from '@lucide/svelte/icons/search';
   import Moon from '@lucide/svelte/icons/moon';
   import Bot from '@lucide/svelte/icons/bot';
+  import ScrollText from '@lucide/svelte/icons/scroll-text';
   import { t } from '../../features/locale/language';
   import HarnessMark from './HarnessMark.svelte';
   import { useWorkspace } from './context';
@@ -39,6 +40,11 @@
     const workspace = store.catalog.workspaces.find((item) => item.id === id);
     return workspace ? (workspace.personal ? $t('Personal chats') : workspace.name) : '';
   };
+
+  /** Session history of the current project, else the first available folder. */
+  const historyWorkspaceId = $derived(
+    store.selectedWorkspaceId || (store.catalog.workspaces.find((item) => !item.missing)?.id ?? ''),
+  );
 
   function run(action: () => void): void {
     open = false;
@@ -81,6 +87,11 @@
                 <Command.Item class="palette__item" value="action:runs" keywords={['runs', 'history']} onSelect={() => run(() => store.navigate({ name: 'pipelines', section: 'runs' }))}>
                   <History size={15} /><span>{$t('Open runs')}</span>
                 </Command.Item>
+                {#if historyWorkspaceId}
+                  <Command.Item class="palette__item" value="action:history" keywords={['history', 'sessions', 'branches', 'pi']} onSelect={() => run(() => store.navigate({ name: 'history', workspaceId: historyWorkspaceId }))}>
+                    <ScrollText size={15} /><span>{$t('Open session history')}</span>
+                  </Command.Item>
+                {/if}
                 <Command.Item class="palette__item" value="action:harnesses" keywords={['harness', 'codex', 'claude', 'pi']} onSelect={() => run(() => store.navigate({ name: 'settings', section: 'harnesses' }))}>
                   <Bot size={15} /><span>{$t('Manage harnesses')}</span>
                 </Command.Item>
