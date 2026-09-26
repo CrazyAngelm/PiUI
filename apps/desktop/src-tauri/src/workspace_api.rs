@@ -10,6 +10,7 @@ mod workspace_store;
 #[path = "workspace_composer.rs"]
 pub mod composer;
 
+use crate::acp_agents::{AcpAgents, AcpRefusal};
 use crate::api::verified_project_directory;
 use crate::dto::ApiError;
 use crate::state::HostState;
@@ -20,15 +21,16 @@ use piui_index::workspace_history::{
 use piui_index::{GenericBlockKind, GenericBlockStatus, GenericTimelineBlock};
 use piui_orchestration::NativeHistoryReference;
 use piui_platform::ProjectDirectory;
+use piui_runtime::acp::AcpLaunch;
+use piui_runtime::workspace_runtime::{
+    AcpAgentId, BlockKind, BlockStatus, BridgeFailureCode, CLAUDE_SIGN_IN_MESSAGE,
+    CoordinatorOperation, CoordinatorResponse, HarnessAvailability, NativeApproval, NativeBlock,
+    NativeEvent, NativeEventReceiver, NativeRuntime, NativeRuntimeConfig, NativeRuntimeError,
+    NativeSessionModes, NativeSnapshot, offline_harness_capabilities, probe_native_harnesses,
+};
 pub use piui_runtime::workspace_runtime::{
     ApprovalDecision, ApprovalOption, HarnessCapabilities, HarnessKind, PermissionMode, PromptMode,
     SessionStatus, TurnOutcome, WorkspaceModel,
-};
-use piui_runtime::workspace_runtime::{
-    BlockKind, BlockStatus, BridgeFailureCode, CLAUDE_SIGN_IN_MESSAGE, CoordinatorOperation,
-    CoordinatorResponse, HarnessAvailability, NativeApproval, NativeBlock, NativeEvent,
-    NativeEventReceiver, NativeRuntime, NativeRuntimeConfig, NativeRuntimeError, NativeSnapshot,
-    offline_harness_capabilities, probe_native_harnesses,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -129,6 +131,9 @@ pub struct SessionSnapshot {
     pub approvals: Vec<WorkspaceApproval>,
     pub capabilities: HarnessCapabilities,
     pub models: Vec<WorkspaceModel>,
+    /// Additive v15 field: session modes a live ACP agent advertises.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modes: Option<NativeSessionModes>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -314,15 +319,50 @@ impl WorkspaceError {
             recoverable: true,
         }
     }
+    /// An ACP agent cannot start now (ADR-034). The detailed reason stays in
+    /// Settings → Harnesses; the chat gets a typed, fixed status.
+    pub(crate) fn acp_refused(refusal: AcpRefusal) -> Self {
+        match refusal {
+            AcpRefusal::Untrusted => Self {
+                code: "ACP_TRUST_REQUIRED",
+                message: "Review and trust this agent in Settings → Harnesses before starting it.",
+                recoverable: true,
+            },
+            AcpRefusal::VersionUnconfirmed => Self {
+                code: "ACP_VERSION_UNCONFIRMED",
+                message: "Confirm this agent's version in Settings → Harnesses before starting it.",
+                recoverable: true,
+            },
+            AcpRefusal::Unknown
+            | AcpRefusal::NotInstalled(_)
+            | AcpRefusal::UnsupportedVersion
+            | AcpRefusal::VersionUnknown => Self {
+                code: "UNAVAILABLE",
+                message: "The selected harness is unavailable. Check it in Settings → Harnesses.",
+                recoverable: true,
+            },
+        }
+    }
+    /// An ACP agent refused to start a conversation until the user signs in
+    /// with the agent's own flow. PiUI never signs in on the user's behalf.
+    pub(crate) fn acp_sign_in_required() -> Self {
+        Self {
+            code: "ACP_SIGN_IN_REQUIRED",
+            message: "Sign in to this agent with its own app, then try again. Settings → Harnesses shows how.",
+            recoverable: true,
+        }
+    }
 }
 
-/// Maps a native start failure to its typed workspace status. Only a refused
-/// non-subscription Claude Code login has a dedicated, actionable status.
+/// Maps a native start failure to its typed workspace status. A refused
+/// non-subscription Claude Code login and an ACP agent's sign-in refusal
+/// have dedicated, actionable statuses.
 fn runtime_failure(error: &NativeRuntimeError) -> WorkspaceError {
     match error {
         NativeRuntimeError::Bridge(BridgeFailureCode::SubscriptionRequired) => {
             WorkspaceError::subscription_required()
         }
+        NativeRuntimeError::AgentSignInRequired { .. } => WorkspaceError::acp_sign_in_required(),
         _ => WorkspaceError::runtime(),
     }
 }
@@ -791,6 +831,8 @@ struct WorkspaceHostInner {
     /// Sessions whose native runtime is starting outside the operation gate.
     starting: Mutex<HashMap<String, StartSlot>>,
     native_root: PathBuf,
+    /// ACP agent descriptors, decisions and discovery (ADR-034).
+    acp: AcpAgents,
     /// Test builds only: replaces native harness resolution with a test
     /// adapter that still runs the production bridge runner and transport.
     #[cfg(test)]
@@ -824,6 +866,7 @@ impl WorkspaceHost {
                 live: Mutex::new(HashMap::new()),
                 starting: Mutex::new(HashMap::new()),
                 native_root,
+                acp: AcpAgents::open(app_data_dir)?,
                 #[cfg(test)]
                 test_spawner: Mutex::new(None),
             }),
@@ -832,7 +875,12 @@ impl WorkspaceHost {
         Ok(host)
     }
 
-    async fn spawn_native(&self, config: NativeRuntimeConfig) -> NativeSpawnResult {
+    async fn spawn_native(
+        &self,
+        config: NativeRuntimeConfig,
+        acp: Option<AcpLaunch>,
+    ) -> NativeSpawnResult {
+        let agent = config.harness.acp_agent();
         #[cfg(test)]
         {
             let spawner = self
@@ -845,12 +893,38 @@ impl WorkspaceHost {
                 return spawner(config).await;
             }
         }
-        NativeRuntime::spawn(config).await
+        let spawned = match acp {
+            Some(launch) => NativeRuntime::spawn_acp(config, launch).await,
+            None => NativeRuntime::spawn(config).await,
+        };
+        if let Some(agent) = agent {
+            self.inner
+                .acp
+                .record_start(agent, spawned.as_ref().map(|_| ()));
+        }
+        spawned
+    }
+
+    /// The host-resolved start of an ACP agent, or its typed refusal.
+    async fn acp_launch(&self, agent: AcpAgentId) -> Result<AcpLaunch, WorkspaceError> {
+        let acp = self.inner.acp.clone();
+        tokio::task::spawn_blocking(move || acp.launch(agent))
+            .await
+            .map_err(|_| WorkspaceError::io())?
+            .map_err(WorkspaceError::acp_refused)
+    }
+
+    /// ACP agents registered in Settings → Harnesses.
+    pub(crate) fn acp_agents(&self) -> &AcpAgents {
+        &self.inner.acp
     }
 
     #[must_use]
     pub(crate) fn orchestration_capabilities(&self, harness: HarnessKind) -> HarnessCapabilities {
-        offline_harness_capabilities(harness)
+        match harness {
+            HarnessKind::Acp(agent) => self.inner.acp.offline_capabilities(agent),
+            builtin => offline_harness_capabilities(builtin),
+        }
     }
 
     #[must_use]
@@ -916,8 +990,12 @@ impl WorkspaceHost {
             id: session_id,
             workspace_id: request.workspace_id,
             harness: request.harness,
-            title: normalized_title(request.title.as_deref())
-                .unwrap_or_else(|| default_title(request.harness)),
+            title: normalized_title(request.title.as_deref()).unwrap_or_else(|| {
+                match request.harness {
+                    HarnessKind::Acp(agent) => self.inner.acp.default_title(agent),
+                    builtin => default_title(builtin),
+                }
+            }),
             updated_at: now_string(),
             model: request.model,
             thinking_level: request.thinking_level,
@@ -1230,10 +1308,15 @@ impl WorkspaceHost {
                 agent_dir: None,
                 kernel_python: None,
             };
+            // An ACP agent starts only from its trusted, resolved descriptor.
+            let acp = match record.harness.acp_agent() {
+                Some(agent) => Some(self.acp_launch(agent).await?),
+                None => None,
+            };
             // Dropping an unfinished spawn terminates its partially started
             // process tree; it never affects another session.
             let (runtime, mut events) = tokio::select! {
-                spawned = self.spawn_native(config) => {
+                spawned = self.spawn_native(config, acp) => {
                     spawned.map_err(|error| runtime_failure(&error))?
                 }
                 () = reservation.cancelled() => return Err(WorkspaceError::conflict()),
@@ -1252,8 +1335,13 @@ impl WorkspaceHost {
                     });
                 }
             };
-            let binding_persisted =
-                record.native_id.is_some() || record.harness != HarnessKind::Codex;
+            if let Some(agent) = record.harness.acp_agent() {
+                self.inner.acp.remember_models(agent, &native.models);
+            }
+            // Codex and ACP conversations are bound when their first turn is
+            // admitted (a `binding` event), so an unused draft reopens fresh.
+            let binding_persisted = record.native_id.is_some()
+                || !matches!(record.harness, HarnessKind::Codex | HarnessKind::Acp(_));
             if let Err(error) =
                 self.update_binding_and_metadata(&record.id, &native, binding_persisted)
             {
@@ -1426,6 +1514,7 @@ impl WorkspaceHost {
                 .collect(),
             capabilities: native.capabilities,
             models: native.models,
+            modes: native.modes,
         })
     }
 
@@ -1467,6 +1556,21 @@ impl WorkspaceHost {
                 status: summary.status,
                 reason: summary.reason,
             })
+            // ACP agents from cached discovery only: listing never runs one.
+            .chain(
+                self.inner
+                    .acp
+                    .summaries()
+                    .into_iter()
+                    .map(|summary| HarnessSummary {
+                        kind: HarnessKind::Acp(summary.id),
+                        name: summary.name,
+                        installed: summary.installed,
+                        version: summary.version,
+                        status: summary.status,
+                        reason: summary.reason.map(str::to_owned),
+                    }),
+            )
             .collect();
         Ok(WorkspaceCatalog {
             protocol: WORKSPACE_PROTOCOL,
@@ -1734,9 +1838,82 @@ impl WorkspaceHost {
         if self.live_runtime(&reference.session_id)?.is_none() {
             let directory =
                 ProjectDirectory::resolve(project_path).map_err(|_| WorkspaceError::conflict())?;
+            if let Some(agent) = record.harness.acp_agent() {
+                return self
+                    .acp_history_text(agent, record, directory, reference)
+                    .await;
+            }
             return historical_reference_text(record, directory, reference.clone()).await;
         }
         let snapshot = self.snapshot(&reference.session_id).await?;
+        Self::referenced_text(&snapshot.blocks, reference)
+    }
+
+    /// Verified result text of a closed ACP conversation, read back through
+    /// the agent's own `session/load` replay: a contained start that sends no
+    /// prompt and is retired right after its first snapshot. An agent that
+    /// cannot reopen conversations fails the reference; nothing is guessed.
+    async fn acp_history_text(
+        &self,
+        agent: AcpAgentId,
+        record: PersistedSession,
+        directory: ProjectDirectory,
+        reference: &NativeHistoryReference,
+    ) -> Result<String, WorkspaceError> {
+        let native_id = record
+            .native_id
+            .clone()
+            .ok_or_else(WorkspaceError::not_found)?;
+        let launch = self.acp_launch(agent).await?;
+        let session_directory = self
+            .inner
+            .native_root
+            .join(format!("history-{}", Uuid::new_v4()));
+        let config = NativeRuntimeConfig {
+            harness: record.harness,
+            cwd: directory.canonical_path().to_path_buf(),
+            session_dir: session_directory.clone(),
+            native_id: Some(native_id),
+            native_path: None,
+            title: None,
+            model: None,
+            thinking_level: None,
+            instructions: None,
+            base_instructions: None,
+            service_tier: None,
+            resource_rules: None,
+            permission_mode: PermissionMode::Native,
+            network_access: false,
+            allowed_tools: None,
+            native_subagents: None,
+            coordination: false,
+            daemon_socket: None,
+            package_root: None,
+            agent_dir: None,
+            kernel_python: None,
+        };
+        let spawned = self.spawn_native(config, Some(launch)).await;
+        let result = match spawned {
+            Ok((runtime, mut events)) => {
+                let snapshot = events.buffer_while(runtime.snapshot()).await;
+                retire_unpublished_runtime(&runtime, events).await;
+                snapshot
+                    .map_err(|_| WorkspaceError::runtime())
+                    .and_then(|snapshot| Self::referenced_text(&snapshot.blocks, reference))
+            }
+            Err(error) => Err(runtime_failure(&error)),
+        };
+        let _ = fs::remove_dir_all(&session_directory);
+        result
+    }
+
+    /// The text a dependency reference names in `blocks`: by block id and
+    /// content hash, else by hash alone (a replay renumbers blocks), else the
+    /// last answer when the reference names neither.
+    fn referenced_text(
+        blocks: &[NativeBlock],
+        reference: &NativeHistoryReference,
+    ) -> Result<String, WorkspaceError> {
         let expected_hash = reference.content_hash.as_deref();
         if expected_hash.is_some_and(|hash| !valid_content_hash(hash)) {
             return Err(WorkspaceError::invalid());
@@ -1744,7 +1921,7 @@ impl WorkspaceHost {
         let block_by_id = reference
             .block_id
             .as_deref()
-            .and_then(|block_id| snapshot.blocks.iter().find(|block| block.id == block_id));
+            .and_then(|block_id| blocks.iter().find(|block| block.id == block_id));
         let block = block_by_id
             .filter(|block| {
                 expected_hash.is_none_or(|hash| {
@@ -1756,7 +1933,7 @@ impl WorkspaceHost {
             })
             .or_else(|| {
                 expected_hash.and_then(|hash| {
-                    snapshot.blocks.iter().rev().find(|block| {
+                    blocks.iter().rev().find(|block| {
                         block.kind == BlockKind::Assistant
                             && block
                                 .text
@@ -1767,8 +1944,7 @@ impl WorkspaceHost {
             })
             .or_else(|| {
                 if reference.block_id.is_none() && expected_hash.is_none() {
-                    snapshot
-                        .blocks
+                    blocks
                         .iter()
                         .rev()
                         .find(|block| block.kind == BlockKind::Assistant)
@@ -2034,6 +2210,7 @@ fn empty_closed_snapshot(record: PersistedSession) -> SessionSnapshot {
         approvals: Vec::new(),
         capabilities: offline_harness_capabilities(record.harness),
         models: record.model.clone().into_iter().collect(),
+        modes: None,
     }
 }
 
@@ -2052,6 +2229,7 @@ fn snapshot_from_history(
         approvals: Vec::new(),
         capabilities: offline_harness_capabilities(record.harness),
         models: record.model.clone().into_iter().collect(),
+        modes: None,
     }
 }
 
@@ -2221,6 +2399,68 @@ pub async fn workspace_settings_v16(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionModeRequestV1 {
+    session_id: String,
+    mode_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionModeResultV1 {
+    protocol: u8,
+    session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    modes: Option<NativeSessionModes>,
+}
+
+/// Selects one of the session modes a live agent advertised (ACP modes such
+/// as an agent's own approval presets). A live trusted-session action.
+#[tauri::command]
+pub async fn workspace_session_mode_v1(
+    state: State<'_, HostState>,
+    request: SessionModeRequestV1,
+) -> Result<SessionModeResultV1, WorkspaceError> {
+    let host = state.inner();
+    if host.safe_mode {
+        return Err(WorkspaceError::safe_mode());
+    }
+    validate_session_id(&request.session_id)?;
+    validate_token(&request.mode_id)?;
+    let _operation = authorize_live_session(host, &request.session_id).await?;
+    let (runtime, _) = host
+        .workspace
+        .live_runtime(&request.session_id)?
+        .ok_or_else(WorkspaceError::closed)?;
+    let before = runtime
+        .snapshot()
+        .await
+        .map_err(|_| WorkspaceError::runtime())?;
+    let offered = before.modes.as_ref().is_some_and(|modes| {
+        modes
+            .available
+            .iter()
+            .any(|mode| mode.id == request.mode_id)
+    });
+    if !offered {
+        return Err(WorkspaceError::not_supported());
+    }
+    runtime
+        .set_mode(request.mode_id)
+        .await
+        .map_err(|_| WorkspaceError::runtime())?;
+    let after = runtime
+        .snapshot()
+        .await
+        .map_err(|_| WorkspaceError::runtime())?;
+    Ok(SessionModeResultV1 {
+        protocol: 1,
+        session_id: request.session_id,
+        modes: after.modes,
+    })
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum WorkspaceLifecycleCommand {
     #[serde(rename = "deleteSession", rename_all = "camelCase")]
@@ -2254,6 +2494,20 @@ pub async fn harness_models_v18(
         return Err(WorkspaceError::safe_mode());
     }
     let directory = verified_project_directory(state.inner(), &request.workspace_id, true)?;
+    if let Some(agent) = request.harness.acp_agent() {
+        // ACP advertises models only inside a conversation, and a probe
+        // conversation would add to the agent's own history. Offer the agent
+        // default plus what its last conversation in this host advertised.
+        return Ok(HarnessModelsResult {
+            protocol: 18,
+            harness: request.harness,
+            models: state.workspace.inner.acp.catalog_models(agent),
+            resources: piui_runtime::workspace_runtime::NativeResourceCatalog {
+                items: Vec::new(),
+                warnings: Vec::new(),
+            },
+        });
+    }
     let id = Uuid::new_v4().to_string();
     let session_dir = state
         .workspace
@@ -3406,6 +3660,7 @@ mod tests {
                 .collect(),
             capabilities,
             models,
+            modes: None,
         };
         assert_eq!(
             serde_json::to_value(WorkspaceResult::Session {
@@ -4720,5 +4975,140 @@ mod native_host_tests {
         assert_eq!(finish(slow).await.expect_err("withdrawn").code, "CONFLICT");
         assert!(no_live_or_starting_runtime(&host));
         cleanup(host, root);
+    }
+}
+
+/// ACP agents through the whole host: registry decisions, the production
+/// runner and ACP bridge, the fake ACP agent, history binding and replay.
+#[cfg(test)]
+mod acp_host_tests {
+    use super::native_host_tests::{chat_request, run_turn, test_root};
+    use super::{HarnessKind, WorkspaceEventPublisher, WorkspaceHost, content_hash};
+    use piui_orchestration::NativeHistoryReference;
+    use piui_platform::ProjectDirectory;
+    use piui_runtime::workspace_runtime::AcpAgentId;
+    use std::sync::Arc;
+
+    fn fixture() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../crates/piui-runtime/bridge/acp.test-fixture.mjs")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_acp_chat_starts_only_after_trust_binds_its_history_and_replays_results() {
+        let root = test_root("acp-host");
+        let host = WorkspaceHost::open(&root.join("app-data")).expect("host");
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("project");
+        let directory = ProjectDirectory::resolve(&project).expect("directory");
+        let fixture = std::fs::canonicalize(fixture()).expect("fixture");
+        let registry = host.acp_agents().clone();
+        registry
+            .add(
+                registry.revision(),
+                &serde_json::json!({
+                    "schemaVersion": 1,
+                    "id": "lab-agent",
+                    "displayName": "Lab Agent",
+                    "command": { "program": piui_runtime::script_runner::process_directory(&fixture).to_string_lossy() },
+                    "version": { "args": ["--version"], "verified": { "minimum": "1.0.0", "ceiling": "2.0.0" } }
+                }),
+            )
+            .expect("add");
+        let agent = AcpAgentId::new("lab-agent").expect("id");
+        let view = registry.view(agent).expect("view");
+        let Some(command_line) = view.command_line.clone() else {
+            // No Node on this machine.
+            let _ = std::fs::remove_dir_all(root);
+            return;
+        };
+        let publisher: WorkspaceEventPublisher = Arc::new(|_| {});
+        let mut request = chat_request("workspace-acp", "ACP chat");
+        request.harness = HarnessKind::Acp(agent);
+        let refused = host
+            .launch_session(&directory, request.clone(), publisher.clone())
+            .await
+            .expect_err("untrusted agents never start");
+        assert_eq!(refused.code, "ACP_TRUST_REQUIRED");
+        assert!(
+            host.inner
+                .registry
+                .lock()
+                .expect("registry")
+                .sessions()
+                .is_empty()
+        );
+
+        registry
+            .trust(registry.revision(), agent, &view.fingerprint, &command_line)
+            .expect("trust");
+        let snapshot = host
+            .launch_session(&directory, request, publisher)
+            .await
+            .expect("trusted agent starts");
+        let session_id = snapshot.session.id.clone();
+        assert_eq!(snapshot.session.harness, HarnessKind::Acp(agent));
+        assert_eq!(snapshot.models.len(), 2);
+        assert_eq!(
+            snapshot.modes.as_ref().map(|modes| modes.available.len()),
+            Some(2)
+        );
+        assert!(
+            host.record(&session_id)
+                .expect("record")
+                .native_id
+                .is_none(),
+            "an unused draft is not bound"
+        );
+        run_turn(&host, &session_id, "hello").await;
+        let live = host.snapshot(&session_id).await.expect("snapshot");
+        assert!(
+            live.blocks
+                .iter()
+                .any(|block| block.text.as_deref() == Some("hello\u{2028}world"))
+        );
+        assert_eq!(
+            host.record(&session_id)
+                .expect("record")
+                .native_id
+                .as_deref(),
+            Some("fixture-session"),
+            "the first admitted turn binds the conversation"
+        );
+        assert_eq!(
+            registry
+                .catalog_models(agent)
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            ["default", "fixture-fast", "fixture-deep"],
+            "pickers learn the advertised models"
+        );
+
+        // A closed conversation serves a dependency result through its own replay.
+        host.close_session(&session_id).await.expect("close");
+        let reference = NativeHistoryReference {
+            fields: Vec::new(),
+            session_id: session_id.clone(),
+            block_id: Some("acp-assistant-99".into()),
+            content_hash: Some(content_hash("earlier answer")),
+        };
+        let text = host
+            .resolve_history_reference(&reference, "workspace-acp", &project)
+            .await
+            .expect("replayed result");
+        assert_eq!(text, "earlier answer");
+        let missing = NativeHistoryReference {
+            content_hash: Some(content_hash("never said")),
+            ..reference
+        };
+        assert!(
+            host.resolve_history_reference(&missing, "workspace-acp", &project)
+                .await
+                .is_err(),
+            "an unverifiable reference fails instead of guessing"
+        );
+        host.shutdown_all().await;
+        let _ = std::fs::remove_dir_all(root);
     }
 }

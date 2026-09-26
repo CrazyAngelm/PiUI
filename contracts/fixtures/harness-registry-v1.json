@@ -1,0 +1,64 @@
+{
+  "protocol": 1,
+  "revision": 0,
+  "safeMode": false,
+  "checked": false,
+  "harnesses": [
+    {
+      "harness": "codex",
+      "name": "Codex",
+      "source": "built-in",
+      "state": "ready",
+      "location": "C:/Users/lab/AppData/Roaming/npm/node_modules/@openai/codex/bin/codex.js",
+      "version": "0.157.1",
+      "verifiedVersions": "0.147.0 – 0.157.x",
+      "signInHint": "Sign in with Codex's own flow: run `codex login` in a terminal."
+    },
+    {
+      "harness": "acp:gemini-cli",
+      "name": "Gemini CLI",
+      "source": "acp-built-in",
+      "state": "checking",
+      "reason": "Checking this agent…",
+      "signInHint": "Sign in with Gemini CLI's own flow: run `gemini` in a terminal and choose a sign-in method. To use an API key instead, allow PiUI to pass GEMINI_API_KEY below.",
+      "docsUrl": "https://github.com/google-gemini/gemini-cli"
+    }
+  ],
+  "agents": [
+    {
+      "descriptor": {
+        "schemaVersion": 1,
+        "id": "gemini-cli",
+        "displayName": "Gemini CLI",
+        "command": {
+          "program": "gemini",
+          "args": ["--experimental-acp"]
+        },
+        "version": {
+          "args": ["--version"]
+        },
+        "environment": [
+          "GEMINI_API_KEY",
+          "GOOGLE_API_KEY",
+          "GOOGLE_APPLICATION_CREDENTIALS",
+          "GOOGLE_CLOUD_PROJECT",
+          "GOOGLE_CLOUD_LOCATION",
+          "GOOGLE_GENAI_USE_VERTEXAI",
+          "HTTPS_PROXY",
+          "HTTP_PROXY",
+          "NO_PROXY"
+        ],
+        "authHint": "Sign in with Gemini CLI's own flow: run `gemini` in a terminal and choose a sign-in method. To use an API key instead, allow PiUI to pass GEMINI_API_KEY below.",
+        "docsUrl": "https://github.com/google-gemini/gemini-cli"
+      },
+      "source": "built-in",
+      "fingerprint": "546a3012e964972e5071973329d47e81297fbfc3d5d4e508aec9a55031c9b71a",
+      "state": "checking",
+      "reason": "Checking this agent…",
+      "trusted": true,
+      "secretEnvironment": ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS"],
+      "allowedSecrets": [],
+      "authMethods": []
+    }
+  ]
+}

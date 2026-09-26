@@ -70,6 +70,17 @@ contract test share `fixtures/acp-descriptors`: `valid-*` pass both,
 the host rules reject. `valid-builtin-gemini-cli.json` is the shipped Gemini
 CLI descriptor, the exact JSON value the host serializes.
 
+`harness-registry-v1.ts` is the Settings → Harnesses protocol (command
+`harness_registry_v1`, event `piui://harness-registry-v1`): harness readiness,
+detected location, version and verified range for built-in adapters and ACP
+agents, plus add / trust (the exact command line) / confirm version / allow
+secret-like environment names / remove for ACP descriptors, each with an
+`expectedRevision`. Listing never runs an agent; checks and changes are refused
+in safe mode. `fixtures/harness-registry-v1.{json,ts}` is the shared golden
+fixture. `workspace-session-mode-v1.ts` adds `workspace_session_mode_v1` and the
+optional v15 `SessionSnapshot.modes` field for agent-advertised session modes;
+no other workspace shape changed.
+
 `harness-identity-v2.ts` versions the identity grammar itself (ADR-034): v1 was
 the closed built-in set; v2 keeps every v1 value and adds `acp:<descriptor id>`
 (a lowercase slug of 1-32 letters, digits and inner hyphens) for Agent Client

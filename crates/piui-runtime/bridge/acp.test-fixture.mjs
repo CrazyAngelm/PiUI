@@ -4,6 +4,7 @@
 import { createInterface } from 'node:readline';
 
 const flag = name => process.argv.includes(name);
+if (flag('--version')) { process.stdout.write('fixture-agent 1.2.3\n'); process.exit(0); }
 const protocol = Number(process.argv.find(arg => arg.startsWith('--protocol='))?.split('=')[1] ?? 1);
 const send = value => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...value })}\n`);
 const notify = (sessionId, update) => send({ method: 'session/update', params: { sessionId, update } });
@@ -130,14 +131,17 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
     send({ id, result: { protocolVersion: protocol, agentCapabilities: { loadSession: !flag('--no-load'), promptCapabilities: { image: false }, mcpCapabilities: { http: !flag('--no-http'), sse: false } }, authMethods: [{ id: 'agent-login', name: 'Agent login', description: 'Sign in using the agent' }, { id: 'api-key', name: 'API key\u0007' }], agentInfo: { name: 'fixture', version: '1.2.3' } } });
   } else if (method === 'session/new' || method === 'session/load') {
     if (flag('--auth-required')) { send({ id, error: { code: -32000, message: 'Authentication required' } }); continue; }
-    if (method === 'session/load' && params.sessionId !== 'saved') { send({ id, error: { code: -32002, message: 'Resource not found' } }); continue; }
+    // `saved` and the id this fixture hands out can be reopened; both replay
+    // the same short conversation.
+    if (method === 'session/load' && !['saved', 'fixture-session'].includes(params.sessionId)) { send({ id, error: { code: -32002, message: 'Resource not found' } }); continue; }
     if (params.cwd.startsWith('\\\\?\\')) throw Error('verbatim cwd');
     for (const server of params.mcpServers) await callCoordinator(server);
     if (method === 'session/load') {
-      notify('saved', { sessionUpdate: 'user_message_chunk', messageId: 'm1', content: { type: 'text', text: 'earlier question' } });
-      notify('saved', { sessionUpdate: 'agent_message_chunk', messageId: 'm2', content: { type: 'text', text: 'earlier ' } });
-      notify('saved', { sessionUpdate: 'agent_message_chunk', messageId: 'm2', content: { type: 'text', text: 'answer' } });
-      notify('saved', { sessionUpdate: 'tool_call', toolCallId: 'old-call', title: 'Read notes', kind: 'read', status: 'completed' });
+      const loaded = params.sessionId;
+      notify(loaded, { sessionUpdate: 'user_message_chunk', messageId: 'm1', content: { type: 'text', text: 'earlier question' } });
+      notify(loaded, { sessionUpdate: 'agent_message_chunk', messageId: 'm2', content: { type: 'text', text: 'earlier ' } });
+      notify(loaded, { sessionUpdate: 'agent_message_chunk', messageId: 'm2', content: { type: 'text', text: 'answer' } });
+      notify(loaded, { sessionUpdate: 'tool_call', toolCallId: 'old-call', title: 'Read notes', kind: 'read', status: 'completed' });
       send({ id, result: configMode ? sessionState() : null });
     } else {
       send({ id, result: { sessionId: 'fixture-session', ...sessionState() } });

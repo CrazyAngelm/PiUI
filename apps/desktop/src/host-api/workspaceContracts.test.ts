@@ -74,6 +74,31 @@ describe('harness identity grammar v2', () => {
   });
 });
 
+describe('harness registry v1', () => {
+  it('matches the shared Rust golden JSON with compile-time checked fields', async () => {
+    const { harnessRegistryFixture } = await import('../../../../contracts/fixtures/harness-registry-v1');
+    const data: unknown = JSON.parse(readFileSync(new URL('../../../../contracts/fixtures/harness-registry-v1.json', import.meta.url), 'utf8'));
+    expect(harnessRegistryFixture).toEqual(data);
+  });
+  it('carries names and fixed texts only: no credential, environment value or native session field', async () => {
+    const { harnessRegistryFixture } = await import('../../../../contracts/fixtures/harness-registry-v1');
+    const forbidden = new Set(['nativeId', 'nativePath', 'apiKey', 'token', 'env', 'credentials', 'auth']);
+    function check(value: unknown): void {
+      if (Array.isArray(value)) { for (const item of value) check(item); return; }
+      if (value !== null && typeof value === 'object') {
+        for (const [key, item] of Object.entries(value)) { expect(forbidden.has(key), key).toBe(false); check(item); }
+      }
+    }
+    check(harnessRegistryFixture);
+    // Additive v15 snapshot field for agent-advertised session modes.
+    const modes: NonNullable<import('../../../../contracts/workspace-v15').SessionSnapshot['modes']> = {
+      current: 'default',
+      available: [{ id: 'default', name: 'Default' }, { id: 'plan', name: 'Plan', description: 'Read-only' }],
+    };
+    expect(modes.available).toHaveLength(2);
+  });
+});
+
 describe('ACP agent descriptor v1 schema', () => {
   it('agrees with the host rules on every shared fixture', async () => {
     const { readdirSync } = await import('node:fs');

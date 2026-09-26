@@ -696,6 +696,22 @@ pub struct NativeHarnessSummary {
     pub status: HarnessAvailability,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The detected executable or entry script, for Settings only. It is not
+    /// part of the workspace catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<PathBuf>,
+}
+
+/// The versions each built-in adapter was tested with, for display.
+#[must_use]
+pub const fn builtin_verified_versions(kind: HarnessKind) -> Option<&'static str> {
+    match kind {
+        HarnessKind::Codex => Some("0.147.0 – 0.157.x"),
+        HarnessKind::ClaudeCode => Some("2.1.0 – 2.x"),
+        HarnessKind::PrimeAgent => Some("0.9.2, 0.9.3"),
+        HarnessKind::Hermes => Some("0.21.0"),
+        HarnessKind::Pi | HarnessKind::Acp(_) => None,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2772,6 +2788,13 @@ pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
             } else {
                 (HarnessAvailability::Available, None)
             };
+            // The entry script of a Node package, else the executable.
+            let location = launch
+                .args
+                .first()
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .unwrap_or(launch.program);
             NativeHarnessSummary {
                 kind,
                 name: kind.display_name().into(),
@@ -2779,6 +2802,7 @@ pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
                 version: launch.version,
                 status,
                 reason,
+                location: Some(location),
             }
         }
         Err(NativeRuntimeError::NodeUnavailable) => NativeHarnessSummary {
@@ -2788,6 +2812,7 @@ pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
             version: None,
             status: HarnessAvailability::Unavailable,
             reason: Some("Node is unavailable.".into()),
+            location: None,
         },
         Err(_) => NativeHarnessSummary {
             kind,
@@ -2796,6 +2821,7 @@ pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
             version: None,
             status: HarnessAvailability::Unavailable,
             reason: Some("The native harness is not installed.".into()),
+            location: None,
         },
     })
     .collect()

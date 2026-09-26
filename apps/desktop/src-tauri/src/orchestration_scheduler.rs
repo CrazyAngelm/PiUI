@@ -2640,6 +2640,74 @@ mod tests {
     }
 
     #[test]
+    fn acp_launch_policy_is_native_only_and_refuses_what_acp_cannot_enforce() {
+        use piui_orchestration::PermissionMode as Mode;
+        let agent = piui_orchestration::AcpAgentId::new("gemini-cli").expect("id");
+        let native = piui_runtime::workspace_runtime::acp_harness_capabilities();
+        let mut gemini = profile(Harness::Acp(agent));
+        gemini.model_provider = None;
+        gemini.model = "default".into();
+        let (capabilities, policy) = launch_policy(&gemini, &native).expect("ACP policy");
+        assert_eq!(capabilities.permission_modes, [Mode::Native]);
+        assert!(capabilities.native_enforced_tools.is_empty());
+        assert!(
+            policy.coordinator,
+            "the workspace tool is offered over HTTP MCP"
+        );
+        assert_eq!(policy.allowed_tools, None);
+        assert_eq!(policy.native_subagents, None);
+        let lease = ControlledSpawnLease {
+            run_id: "run".into(),
+            run_revision: 1,
+            task_revision: 1,
+            lease_id: "lease".into(),
+            step_id: "step".into(),
+            member_id: "member".into(),
+            profile: gemini.clone(),
+            task_instructions: "Review".into(),
+            dependency_result_references: vec![],
+            dependency_outputs: vec![],
+        };
+        let request = workspace_launch_request("workspace", "session", &lease, policy, None);
+        assert_eq!(request.harness, HarnessKind::Acp(agent));
+        assert_eq!(harness_name(Harness::Acp(agent)), "acp:gemini-cli");
+        for mode in [Mode::ReadOnly, Mode::WorkspaceWrite, Mode::FullAccess] {
+            let mut preset = gemini.clone();
+            preset.permission_mode = mode;
+            assert!(launch_policy(&preset, &native).is_err(), "{mode:?}");
+        }
+        let mut speed = gemini.clone();
+        speed.service_tier = Some("standard".into());
+        assert!(launch_policy(&speed, &native).is_err());
+        let mut tools = gemini.clone();
+        tools.tool_policy.rules = vec![native_rule("shell", ToolDecision::Deny)];
+        assert!(launch_policy(&tools, &native).is_err());
+        let mut resources = gemini.clone();
+        resources.resource_rules = vec![piui_orchestration::ResourceRule {
+            kind: piui_orchestration::ResourceKind::Mcp,
+            id: "docs".into(),
+            enabled: false,
+        }];
+        assert!(launch_policy(&resources, &native).is_err());
+        let mut base = gemini.clone();
+        base.base_instructions = Some(String::new());
+        assert!(launch_policy(&base, &native).is_err());
+        // No enforceable read-only mode: a single model call is refused.
+        let mut llm = gemini.clone();
+        llm.permission_mode = Mode::ReadOnly;
+        assert_eq!(
+            one_shot_launch_policy(&llm, &native)
+                .err()
+                .map(|error| error.code),
+            Some("llm-read-only-unsupported")
+        );
+        // An unavailable agent is refused before anything is leased.
+        let offline =
+            piui_runtime::workspace_runtime::offline_harness_capabilities(HarnessKind::Acp(agent));
+        assert!(launch_policy(&gemini, &offline).is_err());
+    }
+
+    #[test]
     fn claude_code_launch_policy_is_explicit_and_refuses_unsupported_settings() {
         use piui_orchestration::PermissionMode as Mode;
         let native = native_capabilities();

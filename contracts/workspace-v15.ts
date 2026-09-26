@@ -42,6 +42,8 @@ export interface WorkspaceApproval {
 export interface SessionSnapshot {
   session: WorkspaceSession; revision: number; blocks: DesktopTimelineBlock[];
   approvals: WorkspaceApproval[]; capabilities: HarnessCapabilities; models: WorkspaceModel[];
+  /** Additive v15 field: modes a live ACP agent advertises (`workspace-session-mode-v1`). */
+  modes?: import('./workspace-session-mode-v1').SessionModesV1;
 }
 export interface WorkspaceCatalog {
   protocol: 15; safeMode: boolean; workspaces: WorkspaceSummary[];

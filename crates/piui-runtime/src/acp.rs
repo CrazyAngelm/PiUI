@@ -48,7 +48,9 @@ const MAX_ENVIRONMENT_NAMES: usize = 32;
 const MAX_ENVIRONMENT_NAME_CHARS: usize = 128;
 const MAX_AUTH_HINT_CHARS: usize = 400;
 const MAX_DOCS_URL_CHARS: usize = 300;
-const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
+/// Node-based agent CLIs load large bundles even for `--version`; the probe
+/// runs off the UI path, so a generous bound only matters for a hung program.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(20);
 /// A failed version probe is repeated after this delay; a success is kept
 /// until the executable (or script) changes.
 const VERSION_RETRY: Duration = Duration::from_secs(60);
