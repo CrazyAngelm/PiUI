@@ -39,6 +39,17 @@ export const projectsHost = {
   setProjectTrust(projectId: string, trustState: 'trusted' | 'restricted'): Promise<ProjectSummary> {
     return call<ProjectSummary>('Trust update', 'set_project_trust', { projectId, trustState });
   },
+  /** Changes only PiUI's label for the folder; the folder itself is untouched. */
+  renameProject(projectId: string, name: string): Promise<ProjectSummary> {
+    return call<ProjectSummary>('Project rename', 'rename_project', { projectId, name });
+  },
+  setProjectPinned(projectId: string, pinned: boolean): Promise<ProjectSummary> {
+    return call<ProjectSummary>('Project pin update', 'set_project_pinned', { projectId, pinned });
+  },
+  /** Forgets the registry entry only; no folder or native history is deleted. */
+  async removeProject(projectId: string): Promise<void> {
+    await call<void>('Project removal', 'remove_project', { projectId });
+  },
 };
 
 /**

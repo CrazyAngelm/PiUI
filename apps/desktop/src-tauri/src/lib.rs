@@ -736,6 +736,13 @@ pub fn run() -> Result<(), tauri::Error> {
             let app_data_dir = app.path().app_data_dir()?;
             let state = HostState::open(&app_data_dir, safe_mode)
                 .map_err(Box::<dyn std::error::Error>::from)?;
+            let extension_ui = app.handle().clone();
+            state
+                .workspace
+                .set_extension_ui_publisher(std::sync::Arc::new(move |event| {
+                    use tauri::Emitter;
+                    let _ = extension_ui.emit(workspace_api::WORKSPACE_EXTENSION_UI_EVENT, event);
+                }));
             let orchestration = orchestration_api::OrchestrationApiState::open(&app_data_dir)
                 .map_err(|_| std::io::Error::other("Could not open local orchestration data"))?;
             app.manage(orchestration);

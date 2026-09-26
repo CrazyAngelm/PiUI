@@ -1,6 +1,7 @@
 <script lang="ts">
   import { t } from '../locale/language';
   import type { AgentKind, ExtensionSummary, Preferences } from '../../host-api/types';
+  import { openView } from '../../app/viewSwitch';
 
   export let preferences: Preferences;
   export let preferencesBusy = false;
@@ -38,7 +39,7 @@
     <div>
       <h1 id="settings-title">{$t("Settings")}</h1>
     </div>
-    <button type="button" class="settings-close" onclick={onClose} aria-label={$t("Close settings")}>{$t("Done")}</button>
+    <span class="settings-header-actions"><button type="button" class="settings-close" onclick={() => openView(undefined)}>{$t('New interface')}</button><button type="button" class="settings-close" onclick={onClose} aria-label={$t("Close settings")}>{$t("Done")}</button></span>
   </header>
 
   <div class="settings-layout">
@@ -178,6 +179,7 @@
   .settings-header h1 { margin: 0; font-size: 25px; letter-spacing: -.035em; }
   .settings-close { min-height: 34px; padding: 0 14px; border: 1px solid var(--piui-border); border-radius: 9px; background: var(--piui-surface-1); color: var(--piui-text); font-size: 12px; font-weight: 700; }
   .settings-close:hover { border-color: var(--piui-accent); background: var(--piui-surface-2); }
+  .settings-header-actions { display: flex; gap: var(--piui-space-2); }
   .settings-layout { display: grid; grid-template-columns: minmax(170px, 210px) minmax(0, 1fr); min-height: 0; flex: 1 1 0; }
   .settings-nav { display: flex; flex-direction: column; gap: 3px; padding: 24px 14px; border-right: 1px solid var(--piui-border-subtle); background: var(--piui-bg-raised); }
   .settings-nav button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 0 11px; border-radius: 9px; background: transparent; color: var(--piui-text-muted); text-align: left; font-size: 13px; font-weight: 650; }

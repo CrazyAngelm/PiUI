@@ -8,7 +8,7 @@
  * the whole transcript for every token.
  */
 import { projectsHost as host } from '../host-api/projectsClient';
-import type { Preferences } from '../host-api/types';
+import type { Preferences, ProjectSummary } from '../host-api/types';
 import { composerRequest } from '../host-api/composerClient';
 import { runtimeSettings } from '../host-api/runtimeSettings';
 import { deleteWorkspaceSession } from '../host-api/workspaceLifecycle';
@@ -38,14 +38,16 @@ import {
 } from '../features/workspace/workspaceState';
 
 export type PipelineSection = 'systems' | 'runs' | 'schedules' | 'agents' | 'teams' | 'pipelines';
-export type SettingsSection = 'general' | 'harnesses' | 'projects' | 'shortcuts' | 'about';
+export type SettingsSection = 'general' | 'harnesses' | 'extensions' | 'projects' | 'shortcuts' | 'about';
 
 export type Route =
   | { name: 'home' }
   | { name: 'chat'; sessionId: string }
   | { name: 'inbox' }
   | { name: 'pipelines'; section: PipelineSection; runId?: string }
-  | { name: 'settings'; section: SettingsSection };
+  | { name: 'settings'; section: SettingsSection }
+  /** Read-only native session history of one folder (or personal chats). */
+  | { name: 'history'; workspaceId: string; sessionId?: string };
 
 export interface InboxApproval {
   approval: WorkspaceApproval;
@@ -98,7 +100,7 @@ function writeJson(key: string, value: unknown): void {
 }
 
 const PIPELINE_SECTIONS: readonly PipelineSection[] = ['systems', 'runs', 'schedules', 'agents', 'teams', 'pipelines'];
-const SETTINGS_SECTIONS: readonly SettingsSection[] = ['general', 'harnesses', 'projects', 'shortcuts', 'about'];
+const SETTINGS_SECTIONS: readonly SettingsSection[] = ['general', 'harnesses', 'extensions', 'projects', 'shortcuts', 'about'];
 
 function isRoute(value: unknown): value is Route {
   if (typeof value !== 'object' || value === null || !('name' in value)) return false;
@@ -114,6 +116,10 @@ function isRoute(value: unknown): value is Route {
     }
     case 'settings':
       return SETTINGS_SECTIONS.includes((value as { section?: unknown }).section as SettingsSection);
+    case 'history': {
+      const { workspaceId, sessionId } = value as { workspaceId?: unknown; sessionId?: unknown };
+      return typeof workspaceId === 'string' && (sessionId === undefined || typeof sessionId === 'string');
+    }
     default:
       return false;
   }
@@ -136,6 +142,8 @@ export class WorkspaceStore {
   drafts = $state.raw<Record<string, string>>({});
   collapsedProjects = $state.raw<string[]>([]);
   preferences = $state.raw<Preferences>(DEFAULT_PREFERENCES);
+  /** Registry rows (agent kind, pin) that the v15 workspace catalog does not carry. */
+  projectSummaries = $state.raw<ProjectSummary[]>([]);
   preferencesError = $state<string>();
   preferencesBusy = $state(false);
   interruptBusy = $state(false);
@@ -159,6 +167,7 @@ export class WorkspaceStore {
   private deleted = new Set<string>();
   private draftTimer: ReturnType<typeof setTimeout> | undefined;
   private unlisten: (() => void) | undefined;
+  private stopSurfaces: (() => void) | undefined;
   private disposed = false;
 
   // ---- derived views -------------------------------------------------------
@@ -220,6 +229,7 @@ export class WorkspaceStore {
   async start(): Promise<void> {
     this.restoreUiState();
     void this.loadPreferences();
+    void this.startExtensionSurfaces();
     try {
       this.unlisten = await workspaceHost.listen((event) => this.enqueueEvent(event));
       if (this.disposed) {
@@ -243,6 +253,20 @@ export class WorkspaceStore {
     this.persistDraftsNow();
     this.disposed = true;
     this.unlisten?.();
+    this.stopSurfaces?.();
+  }
+
+  /** Extension notices, statuses and widgets of native sessions; loaded off the first-paint path. */
+  private async startExtensionSurfaces(): Promise<void> {
+    try {
+      const { extensionSurfaces } = await import('./chat/extensions/extensionSurfaces.svelte');
+      if (this.disposed) return;
+      const stop = await extensionSurfaces.start(this);
+      if (this.disposed) stop();
+      else this.stopSurfaces = stop;
+    } catch {
+      // Chats work without extension surfaces; approvals still arrive through v15.
+    }
   }
 
   // ---- navigation -----------------------------------------------------------
@@ -357,7 +381,10 @@ export class WorkspaceStore {
   async loadPreferences(): Promise<void> {
     try {
       const bootstrap = await host.bootstrap();
-      if (!this.disposed) this.applyPreferences(bootstrap.preferences);
+      if (!this.disposed) {
+        this.applyPreferences(bootstrap.preferences);
+        this.projectSummaries = bootstrap.projects;
+      }
     } catch (error) {
       if (!this.disposed) this.preferencesError = errorMessage(error);
     }
@@ -718,7 +745,7 @@ export class WorkspaceStore {
     this.catalogError = undefined;
     try {
       const project = await host.pickAndAddProject();
-      if (project) await this.loadCatalog(project.id);
+      if (project) await Promise.all([this.loadCatalog(project.id), this.loadProjects()]);
     } catch (error) {
       this.catalogError = errorMessage(error);
     } finally {
@@ -729,5 +756,46 @@ export class WorkspaceStore {
   async trustProject(workspaceId: string): Promise<void> {
     await host.setProjectTrust(workspaceId, 'trusted');
     await this.loadCatalog(workspaceId);
+  }
+
+  /** Registry rows for agent kind and pin state; the catalog carries names and trust. */
+  async loadProjects(): Promise<void> {
+    try {
+      const bootstrap = await host.bootstrap();
+      if (!this.disposed) this.projectSummaries = bootstrap.projects;
+    } catch {
+      // Menus keep the last rows; the next load refreshes pin labels.
+    }
+  }
+
+  /** Renames PiUI's label only; the folder on disk keeps its name. */
+  async renameProject(workspaceId: string, name: string): Promise<void> {
+    await host.renameProject(workspaceId, name);
+    await Promise.all([this.loadCatalog(workspaceId), this.loadProjects()]);
+  }
+
+  /** Pinned folders sort first in the host registry order. */
+  async setProjectPinned(workspaceId: string, pinned: boolean): Promise<void> {
+    await host.setProjectPinned(workspaceId, pinned);
+    await Promise.all([this.loadCatalog(), this.loadProjects()]);
+  }
+
+  /**
+   * Forgets a folder in PiUI. The host stops that folder's agents first; the
+   * folder, its files and every harness's own history stay on disk.
+   */
+  async removeProject(workspaceId: string): Promise<void> {
+    await host.removeProject(workspaceId);
+    const route = this.route;
+    const affected =
+      (route.name === 'chat' && this.catalog.sessions.find((session) => session.id === route.sessionId)?.workspaceId === workspaceId) ||
+      (route.name === 'history' && route.workspaceId === workspaceId) ||
+      (route.name === 'pipelines' && this.selectedWorkspaceId === workspaceId);
+    if (affected) {
+      this.pipelineDirty = false;
+      this.route = { name: 'home' };
+      writeJson(ROUTE_KEY, this.route);
+    }
+    await Promise.all([this.loadCatalog(), this.loadProjects()]);
   }
 }

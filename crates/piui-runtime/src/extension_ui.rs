@@ -307,6 +307,32 @@ impl ExtensionUiMailbox {
     }
 }
 
+/// Projects one fire-and-forget extension UI request that a workspace bridge
+/// forwarded (Pi RPC `notify`, `setStatus`, `setWidget`, `setTitle`,
+/// `set_editor_text`). It applies the same bounds, control-character
+/// stripping, path redaction and opaque ids as the classic mailbox. Workspace
+/// bridges answer dialog methods as approvals, so a dialog or unknown method
+/// reaching this path becomes a payload-free `Unsupported` notice.
+#[must_use]
+pub fn project_surface_request(object: &Map<String, Value>) -> ExtensionUiAction {
+    let source_id = object.get("id").and_then(Value::as_str);
+    let source = source_id.unwrap_or("");
+    let method = object.get("method").and_then(Value::as_str);
+    let public_id = opaque_id("extension", source);
+    match request_kind(method) {
+        RequestKind::FireAndForget(kind) => valid_source_id(source_id)
+            .ok_or(())
+            .and_then(|source_id| parse_fire_and_forget(object, source_id, public_id.clone(), kind))
+            .unwrap_or_else(|()| {
+                unsupported_action(public_id, Some(kind.method()), UNSUPPORTED_REQUEST_SUMMARY)
+            }),
+        RequestKind::Dialog(kind) => {
+            unsupported_action(public_id, Some(kind.method()), UNSUPPORTED_DIALOG_SUMMARY)
+        }
+        RequestKind::Unknown => unsupported_action(public_id, method, UNSUPPORTED_REQUEST_SUMMARY),
+    }
+}
+
 pub(crate) struct ExtensionUiDispatch {
     pub(crate) action: ExtensionUiAction,
     pub(crate) delivery: ExtensionUiDelivery,
@@ -1339,5 +1365,54 @@ mod tests {
             response,
             ExtensionUiResponse::Selected { option_id } if option_id == "opaque-option"
         ));
+    }
+
+    #[test]
+    fn workspace_surface_requests_match_the_public_fixture() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../contracts/fixtures/workspace-extension-ui-v1.json"
+        ))
+        .expect("surface fixture");
+        let cases = fixture["cases"].as_array().expect("cases");
+        assert!(!cases.is_empty());
+        for case in cases {
+            let action = super::project_surface_request(&object(case["request"].clone()));
+            assert_eq!(
+                serde_json::to_value(&action).expect("serializes action"),
+                case["event"]["action"],
+                "request {}",
+                case["request"]
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_surface_requests_fail_closed_on_invalid_payloads() {
+        for request in [
+            json!({"id": "a", "method": "notify"}),
+            json!({"id": "a", "method": "notify", "message": "x", "notifyType": "loud"}),
+            json!({"method": "setTitle", "title": "no id"}),
+            json!({"id": "a", "method": "setWidget", "widgetKey": "k", "widgetLines": vec!["x"; MAX_WIDGET_LINES + 1]}),
+            json!({"id": "a", "method": "set_editor_text", "text": "x".repeat(MAX_EDITOR_TEXT_CHARS + 1)}),
+            json!({"id": "a", "method": "setTitle", "title": "x".repeat(MAX_TITLE_CHARS + 1)}),
+        ] {
+            let action = super::project_surface_request(&object(request.clone()));
+            assert!(
+                matches!(action, ExtensionUiAction::Unsupported { .. }),
+                "request {request} must become unsupported"
+            );
+            let serialized = serde_json::to_string(&action).expect("serializes action");
+            assert!(!serialized.contains("xxxx"), "no rejected text crosses");
+        }
+        let escaped = super::project_surface_request(&object(json!({
+            "id": "a",
+            "method": "notify",
+            "message": "\u{1b}[31mred\u{1b}[0m C:\\Users\\me\\secret.txt",
+        })));
+        let ExtensionUiAction::Notify { message, level, .. } = escaped else {
+            panic!("expected a notice");
+        };
+        assert_eq!(message, "red <external-path>/secret.txt");
+        assert_eq!(level, "info");
     }
 }

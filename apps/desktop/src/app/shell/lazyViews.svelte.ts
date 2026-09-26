@@ -1,5 +1,6 @@
 import type ChatView from './ChatView.svelte';
 import type CommandPalette from './CommandPalette.svelte';
+import type HistoryView from '../history/HistoryView.svelte';
 import type InboxView from './InboxView.svelte';
 import type PipelinesView from './PipelinesView.svelte';
 import type SettingsView from './SettingsView.svelte';
@@ -15,6 +16,7 @@ interface Views {
   pipelines: typeof PipelinesView;
   settings: typeof SettingsView;
   palette: typeof CommandPalette;
+  history: typeof HistoryView;
 }
 
 export type LazyView = keyof Views;
@@ -25,6 +27,7 @@ const loaders: { [K in LazyView]: () => Promise<{ default: Views[K] }> } = {
   pipelines: () => import('./PipelinesView.svelte'),
   settings: () => import('./SettingsView.svelte'),
   palette: () => import('./CommandPalette.svelte'),
+  history: () => import('../history/HistoryView.svelte'),
 };
 
 class LazyViews {

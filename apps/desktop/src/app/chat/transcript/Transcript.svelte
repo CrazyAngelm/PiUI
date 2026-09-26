@@ -24,8 +24,24 @@
     historySessionId?: string;
     agentLabel: string;
     searchOpen?: boolean;
+    /** Read-only native history pages older entries in from the host. */
+    olderAvailable?: boolean;
+    olderLoading?: boolean;
+    onLoadOlder?: () => void;
+    emptyText?: string;
   }
-  let { blocks, loading, sessionKey, historySessionId, agentLabel, searchOpen = $bindable(false) }: Props = $props();
+  let {
+    blocks,
+    loading,
+    sessionKey,
+    historySessionId,
+    agentLabel,
+    searchOpen = $bindable(false),
+    olderAvailable = false,
+    olderLoading = false,
+    onLoadOlder,
+    emptyText,
+  }: Props = $props();
 
   const PAGE = 120;
   let limit = $state(PAGE);
@@ -269,12 +285,16 @@
       {#if blocks.length === 0 && loading}
         <div class="loading"><Skeleton lines={4} /></div>
       {:else if blocks.length === 0}
-        <p class="empty">{$t('No messages yet. Say hello to start.')}</p>
+        <p class="empty">{emptyText ?? $t('No messages yet. Say hello to start.')}</p>
       {/if}
 
       {#if hidden > 0 && !searching}
         <div class="earlier">
           <Button size="sm" variant="ghost" onclick={() => (limit += PAGE)}>{$t('Show earlier messages ({0})', [hidden])}</Button>
+        </div>
+      {:else if olderAvailable && onLoadOlder && !searching}
+        <div class="earlier">
+          <Button size="sm" variant="ghost" loading={olderLoading} onclick={onLoadOlder}>{$t('Load earlier history')}</Button>
         </div>
       {/if}
 

@@ -80,6 +80,18 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   runs the draft once through the host script runner with an editable sample
   stdin and shows what a run would record; it never starts an agent or model.
 
+- `feat/classic-port` (P2.7, first half) — classic parity in the new shell
+  ([CLASSIC_PARITY.md](CLASSIC_PARITY.md)): read-only Pi/Prime session history
+  from the index with paging, cross-folder search and a branch summary
+  (tree navigation stays unavailable, R-03); Pi extension notices, statuses,
+  widgets, window title and prepared text in chats over the additive
+  `workspace-extension-ui-v1` channel, editor dialog prefill and timeout;
+  Settings → Extensions; project rename, pin and remove; Settings → About
+  entry for `?view=legacy` / `?view=classic` with a way back. UI Lab: demo
+  index history (branched, long, damaged, personal) and a "Pi extension
+  playground" chat (`/extension-demo`). Gaps before deleting classic:
+  continue an indexed Pi session live, Pi slash-command discovery, Tier 1A.
+
 ## In progress
 
 - Nothing; next steps wait for the owner's review of the remaining-work plan.
@@ -103,6 +115,14 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   sign-in hint until the user runs `claude` → `/login`.
 - Codex command output is unbounded in the bridge; a non-string Pi input
   placeholder would break Rust parsing.
+- Extension text is path-redacted by the shared sanitizer, so prepared
+  composer text that starts with a slash command shows `<external-path>/…`
+  (same in the classic view).
+- `perf:smoke` first-paint budget: the base (`84f6021`) was at 163 556 of
+  163 840 gzip bytes; the classic port brings it to 166 657 (Russian copy in
+  the statically bundled locale catalogs +1 454, sidebar/store +1 647). Any
+  further visible copy exceeds it until per-language catalogs load lazily or
+  the budget is revised.
 
 ## Next
 

@@ -258,3 +258,45 @@ test("Pi select dialogs expose opaque options and reply with the exact native va
     assert.equal((await adapter.snapshot()).title, "ui:cancelled");
   } finally { await adapter.dispose(); }
 });
+
+test("Pi forwards fire-and-forget extension UI as bounded surface requests without replying", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    await runScenario(adapter, events, "surfaces");
+    const surfaces = events.filter((event) => event.type === "extensionUi").map((event) => event.request);
+    assert.deepEqual(surfaces.map((request) => request.method), ["notify", "setStatus", "setWidget", "setWidget", "setTitle", "set_editor_text"]);
+    assert.deepEqual(surfaces[0], { method: "notify", id: "native-notify", message: "Deployed to /srv/app", notifyType: "warning" });
+    assert.deepEqual(surfaces[2], { method: "setWidget", id: "native-widget", widgetKey: "todo", widgetPlacement: "belowEditor", widgetLines: ["a", "b"] });
+    assert.equal(surfaces[3].widgetLines, undefined, "an oversized widget is dropped for the host to report");
+    assert.doesNotMatch(JSON.stringify(surfaces), /SECRET-MUST-NOT-LEAK|extension_ui_request/);
+    assert.equal((await adapter.snapshot()).title, "Fixture", "fire-and-forget requests get no native reply");
+  } finally { await adapter.dispose(); }
+});
+
+test("Pi cancels and reports an unknown extension UI method", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    await runScenario(adapter, events, "unknownui");
+    const [surface] = events.filter((event) => event.type === "extensionUi");
+    assert.deepEqual(surface.request, { method: "custom", id: "native-custom" });
+    assert.equal((await adapter.snapshot()).title, "ui:cancelled");
+    assert.doesNotMatch(JSON.stringify(events), /SECRET-MUST-NOT-LEAK/);
+  } finally { await adapter.dispose(); }
+});
+
+test("Pi editor dialogs carry their prefill and retire when Pi's timeout ends them", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    await adapter.prompt({ text: "surfaces", mode: "prompt" });
+    const approval = await waitFor(() => events.find((event) => event.type === "approval")?.approval);
+    assert.equal(approval.prefill, "feat: draft");
+    assert.equal(approval.timeoutMs, 40);
+    assert.equal(approval.inputLabel, "Response");
+    await waitFor(() => events.some((event) => event.type === "approvalResolved" && event.requestId === approval.id));
+    await assert.rejects(adapter.respond({ requestId: approval.id, decision: "approve-once", text: "late" }), { bridgeCode: "stale-approval" });
+    assert.equal((await adapter.snapshot()).approvals.length, 0);
+  } finally { await adapter.dispose(); }
+});

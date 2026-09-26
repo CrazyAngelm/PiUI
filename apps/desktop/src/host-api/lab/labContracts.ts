@@ -106,6 +106,9 @@ export type {
   ProjectTrustState,
 } from '../types';
 
+export type { WorkspaceExtensionUiAction, WorkspaceExtensionUiEventV1 } from '../../../../../contracts/workspace-extension-ui-v1';
+export { WORKSPACE_EXTENSION_UI_EVENT } from '../../../../../contracts/workspace-extension-ui-v1';
+
 /** Event channels emitted by the Rust host outside the orchestration contract files. */
 export const WORKSPACE_EVENT_CHANNEL = 'piui://workspace-event';
 export const COMPOSER_EVENT_CHANNEL = 'piui://composer-v19';

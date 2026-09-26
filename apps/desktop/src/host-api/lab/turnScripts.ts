@@ -2,7 +2,9 @@ import { liveLabel } from './catalogFake';
 import { BUILDER_MARKER, builderAnswer } from './labBuilder';
 import type {
   ApprovalDecision, DesktopTimelineBlock, HarnessKind, PermissionMode, SessionStatus, UsageReceipt, WorkspaceApproval,
+  WorkspaceExtensionUiAction,
 } from './labContracts';
+import { extensionDemoTurn, isExtensionDemo } from './extensionDemo';
 import { createRandom, type LabRandom } from './labRandom';
 import { commandText, fileChangeText, toolBlock } from './transcriptBuilder';
 import {
@@ -33,6 +35,8 @@ export type TurnStep =
   | { readonly kind: 'delta'; readonly blockId: string; readonly text: string }
   | ApprovalStep
   | { readonly kind: 'usage'; readonly receipt: UsageReceipt }
+  /** An ephemeral extension UI surface (workspace extension UI v1). */
+  | { readonly kind: 'extensionUi'; readonly action: WorkspaceExtensionUiAction }
   | { readonly kind: 'continue'; readonly next: () => readonly TurnStep[] }
   | { readonly kind: 'end'; readonly outcome: 'succeeded' | 'failed' };
 
@@ -259,6 +263,7 @@ function builderTurn(context: TurnContext, prompt: string): TurnStep[] {
 /** A complete chat turn of roughly 2–6 seconds, sometimes pausing for approval. */
 export function chatTurn(context: TurnContext, prompt: string): TurnStep[] {
   if (prompt.trimStart().startsWith(BUILDER_MARKER)) return builderTurn(context, prompt);
+  if (context.harness === 'pi' && isExtensionDemo(prompt)) return extensionDemoTurn(context, prompt);
   const random = createRandom(`${context.sessionId}:turn:${context.turn}`);
   const ids = idsFor(context, 't');
   const style = streamStyle(context.harness);

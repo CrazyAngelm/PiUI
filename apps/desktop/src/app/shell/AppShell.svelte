@@ -154,6 +154,9 @@
           {:else if store.route.name === 'settings' && lazyViews.loaded.settings}
             {@const SettingsView = lazyViews.loaded.settings}
             <SettingsView section={store.route.section} onTrust={openTrust} />
+          {:else if store.route.name === 'history' && lazyViews.loaded.history}
+            {@const HistoryView = lazyViews.loaded.history}
+            <HistoryView workspaceId={store.route.workspaceId} sessionId={store.route.sessionId} />
           {:else}
             <div class="view-loading"><Skeleton lines={5} /></div>
           {/if}
