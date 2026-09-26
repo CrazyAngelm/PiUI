@@ -134,3 +134,42 @@ instead of becoming uncertain. A step spawned by an agent returns to ready and
 its caller receives the same code. Commands keep their established
 `runtime-unavailable` error code. A cached signed-out verdict is not a
 capability: running the step again after signing in starts it normally.
+
+# Composer inputs v1 and composer v19 attachments
+
+`workspace-composer-inputs-v1.ts` is an independently versioned route
+(`workspace_composer_inputs_v1`, `protocol: 1`) and event
+(`piui://composer-drop-v1`) for the chat composers. `pick` opens the native
+file dialog in the project folder; `paste` takes clipboard image bytes
+(base64); `drop` redeems, once and within a minute, the opaque id of an OS
+drop the host observed on the window (the paths stay in the host; the event
+carries only a count and the id). Images are sniffed from their bytes (PNG,
+JPEG, GIF, WebP; at most 5,000,000 bytes, 10 files per batch, 6 per message)
+and kept in PiUI's app data (`composer-attachments-v1`) until their message is
+delivered or removed; unsent ones are deleted at startup. Nothing is written
+into a project. Other files are never read: they come back as a path
+reference (`@relative/path` inside the project, else the absolute path) that
+the UI inserts only after a visible confirmation. `preview` returns a pending
+image's bytes for its thumbnail; `discard` deletes pending images. `files`
+lists names (no contents) of a trusted project's regular files for `@`:
+`.gitignore`/`.ignore`/git excludes, hidden and dependency folders skipped,
+links never followed or listed, at most 2,000 results, bounded walk; `query`
+only narrows by a case-insensitive subsequence. `catalog` returns the native
+`/` commands (`source`: `command` | `extension` | `prompt` | `skill`) and `$`
+skill mentions a live session reports; PiUI inserts their text and never
+executes them. Every command refuses safe mode (`SAFE_MODE`); project
+commands need a trusted project (`NOT_TRUSTED`). New codes:
+`IMAGES_UNSUPPORTED`, `ATTACHMENT_UNAVAILABLE`, `FILES_UNAVAILABLE`,
+`DROP_EXPIRED`. Unknown fields are rejected.
+
+Composer v19 is extended additively: `send.attachments` (pending image ids),
+`QueuedMessage.attachments` (`{id,name,mimeType,size}`, absent without
+images) and `capabilities.images`. A host that cannot deliver the images of a
+send refuses it (`IMAGES_UNSUPPORTED`, `ATTACHMENT_UNAVAILABLE`) before
+anything is queued, and re-checks before a queued message is sent; an older
+host rejects the unknown field instead of dropping images. Queue files and
+snapshots without images keep their exact v19 shape. User blocks list the
+images a message carried as trailing `[image]` lines (live bridges and the
+closed-session projection); image bytes never cross into blocks.
+`fixtures/workspace-composer-inputs-v1.json` is checked by the Rust host and
+the TypeScript client.

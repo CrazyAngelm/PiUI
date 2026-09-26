@@ -134,6 +134,32 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
     `5a07a69` timestamp contrast, palette search label and matching, named
     canvas nodes and connections.
 
+- `feat/composer-inputs` (plan P3 item 11, first half) — composer inputs, see
+  [contracts/README.md](../contracts/README.md) and the bridge
+  [CONTRACT.md](../crates/piui-runtime/bridge/CONTRACT.md):
+  - Attachments in both composers: paperclip (native dialog), paste and drag
+    and drop (the host keeps OS drop paths and hands the WebView a single-use
+    id). Images are sniffed (PNG/JPEG/GIF/WebP, 5 MB), held in PiUI's app
+    data until their message is delivered or removed and sent natively where
+    the harness takes them: Codex data-URL input items (models whose
+    `inputModalities` include image), Claude Code base64 image blocks, Pi RPC
+    `images` (models declaring image input), Hermes ACP image blocks
+    (`promptCapabilities.image`); Prime refuses them. The paperclip is
+    aria-disabled with the reason where images are unsupported; a refused
+    image is explained, never dropped. Other files become `@path` references
+    after a confirmation; nothing is copied into a project. Previews are drawn
+    on a canvas, so the CSP is unchanged. Sent images show as chips in the
+    transcript (bridges and the closed-session history list `[image]` lines).
+  - `@` project file picker (name-only, `.gitignore`-aware host listing of a
+    trusted project, fuzzy ranking in the UI) in both composers; `/` lists
+    harness-native commands next to PiUI's (Pi `get_commands`, Claude Code
+    `initialize`/`commands_changed`, Hermes `available_commands_update`),
+    badged and inserted as text; `$` inserts Codex skill mentions (the bridge
+    adds the documented `skill` input item). Additive composer v19 fields,
+    new `workspace_composer_inputs_v1` route; UI Lab parity.
+  - Fix: the new-chat composer no longer puts the remembered harness and
+    model back over the user's pick when the host catalog refreshes.
+
 ## In progress
 
 - Nothing; next steps wait for the owner's review of the remaining-work plan.
