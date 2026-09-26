@@ -8,6 +8,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   frontend:
     name: Frontend quality
@@ -26,15 +33,58 @@ jobs:
       - run: python tools/validate_spec.py
       - run: python tools/validate_runtime_evidence.py --check evidence/upstream/npm/earendil-works-pi-coding-agent/0.81.1
       - run: python -m unittest tools/test_validate_runtime_evidence.py -v
-      - run: pnpm check
-      - run: pnpm test
+      - name: svelte-check
+        run: pnpm check
+      - name: Type-check the Playwright specs
+        run: pnpm --filter @piui/desktop check:e2e
+      - name: Vitest
+        run: pnpm test
+      - run: pnpm contract:test
+      - name: System files (examples)
+        run: pnpm system:check examples/systems/*.piui.json
+      - name: Bridge tests
+        run: node --test crates/piui-runtime/bridge/*.test.mjs
+      - run: pnpm agent:api:test
       - run: pnpm build
       - run: pnpm test:smoke
       - run: pnpm perf:smoke
-      - run: pnpm contract:test
 
-  rust-core:
-    name: Rust core (${{ matrix.os }})
+  lab-e2e:
+    name: UI Lab E2E (Playwright, Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.23.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Chromium and its system dependencies
+        run: pnpm --filter @piui/desktop exec playwright install --with-deps chromium
+      - name: Lab E2E (dev server) and production build under the app CSP
+        run: pnpm test:lab
+      - name: Upload the Playwright report and screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lab-e2e-report
+          path: |
+            apps/desktop/playwright-report/
+            apps/desktop/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  rust:
+    name: Rust (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -49,14 +99,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.94.1
         with:
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-workspace
+      - name: Tauri system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential file libayatana-appindicator3-dev librsvg2-dev \
+            libssl-dev libwebkit2gtk-4.1-dev libxdo-dev
       - run: cargo fmt --all -- --check
-      - run: cargo clippy -p piui-contracts -p piui-extensions -p piui-index -p piui-platform -p piui-runtime --all-targets -- -D warnings
-      - run: cargo test -p piui-contracts -p piui-extensions -p piui-index -p piui-platform -p piui-runtime
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
 
   tauri-windows:
-    name: Tauri no-bundle build (Windows)
+    name: Tauri WebView2 E2E and no-bundle build (Windows)
     runs-on: windows-latest
-    needs: [frontend, rust-core]
+    needs: [frontend, rust]
     env:
       PIUI_REQUIRE_WINDOWS_REPARSE_TEST: "1"
     steps:
@@ -72,15 +132,18 @@ jobs:
         with:
           python-version: '3.13'
       - uses: dtolnay/rust-toolchain@1.94.1
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-workspace
       - run: pnpm install --frozen-lockfile
       - name: Prime Agent static compatibility spike
         run: python spikes/prime-agent/run_tests.py
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
       - name: Windows E2E Job runner lint
         run: cargo clippy -p piui-platform --features e2e-harness --all-targets -- -D warnings
       - name: Windows E2E Job runner containment
         run: cargo test -p piui-platform --features e2e-harness --test e2e_job_runner
-      - name: Tauri WebView2 E2E
+      - name: Tauri WebView2 E2E (new shell, debug build, isolated data)
         run: pnpm test:e2e
       - run: pnpm --filter @piui/desktop tauri build --no-bundle
