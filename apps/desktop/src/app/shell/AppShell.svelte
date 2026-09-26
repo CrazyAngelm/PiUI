@@ -174,7 +174,9 @@
   <!-- "Run a pipeline" from a chat or the palette; loaded on first request. -->
   {#if runLauncher.request}
     {#await import('../triggers/RunPipelineDialog.svelte') then module}
-      <module.default />
+      {#key runLauncher.request}
+        <module.default />
+      {/key}
     {/await}
   {/if}
 
