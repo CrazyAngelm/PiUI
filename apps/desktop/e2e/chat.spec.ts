@@ -140,7 +140,11 @@ test.describe('queue and steer', () => {
   test('a follow-up waits for the turn; steer joins it at once', async ({ lab, page }) => {
     test.slow(); // Several native turns are simulated with real timers.
     await lab.open();
-    const transcript = await startChat(lab, 'Walk through the event bus batching');
+    // "Install" makes the lab pause the turn on an approval, so the turn stays
+    // active (deterministically) while the follow-up is queued and steered.
+    const transcript = await startChat(lab, 'Install the tools, then walk through the event bus batching');
+    const card = page.getByRole('article', { name: 'Permission request' });
+    await expect(card).toBeVisible({ timeout: 15_000 });
     const message = page.getByRole('textbox', { name: 'Message' });
     await expect(message).toHaveAttribute('placeholder', 'Queue a follow-up…');
 
@@ -154,8 +158,10 @@ test.describe('queue and steer', () => {
     await page.getByRole('button', { name: 'Steer', exact: true }).click();
     await expect(transcript.getByText('Keep the answer short', { exact: true })).toBeVisible();
     await expect(queue.getByText('Keep the answer short')).toHaveCount(0);
+    await expect(queue.getByRole('article').filter({ hasText: 'Also cover backpressure' })).toContainText('Queued');
 
-    // After the running turn ends the queued follow-up is sent as its own turn.
+    // Once the turn continues and ends, the queued follow-up is sent as its own turn.
+    await card.getByRole('button', { name: 'Allow once' }).click();
     // (The lab's answer quotes the prompt, so the text appears twice.)
     await expect(transcript.getByText('Also cover backpressure', { exact: true }).first()).toBeVisible({ timeout: 45_000 });
     await expect(queue).toBeHidden({ timeout: 45_000 });

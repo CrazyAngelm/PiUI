@@ -53,11 +53,6 @@ export class Lab {
     return this.sidebar.getByRole('listitem').getByRole('button', { name: title }).first();
   }
 
-  /** The open dialog (bits-ui renders it in a portal). */
-  get dialog(): Locator {
-    return this.page.getByRole('dialog');
-  }
-
   /** An option of the open picker popover. */
   option(name: string | RegExp): Locator {
     return this.page.getByRole('option', { name });
