@@ -509,12 +509,12 @@ mod tests {
     fn windows_shell_paths_drop_the_verbatim_prefix() {
         use super::platform::shell_path;
         assert_eq!(
-            shell_path(std::path::Path::new(r"\\?\C:\Users\a\b.txt")),
-            Some(PathBuf::from(r"C:\Users\a\b.txt"))
+            shell_path(std::path::Path::new(r"\\?\C:\Users\example\b.txt")),
+            Some(PathBuf::from(r"C:\Users\example\b.txt"))
         );
         assert_eq!(
-            shell_path(std::path::Path::new(r"C:\Users\a\b.txt")),
-            Some(PathBuf::from(r"C:\Users\a\b.txt"))
+            shell_path(std::path::Path::new(r"C:\Users\example\b.txt")),
+            Some(PathBuf::from(r"C:\Users\example\b.txt"))
         );
         assert_eq!(
             shell_path(std::path::Path::new(r"\\?\UNC\server\share\x.txt")),
