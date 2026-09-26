@@ -22,17 +22,20 @@
   }
   let { plugin, safeMode, busy, onToggle, onSettings, onReload, onRestart, onRemove }: Props = $props();
 
+  // "Label: count" needs no plural forms in either language.
   const counts = $derived(
-    [
-      [plugin.contributes.commands.length, '{0} commands'],
-      [plugin.contributes.panels.length, '{0} panels'],
-      [plugin.contributes.themes.length, '{0} themes'],
-      [plugin.contributes.templates.length, '{0} templates'],
-      [plugin.contributes.nodeTypes.length, '{0} pipeline nodes'],
-      [plugin.contributes.acpAgents.length, '{0} ACP agents'],
-    ]
-      .filter(([count]) => Number(count) > 0)
-      .map(([count, text]) => $t(String(text), [count])),
+    (
+      [
+        [plugin.contributes.commands.length, 'Commands: {0}'],
+        [plugin.contributes.panels.length, 'Panels: {0}'],
+        [plugin.contributes.themes.length, 'Themes: {0}'],
+        [plugin.contributes.templates.length, 'Templates: {0}'],
+        [plugin.contributes.nodeTypes.length, 'Pipeline nodes: {0}'],
+        [plugin.contributes.acpAgents.length, 'ACP agents: {0}'],
+      ] as const
+    )
+      .filter(([count]) => count > 0)
+      .map(([count, text]) => $t(text, [count])),
   );
   const status = $derived(
     plugin.problems.length
@@ -101,7 +104,7 @@
       {#if plugin.backend}
         <p class="backend">
           <strong>{$t('Backend')}:</strong> {$t(BACKEND_STATE_TEXT[plugin.backend.state])}
-          {#if plugin.backend.restarts}<span class="muted">· {$t('{0} restarts', [plugin.backend.restarts])}</span>{/if}
+          {#if plugin.backend.restarts}<span class="muted">· {$t('Restarts: {0}', [plugin.backend.restarts])}</span>{/if}
         </p>
         <code class="command">{commandLineText(plugin.backend.commandLine)}</code>
       {/if}

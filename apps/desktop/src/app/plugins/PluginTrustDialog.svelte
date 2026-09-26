@@ -39,7 +39,7 @@
       ...review.contributes.themes.map((title) => [$t('Theme'), title] as const),
       ...review.contributes.templates.map((title) => [$t('Pipeline template'), title] as const),
       ...review.contributes.nodeTypes.map((title) => [$t('Pipeline node'), title] as const),
-      ...(review.contributes.settings ? [[$t('Settings'), $t('{0} fields', [review.contributes.settings])] as const] : []),
+      ...(review.contributes.settings ? [[$t('Settings'), $t('Fields: {0}', [review.contributes.settings])] as const] : []),
     ],
   );
 </script>
@@ -63,7 +63,7 @@
       {#if review.update}
         <div><dt>{$t('Installed version')}</dt><dd>{review.update.fromVersion}{#if review.update.codeChanged} <Badge tone="warning">{$t('Code changed')}</Badge>{/if}</dd></div>
       {/if}
-      <div><dt>{$t('Package')}</dt><dd>{$t('{0} files, {1}', [review.files, formatBytes(review.bytes)])} · <span title={review.codeHash}>{$t('code {0}', [review.codeHash.slice(0, 12)])}</span></dd></div>
+      <div><dt>{$t('Package')}</dt><dd>{$t('Files: {0}, {1}', [review.files, formatBytes(review.bytes)])} · <span title={review.codeHash}>{$t('code {0}', [review.codeHash.slice(0, 12)])}</span></dd></div>
     </dl>
 
     <section aria-labelledby="plugin-permissions">

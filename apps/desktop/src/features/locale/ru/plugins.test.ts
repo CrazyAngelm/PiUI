@@ -51,7 +51,7 @@ describe('Russian copy for plugins', () => {
       ...Object.values(PERMISSION_TEXT).flatMap((text) => [text.label, text.detail]),
       ...Object.values(BACKEND_STATE_TEXT),
       ...Object.values(LOG_TEXT),
-      '{0} commands', '{0} panels', '{0} themes', '{0} templates', '{0} pipeline nodes', '{0} ACP agents',
+      'Commands: {0}', 'Panels: {0}', 'Themes: {0}', 'Templates: {0}', 'Pipeline nodes: {0}', 'ACP agents: {0}',
       'Plugin removed', 'Plugin reloaded', 'The backend starts again on next use',
       '{0} could not run the command', 'Open a chat to use the prepared text', '{0} prepared text for a message box.',
     ];
