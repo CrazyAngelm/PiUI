@@ -27,6 +27,7 @@
   import Split from '@lucide/svelte/icons/split';
   import Sparkles from '@lucide/svelte/icons/sparkles';
   import Code from '@lucide/svelte/icons/code';
+  import Blocks from '@lucide/svelte/icons/blocks';
   import { RUNTIME_LABEL } from '../pipelines/executors';
   import { t } from '../../features/locale/language';
   import { Spinner } from '../../lib/ui';
@@ -39,6 +40,7 @@
   const tone = $derived(STEP_TONE[view.state]);
   const rounds = $derived(view.attempts.length);
   const script = $derived(view.step.executor?.type === 'script' ? view.step.executor : undefined);
+  const pluginNode = $derived(view.step.executor?.type === 'plugin' ? view.step.executor : undefined);
   const llm = $derived(view.step.executor?.type === 'llm');
 </script>
 
@@ -55,6 +57,8 @@
       <span class="router-mark" aria-hidden="true"><Split size={14} /></span>
     {:else if script}
       <span class="router-mark" aria-hidden="true"><Code size={14} /></span>
+    {:else if pluginNode}
+      <span class="router-mark" aria-hidden="true"><Blocks size={14} /></span>
     {:else if data.profile}
       <HarnessMark kind={data.profile.harness} size={20} />
     {/if}
@@ -64,6 +68,8 @@
         <span class="sub">{$t('Router')}</span>
       {:else if script}
         <span class="sub">{$t('Script')} · {RUNTIME_LABEL[script.runtime]}</span>
+      {:else if pluginNode}
+        <span class="sub" title={pluginNode.pluginId}>{$t('Plugin node')} · {pluginNode.nodeType}</span>
       {:else if data.profile}
         <span class="sub" title={data.profile.model}>{[llm ? $t('Model call') : data.profile.name, harnessMeta(data.profile.harness).short, data.profile.model].filter(Boolean).join(' · ')}</span>
       {/if}

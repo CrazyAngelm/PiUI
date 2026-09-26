@@ -32,6 +32,10 @@
   import { START_NODE_ID } from './canvas/StartNodeCard.svelte';
   import { PipelineEditorStore } from './editorStore.svelte';
   import { TEMPLATES, buildTemplate, type TemplateId } from './templates';
+  import Blocks from '@lucide/svelte/icons/blocks';
+  import PluginTemplates from '../plugins/PluginTemplates.svelte';
+  import { pluginNodeMenu } from '../plugins/pluginNodes';
+  import { pluginRegistry } from '../plugins/pluginRegistry.svelte';
   import { useWorkspace } from '../shell/context';
 
   interface Props {
@@ -101,6 +105,7 @@
 
   onMount(() => {
     void editor.refresh();
+    void pluginRegistry.start();
     const initial = untrack(() => openCommandId);
     if (initial) editor.open(initial);
     return () => {
@@ -129,6 +134,16 @@
     // A model call stays read-only, offline and without tools on every harness.
     const locked = kind === 'llm' ? { permissionMode: 'read-only' as const, networkAccess: undefined } : { networkAccess: moved.networkAccess };
     editor.updateProfile(id, { ...moved, serviceTier: moved.serviceTier, ...locked, ...((await defaultModel(harness)) ?? {}) });
+  }
+
+  /** Node types of active plugins for the Add menu (v6.5). */
+  const pluginNodes = $derived(pluginNodeMenu(pluginRegistry.nodeTypes()));
+
+  function addPluginNode(index: number): void {
+    const entry = pluginNodes[index];
+    if (editor.readOnly || entry === undefined) return;
+    const point = api?.viewportCenter() ?? { x: 80, y: 80 };
+    editor.addPluginNode(entry.node, entry.resultFields, { x: point.x - 124, y: point.y - 50 });
   }
 
   async function addFromLibrary(profileId: string): Promise<void> {
@@ -314,6 +329,9 @@
             { label: $t('Router'), icon: Split, onSelect: () => void addAt('router') },
             { label: $t('Model call'), icon: MessageSquareText, onSelect: () => void addAt('llm') },
             { label: $t('Script'), icon: Code, onSelect: () => void addAt('script') },
+            ...(pluginNodes.length
+              ? [{ type: 'separator' as const }, { type: 'label' as const, label: $t('Plugin nodes') }, ...pluginNodes.map((entry, index) => ({ label: entry.label, icon: Blocks, onSelect: () => addPluginNode(index) }))]
+              : []),
             ...(profileItems.length
               ? [{ type: 'separator' as const }, { type: 'label' as const, label: $t('From library') }, ...profileItems.slice(0, 8).map((item) => ({ label: item.label, icon: Library, onSelect: () => void addFromLibrary(item.value) }))]
               : []),
@@ -346,6 +364,7 @@
                 <span>{$t(template.description)}</span>
               </button>
             {/each}
+            <PluginTemplates disabled={editor.readOnly} onImport={(text) => editor.importText(text)} />
           </div>
         </div>
       {/if}

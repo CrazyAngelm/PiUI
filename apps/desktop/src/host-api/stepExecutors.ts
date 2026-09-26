@@ -45,7 +45,31 @@ export const EXECUTOR_REASONS = {
   resources: "an llm step's profile cannot enable skills or MCP servers",
   spawns: 'an llm step cannot spawn agents',
   spawned: "an llm step's profile cannot be spawned",
+  // Plugin node steps (orchestration v6.5).
+  pluginId: 'a plugin id is lowercase segments of letters, digits and hyphens',
+  nodeType: 'a node type id is lowercase letters, digits and hyphens',
+  configKeys: 'a plugin node configuration has at most 30 field keys',
+  configValues: 'plugin node configuration values are strings, numbers or booleans',
+  configSize: 'a plugin node configuration is at most 64 KiB',
+  pluginBindings: 'a plugin node reads every dependency result; input bindings apply to agent and llm steps',
+  pluginMember: 'a plugin node runs on the host, not as a team member',
 } as const;
+
+/** Plugin node failure codes (orchestration v6.5). */
+export const PLUGIN_FAILURE_CODES = {
+  unavailable: 'plugin-unavailable',
+  configInvalid: 'plugin-config-invalid',
+  inputUnavailable: 'plugin-input-unavailable',
+  startFailed: 'plugin-start-failed',
+  nodeFailed: 'plugin-node-failed',
+  nodeTimeout: 'plugin-node-timeout',
+} as const;
+
+export const MAX_PLUGIN_CONFIG_BYTES = 64 * 1024;
+export const MAX_PLUGIN_CONFIG_KEYS = 30;
+const PLUGIN_ID = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?){0,7}$/;
+const NODE_TYPE_ID = /^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/;
+const CONFIG_KEY = /^[a-z][A-Za-z0-9_]{0,63}$/;
 
 /** Graph and system-file issues (English source strings of the locale catalog). */
 export const EXECUTOR_ISSUES = {
@@ -61,6 +85,9 @@ export const EXECUTOR_ISSUES = {
   llmTools: 'A model call cannot allow tools.',
   llmResources: 'A model call cannot enable skills or MCP servers.',
   needsMember: 'A system needs at least one agent or model call; scripts run on the host outside the team.',
+  pluginConfig: 'This plugin node’s identity or configuration is not valid.',
+  pluginBindings: 'A plugin node reads every dependency result; remove its input mappings.',
+  pluginUnavailable: 'This plugin node needs its plugin: install and enable it in Settings → Plugins.',
 } as const;
 
 export type ExecutorKind = StepExecutor['type'];
@@ -87,6 +114,25 @@ export function isScriptStep(step: Pick<PipelineStep, 'executor'>): boolean {
   return executorKind(step) === 'script';
 }
 
+/** Host work with no native session or team member: a script or a plugin node (v6.5). */
+export function isHostExecutedStep(step: Pick<PipelineStep, 'executor'>): boolean {
+  const kind = executorKind(step);
+  return kind === 'script' || kind === 'plugin';
+}
+
+/** `validate_plugin_executor`: the self-contained shape of a plugin node. */
+export function pluginExecutorIssue(pluginId: string, nodeType: string, config: Readonly<Record<string, unknown>>): string | undefined {
+  if (pluginId.length > 100 || !PLUGIN_ID.test(pluginId)) return EXECUTOR_REASONS.pluginId;
+  if (!NODE_TYPE_ID.test(nodeType)) return EXECUTOR_REASONS.nodeType;
+  const keys = Object.keys(config);
+  if (keys.length > MAX_PLUGIN_CONFIG_KEYS || !keys.every((key) => CONFIG_KEY.test(key))) return EXECUTOR_REASONS.configKeys;
+  if (!Object.values(config).every((value) => typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')) {
+    return EXECUTOR_REASONS.configValues;
+  }
+  if (utf8Length(JSON.stringify(config)) > MAX_PLUGIN_CONFIG_BYTES) return EXECUTOR_REASONS.configSize;
+  return undefined;
+}
+
 /** `validate_step_executor`: self-contained rules of one stored step. */
 export function stepExecutorIssue(step: PipelineStep): string | undefined {
   const executor = step.executor;
@@ -99,6 +145,11 @@ export function stepExecutorIssue(step: PipelineStep): string | undefined {
     if (!scriptTimeoutValid(executor.timeoutSeconds)) return EXECUTOR_REASONS.timeout;
     if ((step.inputBindings ?? []).length > 0) return EXECUTOR_REASONS.bindings;
   }
+  if (executor.type === 'plugin') {
+    const issue = pluginExecutorIssue(executor.pluginId, executor.nodeType, executor.config);
+    if (issue !== undefined) return issue;
+    if ((step.inputBindings ?? []).length > 0) return EXECUTOR_REASONS.pluginBindings;
+  }
   return undefined;
 }
 
@@ -109,6 +160,9 @@ export function executorAuthorityIssue(snapshot: RunDefinitionSnapshot, step: Pi
   const { team } = snapshot;
   if (kind === 'script') {
     return team.members.some((member) => member.id === step.assignedMemberId) ? EXECUTOR_REASONS.member : undefined;
+  }
+  if (kind === 'plugin') {
+    return team.members.some((member) => member.id === step.assignedMemberId) ? EXECUTOR_REASONS.pluginMember : undefined;
   }
   const member = step.assignedMemberId;
   if ([...team.sendEdges, ...team.observeEdges].some((edge) => edge.fromMemberId === member || edge.toMemberId === member)) {

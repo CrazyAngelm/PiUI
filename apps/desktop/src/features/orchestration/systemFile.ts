@@ -13,7 +13,8 @@ export interface SystemFile {
   inputs?: PipelineInput[];
   /**
    * `executor` (version 4, orchestration v6.2): `llm` for a single model call,
-   * `script` for host-run code. A script's `profile` only names the step.
+   * `script` for host-run code, `plugin` (v6.5) for a plugin's node type. A
+   * script's or plugin node's `profile` only names the step.
    */
   agents: { id: string; kind?: 'agent' | 'router'; executor?: StepExecutor; profile: Omit<AgentProfile, 'id' | 'allowedSpawnProfileIds'>; router?: RouterConfig; task: string; inputBindings?: import('../../../../../contracts/orchestration-v6').InputBinding[]; condition?: import('../../../../../contracts/orchestration-v6').ResultCondition; review?: import('../../../../../contracts/orchestration-v6').ReviewRule; requireApproval?: boolean; resultFields?: import('../../../../../contracts/orchestration-v6').ResultField[]; executionMode?: 'scheduled' | 'callable'; input?: string; position?: { x: number; y: number } }[];
   connections: GraphEdge[];
@@ -29,6 +30,7 @@ export function parseSystemFile(text: string): SystemFile {
   if (ids.size !== value.agents.length) errors.push('Agent IDs must be unique.');
   if (value.orchestrator !== undefined && !ids.has(value.orchestrator)) errors.push('Unknown orchestrator.');
   if (value.agents.some(agent => agent.id === value.orchestrator && agent.executor?.type === 'script')) errors.push('A script runs on the host and cannot be the orchestrator.');
+  if (value.agents.some(agent => agent.id === value.orchestrator && agent.executor?.type === 'plugin')) errors.push('A plugin node runs on the host and cannot be the orchestrator.');
   const edges = new Set<string>();
   for (const edge of value.connections) {
     if (!ids.has(edge.from) || !ids.has(edge.to)) errors.push('Connection references an unknown agent.');
@@ -40,8 +42,8 @@ export function parseSystemFile(text: string): SystemFile {
     edges.add(key);
   }
   for (const agent of value.agents) {
-    // A script has no native profile: its placeholder only names the step.
-    if (agent.executor?.type !== 'script') errors.push(...profileConfigurationErrors(agent.id, agent.profile));
+    // A script or a plugin node has no native profile: its placeholder only names the step.
+    if (agent.executor?.type !== 'script' && agent.executor?.type !== 'plugin') errors.push(...profileConfigurationErrors(agent.id, agent.profile));
     errors.push(...executorConfigurationErrors(agent.id, agent.executor, agent.profile));
     if (agent.router && agent.kind !== 'router') errors.push(`${agent.id}: router configuration requires kind=router.`);
     if (agent.kind === 'router' && !agent.router) errors.push(`${agent.id}: kind=router requires router configuration.`);
@@ -56,7 +58,7 @@ export function parseSystemFile(text: string): SystemFile {
 export function systemFileToGraph(file: SystemFile): AgentGraph {
   const graph = emptyGraph();
   const profiles = new Map(file.agents.map(agent => [agent.id, crypto.randomUUID()]));
-  return { ...graph, name: file.name, orchestratorId: file.orchestrator ?? file.agents.find(agent => agent.kind !== 'router' && agent.executor?.type !== 'script')?.id,
+  return { ...graph, name: file.name, orchestratorId: file.orchestrator ?? file.agents.find(agent => agent.kind !== 'router' && agent.executor?.type !== 'script' && agent.executor?.type !== 'plugin')?.id,
     spawnedAgentsJoinTeam: file.inheritTeamConnections,
     ...(file.inputs ? { inputs: file.inputs.map(input => ({ ...input })) } : {}),
     nodes: file.agents.map((agent, index) => ({ kind: agent.kind ?? 'agent', id: agent.id, ...(agent.executor ? { executor: agent.executor } : {}), task: agent.task, inputBindings: agent.inputBindings, condition: agent.condition, review: agent.review, requireApproval: agent.requireApproval, resultFields: agent.resultFields, executionMode: agent.executionMode, router: agent.router, input: agent.input, x: agent.position?.x ?? 60 + index * 280, y: agent.position?.y ?? 100,

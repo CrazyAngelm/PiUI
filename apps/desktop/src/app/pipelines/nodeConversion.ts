@@ -33,9 +33,12 @@ export const NODE_TYPE_LABEL: Readonly<Record<NodeType, string>> = { agent: 'Age
 /** A new script starts empty with the editor's default time limit. */
 export const NEW_SCRIPT_TIMEOUT_SECONDS = 60;
 
-/** The node's type; routers keep their own kind and are never converted. */
+/**
+ * The node's type; routers keep their own kind and are never converted, and
+ * a plugin node (v6.5) belongs to its plugin's node type.
+ */
 export function nodeType(node: Pick<GraphNode, 'kind' | 'executor'>): NodeType | undefined {
-  if (node.kind === 'router') return undefined;
+  if (node.kind === 'router' || node.executor?.type === 'plugin') return undefined;
   return node.executor?.type ?? 'agent';
 }
 

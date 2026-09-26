@@ -4,11 +4,14 @@ import type { AgentProfile, PipelineStep, RunDefinitionSnapshot } from '../../..
 import {
   boundedText, dependencyOutputText, EXECUTOR_REASONS, executorAuthorityIssue, executorKind, failureDetail, failureWithDetail,
   MAX_FAILURE_DETAIL_BYTES, MAX_SCRIPT_SOURCE_BYTES, MAX_SCRIPT_STDOUT_BYTES, resultFieldIssues, resultValueIssue,
+  isHostExecutedStep, MAX_PLUGIN_CONFIG_BYTES, PLUGIN_FAILURE_CODES, pluginExecutorIssue,
   SCRIPT_FAILURE_CODES, scriptResult, scriptStdinDocument, stepExecutorIssue,
 } from './stepExecutors';
 
-/** The Rust authority these helpers mirror. */
-const rust = readFileSync(new URL('../../../../crates/piui-orchestration/src/executors.rs', import.meta.url), 'utf8');
+/** The Rust authority these helpers mirror (plugin node rules live in `plugin_steps.rs`, v6.5). */
+const rust = ['executors.rs', 'plugin_steps.rs']
+  .map((name) => readFileSync(new URL(`../../../../crates/piui-orchestration/src/${name}`, import.meta.url), 'utf8'))
+  .join('\n');
 
 const script = (patch: Partial<PipelineStep> = {}): PipelineStep => ({
   id: 'metrics', name: 'Metrics', assignedMemberId: 'metrics', instructions: '', dependencyStepIds: ['plan'],
@@ -36,11 +39,28 @@ const llm: PipelineStep = {
 describe('step executor mirror (v6.2)', () => {
   it('uses the exact Rust reasons and failure codes', () => {
     for (const reason of Object.values(EXECUTOR_REASONS)) expect(rust).toContain(JSON.stringify(reason));
-    for (const code of Object.values(SCRIPT_FAILURE_CODES)) expect(rust).toContain(`"${code}"`);
+    for (const code of [...Object.values(SCRIPT_FAILURE_CODES), ...Object.values(PLUGIN_FAILURE_CODES)]) expect(rust).toContain(`"${code}"`);
     expect(rust).toContain('MAX_SCRIPT_SOURCE_BYTES: usize = 64 * 1024');
     expect(rust).toContain('MAX_SCRIPT_STDOUT_BYTES: usize = 256 * 1024');
     expect(rust).toContain('MAX_FAILURE_DETAIL_BYTES: usize = 2 * 1024');
     expect([MAX_SCRIPT_SOURCE_BYTES, MAX_SCRIPT_STDOUT_BYTES, MAX_FAILURE_DETAIL_BYTES]).toEqual([65_536, 262_144, 2_048]);
+  });
+
+  it('checks plugin node identity and flat configuration like validate_plugin_executor (v6.5)', () => {
+    const plugin = (config: Record<string, unknown>, pluginId = 'example.pipeline-pack', nodeType = 'json-transform'): PipelineStep => ({
+      id: 'shape', name: 'Shape', assignedMemberId: 'shape', instructions: '', dependencyStepIds: [],
+      executor: { type: 'plugin', pluginId, nodeType, config: config as Record<string, string | number | boolean> },
+    });
+    expect(stepExecutorIssue(plugin({ source: 'inputs', limit: 3, loud: true }))).toBeUndefined();
+    expect(isHostExecutedStep(plugin({}))).toBe(true);
+    expect(stepExecutorIssue(plugin({}, 'Example.Pack'))).toBe(EXECUTOR_REASONS.pluginId);
+    expect(stepExecutorIssue(plugin({}, 'example.pack', 'JSON'))).toBe(EXECUTOR_REASONS.nodeType);
+    expect(stepExecutorIssue(plugin({ nested: { a: 1 } }))).toBe(EXECUTOR_REASONS.configValues);
+    expect(stepExecutorIssue(plugin({ 'bad key': 1 }))).toBe(EXECUTOR_REASONS.configKeys);
+    expect(stepExecutorIssue(plugin(Object.fromEntries(Array.from({ length: 31 }, (_, index) => [`k${index}`, index]))))).toBe(EXECUTOR_REASONS.configKeys);
+    expect(pluginExecutorIssue('a.b', 'c', { text: 'x'.repeat(MAX_PLUGIN_CONFIG_BYTES) })).toBe(EXECUTOR_REASONS.configSize);
+    const bound = { ...plugin({}), inputBindings: [{ sourceStepId: 'plan', field: 'summary', name: 'summary' }] } as PipelineStep;
+    expect(stepExecutorIssue(bound)).toBe(EXECUTOR_REASONS.pluginBindings);
   });
 
   it('checks script source, timeout and agent-only features like validate_step_executor', () => {

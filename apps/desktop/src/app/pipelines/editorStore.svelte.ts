@@ -25,6 +25,7 @@ import {
   newLlmNode,
   newRouterNode,
   newScriptNode,
+  newPluginNode,
   type AgentGraph,
   type ConnectionKind,
   type GraphIssue,
@@ -32,6 +33,8 @@ import {
 } from '../../features/orchestration/agentGraph';
 import { connectAgents, connectRoute } from '../../features/orchestration/graphConnections';
 import { preflightGraph, type PreflightIssue } from '../../features/orchestration/graphPreflight';
+import { pluginNodeIssues } from '../plugins/pluginNodes';
+import { pluginRegistry } from '../plugins/pluginRegistry.svelte';
 import { GraphHistory, duplicateNode } from '../../features/orchestration/graphHistory';
 import { graphNodeHeight } from '../../features/orchestration/graphLayout';
 import { performRunAction } from '../../features/orchestration/runActions';
@@ -319,6 +322,20 @@ export class PipelineEditorStore {
     return node.id;
   }
 
+  /** A plugin's node type (v6.5), with its declared defaults and result fields. */
+  addPluginNode(
+    plugin: { pluginId: string; nodeType: string; title: string; config: Record<string, string | number | boolean> },
+    resultFields: GraphNode['resultFields'],
+    position: { x: number; y: number },
+  ): string {
+    const node = newPluginNode(this.graph.nodes.length, plugin, resultFields);
+    node.x = Math.round(position.x);
+    node.y = Math.round(position.y);
+    this.commit({ ...this.graph, nodes: [...this.graph.nodes, node] });
+    this.selectedId = node.id;
+    return node.id;
+  }
+
   addFromProfile(profile: AgentProfile, position: { x: number; y: number }): string {
     const node = newGraphNode(this.graph.nodes.length);
     node.profile = { ...structuredClone(profile), id: crypto.randomUUID(), allowedSpawnProfileIds: [] };
@@ -477,7 +494,10 @@ export class PipelineEditorStore {
     this.issues = graphIssues(this.graph);
     this.preflight = [];
     if (this.issues.length) return false;
-    this.preflight = await preflightGraph(this.graph, (harness) => harnessModels({ workspaceId: this.workspaceId, harness }, true));
+    this.preflight = [
+      ...(await preflightGraph(this.graph, (harness) => harnessModels({ workspaceId: this.workspaceId, harness }, true))),
+      ...pluginNodeIssues(this.graph, pluginRegistry),
+    ];
     if (!this.preflight.length) this.checkedNotice = 'The pipeline and native settings are valid. The host checks permissions again at launch.';
     return this.preflight.length === 0;
   }
