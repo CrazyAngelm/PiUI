@@ -387,7 +387,7 @@ fn decode_sha512_sri(value: &str) -> Option<[u8; 64]> {
 
 fn decode_standard_base64(value: &str) -> Option<Vec<u8>> {
     let encoded = value.as_bytes();
-    if encoded.is_empty() || encoded.len() % 4 != 0 {
+    if encoded.is_empty() || !encoded.len().is_multiple_of(4) {
         return None;
     }
 

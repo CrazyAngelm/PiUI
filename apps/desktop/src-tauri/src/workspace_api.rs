@@ -2209,13 +2209,12 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                     Ok(())
                 });
             }
-            if let Ok(mut live) = inner.live.lock() {
-                if live
+            if let Ok(mut live) = inner.live.lock()
+                && live
                     .get(&session_id)
                     .is_some_and(|slot| slot.instance_id == instance_id)
-                {
-                    live.remove(&session_id);
-                }
+            {
+                live.remove(&session_id);
             }
         }
     })

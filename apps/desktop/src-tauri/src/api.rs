@@ -464,11 +464,11 @@ pub async fn set_project_trust(
     };
     let _operation_guard = state.live_runtime_operation_gate.lock().await;
     require_user_project(&state, &project_id)?;
-    if trust_state == TrustState::Trusted {
-        if let Err(error) = verified_project_directory(&state, &project_id, false) {
-            retire_project_runtime_after_verification_failure(&state, &project_id, &error).await;
-            return Err(error);
-        }
+    if trust_state == TrustState::Trusted
+        && let Err(error) = verified_project_directory(&state, &project_id, false)
+    {
+        retire_project_runtime_after_verification_failure(&state, &project_id, &error).await;
+        return Err(error);
     }
     let summary = lock_index(&state)?
         .update_project_trust(&project_id, trust_state)
@@ -1890,11 +1890,11 @@ async fn live_runtime_for_mutation(
         retire_live_runtime_if_matches(state, runtime_id, true).await;
         return Err(error);
     }
-    if let Some(admission) = access.admission {
-        if let Err(error) = revalidate_session_admission(state, &admission) {
-            retire_live_runtime_if_matches(state, runtime_id, true).await;
-            return Err(error);
-        }
+    if let Some(admission) = access.admission
+        && let Err(error) = revalidate_session_admission(state, &admission)
+    {
+        retire_live_runtime_if_matches(state, runtime_id, true).await;
+        return Err(error);
     }
     Ok(access.runtime)
 }

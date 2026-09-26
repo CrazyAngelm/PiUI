@@ -564,10 +564,9 @@ impl OrchestrationScheduler {
                     &lease,
                 )
                 .is_ok()
+                && let Ok(Some(updated)) = api.get_run(workspace_id, &lease.run_id)
             {
-                if let Ok(Some(updated)) = api.get_run(workspace_id, &lease.run_id) {
-                    self.emit_run_invalidation(app, workspace_id, &updated);
-                }
+                self.emit_run_invalidation(app, workspace_id, &updated);
             }
             return Err(OrchestrationSchedulerError::conflict());
         }
@@ -896,10 +895,10 @@ impl OrchestrationScheduler {
             };
             let api = app.state::<OrchestrationApiState>();
             let admission = api.handle_agent_request(context.clone(), request, &capabilities);
-            if admission.is_ok() {
-                if let Ok(Some(updated)) = api.get_run(workspace_id, &context.run_id) {
-                    self.emit_run_invalidation(app, workspace_id, &updated);
-                }
+            if admission.is_ok()
+                && let Ok(Some(updated)) = api.get_run(workspace_id, &context.run_id)
+            {
+                self.emit_run_invalidation(app, workspace_id, &updated);
             }
             admission
         };
@@ -982,12 +981,11 @@ impl OrchestrationScheduler {
                         let _operation = host.live_runtime_operation_gate.lock().await;
                         if authorize_live_workspace(&host, workspace_id).is_ok() {
                             let api = app.state::<OrchestrationApiState>();
-                            if api.release_spawn_lease(&context, &lease).is_ok() {
-                                if let Ok(Some(updated)) =
+                            if api.release_spawn_lease(&context, &lease).is_ok()
+                                && let Ok(Some(updated)) =
                                     api.get_run(workspace_id, &context.run_id)
-                                {
-                                    self.emit_run_invalidation(app, workspace_id, &updated);
-                                }
+                            {
+                                self.emit_run_invalidation(app, workspace_id, &updated);
                             }
                         }
                         return coordinator_failure("unsupported-policy");
@@ -1155,8 +1153,7 @@ impl OrchestrationScheduler {
                 .deliver_managed_message(session_id, body)
                 .await
                 .is_ok()
-            {
-                if let Ok(run) = app
+                && let Ok(run) = app
                     .state::<OrchestrationApiState>()
                     .mark_managed_message_delivered(
                         &ManagedAgentContext {
@@ -1166,9 +1163,8 @@ impl OrchestrationScheduler {
                         },
                         &message_id,
                     )
-                {
-                    self.emit_run_invalidation(app, workspace_id, &run);
-                }
+            {
+                self.emit_run_invalidation(app, workspace_id, &run);
             }
         }
     }

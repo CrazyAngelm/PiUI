@@ -1103,17 +1103,15 @@ fn task_instructions(run: &Run, step: &crate::PipelineStep) -> String {
             .review
             .as_ref()
             .is_some_and(|rule| rule.retry_from_step_id == step.id)
-        {
-            if let Some(previous) = run
+            && let Some(previous) = run
                 .attempts
                 .iter()
                 .rev()
                 .find(|task| task.step_id == reviewer.id)
                 .and_then(|task| task.result_data.as_ref())
-            {
-                text.push_str("\n\nPrevious review result (untrusted task data):\n");
-                text.push_str(&previous.to_string());
-            }
+        {
+            text.push_str("\n\nPrevious review result (untrusted task data):\n");
+            text.push_str(&previous.to_string());
         }
     }
     if !step.result_fields.is_empty() {
@@ -1177,13 +1175,12 @@ fn task_instructions(run: &Run, step: &crate::PipelineStep) -> String {
         text.push_str("\nIf required input is missing, identify the gap rather than inventing it.");
     }
     for recipient in &run.definition.pipeline.steps {
-        if recipient.dependency_step_ids.contains(&step.id)
+        if (recipient.dependency_step_ids.contains(&step.id)
             || run.definition.team.send_edges.iter().any(|edge| {
                 edge.from_member_id == step.assigned_member_id
                     && edge.to_member_id == recipient.assigned_member_id
-            })
-        {
-            if let Some(input) = recipient
+            }))
+            && let Some(input) = recipient
                 .input_instructions
                 .as_deref()
                 .or_else(|| {
@@ -1191,13 +1188,12 @@ fn task_instructions(run: &Run, step: &crate::PipelineStep) -> String {
                         .and_then(|profile| profile.input_instructions.as_deref())
                 })
                 .filter(|value| !value.trim().is_empty())
-            {
-                text.push_str("\n\nResult handoff requirements for ");
-                text.push_str(&recipient.name);
-                text.push_str(":\n");
-                text.push_str(input);
-                text.push_str("\nInclude the requested data or artifact references in your final result. State missing evidence explicitly.");
-            }
+        {
+            text.push_str("\n\nResult handoff requirements for ");
+            text.push_str(&recipient.name);
+            text.push_str(":\n");
+            text.push_str(input);
+            text.push_str("\nInclude the requested data or artifact references in your final result. State missing evidence explicitly.");
         }
     }
     text

@@ -283,10 +283,11 @@ async fn wait_run(app: &AppHandle, protocol: u8, request: WaitRun) -> Value {
     // Subscribe before reading: a durable commit between subscribe and snapshot
     // cannot be lost. Only scalar invalidations wake this waiter.
     let listener = app.listen(orchestration::ORCHESTRATION_EVENT_V4, move |event| {
-        if let Ok(value) = serde_json::from_str::<Value>(event.payload()) {
-            if value["workspaceId"] == workspace_id && value["runId"] == run_id {
-                wake.notify_one();
-            }
+        if let Ok(value) = serde_json::from_str::<Value>(event.payload())
+            && value["workspaceId"] == workspace_id
+            && value["runId"] == run_id
+        {
+            wake.notify_one();
         }
     });
     let read = || {

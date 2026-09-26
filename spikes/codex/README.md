@@ -5,7 +5,7 @@ It does not run a model turn or read user Codex auth/config/session files.
 
 ## Run
 
-Windows with Python 3.13+, Rust 1.85+, and Codex 0.147.0 on `PATH`:
+Windows with Python 3.13+, Rust 1.88+, and Codex 0.147.0 on `PATH`:
 
 ```powershell
 py -3.13 spikes/codex/run_tests.py

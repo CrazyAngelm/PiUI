@@ -1139,10 +1139,10 @@ impl NativeRuntime {
 
 impl Drop for NativeRuntime {
     fn drop(&mut self) {
-        if let Some((pool, _)) = &self.pooled {
-            if !self.shared.shutting_down.load(Ordering::Acquire) {
-                let _ = pool.terminate_containment();
-            }
+        if let Some((pool, _)) = &self.pooled
+            && !self.shared.shutting_down.load(Ordering::Acquire)
+        {
+            let _ = pool.terminate_containment();
         }
         let _ = self.terminate_containment();
     }
@@ -1407,10 +1407,10 @@ fn validate_config(config: &NativeRuntimeConfig) -> Result<(), NativeRuntimeErro
     }
     std::fs::create_dir_all(&config.session_dir)
         .map_err(|_| NativeRuntimeError::InvalidConfiguration)?;
-    if let Some(path) = &config.native_path {
-        if !path.is_absolute() {
-            return Err(NativeRuntimeError::InvalidConfiguration);
-        }
+    if let Some(path) = &config.native_path
+        && !path.is_absolute()
+    {
+        return Err(NativeRuntimeError::InvalidConfiguration);
     }
     if config.harness == HarnessKind::PrimeAgent {
         if !is_isolated_daemon(config.daemon_socket.as_deref()) {

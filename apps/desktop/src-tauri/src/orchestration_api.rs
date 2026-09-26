@@ -864,10 +864,9 @@ impl OrchestrationApiState {
                                 step_id: step_id.clone(),
                             },
                         )?;
-                        if !first_admission {
-                            if let Some(committed) = committed_spawn(run, &step_id) {
-                                return Ok(committed);
-                            }
+                        if !first_admission && let Some(committed) = committed_spawn(run, &step_id)
+                        {
+                            return Ok(committed);
                         }
                         let revision = run.revision();
                         let lease = Coordinator::lease_controlled_spawn(

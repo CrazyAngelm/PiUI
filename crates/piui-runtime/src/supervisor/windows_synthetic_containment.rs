@@ -420,10 +420,8 @@ fn wait_for_descendant_witness_unlock(lock_path: &Path, pid_marker: &Path) {
     let deadline = Instant::now() + TERMINATION_TIMEOUT;
     let mut descendant_started = false;
     loop {
-        if !descendant_started {
-            if let Ok(pid) = fs::read_to_string(pid_marker) {
-                descendant_started = pid.trim().parse::<u32>().is_ok_and(|value| value != 0);
-            }
+        if !descendant_started && let Ok(pid) = fs::read_to_string(pid_marker) {
+            descendant_started = pid.trim().parse::<u32>().is_ok_and(|value| value != 0);
         }
         if descendant_started && lock_path.exists() && exclusive_open(lock_path).is_ok() {
             return;

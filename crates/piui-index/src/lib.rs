@@ -1172,18 +1172,16 @@ fn discover_sessions_for_project_incremental_with_descendants(
             // incomplete/malformed header remains ambiguous and is fully read.
             if classify_report_project(&header_report, &canonical_project)
                 == CandidateProjectAttribution::MatchesRequestedProject
+                && let Some(known) = known_by_path.get(path.as_path())
+                && known.fingerprint == evidence.fingerprint
             {
-                if let Some(known) = known_by_path.get(path.as_path()) {
-                    if known.fingerprint == evidence.fingerprint {
-                        stats.matched_files = stats.matched_files.saturating_add(1);
-                        stats.unchanged_sources = stats.unchanged_sources.saturating_add(1);
-                        unchanged_sources.push(UnchangedSourceObservation {
-                            session_id: known.session_id.clone(),
-                            fingerprint: evidence.fingerprint,
-                        });
-                        continue;
-                    }
-                }
+                stats.matched_files = stats.matched_files.saturating_add(1);
+                stats.unchanged_sources = stats.unchanged_sources.saturating_add(1);
+                unchanged_sources.push(UnchangedSourceObservation {
+                    session_id: known.session_id.clone(),
+                    fingerprint: evidence.fingerprint,
+                });
+                continue;
             }
 
             let verified = match read_discovery_catalog(&path, source_name, limits.max_file_bytes) {
@@ -1457,10 +1455,10 @@ impl CatalogAccumulator {
         if self.first_user_preview.is_none() && entry.role.as_deref() == Some("user") {
             self.first_user_preview = entry.preview.clone();
         }
-        if matches!(entry.role.as_deref(), Some("user" | "assistant")) {
-            if let Some(preview) = entry.preview {
-                self.last_message_preview = Some(preview);
-            }
+        if matches!(entry.role.as_deref(), Some("user" | "assistant"))
+            && let Some(preview) = entry.preview
+        {
+            self.last_message_preview = Some(preview);
         }
         if let Some(timestamp) = entry.created_at {
             self.updated_at = Some(timestamp);
