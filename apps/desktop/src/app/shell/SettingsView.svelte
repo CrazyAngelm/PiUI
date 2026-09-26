@@ -8,6 +8,8 @@
   import ShieldCheck from '@lucide/svelte/icons/shield-check';
   import ShieldAlert from '@lucide/svelte/icons/shield-alert';
   import Plus from '@lucide/svelte/icons/plus';
+  import Power from '@lucide/svelte/icons/power';
+  import BackgroundSettings from '../settings/BackgroundSettings.svelte';
   import { t, language, setLanguage, type Language } from '../../features/locale/language';
   import type { Preferences } from '../../host-api/types';
   import type { WorkspaceSummary } from '../../../../../contracts/workspace-v15';
@@ -27,6 +29,7 @@
     { id: 'general', label: 'General', icon: SlidersHorizontal },
     { id: 'harnesses', label: 'Harnesses', icon: Bot },
     { id: 'projects', label: 'Projects', icon: FolderCog },
+    { id: 'background', label: 'Background', icon: Power },
     { id: 'shortcuts', label: 'Shortcuts', icon: Keyboard },
     { id: 'about', label: 'About', icon: Info },
   ];
@@ -200,6 +203,8 @@
           <p class="muted">{$t('No project folders yet.')}</p>
         {/each}
       </div>
+    {:else if section === 'background'}
+      <BackgroundSettings />
     {:else if section === 'shortcuts'}
       <h2>{$t('Shortcuts')}</h2>
       <div class="rows">

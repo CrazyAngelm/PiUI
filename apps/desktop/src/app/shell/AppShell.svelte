@@ -12,8 +12,11 @@
   import { EmptyState, Skeleton } from '../../lib/ui';
   import { provideWorkspace } from './context';
   import { runLauncher } from '../triggers/runLauncher.svelte';
+  import { syncTrayLabels } from '../settings/trayLabels';
 
   const store = provideWorkspace(new WorkspaceStore());
+  // The tray menu (background mode) speaks the interface language.
+  $effect(() => syncTrayLabels($t));
 
   let paletteOpen = $state(false);
   let drawerOpen = $state(false);
