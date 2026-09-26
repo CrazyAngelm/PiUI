@@ -10,7 +10,9 @@
   import Search from '@lucide/svelte/icons/search';
   import Moon from '@lucide/svelte/icons/moon';
   import Bot from '@lucide/svelte/icons/bot';
+  import Play from '@lucide/svelte/icons/play';
   import { t } from '../../features/locale/language';
+  import { runLauncher } from '../triggers/runLauncher.svelte';
   import HarnessMark from './HarnessMark.svelte';
   import { useWorkspace } from './context';
 
@@ -80,6 +82,14 @@
                 </Command.Item>
                 <Command.Item class="palette__item" value="action:runs" keywords={['runs', 'history']} onSelect={() => run(() => store.navigate({ name: 'pipelines', section: 'runs' }))}>
                   <History size={15} /><span>{$t('Open runs')}</span>
+                </Command.Item>
+                <Command.Item
+                  class="palette__item"
+                  value="action:run-pipeline"
+                  keywords={['run', 'start', 'pipeline', 'запуск', 'пайплайн']}
+                  onSelect={() => run(() => runLauncher.open(store.selectedSession?.workspaceId ?? store.selectedWorkspace?.id, store.selectedSessionId || undefined))}
+                >
+                  <Play size={15} /><span>{$t('Run pipeline…')}</span>
                 </Command.Item>
                 <Command.Item class="palette__item" value="action:harnesses" keywords={['harness', 'codex', 'claude', 'pi']} onSelect={() => run(() => store.navigate({ name: 'settings', section: 'harnesses' }))}>
                   <Bot size={15} /><span>{$t('Manage harnesses')}</span>
