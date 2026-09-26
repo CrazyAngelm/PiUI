@@ -1,60 +1,119 @@
 import type { HostTransport } from '../transport';
+import { classicHandlers } from './classicFake';
+import { composerHandlers } from './composerFake';
+import { LabEventBus } from './labBus';
+import { browserTimers, LabClock, type LabTimers } from './labClock';
+import { LabDecodeFailure, tauriArgumentError } from './labErrors';
+import type { LabHandlers } from './labHandlers';
+import { LabIdSource } from './labRandom';
+import { LAB_SCENARIOS, wire, type LabScenarioName, type LabState } from './labState';
+import { orchestrationHandlers } from './orchestration/orchestrationFake';
+import { LabRunScheduler } from './orchestration/runScheduler';
+import { buildSeed, type SeedActivity } from './scenarios';
+import { LabSessions } from './sessionRuntime';
+import { ambientSegment } from './turnScripts';
+import { workspaceHandlers } from './workspaceFake';
 
 /**
- * UI Lab host: an in-memory stand-in for the Rust host used when the UI runs
- * in a plain browser (`pnpm dev`). It never executes agents or touches files;
- * it exists so every screen and state can be designed and tested without Tauri.
+ * UI Lab host: a deterministic, in-memory fake of the Rust host used when the
+ * UI runs in a plain browser (`pnpm dev`). It answers the same commands with
+ * the same JSON shapes, error codes and event channels, simulates native turns
+ * and orchestration runs with timers, and never executes an agent, touches a
+ * file or makes a network request. Pick a scenario with `?lab=<name>`.
  */
-type Handler = (args: Record<string, unknown>) => unknown | Promise<unknown>;
-
-export class LabEventBus {
-  private readonly channels = new Map<string, Set<(payload: unknown) => void>>();
-  on(channel: string, handler: (payload: unknown) => void): () => void {
-    const set = this.channels.get(channel) ?? new Set();
-    set.add(handler);
-    this.channels.set(channel, set);
-    return () => set.delete(handler);
-  }
-  emit(channel: string, payload: unknown): void {
-    for (const handler of this.channels.get(channel) ?? []) handler(payload);
-  }
+export interface LabHostOptions {
+  /** Defaults to `?lab=` in the page URL, then `demo`. */
+  readonly scenario?: LabScenarioName;
+  /** Timer seam for tests (fake timers work with the default too). */
+  readonly timers?: LabTimers;
+  /** Starts the scenario's background activity (a streaming chat, a running run). Default `true`. */
+  readonly ambient?: boolean;
 }
 
-export function labError(code: string): Error & { code: string } {
-  return Object.assign(new Error(code), { code });
+export interface LabHost extends HostTransport {
+  readonly scenario: LabScenarioName;
+  /** Live lab state, exposed for tests and debugging only. */
+  readonly state: LabState;
 }
 
-export function createLabHost(extra: Record<string, Handler> = {}): HostTransport {
-  const bus = new LabEventBus();
-  const handlers: Record<string, Handler> = {
-    workspace_command_v15: (args) => {
-      const command = args.command as { type: string };
-      if (command.type === 'catalog') {
-        return {
-          type: 'catalog',
-          catalog: {
-            protocol: 15, safeMode: false, workspaces: [], sessions: [],
-            harnesses: [
-              { kind: 'pi', name: 'Pi', installed: false, status: 'unavailable', reason: 'Desktop host required' },
-              { kind: 'prime-agent', name: 'Prime Agent', installed: false, status: 'unavailable', reason: 'Desktop host required' },
-              { kind: 'codex', name: 'Codex', installed: false, status: 'unavailable', reason: 'Desktop host required' },
-              { kind: 'hermes', name: 'Hermes', installed: false, status: 'unavailable', reason: 'Desktop host required' },
-            ],
-          },
-        };
+export function scenarioFromSearch(search: string): LabScenarioName {
+  const requested = new URLSearchParams(search).get('lab');
+  return LAB_SCENARIOS.find((name) => name === requested) ?? 'demo';
+}
+
+function currentScenario(): LabScenarioName {
+  return typeof window === 'undefined' ? 'demo' : scenarioFromSearch(window.location.search);
+}
+
+function startActivity(activity: readonly SeedActivity[], runtime: LabSessions, scheduler: LabRunScheduler, start: boolean): void {
+  for (const item of activity) {
+    switch (item.kind) {
+      case 'ambient-stream': {
+        const record = runtime.record(item.sessionId);
+        if (record === undefined) break;
+        const context = runtime.nextContext(record);
+        runtime.startTurn(record, ambientSegment(context, item.firstCycle), { start });
+        break;
       }
-      throw labError('UNAVAILABLE');
-    },
-    ...extra,
+      case 'paused-approval': {
+        const record = runtime.record(item.sessionId);
+        if (record !== undefined) runtime.registerPausedTurn(record, item.approvalId, item.step, []);
+        break;
+      }
+      case 'running-task': {
+        const run = scheduler.findRun(item.workspaceId, item.runId);
+        if (run !== undefined) scheduler.resumeSeeded(item.workspaceId, run, item.stepId, item.steps, start);
+        break;
+      }
+      default: {
+        const exhaustive: never = item;
+        return exhaustive;
+      }
+    }
+  }
+}
+
+export function createLabHost(options: LabHostOptions = {}): LabHost {
+  const scenario = options.scenario ?? currentScenario();
+  const timers = options.timers ?? browserTimers;
+  const clock = new LabClock(timers);
+  const bus = new LabEventBus(timers);
+  const seed = buildSeed(scenario);
+  const state: LabState = {
+    scenario,
+    safeMode: seed.safeMode,
+    appVersion: '0.1.1-lab',
+    preferences: { theme: 'system', density: 'comfortable', reducedMotion: 'system', fontSize: 'medium', chatWidth: 'wide' },
+    projects: seed.projects,
+    harnesses: seed.harnesses,
+    sessions: new Map(seed.sessions.map((record) => [record.id, record])),
+    orchestration: new Map(seed.orchestration.map((workspace) => [workspace.workspaceId, workspace])),
+    ids: new LabIdSource(`lab:${scenario}`),
   };
+  const runtime = new LabSessions(state, bus, clock);
+  const scheduler = new LabRunScheduler(runtime, bus);
+  const handlers: LabHandlers = {
+    ...workspaceHandlers(runtime),
+    ...composerHandlers(runtime),
+    ...classicHandlers(runtime),
+    ...orchestrationHandlers(runtime, scheduler, bus),
+  };
+  startActivity(seed.activity, runtime, scheduler, options.ambient ?? true);
+
   return {
+    scenario,
+    state,
     async invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
       const handler = handlers[command];
-      if (handler === undefined) {
-        if (command.startsWith('orchestration_')) throw labError('desktop-unavailable');
-        throw labError('UNAVAILABLE');
+      // Tauri rejects unregistered commands with a plain message string.
+      if (handler === undefined) throw `Command ${command} not found`;
+      try {
+        const result = await handler(wire(args));
+        return (result === undefined ? null : wire(result)) as T;
+      } catch (error) {
+        if (error instanceof LabDecodeFailure) throw tauriArgumentError(command, error);
+        throw error;
       }
-      return (await handler(args)) as T;
     },
     async listen<T>(channel: string, handler: (payload: T) => void): Promise<() => void> {
       return bus.on(channel, handler as (payload: unknown) => void);

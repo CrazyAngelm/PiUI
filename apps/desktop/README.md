@@ -18,6 +18,22 @@ This package is the Svelte/Tauri composition layer for PiUI's foundation plus a 
 
 The local live-RPC path is a developer preview, not a release/containment claim. The production gate and missing evidence are recorded in [`../../spikes/PHASE0_GATE.md`](../../spikes/PHASE0_GATE.md) and [`../../docs/13_FOUNDATION_STATUS.md`](../../docs/13_FOUNDATION_STATUS.md).
 
+## Browser development (UI Lab)
+
+`pnpm --filter @piui/desktop dev` serves the UI at http://localhost:1420 without Tauri. Every host call then goes
+through [`src/host-api/transport.ts`](src/host-api/transport.ts) to the UI Lab host in
+[`src/host-api/lab/`](src/host-api/lab/): a deterministic, in-memory fake of the Rust host with the same commands,
+JSON shapes, error codes and event channels. It simulates native turns and orchestration runs with timers and never
+runs an agent, touches a file or makes a network request. Choose a scenario with `?lab=`:
+
+- `demo` (default): four projects, ten chats on all four harnesses (one paused on an approval, one streaming),
+  two saved agent systems, a schedule and runs that succeeded, failed, are running or await approval;
+- `empty`: first run — only the host-owned Chats workspace and harness setup states;
+- `safe`: the demo after a restart in safe mode (runtime actions refused, interrupted runs need reconciliation);
+- `long`: one ~3,000-block transcript for performance work.
+
+The classic `client.ts` routes (bootstrap, preferences, projects, trust) still use `mockClient.ts` in the browser.
+
 ## Commands
 
 ```bash
