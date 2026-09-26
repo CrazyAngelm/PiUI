@@ -293,7 +293,10 @@ pub struct HostState {
     /// Serializes a live command's trust/identity authorization with its RPC
     /// write. Trust revocation takes this gate before becoming observable, so
     /// an already-authorized command finishes while trusted or a later one
-    /// fails before Pi receives it.
+    /// fails before Pi receives it. An ordinary workspace session start holds
+    /// it only to authorize and to publish the runtime; the slow native
+    /// initialization runs under a per-session start reservation instead,
+    /// which revocation withdraws without needing this gate to be released.
     pub live_runtime_operation_gate: AsyncMutex<()>,
     /// One bounded discovery gate per opaque project id. Different projects
     /// can reconcile independently; repeated requests for the same project

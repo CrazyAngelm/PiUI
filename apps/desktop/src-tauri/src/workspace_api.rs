@@ -566,9 +566,179 @@ struct LiveSession {
     forwarding: JoinHandle<()>,
 }
 
+/// One session whose native runtime is starting. The operation gate is held
+/// only to authorize and to publish a start; this slot is the per-session
+/// lifecycle gate that excludes a second start while the slow native
+/// initialization runs without the global gate.
+struct StartSlot {
+    token: Uuid,
+    workspace_id: String,
+    cancel: watch::Sender<bool>,
+    /// Closed (never updated) when the start is published or abandoned.
+    finished: watch::Receiver<()>,
+}
+
+/// Exclusive start admission for one session. Dropping it releases the slot
+/// and wakes every waiter; a commit publishes the live runtime before that.
+struct StartReservation {
+    host: Weak<WorkspaceHostInner>,
+    session_id: String,
+    token: Uuid,
+    cancel: watch::Receiver<bool>,
+    _finished: watch::Sender<()>,
+}
+
+impl StartReservation {
+    fn is_cancelled(&self) -> bool {
+        *self.cancel.borrow()
+    }
+
+    /// Resolves once trust revocation, shutdown or an explicit close has
+    /// withdrawn this start, or when its host is gone.
+    async fn cancelled(&self) {
+        let mut cancel = self.cancel.clone();
+        let _ = cancel.wait_for(|cancelled| *cancelled).await;
+    }
+}
+
+impl Drop for StartReservation {
+    fn drop(&mut self) {
+        if let Some(host) = self.host.upgrade()
+            && let Ok(mut starting) = host.starting.lock()
+            && starting
+                .get(&self.session_id)
+                .is_some_and(|slot| slot.token == self.token)
+        {
+            starting.remove(&self.session_id);
+        }
+    }
+}
+
+enum StartAdmission {
+    Live,
+    Starting(watch::Receiver<()>),
+    Reserved(StartReservation),
+}
+
+enum OpenAdmission {
+    Live,
+    Starting(watch::Receiver<()>),
+    Reserved(Box<PendingStart>),
+}
+
+/// A reserved start that passed authorization under the operation gate.
+struct PendingStart {
+    reservation: StartReservation,
+    cwd: PathBuf,
+    record: PersistedSession,
+    options: RuntimeStartOptions,
+    /// A new session's unbound catalog row is removed if its start fails.
+    created: bool,
+}
+
+/// Native half of a start, produced without the operation gate.
+struct StartedRuntime {
+    runtime: Arc<NativeRuntime>,
+    events: NativeEventReceiver,
+    native: NativeSnapshot,
+    binding_persisted: bool,
+}
+
+/// A started native runtime that no command can reach yet.
+struct SpawnedStart {
+    reservation: StartReservation,
+    record: PersistedSession,
+    runtime: Arc<NativeRuntime>,
+    events: NativeEventReceiver,
+    native: NativeSnapshot,
+    binding_persisted: bool,
+    coordinator: Option<CoordinatorBinding>,
+    publisher: WorkspaceEventPublisher,
+    created: bool,
+}
+
+impl SpawnedStart {
+    /// Waits for the operation gate while still draining the runtime's events,
+    /// unless the start is withdrawn first. A trust revocation or shutdown
+    /// that holds the gate withdraws the start instead of waiting on it.
+    async fn acquire_gate<'g>(
+        &mut self,
+        gate: &'g tokio::sync::Mutex<()>,
+    ) -> Option<tokio::sync::MutexGuard<'g, ()>> {
+        let reservation = &self.reservation;
+        self.events
+            .buffer_while(async {
+                tokio::select! {
+                    biased;
+                    () = reservation.cancelled() => None,
+                    guard = gate.lock() => Some(guard),
+                }
+            })
+            .await
+    }
+
+    /// Retires a runtime that never became visible to commands, then releases
+    /// its reservation. Never called with the operation gate held by the
+    /// command path, so other sessions are not held by the disposal.
+    async fn abandon(self, host: &WorkspaceHost) {
+        let Self {
+            reservation,
+            record,
+            runtime,
+            events,
+            created,
+            ..
+        } = self;
+        retire_unpublished_runtime(&runtime, events).await;
+        if created {
+            // A failed launch has no native binding. Retaining a closed catalog
+            // row is safe and makes an atomic rollback failure harmless.
+            let _ = host.remove_unbound_record(&record.id);
+        }
+        drop(reservation);
+    }
+}
+
+/// A failed publication. An unpublished runtime must be retired by the caller
+/// after it releases the operation gate.
+struct CommitFailure {
+    error: WorkspaceError,
+    unpublished: Option<Box<SpawnedStart>>,
+}
+
+impl CommitFailure {
+    fn unpublished(error: WorkspaceError, start: SpawnedStart) -> Self {
+        Self {
+            error,
+            unpublished: Some(Box::new(start)),
+        }
+    }
+
+    async fn resolve(self, host: &WorkspaceHost) -> WorkspaceError {
+        if let Some(start) = self.unpublished {
+            start.abandon(host).await;
+        }
+        self.error
+    }
+}
+
+/// Workspace authorization evaluated under the operation gate.
+type WorkspaceAuthorization<'a> =
+    &'a (dyn Fn(&str) -> Result<ProjectDirectory, WorkspaceError> + Sync);
+
+/// Waits until every listed start has been published or abandoned.
+async fn wait_for_starts(pending: Vec<watch::Receiver<()>>) {
+    for mut finished in pending {
+        // The sender is only ever dropped, so this resolves on release.
+        let _ = finished.changed().await;
+    }
+}
+
 struct WorkspaceHostInner {
     registry: Mutex<WorkspaceRegistry>,
     live: Mutex<HashMap<String, LiveSession>>,
+    /// Sessions whose native runtime is starting outside the operation gate.
+    starting: Mutex<HashMap<String, StartSlot>>,
     native_root: PathBuf,
     /// Test builds only: replaces native harness resolution with a test
     /// adapter that still runs the production bridge runner and transport.
@@ -601,6 +771,7 @@ impl WorkspaceHost {
             inner: Arc::new(WorkspaceHostInner {
                 registry: Mutex::new(WorkspaceRegistry::open(app_data_dir)?),
                 live: Mutex::new(HashMap::new()),
+                starting: Mutex::new(HashMap::new()),
                 native_root,
                 #[cfg(test)]
                 test_spawner: Mutex::new(None),
@@ -636,14 +807,44 @@ impl WorkspaceHost {
         Uuid::new_v4().to_string()
     }
 
-    /// Creates and owns a native runtime after the caller has verified the
-    /// project directory under the shared trust/operation gate.
+    /// Creates and owns a native runtime while the caller holds the operation
+    /// gate across the whole start (the managed-run launch path).
     pub(crate) async fn launch_session(
         &self,
         directory: &ProjectDirectory,
         request: WorkspaceLaunchRequest,
         publisher: WorkspaceEventPublisher,
     ) -> Result<SessionSnapshot, WorkspaceError> {
+        let pending = self.prepare_launch(directory, request, publisher)?;
+        self.start_pending(pending).await
+    }
+
+    /// Creates an ordinary session. Authorization and publication run under
+    /// `gate`; the native initialization, which can take tens of seconds, runs
+    /// without it, so operations on other sessions never wait for it.
+    async fn create_session(
+        &self,
+        gate: &tokio::sync::Mutex<()>,
+        authorize: WorkspaceAuthorization<'_>,
+        request: WorkspaceLaunchRequest,
+        publisher: WorkspaceEventPublisher,
+    ) -> Result<SessionSnapshot, WorkspaceError> {
+        let pending = {
+            let _operation = gate.lock().await;
+            let directory = authorize(&request.workspace_id)?;
+            self.prepare_launch(&directory, request, publisher)?
+        };
+        self.start_outside_gate(gate, authorize, pending).await
+    }
+
+    /// Validates a new session, reserves its start and records its catalog
+    /// row. Runs under the caller's operation gate.
+    fn prepare_launch(
+        &self,
+        directory: &ProjectDirectory,
+        request: WorkspaceLaunchRequest,
+        publisher: WorkspaceEventPublisher,
+    ) -> Result<PendingStart, WorkspaceError> {
         validate_launch_request(&request)?;
         let coordinator = coordinator_binding(&request)?;
         let session_id = request
@@ -651,12 +852,17 @@ impl WorkspaceHost {
             .clone()
             .unwrap_or_else(|| Uuid::new_v4().to_string());
         validate_session_id(&session_id)?;
+        let StartAdmission::Reserved(reservation) =
+            self.reserve_start(&session_id, &request.workspace_id)?
+        else {
+            return Err(WorkspaceError::conflict());
+        };
         let runtime_model = request.model.clone();
         let runtime_thinking_level = request.thinking_level.clone();
         let record = PersistedSession {
             composer: Default::default(),
             usage: Vec::new(),
-            id: session_id.clone(),
+            id: session_id,
             workspace_id: request.workspace_id,
             harness: request.harness,
             title: normalized_title(request.title.as_deref())
@@ -674,31 +880,25 @@ impl WorkspaceHost {
             materialized: Some(false),
         };
         self.insert_record(record.clone())?;
-        let result = self
-            .start_record(
-                directory,
-                record,
-                RuntimeStartOptions {
-                    model: runtime_model,
-                    thinking_level: runtime_thinking_level,
-                    instructions: request.instructions,
-                    base_instructions: request.base_instructions,
-                    service_tier: request.service_tier,
-                    resource_rules: request.resource_rules,
-                    network_access: request.network_access,
-                    allowed_tools: request.allowed_tools,
-                    native_subagents: request.native_subagents,
-                    coordinator,
-                    publisher,
-                },
-            )
-            .await;
-        if result.is_err() {
-            // A failed launch has no native binding. Retaining a closed catalog
-            // row is safe and makes an atomic rollback failure harmless.
-            let _ = self.remove_unbound_record(&session_id);
-        }
-        result
+        Ok(PendingStart {
+            reservation,
+            cwd: directory.canonical_path().to_path_buf(),
+            record,
+            options: RuntimeStartOptions {
+                model: runtime_model,
+                thinking_level: runtime_thinking_level,
+                instructions: request.instructions,
+                base_instructions: request.base_instructions,
+                service_tier: request.service_tier,
+                resource_rules: request.resource_rules,
+                network_access: request.network_access,
+                allowed_tools: request.allowed_tools,
+                native_subagents: request.native_subagents,
+                coordinator,
+                publisher,
+            },
+            created: true,
+        })
     }
 
     pub(crate) async fn launch_for_orchestration(
@@ -741,15 +941,46 @@ impl WorkspaceHost {
         })
     }
 
+    /// Reopens an ordinary session through its native resume binding.
+    /// Authorization and publication run under `gate`; a concurrent open of
+    /// the same session waits for that start instead of spawning another.
     async fn open_session(
+        &self,
+        gate: &tokio::sync::Mutex<()>,
+        authorize: WorkspaceAuthorization<'_>,
+        session_id: &str,
+        publisher: WorkspaceEventPublisher,
+    ) -> Result<SessionSnapshot, WorkspaceError> {
+        loop {
+            let admission = {
+                let _operation = gate.lock().await;
+                let record = self.record(session_id)?;
+                let directory = authorize(&record.workspace_id)?;
+                match self.prepare_open(&directory, session_id, publisher.clone())? {
+                    OpenAdmission::Live => return self.snapshot(session_id).await,
+                    admission => admission,
+                }
+            };
+            match admission {
+                OpenAdmission::Reserved(pending) => {
+                    return self.start_outside_gate(gate, authorize, *pending).await;
+                }
+                OpenAdmission::Starting(finished) => wait_for_starts(vec![finished]).await,
+                OpenAdmission::Live => {}
+            }
+        }
+    }
+
+    /// Admits an ordinary reopen under the caller's operation gate.
+    fn prepare_open(
         &self,
         directory: &ProjectDirectory,
         session_id: &str,
         publisher: WorkspaceEventPublisher,
-    ) -> Result<SessionSnapshot, WorkspaceError> {
+    ) -> Result<OpenAdmission, WorkspaceError> {
         validate_session_id(session_id)?;
         if self.live_runtime(session_id)?.is_some() {
-            return self.snapshot(session_id).await;
+            return Ok(OpenAdmission::Live);
         }
         let record = self.record(session_id)?;
         if record.run_id.is_some() {
@@ -759,22 +990,149 @@ impl WorkspaceHost {
             // History remains readable through the process-free snapshot path.
             return Err(WorkspaceError::not_supported());
         }
-        self.start_record(
-            directory,
-            record,
-            // Catalog values are observed metadata, not a user request.
-            // Native resume/history/settings remain authoritative.
-            RuntimeStartOptions::ordinary_open(publisher),
+        Ok(
+            match self.reserve_start(session_id, &record.workspace_id)? {
+                StartAdmission::Live => OpenAdmission::Live,
+                StartAdmission::Starting(finished) => OpenAdmission::Starting(finished),
+                StartAdmission::Reserved(reservation) => {
+                    OpenAdmission::Reserved(Box::new(PendingStart {
+                        reservation,
+                        cwd: directory.canonical_path().to_path_buf(),
+                        record,
+                        // Catalog values are observed metadata, not a user request.
+                        // Native resume/history/settings remain authoritative.
+                        options: RuntimeStartOptions::ordinary_open(publisher),
+                        created: false,
+                    }))
+                }
+            },
         )
-        .await
     }
 
-    async fn start_record(
+    /// Atomically admits one start of `session_id` unless it is live or
+    /// already starting.
+    fn reserve_start(
         &self,
-        directory: &ProjectDirectory,
-        record: PersistedSession,
-        options: RuntimeStartOptions,
+        session_id: &str,
+        workspace_id: &str,
+    ) -> Result<StartAdmission, WorkspaceError> {
+        let mut starting = lock(&self.inner.starting)?;
+        if let Some(slot) = starting.get(session_id) {
+            return Ok(StartAdmission::Starting(slot.finished.clone()));
+        }
+        // Checked under the start lock: a commit publishes its live runtime
+        // before it releases its reservation, so no start is admitted twice.
+        if lock(&self.inner.live)?.contains_key(session_id) {
+            return Ok(StartAdmission::Live);
+        }
+        let token = Uuid::new_v4();
+        let (cancel, cancel_receiver) = watch::channel(false);
+        let (finished_sender, finished) = watch::channel(());
+        starting.insert(
+            session_id.to_owned(),
+            StartSlot {
+                token,
+                workspace_id: workspace_id.to_owned(),
+                cancel,
+                finished,
+            },
+        );
+        Ok(StartAdmission::Reserved(StartReservation {
+            host: Arc::downgrade(&self.inner),
+            session_id: session_id.to_owned(),
+            token,
+            cancel: cancel_receiver,
+            _finished: finished_sender,
+        }))
+    }
+
+    /// Withdraws every unfinished start selected by `matches`. The receivers
+    /// resolve once each of those starts has been published or abandoned;
+    /// neither needs the operation gate, so a gate holder may wait for them.
+    fn cancel_starts(
+        &self,
+        matches: impl Fn(&str, &StartSlot) -> bool,
+    ) -> Vec<watch::Receiver<()>> {
+        let Ok(starting) = self.inner.starting.lock() else {
+            return Vec::new();
+        };
+        starting
+            .iter()
+            .filter(|(session_id, slot)| matches(session_id, slot))
+            .map(|(_, slot)| {
+                slot.cancel.send_replace(true);
+                slot.finished.clone()
+            })
+            .collect()
+    }
+
+    fn pending_start(&self, session_id: &str) -> Option<watch::Receiver<()>> {
+        self.inner
+            .starting
+            .lock()
+            .ok()?
+            .get(session_id)
+            .map(|slot| slot.finished.clone())
+    }
+
+    /// Per-session lifecycle gate: an operation on a session that is still
+    /// starting waits for that start. Starts of other sessions never hold it.
+    pub(crate) async fn wait_for_pending_start(&self, session_id: &str) {
+        if let Some(finished) = self.pending_start(session_id) {
+            wait_for_starts(vec![finished]).await;
+        }
+    }
+
+    /// Runs a reserved start without the gate, then authorizes the workspace
+    /// again and publishes the runtime under it.
+    async fn start_outside_gate(
+        &self,
+        gate: &tokio::sync::Mutex<()>,
+        authorize: WorkspaceAuthorization<'_>,
+        pending: PendingStart,
     ) -> Result<SessionSnapshot, WorkspaceError> {
+        let mut spawned = self.spawn_pending(pending).await?;
+        let Some(operation) = spawned.acquire_gate(gate).await else {
+            spawned.abandon(self).await;
+            return Err(WorkspaceError::conflict());
+        };
+        // Trust may have been revoked while the native runtime initialized.
+        if let Err(error) = authorize(&spawned.record.workspace_id) {
+            drop(operation);
+            spawned.abandon(self).await;
+            return Err(error);
+        }
+        let committed = self.commit_spawned(spawned);
+        drop(operation);
+        match committed {
+            Ok(snapshot) => Ok(snapshot),
+            Err(failure) => Err(failure.resolve(self).await),
+        }
+    }
+
+    /// Runs a reserved start under an operation gate the caller already holds.
+    async fn start_pending(
+        &self,
+        pending: PendingStart,
+    ) -> Result<SessionSnapshot, WorkspaceError> {
+        let spawned = self.spawn_pending(pending).await?;
+        match self.commit_spawned(spawned) {
+            Ok(snapshot) => Ok(snapshot),
+            Err(failure) => Err(failure.resolve(self).await),
+        }
+    }
+
+    /// Starts the native runtime of a reserved session; the operation gate is
+    /// not required. A withdrawn start drops its unfinished spawn, which
+    /// terminates the partially started process tree, or retires the runtime.
+    async fn spawn_pending(&self, pending: PendingStart) -> Result<SpawnedStart, WorkspaceError> {
+        let PendingStart {
+            reservation,
+            cwd,
+            record,
+            options,
+            created,
+        } = pending;
         let RuntimeStartOptions {
             model,
             thinking_level,
@@ -788,56 +1146,135 @@ impl WorkspaceHost {
             coordinator,
             publisher,
         } = options;
-        let session_directory = self.inner.native_root.join(&record.id);
-        fs::create_dir_all(&session_directory).map_err(|_| WorkspaceError::io())?;
-        let (resume_native_id, resume_native_path) = resume_binding(&record)?;
-        let config = NativeRuntimeConfig {
-            harness: record.harness,
-            cwd: directory.canonical_path().to_path_buf(),
-            session_dir: session_directory,
-            native_id: resume_native_id,
-            native_path: resume_native_path,
-            title: Some(record.title.clone()),
-            model,
-            thinking_level,
-            instructions,
-            base_instructions,
-            service_tier,
-            resource_rules,
-            permission_mode: record.permission_mode,
-            network_access,
-            allowed_tools,
-            native_subagents,
-            coordination: coordinator.is_some(),
-            daemon_socket: isolated_daemon_socket(
-                record.harness,
-                &self.inner.native_root,
-                &record.id,
-            ),
-            package_root: None,
-            agent_dir: None,
-            kernel_python: None,
-        };
-        let (runtime, mut events) = self
-            .spawn_native(config)
-            .await
-            .map_err(|_| WorkspaceError::runtime())?;
-        let runtime = Arc::new(runtime);
-        // No forwarder drains the events yet: keep draining them while the
-        // first snapshot is awaited, or backpressure could hold its response.
-        let native = match events.buffer_while(runtime.snapshot()).await {
-            Ok(snapshot) => snapshot,
-            Err(_) => {
+        let started: Result<StartedRuntime, WorkspaceError> = async {
+            let session_directory = self.inner.native_root.join(&record.id);
+            fs::create_dir_all(&session_directory).map_err(|_| WorkspaceError::io())?;
+            let (resume_native_id, resume_native_path) = resume_binding(&record)?;
+            let config = NativeRuntimeConfig {
+                harness: record.harness,
+                cwd,
+                session_dir: session_directory,
+                native_id: resume_native_id,
+                native_path: resume_native_path,
+                title: Some(record.title.clone()),
+                model,
+                thinking_level,
+                instructions,
+                base_instructions,
+                service_tier,
+                resource_rules,
+                permission_mode: record.permission_mode,
+                network_access,
+                allowed_tools,
+                native_subagents,
+                coordination: coordinator.is_some(),
+                daemon_socket: isolated_daemon_socket(
+                    record.harness,
+                    &self.inner.native_root,
+                    &record.id,
+                ),
+                package_root: None,
+                agent_dir: None,
+                kernel_python: None,
+            };
+            // Dropping an unfinished spawn terminates its partially started
+            // process tree; it never affects another session.
+            let (runtime, mut events) = tokio::select! {
+                spawned = self.spawn_native(config) => {
+                    spawned.map_err(|_| WorkspaceError::runtime())?
+                }
+                () = reservation.cancelled() => return Err(WorkspaceError::conflict()),
+            };
+            let runtime = Arc::new(runtime);
+            // No forwarder drains the events yet: keep draining them while the
+            // first snapshot is awaited, or backpressure could hold its response.
+            let native = match events.buffer_while(runtime.snapshot()).await {
+                Ok(native) if !reservation.is_cancelled() => native,
+                result => {
+                    retire_unpublished_runtime(&runtime, events).await;
+                    return Err(if result.is_ok() {
+                        WorkspaceError::conflict()
+                    } else {
+                        WorkspaceError::runtime()
+                    });
+                }
+            };
+            let binding_persisted =
+                record.native_id.is_some() || record.harness != HarnessKind::Codex;
+            if let Err(error) =
+                self.update_binding_and_metadata(&record.id, &native, binding_persisted)
+            {
                 retire_unpublished_runtime(&runtime, events).await;
-                return Err(WorkspaceError::runtime());
+                return Err(error);
             }
-        };
-        let binding_persisted = record.native_id.is_some() || record.harness != HarnessKind::Codex;
-        if let Err(error) = self.update_binding_and_metadata(&record.id, &native, binding_persisted)
-        {
-            retire_unpublished_runtime(&runtime, events).await;
-            return Err(error);
+            Ok(StartedRuntime {
+                runtime,
+                events,
+                native,
+                binding_persisted,
+            })
         }
+        .await;
+        match started {
+            Ok(StartedRuntime {
+                runtime,
+                events,
+                native,
+                binding_persisted,
+            }) => Ok(SpawnedStart {
+                reservation,
+                record,
+                runtime,
+                events,
+                native,
+                binding_persisted,
+                coordinator,
+                publisher,
+                created,
+            }),
+            Err(error) => {
+                if created {
+                    // A failed launch has no native binding. Retaining a closed
+                    // catalog row is safe and makes a rollback failure harmless.
+                    let _ = self.remove_unbound_record(&record.id);
+                }
+                // The reservation is released only after that cleanup.
+                drop(reservation);
+                Err(error)
+            }
+        }
+    }
+
+    /// Publishes a started runtime to commands. The caller holds the operation
+    /// gate and has re-authorized the workspace; nothing here waits for I/O.
+    fn commit_spawned(&self, spawned: SpawnedStart) -> Result<SessionSnapshot, CommitFailure> {
+        if spawned.reservation.is_cancelled() {
+            return Err(CommitFailure::unpublished(
+                WorkspaceError::conflict(),
+                spawned,
+            ));
+        }
+        let Ok(mut live) = self.inner.live.lock() else {
+            return Err(CommitFailure::unpublished(WorkspaceError::io(), spawned));
+        };
+        if live.contains_key(&spawned.record.id) {
+            drop(live);
+            return Err(CommitFailure::unpublished(
+                WorkspaceError::conflict(),
+                spawned,
+            ));
+        }
+        let SpawnedStart {
+            reservation,
+            record,
+            runtime,
+            events,
+            native,
+            binding_persisted,
+            coordinator,
+            publisher,
+            created: _,
+        } = spawned;
         let state = Arc::new(LiveState {
             composer_gate: tokio::sync::Mutex::new(()),
             composer_notify: Mutex::new(None),
@@ -870,28 +1307,25 @@ impl WorkspaceHost {
             coordinator,
             publisher: publisher.clone(),
         });
-        let slot = LiveSession {
-            instance_id,
-            runtime: Arc::clone(&runtime),
-            state: Arc::clone(&state),
-            forwarding,
-        };
-        let inserted = {
-            let mut live = lock(&self.inner.live)?;
-            if live.contains_key(&record.id) {
-                false
-            } else {
-                live.insert(record.id.clone(), slot);
-                true
-            }
-        };
-        if !inserted {
-            // The forwarder of this unpublished instance keeps draining until
-            // disposal closes its stream, so disposal is never held by it.
-            let _ = runtime.dispose().await;
-            return Err(WorkspaceError::conflict());
-        }
-        let snapshot = self.snapshot_from_native(&record.id, native, &state)?;
+        live.insert(
+            record.id.clone(),
+            LiveSession {
+                instance_id,
+                runtime,
+                state: Arc::clone(&state),
+                forwarding,
+            },
+        );
+        drop(live);
+        // The live runtime is visible before the reservation is released, so a
+        // waiter (close, reopen or a same-session command) observes it.
+        drop(reservation);
+        let snapshot = self
+            .snapshot_from_native(&record.id, native, &state)
+            .map_err(|error| CommitFailure {
+                error,
+                unpublished: None,
+            })?;
         publish_session(&publisher, &state, snapshot.session.clone());
         Ok(snapshot)
     }
@@ -1119,10 +1553,18 @@ impl WorkspaceHost {
     /// Stops one runtime without deleting its native transcript or binding.
     async fn close_session(&self, session_id: &str) -> Result<(), WorkspaceError> {
         validate_session_id(session_id)?;
+        // An explicit close also withdraws an unfinished start of the session;
+        // a start that already published is closed below like any other.
+        let withdrawn = self.cancel_starts(|id, _| id == session_id);
+        let withdrew_start = !withdrawn.is_empty();
+        wait_for_starts(withdrawn).await;
         self.pause_queue(session_id);
         let slot = lock(&self.inner.live)?.remove(session_id);
         let Some(slot) = slot else {
-            self.record(session_id)?;
+            // A withdrawn new session leaves no catalog row to report.
+            if !withdrew_start {
+                self.record(session_id)?;
+            }
             return Ok(());
         };
         if let Ok(snapshot) = slot.runtime.snapshot().await {
@@ -1265,6 +1707,9 @@ impl WorkspaceHost {
     /// Called by trust revocation/project removal while the caller owns the
     /// shared operation gate. It never touches native transcript files.
     pub async fn shutdown_workspace(&self, workspace_id: &str) {
+        // Withdraw unfinished starts first: none may publish after trust
+        // revocation, and retiring them never needs the caller's gate.
+        wait_for_starts(self.cancel_starts(|_, slot| slot.workspace_id == workspace_id)).await;
         let ids = lock(&self.inner.registry)
             .map(|registry| {
                 registry
@@ -1283,6 +1728,7 @@ impl WorkspaceHost {
     /// Explicit application-exit lifecycle. Merely closing or changing a view
     /// never invokes this method.
     pub async fn shutdown_all(&self) {
+        wait_for_starts(self.cancel_starts(|_, _| true)).await;
         let ids = lock(&self.inner.live)
             .map(|live| live.keys().cloned().collect::<Vec<_>>())
             .unwrap_or_default();
@@ -1813,6 +2259,10 @@ pub async fn workspace_lifecycle_v17(
     if record.run_id.is_some() {
         return Err(WorkspaceError::not_supported());
     }
+    // A session that is still starting outside the gate is not idle.
+    if state.workspace.pending_start(&session_id).is_some() {
+        return Err(WorkspaceError::conflict());
+    }
     if let Some((runtime, _)) = state.workspace.live_runtime(&session_id)? {
         let snapshot = runtime
             .snapshot()
@@ -1878,9 +2328,17 @@ pub async fn workspace_command_v15(
     state: State<'_, HostState>,
     command: WorkspaceCommand,
 ) -> Result<WorkspaceResult, WorkspaceError> {
-    let host = state.inner();
+    dispatch_workspace_command(state.inner(), command, event_publisher(app)).await
+}
+
+/// Body of `workspace_command_v15`, independent of the Tauri app handle.
+pub(crate) async fn dispatch_workspace_command(
+    host: &HostState,
+    command: WorkspaceCommand,
+    publisher: WorkspaceEventPublisher,
+) -> Result<WorkspaceResult, WorkspaceError> {
     if matches!(command, WorkspaceCommand::Catalog { .. }) {
-        return state
+        return host
             .workspace
             .catalog(host)
             .map(|catalog| WorkspaceResult::Catalog {
@@ -1888,6 +2346,7 @@ pub async fn workspace_command_v15(
             });
     }
     if let WorkspaceCommand::Snapshot { session_id } = &command {
+        host.workspace.wait_for_pending_start(session_id).await;
         let _operation = host.live_runtime_operation_gate.lock().await;
         let record = host.workspace.record(session_id)?;
         let snapshot = if !host.safe_mode && host.workspace.live_runtime(session_id)?.is_some() {
@@ -1904,7 +2363,11 @@ pub async fn workspace_command_v15(
     if host.safe_mode {
         return Err(WorkspaceError::safe_mode());
     }
-    let publisher = event_publisher(app);
+    // Trust is checked under the operation gate before a start is reserved and
+    // again before it is published; trust revocation serializes with both.
+    let authorize = |workspace_id: &str| {
+        verified_project_directory(host, workspace_id, true).map_err(WorkspaceError::from)
+    };
     match command {
         WorkspaceCommand::Catalog { .. } => unreachable!("catalog returned above"),
         WorkspaceCommand::CreateSession {
@@ -1914,12 +2377,11 @@ pub async fn workspace_command_v15(
             model,
             permission_mode,
         } => {
-            let _operation = state.live_runtime_operation_gate.lock().await;
-            let directory = verified_project_directory(host, &workspace_id, true)?;
-            let snapshot = state
+            let snapshot = host
                 .workspace
-                .launch_session(
-                    &directory,
+                .create_session(
+                    &host.live_runtime_operation_gate,
+                    &authorize,
                     WorkspaceLaunchRequest {
                         session_id: None,
                         workspace_id,
@@ -1950,12 +2412,14 @@ pub async fn workspace_command_v15(
             })
         }
         WorkspaceCommand::OpenSession { session_id } => {
-            let _operation = state.live_runtime_operation_gate.lock().await;
-            let record = state.workspace.record(&session_id)?;
-            let directory = verified_project_directory(host, &record.workspace_id, true)?;
-            let snapshot = state
+            let snapshot = host
                 .workspace
-                .open_session(&directory, &session_id, publisher)
+                .open_session(
+                    &host.live_runtime_operation_gate,
+                    &authorize,
+                    &session_id,
+                    publisher,
+                )
                 .await?;
             Ok(WorkspaceResult::Session {
                 snapshot: Box::new(snapshot),
@@ -1968,18 +2432,18 @@ pub async fn workspace_command_v15(
             mode,
         } => {
             let _operation = authorize_live_session(host, &session_id).await?;
-            state.workspace.send(&session_id, text, mode).await?;
+            host.workspace.send(&session_id, text, mode).await?;
             Ok(WorkspaceResult::Accepted { session_id })
         }
         WorkspaceCommand::Interrupt { session_id } => {
             let _operation = authorize_live_session(host, &session_id).await?;
-            state.workspace.interrupt(&session_id).await?;
+            host.workspace.interrupt(&session_id).await?;
             Ok(WorkspaceResult::Accepted { session_id })
         }
         WorkspaceCommand::CloseSession { session_id } => {
             // Runtime disposal remains available as a safety action. Safe mode
             // cannot reach here and trust revocation uses shutdown_workspace.
-            state.workspace.close_session(&session_id).await?;
+            host.workspace.close_session(&session_id).await?;
             Ok(WorkspaceResult::Accepted { session_id })
         }
         WorkspaceCommand::SetModel {
@@ -1988,16 +2452,14 @@ pub async fn workspace_command_v15(
             thinking_level,
         } => {
             let _operation = authorize_live_session(host, &session_id).await?;
-            state
-                .workspace
+            host.workspace
                 .set_model(&session_id, model, thinking_level, &publisher)
                 .await?;
             Ok(WorkspaceResult::Accepted { session_id })
         }
         WorkspaceCommand::RenameSession { session_id, title } => {
             let _operation = authorize_live_session(host, &session_id).await?;
-            state
-                .workspace
+            host.workspace
                 .rename(&session_id, title, &publisher)
                 .await?;
             Ok(WorkspaceResult::Accepted { session_id })
@@ -2009,8 +2471,7 @@ pub async fn workspace_command_v15(
             text,
         } => {
             let _operation = authorize_live_session(host, &session_id).await?;
-            state
-                .workspace
+            host.workspace
                 .respond(&session_id, request_id, decision, text)
                 .await?;
             Ok(WorkspaceResult::Accepted { session_id })
@@ -2022,6 +2483,9 @@ async fn authorize_live_session<'a>(
     state: &'a HostState,
     session_id: &str,
 ) -> Result<tokio::sync::MutexGuard<'a, ()>, WorkspaceError> {
+    // A command for a session that is still starting waits for that start,
+    // without holding the gate; starts of other sessions never delay it.
+    state.workspace.wait_for_pending_start(session_id).await;
     let guard = state.live_runtime_operation_gate.lock().await;
     let record = state.workspace.record(session_id)?;
     verified_project_directory(state, &record.workspace_id, true)?;
@@ -3186,7 +3650,11 @@ mod tests {
             root.join("codex-home")
         );
         fs::create_dir_all(root.join("project")).expect("project");
-        let directory = ProjectDirectory::resolve(&root.join("project")).expect("directory");
+        let project = root.join("project");
+        let gate = tokio::sync::Mutex::new(());
+        let authorize = |_: &str| {
+            ProjectDirectory::resolve(&project).map_err(|_| super::WorkspaceError::not_found())
+        };
         let app_data = root.join("app-data");
         let host = super::WorkspaceHost::open(&app_data).expect("host");
         let id = uuid::Uuid::new_v4().to_string();
@@ -3211,7 +3679,7 @@ mod tests {
         })
         .expect("draft");
         let first = host
-            .open_session(&directory, &id, Arc::new(|_| {}))
+            .open_session(&gate, &authorize, &id, Arc::new(|_| {}))
             .await
             .expect("first open");
         assert!(first.blocks.is_empty());
@@ -3226,7 +3694,7 @@ mod tests {
 
         let restored = super::WorkspaceHost::open(&app_data).expect("restarted host");
         let reopened = restored
-            .open_session(&directory, &id, Arc::new(|_| {}))
+            .open_session(&gate, &authorize, &id, Arc::new(|_| {}))
             .await
             .expect("reopen empty chat");
         assert_eq!(reopened.session.id, id);
@@ -3381,16 +3849,20 @@ mod tests {
 #[cfg(test)]
 mod native_host_tests {
     use super::{
-        HarnessKind, NativeSpawnResult, PermissionMode, PromptMode, SessionStatus, WorkspaceEvent,
-        WorkspaceEventPayload, WorkspaceEventPublisher, WorkspaceHost, WorkspaceLaunchRequest,
-        coalesce_text_deltas,
+        HarnessKind, NativeSpawnResult, PermissionMode, PromptMode, SessionSnapshot, SessionStatus,
+        WorkspaceCommand, WorkspaceError, WorkspaceEvent, WorkspaceEventPayload,
+        WorkspaceEventPublisher, WorkspaceHost, WorkspaceLaunchRequest, WorkspaceResult,
+        coalesce_text_deltas, dispatch_workspace_command,
     };
+    use crate::state::HostState;
+    use piui_index::TrustState;
     use piui_platform::ProjectDirectory;
     use piui_runtime::workspace_runtime::{
         NativeEvent, NativeEventReceiver, NativeRuntime, NativeRuntimeConfig,
     };
     use std::future::Future;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -3659,5 +4131,320 @@ mod native_host_tests {
         host.shutdown_all().await;
         drop(host);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    const SLOW_TITLE: &str = "Slow native start";
+
+    /// Test adapter spawner whose sessions titled `SLOW_TITLE` pause inside
+    /// native initialization until released, like a 20-50 s Hermes start.
+    struct ControlledStarts {
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        slow_spawns: Arc<AtomicUsize>,
+    }
+
+    impl ControlledStarts {
+        fn install(host: &WorkspaceHost) -> Self {
+            let starts = Self {
+                entered: Arc::new(tokio::sync::Notify::new()),
+                release: Arc::new(tokio::sync::Notify::new()),
+                slow_spawns: Arc::new(AtomicUsize::new(0)),
+            };
+            let entered = Arc::clone(&starts.entered);
+            let release = Arc::clone(&starts.release);
+            let slow_spawns = Arc::clone(&starts.slow_spawns);
+            install_test_spawner(host, move |config: NativeRuntimeConfig| {
+                let entered = Arc::clone(&entered);
+                let release = Arc::clone(&release);
+                let slow_spawns = Arc::clone(&slow_spawns);
+                async move {
+                    if config.title.as_deref() == Some(SLOW_TITLE) {
+                        slow_spawns.fetch_add(1, AtomicOrdering::SeqCst);
+                        entered.notify_one();
+                        release.notified().await;
+                    }
+                    NativeRuntime::spawn_test_adapter(config, TEST_ADAPTER).await
+                }
+            });
+            starts
+        }
+
+        async fn wait_entered(&self) {
+            tokio::time::timeout(Duration::from_secs(20), self.entered.notified())
+                .await
+                .expect("the slow start reaches native initialization");
+        }
+    }
+
+    fn create_command(workspace_id: &str, title: &str) -> WorkspaceCommand {
+        WorkspaceCommand::CreateSession {
+            workspace_id: workspace_id.into(),
+            harness: HarnessKind::Pi,
+            title: Some(title.into()),
+            model: None,
+            permission_mode: PermissionMode::Native,
+        }
+    }
+
+    async fn dispatch(
+        host: &HostState,
+        command: WorkspaceCommand,
+    ) -> Result<WorkspaceResult, WorkspaceError> {
+        dispatch_workspace_command(host, command, Arc::new(|_| {})).await
+    }
+
+    fn session_of(result: Result<WorkspaceResult, WorkspaceError>) -> SessionSnapshot {
+        match result {
+            Ok(WorkspaceResult::Session { snapshot }) => *snapshot,
+            other => panic!("expected a session snapshot, got {other:?}"),
+        }
+    }
+
+    fn spawn_dispatch(
+        host: &Arc<HostState>,
+        command: WorkspaceCommand,
+    ) -> tokio::task::JoinHandle<Result<WorkspaceResult, WorkspaceError>> {
+        let host = Arc::clone(host);
+        tokio::spawn(async move { dispatch(&host, command).await })
+    }
+
+    fn session_titled(
+        host: &HostState,
+        title: &str,
+    ) -> Option<super::workspace_store::PersistedSession> {
+        host.workspace
+            .inner
+            .registry
+            .lock()
+            .expect("registry")
+            .sessions()
+            .iter()
+            .find(|record| record.title == title)
+            .cloned()
+    }
+
+    fn no_live_or_starting_runtime(host: &HostState) -> bool {
+        host.workspace.inner.live.lock().expect("live").is_empty()
+            && host
+                .workspace
+                .inner
+                .starting
+                .lock()
+                .expect("starting")
+                .is_empty()
+    }
+
+    async fn finish(
+        task: tokio::task::JoinHandle<Result<WorkspaceResult, WorkspaceError>>,
+    ) -> Result<WorkspaceResult, WorkspaceError> {
+        tokio::time::timeout(Duration::from_secs(20), task)
+            .await
+            .expect("the start finishes")
+            .expect("start task")
+    }
+
+    fn cleanup(host: Arc<HostState>, root: PathBuf) {
+        drop(host);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_slow_native_start_never_blocks_operations_on_other_sessions() {
+        let root = test_root("slow-start");
+        let host = Arc::new(HostState::open(&root, false).expect("host state"));
+        let starts = ControlledStarts::install(&host.workspace);
+        let workspace_id = host.personal_workspace.project_id.clone();
+        let other = session_of(dispatch(&host, create_command(&workspace_id, "Other")).await)
+            .session
+            .id;
+
+        let slow = spawn_dispatch(&host, create_command(&workspace_id, SLOW_TITLE));
+        starts.wait_entered().await;
+        // Native initialization runs without the global operation gate.
+        assert!(host.live_runtime_operation_gate.try_lock().is_ok());
+        for command in [
+            WorkspaceCommand::Interrupt {
+                session_id: other.clone(),
+            },
+            WorkspaceCommand::Send {
+                session_id: other.clone(),
+                text: "hello".into(),
+                mode: PromptMode::Prompt,
+            },
+            WorkspaceCommand::Snapshot {
+                session_id: other.clone(),
+            },
+        ] {
+            let result = tokio::time::timeout(Duration::from_secs(10), dispatch(&host, command))
+                .await
+                .expect("an operation on another session is not held by the start");
+            assert!(result.is_ok(), "{result:?}");
+        }
+        assert!(!slow.is_finished(), "the slow start is still initializing");
+
+        starts.release.notify_one();
+        let started = session_of(finish(slow).await);
+        assert_eq!(started.session.status, SessionStatus::Idle);
+        assert!(
+            host.workspace
+                .live_runtime(&started.session.id)
+                .expect("lookup")
+                .is_some()
+        );
+        host.workspace.shutdown_all().await;
+        cleanup(host, root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn trust_revocation_withdraws_a_start_that_is_still_initializing() {
+        let root = test_root("revoke-spawn");
+        let host = Arc::new(HostState::open(&root, false).expect("host state"));
+        let starts = ControlledStarts::install(&host.workspace);
+        let workspace_id = host.personal_workspace.project_id.clone();
+        let slow = spawn_dispatch(&host, create_command(&workspace_id, SLOW_TITLE));
+        starts.wait_entered().await;
+        // As trust revocation does: retire the workspace under the gate.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let _operation = host.live_runtime_operation_gate.lock().await;
+            host.workspace.shutdown_workspace(&workspace_id).await;
+        })
+        .await
+        .expect("revocation does not wait for native initialization");
+        let error = finish(slow).await.expect_err("the start was withdrawn");
+        assert_eq!(error.code, "CONFLICT");
+        assert!(no_live_or_starting_runtime(&host));
+        assert!(
+            session_titled(&host, SLOW_TITLE).is_none(),
+            "the unbound draft row is removed"
+        );
+        cleanup(host, root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn revocation_holding_the_gate_withdraws_a_started_runtime_waiting_for_it() {
+        let root = test_root("revoke-publish");
+        let host = Arc::new(HostState::open(&root, false).expect("host state"));
+        let starts = ControlledStarts::install(&host.workspace);
+        let workspace_id = host.personal_workspace.project_id.clone();
+        let slow = spawn_dispatch(&host, create_command(&workspace_id, SLOW_TITLE));
+        starts.wait_entered().await;
+        let operation = host.live_runtime_operation_gate.lock().await;
+        starts.release.notify_one();
+        // The runtime starts and records its binding, then waits for the gate
+        // this test holds.
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while session_titled(&host, SLOW_TITLE).is_none_or(|record| record.native_id.is_none())
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the native runtime starts");
+        tokio::time::timeout(
+            Duration::from_secs(20),
+            host.workspace.shutdown_workspace(&workspace_id),
+        )
+        .await
+        .expect("a gate holder is never blocked by a start waiting for the gate");
+        drop(operation);
+        let error = finish(slow).await.expect_err("the start was withdrawn");
+        assert_eq!(error.code, "CONFLICT");
+        assert!(no_live_or_starting_runtime(&host));
+        cleanup(host, root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn trust_is_verified_again_before_a_start_is_published() {
+        let root = test_root("trust-recheck");
+        let host = Arc::new(HostState::open(&root.join("app-data"), false).expect("host state"));
+        let starts = ControlledStarts::install(&host.workspace);
+        let workspace_id = {
+            let directory = project_directory(&root);
+            host.index
+                .lock()
+                .expect("index")
+                .register_project_directory(&directory, Some("Project"), TrustState::Trusted)
+                .expect("registers a trusted project")
+                .id
+        };
+        let slow = spawn_dispatch(&host, create_command(&workspace_id, SLOW_TITLE));
+        starts.wait_entered().await;
+        host.index
+            .lock()
+            .expect("index")
+            .update_project_trust(&workspace_id, TrustState::Restricted)
+            .expect("restricts the project")
+            .expect("project exists");
+        starts.release.notify_one();
+        let error = finish(slow)
+            .await
+            .expect_err("an untrusted start is not published");
+        assert_eq!(error.code, "NOT_TRUSTED");
+        assert!(no_live_or_starting_runtime(&host));
+        cleanup(host, root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_opens_of_one_session_share_a_single_native_start() {
+        let root = test_root("open-twice");
+        let host = Arc::new(HostState::open(&root, false).expect("host state"));
+        let starts = ControlledStarts::install(&host.workspace);
+        let workspace_id = host.personal_workspace.project_id.clone();
+        let id = session_of(dispatch(&host, create_command(&workspace_id, "Twice")).await)
+            .session
+            .id;
+        dispatch(
+            &host,
+            WorkspaceCommand::CloseSession {
+                session_id: id.clone(),
+            },
+        )
+        .await
+        .expect("closes");
+        host.workspace
+            .update_record(&id, |record| record.title = SLOW_TITLE.into())
+            .expect("the reopen will start slowly");
+        let open = || WorkspaceCommand::OpenSession {
+            session_id: id.clone(),
+        };
+        let first = spawn_dispatch(&host, open());
+        starts.wait_entered().await;
+        let second = spawn_dispatch(&host, open());
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!second.is_finished(), "the second open waits for the first");
+        assert!(host.live_runtime_operation_gate.try_lock().is_ok());
+        starts.release.notify_one();
+        let first = session_of(finish(first).await);
+        let second = session_of(finish(second).await);
+        assert_eq!(first.session.id, id);
+        assert_eq!(second.session.id, id);
+        assert_eq!(second.session.status, SessionStatus::Idle);
+        assert_eq!(starts.slow_spawns.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(host.workspace.inner.live.lock().expect("live").len(), 1);
+        host.workspace.shutdown_all().await;
+        cleanup(host, root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn closing_a_session_withdraws_its_unfinished_start() {
+        let root = test_root("close-start");
+        let host = Arc::new(HostState::open(&root, false).expect("host state"));
+        let starts = ControlledStarts::install(&host.workspace);
+        let workspace_id = host.personal_workspace.project_id.clone();
+        let slow = spawn_dispatch(&host, create_command(&workspace_id, SLOW_TITLE));
+        starts.wait_entered().await;
+        let id = session_titled(&host, SLOW_TITLE)
+            .expect("reserved draft")
+            .id;
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            dispatch(&host, WorkspaceCommand::CloseSession { session_id: id }),
+        )
+        .await
+        .expect("close does not wait for native initialization")
+        .expect("close is accepted");
+        assert_eq!(finish(slow).await.expect_err("withdrawn").code, "CONFLICT");
+        assert!(no_live_or_starting_runtime(&host));
+        cleanup(host, root);
     }
 }
