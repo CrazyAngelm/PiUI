@@ -20,7 +20,28 @@ This file is intended for coding agents and engineers working on the PiUI reposi
 
 ## Goal
 
-Create a minimal, fast, and extensible desktop shell on top of Pi. Do not create another agent harness.
+Build a fast, extensible desktop workbench for native agent harnesses (Codex,
+Claude Code, Pi, Hermes, Prime Agent and ACP agents) with Codex-quality chat UX
+and an n8n-like editor for multi-agent pipelines (ADR-026). Do not create another
+agent harness: harnesses own inference, tools, credentials and history.
+
+Current plan and decisions: `docs/PLAN_2026-09-26_RU.md`; progress log:
+`docs/REWORK_PROGRESS.md`.
+
+## Rework rules (2026-09-26)
+
+- Claude Code runs only on the user's Claude subscription (ADR-029): spawn the
+  user's installed `claude` executable, scrub API-key/cloud-provider env vars,
+  never pass `--bare`, refuse non-subscription auth, never touch credentials.
+- New UI code: Svelte 5 runes, tokens in `styles/tokens.css`, primitives in
+  `src/lib/ui`, Lucide icons, Svelte Flow for graphs (ADR-027). The new shell is
+  `src/app/shell`; the previous one stays at `?view=legacy` until parity.
+- Every screen must work in the browser UI Lab (`pnpm --filter @piui/desktop dev`)
+  through `host-api/transport.ts`; never import Tauri APIs outside the transport.
+- Svelte 5.38 native TS stripping keeps optional parameters (`fn(a?: T)`) in
+  component scripts, which breaks the build: write `a: T | undefined = undefined`.
+- Plugins (ADR-032) run outside the WebView with explicit trust; this replaces
+  the older ban on runtime-loaded harness code, not the isolation rules below.
 
 ## Non-negotiable rules
 
@@ -117,6 +138,10 @@ pnpm perf:smoke     # startup, idle RSS, long-session scroll, stream batching
   `target/` when no build output is still required; otherwise remove only the
   exact superseded `target/debug` or `target/release` tree after preserving the
   current verified deliverables.
+- Apply this post-verification rule to isolated spike `src-tauri/target` trees
+  and task-created temporary build/package staging too. Preserve each sole
+  deliverable, report, checksum, or rollback copy in a stable location outside
+  the generated tree before cleaning it.
 - Cleanup commands must resolve and verify the exact repository root and target
   path before recursive deletion. Never accept an arbitrary cleanup path, never
   follow a reparse point, and never delete the installed application, source,

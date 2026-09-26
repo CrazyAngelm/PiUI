@@ -419,3 +419,87 @@ inside PiUI. No arbitrary round or agent cap is introduced.
 English/Russian selection is local UI metadata, defaults to English and survives
 restart. User text and native outputs retain their original language. Layout
 positions are also rebuildable local UI metadata, separate from durable tasks.
+
+---
+
+## ADR-026 — PiUI is a workbench for agent harnesses and multi-agent pipelines
+
+**Status:** Accepted 2026-09-26 (owner delegated product decisions; see
+`docs/PLAN_2026-09-26_RU.md`).
+
+**Decision:** PiUI is the everyday desktop workbench for native agent harnesses
+(Codex, Claude Code, Pi, Hermes, Prime Agent and ACP agents) and the place to
+design, run and observe multi-agent pipelines. It is no longer "a minimal shell on
+top of Pi". The core invariants stay: harnesses own inference, tools,
+credentials and history; PiUI never adds a provider client or its own agent
+loop; no general shell/filesystem API in the WebView; explicit project trust;
+safe mode; generic fallbacks.
+
+**Consequences:** product docs, README and AGENTS.md describe the multi-harness
+workbench. Features are still evaluated as "could this be a plugin?", but the
+chat workbench (diff review, worktrees, inbox) and the pipeline editor are core.
+
+## ADR-027 — UI stack: Svelte 5 runes, headless primitives, Svelte Flow
+
+**Decision:** new UI code uses Svelte 5 runes, the shared design tokens and the
+primitives in `src/lib/ui` (built on bits-ui, MIT), Lucide icons (ISC) bundled
+locally, and Svelte Flow (MIT) with dagre for graph editing. No Tailwind or
+utility-class DSL (ADR-014 stands). The first-paint asset budget is measured in
+gzip (the WebView loads local files); raw bytes are still reported.
+
+**Consequences:** legacy components migrate as screens are rebuilt; the previous
+shell stays reachable at `?view=legacy` until parity and then is removed.
+
+## ADR-028 — Open harness registry and version ranges
+
+**Decision:** a harness id is a string validated by a host-side registry of
+descriptors (transport, discovery, version range, capability manifest, policy
+table, history format). Closed enums across Rust/TS contracts are replaced by
+registry lookups. Harness versions are accepted by tested ranges with capability
+checks at start and explicit degradation instead of exact pins. A generic ACP
+adapter covers ACP agents; richer native adapters remain for Pi, Codex, Prime,
+Hermes and Claude Code.
+
+## ADR-029 — Claude Code runs only on the user's Claude subscription
+
+**Decision (owner requirement):** the Claude Code adapter drives the user's own
+installed, unmodified `claude` executable in headless stream-json mode with the
+control protocol. PiUI scrubs API-key and cloud-provider variables from the
+child environment, never passes `--bare`, and refuses sessions whose reported
+auth is not the first-party subscription login. Sign-in happens only in Claude
+Code's own flow; PiUI never reads, copies or stores credentials. Pipeline agents
+on Claude Code run under the same subscription.
+
+## ADR-030 — Pipeline document v5 (planned)
+
+**Decision:** the pipeline becomes a first-class stored document (nodes, edges,
+inputs, triggers, positions, limits) with migration from system-file v1–v4.
+The node catalog adds one-shot LLM calls through the harness, scripts, loops
+with explicit limits, map/fan-out, merge, sub-pipelines and human input. Data
+mapping uses a small expression language evaluated in Rust without `eval`.
+Until then the Svelte Flow editor edits the existing agent-graph model.
+
+## ADR-031 — Transactional orchestration storage (planned)
+
+**Decision:** orchestration definitions and runs move from whole-document JSON
+rewrites under one mutex to a transactional store (SQLite WAL) with per-run
+locking, run archival/deletion and incremental run events. This data is
+authoritative, not cache (ADR-006/023 distinction kept).
+
+## ADR-032 — Plugins run outside the WebView with explicit trust (planned)
+
+**Decision:** third-party plugins may contribute harnesses, node types, MCP
+tools, commands, settings, renderers, panels, themes and templates. Backend
+code runs in a host-owned contained process (like harness bridges); UI runs
+only in sandboxed iframes or as declarative forms rendered by PiUI. Install is
+an explicit trust decision with a permission list; safe mode disables plugins;
+every renderer has a generic fallback. This supersedes the earlier "arbitrary
+runtime-loaded JS is not a plugin API" rule for harnesses, not the isolation
+principles of ADR-009/010/016.
+
+## ADR-033 — Script nodes are trusted user code (planned)
+
+**Decision:** script nodes (Node/TS, Python, shell) run in the project folder
+under process containment with timeouts, only after an explicit trust decision
+for the pipeline. Importing a pipeline never runs code. Script nodes are not a
+sandbox and the UI says so.
