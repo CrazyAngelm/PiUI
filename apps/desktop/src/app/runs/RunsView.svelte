@@ -8,7 +8,9 @@
   import { onMount, untrack } from 'svelte';
   import { t } from '../../features/locale/language';
   import type { OrchestrationClient, OrchestrationRunV6 } from '../../host-api/orchestrationClient';
-  import { Badge, Button, Dialog, EmptyState, IconButton, Segmented, Skeleton, Spinner, StatusDot } from '../../lib/ui';
+  import { Badge, Button, Dialog, EmptyState, IconButton, Popover, Segmented, Skeleton, Spinner, StatusDot } from '../../lib/ui';
+  import FileInput from '@lucide/svelte/icons/file-input';
+  import RunInputsView from './RunInputsView.svelte';
   import { useWorkspace } from '../shell/context';
   import { toolKind, type ToolKind } from '../chat/transcript/toolKinds';
   import RunCanvas from './RunCanvas.svelte';
@@ -158,6 +160,17 @@
           <span class="muted">{$t('{0} of {1} steps done', [counts.done, counts.total])}</span>
           {#if counts.attention > 0}<Badge tone="warning">{$t('{0} need attention', [counts.attention])}</Badge>{/if}
         </div>
+        {#if Object.keys(run.inputs ?? {}).length}
+          <Popover align="end" width={360} padded label={$t('Run inputs')}>
+            {#snippet trigger(props)}
+              <Button size="sm" variant="ghost" {...props}>
+                {#snippet leading()}<FileInput />{/snippet}
+                {$t('Inputs')}
+              </Button>
+            {/snippet}
+            <RunInputsView {run} />
+          </Popover>
+        {/if}
         <div class="stage__actions">
           {#if run.status === 'running'}
             <Button size="sm" variant="ghost" loading={runs.busy === 'pause'} disabled={!!runs.busy || safeMode} onclick={() => void runs.setPaused(!run.paused)}>

@@ -539,6 +539,18 @@ export class WorkspaceStore {
    * composer outbox, so the prompt is delivered once the harness is idle.
    */
   async startChat(request: NewChatRequest): Promise<string> {
+    const outcome = await this.createChat(request, { open: true });
+    if (outcome.error) this.sessionError = outcome.error;
+    return outcome.sessionId;
+  }
+
+  /**
+   * Create a native chat and send its first message. `open: false` keeps the
+   * current screen, e.g. for the pipeline assistant beside the editor; the
+   * caller then reports `error` itself. Unsent text is kept as the draft.
+   */
+  async createChat(request: NewChatRequest, options: { open: boolean; title?: string }): Promise<{ sessionId: string; error?: string }> {
+    const { open } = options;
     const harness = this.catalog.harnesses.find((item) => item.kind === request.harness);
     if (!harness || harness.status !== 'available') {
       throw new WorkspaceOperationError('UNAVAILABLE', harness?.reason ?? 'The selected harness is not available.');
@@ -549,18 +561,22 @@ export class WorkspaceStore {
       harness: request.harness,
       permissionMode: request.permissionMode,
       ...(request.model ? { model: request.model } : {}),
+      ...(options.title ? { title: options.title } : {}),
     });
     if (result.type !== 'session' && result.type !== 'accepted') {
       throw new WorkspaceOperationError('CONFLICT', 'The host returned an unexpected create-session result.');
     }
     const sessionId = result.type === 'session' ? result.snapshot.session.id : result.sessionId;
-    this.pendingAcceptedSessionId = result.type === 'accepted' ? sessionId : '';
-    this.selectWorkspace(request.workspaceId);
-    this.route = { name: 'chat', sessionId };
-    writeJson(ROUTE_KEY, this.route);
+    if (open) {
+      this.pendingAcceptedSessionId = result.type === 'accepted' ? sessionId : '';
+      this.selectWorkspace(request.workspaceId);
+      this.route = { name: 'chat', sessionId };
+      writeJson(ROUTE_KEY, this.route);
+    }
     if (result.type === 'session') this.storeSnapshot(result.snapshot);
     else await this.reconcileSession(sessionId);
     void this.loadCatalog(request.workspaceId);
+    let error: string | undefined;
     if (request.model && (request.thinkingLevel || request.serviceTier)) {
       try {
         await runtimeSettings({
@@ -570,22 +586,22 @@ export class WorkspaceStore {
           ...(request.thinkingLevel ? { thinkingLevel: request.thinkingLevel } : {}),
           ...(request.serviceTier ? { serviceTier: request.serviceTier } : {}),
         });
-      } catch (error) {
+      } catch (cause) {
         // The chat still works with native defaults; report instead of hiding it.
-        this.sessionError = errorMessage(error);
+        error = errorMessage(cause);
       }
     }
     const text = request.text.trim();
     if (text) {
       try {
         await composerRequest({ type: 'send', sessionId, requestId: crypto.randomUUID(), text: request.text, mode: 'prompt' });
-      } catch (error) {
+      } catch (cause) {
         // The chat exists; keep the unsent text as its draft so nothing is lost.
         this.updateDraft(sessionId, request.text);
-        this.sessionError = errorMessage(error);
+        error = errorMessage(cause);
       }
     }
-    return sessionId;
+    return error ? { sessionId, error } : { sessionId };
   }
 
   async interrupt(sessionId = this.selectedSessionId): Promise<boolean> {

@@ -28,6 +28,7 @@
     type StepView,
   } from './runPresentation';
   import type { RunsStore } from './runsStore.svelte';
+  import RunInputsView from './RunInputsView.svelte';
 
   interface Props {
     runs: RunsStore;
@@ -263,6 +264,12 @@
         {/if}
       {:else}
         <div class="pane">
+          {#if Object.keys(run.inputs ?? {}).length}
+            <section>
+              <h3>{$t('Run input')}</h3>
+              <RunInputsView {run} />
+            </section>
+          {/if}
           <section>
             <h3>{$t('Task')}</h3>
             {#if view.step.instructions}

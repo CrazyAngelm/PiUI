@@ -215,6 +215,16 @@ export class PipelineEditorStore {
     if (this.validationShown) this.issues = graphIssues(this.graph);
   }
 
+  /** Adopt a whole new version of the draft (e.g. the assistant's) as one undo step. */
+  replaceGraph(next: AgentGraph): void {
+    if (this.readOnly) return;
+    this.history.record(this.graph);
+    this.selectedId = '';
+    this.selectedEdge = '';
+    this.checkedNotice = '';
+    this.commit(next);
+  }
+
   /** Text edits update the graph live; `settle` records them as one step. */
   setLive(next: AgentGraph): void {
     this.graph = next;

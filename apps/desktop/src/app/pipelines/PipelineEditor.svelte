@@ -15,6 +15,7 @@
   import CircleAlert from '@lucide/svelte/icons/circle-alert';
   import CircleCheck from '@lucide/svelte/icons/circle-check';
   import Workflow from '@lucide/svelte/icons/workflow';
+  import Sparkles from '@lucide/svelte/icons/sparkles';
   import { t } from '../../features/locale/language';
   import { Badge, Button, Dialog, Menu, Picker, Spinner, matchesShortcut, toasts, type PickerItem } from '../../lib/ui';
   import type { AgentProfile, OrchestrationRunV6 } from '../../host-api/orchestrationClient';
@@ -40,6 +41,28 @@
   let api = $state.raw<FlowApi | undefined>();
   let filePicker = $state<HTMLInputElement | null>(null);
   let addMenuOpen = $state(false);
+  const ASSISTANT_KEY = 'piui.pipeline.assistant.open';
+  let assistantOpen = $state(readAssistantOpen());
+  let assistantModule = $state<Promise<typeof import('./assistant/AssistantPanel.svelte')> | undefined>();
+
+  function readAssistantOpen(): boolean {
+    try {
+      return localStorage.getItem(ASSISTANT_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  }
+  function setAssistant(open: boolean): void {
+    assistantOpen = open;
+    try {
+      localStorage.setItem(ASSISTANT_KEY, String(open));
+    } catch {
+      // Panel state is a convenience only.
+    }
+  }
+  $effect(() => {
+    if (assistantOpen && !assistantModule) assistantModule = import('./assistant/AssistantPanel.svelte');
+  });
 
   const selected = $derived(editor.selected);
   const dirty = $derived(editor.dirty);
@@ -177,6 +200,11 @@
 
     <div class="spacer"></div>
 
+    <Button size="sm" variant={assistantOpen ? 'secondary' : 'ghost'} aria-pressed={assistantOpen} onclick={() => setAssistant(!assistantOpen)}>
+      {#snippet leading()}<Sparkles />{/snippet}
+      {$t('Assistant')}
+    </Button>
+
     {#if editor.checkedNotice && !editor.stale && !problemCount}
       <span class="ok"><CircleCheck size={14} /> {$t('Checked')}</span>
     {/if}
@@ -245,6 +273,13 @@
         <div class="start">
           <h2>{$t('Build a pipeline')}</h2>
           <p>{$t('Start from a template or add an agent. Double-click the canvas to add one where you click.')}</p>
+          <button type="button" class="ask" onclick={() => setAssistant(true)} disabled={editor.readOnly}>
+            <Sparkles size={15} />
+            <span>
+              <strong>{$t('Describe it to the assistant')}</strong>
+              <small>{$t('Say what should happen; it proposes agents, checks and loops for you to apply.')}</small>
+            </span>
+          </button>
           <div class="templates">
             {#each TEMPLATES as template (template.id)}
               <button type="button" class="template" onclick={() => useTemplate(template.id)} disabled={editor.readOnly}>
@@ -275,6 +310,13 @@
       {#key selected.id}
         <NodeInspector {editor} node={selected} onClose={() => (editor.selectedId = '')} onFocusNode={focusNode} />
       {/key}
+    {/if}
+    {#if assistantOpen && assistantModule}
+      {#await assistantModule then module}
+        <div class="assistant-slot">
+          <module.default {editor} {workspaceId} onClose={() => setAssistant(false)} />
+        </div>
+      {/await}
     {/if}
   </div>
 </section>
@@ -380,6 +422,42 @@
     position: relative;
     flex: 1;
     min-width: 0;
+  }
+  .assistant-slot {
+    display: flex;
+    flex: none;
+    width: clamp(320px, 28vw, 420px);
+    min-height: 0;
+  }
+  .assistant-slot > :global(*) {
+    flex: 1;
+  }
+  .ask {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--piui-space-3);
+    width: 100%;
+    margin-bottom: var(--piui-space-3);
+    padding: var(--piui-space-3) var(--piui-space-4);
+    border: 1px solid color-mix(in srgb, var(--piui-accent) 45%, var(--piui-border));
+    border-radius: var(--piui-radius-md);
+    background: color-mix(in srgb, var(--piui-accent) 8%, var(--piui-surface-1));
+    color: var(--piui-text);
+    text-align: left;
+  }
+  .ask :global(svg) {
+    margin-top: 2px;
+    color: var(--piui-accent);
+  }
+  .ask span {
+    display: grid;
+    gap: 2px;
+  }
+  .ask small {
+    color: var(--piui-text-muted);
+  }
+  .ask:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--piui-accent) 14%, var(--piui-surface-1));
   }
   .add {
     position: absolute;

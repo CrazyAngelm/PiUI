@@ -1,4 +1,5 @@
 import { liveLabel } from './catalogFake';
+import { BUILDER_MARKER, builderAnswer } from './labBuilder';
 import type {
   ApprovalDecision, DesktopTimelineBlock, HarnessKind, PermissionMode, SessionStatus, UsageReceipt, WorkspaceApproval,
 } from './labContracts';
@@ -228,8 +229,25 @@ function reply(prompt: string, random: LabRandom): string {
   ].join('\n');
 }
 
+/** The pipeline assistant: think briefly, then stream a proposal. Never asks for approval. */
+function builderTurn(context: TurnContext, prompt: string): TurnStep[] {
+  const random = createRandom(`${context.sessionId}:builder:${context.turn}`);
+  const ids = idsFor(context, 'b');
+  const style = streamStyle(context.harness);
+  return [
+    { kind: 'status', status: 'running' },
+    { kind: 'block', block: { ...textBlock(context, 'user', ids.next()), text: prompt } },
+    wait(random.int(250, 450)),
+    ...streamSteps(textBlock(context, 'thinking', ids.next()), 'Reading the draft and the request, then choosing the smallest graph that can verify the result.', random, style, [25, 60]),
+    ...streamSteps(textBlock(context, 'assistant', ids.next()), builderAnswer(prompt), random, style, [60, 140]),
+    usageStep(context, random),
+    { kind: 'end', outcome: 'succeeded' },
+  ];
+}
+
 /** A complete chat turn of roughly 2–6 seconds, sometimes pausing for approval. */
 export function chatTurn(context: TurnContext, prompt: string): TurnStep[] {
+  if (prompt.trimStart().startsWith(BUILDER_MARKER)) return builderTurn(context, prompt);
   const random = createRandom(`${context.sessionId}:turn:${context.turn}`);
   const ids = idsFor(context, 't');
   const style = streamStyle(context.harness);
