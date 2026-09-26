@@ -4,16 +4,61 @@ import { compileGraph, emptyGraph, newGraphNode, newRouterNode } from './agentGr
 import { parseSystemFile, systemFileToGraph, graphToSystemFile, serializeSystemFile } from './systemFile';
 
 const example = () => JSON.parse(readFileSync(new URL('../../../../../examples/systems/mixed-review.piui.json', import.meta.url), 'utf8'));
+const structured = () => JSON.parse(readFileSync(new URL('../../../../../examples/systems/structured-review.piui.json', import.meta.url), 'utf8'));
+/** Parsed, deliberately untyped documents that tests corrupt. */
+type SystemFileJson = ReturnType<typeof structured>;
 describe('portable system files', () => {
   it('round-trips structured mappings and review acceptance without losing local references', () => {
     const file = JSON.parse(readFileSync(new URL('../../../../../examples/systems/structured-review.piui.json', import.meta.url), 'utf8'));
     const graph = systemFileToGraph(parseSystemFile(JSON.stringify(file)));
     const reopened = systemFileToGraph(parseSystemFile(serializeSystemFile(graph)));
     const steps = compileGraph(reopened).pipeline.steps;
-    expect(steps[1]!.review).toEqual({field:'accepted',retryFromStepId:steps[0]!.id});
+    expect(steps[1]!.review).toEqual({field:'accepted',retryFromStepId:steps[0]!.id,maxIterations:3});
     expect(steps[1]!.requireApproval).toBe(true);
     expect(steps[1]!.inputBindings?.[0]).toEqual({sourceStepId:steps[0]!.id,field:'summary',name:'proposal'});
     file.agents[1].inputBindings[0].field = 'undeclared';
+    expect(() => parseSystemFile(JSON.stringify(file))).toThrow();
+  });
+  it('keeps the generated validators self-contained browser modules', () => {
+    // Some schema keywords (for example maxLength) make Ajv emit a CommonJS
+    // runtime import, which fails in the WebView and in `pnpm system:check`.
+    for (const version of [1, 2, 3, 4]) {
+      const source = readFileSync(new URL(`../../../../../contracts/system-file-v${version}-validator.mjs`, import.meta.url), 'utf8');
+      expect(source).not.toMatch(/\brequire\(/);
+    }
+  });
+  it('round-trips run inputs and review loop limits and keeps legacy versions strict', () => {
+    const file = structured();
+    file.inputs.push({ name: 'depth', label: 'Depth', kind: 'choice', options: ['quick', 'deep'], defaultValue: 'quick' }, { name: 'budget', label: 'Budget', kind: 'number', defaultValue: 2.5 });
+    const graph = systemFileToGraph(parseSystemFile(JSON.stringify(file)));
+    expect(graph.inputs).toEqual(file.inputs);
+    const text = serializeSystemFile(graph);
+    const reopened = parseSystemFile(text);
+    expect(reopened.inputs).toEqual(file.inputs);
+    expect(reopened.agents[1]!.review).toEqual({ field: 'accepted', retryFromStepId: 'research', maxIterations: 3 });
+    expect(compileGraph(systemFileToGraph(reopened)).pipeline.inputs).toEqual(file.inputs);
+    expect(compileGraph(systemFileToGraph(reopened)).pipeline.steps[0]!.instructions).toContain('{{input.task}}');
+    const plain = example(); plain.version = 4;
+    expect(serializeSystemFile(systemFileToGraph(parseSystemFile(JSON.stringify(plain))))).not.toContain('"inputs"');
+    const legacy = example(); legacy.version = 3; legacy.inputs = [{ name: 'task', label: 'Task', kind: 'text' }];
+    expect(() => parseSystemFile(JSON.stringify(legacy))).toThrow();
+    delete legacy.inputs;
+    expect(parseSystemFile(JSON.stringify(legacy)).version).toBe(3);
+  });
+  it.each([
+    ['input name', (file: SystemFileJson) => { file.inputs[0].name = 'Task'; }],
+    ['duplicate input', (file: SystemFileJson) => { file.inputs.push({ ...file.inputs[0] }); }],
+    ['unknown input field', (file: SystemFileJson) => { file.inputs[0].placeholder = 'not allowed'; }],
+    ['choice without options', (file: SystemFileJson) => { file.inputs.push({ name: 'depth', label: 'Depth', kind: 'choice' }); }],
+    ['mismatched default', (file: SystemFileJson) => { file.inputs.push({ name: 'budget', label: 'Budget', kind: 'number', defaultValue: 'two' }); }],
+    ['null default', (file: SystemFileJson) => { file.inputs[0].defaultValue = null; }],
+    ['zero review rounds', (file: SystemFileJson) => { file.agents[1].review.maxIterations = 0; }],
+    ['21 review rounds', (file: SystemFileJson) => { file.agents[1].review.maxIterations = 21; }],
+    ['fractional review rounds', (file: SystemFileJson) => { file.agents[1].review.maxIterations = 1.5; }],
+  ])('rejects an invalid %s without dropping it', (_case, change) => {
+    const file = structured();
+    parseSystemFile(JSON.stringify(file));
+    change(file);
     expect(() => parseSystemFile(JSON.stringify(file))).toThrow();
   });
   it('preserves callable-only agents in v4 and rejects them in legacy files', () => {

@@ -2,7 +2,9 @@
 
 Current export: **version 4**. Versions 1–3 remain importable. See
 [execution contracts](../skills/piui-systems/references/execution.md) for callable
-nodes, mappings, typed results, artifacts, conditions, approvals and review cycles.
+nodes, mappings, typed results, artifacts, conditions, approvals, review cycles
+(including the optional `maxIterations` bound) and top-level run `inputs`.
+Both additions are optional v4 fields; files without them are unchanged.
 The active orchestration IPC is v6; native history formats are unchanged.
 
 

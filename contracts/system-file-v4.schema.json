@@ -20,6 +20,13 @@
     "inheritTeamConnections": {
       "type": "boolean"
     },
+    "inputs": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/definitions/runInput"
+      }
+    },
     "agents": {
       "type": "array",
       "items": {
@@ -142,6 +149,11 @@
               "retryFromStepId": {
                 "type": "string",
                 "pattern": "\\S"
+              },
+              "maxIterations": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
               }
             },
             "required": [
@@ -231,6 +243,62 @@
   ],
   "additionalProperties": false,
   "definitions": {
+    "runInput": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9_]{0,63}$"
+        },
+        "label": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "kind": {
+          "enum": [
+            "text",
+            "long-text",
+            "number",
+            "boolean",
+            "choice"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "description": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "maxItems": 50,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "\\S"
+          }
+        },
+        "defaultValue": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "label",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
     "router": {
       "type": "object",
       "properties": {
