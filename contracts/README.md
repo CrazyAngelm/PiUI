@@ -55,3 +55,21 @@ field changed, earlier documents keep their exact meaning, and v1-v3 system
 files stay closed (their schemas never accept it). Older builds reject the new
 value with an explicit validation error instead of misreading it. Round-trip and
 compatibility tests cover every extended contract.
+
+# Script step test v1
+
+`orchestration-script-test-v1.ts` is an independently versioned pair of
+commands for the editor's "Test script": `orchestration_script_test_v1` runs
+one script step's draft (`runtime`, `source`, `timeoutSeconds`, `resultFields`)
+once with a caller-supplied sample stdin object (at most 256 KiB) and resolves
+when it ended, timed out or was cancelled; `orchestration_cancel_script_test_v1`
+stops it by the caller's `testId`. The host uses the run's script runner,
+admission (trusted, live project outside safe mode, re-checked while it runs),
+process-tree containment, environment allowlist, bounds and result checks, and
+reports exactly what a run would record (`failure`), the parsed JSON object and
+per-field issues. Nothing is written to a run; the request can only name a
+script runtime, so a test never starts an agent or a model call. Refusals are
+typed `{code}` values (`safe-mode`, `not-trusted`, `script-runtime-unavailable`,
+…). Orchestration v6/v7 commands and records are unchanged. Both DTOs reject
+unknown fields; `fixtures/orchestration-script-test-v1.json` is checked by the
+Rust host and the TypeScript client.
