@@ -3,6 +3,7 @@
   import Folder from '@lucide/svelte/icons/folder';
   import Library from '@lucide/svelte/icons/library';
   import { t } from '../../features/locale/language';
+  import type { OrchestrationRunV6 } from '../../host-api/orchestrationClient';
   import { EmptyState, Menu, Picker, Segmented, Skeleton, type PickerItem } from '../../lib/ui';
   import type { PipelineSection } from '../workspaceStore.svelte';
   import { useWorkspace } from './context';
@@ -13,10 +14,12 @@
   let { section }: Props = $props();
   const store = useWorkspace();
 
-  // The graph editor and run inspector are the existing orchestration
-  // contribution, loaded on demand; they are rebuilt in the pipelines phase.
+  // The graph editor is rebuilt on Svelte Flow; runs, schedules and the
+  // library still use the existing orchestration contribution.
+  const editor = import('../pipelines/PipelineEditor.svelte');
   const panel = import('../../features/orchestration/OrchestrationPanel.svelte');
   let epoch = $state(0);
+  let startedRun = $state.raw<OrchestrationRunV6 | undefined>();
 
   const projects = $derived(store.catalog.workspaces.filter((item) => !item.missing));
   const workspace = $derived(store.selectedWorkspace);
@@ -35,8 +38,14 @@
     store.guard(() => {
       store.pipelineDirty = false;
       store.selectWorkspace(id);
+      startedRun = undefined;
       epoch += 1;
     });
+  }
+  function opened(run: OrchestrationRunV6): void {
+    startedRun = run;
+    store.pipelineDirty = false;
+    setSection('runs');
   }
 </script>
 
@@ -86,6 +95,22 @@
       <EmptyState title={$t('Choose a project')} description={$t('Pipelines belong to a project folder.')} />
     {:else if !workspace.personal && workspace.trust !== 'trusted'}
       <EmptyState title={$t('This folder is restricted')} description={$t('Trust the folder from the sidebar to build and run pipelines in it.')} />
+    {:else if section === 'systems'}
+      {#await editor}
+        <div class="loading"><Skeleton lines={5} /></div>
+      {:then module}
+        {#key `${workspace.id}:${epoch}`}
+          <module.default
+            workspaceId={workspace.id}
+            safeMode={store.safeMode}
+            onDirtyChange={(dirty) => (store.pipelineDirty = dirty)}
+            onRun={opened}
+            onLibrary={() => setSection('agents')}
+          />
+        {/key}
+      {:catch}
+        <EmptyState title={$t('Pipelines are unavailable')} description={$t('Chats and history still work.')} />
+      {/await}
     {:else}
       {#await panel}
         <div class="loading"><Skeleton lines={5} /></div>
@@ -96,6 +121,7 @@
             workspaceId={workspace.id}
             {section}
             safeMode={store.safeMode}
+            initialRun={startedRun}
             onSectionChange={(next) => setSection(next)}
             onOpenSession={(sessionId) => void store.openSession(sessionId)}
             onDirtyChange={(dirty) => (store.pipelineDirty = dirty)}

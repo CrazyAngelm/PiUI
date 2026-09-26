@@ -32,6 +32,8 @@
   export let onSectionChange: (section: OrchestrationSection) => void = () => {};
   export let onOpenSession: ((sessionId: string) => void) | undefined = undefined;
   export let onDirtyChange: (dirty: boolean) => void = () => {};
+  /** A run just started elsewhere (e.g. the pipeline editor) to open in Runs. */
+  export let initialRun: OrchestrationRunV6 | undefined = undefined;
   /** Dependency injection is for native-host tests, never a production fake store. */
   export let client: OrchestrationClient = orchestrationHost;
 
@@ -71,6 +73,8 @@
   let query = '';
   let runStatus = '';
   let pendingRunToOpen: { workspaceId: string; run: OrchestrationRunV6 } | undefined;
+  let consumedInitialRun: string | undefined;
+  $: if (initialRun && initialRun.id !== consumedInitialRun) { consumedInitialRun = initialRun.id; pendingRunToOpen = { workspaceId, run: initialRun }; }
   let deleteRequest: { workspaceId: string; kind: OrchestrationDefinitionKind | 'schedule'; summary: DefinitionSummary } | undefined;
   let epoch = 0;
   let mounted = false;
