@@ -9,6 +9,7 @@
 mod agent_api;
 mod api;
 mod automation_paths;
+mod background;
 mod catalog_watch;
 mod contributions;
 mod dto;
@@ -688,6 +689,11 @@ pub fn run() -> Result<(), tauri::Error> {
         None
     };
     let context = tauri::generate_context!();
+    // E2E hosts never touch the person's real sign-in registration.
+    #[cfg(debug_assertions)]
+    let autostart_allowed = e2e_directories.is_none();
+    #[cfg(not(debug_assertions))]
+    let autostart_allowed = true;
     #[cfg(debug_assertions)]
     if e2e_directories.is_some()
         && context
@@ -705,6 +711,13 @@ pub fn run() -> Result<(), tauri::Error> {
     }
 
     let app = tauri::Builder::default()
+        // Host-driven only: the WebView has no autostart permission.
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .arg(background::AUTOSTART_ARG)
+                .build(),
+        )
+        .on_window_event(background::on_window_event)
         .setup(move |app| {
             #[cfg(debug_assertions)]
             if let Some(e2e_directories) = &e2e_directories {
@@ -751,6 +764,7 @@ pub fn run() -> Result<(), tauri::Error> {
             app.manage(state);
             let trigger_engine = orchestration_triggers::TriggerEngine::default();
             app.manage(trigger_engine.clone());
+            background::setup(app.handle(), safe_mode, autostart_allowed);
             if !safe_mode {
                 orchestration_scheduler.start_timed_schedule_worker(app.handle().clone());
                 trigger_engine.start(app.handle().clone());
@@ -838,6 +852,9 @@ pub fn run() -> Result<(), tauri::Error> {
             orchestration_api::orchestration_delete_schedule_v7,
             orchestration_api::orchestration_automations_v7,
             orchestration_api::orchestration_set_automations_paused_v7,
+            background::background_settings_v1,
+            background::background_update_v1,
+            background::background_tray_labels_v1,
             orchestration_api::orchestration_list_runs_v6,
             orchestration_api::orchestration_get_run_v6,
             orchestration_api::orchestration_start_run_v6,

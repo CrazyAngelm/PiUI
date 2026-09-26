@@ -53,6 +53,7 @@ const SESSION_SEARCH_CANDIDATE_ROW_BUDGET: usize = 256;
 /// Maximum number of generic timeline blocks returned by one pure slice.
 pub const TIMELINE_SLICE_MAX_LIMIT: usize = 200;
 const PREFERENCES_STATE_KEY: &str = "piui.preferences.v1";
+const BACKGROUND_STATE_KEY: &str = "piui.background.v1";
 const TYPE_LIMIT: usize = 80;
 const HEADER_CWD_MAX_BYTES: usize = 32 * 1024;
 /// A complete initial header is sufficient to exclude a candidate that belongs
@@ -3362,6 +3363,35 @@ pub struct Preferences {
     pub chat_width: ChatWidthPreference,
 }
 
+/// PiUI background-mode preferences. Both behaviors are off until a person
+/// turns them on. Starting at sign-in is registered with the OS, not here.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundPreferences {
+    /// Keep running in the tray when the window is closed.
+    pub keep_in_tray: bool,
+}
+
+fn encode_background_preferences(value: BackgroundPreferences) -> String {
+    format!("v1|{}", if value.keep_in_tray { "tray" } else { "window" })
+}
+
+fn decode_background_preferences(value: &str) -> Option<BackgroundPreferences> {
+    let mut fields = value.split('|');
+    if fields.next()? != "v1" {
+        return None;
+    }
+    let keep_in_tray = match fields.next()? {
+        "tray" => true,
+        "window" => false,
+        _ => return None,
+    };
+    if fields.next().is_some() {
+        return None;
+    }
+    Some(BackgroundPreferences { keep_in_tray })
+}
+
 fn agent_kind_db(value: AgentKind) -> &'static str {
     match value {
         AgentKind::Pi => "pi",
@@ -3727,6 +3757,41 @@ impl ProjectIndex {
             "INSERT INTO index_state (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             params![PREFERENCES_STATE_KEY, encode_preferences(preferences)],
+        )?;
+        transaction.commit()?;
+        Ok(preferences)
+    }
+
+    /// Background-mode preferences. Missing or malformed state fails closed
+    /// to "off".
+    pub fn background_preferences(&self) -> Result<BackgroundPreferences, IndexError> {
+        let stored: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT value FROM index_state WHERE key = ?1",
+                params![BACKGROUND_STATE_KEY],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(stored
+            .as_deref()
+            .and_then(decode_background_preferences)
+            .unwrap_or_default())
+    }
+
+    /// Atomically replaces the background-mode preferences.
+    pub fn update_background_preferences(
+        &mut self,
+        preferences: BackgroundPreferences,
+    ) -> Result<BackgroundPreferences, IndexError> {
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO index_state (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![
+                BACKGROUND_STATE_KEY,
+                encode_background_preferences(preferences)
+            ],
         )?;
         transaction.commit()?;
         Ok(preferences)
@@ -5626,6 +5691,48 @@ mod tests {
                 .expect("preferences survive projection rebuild"),
             preferences
         );
+    }
+
+    #[test]
+    fn background_preferences_default_off_round_trip_and_fail_closed() {
+        let mut index = ProjectIndex::open_in_memory().expect("opens index");
+        assert_eq!(
+            index.background_preferences().expect("loads defaults"),
+            BackgroundPreferences::default()
+        );
+        assert!(!BackgroundPreferences::default().keep_in_tray);
+        let tray = BackgroundPreferences { keep_in_tray: true };
+        assert_eq!(
+            index
+                .update_background_preferences(tray)
+                .expect("stores background preferences"),
+            tray
+        );
+        assert_eq!(index.background_preferences().expect("loads"), tray);
+        // Display preferences are a separate record and stay untouched.
+        assert_eq!(
+            index.preferences().expect("loads display preferences"),
+            Preferences::default()
+        );
+        index
+            .rebuild_session_projection()
+            .expect("rebuilds only session cache");
+        assert_eq!(index.background_preferences().expect("survives"), tray);
+        for malformed in ["v1|maybe", "v2|tray", "v1|tray|extra", ""] {
+            index
+                .connection
+                .execute(
+                    "INSERT INTO index_state (key, value) VALUES (?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    params![BACKGROUND_STATE_KEY, malformed],
+                )
+                .expect("seeds malformed background state");
+            assert_eq!(
+                index.background_preferences().expect("fails closed"),
+                BackgroundPreferences::default(),
+                "{malformed}"
+            );
+        }
     }
 
     #[test]

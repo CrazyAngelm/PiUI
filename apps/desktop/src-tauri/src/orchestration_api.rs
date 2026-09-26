@@ -253,6 +253,8 @@ pub(crate) fn apply_automations_paused<R: tauri::Runtime>(
                 paused,
             },
         );
+        // The tray menu shows Pause or Resume.
+        let _ = crate::background::refresh_tray(app);
     }
     Ok(AutomationsStateV7 { paused })
 }

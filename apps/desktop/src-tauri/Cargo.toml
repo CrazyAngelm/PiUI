@@ -42,9 +42,11 @@ sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net"] }
 uuid.workspace = true
-tauri = { version = "=2.11.5", features = [] }
+tauri = { version = "=2.11.5", features = ["tray-icon"] }
 rfd = "0.17.2"
 notify = "8.2.0"
+# Sign-in registration for background mode; driven only from host code.
+tauri-plugin-autostart = "=2.5.1"
 
 [dev-dependencies]
 tauri = { version = "=2.11.5", features = ["test"] }
