@@ -35,33 +35,27 @@ export const harnessesRu: Readonly<Record<string, string>> = {
 
   // Harness limitations in the node inspector (adapter manifests).
   'Limitations of {0}': 'Ограничения {0}',
-  'Codex cannot limit its tools per agent: only its sandbox and permissions bound them.':
-    'Codex не умеет ограничивать инструменты для отдельного агента: их ограничивают только песочница и права.',
-  'With read-only, workspace-write or full-access permissions Codex never asks for approval: actions that would need it, including MCP tools that ask first, are refused.':
-    'С правами «только чтение», «запись в проект» или «полный доступ» Codex никогда не спрашивает одобрения: действия, которым оно нужно, включая MCP-инструменты с запросом, отклоняются.',
-  'Network access stays off unless you allow it, and only with read-only or workspace-write permissions.':
-    'Доступ к сети выключен, пока вы его не разрешите, и возможен только с правами «только чтение» или «запись в проект».',
-  "Read-only allows only the read, grep, find and ls tools. It is Pi's tool allowlist, not a sandbox.":
-    'Режим «только чтение» разрешает лишь инструменты read, grep, find и ls. Это список инструментов Pi, а не песочница.',
-  'Pi has no workspace-write mode: choose read-only or full access.':
-    'У Pi нет режима «запись в проект»: выберите «только чтение» или «полный доступ».',
-  'Pi cannot restrict network access.': 'Pi не умеет ограничивать доступ к сети.',
-  'Prime Agent uses its own permission settings: PiUI cannot make it read-only or limit its writes.':
-    'Prime Agent использует собственные настройки прав: PiUI не может сделать его «только для чтения» или ограничить запись.',
-  'Approval prompts of Prime Agent are not shown in PiUI.': 'Запросы одобрения Prime Agent не показываются в PiUI.',
-  'Only skills can be switched per agent; MCP servers cannot.':
-    'Для отдельного агента можно переключать только навыки, MCP-серверы — нельзя.',
-  'Prime Agent cannot run a single model call read-only.': 'Prime Agent не может выполнить разовый вызов модели в режиме только чтения.',
-  'Hermes uses its own permission settings: PiUI cannot make it read-only or limit its writes.':
-    'Hermes использует собственные настройки прав: PiUI не может сделать его «только для чтения» или ограничить запись.',
-  'Hermes cannot limit its tools or delegation per agent.': 'Hermes не умеет ограничивать инструменты и делегирование для отдельного агента.',
-  'Hermes cannot steer a running turn; follow-up messages wait until it ends.':
-    'Hermes нельзя направлять во время хода: следующие сообщения ждут его окончания.',
-  'Hermes cannot run a single model call read-only.': 'Hermes не может выполнить разовый вызов модели в режиме только чтения.',
-  'Skills, MCP servers and plugins come from your Claude Code configuration and cannot be switched per agent.':
-    'Навыки, MCP-серверы и плагины берутся из вашей конфигурации Claude Code, их нельзя переключать для отдельного агента.',
-  'A step fails before it starts when Claude Code is not signed in: run `claude` in a terminal and use /login.':
-    'Если вход в Claude Code не выполнен, шаг завершается ошибкой до запуска: запустите `claude` в терминале и выполните /login.',
+  'Tools cannot be limited per agent; only the sandbox and permissions bound them.':
+    'Инструменты нельзя ограничить для агента — их ограничивают только песочница и права.',
+  'Never asks for approval with read-only, workspace-write or full access: actions that need one, MCP tools included, are refused.':
+    'С правами «только чтение», «запись в проект» и «полный доступ» не спрашивает одобрения: такие действия, включая MCP-инструменты, отклоняются.',
+  'No network unless allowed, and only with read-only or workspace-write.':
+    'Сеть доступна, только если разрешена, и лишь с «только чтение» или «запись в проект».',
+  'Read-only allows only read, grep, find and ls: a tool list, not a sandbox.':
+    '«Только чтение» разрешает лишь read, grep, find и ls: это список инструментов, а не песочница.',
+  'No workspace-write mode: choose read-only or full access.': 'Нет режима «запись в проект»: выберите «только чтение» или «полный доступ».',
+  'Network access cannot be restricted.': 'Доступ к сети ограничить нельзя.',
+  'Uses its own permission settings; PiUI cannot make it read-only.':
+    'Использует свои настройки прав; PiUI не может сделать его «только для чтения».',
+  'Its approval prompts are not shown in PiUI.': 'Его запросы одобрения не показываются в PiUI.',
+  'Only skills can be switched per agent, not MCP servers.': 'Для агента переключаются только навыки, не MCP-серверы.',
+  'Cannot run a single model call read-only.': 'Не может выполнить разовый вызов модели только для чтения.',
+  'Tools and delegation cannot be limited per agent.': 'Инструменты и делегирование нельзя ограничить для агента.',
+  'A running turn cannot be steered; follow-ups wait for it to end.': 'Идущий ход нельзя направлять; следующие сообщения ждут его конца.',
+  'Skills, MCP servers and plugins come from your Claude Code settings; they cannot be switched per agent.':
+    'Навыки, MCP-серверы и плагины берутся из настроек Claude Code; для агента их не переключить.',
+  'Without a sign-in a step fails before it starts: run `claude` and use /login.':
+    'Без входа шаг завершается ошибкой до запуска: запустите `claude` и выполните /login.',
 
   // Claude Code sign-in: run panel.
   'Claude Code is not signed in with your Claude subscription, so this step did not start. Run `claude` in a terminal and use /login, then run this step again.':

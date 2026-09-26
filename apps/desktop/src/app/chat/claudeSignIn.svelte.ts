@@ -20,11 +20,6 @@ export function cachedSignedOut(harnesses: readonly HarnessSummary[]): boolean {
   return harnesses.some((summary) => summary.kind === 'claude-code' && summary.reason === CLAUDE_SIGN_IN_REASON);
 }
 
-/** Whether a message is the host's sign-in guidance (not another failure). */
-export function isSignInMessage(message: string): boolean {
-  return message === CLAUDE_SIGN_IN_REASON;
-}
-
 export type SignInVerdict = 'signed-in' | 'signed-out' | 'unchecked';
 
 /** What a Claude Code catalog request proved: its failure is a verdict only for `SIGN_IN_REQUIRED`. */

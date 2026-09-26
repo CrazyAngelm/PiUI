@@ -12,7 +12,6 @@ import {
   SIGNED_OUT_COPY,
   cachedSignedOut,
   copyParts,
-  isSignInMessage,
   verdictOf,
 } from './claudeSignIn.svelte';
 
@@ -24,9 +23,8 @@ const signInError = () => new WorkspaceOperationError('SIGN_IN_REQUIRED', CLAUDE
 describe('Claude Code sign-in state', () => {
   it('reads the host verdict from the catalog reason the host and the UI Lab report', () => {
     expect(CLAUDE_SIGN_IN_REASON).toBe(CLAUDE_SIGN_IN_MESSAGE);
+    // The new-chat composer hides its own notice for exactly this safe message.
     expect(workspaceError({ code: 'SIGN_IN_REQUIRED' }).message).toBe(CLAUDE_SIGN_IN_REASON);
-    expect(isSignInMessage(workspaceError({ code: 'SIGN_IN_REQUIRED' }).message)).toBe(true);
-    expect(isSignInMessage('Could not load models.')).toBe(false);
     expect(cachedSignedOut([claude(CLAUDE_SIGN_IN_REASON)])).toBe(true);
     // No reason: never checked in this host process, or verified.
     expect(cachedSignedOut([claude()])).toBe(false);
