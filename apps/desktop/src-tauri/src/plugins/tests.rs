@@ -577,7 +577,7 @@ fn plugin_acp_agents_join_the_harness_registry_and_leave_with_the_plugin() {
     let agent = acp
         .views()
         .into_iter()
-        .find(|view| view.descriptor.id.as_str() == "qwen-code")
+        .find(|view| view.descriptor.id.as_str() == "opencode")
         .expect("registered");
     assert_eq!(agent.source, crate::acp_agents::AgentSource::Plugin);
     assert_eq!(
@@ -601,7 +601,7 @@ fn plugin_acp_agents_join_the_harness_registry_and_leave_with_the_plugin() {
     assert!(
         acp.views()
             .iter()
-            .all(|view| view.descriptor.id.as_str() != "qwen-code")
+            .all(|view| view.descriptor.id.as_str() != "opencode")
     );
 }
 

@@ -130,6 +130,8 @@ const step = object({
     agent: {},
     llm: {},
     script: { runtime: enumOf(['node', 'python', 'powershell']), source: string, timeoutSeconds: u32 },
+    // v6.5 plugin nodes; the configuration is a flat JSON object.
+    plugin: { pluginId: string, nodeType: string, config: json },
   })),
   inputInstructions: option(string),
   id: string,

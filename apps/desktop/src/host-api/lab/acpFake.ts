@@ -177,6 +177,7 @@ const REGISTRY_MESSAGES: Readonly<Record<Exclude<HarnessRegistryErrorCode, 'INVA
   NOTHING_TO_CONFIRM: 'There is nothing to confirm for this agent right now. Check it again.',
   LIMIT: 'Remove an agent before adding another (32 at most).',
   IO_ERROR: 'PiUI could not save the harness list.',
+  PLUGIN_OWNED: 'This agent comes from a plugin. Disable or remove the plugin in Settings → Plugins.',
 };
 
 function registryFailure(code: Exclude<HarnessRegistryErrorCode, 'INVALID_DESCRIPTOR'>): HostErrorPayload {
@@ -236,6 +237,15 @@ const sameLine = (left: CommandLineV1 | undefined, right: CommandLineV1): boolea
 
 type Refusal = 'unsupported-version' | 'version-unknown' | 'version-unconfirmed';
 
+type Source = 'built-in' | 'user' | 'plugin';
+
+/** An enabled plugin's ACP agent (ADR-032), like `acp_agents::PluginAgent`. */
+export interface LabPluginAgent {
+  readonly pluginId: string;
+  readonly pluginName: string;
+  readonly descriptor: AcpAgentDescriptorV1;
+}
+
 export class LabAcpRegistry {
   revision: number;
   private readonly users: AcpAgentDescriptorV1[];
@@ -245,6 +255,7 @@ export class LabAcpRegistry {
   /** Agents whose first start already asked to sign in. */
   private readonly askedToSignIn = new Set<string>();
   private readonly path: Readonly<Record<string, LabProgram>>;
+  private plugins: LabPluginAgent[] = [];
 
   constructor(private readonly state: LabState, private readonly bus: LabEventBus, private readonly clock: LabClock) {
     const fresh = state.scenario === 'empty';
@@ -259,11 +270,44 @@ export class LabAcpRegistry {
 
   // ---- views ------------------------------------------------------------------
 
-  private descriptors(): [AcpAgentDescriptorV1, 'built-in' | 'user'][] {
-    return [[LAB_GEMINI_DESCRIPTOR, 'built-in'], ...this.users.map((descriptor): [AcpAgentDescriptorV1, 'user'] => [descriptor, 'user'])];
+  private descriptors(): [AcpAgentDescriptorV1, Source][] {
+    const owned = [LAB_GEMINI_DESCRIPTOR, ...this.users];
+    return [
+      [LAB_GEMINI_DESCRIPTOR, 'built-in'],
+      ...this.users.map((descriptor): [AcpAgentDescriptorV1, 'user'] => [descriptor, 'user']),
+      ...this.plugins
+        .filter((agent) => !owned.some((descriptor) => descriptor.id === agent.descriptor.id))
+        .map((agent): [AcpAgentDescriptorV1, 'plugin'] => [agent.descriptor, 'plugin']),
+    ];
   }
 
-  private find(id: string): [AcpAgentDescriptorV1, 'built-in' | 'user'] | undefined {
+  /**
+   * `set_plugin_agents`: the agents enabled plugins contribute. An id another
+   * agent uses is not added. Returns plugin id, agent id and whether it was.
+   */
+  setPluginAgents(agents: readonly LabPluginAgent[]): [string, string, boolean][] {
+    const before = new Set(this.plugins.map((agent) => agent.descriptor.id));
+    const key = (list: readonly LabPluginAgent[]) => JSON.stringify(list.map((agent) => [agent.pluginId, agent.descriptor]));
+    const previous = key(this.plugins);
+    const owned = [LAB_GEMINI_DESCRIPTOR, ...this.users];
+    this.plugins = agents.filter((agent, index) => agents.findIndex((other) => other.descriptor.id === agent.descriptor.id) === index);
+    for (const id of before) if (!this.plugins.some((agent) => agent.descriptor.id === id)) this.discovery.delete(id);
+    const report = this.plugins.map((agent): [string, string, boolean] => [
+      agent.pluginId,
+      agent.descriptor.id,
+      !owned.some((descriptor) => descriptor.id === agent.descriptor.id),
+    ]);
+    if (!this.state.safeMode) {
+      for (const [descriptor, source] of this.descriptors()) {
+        if (source === 'plugin' && !before.has(descriptor.id)) this.discover(descriptor, source, false);
+      }
+    }
+    // Only a real change is announced (start-up with no plugin agents is silent).
+    if (key(this.plugins) !== previous) this.changed();
+    return report;
+  }
+
+  private find(id: string): [AcpAgentDescriptorV1, Source] | undefined {
     return this.descriptors().find(([descriptor]) => descriptor.id === id);
   }
 
@@ -295,11 +339,11 @@ export class LabAcpRegistry {
     return { ok: true, line, location: entry, versionOutput };
   }
 
-  private mayExecute(descriptor: AcpAgentDescriptorV1, source: 'built-in' | 'user', resolution: Resolution): boolean {
+  private mayExecute(descriptor: AcpAgentDescriptorV1, source: Source, resolution: Resolution): boolean {
     return source === 'built-in' || (resolution.ok && sameLine(this.decision(descriptor)?.trustedCommand, resolution.line));
   }
 
-  private discover(descriptor: AcpAgentDescriptorV1, source: 'built-in' | 'user', force: boolean): void {
+  private discover(descriptor: AcpAgentDescriptorV1, source: Source, force: boolean): void {
     const resolution = this.resolve(descriptor);
     const report = resolution.ok && this.mayExecute(descriptor, source, resolution)
       ? versionReport(descriptor, resolution.versionOutput)
@@ -341,7 +385,7 @@ export class LabAcpRegistry {
     }
   }
 
-  private entry(descriptor: AcpAgentDescriptorV1, source: 'built-in' | 'user'): AcpAgentEntryV1 {
+  private entry(descriptor: AcpAgentDescriptorV1, source: Source): AcpAgentEntryV1 {
     const decision = this.decision(descriptor);
     const found = this.discovery.get(descriptor.id);
     const line = found?.resolution.ok ? found.resolution.line : undefined;
@@ -363,7 +407,13 @@ export class LabAcpRegistry {
       allowedSecrets: [...(decision?.allowedSecrets ?? [])],
       authMethods: [...(this.signIn.get(descriptor.id) ?? [])],
       ...(found === undefined ? {} : { checkedAt: found.checkedAt }),
+      ...(source === 'plugin' ? { plugin: this.pluginOrigin(descriptor.id) } : {}),
     };
+  }
+
+  private pluginOrigin(id: string): { id: string; name: string } {
+    const agent = this.plugins.find((candidate) => candidate.descriptor.id === id);
+    return { id: agent?.pluginId ?? '', name: agent?.pluginName ?? '' };
   }
 
   agents(): AcpAgentEntryV1[] {
@@ -378,7 +428,7 @@ export class LabAcpRegistry {
     return {
       harness: acpHarnessId(descriptor.id),
       name: descriptor.displayName,
-      source: agent.source === 'built-in' ? 'acp-built-in' : 'acp-user',
+      source: agent.source === 'built-in' ? 'acp-built-in' : agent.source === 'plugin' ? 'acp-plugin' : 'acp-user',
       state: agent.state,
       ...(commandLine === undefined ? {} : { location: first !== undefined && /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(first) ? first : commandLine.program }),
       ...(agent.version === undefined ? {} : { version: agent.version }),
@@ -550,6 +600,7 @@ export class LabAcpRegistry {
       }
       case 'remove': {
         if (command.id === LAB_GEMINI_DESCRIPTOR.id) throw new RegistryFailure('BUILT_IN', REGISTRY_MESSAGES.BUILT_IN);
+        if (this.find(command.id)?.[1] === 'plugin') throw new RegistryFailure('PLUGIN_OWNED', REGISTRY_MESSAGES.PLUGIN_OWNED);
         this.transact(command.expectedRevision, () => {
           const index = this.users.findIndex((descriptor) => descriptor.id === command.id);
           if (index < 0) throw new RegistryFailure('NOT_FOUND', REGISTRY_MESSAGES.NOT_FOUND);
@@ -600,6 +651,11 @@ export class LabAcpRegistry {
 }
 
 const registries = new WeakMap<LabState, LabAcpRegistry>();
+
+/** The lab ACP registry of `state` (plugin agents join it). */
+export function labAcpRegistry(state: LabState): LabAcpRegistry | undefined {
+  return registries.get(state);
+}
 
 /** Starts of `acp:<id>` harnesses pass the registry's trust, version and sign-in checks first. */
 export function assertAcpStartable(state: LabState, harness: HarnessKind): void {

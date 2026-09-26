@@ -10,8 +10,10 @@ import { sha256Hex } from '../sha256';
 import type { LabSessions, TurnOutcome } from '../sessionRuntime';
 import { oneShotTurn, taskTurn, type TurnStep } from '../turnScripts';
 import {
-  executorKind, failureWithDetail, LLM_READ_ONLY_UNSUPPORTED, SCRIPT_FAILURE_CODES, scriptStdinDocument,
+  executorKind, failureWithDetail, LLM_READ_ONLY_UNSUPPORTED, PLUGIN_FAILURE_CODES, SCRIPT_FAILURE_CODES, scriptStdinDocument,
 } from '../../stepExecutors';
+import { resolvePluginValues } from '../../pluginManifest';
+import { labPluginHost } from '../pluginsFake';
 import { claudeSignInRequired } from '../catalogFake';
 import { HARNESS_SIGN_IN_REQUIRED, launchPolicyIssue, oneShotPolicyIssue } from './definitionRules';
 import {
@@ -91,6 +93,11 @@ export class LabRunScheduler {
       const executionId = labUuid(`${run.id}:${stepId}:${attempt}`);
       if (executorKind(step) === 'script') {
         const issue = this.admitScript(workspaceId, run, step, executionId);
+        if (issue !== undefined) return issue;
+        continue;
+      }
+      if (executorKind(step) === 'plugin') {
+        const issue = this.admitPlugin(workspaceId, run, step, executionId);
         if (issue !== undefined) return issue;
         continue;
       }
@@ -195,6 +202,46 @@ export class LabRunScheduler {
       const completion: ScriptCompletion = outcome === 'timeout'
         ? { status: 'failed', failure: failureWithDetail(SCRIPT_FAILURE_CODES.timeout, 'still waiting (lab:timeout)') }
         : outcome;
+      this.scriptFinished(workspaceId, run.id, step.id, executionId, completion);
+    });
+    return undefined;
+  }
+
+  /**
+   * `admit_plugin_step` + `prepare_plugin_step` (v6.5): an unavailable plugin
+   * or an invalid configuration is a certain failure before any lease; the
+   * node then "runs" in the lab plugin host (the pipeline pack's pure
+   * transform) and its answer is recorded like script output.
+   */
+  private admitPlugin(workspaceId: string, run: LabRun, step: PipelineStep, executionId: string): OrchestrationHostErrorCode | undefined {
+    if (step.executor?.type !== 'plugin') return 'conflict';
+    const node = labPluginHost(this.runtime.state)?.node(step.executor.pluginId, step.executor.nodeType);
+    const config = node === undefined ? undefined : resolvePluginValues(node.fields, step.executor.config);
+    if (node === undefined || config === undefined || !config.ok) {
+      rejectReadyTask(run, step.id, node === undefined ? PLUGIN_FAILURE_CODES.unavailable : PLUGIN_FAILURE_CODES.configInvalid);
+      this.emit(workspaceId, run);
+      return 'runtime-unavailable';
+    }
+    leaseTask(run, step.id, executionId);
+    this.emit(workspaceId, run);
+    const stdin = scriptStdinDocument(run, step, (id) => nativeDependencyText(this.runtime.state.sessions, run, id));
+    dispatchTask(run, step.id, executionId);
+    this.emit(workspaceId, run);
+    let completion: ScriptCompletion;
+    try {
+      const output = node.run({ config: config.values, inputs: { ...stdin.inputs }, dependencies: stdin.dependencies });
+      completion = { status: 'exited', stdout: typeof output === 'string' ? output : JSON.stringify(output) };
+    } catch (error) {
+      completion = { status: 'failed', failure: failureWithDetail(PLUGIN_FAILURE_CODES.nodeFailed, error instanceof Error ? error.message : String(error)) };
+    }
+    let stopped = false;
+    this.scripts.set(executionId, () => {
+      stopped = true;
+      this.scripts.delete(executionId);
+    });
+    this.runtime.clock.after(SCRIPT_RUN_MS, () => {
+      if (stopped) return;
+      this.scripts.delete(executionId);
       this.scriptFinished(workspaceId, run.id, step.id, executionId, completion);
     });
     return undefined;

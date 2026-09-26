@@ -4,7 +4,7 @@ import type {
   RunInputValue, RunStatus, RunSummary, RunTrigger, TaskOutput, TaskRecord,
 } from '../labContracts';
 import { runInputSection, substituteInputTokens } from '../../runInputs';
-import { executorKind, isScriptStep, scriptResult } from '../../stepExecutors';
+import { executorKind, isHostExecutedStep, scriptResult } from '../../stepExecutors';
 
 /**
  * Pure run transitions ported from `piui-orchestration` (coordinator.rs and
@@ -376,7 +376,7 @@ function repeatFrom(run: LabRun, stepId: string): void {
 export function completeTask(run: LabRun, stepId: string, executionId: string, completion: Completion): void {
   const step = stepOf(run, stepId);
   if (step === undefined) throw new CoordinatorFault('unknown-task', `unknown task: ${stepId}`);
-  if (isScriptStep(step)) throw new CoordinatorFault('invalid', `step ${stepId} is not run by this executor`);
+  if (isHostExecutedStep(step)) throw new CoordinatorFault('invalid', `step ${stepId} is not run by this executor`);
   let data: Record<string, unknown> | undefined;
   let outcome: Completion = completion;
   if (completion.status === 'succeeded') {
@@ -420,7 +420,7 @@ export function completeTask(run: LabRun, stepId: string, executionId: string, c
 export function completeScript(run: LabRun, stepId: string, executionId: string, completion: ScriptCompletion): void {
   const step = stepOf(run, stepId);
   if (step === undefined) throw new CoordinatorFault('unknown-task', `unknown task: ${stepId}`);
-  if (!isScriptStep(step)) throw new CoordinatorFault('invalid', `step ${stepId} is not run by this executor`);
+  if (!isHostExecutedStep(step)) throw new CoordinatorFault('invalid', `step ${stepId} is not run by this executor`);
   const result = completion.status === 'exited'
     ? scriptResult(step.resultFields ?? [], completion.stdout, completion.truncated === true)
     : { status: 'failed' as const, failure: completion.failure };
@@ -605,7 +605,7 @@ export function reconcileUncertain(
   if (task.status !== 'uncertain') throw new CoordinatorFault('invalid', `task ${stepId} is ${task.status}`);
   const step = stepOf(run, stepId);
   // A script has no native history: a reference cannot stand in for its result.
-  if (resolution.status === 'succeeded' && resolution.resultReference && step !== undefined && isScriptStep(step)) {
+  if (resolution.status === 'succeeded' && resolution.resultReference && step !== undefined && isHostExecutedStep(step)) {
     throw new CoordinatorFault('invalid', `step ${stepId} is not run by this executor`);
   }
   const structured = (step?.resultFields?.length ?? 0) > 0 || step?.requireApproval === true || step?.review !== undefined;
@@ -722,7 +722,7 @@ export function dependencyOutputs(run: LabRun, step: PipelineStep): LabDependenc
   return step.dependencyStepIds.flatMap((dependency) => {
     const source = stepOf(run, dependency);
     const task = taskOf(run, dependency);
-    if (source === undefined || !isScriptStep(source) || task?.status !== 'succeeded') return [];
+    if (source === undefined || !isHostExecutedStep(source) || task?.status !== 'succeeded') return [];
     if (task.output === undefined && task.resultData === undefined) return [];
     const fields = (step.inputBindings ?? [])
       .filter((binding) => binding.sourceStepId === dependency)
