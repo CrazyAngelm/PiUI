@@ -2645,6 +2645,7 @@ dependencies = [
  "ed25519-dalek",
  "piui-contracts",
  "piui-platform",
+ "regex",
  "serde",
  "serde_json",
  "sha2",

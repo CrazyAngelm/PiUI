@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "gemini-cli",
+  "displayName": "Gemini CLI",
+  "command": {
+    "program": "gemini",
+    "args": [
+      "--experimental-acp"
+    ]
+  },
+  "version": {
+    "args": [
+      "--version"
+    ]
+  },
+  "environment": [
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+    "GOOGLE_GENAI_USE_VERTEXAI",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY"
+  ],
+  "authHint": "Sign in with Gemini CLI's own flow: run `gemini` in a terminal and choose a sign-in method. To use an API key instead, allow PiUI to pass GEMINI_API_KEY below.",
+  "docsUrl": "https://github.com/google-gemini/gemini-cli"
+}

@@ -74,6 +74,25 @@ describe('harness identity grammar v2', () => {
   });
 });
 
+describe('ACP agent descriptor v1 schema', () => {
+  it('agrees with the host rules on every shared fixture', async () => {
+    const { readdirSync } = await import('node:fs');
+    const { default: Ajv } = await import('ajv');
+    const schema: unknown = JSON.parse(readFileSync(new URL('../../../../contracts/acp-agent-descriptor-v1.schema.json', import.meta.url), 'utf8'));
+    const validate = new Ajv({ allErrors: true, strict: true }).compile(schema as object);
+    const directory = new URL('../../../../contracts/fixtures/acp-descriptors/', import.meta.url);
+    const names = readdirSync(directory).filter((name) => name.endsWith('.json'));
+    expect(names.length).toBeGreaterThanOrEqual(10);
+    for (const name of names) {
+      const document: unknown = JSON.parse(readFileSync(new URL(name, directory), 'utf8'));
+      // `invalid-semantic-*` documents have a valid shape; only the host rules
+      // (regular expression, range order, case-insensitive names) reject them.
+      const shapeValid = name.startsWith('valid-') || name.startsWith('invalid-semantic-');
+      expect(validate(document), `${name}: ${JSON.stringify(validate.errors)}`).toBe(shapeValid);
+    }
+  });
+});
+
 it('keeps the explicit history read independently versioned without changing workspace v15', async () => {
   const { default: fixture } = await import('../../../../contracts/fixtures/workspace-history-v1.json');
   const request: import('../../../../contracts/workspace-history-v1').WorkspaceHistoryRequestV1 = fixture.request;

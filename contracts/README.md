@@ -56,6 +56,20 @@ files stay closed (their schemas never accept it). Older builds reject the new
 value with an explicit validation error instead of misreading it. Round-trip and
 compatibility tests cover every extended contract.
 
+# ACP agent descriptors (v1)
+
+`acp-agent-descriptor-v1.schema.json` describes one Agent Client Protocol agent
+(ADR-034): `id`, `displayName`, `command` (`program` on PATH or absolute, fixed
+`args`; never a shell string), `version` (`args`, optional `pattern`, optional
+`verified` range `minimum <= v < ceiling`), `environment` (names passed through
+from the user's environment; values are never stored), `authHint`, `docsUrl`
+and `capabilities` (restrictions only). Unknown fields are rejected, never
+dropped. The host validator (`crates/piui-runtime/src/acp.rs`) and the TS
+contract test share `fixtures/acp-descriptors`: `valid-*` pass both,
+`invalid-*` fail both and `invalid-semantic-*` have a valid shape that only
+the host rules reject. `valid-builtin-gemini-cli.json` is the shipped Gemini
+CLI descriptor, the exact JSON value the host serializes.
+
 `harness-identity-v2.ts` versions the identity grammar itself (ADR-034): v1 was
 the closed built-in set; v2 keeps every v1 value and adds `acp:<descriptor id>`
 (a lowercase slug of 1-32 letters, digits and inner hyphens) for Agent Client
