@@ -54,10 +54,32 @@ remain importable. Orchestration IPC v6 is separate from portable JSON.
   routes or permissions. Schedules store their own values, validated on save and
   enable.
 
+- `executor` (orchestration v6.2) selects how a step runs: absent or
+  `{"type": "agent"}` is a native harness session; `{"type": "llm"}` is one
+  native turn with no follow-up or collaboration and least authority (profile
+  `read-only`, no network, no allowed tools, no enabled skills/MCP, no spawn);
+  `{"type": "script", runtime, source, timeoutSeconds}` is host-run code
+  (`node` ES module, `python` via `py -3`/`python3`, `powershell`) in the
+  trusted project folder with containment and a 1–3600 s timeout. Scripts are
+  not a sandbox and run only in trusted projects outside safe mode. stdin:
+  `{inputs, dependencies: {<stepId>: {text, data}}, step: {id, name}}` (native
+  dependency text is the hash-verified final answer; program routers pass
+  `data` only). Exit 0 with one JSON object on stdout → checked `resultData`;
+  other stdout → `output.text` (256 KiB kept, `truncated` marks a cut). Failure
+  codes: `script-failed` (non-zero exit; `detail` holds the last stderr lines,
+  at most 2 KiB), `script-timeout` (tree killed), `script-runtime-unavailable`,
+  `script-input-unavailable` and `script-start-failed` (nothing ran), plus the
+  usual `result-*` codes for declared fields. An llm step whose harness has no
+  read-only mode fails with `llm-read-only-unsupported` before anything starts.
+  A script source is at most 64 KiB and is frozen in the run snapshot; its
+  execution id is not a session, so it has no transcript or usage.
+
 Pause prevents new admissions while active native work continues. Cancel task
 interrupts that native execution and cancels dependent ready tasks; independent
 work continues. Repeat is explicit and archives prior attempts. On host recovery,
-unknown native outcomes remain uncertain and are never automatically replayed.
+unknown native outcomes remain uncertain and are never automatically replayed;
+a script that may have started is uncertain in the same way, and cancelling a
+run or task terminates a running script's whole process tree.
 A manual success assertion cannot bypass structured result checks or human
 acceptance: reconcile as failed/cancelled, inspect prior effects, then explicitly
 repeat if appropriate. Prior native history is retained.
@@ -70,6 +92,9 @@ input tokens; do not add it again. Native subagent usage is not independently
 attributable unless the harness supplies it. No cost is inferred from model names.
 
 Example: `examples/systems/structured-review.piui.json` (a required `task` input
-used as `{{input.task}}` and a review loop bounded to 3 rounds). Replace model
+used as `{{input.task}}` and a review loop bounded to 3 rounds);
+`examples/systems/agent-script-llm.piui.json` (an agent lists dependencies, a
+Node script counts them deterministically, one read-only model call summarizes
+with bindings from the script result). Replace model
 placeholders, validate with `pnpm system:check`, then inspect native preflight.
 Import is a draft, not authorization to save, run or replay effects.

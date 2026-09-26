@@ -1,5 +1,59 @@
 import { describe, expect, it } from 'vitest';
-import { compileGraph, emptyGraph, newGraphNode, newRouterNode, graphErrors, patternEdges } from './agentGraph';
+import { compileGraph, emptyGraph, newGraphNode, newRouterNode, graphErrors, patternEdges, newLlmNode, newScriptNode, nodeHasNoMember } from './agentGraph';
+import { EXECUTOR_ISSUES } from '../../host-api/stepExecutors';
+
+describe('step executors in the agent graph (v6.2)', () => {
+  function mixed() {
+    const graph = emptyGraph(); graph.name = 'Mixed executors';
+    const agent = newGraphNode(0), script = newScriptNode(1), llm = newLlmNode(2);
+    agent.profile = { ...agent.profile, model: 'model' };
+    llm.profile = { ...llm.profile, model: 'model' };
+    if (script.executor?.type === 'script') script.executor = { ...script.executor, source: 'console.log(JSON.stringify({ ok: true }))' };
+    graph.nodes = [agent, script, llm];
+    graph.edges = [{ from: agent.id, to: script.id, kind: 'result' }, { from: script.id, to: llm.id, kind: 'result' }];
+    return graph;
+  }
+  it('compiles a script as host work and a model call as a read-only member', () => {
+    const graph = mixed();
+    expect(graphErrors(graph)).toEqual([]);
+    const [agent, script, llm] = graph.nodes;
+    expect(nodeHasNoMember(script!)).toBe(true);
+    const compiled = compileGraph(graph);
+    expect(compiled.profiles.map(profile => profile.id)).toEqual([agent!.profile.id, llm!.profile.id]);
+    expect(compiled.team.members.map(member => member.id)).toEqual([agent!.id, llm!.id]);
+    expect(compiled.pipeline.steps[1]).toMatchObject({ id: script!.id, assignedMemberId: script!.id, name: 'Script 2', executor: script!.executor });
+    expect(compiled.pipeline.steps[2]).toMatchObject({ executor: { type: 'llm' }, dependencyStepIds: [script!.id] });
+    expect(compiled.profiles[1]!.permissionMode).toBe('read-only');
+    expect(compiled.pipeline.steps[0]).not.toHaveProperty('executor');
+  });
+  it('reports every executor rule before saving instead of dropping settings', () => {
+    const graph = mixed(); const [agent, script, llm] = graph.nodes;
+    if (script!.executor?.type !== 'script') throw new Error('script');
+    script!.executor = { ...script!.executor, source: ' ', timeoutSeconds: 0 };
+    script!.inputBindings = [{ sourceStepId: agent!.id, field: 'x', name: 'y' }];
+    llm!.profile = { ...llm!.profile, permissionMode: 'workspace-write', networkAccess: true, toolPolicy: { rules: [{ tool: 'shell', decision: 'allow', enforcement: 'advisory', mandatory: false }] } };
+    graph.edges.push({ from: agent!.id, to: llm!.id, kind: 'send' }, { from: script!.id, to: agent!.id, kind: 'observe' });
+    const errors = graphErrors(graph);
+    for (const issue of [EXECUTOR_ISSUES.scriptSource, EXECUTOR_ISSUES.scriptTimeout, EXECUTOR_ISSUES.scriptBindings,
+      EXECUTOR_ISSUES.noCollaboration, EXECUTOR_ISSUES.llmReadOnly, EXECUTOR_ISSUES.llmNetwork, EXECUTOR_ISSUES.llmTools]) {
+      expect(errors).toContain(issue);
+    }
+    const callable = mixed(); callable.edges = [];
+    callable.nodes[2]!.executionMode = 'callable';
+    expect(graphErrors(callable)).toContain(EXECUTOR_ISSUES.notCallable);
+    const router = mixed(); router.nodes[1]!.kind = 'router';
+    expect(graphErrors(router)).toContain(EXECUTOR_ISSUES.notRouter);
+    const scripts = mixed(); scripts.nodes = [scripts.nodes[1]!]; scripts.edges = [];
+    expect(graphErrors(scripts)).toContain(EXECUTOR_ISSUES.needsMember);
+  });
+  it('needs no model for a script but does for a model call', () => {
+    const graph = mixed();
+    graph.nodes[1]!.profile = { ...graph.nodes[1]!.profile, model: '' };
+    expect(graphErrors(graph)).toEqual([]);
+    graph.nodes[2]!.profile = { ...graph.nodes[2]!.profile, model: '' };
+    expect(graphErrors(graph)).toContain('Enter a name and model for every agent.');
+  });
+});
 describe('agent graph', () => {
   function graph() { const graph = emptyGraph(); graph.name = 'Mixed'; graph.nodes = [newGraphNode(0), newGraphNode(1)]; graph.nodes.forEach(node => { node.profile = { ...node.profile, model: 'model' }; }); graph.nodes[1]!.profile = { ...graph.nodes[1]!.profile, harness: 'prime-agent', permissionMode: 'native', serviceTier: undefined }; return graph; }
   it('compiles cross-harness results independently from message permissions', () => {

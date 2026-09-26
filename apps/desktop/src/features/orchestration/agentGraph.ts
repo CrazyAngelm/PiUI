@@ -1,6 +1,13 @@
-import type { AgentProfile, PipelineDefinition, PipelineInput, TeamDefinition, LaunchCommandReference, RouterConfig, RouterBranch, RouterPredicate } from '../../../../../contracts/orchestration-v6';
+import type { AgentProfile, PipelineDefinition, PipelineInput, TeamDefinition, LaunchCommandReference, RouterConfig, RouterBranch, RouterPredicate, StepExecutor } from '../../../../../contracts/orchestration-v6';
 import { pipelineInputIssues, reviewLimitValid, RUN_INPUT_ISSUES } from '../../host-api/runInputs';
-export interface GraphNode { kind?: 'agent' | 'router'; inputBindings?: import('../../../../../contracts/orchestration-v6').InputBinding[]; condition?: import('../../../../../contracts/orchestration-v6').ResultCondition; review?: import('../../../../../contracts/orchestration-v6').ReviewRule; requireApproval?: boolean; resultFields?: import('../../../../../contracts/orchestration-v6').ResultField[]; executionMode?: 'scheduled' | 'callable'; id: string; profile: AgentProfile; router?: RouterConfig; task: string; input?: string; x: number; y: number; }
+import { EXECUTOR_ISSUES, SCRIPT_RUNTIMES, scriptSourceValid, scriptTimeoutValid } from '../../host-api/stepExecutors';
+/**
+ * `executor` (v6.2) selects a native agent (absent), a single model call
+ * (`llm`) or a host-run `script`. A script node has no team member: like a
+ * program router it carries a placeholder profile whose name is the step
+ * name and which is never saved.
+ */
+export interface GraphNode { kind?: 'agent' | 'router'; executor?: StepExecutor; inputBindings?: import('../../../../../contracts/orchestration-v6').InputBinding[]; condition?: import('../../../../../contracts/orchestration-v6').ResultCondition; review?: import('../../../../../contracts/orchestration-v6').ReviewRule; requireApproval?: boolean; resultFields?: import('../../../../../contracts/orchestration-v6').ResultField[]; executionMode?: 'scheduled' | 'callable'; id: string; profile: AgentProfile; router?: RouterConfig; task: string; input?: string; x: number; y: number; }
 export type ConnectionKind = 'result' | 'send' | 'observe' | 'spawn' | 'route';
 export interface GraphEdge { from: string; to: string; kind: ConnectionKind; branchId?: string; }
 /** `inputs` are the pipeline's run inputs (v6.1): values requested when a run starts. */
@@ -16,6 +23,24 @@ export function newRouterNode(index: number): GraphNode {
   const branch = (branchIndex: number): RouterBranch => ({ id: crypto.randomUUID(), label: `Route ${branchIndex + 1}`, predicate: { op: 'equals', field: '', value: '' } });
   return { ...node, kind: 'router', task: 'Choose which routes should continue.', profile: { ...node.profile, name: `Router ${index + 1}`, model: 'router' }, router: { mode: 'program', inputStepId: '', branches: [branch(0), branch(1)] } };
 }
+/** A single model call: one read-only native turn without collaboration. */
+export function newLlmNode(index: number): GraphNode {
+  const node = newGraphNode(index);
+  return { ...node, executor: { type: 'llm' }, profile: { ...node.profile, name: `Model call ${index + 1}`, permissionMode: 'read-only' } };
+}
+/** A host-run script; its placeholder profile only carries the step name. */
+export function newScriptNode(index: number): GraphNode {
+  const node = newGraphNode(index);
+  return { ...node, executor: { type: 'script', runtime: 'node', source: '', timeoutSeconds: 60 }, profile: placeholderProfile(`Script ${index + 1}`, 'script') };
+}
+/** The unsaved profile of a node without a team member (program router or script). */
+export function placeholderProfile(name: string, model: 'router' | 'script'): AgentProfile {
+  return { id: crypto.randomUUID(), name, harness: 'codex', model, permissionMode: 'read-only', instructions: '', serviceTier: 'standard', toolPolicy: { rules: [] }, allowedSpawnProfileIds: [] };
+}
+/** Program routers are coordinator work and scripts are host work: neither is a team member. */
+export function nodeHasNoMember(node: Pick<GraphNode, 'kind' | 'router' | 'executor'>): boolean {
+  return (node.kind === 'router' && node.router?.mode === 'program') || node.executor?.type === 'script';
+}
 export function permissionsSubset(parent: AgentProfile, child: AgentProfile): boolean {
   const ranks = { 'read-only': 0, 'workspace-write': 1, 'full-access': 2 };
   if (parent.permissionMode === 'native' || child.permissionMode === 'native') {
@@ -29,8 +54,7 @@ export function permissionsSubset(parent: AgentProfile, child: AgentProfile): bo
   return child.allowedSpawnProfileIds.every(id => parent.allowedSpawnProfileIds.includes(id));
 }
 export function compileGraph(graph: AgentGraph): { profiles: AgentProfile[]; team: TeamDefinition; pipeline: PipelineDefinition; command: LaunchCommandReference } {
-  const isProgramRouter = (node: GraphNode): boolean => node.kind === 'router' && node.router?.mode === 'program';
-  const executionNodes = graph.nodes.filter(node => !isProgramRouter(node));
+  const executionNodes = graph.nodes.filter(node => !nodeHasNoMember(node));
   const executionIds = new Set(executionNodes.map(node => node.id));
   const profiles = executionNodes.map(node => ({ ...node.profile, allowedSpawnProfileIds: graph.edges.filter(edge => edge.kind === 'spawn' && edge.from === node.id && executionIds.has(edge.to)).map(edge => graph.nodes.find(target => target.id === edge.to)?.profile.id ?? '') }));
   const steps = graph.nodes.map(node => {
@@ -45,6 +69,7 @@ export function compileGraph(graph: AgentGraph): { profiles: AgentProfile[]; tea
       ...(routeEdges.length ? { routeGates: routeEdges.map(edge => ({ routerStepId: edge.from, branchId: edge.branchId ?? '' })) } : {}),
       ...(router ? { router } : {}), ...(node.review ? { review: node.review } : {}), ...(node.requireApproval ? { requireApproval: true } : {}),
       ...(resultFields?.length ? { resultFields } : {}), ...(node.executionMode ? { executionMode: node.executionMode } : {}),
+      ...(node.executor ? { executor: node.executor } : {}),
       ...(node.input !== undefined ? { inputInstructions: node.input } : {}), dependencyStepIds: [...new Set(dependencies)] };
   });
   return {
@@ -101,9 +126,30 @@ export function graphIssues(graph: AgentGraph): GraphIssue[] {
     const source = graph.nodes.find(node => node.id === edge.from);
     if (!source || source.kind !== 'router' || !edge.branchId || !source.router?.branches.some(branch => branch.id === edge.branchId) || graph.nodes.some(node => node.id === edge.to && node.kind === 'router')) push('Route connections need a router branch and an agent target.', [edge.from,edge.to]);
   }
+  // Step executors (v6.2), the rules of `piui-orchestration/src/executors.rs`.
+  for (const node of graph.nodes) {
+    const executor = node.executor;
+    if (executor === undefined || executor.type === 'agent') continue;
+    if (node.kind === 'router') { push(EXECUTOR_ISSUES.notRouter, [node.id]); continue; }
+    if (node.executionMode === 'callable') push(EXECUTOR_ISSUES.notCallable, [node.id]);
+    if (graph.edges.some(edge => (edge.kind === 'send' || edge.kind === 'observe' || edge.kind === 'spawn') && (edge.from === node.id || edge.to === node.id))) push(EXECUTOR_ISSUES.noCollaboration, [node.id]);
+    if (executor.type === 'script') {
+      if (!SCRIPT_RUNTIMES.includes(executor.runtime)) push(EXECUTOR_ISSUES.scriptRuntime, [node.id]);
+      if (!scriptSourceValid(executor.source)) push(EXECUTOR_ISSUES.scriptSource, [node.id]);
+      if (!scriptTimeoutValid(executor.timeoutSeconds)) push(EXECUTOR_ISSUES.scriptTimeout, [node.id]);
+      if (node.inputBindings?.length) push(EXECUTOR_ISSUES.scriptBindings, [node.id]);
+    } else {
+      if (node.profile.permissionMode !== 'read-only') push(EXECUTOR_ISSUES.llmReadOnly, [node.id]);
+      if (node.profile.networkAccess === true) push(EXECUTOR_ISSUES.llmNetwork, [node.id]);
+      if (node.profile.toolPolicy.rules.some(rule => rule.decision === 'allow')) push(EXECUTOR_ISSUES.llmTools, [node.id]);
+      if ((node.profile.resourceRules ?? []).some(rule => rule.enabled)) push(EXECUTOR_ISSUES.llmResources, [node.id]);
+    }
+  }
+  if (graph.nodes.length > 0 && graph.nodes.every(nodeHasNoMember)) push(EXECUTOR_ISSUES.needsMember);
   if (!agentNodes.some(node => node.executionMode !== 'callable')) push('Add a scheduled agent to start this system.');
   if (graph.edges.some(edge => (edge.kind === 'result' || edge.kind === 'route') && graph.nodes.some(node => node.executionMode === 'callable' && (node.id === edge.from || node.id === edge.to)))) push('Callable agents exchange results through their caller, not pipeline dependencies.');
-  if (!graph.name.trim() || !graph.nodes.length || agentNodes.some(node => !node.profile.name.trim() || (node.kind !== 'router' || node.router?.mode === 'agent') && !node.profile.model.trim())) push('Enter a name and model for every agent.', agentNodes.filter(node => !node.profile.name.trim() || !node.profile.model.trim()).map(node=>node.id));
+  const needsModel = (node: GraphNode): boolean => (node.kind !== 'router' || node.router?.mode === 'agent') && node.executor?.type !== 'script';
+  if (!graph.name.trim() || !graph.nodes.length || agentNodes.some(node => !node.profile.name.trim() || needsModel(node) && !node.profile.model.trim())) push('Enter a name and model for every agent.', agentNodes.filter(node => !node.profile.name.trim() || needsModel(node) && !node.profile.model.trim()).map(node=>node.id));
   const definition = compileGraph(graph);
   if (definition.profiles.some(parent => parent.allowedSpawnProfileIds.some(id => { const child = definition.profiles.find(profile => profile.id === id); return !child || !permissionsSubset(parent, child); }))) push('Child permissions must be the same or lower.');
   const indegree = new Map(graph.nodes.map(node => [node.id, 0]));

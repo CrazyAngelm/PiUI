@@ -1,4 +1,18 @@
 import type { Harness, PermissionMode, ResourceRule } from '../../../../contracts/orchestration-v6';
+/**
+ * How a single-call `llm` step (orchestration v6.2) runs on a harness.
+ * - `disabled`: the adapter starts the turn with an empty native tool
+ *   allowlist that the harness enforces, so no tool runs.
+ * - `read-only-sandbox`: the harness cannot turn its tools off; only its
+ *   read-only sandbox (and denied network) bounds them.
+ * A manifest without `oneShot` cannot run such a step read-only; the host
+ * refuses it before starting anything.
+ */
+export interface OneShotSupport {
+  readonly tools: 'disabled' | 'read-only-sandbox';
+  /** User-visible explanation. It is never a stronger claim than `tools`. */
+  readonly note: string;
+}
 /** Presentation manifest owned by each adapter. Host validation remains authoritative. */
 export interface HarnessConfiguration {
   readonly name: string;
@@ -12,5 +26,6 @@ export interface HarnessConfiguration {
   readonly nativeTools: readonly string[];
   readonly filesystemSandbox: boolean;
   readonly networkAccess: boolean;
+  readonly oneShot?: OneShotSupport;
 }
 export type HarnessConfigurations = Readonly<Record<Harness, HarnessConfiguration>>;

@@ -31,6 +31,53 @@ duplicate IDs fail the router. Route edges are control gates: every ordinary
 dependency still has to succeed, and an unselected branch is explicitly
 skipped. A router never grants tools, permissions, or authority to its targets.
 
+## Agent, model call or script
+
+Version 4 agents take an optional `executor`; choose the cheapest one that can
+prove the step's outcome.
+
+- **agent** (default; omit `executor`): a native harness session with its tools,
+  approvals and allowed team routes. Use it when the step must inspect or change
+  the project, run tools, iterate, or work with other agents.
+- **llm** (`{"type": "llm"}`): exactly one native turn of the node's profile with
+  no follow-up, no messages, observation or delegation, never `callable` and
+  never a router. Its profile must be `read-only` without `networkAccess`, allow
+  no tools, enable no skills or MCP servers, and neither spawn nor be spawned.
+  Use it to classify, extract `resultFields`, summarize or judge text that
+  dependencies already produced. "No tools" depends on the harness; state what
+  applies and never claim more: Pi starts the call with `--no-tools
+  --no-extensions`, so no tool exists; Codex cannot turn its tools off, so only
+  its read-only sandbox without network bounds them (the model can still read
+  files and run read-only commands); Prime Agent and Hermes have no read-only
+  mode and cannot run such a step (the host refuses it with
+  `llm-read-only-unsupported`). Check `src/harness-adapters/` (`oneShot`) for the
+  current statement of each adapter.
+- **script** (`{"type": "script", "runtime": "node" | "python" | "powershell",
+  "source": "…", "timeoutSeconds": 1-3600}`): deterministic local code that the
+  PiUI host runs — never a harness or the WebView — in the trusted project folder
+  with process-tree containment, a required timeout and a minimal environment
+  (PATH, SystemRoot/WINDIR, TEMP/TMP, HOME/USERPROFILE, LANG; no API keys or
+  tokens). It is **not a sandbox**: the code has the user's file and network
+  access, so write it like any trusted repository script. stdin is one JSON
+  document `{inputs, dependencies: {<stepId>: {text, data}}, step: {id, name}}`;
+  stdout that is exactly one JSON object becomes the result (checked against
+  `resultFields` like an agent result); other stdout is kept as text (first
+  256 KiB). A non-zero exit fails with `script-failed` and the last stderr lines;
+  a timeout kills the tree and fails with `script-timeout`. Node sources are ES
+  modules; Python runs as `py -3` (Windows) or `python3` in UTF-8 mode;
+  PowerShell is Windows PowerShell (or `pwsh`) with UTF-8 stdin/stdout. A script
+  is host work, not a team member: its `profile` only names the step (use a
+  placeholder such as `"model": "script"`), and it takes no `inputBindings`,
+  messages, observation, delegation, `callable` mode or router role. A system
+  still needs at least one agent or model call. Scripts run only in trusted
+  projects outside safe mode; importing a file never runs one — the user saves
+  and then runs the system.
+
+Downstream agents and model calls receive a script's result where a native
+result would be (with `inputBindings` applied); downstream scripts receive
+native results as their verified final text. Conditions, program routers and
+review loops read script results like any structured result.
+
 ## Configure and verify
 
 1. Inspect existing files before editing. Read `src/harness-adapters/` under `apps/desktop` for capabilities. Verify installed model/provider identifiers through an available native catalog/configuration without exposing credentials. Examples intentionally contain `REPLACE_WITH_AVAILABLE_MODEL`; resolve that before presenting a ready-to-run system.

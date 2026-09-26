@@ -1,4 +1,4 @@
-import type { AgentProfile } from '../../../../contracts/orchestration-v6';
+import type { AgentProfile, StepExecutor } from '../../../../contracts/orchestration-v6';
 import { harnessConfigurations } from './index';
 
 /** Static file checks only. The native host remains authoritative at launch. */
@@ -23,4 +23,21 @@ export function profileConfigurationErrors(id: string, profile: Omit<AgentProfil
       if (rule.mandatory && ['advisory', 'unsupported'].includes(rule.enforcement)) errors.push(`${id}: mandatory policy cannot be advisory or unsupported.`);
     }
   return errors;
+}
+
+/**
+ * Static adapter checks of a step executor (orchestration v6.2). A single
+ * model call needs a harness that runs it read-only; the host refuses the
+ * others with `llm-read-only-unsupported` before anything starts.
+ */
+export function executorConfigurationErrors(
+  id: string,
+  executor: StepExecutor | undefined,
+  profile: Pick<AgentProfile, 'harness'>,
+): string[] {
+  if (executor?.type !== 'llm') return [];
+  const configuration = harnessConfigurations[profile.harness];
+  return configuration.oneShot && configuration.permissionModes.includes('read-only')
+    ? []
+    : [`${id}: ${configuration.name} cannot run a single model call read-only.`];
 }

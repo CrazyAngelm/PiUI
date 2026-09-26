@@ -2,8 +2,8 @@ import validateV4 from '../../../../../contracts/system-file-v4-validator.mjs';
 import validateV1 from '../../../../../contracts/system-file-v1-validator.mjs';
 import validateV3 from '../../../../../contracts/system-file-v3-validator.mjs';
 import validateV2 from '../../../../../contracts/system-file-v2-validator.mjs';
-import type { AgentProfile, PipelineInput, RouterConfig } from '../../../../../contracts/orchestration-v6';
-import { profileConfigurationErrors } from '../../harness-adapters/validation';
+import type { AgentProfile, PipelineInput, RouterConfig, StepExecutor } from '../../../../../contracts/orchestration-v6';
+import { executorConfigurationErrors, profileConfigurationErrors } from '../../harness-adapters/validation';
 import { compileGraph, emptyGraph, graphErrors, type AgentGraph, type GraphEdge } from './agentGraph';
 
 export interface SystemFile {
@@ -11,7 +11,11 @@ export interface SystemFile {
   orchestrator?: string; inheritTeamConnections?: boolean;
   /** Version 4 only: run inputs requested when the system starts. */
   inputs?: PipelineInput[];
-  agents: { id: string; kind?: 'agent' | 'router'; profile: Omit<AgentProfile, 'id' | 'allowedSpawnProfileIds'>; router?: RouterConfig; task: string; inputBindings?: import('../../../../../contracts/orchestration-v6').InputBinding[]; condition?: import('../../../../../contracts/orchestration-v6').ResultCondition; review?: import('../../../../../contracts/orchestration-v6').ReviewRule; requireApproval?: boolean; resultFields?: import('../../../../../contracts/orchestration-v6').ResultField[]; executionMode?: 'scheduled' | 'callable'; input?: string; position?: { x: number; y: number } }[];
+  /**
+   * `executor` (version 4, orchestration v6.2): `llm` for a single model call,
+   * `script` for host-run code. A script's `profile` only names the step.
+   */
+  agents: { id: string; kind?: 'agent' | 'router'; executor?: StepExecutor; profile: Omit<AgentProfile, 'id' | 'allowedSpawnProfileIds'>; router?: RouterConfig; task: string; inputBindings?: import('../../../../../contracts/orchestration-v6').InputBinding[]; condition?: import('../../../../../contracts/orchestration-v6').ResultCondition; review?: import('../../../../../contracts/orchestration-v6').ReviewRule; requireApproval?: boolean; resultFields?: import('../../../../../contracts/orchestration-v6').ResultField[]; executionMode?: 'scheduled' | 'callable'; input?: string; position?: { x: number; y: number } }[];
   connections: GraphEdge[];
 }
 export function parseSystemFile(text: string): SystemFile {
@@ -24,6 +28,7 @@ export function parseSystemFile(text: string): SystemFile {
   const ids = new Set(value.agents.map(agent => agent.id));
   if (ids.size !== value.agents.length) errors.push('Agent IDs must be unique.');
   if (value.orchestrator !== undefined && !ids.has(value.orchestrator)) errors.push('Unknown orchestrator.');
+  if (value.agents.some(agent => agent.id === value.orchestrator && agent.executor?.type === 'script')) errors.push('A script runs on the host and cannot be the orchestrator.');
   const edges = new Set<string>();
   for (const edge of value.connections) {
     if (!ids.has(edge.from) || !ids.has(edge.to)) errors.push('Connection references an unknown agent.');
@@ -35,7 +40,9 @@ export function parseSystemFile(text: string): SystemFile {
     edges.add(key);
   }
   for (const agent of value.agents) {
-    errors.push(...profileConfigurationErrors(agent.id, agent.profile));
+    // A script has no native profile: its placeholder only names the step.
+    if (agent.executor?.type !== 'script') errors.push(...profileConfigurationErrors(agent.id, agent.profile));
+    errors.push(...executorConfigurationErrors(agent.id, agent.executor, agent.profile));
     if (agent.router && agent.kind !== 'router') errors.push(`${agent.id}: router configuration requires kind=router.`);
     if (agent.kind === 'router' && !agent.router) errors.push(`${agent.id}: kind=router requires router configuration.`);
   }
@@ -49,10 +56,10 @@ export function parseSystemFile(text: string): SystemFile {
 export function systemFileToGraph(file: SystemFile): AgentGraph {
   const graph = emptyGraph();
   const profiles = new Map(file.agents.map(agent => [agent.id, crypto.randomUUID()]));
-  return { ...graph, name: file.name, orchestratorId: file.orchestrator ?? file.agents.find(agent => agent.kind !== 'router')?.id,
+  return { ...graph, name: file.name, orchestratorId: file.orchestrator ?? file.agents.find(agent => agent.kind !== 'router' && agent.executor?.type !== 'script')?.id,
     spawnedAgentsJoinTeam: file.inheritTeamConnections,
     ...(file.inputs ? { inputs: file.inputs.map(input => ({ ...input })) } : {}),
-    nodes: file.agents.map((agent, index) => ({ kind: agent.kind ?? 'agent', id: agent.id, task: agent.task, inputBindings: agent.inputBindings, condition: agent.condition, review: agent.review, requireApproval: agent.requireApproval, resultFields: agent.resultFields, executionMode: agent.executionMode, router: agent.router, input: agent.input, x: agent.position?.x ?? 60 + index * 280, y: agent.position?.y ?? 100,
+    nodes: file.agents.map((agent, index) => ({ kind: agent.kind ?? 'agent', id: agent.id, ...(agent.executor ? { executor: agent.executor } : {}), task: agent.task, inputBindings: agent.inputBindings, condition: agent.condition, review: agent.review, requireApproval: agent.requireApproval, resultFields: agent.resultFields, executionMode: agent.executionMode, router: agent.router, input: agent.input, x: agent.position?.x ?? 60 + index * 280, y: agent.position?.y ?? 100,
       profile: { ...agent.profile, id: profiles.get(agent.id)!, allowedSpawnProfileIds: file.connections.filter(edge => edge.kind === 'spawn' && edge.from === agent.id).map(edge => profiles.get(edge.to)!) } })),
     edges: file.connections.map(edge => ({ ...edge })),
   };
@@ -65,7 +72,7 @@ export function graphToSystemFile(graph: AgentGraph): SystemFile {
     ...(definition.pipeline.inputs?.length ? { inputs: definition.pipeline.inputs.map(input => ({ ...input })) } : {}),
     agents: graph.nodes.map(node => {
       const { id: _id, allowedSpawnProfileIds: _spawn, ...profile } = node.profile;
-      return { id: node.id, ...(node.kind && node.kind !== 'agent' ? { kind: node.kind } : {}), profile, ...(node.router ? { router: node.router } : {}), task: node.task, ...(node.inputBindings?.length ? { inputBindings: node.inputBindings } : {}), ...(node.condition ? { condition: node.condition } : {}), ...(node.review ? { review: node.review } : {}), ...(node.requireApproval ? { requireApproval: true } : {}), ...(node.resultFields?.length ? { resultFields: node.resultFields } : {}), ...(node.executionMode ? { executionMode: node.executionMode } : {}), ...(node.input !== undefined ? { input: node.input } : {}), position: { x: node.x, y: node.y } };
+      return { id: node.id, ...(node.kind && node.kind !== 'agent' ? { kind: node.kind } : {}), ...(node.executor ? { executor: node.executor } : {}), profile, ...(node.router ? { router: node.router } : {}), task: node.task, ...(node.inputBindings?.length ? { inputBindings: node.inputBindings } : {}), ...(node.condition ? { condition: node.condition } : {}), ...(node.review ? { review: node.review } : {}), ...(node.requireApproval ? { requireApproval: true } : {}), ...(node.resultFields?.length ? { resultFields: node.resultFields } : {}), ...(node.executionMode ? { executionMode: node.executionMode } : {}), ...(node.input !== undefined ? { input: node.input } : {}), position: { x: node.x, y: node.y } };
     }), connections: graph.edges.map(edge => ({ ...edge })),
   };
 }

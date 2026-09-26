@@ -2,6 +2,8 @@ import { afterEach, expect, it } from 'vitest';
 import { get } from 'svelte/store';
 import { setLanguage, t, translate } from './language';
 import { workspaceError } from '../../host-api/workspaceClient';
+import { EXECUTOR_ISSUES } from '../../host-api/stepExecutors';
+import { harnessConfigurations } from '../../harness-adapters';
 
 afterEach(() => setLanguage('en'));
 it('switches interface copy without translating user content or model IDs', () => {
@@ -13,6 +15,12 @@ it('switches interface copy without translating user content or model IDs', () =
   expect(translate('User supplied instruction', 'ru')).toBe('User supplied instruction');
   setLanguage('en');
   expect(get(t)('Message queue')).toBe('Message queue');
+});
+it('translates every step executor issue and one-shot note', () => {
+  const notes = Object.values(harnessConfigurations).flatMap((configuration) => (configuration.oneShot ? [configuration.oneShot.note] : []));
+  for (const message of [...Object.values(EXECUTOR_ISSUES), 'A script runs on the host and cannot be the orchestrator.', ...notes]) {
+    expect(translate(message, 'ru'), message).not.toBe(message);
+  }
 });
 it('translates safe composer errors without forwarding host details', () => {
   for (const code of ['TURN_ACTIVE','NO_ACTIVE_TURN','QUEUE_PENDING','DELIVERY_UNCERTAIN','NOT_SUPPORTED','RUNTIME_FAILED']) {

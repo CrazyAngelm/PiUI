@@ -7,6 +7,15 @@ nodes, mappings, typed results, artifacts, conditions, approvals, review cycles
 Both additions are optional v4 fields; files without them are unchanged.
 The active orchestration IPC is v6; native history formats are unchanged.
 
+Optional `agents[].executor` (orchestration v6.2) makes a node a single
+read-only model call (`{"type": "llm"}`) or a host-run script
+(`{"type": "script", "runtime", "source", "timeoutSeconds"}`); a node without it
+stays a native agent. Scripts are trusted user code that the host runs in the
+project folder under process containment — not a sandbox — and importing a
+file never runs one. `pnpm system:check` checks the executor rules and which
+harnesses can run a model call read-only. Example:
+[agent → script → model call](../examples/systems/agent-script-llm.piui.json).
+
 
 Use UTF-8 `*.piui.json`. JSON Schema is in [system-file-v1.schema.json](../contracts/system-file-v1.schema.json); [examples](../examples/systems) cover a single agent, Codex → Prime review, and parallel work followed by synthesis. Replace example model placeholders with actual available native model IDs before execution.
 
