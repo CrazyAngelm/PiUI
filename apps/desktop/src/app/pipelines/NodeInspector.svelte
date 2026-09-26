@@ -6,6 +6,17 @@
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import CircleAlert from '@lucide/svelte/icons/circle-alert';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+  import Code from '@lucide/svelte/icons/code';
+  import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
+  import type { ScriptRuntime, StepExecutor } from '../../host-api/orchestrationClient';
+  import {
+    MAX_SCRIPT_SOURCE_BYTES,
+    MAX_SCRIPT_TIMEOUT_SECONDS,
+    MIN_SCRIPT_TIMEOUT_SECONDS,
+    SCRIPT_RUNTIMES,
+    scriptTimeoutValid,
+  } from '../../host-api/stepExecutors';
+  import { RUNTIME_LABEL, SCRIPT_EXAMPLES, sourceBytes } from './executors';
   import { t } from '../../features/locale/language';
   import { harnessConfigurations, permissionLabels } from '../../harness-adapters';
   import { profileForHarness } from '../../harness-adapters/normalize';
@@ -29,9 +40,17 @@
   let { editor, node, onClose, onFocusNode }: Props = $props();
   const workspace = useWorkspace();
 
-  type TabId = 'basics' | 'io' | 'access' | 'flow' | 'routes';
+  type TabId = 'basics' | 'io' | 'access' | 'flow' | 'routes' | 'script';
   let tab = $state<TabId>('basics');
   const isRouter = $derived(node.kind === 'router');
+  // v6.2 executors: a script runs on the host; a model call is one read-only turn.
+  const script = $derived(node.executor?.type === 'script' ? node.executor : undefined);
+  const llm = $derived(node.executor?.type === 'llm');
+  const scriptBytes = $derived(script ? sourceBytes(script.source) : 0);
+  let timeoutText = $state('');
+  $effect(() => {
+    timeoutText = script ? String(script.timeoutSeconds) : '';
+  });
   const agentRouter = $derived(isRouter && node.router?.mode === 'agent');
   const profile = $derived(node.profile);
   const configuration = $derived(harnessConfigurations[profile.harness]);
@@ -46,13 +65,16 @@
 
   // Load the native catalog of the selected harness when the agent is shown.
   $effect(() => {
-    if ((!isRouter || agentRouter) && !editor.catalogs[profile.harness] && !editor.catalogErrors[profile.harness]) {
+    if ((!isRouter || agentRouter) && !script && !editor.catalogs[profile.harness] && !editor.catalogErrors[profile.harness]) {
       void editor.loadCatalog(profile.harness);
     }
   });
 
   $effect(() => {
     if (isRouter && tab !== 'routes' && tab !== 'basics') tab = 'routes';
+    else if (script && tab !== 'script' && tab !== 'io' && tab !== 'flow') tab = 'script';
+    else if (!script && tab === 'script') tab = 'basics';
+    else if (llm && tab === 'access') tab = 'basics';
   });
 
   const tabs = $derived(
@@ -61,6 +83,18 @@
           { value: 'routes' as const, label: $t('Routes') },
           { value: 'basics' as const, label: $t('Agent') },
         ]
+      : script
+        ? [
+            { value: 'script' as const, label: $t('Script') },
+            { value: 'io' as const, label: $t('Output') },
+            { value: 'flow' as const, label: $t('Flow') },
+          ]
+      : llm
+        ? [
+            { value: 'basics' as const, label: $t('Basics') },
+            { value: 'io' as const, label: $t('Input & output') },
+            { value: 'flow' as const, label: $t('Flow') },
+          ]
       : [
           { value: 'basics' as const, label: $t('Basics') },
           { value: 'io' as const, label: $t('Input & output') },
@@ -72,10 +106,12 @@
   const harnessItems = $derived<PickerItem[]>(
     (Object.keys(harnessConfigurations) as AgentProfile['harness'][]).map((kind) => {
       const status = workspace.catalog.harnesses.find((item) => item.kind === kind);
+      const oneShotMissing = llm && !harnessConfigurations[kind].oneShot;
       return {
         value: kind,
         label: harnessConfigurations[kind].name,
         description: status?.status === 'available' ? (status.version ? `v${status.version}` : $t('Ready')) : status?.reason ?? $t('Not found on this computer'),
+        ...(oneShotMissing ? { disabled: true, disabledReason: $t('Cannot answer read-only without tools') } : {}),
       };
     }),
   );
@@ -108,7 +144,19 @@
       resourceRules: next.resourceRules,
       baseInstructions: next.baseInstructions,
       networkAccess: next.networkAccess,
+      // A model call stays read-only, offline and without tools.
+      ...(llm ? { permissionMode: 'read-only' as const, networkAccess: undefined, resourceRules: undefined, toolPolicy: { rules: [] } } : {}),
     });
+  }
+
+  function setScript(change: Partial<Extract<StepExecutor, { type: 'script' }>>, live = false): void {
+    if (script) editor.updateNode(node.id, { executor: { ...script, ...change } }, live);
+  }
+
+  function setTimeoutText(value: string): void {
+    timeoutText = value;
+    const seconds = Number(value.trim());
+    if (value.trim() !== '' && scriptTimeoutValid(seconds)) setScript({ timeoutSeconds: seconds }, true);
   }
 
   function setModel(value: string): void {
@@ -132,6 +180,8 @@
   <header>
     {#if isRouter}
       <span class="router-mark" aria-hidden="true">⑂</span>
+    {:else if script}
+      <span class="router-mark" aria-hidden="true"><Code size={14} /></span>
     {:else}
       <HarnessMark kind={profile.harness} size={22} />
     {/if}
@@ -139,7 +189,7 @@
       class="name"
       value={profile.name}
       aria-label={$t('Name')}
-      placeholder={isRouter ? $t('Router') : $t('Agent name')}
+      placeholder={isRouter ? $t('Router') : script ? $t('Script name') : llm ? $t('Model call name') : $t('Agent name')}
       disabled={readOnly}
       oninput={(event) => patch({ name: event.currentTarget.value }, true)}
       onblur={() => editor.settle()}
@@ -178,9 +228,65 @@
             onchange={(change) => editor.updateNode(node.id, change)}
             onselectinput={onFocusNode}
           />
+        {:else if current === 'script' && script}
+          <p class="warning" role="note">
+            <TriangleAlert size={14} />
+            <span>{$t('Runs on this computer in the project folder with your permissions. It is not a sandbox: review the code before running it.')}</span>
+          </p>
+          <Field label={$t('Runtime')}>
+            <Segmented
+              size="sm"
+              label={$t('Runtime')}
+              value={script.runtime}
+              options={SCRIPT_RUNTIMES.map((runtime) => ({ value: runtime, label: RUNTIME_LABEL[runtime] }))}
+              onValueChange={(value) => setScript({ runtime: value as ScriptRuntime })}
+            />
+          </Field>
+          <Field
+            label={$t('Code')}
+            for="node-script"
+            error={scriptBytes > MAX_SCRIPT_SOURCE_BYTES ? $t('A script needs source code of at most 64 KiB.') : undefined}
+            description={$t('{0} of {1} KiB', [(scriptBytes / 1024).toFixed(1), MAX_SCRIPT_SOURCE_BYTES / 1024])}
+          >
+            {#snippet action()}
+              {#if !script.source.trim() && !readOnly}
+                <button type="button" class="link" onclick={() => setScript({ source: SCRIPT_EXAMPLES[script.runtime] })}>{$t('Insert example')}</button>
+              {/if}
+            {/snippet}
+            <Textarea
+              id="node-script"
+              class="code"
+              value={script.source}
+              minRows={10}
+              maxRows={28}
+              spellcheck={false}
+              wrap="off"
+              disabled={readOnly}
+              placeholder={$t('Read JSON from stdin, print the result to stdout.')}
+              oninput={(event) => setScript({ source: event.currentTarget.value }, true)}
+              onblur={() => editor.settle()}
+            />
+          </Field>
+          <Field
+            label={$t('Time limit, seconds')}
+            for="node-timeout"
+            error={timeoutText.trim() !== '' && !scriptTimeoutValid(Number(timeoutText.trim())) ? $t('A script timeout must be a whole number of seconds from 1 to 3600.') : undefined}
+            description={$t('From {0} to {1}. The whole process tree is stopped when it runs out.', [MIN_SCRIPT_TIMEOUT_SECONDS, MAX_SCRIPT_TIMEOUT_SECONDS])}
+          >
+            <Input id="node-timeout" inputmode="numeric" value={timeoutText} disabled={readOnly} oninput={(event) => setTimeoutText(event.currentTarget.value)} onblur={() => editor.settle()} />
+          </Field>
+          <details class="help">
+            <summary>{$t('How a script gets and returns data')}</summary>
+            <p>{$t('It reads one JSON document on stdin: the run inputs, the result of every step it depends on and its own step.')}</p>
+            <pre>{'{ "inputs": {…}, "dependencies": { "<step id>": { "text": "…", "data": {…} } }, "step": { "id": "…", "name": "…" } }'}</pre>
+            <p>{$t('Print one JSON object to return named fields, or any text. A non-zero exit code fails the step; the end of stderr is shown in the run.')}</p>
+          </details>
         {:else if current === 'basics'}
           {#if !isRouter || agentRouter}
-            <Field label={$t('Harness')} description={$t('The agent runs inside this installed tool with its own sign-in.')}>
+            <Field
+              label={$t('Harness')}
+              description={llm ? $t('Answers once inside this installed tool, read-only and without tools.') : $t('The agent runs inside this installed tool with its own sign-in.')}
+            >
               <Picker items={harnessItems} value={profile.harness} label={$t('Harness')} searchPlaceholder={$t('Search harnesses')} width={300} onSelect={(value) => setHarness(value as AgentProfile['harness'])}>
                 {#snippet trigger(props)}
                   <button type="button" class="select" {...props} disabled={readOnly}>
@@ -226,9 +332,18 @@
             {#if model?.supportsFast && configuration.speed}
               <Switch label={$t('Fast mode')} checked={profile.serviceTier === 'fast'} disabled={readOnly} onCheckedChange={(checked) => patch({ serviceTier: checked ? 'fast' : 'standard' })} />
             {/if}
+            {#if llm}
+              <p class="hint" class:hint--warning={!configuration.oneShot}>
+                {configuration.oneShot ? $t(configuration.oneShot.note) : $t('This harness cannot run a model call read-only. Choose Pi, Codex or Claude Code.')}
+              </p>
+            {/if}
           {/if}
           {#if !isRouter}
-            <Field label={$t('Task')} for="node-task" description={$t('What this agent does in this pipeline. Upstream results are attached automatically.')}>
+            <Field
+              label={llm ? $t('Prompt') : $t('Task')}
+              for="node-task"
+              description={llm ? $t('What to ask the model. Results of earlier steps are attached automatically.') : $t('What this agent does in this pipeline. Upstream results are attached automatically.')}
+            >
               <Textarea
                 id="node-task"
                 value={node.task}
@@ -252,6 +367,12 @@
               />
             </Field>
           {/if}
+        {:else if current === 'io' && script}
+          <div class="section">
+            <h3>{$t('Structured result fields')}</h3>
+            <p class="hint">{$t('Named fields the script prints as one JSON object. Without fields, its output is passed on as text.')}</p>
+            <ResultFields fields={node.resultFields ?? []} disabled={readOnly} onchange={(fields) => editor.updateNode(node.id, { resultFields: fields.length ? fields : undefined })} />
+          </div>
         {:else if current === 'io'}
           <Field label={$t('Expected input')} for="node-input" description={$t('What this agent needs from upstream agents. Senders are told about it.')}>
             <Textarea
@@ -317,6 +438,7 @@
             {/if}
           </div>
         {:else if current === 'flow'}
+          {#if !script && !llm}
           <Field label={$t('When it runs')}>
             <Segmented
               size="sm"
@@ -329,7 +451,8 @@
               onValueChange={(value) => editor.updateNode(node.id, { executionMode: value === 'callable' ? 'callable' : undefined })}
             />
           </Field>
-          {#if node.executionMode === 'callable'}
+          {/if}
+          {#if node.executionMode === 'callable' && !script && !llm}
             <Field label={$t('When to call')} for="node-when" description={$t('Shown to agents that may start this one.')}>
               <Textarea
                 id="node-when"
@@ -373,6 +496,59 @@
     height: var(--piui-header-height);
     padding: 0 var(--piui-space-2) 0 var(--piui-space-3);
     flex: none;
+  }
+  .warning {
+    display: flex;
+    gap: 8px;
+    margin: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--piui-warning-border);
+    border-radius: var(--piui-radius-md);
+    background: var(--piui-warning-surface);
+    color: var(--piui-text);
+    font-size: var(--piui-text-sm);
+    line-height: 1.45;
+  }
+  .warning :global(svg) {
+    flex: none;
+    margin-top: 2px;
+    color: var(--piui-warning);
+  }
+  .hint--warning {
+    color: var(--piui-warning);
+  }
+  .link {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--piui-accent);
+    font-size: var(--piui-text-sm);
+    cursor: pointer;
+  }
+  .help {
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
+  }
+  .help summary {
+    cursor: pointer;
+  }
+  .help p {
+    margin: 6px 0;
+  }
+  .help pre {
+    margin: 0;
+    padding: 8px;
+    overflow-x: auto;
+    border-radius: var(--piui-radius-sm);
+    background: var(--piui-code-surface);
+    font-family: var(--piui-font-mono);
+    font-size: 11px;
+    white-space: pre-wrap;
+  }
+  .body :global(textarea.code) {
+    font-family: var(--piui-font-mono);
+    font-size: 12px;
+    tab-size: 2;
   }
   .router-mark {
     display: inline-flex;

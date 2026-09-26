@@ -37,6 +37,13 @@ describe('run presentation', () => {
     expect(stepState(step('a'), task('a', 'uncertain'))).toBe('uncertain');
   });
 
+  it('never treats a script execution as a native session', () => {
+    const script = step('check', { executor: { type: 'script', runtime: 'node', source: 'console.log(1)', timeoutSeconds: 60 } });
+    const execution = { id: 'process-1' } as TaskRecord['execution'];
+    const views = stepViews(run([step('a'), script], [task('a', 'succeeded', { execution: { id: 'session-a' } as TaskRecord['execution'] }), task('check', 'succeeded', { execution })]));
+    expect(views.map((view) => view.sessionId)).toEqual(['session-a', undefined]);
+  });
+
   it('marks steps added at run time and groups earlier attempts per step', () => {
     const initial = run([step('a')], []);
     const current = run([step('a'), step('helper')], [task('a', 'succeeded', { execution: { id: 's1' } }), task('helper', 'running')], {

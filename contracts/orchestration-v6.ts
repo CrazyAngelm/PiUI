@@ -5,6 +5,11 @@
  * compaction, transcripts, and processes. This contract contains definition
  * snapshots and a coordination journal only. Trusted host code must reject
  * unknown fields when decoding persisted or IPC data.
+ *
+ * v6.1 (additive) added run inputs and review loop bounds. v6.2 (additive)
+ * adds step executors: `PipelineStep.executor` (`agent` | `llm` | `script`),
+ * `TaskRecord.output` for script results and `FailureRecord.detail`. Stored
+ * v6.0/v6.1 data decodes unchanged and is re-encoded without the new fields.
  */
 
 export type OrchestrationId = string;
@@ -141,6 +146,31 @@ export interface RouteGate {
   readonly branchId: string;
 }
 
+/** Interpreter of a script step (v6.2). The host resolves it; a definition never names an executable. */
+export type ScriptRuntime = 'node' | 'python' | 'powershell';
+
+/**
+ * How a step runs (v6.2, additive; absent means `agent`).
+ * - `agent`: a native harness turn with the profile's tools and team routes.
+ * - `llm`: exactly one native turn of the step's profile with no follow-ups and
+ *   no collaboration (no send/observe/spawn routes, never callable, never a
+ *   router). Its profile must be read-only, network-denied, allow no tools,
+ *   enable no skills/MCP and hold no spawn templates. The adapter requests an
+ *   empty native tool allowlist where the harness enforces one; otherwise the
+ *   read-only sandbox is the only boundary and native tools remain available.
+ * - `script`: user code the trusted host runs in the project folder under
+ *   process containment with a required timeout (1-3600 s). It is not a
+ *   sandbox. stdin is one JSON document
+ *   `{inputs, dependencies: {<stepId>: {text, data}}, step: {id, name}}`;
+ *   stdout that is one JSON object becomes `resultData`, other stdout becomes
+ *   `TaskRecord.output`. `source` is at most 64 KiB and is frozen in the run.
+ *   A script step is host work, not a team member, and has no profile.
+ */
+export type StepExecutor =
+  | { readonly type: 'agent' }
+  | { readonly type: 'llm' }
+  | { readonly type: 'script'; readonly runtime: ScriptRuntime; readonly source: string; readonly timeoutSeconds: number };
+
 export interface PipelineStep {
   readonly inputBindings?: readonly InputBinding[];
   readonly condition?: ResultCondition;
@@ -151,6 +181,8 @@ export interface PipelineStep {
   readonly resultFields?: readonly ResultField[];
   /** Callable templates are never admitted by the automatic scheduler. */
   readonly executionMode?: 'scheduled' | 'callable';
+  /** Additive (v6.2): how the step runs; absent is a native agent turn. */
+  readonly executor?: StepExecutor;
   /** Expected input supplied by upstream agents. */
   readonly inputInstructions?: string;
   readonly id: OrchestrationId;
@@ -222,8 +254,27 @@ export interface NativeExecutionReference {
 }
 
 export interface FailureRecord {
-  /** Stable, non-secret application error code. */
+  /**
+   * Stable, non-secret application error code. Script codes (v6.2):
+   * `script-failed` (non-zero exit), `script-timeout` (tree killed),
+   * `script-runtime-unavailable`, `script-input-unavailable` and
+   * `script-start-failed` (nothing was executed). Declared-result failures use
+   * the same `result-*` codes as native results.
+   */
   readonly code: string;
+  /**
+   * Additive (v6.2): bounded (2 KiB), non-secret human detail recorded by the
+   * host, such as the last lines of a script's stderr. Never an IPC input.
+   */
+  readonly detail?: string;
+}
+
+/** Additive (v6.2): bounded text result of a host-executed (script) step. */
+export interface TaskOutput {
+  /** At most 256 KiB of stdout. */
+  readonly text: string;
+  /** The text is the first part of a longer output. */
+  readonly truncated?: boolean;
 }
 
 export interface NativeHistoryReference {
@@ -240,9 +291,12 @@ export interface TaskRecord {
   readonly status: TaskStatus;
   readonly revision: Revision;
   readonly leaseId?: OrchestrationId;
+  /** For a script step this is an opaque host execution id, not a workspace session. */
   readonly execution?: NativeExecutionReference;
   readonly resultReference?: NativeHistoryReference;
   readonly failure?: FailureRecord;
+  /** Additive (v6.2): recorded text of a script that did not print a JSON object. */
+  readonly output?: TaskOutput;
 }
 
 export interface MessageRecord {
@@ -303,6 +357,13 @@ export interface LaunchRequest {
   readonly profile: AgentProfile;
   readonly taskInstructions: string;
   readonly dependencyResultReferences: readonly NativeHistoryReference[];
+  /** Additive (v6.2): recorded results of script dependencies, used where a native reference would be. */
+  readonly dependencyOutputs?: readonly {
+    readonly stepId: OrchestrationId;
+    readonly fields: readonly { readonly field: string; readonly name: string }[];
+    readonly text?: string;
+    readonly data?: Record<string, unknown>;
+  }[];
   readonly execution: NativeExecutionReference;
 }
 

@@ -16,6 +16,9 @@
   import PhoneIncoming from '@lucide/svelte/icons/phone-incoming';
   import CircleAlert from '@lucide/svelte/icons/circle-alert';
   import Zap from '@lucide/svelte/icons/zap';
+  import Code from '@lucide/svelte/icons/code';
+  import MessageSquareText from '@lucide/svelte/icons/message-square-text';
+  import { firstCodeLine, RUNTIME_LABEL } from '../executors';
   import { t } from '../../../features/locale/language';
   import HarnessMark from '../../shell/HarnessMark.svelte';
   import { harnessMeta } from '../../harnessMeta';
@@ -24,27 +27,46 @@
   const node = $derived(data.node);
   const profile = $derived(node.profile);
   const callable = $derived(node.executionMode === 'callable');
+  const script = $derived(node.executor?.type === 'script' ? node.executor : undefined);
+  const llm = $derived(node.executor?.type === 'llm');
+  const codeLine = $derived(script ? firstCodeLine(script.source) : '');
 </script>
 
 <div class="card" class:card--selected={selected} class:card--callable={callable} class:card--problem={data.problems > 0}>
   <Handle type="target" position={Position.Left} id="in" class="port port--in" isConnectable={!data.readOnly} />
   <header>
-    <HarnessMark kind={profile.harness} size={20} />
+    {#if script}
+      <span class="mark" aria-hidden="true"><Code size={14} /></span>
+    {:else}
+      <HarnessMark kind={profile.harness} size={20} />
+    {/if}
     <div class="title">
-      <strong title={profile.name}>{profile.name || $t('Untitled agent')}</strong>
-      <span class="sub" title={profile.model}>
-        {[harnessMeta(profile.harness).short, profile.model, profile.reasoning].filter(Boolean).join(' · ')}
-        {#if profile.serviceTier === 'fast'}<Zap size={11} />{/if}
-      </span>
+      <strong title={profile.name}>{profile.name || (script ? $t('Untitled script') : $t('Untitled agent'))}</strong>
+      {#if script}
+        <span class="sub">{RUNTIME_LABEL[script.runtime]} · {$t('{0} s limit', [script.timeoutSeconds])}</span>
+      {:else}
+        <span class="sub" title={profile.model}>
+          {[harnessMeta(profile.harness).short, profile.model, profile.reasoning].filter(Boolean).join(' · ')}
+          {#if profile.serviceTier === 'fast'}<Zap size={11} />{/if}
+        </span>
+      {/if}
     </div>
   </header>
-  {#if node.task}
+  {#if script}
+    {#if codeLine}
+      <p class="task task--code">{codeLine}</p>
+    {:else}
+      <p class="task task--empty">{$t('No code yet')}</p>
+    {/if}
+  {:else if node.task}
     <p class="task">{node.task}</p>
   {:else}
-    <p class="task task--empty">{$t('No task yet')}</p>
+    <p class="task task--empty">{llm ? $t('No prompt yet') : $t('No task yet')}</p>
   {/if}
-  {#if callable || node.requireApproval || data.problems > 0}
+  {#if callable || node.requireApproval || data.problems > 0 || llm || script}
     <footer>
+      {#if llm}<span class="chip" title={$t('One model answer, read-only and without tools')}><MessageSquareText size={11} /> {$t('Model call')}</span>{/if}
+      {#if script}<span class="chip" title={$t('Runs on this computer in the project folder')}><Code size={11} /> {$t('Script')}</span>{/if}
       {#if callable}<span class="chip" title={$t('Started only when another agent calls it')}><PhoneIncoming size={11} /> {$t('On call')}</span>{/if}
       {#if node.requireApproval}<span class="chip" title={$t('A person approves the result')}><ShieldCheck size={11} /> {$t('Approval')}</span>{/if}
       {#if data.problems > 0}<span class="chip chip--problem"><CircleAlert size={11} /> {data.problems}</span>{/if}
@@ -85,6 +107,22 @@
     display: flex;
     align-items: flex-start;
     gap: 8px;
+  }
+  .mark {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    background: var(--piui-surface-3);
+    color: var(--piui-text-muted);
+  }
+  .task.task--code {
+    font-family: var(--piui-font-mono);
+    font-size: 11px;
+    white-space: nowrap;
   }
   .title {
     display: grid;

@@ -186,6 +186,9 @@ pub struct PipelineStep {
     pub result_fields: Vec<crate::ResultField>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_mode: Option<ExecutionMode>,
+    /// How the step runs (v6.2, additive). `None` is a native agent turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executor: Option<crate::StepExecutor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_instructions: Option<String>,
     pub id: String,
@@ -263,6 +266,31 @@ pub struct NativeExecutionReference {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FailureRecord {
     pub code: String,
+    /// Bounded, non-secret human detail such as the tail of a script's
+    /// stderr (v6.2, additive). Host-recorded only; never an IPC input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+impl FailureRecord {
+    /// A failure with a stable code and no detail.
+    pub fn new(code: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            detail: None,
+        }
+    }
+
+    /// A failure whose detail keeps at most the last
+    /// [`crate::MAX_FAILURE_DETAIL_BYTES`] bytes of whole lines of `detail`.
+    /// Blank detail is omitted.
+    pub fn with_detail(code: impl Into<String>, detail: &str) -> Self {
+        let detail = crate::failure_detail(detail);
+        Self {
+            code: code.into(),
+            detail: (!detail.is_empty()).then_some(detail),
+        }
+    }
 }
 
 /// Safe PiUI reference to output in a workspace session history.
@@ -295,11 +323,21 @@ pub struct TaskRecord {
     pub(crate) result_reference: Option<NativeHistoryReference>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) failure: Option<FailureRecord>,
+    /// Bounded text result of a host-executed (script) step that did not
+    /// print a JSON object (v6.2, additive). Native results stay in history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) output: Option<crate::TaskOutput>,
 }
 
 impl TaskRecord {
     pub fn step_id(&self) -> &str {
         &self.step_id
+    }
+    pub fn output(&self) -> Option<&crate::TaskOutput> {
+        self.output.as_ref()
+    }
+    pub fn result_data(&self) -> Option<&serde_json::Value> {
+        self.result_data.as_ref()
     }
     pub fn status(&self) -> TaskStatus {
         self.status
@@ -493,6 +531,9 @@ pub struct LaunchRequest {
     pub task_instructions: String,
     /// Opaque native history/result references from completed dependencies.
     pub dependency_result_references: Vec<NativeHistoryReference>,
+    /// Recorded results of completed host-executed dependencies (v6.2),
+    /// used where a native history reference would be.
+    pub dependency_outputs: Vec<crate::DependencyOutput>,
     pub execution: NativeExecutionReference,
 }
 
@@ -507,6 +548,7 @@ pub struct ControlledSpawnLease {
     pub profile: AgentProfile,
     pub task_instructions: String,
     pub dependency_result_references: Vec<NativeHistoryReference>,
+    pub dependency_outputs: Vec<crate::DependencyOutput>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

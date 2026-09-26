@@ -6,7 +6,7 @@
 use crate::api::verified_project_directory;
 #[cfg(test)]
 use crate::harness_configuration::PI_NATIVE_TOOL_NAMES;
-use crate::harness_configuration::{LaunchPolicy, launch_policy};
+use crate::harness_configuration::{LaunchPolicy, launch_policy, one_shot_launch_policy};
 use crate::orchestration_api::{
     AgentRequestAdmission, AgentToolOperation, AgentToolRequest, ManagedAgentContext,
     ORCHESTRATION_EVENT_V4, OrchestrationApiState, OrchestrationRunChangedEventV4,
@@ -19,14 +19,20 @@ use crate::workspace_api::{
     CoordinatorRequestHandler, CoordinatorRequestOrigin, HarnessKind,
     PermissionMode as WorkspacePermissionMode, PromptMode, TurnOutcome, TurnState,
     WORKSPACE_EVENT_NAME, WorkspaceEventPublisher, WorkspaceLaunchRequest, WorkspaceModel,
-    WorkspaceRuntimeHandle,
+    WorkspaceRuntimeHandle, validate_artifact_files,
 };
 use piui_orchestration::{
-    AgentProfile, CompletionOutcome, ControlledSpawnLease, FailureRecord, Harness, MessageStatus,
-    Run, TaskStatus, UncertaintyIdentity,
+    AgentProfile, CompletionOutcome, ControlledSpawnLease, ExecutorKind, FailureRecord, Harness,
+    MessageStatus, PipelineStep, Run, SCRIPT_FAILED, SCRIPT_INPUT_UNAVAILABLE,
+    SCRIPT_RUNTIME_UNAVAILABLE, SCRIPT_START_FAILED, SCRIPT_TIMEOUT, ScriptCompletion, ScriptLease,
+    ScriptRuntime, StepExecutor, TaskStatus, UncertaintyIdentity,
 };
 #[cfg(test)]
 use piui_orchestration::{PolicyEnforcement, ToolDecision};
+use piui_runtime::script_runner::{
+    ResolvedInterpreter, ScriptInterpreter, ScriptOutcome, ScriptRequest, ScriptRun,
+    ScriptRunError, resolve_interpreter, run_script,
+};
 #[cfg(test)]
 use piui_runtime::workspace_runtime::Enforcement;
 use piui_runtime::workspace_runtime::{CoordinatorOperation, CoordinatorResponse};
@@ -65,6 +71,11 @@ impl OrchestrationSchedulerError {
         Self::new("unsupported-policy")
     }
 
+    /// An `llm` step's harness has no read-only mode (v6.2).
+    pub(crate) fn llm_read_only_unsupported() -> Self {
+        Self::new("llm-read-only-unsupported")
+    }
+
     fn uncertain() -> Self {
         Self::new("native-outcome-uncertain")
     }
@@ -74,6 +85,83 @@ impl OrchestrationSchedulerError {
 struct ActiveExecution {
     handle: WorkspaceRuntimeHandle,
     cancelling: Arc<AtomicBool>,
+}
+
+/// How a host-executed script ended, as proof for cancellation (v6.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScriptEnd {
+    /// It ended on its own; the script watcher records the outcome.
+    Completed { succeeded: bool },
+    /// A cancellation terminated its whole process tree.
+    Stopped,
+    /// Its outcome or its tree cleanup could not be observed.
+    Unobserved,
+}
+
+/// A running script step. `cancel` terminates its process tree; `ended`
+/// reports how it ended.
+#[derive(Clone)]
+struct ActiveScript {
+    cancel: Arc<watch::Sender<bool>>,
+    ended: watch::Receiver<Option<ScriptEnd>>,
+}
+
+/// How often a running script re-checks that its project is still trusted
+/// and live; a failed check terminates its tree like a cancellation.
+const SCRIPT_TRUST_POLL: Duration = Duration::from_millis(500);
+/// Bound on the proof that a cancelled script's tree ended: the runner's
+/// own reap and pipe-drain bounds plus margin.
+const SCRIPT_STOP_PROOF_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// A task admitted by one scheduling pass.
+enum Admission {
+    Native {
+        lease: Box<ControlledSpawnLease>,
+        policy: LaunchPolicy,
+        reserved_session_id: String,
+    },
+    Script {
+        lease: Box<ScriptLease>,
+        interpreter: ResolvedInterpreter,
+    },
+}
+
+/// A started script step handed to its watcher.
+struct ScriptLaunch {
+    workspace_id: String,
+    execution_id: String,
+    lease: ScriptLease,
+    interpreter: ResolvedInterpreter,
+    stdin: Vec<u8>,
+    project_dir: std::path::PathBuf,
+    work_dir: std::path::PathBuf,
+    /// The step's declared result fields from the frozen snapshot.
+    result_fields: Vec<piui_orchestration::ResultField>,
+}
+
+/// A script admission decided under the operation gate.
+enum ScriptAdmission {
+    Leased {
+        lease: Box<ScriptLease>,
+        interpreter: ResolvedInterpreter,
+        run: Box<Run>,
+    },
+    /// A certain failure before anything ran; `run` is the recorded state.
+    Rejected {
+        run: Option<Box<Run>>,
+        error: OrchestrationSchedulerError,
+    },
+    /// Nothing is ready any more.
+    Idle,
+}
+
+/// What the host records for a script that ended.
+enum ScriptResolution {
+    Record(ScriptCompletion),
+    /// A cancellation terminated the tree; the cancelling path records it.
+    Stopped,
+    /// The script may have run but its outcome is unknown.
+    Unobserved,
 }
 
 type RunKey = (String, String);
@@ -86,6 +174,8 @@ struct SchedulerInner {
     timed_worker_started: AtomicBool,
     timed_wake: Notify,
     active: Mutex<HashMap<String, ActiveExecution>>,
+    /// Running script steps by opaque host execution id (v6.2).
+    scripts: Mutex<HashMap<String, ActiveScript>>,
     #[cfg(feature = "native-prime-scheduler-test")]
     completed: Mutex<HashMap<String, WorkspaceRuntimeHandle>>,
     run_gates: Mutex<RunGateMap>,
@@ -113,10 +203,17 @@ impl Drop for CancellationAdmission {
 }
 
 impl OrchestrationScheduler {
-    /// Stops all new scheduler admissions before native workspace cleanup starts.
+    /// Stops all new scheduler admissions before native workspace cleanup
+    /// starts, and terminates every running script's process tree. Their
+    /// tasks stay running in the journal and become uncertain on restart.
     pub(crate) fn begin_shutdown(&self) {
         self.inner.shutting_down.store(true, Ordering::Release);
         self.inner.timed_wake.notify_waiters();
+        if let Ok(scripts) = self.inner.scripts.lock() {
+            for script in scripts.values() {
+                script.cancel.send_replace(true);
+            }
+        }
     }
 
     pub(crate) fn wake_timed_schedules(&self) {
@@ -270,7 +367,7 @@ impl OrchestrationScheduler {
             // Selection, capability validation, and durable leasing share the
             // same operation gate. A reverse-tool spawn cannot change which
             // lexical ready task those capabilities describe between steps.
-            let (lease, launch_policy, reserved_session_id) = {
+            let admission = 'admission: {
                 let host = app.state::<HostState>();
                 let _operation = host.live_runtime_operation_gate.lock().await;
                 authorize_live_workspace(&host, workspace_id)?;
@@ -283,23 +380,50 @@ impl OrchestrationScheduler {
                     .get_run(workspace_id, run_id)
                     .map_err(|_| OrchestrationSchedulerError::conflict())?
                     .ok_or_else(OrchestrationSchedulerError::conflict)?;
-                let Some(profile) = next_ready_profile(&run) else {
+                let Some(step) = next_ready_step(&run) else {
                     return Ok(());
                 };
-                let step_id = piui_orchestration::Coordinator::ready_task_ids(&run)
-                    .first()
-                    .map(|step_id| (*step_id).to_owned())
-                    .ok_or_else(OrchestrationSchedulerError::conflict)?;
+                let step_id = step.id.clone();
                 let task_revision = run
                     .tasks()
                     .iter()
                     .find(|task| task.step_id() == step_id)
                     .map(piui_orchestration::TaskRecord::revision)
                     .ok_or_else(OrchestrationSchedulerError::conflict)?;
+                if step.is_script() {
+                    let lease_id = host.workspace.allocate_orchestration_session_id();
+                    match admit_script(&api, workspace_id, &run, &step, task_revision, lease_id) {
+                        ScriptAdmission::Leased {
+                            lease,
+                            interpreter,
+                            run,
+                        } => {
+                            self.emit_run_invalidation(app, workspace_id, &run);
+                            break 'admission Admission::Script { lease, interpreter };
+                        }
+                        ScriptAdmission::Rejected { run, error } => {
+                            if let Some(run) = run {
+                                self.emit_run_invalidation(app, workspace_id, &run);
+                            }
+                            return Err(error);
+                        }
+                        ScriptAdmission::Idle => return Ok(()),
+                    }
+                }
+                let Some(profile) = profile_for_step(&run, &step) else {
+                    return Ok(());
+                };
                 let offline = host
                     .workspace
                     .orchestration_capabilities(harness_kind(profile.harness));
-                let (capabilities, launch_policy) = match launch_policy(&profile, &offline) {
+                // An llm step is one native turn with the least authority
+                // the adapter enforces; harness differences live there.
+                let policy = if step.executor_kind() == ExecutorKind::Llm {
+                    one_shot_launch_policy(&profile, &offline)
+                } else {
+                    launch_policy(&profile, &offline)
+                };
+                let (capabilities, launch_policy) = match policy {
                     Ok(policy) => policy,
                     Err(error) => {
                         if let Ok(rejected) = api.reject_ready_task(
@@ -334,16 +458,26 @@ impl OrchestrationScheduler {
                 if let Ok(Some(updated)) = api.get_run(workspace_id, run_id) {
                     self.emit_run_invalidation(app, workspace_id, &updated);
                 }
-                (lease, launch_policy, reserved_session_id)
+                Admission::Native {
+                    lease: Box::new(lease),
+                    policy: launch_policy,
+                    reserved_session_id,
+                }
             };
-            self.launch_lease(
-                app,
-                workspace_id,
-                lease,
-                launch_policy,
-                Some(reserved_session_id),
-            )
-            .await?;
+            match admission {
+                Admission::Native {
+                    lease,
+                    policy,
+                    reserved_session_id,
+                } => {
+                    self.launch_lease(app, workspace_id, *lease, policy, Some(reserved_session_id))
+                        .await?;
+                }
+                Admission::Script { lease, interpreter } => {
+                    self.launch_script(app, workspace_id, *lease, interpreter)
+                        .await?;
+                }
+            }
         }
     }
 
@@ -423,6 +557,11 @@ impl OrchestrationScheduler {
 
         let mut evidence = Vec::with_capacity(cancels.len());
         for cancel in &cancels {
+            // A script has no native turn: proof is its terminated tree.
+            if let Some(script) = self.active_script(&cancel.execution.id) {
+                evidence.push((cancel, None, stop_script(&script).await));
+                continue;
+            }
             let active = match self.active(&cancel.execution.id) {
                 Ok(active) => active,
                 Err(_) => {
@@ -726,9 +865,7 @@ impl OrchestrationScheduler {
         };
         let completion = match outcome {
             Ok(TurnOutcome::Succeeded) if !artifacts_valid => CompletionOutcome::Failed {
-                failure: FailureRecord {
-                    code: "result-artifact-unavailable".into(),
-                },
+                failure: FailureRecord::new("result-artifact-unavailable"),
             },
             Ok(TurnOutcome::Succeeded) => match native_result {
                 Some((reference, _)) => CompletionOutcome::Succeeded {
@@ -742,14 +879,10 @@ impl OrchestrationScheduler {
                 }
             },
             Ok(TurnOutcome::Failed) => CompletionOutcome::Failed {
-                failure: FailureRecord {
-                    code: "native-turn-failed".into(),
-                },
+                failure: FailureRecord::new("native-turn-failed"),
             },
             Ok(TurnOutcome::Interrupted) => CompletionOutcome::Failed {
-                failure: FailureRecord {
-                    code: "native-turn-interrupted".into(),
-                },
+                failure: FailureRecord::new("native-turn-interrupted"),
             },
             Err(()) => {
                 self.mark_execution_uncertain(&app, &workspace_id, &launch)
@@ -793,6 +926,221 @@ impl OrchestrationScheduler {
         if let Ok(run) = recorded {
             self.emit_run_invalidation(&app, &workspace_id, &run);
             self.spawn_reschedule(app, workspace_id, launch.run_id.clone());
+        }
+    }
+
+    /// Starts one leased script step on the host (v6.2). The task becomes
+    /// running only immediately before the process starts, so a restart can
+    /// never replay a script that may have run: it becomes uncertain.
+    async fn launch_script<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        workspace_id: &str,
+        lease: ScriptLease,
+        interpreter: ResolvedInterpreter,
+    ) -> Result<(), OrchestrationSchedulerError> {
+        let host = app.state::<HostState>();
+        let operation = host.live_runtime_operation_gate.lock().await;
+        let api = app.state::<OrchestrationApiState>();
+        let authorized = authorize_live_workspace(&host, workspace_id);
+        let directory = match authorized {
+            Ok(directory)
+                if self.admits_work() && !self.is_run_cancelling(workspace_id, &lease.run_id) =>
+            {
+                directory
+            }
+            other => {
+                // Nothing ran: the step returns to ready.
+                if let Ok(run) = api.release_script_lease(workspace_id, &lease) {
+                    self.emit_run_invalidation(app, workspace_id, &run);
+                }
+                return Err(other
+                    .err()
+                    .unwrap_or_else(OrchestrationSchedulerError::conflict));
+            }
+        };
+        let execution_id = host.workspace.allocate_orchestration_session_id();
+        let prepared = prepare_script(
+            &host,
+            &api,
+            workspace_id,
+            &directory,
+            lease,
+            interpreter,
+            execution_id,
+        )
+        .await;
+        let launch = match prepared {
+            Ok((launch, run)) => {
+                self.emit_run_invalidation(app, workspace_id, &run);
+                launch
+            }
+            Err((run, error)) => {
+                if let Some(run) = run {
+                    self.emit_run_invalidation(app, workspace_id, &run);
+                }
+                return Err(error);
+            }
+        };
+        let (cancel, cancel_receiver) = watch::channel(false);
+        let (ended, ended_receiver) = watch::channel(None);
+        let script = ActiveScript {
+            cancel: Arc::new(cancel),
+            ended: ended_receiver,
+        };
+        if self
+            .insert_script(launch.execution_id.clone(), script.clone())
+            .is_err()
+        {
+            // No process exists under this id: a certain start failure.
+            if let Ok(run) = api.record_script_outcome(
+                workspace_id,
+                &launch.lease.run_id,
+                &launch.lease.step_id,
+                &launch.execution_id,
+                ScriptCompletion::Failed {
+                    failure: FailureRecord::new(SCRIPT_START_FAILED),
+                },
+            ) {
+                self.emit_run_invalidation(app, workspace_id, &run);
+            }
+            return Err(OrchestrationSchedulerError::conflict());
+        }
+        drop(operation);
+        let scheduler = self.clone();
+        let app = app.clone();
+        tokio::spawn(async move {
+            scheduler
+                .watch_script(app, launch, script.cancel, cancel_receiver, ended)
+                .await;
+        });
+        Ok(())
+    }
+
+    /// Runs a started script to its end and records the host-observed
+    /// outcome. A cancellation (from a person, shutdown or a project that is
+    /// no longer trusted) terminates the tree; the cancelling path owns that
+    /// transition, and anything unrecorded becomes uncertain on restart.
+    async fn watch_script<R: Runtime>(
+        &self,
+        app: AppHandle<R>,
+        launch: ScriptLaunch,
+        cancel: Arc<watch::Sender<bool>>,
+        cancel_receiver: watch::Receiver<bool>,
+        ended: watch::Sender<Option<ScriptEnd>>,
+    ) {
+        let guard = {
+            let scheduler = self.clone();
+            let app = app.clone();
+            let workspace_id = launch.workspace_id.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(SCRIPT_TRUST_POLL).await;
+                    if !scheduler.admits_work()
+                        || authorize_live_workspace(&app.state::<HostState>(), &workspace_id)
+                            .is_err()
+                    {
+                        cancel.send_replace(true);
+                        return;
+                    }
+                }
+            })
+        };
+        let resolution = execute_script(&launch, cancel_receiver).await;
+        guard.abort();
+        let completion = match resolution {
+            ScriptResolution::Stopped => {
+                ended.send_replace(Some(ScriptEnd::Stopped));
+                self.remove_script(&launch.execution_id);
+                return;
+            }
+            ScriptResolution::Unobserved => {
+                ended.send_replace(Some(ScriptEnd::Unobserved));
+                self.mark_script_uncertain(&app, &launch).await;
+                self.remove_script(&launch.execution_id);
+                return;
+            }
+            ScriptResolution::Record(completion) => completion,
+        };
+        ended.send_replace(Some(ScriptEnd::Completed {
+            succeeded: matches!(completion, ScriptCompletion::Exited { .. }),
+        }));
+        let recorded = {
+            let host = app.state::<HostState>();
+            let _operation = host.live_runtime_operation_gate.lock().await;
+            if authorize_live_workspace(&host, &launch.workspace_id).is_err() {
+                self.remove_script(&launch.execution_id);
+                return;
+            }
+            app.state::<OrchestrationApiState>().record_script_outcome(
+                &launch.workspace_id,
+                &launch.lease.run_id,
+                &launch.lease.step_id,
+                &launch.execution_id,
+                completion,
+            )
+        };
+        self.remove_script(&launch.execution_id);
+        if let Ok(run) = recorded {
+            self.emit_run_invalidation(&app, &launch.workspace_id, &run);
+            self.spawn_reschedule(app, launch.workspace_id, launch.lease.run_id);
+        }
+    }
+
+    async fn mark_script_uncertain<R: Runtime>(&self, app: &AppHandle<R>, launch: &ScriptLaunch) {
+        let host = app.state::<HostState>();
+        let _operation = host.live_runtime_operation_gate.lock().await;
+        if authorize_live_workspace(&host, &launch.workspace_id).is_err() {
+            return;
+        }
+        let api = app.state::<OrchestrationApiState>();
+        let Ok(Some(current)) = api.get_run(&launch.workspace_id, &launch.lease.run_id) else {
+            return;
+        };
+        let Some(task) = current.tasks().iter().find(|task| {
+            task.step_id() == launch.lease.step_id
+                && task
+                    .execution()
+                    .is_some_and(|execution| execution.id == launch.execution_id)
+        }) else {
+            return;
+        };
+        if let Ok(run) = api.mark_task_uncertain(
+            &launch.workspace_id,
+            &launch.lease.run_id,
+            current.revision(),
+            &launch.lease.step_id,
+            task.revision(),
+            UncertaintyIdentity::Execution(launch.execution_id.clone()),
+        ) {
+            self.emit_run_invalidation(app, &launch.workspace_id, &run);
+        }
+    }
+
+    fn active_script(&self, execution_id: &str) -> Option<ActiveScript> {
+        self.inner.scripts.lock().ok()?.get(execution_id).cloned()
+    }
+
+    fn insert_script(
+        &self,
+        execution_id: String,
+        script: ActiveScript,
+    ) -> Result<(), OrchestrationSchedulerError> {
+        let mut scripts = self
+            .inner
+            .scripts
+            .lock()
+            .map_err(|_| OrchestrationSchedulerError::unavailable())?;
+        if scripts.contains_key(&execution_id) {
+            return Err(OrchestrationSchedulerError::conflict());
+        }
+        scripts.insert(execution_id, script);
+        Ok(())
+    }
+
+    fn remove_script(&self, execution_id: &str) {
+        if let Ok(mut scripts) = self.inner.scripts.lock() {
+            scripts.remove(execution_id);
         }
     }
 
@@ -1402,6 +1750,7 @@ fn workspace_launch_request(
         // authenticated workspace tool's predefined spawn route.
         native_subagents: policy.native_subagents,
         dependency_history_references: lease.dependency_result_references.clone(),
+        dependency_outputs: lease.dependency_outputs.clone(),
         coordinator,
     }
 }
@@ -1442,16 +1791,21 @@ fn authorize_live_workspace(
         .map_err(|_| OrchestrationSchedulerError::unavailable())
 }
 
-fn next_ready_profile(run: &Run) -> Option<AgentProfile> {
+/// The deterministic next ready step, whatever its executor.
+fn next_ready_step(run: &Run) -> Option<PipelineStep> {
     let step_id = piui_orchestration::Coordinator::ready_task_ids(run)
         .first()?
         .to_string();
-    let step = run
-        .definition()
+    run.definition()
         .pipeline
         .steps
         .iter()
-        .find(|step| step.id == step_id)?;
+        .find(|step| step.id == step_id)
+        .cloned()
+}
+
+/// The snapshotted profile of a native (agent or llm) step.
+fn profile_for_step(run: &Run, step: &PipelineStep) -> Option<AgentProfile> {
     let member = run
         .definition()
         .team
@@ -1504,6 +1858,255 @@ fn profile_for_execution(run: &Run, session_id: &str) -> Option<AgentProfile> {
         .iter()
         .find(|profile| profile.id == member.profile_id)
         .cloned()
+}
+
+/// Resolves the interpreter of the next ready script step, then leases it.
+/// A missing interpreter is a certain failure: nothing ran. Runs under the
+/// operation gate with the scheduling pass's run snapshot.
+fn admit_script(
+    api: &OrchestrationApiState,
+    workspace_id: &str,
+    run: &Run,
+    step: &PipelineStep,
+    task_revision: u64,
+    lease_id: String,
+) -> ScriptAdmission {
+    let conflict = || ScriptAdmission::Rejected {
+        run: None,
+        error: OrchestrationSchedulerError::conflict(),
+    };
+    let Some(runtime) = script_runtime(step) else {
+        return conflict();
+    };
+    let interpreter = match resolve_interpreter(script_interpreter(runtime)) {
+        Ok(interpreter) => interpreter,
+        Err(_) => {
+            return ScriptAdmission::Rejected {
+                run: api
+                    .reject_ready_task(
+                        workspace_id,
+                        run.id(),
+                        &step.id,
+                        task_revision,
+                        SCRIPT_RUNTIME_UNAVAILABLE.to_owned(),
+                    )
+                    .ok()
+                    .map(Box::new),
+                error: OrchestrationSchedulerError::new(SCRIPT_RUNTIME_UNAVAILABLE),
+            };
+        }
+    };
+    let lease = match api.lease_next_script(workspace_id, run.id(), run.revision(), lease_id) {
+        Ok(Some(lease)) => lease,
+        Ok(None) => return ScriptAdmission::Idle,
+        Err(_) => return conflict(),
+    };
+    // Defense in depth: the revision check should make this exact.
+    if lease.step_id != step.id {
+        return conflict();
+    }
+    match api.get_run(workspace_id, run.id()) {
+        Ok(Some(run)) => ScriptAdmission::Leased {
+            lease: Box::new(lease),
+            interpreter,
+            run: Box::new(run),
+        },
+        _ => conflict(),
+    }
+}
+
+/// Resolves native dependency results (hash-verified, never copied into
+/// the run) into the leased script's stdin and marks the task running under
+/// `execution_id`. Every failure here is certain because nothing ran: the
+/// task is rejected or its lease released.
+async fn prepare_script(
+    host: &HostState,
+    api: &OrchestrationApiState,
+    workspace_id: &str,
+    directory: &piui_platform::ProjectDirectory,
+    mut lease: ScriptLease,
+    interpreter: ResolvedInterpreter,
+    execution_id: String,
+) -> Result<(ScriptLaunch, Run), (Option<Run>, OrchestrationSchedulerError)> {
+    let mut texts = Vec::with_capacity(lease.dependencies.len());
+    for dependency in &lease.dependencies {
+        let text = match &dependency.reference {
+            Some(reference) => match host
+                .workspace
+                .dependency_text(reference, workspace_id, directory.canonical_path())
+                .await
+            {
+                Ok(text) => Some(text),
+                Err(_) => {
+                    let run = api
+                        .reject_leased_script(workspace_id, &lease, SCRIPT_INPUT_UNAVAILABLE)
+                        .ok();
+                    return Err((
+                        run,
+                        OrchestrationSchedulerError::new(SCRIPT_INPUT_UNAVAILABLE),
+                    ));
+                }
+            },
+            None => dependency.text.clone(),
+        };
+        texts.push(text);
+    }
+    for (dependency, text) in lease.dependencies.iter_mut().zip(texts) {
+        dependency.text = text;
+    }
+    let Ok(stdin) = serde_json::to_vec(&lease.stdin_document()) else {
+        let run = api
+            .reject_leased_script(workspace_id, &lease, SCRIPT_START_FAILED)
+            .ok();
+        return Err((run, OrchestrationSchedulerError::new(SCRIPT_START_FAILED)));
+    };
+    let run = match api.commit_script_lease(workspace_id, &lease, execution_id.clone()) {
+        Ok(run) => run,
+        Err(_) => {
+            let run = api.release_script_lease(workspace_id, &lease).ok();
+            return Err((run, OrchestrationSchedulerError::conflict()));
+        }
+    };
+    let result_fields = run
+        .definition()
+        .pipeline
+        .steps
+        .iter()
+        .find(|step| step.id == lease.step_id)
+        .map(|step| step.result_fields.clone())
+        .unwrap_or_default();
+    Ok((
+        ScriptLaunch {
+            workspace_id: workspace_id.to_owned(),
+            work_dir: api.script_work_root().join(&execution_id),
+            project_dir: directory.canonical_path().to_path_buf(),
+            execution_id,
+            lease,
+            interpreter,
+            stdin,
+            result_fields,
+        },
+        run,
+    ))
+}
+
+/// Runs a prepared script and maps what the host observed to what it
+/// records. Declared artifact fields are checked like native results.
+async fn execute_script(launch: &ScriptLaunch, cancel: watch::Receiver<bool>) -> ScriptResolution {
+    let environment = std::env::vars_os().collect::<Vec<_>>();
+    let result = run_script(
+        ScriptRequest {
+            interpreter: &launch.interpreter,
+            source: &launch.lease.source,
+            stdin: &launch.stdin,
+            project_dir: &launch.project_dir,
+            work_dir: &launch.work_dir,
+            timeout: Duration::from_secs(u64::from(launch.lease.timeout_seconds)),
+            host_environment: &environment,
+        },
+        cancel,
+    )
+    .await;
+    log_script_end(&launch.lease, &result);
+    let failed = |failure| ScriptResolution::Record(ScriptCompletion::Failed { failure });
+    match result.map(|run| run.outcome) {
+        Ok(ScriptOutcome::Exited {
+            code: Some(0),
+            stdout,
+            ..
+        }) => {
+            if validate_artifact_files(&launch.project_dir, &launch.result_fields, &stdout.text)
+                .await
+                .is_err()
+            {
+                failed(FailureRecord::new("result-artifact-unavailable"))
+            } else {
+                ScriptResolution::Record(ScriptCompletion::Exited {
+                    stdout: stdout.text,
+                    truncated: stdout.truncated,
+                })
+            }
+        }
+        Ok(ScriptOutcome::Exited { stdout, stderr, .. }) => {
+            failed(script_failure(SCRIPT_FAILED, &stdout.text, &stderr.text))
+        }
+        Ok(ScriptOutcome::TimedOut { stderr }) => {
+            failed(FailureRecord::with_detail(SCRIPT_TIMEOUT, &stderr.text))
+        }
+        Ok(ScriptOutcome::Cancelled) => ScriptResolution::Stopped,
+        Err(ScriptRunError::RuntimeUnavailable) => {
+            failed(FailureRecord::new(SCRIPT_RUNTIME_UNAVAILABLE))
+        }
+        Err(ScriptRunError::NotStarted) => failed(FailureRecord::new(SCRIPT_START_FAILED)),
+        Err(ScriptRunError::Unobserved) => ScriptResolution::Unobserved,
+    }
+}
+
+fn script_runtime(step: &PipelineStep) -> Option<ScriptRuntime> {
+    match &step.executor {
+        Some(StepExecutor::Script { runtime, .. }) => Some(*runtime),
+        _ => None,
+    }
+}
+
+fn script_interpreter(runtime: ScriptRuntime) -> ScriptInterpreter {
+    match runtime {
+        ScriptRuntime::Node => ScriptInterpreter::Node,
+        ScriptRuntime::Python => ScriptInterpreter::Python,
+        ScriptRuntime::PowerShell => ScriptInterpreter::PowerShell,
+    }
+}
+
+/// Terminates a running script's process tree and returns how it ended, in
+/// the terms cancellation uses for native turns.
+async fn stop_script(script: &ActiveScript) -> Option<TurnOutcome> {
+    script.cancel.send_replace(true);
+    let mut ended = script.ended.clone();
+    let end = tokio::time::timeout(SCRIPT_STOP_PROOF_TIMEOUT, ended.wait_for(Option::is_some))
+        .await
+        .ok()?
+        .ok()
+        .and_then(|end| *end)?;
+    match end {
+        ScriptEnd::Stopped => Some(TurnOutcome::Interrupted),
+        ScriptEnd::Completed { succeeded: true } => Some(TurnOutcome::Succeeded),
+        ScriptEnd::Completed { succeeded: false } => Some(TurnOutcome::Failed),
+        ScriptEnd::Unobserved => None,
+    }
+}
+
+/// The failure text a person sees for a script that exited non-zero: its
+/// stderr tail, or stdout's when stderr is empty. Bounded by the coordinator.
+fn script_failure(code: &str, stdout: &str, stderr: &str) -> FailureRecord {
+    let detail = if stderr.trim().is_empty() {
+        stdout
+    } else {
+        stderr
+    };
+    FailureRecord::with_detail(code, detail)
+}
+
+/// Structured metadata only: never source, stdin or output.
+fn log_script_end(lease: &ScriptLease, result: &Result<ScriptRun, ScriptRunError>) {
+    let (outcome, exit_code, elapsed) = match result {
+        Ok(run) => {
+            let (outcome, code) = match &run.outcome {
+                ScriptOutcome::Exited { code, .. } => ("exited", *code),
+                ScriptOutcome::TimedOut { .. } => ("timed-out", None),
+                ScriptOutcome::Cancelled => ("cancelled", None),
+            };
+            (outcome, code, run.elapsed.as_millis())
+        }
+        Err(ScriptRunError::RuntimeUnavailable) => ("runtime-unavailable", None, 0),
+        Err(ScriptRunError::NotStarted) => ("not-started", None, 0),
+        Err(ScriptRunError::Unobserved) => ("unobserved", None, 0),
+    };
+    let exit_code = exit_code.map_or_else(|| "none".to_owned(), |code| code.to_string());
+    eprintln!(
+        "event=orchestration_script_ended step_id={:?} runtime={} outcome={outcome} exit_code={exit_code} duration_ms={elapsed}",
+        lease.step_id,
+        lease.runtime.as_str()
+    );
 }
 
 fn execution_for_member(run: &Run, member_id: &str) -> Option<String> {
@@ -1676,6 +2279,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
                     allowed_tools: Some(vec![]),
                     native_subagents: Some(false),
                     dependency_history_references: vec![],
+                    dependency_outputs: vec![],
                     coordinator: None,
                 },
                 Arc::new(|_| {}),
@@ -1745,6 +2349,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
                 require_approval: false,
                 result_fields: Vec::new(),
                 execution_mode: None,
+                executor: None,
                 input_instructions: None,
                 id: "step-one".into(),
                 name: "First marker".into(),
@@ -1761,6 +2366,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
                 require_approval: false,
                 result_fields: Vec::new(),
                 execution_mode: None,
+                executor: None,
                 input_instructions: None,
                 id: "step-two".into(),
                 name: "Second marker".into(),
@@ -2015,6 +2621,7 @@ mod tests {
             profile: profile.clone(),
             task_instructions: "Do the work".into(),
             dependency_result_references: vec![],
+            dependency_outputs: vec![],
         };
         let request = workspace_launch_request("workspace", "session", &lease, policy, None);
         assert_eq!(request.profile_id.as_deref(), Some("profile"));
@@ -2066,6 +2673,7 @@ mod tests {
             profile: claude.clone(),
             task_instructions: "Review the change".into(),
             dependency_result_references: vec![],
+            dependency_outputs: vec![],
         };
         let request = workspace_launch_request("workspace", "session", &lease, policy, None);
         assert_eq!(request.harness, HarnessKind::ClaudeCode);
@@ -2176,6 +2784,7 @@ mod tests {
             profile: codex,
             task_instructions: "Fetch public metadata".into(),
             dependency_result_references: vec![],
+            dependency_outputs: vec![],
         };
         let request = workspace_launch_request("workspace", "session", &lease, policy, None);
         assert!(request.network_access);
@@ -2282,6 +2891,7 @@ mod tests {
                         require_approval: false,
                         result_fields: Vec::new(),
                         execution_mode: None,
+                        executor: None,
                         input_instructions: None,
                         id: "build".into(),
                         name: "Build".into(),
@@ -2298,6 +2908,7 @@ mod tests {
                         require_approval: false,
                         result_fields: Vec::new(),
                         execution_mode: None,
+                        executor: None,
                         input_instructions: None,
                         id: "review".into(),
                         name: "Review".into(),
@@ -2420,9 +3031,7 @@ mod tests {
             launch.task_revision,
             &launch.execution.id,
             CompletionOutcome::Failed {
-                failure: FailureRecord {
-                    code: "native-turn-failed".into(),
-                },
+                failure: FailureRecord::new("native-turn-failed"),
             },
         )
         .unwrap();
@@ -2617,3 +3226,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "orchestration_script_tests.rs"]
+mod script_tests;

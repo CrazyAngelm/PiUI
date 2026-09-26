@@ -1,7 +1,7 @@
 use crate::coordinator::{check_run_revision, refresh_status};
 use crate::{
-    CompletionOutcome, Coordinator, CoordinatorError, FailureRecord, Revision, Run, RunStatus,
-    TaskStatus,
+    CompletionOutcome, Coordinator, CoordinatorError, FailureRecord, PipelineStep, Revision, Run,
+    RunStatus, TaskStatus,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -243,9 +243,7 @@ impl Coordinator {
                 };
                 // Approval accepts the recorded result, including one held back
                 // by a review loop limit.
-                task.failure = (!approved).then(|| FailureRecord {
-                    code: "result-rejected".into(),
-                });
+                task.failure = (!approved).then(|| FailureRecord::new("result-rejected"));
                 task.revision += 1;
             }
             FlowAction::Repeat {
@@ -303,6 +301,11 @@ impl Coordinator {
             .ok_or(CoordinatorError::UnknownTask {
                 step_id: step_id.into(),
             })?;
+        if step.is_script() {
+            return Err(CoordinatorError::ExecutorMismatch {
+                step_id: step_id.into(),
+            });
+        }
         let mut data = None;
         let outcome = if matches!(outcome, CompletionOutcome::Succeeded { .. }) {
             match crate::validate_result(&step.result_fields, text.unwrap_or("")) {
@@ -335,13 +338,11 @@ impl Coordinator {
                                     outcome
                                 }
                                 Err(code) => CompletionOutcome::Failed {
-                                    failure: FailureRecord { code: code.into() },
+                                    failure: FailureRecord::new(code),
                                 },
                             },
                             None => CompletionOutcome::Failed {
-                                failure: FailureRecord {
-                                    code: "router-selection-invalid".into(),
-                                },
+                                failure: FailureRecord::new("router-selection-invalid"),
                             },
                         }
                     } else {
@@ -349,7 +350,7 @@ impl Coordinator {
                     }
                 }
                 Err(code) => CompletionOutcome::Failed {
-                    failure: FailureRecord { code: code.into() },
+                    failure: FailureRecord::new(code),
                 },
             }
         } else {
@@ -364,59 +365,61 @@ impl Coordinator {
                 step_id: step_id.into(),
             })?;
         run.tasks[index].result_data = data;
-        if run.tasks[index].status == TaskStatus::Succeeded {
-            if let Some(review) = &step.review {
-                match run.tasks[index]
-                    .result_data
-                    .as_ref()
-                    .and_then(|value| value.get(&review.field))
-                    .and_then(Value::as_bool)
-                {
-                    Some(false) if review_limit_reached(run, step_id, review) => {
-                        // Another round would exceed the bound: keep the last
-                        // result and let a person approve, reject or repeat.
-                        run.tasks[index].status = TaskStatus::AwaitingApproval;
-                        run.tasks[index].failure = Some(FailureRecord {
-                            code: "review-limit-reached".into(),
-                        });
-                    }
-                    Some(false) => {
-                        let repeated = run
-                            .attempts
-                            .iter()
-                            .rev()
-                            .find(|task| task.step_id == step_id)
-                            .is_some_and(|task| task.result_data == run.tasks[index].result_data);
-                        if repeat_from(run, &review.retry_from_step_id).is_err() {
-                            run.tasks[index].status = TaskStatus::Failed;
-                            run.tasks[index].failure = Some(FailureRecord {
-                                code: "review-retry-conflict".into(),
-                            });
-                        }
-                        if repeated {
-                            run.paused = true;
-                        }
-                    }
-                    Some(true) => {
-                        if step.require_approval {
-                            run.tasks[index].status = TaskStatus::AwaitingApproval;
-                        }
-                    }
-                    None => {
-                        run.tasks[index].status = TaskStatus::Failed;
-                        run.tasks[index].failure = Some(FailureRecord {
-                            code: "review-verdict-missing".into(),
-                        });
-                    }
-                }
-            } else if step.require_approval {
-                run.tasks[index].status = TaskStatus::AwaitingApproval;
-            }
-        }
-        advance_conditions(run);
-        refresh_status(run);
+        settle_result(run, index, &step);
         Ok(())
     }
+}
+
+/// Applies a completed task's review rule or human acceptance, then advances
+/// conditions. Shared by native and host-executed (script) completions.
+pub(crate) fn settle_result(run: &mut Run, index: usize, step: &PipelineStep) {
+    let step_id = step.id.as_str();
+    if run.tasks[index].status == TaskStatus::Succeeded {
+        if let Some(review) = &step.review {
+            match run.tasks[index]
+                .result_data
+                .as_ref()
+                .and_then(|value| value.get(&review.field))
+                .and_then(Value::as_bool)
+            {
+                Some(false) if review_limit_reached(run, step_id, review) => {
+                    // Another round would exceed the bound: keep the last
+                    // result and let a person approve, reject or repeat.
+                    run.tasks[index].status = TaskStatus::AwaitingApproval;
+                    run.tasks[index].failure = Some(FailureRecord::new("review-limit-reached"));
+                }
+                Some(false) => {
+                    let repeated = run
+                        .attempts
+                        .iter()
+                        .rev()
+                        .find(|task| task.step_id == step_id)
+                        .is_some_and(|task| task.result_data == run.tasks[index].result_data);
+                    if repeat_from(run, &review.retry_from_step_id).is_err() {
+                        run.tasks[index].status = TaskStatus::Failed;
+                        run.tasks[index].failure =
+                            Some(FailureRecord::new("review-retry-conflict"));
+                    }
+                    if repeated {
+                        run.paused = true;
+                    }
+                }
+                Some(true) => {
+                    if step.require_approval {
+                        run.tasks[index].status = TaskStatus::AwaitingApproval;
+                    }
+                }
+                None => {
+                    run.tasks[index].status = TaskStatus::Failed;
+                    run.tasks[index].failure = Some(FailureRecord::new("review-verdict-missing"));
+                }
+            }
+        } else if step.require_approval {
+            run.tasks[index].status = TaskStatus::AwaitingApproval;
+        }
+    }
+    advance_conditions(run);
+    refresh_status(run);
 }
 
 /// Whether a rejection completing a review round has used up the rule's bound.
@@ -477,6 +480,7 @@ fn repeat_from(run: &mut Run, step_id: &str) -> Result<(), CoordinatorError> {
             task.result_reference = None;
             task.result_data = None;
             task.failure = None;
+            task.output = None;
             task.revision += 1;
         }
     }

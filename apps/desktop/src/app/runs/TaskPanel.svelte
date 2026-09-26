@@ -6,6 +6,8 @@
   import MessageSquare from '@lucide/svelte/icons/message-square';
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
   import ClipboardCheck from '@lucide/svelte/icons/clipboard-check';
+  import Code from '@lucide/svelte/icons/code';
+  import { RUNTIME_LABEL } from '../pipelines/executors';
   import { t } from '../../features/locale/language';
   import MarkdownContent from '../../components/MarkdownContent.svelte';
   import type { OrchestrationRunV6, ReconcileUncertainTaskRequest, TaskRecord } from '../../host-api/orchestrationClient';
@@ -56,7 +58,10 @@
   const profile = $derived(member ? run.definition.profiles.find((item) => item.id === member.profileId) : undefined);
   const record = $derived<TaskRecord | undefined>(attempt >= 0 ? view.attempts[attempt] : view.task);
   const shown = $derived(attempt >= 0 && record ? stepState(view.step, record) : view.state);
-  const sessionId = $derived(record?.execution?.id);
+  // A script runs on the host: its execution id is not a native session.
+  const script = $derived(view.step.executor?.type === 'script' ? view.step.executor : undefined);
+  const llm = $derived(view.step.executor?.type === 'llm');
+  const sessionId = $derived(script ? undefined : record?.execution?.id);
   const snapshot = $derived(sessionId ? snapshotFor(sessionId) : undefined);
   const entries = $derived(resultEntries(view.step, record?.resultData));
   const answer = $derived.by(() => {
@@ -89,6 +94,7 @@
       const data = bindings.length ? Object.fromEntries(bindings.map((binding) => [binding.name, task.resultData?.[binding.field]])) : task.resultData;
       return formatValue(data);
     }
+    if (task.output) return task.output.text;
     const source = task.execution?.id ? snapshotFor(task.execution.id) : undefined;
     const blocks = source?.blocks ?? [];
     const block = task.resultReference?.blockId
@@ -115,11 +121,13 @@
 <aside class="panel" aria-labelledby="task-title">
   <header class="head">
     <div class="head__main">
-      {#if profile}<HarnessMark kind={profile.harness} size={22} />{/if}
+      {#if script}<span class="mark" aria-hidden="true"><Code size={14} /></span>{:else if profile}<HarnessMark kind={profile.harness} size={22} />{/if}
       <div class="head__text">
         <h2 id="task-title" title={view.name}>{view.name}</h2>
-        {#if profile}
-          <span class="muted">{[profile.name, harnessMeta(profile.harness).label, profile.model, profile.reasoning].filter(Boolean).join(' · ')}</span>
+        {#if script}
+          <span class="muted">{$t('Script')} · {RUNTIME_LABEL[script.runtime]} · {$t('{0} s limit', [script.timeoutSeconds])}</span>
+        {:else if profile}
+          <span class="muted">{[llm ? $t('Model call') : profile.name, harnessMeta(profile.harness).label, profile.model, profile.reasoning].filter(Boolean).join(' · ')}</span>
         {:else if view.step.router}
           <span class="muted">{$t('Router')}</span>
         {/if}
@@ -151,7 +159,10 @@
   {#if record?.failure}
     <div class="note note--danger" role="note">
       <TriangleAlert size={15} />
-      <p>{$t(failureText(record.failure.code))}</p>
+      <div class="note__body">
+        <p>{$t(failureText(record.failure.code))}</p>
+        {#if record.failure.detail}<pre class="detail">{record.failure.detail}</pre>{/if}
+      </div>
     </div>
   {/if}
   {#if !live}
@@ -178,6 +189,8 @@
           {#snippet leading()}<RotateCcw />{/snippet}
           {$t('Retry step')}
         </Button>
+      {/if}
+      {#if view.state === 'uncertain' && (view.sessionId || script)}
         <Button size="sm" disabled={!!busyKey || runs.safeMode} onclick={() => (reconcileOpen = true)}>
           {#snippet leading()}<ClipboardCheck />{/snippet}
           {$t('Record outcome…')}
@@ -243,7 +256,13 @@
               {/each}
             </dl>
           {/if}
-          {#if answer}
+          {#if record?.output}
+            <div class="answer">
+              {#if entries.length}<h3>{$t('Output')}</h3>{/if}
+              <pre class="output">{record.output.text}</pre>
+              {#if record.output.truncated}<p class="muted small">{$t('The output was longer than 256 KiB and was cut.')}</p>{/if}
+            </div>
+          {:else if answer}
             <div class="answer">
               {#if entries.length}<h3>{$t('Final answer')}</h3>{/if}
               <MarkdownContent source={answer} compact={true} />
@@ -283,14 +302,21 @@
               <RunInputsView {run} />
             </section>
           {/if}
+          {#if script}
+            <section>
+              <h3>{$t('Code')}</h3>
+              <pre class="output">{script.source}</pre>
+            </section>
+          {:else}
           <section>
-            <h3>{$t('Task')}</h3>
+            <h3>{llm ? $t('Prompt') : $t('Task')}</h3>
             {#if view.step.instructions}
               <MarkdownContent source={view.step.instructions} compact={true} />
             {:else}
               <p class="muted">{$t('No task text; the agent works from its role instructions.')}</p>
             {/if}
           </section>
+          {/if}
           {#if view.step.inputInstructions}
             <section>
               <h3>{$t('Expected input')}</h3>
@@ -351,7 +377,14 @@
   {/snippet}
 </Dialog>
 
-<Dialog bind:open={reconcileOpen} title={$t('Record what happened')} description={$t('After checking the linked native session, record an operator assertion. It reconciles the journal only.')} size="md">
+<Dialog
+  bind:open={reconcileOpen}
+  title={$t('Record what happened')}
+  description={script
+    ? $t('PiUI could not confirm how the script ended. Check its effects in the project folder, then record an operator assertion. It reconciles the journal only.')
+    : $t('After checking the linked native session, record an operator assertion. It reconciles the journal only.')}
+  size="md"
+>
   <div class="choices" role="radiogroup" aria-label={$t('Outcome')}>
     {#each [
       { value: 'succeeded', label: 'The step succeeded', note: 'Recording succeeded can unblock dependent tasks. It does not prove native completion.', disabled: !canRecordSucceeded(view.step) },
@@ -364,7 +397,12 @@
       </label>
     {/each}
   </div>
-  <Checkbox bind:checked={acknowledged} label={$t('I checked the linked native session and understand this is an operator assertion.')} />
+  <Checkbox
+    bind:checked={acknowledged}
+    label={script
+      ? $t('I checked what the script did and understand this is an operator assertion.')
+      : $t('I checked the linked native session and understand this is an operator assertion.')}
+  />
   {#snippet footer()}
     {#if view.sessionId}<Button variant="ghost" onclick={() => view.sessionId && onOpenSession(view.sessionId)}>{$t('Check native session')}</Button>{/if}
     <Button variant="primary" disabled={!acknowledged} loading={busyKey === `reconcile:${view.stepId}`} onclick={() => void reconcile()}>{$t('Record outcome')}</Button>
@@ -452,6 +490,29 @@
   }
   .note p {
     margin: 0;
+  }
+  .note__body {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+  }
+  .detail {
+    max-height: 180px;
+    color: var(--piui-text);
+  }
+  .output {
+    max-height: 420px;
+  }
+  .mark {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    background: var(--piui-surface-3);
+    color: var(--piui-text-muted);
   }
   .note--danger {
     border: 1px solid var(--piui-danger-border);

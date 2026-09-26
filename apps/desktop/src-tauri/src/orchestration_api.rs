@@ -20,9 +20,9 @@ use piui_orchestration::{
     AgentProfile, AgentRequestKind, AuthenticatedSender, CompletionOutcome, ControlledSpawnLease,
     Coordinator, CoordinatorError, FailureRecord, Harness, LaunchCommandReference, LaunchRequest,
     MessageIntent, NativeBridgeCapabilities, NativeExecutionReference, NativeHistoryReference,
-    PipelineDefinition, Run, RunDefinitionSnapshot, RunStatus, TaskStatus, TeamDefinition,
-    UncertainResolution, UncertaintyIdentity, authorize_coordinator_tool, authorize_observe,
-    authorize_send, validate_profile_capabilities,
+    PipelineDefinition, Run, RunDefinitionSnapshot, RunStatus, ScriptCompletion, ScriptLease,
+    TaskRecord, TaskStatus, TeamDefinition, UncertainResolution, UncertaintyIdentity,
+    authorize_coordinator_tool, authorize_observe, authorize_send, validate_profile_capabilities,
 };
 use piui_orchestration::{RunInputError, resolve_run_inputs, validate_pipeline_declarations};
 use serde::{Deserialize, Serialize};
@@ -101,7 +101,42 @@ impl From<CoordinatorError> for OrchestrationApiError {
 fn scheduler_error(
     error: crate::orchestration_scheduler::OrchestrationSchedulerError,
 ) -> OrchestrationApiError {
-    OrchestrationApiError { code: error.code }
+    // Step executor codes (v6.2) stay on the failed task record; the command
+    // contract keeps its established error codes.
+    let code = match error.code {
+        "llm-read-only-unsupported" => "unsupported-policy",
+        code if code.starts_with("script-") => "runtime-unavailable",
+        code => code,
+    };
+    OrchestrationApiError { code }
+}
+
+/// Application-data folder for running script steps (v6.2).
+const SCRIPT_WORK_DIRECTORY: &str = "orchestration-scripts";
+
+/// Every script ends its own folder. One left by an interrupted host holds
+/// only a stale copy of a frozen run source; anything older than the longest
+/// script timeout (with margin) cannot belong to a running script, even of
+/// another host instance sharing this application data.
+fn remove_stale_script_directories(root: &Path) {
+    let limit = std::time::Duration::from_secs(
+        2 * u64::from(piui_orchestration::MAX_SCRIPT_TIMEOUT_SECONDS),
+    );
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let stale = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > limit);
+        let is_directory = entry.file_type().is_ok_and(|kind| kind.is_dir());
+        if stale && is_directory {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 pub const ORCHESTRATION_EVENT_V4: &str = "piui://orchestration-event";
@@ -164,6 +199,9 @@ pub struct OrchestrationApiState {
     /// Writers serialize inside the store; readers take an immutable snapshot
     /// and never wait for a writer's serialization or fsync.
     store: OrchestrationStore,
+    /// Private application-data folder holding one fresh directory per
+    /// running script step (v6.2). Never inside a project.
+    script_work_root: std::path::PathBuf,
 }
 
 impl OrchestrationApiState {
@@ -183,7 +221,17 @@ impl OrchestrationApiState {
     pub fn open(app_data_dir: &Path) -> Result<Self, OrchestrationApiError> {
         let store = OrchestrationStore::open(app_data_dir)?;
         store.recover_interrupted_runs()?;
-        Ok(Self { store })
+        let script_work_root = app_data_dir.join(SCRIPT_WORK_DIRECTORY);
+        remove_stale_script_directories(&script_work_root);
+        Ok(Self {
+            store,
+            script_work_root,
+        })
+    }
+
+    /// Where the host writes the source of a running script step.
+    pub(crate) fn script_work_root(&self) -> &Path {
+        &self.script_work_root
     }
 
     pub fn get_run(
@@ -428,6 +476,152 @@ impl OrchestrationApiState {
             .map_err(Into::into)
     }
 
+    /// Durably leases the next ready script step before the host writes or
+    /// starts anything (v6.2).
+    pub fn lease_next_script(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+        expected_run_revision: u64,
+        lease_id: String,
+    ) -> Result<Option<ScriptLease>, OrchestrationApiError> {
+        self.store
+            .transact(|workspaces| {
+                let run = mutable_run(workspaces, workspace_id, run_id)?;
+                Coordinator::lease_next_script(run, expected_run_revision, lease_id)
+                    .map_err(|error| StoreError::from_api(error.into()))
+            })
+            .map_err(Into::into)
+    }
+
+    /// Commits a leased script as running immediately before its process
+    /// starts. The execution id is an opaque host id, not a session.
+    pub fn commit_script_lease(
+        &self,
+        workspace_id: &str,
+        lease: &ScriptLease,
+        execution_id: String,
+    ) -> Result<Run, OrchestrationApiError> {
+        self.store
+            .transact(|workspaces| {
+                let run = mutable_run(workspaces, workspace_id, &lease.run_id)?;
+                let current_run_revision = run.revision();
+                Coordinator::dispatch_leased_script(
+                    run,
+                    current_run_revision,
+                    &lease.step_id,
+                    lease.task_revision,
+                    &lease.lease_id,
+                    NativeExecutionReference { id: execution_id },
+                )
+                .map_err(|error| match error {
+                    CoordinatorError::RevisionConflict { .. }
+                    | CoordinatorError::LeaseConflict { .. } => StoreError::Conflict,
+                    _ => StoreError::Invalid,
+                })?;
+                Ok(run.clone())
+            })
+            .map_err(Into::into)
+    }
+
+    /// Records a certain pre-execution failure of a leased script: nothing
+    /// was started, so the task fails instead of becoming uncertain.
+    pub fn reject_leased_script(
+        &self,
+        workspace_id: &str,
+        lease: &ScriptLease,
+        failure_code: &str,
+    ) -> Result<Run, OrchestrationApiError> {
+        self.store
+            .transact(|workspaces| {
+                let run = mutable_run(workspaces, workspace_id, &lease.run_id)?;
+                let revision = run.revision();
+                Coordinator::release_task_lease(
+                    run,
+                    revision,
+                    &lease.step_id,
+                    lease.task_revision,
+                    &lease.lease_id,
+                )
+                .map_err(|_| StoreError::Conflict)?;
+                let revision = run.revision();
+                let task_revision = run
+                    .tasks()
+                    .iter()
+                    .find(|task| task.step_id() == lease.step_id)
+                    .map(TaskRecord::revision)
+                    .ok_or(StoreError::NotFound)?;
+                Coordinator::reject_ready_task(
+                    run,
+                    revision,
+                    &lease.step_id,
+                    task_revision,
+                    FailureRecord::new(failure_code),
+                )
+                .map_err(|_| StoreError::Conflict)?;
+                Ok(run.clone())
+            })
+            .map_err(Into::into)
+    }
+
+    /// Returns a leased script to ready when the host stopped before any
+    /// side effect (for example a cancellation raced the admission).
+    pub fn release_script_lease(
+        &self,
+        workspace_id: &str,
+        lease: &ScriptLease,
+    ) -> Result<Run, OrchestrationApiError> {
+        self.store
+            .transact(|workspaces| {
+                let run = mutable_run(workspaces, workspace_id, &lease.run_id)?;
+                let revision = run.revision();
+                Coordinator::release_task_lease(
+                    run,
+                    revision,
+                    &lease.step_id,
+                    lease.task_revision,
+                    &lease.lease_id,
+                )
+                .map_err(|_| StoreError::Conflict)?;
+                Ok(run.clone())
+            })
+            .map_err(Into::into)
+    }
+
+    /// Trusted script outcome observed by the host. As for native terminal
+    /// events there is no Tauri command for this operation.
+    pub fn record_script_outcome(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+        step_id: &str,
+        execution_id: &str,
+        completion: ScriptCompletion,
+    ) -> Result<Run, OrchestrationApiError> {
+        self.store
+            .transact(|workspaces| {
+                let run = mutable_run(workspaces, workspace_id, run_id)?;
+                let revision = run.revision();
+                let task_revision = run
+                    .tasks()
+                    .iter()
+                    .find(|task| task.step_id() == step_id)
+                    .map(TaskRecord::revision)
+                    .ok_or(StoreError::NotFound)?;
+                Coordinator::complete_script_task(
+                    run,
+                    revision,
+                    step_id,
+                    task_revision,
+                    execution_id,
+                    completion,
+                )
+                .map_err(|_| StoreError::Conflict)?;
+                Ok(run.clone())
+            })
+            .map_err(Into::into)
+    }
+
     pub fn reject_ready_task(
         &self,
         workspace_id: &str,
@@ -445,7 +639,7 @@ impl OrchestrationApiState {
                     current_run_revision,
                     step_id,
                     expected_task_revision,
-                    FailureRecord { code: failure_code },
+                    FailureRecord::new(failure_code),
                 )
                 .map_err(|error| match error {
                     CoordinatorError::RevisionConflict { .. } => StoreError::Conflict,
@@ -1827,7 +2021,7 @@ pub async fn orchestration_run_usage_v6(
     .await
 }
 
-fn orchestration_run_usage(
+pub(crate) fn orchestration_run_usage(
     state: &OrchestrationApiState,
     host_state: &HostState,
     request: &RunRequest,
@@ -1838,6 +2032,16 @@ fn orchestration_run_usage(
         .ok_or_else(OrchestrationApiError::not_found)?;
     let mut usage = std::collections::BTreeMap::new();
     for task in run.tasks().iter().chain(run.attempts()) {
+        // A script execution is host work with no session or model usage.
+        let script = run
+            .definition()
+            .pipeline
+            .steps
+            .iter()
+            .any(|step| step.id == task.step_id() && step.is_script());
+        if script {
+            continue;
+        }
         if let Some(execution) = task.execution() {
             let receipts = host_state
                 .workspace
@@ -2211,7 +2415,7 @@ pub async fn orchestration_reconcile_uncertain_task_v6(
             UncertainResolution::Succeeded { result_reference }
         }
         ReconcileResolution::Failed { failure_code } => UncertainResolution::Failed {
-            failure: FailureRecord { code: failure_code },
+            failure: FailureRecord::new(failure_code),
         },
         ReconcileResolution::Cancelled => UncertainResolution::Cancelled,
     };
@@ -2539,6 +2743,25 @@ mod tests {
     use super::{AgentToolOperation, AgentToolRequest};
 
     #[test]
+    fn step_executor_codes_keep_the_command_error_contract() {
+        use crate::orchestration_scheduler::OrchestrationSchedulerError;
+        for (code, expected) in [
+            ("llm-read-only-unsupported", "unsupported-policy"),
+            ("script-runtime-unavailable", "runtime-unavailable"),
+            ("script-input-unavailable", "runtime-unavailable"),
+            ("script-start-failed", "runtime-unavailable"),
+            ("unsupported-policy", "unsupported-policy"),
+            ("conflict", "conflict"),
+            ("native-outcome-uncertain", "native-outcome-uncertain"),
+        ] {
+            assert_eq!(
+                super::scheduler_error(OrchestrationSchedulerError { code }).code,
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn dynamic_spawn_request_replays_committed_identity_without_duplicate_agent() {
         use super::*;
         let root = std::env::temp_dir().join(format!("piui-spawn-api-{}", uuid::Uuid::new_v4()));
@@ -2718,7 +2941,7 @@ fn put_graph_definition<T: DefinitionValue>(
     Ok(())
 }
 
-fn save_graph(
+pub(crate) fn save_graph(
     state: &OrchestrationApiState,
     request: SaveGraphRequest,
 ) -> Result<(), OrchestrationApiError> {

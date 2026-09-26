@@ -321,6 +321,20 @@ export function taskTurn(context: TurnContext, prompt: string, resultText: strin
   ];
 }
 
+/** A single model call (`llm` step): the prompt and one short answer, with no tool work. */
+export function oneShotTurn(context: TurnContext, prompt: string, resultText: string): TurnStep[] {
+  const random = createRandom(`${context.sessionId}:call:${context.turn}`);
+  const ids = idsFor(context, 'c');
+  return [
+    { kind: 'status', status: 'running' },
+    { kind: 'block', block: { ...textBlock(context, 'user', ids.next()), text: prompt } },
+    wait(random.int(200, 400)),
+    ...streamSteps(textBlock(context, 'assistant', ids.next()), resultText, random, streamStyle(context.harness), [10, 30]),
+    usageStep(context, random),
+    { kind: 'end', outcome: 'succeeded' },
+  ];
+}
+
 /**
  * The remainder of a task turn that was already under way when the lab
  * started: a slow test run and two more commands (about a minute of visible

@@ -1,11 +1,11 @@
 import type { AgentGraph } from './agentGraph';
 import type { HarnessModelsResult } from '../../../../../contracts/harness-models-v18';
 import type { AgentProfile } from '../../../../../contracts/orchestration-v6';
-import { profileConfigurationErrors } from '../../harness-adapters/validation';
+import { executorConfigurationErrors, profileConfigurationErrors } from '../../harness-adapters/validation';
 export interface PreflightIssue { nodeId: string; message: string }
-/** Catalog preflight is advisory freshness; the trusted host rechecks launch authority. */
+/** Catalog preflight is advisory freshness; the trusted host rechecks launch authority. Scripts have no native profile. */
 export async function preflightGraph(graph: AgentGraph, catalog: (harness: AgentProfile['harness']) => Promise<HarnessModelsResult>): Promise<PreflightIssue[]> {
-  const nativeNodes = graph.nodes.filter(node => node.kind !== 'router' || node.router?.mode === 'agent');
+  const nativeNodes = graph.nodes.filter(node => (node.kind !== 'router' || node.router?.mode === 'agent') && node.executor?.type !== 'script');
   const catalogs = new Map<AgentProfile['harness'], HarnessModelsResult>();
   const failed = new Set<AgentProfile['harness']>();
   await Promise.all([...new Set(nativeNodes.map(node => node.profile.harness))].map(async harness => {
@@ -13,11 +13,11 @@ export async function preflightGraph(graph: AgentGraph, catalog: (harness: Agent
     catch { failed.add(harness); }
   }));
   const issues: PreflightIssue[] = [];
-  for (const node of graph.nodes) {
-    if (node.kind === 'router' && node.router?.mode === 'program') continue;
+  for (const node of nativeNodes) {
     const add = (message: string) => issues.push({nodeId:node.id,message});
     const profile = node.profile;
     for (const message of profileConfigurationErrors(node.id,profile)) add(message);
+    for (const message of executorConfigurationErrors(node.id,node.executor,profile)) add(message);
     if (failed.has(profile.harness)) { add('Could not verify the native catalog. Check the harness connection.'); continue; }
     const models = catalogs.get(profile.harness);
     const model = models?.models.find(model => model.id === profile.model && model.provider === profile.modelProvider);

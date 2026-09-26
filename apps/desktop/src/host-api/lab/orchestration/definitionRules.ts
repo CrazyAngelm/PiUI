@@ -5,6 +5,7 @@ import type {
 import { CLAUDE_SIGN_IN_MESSAGE } from '../catalogFake';
 import type { LabOrchestrationWorkspace } from '../labState';
 import { pipelineInputIssues, reviewLimitValid } from '../../runInputs';
+import { executorAuthorityIssue, isScriptStep, LLM_READ_ONLY_UNSUPPORTED, llmProfileIssue, stepExecutorIssue } from '../../stepExecutors';
 
 /**
  * Definition rules from `piui-orchestration/validation.rs`, the per-kind
@@ -99,7 +100,8 @@ function stepIssue(steps: readonly PipelineStep[], step: PipelineStep, members: 
   const fields = (step.resultFields ?? []).map((field) => field.name);
   if (fields.some(blank) || duplicates(fields)) return 'result fields';
   if (blank(step.name)) return 'step name';
-  if (step.router?.mode !== 'program' && !members.has(step.assignedMemberId)) return 'assigned member';
+  // Program routers and scripts are coordinator and host work, not members.
+  if (step.router?.mode !== 'program' && !isScriptStep(step) && !members.has(step.assignedMemberId)) return 'assigned member';
   if (duplicates(step.dependencyStepIds) || step.dependencyStepIds.some((id) => !steps.some((candidate) => candidate.id === id))) {
     return 'dependencies';
   }
@@ -121,10 +123,14 @@ function acyclic(steps: readonly PipelineStep[]): boolean {
   return visited === steps.length;
 }
 
-/** `validate_pipeline_declarations`: run input declarations, then review loop bounds. */
+/** `validate_pipeline_declarations`: run input declarations, review loop bounds and step executors. */
 export function pipelineDeclarationIssue(pipeline: PipelineDefinition): string | undefined {
   if (pipelineInputIssues(pipeline.inputs).length > 0) return 'run inputs';
-  if (pipeline.steps.some((step) => !reviewLimitValid(step.review))) return 'review limit';
+  for (const step of pipeline.steps) {
+    if (!reviewLimitValid(step.review)) return 'review limit';
+    const executor = stepExecutorIssue(step);
+    if (executor !== undefined) return executor;
+  }
   return undefined;
 }
 
@@ -164,7 +170,7 @@ export function definitionIssue(snapshot: RunDefinitionSnapshot): string | undef
   if (stepIds.some(blank) || duplicates(stepIds)) return 'step ids';
   const members = new Set(memberIds);
   for (const step of steps) {
-    const issue = stepIssue(steps, step, members);
+    const issue = stepIssue(steps, step, members) ?? executorAuthorityIssue(snapshot, step);
     if (issue !== undefined) return issue;
   }
   if (!acyclic(steps)) return 'dependency cycle';
@@ -290,6 +296,19 @@ export function launchPolicyIssue(profile: AgentProfile, summary: HarnessSummary
     || (claude && profile.toolPolicy.rules.some((rule) => rule.enforcement === 'native' && rule.decision === 'allow'
       && claudeAllowUnsatisfiable(profile, rule.tool)));
   return unsupported ? 'unsupported-policy' : undefined;
+}
+
+/**
+ * `one_shot_launch_policy`: an `llm` step needs a harness with a read-only
+ * mode and a least-authority profile; then the ordinary adapter refusals apply.
+ */
+export function oneShotPolicyIssue(
+  profile: AgentProfile,
+  summary: HarnessSummary | undefined,
+): OrchestrationHostErrorCode | typeof LLM_READ_ONLY_UNSUPPORTED | undefined {
+  if (!PERMISSION_MODES[profile.harness].includes('read-only')) return LLM_READ_ONLY_UNSUPPORTED;
+  if (llmProfileIssue(profile) !== undefined) return 'unsupported-policy';
+  return launchPolicyIssue(profile, summary);
 }
 
 /** `Option<T>` fields decoded from `null` are stored as absent; JSON values keep their nulls. */

@@ -42,6 +42,9 @@
               "router"
             ]
           },
+          "executor": {
+            "$ref": "#/definitions/executor"
+          },
           "profile": {
             "$ref": "#/definitions/profile"
           },
@@ -243,6 +246,56 @@
   ],
   "additionalProperties": false,
   "definitions": {
+    "executor": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "enum": [
+                "agent",
+                "llm"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "script"
+            },
+            "runtime": {
+              "enum": [
+                "node",
+                "python",
+                "powershell"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            }
+          },
+          "required": [
+            "type",
+            "runtime",
+            "source",
+            "timeoutSeconds"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
     "runInput": {
       "type": "object",
       "properties": {

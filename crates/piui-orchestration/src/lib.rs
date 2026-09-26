@@ -8,6 +8,15 @@
 #![forbid(unsafe_code)]
 
 mod coordinator;
+mod executors;
+pub use executors::{
+    DependencyOutput, ExecutorKind, MAX_FAILURE_DETAIL_BYTES, MAX_SCRIPT_SOURCE_BYTES,
+    MAX_SCRIPT_STDERR_BYTES, MAX_SCRIPT_STDOUT_BYTES, MAX_SCRIPT_TIMEOUT_SECONDS,
+    MIN_SCRIPT_TIMEOUT_SECONDS, SCRIPT_FAILED, SCRIPT_INPUT_UNAVAILABLE,
+    SCRIPT_RUNTIME_UNAVAILABLE, SCRIPT_START_FAILED, SCRIPT_TIMEOUT, ScriptCompletion,
+    ScriptDependency, ScriptLease, ScriptRuntime, StepExecutor, TaskOutput, bounded_text,
+    failure_detail,
+};
 mod flow;
 pub use flow::*;
 mod inputs;
@@ -32,6 +41,8 @@ pub use validation::{
     validate_history_reference, validate_profile_capabilities,
 };
 
+#[cfg(test)]
+mod executor_tests;
 #[cfg(test)]
 mod input_tests;
 #[cfg(test)]

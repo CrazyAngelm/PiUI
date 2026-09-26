@@ -1,4 +1,4 @@
-import type { AgentProfile } from '../../../../contracts/orchestration-v6';
+import type { AgentProfile, StepExecutor } from '../../../../contracts/orchestration-v6';
 import { CLAUDE_CODE_EFFORT_LEVELS } from './claude-code';
 import { harnessConfigurations } from './index';
 
@@ -40,4 +40,21 @@ export function profileConfigurationErrors(id: string, profile: Omit<AgentProfil
       errors.push(`${id}: Claude Code runs only Anthropic models.`);
     }
   return errors;
+}
+
+/**
+ * Static adapter checks of a step executor (orchestration v6.2). A single
+ * model call needs a harness that runs it read-only; the host refuses the
+ * others with `llm-read-only-unsupported` before anything starts.
+ */
+export function executorConfigurationErrors(
+  id: string,
+  executor: StepExecutor | undefined,
+  profile: Pick<AgentProfile, 'harness'>,
+): string[] {
+  if (executor?.type !== 'llm') return [];
+  const configuration = harnessConfigurations[profile.harness];
+  return configuration.oneShot && configuration.permissionModes.includes('read-only')
+    ? []
+    : [`${id}: ${configuration.name} cannot run a single model call read-only.`];
 }

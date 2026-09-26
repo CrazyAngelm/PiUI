@@ -10,7 +10,14 @@ import type {
   SaveDefinitionRequest,
   StoredDefinition,
 } from '../../host-api/orchestrationClient';
-import { compileGraph, type AgentGraph, type GraphEdge, type GraphNode } from '../../features/orchestration/agentGraph';
+import {
+  compileGraph,
+  nodeHasNoMember,
+  placeholderProfile,
+  type AgentGraph,
+  type GraphEdge,
+  type GraphNode,
+} from '../../features/orchestration/agentGraph';
 
 export type Revisions = Map<string, number>;
 
@@ -54,19 +61,6 @@ export function writePositions(workspaceId: string, graph: AgentGraph): void {
   }
 }
 
-function routerProfile(name: string): AgentProfile {
-  return {
-    id: crypto.randomUUID(),
-    name,
-    harness: 'codex',
-    model: 'router',
-    permissionMode: 'read-only',
-    instructions: '',
-    serviceTier: 'standard',
-    toolPolicy: { rules: [] },
-    allowedSpawnProfileIds: [],
-  };
-}
 
 /** Rebuilds the canvas graph for a saved launch command. */
 export async function openGraph(client: OrchestrationClient, workspaceId: string, commandId: string): Promise<OpenedGraph> {
@@ -84,14 +78,20 @@ export async function openGraph(client: OrchestrationClient, workspaceId: string
   );
 
   const nodes: GraphNode[] = pipeline.value.steps.map((step, index) => {
-    const programRouter = step.router?.mode === 'program';
+    const kind = step.router ? 'router' : 'agent';
+    // Program routers and scripts have no team member, only a placeholder profile.
+    const script = step.executor?.type === 'script';
+    const noMember = nodeHasNoMember({ kind, router: step.router, executor: step.executor });
     const member = team.value.members.find((item) => item.id === step.assignedMemberId);
     const profile = member ? profiles.get(member.profileId) : undefined;
-    if (!profile && !programRouter) throw new GraphDocumentError('An agent in this system has no saved profile.');
+    if (!profile && !noMember) throw new GraphDocumentError('An agent in this system has no saved profile.');
     return {
-      kind: step.router ? 'router' : 'agent',
+      kind,
+      ...(step.executor ? { executor: step.executor } : {}),
       id: step.id,
-      profile: profile?.value ?? routerProfile(step.name || `Router ${index + 1}`),
+      profile:
+        profile?.value ??
+        placeholderProfile(step.name || (script ? `Script ${index + 1}` : `Router ${index + 1}`), script ? 'script' : 'router'),
       router: step.router,
       task: step.instructions,
       inputBindings: step.inputBindings ? [...step.inputBindings] : undefined,
@@ -106,7 +106,7 @@ export async function openGraph(client: OrchestrationClient, workspaceId: string
     };
   });
 
-  const agentNodes = nodes.filter((node) => node.kind !== 'router' || node.router?.mode === 'agent');
+  const agentNodes = nodes.filter((node) => !nodeHasNoMember(node));
   const reusesMembers =
     new Set(agentNodes.map((node) => node.profile.id)).size !== agentNodes.length ||
     team.value.members.some((member) => !pipeline.value.steps.some((step) => step.id === member.id && step.assignedMemberId === member.id));

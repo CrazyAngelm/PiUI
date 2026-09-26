@@ -43,6 +43,11 @@ pub enum DefinitionError {
     InvalidInput { name: String, reason: &'static str },
     #[error("review on step {step_id} must bound its rounds between 1 and 20")]
     InvalidReviewLimit { step_id: String },
+    #[error("step {step_id} cannot use its executor: {reason}")]
+    InvalidExecutor {
+        step_id: String,
+        reason: &'static str,
+    },
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -68,6 +73,8 @@ pub enum AuthorizationError {
     },
     #[error("member {member_id} is denied coordinator operation {tool}")]
     CoordinatorToolDenied { member_id: String, tool: String },
+    #[error("step {step_id} is not an agent step and cannot be spawned")]
+    StepNotSpawnable { step_id: String },
 }
 
 pub fn validate_definition(snapshot: &RunDefinitionSnapshot) -> Result<(), DefinitionError> {
@@ -371,10 +378,13 @@ fn validate_pipeline(snapshot: &RunDefinitionSnapshot) -> Result<(), DefinitionE
             }
         }
         require_nonempty("step name", &step.name)?;
+        // Program routers and scripts are coordinator and host work; every
+        // other step runs as a team member's native session.
         if step
             .router
             .as_ref()
             .is_none_or(|router| router.mode == RouterMode::Agent)
+            && !step.is_script()
             && !members.contains(step.assigned_member_id.as_str())
         {
             return Err(DefinitionError::MissingId {
@@ -382,6 +392,7 @@ fn validate_pipeline(snapshot: &RunDefinitionSnapshot) -> Result<(), DefinitionE
                 id: step.assigned_member_id.clone(),
             });
         }
+        crate::executors::validate_executor_authority(snapshot, step, &members)?;
         let mut dependencies = BTreeSet::new();
         for dependency in &step.dependency_step_ids {
             if !steps.contains(dependency.as_str()) {

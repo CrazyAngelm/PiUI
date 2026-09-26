@@ -11,6 +11,8 @@
   import Download from '@lucide/svelte/icons/download';
   import Bot from '@lucide/svelte/icons/bot';
   import Split from '@lucide/svelte/icons/split';
+  import Code from '@lucide/svelte/icons/code';
+  import MessageSquareText from '@lucide/svelte/icons/message-square-text';
   import Library from '@lucide/svelte/icons/library';
   import CircleAlert from '@lucide/svelte/icons/circle-alert';
   import CircleCheck from '@lucide/svelte/icons/circle-check';
@@ -25,6 +27,7 @@
   import NodeInspector from './NodeInspector.svelte';
   import StartInspector from './StartInspector.svelte';
   import { profileForHarness } from '../../harness-adapters/normalize';
+  import { harnessConfigurations } from '../../harness-adapters';
   import RunInputsDialog from './inputs/RunInputsDialog.svelte';
   import { START_NODE_ID } from './canvas/StartNodeCard.svelte';
   import { PipelineEditorStore } from './editorStore.svelte';
@@ -75,6 +78,14 @@
   const defaultHarness = $derived<AgentProfile['harness']>(
     (workspace.catalog.harnesses.find((item) => item.status === 'available')?.kind as AgentProfile['harness'] | undefined) ?? 'codex',
   );
+  /** A model call needs a harness that can run one read-only turn without tools. */
+  const oneShotHarness = $derived<AgentProfile['harness']>(
+    harnessConfigurations[defaultHarness].oneShot
+      ? defaultHarness
+      : ((workspace.catalog.harnesses.find(
+          (item) => item.status === 'available' && harnessConfigurations[item.kind as AgentProfile['harness']]?.oneShot,
+        )?.kind as AgentProfile['harness'] | undefined) ?? 'codex'),
+  );
   const systemItems = $derived<PickerItem[]>(editor.systems.map((item) => ({ value: item.id, label: item.name || $t('Untitled pipeline') })));
   const profileItems = $derived<PickerItem[]>(editor.profiles.map((item) => ({ value: item.id, label: item.name })));
 
@@ -98,16 +109,18 @@
     return model ? { model: model.id, ...(model.provider ? { modelProvider: model.provider } : {}) } : undefined;
   }
 
-  async function addAt(kind: 'agent' | 'router', screen: { x: number; y: number } | undefined = undefined): Promise<void> {
+  async function addAt(kind: 'agent' | 'router' | 'llm' | 'script', screen: { x: number; y: number } | undefined = undefined): Promise<void> {
     if (editor.readOnly) return;
     const point = screen && api ? api.toFlow(screen) : (api?.viewportCenter() ?? { x: 80, y: 80 });
     const id = editor.addNode(kind, { x: point.x - 124, y: point.y - 50 });
-    if (kind !== 'agent') return;
-    const harness = defaultHarness;
+    if (kind !== 'agent' && kind !== 'llm') return;
+    const harness = kind === 'llm' ? oneShotHarness : defaultHarness;
     const current = editor.graph.nodes.find((node) => node.id === id)?.profile;
     if (!current) return;
     const moved = profileForHarness(current, harness);
-    editor.updateProfile(id, { ...moved, serviceTier: moved.serviceTier, networkAccess: moved.networkAccess, ...((await defaultModel(harness)) ?? {}) });
+    // A model call stays read-only, offline and without tools on every harness.
+    const locked = kind === 'llm' ? { permissionMode: 'read-only' as const, networkAccess: undefined } : { networkAccess: moved.networkAccess };
+    editor.updateProfile(id, { ...moved, serviceTier: moved.serviceTier, ...locked, ...((await defaultModel(harness)) ?? {}) });
   }
 
   async function addFromLibrary(profileId: string): Promise<void> {
@@ -290,6 +303,8 @@
             { type: 'label', label: $t('Add to canvas') },
             { label: $t('Agent'), icon: Bot, onSelect: () => void addAt('agent') },
             { label: $t('Router'), icon: Split, onSelect: () => void addAt('router') },
+            { label: $t('Model call'), icon: MessageSquareText, onSelect: () => void addAt('llm') },
+            { label: $t('Script'), icon: Code, onSelect: () => void addAt('script') },
             ...(profileItems.length
               ? [{ type: 'separator' as const }, { type: 'label' as const, label: $t('From library') }, ...profileItems.slice(0, 8).map((item) => ({ label: item.label, icon: Library, onSelect: () => void addFromLibrary(item.value) }))]
               : []),

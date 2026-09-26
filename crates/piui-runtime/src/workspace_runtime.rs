@@ -2262,7 +2262,7 @@ fn package_version(entry: &Path) -> Option<String> {
     None
 }
 
-fn resolve_node() -> Result<PathBuf, NativeRuntimeError> {
+pub(crate) fn resolve_node() -> Result<PathBuf, NativeRuntimeError> {
     if let Some(value) = std::env::var_os("PIUI_NODE") {
         let path = PathBuf::from(value);
         if path.is_absolute() && path.is_file() {

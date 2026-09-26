@@ -188,3 +188,61 @@ describe('portable system files', () => {
     expect(reopened.edges.find(edge => edge.kind === 'route')?.branchId).toBe(branches[0]!.id);
   });
 });
+
+describe('step executors in system files (v4, orchestration v6.2)', () => {
+  const mixed = () => JSON.parse(readFileSync(new URL('../../../../../examples/systems/agent-script-llm.piui.json', import.meta.url), 'utf8'));
+  it('round-trips an agent, a script and a single model call without dropping fields', () => {
+    const file = mixed();
+    const graph = systemFileToGraph(parseSystemFile(JSON.stringify(file)));
+    expect(graph.nodes.map(node => node.executor?.type ?? 'agent')).toEqual(['agent', 'script', 'llm']);
+    const compiled = compileGraph(graph);
+    // The script is host work: no profile and no team member.
+    expect(compiled.profiles.map(profile => profile.name)).toEqual(['Dependency audit', 'Audit summary']);
+    expect(compiled.team.members.map(member => member.id)).toEqual(['audit', 'summary']);
+    const [, count, summary] = compiled.pipeline.steps;
+    expect(count?.executor).toEqual(file.agents[1].executor);
+    expect(count?.assignedMemberId).toBe('count');
+    expect(summary?.executor).toEqual({ type: 'llm' });
+    const text = serializeSystemFile(graph);
+    const reopened = parseSystemFile(text);
+    expect(reopened.agents.map(agent => agent.executor)).toEqual(file.agents.map((agent: { executor?: unknown }) => agent.executor));
+    expect(reopened.agents[1]!.executor).toMatchObject({ source: file.agents[1].executor.source, timeoutSeconds: 30 });
+    expect(JSON.parse(text).agents[0]).not.toHaveProperty('executor');
+  });
+  it.each([
+    ['an unknown runtime', (file: SystemFileJson) => { file.agents[1].executor.runtime = 'bash'; }],
+    ['an unknown executor field', (file: SystemFileJson) => { file.agents[1].executor.cwd = '/tmp'; }],
+    ['an llm field', (file: SystemFileJson) => { file.agents[2].executor.model = 'other'; }],
+    ['a zero timeout', (file: SystemFileJson) => { file.agents[1].executor.timeoutSeconds = 0; }],
+    ['a fractional timeout', (file: SystemFileJson) => { file.agents[1].executor.timeoutSeconds = 1.5; }],
+    ['blank source', (file: SystemFileJson) => { file.agents[1].executor.source = '  '; }],
+    ['source over 64 KiB', (file: SystemFileJson) => { file.agents[1].executor.source = 'é'.repeat(32 * 1024 + 1); }],
+    ['a script router', (file: SystemFileJson) => { file.agents[1].kind = 'router'; }],
+    ['a callable script', (file: SystemFileJson) => { file.agents[1].executionMode = 'callable'; }],
+    ['script input mappings', (file: SystemFileJson) => { file.agents[1].inputBindings = [{ sourceStepId: 'audit', field: 'dependencies', name: 'list' }]; }],
+    ['a script orchestrator', (file: SystemFileJson) => { file.orchestrator = 'count'; }],
+    ['messages to a script', (file: SystemFileJson) => { file.connections.push({ from: 'audit', to: 'count', kind: 'send' }); }],
+    ['an observed model call', (file: SystemFileJson) => { file.connections.push({ from: 'audit', to: 'summary', kind: 'observe' }); }],
+    ['a delegating model call', (file: SystemFileJson) => { file.connections.push({ from: 'summary', to: 'audit', kind: 'spawn' }); }],
+    ['a writable model call', (file: SystemFileJson) => { file.agents[2].profile.permissionMode = 'workspace-write'; }],
+    ['a networked model call', (file: SystemFileJson) => { file.agents[2].profile.networkAccess = true; }],
+    ['a model call with tools', (file: SystemFileJson) => { file.agents[2].profile.harness = 'pi'; delete file.agents[2].profile.serviceTier; file.agents[2].profile.toolPolicy.rules = [{ tool: 'read', decision: 'allow', enforcement: 'native', mandatory: true }]; }],
+    ['a model call without a read-only mode', (file: SystemFileJson) => { file.agents[2].profile.harness = 'prime-agent'; }],
+    ['a model call on Hermes', (file: SystemFileJson) => { file.agents[2].profile.harness = 'hermes'; delete file.agents[2].profile.serviceTier; }],
+    ['only host scripts', (file: SystemFileJson) => { file.agents = [file.agents[1]]; file.connections = []; delete file.orchestrator; }],
+  ])('rejects %s without dropping it', (_case, change) => {
+    const file = mixed();
+    parseSystemFile(JSON.stringify(file));
+    change(file);
+    expect(() => parseSystemFile(JSON.stringify(file))).toThrow();
+  });
+  it('keeps executors out of legacy versions', () => {
+    const file = mixed(); file.version = 3;
+    expect(() => parseSystemFile(JSON.stringify(file))).toThrow();
+  });
+  it('accepts an explicit agent executor and keeps it', () => {
+    const file = mixed(); file.agents[0].executor = { type: 'agent' };
+    const reopened = parseSystemFile(serializeSystemFile(systemFileToGraph(parseSystemFile(JSON.stringify(file)))));
+    expect(reopened.agents[0]!.executor).toEqual({ type: 'agent' });
+  });
+});

@@ -14,7 +14,7 @@
   import { harnessConfigurations, permissionLabels } from '../../harness-adapters';
   import { t } from '../locale/language';
   import { orchestrationHost, orchestrationError, type OrchestrationClient, type DefinitionSummary, type AgentProfile, type SaveDefinitionRequest, type StoredDefinition } from '../../host-api/orchestrationClient';
-  import { emptyGraph, newGraphNode, newRouterNode, compileGraph, graphIssues, patternEdges, type AgentGraph, type GraphNode, type ConnectionKind } from './agentGraph';
+  import { emptyGraph, newGraphNode, newRouterNode, compileGraph, graphIssues, patternEdges, placeholderProfile, type AgentGraph, type GraphNode, type ConnectionKind } from './agentGraph';
   import { arrangeResultDependencies, unoccupiedPosition, graphNodeHeight, graphBounds, GRAPH_NODE_WIDTH, GRAPH_PORT_Y } from './graphLayout';
   import RouterSettings from './RouterSettings.svelte';
   import GraphCanvas from '../../components/GraphCanvas.svelte';
@@ -329,11 +329,13 @@
       const profiles = new Map(storedProfiles.filter((profile): profile is StoredDefinition<AgentProfile> => profile !== null).map(profile => [profile.value.id, profile]));
       const nodes = pipeline.value.steps.map((step, index) => {
         const isProgramRouter = step.router?.mode === 'program';
+        // Program routers and scripts have no team member; their placeholder profile only names the step.
+        const isScript = step.executor?.type === 'script';
         const member = team.value.members.find(item => item.id === step.assignedMemberId);
         const profile = member && profiles.get(member.profileId);
-        const fallbackProfile: AgentProfile = { id: crypto.randomUUID(), name: step.name || `Router ${index + 1}`, harness: 'codex', model: 'router', permissionMode: 'read-only', instructions: '', serviceTier: 'standard', toolPolicy: { rules: [] }, allowedSpawnProfileIds: [] };
-        if (!profile && !isProgramRouter) throw new Error('Missing agent profile');
-        return { kind: step.router ? 'router' as const : 'agent' as const, id: step.id, profile: profile?.value ?? fallbackProfile, router: step.router, task: step.instructions, inputBindings: step.inputBindings ? [...step.inputBindings] : undefined, condition: step.condition, review: step.review, requireApproval: step.requireApproval, resultFields: step.resultFields ? [...step.resultFields] : undefined, executionMode: step.executionMode, input: step.inputInstructions, x: 60 + index * 280, y: 100 };
+        const fallbackProfile: AgentProfile = placeholderProfile(step.name || (isScript ? `Script ${index + 1}` : `Router ${index + 1}`), isScript ? 'script' : 'router');
+        if (!profile && !isProgramRouter && !isScript) throw new Error('Missing agent profile');
+        return { kind: step.router ? 'router' as const : 'agent' as const, id: step.id, ...(step.executor ? { executor: step.executor } : {}), profile: profile?.value ?? fallbackProfile, router: step.router, task: step.instructions, inputBindings: step.inputBindings ? [...step.inputBindings] : undefined, condition: step.condition, review: step.review, requireApproval: step.requireApproval, resultFields: step.resultFields ? [...step.resultFields] : undefined, executionMode: step.executionMode, input: step.inputInstructions, x: 60 + index * 280, y: 100 };
       });
       // A member may own several steps in older definitions; preserve the original editors for those graphs.
       if (new Set(nodes.filter(node => node.kind !== 'router' || node.router?.mode === 'agent').map(node => node.profile.id)).size !== nodes.filter(node => node.kind !== 'router' || node.router?.mode === 'agent').length || team.value.members.some(member => !pipeline.value.steps.some(step => step.id === member.id && step.assignedMemberId === member.id))) throw new Error('This definition uses reusable members. Open it in Library to preserve its assignments.');

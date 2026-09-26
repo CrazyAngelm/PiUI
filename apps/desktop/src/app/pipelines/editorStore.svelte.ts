@@ -22,7 +22,9 @@ import {
   emptyGraph,
   graphIssues,
   newGraphNode,
+  newLlmNode,
   newRouterNode,
+  newScriptNode,
   type AgentGraph,
   type ConnectionKind,
   type GraphIssue,
@@ -297,8 +299,10 @@ export class PipelineEditorStore {
     if (node) this.updateNode(id, { profile: { ...node.profile, ...change } }, live);
   }
 
-  addNode(kind: 'agent' | 'router', position: { x: number; y: number }): string {
-    const node = kind === 'router' ? newRouterNode(this.graph.nodes.length) : newGraphNode(this.graph.nodes.length);
+  addNode(kind: 'agent' | 'router' | 'llm' | 'script', position: { x: number; y: number }): string {
+    const index = this.graph.nodes.length;
+    const node =
+      kind === 'router' ? newRouterNode(index) : kind === 'llm' ? newLlmNode(index) : kind === 'script' ? newScriptNode(index) : newGraphNode(index);
     node.x = Math.round(position.x);
     node.y = Math.round(position.y);
     this.commit({ ...this.graph, nodes: [...this.graph.nodes, node] });

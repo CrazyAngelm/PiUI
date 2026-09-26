@@ -487,6 +487,15 @@ with explicit limits, map/fan-out, merge, sub-pipelines and human input. Data
 mapping uses a small expression language evaluated in Rust without `eval`.
 Until then the Svelte Flow editor edits the existing agent-graph model.
 
+**Status (orchestration v6.2):** the first two node kinds ship ahead of the
+document as an additive step `executor` on the existing graph. An `llm` step is
+exactly one native turn of its profile through the harness adapter (no PiUI
+provider client): no follow-up, no messages, observation or delegation, a
+read-only, network-denied profile without allowed tools or enabled resources,
+and an empty native tool allowlist where the adapter enforces one. Where it
+cannot (Codex), the read-only sandbox is the only boundary and the manifest
+says so; harnesses without a read-only mode refuse the step. Scripts: ADR-033.
+
 ## ADR-031 — Transactional orchestration storage (planned)
 
 **Decision:** orchestration definitions and runs move from whole-document JSON
@@ -505,9 +514,24 @@ every renderer has a generic fallback. This supersedes the earlier "arbitrary
 runtime-loaded JS is not a plugin API" rule for harnesses, not the isolation
 principles of ADR-009/010/016.
 
-## ADR-033 — Script nodes are trusted user code (planned)
+## ADR-033 — Script nodes are trusted user code (orchestration v6.2)
 
 **Decision:** script nodes (Node/TS, Python, shell) run in the project folder
 under process containment with timeouts, only after an explicit trust decision
 for the pipeline. Importing a pipeline never runs code. Script nodes are not a
 sandbox and the UI says so.
+
+**Implemented as** the `script` step executor (runtimes `node`, `python`,
+`powershell`; source at most 64 KiB, frozen in the run snapshot; timeout
+1–3600 s). The trust decision is the project's trust plus an explicit Save and
+Run: the host admits scripts only for trusted, live projects outside safe mode
+and re-checks while one runs. The host — never a harness or the WebView —
+resolves the interpreter (Node as the bridges do, honouring `PIUI_NODE`;
+`py -3`/`python3`; Windows PowerShell/`pwsh`), writes the source to a fresh
+private folder under application data, runs it with the project as working
+directory, a minimal allowlisted environment and one JSON document on stdin,
+and contains the tree (Job Object assigned before resume, or a process group)
+so the end, a timeout, a cancellation, shutdown or lost trust kills it.
+Outputs are bounded (stdout 256 KiB, stderr tail 64 KiB, failure detail 2 KiB)
+and never logged. Scripts use the coordinator's lease/dispatch machinery;
+restart marks a started script uncertain and never replays it.

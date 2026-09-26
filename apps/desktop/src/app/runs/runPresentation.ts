@@ -80,7 +80,7 @@ export function stepViews(run: OrchestrationRunV6): StepView[] {
       state: stepState(step, task),
       task,
       attempts: (run.attempts ?? []).filter((attempt) => attempt.stepId === step.id),
-      sessionId: task?.execution?.id,
+      sessionId: step.executor?.type === 'script' ? undefined : task?.execution?.id,
       spawned: !initial.has(step.id),
     };
   });

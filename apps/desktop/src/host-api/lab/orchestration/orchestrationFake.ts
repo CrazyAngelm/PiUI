@@ -29,6 +29,7 @@ import {
 } from './runEngine';
 import type { LabRunScheduler } from './runScheduler';
 import { resolveRunInputs } from '../../runInputs';
+import { isScriptStep } from '../../stepExecutors';
 
 /**
  * Every `orchestration_*` command the UI client calls, with the host's scope
@@ -187,6 +188,8 @@ function runUsage(state: LabState, request: RunRequest): Record<string, UsageRec
   const usage: Record<string, UsageReceipt[]> = {};
   for (const task of [...run.tasks, ...run.attempts]) {
     if (task.execution === undefined) continue;
+    // A script execution is host work with no session or model usage.
+    if (run.definition.pipeline.steps.some((step) => step.id === task.stepId && isScriptStep(step))) continue;
     const record = state.sessions.get(task.execution.id);
     if (record === undefined || record.workspaceId !== request.workspaceId) throw orchestrationFailure('not-found');
     usage[task.execution.id] = record.usage.map((receipt) => ({ ...receipt }));

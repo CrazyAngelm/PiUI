@@ -83,8 +83,9 @@ pub enum RunInputError {
     TotalTooLong { limit: usize },
 }
 
-/// Self-contained checks of one stored pipeline: its run input declarations
-/// and review loop bounds. Cross-definition rules run with `validate_definition`.
+/// Self-contained checks of one stored pipeline: its run input declarations,
+/// review loop bounds and step executors (v6.2). Cross-definition rules run
+/// with `validate_definition`.
 pub fn validate_pipeline_declarations(
     pipeline: &PipelineDefinition,
 ) -> Result<(), DefinitionError> {
@@ -93,6 +94,7 @@ pub fn validate_pipeline_declarations(
         if let Some(review) = &step.review {
             validate_review_limit(step, review)?;
         }
+        crate::executors::validate_step_executor(step)?;
     }
     Ok(())
 }
