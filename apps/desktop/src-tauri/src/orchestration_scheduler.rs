@@ -580,13 +580,8 @@ impl OrchestrationScheduler {
                 lease.run_id.clone(),
             )
         });
-        let request = workspace_launch_request(
-            workspace_id,
-            &session_id,
-            &lease,
-            policy.allowed_tools,
-            coordinator,
-        );
+        let request =
+            workspace_launch_request(workspace_id, &session_id, &lease, policy, coordinator);
         let publisher = workspace_event_publisher(app.clone());
         let handle = match host
             .workspace
@@ -1375,7 +1370,7 @@ fn workspace_launch_request(
     workspace_id: &str,
     session_id: &str,
     lease: &ControlledSpawnLease,
-    allowed_tools: Option<Vec<String>>,
+    policy: LaunchPolicy,
     coordinator: Option<CoordinatorRequestHandler>,
 ) -> WorkspaceLaunchRequest {
     WorkspaceLaunchRequest {
@@ -1401,10 +1396,11 @@ fn workspace_launch_request(
         instructions: (!lease.profile.instructions.trim().is_empty())
             .then(|| lease.profile.instructions.clone()),
         permission_mode: workspace_permission(lease.profile.permission_mode),
-        allowed_tools,
-        // Normal native subagents stay inherited. allowedSpawnProfileIds only
-        // governs the authenticated workspace tool's predefined spawn route.
-        native_subagents: None,
+        allowed_tools: policy.allowed_tools,
+        // Normal native subagents stay inherited unless the adapter's launch
+        // policy fixes them. allowedSpawnProfileIds only governs the
+        // authenticated workspace tool's predefined spawn route.
+        native_subagents: policy.native_subagents,
         dependency_history_references: lease.dependency_result_references.clone(),
         coordinator,
     }
@@ -1578,6 +1574,7 @@ fn harness_kind(harness: Harness) -> HarnessKind {
         Harness::PrimeAgent => HarnessKind::PrimeAgent,
         Harness::Codex => HarnessKind::Codex,
         Harness::Hermes => HarnessKind::Hermes,
+        Harness::ClaudeCode => HarnessKind::ClaudeCode,
     }
 }
 
@@ -1587,6 +1584,7 @@ fn harness_name(harness: Harness) -> &'static str {
         Harness::PrimeAgent => "prime-agent",
         Harness::Codex => "codex",
         Harness::Hermes => "hermes",
+        Harness::ClaudeCode => "claude-code",
     }
 }
 
@@ -2016,8 +2014,7 @@ mod tests {
             task_instructions: "Do the work".into(),
             dependency_result_references: vec![],
         };
-        let request =
-            workspace_launch_request("workspace", "session", &lease, policy.allowed_tools, None);
+        let request = workspace_launch_request("workspace", "session", &lease, policy, None);
         assert_eq!(request.profile_id.as_deref(), Some("profile"));
         assert_eq!(request.instructions.as_deref(), Some("Be exact"));
         assert_eq!(
@@ -2026,6 +2023,126 @@ mod tests {
         );
         assert_eq!(request.native_subagents, None);
         assert_eq!(request.task_id.as_deref(), Some("step"));
+    }
+
+    fn native_rule(tool: &str, decision: ToolDecision) -> piui_orchestration::ToolRule {
+        piui_orchestration::ToolRule {
+            tool: tool.into(),
+            decision,
+            enforcement: PolicyEnforcement::Native,
+            mandatory: true,
+        }
+    }
+
+    #[test]
+    fn claude_code_launch_policy_is_explicit_and_refuses_unsupported_settings() {
+        use piui_orchestration::PermissionMode as Mode;
+        let native = native_capabilities();
+        let mut claude = profile(Harness::ClaudeCode);
+        claude.model_provider = Some("anthropic".into());
+        claude.reasoning = Some("xhigh".into());
+        let (capabilities, policy) = launch_policy(&claude, &native).expect("Claude Code policy");
+        assert_eq!(
+            capabilities.permission_modes,
+            [
+                Mode::Native,
+                Mode::ReadOnly,
+                Mode::WorkspaceWrite,
+                Mode::FullAccess
+            ]
+        );
+        assert!(policy.coordinator, "managed runs use the PiUI coordinator");
+        assert_eq!(policy.native_subagents, Some(false));
+        assert_eq!(policy.allowed_tools, None, "no rules keep the native tools");
+        let lease = ControlledSpawnLease {
+            run_id: "run".into(),
+            run_revision: 1,
+            task_revision: 1,
+            lease_id: "lease".into(),
+            step_id: "step".into(),
+            member_id: "member".into(),
+            profile: claude.clone(),
+            task_instructions: "Review the change".into(),
+            dependency_result_references: vec![],
+        };
+        let request = workspace_launch_request("workspace", "session", &lease, policy, None);
+        assert_eq!(request.harness, HarnessKind::ClaudeCode);
+        assert_eq!(request.native_subagents, Some(false));
+        assert_eq!(request.thinking_level.as_deref(), Some("xhigh"));
+        assert_eq!(request.service_tier, None);
+        assert_eq!(harness_name(Harness::ClaudeCode), "claude-code");
+
+        // Speed, unknown effort, overrides and network are refused before launch.
+        for tier in ["fast", "standard"] {
+            let mut fast = claude.clone();
+            fast.service_tier = Some(tier.into());
+            assert!(launch_policy(&fast, &native).is_err(), "{tier}");
+        }
+        let mut effort = claude.clone();
+        effort.reasoning = Some("minimal".into());
+        assert!(launch_policy(&effort, &native).is_err());
+        let mut resources = claude.clone();
+        resources.resource_rules = vec![piui_orchestration::ResourceRule {
+            kind: piui_orchestration::ResourceKind::Mcp,
+            id: "docs".into(),
+            enabled: false,
+        }];
+        assert!(launch_policy(&resources, &native).is_err());
+        let mut network = claude.clone();
+        network.permission_mode = Mode::WorkspaceWrite;
+        network.network_access = true;
+        assert!(launch_policy(&network, &native).is_err());
+        let mut base = claude.clone();
+        base.base_instructions = Some(String::new());
+        assert!(launch_policy(&base, &native).is_err());
+
+        // Native tool rules are an exact built-in allowlist.
+        let mut tools = claude.clone();
+        tools.tool_policy.rules = vec![
+            native_rule("Read", ToolDecision::Allow),
+            native_rule("Grep", ToolDecision::Allow),
+            native_rule("Bash", ToolDecision::Deny),
+        ];
+        tools.permission_mode = Mode::ReadOnly;
+        let (capabilities, policy) = launch_policy(&tools, &native).expect("read-only allowlist");
+        assert_eq!(
+            policy.allowed_tools,
+            Some(vec!["Grep".into(), "Read".into(), "workspace".into()])
+        );
+        assert!(
+            capabilities
+                .native_enforced_tools
+                .contains(&"Read".to_owned())
+        );
+        assert!(
+            !capabilities
+                .native_enforced_tools
+                .contains(&"Agent".to_owned())
+        );
+        for (mode, tool) in [
+            (Mode::ReadOnly, "Bash"),
+            (Mode::WorkspaceWrite, "Bash"),
+            (Mode::WorkspaceWrite, "PowerShell"),
+            (Mode::ReadOnly, "Write"),
+            (Mode::FullAccess, "Agent"),
+            (Mode::FullAccess, "Task"),
+            (Mode::FullAccess, "Bash(git *)"),
+            (Mode::FullAccess, "mcp__docs__search"),
+        ] {
+            let mut unsatisfiable = claude.clone();
+            unsatisfiable.permission_mode = mode;
+            unsatisfiable.tool_policy.rules = vec![native_rule(tool, ToolDecision::Allow)];
+            assert!(
+                launch_policy(&unsatisfiable, &native).is_err(),
+                "{mode:?} {tool}"
+            );
+        }
+        for (mode, tool) in [(Mode::FullAccess, "Bash"), (Mode::WorkspaceWrite, "Edit")] {
+            let mut allowed = claude.clone();
+            allowed.permission_mode = mode;
+            allowed.tool_policy.rules = vec![native_rule(tool, ToolDecision::Allow)];
+            assert!(launch_policy(&allowed, &native).is_ok(), "{mode:?} {tool}");
+        }
     }
 
     #[test]
@@ -2052,8 +2169,7 @@ mod tests {
             task_instructions: "Fetch public metadata".into(),
             dependency_result_references: vec![],
         };
-        let request =
-            workspace_launch_request("workspace", "session", &lease, policy.allowed_tools, None);
+        let request = workspace_launch_request("workspace", "session", &lease, policy, None);
         assert!(request.network_access);
 
         let mut pi = profile(Harness::Pi);

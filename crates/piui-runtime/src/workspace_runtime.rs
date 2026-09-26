@@ -41,6 +41,130 @@ const PRIME_SOURCE: &str = include_str!("../bridge/prime.mjs");
 const HERMES_SOURCE: &str = include_str!("../bridge/hermes.mjs");
 const CODEX_SOURCE: &str = include_str!("../bridge/codex.mjs");
 const CODEX_POOL_SOURCE: &str = include_str!("../bridge/codex-pool.mjs");
+const CLAUDE_SOURCE: &str = include_str!("../bridge/claude.mjs");
+
+/// Fixed, user-facing sign-in guidance for a Claude Code login that is not
+/// the user's Claude subscription. PiUI never signs in on the user's behalf.
+pub const CLAUDE_SIGN_IN_MESSAGE: &str = "Sign in to Claude Code with your Claude subscription: run `claude` in a terminal and use /login.";
+
+/// Environment removed before the Claude Code bridge starts. Only the user's
+/// Claude subscription login may reach the CLI: API keys, bearer, identity and
+/// federation tokens, provider switches, base-URL/socket/header routing,
+/// billing and account overrides, and the coupling a parent Claude Code
+/// session injects into its children are all dropped. The bridge filters the
+/// same list again; a unit test keeps both lists identical. Values are never
+/// read or logged.
+pub const CLAUDE_SCRUBBED_ENVIRONMENT: &[&str] = &[
+    // Non-subscription credentials, provider switches and API routing.
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_API_HOST",
+    "ANTHROPIC_UNIX_SOCKET",
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "ANTHROPIC_BEDROCK_BASE_URL",
+    "ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+    "AWS_BEARER_TOKEN_BEDROCK",
+    "ANTHROPIC_VERTEX_PROJECT_ID",
+    "ANTHROPIC_VERTEX_BASE_URL",
+    "ANTHROPIC_FOUNDRY_API_KEY",
+    "ANTHROPIC_FOUNDRY_AUTH_TOKEN",
+    "ANTHROPIC_FOUNDRY_BASE_URL",
+    "ANTHROPIC_FOUNDRY_RESOURCE",
+    "ANTHROPIC_AWS_API_KEY",
+    "ANTHROPIC_AWS_BASE_URL",
+    "ANTHROPIC_GOOGLE_CLOUD_BASE_URL",
+    "ANTHROPIC_IDENTITY_TOKEN",
+    "ANTHROPIC_IDENTITY_TOKEN_FILE",
+    "ANTHROPIC_FEDERATION_RULE_ID",
+    "ANTHROPIC_SERVICE_ACCOUNT_ID",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_GATEWAY",
+    "CLAUDE_CODE_SKIP_BEDROCK_AUTH",
+    "CLAUDE_CODE_SKIP_VERTEX_AUTH",
+    "CLAUDE_CODE_SKIP_FOUNDRY_AUTH",
+    "CLAUDE_CODE_SKIP_MANTLE_AUTH",
+    "CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH",
+    "CLAUDE_CODE_SKIP_ANTHROPIC_GOOGLE_CLOUD_AUTH",
+    "CLAUDE_CODE_API_BASE_URL",
+    "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+    "CLAUDE_CODE_HFI_BEARER_TOKEN",
+    "CLAUDE_CODE_CUSTOM_OAUTH_URL",
+    "CLAUDE_CODE_OAUTH_CLIENT_ID",
+    "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+    // Billing, account and speed overrides.
+    "CLAUDE_CODE_EXTRA_BODY",
+    "CLAUDE_CODE_SUBSCRIPTION_TYPE",
+    "CLAUDE_CODE_RATE_LIMIT_TIER",
+    "CLAUDE_CODE_ACCOUNT_UUID",
+    "CLAUDE_CODE_ACCOUNT_TAGGED_ID",
+    "CLAUDE_CODE_ORGANIZATION_UUID",
+    "CLAUDE_CODE_USER_EMAIL",
+    "CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK",
+    "CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS",
+    // Coupling a parent Claude Code session or host injects into its children.
+    "CLAUDECODE",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_SSE_PORT",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_HOST_SESSION_ID",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH",
+    "CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH",
+    "CLAUDE_CODE_OAUTH_SCOPES",
+    "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_AGENT_SDK_VERSION",
+    "CLAUDE_AGENT_SDK_CLIENT_APP",
+    "CLAUDE_PID",
+    "CLAUDE_CODE_HOST_AUTH_ENV_VAR",
+    "CLAUDE_CODE_HOST_CREDS_FILE",
+    "CLAUDE_CODE_HOST_HTTP_PROXY_PORT",
+    "CLAUDE_CODE_HOST_SOCKS_PROXY_PORT",
+    "CLAUDE_CODE_SESSION_ACCESS_TOKEN",
+    "CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDE_BRIDGE_REATTACH_SESSION",
+    "CLAUDE_BRIDGE_SESSION_INGRESS_URL",
+    "CLAUDE_SESSION_INGRESS_TOKEN_FILE",
+    "CLAUDE_CODE_REMOTE",
+    "CLAUDE_CODE_REMOTE_SESSION_ID",
+    "CLAUDE_CODE_REMOTE_SESSION_UUID",
+    "CLAUDE_SESSION_ID",
+    "CLAUDE_RUNNER_SESSION_ID",
+    "CLAUDE_RUNNER_SESSION_UUID",
+    "CLAUDE_CODE_IDE_HOST_OVERRIDE",
+];
+
+/// Operator capabilities that no managed native process may inherit.
+const OPERATOR_ENVIRONMENT: &[&str] = &[
+    "PIUI_AGENT_API_TOKEN",
+    "PIUI_AGENT_API_PORT",
+    "PIUI_AGENT_API_CONNECTION",
+];
+
+/// Claude Code releases this adapter accepts: `>=2.1.0 <3.0.0`. The protocol
+/// was verified against 2.1.232; newer 2.x releases keep the same headless
+/// stream-json and control protocol, and the adapter fails closed on drift.
+const CLAUDE_MINIMUM_VERSION: (u64, u64, u64) = (2, 1, 0);
+const CLAUDE_MAXIMUM_MAJOR_EXCLUSIVE: u64 = 3;
+const CLAUDE_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
+/// A failed version probe is repeated after this delay; a success is kept
+/// until the executable changes.
+const CLAUDE_VERSION_RETRY: Duration = Duration::from_secs(60);
+const CLAUDE_VERSION_OUTPUT_LIMIT: u64 = 4 * 1024;
+/// Claude Code resolves plugins, hooks and MCP servers before it answers the
+/// `initialize` control request; add that native phase to the transport
+/// allowance, like the Hermes ACP startup below.
+const CLAUDE_STARTUP_ALLOWANCE: Duration = Duration::from_secs(25);
 
 // The full bridge source is sent through stdin because CreateProcess has a
 // 32767 UTF--16 command-line limit. This fixed ESM bootstrap reads exactly the
@@ -54,15 +178,26 @@ pub enum HarnessKind {
     PrimeAgent,
     Codex,
     Hermes,
+    ClaudeCode,
 }
 
 impl HarnessKind {
+    /// Every harness in presentation order.
+    pub const ALL: [Self; 5] = [
+        Self::Pi,
+        Self::PrimeAgent,
+        Self::Codex,
+        Self::Hermes,
+        Self::ClaudeCode,
+    ];
+
     const fn display_name(self) -> &'static str {
         match self {
             Self::Pi => "Pi",
             Self::PrimeAgent => "Prime Agent",
             Self::Codex => "Codex",
             Self::Hermes => "Hermes",
+            Self::ClaudeCode => "Claude Code",
         }
     }
 }
@@ -486,6 +621,9 @@ pub enum BridgeFailureCode {
     AlreadyInitialized,
     NotInitialized,
     NotRunning,
+    /// The native login is not the user's Claude subscription (Claude Code
+    /// only): signed out, an API key, a cloud provider or a bearer token.
+    SubscriptionRequired,
     OperationFailed,
 }
 
@@ -731,10 +869,14 @@ impl NativeRuntime {
         let node = resolve_node()?;
         let launch = resolve_harness_launch_for_config(&config)?;
         let source = bridge_source(config.harness)?;
-        if config.harness == HarnessKind::Codex && config.coordination {
-            return Self::spawn_pooled(config, node, launch, source).await;
-        }
-        Self::spawn_resolved(config, node, launch, source, false, false).await
+        let harness = config.harness;
+        let spawned = if harness == HarnessKind::Codex && config.coordination {
+            Self::spawn_pooled(config, node, launch, source).await
+        } else {
+            Self::spawn_resolved(config, node, launch, source, false, false).await
+        };
+        record_native_account(harness, spawned.as_ref().map(|_| ()));
+        spawned
     }
 
     pub async fn spawn_catalog(
@@ -745,7 +887,10 @@ impl NativeRuntime {
         let node = resolve_node()?;
         let launch = resolve_harness_launch_for_config(&config)?;
         let source = bridge_source(config.harness)?;
-        Self::spawn_resolved(config, node, launch, source, false, true).await
+        let harness = config.harness;
+        let spawned = Self::spawn_resolved(config, node, launch, source, false, true).await;
+        record_native_account(harness, spawned.as_ref().map(|_| ()));
+        spawned
     }
 
     async fn spawn_resolved(
@@ -761,25 +906,7 @@ impl NativeRuntime {
         #[cfg(windows)]
         let mut windows_job = WindowsJob::new().map_err(|_| NativeRuntimeError::Containment)?;
 
-        let mut standard = std::process::Command::new(node);
-        // Operator capabilities must never be inherited by managed agents.
-        standard.env_remove("PIUI_AGENT_API_TOKEN");
-        standard.env_remove("PIUI_AGENT_API_PORT");
-        standard.env_remove("PIUI_AGENT_API_CONNECTION");
-        standard
-            .args(["--input-type=module", "-e", NODE_BOOTSTRAP])
-            .current_dir(&config.cwd)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt as _;
-            const CREATE_SUSPENDED: u32 = 0x0000_0004;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            standard.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
-        }
-        let mut command = Command::from(standard);
+        let mut command = Command::from(bridge_command(&node, &config));
         command.kill_on_drop(false);
         #[cfg(unix)]
         command.process_group(0);
@@ -881,10 +1008,10 @@ impl NativeRuntime {
         };
         // Hermes 0.21 ACP permits a 30-second late MCP discovery phase.
         // Add that native phase to the existing 20-second transport allowance.
-        let startup_timeout = if config.harness == HarnessKind::Hermes {
-            REQUEST_TIMEOUT + Duration::from_secs(30)
-        } else {
-            REQUEST_TIMEOUT
+        let startup_timeout = match config.harness {
+            HarnessKind::Hermes => REQUEST_TIMEOUT + Duration::from_secs(30),
+            HarnessKind::ClaudeCode => REQUEST_TIMEOUT + CLAUDE_STARTUP_ALLOWANCE,
+            HarnessKind::Pi | HarnessKind::PrimeAgent | HarnessKind::Codex => REQUEST_TIMEOUT,
         };
         // An adapter may replay native history while it initializes (a Hermes
         // `session/load` or a resumed Codex page). Those events are retained
@@ -1495,6 +1622,7 @@ fn map_bridge_failure(code: &str) -> BridgeFailureCode {
         "already-initialized" => BridgeFailureCode::AlreadyInitialized,
         "not-initialized" => BridgeFailureCode::NotInitialized,
         "not-running" => BridgeFailureCode::NotRunning,
+        "claude-subscription-required" => BridgeFailureCode::SubscriptionRequired,
         _ => BridgeFailureCode::OperationFailed,
     }
 }
@@ -1602,6 +1730,17 @@ fn validate_config(config: &NativeRuntimeConfig) -> Result<(), NativeRuntimeErro
     {
         return Err(NativeRuntimeError::InvalidConfiguration);
     }
+    // Claude Code runs only at standard speed: fast mode can use paid extra
+    // usage. The host rejects it earlier with a typed error; this is the
+    // runtime's own fail-closed guard.
+    if config.harness == HarnessKind::ClaudeCode
+        && config
+            .service_tier
+            .as_deref()
+            .is_some_and(|tier| tier != "standard")
+    {
+        return Err(NativeRuntimeError::InvalidConfiguration);
+    }
     if config.harness == HarnessKind::PrimeAgent {
         if !is_isolated_daemon(config.daemon_socket.as_deref()) {
             return Err(NativeRuntimeError::InvalidConfiguration);
@@ -1671,6 +1810,7 @@ fn bridge_source(kind: HarnessKind) -> Result<Vec<u8>, NativeRuntimeError> {
         HarnessKind::PrimeAgent => (PRIME_SOURCE, "createPrimeAdapter"),
         HarnessKind::Codex => (CODEX_SOURCE, "createCodexAdapter"),
         HarnessKind::Hermes => (HERMES_SOURCE, "createHermesAdapter"),
+        HarnessKind::ClaudeCode => (CLAUDE_SOURCE, "createClaudeAdapter"),
     };
     if factory.trim().is_empty() {
         return Err(NativeRuntimeError::HarnessUnavailable);
@@ -1693,6 +1833,13 @@ fn resolve_harness_launch_for_config(
     if config.harness == HarnessKind::Codex {
         let launch = resolve_harness_launch(HarnessKind::Codex)?;
         if !matches!(launch.version.as_deref(), Some("0.147.0" | "0.153.4")) {
+            return Err(NativeRuntimeError::HarnessUnavailable);
+        }
+        return Ok(launch);
+    }
+    if config.harness == HarnessKind::ClaudeCode {
+        let launch = resolve_claude_launch()?;
+        if !claude_version_supported(launch.version.as_deref()) {
             return Err(NativeRuntimeError::HarnessUnavailable);
         }
         return Ok(launch);
@@ -1738,7 +1885,310 @@ fn resolve_harness_launch(kind: HarnessKind) -> Result<ResolvedHarnessLaunch, Na
         HarnessKind::PrimeAgent => resolve_package_launch("prime-agent", "dist/bundle/cli.js"),
         HarnessKind::Codex => resolve_package_launch("@openai/codex", "bin/codex.js"),
         HarnessKind::Hermes => resolve_hermes_launch(),
+        HarnessKind::ClaudeCode => resolve_claude_launch(),
     }
+}
+
+/// Resolves the user's own installed Claude Code executable and verifies its
+/// identity and version with `claude --version`. Only a native executable is
+/// accepted: `.cmd`/`.ps1`/`.bat` shims need a shell, which is never used.
+/// `PIUI_CLAUDE_BIN` is an authoritative override without fallback.
+fn resolve_claude_launch() -> Result<ResolvedHarnessLaunch, NativeRuntimeError> {
+    let program = claude_executable_candidates()
+        .into_iter()
+        .find(|candidate| is_native_claude_executable(candidate))
+        .ok_or(NativeRuntimeError::HarnessUnavailable)?;
+    let version = probe_claude_version(&program);
+    Ok(ResolvedHarnessLaunch {
+        program,
+        args: Vec::new(),
+        version,
+    })
+}
+
+fn claude_executable_candidates() -> Vec<PathBuf> {
+    if let Some(value) = std::env::var_os("PIUI_CLAUDE_BIN") {
+        return vec![PathBuf::from(value)];
+    }
+    let executable = if cfg!(windows) {
+        "claude.exe"
+    } else {
+        "claude"
+    };
+    let mut candidates = Vec::new();
+    if cfg!(windows) {
+        // The npm package installs the native executable itself as
+        // `bin/claude.exe`; the global `claude.cmd` shim is never used.
+        candidates.extend(
+            global_package_roots()
+                .into_iter()
+                .map(|root| root.join("@anthropic-ai/claude-code/bin/claude.exe")),
+        );
+        if let Ok(home) = native_home_dir() {
+            candidates.push(home.join(".local/bin/claude.exe"));
+        }
+    } else {
+        if let Ok(home) = native_home_dir() {
+            candidates.push(home.join(".local/bin/claude"));
+            candidates.push(home.join(".claude/local/claude"));
+        }
+        candidates.extend(global_package_roots().into_iter().flat_map(|root| {
+            let bin = root.join("@anthropic-ai/claude-code/bin");
+            [bin.join("claude.exe"), bin.join("claude")]
+        }));
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        // Relative PATH entries would resolve against an arbitrary working
+        // directory and are never searched.
+        candidates.extend(
+            std::env::split_paths(&path)
+                .filter(|directory| directory.is_absolute())
+                .map(|directory| directory.join(executable)),
+        );
+    }
+    candidates
+}
+
+fn is_native_claude_executable(path: &Path) -> bool {
+    if !path.is_absolute() || !path.is_file() {
+        return false;
+    }
+    if cfg!(windows) {
+        return path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"));
+    }
+    // A `.js` entry needs an interpreter; only a native executable is spawned.
+    !path
+        .extension()
+        .is_some_and(|extension| matches!(extension.to_str(), Some("js" | "cjs" | "mjs")))
+}
+
+/// Parses `claude --version` output such as `2.1.232 (Claude Code)`. The
+/// product marker proves the executable is Claude Code, not another `claude`.
+fn parse_claude_version(output: &str) -> Option<String> {
+    let line = output
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    let version = line.strip_suffix("(Claude Code)")?.trim();
+    parse_version_core(version)?;
+    Some(version.to_owned())
+}
+
+fn parse_version_core(version: &str) -> Option<(u64, u64, u64)> {
+    let core = version.split(['-', '+']).next()?;
+    let mut parts = core.split('.');
+    let parsed = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    );
+    parts.next().is_none().then_some(parsed)
+}
+
+/// Accepts the tested release range `>=2.1.0 <3.0.0`, never an exact pin.
+fn claude_version_supported(version: Option<&str>) -> bool {
+    version.and_then(parse_version_core).is_some_and(|version| {
+        version >= CLAUDE_MINIMUM_VERSION && version.0 < CLAUDE_MAXIMUM_MAJOR_EXCLUSIVE
+    })
+}
+
+struct ClaudeVersionProbe {
+    length: u64,
+    modified: Option<std::time::SystemTime>,
+    probed_at: std::time::Instant,
+    version: Option<String>,
+}
+
+/// Runs `claude --version` at most once per executable revision. Discovery is
+/// otherwise filesystem-only, so the result is cached; a failed probe is
+/// retried after [`CLAUDE_VERSION_RETRY`]. Probes are serialized by the cache.
+fn probe_claude_version(program: &Path) -> Option<String> {
+    static CACHE: OnceLock<StdMutex<HashMap<PathBuf, ClaudeVersionProbe>>> = OnceLock::new();
+    let metadata = std::fs::metadata(program).ok()?;
+    let length = metadata.len();
+    let modified = metadata.modified().ok();
+    let mut cache = CACHE
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .ok()?;
+    if let Some(probe) = cache.get(program)
+        && probe.length == length
+        && probe.modified == modified
+        && (probe.version.is_some() || probe.probed_at.elapsed() < CLAUDE_VERSION_RETRY)
+    {
+        return probe.version.clone();
+    }
+    let version = run_claude_version(program);
+    cache.insert(
+        program.to_path_buf(),
+        ClaudeVersionProbe {
+            length,
+            modified,
+            probed_at: std::time::Instant::now(),
+            version: version.clone(),
+        },
+    );
+    version
+}
+
+/// The contained bridge process: the fixed bootstrap reads the bridge source
+/// from stdin. Operator capabilities are never inherited; a Claude Code
+/// bridge additionally starts without any non-subscription credential,
+/// provider switch, billing override or parent-session coupling.
+fn bridge_command(node: &Path, config: &NativeRuntimeConfig) -> std::process::Command {
+    let mut standard = std::process::Command::new(node);
+    for name in OPERATOR_ENVIRONMENT {
+        standard.env_remove(name);
+    }
+    if config.harness == HarnessKind::ClaudeCode {
+        scrub_claude_environment(&mut standard);
+    }
+    standard
+        .args(["--input-type=module", "-e", NODE_BOOTSTRAP])
+        .current_dir(&config.cwd)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_SUSPENDED: u32 = 0x0000_0004;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        standard.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
+    }
+    standard
+}
+
+/// Removes every non-subscription credential, provider switch, billing
+/// override and parent-session coupling from a Claude Code child environment.
+fn scrub_claude_environment(command: &mut std::process::Command) {
+    for name in CLAUDE_SCRUBBED_ENVIRONMENT
+        .iter()
+        .chain(OPERATOR_ENVIRONMENT)
+    {
+        command.env_remove(name);
+    }
+}
+
+/// Executes `claude --version` inside the same containment as a runtime: a
+/// Windows Job assigned before resume or an owned Unix process group. The
+/// output is bounded and only the parsed version survives.
+fn run_claude_version(program: &Path) -> Option<String> {
+    use std::io::Read as _;
+    let mut command = std::process::Command::new(program);
+    scrub_claude_environment(&mut command);
+    command
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_SUSPENDED: u32 = 0x0000_0004;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
+    #[cfg(windows)]
+    let mut job = WindowsJob::new().ok()?;
+    let mut child = command.spawn().ok()?;
+    #[cfg(windows)]
+    {
+        let resumed = ProcessId::new(child.id())
+            .ok()
+            .and_then(|pid| {
+                job.assign_before_resume(SuspendedProcess::from_created_suspended(pid))
+                    .ok()
+            })
+            .and_then(|assignment| job.resume_assigned(assignment).ok());
+        if resumed.is_none() {
+            let _ = job.force_terminate_tree();
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+    }
+    #[cfg(unix)]
+    let mut group = {
+        let Some(id) = i32::try_from(child.id())
+            .ok()
+            .and_then(|pid| ProcessGroupId::new(pid).ok())
+        else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        };
+        UnixProcessGroup::from_spawned_group(id)
+    };
+    let deadline = std::time::Instant::now() + CLAUDE_VERSION_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            _ => break None,
+        }
+    };
+    // The whole tree is retired whether or not the probe finished in time.
+    #[cfg(windows)]
+    {
+        let _ = job.force_terminate_tree();
+        let _ = job.close();
+    }
+    #[cfg(unix)]
+    {
+        let _ = group.force_terminate_tree();
+        group.discard_after_supervisor_cleanup();
+    }
+    let Some(status) = status else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    };
+    if !status.success() {
+        return None;
+    }
+    let mut output = String::new();
+    child
+        .stdout
+        .take()?
+        .take(CLAUDE_VERSION_OUTPUT_LIMIT)
+        .read_to_string(&mut output)
+        .ok()?;
+    parse_claude_version(&output)
+}
+
+/// Last native account verdict of Claude Code in this host process: set when
+/// a start is refused because the login is not a Claude subscription, cleared
+/// by the next start that verifies one. No credential is read or stored.
+static CLAUDE_SIGN_IN_REQUIRED: AtomicBool = AtomicBool::new(false);
+
+fn record_native_account(harness: HarnessKind, outcome: Result<(), &NativeRuntimeError>) {
+    if harness != HarnessKind::ClaudeCode {
+        return;
+    }
+    match outcome {
+        Ok(()) => CLAUDE_SIGN_IN_REQUIRED.store(false, Ordering::Release),
+        Err(NativeRuntimeError::Bridge(BridgeFailureCode::SubscriptionRequired)) => {
+            CLAUDE_SIGN_IN_REQUIRED.store(true, Ordering::Release);
+        }
+        Err(_) => {}
+    }
+}
+
+/// Whether the last Claude Code start was refused for a missing Claude
+/// subscription login.
+#[must_use]
+pub fn claude_sign_in_required() -> bool {
+    CLAUDE_SIGN_IN_REQUIRED.load(Ordering::Acquire)
 }
 
 fn resolve_hermes_launch() -> Result<ResolvedHarnessLaunch, NativeRuntimeError> {
@@ -1885,6 +2335,16 @@ pub fn offline_harness_capabilities(kind: HarnessKind) -> HarnessCapabilities {
             "The installed native adapter is unavailable or unverified.",
         );
     }
+    // A managed run cannot start while Claude Code is known to be signed in
+    // with something other than the user's Claude subscription.
+    if kind == HarnessKind::ClaudeCode && claude_sign_in_required() {
+        return unavailable_capabilities(CLAUDE_SIGN_IN_MESSAGE);
+    }
+    verified_harness_capabilities(kind)
+}
+
+/// Capabilities of a verified, available adapter.
+fn verified_harness_capabilities(kind: HarnessKind) -> HarnessCapabilities {
     match kind {
         HarnessKind::Pi => HarnessCapabilities {
             prompt: capability(true, Enforcement::Native, None),
@@ -1946,41 +2406,80 @@ pub fn offline_harness_capabilities(kind: HarnessKind) -> HarnessCapabilities {
             ),
             native_subagents: capability(true, Enforcement::Native, None),
         },
+        // These labels describe managed runs, the only consumer of the offline
+        // table. They are Claude Code's own engine, not an OS sandbox.
+        HarnessKind::ClaudeCode => HarnessCapabilities {
+            prompt: capability(true, Enforcement::Native, None),
+            resume: capability(true, Enforcement::Native, None),
+            models: capability(
+                true,
+                Enforcement::Native,
+                Some("Models and effort levels come from the Claude Code initialize catalog."),
+            ),
+            approvals: capability(
+                true,
+                Enforcement::Native,
+                Some(
+                    "Claude Code permission prompts; read-only and workspace-write sessions can only deny them.",
+                ),
+            ),
+            instructions: capability(
+                true,
+                Enforcement::Native,
+                Some("Appended to Claude Code's own system prompt; the base prompt is kept."),
+            ),
+            tool_policy: capability(
+                true,
+                Enforcement::Native,
+                Some(
+                    "Claude Code built-in tool allowlist; user MCP servers are excluded under a policy.",
+                ),
+            ),
+            native_subagents: capability(
+                true,
+                Enforcement::Coordinator,
+                Some(
+                    "Managed runs disable the native Agent tool and delegate through the PiUI coordinator.",
+                ),
+            ),
+        },
     }
 }
 
-/// Offline installed-harness metadata. This performs filesystem reads only.
+/// Tested native release range of each adapter. Pi is resolved from its own
+/// verified CLI launcher and has no separate pin.
+fn harness_version_supported(kind: HarnessKind, version: Option<&str>) -> bool {
+    match kind {
+        HarnessKind::Pi => true,
+        HarnessKind::PrimeAgent => matches!(version, Some("0.9.2" | "0.9.3")),
+        HarnessKind::Codex => matches!(version, Some("0.147.0" | "0.153.4")),
+        HarnessKind::Hermes => version == Some("0.21.0"),
+        HarnessKind::ClaudeCode => claude_version_supported(version),
+    }
+}
+
+/// Offline installed-harness metadata. This performs filesystem reads only,
+/// except Claude Code's cached `claude --version` identity probe.
 #[must_use]
 pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
-    [
-        HarnessKind::Pi,
-        HarnessKind::PrimeAgent,
-        HarnessKind::Codex,
-        HarnessKind::Hermes,
-    ]
+    HarnessKind::ALL
     .into_iter()
     .map(|kind| match resolve_harness_launch(kind) {
         Ok(launch) => {
-            let expected = match kind {
-                HarnessKind::Pi => None,
-                HarnessKind::PrimeAgent => Some("0.9.2"),
-                HarnessKind::Codex => Some("0.147.0"),
-                HarnessKind::Hermes => Some("0.21.0"),
-            };
-            let version_supported = expected.is_none_or(|expected| {
-                launch.version.as_deref() == Some(expected)
-                    || (kind == HarnessKind::Codex && launch.version.as_deref() == Some("0.153.4"))
-                    || (kind == HarnessKind::PrimeAgent
-                        && launch.version.as_deref() == Some("0.9.3"))
-            });
+            let version_supported = harness_version_supported(kind, launch.version.as_deref());
             let platform_verified = cfg!(windows);
             let (status, reason) = if !version_supported {
                 (
                     HarnessAvailability::Unverified,
-                    Some(
+                    Some(if kind != HarnessKind::ClaudeCode {
                         "The installed native harness version is not supported by this adapter."
-                            .into(),
-                    ),
+                            .into()
+                    } else if launch.version.is_some() {
+                        "The installed Claude Code version is outside the tested range (2.1 or a later 2.x release)."
+                            .into()
+                    } else {
+                        "Claude Code could not be verified with `claude --version`.".into()
+                    }),
                 )
             } else if !platform_verified {
                 (
@@ -1988,6 +2487,12 @@ pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
                     Some(
                         "Native lifecycle containment is not yet verified on this platform.".into(),
                     ),
+                )
+            } else if kind == HarnessKind::ClaudeCode && claude_sign_in_required() {
+                // Still startable: the next start verifies the native login again.
+                (
+                    HarnessAvailability::Available,
+                    Some(CLAUDE_SIGN_IN_MESSAGE.into()),
                 )
             } else {
                 (HarnessAvailability::Available, None)
@@ -2690,5 +3195,329 @@ mod tests {
         let factory = r#"return {dispose(){}}"#;
         let (runtime, _events) = spawn_test_bridge(factory).await.expect("group handshake");
         runtime.dispose().await.expect("group dispose");
+    }
+
+    #[test]
+    fn claude_code_identity_is_additive_kebab_case() {
+        assert_eq!(
+            serde_json::to_value(HarnessKind::ClaudeCode).ok(),
+            Some(json!("claude-code"))
+        );
+        assert_eq!(
+            serde_json::from_value::<HarnessKind>(json!("claude-code")).ok(),
+            Some(HarnessKind::ClaudeCode)
+        );
+        assert_eq!(HarnessKind::ClaudeCode.display_name(), "Claude Code");
+        // Existing identities keep their exact spelling.
+        for (kind, name) in [
+            (HarnessKind::Pi, "pi"),
+            (HarnessKind::PrimeAgent, "prime-agent"),
+            (HarnessKind::Codex, "codex"),
+            (HarnessKind::Hermes, "hermes"),
+        ] {
+            assert_eq!(serde_json::to_value(kind).ok(), Some(json!(name)));
+            assert_eq!(
+                serde_json::from_value::<HarnessKind>(json!(name)).ok(),
+                Some(kind)
+            );
+        }
+        for alias in ["claude", "claude_code", "ClaudeCode"] {
+            assert!(serde_json::from_value::<HarnessKind>(json!(alias)).is_err());
+        }
+        assert_eq!(HarnessKind::ALL.len(), 5);
+    }
+
+    #[test]
+    fn claude_bridge_embeds_the_claude_factory_and_common_runner() {
+        let source = String::from_utf8(
+            bridge_source(HarnessKind::ClaudeCode).expect("Claude Code bridge source"),
+        )
+        .expect("bridge source is UTF-8");
+        assert!(source.contains("export async function createClaudeAdapter("));
+        assert!(source.contains("globalThis.__PIUI_BRIDGE_FACTORY__=createClaudeAdapter;"));
+        assert!(source.contains("export function runBridge("));
+        assert!(
+            !source.contains("\"--bare\""),
+            "bare mode requires an API key and is never passed"
+        );
+    }
+
+    #[test]
+    fn claude_version_is_verified_by_identity_and_a_range() {
+        assert_eq!(
+            parse_claude_version("2.1.232 (Claude Code)\n").as_deref(),
+            Some("2.1.232")
+        );
+        assert_eq!(
+            parse_claude_version("\n  2.4.0 (Claude Code)  \n").as_deref(),
+            Some("2.4.0")
+        );
+        for output in [
+            "2.1.232",
+            "claude 2.1.232",
+            "2.1 (Claude Code)",
+            "(Claude Code)",
+            "",
+            "2.1.x (Claude Code)",
+            "2.1.232.1 (Claude Code)",
+        ] {
+            assert_eq!(parse_claude_version(output), None, "{output:?}");
+        }
+        for (version, supported) in [
+            ("2.1.0", true),
+            ("2.1.232", true),
+            ("2.9.14", true),
+            ("2.1.232-beta.1", true),
+            ("2.0.99", false),
+            ("1.0.128", false),
+            ("3.0.0", false),
+            ("10.1.0", false),
+            ("garbage", false),
+        ] {
+            assert_eq!(
+                claude_version_supported(Some(version)),
+                supported,
+                "{version}"
+            );
+            assert_eq!(
+                harness_version_supported(HarnessKind::ClaudeCode, Some(version)),
+                supported
+            );
+        }
+        assert!(!claude_version_supported(None));
+        // Other adapters keep their exact tested versions.
+        assert!(harness_version_supported(
+            HarnessKind::Codex,
+            Some("0.153.4")
+        ));
+        assert!(!harness_version_supported(
+            HarnessKind::Codex,
+            Some("0.157.1")
+        ));
+        assert!(harness_version_supported(HarnessKind::Pi, None));
+    }
+
+    #[test]
+    fn claude_launch_accepts_only_a_native_executable() {
+        let root = std::env::temp_dir().join(format!(
+            "piui-claude-candidates-{}-{}",
+            std::process::id(),
+            uuid_like_suffix()
+        ));
+        std::fs::create_dir_all(&root).expect("candidate directory");
+        let names = [
+            "claude.exe",
+            "claude.cmd",
+            "claude.ps1",
+            "claude.bat",
+            "claude",
+            "cli.js",
+        ];
+        for name in names {
+            std::fs::write(root.join(name), b"fixture").expect("candidate file");
+        }
+        let accepted = names
+            .into_iter()
+            .filter(|name| is_native_claude_executable(&root.join(name)))
+            .collect::<Vec<_>>();
+        if cfg!(windows) {
+            assert_eq!(accepted, ["claude.exe"], "shell shims are never spawned");
+        } else {
+            assert_eq!(
+                accepted,
+                [
+                    "claude.exe",
+                    "claude.cmd",
+                    "claude.ps1",
+                    "claude.bat",
+                    "claude"
+                ]
+            );
+        }
+        assert!(!is_native_claude_executable(Path::new("claude.exe")));
+        assert!(!is_native_claude_executable(&root.join("missing.exe")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn uuid_like_suffix() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn claude_bridge_command_removes_every_billing_and_parent_override() {
+        let mut config = test_config();
+        config.harness = HarnessKind::ClaudeCode;
+        let command = bridge_command(Path::new("node"), &config);
+        let removed = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().to_uppercase())
+            .collect::<HashSet<_>>();
+        for name in CLAUDE_SCRUBBED_ENVIRONMENT
+            .iter()
+            .chain(OPERATOR_ENVIRONMENT)
+        {
+            assert!(removed.contains(*name), "{name} must be removed");
+        }
+        // The explicit subscription-only list from ADR-029 and the rework plan.
+        for name in [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_BEDROCK_BASE_URL",
+            "ANTHROPIC_VERTEX_BASE_URL",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+            "CLAUDE_CODE_USE_FOUNDRY",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "CLAUDECODE",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "CLAUDE_CODE_SSE_PORT",
+        ] {
+            assert!(removed.contains(name), "{name} must be removed");
+        }
+        assert!(
+            command.get_envs().all(|(_, value)| value.is_none()),
+            "the launcher only removes variables"
+        );
+        // Other harnesses keep the user's environment minus operator capabilities.
+        config.harness = HarnessKind::Codex;
+        let other = bridge_command(Path::new("node"), &config);
+        let other_removed = other
+            .get_envs()
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            other_removed,
+            OPERATOR_ENVIRONMENT
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<HashSet<_>>()
+        );
+    }
+
+    #[test]
+    fn claude_scrubbed_child_environment_lacks_every_override() {
+        let node = resolve_node().expect("node for the environment proof");
+        let mut command = std::process::Command::new(node);
+        for name in CLAUDE_SCRUBBED_ENVIRONMENT
+            .iter()
+            .chain(OPERATOR_ENVIRONMENT)
+        {
+            command.env(name, "SECRET-MUST-NOT-LEAK");
+        }
+        command.env("PIUI_TEST_USER_SETTING", "kept");
+        scrub_claude_environment(&mut command);
+        // Only variable names cross back; values are never printed.
+        let output = command
+            .args([
+                "-e",
+                "process.stdout.write(JSON.stringify(Object.keys(process.env).map((key) => key.toUpperCase())))",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .expect("node reports its environment names");
+        let names: Vec<String> = serde_json::from_slice(&output.stdout).expect("name list");
+        for name in CLAUDE_SCRUBBED_ENVIRONMENT
+            .iter()
+            .chain(OPERATOR_ENVIRONMENT)
+        {
+            assert!(
+                !names.iter().any(|value| value == name),
+                "{name} reached the child"
+            );
+        }
+        assert!(names.iter().any(|value| value == "PIUI_TEST_USER_SETTING"));
+    }
+
+    #[test]
+    fn claude_scrub_list_matches_the_bridge_list() {
+        let start = CLAUDE_SOURCE
+            .find("const SCRUBBED_ENVIRONMENT = new Set([")
+            .expect("bridge scrub list");
+        let body = &CLAUDE_SOURCE[start..];
+        let end = body.find("]);").expect("end of bridge scrub list");
+        let bridge = body[..end]
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .collect::<std::collections::BTreeSet<_>>();
+        let host = CLAUDE_SCRUBBED_ENVIRONMENT
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(bridge, host);
+        assert_eq!(
+            host.len(),
+            CLAUDE_SCRUBBED_ENVIRONMENT.len(),
+            "no duplicates"
+        );
+    }
+
+    #[test]
+    fn claude_subscription_refusal_is_typed_and_tracked() {
+        assert_eq!(
+            map_bridge_failure("claude-subscription-required"),
+            BridgeFailureCode::SubscriptionRequired
+        );
+        let refused = NativeRuntimeError::Bridge(BridgeFailureCode::SubscriptionRequired);
+        record_native_account(HarnessKind::ClaudeCode, Ok(()));
+        // Other adapters never change the Claude Code verdict.
+        record_native_account(HarnessKind::Codex, Err(&refused));
+        assert!(!claude_sign_in_required());
+        record_native_account(HarnessKind::ClaudeCode, Err(&refused));
+        assert!(claude_sign_in_required());
+        // An unrelated failure proves nothing about the login.
+        record_native_account(HarnessKind::ClaudeCode, Err(&NativeRuntimeError::Timeout));
+        assert!(claude_sign_in_required());
+        record_native_account(HarnessKind::ClaudeCode, Ok(()));
+        assert!(!claude_sign_in_required());
+    }
+
+    #[test]
+    fn claude_capabilities_are_native_with_coordinator_delegation() {
+        let capabilities = verified_harness_capabilities(HarnessKind::ClaudeCode);
+        for capability in [
+            &capabilities.prompt,
+            &capabilities.resume,
+            &capabilities.models,
+            &capabilities.approvals,
+            &capabilities.instructions,
+            &capabilities.tool_policy,
+        ] {
+            assert!(capability.supported);
+            assert_eq!(capability.enforcement, Enforcement::Native);
+        }
+        assert!(capabilities.native_subagents.supported);
+        assert_eq!(
+            capabilities.native_subagents.enforcement,
+            Enforcement::Coordinator
+        );
+        assert!(
+            capabilities
+                .approvals
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("only deny"))
+        );
+    }
+
+    #[test]
+    fn claude_fast_mode_is_rejected_by_the_runtime_guard() {
+        let mut config = test_config();
+        config.harness = HarnessKind::ClaudeCode;
+        config.service_tier = Some("fast".into());
+        assert_eq!(
+            validate_config(&config),
+            Err(NativeRuntimeError::InvalidConfiguration)
+        );
+        config.service_tier = Some("standard".into());
+        assert_eq!(validate_config(&config), Ok(()));
+        config.service_tier = None;
+        assert_eq!(validate_config(&config), Ok(()));
     }
 }

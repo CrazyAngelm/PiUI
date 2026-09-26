@@ -1217,3 +1217,70 @@ fn native_defaults_do_not_prove_cross_harness_authority() {
     definition.profiles[1].harness = definition.profiles[0].harness;
     assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_ok());
 }
+
+#[test]
+fn claude_code_harness_is_an_additive_v6_identity() {
+    assert_eq!(
+        serde_json::to_value(Harness::ClaudeCode).unwrap(),
+        json!("claude-code")
+    );
+    let mut profile = profile("claude-profile", Harness::ClaudeCode, &[]);
+    profile.reasoning = Some("xhigh".into());
+    let stored = serde_json::to_value(&profile).unwrap();
+    assert_eq!(stored["harness"], json!("claude-code"));
+    assert_eq!(
+        serde_json::from_value::<AgentProfile>(stored).unwrap(),
+        profile
+    );
+    // Definitions recorded before this harness existed read back unchanged.
+    for (name, harness) in [
+        ("pi", Harness::Pi),
+        ("prime-agent", Harness::PrimeAgent),
+        ("codex", Harness::Codex),
+        ("hermes", Harness::Hermes),
+    ] {
+        assert_eq!(
+            serde_json::from_value::<Harness>(json!(name)).unwrap(),
+            harness
+        );
+    }
+    assert!(serde_json::from_value::<Harness>(json!("claude")).is_err());
+}
+
+#[test]
+fn claude_code_native_defaults_are_incomparable_with_other_harnesses() {
+    for other in [
+        Harness::Pi,
+        Harness::PrimeAgent,
+        Harness::Codex,
+        Harness::Hermes,
+    ] {
+        for (lead, worker) in [(Harness::ClaudeCode, other), (other, Harness::ClaudeCode)] {
+            let mut definition = snapshot();
+            definition.profiles[0].harness = lead;
+            definition.profiles[1].harness = worker;
+            definition.profiles[0].permission_mode = PermissionMode::Native;
+            definition.profiles[1].permission_mode = PermissionMode::Native;
+            assert!(
+                authorize_spawn(&definition, "lead-profile", "worker-profile").is_err(),
+                "native {lead:?} -> native {worker:?} must be rejected"
+            );
+        }
+    }
+    let mut definition = snapshot();
+    definition.profiles[0].harness = Harness::ClaudeCode;
+    definition.profiles[1].harness = Harness::ClaudeCode;
+    definition.profiles[0].permission_mode = PermissionMode::Native;
+    definition.profiles[1].permission_mode = PermissionMode::Native;
+    assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_ok());
+    // A native parent proves nothing about a declared preset of its child.
+    definition.profiles[1].permission_mode = PermissionMode::ReadOnly;
+    assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_err());
+    // Declared presets stay comparable across adapters and cannot escalate.
+    definition.profiles[0].permission_mode = PermissionMode::ReadOnly;
+    definition.profiles[1].harness = Harness::Codex;
+    definition.profiles[1].permission_mode = PermissionMode::WorkspaceWrite;
+    assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_err());
+    definition.profiles[1].permission_mode = PermissionMode::ReadOnly;
+    assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_ok());
+}

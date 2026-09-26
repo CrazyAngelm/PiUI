@@ -25,9 +25,10 @@ pub use piui_runtime::workspace_runtime::{
     SessionStatus, TurnOutcome, WorkspaceModel,
 };
 use piui_runtime::workspace_runtime::{
-    BlockKind, BlockStatus, CoordinatorOperation, CoordinatorResponse, HarnessAvailability,
-    NativeApproval, NativeBlock, NativeEvent, NativeEventReceiver, NativeRuntime,
-    NativeRuntimeConfig, NativeSnapshot, offline_harness_capabilities, probe_native_harnesses,
+    BlockKind, BlockStatus, BridgeFailureCode, CLAUDE_SIGN_IN_MESSAGE, CoordinatorOperation,
+    CoordinatorResponse, HarnessAvailability, NativeApproval, NativeBlock, NativeEvent,
+    NativeEventReceiver, NativeRuntime, NativeRuntimeConfig, NativeRuntimeError, NativeSnapshot,
+    offline_harness_capabilities, probe_native_harnesses,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -295,6 +296,48 @@ impl WorkspaceError {
             message: "That approval is no longer pending for this session.",
             recoverable: true,
         }
+    }
+    /// Claude Code is signed out or signed in with something other than the
+    /// user's Claude subscription. PiUI never signs in on the user's behalf.
+    pub(crate) fn subscription_required() -> Self {
+        Self {
+            code: "SIGN_IN_REQUIRED",
+            message: CLAUDE_SIGN_IN_MESSAGE,
+            recoverable: true,
+        }
+    }
+    /// Fast mode can bill paid extra usage beyond the base subscription.
+    pub(crate) fn fast_mode_unsupported() -> Self {
+        Self {
+            code: "NOT_SUPPORTED",
+            message: "Claude Code fast mode is not available in PiUI because it can use paid extra usage.",
+            recoverable: true,
+        }
+    }
+}
+
+/// Maps a native start failure to its typed workspace status. Only a refused
+/// non-subscription Claude Code login has a dedicated, actionable status.
+fn runtime_failure(error: &NativeRuntimeError) -> WorkspaceError {
+    match error {
+        NativeRuntimeError::Bridge(BridgeFailureCode::SubscriptionRequired) => {
+            WorkspaceError::subscription_required()
+        }
+        _ => WorkspaceError::runtime(),
+    }
+}
+
+/// Speed settings are refused before any native request when the adapter
+/// cannot honour them. Claude Code runs only at standard speed.
+fn reject_unsupported_speed(
+    harness: HarnessKind,
+    service_tier: Option<&str>,
+) -> Result<(), WorkspaceError> {
+    match (harness, service_tier) {
+        (HarnessKind::ClaudeCode, Some(tier)) if tier != "standard" => {
+            Err(WorkspaceError::fast_mode_unsupported())
+        }
+        _ => Ok(()),
     }
 }
 
@@ -1185,7 +1228,7 @@ impl WorkspaceHost {
             // process tree; it never affects another session.
             let (runtime, mut events) = tokio::select! {
                 spawned = self.spawn_native(config) => {
-                    spawned.map_err(|_| WorkspaceError::runtime())?
+                    spawned.map_err(|error| runtime_failure(&error))?
                 }
                 () = reservation.cancelled() => return Err(WorkspaceError::conflict()),
             };
@@ -1987,6 +2030,7 @@ fn history_format(harness: HarnessKind) -> WorkspaceHistoryFormat {
         HarnessKind::PrimeAgent => WorkspaceHistoryFormat::PrimeAgent,
         HarnessKind::Codex => WorkspaceHistoryFormat::Codex,
         HarnessKind::Hermes => WorkspaceHistoryFormat::Hermes,
+        HarnessKind::ClaudeCode => WorkspaceHistoryFormat::ClaudeCode,
     }
 }
 
@@ -2085,6 +2129,10 @@ pub async fn workspace_settings_v16(
         .workspace
         .live_runtime(session_id)?
         .ok_or_else(WorkspaceError::closed)?;
+    if let RuntimeSettingsCommand::Set { service_tier, .. } = &command {
+        let harness = host.workspace.record(session_id)?.harness;
+        reject_unsupported_speed(harness, service_tier.as_deref())?;
+    }
     let models = runtime
         .models()
         .await
@@ -2213,7 +2261,7 @@ pub async fn harness_models_v18(
                 "event=harness_catalog_failed phase=start harness={:?} code={error:?}",
                 request.harness
             );
-            WorkspaceError::runtime()
+            runtime_failure(&error)
         })?;
     let drain = tokio::spawn(async move { while events.recv().await.is_some() {} });
     let models = runtime
@@ -3101,6 +3149,7 @@ fn default_title(harness: HarnessKind) -> String {
         HarnessKind::PrimeAgent => "New Prime Agent session",
         HarnessKind::Codex => "New Codex session",
         HarnessKind::Hermes => "New Hermes session",
+        HarnessKind::ClaudeCode => "New Claude Code session",
     }
     .into()
 }
@@ -3403,6 +3452,78 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn claude_code_is_an_additive_v15_harness_value() {
+        let command: WorkspaceCommand = serde_json::from_value(serde_json::json!({
+            "type": "createSession",
+            "workspaceId": "workspace-id",
+            "harness": "claude-code",
+            "permissionMode": "read-only"
+        }))
+        .expect("the v15 command grammar accepts the additive harness");
+        assert!(matches!(
+            command,
+            WorkspaceCommand::CreateSession {
+                harness: HarnessKind::ClaudeCode,
+                permission_mode: PermissionMode::ReadOnly,
+                ..
+            }
+        ));
+        let summary = HarnessSummary {
+            kind: HarnessKind::ClaudeCode,
+            name: "Claude Code".into(),
+            installed: true,
+            version: Some("2.1.232".into()),
+            status: HarnessAvailability::Available,
+            reason: Some(super::CLAUDE_SIGN_IN_MESSAGE.into()),
+        };
+        assert_eq!(
+            serde_json::to_value(summary).expect("summary"),
+            serde_json::json!({
+                "kind": "claude-code", "name": "Claude Code", "installed": true,
+                "version": "2.1.232", "status": "available",
+                "reason": "Sign in to Claude Code with your Claude subscription: run `claude` in a terminal and use /login."
+            })
+        );
+        assert_eq!(
+            super::default_title(HarnessKind::ClaudeCode),
+            "New Claude Code session"
+        );
+        assert_eq!(
+            super::history_format(HarnessKind::ClaudeCode),
+            piui_index::workspace_history::WorkspaceHistoryFormat::ClaudeCode
+        );
+    }
+
+    #[test]
+    fn claude_code_refusals_are_typed_before_native_execution() {
+        use piui_runtime::workspace_runtime::{BridgeFailureCode, NativeRuntimeError};
+        let signed_out = super::runtime_failure(&NativeRuntimeError::Bridge(
+            BridgeFailureCode::SubscriptionRequired,
+        ));
+        assert_eq!(signed_out.code, "SIGN_IN_REQUIRED");
+        assert_eq!(
+            signed_out.message,
+            "Sign in to Claude Code with your Claude subscription: run `claude` in a terminal and use /login."
+        );
+        assert!(signed_out.recoverable);
+        for other in [
+            NativeRuntimeError::Timeout,
+            NativeRuntimeError::HarnessUnavailable,
+            NativeRuntimeError::Bridge(BridgeFailureCode::OperationFailed),
+        ] {
+            assert_eq!(super::runtime_failure(&other).code, "RUNTIME_FAILED");
+        }
+        let fast = super::reject_unsupported_speed(HarnessKind::ClaudeCode, Some("fast"))
+            .expect_err("fast mode can use paid extra usage");
+        assert_eq!(fast.code, "NOT_SUPPORTED");
+        assert!(fast.message.contains("paid extra usage"));
+        assert!(super::reject_unsupported_speed(HarnessKind::ClaudeCode, Some("turbo")).is_err());
+        assert!(super::reject_unsupported_speed(HarnessKind::ClaudeCode, Some("standard")).is_ok());
+        assert!(super::reject_unsupported_speed(HarnessKind::ClaudeCode, None).is_ok());
+        assert!(super::reject_unsupported_speed(HarnessKind::Codex, Some("fast")).is_ok());
     }
 
     #[test]
@@ -4251,6 +4372,44 @@ mod native_host_tests {
     fn cleanup(host: Arc<HostState>, root: PathBuf) {
         drop(host);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refused_claude_code_login_is_a_typed_sign_in_status_without_a_session() {
+        use piui_runtime::workspace_runtime::{
+            BridgeFailureCode, CLAUDE_SIGN_IN_MESSAGE, NativeRuntimeError,
+        };
+        let root = test_root("claude-sign-in");
+        let host = Arc::new(HostState::open(&root, false).expect("host state"));
+        install_test_spawner(&host.workspace, |config: NativeRuntimeConfig| async move {
+            assert_eq!(config.harness, HarnessKind::ClaudeCode);
+            assert_eq!(config.title.as_deref(), Some("New Claude Code session"));
+            assert_eq!(config.service_tier, None);
+            Err::<(NativeRuntime, NativeEventReceiver), _>(NativeRuntimeError::Bridge(
+                BridgeFailureCode::SubscriptionRequired,
+            ))
+        });
+        let workspace_id = host.personal_workspace.project_id.clone();
+        let error = dispatch(
+            &host,
+            WorkspaceCommand::CreateSession {
+                workspace_id,
+                harness: HarnessKind::ClaudeCode,
+                title: None,
+                model: None,
+                permission_mode: PermissionMode::Native,
+            },
+        )
+        .await
+        .expect_err("a signed-out Claude Code never starts");
+        assert_eq!(error.code, "SIGN_IN_REQUIRED");
+        assert_eq!(error.message, CLAUDE_SIGN_IN_MESSAGE);
+        assert!(no_live_or_starting_runtime(&host));
+        assert!(
+            session_titled(&host, "New Claude Code session").is_none(),
+            "a refused start leaves no draft session"
+        );
+        cleanup(host, root);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

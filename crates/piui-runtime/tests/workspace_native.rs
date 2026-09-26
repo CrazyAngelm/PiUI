@@ -73,6 +73,8 @@ fn native_config(kind: HarnessKind, label: &str) -> NativeRuntimeConfig {
     let (allowed_tools, native_subagents) = match kind {
         HarnessKind::Pi => (Some(Vec::new()), Some(false)),
         HarnessKind::PrimeAgent => (Some(Vec::new()), Some(false)),
+        // `--tools ""` disables every built-in tool; subagents stay off.
+        HarnessKind::ClaudeCode => (Some(Vec::new()), Some(false)),
         // Codex 0.147.0 does not expose a restrictive built-in tool allowlist.
         // The prompt asks for no tools and the proof rejects any observed use.
         HarnessKind::Codex | HarnessKind::Hermes => (None, None),
@@ -346,6 +348,65 @@ async fn live_hermes_workspace_coordinator() {
     runtime.dispose().await.expect("managed process cleanup");
     assert!(called, "real Hermes native MCP invoked host coordinator");
     assert_final_assistant(blocks.into_values());
+}
+
+/// Real Claude Code evidence without inference: resolves the installed CLI,
+/// verifies `claude --version`, performs only the `initialize` control request
+/// (no prompt, no model turn, no transcript) and proves the subscription gate.
+/// A signed-out or non-subscription CLI must fail with the typed sign-in
+/// status; a Claude subscription login must list native models.
+#[tokio::test]
+#[ignore = "Runs the installed Claude Code initialize handshake only; no prompt or model turn"]
+async fn installed_claude_code_initialize_is_subscription_gated() {
+    use piui_runtime::workspace_runtime::{
+        BridgeFailureCode, CLAUDE_SIGN_IN_MESSAGE, HarnessAvailability, claude_sign_in_required,
+        probe_native_harnesses,
+    };
+    let summary = probe_native_harnesses()
+        .into_iter()
+        .find(|summary| summary.kind == HarnessKind::ClaudeCode)
+        .expect("Claude Code is part of discovery");
+    eprintln!(
+        "claude discovery status={:?} version={:?}",
+        summary.status, summary.version
+    );
+    assert_eq!(summary.status, HarnessAvailability::Available);
+    let mut config = native_config(HarnessKind::ClaudeCode, "claude-catalog");
+    config.allowed_tools = None;
+    config.native_subagents = None;
+    let started = Instant::now();
+    match NativeRuntime::spawn_catalog(config).await {
+        Ok((runtime, mut events)) => {
+            let drain = tokio::spawn(async move { while events.recv().await.is_some() {} });
+            let models = runtime.catalog_models().await.expect("native catalog");
+            eprintln!(
+                "claude initialize subscription=verified models={} elapsed_ms={}",
+                models.len(),
+                started.elapsed().as_millis()
+            );
+            assert!(!models.is_empty());
+            assert!(models.iter().all(|model| !model.supports_fast));
+            assert!(!claude_sign_in_required());
+            runtime.terminate().await.expect("catalog process retired");
+            drain.abort();
+        }
+        Err(error) => {
+            eprintln!(
+                "claude initialize error={error:?} elapsed_ms={}",
+                started.elapsed().as_millis()
+            );
+            assert_eq!(
+                error,
+                NativeRuntimeError::Bridge(BridgeFailureCode::SubscriptionRequired)
+            );
+            assert!(claude_sign_in_required());
+            let summary = probe_native_harnesses()
+                .into_iter()
+                .find(|summary| summary.kind == HarnessKind::ClaudeCode)
+                .expect("Claude Code summary");
+            assert_eq!(summary.reason.as_deref(), Some(CLAUDE_SIGN_IN_MESSAGE));
+        }
+    }
 }
 
 #[tokio::test]
