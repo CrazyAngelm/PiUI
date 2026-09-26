@@ -120,12 +120,15 @@ test.describe('approvals', () => {
   test('the Inbox decides a waiting approval and the queued follow-up drains', async ({ lab, page }) => {
     test.slow(); // Several native turns are simulated with real timers.
     await lab.open();
+    // Two chats wait: the e2e permission and an MCP form request.
+    await expect(lab.nav('Inbox')).toHaveAccessibleName('Inbox 2 waiting');
     await lab.nav('Inbox').click();
     const card = page.getByRole('article', { name: 'Permission request' });
     await expect(card.getByRole('heading', { name: 'Run the full e2e suite?' })).toBeVisible();
     await card.getByRole('button', { name: 'Allow once' }).click();
     await expect(card).toHaveCount(0);
-    await expect(lab.nav('Inbox')).toHaveAccessibleName('Inbox');
+    await expect(lab.nav('Inbox')).toHaveAccessibleName('Inbox 1 waiting');
+    await expect(page.getByRole('article', { name: 'MCP server lab-issues' })).toBeVisible();
 
     await lab.chat(/Fix flaky scheduler test/).click();
     const queue = page.getByRole('region', { name: 'Message queue' });
@@ -133,6 +136,61 @@ test.describe('approvals', () => {
     await expect(queue).toBeHidden({ timeout: 45_000 });
     await expect(page.getByRole('region', { name: 'Conversation messages' }))
       .toContainText('After the e2e run, add a CHANGELOG entry for the fix.');
+  });
+});
+
+test.describe('MCP form requests', () => {
+  async function openTriage(lab: Lab): Promise<Locator> {
+    await lab.open();
+    await lab.chat(/File an issue for the broken docs link/).click();
+    const card = lab.page.getByRole('article', { name: 'MCP server lab-issues' });
+    await expect(card.getByRole('heading', { level: 3, name: 'MCP server request' })).toBeVisible();
+    return card;
+  }
+
+  test('values are checked before accepting; a valid answer is sent', async ({ lab, page }) => {
+    const card = await openTriage(lab);
+    const form = card.getByRole('group', { name: 'Requested values' });
+    const title = form.getByRole('textbox', { name: 'Title' });
+    await expect(title).toHaveValue('Broken link in the harness guide');
+    await expect(form.getByRole('combobox', { name: 'Priority' })).toHaveValue('choice-2');
+    await expect(form.getByRole('checkbox', { name: 'Notify the docs team' })).toBeChecked();
+    await expect(card).toContainText('Some optional values cannot be entered here and are left empty.');
+
+    // Too short, out of range and not an email: nothing is sent, focus goes to the first problem.
+    await title.fill('Bug');
+    const estimate = form.getByRole('textbox', { name: /^Estimate \(hours\)/ });
+    await estimate.fill('0');
+    const email = form.getByRole('textbox', { name: /^Reporter email/ });
+    await email.fill('not-an-email');
+    await card.getByRole('button', { name: 'Accept' }).click();
+    await expect(title).toBeFocused();
+    await expect(title).toHaveAttribute('aria-invalid', 'true');
+    await expect(form.getByRole('alert').filter({ hasText: 'Enter at least 5 characters.' })).toBeVisible();
+    await expect(form.getByRole('alert').filter({ hasText: 'Enter 1 or more.' })).toBeVisible();
+    await expect(form.getByRole('alert').filter({ hasText: 'Enter an email address.' })).toBeVisible();
+    await expect(card).toBeVisible();
+
+    // Fixing a field clears its message; blanks in optional fields are allowed.
+    await title.fill('Broken harness setup link');
+    await expect(form.getByRole('alert').filter({ hasText: 'Enter at least 5 characters.' })).toHaveCount(0);
+    await estimate.fill('2');
+    await email.fill('');
+    await form.getByRole('combobox', { name: 'Priority' }).selectOption({ label: 'Urgent' });
+    await card.getByRole('button', { name: 'Accept' }).click();
+    await expect(card).toBeHidden();
+    const transcript = page.getByRole('region', { name: 'Conversation messages' });
+    await expect(transcript).toContainText('LAB-142', { timeout: 20_000 });
+    await expect(transcript).toContainText('I filed');
+  });
+
+  test('declining answers the server without sending values', async ({ lab, page }) => {
+    const card = await openTriage(lab);
+    // Invalid values do not block a decline.
+    await card.getByRole('group', { name: 'Requested values' }).getByRole('textbox', { name: 'Title' }).fill('');
+    await card.getByRole('button', { name: 'Decline' }).click();
+    await expect(card).toBeHidden();
+    await expect(page.getByRole('region', { name: 'Conversation messages' })).toContainText('I did not file an issue', { timeout: 20_000 });
   });
 });
 

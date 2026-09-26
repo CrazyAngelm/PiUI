@@ -108,4 +108,44 @@ test.describe('pipelines', () => {
     await expect(developer).toContainText('Failed');
     await expect(run).toContainText('Failed');
   });
+
+  test('the run header wraps instead of overlapping when the step panel is open', async ({ lab, page }) => {
+    await lab.open();
+    const runs = await lab.openRuns();
+    await runs.getByRole('button', { name: /^Succeeded Code review/ }).click();
+    const run = page.getByRole('region', { name: 'Run' });
+    await run.getByRole('application').getByRole('group', { name: 'Planner', exact: true }).click();
+    await expect(page.getByRole('tablist', { name: 'Step details' })).toBeVisible();
+
+    const parts = [
+      run.getByRole('heading', { level: 2, name: 'Code review' }),
+      run.getByText('Succeeded', { exact: true }),
+      run.getByText('3 of 3 steps done'),
+      run.getByText('Started by Nightly code review'),
+      run.getByRole('button', { name: 'Inputs' }),
+      run.getByRole('button', { name: 'Edit pipeline' }),
+    ];
+    const boxes = [];
+    for (const part of parts) {
+      await expect(part).toBeVisible();
+      const box = await part.boundingBox();
+      expect(box).not.toBeNull();
+      boxes.push(box!);
+    }
+    for (let first = 0; first < boxes.length; first += 1) {
+      for (let second = first + 1; second < boxes.length; second += 1) {
+        const a = boxes[first]!;
+        const b = boxes[second]!;
+        const overlap = a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+        expect(overlap, `header parts ${first} and ${second} overlap`).toBe(false);
+      }
+    }
+    // Everything stays inside the stage, left of the step panel.
+    const panel = await page.getByRole('complementary', { name: /Planner/ }).boundingBox();
+    for (const box of boxes) expect(box.x + box.width).toBeLessThanOrEqual(panel!.x + 1);
+
+    // The inputs stay reachable from the wrapped header.
+    await run.getByRole('button', { name: 'Inputs' }).click();
+    await expect(page.getByRole('dialog', { name: 'Run inputs' })).toContainText('Review the changes merged since the last nightly run');
+  });
 });
