@@ -79,6 +79,21 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   `orchestration_cancel_script_test_v1`, contract `orchestration-script-test-v1`)
   runs the draft once through the host script runner with an editable sample
   stdin and shows what a run would record; it never starts an agent or model.
+- `feat/run-debugging` (`96cd87a`…) — run observability+ (P3 item 10,
+  [RUN_DEBUGGING.md](RUN_DEBUGGING.md), ADR-034). Pinned data (orchestration
+  v6.3, additive): "Pin output" in a finished run's step panel (the host reads
+  the recorded output, hash-verified for native answers, and pins it at the
+  saved pipeline's revision); pin chip and inspector section (view, unpin) in
+  the editor; the Start dialog's "Use pinned data (pinned steps don't run)";
+  the coordinator admits pinned steps as succeeded without a session or
+  process, checks them against the result contract and hands them downstream;
+  runs mark those tasks `pinned`; script test samples use pinned upstream
+  outputs. "Debug in editor" opens a run's frozen pipeline as a new unsaved
+  draft with a checklist of outputs to pin. Runs archive/unarchive ("Show
+  archived runs") and delete finished runs through `orchestration_delete_run_v1`
+  (PiUI's journal entry and verified script working copies only; running and
+  uncertain runs refused; read-only in safe mode). Commands:
+  `orchestration-run-debugging-v1`. Pins stay out of system files.
 
 ## In progress
 
@@ -103,6 +118,13 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   sign-in hint until the user runs `claude` → `/login`.
 - Codex command output is unbounded in the bridge; a non-string Pi input
   placeholder would break Rust parsing.
+- The orchestration journal is one document rewritten per transaction, and an
+  older build discards a generation it cannot parse: once pins, pinned runs or
+  archived runs exist, rolling back to a build without v6.3 loses that data
+  (ADR-031 would fix both). Fields are omitted while unused, so a journal
+  without them stays readable by the previous build.
+- Pinned artifact paths are not re-checked when a run uses them. An automation's
+  history still names a deleted run; opening it says the run is gone.
 
 ## Next
 

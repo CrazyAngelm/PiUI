@@ -509,6 +509,9 @@ rewrites under one mutex to a transactional store (SQLite WAL) with per-run
 locking, run archival/deletion and incremental run events. This data is
 authoritative, not cache (ADR-006/023 distinction kept).
 
+**Status:** run archival and deletion ship ahead of the new store on the
+existing journal (run debugging v1, ADR-034); each is one journal generation.
+
 ## ADR-032 — Plugins run outside the WebView with explicit trust (planned)
 
 **Decision:** third-party plugins may contribute harnesses, node types, MCP
@@ -547,8 +550,8 @@ draft once, without a pipeline run, when the person clicks Test: an explicit
 action with the same admission (trusted, live project outside safe mode,
 re-checked every 500 ms), the same runner, containment, environment, timeout,
 bounds and result checks, and a user-editable sample stdin (default: the run
-inputs' defaults, `{text: null, data: null}` for every direct dependency and
-the step). The result shows exactly what a run would record. Nothing is
+inputs' defaults, each direct dependency's pinned data (ADR-034) or
+`{text: null, data: null}`, and the step). The result shows exactly what a run would record. Nothing is
 recorded in a run, cancellation stops the tree, and the command can only name a
 script runtime, so it never starts an agent or a paid model call. This grants
 no authority a saved script step lacks: whoever can edit a trusted project's
@@ -560,3 +563,30 @@ script is shown (never in the main bundle). The desktop CSP allows
 a document, which that policy refuses, but uses constructable stylesheets in a
 shadow root, so the editor always mounts in its own shadow root. If it cannot
 load, the plain text field remains.
+
+## ADR-034 — Run debugging: pinned data, debug in editor, archive and delete (orchestration v6.3)
+
+**Decision:** pinned data is saved definition data, not a run cache. A
+pipeline step may hold a person's pinned output (text and/or a result, 256 KiB
+each, 1 MiB per pipeline), usually pinned from a finished run by the host,
+which reads the recorded output itself (hash-verified native history or the run
+record) and writes it at the pipeline revision the person saw. A run uses pins
+only when the person starts it with the explicit *Use pinned data* option; the
+coordinator then admits each ready pinned step as succeeded with its pinned
+output, checked against its result contract, before any launch, and marks the
+task `pinned`. Downstream steps receive it through the recorded-output
+dependency path. Without the option a run freezes no pins; asking for pinned
+data on a pipeline without pins is refused rather than running every step.
+Pins never apply to callable roles, program routers or reviewing steps, and a
+review whose correction step is pinned waits for a person instead of looping.
+Portable system files never carry pins (they are copies of run results).
+
+*Debug in editor* opens a run's original definitions as a new unsaved draft
+with new ids (saving creates a copy; the saved pipeline is never changed) and
+the outputs the person checks as pins. Archiving a finished run is UI metadata
+beside the runs. Deleting a finished run removes only PiUI's records — its
+journal entry and script working copies verified as plain direct children of
+PiUI's script folder, never following links or reparse points — never native
+sessions or project files; running and uncertain runs are refused and safe
+mode is read-only. Additive within orchestration v6 (v6.3) plus the
+independent run debugging v1 commands. See [RUN_DEBUGGING.md](RUN_DEBUGGING.md).

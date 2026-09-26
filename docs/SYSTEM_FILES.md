@@ -17,6 +17,12 @@ harnesses can run a model call read-only. Example:
 [agent → script → model call](../examples/systems/agent-script-llm.piui.json).
 
 
+Pinned data (orchestration v6.3, [RUN_DEBUGGING.md](RUN_DEBUGGING.md)) is never
+part of a system file: pins are copies of run results, which exports exclude
+like native history. Export omits them and says so; import creates no pins; the
+format is unchanged. The assistant keeps the pins of nodes that survive a
+proposal.
+
 Use UTF-8 `*.piui.json`. JSON Schema is in [system-file-v1.schema.json](../contracts/system-file-v1.schema.json); [examples](../examples/systems) cover a single agent, Codex → Prime review, and parallel work followed by synthesis. Replace example model placeholders with actual available native model IDs before execution.
 
 ```powershell
