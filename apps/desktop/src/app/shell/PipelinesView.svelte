@@ -19,6 +19,7 @@
   // library still use the existing orchestration contribution.
   const editor = import('../pipelines/PipelineEditor.svelte');
   const runsView = import('../runs/RunsView.svelte');
+  const automationsView = import('../automations/AutomationsView.svelte');
   const panel = import('../../features/orchestration/OrchestrationPanel.svelte');
   let epoch = $state(0);
   let startedRun = $state.raw<OrchestrationRunV6 | undefined>();
@@ -110,6 +111,22 @@
             initialRun={startedRun?.id === runId ? startedRun : undefined}
             onOpenRun={(id) => store.navigate({ name: 'pipelines', section: 'runs', runId: id })}
             onEdit={() => setSection('systems')}
+          />
+        {/key}
+      {:catch}
+        <EmptyState title={$t('Pipelines are unavailable')} description={$t('Chats and history still work.')} />
+      {/await}
+    {:else if section === 'schedules'}
+      {#await automationsView}
+        <div class="loading"><Skeleton lines={5} /></div>
+      {:then module}
+        {#key `${workspace.id}:${epoch}`}
+          <module.default
+            workspaceId={workspace.id}
+            safeMode={store.safeMode}
+            client={orchestrationHost}
+            onOpenRun={(id) => store.navigate({ name: 'pipelines', section: 'runs', runId: id })}
+            onEditPipelines={() => setSection('systems')}
           />
         {/key}
       {:catch}
