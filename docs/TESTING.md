@@ -74,21 +74,43 @@ Covered flows, each with at least one failure path:
   project asks for trust; safe mode; signed-out Claude Code; approval allow,
   deny and from the Inbox; follow-up queue that drains after the turn; steer
   into a running turn; an uncertain delivery that blocks the queue.
+- MCP form requests (Codex elicitations): field checks with focus on the first
+  problem, accept with valid values, decline.
+- Pi extension UI (`/extension-demo` in "Pi extension playground"): notices,
+  statuses, panels above and below the message box, the window title, prepared
+  text and the four dialog kinds, answered and then declined or dismissed.
+- Pi session history: a session with three branches, the read-only reader, a
+  damaged file with the generic fallback, a filter without matches.
+- Run from a chat: `/run` → inputs → "Run started" toast → Open run, Ctrl+K
+  "Run pipeline…", a project without saved pipelines.
 - Pipelines: Review loop template → Start inputs → Check with a graph issue →
   Run (required input refused, then accepted) → run canvas states → step panel
   tabs → "Accept last result" / "One more round" at a one-round review limit;
   a failed run keeps its failure when repeating is declined.
 - Editor: Model call and Script nodes, their inspector tabs, the "not a
-  sandbox" warning, Insert example (Node.js and Python), an empty script and an
-  invalid time limit.
+  sandbox" warning, the CodeMirror code field (Insert example for Node.js and
+  Python, Tab indents, Escape then Tab leaves), an empty script and an invalid
+  time limit; Test script (success, `// lab:fail` with stderr, invalid sample,
+  stale result); node type change (lossy-change dialog, cancel, change, one
+  undo).
+- Runs: the header wraps instead of overlapping with the step panel open.
 - Automations: weekday calendar schedule with the next-run preview, required
-  pipeline inputs, on/off; empty time and empty day set are refused.
+  pipeline inputs, on/off, the name following the pipeline; empty time and
+  empty day set are refused; "After an event" rules (self-start warning, no
+  result chosen, file patterns, quiet period, preview); Pause all / Resume,
+  also from Settings → Background.
+- Settings: Background (tray and sign-in switches in the lab, read-only in
+  safe mode), Extensions (Pi and Prime Agent inventories, empty inventory).
 - Keyboard: skip link, sidebar tab order and activation, global shortcuts,
   dialog focus trap with Escape and focus return (also from a menu), pickers.
-- Accessibility: axe-core (WCAG 2.1 A/AA) on twelve screens in light and dark;
-  serious and critical violations fail. The only reviewed exception is listed
-  in `e2e/screens.spec.ts` (`KNOWN`), with its reason.
-- CSP: the production build under the shipped policy (see above).
+- Accessibility: axe-core (WCAG 2.1 A/AA) on 23 screens (including the MCP
+  form, script test, node type dialog, run inputs, Pi history, extension
+  surfaces, run dialog, event automation and the new Settings sections) in
+  light and dark; serious and critical violations fail. The only reviewed
+  exception is listed in `e2e/screens.spec.ts` (`KNOWN`), with its reason.
+- CSP: the production build under the shipped policy (see above), including
+  CodeMirror, the script test, the MCP card, `/run`, extension surfaces, Pi
+  history and the Background and Extensions settings.
 
 Writing specs: use semantic locators (`getByRole` with the accessible name,
 `getByLabel`). When a control has no accessible name, add one to the component

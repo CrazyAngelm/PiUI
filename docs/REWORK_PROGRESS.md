@@ -134,6 +134,15 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
     `5a07a69` timestamp contrast, palette search label and matching, named
     canvas nodes and connections.
 
+- `feat/e2e-2` — E2E for the merged harness polish, step editing, classic port
+  and triggers (MCP forms, node type change, Test script, Pi history,
+  `/extension-demo`, `/run`, event automations and pause, Settings →
+  Background and Extensions); the run header wraps with the step panel open.
+  Fixes found by the tests: the automation form reset itself when the pipeline
+  changed (name no longer followed it); the run dialog's "Next…" stayed a
+  disabled "Start run"; CodeMirror scroll area, optional-label contrast and
+  popover role (axe).
+
 ## In progress
 
 - Nothing; next steps wait for the owner's review of the remaining-work plan.
@@ -171,10 +180,10 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   further visible copy exceeds it until per-language catalogs load lazily or
   the budget is revised.
 
-- Run view header: with the step panel open at 1280 px, the status badge and
-  "Inputs" overlap. bits-ui Command points `aria-controls` at its viewport, so
-  axe flags the palette list (`scrollable-region-focusable`, reviewed
-  exception). The Ubuntu full-workspace Rust job has not run yet.
+- bits-ui Command points `aria-controls` at its viewport, so axe flags the
+  palette list (`scrollable-region-focusable`, reviewed exception). Approval
+  cards use an h3 under the chat's h1 (axe heading-order, moderate). The Ubuntu
+  full-workspace Rust job has not run yet.
 
 - Triggers: no single-instance guard yet, so launching PiUI while it waits in
   the tray starts a second process (its journal writes then fail instead of
