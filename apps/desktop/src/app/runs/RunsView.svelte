@@ -25,7 +25,8 @@
     runId?: string;
     initialRun?: OrchestrationRunV6;
     onOpenRun: (runId: string) => void;
-    onEdit: () => void;
+    /** Opens the editor, on the run's saved pipeline when it has one. */
+    onEdit: (launchCommandId: string | undefined) => void;
   }
   let { workspaceId, safeMode, client, runId, initialRun, onOpenRun, onEdit }: Props = $props();
   const store = useWorkspace();
@@ -182,7 +183,7 @@
               {$t('Stop run')}
             </Button>
           {/if}
-          <Button size="sm" variant="ghost" onclick={onEdit}>
+          <Button size="sm" variant="ghost" onclick={() => onEdit(run?.definition.launchCommand?.id)}>
             {#snippet leading()}<PenLine />{/snippet}
             {$t('Edit pipeline')}
           </Button>
@@ -205,7 +206,7 @@
     {:else}
       <EmptyState icon={History} title={$t('No run selected')} description={runs.summaries.length ? $t('Choose a run on the left to see each step, its result and its conversation.') : $t('Build a pipeline in the editor and press Run. Every run appears here with its steps and results.')}>
         {#snippet actions()}
-          <Button size="sm" onclick={onEdit}>{$t('Open editor')}</Button>
+          <Button size="sm" onclick={() => onEdit(undefined)}>{$t('Open editor')}</Button>
         {/snippet}
       </EmptyState>
     {/if}

@@ -33,9 +33,16 @@
   const mainSection = $derived<MainSection>(section === 'runs' || section === 'schedules' ? section : 'systems');
   const librarySection = $derived(section === 'agents' || section === 'teams' || section === 'pipelines');
 
+  // "Edit pipeline" from a run opens that run's saved pipeline in the editor.
+  let editCommand = $state<string | undefined>();
   function setSection(next: PipelineSection): void {
+    if (next !== 'systems') editCommand = undefined;
     if (next === section) return;
     store.navigate({ name: 'pipelines', section: next });
+  }
+  function editPipeline(commandId: string | undefined): void {
+    editCommand = commandId;
+    setSection('systems');
   }
   function selectProject(id: string): void {
     store.guard(() => {
@@ -110,7 +117,7 @@
             {runId}
             initialRun={startedRun?.id === runId ? startedRun : undefined}
             onOpenRun={(id) => store.navigate({ name: 'pipelines', section: 'runs', runId: id })}
-            onEdit={() => setSection('systems')}
+            onEdit={editPipeline}
           />
         {/key}
       {:catch}
@@ -140,6 +147,7 @@
           <module.default
             workspaceId={workspace.id}
             safeMode={store.safeMode}
+            openCommandId={editCommand}
             onDirtyChange={(dirty) => (store.pipelineDirty = dirty)}
             onRun={opened}
             onLibrary={() => setSection('agents')}

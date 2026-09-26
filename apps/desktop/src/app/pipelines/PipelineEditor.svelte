@@ -37,11 +37,13 @@
   interface Props {
     workspaceId: string;
     safeMode: boolean;
+    /** A saved pipeline to open on mount, e.g. from a run. */
+    openCommandId?: string;
     onDirtyChange: (dirty: boolean) => void;
     onRun: (run: OrchestrationRunV6) => void;
     onLibrary: () => void;
   }
-  let { workspaceId, safeMode, onDirtyChange, onRun, onLibrary }: Props = $props();
+  let { workspaceId, safeMode, openCommandId, onDirtyChange, onRun, onLibrary }: Props = $props();
   const workspace = useWorkspace();
   const editor = new PipelineEditorStore(untrack(() => workspaceId), untrack(() => safeMode));
 
@@ -99,6 +101,8 @@
 
   onMount(() => {
     void editor.refresh();
+    const initial = untrack(() => openCommandId);
+    if (initial) editor.open(initial);
     return () => onDirtyChange(false);
   });
 
