@@ -17,6 +17,7 @@
   import HarnessMark from './HarnessMark.svelte';
   import ExtensionsSettings from '../settings/ExtensionsSettings.svelte';
   import ClassicViewEntry from '../settings/ClassicViewEntry.svelte';
+  import AboutSettings from '../settings/AboutSettings.svelte';
   import { useWorkspace } from './context';
 
   interface Props {
@@ -214,12 +215,7 @@
         {/each}
       </div>
     {:else}
-      <h2>{$t('About')}</h2>
-      <div class="rows">
-        <div class="row row--tight"><span>PiUI</span><span class="muted">0.2.0</span></div>
-        <div class="row row--tight"><span>{$t('Safe mode')}</span><span class="muted">{store.safeMode ? $t('On') : $t('Off')}</span></div>
-      </div>
-      <p class="muted small">{$t('Local-first: no account, cloud backend or telemetry. Harnesses talk to their own providers.')}</p>
+      <AboutSettings safeMode={store.safeMode} />
       <ClassicViewEntry />
     {/if}
   </div>

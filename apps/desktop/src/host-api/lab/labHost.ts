@@ -1,4 +1,5 @@
 import type { HostTransport } from '../transport';
+import { appUpdateHandlers, updateScenarioFromSearch, type LabUpdateScenario } from './appUpdateFake';
 import { classicHandlers } from './classicFake';
 import { composerHandlers } from './composerFake';
 import { demoExtensions, extensionHandlers } from './extensionsFake';
@@ -34,6 +35,8 @@ export interface LabHostOptions {
   readonly ambient?: boolean;
   /** Claude Code signed out (see `withSignedOutClaude`). Defaults to `?claude=signed-out`. */
   readonly claudeSignedOut?: boolean;
+  /** App update state (see `appUpdateFake.ts`). Defaults to `?updates=`, then `off`. */
+  readonly updates?: LabUpdateScenario;
 }
 
 export interface LabHost extends HostTransport {
@@ -113,6 +116,11 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     ...scriptTestHandlers(runtime),
     ...piHistoryHandlers(runtime, seed.nativeHistory ?? EMPTY_NATIVE_HISTORY, bus),
     ...extensionHandlers(scenario === 'empty' ? [] : demoExtensions()),
+    ...appUpdateHandlers(
+      options.updates ?? (typeof window === 'undefined' ? 'off' : updateScenarioFromSearch(window.location.search)),
+      bus,
+      clock,
+    ),
   };
   startActivity(seed.activity, runtime, scheduler, options.ambient ?? true);
 

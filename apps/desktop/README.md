@@ -36,6 +36,16 @@ runs an agent, touches a file or makes a network request. Choose a scenario with
 Add `&claude=signed-out` to any scenario to see Claude Code without a subscription login: the new-chat composer's
 sign-in status and a saved "Claude check" system whose run fails before it starts.
 
+Add `&updates=` to see Settings → About for signed updates (nothing is downloaded or installed):
+
+- `off` (default): a build without updater keys, like every local build — no update controls;
+- `current`: configured; a check finds nothing newer;
+- `available`: configured with automatic checks on; 0.2.1 is offered, a notice appears a few seconds after start,
+  and "Download and restart" simulates the download;
+- `failing`: every check fails as if offline;
+- `bad-signature`: the download fails the signature check, so nothing installs;
+- `install-fails`: the Windows installer does not start after the agents stopped, so PiUI offers a restart.
+
 The classic `client.ts` routes (bootstrap, preferences, projects, trust) still use `mockClient.ts` in the browser.
 
 ## Commands
