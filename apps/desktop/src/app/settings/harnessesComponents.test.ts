@@ -44,11 +44,11 @@ describe('Settings → Harnesses components', () => {
     expect(body).toContain('aria-label="Built-in harnesses"');
     for (const name of ['Pi', 'Prime Agent', 'Codex', 'Hermes', 'Claude Code', 'Gemini CLI', 'Qwen Code', 'Lab Agent']) expect(body).toContain(`>${name}</strong>`);
     expect(body).toContain('0.147.0 – 0.157.x');
-    expect(body).toContain('C:/Users/lab/AppData/Roaming/npm/node_modules/@openai/codex/bin/codex.js');
+    expect(body).toContain('C:/Users/example/AppData/Roaming/npm/node_modules/@openai/codex/bin/codex.js');
     expect(body).toContain('Claude Code runs only on your Claude subscription: run `claude` in a terminal and use /login.');
     // ACP agents: the exact command line, the identity, readiness and the next decision.
     expect(body).toContain('acp:gemini-cli');
-    expect(body).toContain('"C:/Program Files/nodejs/node.exe" C:/Users/lab/AppData/Roaming/npm/node_modules/@google/gemini-cli/dist/index.js --experimental-acp');
+    expect(body).toContain('"C:/Program Files/nodejs/node.exe" C:/Users/example/AppData/Roaming/npm/node_modules/@google/gemini-cli/dist/index.js --experimental-acp');
     expect(body).toContain('Ships with PiUI');
     expect(body).toContain('Added by you');
     expect(body).toContain("The agent's program was not found on PATH.");
@@ -85,7 +85,7 @@ describe('Settings → Harnesses components', () => {
     const lab = agentOf(await registryOf('demo'), 'lab-agent');
     const { body } = render(AcpTrustReview, { props: { agent: lab, error: undefined, onReview: noop } });
     expect(body).toContain('Command line');
-    expect(body).toContain('C:/Users/lab/.local/bin/lab-agent.exe');
+    expect(body).toContain('C:/Users/example/.local/bin/lab-agent.exe');
     // Each argument separately, exactly as PiUI passes it.
     expect(body).toMatch(/<li><code[^>]*>--acp<\/code><\/li>/);
     expect(body).toContain('LAB_AGENT_TOKEN, HTTPS_PROXY');

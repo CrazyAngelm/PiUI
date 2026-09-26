@@ -66,7 +66,7 @@ describe('UI Lab ACP agent registry', () => {
     expect(gemini.commandLine?.args.slice(1)).toEqual(['--experimental-acp']);
     expect(agent(view, 'qwen-code')).toMatchObject({ state: 'not-installed', reason: "The agent's program was not found on PATH.", trusted: false });
     expect(agent(view, 'lab-agent')).toMatchObject({
-      state: 'untrusted', trusted: false, commandLine: { program: 'C:/Users/lab/.local/bin/lab-agent.exe', args: ['--acp'] },
+      state: 'untrusted', trusted: false, commandLine: { program: 'C:/Users/example/.local/bin/lab-agent.exe', args: ['--acp'] },
     });
     // Listing never probes a user descriptor before trust.
     expect(agent(view, 'lab-agent').version).toBeUndefined();

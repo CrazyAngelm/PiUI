@@ -13,7 +13,7 @@ export const harnessRegistryFixture: HarnessRegistryV1 = {
       name: 'Codex',
       source: 'built-in',
       state: 'ready',
-      location: 'C:/Users/lab/AppData/Roaming/npm/node_modules/@openai/codex/bin/codex.js',
+      location: 'C:/Users/example/AppData/Roaming/npm/node_modules/@openai/codex/bin/codex.js',
       version: '0.157.1',
       verifiedVersions: '0.147.0 – 0.157.x',
       signInHint: "Sign in with Codex's own flow: run `codex login` in a terminal.",

@@ -43,10 +43,11 @@ import { sha256Hex } from './sha256';
  * secret-like environment name need their own confirmation, every decision
  * binds to the descriptor fingerprint, and changes name the registry revision.
  *
- * Scenarios: `demo`/`long`/`safe` ship a ready Gemini CLI (version confirmed),
- * a user descriptor whose program is missing (Qwen Code) and an untrusted one
- * (Lab Agent, which asks to sign in on its first start). `empty` is a fresh
- * machine: Gemini CLI is not installed. Safe mode runs no discovery.
+ * Scenarios: `demo`/`long` ship a ready Gemini CLI (version confirmed), a
+ * user descriptor whose program is missing (Qwen Code) and an untrusted one
+ * (Lab Agent, which asks to sign in on its first start). `safe` has the same
+ * agents but runs no discovery, so nothing is checked. `empty` is a fresh
+ * machine: Gemini CLI is not installed.
  */
 
 const NODE = 'C:/Program Files/nodejs/node.exe';
@@ -64,8 +65,8 @@ interface LabProgram {
 }
 
 const LAB_PATH: Readonly<Record<string, LabProgram>> = {
-  gemini: { entry: 'C:/Users/lab/AppData/Roaming/npm/node_modules/@google/gemini-cli/dist/index.js', versionOutput: '0.39.1\n' },
-  'lab-agent': { entry: 'C:/Users/lab/.local/bin/lab-agent.exe', versionOutput: 'lab-agent 1.4.0 (lab build)\n' },
+  gemini: { entry: 'C:/Users/example/AppData/Roaming/npm/node_modules/@google/gemini-cli/dist/index.js', versionOutput: '0.39.1\n' },
+  'lab-agent': { entry: 'C:/Users/example/.local/bin/lab-agent.exe', versionOutput: 'lab-agent 1.4.0 (lab build)\n' },
 };
 
 /** Agents that refuse their first start until the user signs in (then accept the next one). */
@@ -74,11 +75,11 @@ const SIGN_IN_ON_FIRST_START: Readonly<Record<string, readonly string[]>> = {
 };
 
 const BUILTIN_LOCATIONS: Readonly<Record<BuiltinHarness, string>> = {
-  pi: 'C:/Users/lab/AppData/Roaming/npm/node_modules/@lab/pi-coding-agent/dist/cli.js',
-  'prime-agent': 'C:/Users/lab/.local/bin/prime.exe',
-  codex: 'C:/Users/lab/AppData/Roaming/npm/node_modules/@openai/codex/bin/codex.js',
-  hermes: 'C:/Users/lab/.local/bin/hermes.exe',
-  'claude-code': 'C:/Users/lab/.local/bin/claude.exe',
+  pi: 'C:/Users/example/AppData/Roaming/npm/node_modules/@lab/pi-coding-agent/dist/cli.js',
+  'prime-agent': 'C:/Users/example/.local/bin/prime.exe',
+  codex: 'C:/Users/example/AppData/Roaming/npm/node_modules/@openai/codex/bin/codex.js',
+  hermes: 'C:/Users/example/.local/bin/hermes.exe',
+  'claude-code': 'C:/Users/example/.local/bin/claude.exe',
 };
 
 /** `builtin_verified_versions` */

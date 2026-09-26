@@ -477,7 +477,7 @@ mod tests {
                 source: "built-in",
                 state: HarnessState::Ready,
                 location: Some(
-                    "C:/Users/lab/AppData/Roaming/npm/node_modules/@openai/codex/bin/codex.js"
+                    "C:/Users/example/AppData/Roaming/npm/node_modules/@openai/codex/bin/codex.js"
                         .into(),
                 ),
                 version: Some("0.157.1".into()),
