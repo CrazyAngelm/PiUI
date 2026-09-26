@@ -1,6 +1,7 @@
 <script lang="ts">
   import { language, setLanguage, t } from '../locale/language';
   import type { Preferences } from '../../host-api/types';
+  import { openView } from '../../app/viewSwitch';
 
   export let preferences: Preferences;
   export let busy = false;
@@ -16,7 +17,7 @@
 <section class="settings" aria-labelledby="workspace-settings-title">
   <header>
     <div><h1 id="workspace-settings-title">{$t('Settings')}</h1></div>
-    <button type="button" onclick={onClose}>{$t('Done')}</button>
+    <div class="header-actions"><button type="button" onclick={() => openView(undefined)}>{$t('New interface')}</button><button type="button" onclick={onClose}>{$t('Done')}</button></div>
   </header>
   <div class="body">
     <div class="rows">
@@ -55,6 +56,7 @@
   .settings { flex:1; min-height:0; overflow:auto; background: var(--piui-bg); color: var(--piui-text); }
   header { height: 46px; padding: 0 var(--piui-space-6); border-bottom: 1px solid var(--piui-border-subtle); display:flex; align-items:center; justify-content:space-between; }
   header div { display:flex; align-items:baseline; }
+  .header-actions { gap:8px; }
   h1 { margin:0; font-size:15px; font-weight:650; }
   button, select { border:1px solid var(--piui-border); border-radius:7px; background:var(--piui-bg-raised); color:var(--piui-text); font:inherit; }
   button { padding:6px 10px; cursor:pointer; }

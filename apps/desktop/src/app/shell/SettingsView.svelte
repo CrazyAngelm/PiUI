@@ -16,6 +16,7 @@
   import type { SettingsSection } from '../workspaceStore.svelte';
   import HarnessMark from './HarnessMark.svelte';
   import ExtensionsSettings from '../settings/ExtensionsSettings.svelte';
+  import ClassicViewEntry from '../settings/ClassicViewEntry.svelte';
   import { useWorkspace } from './context';
 
   interface Props {
@@ -219,6 +220,7 @@
         <div class="row row--tight"><span>{$t('Safe mode')}</span><span class="muted">{store.safeMode ? $t('On') : $t('Off')}</span></div>
       </div>
       <p class="muted small">{$t('Local-first: no account, cloud backend or telemetry. Harnesses talk to their own providers.')}</p>
+      <ClassicViewEntry />
     {/if}
   </div>
 </section>
