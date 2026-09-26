@@ -258,10 +258,10 @@ fn validate_pipeline(snapshot: &RunDefinitionSnapshot) -> Result<(), DefinitionE
             let mut ancestors = BTreeSet::new();
             let mut pending = step.dependency_step_ids.clone();
             while let Some(id) = pending.pop() {
-                if ancestors.insert(id.clone()) {
-                    if let Some(parent) = pipeline.steps.iter().find(|parent| parent.id == id) {
-                        pending.extend(parent.dependency_step_ids.clone());
-                    }
+                if ancestors.insert(id.clone())
+                    && let Some(parent) = pipeline.steps.iter().find(|parent| parent.id == id)
+                {
+                    pending.extend(parent.dependency_step_ids.clone());
                 }
             }
             if !ancestors.contains(&review.retry_from_step_id)

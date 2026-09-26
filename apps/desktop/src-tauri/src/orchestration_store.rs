@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, RwLock};
 use thiserror::Error;
 
 const STORE_VERSION: u32 = 2;
@@ -95,9 +96,39 @@ impl From<io::Error> for StoreError {
     }
 }
 
+/// Immutable view of one durable generation. Holding it never blocks a writer.
+#[derive(Clone)]
+pub(crate) struct StoreSnapshot(Arc<StoreDocument>);
+
+impl StoreSnapshot {
+    pub fn workspace(&self, workspace_id: &str) -> Option<&WorkspaceOrchestration> {
+        self.0
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.workspace_id == workspace_id)
+    }
+
+    pub fn workspaces(&self) -> &[WorkspaceOrchestration] {
+        &self.0.workspaces
+    }
+}
+
+/// Durable orchestration journal.
+///
+/// Writers are serialized by `writer`, which is held across the staged clone,
+/// the change and its create-only fsynced generation write, so write order and
+/// every revision check are exactly those of a single global lock. The
+/// published generation is swapped in afterwards under a brief `current` write
+/// lock; readers only clone the `Arc` and never wait for serialization or
+/// fsync.
 pub(crate) struct OrchestrationStore {
     directory: PathBuf,
-    document: StoreDocument,
+    writer: Mutex<()>,
+    current: RwLock<Arc<StoreDocument>>,
+}
+
+fn poisoned() -> StoreError {
+    StoreError::Io(io::Error::other("orchestration store lock poisoned"))
 }
 
 impl OrchestrationStore {
@@ -134,41 +165,45 @@ impl OrchestrationStore {
         }
         Ok(Self {
             directory,
-            document: newest.map(|(_, document)| document).unwrap_or_default(),
+            writer: Mutex::new(()),
+            current: RwLock::new(Arc::new(
+                newest.map(|(_, document)| document).unwrap_or_default(),
+            )),
         })
     }
 
-    pub fn workspace(&self, workspace_id: &str) -> Option<&WorkspaceOrchestration> {
-        self.document
-            .workspaces
-            .iter()
-            .find(|workspace| workspace.workspace_id == workspace_id)
+    /// The newest durable generation. Never waits for a writer's fsync.
+    pub fn snapshot(&self) -> Result<StoreSnapshot, StoreError> {
+        self.current
+            .read()
+            .map(|current| StoreSnapshot(Arc::clone(&current)))
+            .map_err(|_| poisoned())
     }
 
-    pub fn workspaces(&self) -> &[WorkspaceOrchestration] {
-        &self.document.workspaces
-    }
-
+    /// Applies `change` to a staged copy of the newest generation and makes it
+    /// current only after its complete generation file has been fsynced.
     pub fn transact<T>(
-        &mut self,
+        &self,
         change: impl FnOnce(&mut Vec<WorkspaceOrchestration>) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
-        let mut staged = self.document.clone();
+        let _writer = self.writer.lock().map_err(|_| poisoned())?;
+        let mut staged = StoreDocument::clone(&self.snapshot()?.0);
         let result = change(&mut staged.workspaces)?;
         staged.generation = staged
             .generation
             .checked_add(1)
             .ok_or(StoreError::Invalid)?;
         self.persist(&staged)?;
-        self.document = staged;
-        self.remove_older_generations();
+        let generation = staged.generation;
+        *self.current.write().map_err(|_| poisoned())? = Arc::new(staged);
+        self.remove_older_generations(generation);
         Ok(result)
     }
 
     /// Marks only work that had crossed the native boundary uncertain. Ready
     /// work is safe to schedule later because it has no native side effect.
-    pub fn recover_interrupted_runs(&mut self) -> Result<(), StoreError> {
-        let needs_recovery = self.document.workspaces.iter().any(|workspace| {
+    pub fn recover_interrupted_runs(&self) -> Result<(), StoreError> {
+        let needs_recovery = self.snapshot()?.workspaces().iter().any(|workspace| {
             workspace.runs.iter().any(|run| {
                 run.tasks().iter().any(|task| {
                     task.status() == piui_orchestration::TaskStatus::Running
@@ -207,15 +242,13 @@ impl OrchestrationStore {
         Ok(())
     }
 
-    fn remove_older_generations(&self) {
+    fn remove_older_generations(&self, current: u64) {
         let Ok(entries) = fs::read_dir(&self.directory) else {
             return;
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if generation_from_path(&path)
-                .is_some_and(|generation| generation < self.document.generation)
-            {
+            if generation_from_path(&path).is_some_and(|generation| generation < current) {
                 let _ = fs::remove_file(path);
             }
         }
@@ -296,7 +329,8 @@ mod tests {
         let path = generation_path(&directory, 1);
         fs::write(&path, &source).unwrap();
         let store = OrchestrationStore::open(&root).unwrap();
-        let run = &store.workspace("project").unwrap().runs[0];
+        let snapshot = store.snapshot().unwrap();
+        let run = &snapshot.workspace("project").unwrap().runs[0];
         assert_eq!(run.schema_version(), 6);
         assert_eq!(
             run.definition().profiles[0].instructions,
@@ -311,7 +345,7 @@ mod tests {
     #[test]
     fn failed_transaction_rolls_back_memory_and_disk() {
         let root = root();
-        let mut store = OrchestrationStore::open(&root).expect("opens store");
+        let store = OrchestrationStore::open(&root).expect("opens store");
         store
             .transact(|workspaces| {
                 workspaces.push(WorkspaceOrchestration::empty("kept".to_owned()));
@@ -323,16 +357,16 @@ mod tests {
             Err(StoreError::Invalid)
         });
         assert!(result.is_err());
-        assert!(store.workspace("kept").is_some());
+        assert!(store.snapshot().unwrap().workspace("kept").is_some());
         let restored = OrchestrationStore::open(&root).expect("restores baseline");
-        assert!(restored.workspace("kept").is_some());
+        assert!(restored.snapshot().unwrap().workspace("kept").is_some());
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn failed_generation_publish_keeps_previous_document() {
         let root = root();
-        let mut store = OrchestrationStore::open(&root).expect("opens store");
+        let store = OrchestrationStore::open(&root).expect("opens store");
         store
             .transact(|workspaces| {
                 workspaces.push(WorkspaceOrchestration::empty("kept".to_owned()));
@@ -345,10 +379,67 @@ mod tests {
             Ok(())
         });
         assert!(result.is_err());
-        assert!(store.workspace("kept").is_some());
+        assert!(store.snapshot().unwrap().workspace("kept").is_some());
         fs::remove_file(generation_path(&store.directory, 2)).expect("removes collision");
         let restored = OrchestrationStore::open(&root).expect("restores baseline");
-        assert!(restored.workspace("kept").is_some());
+        assert!(restored.snapshot().unwrap().workspace("kept").is_some());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn readers_are_served_the_durable_generation_while_a_writer_commits() {
+        let root = root();
+        let store = Arc::new(OrchestrationStore::open(&root).expect("opens store"));
+        store
+            .transact(|workspaces| {
+                workspaces.push(WorkspaceOrchestration::empty("first".to_owned()));
+                Ok(())
+            })
+            .expect("writes baseline");
+        let (entered, writer_inside) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let writer = std::thread::spawn({
+            let store = Arc::clone(&store);
+            move || {
+                store.transact(|workspaces| {
+                    entered.send(()).expect("signals");
+                    released.recv().expect("released");
+                    workspaces.push(WorkspaceOrchestration::empty("second".to_owned()));
+                    Ok(())
+                })
+            }
+        });
+        writer_inside
+            .recv()
+            .expect("writer holds the write section");
+        // With one store-wide lock this read would wait for the writer.
+        let snapshot = store.snapshot().expect("reader is not blocked");
+        assert!(snapshot.workspace("first").is_some());
+        assert!(snapshot.workspace("second").is_none());
+        release.send(()).expect("releases writer");
+        writer.join().expect("writer thread").expect("commits");
+        assert!(
+            snapshot.workspace("second").is_none(),
+            "snapshots are immutable"
+        );
+        assert!(
+            store
+                .snapshot()
+                .expect("snapshot")
+                .workspace("second")
+                .is_some()
+        );
+        // Writers stay serialized: the next change starts from that commit.
+        store
+            .transact(|workspaces| {
+                assert_eq!(workspaces.len(), 2);
+                Ok(())
+            })
+            .expect("next write");
+        let restored = OrchestrationStore::open(&root).expect("restores");
+        assert_eq!(restored.snapshot().expect("snapshot").workspaces().len(), 2);
+        drop(snapshot);
+        drop(store);
         let _ = fs::remove_dir_all(root);
     }
 }

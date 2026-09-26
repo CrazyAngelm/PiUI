@@ -5,14 +5,14 @@
 //! or settings. Run one ignored test by exact name only after explicit consent.
 
 use piui_runtime::workspace_runtime::{
-    BlockKind, HarnessKind, NativeBlock, NativeEvent, NativeRuntime, NativeRuntimeConfig,
-    NativeRuntimeError, PermissionMode, PromptMode, SessionStatus, TurnOutcome, WorkspaceModel,
+    BlockKind, HarnessKind, NativeBlock, NativeEvent, NativeEventReceiver, NativeRuntime,
+    NativeRuntimeConfig, NativeRuntimeError, PermissionMode, PromptMode, SessionStatus,
+    TurnOutcome, WorkspaceModel,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::mpsc;
 use tokio::time::{Instant, timeout_at};
 
 // Reuses the established live Prime proof watchdog from real_rpc. This bounds
@@ -113,10 +113,7 @@ fn native_config(kind: HarnessKind, label: &str) -> NativeRuntimeConfig {
     }
 }
 
-async fn wait_for_live_turn(
-    events: &mut mpsc::Receiver<NativeEvent>,
-    kind: HarnessKind,
-) -> LiveTurn {
+async fn wait_for_live_turn(events: &mut NativeEventReceiver, kind: HarnessKind) -> LiveTurn {
     // Hermes 0.21 run_agent._resolved_api_call_timeout defaults to 1800s.
     // Its provider request must not be cut off by the older Prime-only watchdog.
     let operation_timeout = if kind == HarnessKind::Hermes {

@@ -71,6 +71,10 @@ pub(super) struct WorkspaceRegistry {
     directory: PathBuf,
     document: RegistryDocument,
     next_generation: u64,
+    /// Cache-only changes (usage receipts) not yet in a durable generation.
+    /// Every binding, catalog or lifecycle change is written immediately by
+    /// `transact`, which also persists these pending changes.
+    unsynced: bool,
 }
 
 impl WorkspaceRegistry {
@@ -109,7 +113,13 @@ impl WorkspaceRegistry {
             directory,
             document,
             next_generation,
+            unsynced: false,
         })
+    }
+
+    #[cfg(test)]
+    pub(super) fn generation(&self) -> u64 {
+        self.document.generation
     }
 
     pub(super) fn sessions(&self) -> &[PersistedSession] {
@@ -185,8 +195,31 @@ impl WorkspaceRegistry {
         }
         self.next_generation = staged.generation;
         self.document = staged;
+        self.unsynced = false;
         self.remove_older_generations();
         Ok(result)
+    }
+
+    /// Applies a cache-only change in memory without writing a generation.
+    /// Readers see it at once; `flush_cached` or the next `transact` makes it
+    /// durable. `change` must not partially mutate before returning an error,
+    /// and must never touch native bindings, which are always written through.
+    pub(super) fn update_cached<T>(
+        &mut self,
+        change: impl FnOnce(&mut Vec<PersistedSession>) -> io::Result<T>,
+    ) -> io::Result<T> {
+        let result = change(&mut self.document.sessions)?;
+        self.unsynced = true;
+        Ok(result)
+    }
+
+    /// Writes pending cache-only changes as one complete generation.
+    pub(super) fn flush_cached(&mut self) -> io::Result<()> {
+        if self.unsynced {
+            self.transact(|_| Ok(()))
+        } else {
+            Ok(())
+        }
     }
 
     fn remove_older_generations(&self) {
@@ -371,6 +404,90 @@ mod tests {
             })
             .expect("skips occupied interrupted generation");
         assert_eq!(restored.sessions().len(), 3);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn cache_usage(registry: &mut WorkspaceRegistry, input_tokens: u64) {
+        registry
+            .update_cached(|sessions| {
+                let record = sessions
+                    .iter_mut()
+                    .find(|session| session.id == "usage")
+                    .ok_or_else(|| std::io::Error::other("session missing"))?;
+                piui_runtime::workspace_usage::merge_usage(
+                    &mut record.usage,
+                    piui_runtime::workspace_usage::NativeUsage {
+                        id: "receipt".into(),
+                        input_tokens: Some(input_tokens),
+                        output_tokens: None,
+                        cache_read_tokens: None,
+                        cache_write_tokens: None,
+                        total_tokens: None,
+                    },
+                );
+                Ok(())
+            })
+            .expect("caches usage");
+    }
+
+    fn durable_input_tokens(root: &std::path::Path) -> Option<u64> {
+        WorkspaceRegistry::open(root)
+            .expect("reopens registry")
+            .session("usage")
+            .expect("durable session")
+            .usage
+            .first()
+            .and_then(|receipt| receipt.input_tokens)
+    }
+
+    #[test]
+    fn cached_usage_is_written_once_by_a_flush_or_the_next_transaction() {
+        let root = test_root();
+        let mut registry = WorkspaceRegistry::open(&root).expect("opens registry");
+        registry
+            .transact(|sessions| {
+                sessions.push(session("usage"));
+                Ok(())
+            })
+            .expect("persists session");
+        let baseline = registry.generation();
+        for input_tokens in 0..100 {
+            cache_usage(&mut registry, input_tokens);
+        }
+        assert_eq!(
+            registry.generation(),
+            baseline,
+            "cached usage writes nothing"
+        );
+        assert_eq!(
+            registry.session("usage").expect("session").usage[0].input_tokens,
+            Some(99),
+            "readers see cached usage immediately"
+        );
+        assert_eq!(durable_input_tokens(&root), None);
+
+        registry.flush_cached().expect("flushes");
+        assert_eq!(registry.generation(), baseline + 1);
+        assert_eq!(durable_input_tokens(&root), Some(99));
+        registry.flush_cached().expect("nothing pending");
+        assert_eq!(
+            registry.generation(),
+            baseline + 1,
+            "an idle flush writes nothing"
+        );
+
+        // Any ordinary transaction also persists pending cached usage.
+        cache_usage(&mut registry, 100);
+        registry
+            .transact(|sessions| {
+                sessions[0].title = "Renamed".into();
+                Ok(())
+            })
+            .expect("renames");
+        assert_eq!(registry.generation(), baseline + 2);
+        assert_eq!(durable_input_tokens(&root), Some(100));
+        registry.flush_cached().expect("already durable");
+        assert_eq!(registry.generation(), baseline + 2);
         let _ = fs::remove_dir_all(root);
     }
 

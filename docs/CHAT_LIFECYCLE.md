@@ -98,3 +98,61 @@ supported. Unsupported slash input remains a draft and is not a model prompt.
 Pi uses RPC compact/steer; Codex uses thread/compact/start and turn/steer; Prime
 checks the installed SDK methods. Hermes ACP currently exposes neither compact
 nor active steering, but uses the same host Follow up queue.
+
+## Native session start and the operation gate
+
+The global operation gate serializes trust/identity authorization with the
+native command it authorizes and with trust revocation. Native initialization
+can take 20-50 seconds (Hermes MCP discovery), so an ordinary `createSession`
+or `openSession` holds the gate only for its short phases:
+
+1. Under the gate: verify workspace trust, reserve the session's start and, for
+   a new chat, record its catalog row.
+2. Without the gate: spawn the native runtime and read its first snapshot.
+3. Under the gate again: verify trust once more and publish the live runtime.
+
+The reservation is the per-session lifecycle gate. A second open of the same
+session waits for it and then returns the same live runtime; commands for a
+session that is still starting wait for that start; no session is ever started
+twice. Operations on other sessions never wait for a start.
+
+Trust revocation, project removal and app exit withdraw unfinished starts of
+the affected workspaces before closing live sessions: a start that is still
+initializing drops its spawn, which terminates the partially started process
+tree, and a started runtime waiting to be published is retired without the
+gate. An explicit close withdraws an unfinished start of that session; delete
+reports a conflict while the session is starting. A start whose workspace lost
+trust while it initialized is never published. A withdrawn or failed new chat
+without a native binding leaves no catalog row. Managed-run launches still run
+their whole start under the gate held by the run scheduler.
+
+## Native event delivery
+
+Each native runtime delivers events through a bounded queue of 256 events. A
+full queue is backpressure, not a protocol failure: the bridge reader stops
+reading the bridge's stdout until the host forwarder drains, so a slow WebView
+or a large burst throttles the native process instead of killing it. In the
+shared Codex pool one slow session delays the pool's other sessions but never
+fails them. An unexpectedly closed queue during active operation still fails
+closed.
+
+Code that owns an undrained queue never awaits a response from the same
+runtime. Events that arrive while PiUI awaits `initialize`, the pooled
+`openSession`, the first snapshot or the operation gate for publication are
+retained in arrival order; Hermes `session/load` and resumed Codex pages may
+replay long histories there.
+Retirement stops command admission and closes the queue before disposal.
+
+A forwarder that fell behind sends the already-queued consecutive text deltas of
+one block as a single `textDelta` of at most 64 KiB. It never waits for more
+input, so content, order and contiguous revisions are unchanged; the workspace
+IPC contract is unchanged.
+
+Native bindings, catalog metadata and lifecycle changes are written to the
+session registry immediately, each as one fsynced generation; a repeated
+unchanged binding needs no write. Usage receipts are cached in memory at once
+(readers and `Session` notifications see them) and written in batches: when the
+turn completes and before its outcome is observed, at most two seconds after
+the first unsaved receipt while a turn runs, with any other registry write, and
+when the runtime closes or stops. A host crash can lose at most that last
+window of usage receipts, never a binding.

@@ -377,11 +377,10 @@ fn exact_pi_assistant_texts(bytes: &[u8]) -> Result<Vec<String>, WorkspaceHistor
                     if matches!(
                         item.get("type").and_then(Value::as_str),
                         Some("text" | "markdown")
-                    ) {
-                        if let Some(text) = item.get("text").and_then(Value::as_str) {
-                            texts.push(text.to_owned());
-                            found_detail = true;
-                        }
+                    ) && let Some(text) = item.get("text").and_then(Value::as_str)
+                    {
+                        texts.push(text.to_owned());
+                        found_detail = true;
                     }
                 }
                 if !found_detail && let Some(text) = exact_display_scalar(content) {

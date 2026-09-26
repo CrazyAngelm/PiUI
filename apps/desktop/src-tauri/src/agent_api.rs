@@ -89,35 +89,35 @@ async fn dispatch(app: &AppHandle, request: Request) -> Value {
         }
         "catalog" => encode(
             protocol,
-            orchestration::orchestration_catalog_v6(app.state(), app.state(), args!()),
+            orchestration::orchestration_catalog_v6(app.clone(), args!()).await,
         ),
         "getProfile" => encode(
             protocol,
-            orchestration::orchestration_get_profile_v6(app.state(), app.state(), args!()),
+            orchestration::orchestration_get_profile_v6(app.clone(), args!()).await,
         ),
         "getTeam" => encode(
             protocol,
-            orchestration::orchestration_get_team_v6(app.state(), app.state(), args!()),
+            orchestration::orchestration_get_team_v6(app.clone(), args!()).await,
         ),
         "getPipeline" => encode(
             protocol,
-            orchestration::orchestration_get_pipeline_v6(app.state(), app.state(), args!()),
+            orchestration::orchestration_get_pipeline_v6(app.clone(), args!()).await,
         ),
         "getLaunchCommand" => encode(
             protocol,
-            orchestration::orchestration_get_launch_command_v6(app.state(), app.state(), args!()),
+            orchestration::orchestration_get_launch_command_v6(app.clone(), args!()).await,
         ),
         "listRuns" => encode(
             protocol,
-            orchestration::orchestration_list_runs_v6(app.state(), app.state(), args!()),
+            orchestration::orchestration_list_runs_v6(app.clone(), args!()).await,
         ),
         "getRun" => encode(
             protocol,
-            orchestration::orchestration_get_run_v6(app.state(), app.state(), args!()),
+            orchestration::orchestration_get_run_v6(app.clone(), args!()).await,
         ),
         "usage" => encode(
             protocol,
-            orchestration::orchestration_run_usage_v6(app.state(), app.state(), args!()),
+            orchestration::orchestration_run_usage_v6(app.clone(), args!()).await,
         ),
         "saveGraph" => encode(
             protocol,
@@ -164,7 +164,7 @@ async fn dispatch(app: &AppHandle, request: Request) -> Value {
         ),
         "listSchedules" => encode(
             protocol,
-            orchestration::orchestration_list_schedules_v7(app.state(), app.state(), args!()),
+            orchestration::orchestration_list_schedules_v7(app.clone(), args!()).await,
         ),
         "saveSchedule" => encode(
             protocol,
@@ -283,18 +283,19 @@ async fn wait_run(app: &AppHandle, protocol: u8, request: WaitRun) -> Value {
     // Subscribe before reading: a durable commit between subscribe and snapshot
     // cannot be lost. Only scalar invalidations wake this waiter.
     let listener = app.listen(orchestration::ORCHESTRATION_EVENT_V4, move |event| {
-        if let Ok(value) = serde_json::from_str::<Value>(event.payload()) {
-            if value["workspaceId"] == workspace_id && value["runId"] == run_id {
-                wake.notify_one();
-            }
+        if let Ok(value) = serde_json::from_str::<Value>(event.payload())
+            && value["workspaceId"] == workspace_id
+            && value["runId"] == run_id
+        {
+            wake.notify_one();
         }
     });
-    let read = || {
+    let read = || async {
         let params = json!({"workspaceId":request.workspace_id,"runId":request.run_id});
         match parse(protocol, params) {
             Ok(params) => encode(
                 protocol,
-                orchestration::orchestration_get_run_v6(app.state(), app.state(), params),
+                orchestration::orchestration_get_run_v6(app.clone(), params).await,
             ),
             Err(error) => error,
         }
@@ -303,7 +304,7 @@ async fn wait_run(app: &AppHandle, protocol: u8, request: WaitRun) -> Value {
         std::time::Duration::from_millis(request.timeout_ms),
         async {
             loop {
-                let current = read();
+                let current = read().await;
                 if current["ok"] != true
                     || current["result"].is_null()
                     || current["result"]["revision"].as_u64() != Some(request.after_revision)
@@ -316,7 +317,10 @@ async fn wait_run(app: &AppHandle, protocol: u8, request: WaitRun) -> Value {
     )
     .await;
     app.unlisten(listener);
-    outcome.unwrap_or_else(|_| read())
+    match outcome {
+        Ok(current) => current,
+        Err(_) => read().await,
+    }
 }
 
 async fn authenticate(reader: &mut BufReader<TcpStream>, token: &[u8]) -> std::io::Result<bool> {

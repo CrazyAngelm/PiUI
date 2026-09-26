@@ -431,11 +431,11 @@ fn runtime_launch_args(
     prime_daemon_socket: Option<&std::ffi::OsStr>,
 ) -> Vec<OsString> {
     let mut args = vec![OsString::from("--mode"), OsString::from("rpc")];
-    if agent_kind == AgentKind::PrimeAgent {
-        if let Some(socket) = prime_daemon_socket {
-            args.push(OsString::from("--daemon-socket"));
-            args.push(socket.to_owned());
-        }
+    if agent_kind == AgentKind::PrimeAgent
+        && let Some(socket) = prime_daemon_socket
+    {
+        args.push(OsString::from("--daemon-socket"));
+        args.push(socket.to_owned());
     }
     if let Some(path) = &config.session_path {
         let flag = match agent_kind {
@@ -786,20 +786,19 @@ impl RealPiRuntime {
             if let Ok(value) = runtime_clone
                 .request("get_available_models", json!({}))
                 .await
+                && let Some(models) = map_models(&value)
             {
-                if let Some(models) = map_models(&value) {
-                    let _ = models_tx
-                        .send(SurfaceEvent::ModelsAvailable { models })
-                        .await;
-                }
+                let _ = models_tx
+                    .send(SurfaceEvent::ModelsAvailable { models })
+                    .await;
             }
             if agent_kind == AgentKind::PrimeAgent {
-                if let Ok(value) = runtime_clone.request("get_heartbeat", json!({})).await {
-                    if let Some(activity) = prime_heartbeat_activity(&value) {
-                        let _ = models_tx
-                            .send(SurfaceEvent::PrimeActivity { activity })
-                            .await;
-                    }
+                if let Ok(value) = runtime_clone.request("get_heartbeat", json!({})).await
+                    && let Some(activity) = prime_heartbeat_activity(&value)
+                {
+                    let _ = models_tx
+                        .send(SurfaceEvent::PrimeActivity { activity })
+                        .await;
                 }
                 if let Ok(value) = runtime_clone
                     .request("list_schedules", json!({ "includeInactive": true }))
@@ -1415,14 +1414,14 @@ async fn handle_frame_for_kind(
                 let _ = tx.send(Ok(value.clone()));
             }
             let command = obj.get("command").and_then(Value::as_str).unwrap_or("");
-            if obj.get("success").and_then(Value::as_bool) == Some(false) {
-                if let Some(error) = obj.get("error").and_then(Value::as_str) {
-                    let _ = event_tx
-                        .send(SurfaceEvent::RuntimeError {
-                            safe_summary: redact_command_error(command, error),
-                        })
-                        .await;
-                }
+            if obj.get("success").and_then(Value::as_bool) == Some(false)
+                && let Some(error) = obj.get("error").and_then(Value::as_str)
+            {
+                let _ = event_tx
+                    .send(SurfaceEvent::RuntimeError {
+                        safe_summary: redact_command_error(command, error),
+                    })
+                    .await;
             }
             return;
         }
@@ -4706,10 +4705,9 @@ mod tests {
                                     status, objective, ..
                                 },
                         } = event
+                            && status == "active"
                         {
-                            if status == "active" {
-                                return Some((status, objective));
-                            }
+                            return Some((status, objective));
                         }
                     }
                     None

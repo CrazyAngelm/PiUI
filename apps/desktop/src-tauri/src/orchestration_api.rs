@@ -12,7 +12,7 @@ use crate::orchestration_schedule::{
 };
 use crate::orchestration_scheduler::OrchestrationScheduler;
 use crate::orchestration_store::{
-    OrchestrationStore, StoreError, StoredDefinition, WorkspaceOrchestration,
+    OrchestrationStore, StoreError, StoreSnapshot, StoredDefinition, WorkspaceOrchestration,
 };
 use crate::state::HostState;
 use chrono::{DateTime, Utc};
@@ -26,8 +26,7 @@ use piui_orchestration::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -160,12 +159,14 @@ pub fn emit_schedule_changed<R: tauri::Runtime>(
 }
 
 pub struct OrchestrationApiState {
-    store: Mutex<OrchestrationStore>,
+    /// Writers serialize inside the store; readers take an immutable snapshot
+    /// and never wait for a writer's serialization or fsync.
+    store: OrchestrationStore,
 }
 
 impl OrchestrationApiState {
     fn control_flow(&self, request: FlowControlRequest) -> Result<Run, OrchestrationApiError> {
-        self.lock()?
+        self.store
             .transact(|workspaces| {
                 let run = mutable_run(workspaces, &request.workspace_id, &request.run_id)?;
                 Coordinator::control_flow(run, request.expected_run_revision, request.action)
@@ -178,11 +179,9 @@ impl OrchestrationApiState {
             .map_err(Into::into)
     }
     pub fn open(app_data_dir: &Path) -> Result<Self, OrchestrationApiError> {
-        let mut store = OrchestrationStore::open(app_data_dir)?;
+        let store = OrchestrationStore::open(app_data_dir)?;
         store.recover_interrupted_runs()?;
-        Ok(Self {
-            store: Mutex::new(store),
-        })
+        Ok(Self { store })
     }
 
     pub fn get_run(
@@ -191,7 +190,7 @@ impl OrchestrationApiState {
         run_id: &str,
     ) -> Result<Option<Run>, OrchestrationApiError> {
         validate_workspace_id(workspace_id)?;
-        let store = self.lock()?;
+        let store = self.snapshot()?;
         Ok(store.workspace(workspace_id).and_then(|workspace| {
             workspace
                 .runs
@@ -209,8 +208,7 @@ impl OrchestrationApiState {
         run_id: &str,
     ) -> Result<Run, OrchestrationApiError> {
         validate_workspace_id(workspace_id)?;
-        let mut store = self.lock()?;
-        store
+        self.store
             .transact(|workspaces| {
                 let run = mutable_run(workspaces, workspace_id, run_id)?;
                 Coordinator::advance_automatic_steps(run);
@@ -221,14 +219,13 @@ impl OrchestrationApiState {
 
     pub fn create_run(&self, request: StartRunRequest) -> Result<Run, OrchestrationApiError> {
         validate_workspace_id(&request.workspace_id)?;
-        let mut store = self.lock()?;
-        store
+        self.store
             .transact(|workspaces| create_run_in(workspaces, request))
             .map_err(Into::into)
     }
 
     pub(crate) fn next_schedule_due(&self) -> Result<Option<DateTime<Utc>>, OrchestrationApiError> {
-        let store = self.lock()?;
+        let store = self.snapshot()?;
         Ok(store
             .workspaces()
             .iter()
@@ -242,7 +239,7 @@ impl OrchestrationApiState {
         &self,
         now: DateTime<Utc>,
     ) -> Result<Vec<(String, String, u64)>, OrchestrationApiError> {
-        let store = self.lock()?;
+        let store = self.snapshot()?;
         let mut due = Vec::new();
         for workspace in store.workspaces() {
             for schedule in &workspace.schedules {
@@ -259,35 +256,24 @@ impl OrchestrationApiState {
         Ok(due)
     }
 
-    pub(crate) fn recoverable_schedule_runs(
-        &self,
-    ) -> Result<Vec<(String, String)>, OrchestrationApiError> {
-        let store = self.lock()?;
-        let mut result = Vec::new();
-        for workspace in store.workspaces() {
-            for schedule in &workspace.schedules {
-                for run_id in schedule
-                    .occurrences
+    /// Committed runs, started manually or by a schedule, whose remaining
+    /// work has not crossed the native boundary. The host resumes them after
+    /// a restart exactly like a fresh start. Work that did cross the boundary
+    /// was made uncertain by `recover_interrupted_runs` when the journal was
+    /// opened; such a run is never resumed or replayed automatically.
+    pub(crate) fn recoverable_runs(&self) -> Result<Vec<(String, String)>, OrchestrationApiError> {
+        let store = self.snapshot()?;
+        let mut result = store
+            .workspaces()
+            .iter()
+            .flat_map(|workspace| {
+                workspace
+                    .runs
                     .iter()
-                    .filter(|occurrence| occurrence.outcome == ScheduleOccurrenceOutcome::Started)
-                    .filter_map(|occurrence| occurrence.run_id.as_deref())
-                {
-                    let Some(run) = workspace.runs.iter().find(|run| run.id() == run_id) else {
-                        continue;
-                    };
-                    let has_ready = run.tasks().iter().any(|task| {
-                        task.status() == TaskStatus::Ready && task.lease_id().is_none()
-                    });
-                    let crossed_native_boundary = run.tasks().iter().any(|task| {
-                        matches!(task.status(), TaskStatus::Running | TaskStatus::Uncertain)
-                            || task.lease_id().is_some()
-                    });
-                    if run.status() == RunStatus::Running && has_ready && !crossed_native_boundary {
-                        result.push((workspace.workspace_id.clone(), run_id.to_owned()));
-                    }
-                }
-            }
-        }
+                    .filter(|run| resumable_after_restart(run))
+                    .map(|run| (workspace.workspace_id.clone(), run.id().to_owned()))
+            })
+            .collect::<Vec<_>>();
         result.sort();
         result.dedup();
         Ok(result)
@@ -302,8 +288,7 @@ impl OrchestrationApiState {
         host_started_at: DateTime<Utc>,
         admission_failure: Option<&str>,
     ) -> Result<ScheduleClaim, OrchestrationApiError> {
-        let mut store = self.lock()?;
-        store
+        self.store
             .transact(|workspaces| {
                 let workspace_index = workspaces
                     .iter()
@@ -414,8 +399,7 @@ impl OrchestrationApiState {
         &self,
         request: RetryUncertainTaskRequest,
     ) -> Result<Run, OrchestrationApiError> {
-        let mut store = self.lock()?;
-        store
+        self.store
             .transact(|workspaces| retry_uncertain_in(workspaces, request))
             .map_err(Into::into)
     }
@@ -428,8 +412,7 @@ impl OrchestrationApiState {
         lease_id: String,
         capabilities: &NativeBridgeCapabilities,
     ) -> Result<Option<ControlledSpawnLease>, OrchestrationApiError> {
-        let mut store = self.lock()?;
-        store
+        self.store
             .transact(|workspaces| {
                 let run = mutable_run(workspaces, workspace_id, run_id)?;
                 let lease = Coordinator::lease_next_task(run, expected_run_revision, lease_id)
@@ -451,8 +434,7 @@ impl OrchestrationApiState {
         expected_task_revision: u64,
         failure_code: String,
     ) -> Result<Run, OrchestrationApiError> {
-        let mut store = self.lock()?;
-        store
+        self.store
             .transact(|workspaces| {
                 let run = mutable_run(workspaces, workspace_id, run_id)?;
                 let current_run_revision = run.revision();
@@ -479,7 +461,7 @@ impl OrchestrationApiState {
         run_id: &str,
         expected_run_revision: u64,
     ) -> Result<Vec<piui_orchestration::CancelRequest>, OrchestrationApiError> {
-        let store = self.lock()?;
+        let store = self.snapshot()?;
         let run = store
             .workspace(workspace_id)
             .and_then(|workspace| workspace.runs.iter().find(|run| run.id() == run_id))
@@ -494,8 +476,7 @@ impl OrchestrationApiState {
         expected_run_revision: u64,
         step_id: Option<&str>,
     ) -> Result<Run, OrchestrationApiError> {
-        let mut store = self.lock()?;
-        store
+        self.store
             .transact(|workspaces| {
                 let run = mutable_run(workspaces, workspace_id, run_id)?;
                 match step_id {
@@ -520,8 +501,7 @@ impl OrchestrationApiState {
         expected_task_revision: u64,
         identity: UncertaintyIdentity,
     ) -> Result<Run, OrchestrationApiError> {
-        let mut store = self.lock()?;
-        store
+        self.store
             .transact(|workspaces| {
                 let run = mutable_run(workspaces, workspace_id, run_id)?;
                 let current_run_revision = run.revision();
@@ -558,8 +538,7 @@ impl OrchestrationApiState {
         outcome: CompletionOutcome,
         native_result_text: Option<&str>,
     ) -> Result<Run, OrchestrationApiError> {
-        let mut store = self.lock()?;
-        store
+        self.store
             .transact(|workspaces| {
                 let run = mutable_run(workspaces, workspace_id, run_id)?;
                 let current_run_revision = run.revision();
@@ -592,8 +571,7 @@ impl OrchestrationApiState {
                 if !capabilities.agent_operations.roster {
                     return Err(OrchestrationApiError::denied());
                 }
-                let mut store = self.lock()?;
-                store
+                self.store
                     .transact(|workspaces| {
                         let run = mutable_run(workspaces, &context.workspace_id, &context.run_id)?;
                         let actor_member_id =
@@ -664,8 +642,7 @@ impl OrchestrationApiState {
                 if !capabilities.agent_operations.observe {
                     return Err(OrchestrationApiError::denied());
                 }
-                let mut store = self.lock()?;
-                store
+                self.store
                     .transact(|workspaces| {
                         let run = mutable_run(workspaces, &context.workspace_id, &context.run_id)?;
                         let actor_member_id =
@@ -709,8 +686,7 @@ impl OrchestrationApiState {
                 if !capabilities.agent_operations.send {
                     return Err(OrchestrationApiError::denied());
                 }
-                let mut store = self.lock()?;
-                store
+                self.store
                     .transact(|workspaces| {
                         let run = mutable_run(workspaces, &context.workspace_id, &context.run_id)?;
                         let actor_member_id =
@@ -791,8 +767,7 @@ impl OrchestrationApiState {
                 if !capabilities.agent_operations.spawn {
                     return Err(OrchestrationApiError::denied());
                 }
-                let mut store = self.lock()?;
-                store
+                self.store
                     .transact(|workspaces| {
                         let run = mutable_run(workspaces, &context.workspace_id, &context.run_id)?;
                         let actor = derive_actor_member_id(run, &context.workspace_session_id)
@@ -842,8 +817,7 @@ impl OrchestrationApiState {
                 if !capabilities.agent_operations.spawn {
                     return Err(OrchestrationApiError::denied());
                 }
-                let mut store = self.lock()?;
-                store
+                self.store
                     .transact(|workspaces| {
                         let run = mutable_run(workspaces, &context.workspace_id, &context.run_id)?;
                         let actor_member_id =
@@ -864,10 +838,9 @@ impl OrchestrationApiState {
                                 step_id: step_id.clone(),
                             },
                         )?;
-                        if !first_admission {
-                            if let Some(committed) = committed_spawn(run, &step_id) {
-                                return Ok(committed);
-                            }
+                        if !first_admission && let Some(committed) = committed_spawn(run, &step_id)
+                        {
+                            return Ok(committed);
                         }
                         let revision = run.revision();
                         let lease = Coordinator::lease_controlled_spawn(
@@ -900,8 +873,7 @@ impl OrchestrationApiState {
         lease: &ControlledSpawnLease,
         workspace_session_id: String,
     ) -> Result<LaunchRequest, OrchestrationApiError> {
-        let mut store = self.lock()?;
-        store
+        self.store
             .transact(|workspaces| {
                 let run = mutable_run(workspaces, workspace_id, run_id)?;
                 let current_run_revision = run.revision();
@@ -929,8 +901,7 @@ impl OrchestrationApiState {
         context: &ManagedAgentContext,
         lease: &ControlledSpawnLease,
     ) -> Result<(), OrchestrationApiError> {
-        let mut store = self.lock()?;
-        store
+        self.store
             .transact(|workspaces| {
                 let run = mutable_run(workspaces, &context.workspace_id, &context.run_id)?;
                 let current_run_revision = run.revision();
@@ -951,8 +922,7 @@ impl OrchestrationApiState {
         context: &ManagedAgentContext,
         message_id: &str,
     ) -> Result<Run, OrchestrationApiError> {
-        let mut store = self.lock()?;
-        store
+        self.store
             .transact(|workspaces| {
                 let run = mutable_run(workspaces, &context.workspace_id, &context.run_id)?;
                 let message = run
@@ -974,8 +944,8 @@ impl OrchestrationApiState {
             .map_err(Into::into)
     }
 
-    fn lock(&self) -> Result<MutexGuard<'_, OrchestrationStore>, OrchestrationApiError> {
-        self.store.lock().map_err(|_| OrchestrationApiError::io())
+    fn snapshot(&self) -> Result<StoreSnapshot, OrchestrationApiError> {
+        self.store.snapshot().map_err(Into::into)
     }
 }
 
@@ -1468,7 +1438,7 @@ fn get_definition<T: DefinitionValue>(
     if request.id.trim().is_empty() {
         return Err(OrchestrationApiError::invalid());
     }
-    let store = state.lock()?;
+    let store = state.snapshot()?;
     Ok(store
         .workspace(&request.workspace_id)
         .and_then(|workspace| {
@@ -1487,8 +1457,8 @@ fn save_definition<T: DefinitionValue>(
     let workspace_id = request.workspace_id;
     let expected_revision = request.expected_revision;
     let value = request.value;
-    let mut store = state.lock()?;
-    store
+    state
+        .store
         .transact(|workspaces| {
             let index = workspaces
                 .iter()
@@ -1536,8 +1506,8 @@ fn delete_definition<T: DefinitionValue>(
     request: DeleteDefinitionRequest,
 ) -> Result<(), OrchestrationApiError> {
     validate_workspace_id(&request.workspace_id)?;
-    let mut store = state.lock()?;
-    store
+    state
+        .store
         .transact(|workspaces| {
             let workspace = workspaces
                 .iter_mut()
@@ -1568,8 +1538,8 @@ fn save_schedule(
     if !request.value.validate() {
         return Err(OrchestrationApiError::invalid());
     }
-    let mut store = state.lock()?;
-    store
+    state
+        .store
         .transact(|workspaces| {
             let workspace = workspaces
                 .iter_mut()
@@ -1635,8 +1605,8 @@ fn set_schedule_enabled(
     request: SetScheduleEnabledRequest,
 ) -> Result<ScheduleSnapshot, OrchestrationApiError> {
     validate_workspace_id(&request.workspace_id)?;
-    let mut store = state.lock()?;
-    store
+    state
+        .store
         .transact(|workspaces| {
             let workspace = workspaces
                 .iter_mut()
@@ -1697,8 +1667,8 @@ fn delete_schedule(
     request: &ScheduleMutationRequest,
 ) -> Result<(), OrchestrationApiError> {
     validate_workspace_id(&request.workspace_id)?;
-    let mut store = state.lock()?;
-    store
+    state
+        .store
         .transact(|workspaces| {
             let workspace = workspaces
                 .iter_mut()
@@ -1718,14 +1688,54 @@ fn delete_schedule(
         .map_err(Into::into)
 }
 
+/// Runs a read-only orchestration query on the blocking thread pool. Tauri
+/// runs synchronous commands on the main thread, where waiting for index or
+/// registry locks and project filesystem checks would stall the WebView.
+async fn orchestration_query<T, Q>(app: AppHandle, query: Q) -> Result<T, OrchestrationApiError>
+where
+    T: Send + 'static,
+    Q: FnOnce(&OrchestrationApiState, &HostState) -> Result<T, OrchestrationApiError>
+        + Send
+        + 'static,
+{
+    off_main_thread(move || {
+        let state = app
+            .try_state::<OrchestrationApiState>()
+            .ok_or_else(OrchestrationApiError::io)?;
+        let host_state = app
+            .try_state::<HostState>()
+            .ok_or_else(OrchestrationApiError::io)?;
+        query(&state, &host_state)
+    })
+    .await
+}
+
+async fn off_main_thread<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, OrchestrationApiError> + Send + 'static,
+) -> Result<T, OrchestrationApiError> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|_| OrchestrationApiError::io())?
+}
+
 #[tauri::command]
-pub fn orchestration_catalog_v6(
-    state: State<'_, OrchestrationApiState>,
-    host_state: State<'_, HostState>,
+pub async fn orchestration_catalog_v6(
+    app: AppHandle,
     request: WorkspaceRequest,
 ) -> Result<OrchestrationCatalogV4, OrchestrationApiError> {
-    validate_workspace_scope(&host_state, &request.workspace_id)?;
-    let store = state.lock()?;
+    orchestration_query(app, move |state, host_state| {
+        orchestration_catalog(state, host_state, &request)
+    })
+    .await
+}
+
+fn orchestration_catalog(
+    state: &OrchestrationApiState,
+    host_state: &HostState,
+    request: &WorkspaceRequest,
+) -> Result<OrchestrationCatalogV4, OrchestrationApiError> {
+    validate_workspace_scope(host_state, &request.workspace_id)?;
+    let store = state.snapshot()?;
     let Some(workspace) = store.workspace(&request.workspace_id) else {
         return Ok(OrchestrationCatalogV4 {
             profiles: vec![],
@@ -1754,16 +1764,25 @@ pub fn orchestration_catalog_v6(
     })
 }
 
+type RunUsage = std::collections::BTreeMap<String, Vec<piui_runtime::workspace_usage::NativeUsage>>;
+
 #[tauri::command]
-pub fn orchestration_run_usage_v6(
-    state: State<'_, OrchestrationApiState>,
-    host_state: State<'_, HostState>,
+pub async fn orchestration_run_usage_v6(
+    app: AppHandle,
     request: RunRequest,
-) -> Result<
-    std::collections::BTreeMap<String, Vec<piui_runtime::workspace_usage::NativeUsage>>,
-    OrchestrationApiError,
-> {
-    validate_workspace_scope(&host_state, &request.workspace_id)?;
+) -> Result<RunUsage, OrchestrationApiError> {
+    orchestration_query(app, move |state, host_state| {
+        orchestration_run_usage(state, host_state, &request)
+    })
+    .await
+}
+
+fn orchestration_run_usage(
+    state: &OrchestrationApiState,
+    host_state: &HostState,
+    request: &RunRequest,
+) -> Result<RunUsage, OrchestrationApiError> {
+    validate_workspace_scope(host_state, &request.workspace_id)?;
     let run = state
         .get_run(&request.workspace_id, &request.run_id)?
         .ok_or_else(OrchestrationApiError::not_found)?;
@@ -1783,13 +1802,15 @@ pub fn orchestration_run_usage_v6(
 macro_rules! definition_commands {
     ($get:ident, $save:ident, $delete:ident, $type:ty) => {
         #[tauri::command]
-        pub fn $get(
-            state: State<'_, OrchestrationApiState>,
-            host_state: State<'_, HostState>,
+        pub async fn $get(
+            app: AppHandle,
             request: GetDefinitionRequest,
         ) -> Result<Option<StoredDefinition<$type>>, OrchestrationApiError> {
-            validate_workspace_scope(&host_state, &request.workspace_id)?;
-            get_definition(&state, request)
+            orchestration_query(app, move |state, host_state| {
+                validate_workspace_scope(host_state, &request.workspace_id)?;
+                get_definition(state, request)
+            })
+            .await
         }
         #[tauri::command]
         pub async fn $save(
@@ -1840,13 +1861,23 @@ definition_commands!(
 );
 
 #[tauri::command]
-pub fn orchestration_list_schedules_v7(
-    state: State<'_, OrchestrationApiState>,
-    host_state: State<'_, HostState>,
+pub async fn orchestration_list_schedules_v7(
+    app: AppHandle,
     request: WorkspaceRequest,
 ) -> Result<Vec<ScheduleSnapshot>, OrchestrationApiError> {
-    validate_workspace_scope(&host_state, &request.workspace_id)?;
-    let store = state.lock()?;
+    orchestration_query(app, move |state, host_state| {
+        orchestration_list_schedules(state, host_state, &request)
+    })
+    .await
+}
+
+fn orchestration_list_schedules(
+    state: &OrchestrationApiState,
+    host_state: &HostState,
+    request: &WorkspaceRequest,
+) -> Result<Vec<ScheduleSnapshot>, OrchestrationApiError> {
+    validate_workspace_scope(host_state, &request.workspace_id)?;
+    let store = state.snapshot()?;
     let mut schedules: Vec<_> = store
         .workspace(&request.workspace_id)
         .map(|workspace| {
@@ -1924,14 +1955,24 @@ pub async fn orchestration_delete_schedule_v7(
 }
 
 #[tauri::command]
-pub fn orchestration_list_runs_v6(
-    state: State<'_, OrchestrationApiState>,
-    host_state: State<'_, HostState>,
+pub async fn orchestration_list_runs_v6(
+    app: AppHandle,
     request: WorkspaceRequest,
 ) -> Result<Vec<RunSummary>, OrchestrationApiError> {
-    validate_workspace_scope(&host_state, &request.workspace_id)?;
+    orchestration_query(app, move |state, host_state| {
+        orchestration_list_runs(state, host_state, &request)
+    })
+    .await
+}
+
+fn orchestration_list_runs(
+    state: &OrchestrationApiState,
+    host_state: &HostState,
+    request: &WorkspaceRequest,
+) -> Result<Vec<RunSummary>, OrchestrationApiError> {
+    validate_workspace_scope(host_state, &request.workspace_id)?;
     validate_workspace_id(&request.workspace_id)?;
-    let store = state.lock()?;
+    let store = state.snapshot()?;
     let Some(workspace) = store.workspace(&request.workspace_id) else {
         return Ok(vec![]);
     };
@@ -1951,14 +1992,24 @@ pub fn orchestration_list_runs_v6(
 }
 
 #[tauri::command]
-pub fn orchestration_get_run_v6(
-    state: State<'_, OrchestrationApiState>,
-    host_state: State<'_, HostState>,
+pub async fn orchestration_get_run_v6(
+    app: AppHandle,
     request: RunRequest,
 ) -> Result<Option<Run>, OrchestrationApiError> {
-    validate_workspace_scope(&host_state, &request.workspace_id)?;
+    orchestration_query(app, move |state, host_state| {
+        orchestration_get_run(state, host_state, &request)
+    })
+    .await
+}
+
+fn orchestration_get_run(
+    state: &OrchestrationApiState,
+    host_state: &HostState,
+    request: &RunRequest,
+) -> Result<Option<Run>, OrchestrationApiError> {
+    validate_workspace_scope(host_state, &request.workspace_id)?;
     validate_workspace_id(&request.workspace_id)?;
-    let store = state.lock()?;
+    let store = state.snapshot()?;
     Ok(store
         .workspace(&request.workspace_id)
         .and_then(|workspace| {
@@ -2115,8 +2166,7 @@ pub async fn orchestration_reconcile_uncertain_task_v6(
         ReconcileResolution::Cancelled => UncertainResolution::Cancelled,
     };
     let reconciled = {
-        let mut store = state.lock()?;
-        store.transact(|workspaces| {
+        state.store.transact(|workspaces| {
             let run = mutable_run(workspaces, &workspace_id, &run_id)?;
             Coordinator::reconcile_uncertain_task(
                 run,
@@ -2406,6 +2456,20 @@ fn history_references_for_member(run: &Run, member_id: &str) -> Vec<NativeHistor
     references
 }
 
+/// A running run with unleased ready work and nothing that crossed the native
+/// boundary (no running, uncertain or leased task).
+fn resumable_after_restart(run: &Run) -> bool {
+    let has_ready = run
+        .tasks()
+        .iter()
+        .any(|task| task.status() == TaskStatus::Ready && task.lease_id().is_none());
+    let crossed_native_boundary = run.tasks().iter().any(|task| {
+        matches!(task.status(), TaskStatus::Running | TaskStatus::Uncertain)
+            || task.lease_id().is_some()
+    });
+    run.status() == RunStatus::Running && has_ready && !crossed_native_boundary
+}
+
 fn mutable_run<'a>(
     workspaces: &'a mut [WorkspaceOrchestration],
     workspace_id: &str,
@@ -2442,8 +2506,7 @@ mod tests {
         )
         .unwrap();
         state
-            .lock()
-            .unwrap()
+            .store
             .transact(|workspaces| {
                 let mut workspace = WorkspaceOrchestration::empty("project".into());
                 workspace.runs.push(run);
@@ -2627,7 +2690,7 @@ fn save_graph(
         }
     }
     state
-        .lock()?
+        .store
         .transact(|workspaces| {
             let index = match workspaces
                 .iter()
@@ -2692,7 +2755,7 @@ mod graph_tests {
         assert!(save_graph(&state, conflict).is_err());
         drop(state);
         let state = OrchestrationApiState::open(&root).unwrap();
-        let store = state.lock().unwrap();
+        let store = state.snapshot().unwrap();
         let workspace = store.workspace("workspace").unwrap();
         assert_eq!(workspace.profiles[0].value.name, "Agent");
         assert_eq!(workspace.profiles[0].revision, 0);
@@ -2800,15 +2863,100 @@ mod graph_tests {
 
         let reopened = OrchestrationApiState::open(&root).unwrap();
         assert_eq!(
-            reopened.recoverable_schedule_runs().unwrap(),
+            reopened.recoverable_runs().unwrap(),
             vec![("workspace".into(), run_id.clone())]
         );
-        let store = reopened.lock().unwrap();
+        let store = reopened.snapshot().unwrap();
         let workspace = store.workspace("workspace").unwrap();
         assert_eq!(workspace.runs.len(), 1);
         assert_eq!(workspace.runs[0].id(), run_id);
         assert_eq!(workspace.schedules[0].occurrences.len(), 2);
         drop(store);
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn start_manual_run(state: &OrchestrationApiState, run_id: &str) {
+        state
+            .create_run(StartRunRequest {
+                workspace_id: "workspace".into(),
+                run_id: run_id.into(),
+                team_id: "team".into(),
+                pipeline_id: "pipeline".into(),
+                launch_command_id: None,
+            })
+            .expect("starts a manual run");
+    }
+
+    fn advance_run(
+        state: &OrchestrationApiState,
+        run_id: &str,
+        advance: impl FnOnce(&mut Run) -> Result<(), CoordinatorError>,
+    ) {
+        state
+            .store
+            .transact(|workspaces| {
+                let run = mutable_run(workspaces, "workspace", run_id)?;
+                advance(run).map_err(|_| StoreError::Invalid)
+            })
+            .expect("advances the run");
+    }
+
+    #[test]
+    fn manual_runs_resume_after_restart_unless_work_crossed_the_native_boundary() {
+        let root =
+            std::env::temp_dir().join(format!("piui-manual-resume-{}", uuid::Uuid::new_v4()));
+        let state = OrchestrationApiState::open(&root).unwrap();
+        save_graph(&state, request()).unwrap();
+        // Committed before the first task was leased (for example, the host
+        // closed before scheduling): no native side effect exists yet.
+        start_manual_run(&state, "manual-ready");
+        // Leased, then interrupted before or while crossing the boundary.
+        start_manual_run(&state, "manual-leased");
+        advance_run(&state, "manual-leased", |run| {
+            let revision = run.revision();
+            Coordinator::lease_next_task(run, revision, "lease".into()).map(|_| ())
+        });
+        // Dispatched to a native session that the restart interrupted.
+        start_manual_run(&state, "manual-running");
+        advance_run(&state, "manual-running", |run| {
+            let revision = run.revision();
+            Coordinator::dispatch_next(
+                run,
+                revision,
+                NativeExecutionReference {
+                    id: "native-session".into(),
+                },
+            )
+            .map(|_| ())
+        });
+        assert_eq!(
+            state.recoverable_runs().unwrap(),
+            vec![("workspace".into(), "manual-ready".into())]
+        );
+        drop(state);
+
+        let reopened = OrchestrationApiState::open(&root).unwrap();
+        assert_eq!(
+            reopened.recoverable_runs().unwrap(),
+            vec![("workspace".into(), "manual-ready".into())],
+            "only the manual run that never crossed the boundary resumes"
+        );
+        for crossed in ["manual-leased", "manual-running"] {
+            let run = reopened.get_run("workspace", crossed).unwrap().unwrap();
+            assert_eq!(run.status(), RunStatus::Uncertain);
+            assert!(
+                run.tasks()
+                    .iter()
+                    .all(|task| task.status() == TaskStatus::Uncertain)
+            );
+        }
+        let ready = reopened
+            .get_run("workspace", "manual-ready")
+            .unwrap()
+            .unwrap();
+        assert_eq!(ready.status(), RunStatus::Running);
+        assert_eq!(ready.revision(), 0, "recovery itself changed nothing");
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -2877,7 +3025,7 @@ mod graph_tests {
         )
         .unwrap();
 
-        let store = state.lock().unwrap();
+        let store = state.snapshot().unwrap();
         let schedule = &store.workspace("workspace").unwrap().schedules[0];
         assert!(!schedule.enabled);
         assert_eq!(schedule.trigger_revision, 1);
@@ -2972,7 +3120,7 @@ mod graph_tests {
         );
         assert!(
             state
-                .lock()
+                .snapshot()
                 .unwrap()
                 .workspace("workspace")
                 .unwrap()
@@ -3035,7 +3183,7 @@ mod graph_tests {
             Err(error) => error,
         };
         assert_eq!(error.code, "io");
-        let store = state.lock().unwrap();
+        let store = state.snapshot().unwrap();
         let workspace = store.workspace("workspace").unwrap();
         assert!(workspace.runs.is_empty());
         assert!(workspace.schedules[0].occurrences.is_empty());
@@ -3045,5 +3193,86 @@ mod graph_tests {
         drop(state);
         std::fs::remove_file(journal).unwrap();
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod query_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn read_queries_run_off_the_invoking_thread_and_keep_their_errors() {
+        let root = std::env::temp_dir().join(format!("piui-query-{}", uuid::Uuid::new_v4()));
+        let app_data = root.join("app-data");
+        let host = std::sync::Arc::new(HostState::open(&app_data, false).expect("host state"));
+        let workspace_id = host.personal_workspace.project_id.clone();
+        let api = std::sync::Arc::new(OrchestrationApiState::open(&app_data).expect("state"));
+        let invoking_thread = std::thread::current().id();
+        let (runs, query_thread) = off_main_thread({
+            let (api, host) = (std::sync::Arc::clone(&api), std::sync::Arc::clone(&host));
+            let request = WorkspaceRequest { workspace_id };
+            move || {
+                Ok((
+                    orchestration_list_runs(&api, &host, &request)?,
+                    std::thread::current().id(),
+                ))
+            }
+        })
+        .await
+        .expect("lists runs");
+        assert!(runs.is_empty());
+        assert_ne!(
+            query_thread, invoking_thread,
+            "store and filesystem work runs on the blocking pool"
+        );
+        let error = off_main_thread({
+            let (api, host) = (std::sync::Arc::clone(&api), std::sync::Arc::clone(&host));
+            let missing = WorkspaceRequest {
+                workspace_id: "missing-workspace".into(),
+            };
+            move || orchestration_catalog(&api, &host, &missing)
+        })
+        .await
+        .expect_err("unknown workspace is rejected");
+        assert_eq!(error.code, "not-found");
+        drop((api, host));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn run_reads_are_served_while_a_writer_holds_the_journal() {
+        let root = std::env::temp_dir().join(format!("piui-query-read-{}", uuid::Uuid::new_v4()));
+        let state = std::sync::Arc::new(OrchestrationApiState::open(&root).expect("state"));
+        state
+            .store
+            .transact(|workspaces| {
+                workspaces.push(WorkspaceOrchestration::empty("workspace".into()));
+                Ok(())
+            })
+            .expect("baseline");
+        let (entered, writer_inside) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let writer = std::thread::spawn({
+            let state = std::sync::Arc::clone(&state);
+            move || {
+                state.store.transact(|_| {
+                    entered.send(()).expect("signals");
+                    released.recv().expect("released");
+                    Ok(())
+                })
+            }
+        });
+        writer_inside.recv().expect("writer inside the journal");
+        assert!(
+            state
+                .get_run("workspace", "absent")
+                .expect("read is not blocked")
+                .is_none()
+        );
+        assert!(state.next_schedule_due().expect("read").is_none());
+        release.send(()).expect("releases");
+        writer.join().expect("writer").expect("commits");
+        drop(state);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

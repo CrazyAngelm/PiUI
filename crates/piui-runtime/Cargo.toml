@@ -16,6 +16,11 @@ sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
+[features]
+# Test support only: exposes a constructor that runs the production bridge
+# runner around a test adapter. Never enabled for application builds.
+test-support = []
+
 [lints.rust]
 unsafe_code = "forbid"
 
