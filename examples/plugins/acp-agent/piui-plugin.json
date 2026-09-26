@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "example.qwen-code-acp",
+  "name": "Qwen Code agent",
+  "version": "1.0.0",
+  "publisher": "PiUI examples",
+  "description": "Adds Qwen Code as an ACP agent. It appears in Settings → Harnesses and runs only after you trust its exact command line there.",
+  "engines": { "piui": ">=0.1.0 <1.0.0" },
+  "permissions": ["acp.agents"],
+  "contributes": {
+    "acpAgents": [
+      {
+        "schemaVersion": 1,
+        "id": "qwen-code",
+        "displayName": "Qwen Code",
+        "command": { "program": "qwen", "args": ["--experimental-acp"] },
+        "version": { "args": ["--version"] },
+        "environment": ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"],
+        "authHint": "Run `qwen` in a terminal and sign in with Qwen Code's own flow, then check the agent again.",
+        "docsUrl": "https://github.com/QwenLM/qwen-code"
+      }
+    ]
+  }
+}

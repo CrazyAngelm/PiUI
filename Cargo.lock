@@ -2920,6 +2920,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "piui-plugins"
+version = "0.1.1"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "jsonschema",
+ "piui-runtime",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "piui-runtime"
 version = "0.1.1"
 dependencies = [

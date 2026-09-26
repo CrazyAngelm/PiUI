@@ -1,0 +1,45 @@
+/* PiUI passes its design tokens as --piui-* custom properties. */
+:root {
+  color-scheme: dark;
+}
+:root[data-appearance='light'] {
+  color-scheme: light;
+}
+body {
+  margin: 0;
+  padding: 12px;
+  background: var(--piui-bg-raised, #19171a);
+  color: var(--piui-text, #eee9ed);
+  font: 13px/1.45 var(--piui-font-ui, system-ui, sans-serif);
+}
+h1 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+p {
+  margin: 0 0 8px;
+  color: var(--piui-text-muted, #b5adb7);
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+button {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--piui-border, #3b343e);
+  border-radius: 6px;
+  background: var(--piui-surface-1, #222024);
+  color: var(--piui-text, #eee9ed);
+  font: inherit;
+  cursor: pointer;
+}
+button:hover {
+  border-color: var(--piui-border-strong, #938898);
+}
+button:focus-visible {
+  outline: 2px solid var(--piui-focus, #ec91a5);
+  outline-offset: 1px;
+}

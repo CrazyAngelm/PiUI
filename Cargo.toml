@@ -7,6 +7,7 @@ members = [
   "crates/piui-platform",
   "crates/piui-runtime",
   "crates/piui-orchestration",
+  "crates/piui-plugins",
 ]
 exclude = ["spikes/webview-baseline/src-tauri"]
 resolver = "2"

@@ -1,0 +1,24 @@
+{
+  "name": "@piui/plugin-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Types, a backend JSON-RPC helper, a panel bridge client and a template for PiUI plugins",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "create-piui-plugin": "./bin/create-plugin.mjs"
+  },
+  "exports": {
+    "./backend": {
+      "types": "./src/backend.d.mts",
+      "default": "./src/backend.mjs"
+    },
+    "./panel": {
+      "types": "./src/panel.d.ts",
+      "default": "./src/panel.js"
+    },
+    "./manifest": {
+      "types": "./src/manifest.d.ts"
+    }
+  }
+}

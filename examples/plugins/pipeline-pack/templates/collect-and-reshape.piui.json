@@ -1,0 +1,130 @@
+{
+  "format": "piui-system",
+  "version": 4,
+  "name": "Collect, reshape and review",
+  "orchestrator": "collector",
+  "inputs": [
+    {
+      "name": "question",
+      "label": "What should be investigated?",
+      "kind": "long-text",
+      "required": true
+    }
+  ],
+  "agents": [
+    {
+      "id": "collector",
+      "profile": {
+        "name": "Collector",
+        "harness": "codex",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "read-only",
+        "instructions": "Read the project to answer the question. Do not change files.",
+        "toolPolicy": {
+          "rules": []
+        },
+        "serviceTier": "standard"
+      },
+      "task": "Investigate: {{input.question}}. Return a JSON object with summary (text), findings (text list), risks (text list) and notes (text).",
+      "resultFields": [
+        {
+          "name": "findings",
+          "kind": "text-list"
+        },
+        {
+          "name": "risks",
+          "kind": "text-list"
+        }
+      ],
+      "position": {
+        "x": 60,
+        "y": 100
+      }
+    },
+    {
+      "id": "reshape",
+      "executor": {
+        "type": "plugin",
+        "pluginId": "example.pipeline-pack",
+        "nodeType": "json-transform",
+        "config": {
+          "source": "dependencies",
+          "pick": "findings, risks",
+          "rename": "risks=openRisks",
+          "wrap": ""
+        }
+      },
+      "profile": {
+        "name": "Keep findings and risks",
+        "harness": "codex",
+        "model": "plugin",
+        "permissionMode": "read-only",
+        "instructions": "",
+        "toolPolicy": {
+          "rules": []
+        }
+      },
+      "task": "Keep only the findings and the open risks of the collected result. Deterministic: no model is involved.",
+      "resultFields": [
+        {
+          "name": "findings",
+          "kind": "text-list"
+        },
+        {
+          "name": "openRisks",
+          "kind": "text-list"
+        }
+      ],
+      "position": {
+        "x": 360,
+        "y": 100
+      }
+    },
+    {
+      "id": "reviewer",
+      "executor": {
+        "type": "llm"
+      },
+      "profile": {
+        "name": "Reviewer",
+        "harness": "codex",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "read-only",
+        "instructions": "Write for maintainers. State only what the findings show.",
+        "toolPolicy": {
+          "rules": []
+        },
+        "serviceTier": "standard"
+      },
+      "task": "Review the findings and open risks. Say which risk to address first and why, in at most five sentences.",
+      "inputBindings": [
+        {
+          "sourceStepId": "reshape",
+          "field": "findings",
+          "name": "findings"
+        },
+        {
+          "sourceStepId": "reshape",
+          "field": "openRisks",
+          "name": "openRisks"
+        }
+      ],
+      "position": {
+        "x": 660,
+        "y": 100
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "collector",
+      "to": "reshape",
+      "kind": "result"
+    },
+    {
+      "from": "reshape",
+      "to": "reviewer",
+      "kind": "result"
+    }
+  ]
+}

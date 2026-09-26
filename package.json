@@ -25,6 +25,8 @@
     "release:windows": "pnpm --filter @piui/desktop exec tauri build --bundles nsis --ci && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-windows-release.ps1",
     "system:check": "node scripts/system-config.mjs",
     "system:schema": "node scripts/system-schema.mjs",
+    "create-plugin": "node packages/plugin-sdk/bin/create-plugin.mjs",
+    "plugin:check": "node scripts/plugin-check.mjs",
     "agent:api": "node scripts/agent-api.mjs",
     "agent:api:test": "node --test scripts/agent-api.test.mjs",
     "agent:api:e2e": "pnpm --filter @piui/desktop exec node scripts/tauri-webview2-e2e-controller.mjs --agent-api"

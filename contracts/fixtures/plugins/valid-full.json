@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schemas.piui.dev/plugin/v1.json",
+  "schemaVersion": 1,
+  "id": "com.example.full-plugin",
+  "name": "Full example",
+  "version": "2.1.0-beta.1",
+  "publisher": "Example Co.",
+  "description": "Every contribution kind in one manifest.",
+  "engines": { "piui": ">=0.1.0 <1.0.0" },
+  "permissions": ["commands", "ui.panel", "ui.settings", "node.run", "acp.agents", "chat.read", "notifications", "project.read", "network"],
+  "backend": { "entry": "backend/main.mjs" },
+  "ui": { "entry": "ui/index.html" },
+  "contributes": {
+    "commands": [
+      { "id": "summarize", "title": "Summarize this chat", "description": "Runs in the backend.", "surfaces": ["palette", "composer"] },
+      { "id": "checklist", "title": "Insert checklist", "surfaces": ["composer"], "insertText": "- [ ] Tests\n- [ ] Docs" }
+    ],
+    "settings": [
+      { "key": "greeting", "label": "Greeting", "type": "text", "default": "Hello", "maxLength": 80 },
+      { "key": "limit", "label": "Limit", "type": "number", "minimum": 1, "maximum": 50, "default": 10 },
+      { "key": "verbose", "label": "Verbose", "type": "boolean", "default": false },
+      { "key": "tone", "label": "Tone", "type": "choice", "options": [{ "value": "calm", "label": "Calm" }, { "value": "brief", "label": "Brief" }], "default": "calm" },
+      { "key": "notes", "label": "Notes", "type": "long-text", "required": false }
+    ],
+    "panels": [{ "id": "overview", "title": "Overview", "location": "chat-details" }],
+    "themes": [
+      {
+        "id": "ocean",
+        "label": "Ocean",
+        "appearance": "dark",
+        "tokens": { "bg": "#0e1720", "surface-1": "#16222e", "text": "#e6eef5", "text-muted": "#a8b7c4", "accent": "#6cb6ff", "accent-ink": "#06121d", "overlay": "rgba(3, 8, 12, 0.6)" }
+      }
+    ],
+    "templates": [{ "id": "triage", "title": "Issue triage", "description": "Classify and route issues.", "file": "templates/triage.piui.json" }],
+    "acpAgents": [
+      {
+        "schemaVersion": 1,
+        "id": "example-agent",
+        "displayName": "Example Agent",
+        "command": { "program": "example-agent", "args": ["--acp"] },
+        "version": { "args": ["--version"], "verified": { "minimum": "1.0.0", "ceiling": "2.0.0" } },
+        "environment": ["HTTPS_PROXY"]
+      }
+    ],
+    "nodeTypes": [
+      {
+        "id": "json-transform",
+        "title": "JSON transform",
+        "description": "Picks and renames fields.",
+        "config": [{ "key": "fields", "label": "Fields", "type": "text", "required": true }],
+        "timeoutSeconds": 30,
+        "resultFields": [{ "name": "result", "kind": "text" }]
+      }
+    ]
+  }
+}

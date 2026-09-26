@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "id": "example.hello-command",
+  "name": "Hello command",
+  "version": "1.0.0",
+  "publisher": "PiUI examples",
+  "description": "A palette command answered by a small backend, a composer action and a sandboxed chat panel.",
+  "engines": { "piui": ">=0.1.0 <1.0.0" },
+  "permissions": ["commands", "ui.settings", "ui.panel", "chat.read", "notifications"],
+  "backend": { "entry": "backend/main.mjs" },
+  "ui": { "entry": "ui/index.html" },
+  "contributes": {
+    "commands": [
+      {
+        "id": "say-hello",
+        "title": "Say hello",
+        "description": "Shows a greeting from the plugin's backend.",
+        "surfaces": ["palette", "composer"]
+      },
+      {
+        "id": "insert-thanks",
+        "title": "Thank the agent",
+        "description": "Prepares a thank-you message for you to review.",
+        "surfaces": ["composer"],
+        "insertText": "Thanks! That looks right. Please also add a short summary of what you changed."
+      }
+    ],
+    "settings": [
+      { "key": "greeting", "label": "Greeting", "description": "The word the notice starts with.", "type": "text", "default": "Hello", "maxLength": 40 },
+      { "key": "prepareText", "label": "Prepare a message", "description": "Also put a greeting in the message box when a chat is open.", "type": "boolean", "default": false }
+    ],
+    "panels": [{ "id": "hello", "title": "Hello panel", "location": "chat-details" }]
+  }
+}

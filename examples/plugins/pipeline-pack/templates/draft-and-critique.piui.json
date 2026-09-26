@@ -1,0 +1,76 @@
+{
+  "format": "piui-system",
+  "version": 4,
+  "name": "Draft and critique",
+  "orchestrator": "writer",
+  "inputs": [
+    {
+      "name": "topic",
+      "label": "What should be written?",
+      "kind": "long-text",
+      "required": true
+    }
+  ],
+  "agents": [
+    {
+      "id": "writer",
+      "profile": {
+        "name": "Writer",
+        "harness": "codex",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "read-only",
+        "instructions": "Write clearly for the stated audience. When the critic asks for changes, apply them and say what changed.",
+        "toolPolicy": {
+          "rules": []
+        },
+        "serviceTier": "standard"
+      },
+      "task": "Write a first draft about: {{input.topic}}",
+      "position": {
+        "x": 60,
+        "y": 100
+      }
+    },
+    {
+      "id": "critic",
+      "profile": {
+        "name": "Critic",
+        "harness": "codex",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "read-only",
+        "instructions": "Be specific. Approve only when the draft is accurate, complete and easy to read.",
+        "toolPolicy": {
+          "rules": []
+        },
+        "serviceTier": "standard"
+      },
+      "task": "Critique the writer's draft. Return a JSON object with approved (boolean) and feedback (text).",
+      "resultFields": [
+        {
+          "name": "approved",
+          "kind": "boolean"
+        },
+        {
+          "name": "feedback",
+          "kind": "text"
+        }
+      ],
+      "review": {
+        "field": "approved",
+        "retryFromStepId": "writer",
+        "maxIterations": 3
+      },
+      "position": {
+        "x": 360,
+        "y": 100
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "writer",
+      "to": "critic",
+      "kind": "result"
+    }
+  ]
+}

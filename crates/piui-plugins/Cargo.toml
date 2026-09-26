@@ -1,0 +1,22 @@
+[package]
+name = "piui-plugins"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "PiUI plugin package format v1: manifest, package and theme validation"
+
+[dependencies]
+# Deflate for `.zip` packages; already in the dependency graph through Tauri.
+crc32fast = "1.5"
+flate2 = "1.1"
+jsonschema = { version = "=0.30.0", default-features = false }
+piui-runtime = { path = "../piui-runtime" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
