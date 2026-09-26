@@ -10,6 +10,7 @@
   import { IconButton } from '../../lib/ui';
   import PiuiEdge, { type PiuiFlowEdge } from '../pipelines/canvas/PiuiEdge.svelte';
   import FlowBridge, { type FlowApi } from '../pipelines/canvas/FlowBridge.svelte';
+  import { connectionLabel } from '../pipelines/canvas/connectionLabel';
   import RunNodeCard, { type RunFlowNode } from './RunNodeCard.svelte';
   import { buildRunGraph } from './runGraph';
   import type { StepView } from './runPresentation';
@@ -64,6 +65,7 @@
         {
           id: node.id,
           type: 'step' as const,
+          ariaLabel: view.name,
           position: { x: node.x, y: node.y },
           data: {
             view,
@@ -78,6 +80,7 @@
         },
       ];
     });
+    const nameOf = (stepId: string) => byStep.get(stepId)?.name ?? '';
     edges = graph.edges.map((edge) => {
       const router = edge.kind === 'route' ? graph.nodes.find((node) => node.id === edge.from) : undefined;
       const label = edge.kind === 'route' ? router?.router?.branches.find((branch) => branch.id === edge.branchId)?.label : undefined;
@@ -88,6 +91,7 @@
         type: 'piui' as const,
         source: edge.from,
         target: edge.to,
+        ariaLabel: connectionLabel($t, edge.kind, nameOf(edge.from), nameOf(edge.to)),
         sourceHandle: 'out',
         targetHandle: 'in',
         data: { kind: edge.kind, label },

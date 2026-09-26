@@ -464,13 +464,13 @@
   }
   .chat__time {
     flex: none;
-    color: var(--piui-text-disabled);
+    color: var(--piui-text-faint);
     font-size: var(--piui-text-xs);
   }
   .chats__empty {
     margin: 2px 0 6px;
     padding: 0 var(--piui-space-2);
-    color: var(--piui-text-disabled);
+    color: var(--piui-text-faint);
     font-size: var(--piui-text-sm);
   }
   .hint {

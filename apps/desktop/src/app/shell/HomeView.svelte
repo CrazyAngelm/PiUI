@@ -214,7 +214,7 @@
   }
   .recent__time {
     min-width: 44px;
-    color: var(--piui-text-disabled);
+    color: var(--piui-text-faint);
     text-align: right;
   }
   .link {
