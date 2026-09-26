@@ -85,7 +85,7 @@ Aggregate both returned `checks`, `timings`, and `screenshots` into the inner JS
 
 `resizeExactTauriWindow` is also required and receives `{ width, height, appOwnerPid }`. Use the same direct-child HWND ownership check before resizing. The scenario verifies the resulting WebView viewport crosses the CSS breakpoint; a no-op resize cannot pass.
 
-The classic compatibility proof must navigate to `?view=classic`. The workspace calls above must navigate to the default route. The loopback origin stays unchanged, so the authenticated automation origin check remains valid. Do not put both suites on the classic URL.
+The classic compatibility proof (`--classic`, opt-in) must navigate to `?view=classic`. Since the new shell became the default view, the workspace calls above navigate to `?view=legacy`, the shell they were written for, until the new shell reaches parity; the default route is covered by the shell proof (`scripts/shell-webview2-e2e.mjs`, see [TESTING.md](TESTING.md)). The loopback origin stays unchanged, so the authenticated automation origin check remains valid. Do not put these suites on the same URL.
 
 The outside controller runs this scenario through the managed `--workspace` branch of `tauri-webview2-dialog-e2e.mjs` and recognizes its workspace-v11 pass target. The scenario does not spawn a second launcher. The classic scenario keeps its separate `?view=classic` route.
 
