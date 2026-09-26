@@ -40,7 +40,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     throw fail("coordinator-unavailable", "The managed Codex coordinator is unavailable.");
   }
   if (coordinationEnabled && config.nativeId) {
-    throw fail("unsupported-coordinator-resume", "Codex 0.147.0 cannot re-register the managed workspace tool while resuming.");
+    throw fail("unsupported-coordinator-resume", "Codex app-server thread/resume cannot re-register the managed workspace tool.");
   }
   if (coordinationEnabled && config.nativeSubagents === true) {
     throw fail("unsupported-managed-native-subagents", "Managed Codex runs use coordinator-only spawning and cannot also enable native subagents.");
@@ -48,6 +48,34 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   if (config.nativeSubagents === true) {
     throw fail("unsupported-native-subagent-policy", "Codex cannot prove that native subagents are enabled for this session.");
   }
+
+  // Verified Codex app-server range, mirrored from CODEX_APP_SERVER in
+  // crates/piui-runtime/src/native_version.rs (a Rust unit test keeps both
+  // equal): minimum <= version < ceiling on MAJOR.MINOR.PATCH. A pre-release
+  // precedes its release; one at or above the ceiling previews an untested
+  // release line and is newer than tested. See CONTRACT.md (Codex section).
+  const VERIFIED_CODEX_VERSIONS = { minimum: "0.147.0", ceiling: "0.158.0" };
+  const parseVersion = (text) => {
+    const match = /^v?(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(text);
+    if (!match) return undefined;
+    const core = match.slice(1, 4).map(Number);
+    return core.every(Number.isSafeInteger) ? { core, prerelease: match[4] !== undefined } : undefined;
+  };
+  // The initialize user agent is `<originator>/<version> (<os>; <arch>) ...
+  // (<client name>; <client version>)`; only the first token names Codex.
+  const userAgentVersion = (userAgent) => {
+    const product = userAgent.trim().split(/\s+/, 1)[0] ?? "";
+    const slash = product.lastIndexOf("/");
+    return slash > 0 ? parseVersion(product.slice(slash + 1)) : undefined;
+  };
+  const compareCore = (left, right) => left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
+  const checkCodexVersion = (version) => {
+    if (!version) return "unrecognized";
+    const minimum = compareCore(version.core, parseVersion(VERIFIED_CODEX_VERSIONS.minimum).core);
+    if (minimum < 0 || (minimum === 0 && version.prerelease)) return "older";
+    if (compareCore(version.core, parseVersion(VERIFIED_CODEX_VERSIONS.ceiling).core) >= 0) return "newer";
+    return "verified";
+  };
 
   const MAX_FRAME_BYTES = 32 * 1024 * 1024;
   const pending = new Map();
@@ -851,8 +879,14 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   if (!initialize || typeof initialize.codexHome !== "string") {
     throw cleanupStartupFailure(fail("native-handshake-failed", "The Codex app server handshake failed."));
   }
-  if (typeof initialize.userAgent !== "string" || !/(?:^|\/)0\.(?:147\.0|153\.4)(?:\s|\(|$)/.test(initialize.userAgent)) {
-    throw cleanupStartupFailure(fail("unsupported-native-version", "PiUI requires a supported Codex app-server version (0.147.0 or 0.153.4)."));
+  const versionCheck = checkCodexVersion(typeof initialize.userAgent === "string" ? userAgentVersion(initialize.userAgent) : undefined);
+  if (versionCheck !== "verified") {
+    throw cleanupStartupFailure(fail(
+      "unsupported-native-version",
+      versionCheck === "newer"
+        ? "Unverified: this Codex app-server is newer than the versions tested with PiUI."
+        : "PiUI requires a verified Codex app-server version.",
+    ));
   }
   try {
     await notifyNative("initialized");
@@ -1026,7 +1060,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
           models: { supported: true, enforcement: "native" },
           approvals: { supported: true, enforcement: "native" },
           instructions: { supported: true, enforcement: "native" },
-          toolPolicy: { supported: false, enforcement: "unsupported", reason: "Codex app-server 0.147.0 has no restrictive tool allowlist contract." },
+          toolPolicy: { supported: false, enforcement: "unsupported", reason: "Codex app-server has no restrictive tool allowlist contract." },
           nativeSubagents: coordinationEnabled
             ? { supported: true, enforcement: "coordinator" }
             : { supported: true, enforcement: "native" },

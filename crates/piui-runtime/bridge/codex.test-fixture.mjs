@@ -22,6 +22,9 @@ const settingsIndex = process.argv.indexOf("--expect-settings");
 const expectedSettings = settingsIndex >= 0 ? JSON.parse(process.argv[settingsIndex + 1]) : undefined;
 const unknownItemsFixture = process.argv.includes("--unknown-items");
 const toolItemsFixture = process.argv.includes("--tool-items");
+// Emulated app-server version (default: the newest verified protocol). Shapes
+// that changed between versions follow it; see CONTRACT.md (Codex section).
+const codexVersion = process.argv.find((argument) => argument.startsWith("--codex-version="))?.slice("--codex-version=".length) ?? "0.157.1";
 
 const permissionMatches = (params) => {
   if (expectedPermission === "native") return params.permissions === undefined && params.approvalPolicy === undefined;
@@ -34,7 +37,10 @@ input.on("line", (line) => {
   const message = JSON.parse(line);
   if (poolFixture && message.params?.threadId) threadId = message.params.threadId;
   if (message.method === "initialize") {
-    const userAgent = process.argv.includes("--wrong-version") ? "fixture/0.148.0" : process.argv.includes("--latest-version") ? "fixture/0.153.4" : "fixture/0.147.0";
+    // Real shape: `<client name>/<codex version> (<os>; <arch>) <terminal> (<client name>; <client version>)`.
+    const userAgent = process.argv.includes("--raw-user-agent")
+      ? codexVersion
+      : `${message.params?.clientInfo?.name}/${codexVersion} (Fixture OS 1.0; x86_64) fixture-terminal (${message.params?.clientInfo?.name}; ${message.params?.clientInfo?.version})`;
     send({ id: message.id, result: { userAgent, codexHome: "/fixture", platformFamily: "fixture", platformOs: "fixture" } });
   } else if (message.method === "initialized") {
     if (process.argv.includes("--rate-limits")) {

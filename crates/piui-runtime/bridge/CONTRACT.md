@@ -79,6 +79,52 @@ items with a safe `error` event. A failed native prompt emits
 `turnCompleted:"failed"`, keeps an `error` block visible and returns to idle.
 
 
+## Codex (`codex.mjs`, harness `codex`)
+
+Drives the user's installed `@openai/codex` (`node bin/codex.js app-server --stdio
+-c analytics.enabled=false --disable apps --disable plugins --disable remote_plugin
+--disable recommended_plugins --disable shell_snapshot`, plus `--disable multi_agent
+--disable multi_agent_v2` for managed runs and `nativeSubagents:false`) with the
+inherited `CODEX_HOME`. Frames are LF JSON without a `jsonrpc` member; `initialize`
+negotiates `experimentalApi:true, requestAttestation:false`.
+
+### Verified version range
+
+- One range, `minimum <= version < ceiling`, currently `0.147.0 <= v < 0.158.0`:
+  `CODEX_APP_SERVER` in `crates/piui-runtime/src/native_version.rs`, mirrored by
+  `VERIFIED_CODEX_VERSIONS` in `codex.mjs`; the Rust test
+  `bridge_mirrors_the_codex_range` keeps the two equal.
+- Grammar: `MAJOR.MINOR.PATCH[-pre][+build]` (leading `v` tolerated). A pre-release
+  precedes its release (`0.147.0-alpha.1` is older than the minimum); a
+  pre-release at or above the ceiling previews an untested line
+  (`0.158.0-alpha.2` is newer than tested). Anything else is unrecognized.
+- Host discovery reads `@openai/codex/package.json` and reports the found
+  `version`. Inside the range it is `available` (on verified platforms); above it
+  `unverified` with "Unverified: newer than the versions tested with PiUI.";
+  below it "Older than the oldest version supported by PiUI."; unparseable
+  "The installed version could not be recognized.". Launch refuses every
+  version outside the range (`HarnessUnavailable`); nothing newer is accepted
+  silently.
+- The bridge checks the running app-server itself: the first token of the
+  `initialize` `userAgent` (`<originator>/<version> (<os>; <arch>) <terminal>
+  (<client name>; <client version>)`, originator = our `clientInfo.name`) must be
+  in range, else `unsupported-native-version` before `initialized`. The trailing
+  client version is never read.
+- Why 0.158.0: 0.147.0, 0.153.4 and 0.157.1 were audited. Patch
+  releases do not change the protocol: `codex-rs/app-server` and
+  `codex-rs/app-server-protocol` are identical at 0.157.0 and 0.157.1 (and at
+  0.156.0 and 0.156.1), so the ceiling admits the 0.157.x line and nothing after
+  it. On 2026-09-26 0.158.0 and 0.159.0 exist only as unaudited alphas.
+- Raising the ceiling: generate the new version's bindings
+  (`codex app-server generate-ts --experimental --out <dir>`), re-audit every
+  method, notification, request and field the bridge uses, check that
+  `codex features list` still registers each `--disable` flag (an unknown name is
+  a hard CLI error), extend the fixture (`--codex-version=`) and tests for any
+  change, run the live handshake
+  (`PIUI_CODEX_LIVE_HANDSHAKE=<abs path to bin/codex.js> node --test
+  --test-name-pattern live: crates/piui-runtime/bridge/codex.test.mjs`; it
+  forwards only `initialize`), then raise both constants.
+
 ## Claude Code (`claude.mjs`, harness `claude-code`)
 
 Drives the user's own installed, unmodified `claude` executable (`runtimeProgram`,

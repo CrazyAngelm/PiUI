@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
-import { toNamespacedPath } from "node:path";
+import { isAbsolute, toNamespacedPath } from "node:path";
 import test from "node:test";
 import { createCodexAdapter } from "./codex.mjs";
 
@@ -390,12 +392,43 @@ test("fails closed for unsupported mandatory policy", async () => {
     (error) => error.bridgeCode === "unsupported-permission-mode",
   );
   await assert.rejects(
-    createCodexAdapter({ ...config, runtimeArgs: [fixture, "--wrong-version"] }, () => {}),
-    (error) => error.bridgeCode === "unsupported-native-version",
-  );
-  await assert.rejects(
     createCodexAdapter({ ...config, runtimeProgram: "piui-definitely-missing-codex" }, () => {}),
     (error) => error.bridgeCode === "native-unavailable",
+  );
+});
+
+test("admits app-server versions only inside the verified range", async () => {
+  // Audited protocols (0.147.0, 0.153.4, 0.157.1) and releases between them.
+  for (const version of ["0.147.0", "0.148.0", "0.153.4", "0.157.1", "0.157.1-alpha", "0.157.9"]) {
+    const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, `--codex-version=${version}`] }, () => {});
+    try { assert.equal(adapter.snapshot().status, "idle", version); }
+    finally { await adapter.dispose(); }
+  }
+  const rejected = [
+    // Older than the minimum; a pre-release precedes its release.
+    ["0.146.9", /requires a verified Codex/],
+    ["0.147.0-alpha.1", /requires a verified Codex/],
+    // Newer than tested, including previews of the untested release line.
+    ["0.158.0", /newer than the versions tested/],
+    ["0.158.0-alpha.2", /newer than the versions tested/],
+    ["0.159.0-alpha.4", /newer than the versions tested/],
+    ["1.0.0", /newer than the versions tested/],
+    // Only the leading product token names Codex: the trailing client version
+    // `(piui; 0.1.1)` never stands in for an unrecognized Codex version.
+    ["latest", /requires a verified Codex/],
+  ];
+  for (const [version, message] of rejected) {
+    const events = [];
+    await assert.rejects(
+      createCodexAdapter({ ...config, runtimeArgs: [fixture, `--codex-version=${version}`] }, (event) => events.push(event)),
+      (error) => error.bridgeCode === "unsupported-native-version" && message.test(error.safeMessage),
+      version,
+    );
+    assert.equal(events.some((event) => event.type === "binding"), false, version);
+  }
+  await assert.rejects(
+    createCodexAdapter({ ...config, runtimeArgs: [fixture, "--raw-user-agent"] }, () => {}),
+    (error) => error.bridgeCode === "unsupported-native-version",
   );
 });
 
@@ -460,7 +493,7 @@ test("ordinary Codex settings change Fast and reasoning without transcript noise
 });
 
 test("retains the native current model and reasoning metadata when hidden from discovery", async () => {
-  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, '--latest-version', '--hidden-current-model'] }, () => {});
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, '--codex-version=0.153.4', '--hidden-current-model'] }, () => {});
   try { assert.deepEqual(await adapter.models(), [{ id: 'fixture-model', provider: 'openai', name: 'Hidden current', thinkingLevels: ['low', 'ultra'] }]); }
   finally { await adapter.dispose(); }
 });
@@ -480,4 +513,74 @@ test('account quota updates stay out of the transcript without hiding unknown co
     assert.ok(!JSON.stringify(adapter.snapshot().blocks).includes('account/rateLimits/updated'));
     assert.ok(adapter.snapshot().blocks.some(block => block.safeSummary === 'Unsupported Codex event: future/conversation/event'));
   } finally { await adapter.dispose(); }
+});
+
+// Real evidence, never part of the default run: set PIUI_CODEX_LIVE_HANDSHAKE
+// to the absolute path of the installed `@openai/codex/bin/codex.js`. Only
+// `initialize` reaches the real app-server. The bridge writes `initialized`
+// only after its version check passed; the probe records that, closes the
+// app-server and refuses to forward anything else, so no thread or turn starts.
+const liveEntry = process.env.PIUI_CODEX_LIVE_HANDSHAKE;
+test("live: the installed Codex app-server passes the bridge handshake (initialize only)", {
+  skip: liveEntry ? false : "set PIUI_CODEX_LIVE_HANDSHAKE to the installed bin/codex.js",
+}, async (t) => {
+  assert.ok(isAbsolute(liveEntry), "PIUI_CODEX_LIVE_HANDSHAKE must be an absolute path");
+  const forwarded = [];
+  let accepted = false;
+  let product;
+  let real;
+  const openChild = (program, args, options) => {
+    real = spawn(program, args, options);
+    let buffered = "";
+    real.stdout.on("data", (chunk) => {
+      buffered += chunk.toString("utf8");
+      const response = buffered.split("\n").map((line) => { try { return JSON.parse(line); } catch { return undefined; } })
+        .find((message) => message?.id === "piui-1" && message.result);
+      if (response && typeof response.result.userAgent === "string") product ??= response.result.userAgent.split(/\s+/, 1)[0];
+    });
+    // Killing only the Node launcher could orphan the native app-server on
+    // Windows, so every close path ends its stdin and `exited` bounds the wait.
+    const closeReal = () => {
+      if (!real.stdin.destroyed && !real.stdin.writableEnded) real.stdin.end();
+    };
+    const stdin = new EventEmitter();
+    stdin.writable = true;
+    stdin.write = (frame, callback) => {
+      const message = JSON.parse(frame);
+      forwarded.push(message.method);
+      if (message.method === "initialize") return real.stdin.write(frame, callback);
+      if (message.method === "initialized") {
+        accepted = true;
+        stdin.writable = false;
+        closeReal();
+        callback?.();
+        return true;
+      }
+      callback?.(new Error("the live probe forwards only initialize"));
+      return false;
+    };
+    stdin.end = () => { stdin.writable = false; closeReal(); };
+    stdin.destroy = stdin.end;
+    const proxy = new EventEmitter();
+    Object.assign(proxy, { stdin, stdout: real.stdout, stderr: real.stderr, kill: closeReal });
+    real.once("error", (error) => proxy.emit("error", error));
+    real.once("close", (...values) => { stdin.emit("close"); proxy.emit("close", ...values); });
+    return proxy;
+  };
+  const exited = () => new Promise((resolve) => {
+    if (!real || real.exitCode !== null || real.signalCode !== null) return resolve();
+    const timer = setTimeout(() => { real.kill(); resolve(); }, 10000);
+    real.once("close", () => { clearTimeout(timer); resolve(); });
+  });
+  try {
+    await assert.rejects(
+      createCodexAdapter({ ...config, runtimeArgs: [liveEntry] }, () => {}, undefined, openChild),
+      (error) => error.bridgeCode !== "unsupported-native-version",
+    );
+  } finally {
+    await exited();
+  }
+  t.diagnostic(`installed app-server product token: ${product}`);
+  assert.ok(accepted, "the bridge must accept the installed version before any thread request");
+  assert.deepEqual(forwarded.slice(0, 2), ["initialize", "initialized"]);
 });
