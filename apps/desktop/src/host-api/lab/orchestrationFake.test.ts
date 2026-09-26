@@ -74,12 +74,14 @@ async function graphOf(host: LabHost, workspaceId: string, name: string): Promis
   const nodes = pipeline.steps.map((step) => {
     const member = team.members.find((candidate) => candidate.id === step.assignedMemberId);
     const profile = profiles.find((stored) => stored.value.id === member?.profileId)?.value;
+    // Program routers and scripts have no member: a placeholder names the step.
     const fallback: AgentProfile = {
-      id: `router-${step.id}`, name: step.name, harness: 'codex', model: 'router', permissionMode: 'read-only', instructions: '',
-      serviceTier: 'standard', toolPolicy: { rules: [] }, allowedSpawnProfileIds: [],
+      id: `placeholder-${step.id}`, name: step.name, harness: 'codex', model: step.executor?.type === 'script' ? 'script' : 'router',
+      permissionMode: 'read-only', instructions: '', serviceTier: 'standard', toolPolicy: { rules: [] }, allowedSpawnProfileIds: [],
     };
     return {
       kind: step.router ? 'router' as const : 'agent' as const, id: step.id, profile: profile ?? fallback, router: step.router,
+      ...(step.executor ? { executor: step.executor } : {}),
       task: step.instructions, resultFields: step.resultFields ? [...step.resultFields] : undefined, review: step.review,
       requireApproval: step.requireApproval, x: 0, y: 0,
     };
@@ -111,8 +113,10 @@ describe('UI Lab orchestration host', () => {
     const host = labHost();
     const piui = projectId(host, 'piui');
     const catalog = await call<OrchestrationCatalogV6>(host, 'orchestration_catalog_v6', { workspaceId: piui });
-    expect(catalog.profiles.map((item) => item.name)).toEqual(['Developer', 'Docs writer', 'Planner', 'Release notes', 'Reviewer']);
-    expect(catalog.launchCommands.map((item) => item.name)).toEqual(['Code review']);
+    expect(catalog.profiles.map((item) => item.name)).toEqual([
+      'Change scout', 'Developer', 'Docs writer', 'Planner', 'Release note writer', 'Release notes', 'Reviewer',
+    ]);
+    expect(catalog.launchCommands.map((item) => item.name)).toEqual(['Code review', 'Release check']);
     const runs = await call<RunSummary[]>(host, 'orchestration_list_runs_v6', { workspaceId: piui });
     expect(runs.map((run) => run.status).sort()).toEqual(['failed', 'running', 'succeeded']);
     expect(runs.map((run) => run.id)).toEqual([...runs.map((run) => run.id)].sort());
@@ -134,7 +138,7 @@ describe('UI Lab orchestration host', () => {
 
   it('keeps the seeded systems valid for the graph editor and its native preflight', async () => {
     const host = labHost();
-    for (const [project, name] of [['piui', 'Code review'], ['video-studio', 'Video pipeline']] as const) {
+    for (const [project, name] of [['piui', 'Code review'], ['piui', 'Release check'], ['video-studio', 'Video pipeline']] as const) {
       const workspaceId = projectId(host, project);
       const graph = await graphOf(host, workspaceId, name);
       expect(graphIssues(graph)).toEqual([]);
@@ -361,9 +365,11 @@ describe('UI Lab orchestration host', () => {
     const changes: OrchestrationRunChangedEventV6[] = [];
     await client.listen((event) => changes.push(event));
     const catalog = await client.orchestration_catalog_v6({ workspaceId: piui });
-    expect(catalog.teams.map((team) => team.name)).toEqual(['Code review']);
+    expect(catalog.teams.map((team) => team.name).sort()).toEqual(['Code review', 'Release check']);
+    const named = <T extends { readonly name: string; readonly id: string }>(items: readonly T[]) =>
+      items.find((item) => item.name === 'Code review')?.id ?? '';
     const request = {
-      workspaceId: piui, runId: labUuid('test:client'), teamId: catalog.teams[0]?.id ?? '', pipelineId: catalog.pipelines[0]?.id ?? '',
+      workspaceId: piui, runId: labUuid('test:client'), teamId: named(catalog.teams), pipelineId: named(catalog.pipelines),
       inputs: REVIEW_INPUTS,
     };
     const run = await client.orchestration_start_run_v6(request);

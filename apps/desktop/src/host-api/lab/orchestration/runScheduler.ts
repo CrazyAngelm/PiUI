@@ -8,24 +8,59 @@ import { labUuid } from '../labRandom';
 import { newQueue, type LabSessionRecord } from '../labState';
 import { sha256Hex } from '../sha256';
 import type { LabSessions, TurnOutcome } from '../sessionRuntime';
-import { taskTurn, type TurnStep } from '../turnScripts';
-import { launchPolicyIssue } from './definitionRules';
+import { oneShotTurn, taskTurn, type TurnStep } from '../turnScripts';
 import {
-  advanceProgramRouters, cancelRun, cancelTask, completeTask, CoordinatorFault, dispatchTask, leaseTask, markUncertain,
-  profileForStep, readyTaskIds, rejectReadyTask, runningExecutions, stepOf, taskOf, type Completion, type LabRun,
+  executorKind, failureWithDetail, LLM_READ_ONLY_UNSUPPORTED, SCRIPT_FAILURE_CODES, scriptStdinDocument,
+} from '../../stepExecutors';
+import { launchPolicyIssue, oneShotPolicyIssue } from './definitionRules';
+import {
+  advanceProgramRouters, cancelRun, cancelTask, completeScript, completeTask, CoordinatorFault, dispatchTask, leaseTask,
+  markUncertain, profileForStep, readyTaskIds, rejectReadyTask, runningExecutions, stepOf, taskOf, type Completion,
+  type LabRun, type ScriptCompletion,
 } from './runEngine';
-import { taskPrompt, taskResultText } from './taskContent';
+import { nativeDependencyText, taskPrompt, taskResultText } from './taskContent';
 
 /** Delay between a recorded completion and the next scheduling pass. */
 const RESCHEDULE_MS = 300;
+/** How long a fake script "runs" before it prints its result. */
+const SCRIPT_RUN_MS = 400;
+
+/**
+ * Deterministic stand-in for a host-run script (v6.2): it never evaluates the
+ * source. It prints a JSON summary of its stdin, unless the source contains a
+ * lab marker: `lab:text` prints plain text, `lab:fail` exits 1 with a stderr
+ * line, `lab:timeout` never ends and reaches its timeout.
+ */
+function fakeScriptOutcome(step: PipelineStep, stdin: ReturnType<typeof scriptStdinDocument>): ScriptCompletion | 'timeout' {
+  const source = step.executor?.type === 'script' ? step.executor.source : '';
+  if (source.includes('lab:timeout')) return 'timeout';
+  if (source.includes('lab:fail')) {
+    return { status: 'failed', failure: failureWithDetail(SCRIPT_FAILURE_CODES.failed, 'Error: the check failed (lab:fail)') };
+  }
+  const dependencies = Object.keys(stdin.dependencies);
+  const characters = dependencies.reduce((total, id) => {
+    const value = stdin.dependencies[id];
+    return total + (value?.text ?? JSON.stringify(value?.data ?? '')).length;
+  }, 0);
+  if (source.includes('lab:text')) {
+    return { status: 'exited', stdout: `${stdin.step.name}: ${dependencies.length} dependencies, ${characters} characters\n` };
+  }
+  return {
+    status: 'exited',
+    stdout: `${JSON.stringify({ step: stdin.step.id, inputs: Object.keys(stdin.inputs), dependencies, characters })}\n`,
+  };
+}
 
 /**
  * The lab counterpart of `OrchestrationScheduler`: leases ready tasks, binds
- * each to a new linked workspace session whose simulated turn produces the
- * result, records terminal outcomes and emits `runChanged` after every commit.
+ * each native one to a new linked workspace session whose simulated turn
+ * produces the result, runs script steps as deterministic host work,
+ * records terminal outcomes and emits `runChanged` after every commit.
  */
 export class LabRunScheduler {
   private readonly cancelling = new Set<string>();
+  /** Running fake scripts by execution id: cancelling one clears its timer. */
+  private readonly scripts = new Map<string, () => void>();
 
   constructor(private readonly runtime: LabSessions, private readonly bus: LabEventBus) {}
 
@@ -46,20 +81,27 @@ export class LabRunScheduler {
       const [stepId] = readyTaskIds(run);
       if (stepId === undefined) return undefined;
       const step = stepOf(run, stepId);
-      const profile = step === undefined ? undefined : profileForStep(run, step);
-      if (step === undefined || profile === undefined) return 'conflict';
+      if (step === undefined) return 'conflict';
+      const attempt = run.attempts.filter((item) => item.stepId === stepId).length;
+      const executionId = labUuid(`${run.id}:${stepId}:${attempt}`);
+      if (executorKind(step) === 'script') {
+        const issue = this.admitScript(workspaceId, run, step, executionId);
+        if (issue !== undefined) return issue;
+        continue;
+      }
+      const profile = profileForStep(run, step);
+      if (profile === undefined) return 'conflict';
       const summary = this.runtime.state.harnesses.find((harness) => harness.kind === profile.harness);
-      const issue = launchPolicyIssue(profile, summary);
+      const issue = executorKind(step) === 'llm' ? oneShotPolicyIssue(profile, summary) : launchPolicyIssue(profile, summary);
       if (issue !== undefined) {
         rejectReadyTask(run, stepId, issue);
         this.emit(workspaceId, run);
-        return issue;
+        // The failure record keeps the step code; the command keeps its contract.
+        return issue === LLM_READ_ONLY_UNSUPPORTED ? 'unsupported-policy' : issue;
       }
-      const attempt = run.attempts.filter((item) => item.stepId === stepId).length;
-      const sessionId = labUuid(`${run.id}:${stepId}:${attempt}`);
-      leaseTask(run, stepId, sessionId);
+      leaseTask(run, stepId, executionId);
       this.emit(workspaceId, run);
-      this.launch(workspaceId, run, step, profile, sessionId);
+      this.launch(workspaceId, run, step, profile, executionId);
     }
   }
 
@@ -83,6 +125,12 @@ export class LabRunScheduler {
     this.cancelling.add(key);
     try {
       for (const id of executions) {
+        // A script's tree ends with its timer; a native turn is interrupted.
+        const stopScript = this.scripts.get(id);
+        if (stopScript !== undefined) {
+          stopScript();
+          continue;
+        }
         const record = this.runtime.record(id);
         if (record?.live !== undefined) this.runtime.interrupt(record);
       }
@@ -102,6 +150,58 @@ export class LabRunScheduler {
     const { state } = this.runtime;
     const project = state.projects.find((candidate) => candidate.id === workspaceId);
     return !state.safeMode && project !== undefined && project.trustState === 'trusted' && !project.missing;
+  }
+
+  /**
+   * `admit_script` + `prepare_script`: a missing interpreter is a certain
+   * failure before any lease; otherwise the step is leased, marked running
+   * and its fake process started. Returns the admission error, if any.
+   */
+  private admitScript(workspaceId: string, run: LabRun, step: PipelineStep, executionId: string): OrchestrationHostErrorCode | undefined {
+    if (step.executor?.type !== 'script') return 'conflict';
+    if ((this.runtime.state.missingScriptRuntimes ?? []).includes(step.executor.runtime)) {
+      rejectReadyTask(run, step.id, SCRIPT_FAILURE_CODES.runtimeUnavailable);
+      this.emit(workspaceId, run);
+      return 'runtime-unavailable';
+    }
+    leaseTask(run, step.id, executionId);
+    this.emit(workspaceId, run);
+    const stdin = scriptStdinDocument(run, step, (id) => nativeDependencyText(this.runtime.state.sessions, run, id));
+    dispatchTask(run, step.id, executionId);
+    this.emit(workspaceId, run);
+    const outcome = fakeScriptOutcome(step, stdin);
+    const delay = outcome === 'timeout' ? step.executor.timeoutSeconds * 1_000 : SCRIPT_RUN_MS;
+    let stopped = false;
+    this.scripts.set(executionId, () => {
+      stopped = true;
+      this.scripts.delete(executionId);
+    });
+    this.runtime.clock.after(delay, () => {
+      if (stopped) return;
+      this.scripts.delete(executionId);
+      const completion: ScriptCompletion = outcome === 'timeout'
+        ? { status: 'failed', failure: failureWithDetail(SCRIPT_FAILURE_CODES.timeout, 'still waiting (lab:timeout)') }
+        : outcome;
+      this.scriptFinished(workspaceId, run.id, step.id, executionId, completion);
+    });
+    return undefined;
+  }
+
+  private scriptFinished(workspaceId: string, runId: string, stepId: string, executionId: string, completion: ScriptCompletion): void {
+    if (this.cancelling.has(`${workspaceId}\u0000${runId}`)) return;
+    const run = this.findRun(workspaceId, runId);
+    const task = run === undefined ? undefined : taskOf(run, stepId);
+    if (run === undefined || task?.status !== 'running' || task.execution?.id !== executionId) return;
+    completeScript(run, stepId, executionId, completion);
+    this.emit(workspaceId, run);
+    this.reschedule(workspaceId, runId);
+  }
+
+  private reschedule(workspaceId: string, runId: string): void {
+    this.runtime.clock.after(RESCHEDULE_MS, () => {
+      const current = this.findRun(workspaceId, runId);
+      if (current?.status === 'running' && !current.paused) this.schedule(workspaceId, current);
+    });
   }
 
   private launch(workspaceId: string, run: LabRun, step: PipelineStep, profile: AgentProfile, sessionId: string): void {
@@ -131,7 +231,9 @@ export class LabRunScheduler {
     dispatchTask(run, step.id, sessionId);
     this.emit(workspaceId, run);
     const prompt = taskPrompt(runtime.state.sessions, run, step);
-    const steps = taskTurn(runtime.nextContext(record), prompt, taskResultText(run, step));
+    // A single model call answers without tool work (the adapter's empty allowlist).
+    const turn = executorKind(step) === 'llm' ? oneShotTurn : taskTurn;
+    const steps = turn(runtime.nextContext(record), prompt, taskResultText(run, step));
     runtime.startTurn(record, steps, { onEnd: (outcome) => this.finished(workspaceId, run.id, step.id, sessionId, outcome) });
   }
 
@@ -153,9 +255,6 @@ export class LabRunScheduler {
       : { status: 'failed', code: outcome === 'interrupted' ? 'native-turn-interrupted' : 'native-turn-failed' };
     completeTask(run, stepId, sessionId, completion);
     this.emit(workspaceId, run);
-    this.runtime.clock.after(RESCHEDULE_MS, () => {
-      const current = this.findRun(workspaceId, runId);
-      if (current?.status === 'running' && !current.paused) this.schedule(workspaceId, current);
-    });
+    this.reschedule(workspaceId, runId);
   }
 }

@@ -17,7 +17,11 @@ import { resolveRunInputs } from '../../runInputs';
 import { DEMO_FOLDERS, DEMO_PROJECTS } from './demoChats';
 import { seededUsage, sessionRecord, type SeedActivity } from './seedTypes';
 
-/** "Code review" (Planner → Developer → Reviewer with a review loop) and "Video pipeline" (program router + approval). */
+/**
+ * "Code review" (Planner → Developer → Reviewer with a review loop), "Release
+ * check" (agent → script → single model call) and "Video pipeline" (program
+ * router + approval).
+ */
 const id = (name: string): string => labUuid(`demo:${name}`);
 
 const NODE = {
@@ -29,7 +33,28 @@ const NODE = {
   shorts: id('node:shorts-editor'),
   storyboard: id('node:storyboard-artist'),
   render: id('node:render-planner'),
+  scout: id('node:change-scout'),
+  metrics: id('node:change-metrics'),
+  note: id('node:release-note'),
 };
+
+/**
+ * The Node.js source of the Release check script step. The lab never runs
+ * it: its fake prints the same JSON summary of stdin that this code would.
+ */
+export const RELEASE_METRICS_SOURCE = [
+  "import { readFileSync } from 'node:fs';",
+  '',
+  '// One JSON document on stdin: run inputs, dependency results and this step.',
+  "const input = JSON.parse(readFileSync(0, 'utf8'));",
+  'const dependencies = Object.keys(input.dependencies);',
+  'const characters = dependencies.reduce((total, id) => {',
+  '  const value = input.dependencies[id];',
+  "  return total + (value.text ?? JSON.stringify(value.data ?? '')).length;",
+  '}, 0);',
+  '// A JSON object on stdout becomes the step result.',
+  'console.log(JSON.stringify({ step: input.step.id, inputs: Object.keys(input.inputs), dependencies, characters }));',
+].join('\n');
 const BRANCH = { short: id('branch:short-form'), long: id('branch:long-form') };
 
 /** Recorded "What should be reviewed?" values of the seeded Code review runs. */
@@ -108,6 +133,52 @@ function codeReview(): System {
   };
   const command: LaunchCommandReference = { id: id('system:code-review'), name: 'Code review', teamId: team.id, pipelineId: pipeline.id };
   return { profiles: [planner, developer, reviewer], team, pipeline, command };
+}
+
+/** An agent lists changes, a host script measures them and one read-only model call writes the note. */
+function releaseCheck(): System {
+  const scout = profile('Change scout', {
+    harness: 'codex', modelProvider: 'openai-lab', model: 'gpt-lab-5-mini', permissionMode: 'read-only', reasoning: 'low',
+    serviceTier: 'standard',
+    instructions: 'List merged changes with the files they touch. Do not edit anything.',
+  });
+  const writer = profile('Release note writer', {
+    harness: 'pi', modelProvider: 'anthropic-lab', model: 'claude-lab-haiku', permissionMode: 'read-only',
+    instructions: 'Write short, factual release notes for users.',
+  });
+  const team: TeamDefinition = {
+    id: id('team:release-check'),
+    name: 'Release check',
+    members: [
+      { id: NODE.scout, profileId: scout.id },
+      { id: NODE.note, profileId: writer.id },
+    ],
+    // A single model call has no message routes.
+    sendEdges: [],
+    observeEdges: [],
+    orchestratorMemberId: NODE.scout,
+  };
+  const pipeline: PipelineDefinition = {
+    id: id('pipeline:release-check'),
+    name: 'Release check',
+    steps: [
+      { id: NODE.scout, name: 'Change scout', assignedMemberId: NODE.scout, dependencyStepIds: [],
+        instructions: 'List the changes merged since {{input.since}}.',
+        resultFields: [{ name: 'changes', kind: 'text-list' }] },
+      { id: NODE.metrics, name: 'Change metrics', assignedMemberId: NODE.metrics, dependencyStepIds: [NODE.scout],
+        instructions: 'Measure the change list for the release note.',
+        executor: { type: 'script', runtime: 'node', source: RELEASE_METRICS_SOURCE, timeoutSeconds: 30 },
+        resultFields: [{ name: 'characters', kind: 'number' }] },
+      { id: NODE.note, name: 'Release note', assignedMemberId: NODE.note, dependencyStepIds: [NODE.scout, NODE.metrics],
+        instructions: 'Write a three-sentence release note from the change list and its metrics.',
+        executor: { type: 'llm' } },
+    ],
+    inputs: [{ name: 'since', label: 'Changes since', kind: 'text', defaultValue: 'the last release' }],
+  };
+  const command: LaunchCommandReference = {
+    id: id('system:release-check'), name: 'Release check', teamId: team.id, pipelineId: pipeline.id,
+  };
+  return { profiles: [scout, writer], team, pipeline, command };
 }
 
 function videoPipeline(): System {
@@ -280,13 +351,14 @@ const NIGHTLY_OCCURRENCE = '2026-09-26T02:00:00Z';
 
 export function demoSystems(): { orchestration: LabOrchestrationWorkspace[]; sessions: LabSessionRecord[]; activity: SeedActivity[] } {
   const review = codeReview();
+  const release = releaseCheck();
   const video = videoPipeline();
   const library = libraryProfiles();
   const piui = emptyOrchestration(DEMO_PROJECTS.piui);
-  piui.profiles = [...review.profiles, ...library].map((value) => ({ revision: 0, value }));
-  piui.teams = [{ revision: 0, value: review.team }];
-  piui.pipelines = [{ revision: 0, value: review.pipeline }];
-  piui.launchCommands = [{ revision: 0, value: review.command }];
+  piui.profiles = [...review.profiles, ...release.profiles, ...library].map((value) => ({ revision: 0, value }));
+  piui.teams = [review.team, release.team].map((value) => ({ revision: 0, value }));
+  piui.pipelines = [review.pipeline, release.pipeline].map((value) => ({ revision: 0, value }));
+  piui.launchCommands = [review.command, release.command].map((value) => ({ revision: 0, value }));
   const studio = emptyOrchestration(DEMO_PROJECTS.video);
   studio.profiles = video.profiles.map((value) => ({ revision: 0, value }));
   studio.teams = [{ revision: 0, value: video.team }];

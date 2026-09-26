@@ -1,9 +1,10 @@
 import type {
-  AgentProfile, AgentRequestRecord, FlowAction, MessageRecord, NativeHistoryReference, OrchestrationRunV6,
+  AgentProfile, AgentRequestRecord, FailureRecord, FlowAction, MessageRecord, NativeHistoryReference, OrchestrationRunV6,
   PipelineStep, ReconcileUncertainTaskRequest, ResultField, RouterConfig, RouterPredicate, RunDefinitionSnapshot,
-  RunInputValue, RunStatus, RunSummary, TaskRecord,
+  RunInputValue, RunStatus, RunSummary, TaskOutput, TaskRecord,
 } from '../labContracts';
 import { runInputSection, substituteInputTokens } from '../../runInputs';
+import { executorKind, isScriptStep, scriptResult } from '../../stepExecutors';
 
 /**
  * Pure run transitions ported from `piui-orchestration` (coordinator.rs and
@@ -40,6 +41,11 @@ export class CoordinatorFault extends Error {
 export type Completion =
   | { readonly status: 'succeeded'; readonly reference: NativeHistoryReference; readonly text: string }
   | { readonly status: 'failed'; readonly code: string };
+
+/** `ScriptCompletion`: what the host observed when a script ended (v6.2). */
+export type ScriptCompletion =
+  | { readonly status: 'exited'; readonly stdout: string; readonly truncated?: boolean }
+  | { readonly status: 'failed'; readonly failure: FailureRecord };
 
 const SELECTION_FIELD = 'selectedBranchIds';
 
@@ -352,6 +358,7 @@ function repeatFrom(run: LabRun, stepId: string): void {
     delete task.resultReference;
     delete task.resultData;
     delete task.failure;
+    delete task.output;
     task.revision += 1;
   }
   run.status = 'running';
@@ -361,6 +368,7 @@ function repeatFrom(run: LabRun, stepId: string): void {
 export function completeTask(run: LabRun, stepId: string, executionId: string, completion: Completion): void {
   const step = stepOf(run, stepId);
   if (step === undefined) throw new CoordinatorFault('unknown-task', `unknown task: ${stepId}`);
+  if (isScriptStep(step)) throw new CoordinatorFault('invalid', `step ${stepId} is not run by this executor`);
   let data: Record<string, unknown> | undefined;
   let outcome: Completion = completion;
   if (completion.status === 'succeeded') {
@@ -391,6 +399,41 @@ export function completeTask(run: LabRun, stepId: string, executionId: string, c
   refreshStatus(run);
   if (data === undefined) delete task.resultData;
   else task.resultData = data;
+  if (task.status === 'succeeded') applyReviewAndApproval(run, step, task);
+  advanceConditions(run);
+  refreshStatus(run);
+}
+
+/**
+ * `complete_script_task`: exit status 0 succeeds; complete stdout that is one
+ * JSON object becomes result data checked like a native result, any other
+ * stdout the recorded text output. Review and approval then apply.
+ */
+export function completeScript(run: LabRun, stepId: string, executionId: string, completion: ScriptCompletion): void {
+  const step = stepOf(run, stepId);
+  if (step === undefined) throw new CoordinatorFault('unknown-task', `unknown task: ${stepId}`);
+  if (!isScriptStep(step)) throw new CoordinatorFault('invalid', `step ${stepId} is not run by this executor`);
+  const result = completion.status === 'exited'
+    ? scriptResult(step.resultFields ?? [], completion.stdout, completion.truncated === true)
+    : { status: 'failed' as const, failure: completion.failure };
+  const task = requireTask(run, stepId);
+  if (task.status !== 'running') throw new CoordinatorFault('invalid', `task ${stepId} is ${task.status}`);
+  if (task.execution?.id !== executionId) throw new CoordinatorFault('invalid', `stale native result for task ${stepId}`);
+  if (result.status === 'succeeded') task.status = 'succeeded';
+  else {
+    task.status = 'failed';
+    task.failure = result.failure;
+  }
+  task.revision += 1;
+  if (result.status === 'failed') cancelReady(run);
+  run.revision += 1;
+  refreshStatus(run);
+  const data = result.status === 'succeeded' ? result.data : undefined;
+  const output: TaskOutput | undefined = result.status === 'succeeded' ? result.output : undefined;
+  if (data === undefined) delete task.resultData;
+  else task.resultData = data;
+  if (output === undefined) delete task.output;
+  else task.output = output;
   if (task.status === 'succeeded') applyReviewAndApproval(run, step, task);
   advanceConditions(run);
   refreshStatus(run);
@@ -553,6 +596,10 @@ export function reconcileUncertain(
   checkRevision(taskRevision, task.revision, 'task');
   if (task.status !== 'uncertain') throw new CoordinatorFault('invalid', `task ${stepId} is ${task.status}`);
   const step = stepOf(run, stepId);
+  // A script has no native history: a reference cannot stand in for its result.
+  if (resolution.status === 'succeeded' && resolution.resultReference && step !== undefined && isScriptStep(step)) {
+    throw new CoordinatorFault('invalid', `step ${stepId} is not run by this executor`);
+  }
   const structured = (step?.resultFields?.length ?? 0) > 0 || step?.requireApproval === true || step?.review !== undefined;
   if (resolution.status === 'succeeded' && structured) {
     throw new CoordinatorFault('invalid', 'structured results require native validation');
@@ -585,6 +632,7 @@ export function retryUncertain(run: LabRun, expectedRevision: number, stepId: st
   delete task.resultReference;
   delete task.resultData;
   delete task.failure;
+  delete task.output;
   task.revision += 1;
   run.revision += 1;
   run.status = 'running';
@@ -647,7 +695,37 @@ export function taskInstructions(run: LabRun, step: PipelineStep): string {
   if (profile?.expectedResult?.trim()) parts.push(`\n\nExpected result:\n${profile.expectedResult}`);
   const input = step.inputInstructions ?? profile?.inputInstructions;
   if (input?.trim()) parts.push(`\n\nExpected input:\n${input}\nIf required input is missing, identify the gap rather than inventing it.`);
+  if (executorKind(step) === 'llm') {
+    parts.push('\n\nThis step is a single model call: answer in one reply from this task and the dependency results, without calling tools.');
+  }
   return parts.join('');
+}
+
+/** A recorded result of a succeeded script dependency, with the step's bindings from it. */
+export interface LabDependencyOutput {
+  readonly stepId: string;
+  readonly fields: readonly { readonly field: string; readonly name: string }[];
+  readonly output?: TaskOutput;
+  readonly data?: Record<string, unknown>;
+}
+
+/** `dependency_outputs`: script results a native step receives where a reference would be. */
+export function dependencyOutputs(run: LabRun, step: PipelineStep): LabDependencyOutput[] {
+  return step.dependencyStepIds.flatMap((dependency) => {
+    const source = stepOf(run, dependency);
+    const task = taskOf(run, dependency);
+    if (source === undefined || !isScriptStep(source) || task?.status !== 'succeeded') return [];
+    if (task.output === undefined && task.resultData === undefined) return [];
+    const fields = (step.inputBindings ?? [])
+      .filter((binding) => binding.sourceStepId === dependency)
+      .map((binding) => ({ field: binding.field, name: binding.name }));
+    return [{
+      stepId: dependency,
+      fields,
+      ...(task.output === undefined ? {} : { output: task.output }),
+      ...(task.resultData === undefined ? {} : { data: task.resultData }),
+    }];
+  });
 }
 
 /** Result references of succeeded dependencies with the step's input bindings applied. */

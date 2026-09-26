@@ -120,6 +120,12 @@ const step = object({
     kind: enumOf(['text', 'number', 'boolean', 'text-list', 'artifact']),
   }))),
   executionMode: option(enumOf(['scheduled', 'callable'])),
+  // v6.2 step executors; `deny_unknown_fields` on every variant.
+  executor: option(tagged('type', {
+    agent: {},
+    llm: {},
+    script: { runtime: enumOf(['node', 'python', 'powershell']), source: string, timeoutSeconds: u32 },
+  })),
   inputInstructions: option(string),
   id: string,
   name: string,

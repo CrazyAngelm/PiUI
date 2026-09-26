@@ -1,7 +1,7 @@
 import type {
   AgentKind, AgentProfile, DesktopTimelineBlock, HarnessKind, HarnessSummary, LaunchCommandReference,
   PermissionMode, PipelineDefinition, Preferences, ProjectSummary, ProjectTrustState, QueuedMessage,
-  ScheduleDefinition, ScheduleOccurrence, SessionStatus, StoredDefinition, TeamDefinition, UsageReceipt,
+  ScheduleDefinition, ScheduleOccurrence, ScriptRuntime, SessionStatus, StoredDefinition, TeamDefinition, UsageReceipt,
   WorkspaceApproval, WorkspaceModel, WorkspaceSession, WorkspaceSummary,
 } from './labContracts';
 import type { LabRun } from './orchestration/runEngine';
@@ -95,6 +95,8 @@ export interface LabState {
   preferences: Preferences;
   projects: LabProject[];
   harnesses: HarnessSummary[];
+  /** Script interpreters this fake machine lacks (v6.2); all are present unless listed. */
+  missingScriptRuntimes?: ScriptRuntime[];
   /** Insertion order is the host registry order. */
   sessions: Map<string, LabSessionRecord>;
   orchestration: Map<string, LabOrchestrationWorkspace>;
