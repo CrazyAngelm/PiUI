@@ -68,6 +68,19 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   a sandbox" warning), run panel (stdout, stderr tail, failure texts). Claude
   Code runs a model call with `--tools "" --strict-mcp-config`.
 - `main` fast-forwarded to `rework/piui-2` (local only, not pushed).
+- `7db21ac`, `ad53173`, `f3aac6b`, `915a650`, `e972703`, `3afc50a` (branch
+  `feat/acp-registry`, ADR-034) — ACP agents and Settings → Harnesses: harness
+  identity `acp:<descriptor id>` (additive in workspace v15, orchestration
+  v6.3, system files v4); versioned ACP descriptors with a shipped Gemini CLI
+  descriptor; no-shell resolution (PATH, npm/pnpm shims), contained version
+  probes and tested ranges; generic ACP v1 bridge (`bridge/acp.mjs`: streaming,
+  permissions, cancel, modes/models, sign-in hint, resume, generic fallback);
+  host registry with trust of the exact command line, version and secret-name
+  confirmations (`harness_registry_v1`, `workspace_session_mode_v1`);
+  Settings → Harnesses for every harness (status, location, version vs tested
+  range, sign-in guidance, check again, add/trust/remove ACP agents) and agent
+  modes in chat details; UI Lab fakes (ready Gemini, missing and untrusted
+  descriptors). No real ACP model turn was run.
 
 ## In progress
 
@@ -86,6 +99,12 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   sign-in hint until the user runs `claude` → `/login`.
 - Codex command output is unbounded in the bridge; a non-string Pi input
   placeholder would break Rust parsing.
+- ACP agents (ADR-034): Gemini CLI has no tested version range yet, so every
+  version needs the user's confirmation; the bridge is verified only against
+  the fake agent fixture. Coordinated (managed) runs need an agent with HTTP
+  MCP support. Pickers learn an agent's models only after one of its sessions
+  started in this host process. Mode changes the agent makes by itself appear
+  on the next snapshot. A crash mid-turn is recorded as uncertain.
 
 ## Next
 

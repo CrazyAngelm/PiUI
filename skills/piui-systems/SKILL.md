@@ -192,6 +192,10 @@ untrusted id fails at launch with a visible reason.
   them is rejected; use result edges. A closed ACP conversation is read back
   through the agent's own `session/load`; an agent without it cannot reopen
   chats or serve dependency results after a restart.
+- Readiness is the user's decision, not the file's: PiUI has not verified a
+  Gemini CLI release yet, so the user confirms the installed version (and any
+  secret-like environment name such as `GEMINI_API_KEY`) in Settings → Harnesses
+  before the first launch; sign-in happens in the agent's own app.
 - See `examples/systems/codex-gemini-acp-review.piui.json` for a Codex -> Gemini
   CLI (ACP) -> Pi result pipeline.
 

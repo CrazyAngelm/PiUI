@@ -535,3 +535,66 @@ so the end, a timeout, a cancellation, shutdown or lost trust kills it.
 Outputs are bounded (stdout 256 KiB, stderr tail 64 KiB, failure detail 2 KiB)
 and never logged. Scripts use the coordinator's lease/dispatch machinery;
 restart marks a started script uncertain and never replays it.
+
+## ADR-034 — ACP agents from descriptors, trusted by exact command line
+
+**Context:** ADR-028 opened the harness registry and promised a generic Agent
+Client Protocol adapter. Agents such as Gemini CLI speak ACP over stdio, so one
+bridge can drive all of them without code in core, but a descriptor is a
+command PiUI will execute, and agents keep their own tools and credentials.
+
+**Decision:** an ACP agent is data: a versioned JSON descriptor
+(`contracts/acp-agent-descriptor-v1.schema.json`) with a slug `id`, a display
+name, the `program` (a file name on PATH or an absolute path) with fixed `args`
+(never a shell string), version `args` with an optional pattern and tested
+range (`minimum <= v < ceiling`), environment variable **names**, a sign-in
+hint, a docs link and restriction-only capability overrides. Its harness
+identity is `acp:<id>` (identity grammar v2, additive in workspace v15,
+orchestration v6.3 and system files v4; v1–v3 files stay closed). PiUI ships a
+Gemini CLI descriptor; users add theirs in Settings → Harnesses. One bridge
+(`bridge/acp.mjs`) speaks ACP v1 for every agent.
+
+- **Trust:** a user descriptor never runs, not even `--version`, until the user
+  trusts the exact resolved command line (program and each argument after PATH
+  and npm/pnpm shim resolution) in a review that says trust is not a sandbox.
+  Trust, version confirmations and secret choices bind to the descriptor
+  fingerprint (SHA-256 of the canonical JSON); any change needs a new review.
+  Shipped descriptors are trusted by PiUI.
+- **No shell:** absolute PATH entries only; Windows `.exe`/`.com`, npm/pnpm
+  `.cmd` shims parsed to `node <script>`, `.js`/`.mjs`/`.cjs` through Node; any
+  other batch or PowerShell launcher is refused.
+- **Versions:** the probe runs contained (Job Object before resume or a
+  process group) with the base environment, bounded output and a 20 s timeout;
+  results are cached per program identity. Older than the tested range is
+  unsupported; newer or without a range needs an explicit confirmation of that
+  exact version.
+- **Environment:** bridge and agent start from a cleared environment: fixed
+  locations, locale and PATH plus the descriptor's names. Secret-like names
+  (KEY, TOKEN, SECRET, PASSWORD, CREDENTIAL, AUTH, COOKIE, SESSION, PRIVATE)
+  pass only after a per-name confirmation; loader, Node and `PIUI_*` variables
+  are refused. Values are never read, stored or shown by PiUI.
+- **Sign-in:** PiUI never authenticates. `auth_required` becomes the typed
+  `ACP_SIGN_IN_REQUIRED` status with the agent's advertised method names.
+- **Storage and discovery:** the registry is create-only generations under app
+  data with revision checks; a failed validation stores nothing. Discovery runs
+  once in the background after start-up (never in safe mode, never on the
+  first-paint path) and on "Check again"; `harness_registry_v1` and its event
+  carry the result to the UI.
+- **Protocol mapping:** `initialize` with fs/terminal client capabilities off;
+  `session/new` (cwd, no MCP servers except PiUI's coordinator as a loopback
+  HTTP MCP server when the agent supports it; otherwise coordinated runs are
+  refused); `session/load` only when advertised; updates map to timeline blocks
+  with a generic fallback; permission requests become approvals with the
+  agent's own options; `session/cancel`; model, mode and reasoning from config
+  options before the legacy `set_model`/`set_mode`. Instructions go with the
+  first prompt. A crash mid-turn leaves the outcome uncertain.
+
+**Consequences:** ACP agents keep their own tools, permissions and MCP
+servers: PiUI offers native permissions only and no tool, resource, speed or
+network settings, and delegation across different harnesses stays rejected
+because native defaults are incomparable. Dependency results of a closed ACP
+chat come from its own `session/load` replay, verified by content hash. Model
+pickers offer "Agent default" plus the models an earlier session advertised;
+no probe conversation is started. Gemini CLI has no tested range until a
+release is verified with real turns, so every version needs the user's
+confirmation.

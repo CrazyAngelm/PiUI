@@ -32,6 +32,12 @@ runs an agent, touches a file or makes a network request. Choose a scenario with
 - `safe`: the demo after a restart in safe mode (runtime actions refused, interrupted runs need reconciliation);
 - `long`: one ~3,000-block transcript for performance work.
 
+Settings → Harnesses uses the lab ACP registry (`lab/acpFake.ts`): every scenario lists the shipped Gemini CLI
+(ready in `demo` and `long`, not installed in `empty`, not checked in `safe`, which runs no discovery), and
+`demo`, `safe` and `long` add a user descriptor whose program is missing (Qwen Code) and an untrusted one (Lab
+Agent: trust it, then its first chat asks to sign in). The fake PATH has `gemini` and `lab-agent`; absolute paths
+always resolve.
+
 The classic `client.ts` routes (bootstrap, preferences, projects, trust) still use `mockClient.ts` in the browser.
 
 ## Commands
