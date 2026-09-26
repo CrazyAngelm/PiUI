@@ -138,9 +138,12 @@ export function usageStep(context: TurnContext, random: LabRandom): TurnStep {
   };
 }
 
-/** Codex offers only deny/cancel for commands under strict permission presets. */
+/**
+ * Codex and Claude Code offer only deny/cancel for prompts under strict
+ * permission presets (Claude Code's own engine, not a sandbox).
+ */
 function decisionsFor(context: TurnContext): ApprovalDecision[] {
-  if (context.harness !== 'codex') return ['approve-once', 'deny', 'cancel'];
+  if (context.harness !== 'codex' && context.harness !== 'claude-code') return ['approve-once', 'deny', 'cancel'];
   return context.permissionMode === 'read-only' || context.permissionMode === 'workspace-write'
     ? ['deny', 'cancel']
     : ['approve-once', 'approve-session', 'deny', 'cancel'];
@@ -152,6 +155,14 @@ export function commandApproval(context: TurnContext, command: string): PendingA
       kind: 'command',
       title: 'Run terminal command',
       description: 'Hermes requests permission for this operation.',
+      decisions: decisionsFor(context),
+    };
+  }
+  if (context.harness === 'claude-code') {
+    return {
+      kind: 'command',
+      title: 'Run command',
+      description: `Verify the change before answering\nCommand: ${command}\nReason: The agent wants to verify its change before answering.`,
       decisions: decisionsFor(context),
     };
   }

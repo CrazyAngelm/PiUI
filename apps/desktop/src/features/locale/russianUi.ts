@@ -402,4 +402,10 @@ export const russianUi: Readonly<Record<string, string>> = {
   "Choose the agent that coordinates the team.": "Выберите агента, который координирует команду.",
   "Independent tasks may run in parallel.": "Независимые задачи могут выполняться параллельно.",
   "Runs use the latest saved team and pipeline.": "Запуски используют последние сохранённые команду и пайплайн.",
+  "Sign in to Claude Code with your Claude subscription: run `claude` in a terminal and use /login.": "Войдите в Claude Code своей подпиской Claude: запустите `claude` в терминале и выполните /login.",
+  "The installed Claude Code version is outside the tested range (2.1 or a later 2.x release).": "Установленная версия Claude Code вне проверенного диапазона (2.1 или более поздняя 2.x).",
+  "Claude Code could not be verified with `claude --version`.": "Не удалось проверить Claude Code командой `claude --version`.",
+  "Harness limitations": "Ограничения агента",
+  "Runs only on your Claude subscription. API keys, cloud providers, fast mode and paid extra usage are never used.": "Работает только по вашей подписке Claude. API-ключи, облачные провайдеры, быстрый режим и платное дополнительное использование не применяются.",
+  "Read-only and workspace-write can only deny Claude Code permission prompts, so prompted tools such as Bash never run there. This is Claude Code's permission engine, not a sandbox.": "В режимах «только чтение» и «запись в проект» запросы разрешений Claude Code можно только отклонить, поэтому инструменты с запросом, например Bash, там не запускаются. Это механизм разрешений Claude Code, а не песочница.",
 };

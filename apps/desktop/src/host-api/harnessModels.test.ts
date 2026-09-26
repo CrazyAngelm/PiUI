@@ -11,8 +11,8 @@ describe('native harness catalog v18', () => {
     expect(await harnessModels({ workspaceId: 'project', harness: 'pi' })).toEqual(result);
     expect(invoke).toHaveBeenLastCalledWith('harness_models_v18', { request: { workspaceId: 'project', harness: 'pi' } });
   });
-  it('shares concurrent loads, reuses all four catalogs and refreshes explicitly', async () => {
-    for (const harness of ['pi', 'codex', 'prime-agent', 'hermes'] as const) {
+  it('shares concurrent loads, reuses all five catalogs and refreshes explicitly', async () => {
+    for (const harness of ['pi', 'codex', 'prime-agent', 'hermes', 'claude-code'] as const) {
       const request = { workspaceId: 'project', harness };
       const result = { protocol: 18, harness, models: [], resources: { items: [], warnings: [] } };
       let complete!: (value: typeof result) => void;
@@ -45,5 +45,16 @@ describe('native harness catalog v18', () => {
     await expect(harnessModels({ workspaceId: 'project', harness: 'pi' })).rejects.toThrow();
     invoke.mockRejectedValueOnce({ code: 'SAFE_MODE', detail: 'PRIVATE' });
     await expect(harnessModels({ workspaceId: 'project', harness: 'pi' })).rejects.toThrow('Runtime actions are disabled in safe mode.');
+  });
+  it('turns a refused Claude Code login into the fixed sign-in guidance and retries later', async () => {
+    const request = { workspaceId: 'project', harness: 'claude-code' as const };
+    invoke.mockRejectedValueOnce({ code: 'SIGN_IN_REQUIRED', message: 'host text is not trusted', recoverable: true });
+    await expect(harnessModels(request)).rejects.toMatchObject({
+      code: 'SIGN_IN_REQUIRED',
+      message: 'Sign in to Claude Code with your Claude subscription: run `claude` in a terminal and use /login.',
+    });
+    const result = { protocol: 18, harness: 'claude-code', models: [{ id: 'sonnet', provider: 'anthropic', name: 'Sonnet', thinkingLevels: ['low', 'high'], supportsFast: false }], resources: { items: [], warnings: [] } };
+    invoke.mockResolvedValueOnce(result);
+    expect(await harnessModels(request), 'a failure is never cached').toEqual(result);
   });
 });

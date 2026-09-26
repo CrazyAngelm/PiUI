@@ -11,6 +11,7 @@ const TOOL_NAMES: Readonly<Record<HarnessKind, Readonly<Record<ToolRole, string>
   'prime-agent': { command: 'bash', edit: 'workspace', search: 'workspace', read: 'ipython' },
   codex: { command: 'commandExecution', edit: 'fileChange', search: 'commandExecution', read: 'commandExecution' },
   hermes: { command: 'Run terminal command', edit: 'Edit file', search: 'Search files', read: 'Read file' },
+  'claude-code': { command: 'Bash', edit: 'Edit', search: 'Grep', read: 'Read' },
 };
 
 const CODEX_TOOL_LABELS: Readonly<Record<string, string>> = { commandExecution: 'Command', fileChange: 'File change' };

@@ -26,7 +26,8 @@ export type WorkspaceErrorCode =
   | 'TURN_ACTIVE'
   | 'NO_ACTIVE_TURN'
   | 'QUEUE_PENDING'
-  | 'DELIVERY_UNCERTAIN';
+  | 'DELIVERY_UNCERTAIN'
+  | 'SIGN_IN_REQUIRED';
 
 /** `SESSION_CLOSED` is the host's `closed()` constructor: code NOT_FOUND with its own message. */
 const WORKSPACE_ERRORS: Readonly<Record<WorkspaceErrorCode, readonly [string, string]>> = {
@@ -45,6 +46,7 @@ const WORKSPACE_ERRORS: Readonly<Record<WorkspaceErrorCode, readonly [string, st
   NO_ACTIVE_TURN: ['NO_ACTIVE_TURN', 'There is no active turn to steer.'],
   QUEUE_PENDING: ['QUEUE_PENDING', 'Resolve queued messages before compacting.'],
   DELIVERY_UNCERTAIN: ['DELIVERY_UNCERTAIN', 'Check native history before dismissing the uncertain message.'],
+  SIGN_IN_REQUIRED: ['SIGN_IN_REQUIRED', 'Sign in to Claude Code with your Claude subscription: run `claude` in a terminal and use /login.'],
 };
 
 export function workspaceFailure(kind: WorkspaceErrorCode): HostErrorPayload {

@@ -9,7 +9,8 @@
 
 export type OrchestrationId = string;
 export type Revision = number;
-export type Harness = 'pi' | 'prime-agent' | 'codex' | 'hermes';
+/** `claude-code` is additive within v6 (ADR-028): earlier definitions are unchanged. */
+export type Harness = 'pi' | 'prime-agent' | 'codex' | 'hermes' | 'claude-code';
 export type PermissionMode = 'native' | 'read-only' | 'workspace-write' | 'full-access';
 export type ToolDecision = 'allow' | 'deny';
 

@@ -382,7 +382,8 @@
             "codex",
             "prime-agent",
             "pi",
-            "hermes"
+            "hermes",
+            "claude-code"
           ]
         },
         "model": {

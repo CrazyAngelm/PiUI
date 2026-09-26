@@ -8,13 +8,14 @@ import type {
  * fake ("lab") while keeping the shapes and per-adapter rules of the real
  * bridges: which harness reports reasoning levels, Fast, skills and MCP.
  */
-export const HARNESS_ORDER: readonly HarnessKind[] = ['pi', 'prime-agent', 'codex', 'hermes'];
+export const HARNESS_ORDER: readonly HarnessKind[] = ['pi', 'prime-agent', 'codex', 'hermes', 'claude-code'];
 
 export const HARNESS_NAMES: Readonly<Record<HarnessKind, string>> = {
   pi: 'Pi',
   'prime-agent': 'Prime Agent',
   codex: 'Codex',
   hermes: 'Hermes',
+  'claude-code': 'Claude Code',
 };
 
 const VERSIONS: Readonly<Record<HarnessKind, string>> = {
@@ -22,9 +23,18 @@ const VERSIONS: Readonly<Record<HarnessKind, string>> = {
   'prime-agent': '0.9.2',
   codex: '0.147.0',
   hermes: '0.21.0',
+  'claude-code': '2.1.232',
 };
 
-/** Every adapter verified: the demo can create sessions on all four harnesses. */
+/** The host's fixed status for a Claude Code login that is not a Claude subscription. */
+export const CLAUDE_SIGN_IN_MESSAGE = 'Sign in to Claude Code with your Claude subscription: run `claude` in a terminal and use /login.';
+
+/** Mirrors the host: the last start was refused for a missing subscription login. */
+export function claudeSignInRequired(summaries: readonly HarnessSummary[]): boolean {
+  return summaries.some((summary) => summary.kind === 'claude-code' && summary.reason === CLAUDE_SIGN_IN_MESSAGE);
+}
+
+/** Every adapter verified: the demo can create sessions on all five harnesses. */
 export function readyHarnesses(): HarnessSummary[] {
   return HARNESS_ORDER.map((kind) => ({
     kind,
@@ -35,7 +45,10 @@ export function readyHarnesses(): HarnessSummary[] {
   }));
 }
 
-/** A fresh machine: two adapters ready, one needing verification, one missing. */
+/**
+ * A fresh machine: two adapters ready, one needing verification, one missing,
+ * and Claude Code installed but not signed in with a Claude subscription.
+ */
 export function firstRunHarnesses(): HarnessSummary[] {
   return readyHarnesses().map((summary): HarnessSummary => {
     if (summary.kind === 'prime-agent') {
@@ -49,6 +62,8 @@ export function firstRunHarnesses(): HarnessSummary[] {
     if (summary.kind === 'hermes') {
       return { kind: 'hermes', name: 'Hermes', installed: false, status: 'unavailable', reason: 'The native harness is not installed.' };
     }
+    // Still available: every start verifies the native login again.
+    if (summary.kind === 'claude-code') return { ...summary, reason: CLAUDE_SIGN_IN_MESSAGE };
     return summary;
   });
 }
@@ -58,8 +73,9 @@ const unsupported = (reason: string): Capability => ({ supported: false, enforce
 
 /** Mirrors `offline_harness_capabilities`. */
 export function harnessCapabilities(kind: HarnessKind, summary: HarnessSummary | undefined): HarnessCapabilities {
-  if (summary?.status !== 'available') {
-    const blocked = unsupported('The installed native adapter is unavailable or unverified.');
+  const signInRequired = kind === 'claude-code' && summary?.reason === CLAUDE_SIGN_IN_MESSAGE;
+  if (summary?.status !== 'available' || signInRequired) {
+    const blocked = unsupported(signInRequired ? CLAUDE_SIGN_IN_MESSAGE : 'The installed native adapter is unavailable or unverified.');
     return {
       prompt: blocked, resume: blocked, models: blocked, approvals: blocked,
       instructions: blocked, toolPolicy: blocked, nativeSubagents: blocked,
@@ -95,6 +111,18 @@ export function harnessCapabilities(kind: HarnessKind, summary: HarnessSummary |
         toolPolicy: unsupported('Codex app-server has no restrictive tool allowlist contract.'),
         nativeSubagents: supported(),
       };
+    case 'claude-code':
+      return {
+        prompt: supported(), resume: supported(),
+        models: { ...supported(), reason: 'Models and effort levels come from the Claude Code initialize catalog.' },
+        approvals: { ...supported(), reason: 'Claude Code permission prompts; read-only and workspace-write sessions can only deny them.' },
+        instructions: { ...supported(), reason: "Appended to Claude Code's own system prompt; the base prompt is kept." },
+        toolPolicy: { ...supported(), reason: 'Claude Code built-in tool allowlist; user MCP servers are excluded under a policy.' },
+        nativeSubagents: {
+          ...supported('coordinator'),
+          reason: 'Managed runs disable the native Agent tool and delegate through the PiUI coordinator.',
+        },
+      };
     default: {
       const exhaustive: never = kind;
       return exhaustive;
@@ -114,6 +142,7 @@ function model(
 
 const PI_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 const CODEX_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+const CLAUDE_EFFORT = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 export const HARNESS_MODELS: Readonly<Record<HarnessKind, readonly HarnessCatalogModel[]>> = {
   pi: [
@@ -134,6 +163,12 @@ export const HARNESS_MODELS: Readonly<Record<HarnessKind, readonly HarnessCatalo
   hermes: [
     model('nous-lab', 'hermes-lab-70b', 'Hermes Lab 70B', undefined, false),
     model('nous-lab', 'hermes-lab-8b', 'Hermes Lab 8B', undefined, false),
+  ],
+  // The bridge reports provider `anthropic` and never offers fast mode.
+  'claude-code': [
+    model('anthropic', 'lab-sonnet', 'Claude Lab Sonnet', CLAUDE_EFFORT.slice(0, 3), false),
+    model('anthropic', 'lab-opus', 'Claude Lab Opus', CLAUDE_EFFORT, false),
+    model('anthropic', 'lab-haiku', 'Claude Lab Haiku', [], false),
   ],
 };
 
@@ -195,6 +230,16 @@ export const HARNESS_RESOURCES: Readonly<Record<HarnessKind, HarnessModelsResult
     items: [],
     warnings: ['Hermes tool inventory is unavailable.'],
   },
+  // Claude Code slash commands and skills; they come from the user's own
+  // configuration and cannot be switched per session.
+  'claude-code': {
+    items: [
+      resource('skill', 'review', 'review', true, false),
+      resource('skill', 'lab-release-notes', 'lab-release-notes', true, false),
+      resource('skill', 'security-review', 'security-review', true, false),
+    ],
+    warnings: [],
+  },
 };
 
 /** Native adapters that implement each permission preset (see the bridge factories). */
@@ -203,10 +248,13 @@ export const NATIVE_PERMISSION_MODES: Readonly<Record<HarnessKind, readonly Perm
   'prime-agent': ['native'],
   codex: ['native', 'read-only', 'workspace-write', 'full-access'],
   hermes: ['native'],
+  'claude-code': ['native', 'read-only', 'workspace-write', 'full-access'],
 };
 
+/** Claude Code steers natively; compaction is only a literal `/compact` prompt headlessly. */
 export function composerCapabilities(kind: HarnessKind): { steer: boolean; compact: boolean } {
-  return kind === 'hermes' ? { steer: false, compact: false } : { steer: true, compact: true };
+  if (kind === 'hermes') return { steer: false, compact: false };
+  return kind === 'claude-code' ? { steer: true, compact: false } : { steer: true, compact: true };
 }
 
 /** Service tiers are Codex/Prime only; Prime reports one only for Fast-capable models. */
@@ -227,6 +275,10 @@ export function liveLabel(harness: HarnessKind, kind: BlockKind): string {
     },
     codex: { user: 'You', assistant: 'Codex', thinking: 'Reasoning', compaction: 'Compaction', unknown: 'Codex event', error: 'Error' },
     hermes: { user: 'user', assistant: 'assistant', thinking: 'thinking', custom: 'Hermes event', error: 'Error' },
+    'claude-code': {
+      user: 'You', assistant: 'Claude', thinking: 'Thinking', compaction: 'Compaction', custom: 'Claude Code',
+      unknown: 'Claude Code event', error: 'Error',
+    },
   };
   return labels[harness][kind] ?? kind;
 }

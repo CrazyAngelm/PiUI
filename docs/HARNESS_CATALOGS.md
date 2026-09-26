@@ -33,3 +33,13 @@ native `supportsFastMode` resolver. Pi exposes no Fast service tier; Codex uses
 its native service-tier override. Choosing another model clears incompatible Fast.
 
 Version 18 adds Hermes; v14 remains a frozen compatibility document. Hermes uses native no-probe inventory and canonical custom-provider choice IDs. Its resource controls are read-only.
+
+Claude Code is an additive v18 harness value (ADR-028). Its catalog is the
+`initialize` control response of the user's own `claude` CLI, started without a
+conversation and retired immediately: models keep the native alias as ID with
+provider `anthropic` and the native effort levels; slash commands and skills are
+read-only resources. `supportsFast` is always `false`: fast mode can use paid
+extra usage and PiUI never offers it. The same handshake verifies the Claude
+subscription login; any other login fails with `SIGN_IN_REQUIRED` and the fixed
+sign-in guidance, and no catalog is returned. Nothing is written to Claude
+Code's transcript directory.

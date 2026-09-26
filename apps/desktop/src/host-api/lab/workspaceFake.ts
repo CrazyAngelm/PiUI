@@ -1,6 +1,6 @@
 import {
-  catalogModel, defaultModel, defaultSessionTitle, HARNESS_MODELS, HARNESS_RESOURCES, NATIVE_PERMISSION_MODES,
-  reportsServiceTier, runtimeModels,
+  catalogModel, claudeSignInRequired, defaultModel, defaultSessionTitle, HARNESS_MODELS, HARNESS_RESOURCES,
+  NATIVE_PERMISSION_MODES, reportsServiceTier, runtimeModels,
 } from './catalogFake';
 import type {
   HarnessModelsRequest, HarnessModelsResult, HarnessKind, RuntimeSettings, RuntimeSettingsCommand, SessionSnapshot,
@@ -33,6 +33,11 @@ function assertNotSafe(state: LabState): void {
 
 function assertHarnessAvailable(state: LabState, harness: HarnessKind): void {
   if (state.harnesses.find((summary) => summary.kind === harness)?.status !== 'available') throw workspaceFailure('RUNTIME_FAILED');
+}
+
+/** Mirrors the host: every Claude Code start verifies the Claude subscription login. */
+function assertSignedIn(state: LabState, harness: HarnessKind): void {
+  if (harness === 'claude-code' && claudeSignInRequired(state.harnesses)) throw workspaceFailure('SIGN_IN_REQUIRED');
 }
 
 /** The runtime refused: the plain workspace route reports every native rejection as RUNTIME_FAILED. */
@@ -82,6 +87,7 @@ function createSession(runtime: LabSessions, command: Extract<WorkspaceCommand, 
   if (command.model) validateModel(command.model, undefined);
   assertHarnessAvailable(state, command.harness);
   if (!NATIVE_PERMISSION_MODES[command.harness].includes(command.permissionMode)) throw workspaceFailure('RUNTIME_FAILED');
+  assertSignedIn(state, command.harness);
   if (command.model && catalogModel(command.harness, command.model.id, command.model.provider) === undefined) {
     throw workspaceFailure('RUNTIME_FAILED');
   }
@@ -219,6 +225,10 @@ function runtimeSettings(runtime: LabSessions, command: RuntimeSettingsCommand):
   assertNotSafe(state);
   const record = authorizeLive(state, command.sessionId);
   const live = requireLive(record);
+  // Claude Code runs only at standard speed: fast mode can use paid extra usage.
+  if (command.type === 'set' && record.harness === 'claude-code' && command.serviceTier != null && command.serviceTier !== 'standard') {
+    throw workspaceFailure('NOT_SUPPORTED');
+  }
   if (live.status === 'failed') throw workspaceFailure('RUNTIME_FAILED');
   const models = runtimeModels(record.harness);
   if (command.type === 'set') {
@@ -274,6 +284,7 @@ async function harnessModels(runtime: LabSessions, request: HarnessModelsRequest
   verifiedProject(state, request.workspaceId, true);
   assertHarnessAvailable(state, request.harness);
   await runtime.clock.delay(CATALOG_LATENCY_MS);
+  assertSignedIn(state, request.harness);
   return {
     protocol: 18,
     harness: request.harness,

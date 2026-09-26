@@ -28,7 +28,7 @@ for (const file of files(root)) {
       const text = localized(node.expression);
       if (text !== source.slice(node.expression.start, node.expression.end)) edits.push({ start: node.expression.start, end: node.expression.end, text });
     }
-    if (!protectedText && node.type === 'Text' && parent?.type !== 'Attribute' && /[A-Za-z]{2}/.test(node.data) && !/^(PiUI|Pi|Prime Agent|Codex|Hermes|JSON|MCP|OAuth)$/.test(node.data.trim())) {
+    if (!protectedText && node.type === 'Text' && parent?.type !== 'Attribute' && /[A-Za-z]{2}/.test(node.data) && !/^(PiUI|Pi|Prime Agent|Codex|Hermes|Claude Code|JSON|MCP|OAuth)$/.test(node.data.trim())) {
       found.push({ file: relative(process.cwd(), file.pathname.slice(process.platform === 'win32' ? 1 : 0)), text: node.data.trim() });
       edits.push({ start: node.start, end: node.end, text: node.data.replace(/\S[\s\S]*\S|\S/, value => `{$t(${JSON.stringify(value)})}`) });
     }

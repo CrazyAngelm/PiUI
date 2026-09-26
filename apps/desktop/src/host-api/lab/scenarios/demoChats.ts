@@ -7,7 +7,8 @@ import { TranscriptBuilder } from '../transcriptBuilder';
 import {
   AUDIT_ANSWER, AUDIT_GREP_OUTPUT, AUDIT_PROMPT, cargoBuildLog, CHECK_COMMAND, CHECK_OUTPUT, COMPACTION_SUMMARY,
   COMPACTION_TOPICS, compactionAnswer, CRASH_ANALYSIS_PARTIAL, CRASH_ANSWER, CRASH_ERROR, CRASH_LOG_COMMAND,
-  CRASH_LOG_OUTPUT, CRASH_PROMPT, CRASH_RETRY, LIFETIMES_ANSWER, LIFETIMES_PROMPT, LIFETIMES_THINKING, LISBON_FOLLOW_UP,
+  CRASH_LOG_OUTPUT, CRASH_PROMPT, CRASH_RETRY, KEYMAP_ANSWER, KEYMAP_GREP_COMMAND, KEYMAP_GREP_OUTPUT, KEYMAP_PROMPT,
+  KEYMAP_THINKING, LIFETIMES_ANSWER, LIFETIMES_PROMPT, LIFETIMES_THINKING, LISBON_FOLLOW_UP,
   LISBON_PLAN, LISBON_PROMPT, LISBON_REVISED, longReferenceAnswer, RENDER_CONFIG, RENDER_ERROR, RENDER_PARTIAL,
   RENDER_PROMPT, RENDERER_PARAGRAPHS, RENDERER_PROMPT, RENDERER_THINKING, RG_COMMAND, RG_OUTPUT, SCHEDULER_ANALYSIS,
   SCHEDULER_DECLINED, SCHEDULER_DONE, SCHEDULER_E2E_COMMAND, SCHEDULER_E2E_OUTPUT, SCHEDULER_FIX_DIFF,
@@ -253,14 +254,31 @@ function audit(): LabSeed['sessions'][number] {
   });
 }
 
-/** Ten chat sessions across all four harnesses and every block kind. */
+/** A live Claude Code chat on the user's subscription, near its usage limit. */
+function keymap(): LabSeed['sessions'][number] {
+  const transcript = new TranscriptBuilder('claude-code', 'keymap', LAB_BASE_TIME - 26 * MINUTE)
+    .user(KEYMAP_PROMPT)
+    .thinking(KEYMAP_THINKING)
+    .search(KEYMAP_GREP_COMMAND, KEYMAP_GREP_OUTPUT)
+    .read('apps/desktop/src/app/pipelines/PipelineEditor.svelte', "window.addEventListener('keydown', onKeydown);")
+    .custom('Usage limit', 'Your Claude subscription usage is close to its limit. It resets at 2026-09-26T18:00:00.000Z.')
+    .assistant(KEYMAP_ANSWER);
+  return sessionRecord({
+    id: demoSessionId('keymap'), workspaceId: DEMO_PROJECTS.piui, harness: 'claude-code', title: 'Map pipeline editor shortcuts',
+    blocks: transcript.build(), updatedAt: transcript.lastInstant(), model: model('claude-code', 'anthropic', 'lab-opus'),
+    thinkingLevel: 'xhigh', permissionMode: 'workspace-write', live: 'idle',
+    usage: [seededUsage('claude-keymap-1', 28_410, 1_960)],
+  });
+}
+
+/** Eleven chat sessions across all five harnesses and every block kind. */
 export function demoChats(): { sessions: LabSeed['sessions']; activity: SeedActivity[] } {
   const pending = scheduler();
   const streaming = renderer();
   return {
     sessions: [
       lisbon(), lifetimes(), transport(), pending.record, streaming.record,
-      crash(), compaction(), storyboard(), renderFarm(), audit(),
+      crash(), compaction(), storyboard(), renderFarm(), audit(), keymap(),
     ],
     activity: [pending.activity, streaming.activity],
   };

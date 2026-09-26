@@ -6,6 +6,7 @@ import type {
   ToolDecision,
   ToolRule,
 } from '../../../../../contracts/orchestration-v6';
+import { harnessConfigurations } from '../../harness-adapters';
 
 export interface ProfileDraft {
   id: string;
@@ -86,7 +87,9 @@ export function profileFromDraft(draft: ProfileDraft): AgentProfile {
     ...(provider === '' ? {} : { modelProvider: provider }),
     model: draft.model.trim(),
     ...(draft.reasoning ? { reasoning: draft.reasoning } : {}),
-    ...(!['pi', 'hermes'].includes(draft.harness) ? { serviceTier: draft.serviceTier } : {}),
+    // Only adapters with a speed setting store one (never Claude Code: fast
+    // mode can use paid extra usage).
+    ...(harnessConfigurations[draft.harness].speed ? { serviceTier: draft.serviceTier } : {}),
     permissionMode: draft.permissionMode,
     ...(draft.networkAccess ? { networkAccess: true } : {}),
     instructions: draft.instructions,

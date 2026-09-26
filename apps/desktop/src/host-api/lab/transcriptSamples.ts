@@ -461,6 +461,27 @@ src/auth/reset.js:41:  const reset = { token: randomToken(), createdAt: Date.now
 src/auth/hash.js:12:const COST = 8;
 src/auth/login.js:130:    return res.status(404).send('No such user');`;
 
+export const KEYMAP_PROMPT = 'List the keyboard shortcuts of the pipeline editor and flag any that collide with the chat composer.';
+
+export const KEYMAP_THINKING = 'Collect every keydown handler under app/pipelines and app/shell, normalise the modifiers, then compare the two sets. Report only real collisions, not shortcuts that are scoped to different focus targets.';
+
+export const KEYMAP_GREP_COMMAND = 'rg -n "key ===|ctrlKey|metaKey" apps/desktop/src/app';
+
+export const KEYMAP_GREP_OUTPUT = `apps/desktop/src/app/pipelines/PipelineEditor.svelte:212:    if (event.key === 'Delete' || event.key === 'Backspace') removeSelection();
+apps/desktop/src/app/pipelines/PipelineEditor.svelte:219:    if ((event.ctrlKey || event.metaKey) && event.key === 'd') duplicateSelection();
+apps/desktop/src/app/pipelines/PipelineEditor.svelte:226:    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') runPipeline();
+apps/desktop/src/app/shell/Composer.svelte:88:    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') send();`;
+
+export const KEYMAP_ANSWER = `## Pipeline editor shortcuts
+
+| Shortcut | Action | Scope |
+| --- | --- | --- |
+| Delete / Backspace | Remove the selected nodes | Canvas |
+| Ctrl+D | Duplicate the selection | Canvas |
+| Ctrl+Enter | Run the pipeline | Editor |
+
+**One collision:** Ctrl+Enter also sends a chat message. The handlers are scoped to different focus targets, so today they never fire together, but the editor handler listens on \`window\`. Scope it to the canvas element to keep it from ever reaching the composer.`;
+
 /** Live reply fragments used by chat turns. */
 export const LIVE_REPLY_OPENINGS: readonly string[] = [
   'Here is what I found.',

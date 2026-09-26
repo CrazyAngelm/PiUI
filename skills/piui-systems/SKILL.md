@@ -61,7 +61,7 @@ caller. They describe purpose; they never grant permission to spawn a profile.
   model levels from adapter examples. Missing imported IDs remain visible until
   explicitly corrected. A catalog is not proof of authentication or isolation.
 
-- Standard/Fast is supported by Codex and by Prime models advertised as Fast-capable by its native SDK; Pi RPC does not expose it. Base-prompt replacement is a Codex capability. Omitted `baseInstructions` keeps the native base; `""` replaces only that base with empty text, not all native context.
+- Standard/Fast is supported by Codex and by Prime models advertised as Fast-capable by its native SDK; Pi RPC does not expose it and Claude Code refuses it (fast mode can use paid extra usage). Base-prompt replacement is a Codex capability. Omitted `baseInstructions` keeps the native base; `""` replaces only that base with empty text, not all native context.
 - Pi profiles can append native instructions and participate in result pipelines. Its current RPC adapter does not expose workspace messaging/delegation tools; do not promise Pi send/observe/spawn links.
 - Codex skill IDs are absolute paths; MCP IDs are existing configured server names. Codex `networkAccess` is native sandbox egress permission, not a domain allowlist or secret grant, and child profiles cannot enable it unless the parent also has it. Prime skill IDs are names. Per-agent Prime MCP disabling is unsupported; skills depend on its ipython tool and native RLM cannot be treated as an independent workspace spawn switch.
 - Disabling a skill controls discovery, not file access. No file contains API keys, credentials, native session IDs, shell commands for startup or executable plugins.
@@ -82,6 +82,38 @@ not turn native defaults into a sandbox claim. Resource inventory is read-only.
 Hermes cannot be steered: a message sent during its turn waits and runs as its
 next turn. Use result edges for mixed-harness dependencies. Native authority is
 incomparable across harnesses, so it cannot authorize cross-harness spawning.
+
+## Claude Code
+
+Portable version 4 accepts `harness: "claude-code"` (additive; earlier files
+are unchanged and versions 1-3 never contain it). PiUI drives the user's own
+installed `claude` CLI (tested range 2.1 to 2.x) and runs it **only on the
+user's Claude subscription**: API keys, cloud providers, base-URL proxies, fast
+mode and paid extra usage are never used, and a signed-out CLI fails before any
+turn with "Sign in to Claude Code with your Claude subscription: run `claude` in
+a terminal and use /login." Do not set `serviceTier`; it is refused.
+
+- Verified configuration: `model` (use `modelProvider: "anthropic"` and an ID
+  selected from the native catalog, which reports account-specific aliases such
+  as `default`; never assume a model is available), `reasoning` from `low`,
+  `medium`, `high`, `xhigh`, `max` (the catalog decides which levels a model
+  supports), appended `instructions`, all four permission
+  presets, and native tool rules naming Claude Code built-in tools (`Read`,
+  `Grep`, `Glob`, `Edit`, `Write`, `Bash`, `WebFetch`, ...). A tool policy
+  restricts the built-in set and excludes the user's MCP servers.
+- Unsupported, refused at preflight: `baseInstructions`, `serviceTier`,
+  `resourceRules` (skills, plugins and MCP come from the user's own Claude Code
+  configuration), `networkAccess`, and any rule for the native `Agent` tool.
+  Managed runs disable native subagents and delegate through PiUI's coordinator.
+- `native` uses the user's own configured default mode. `read-only` is plan
+  mode and `workspace-write` is accept-edits: both can only **deny** Claude
+  Code permission prompts, so prompted tools such as `Bash` never run there and
+  allowing `Bash` with them is rejected. This is Claude Code's permission
+  engine, not an OS sandbox; `full-access` bypasses prompts.
+- Parallel Claude agents share one subscription usage limit. Plan role counts
+  accordingly; a run stops a session that starts using paid extra usage.
+- See `examples/systems/codex-claude-pi-review.piui.json` for a Codex -> Claude
+  Code -> Pi result pipeline.
 
 ## Execution contracts (portable v4)
 

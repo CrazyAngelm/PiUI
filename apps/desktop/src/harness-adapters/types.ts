@@ -12,5 +12,7 @@ export interface HarnessConfiguration {
   readonly nativeTools: readonly string[];
   readonly filesystemSandbox: boolean;
   readonly networkAccess: boolean;
+  /** User-visible native limitations. They are never a sandbox claim. */
+  readonly limitations?: readonly string[];
 }
 export type HarnessConfigurations = Readonly<Record<Harness, HarnessConfiguration>>;
