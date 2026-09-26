@@ -67,7 +67,7 @@ fn init_repository(scratch: &Scratch) -> PathBuf {
     std::fs::create_dir_all(repo.join("src")).expect("creates repo");
     git(&repo, &["init", "-q", "-b", "main"]);
     for (key, value) in [
-        ("user.email", "piui@example.invalid"),
+        ("user.email", "piui@example.com"),
         ("user.name", "PiUI tests"),
         ("core.autocrlf", "false"),
         ("commit.gpgsign", "false"),
