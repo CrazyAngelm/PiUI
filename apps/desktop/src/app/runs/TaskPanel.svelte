@@ -33,6 +33,9 @@
   import type { RunsStore } from './runsStore.svelte';
   import { completedReviewRounds } from '../../host-api/runInputs';
   import RunInputsView from './RunInputsView.svelte';
+  import { REVIEW_RETRY_PINNED } from '../../host-api/pinnedData';
+  import PinOutputButton from './PinOutputButton.svelte';
+  import PinnedTaskNote from './PinnedTaskNote.svelte';
 
   interface Props {
     runs: RunsStore;
@@ -78,7 +81,9 @@
   const live = $derived(attempt < 0);
   const review = $derived(view.step.review);
   const rounds = $derived(review ? completedReviewRounds(run, view.stepId) : 0);
-  const limitReached = $derived(view.task?.status === 'awaitingApproval' && view.task.failure?.code === 'review-limit-reached');
+  // A review held for a person: its round limit, or (v6.3) a pinned correction step that cannot change.
+  const retryPinned = $derived(view.task?.status === 'awaitingApproval' && view.task.failure?.code === REVIEW_RETRY_PINNED);
+  const limitReached = $derived((view.task?.status === 'awaitingApproval' && view.task.failure?.code === 'review-limit-reached') || retryPinned);
   const busyKey = $derived(runs.busy);
   const dependencies = $derived(
     view.step.dependencyStepIds.map((id) => {
@@ -166,6 +171,7 @@
       </div>
     </div>
   {/if}
+  <PinnedTaskNote {run} {record} />
   {#if !live}
     <p class="note note--info">{$t('You are viewing an earlier attempt. Actions apply to the latest one.')}</p>
   {/if}
@@ -177,7 +183,7 @@
           {#snippet leading()}<Check />{/snippet}
           {limitReached ? $t('Accept last result') : $t('Approve result')}
         </Button>
-        {#if limitReached && review}
+        {#if limitReached && review && !retryPinned}
           <Button size="sm" loading={busyKey === `repeat:${review.retryFromStepId}`} disabled={!!busyKey || runs.safeMode} onclick={() => void runs.repeat(review.retryFromStepId)}>
             {#snippet leading()}<RotateCcw />{/snippet}
             {$t('One more round')}
@@ -215,6 +221,7 @@
           {$t('Open chat')}
         </Button>
       {/if}
+      <PinOutputButton {runs} {run} {view} />
     </div>
   {:else if sessionId}
     <div class="actions">

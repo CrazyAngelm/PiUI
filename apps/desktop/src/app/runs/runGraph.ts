@@ -148,6 +148,7 @@ export const TASK_STATUS_LABEL: Record<TaskRecord['status'], string> = {
 /** Human wording for stable failure codes; unknown codes stay visible verbatim. */
 export function failureText(code: string): string {
   const known: Record<string, string> = {
+    'review-retry-pinned': 'The review asked for changes, but the step it retries from uses pinned data, so another round would repeat the same input. Accept the last result or reject it.',
     'result-rejected': 'A person rejected the result.',
     'result-invalid': 'The agent returned a result that does not match the declared fields.',
     'native-turn-failed': 'The agent’s turn failed in the harness.',

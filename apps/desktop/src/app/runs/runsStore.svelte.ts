@@ -14,6 +14,7 @@ import {
 } from '../../host-api/orchestrationClient';
 import { performRunAction, type RunAction } from '../../features/orchestration/runActions';
 import { createRunLiveUpdates, mergeRunSummaries, runSummary } from '../../features/orchestration/runUpdates';
+import { runDebuggingError, runDebuggingHost, type RunDebuggingClient } from '../../host-api/runDebuggingClient';
 import { sortRuns } from './runPresentation';
 
 export class RunsStore {
@@ -31,17 +32,23 @@ export class RunsStore {
   busy = $state('');
   actionError = $state('');
   liveError = $state('');
+  /** Runs hidden from the default list (run debugging v1). */
+  archived = $state.raw<ReadonlySet<string>>(new Set());
+  showArchived = $state(false);
 
   private generation = 0;
   private disposed = false;
   private stopLive: (() => void) | undefined;
   private live: ReturnType<typeof createRunLiveUpdates> | undefined;
   private usageRequest = 0;
+  /** Deleted here: never merged back from an older in-flight read. */
+  private readonly deleted = new Set<string>();
 
   constructor(
     readonly workspaceId: string,
     readonly safeMode: boolean,
-    private readonly client: OrchestrationClient,
+    readonly client: OrchestrationClient,
+    readonly debugging: RunDebuggingClient = runDebuggingHost,
   ) {}
 
   get selectedRunId(): string {
@@ -101,7 +108,8 @@ export class RunsStore {
     try {
       const incoming = await this.client.orchestration_list_runs_v6({ workspaceId: this.workspaceId });
       if (generation !== this.generation) return;
-      this.summaries = mergeRunSummaries(this.summaries, incoming);
+      this.summaries = mergeRunSummaries(this.summaries, incoming).filter((item) => !this.deleted.has(item.id));
+      this.archived = new Set(incoming.filter((item) => item.archived === true).map((item) => item.id));
     } catch (error) {
       if (generation === this.generation) this.listError = orchestrationError(error).message;
     } finally {
@@ -137,6 +145,7 @@ export class RunsStore {
 
   /** Accept a recorded run only when it is newer; keep the list in step. */
   private accept(run: OrchestrationRunV6, select = false): void {
+    if (this.deleted.has(run.id)) return;
     const current = this.run;
     if (select || current?.id === run.id) {
       if (!current || current.id !== run.id || run.revision >= current.revision) {
@@ -234,5 +243,61 @@ export class RunsStore {
 
   private taskRevision(run: OrchestrationRunV6, stepId: string): number {
     return run.tasks.find((task) => task.stepId === stepId)?.revision ?? -1;
+  }
+
+  // ---- archive and delete (run debugging v1) ----------------------------------
+
+  isDeleted(runId: string): boolean {
+    return this.deleted.has(runId);
+  }
+
+  /** Hides a finished run from the default list, or shows it again. */
+  async setArchived(runId: string, archived: boolean): Promise<boolean> {
+    if (this.busy) return false;
+    this.busy = archived ? 'archive' : 'unarchive';
+    this.actionError = '';
+    try {
+      const recorded = await this.debugging.setArchived({ workspaceId: this.workspaceId, runId, archived });
+      const next = new Set(this.archived);
+      if (recorded) next.add(runId);
+      else next.delete(runId);
+      this.archived = next;
+      return true;
+    } catch (error) {
+      this.actionError = runDebuggingError(error).message;
+      return false;
+    } finally {
+      this.busy = '';
+    }
+  }
+
+  /**
+   * Deletes a finished run's PiUI records at the revision the person
+   * confirmed. The host refuses active runs; native sessions stay.
+   */
+  async deleteRun(runId: string, expectedRunRevision: number): Promise<boolean> {
+    if (this.busy) return false;
+    this.busy = 'delete';
+    this.actionError = '';
+    try {
+      await this.debugging.delete({ workspaceId: this.workspaceId, runId, expectedRunRevision });
+      this.deleted.add(runId);
+      this.summaries = this.summaries.filter((item) => item.id !== runId);
+      const archived = new Set(this.archived);
+      archived.delete(runId);
+      this.archived = archived;
+      if (this.run?.id === runId) {
+        this.run = undefined;
+        this.selectedStepId = '';
+        this.attemptIndex = -1;
+        this.usage = {};
+      }
+      return true;
+    } catch (error) {
+      this.actionError = runDebuggingError(error).message;
+      return false;
+    } finally {
+      this.busy = '';
+    }
   }
 }
