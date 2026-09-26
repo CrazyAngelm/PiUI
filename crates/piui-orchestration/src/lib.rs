@@ -10,6 +10,13 @@
 mod coordinator;
 mod flow;
 pub use flow::*;
+mod inputs;
+pub use inputs::{
+    MAX_CHOICE_OPTIONS, MAX_INPUT_LABEL_CHARS, MAX_INPUT_NAME_LEN, MAX_INPUT_TEXT_BYTES,
+    MAX_PIPELINE_INPUTS, MAX_REVIEW_ITERATIONS, MAX_RUN_INPUT_TEXT_BYTES, MIN_REVIEW_ITERATIONS,
+    PipelineInput, PipelineInputKind, RunInputError, resolve_run_inputs,
+    validate_pipeline_declarations, validate_pipeline_inputs,
+};
 mod results;
 pub use results::*;
 mod types;
@@ -25,5 +32,7 @@ pub use validation::{
     validate_history_reference, validate_profile_capabilities,
 };
 
+#[cfg(test)]
+mod input_tests;
 #[cfg(test)]
 mod tests;

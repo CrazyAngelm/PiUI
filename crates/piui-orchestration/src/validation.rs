@@ -37,6 +37,12 @@ pub enum DefinitionError {
     MandatoryToolUnsupported { tool: String },
     #[error("native history reference is invalid")]
     InvalidHistoryReference,
+    #[error("a pipeline declares at most {limit} run inputs")]
+    TooManyInputs { limit: usize },
+    #[error("run input {name} is invalid: {reason}")]
+    InvalidInput { name: String, reason: &'static str },
+    #[error("review on step {step_id} must bound its rounds between 1 and 20")]
+    InvalidReviewLimit { step_id: String },
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -205,6 +211,7 @@ fn validate_pipeline(snapshot: &RunDefinitionSnapshot) -> Result<(), DefinitionE
     }
     require_nonempty("pipeline", &pipeline.id)?;
     require_nonempty("pipeline name", &pipeline.name)?;
+    crate::validate_pipeline_declarations(pipeline)?;
     let steps = unique_ids("step", pipeline.steps.iter().map(|step| step.id.as_str()))?;
     let members: BTreeSet<&str> = snapshot
         .team

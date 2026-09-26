@@ -276,6 +276,7 @@ fn revision_cycle_retains_attempts_and_pauses_identical_feedback() {
     definition.pipeline.steps[1].review = Some(ReviewRule {
         field: "accepted".into(),
         retry_from_step_id: "build".into(),
+        max_iterations: None,
     });
     let mut run = Coordinator::new_run("review", definition).unwrap();
     finish_checked(&mut run, "First implementation", "native-1");
@@ -582,6 +583,7 @@ fn snapshot() -> RunDefinitionSnapshot {
                     dependency_step_ids: vec!["build".to_owned()],
                 },
             ],
+            inputs: Vec::new(),
         },
         launch_command: Some(LaunchCommandReference {
             id: "launch-1".to_owned(),
