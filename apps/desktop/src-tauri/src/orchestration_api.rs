@@ -101,7 +101,14 @@ impl From<CoordinatorError> for OrchestrationApiError {
 fn scheduler_error(
     error: crate::orchestration_scheduler::OrchestrationSchedulerError,
 ) -> OrchestrationApiError {
-    OrchestrationApiError { code: error.code }
+    // Step executor codes (v6.2) stay on the failed task record; the command
+    // contract keeps its established error codes.
+    let code = match error.code {
+        "llm-read-only-unsupported" => "unsupported-policy",
+        code if code.starts_with("script-") => "runtime-unavailable",
+        code => code,
+    };
+    OrchestrationApiError { code }
 }
 
 /// Application-data folder for running script steps (v6.2).
@@ -2734,6 +2741,25 @@ fn mutable_run<'a>(
 #[cfg(test)]
 mod tests {
     use super::{AgentToolOperation, AgentToolRequest};
+
+    #[test]
+    fn step_executor_codes_keep_the_command_error_contract() {
+        use crate::orchestration_scheduler::OrchestrationSchedulerError;
+        for (code, expected) in [
+            ("llm-read-only-unsupported", "unsupported-policy"),
+            ("script-runtime-unavailable", "runtime-unavailable"),
+            ("script-input-unavailable", "runtime-unavailable"),
+            ("script-start-failed", "runtime-unavailable"),
+            ("unsupported-policy", "unsupported-policy"),
+            ("conflict", "conflict"),
+            ("native-outcome-uncertain", "native-outcome-uncertain"),
+        ] {
+            assert_eq!(
+                super::scheduler_error(OrchestrationSchedulerError { code }).code,
+                expected
+            );
+        }
+    }
 
     #[test]
     fn dynamic_spawn_request_replays_committed_identity_without_duplicate_agent() {
