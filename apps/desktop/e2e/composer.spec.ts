@@ -146,6 +146,20 @@ test.describe('mentions', () => {
     await page.keyboard.press('Tab');
     await expect(message).toHaveValue('Please use $test-runner ');
   });
+
+  test('$ offers Codex skills in a new chat, and nothing for a harness without them', async ({ lab, page }) => {
+    await lab.open();
+    const composer = home(page);
+    const message = composer.getByRole('textbox', { name: 'Message' });
+    await message.fill('Costs $5');
+    await expect(page.getByRole('listbox', { name: 'Skills' })).toHaveCount(0);
+    await composer.getByRole('button', { name: 'Pi', exact: true }).click();
+    await lab.option(/^Codex/).click();
+    await message.fill('Run $te');
+    await expect(page.getByRole('listbox', { name: 'Skills' }).getByRole('option', { name: /\$test-runner/ })).toBeVisible();
+    await page.keyboard.press('Enter');
+    await expect(message).toHaveValue('Run $test-runner ');
+  });
 });
 
 test('a harness catalog refresh never undoes the new-chat harness and model pick', async ({ lab, page }) => {
