@@ -41,6 +41,7 @@ export type {
   ComposerImageType,
   ComposerInputsCommand,
   ComposerInputsResult,
+  ComposerPreviewResult,
   ComposerRejection,
   NativeCommand,
   NativeSkill,

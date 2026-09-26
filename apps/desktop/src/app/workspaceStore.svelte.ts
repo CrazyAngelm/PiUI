@@ -10,6 +10,7 @@
 import { projectsHost as host } from '../host-api/projectsClient';
 import type { Preferences, ProjectSummary } from '../host-api/types';
 import { composerRequest } from '../host-api/composerClient';
+import type { ComposerImage } from '../host-api/composerInputsClient';
 import { runtimeSettings } from '../host-api/runtimeSettings';
 import { workspaceModel } from '../host-api/harnessModels';
 import { deleteWorkspaceSession } from '../host-api/workspaceLifecycle';
@@ -64,6 +65,8 @@ export interface NewChatRequest {
   thinkingLevel?: string;
   serviceTier?: 'standard' | 'fast';
   text: string;
+  /** Pending images sent with the first message (composer inputs v1). */
+  attachments?: readonly ComposerImage[];
 }
 
 const EMPTY_CATALOG: WorkspaceCatalog = { protocol: 15, safeMode: false, workspaces: [], sessions: [], harnesses: [] };
@@ -141,6 +144,8 @@ export class WorkspaceStore {
   sessionLoading = $state(false);
   sessionError = $state<string>();
   drafts = $state.raw<Record<string, string>>({});
+  /** Pending composer images per draft key (session id or the new-chat key). */
+  attachmentDrafts = $state.raw<Record<string, ComposerImage[]>>({});
   collapsedProjects = $state.raw<string[]>([]);
   preferences = $state.raw<Preferences>(DEFAULT_PREFERENCES);
   /** Registry rows (agent kind, pin) that the v15 workspace catalog does not carry. */
@@ -334,6 +339,21 @@ export class WorkspaceStore {
 
   draftFor(key: string): string {
     return this.drafts[key] ?? '';
+  }
+
+  /**
+   * Images attached to a draft (composer inputs v1). Memory only: the host
+   * keeps their bytes in app data and forgets unsent ones on restart.
+   */
+  attachmentsFor(key: string): readonly ComposerImage[] {
+    return this.attachmentDrafts[key] ?? [];
+  }
+
+  updateAttachments(key: string, images: readonly ComposerImage[]): void {
+    const next = { ...this.attachmentDrafts };
+    if (images.length) next[key] = [...images];
+    else delete next[key];
+    this.attachmentDrafts = next;
   }
 
   updateDraft(key: string, text: string): void {
@@ -622,12 +642,21 @@ export class WorkspaceStore {
       }
     }
     const text = request.text.trim();
+    const images = request.attachments ?? [];
     if (text) {
       try {
-        await composerRequest({ type: 'send', sessionId, requestId: crypto.randomUUID(), text: request.text, mode: 'prompt' });
+        await composerRequest({
+          type: 'send',
+          sessionId,
+          requestId: crypto.randomUUID(),
+          text: request.text,
+          mode: 'prompt',
+          ...(images.length ? { attachments: images.map((image) => image.id) } : {}),
+        });
       } catch (cause) {
-        // The chat exists; keep the unsent text as its draft so nothing is lost.
+        // The chat exists; keep the unsent text and images as its draft so nothing is lost.
         this.updateDraft(sessionId, request.text);
+        this.updateAttachments(sessionId, images);
         error = errorMessage(cause);
       }
     }
@@ -706,6 +735,7 @@ export class WorkspaceStore {
     const { [sessionId]: _draft, ...drafts } = this.drafts;
     this.drafts = drafts;
     this.persistDraftsNow();
+    this.updateAttachments(sessionId, []);
     this.catalog = { ...this.catalog, sessions: this.catalog.sessions.filter((session) => session.id !== sessionId) };
     if (this.selectedSessionId === sessionId) {
       this.route = { name: 'home' };

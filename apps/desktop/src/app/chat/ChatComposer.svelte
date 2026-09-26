@@ -3,30 +3,48 @@
   import Square from '@lucide/svelte/icons/square';
   import Pencil from '@lucide/svelte/icons/pencil';
   import CornerDownRight from '@lucide/svelte/icons/corner-down-right';
+  import ImageIcon from '@lucide/svelte/icons/image';
   import X from '@lucide/svelte/icons/x';
-  import { onMount, untrack } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import { t } from '../../features/locale/language';
   import { composerRequest, listenComposer, type ComposerCommand, type ComposerSnapshot } from '../../host-api/composerClient';
+  import type { ComposerImage } from '../../host-api/composerInputsClient';
   import type { SessionSnapshot } from '../../host-api/workspaceClient';
+  import { composerSupport, imageSupport } from '../../harness-adapters/composer';
   import { Button, IconButton, Segmented, Spinner, Textarea } from '../../lib/ui';
+  import { harnessMeta } from '../harnessMeta';
   import { errorMessage } from '../workspaceStore.svelte';
   import { runLauncher } from '../triggers/runLauncher.svelte';
   import RuntimeChip from './RuntimeChip.svelte';
+  import AttachButton from './composer/AttachButton.svelte';
+  import AttachmentChips from './composer/AttachmentChips.svelte';
+  import AttachmentNotices from './composer/AttachmentNotices.svelte';
+  import MentionMenu from './composer/MentionMenu.svelte';
+  import ReferenceDialog from './composer/ReferenceDialog.svelte';
+  import { ComposerAttachments } from './composer/composerAttachments.svelte';
+  import { FileMentions, loadComposerCatalog, type NativeEntries } from './composer/composerLookups.svelte';
+  import { composerDropTargets } from './composer/dropTargets.svelte';
+  import { activeMention, fileMention, rankFiles, rankNamed, replaceMention } from './composer/mentions';
+  import type { ComposerMenuItem } from './composer/menuItems';
 
   interface Props {
     snapshot: SessionSnapshot;
     draft: string;
     updateDraft: (text: string) => void;
+    /** Pending images of this chat's draft (composer inputs v1). */
+    images?: readonly ComposerImage[];
+    updateImages?: (images: readonly ComposerImage[]) => void;
     refresh: () => void;
     interrupt: () => Promise<boolean>;
     interruptBusy?: boolean;
   }
-  let { snapshot, draft, updateDraft, refresh, interrupt, interruptBusy = false }: Props = $props();
+  let { snapshot, draft, updateDraft, images = [], updateImages = () => undefined, refresh, interrupt, interruptBusy = false }: Props = $props();
 
   interface Pending {
     id: string;
     text: string;
     mode: 'prompt' | 'follow-up' | 'steer';
+    attachments?: string[];
   }
 
   let composer = $state.raw<ComposerSnapshot | undefined>();
@@ -35,13 +53,24 @@
   let error = $state('');
   let editing = $state('');
   let editText = $state('');
-  let slashIndex = $state(0);
-  let slashDismissed = $state(false);
+  let menuIndex = $state(0);
+  let menuDismissed = $state(false);
   // Keyed per chat by the parent: the saved draft seeds the editor once.
   let text = $state(untrack(() => draft));
+  let caret = $state(untrack(() => draft.length));
   let input = $state<HTMLTextAreaElement | null>(null);
+  let catalog = $state.raw<NativeEntries>({ commands: [], skills: [] });
+  let htmlDragging = $state(false);
+  const attachments = new ComposerAttachments(untrack(() => images), (next) => updateImages(next));
+  const fileMentions = new FileMentions();
 
   const sessionId = $derived(snapshot.session.id);
+  const workspaceId = $derived(snapshot.session.workspaceId);
+  const harness = $derived(snapshot.session.harness);
+  const harnessLabel = $derived(harnessMeta(harness).short);
+  const support = $derived(composerSupport(harness));
+  // The open session's report is authoritative; before it arrives, the manifest.
+  const imageState = $derived(imageSupport(harness, composer ? Boolean(composer.capabilities.images) : undefined));
   const identityKey = $derived(`piui.composer.request.${sessionId}`);
   const running = $derived(snapshot.session.status === 'running');
   const stopping = $derived(snapshot.session.status === 'stopping');
@@ -53,13 +82,110 @@
     { name: 'stop', description: 'Stop the current turn', enabled: running },
     { name: 'run', description: 'Run a saved pipeline of this project', enabled: true },
   ]);
-  const slash = $derived(
-    !slashDismissed && /^\/[^\s]*$/.test(text) ? commands.filter((command) => command.name.startsWith(text.slice(1))) : [],
+  // A PiUI command wins over a native one of the same name: PiUI runs it on send.
+  const nativeCommands = $derived(catalog.commands.filter((command) => !commands.some((own) => own.name === command.name)));
+  const mention = $derived(
+    menuDismissed
+      ? undefined
+      : activeMention(text, caret, { slash: true, at: Boolean(workspaceId), dollar: support.skillMentions && catalog.skills.length > 0 }),
   );
+  const SOURCE_LABELS: Readonly<Record<string, string>> = { extension: 'extension', prompt: 'prompt', skill: 'skill' };
+
+  type Menu =
+    | { kind: 'slash'; items: ComposerMenuItem[] }
+    | { kind: 'file'; items: ComposerMenuItem[]; paths: string[] }
+    | { kind: 'skill'; items: ComposerMenuItem[]; mentions: string[] };
+  const menu = $derived.by((): Menu | undefined => {
+    if (!mention) return undefined;
+    if (mention.trigger === '/') {
+      const own = commands
+        .filter((command) => command.name.startsWith(mention.query))
+        .map((command): ComposerMenuItem => ({
+          key: `piui:${command.name}`,
+          title: `/${command.name}`,
+          detail: $t(command.description),
+          badge: 'PiUI',
+          disabled: !command.enabled,
+          ...(command.enabled ? {} : { note: $t('Unavailable now') }),
+        }));
+      const native = rankNamed(nativeCommands, mention.query).map((command): ComposerMenuItem => ({
+        key: `native:${command.name}`,
+        title: `/${command.name}`,
+        ...(command.description ? { detail: command.description } : {}),
+        ...(command.hint ? { hint: command.hint } : {}),
+        badge: SOURCE_LABELS[command.source] ? `${harnessLabel} · ${$t(SOURCE_LABELS[command.source] ?? '')}` : harnessLabel,
+      }));
+      return own.length || native.length ? { kind: 'slash', items: [...own, ...native] } : undefined;
+    }
+    if (mention.trigger === '@') {
+      const paths = rankFiles(fileMentions.files, mention.query);
+      return { kind: 'file', paths, items: paths.map((path) => ({ key: `file:${path}`, title: path })) };
+    }
+    const skills = rankNamed(catalog.skills, mention.query);
+    return {
+      kind: 'skill',
+      mentions: skills.map((skill) => skill.mention),
+      items: skills.map((skill) => ({
+        key: `skill:${skill.name}`,
+        title: skill.mention,
+        ...(skill.description ? { detail: skill.description } : {}),
+        badge: harnessLabel,
+      })),
+    };
+  });
+  const menuId = $derived(`composer-menu-${sessionId}`);
+  const menuLabel = $derived(
+    menu?.kind === 'file' ? $t('Project files') : menu?.kind === 'skill' ? $t('Skills') : $t('Available commands'),
+  );
+  const menuEmpty = $derived(
+    menu?.kind === 'file'
+      ? fileMentions.loading
+        ? $t('Loading project files…')
+        : fileMentions.error
+          ? $t(fileMentions.error)
+          : $t('No matching files')
+      : $t('No matches'),
+  );
+  const activeIndex = $derived(menu && menu.items.length ? menuIndex % menu.items.length : 0);
   const queue = $derived(composer?.queue.items.filter((item) => item.status !== 'sent' && item.status !== 'cancelled') ?? []);
 
   $effect(() => {
     if (!running || !canSteer) mode = 'follow-up';
+  });
+
+  // Loads the project file names for `@` as it is typed.
+  $effect(() => {
+    if (mention?.trigger === '@') fileMentions.update(workspaceId, mention.query);
+  });
+
+  // Native commands and skills of the live session: loaded once, then again
+  // when a `/` or `$` menu opens after a minute (commands can change).
+  let catalogLoadedAt = 0;
+  const catalogWanted = $derived(support.nativeCommands || support.skillMentions);
+  const menuTrigger = $derived(mention?.trigger);
+  $effect(() => {
+    const id = sessionId;
+    const opening = menuTrigger === '/' || menuTrigger === '$';
+    if (!catalogWanted) return;
+    untrack(() => {
+      if (catalogLoadedAt && (!opening || Date.now() - catalogLoadedAt < 60_000)) return;
+      catalogLoadedAt = Date.now();
+      void loadComposerCatalog(id, opening).then(
+        (result) => {
+          if (id === sessionId) catalog = { commands: result.commands, skills: result.skills };
+        },
+        () => {
+          catalogLoadedAt = 0;
+        },
+      );
+    });
+  });
+
+  // The model may change what the session accepts; read the capabilities again.
+  const modelId = $derived(snapshot.session.model?.id);
+  $effect(() => {
+    void modelId;
+    if (untrack(() => composer)) void read();
   });
 
   function accept(next: ComposerSnapshot): void {
@@ -84,10 +210,13 @@
         void read();
       }
     });
+    const unregister = composerDropTargets.register((dropId) => void attachments.redeem(workspaceId, dropId, imageState));
     queueMicrotask(() => input?.focus());
     return () => {
       disposed = true;
       unlisten?.();
+      unregister();
+      fileMentions.dispose();
     };
   });
 
@@ -113,6 +242,20 @@
     updateDraft(value);
   }
 
+  /** Replaces the text and puts the caret at `position` once the editor updated. */
+  async function place(value: string, position: number): Promise<void> {
+    setText(value);
+    caret = position;
+    menuIndex = 0;
+    await tick();
+    input?.focus();
+    input?.setSelectionRange(position, position);
+  }
+
+  function syncCaret(): void {
+    caret = input?.selectionStart ?? text.length;
+  }
+
   async function runCommand(name: string): Promise<void> {
     const command = commands.find((item) => item.name === name);
     if (!command || !command.enabled) {
@@ -128,7 +271,29 @@
     } else if (await action({ type: 'compact', sessionId })) {
       setText('');
     }
-    slashDismissed = true;
+    menuDismissed = true;
+  }
+
+  /** Applies a menu entry: PiUI commands run, everything else inserts native text. */
+  function choose(index: number, key: 'Enter' | 'Tab' | 'click'): void {
+    const current = menu;
+    const item = current?.items[index];
+    if (!current || !item || !mention) return;
+    if (current.kind === 'slash') {
+      if (item.key.startsWith('piui:')) {
+        const name = item.title.slice(1);
+        if (key === 'Tab') void place(`/${name}`, name.length + 1);
+        else void runCommand(name);
+        return;
+      }
+      // The harness runs its own command when the message is sent.
+      void place(`${item.title} `, item.title.length + 1);
+      return;
+    }
+    const replacement = current.kind === 'file' ? fileMention(current.paths[index] ?? '') : current.mentions[index];
+    if (!replacement) return;
+    const next = replaceMention(text, mention, replacement);
+    void place(next.text, next.caret);
   }
 
   function loadIdentity(): Pending | undefined {
@@ -146,11 +311,12 @@
       return;
     }
     const message = text;
+    const imageIds = attachments.ids;
     const effectiveMode = running ? mode : 'prompt';
     // A durable request id prevents duplicate delivery if the reply is lost.
     let identity = loadIdentity();
-    if (!identity || identity.text !== message) {
-      identity = { id: crypto.randomUUID(), text: message, mode: effectiveMode };
+    if (!identity || identity.text !== message || (identity.attachments ?? []).join() !== imageIds.join()) {
+      identity = { id: crypto.randomUUID(), text: message, mode: effectiveMode, ...(imageIds.length ? { attachments: imageIds } : {}) };
       try {
         localStorage.setItem(identityKey, JSON.stringify(identity));
       } catch {
@@ -158,8 +324,18 @@
         return;
       }
     }
-    if (await action({ type: 'send', sessionId, requestId: identity.id, text: message, mode: identity.mode })) {
+    const sent = await action({
+      type: 'send',
+      sessionId,
+      requestId: identity.id,
+      text: message,
+      mode: identity.mode,
+      ...(identity.attachments?.length ? { attachments: identity.attachments } : {}),
+    });
+    if (sent) {
       if (text === message) setText('');
+      // The host now owns the images of the queued message.
+      if (attachments.ids.join() === imageIds.join()) attachments.handOver();
       try {
         localStorage.removeItem(identityKey);
       } catch {
@@ -170,20 +346,46 @@
 
   function keydown(event: KeyboardEvent): void {
     if (event.isComposing) return;
-    if (slash.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+    const items = menu?.items ?? [];
+    if (items.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
       event.preventDefault();
-      slashIndex = (slashIndex + (event.key === 'ArrowDown' ? 1 : slash.length - 1)) % slash.length;
-    } else if (event.key === 'Escape' && slash.length) {
+      menuIndex = (activeIndex + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
+    } else if (event.key === 'Escape' && menu) {
       event.preventDefault();
-      slashDismissed = true;
-    } else if (slash.length && event.key === 'Tab') {
+      menuDismissed = true;
+    } else if (items.length && (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey))) {
       event.preventDefault();
-      setText(`/${slash[slashIndex % slash.length].name}`);
+      choose(activeIndex, event.key === 'Tab' ? 'Tab' : 'Enter');
     } else if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      if (slash.length) void runCommand(slash[slashIndex % slash.length].name);
-      else void send();
+      void send();
     }
+  }
+
+  function pasted(event: ClipboardEvent): void {
+    const files = [...(event.clipboardData?.files ?? [])];
+    if (!files.length) return;
+    event.preventDefault();
+    void attachments.paste(workspaceId, files, imageState);
+  }
+
+  const carriesFiles = (event: DragEvent): boolean => Boolean(event.dataTransfer?.types.includes('Files'));
+
+  function dropped(event: DragEvent): void {
+    htmlDragging = false;
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    void attachments.paste(workspaceId, [...(event.dataTransfer?.files ?? [])], imageState);
+  }
+
+  function insertReferences(): void {
+    const references = attachments.confirmReferences();
+    if (!references) return;
+    const before = text.slice(0, caret);
+    const after = text.slice(caret);
+    const lead = before && !/\s$/u.test(before) ? ' ' : '';
+    const trail = after.startsWith(' ') ? '' : ' ';
+    void place(`${before}${lead}${references}${trail}${after}`, before.length + lead.length + references.length + trail.length);
   }
 
   function statusText(status: string): string {
@@ -225,6 +427,12 @@
             </div>
           {:else}
             <p class="queue__text">{item.text}</p>
+            {#if item.attachments?.length}
+              <p class="queue__images" aria-label={$t('Attached images')}>
+                <ImageIcon size={12} />
+                {item.attachments.map((image) => image.name).join(', ')}
+              </p>
+            {/if}
             <div class="queue__actions">
               <span class="queue__status">
                 {#if item.status === 'sending'}<Spinner size={10} />{/if}
@@ -258,44 +466,62 @@
     </section>
   {/if}
 
-  <div class="composer" class:composer--running={running}>
-    {#if slash.length}
-      <div class="slash" id="composer-commands" role="listbox" aria-label={$t('Available commands')}>
-        {#each slash as command, index (command.name)}
-          <button
-            type="button"
-            id={`composer-command-${index}`}
-            role="option"
-            aria-selected={index === slashIndex % slash.length}
-            aria-disabled={!command.enabled}
-            onclick={() => void runCommand(command.name)}
-          >
-            <strong>/{command.name}</strong>
-            <span>{$t(command.description)}</span>
-            {#if !command.enabled}<small>{$t('Unavailable now')}</small>{/if}
-          </button>
-        {/each}
-      </div>
+  <!-- svelte-ignore a11y_no_static_element_interactions (Drop target for files; the paperclip is the keyboard path.) -->
+  <div
+    class="composer"
+    class:composer--running={running}
+    class:composer--drop={htmlDragging || composerDropTargets.dragging}
+    ondragover={(event) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      htmlDragging = true;
+    }}
+    ondragleave={() => (htmlDragging = false)}
+    ondrop={dropped}
+  >
+    {#if menu}
+      <MentionMenu
+        id={menuId}
+        label={menuLabel}
+        items={menu.items}
+        active={activeIndex}
+        loading={menu.kind === 'file' && fileMentions.loading}
+        emptyText={menuEmpty}
+        onPick={(index) => choose(index, 'click')}
+      />
     {/if}
+    <AttachmentChips images={attachments.images} disabled={busy} onRemove={(id) => void attachments.remove(id)} />
+    {#if attachments.images.length && !imageState.supported}
+      <p class="composer__warning" role="alert">{$t(imageState.reason ?? '')} {$t('Remove the images to send this message.')}</p>
+    {/if}
+    <AttachmentNotices notices={attachments.notices} onDismiss={() => attachments.dismissNotices()} />
     <Textarea
       bind:ref={input}
       value={text}
       oninput={(event) => {
         setText(event.currentTarget.value);
-        slashDismissed = false;
-        slashIndex = 0;
+        syncCaret();
+        menuDismissed = false;
+        menuIndex = 0;
       }}
       onkeydown={keydown}
+      onkeyup={(event) => {
+        if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) syncCaret();
+      }}
+      onclick={syncCaret}
+      onpaste={pasted}
       minRows={1}
       maxRows={14}
       class="composer__input"
       aria-label={$t('Message')}
-      aria-controls={slash.length ? 'composer-commands' : undefined}
-      aria-activedescendant={slash.length ? `composer-command-${slashIndex % slash.length}` : undefined}
-      placeholder={running ? $t('Queue a follow-up…') : $t('Reply, ask for changes or type / for commands…')}
+      aria-autocomplete="list"
+      aria-controls={menu ? menuId : undefined}
+      aria-activedescendant={menu && menu.items.length ? `${menuId}-${activeIndex}` : undefined}
+      placeholder={running ? $t('Queue a follow-up…') : $t('Reply, type / for commands or @ to mention a file…')}
     />
     <div class="composer__bar">
       <div class="composer__left">
+        <AttachButton images={imageState} busy={attachments.busy} disabled={busy} onPick={() => void attachments.pick(workspaceId, imageState)} />
         <RuntimeChip
           session={snapshot.session}
           disabled={busy || snapshot.session.status !== 'idle' || !snapshot.capabilities.models.supported}
@@ -330,9 +556,15 @@
         </button>
       </div>
     </div>
+    {#if htmlDragging || composerDropTargets.dragging}
+      <div class="composer__drop" aria-hidden="true">{$t('Drop images or files to attach')}</div>
+    {/if}
   </div>
   {#if error}<p class="error" role="alert">{$t(error)}</p>{/if}
 </div>
+{#if attachments.references.length}
+  <ReferenceDialog references={attachments.references} onConfirm={insertReferences} onCancel={() => attachments.cancelReferences()} />
+{/if}
 
 <style>
   .composer-wrap {
@@ -386,6 +618,14 @@
     line-clamp: 3;
     -webkit-box-orient: vertical;
   }
+  .queue__images {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
+  }
   .queue__actions {
     display: flex;
     align-items: center;
@@ -415,6 +655,9 @@
   .composer:focus-within {
     border-color: var(--piui-border-strong);
   }
+  .composer--drop {
+    border-color: var(--piui-focus);
+  }
   .composer :global(.composer__input) {
     padding: 12px 14px 4px;
     border: 0;
@@ -424,6 +667,11 @@
   }
   .composer :global(.composer__input:focus-visible) {
     box-shadow: none;
+  }
+  .composer__warning {
+    margin: 8px 12px 0;
+    color: var(--piui-warning-text);
+    font-size: var(--piui-text-sm);
   }
   .composer__bar {
     display: flex;
@@ -438,6 +686,18 @@
     align-items: center;
     gap: 4px;
     min-width: 0;
+  }
+  .composer__drop {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--piui-surface-1) 88%, transparent);
+    color: var(--piui-text);
+    font-size: var(--piui-text-sm);
+    pointer-events: none;
   }
   .send {
     display: inline-flex;
@@ -458,43 +718,6 @@
     background: var(--piui-surface-3);
     color: var(--piui-text-disabled);
     opacity: 1;
-  }
-  .slash {
-    position: absolute;
-    right: 0;
-    bottom: calc(100% + 6px);
-    left: 0;
-    z-index: var(--piui-z-dropdown);
-    display: grid;
-    padding: 4px;
-    border: 1px solid var(--piui-border);
-    border-radius: var(--piui-radius-md);
-    background: var(--piui-surface-1);
-    box-shadow: var(--piui-shadow-2);
-  }
-  .slash button {
-    display: flex;
-    align-items: center;
-    gap: var(--piui-space-3);
-    padding: 8px 10px;
-    border: 0;
-    border-radius: var(--piui-radius-sm);
-    background: transparent;
-    color: var(--piui-text);
-    text-align: left;
-  }
-  .slash button[aria-selected='true'] {
-    background: var(--piui-hover);
-  }
-  .slash button[aria-disabled='true'] {
-    opacity: 0.5;
-  }
-  .slash span {
-    color: var(--piui-text-muted);
-  }
-  .slash small {
-    margin-left: auto;
-    color: var(--piui-text-disabled);
   }
   .error {
     margin: 0;
