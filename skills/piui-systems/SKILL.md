@@ -79,8 +79,9 @@ native `provider:model` IDs from its catalog. Its current ACP adapter does not
 expose per-agent reasoning/Fast, base-prompt replacement, strict tools/skills/MCP
 restrictions or native-subagent controls. Those required settings must fail; do
 not turn native defaults into a sandbox claim. Resource inventory is read-only.
-Use result edges for mixed-harness dependencies. Native authority is incomparable
-across harnesses, so it cannot authorize cross-harness spawning.
+Hermes cannot be steered: a message sent during its turn waits and runs as its
+next turn. Use result edges for mixed-harness dependencies. Native authority is
+incomparable across harnesses, so it cannot authorize cross-harness spawning.
 
 ## Execution contracts (portable v4)
 

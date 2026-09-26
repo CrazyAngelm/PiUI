@@ -158,6 +158,57 @@ main()
   const request = (method, params) => new Promise((resolve, reject) => { const id = ++sequence; pending.set(id, { resolve, reject, method }); send({ id, method, params }); });
   const put = value => { const block = { label: value.title ?? value.kind, status: 'complete', ...value }; blocks.set(block.id, block); emit({ type: 'block', block }); };
   const setStatus = value => { status = value; emit({ type: 'status', status }); };
+
+  // Hermes ACP has no native follow-up queue. A follow-up that arrives during a
+  // turn waits here (FIFO) and becomes the next prompt once that turn ends.
+  const followUps = [];
+  const rejectFollowUps = () => {
+    if (followUps.splice(0).length === 0) return;
+    emit({ type: 'error', message: 'Queued Hermes messages were not delivered because the session stopped.' });
+  };
+  const showTurnError = message => {
+    put({ id: `hermes-error-${++sequence}`, kind: 'error', label: 'Error', status: 'failed', safeSummary: message });
+    emit({ type: 'error', message });
+  };
+  // A failed turn does not fail the session: the user can continue, and a
+  // queued follow-up starts the next turn directly.
+  const finishTurn = () => {
+    if (disposed || status !== 'running') return;
+    const next = followUps.shift();
+    if (next === undefined) setStatus('idle');
+    else startTurn(next);
+  };
+  const startTurn = text => {
+    ++turn;
+    streamingId = undefined;
+    put({ id: `hermes-user-${turn}`, kind: 'user', text, status: 'complete' });
+    setStatus('running');
+    const input = config.instructions ? `Agent instructions:\n${config.instructions}\n\nTask:\n${text}` : text;
+    const usageId = randomUUID();
+    void request('session/prompt', { sessionId, prompt: [{ type: 'text', text: input }] }).then(result => {
+      if (result.usage) {
+        const usage = { id: usageId };
+        for (const [source, target] of [["inputTokens","inputTokens"],["outputTokens","outputTokens"],["cachedReadTokens","cacheReadTokens"],["totalTokens","totalTokens"]]) {
+          if (Number.isSafeInteger(result.usage[source]) && result.usage[source] >= 0) usage[target] = result.usage[source];
+        }
+        emit({ type: 'usage', usage });
+      }
+      for (const block of blocks.values()) if (block.status === 'streaming') put({ ...block, status: 'complete' });
+      boundNativeId = result?._meta?.hermes?.sessionProvenance?.currentHermesSessionId ?? boundNativeId;
+      emit({ type: 'binding', nativeId: boundNativeId, nativePath });
+      const outcome = result._meta?.piuiOutcome === 'failed' ? 'failed' : result.stopReason === 'end_turn' ? 'succeeded' : result.stopReason === 'cancelled' ? 'interrupted' : 'failed';
+      if (outcome === 'failed') showTurnError('Hermes could not complete this turn. Check the native provider response.');
+      emit({ type: 'turnCompleted', outcome });
+      finishTurn();
+    }).catch(error => {
+      if (!disposed) {
+        for (const block of blocks.values()) if (block.status === 'streaming') put({ ...block, status: 'failed' });
+        showTurnError(error?.safeMessage ?? 'Hermes could not complete this turn.');
+      }
+      emit({ type: 'turnCompleted', outcome: 'failed' });
+      finishTurn();
+    });
+  };
   const update = message => {
     const u = message.params?.update; if (!u) return;
     const kind = u.sessionUpdate;
@@ -193,7 +244,7 @@ main()
       } catch { for (const slot of pending.values()) slot.reject(fail('invalid-native-protocol')); pending.clear(); setStatus('failed'); child.kill(); }
     }
   });
-  const exited = () => { for (const slot of pending.values()) slot.reject(fail('native-exited')); pending.clear(); if (!disposed) setStatus('failed'); server?.close(); };
+  const exited = () => { for (const slot of pending.values()) slot.reject(fail('native-exited')); pending.clear(); rejectFollowUps(); if (!disposed) setStatus('failed'); server?.close(); };
   child.once('error', exited); child.once('exit', exited);
   try {
     const initialized = await request('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'piui', version: '0.1.1' } });
@@ -221,25 +272,15 @@ main()
     async resources() { return (await readCatalog()).resources; },
     composerCapabilities() { return { steer: false, compact: false }; },
     async prompt({ text, mode }) {
-      if (status !== 'idle' || mode !== 'prompt') throw fail('busy');
-      ++turn; streamingId = undefined; put({ id: `hermes-user-${turn}`, kind: 'user', text, status: 'complete' }); setStatus('running');
-      const input = config.instructions ? `Agent instructions:\n${config.instructions}\n\nTask:\n${text}` : text;
-      const usageId = randomUUID();
-      void request('session/prompt', { sessionId, prompt: [{ type: 'text', text: input }] }).then(result => {
-        if (result.usage) {
-          const usage = { id: usageId };
-          for (const [source, target] of [["inputTokens","inputTokens"],["outputTokens","outputTokens"],["cachedReadTokens","cacheReadTokens"],["totalTokens","totalTokens"]]) {
-            if (Number.isSafeInteger(result.usage[source]) && result.usage[source] >= 0) usage[target] = result.usage[source];
-          }
-          emit({ type: 'usage', usage });
-        }
-        for (const block of blocks.values()) if (block.status === 'streaming') put({ ...block, status: 'complete' });
-        boundNativeId = result?._meta?.hermes?.sessionProvenance?.currentHermesSessionId ?? boundNativeId;
-        emit({ type: 'binding', nativeId: boundNativeId, nativePath });
-        const outcome = result._meta?.piuiOutcome === 'failed' ? 'failed' : result.stopReason === 'end_turn' ? 'succeeded' : result.stopReason === 'cancelled' ? 'interrupted' : 'failed';
-        if (outcome === 'failed') emit({ type: 'error', message: 'Hermes could not complete this turn. Check the native provider response.' });
-        emit({ type: 'turnCompleted', outcome }); setStatus('idle');
-      }).catch(() => { emit({ type: 'turnCompleted', outcome: 'failed' }); setStatus('failed'); });
+      if (typeof text !== 'string' || !text.trim()) throw fail('invalid-request', 'A non-empty prompt is required.');
+      if (mode === 'steer') throw fail('unsupported-method', 'Hermes ACP cannot steer an active turn.');
+      if (mode !== 'prompt' && mode !== 'follow-up') throw fail('invalid-request', 'The prompt mode is invalid.');
+      if (mode === 'follow-up' && status === 'running') {
+        followUps.push(text);
+        return { accepted: true };
+      }
+      if (status !== 'idle') throw fail('busy');
+      startTurn(text);
       return { accepted: true };
     },
     async interrupt() { send({ method: 'session/cancel', params: { sessionId } }); },
@@ -251,6 +292,6 @@ main()
       approvals.delete(approvalId); emit({ type: 'approvalResolved', requestId: approvalId });
     },
     async rename({ title: value }) { title = value; },
-    async dispose() { disposed = true; if (status === 'running') send({ method: 'session/cancel', params: { sessionId } }); server?.close(); for (const item of children) item.kill(); },
+    async dispose() { disposed = true; rejectFollowUps(); if (status === 'running') send({ method: 'session/cancel', params: { sessionId } }); server?.close(); for (const item of children) item.kill(); },
   };
 }

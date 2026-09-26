@@ -70,3 +70,10 @@ native turn and must not create a new turn when it races completion.
 The workspace host owns the durable user Follow up outbox. Native adapters do
 not add a second persistent message format or model loop. Pi and Codex expose
 compact and steer, Prime reports actual SDK methods, Hermes ACP reports neither.
+
+Hermes ACP has no native follow-up queue. `prompt({mode:"follow-up"})` starts a
+turn while idle; during a turn the adapter keeps an in-memory FIFO and sends each
+item as the next native prompt once the running turn reaches any terminal
+outcome, without an intermediate idle. Dispose or native exit reports undelivered
+items with a safe `error` event. A failed native prompt emits
+`turnCompleted:"failed"`, keeps an `error` block visible and returns to idle.

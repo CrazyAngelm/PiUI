@@ -30,6 +30,14 @@ per-session skills/MCP/tool restrictions, reasoning/Fast, native-subagent disabl
 or base prompt replacement. Required unsupported settings fail before execution.
 Rename is PiUI title metadata, since this ACP has no native rename operation.
 
+This ACP has no native follow-up queue or steering. A managed coordinator message
+(`follow-up`) starts a turn while the session is idle. During a turn the adapter
+holds it in an in-memory FIFO and sends it as the next native prompt once the
+current turn ends with any outcome, matching Pi RPC follow-ups. Closing the
+session or a native exit reports undelivered messages instead of dropping them
+silently. A rejected native prompt completes its turn as failed, keeps a safe
+error block in the timeline and returns the session to idle.
+
 Hermes permits 30 seconds for late MCP discovery. The Hermes startup allowance
 adds that native phase to the existing 20-second bridge request watchdog. Other
 adapter deadlines are unchanged. First paint never waits for this initialization.

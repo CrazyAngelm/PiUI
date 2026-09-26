@@ -49,6 +49,82 @@ test('unsupported mandatory settings fail before spawning', async () => {
   }
 });
 
+test('an idle follow-up is delivered immediately and steer stays unsupported', async () => {
+  const e = events(), a = await createHermesAdapter(config, e.emit);
+  try {
+    const done = e.next(v => v.type === 'turnCompleted');
+    assert.deepEqual(await a.prompt({ text: 'follow: now', mode: 'follow-up' }), { accepted: true });
+    assert.equal(a.snapshot().status, 'running');
+    assert.equal((await done).outcome, 'succeeded');
+    assert.ok(a.snapshot().blocks.some(b => b.text === 'ack follow: now'));
+    assert.equal(a.snapshot().status, 'idle');
+    await assert.rejects(a.prompt({ text: 'redirect', mode: 'steer' }), { bridgeCode: 'unsupported-method' });
+    await assert.rejects(a.prompt({ text: '  ', mode: 'follow-up' }), { bridgeCode: 'invalid-request' });
+  } finally { await a.dispose(); }
+});
+
+test('follow-ups sent during a turn run next in FIFO order without an idle gap', async () => {
+  const e = events(), a = await createHermesAdapter(config, e.emit);
+  try {
+    let completed = 0;
+    const all = e.next(v => v.type === 'turnCompleted' && ++completed === 3);
+    const firstStatus = e.values.length;
+    await a.prompt({ text: 'slow', mode: 'prompt' });
+    assert.deepEqual(await a.prompt({ text: 'follow: one', mode: 'follow-up' }), { accepted: true });
+    assert.deepEqual(await a.prompt({ text: 'follow: two', mode: 'follow-up' }), { accepted: true });
+    await assert.rejects(a.prompt({ text: 'not queued', mode: 'prompt' }), { bridgeCode: 'busy' });
+    assert.ok(!a.snapshot().blocks.some(b => b.text === 'follow: one'), 'queued until the running turn ends');
+    await all;
+    const transcript = a.snapshot().blocks.filter(b => b.kind === 'user' || b.kind === 'assistant').map(b => b.text);
+    assert.deepEqual(transcript, ['slow', 'ack slow', 'follow: one', 'ack follow: one', 'follow: two', 'ack follow: two']);
+    assert.deepEqual(e.values.filter(v => v.type === 'turnCompleted').map(v => v.outcome), ['succeeded', 'succeeded', 'succeeded']);
+    const statuses = e.values.slice(firstStatus).filter(v => v.type === 'status').map(v => v.status);
+    assert.deepEqual(statuses.filter(s => s === 'idle'), ['idle'], 'idle only after the last queued turn');
+    assert.equal(statuses.at(-1), 'idle');
+  } finally { await a.dispose(); }
+});
+
+test('a failed native prompt ends the turn, not the session, and keeps queued follow-ups', async () => {
+  const e = events(), a = await createHermesAdapter(config, e.emit);
+  try {
+    let completed = 0;
+    const both = e.next(v => v.type === 'turnCompleted' && ++completed === 2);
+    await a.prompt({ text: 'slow-reject', mode: 'prompt' });
+    await a.prompt({ text: 'follow: after failure', mode: 'follow-up' });
+    await both;
+    assert.deepEqual(e.values.filter(v => v.type === 'turnCompleted').map(v => v.outcome), ['failed', 'succeeded']);
+    assert.ok(a.snapshot().blocks.some(b => b.text === 'ack follow: after failure'));
+    const error = a.snapshot().blocks.find(b => b.kind === 'error');
+    assert.equal(error.status, 'failed');
+    assert.equal(error.safeSummary, 'Hermes could not complete session/prompt (provider, -32603).');
+    assert.ok(e.values.some(v => v.type === 'error' && v.message === error.safeSummary));
+    assert.ok(!e.values.some(v => v.type === 'status' && v.status === 'failed'));
+    assert.equal(a.snapshot().status, 'idle');
+
+    const rejected = e.next(v => v.type === 'turnCompleted' && v.outcome === 'failed');
+    await a.prompt({ text: 'reject', mode: 'prompt' });
+    await rejected;
+    assert.equal(a.snapshot().status, 'idle');
+    const recovered = e.next(v => v.type === 'turnCompleted' && v.outcome === 'succeeded');
+    await a.prompt({ text: 'hello', mode: 'prompt' });
+    await recovered;
+    assert.equal(a.snapshot().blocks.filter(b => b.kind === 'error').length, 2, 'failures stay visible');
+    assert.doesNotMatch(JSON.stringify(e.values), /SECRET-MUST-NOT-LEAK/);
+  } finally { await a.dispose(); }
+});
+
+test('dispose rejects follow-ups that were never delivered', async () => {
+  const e = events(), a = await createHermesAdapter(config, e.emit);
+  await a.prompt({ text: 'wait', mode: 'prompt' });
+  await a.prompt({ text: 'follow: never', mode: 'follow-up' });
+  const settled = e.next(v => v.type === 'turnCompleted');
+  await a.dispose();
+  await settled;
+  assert.ok(e.values.some(v => v.type === 'error' && /not delivered/.test(v.message)));
+  assert.ok(!a.snapshot().blocks.some(b => b.text === 'follow: never'));
+  assert.ok(!a.snapshot().blocks.some(b => b.kind === 'error'), 'a deliberate close is not a turn error');
+});
+
 test('native error metadata cannot become successful graph completion', async () => {
   const e = events(), a = await createHermesAdapter(config, e.emit);
   try {
