@@ -75,5 +75,6 @@ describe('bundle isolation', () => {
     expect(editor).toContain("import type { CodeEditorHandle, CodeEditorSize } from './codeMirror';");
     expect(editor).toContain("import('./codeMirror')");
     expect(editor.match(/from '\.\/codeMirror'/g)).toHaveLength(1);
-  });
+    // Reads every source file; allow for a busy machine.
+  }, 30_000);
 });

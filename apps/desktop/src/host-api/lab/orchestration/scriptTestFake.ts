@@ -84,13 +84,19 @@ function fakeRun(request: ScriptTestRequestV1): FakeRun {
   const stdin = request.stdin;
   const step = (typeof stdin.step === 'object' && stdin.step !== null ? stdin.step : {}) as Record<string, unknown>;
   const inputs = typeof stdin.inputs === 'object' && stdin.inputs !== null ? Object.keys(stdin.inputs) : [];
-  const dependencies = typeof stdin.dependencies === 'object' && stdin.dependencies !== null ? Object.keys(stdin.dependencies) : [];
+  const upstream = (typeof stdin.dependencies === 'object' && stdin.dependencies !== null ? stdin.dependencies : {}) as Record<string, { text?: unknown; data?: unknown } | null>;
+  const dependencies = Object.keys(upstream);
+  // The same summary as the run fake (runScheduler.ts), so a test predicts the run.
+  const characters = dependencies.reduce((total, id) => {
+    const value = upstream[id];
+    return total + (typeof value?.text === 'string' ? value.text : JSON.stringify(value?.data ?? '')).length;
+  }, 0);
   if (request.source.includes('lab:timeout')) return { exitCode: null, stdout: 'started\n', stderr: 'still waiting (lab:timeout)\n', timedOut: true };
   if (request.source.includes('lab:fail')) return { exitCode: 1, stdout: '', stderr: 'Error: the check failed (lab:fail)\n', timedOut: false };
   if (request.source.includes('lab:text')) {
-    return { exitCode: 0, stdout: `${String(step.name ?? 'step')}: ${dependencies.length} dependencies\n`, stderr: '', timedOut: false };
+    return { exitCode: 0, stdout: `${String(step.name ?? 'step')}: ${dependencies.length} dependencies, ${characters} characters\n`, stderr: '', timedOut: false };
   }
-  return { exitCode: 0, stdout: `${JSON.stringify({ step: step.id ?? null, inputs, dependencies, echo: stdin })}\n`, stderr: '', timedOut: false };
+  return { exitCode: 0, stdout: `${JSON.stringify({ step: step.id ?? null, inputs, dependencies, characters })}\n`, stderr: '', timedOut: false };
 }
 
 /** The host's result for a fake run, through the shared result checker. */
