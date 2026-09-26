@@ -30,6 +30,7 @@
   import HarnessMark from '../shell/HarnessMark.svelte';
   import { useWorkspace } from '../shell/context';
   import type { PipelineEditorStore } from './editorStore.svelte';
+  import NodeTypeMenu from './NodeTypeMenu.svelte';
   import ScriptEditor from './code/ScriptEditor.svelte';
 
   interface Props {
@@ -195,6 +196,9 @@
       oninput={(event) => patch({ name: event.currentTarget.value }, true)}
       onblur={() => editor.settle()}
     />
+    {#if !isRouter}
+      <NodeTypeMenu {editor} {node} />
+    {/if}
     <Menu
       align="end"
       items={[
