@@ -1289,3 +1289,84 @@ fn claude_code_native_defaults_are_incomparable_with_other_harnesses() {
     definition.profiles[1].permission_mode = PermissionMode::ReadOnly;
     assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_ok());
 }
+
+#[test]
+fn run_trigger_is_additive_frozen_and_bounded() {
+    // A run without a trigger keeps the v6.2 shape exactly.
+    let manual = Coordinator::new_run("manual", snapshot()).unwrap();
+    assert!(manual.trigger().is_none());
+    assert_eq!(manual.chain_depth(), 0);
+    let bytes = serialize_run(&manual).unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).contains("trigger"));
+    assert_eq!(deserialize_run(&bytes).unwrap(), manual);
+
+    let trigger = RunTrigger::Event {
+        schedule_id: "after-build".into(),
+        schedule_name: "After build".into(),
+        occurrence_id: "event-1".into(),
+        event: RunTriggerEvent::RunFinished,
+        source_run_id: Some("build-run".into()),
+        chain_depth: 2,
+    };
+    let run = Coordinator::new_triggered_run(
+        "chained",
+        snapshot(),
+        Default::default(),
+        Some(trigger.clone()),
+    )
+    .unwrap();
+    assert_eq!(run.trigger(), Some(&trigger));
+    assert_eq!(run.chain_depth(), 2);
+    let value = serde_json::to_value(&run).unwrap();
+    assert_eq!(
+        value["trigger"],
+        json!({"kind":"event","scheduleId":"after-build","scheduleName":"After build","occurrenceId":"event-1","event":"run-finished","sourceRunId":"build-run","chainDepth":2})
+    );
+    assert_eq!(
+        deserialize_run(&serde_json::to_vec(&value).unwrap()).unwrap(),
+        run
+    );
+    assert_eq!(
+        serde_json::to_value(RunTrigger::Chat { session_id: None }).unwrap(),
+        json!({"kind":"chat"})
+    );
+    assert_eq!(
+        RunTrigger::Schedule {
+            schedule_id: "nightly".into(),
+            schedule_name: "Nightly".into(),
+            occurrence_id: "schedule-1".into(),
+        }
+        .chain_depth(),
+        0
+    );
+
+    // Out-of-range depths, blank or control-character identifiers and
+    // unknown fields are refused both at creation and on read.
+    for invalid in [
+        RunTrigger::Event {
+            schedule_id: "loop".into(),
+            schedule_name: "Loop".into(),
+            occurrence_id: "event-2".into(),
+            event: RunTriggerEvent::FilesChanged,
+            source_run_id: None,
+            chain_depth: MAX_TRIGGER_CHAIN_DEPTH + 1,
+        },
+        RunTrigger::Chat {
+            session_id: Some(" ".into()),
+        },
+        RunTrigger::Chat {
+            session_id: Some("chat\nsession".into()),
+        },
+    ] {
+        assert!(
+            Coordinator::new_triggered_run("bad", snapshot(), Default::default(), Some(invalid))
+                .is_err()
+        );
+    }
+    let mut tampered = value.clone();
+    tampered["trigger"]["chainDepth"] = json!(0);
+    assert!(deserialize_run(&serde_json::to_vec(&tampered).unwrap()).is_err());
+    let mut unknown = value;
+    unknown["trigger"]["sessionId"] = json!("chat");
+    assert!(deserialize_run(&serde_json::to_vec(&unknown).unwrap()).is_err());
+}

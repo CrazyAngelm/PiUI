@@ -10,7 +10,7 @@ use crate::{
     CompletionOutcome, ControlledSpawnLease, DefinitionError, FailureRecord, LaunchRequest,
     MessageIntent, MessageRecord, MessageStatus, NativeExecutionReference,
     ORCHESTRATION_SCHEMA_VERSION, Revision, Run, RunDefinitionSnapshot, RunInputError, RunStatus,
-    TaskRecord, TaskStatus, UncertainResolution, UncertaintyIdentity, authorize_send,
+    RunTrigger, TaskRecord, TaskStatus, UncertainResolution, UncertaintyIdentity, authorize_send,
     authorize_spawn, resolve_run_inputs, validate_definition, validate_history_reference,
 };
 
@@ -103,10 +103,26 @@ impl Coordinator {
         definition: RunDefinitionSnapshot,
         inputs: BTreeMap<String, Value>,
     ) -> Result<Run, CoordinatorError> {
+        Self::new_triggered_run(run_id, definition, inputs, None)
+    }
+
+    /// A run that also records what started it (v6.3). The trigger is
+    /// frozen with the run and never changes afterwards.
+    pub fn new_triggered_run(
+        run_id: impl Into<String>,
+        definition: RunDefinitionSnapshot,
+        inputs: BTreeMap<String, Value>,
+        trigger: Option<RunTrigger>,
+    ) -> Result<Run, CoordinatorError> {
         validate_definition(&definition)?;
         let run_id = run_id.into();
         if run_id.trim().is_empty() {
             return Err(CoordinatorError::EmptyId { kind: "run" });
+        }
+        if trigger.as_ref().is_some_and(|trigger| !trigger.is_valid()) {
+            return Err(CoordinatorError::InvalidRunData {
+                reason: "run trigger is invalid",
+            });
         }
         let inputs = resolve_run_inputs(&definition.pipeline.inputs, &inputs)?;
         let tasks = definition
@@ -127,6 +143,7 @@ impl Coordinator {
             .collect();
         Ok(Run {
             inputs,
+            trigger,
             paused: false,
             attempts: Vec::new(),
             schema_version: ORCHESTRATION_SCHEMA_VERSION,
@@ -1329,6 +1346,15 @@ fn validate_run_data(run: &Run) -> Result<(), CoordinatorError> {
         });
     }
     validate_definition(&run.definition)?;
+    if run
+        .trigger
+        .as_ref()
+        .is_some_and(|trigger| !trigger.is_valid())
+    {
+        return Err(CoordinatorError::InvalidRunData {
+            reason: "run trigger is invalid",
+        });
+    }
     let step_ids: BTreeSet<&str> = run
         .definition
         .pipeline

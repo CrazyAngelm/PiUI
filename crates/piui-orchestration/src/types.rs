@@ -447,12 +447,116 @@ impl AgentRequestRecord {
     }
 }
 
+/// Most event hops (a run finishing, files changing) one chain may take
+/// from a person's action or a clock (v6.3). A trigger that would go
+/// further is recorded as skipped instead of starting a run.
+pub const MAX_TRIGGER_CHAIN_DEPTH: u8 = 3;
+/// Upper bound on any identifier or name stored in a run trigger.
+const MAX_TRIGGER_TEXT_BYTES: usize = 512;
+
+/// The event kind an event automation reacted to (v6.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunTriggerEvent {
+    RunFinished,
+    FilesChanged,
+}
+
+/// Who or what started a run (v6.3, additive). Absent for runs a person
+/// started from the editor or the runs screen. Recorded by the host once at
+/// creation; it is display and loop-protection metadata, never authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum RunTrigger {
+    /// A time-based automation occurrence.
+    Schedule {
+        schedule_id: String,
+        schedule_name: String,
+        occurrence_id: String,
+    },
+    /// An event automation: `chain_depth` counts event hops from the last
+    /// person or clock (1 for the first automatic follow-up).
+    Event {
+        schedule_id: String,
+        schedule_name: String,
+        occurrence_id: String,
+        event: RunTriggerEvent,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_run_id: Option<String>,
+        chain_depth: u8,
+    },
+    /// A person started it from a chat (`/run` or the command palette).
+    Chat {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+    },
+}
+
+impl RunTrigger {
+    /// Event hops behind this run; runs started by a person or a clock are 0.
+    pub fn chain_depth(&self) -> u8 {
+        match self {
+            Self::Event { chain_depth, .. } => *chain_depth,
+            Self::Schedule { .. } | Self::Chat { .. } => 0,
+        }
+    }
+
+    /// The automation that started this run, if any.
+    pub fn schedule_id(&self) -> Option<&str> {
+        match self {
+            Self::Schedule { schedule_id, .. } | Self::Event { schedule_id, .. } => {
+                Some(schedule_id)
+            }
+            Self::Chat { .. } => None,
+        }
+    }
+
+    /// Bounded, non-empty identifiers and a depth within the chain limit.
+    pub fn is_valid(&self) -> bool {
+        let text = |value: &str| {
+            !value.trim().is_empty()
+                && value.len() <= MAX_TRIGGER_TEXT_BYTES
+                && !value.chars().any(char::is_control)
+        };
+        match self {
+            Self::Schedule {
+                schedule_id,
+                schedule_name,
+                occurrence_id,
+            } => text(schedule_id) && text(schedule_name) && text(occurrence_id),
+            Self::Event {
+                schedule_id,
+                schedule_name,
+                occurrence_id,
+                source_run_id,
+                chain_depth,
+                ..
+            } => {
+                text(schedule_id)
+                    && text(schedule_name)
+                    && text(occurrence_id)
+                    && source_run_id.as_deref().is_none_or(text)
+                    && (1..=MAX_TRIGGER_CHAIN_DEPTH).contains(chain_depth)
+            }
+            Self::Chat { session_id } => session_id.as_deref().is_none_or(text),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Run {
     /// Validated run inputs frozen at creation (v6.1, additive). Task data only.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub(crate) inputs: std::collections::BTreeMap<String, serde_json::Value>,
+    /// What started this run (v6.3, additive); absent for manual runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) trigger: Option<RunTrigger>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) paused: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -473,6 +577,13 @@ pub struct Run {
 impl Run {
     pub fn inputs(&self) -> &std::collections::BTreeMap<String, serde_json::Value> {
         &self.inputs
+    }
+    pub fn trigger(&self) -> Option<&RunTrigger> {
+        self.trigger.as_ref()
+    }
+    /// Event hops behind this run (0 unless an event automation started it).
+    pub fn chain_depth(&self) -> u8 {
+        self.trigger.as_ref().map_or(0, RunTrigger::chain_depth)
     }
     pub fn paused(&self) -> bool {
         self.paused
