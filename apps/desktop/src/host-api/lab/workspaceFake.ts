@@ -7,6 +7,7 @@ import type {
   WorkspaceCatalog, WorkspaceCommand, WorkspaceHistoryRequestV1, WorkspaceHistoryResultV1, WorkspaceLifecycleCommand,
   WorkspaceLifecycleResult, WorkspaceModel, WorkspaceResult,
 } from './labContracts';
+import { answerMatchesForm } from '../approvalForms';
 import { NativeRejection, workspaceFailure } from './labErrors';
 import {
   authorizeLive, hasControl, normalizedTitle, requireLive, requireRecord, validateModel, validText, validToken,
@@ -208,6 +209,10 @@ function workspaceCommand(runtime: LabSessions, command: WorkspaceCommand): Work
       if (approval === undefined || !approval.decisions.includes(command.decision)) throw workspaceFailure('APPROVAL_EXPIRED');
       if (typeof command.text === 'string' && hasControl(command.text)) throw workspaceFailure('INVALID_ARGUMENT');
       if (approval.kind === 'input' && command.decision === 'approve-once' && typeof command.text !== 'string') {
+        throw workspaceFailure('RUNTIME_FAILED');
+      }
+      // The adapter rejects a form answer that does not match its fields; the request stays pending.
+      if (approval.form && command.decision === 'approve-once' && !answerMatchesForm(approval.form, command.text)) {
         throw workspaceFailure('RUNTIME_FAILED');
       }
       native(() => runtime.respond(record, command.requestId, command.decision));

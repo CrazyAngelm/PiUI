@@ -141,6 +141,49 @@ describe('UI Lab workspace host', () => {
     expect(done.blocks.at(-1)?.text).toContain('declined');
   });
 
+  it('seeds an MCP form request whose answer is checked like the adapter does', async () => {
+    const host = labHost();
+    const id = sessionId(host, 'File an issue for the broken docs link');
+    const before = await snapshot(host, id);
+    expect(before.session).toMatchObject({ harness: 'codex', status: 'running' });
+    const [approval] = before.approvals;
+    expect(approval).toMatchObject({ kind: 'input', title: 'MCP server request', decisions: ['approve-once', 'deny', 'cancel'] });
+    expect(approval?.form).toMatchObject({ server: 'lab-issues', limitation: 'optional-fields-omitted' });
+    expect(approval?.form?.fields.map((field) => field.type)).toEqual(['text', 'choice', 'number', 'boolean', 'text']);
+    const respond = (text: string | undefined) => command(host, {
+      type: 'respond', sessionId: id, requestId: approval?.id, decision: 'approve-once', ...(text === undefined ? {} : { text }),
+    });
+    for (const text of [
+      undefined,
+      JSON.stringify({ 'field-1': 'Bug', 'field-2': 'choice-2' }),
+      JSON.stringify({ 'field-1': 'Broken link', 'field-2': 'normal' }),
+      JSON.stringify({ 'field-1': 'Broken link', 'field-2': 'choice-2', 'field-3': 41 }),
+      JSON.stringify({ 'field-1': 'Broken link', 'field-2': 'choice-2', title: 'native name' }),
+    ]) {
+      expect(await rejection(respond(text)), text).toMatchObject({ code: 'RUNTIME_FAILED' });
+    }
+    expect((await snapshot(host, id)).approvals).toHaveLength(1);
+    await respond(JSON.stringify({ 'field-1': 'Broken link in the harness guide', 'field-2': 'choice-1', 'field-3': 2, 'field-4': true }));
+    await vi.advanceTimersByTimeAsync(10_000);
+    const after = await snapshot(host, id);
+    expect(after.approvals).toEqual([]);
+    expect(after.session.status).toBe('idle');
+    expect(after.blocks.find((block) => block.id === 'issue-triage-create')).toMatchObject({ status: 'complete', title: 'lab-issues.create_issue' });
+    expect(after.blocks.at(-1)?.text).toContain('LAB-142');
+  });
+
+  it('declining the seeded MCP form request skips the MCP tool', async () => {
+    const host = labHost();
+    const id = sessionId(host, 'File an issue for the broken docs link');
+    const [approval] = (await snapshot(host, id)).approvals;
+    await command(host, { type: 'respond', sessionId: id, requestId: approval?.id, decision: 'deny' });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const after = await snapshot(host, id);
+    expect(after.approvals).toEqual([]);
+    expect(after.blocks.some((block) => block.id === 'issue-triage-create')).toBe(false);
+    expect(after.blocks.at(-1)?.text).toContain('did not file');
+  });
+
   it('continues the seeded approval session and then drains its queued follow-up', async () => {
     const host = labHost();
     const id = sessionId(host, 'Fix flaky scheduler test');

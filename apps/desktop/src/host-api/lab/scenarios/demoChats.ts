@@ -254,6 +254,76 @@ function audit(): LabSeed['sessions'][number] {
   });
 }
 
+const TRIAGE_PROMPT = 'The harness guide links to a page that no longer exists. Find it and file an issue in our tracker.';
+const TRIAGE_THINKING = 'Search the docs for the dead link first, then use the lab-issues MCP server to file the issue with the exact location.';
+const TRIAGE_GREP_COMMAND = 'rg -n "harness-setup" docs';
+const TRIAGE_GREP_OUTPUT = 'docs/HARNESS_CATALOGS.md:42:See [harness setup](./harness-setup.md) for sign-in steps.';
+const TRIAGE_FINDING = 'The dead link is in `docs/HARNESS_CATALOGS.md` line 42: it points to `harness-setup.md`, which was removed. I will file it in lab-issues.';
+const TRIAGE_FILED = 'I filed **LAB-142** in lab-issues with the exact location (`docs/HARNESS_CATALOGS.md:42`) and a suggested fix: link to the Settings → Harnesses section instead.';
+const TRIAGE_DECLINED = 'Understood, I did not file an issue. The dead link is `docs/HARNESS_CATALOGS.md:42`; replacing `harness-setup.md` with the Settings → Harnesses section fixes it.';
+
+/** A Codex chat paused on an MCP form request: accepting files the issue, declining skips it. */
+function issueTriage(): { record: LabSeed['sessions'][number]; activity: SeedActivity } {
+  const id = demoSessionId('issue-triage');
+  const transcript = new TranscriptBuilder('codex', 'issue-triage', LAB_BASE_TIME - 7 * MINUTE)
+    .user(TRIAGE_PROMPT)
+    .thinking(TRIAGE_THINKING)
+    .search(TRIAGE_GREP_COMMAND, TRIAGE_GREP_OUTPUT)
+    .assistant(TRIAGE_FINDING);
+  const context = { harness: 'codex' as const, sessionId: id, turn: 1, permissionMode: 'native' as const, cwd: DEMO_FOLDERS.piui };
+  const random = createRandom('issue-triage-approval');
+  const tool: DesktopTimelineBlock = {
+    id: 'issue-triage-create', kind: 'tool', label: 'MCP tool', toolName: 'create_issue', title: 'lab-issues.create_issue',
+    collapsible: true, status: 'streaming', text: 'Arguments: title: Broken link in the harness guide, priority: normal',
+  };
+  const answer: DesktopTimelineBlock = { id: 'issue-triage-answer', kind: 'assistant', label: 'Codex', status: 'complete' };
+  const approvalId = 'lab-approval-issue-triage';
+  // The bridge's projection of an MCP elicitation: opaque field ids, native labels.
+  const step: ApprovalStep = {
+    kind: 'approval',
+    approval: {
+      kind: 'input',
+      title: 'MCP server request',
+      description: 'Create an issue for the broken link in the lab-issues tracker?',
+      decisions: ['approve-once', 'deny', 'cancel'],
+      form: {
+        server: 'lab-issues',
+        fields: [
+          { type: 'text', id: 'field-1', label: 'Title', required: true, minLength: 5, maxLength: 80, default: 'Broken link in the harness guide' },
+          {
+            type: 'choice', id: 'field-2', label: 'Priority', required: true, default: 'choice-2',
+            options: [{ id: 'choice-1', label: 'Urgent' }, { id: 'choice-2', label: 'Normal' }, { id: 'choice-3', label: 'Low' }],
+          },
+          { type: 'number', id: 'field-3', label: 'Estimate (hours)', description: 'Rough effort for the fix.', required: false, integer: true, minimum: 1, maximum: 40 },
+          { type: 'boolean', id: 'field-4', label: 'Notify the docs team', required: false, default: true },
+          { type: 'text', id: 'field-5', label: 'Reporter email', required: false, format: 'email' },
+        ],
+        limitation: 'optional-fields-omitted',
+      },
+    },
+    approved: [
+      { kind: 'block', block: tool },
+      { kind: 'wait', ms: 600 },
+      { kind: 'block', block: { ...tool, status: 'complete', text: `${tool.text ?? ''}\nCreated issue LAB-142.` } },
+      ...streamSteps(answer, TRIAGE_FILED, random, 'delta', [25, 60]),
+      usageStep(context, random),
+      { kind: 'end', outcome: 'succeeded' },
+    ],
+    declined: [
+      ...streamSteps(answer, TRIAGE_DECLINED, random, 'delta', [25, 60]),
+      usageStep(context, random),
+      { kind: 'end', outcome: 'succeeded' },
+    ],
+  };
+  const record = sessionRecord({
+    id, workspaceId: DEMO_PROJECTS.piui, harness: 'codex', title: 'File an issue for the broken docs link',
+    blocks: transcript.build(), updatedAt: seededIso(-6 * MINUTE), model: model('codex', 'openai-lab', 'gpt-lab-5-codex'),
+    thinkingLevel: 'medium', serviceTier: 'standard', live: 'running',
+    approvals: [{ ...step.approval, id: approvalId, sessionId: id }],
+  });
+  return { record, activity: { kind: 'paused-approval', sessionId: id, approvalId, step } };
+}
+
 /** A live Claude Code chat on the user's subscription, near its usage limit. */
 function keymap(): LabSeed['sessions'][number] {
   const transcript = new TranscriptBuilder('claude-code', 'keymap', LAB_BASE_TIME - 26 * MINUTE)
@@ -271,15 +341,16 @@ function keymap(): LabSeed['sessions'][number] {
   });
 }
 
-/** Eleven chat sessions across all five harnesses and every block kind. */
+/** Twelve chat sessions across all five harnesses, every block kind and an MCP form request. */
 export function demoChats(): { sessions: LabSeed['sessions']; activity: SeedActivity[] } {
   const pending = scheduler();
   const streaming = renderer();
+  const triage = issueTriage();
   return {
     sessions: [
       lisbon(), lifetimes(), transport(), pending.record, streaming.record,
-      crash(), compaction(), storyboard(), renderFarm(), audit(), keymap(),
+      crash(), compaction(), storyboard(), renderFarm(), audit(), keymap(), triage.record,
     ],
-    activity: [pending.activity, streaming.activity],
+    activity: [pending.activity, streaming.activity, triage.activity],
   };
 }
