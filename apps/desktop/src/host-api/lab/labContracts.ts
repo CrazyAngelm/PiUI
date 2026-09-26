@@ -48,6 +48,7 @@ export type {
   NativeExecutionReference,
   NativeHistoryReference,
   OrchestrationRunV6,
+  PinnedOutput,
   PipelineDefinition,
   PipelineInput,
   PipelineStep,

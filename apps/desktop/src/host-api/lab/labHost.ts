@@ -10,6 +10,7 @@ import { LAB_SCENARIOS, wire, type LabScenarioName, type LabState } from './labS
 import { orchestrationHandlers } from './orchestration/orchestrationFake';
 import { LabRunScheduler } from './orchestration/runScheduler';
 import { scriptTestHandlers } from './orchestration/scriptTestFake';
+import { runDebuggingHandlers } from './orchestration/runDebuggingFake';
 import { buildSeed, type SeedActivity } from './scenarios';
 import { LabSessions } from './sessionRuntime';
 import { ambientSegment } from './turnScripts';
@@ -99,6 +100,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     ...classicHandlers(runtime),
     ...orchestrationHandlers(runtime, scheduler, bus),
     ...scriptTestHandlers(runtime),
+    ...runDebuggingHandlers(runtime),
   };
   startActivity(seed.activity, runtime, scheduler, options.ambient ?? true);
 

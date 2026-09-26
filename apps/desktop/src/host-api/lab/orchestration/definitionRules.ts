@@ -6,6 +6,8 @@ import { CLAUDE_SIGN_IN_MESSAGE } from '../catalogFake';
 import type { LabOrchestrationWorkspace } from '../labState';
 import { pipelineInputIssues, reviewLimitValid } from '../../runInputs';
 import { executorAuthorityIssue, isScriptStep, LLM_READ_ONLY_UNSUPPORTED, llmProfileIssue, stepExecutorIssue } from '../../stepExecutors';
+import { pipelinePinsIssue } from '../../pinnedData';
+import type { PinnedOutput } from '../labContracts';
 
 /**
  * Definition rules from `piui-orchestration/validation.rs`, the per-kind
@@ -123,7 +125,7 @@ function acyclic(steps: readonly PipelineStep[]): boolean {
   return visited === steps.length;
 }
 
-/** `validate_pipeline_declarations`: run input declarations, review loop bounds and step executors. */
+/** `validate_pipeline_declarations`: run input declarations, review loop bounds, step executors and pinned data. */
 export function pipelineDeclarationIssue(pipeline: PipelineDefinition): string | undefined {
   if (pipelineInputIssues(pipeline.inputs).length > 0) return 'run inputs';
   for (const step of pipeline.steps) {
@@ -131,7 +133,7 @@ export function pipelineDeclarationIssue(pipeline: PipelineDefinition): string |
     const executor = stepExecutorIssue(step);
     if (executor !== undefined) return executor;
   }
-  return undefined;
+  return pipelinePinsIssue(pipeline.steps)?.reason;
 }
 
 /** `validate_definition`: the whole snapshot a run or graph save would capture. */
@@ -344,16 +346,34 @@ export function normalizePipeline(pipeline: PipelineDefinition): PipelineDefinit
   }));
   return {
     ...definition,
-    steps: dropNulls(pipeline.steps).map((step) => {
-      const { inputBindings, routeGates, resultFields, requireApproval, ...rest } = step;
+    steps: pipeline.steps.map((raw) => {
+      // Pinned results are JSON values: their nulls are kept, like serde.
+      const { pinnedOutput, ...other } = raw;
+      const { inputBindings, routeGates, resultFields, requireApproval, ...rest } = dropNulls(other);
       return {
         ...rest,
         ...(inputBindings?.length ? { inputBindings } : {}),
         ...(routeGates?.length ? { routeGates } : {}),
         ...(resultFields?.length ? { resultFields } : {}),
         ...(requireApproval ? { requireApproval } : {}),
+        ...(pinnedOutput ? { pinnedOutput: normalizePinned(pinnedOutput) } : {}),
       };
     }),
     ...(declared.length ? { inputs: declared } : {}),
+  };
+}
+
+/** `PinnedOutput` as the host stores it: `null` options absent, `truncated` only when set. */
+function normalizePinned(pinned: PinnedOutput): PinnedOutput {
+  const nullable = pinned as unknown as Record<string, unknown>;
+  const text = nullable.text;
+  const data = nullable.data;
+  const source = nullable.sourceRunId;
+  return {
+    ...(typeof text === 'string' ? { text } : {}),
+    ...(pinned.truncated === true ? { truncated: true } : {}),
+    ...(data !== undefined && data !== null ? { data: data as Record<string, unknown> } : {}),
+    pinnedAt: pinned.pinnedAt,
+    ...(typeof source === 'string' ? { sourceRunId: source } : {}),
   };
 }

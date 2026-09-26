@@ -86,6 +86,8 @@ export interface LabOrchestrationWorkspace {
   launchCommands: StoredDefinition<LaunchCommandReference>[];
   schedules: LabSchedule[];
   runs: LabRun[];
+  /** Runs hidden from the default list (run debugging v1); absent means none. */
+  archivedRunIds?: Set<string>;
 }
 
 export interface LabState {
