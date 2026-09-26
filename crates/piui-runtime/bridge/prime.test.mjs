@@ -216,8 +216,18 @@ test("Prime filters one skill per session and rejects unsupported MCP isolation"
 test("Prime composer reflects SDK capability and refuses idle steer", async () => {
   const adapter = await createPrimeAdapter(await config(), () => {});
   try {
-    assert.deepEqual(await adapter.composerCapabilities(), {steer:true, compact:false});
+    assert.deepEqual(await adapter.composerCapabilities(), {steer:true, compact:false, images:false});
     await assert.rejects(adapter.prompt({text:"cannot start a turn",mode:"steer"}), {bridgeCode:"no-active-turn"});
     await assert.rejects(adapter.compact(), {bridgeCode:"unsupported-method"});
+  } finally { await adapter.dispose(); }
+});
+
+test("Prime refuses images before anything reaches the SDK and has no native catalog", async () => {
+  const adapter = await createPrimeAdapter(await config(), () => {});
+  try {
+    const before = (await adapter.snapshot()).blocks.length;
+    await assert.rejects(adapter.prompt({text:"look",mode:"prompt",images:[{mimeType:"image/png",data:"iVBORw0KGgo="}]}), {bridgeCode:"unsupported-input"});
+    assert.equal((await adapter.snapshot()).blocks.length, before, "no prompt was admitted");
+    assert.deepEqual(await adapter.composerCatalog(), {commands:[], skills:[]});
   } finally { await adapter.dispose(); }
 });

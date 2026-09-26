@@ -72,7 +72,11 @@ function undeclared(schemaIn, value, path, root, out) {
       })
       : undefined;
     const branch = tagged('method') ?? tagged('type') ?? branches.find((candidate) => branchMatches(candidate, root, value));
-    if (branch) undeclared(branch, value, path, root, out);
+    // An object schema can declare fields beside its union (the image input's
+    // `type`/`detail` beside its `url` | `fileId` alternatives): both count.
+    const chosen = branch && schema.properties ? resolve(branch, root) : undefined;
+    if (chosen) undeclared({ ...chosen, properties: { ...schema.properties, ...(chosen.properties || {}) } }, value, path, root, out);
+    else if (branch) undeclared(branch, value, path, root, out);
     return out;
   }
   if (Array.isArray(value)) {
@@ -96,10 +100,13 @@ function undeclared(schemaIn, value, path, root, out) {
 }
 const selfTest = undeclared(clientRequests, {
   method: 'turn/start', id: 'self', params: {
-    threadId: 't', bogusTop: true, input: [{ type: 'text', text: 'x', text_elements: [], bogusInput: 1 }],
+    threadId: 't', bogusTop: true, input: [
+      { type: 'text', text: 'x', text_elements: [], bogusInput: 1 },
+      { type: 'image', url: 'data:image/png;base64,AA==', bogusImage: 1 },
+    ],
   },
 }, '', clientRequests, []);
-if (selfTest.sort().join(',') !== '.params.bogusTop,.params.input[0].bogusInput') {
+if (selfTest.sort().join(',') !== '.params.bogusTop,.params.input[0].bogusInput,.params.input[1].bogusImage') {
   throw new Error(`undeclared-field self test failed: ${selfTest.join(',')}`);
 }
 
@@ -242,6 +249,14 @@ await flow('mcp-elicitation-edge', ['--mcp-elicitation-edge'], settle);
 await flow('mcp-elicitation-interrupt', ['--hold-turn', '--mcp-elicitation-turn'], async (adapter) => {
   await adapter.prompt({ text: 'elicitation', mode: 'prompt' });
   await settle();
+  await adapter.interrupt();
+  await settle();
+});
+// Composer inputs: image and skill input items on turn/start and turn/steer.
+await flow('images-and-skills', ['--skills', '--hold-turn'], async (adapter) => {
+  await adapter.composerCatalog();
+  await adapter.prompt({ text: 'Look with $test-runner', mode: 'prompt', images: [{ mimeType: 'image/png', data: 'iVBORw0KGgo=' }] });
+  await adapter.prompt({ text: 'and this', mode: 'steer', images: [{ mimeType: 'image/jpeg', data: '/9j/4A==' }] });
   await adapter.interrupt();
   await settle();
 });

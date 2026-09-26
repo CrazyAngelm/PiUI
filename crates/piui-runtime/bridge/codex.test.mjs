@@ -20,7 +20,7 @@ const config = {
 test("composer commands use native compaction and steer without inventing a queued native turn", async () => {
   const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--hold-turn"] }, () => {});
   try {
-    assert.deepEqual(adapter.composerCapabilities(), { steer: true, compact: true });
+    assert.deepEqual(await adapter.composerCapabilities(), { steer: true, compact: true, images: true });
     await adapter.compact();
     await waitFor(() => adapter.snapshot().blocks.some(block => block.kind === "compaction") && adapter.snapshot().status === "idle");
     await adapter.prompt({ text: "first", mode: "prompt" });
@@ -894,4 +894,52 @@ test("live: the installed Codex app-server passes the bridge handshake (initiali
   t.diagnostic(`installed app-server product token: ${product}`);
   assert.ok(accepted, "the bridge must accept the installed version before any thread request");
   assert.deepEqual(forwarded.slice(0, 2), ["initialize", "initialized"]);
+});
+
+const PNG = { mimeType: "image/png", data: "iVBORw0KGgo=" };
+
+test("images reach Codex as data URL input items and show as markers", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter(config, (event) => events.push(event));
+  try {
+    for (const invalid of [[{ mimeType: "image/svg+xml", data: "PHN2Zz4=" }], [{ mimeType: "image/png", data: "not base64!" }], Array.from({ length: 7 }, () => PNG)]) {
+      await assert.rejects(adapter.prompt({ text: "look", mode: "prompt", images: invalid }), { bridgeCode: "invalid-request" });
+    }
+    await adapter.prompt({ text: "look", mode: "prompt", images: [PNG] });
+    await waitFor(() => adapter.snapshot().title.startsWith("turn/start:"));
+    assert.equal(adapter.snapshot().title, "turn/start:text:look|image:data:image/png;base64,iVBORw0KGgo=");
+    const user = await waitFor(() => adapter.snapshot().blocks.find((block) => block.kind === "user"));
+    assert.equal(user.text, "look\n\n[image]");
+    assert.doesNotMatch(JSON.stringify(adapter.snapshot().blocks), /iVBORw0KGgo/);
+  } finally { await adapter.dispose(); }
+});
+
+test("a text-only Codex model refuses images before any turn starts", async () => {
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--text-only-model"] }, () => {});
+  try {
+    assert.equal((await adapter.composerCapabilities()).images, false);
+    const title = adapter.snapshot().title;
+    await assert.rejects(adapter.prompt({ text: "look", mode: "prompt", images: [PNG] }), { bridgeCode: "unsupported-input" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(adapter.snapshot().title, title, "no turn was started");
+    assert.equal(adapter.snapshot().status, "idle");
+  } finally { await adapter.dispose(); }
+});
+
+test("$ mentions of an enabled skill carry the native skill input item", async () => {
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--skills"] }, () => {});
+  try {
+    assert.deepEqual(await adapter.composerCatalog(), {
+      commands: [],
+      skills: [
+        { name: "test-runner", description: "Run the tests", mention: "$test-runner" },
+        { name: "twin", description: "One", mention: "$twin" },
+        { name: "twin", description: "Two", mention: "$twin" },
+      ],
+    });
+    await adapter.prompt({ text: "Please $test-runner, then $twin and $test-runner-extra", mode: "prompt" });
+    await waitFor(() => adapter.snapshot().title.startsWith("turn/start:"));
+    // The ambiguous `twin` and the unknown `test-runner-extra` stay plain text.
+    assert.equal(adapter.snapshot().title, "turn/start:text:Please $test-runner, then $twin and $test-runner-extra|skill:test-runner@/skills/test-runner/SKILL.md");
+  } finally { await adapter.dispose(); }
 });

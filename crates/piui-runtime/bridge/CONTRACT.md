@@ -79,6 +79,48 @@ outcome, without an intermediate idle. Dispose or native exit reports undelivere
 items with a safe `error` event. A failed native prompt emits
 `turnCompleted:"failed"`, keeps an `error` block visible and returns to idle.
 
+### Composer inputs: images, native commands and skills
+
+- `composerCapabilities()` adds `images:boolean`: the harness protocol and the
+  *current* model accept image input. Absent means `false` (older adapters).
+- `prompt({text,mode,images?})`: `images` is at most 6 `{mimeType,data}` with
+  `mimeType` one of `image/png|image/jpeg|image/gif|image/webp` and base64
+  `data` the host sniffed and bounded (5,000,000 bytes each). Malformed images
+  reject with `invalid-request`; images the harness or model cannot take reject
+  the whole prompt with `unsupported-input` before anything is written, so an
+  image is never dropped silently. The host re-checks `images` before it sends
+  a queued message (the model may have changed) and keeps the message queued.
+- User blocks list every image a message carried as one `[image]` line after
+  its text (live prompts, echoes and resumed history alike). Image bytes, data
+  URLs and local paths never reach a block, event or log.
+- `composerCatalog()` returns `{commands:[{name,description?,hint?,source}],
+  skills:[{name,description?,mention}]}`. `commands` are slash commands the
+  harness runs itself when a prompt starts with `/<name>`; `source` is
+  `command|extension|prompt|skill`. `skills` are mentions the harness resolves
+  from its own syntax (`mention` is the exact text). No native path, location
+  or id is included; the host bounds, sanitizes and drops ambiguous names.
+  An adapter without discovery returns empty lists. PiUI never executes them.
+- Per harness:
+  - Pi: `images` from `get_state` `model.input` (`image`); RPC `prompt`,
+    `steer` and `follow_up` carry `images:[{type:"image",data,mimeType}]`.
+    Commands from `get_commands` (`extension`, `prompt`, `skill` — skills are
+    `/skill:<name>`); `skills` is empty.
+  - Claude Code: `images:true`; the user message content is
+    `[{type:"text"},{type:"image",source:{type:"base64",media_type,data}}…]`.
+    Commands from the `initialize` `commands` (name, description,
+    `argumentHint`) and `commands_changed`; Claude has no `$` syntax.
+  - Codex: `images` from `model/list` `inputModalities` of the current model;
+    `turn/start` and `turn/steer` input adds `{type:"image",url:"data:<mime>;base64,<data>"}`.
+    No slash-command catalog (the TUI expands custom prompts itself). Skills
+    from `skills/list` (enabled) with `mention:"$<name>"`; a prompt that
+    mentions `$<name>` of exactly one enabled skill also gets the documented
+    `{type:"skill",name,path}` input item.
+  - Hermes (ACP): `images` from `initialize` `agentCapabilities.promptCapabilities.image`;
+    `session/prompt` adds `{type:"image",mimeType,data}` blocks (queued
+    follow-ups keep theirs). Commands from `available_commands_update`
+    (`input.hint` → `hint`). A generic ACP adapter follows the same mapping.
+  - Prime: `images:false` (the SDK connection takes text), empty catalog.
+
 
 ## Codex (`codex.mjs`, harness `codex`)
 

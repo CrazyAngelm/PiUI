@@ -138,3 +138,44 @@ test('native error metadata cannot become successful graph completion', async ()
     }
   } finally { await a.dispose(); }
 });
+
+const PNG = { mimeType: 'image/png', data: 'iVBORw0KGgo=' };
+
+test('images reach Hermes as ACP image blocks when the agent declares image input', async () => {
+  const e = events(), a = await createHermesAdapter(config, e.emit);
+  try {
+    assert.deepEqual(a.composerCapabilities(), { steer: false, compact: false, images: true });
+    const done = e.next(v => v.type === 'turnCompleted');
+    await a.prompt({ text: 'look', mode: 'prompt', images: [PNG] });
+    assert.equal((await done).outcome, 'succeeded');
+    const texts = a.snapshot().blocks.map(b => b.text);
+    assert.ok(texts.includes('look\n\n[image]'));
+    assert.ok(texts.includes('images:image/png/iVBORw0KGgo='));
+    // A follow-up keeps its images while it waits for the running turn.
+    const first = e.next(v => v.type === 'turnCompleted');
+    await a.prompt({ text: 'slow', mode: 'prompt' });
+    await a.prompt({ text: 'and this', mode: 'follow-up', images: [PNG, PNG] });
+    await first;
+    await e.next(v => v.type === 'turnCompleted');
+    assert.ok(a.snapshot().blocks.some(b => b.text === 'and this\n\n[image]\n[image]'));
+    assert.ok(a.snapshot().blocks.some(b => b.text === 'images:image/png/iVBORw0KGgo=,image/png/iVBORw0KGgo='));
+    await assert.rejects(a.prompt({ text: 'bad', mode: 'prompt', images: [{ mimeType: 'image/bmp', data: 'Qk0=' }] }), { bridgeCode: 'invalid-request' });
+  } finally { await a.dispose(); }
+});
+
+test('an agent without image input refuses images and lists its ACP commands', async () => {
+  const a = await createHermesAdapter({ ...config, runtimeArgs: [...config.runtimeArgs, '--no-image'] }, () => {});
+  try {
+    assert.equal(a.composerCapabilities().images, false);
+    await assert.rejects(a.prompt({ text: 'look', mode: 'prompt', images: [PNG] }), { bridgeCode: 'unsupported-input' });
+    assert.equal(a.snapshot().status, 'idle', 'nothing was sent');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.deepEqual(a.composerCatalog(), {
+      commands: [
+        { name: 'help', description: 'List available commands', source: 'command' },
+        { name: 'model', description: 'Show current model and provider, or switch models', hint: 'model name to switch to', source: 'command' },
+      ],
+      skills: [],
+    });
+  } finally { await a.dispose(); }
+});

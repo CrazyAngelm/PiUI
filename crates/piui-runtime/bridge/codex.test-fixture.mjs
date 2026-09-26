@@ -22,6 +22,18 @@ const settingsIndex = process.argv.indexOf("--expect-settings");
 const expectedSettings = settingsIndex >= 0 ? JSON.parse(process.argv[settingsIndex + 1]) : undefined;
 const unknownItemsFixture = process.argv.includes("--unknown-items");
 const toolItemsFixture = process.argv.includes("--tool-items");
+const textOnlyModel = process.argv.includes("--text-only-model");
+const skillsFixture = process.argv.includes("--skills");
+// Rich input (images, skill items) is echoed as the native user message and
+// summarized in the thread name so tests can read what reached turn/start.
+const echoRichInput = (method, input) => {
+  if (!Array.isArray(input) || input.every((item) => item.type === "text")) return;
+  const summary = input.map((item) => item.type === "image" ? `image:${item.url}` : item.type === "skill" ? `skill:${item.name}@${item.path}` : `${item.type}:${item.text}`).join("|");
+  send({ method: "thread/name/updated", params: { threadId, threadName: `${method}:${summary}` } });
+  const item = { type: "userMessage", id: `user-${method}`, content: input };
+  send({ method: "item/started", params: { threadId, turnId: "turn-fixture", startedAtMs: 1, item } });
+  send({ method: "item/completed", params: { threadId, turnId: "turn-fixture", completedAtMs: 2, item } });
+};
 // MCP elicitations (`mcpServer/elicitation/request`, ids 960-979). Every
 // client reply is echoed back as an agent message `reply-<id>` whose text is
 // the exact reply JSON, so tests can read all of them from the snapshot.
@@ -335,6 +347,7 @@ input.on("line", (line) => {
       send({ id: message.id, error: { code: -32602, message: "turn settings not forwarded" } }); return;
     }
     if (poolFixture && message.params.input?.[0]?.text === 'crash fixture') { process.exit(1); }
+    echoRichInput("turn/start", message.params.input);
     const responseText = poolFixture ? message.params.input?.[0]?.text : "hello";
     send({ id: message.id, result: { turn: { id: "turn-fixture", status: "inProgress", items: [] } } });
     send({ method: "turn/started", params: { threadId, turn: { id: "turn-fixture", status: "inProgress", items: [] } } });
@@ -359,7 +372,12 @@ input.on("line", (line) => {
   } else if (message.method === "thread/unsubscribe") {
     send({id:message.id,result:{status:'unsubscribed'}});
   } else if (message.method === "skills/list") {
-    send({ id: message.id, result: { data: [{ skills: [{ name: "Review", path: "/skills/review/SKILL.md", enabled: false }] }] } });
+    const extra = skillsFixture ? [
+      { name: "test-runner", description: "Runs the whole suite", interface: { shortDescription: "Run the tests" }, path: "/skills/test-runner/SKILL.md", enabled: true, scope: "repo" },
+      { name: "twin", description: "One", path: "/skills/a/twin/SKILL.md", enabled: true, scope: "user" },
+      { name: "twin", description: "Two", path: "/skills/b/twin/SKILL.md", enabled: true, scope: "repo" },
+    ] : [];
+    send({ id: message.id, result: { data: [{ skills: [{ name: "Review", path: "/skills/review/SKILL.md", enabled: false }, ...extra] }] } });
   } else if (message.method === "config/read") {
     send({ id: message.id, result: { config: { mcp_servers: { docs: { enabled: true, env: { TOKEN: "SECRET-MUST-NOT-LEAK" } } } } } });
   } else if (message.method === "mcpServerStatus/list") {
@@ -374,13 +392,14 @@ input.on("line", (line) => {
       ] : [];
       send({ id: message.id, result: { data, nextCursor: null } }); return;
     }
-    send({ id: message.id, result: { data: [{ id: "fixture-model", model: "fixture-model", displayName: "Fixture Model", hidden: false, supportedReasoningEfforts: [{ reasoningEffort: "low" }] }], nextCursor: null } });
+    send({ id: message.id, result: { data: [{ id: "fixture-model", model: "fixture-model", displayName: "Fixture Model", hidden: false, supportedReasoningEfforts: [{ reasoningEffort: "low" }], inputModalities: textOnlyModel ? ["text"] : ["text", "image"] }], nextCursor: null } });
   } else if (message.method === "thread/compact/start") {
     send({ id: message.id, result: {} });
     send({ method: "turn/started", params: { threadId, turn: { id: "compact-fixture", status: "inProgress" } } });
     send({ method: "item/completed", params: { threadId, item: { id: "compact-item", type: "contextCompaction" } } });
     send({ method: "turn/completed", params: { threadId, turn: { id: "compact-fixture", status: "completed" } } });
   } else if (message.method === "turn/steer") {
+    echoRichInput("turn/steer", message.params.input);
     send({ id: message.id, result: { turnId: message.params.expectedTurnId } });
   } else if (message.method === "thread/settings/update" || message.method === "thread/name/set" || message.method === "turn/interrupt") {
     send({ id: message.id, result: {} });

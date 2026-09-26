@@ -154,6 +154,14 @@ main()
   const child = start(config.runtimeArgs[0] === '-m' ? ['-P', '-c', launchSource] : config.runtimeArgs);
   const pending = new Map(); const approvals = new Map(); const blocks = new Map();
   let sequence = 0, buffer = '', sessionId, boundNativeId, title = config.title ?? 'Hermes conversation', status = 'starting', currentModel, models = [], turn = 0, streamingId, disposed = false, loading = false;
+  // ACP `promptCapabilities.image` and the latest `available_commands_update`.
+  let acceptsImages = false, availableCommands = [];
+  const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+  const promptImages = images => {
+    if (images === undefined || images === null) return [];
+    if (!Array.isArray(images) || images.length > 6 || images.some(image => !image || typeof image !== 'object' || !IMAGE_TYPES.has(image.mimeType) || typeof image.data !== 'string' || !image.data)) throw fail('invalid-request', 'The prompt images are invalid.');
+    return images.map(image => ({ mimeType: image.mimeType, data: image.data }));
+  };
   const send = value => child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...value })}\n`);
   const request = (method, params) => new Promise((resolve, reject) => { const id = ++sequence; pending.set(id, { resolve, reject, method }); send({ id, method, params }); });
   const put = value => { const block = { label: value.title ?? value.kind, status: 'complete', ...value }; blocks.set(block.id, block); emit({ type: 'block', block }); };
@@ -178,14 +186,22 @@ main()
     if (next === undefined) setStatus('idle');
     else startTurn(next);
   };
-  const startTurn = text => {
+  // A user message lists each image it carried as an `[image]` line.
+  const withImageMarkers = (text, images) => {
+    if (!images) return text;
+    const markers = Array.from({ length: images }, () => '[image]').join('\n');
+    return text ? `${text}\n\n${markers}` : markers;
+  };
+  const startTurn = ({ text, images = [] }) => {
     ++turn;
     streamingId = undefined;
-    put({ id: `hermes-user-${turn}`, kind: 'user', text, status: 'complete' });
+    put({ id: `hermes-user-${turn}`, kind: 'user', text: withImageMarkers(text, images.length), status: 'complete' });
     setStatus('running');
     const input = config.instructions ? `Agent instructions:\n${config.instructions}\n\nTask:\n${text}` : text;
     const usageId = randomUUID();
-    void request('session/prompt', { sessionId, prompt: [{ type: 'text', text: input }] }).then(result => {
+    // ACP image content blocks, sent only when the agent declared image input.
+    const prompt = [{ type: 'text', text: input }, ...images.map(image => ({ type: 'image', mimeType: image.mimeType, data: image.data }))];
+    void request('session/prompt', { sessionId, prompt }).then(result => {
       if (result.usage) {
         const usage = { id: usageId };
         for (const [source, target] of [["inputTokens","inputTokens"],["outputTokens","outputTokens"],["cachedReadTokens","cacheReadTokens"],["totalTokens","totalTokens"]]) {
@@ -213,15 +229,27 @@ main()
     const u = message.params?.update; if (!u) return;
     const kind = u.sessionUpdate;
     if (['agent_message_chunk', 'agent_thought_chunk', 'user_message_chunk'].includes(kind)) {
-      if (u.content?.type !== 'text') { put({ id: `hermes-media-${++sequence}`, kind: 'custom', title: 'Hermes content', text: 'This native content type is not supported by the current renderer.', fallback: true }); return; }
+      // A user image in replayed history is listed as an `[image]` line.
+      const userImage = kind === 'user_message_chunk' && u.content?.type === 'image';
+      if (u.content?.type !== 'text' && !userImage) { put({ id: `hermes-media-${++sequence}`, kind: 'custom', title: 'Hermes content', text: 'This native content type is not supported by the current renderer.', fallback: true }); return; }
       const role = kind === 'agent_message_chunk' ? 'assistant' : kind === 'agent_thought_chunk' ? 'thinking' : 'user';
       if (!streamingId || blocks.get(streamingId)?.kind !== role || loading) streamingId = `hermes-${role}-${++sequence}`;
       const previous = blocks.get(streamingId);
-      put({ id: streamingId, kind: role, text: (previous?.text ?? '') + u.content.text, status: loading ? 'complete' : 'streaming' });
+      put({ id: streamingId, kind: role, text: userImage ? withImageMarkers(previous?.text ?? '', 1) : (previous?.text ?? '') + u.content.text, status: loading ? 'complete' : 'streaming' });
     } else if (kind === 'tool_call' || kind === 'tool_call_update') {
       streamingId = undefined; const id = `hermes-tool-${u.toolCallId}`; const old = blocks.get(id);
       put({ ...old, id, kind: 'tool', title: u.title ?? old?.title ?? 'Hermes tool', text: u.content?.map(c => c.content?.text ?? '').filter(Boolean).join('\n') || old?.text || '', status: u.status === 'failed' ? 'failed' : u.status === 'completed' ? 'complete' : 'streaming', collapsible: true });
-    } else if (!['available_commands_update', 'usage_update', 'current_mode_update', 'session_info_update', 'config_option_update'].includes(kind)) {
+    } else if (kind === 'available_commands_update') {
+      // ACP slash commands the agent runs itself when a prompt starts with `/<name>`.
+      availableCommands = (Array.isArray(u.availableCommands) ? u.availableCommands : [])
+        .filter(command => typeof command?.name === 'string' && command.name.length <= 160)
+        .map(command => ({
+          name: command.name,
+          ...(typeof command.description === 'string' && command.description.trim() ? { description: command.description.slice(0, 600) } : {}),
+          ...(typeof command.input?.hint === 'string' && command.input.hint.trim() ? { hint: command.input.hint.slice(0, 240) } : {}),
+          source: 'command',
+        }));
+    } else if (!['usage_update', 'current_mode_update', 'session_info_update', 'config_option_update'].includes(kind)) {
       put({ id: `hermes-event-${++sequence}`, kind: 'custom', title: 'Hermes event', text: String(kind ?? 'Unknown native event'), fallback: true, collapsible: true });
     }
   };
@@ -249,6 +277,7 @@ main()
   try {
     const initialized = await request('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'piui', version: '0.1.1' } });
     if (initialized.protocolVersion !== 1 || initialized.agentInfo?.version !== '0.21.0') throw fail('unsupported-version', 'The Hermes ACP version or protocol is unsupported.');
+    acceptsImages = initialized.agentCapabilities?.promptCapabilities?.image === true;
     if (config.nativeId) {
       // Never call Hermes resume: its missing-id fallback creates a new session.
       let cursor, found;
@@ -270,17 +299,21 @@ main()
     async models() { return models; },
     async catalogModels() { return models.map(m => ({ ...m, supportsFast: false })); },
     async resources() { return (await readCatalog()).resources; },
-    composerCapabilities() { return { steer: false, compact: false }; },
-    async prompt({ text, mode }) {
+    composerCapabilities() { return { steer: false, compact: false, images: acceptsImages }; },
+    // Hermes skills have no mention syntax of their own; its ACP commands do.
+    composerCatalog() { return { commands: availableCommands, skills: [] }; },
+    async prompt({ text, mode, images: attached }) {
       if (typeof text !== 'string' || !text.trim()) throw fail('invalid-request', 'A non-empty prompt is required.');
       if (mode === 'steer') throw fail('unsupported-method', 'Hermes ACP cannot steer an active turn.');
       if (mode !== 'prompt' && mode !== 'follow-up') throw fail('invalid-request', 'The prompt mode is invalid.');
+      const images = promptImages(attached);
+      if (images.length && !acceptsImages) throw fail('unsupported-input', 'This Hermes agent does not accept images.');
       if (mode === 'follow-up' && status === 'running') {
-        followUps.push(text);
+        followUps.push({ text, images });
         return { accepted: true };
       }
       if (status !== 'idle') throw fail('busy');
-      startTurn(text);
+      startTurn({ text, images });
       return { accepted: true };
     },
     async interrupt() { send({ method: 'session/cancel', params: { sessionId } }); },

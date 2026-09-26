@@ -6,7 +6,7 @@ let promptId;
 for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
   const m = JSON.parse(line); let result = {};
   if (!m.method) { if (promptId) send({ id: promptId, result: { stopReason: m.result?.outcome?.outcome === 'cancelled' ? 'cancelled' : 'end_turn' } }); continue; }
-  if (m.method === 'initialize') result = { protocolVersion: 1, agentInfo: { version: '0.21.0' } };
+  if (m.method === 'initialize') result = { protocolVersion: 1, agentInfo: { version: '0.21.0' }, agentCapabilities: { loadSession: true, promptCapabilities: { image: !process.argv.includes('--no-image') } } };
   else if (m.method === 'session/list') result = { sessions: [{ sessionId: 'saved', cwd: process.argv.includes('--wrong-cwd') ? '/' : process.cwd() }] };
   else if (m.method === 'session/new' || m.method === 'session/load') {
     if (m.method === 'session/load') notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'native history' } });
@@ -16,9 +16,21 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       const response = await fetch(server.url, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'workspace', arguments: { type: 'roster' } } }) });
       if (!response.ok || !(await response.json()).result.content.length) throw Error('coordinator transport failed');
     }
-    result = { sessionId: 'saved', models };
+    send({ id: m.id, result: { sessionId: 'saved', models } });
+    // Hermes advertises its headless slash commands right after the session starts.
+    notify({ sessionUpdate: 'available_commands_update', availableCommands: [
+      { name: 'help', description: 'List available commands', input: null },
+      { name: 'model', description: 'Show current model and provider, or switch models', input: { hint: 'model name to switch to' } },
+    ] });
+    continue;
   } else if (m.method === 'session/prompt') {
     const text = m.params.prompt[0].text;
+    const images = m.params.prompt.filter(block => block.type === 'image');
+    if (images.length) {
+      notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `images:${images.map(image => `${image.mimeType}/${image.data}`).join(',')}` } });
+      send({ id: m.id, result: { stopReason: 'end_turn' } });
+      continue;
+    }
     if (text === 'approve') {
       promptId = m.id;
       send({ id: 'permission', method: 'session/request_permission', params: { options: [{ kind: 'allow_once', optionId: 'once' }, { kind: 'reject_once', optionId: 'no' }], toolCall: { title: 'Fixture command' } } });
