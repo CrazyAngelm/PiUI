@@ -560,3 +560,27 @@ script is shown (never in the main bundle). The desktop CSP allows
 a document, which that policy refuses, but uses constructable stylesheets in a
 shadow root, so the editor always mounts in its own shadow root. If it cannot
 load, the plain text field remains.
+
+## ADR-034 — Signed updates are compiled in but off until a release configures them
+
+**Status:** Accepted 2026-09-27 (release 0.2.0; decisions delegated by the owner).
+
+**Decision:** every build contains `tauri-plugin-updater`, but the host registers
+it only when the build's Tauri configuration carries `plugins.updater` with a
+minisign public key and one to eight HTTPS endpoints and no insecure or
+downgrade switch. Release tooling adds that section (`scripts/release-config.mjs`)
+only when the updater private key, public key and endpoint are all provided;
+local and CI builds never have it. The WebView gets typed host commands
+(app update v1) and no `updater:*` permission. Automatic checks are opt-in in
+Settings → About (off by default), wait well past first paint, skip safe mode
+and never install; an install names the exact version the person confirmed,
+the plugin verifies its signature, and native runtimes stop as on quit first.
+Releases stay GitHub pre-releases until Windows builds are code-signed, so the
+feed (`latest.json`) lives on a rolling `updater` release instead of
+`releases/latest`.
+
+**Consequences:** a local-first build makes no update request unless the person
+asks or opts in. A release without the key cannot update itself later. The feed
+is unsigned; until the Tauri CLI records signed versions, `requireSignedVersion`
+stays off and a tampered feed could replay an older signed build under a newer
+number. Key handling, rotation and compromise response: `docs/RELEASING.md`.
