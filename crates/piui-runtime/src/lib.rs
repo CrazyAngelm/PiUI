@@ -27,6 +27,7 @@ pub mod fake;
 pub mod provenance;
 pub mod read_only_probe;
 pub mod real_rpc;
+pub mod script_runner;
 pub mod supervisor;
 pub mod system_probe;
 pub mod workspace_runtime;
