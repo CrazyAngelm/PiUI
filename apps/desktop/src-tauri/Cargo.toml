@@ -47,6 +47,8 @@ rfd = "0.17.2"
 notify = "8.2.0"
 # Sign-in registration for background mode; driven only from host code.
 tauri-plugin-autostart = "=2.5.1"
+# One PiUI process per user session: a second launch shows the first one.
+tauri-plugin-single-instance = "=2.4.5"
 
 [dev-dependencies]
 tauri = { version = "=2.11.5", features = ["test"] }

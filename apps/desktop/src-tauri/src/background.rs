@@ -321,6 +321,38 @@ fn with_controller<R: Runtime, T>(
     })
 }
 
+/// What a second launch of PiUI asks the running one to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SecondLaunch {
+    /// Show and focus the main window, restoring it from the tray.
+    ShowWindow,
+    /// A sign-in start while PiUI already runs: change nothing.
+    StayAsIs,
+}
+
+/// Decides from the second process's arguments; it exits right after.
+pub(crate) fn second_launch(args: &[String]) -> SecondLaunch {
+    if args.iter().any(|argument| argument == AUTOSTART_ARG) {
+        SecondLaunch::StayAsIs
+    } else {
+        SecondLaunch::ShowWindow
+    }
+}
+
+/// The single-instance guard's callback in the running PiUI.
+pub(crate) fn on_second_launch<R: Runtime>(app: &AppHandle<R>, args: &[String]) {
+    match second_launch(args) {
+        SecondLaunch::ShowWindow => show_main(app),
+        SecondLaunch::StayAsIs => {}
+    }
+}
+
+/// Whether this process joins the one-instance-per-session guard. E2E hosts
+/// run in isolated data folders, several at a time, and stay outside it.
+pub(crate) fn single_instance_guard(e2e_isolated: bool) -> bool {
+    !e2e_isolated
+}
+
 /// Manages background state at startup, shows the tray when it is on and
 /// keeps a sign-in start hidden in it. Nothing here blocks first paint: the
 /// OS registration is read only when Settings asks for it.
@@ -729,6 +761,32 @@ mod tests {
         );
         assert_eq!(autostart.writes.get(), 0);
         assert!(!start_hidden(&[AUTOSTART_ARG.to_owned()], true, true));
+    }
+
+    #[test]
+    fn a_second_launch_shows_the_running_window_unless_it_is_a_sign_in_start() {
+        let args = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            second_launch(&args(&["piui-desktop"])),
+            SecondLaunch::ShowWindow
+        );
+        assert_eq!(second_launch(&args(&[])), SecondLaunch::ShowWindow);
+        assert_eq!(
+            second_launch(&args(&["piui-desktop", "--safe-mode"])),
+            SecondLaunch::ShowWindow
+        );
+        assert_eq!(
+            second_launch(&args(&["piui-desktop", AUTOSTART_ARG])),
+            SecondLaunch::StayAsIs
+        );
+        // E2E hosts run side by side in isolated folders, outside the guard.
+        assert!(single_instance_guard(false));
+        assert!(!single_instance_guard(true));
     }
 
     #[test]
