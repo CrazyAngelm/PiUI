@@ -62,6 +62,8 @@ pub enum CoordinatorError {
     EmptyId { kind: &'static str },
     #[error("run data is inconsistent: {reason}")]
     InvalidRunData { reason: &'static str },
+    #[error("step {step_id} is not run by this executor")]
+    ExecutorMismatch { step_id: String },
 }
 
 #[derive(Debug, Error)]
@@ -120,6 +122,7 @@ impl Coordinator {
                 execution: None,
                 result_reference: None,
                 failure: None,
+                output: None,
             })
             .collect();
         Ok(Run {
@@ -208,6 +211,10 @@ impl Coordinator {
                 reason: "task has no pipeline step",
             });
         };
+        // Scripts are leased by `lease_next_script`; they have no profile.
+        if step.is_script() {
+            return Err(CoordinatorError::ExecutorMismatch { step_id });
+        }
         let Some(member) = run
             .definition
             .team
@@ -232,6 +239,7 @@ impl Coordinator {
         };
         let task_instructions = task_instructions(run, &step);
         let dependency_result_references = dependency_result_references(run, &step);
+        let dependency_outputs = crate::executors::dependency_outputs(run, &step);
         let Some(task) = run.tasks.iter_mut().find(|task| task.step_id == step_id) else {
             return Err(CoordinatorError::InvalidRunData {
                 reason: "pipeline step has no task",
@@ -250,6 +258,7 @@ impl Coordinator {
             profile,
             task_instructions,
             dependency_result_references,
+            dependency_outputs,
         }))
     }
 
@@ -367,6 +376,7 @@ impl Coordinator {
             require_approval,
             result_fields,
             execution_mode: None,
+            executor: None,
             input_instructions,
             id: id.clone(),
             name: name.into(),
@@ -388,6 +398,7 @@ impl Coordinator {
             execution: None,
             result_reference: None,
             failure: None,
+            output: None,
         });
         run.revision += 1;
         Ok(id)
@@ -435,6 +446,14 @@ impl Coordinator {
                 step_id: step_id.to_owned(),
             });
         };
+        // Only agent steps are spawn targets: an llm step is one call without
+        // collaboration and a script is host work outside the team.
+        if step.executor_kind() != crate::ExecutorKind::Agent {
+            return Err(AuthorizationError::StepNotSpawnable {
+                step_id: step_id.to_owned(),
+            }
+            .into());
+        }
         let Some(target_member) = run
             .definition
             .team
@@ -468,6 +487,7 @@ impl Coordinator {
             if existing_lease_id == lease_id {
                 let task_instructions = task_instructions(run, &step);
                 let dependency_result_references = dependency_result_references(run, &step);
+                let dependency_outputs = crate::executors::dependency_outputs(run, &step);
                 return Ok(ControlledSpawnLease {
                     run_id: run.id.clone(),
                     run_revision: run.revision,
@@ -478,6 +498,7 @@ impl Coordinator {
                     profile,
                     task_instructions,
                     dependency_result_references,
+                    dependency_outputs,
                 });
             }
             return Err(CoordinatorError::LeaseConflict {
@@ -491,6 +512,7 @@ impl Coordinator {
         }
         let task_instructions = task_instructions(run, &step);
         let dependency_result_references = dependency_result_references(run, &step);
+        let dependency_outputs = crate::executors::dependency_outputs(run, &step);
         run.tasks[index].lease_id = Some(lease_id.clone());
         run.tasks[index].revision += 1;
         run.revision += 1;
@@ -504,6 +526,7 @@ impl Coordinator {
             profile,
             task_instructions,
             dependency_result_references,
+            dependency_outputs,
         })
     }
 
@@ -552,6 +575,11 @@ impl Coordinator {
                 reason: "task has no pipeline step",
             });
         };
+        if step.is_script() {
+            return Err(CoordinatorError::ExecutorMismatch {
+                step_id: step_id.to_owned(),
+            });
+        }
         let Some(member) = run
             .definition
             .team
@@ -576,6 +604,7 @@ impl Coordinator {
         };
         let task_instructions = task_instructions(run, &step);
         let dependency_result_references = dependency_result_references(run, &step);
+        let dependency_outputs = crate::executors::dependency_outputs(run, &step);
         run.tasks[index].status = TaskStatus::Running;
         run.tasks[index].lease_id = None;
         run.tasks[index].execution = Some(execution.clone());
@@ -590,6 +619,7 @@ impl Coordinator {
             profile,
             task_instructions,
             dependency_result_references,
+            dependency_outputs,
             execution,
         })
     }
@@ -647,6 +677,9 @@ impl Coordinator {
                 reason: "task has no pipeline step",
             });
         };
+        if step.is_script() {
+            return Err(CoordinatorError::ExecutorMismatch { step_id });
+        }
         let Some(member) = run
             .definition
             .team
@@ -671,6 +704,7 @@ impl Coordinator {
         };
         let task_instructions = task_instructions(run, &step);
         let dependency_result_references = dependency_result_references(run, &step);
+        let dependency_outputs = crate::executors::dependency_outputs(run, &step);
         let Some(task) = run.tasks.iter_mut().find(|task| task.step_id == step_id) else {
             return Err(CoordinatorError::InvalidRunData {
                 reason: "pipeline step has no task",
@@ -690,10 +724,13 @@ impl Coordinator {
             profile,
             task_instructions,
             dependency_result_references,
+            dependency_outputs,
             execution,
         }))
     }
 
+    /// Records a native terminal outcome. A script's outcome is recorded with
+    /// `complete_script_task`, which checks its output instead.
     pub fn complete_task(
         run: &mut Run,
         expected_run_revision: Revision,
@@ -702,60 +739,25 @@ impl Coordinator {
         execution_id: &str,
         outcome: CompletionOutcome,
     ) -> Result<(), CoordinatorError> {
-        check_run_revision(run, expected_run_revision)?;
-        let Some(index) = run.tasks.iter().position(|task| task.step_id == step_id) else {
-            return Err(CoordinatorError::UnknownTask {
-                step_id: step_id.to_owned(),
-            });
-        };
-        check_revision("task", expected_task_revision, run.tasks[index].revision)?;
-        if run.tasks[index].status != TaskStatus::Running {
-            return Err(CoordinatorError::InvalidTaskStatus {
-                step_id: step_id.to_owned(),
-                expected: TaskStatus::Running,
-                actual: run.tasks[index].status,
-            });
-        }
-        if run.tasks[index]
-            .execution
-            .as_ref()
-            .map(|value| value.id.as_str())
-            != Some(execution_id)
+        if run
+            .definition
+            .pipeline
+            .steps
+            .iter()
+            .any(|step| step.id == step_id && step.is_script())
         {
-            return Err(CoordinatorError::StaleExecution {
+            return Err(CoordinatorError::ExecutorMismatch {
                 step_id: step_id.to_owned(),
             });
         }
-        if let CompletionOutcome::Succeeded {
-            result_reference: Some(reference),
-        } = &outcome
-        {
-            validate_history_reference(reference)?;
-        }
-        let failed = matches!(outcome, CompletionOutcome::Failed { .. });
-        match outcome {
-            CompletionOutcome::Succeeded { result_reference } => {
-                run.tasks[index].status = TaskStatus::Succeeded;
-                run.tasks[index].result_reference = result_reference;
-            }
-            CompletionOutcome::Failed { failure } => {
-                run.tasks[index].status = TaskStatus::Failed;
-                run.tasks[index].failure = Some(failure);
-            }
-        }
-        run.tasks[index].revision += 1;
-        if failed {
-            // Fail-fast for work that has not crossed the native boundary.
-            for task in &mut run.tasks {
-                if task.status == TaskStatus::Ready {
-                    task.status = TaskStatus::Cancelled;
-                    task.revision += 1;
-                }
-            }
-        }
-        run.revision += 1;
-        refresh_status(run);
-        Ok(())
+        complete_task_transition(
+            run,
+            expected_run_revision,
+            step_id,
+            expected_task_revision,
+            execution_id,
+            outcome,
+        )
     }
 
     /// Records a prelaunch policy/capability rejection. No native execution
@@ -937,6 +939,19 @@ impl Coordinator {
             result_reference: Some(reference),
         } = &resolution
         {
+            // A script has no native history; its result exists only when
+            // the host observed it.
+            if run
+                .definition
+                .pipeline
+                .steps
+                .iter()
+                .any(|step| step.id == step_id && step.is_script())
+            {
+                return Err(CoordinatorError::ExecutorMismatch {
+                    step_id: step_id.to_owned(),
+                });
+            }
             validate_history_reference(reference)?;
         }
         if matches!(resolution, UncertainResolution::Succeeded { .. })
@@ -1008,6 +1023,7 @@ impl Coordinator {
         task.execution = None;
         task.result_reference = None;
         task.failure = None;
+        task.output = None;
         task.revision += 1;
         run.revision += 1;
         run.status = RunStatus::Running;
@@ -1111,6 +1127,72 @@ impl Coordinator {
         run.revision += 1;
         Ok(())
     }
+}
+
+/// The terminal transition shared by native and script completions. Callers
+/// check the executor; this checks revisions, status and execution identity.
+pub(crate) fn complete_task_transition(
+    run: &mut Run,
+    expected_run_revision: Revision,
+    step_id: &str,
+    expected_task_revision: Revision,
+    execution_id: &str,
+    outcome: CompletionOutcome,
+) -> Result<(), CoordinatorError> {
+    check_run_revision(run, expected_run_revision)?;
+    let Some(index) = run.tasks.iter().position(|task| task.step_id == step_id) else {
+        return Err(CoordinatorError::UnknownTask {
+            step_id: step_id.to_owned(),
+        });
+    };
+    check_revision("task", expected_task_revision, run.tasks[index].revision)?;
+    if run.tasks[index].status != TaskStatus::Running {
+        return Err(CoordinatorError::InvalidTaskStatus {
+            step_id: step_id.to_owned(),
+            expected: TaskStatus::Running,
+            actual: run.tasks[index].status,
+        });
+    }
+    if run.tasks[index]
+        .execution
+        .as_ref()
+        .map(|value| value.id.as_str())
+        != Some(execution_id)
+    {
+        return Err(CoordinatorError::StaleExecution {
+            step_id: step_id.to_owned(),
+        });
+    }
+    if let CompletionOutcome::Succeeded {
+        result_reference: Some(reference),
+    } = &outcome
+    {
+        validate_history_reference(reference)?;
+    }
+    let failed = matches!(outcome, CompletionOutcome::Failed { .. });
+    match outcome {
+        CompletionOutcome::Succeeded { result_reference } => {
+            run.tasks[index].status = TaskStatus::Succeeded;
+            run.tasks[index].result_reference = result_reference;
+        }
+        CompletionOutcome::Failed { failure } => {
+            run.tasks[index].status = TaskStatus::Failed;
+            run.tasks[index].failure = Some(failure);
+        }
+    }
+    run.tasks[index].revision += 1;
+    if failed {
+        // Fail-fast for work that has not crossed the native boundary.
+        for task in &mut run.tasks {
+            if task.status == TaskStatus::Ready {
+                task.status = TaskStatus::Cancelled;
+                task.revision += 1;
+            }
+        }
+    }
+    run.revision += 1;
+    refresh_status(run);
+    Ok(())
 }
 
 fn task_instructions(run: &Run, step: &crate::PipelineStep) -> String {
@@ -1219,6 +1301,10 @@ fn task_instructions(run: &Run, step: &crate::PipelineStep) -> String {
             text.push_str(input);
             text.push_str("\nInclude the requested data or artifact references in your final result. State missing evidence explicitly.");
         }
+    }
+    if step.executor_kind() == crate::ExecutorKind::Llm {
+        // Enforcement is the adapter's; this only tells the model the shape.
+        text.push_str("\n\nThis step is a single model call: answer in one reply from this task and the dependency results, without calling tools.");
     }
     text
 }
@@ -1375,6 +1461,18 @@ fn validate_run_data(run: &Run) -> Result<(), CoordinatorError> {
         if task.status == TaskStatus::Running && task.execution.is_none() {
             return Err(CoordinatorError::InvalidRunData {
                 reason: "running task has no execution reference",
+            });
+        }
+        if task.output.is_some()
+            && !run
+                .definition
+                .pipeline
+                .steps
+                .iter()
+                .any(|step| step.id == task.step_id && step.is_script())
+        {
+            return Err(CoordinatorError::InvalidRunData {
+                reason: "only host-executed tasks record output",
             });
         }
     }
@@ -1539,7 +1637,7 @@ fn advance_program_routers(run: &mut Run) {
                     }
                     Err(code) => {
                         task.status = TaskStatus::Failed;
-                        task.failure = Some(FailureRecord { code: code.into() });
+                        task.failure = Some(FailureRecord::new(code));
                         task.result_data = None;
                     }
                 }
@@ -1556,7 +1654,7 @@ pub(crate) fn check_run_revision(run: &Run, expected: Revision) -> Result<(), Co
     check_revision("run", expected, run.revision)
 }
 
-fn check_revision(
+pub(crate) fn check_revision(
     scope: &'static str,
     expected: Revision,
     actual: Revision,
@@ -1572,7 +1670,7 @@ fn check_revision(
     }
 }
 
-fn ensure_active(run: &Run) -> Result<(), CoordinatorError> {
+pub(crate) fn ensure_active(run: &Run) -> Result<(), CoordinatorError> {
     if run.status == RunStatus::Running {
         Ok(())
     } else {

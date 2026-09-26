@@ -59,6 +59,15 @@ pub fn validate_result(fields: &[ResultField], text: &str) -> Result<(), &'stati
         return Ok(());
     }
     let value: Value = serde_json::from_str(text.trim()).map_err(|_| "result-invalid-json")?;
+    validate_result_value(fields, &value)
+}
+
+/// `validate_result` for an already parsed result, such as a script's JSON
+/// stdout. The same codes apply; nothing is coerced.
+pub fn validate_result_value(fields: &[ResultField], value: &Value) -> Result<(), &'static str> {
+    if fields.is_empty() {
+        return Ok(());
+    }
     let object = value.as_object().ok_or("result-not-object")?;
     for field in fields {
         let value = object.get(&field.name).ok_or("result-missing-field")?;

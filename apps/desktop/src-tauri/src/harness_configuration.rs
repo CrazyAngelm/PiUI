@@ -10,6 +10,9 @@ use piui_runtime::workspace_runtime::Enforcement;
 pub(crate) struct LaunchPolicy {
     pub(crate) allowed_tools: Option<Vec<String>>,
     pub(crate) coordinator: bool,
+    /// Adapter-owned native subagent setting of a managed run; `None` keeps
+    /// the native default.
+    pub(crate) native_subagents: Option<bool>,
 }
 
 pub(crate) const PI_NATIVE_TOOL_NAMES: &[&str] =
@@ -109,20 +112,7 @@ pub(crate) fn launch_policy(
     if !profile.instructions.trim().is_empty() && !native.instructions.supported {
         return Err(OrchestrationSchedulerError::unsupported());
     }
-    let permission_modes = match profile.harness {
-        Harness::Pi => vec![
-            piui_orchestration::PermissionMode::Native,
-            piui_orchestration::PermissionMode::ReadOnly,
-            piui_orchestration::PermissionMode::FullAccess,
-        ],
-        Harness::PrimeAgent | Harness::Hermes => vec![piui_orchestration::PermissionMode::Native],
-        Harness::Codex => vec![
-            piui_orchestration::PermissionMode::Native,
-            piui_orchestration::PermissionMode::ReadOnly,
-            piui_orchestration::PermissionMode::WorkspaceWrite,
-            piui_orchestration::PermissionMode::FullAccess,
-        ],
-    };
+    let permission_modes = permission_modes(profile.harness);
     if !permission_modes.contains(&profile.permission_mode) {
         return Err(OrchestrationSchedulerError::unsupported());
     }
@@ -196,6 +186,68 @@ pub(crate) fn launch_policy(
         LaunchPolicy {
             allowed_tools,
             coordinator,
+            native_subagents: None,
         },
     ))
+}
+
+/// File permission presets the adapter enforces for `harness`.
+fn permission_modes(harness: Harness) -> Vec<piui_orchestration::PermissionMode> {
+    match harness {
+        Harness::Pi => vec![
+            piui_orchestration::PermissionMode::Native,
+            piui_orchestration::PermissionMode::ReadOnly,
+            piui_orchestration::PermissionMode::FullAccess,
+        ],
+        Harness::PrimeAgent | Harness::Hermes => vec![piui_orchestration::PermissionMode::Native],
+        Harness::Codex => vec![
+            piui_orchestration::PermissionMode::Native,
+            piui_orchestration::PermissionMode::ReadOnly,
+            piui_orchestration::PermissionMode::WorkspaceWrite,
+            piui_orchestration::PermissionMode::FullAccess,
+        ],
+    }
+}
+
+/// Launch policy of an `llm` step (orchestration v6.2): exactly one native
+/// turn with no collaboration and the least authority the adapter enforces.
+///
+/// Definition validation already requires a read-only, network-denied
+/// profile that allows no tools, enables no skills or MCP servers and holds
+/// no spawn templates; a harness without a read-only mode (Prime Agent,
+/// Hermes) is refused here before anything starts. The turn gets no
+/// coordinator tool and no native subagents. Where the adapter enforces a
+/// native tool allowlist (Pi: `--no-tools --no-extensions`; Claude Code:
+/// `--tools ""` with strict MCP configuration) it is empty, so no tool runs.
+/// Codex has no restrictive tool contract: its native tools stay available
+/// and only its read-only sandbox bounds them. The presentation manifests in
+/// `src/harness-adapters/` state this per harness.
+pub(crate) fn one_shot_launch_policy(
+    profile: &AgentProfile,
+    native: &HarnessCapabilities,
+) -> Result<(NativeBridgeCapabilities, LaunchPolicy), OrchestrationSchedulerError> {
+    use piui_orchestration::PermissionMode::ReadOnly;
+    if !permission_modes(profile.harness).contains(&ReadOnly) {
+        return Err(OrchestrationSchedulerError::llm_read_only_unsupported());
+    }
+    // Stored runs are re-checked here even though validation holds these.
+    if profile.permission_mode != ReadOnly
+        || profile.network_access
+        || !profile.allowed_spawn_profile_ids.is_empty()
+        || profile.resource_rules.iter().any(|rule| rule.enabled)
+        || profile
+            .tool_policy
+            .rules
+            .iter()
+            .any(|rule| rule.decision == ToolDecision::Allow)
+    {
+        return Err(OrchestrationSchedulerError::unsupported());
+    }
+    let (capabilities, mut policy) = launch_policy(profile, native)?;
+    let tools_enforced =
+        native.tool_policy.supported && native.tool_policy.enforcement == Enforcement::Native;
+    policy.allowed_tools = tools_enforced.then(Vec::new);
+    policy.coordinator = false;
+    policy.native_subagents = Some(false);
+    Ok((capabilities, policy))
 }
