@@ -1,8 +1,9 @@
 import type {
   AgentProfile, AgentRequestRecord, FlowAction, MessageRecord, NativeHistoryReference, OrchestrationRunV6,
   PipelineStep, ReconcileUncertainTaskRequest, ResultField, RouterConfig, RouterPredicate, RunDefinitionSnapshot,
-  RunStatus, RunSummary, TaskRecord,
+  RunInputValue, RunStatus, RunSummary, TaskRecord,
 } from '../labContracts';
+import { runInputSection, substituteInputTokens } from '../../runInputs';
 
 /**
  * Pure run transitions ported from `piui-orchestration` (coordinator.rs and
@@ -13,6 +14,8 @@ type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 export type LabTask = Mutable<TaskRecord>;
 
 export interface LabRun {
+  /** Validated input values frozen at creation (sorted keys, like the host's `BTreeMap`). */
+  inputs: Readonly<Record<string, RunInputValue>>;
   paused: boolean;
   attempts: LabTask[];
   schemaVersion: 6;
@@ -48,8 +51,10 @@ function objectValue(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
-export function newRun(id: string, definition: RunDefinitionSnapshot): LabRun {
+/** `new_run_with_inputs` after the caller resolved `inputs` (see `resolveRunInputs`). */
+export function newRun(id: string, definition: RunDefinitionSnapshot, inputs: Readonly<Record<string, RunInputValue>> = {}): LabRun {
   return {
+    inputs,
     paused: false,
     attempts: [],
     schemaVersion: 6,
@@ -391,13 +396,30 @@ export function completeTask(run: LabRun, stepId: string, executionId: string, c
   refreshStatus(run);
 }
 
+/**
+ * `review_limit_reached`: rounds are this reviewer's archived attempts that
+ * returned a result, plus the one completing now.
+ */
+function reviewLimitReached(run: LabRun, step: PipelineStep): boolean {
+  const limit = step.review?.maxIterations ?? undefined;
+  if (limit === undefined) return false;
+  const rounds = run.attempts
+    .filter((attempt) => attempt.stepId === step.id && (attempt.status === 'succeeded' || attempt.status === 'awaitingApproval'))
+    .length + 1;
+  return rounds >= limit;
+}
+
 function applyReviewAndApproval(run: LabRun, step: PipelineStep, task: LabTask): void {
   if (step.review === undefined) {
     if (step.requireApproval) task.status = 'awaitingApproval';
     return;
   }
   const verdict = task.resultData?.[step.review.field];
-  if (verdict === false) {
+  if (verdict === false && reviewLimitReached(run, step)) {
+    // Another round would exceed the bound: a person approves, rejects or repeats.
+    task.status = 'awaitingApproval';
+    task.failure = { code: 'review-limit-reached' };
+  } else if (verdict === false) {
     const previous = [...run.attempts].reverse().find((attempt) => attempt.stepId === step.id);
     const repeated = previous !== undefined && jsonEqual(previous.resultData, task.resultData);
     try {
@@ -490,7 +512,9 @@ export function controlFlow(run: LabRun, expectedRevision: number, action: FlowA
         throw new CoordinatorFault('invalid', 'decision is stale');
       }
       task.status = action.approved ? 'succeeded' : 'failed';
-      if (!action.approved) task.failure = { code: 'result-rejected' };
+      // Approval accepts the recorded result, including one held by a review limit.
+      if (action.approved) delete task.failure;
+      else task.failure = { code: 'result-rejected' };
       task.revision += 1;
       break;
     }
@@ -583,10 +607,15 @@ export function restoreInterrupted(run: LabRun): void {
   }
 }
 
-/** The IPC shape: `paused` and `attempts` are omitted at their defaults, like serde. */
+/** The IPC shape: `inputs`, `paused` and `attempts` are omitted at their defaults, like serde. */
 export function runToWire(run: LabRun): OrchestrationRunV6 {
-  const { paused, attempts, ...rest } = run;
-  const value = { ...(paused ? { paused } : {}), ...(attempts.length > 0 ? { attempts } : {}), ...rest };
+  const { inputs, paused, attempts, ...rest } = run;
+  const value = {
+    ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+    ...(paused ? { paused } : {}),
+    ...(attempts.length > 0 ? { attempts } : {}),
+    ...rest,
+  };
   return JSON.parse(JSON.stringify(value)) as OrchestrationRunV6;
 }
 
@@ -602,7 +631,9 @@ export function runSummary(run: LabRun): RunSummary {
 
 /** `task_instructions`: the prompt a task session receives (dependency context is added by the host). */
 export function taskInstructions(run: LabRun, step: PipelineStep): string {
-  const parts = [step.instructions];
+  // Run inputs precede the step's own instructions as labelled task data.
+  const declared = run.definition.pipeline.inputs;
+  const parts = [runInputSection(declared, run.inputs), substituteInputTokens(step.instructions, declared, run.inputs)];
   for (const reviewer of run.definition.pipeline.steps) {
     if (reviewer.review?.retryFromStepId !== step.id) continue;
     const previous = [...run.attempts].reverse().find((attempt) => attempt.stepId === reviewer.id)?.resultData;

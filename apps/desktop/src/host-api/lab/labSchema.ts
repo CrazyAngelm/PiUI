@@ -10,10 +10,13 @@ export type Schema =
   | { readonly kind: 'string' }
   | { readonly kind: 'boolean' }
   | { readonly kind: 'u64' }
+  | { readonly kind: 'u32' }
   | { readonly kind: 'json' }
   | { readonly kind: 'datetime' }
   | { readonly kind: 'enum'; readonly values: readonly string[] }
   | { readonly kind: 'array'; readonly item: Schema }
+  /** A string-keyed map (`BTreeMap<String, T>`). */
+  | { readonly kind: 'map'; readonly item: Schema }
   | { readonly kind: 'object'; readonly fields: Readonly<Record<string, Field>> }
   | { readonly kind: 'tagged'; readonly tag: string; readonly variants: Readonly<Record<string, Readonly<Record<string, Field>>>> }
   | { readonly kind: 'lazy'; readonly get: () => Schema };
@@ -27,10 +30,12 @@ export interface Field {
 export const string: Schema = { kind: 'string' };
 export const boolean: Schema = { kind: 'boolean' };
 export const u64: Schema = { kind: 'u64' };
+export const u32: Schema = { kind: 'u32' };
 export const json: Schema = { kind: 'json' };
 export const datetime: Schema = { kind: 'datetime' };
 export const enumOf = (values: readonly string[]): Schema => ({ kind: 'enum', values });
 export const arrayOf = (item: Schema): Schema => ({ kind: 'array', item });
+export const mapOf = (item: Schema): Schema => ({ kind: 'map', item });
 export const lazy = (get: () => Schema): Schema => ({ kind: 'lazy', get });
 export const option = (schema: Schema): Field => ({ schema, presence: 'option' });
 export const withDefault = (schema: Schema): Field => ({ schema, presence: 'default' });
@@ -101,6 +106,11 @@ function check(schema: Schema, value: unknown, path: string): void {
         fail(path, `invalid value: ${describe(value)}, expected u64`);
       }
       return;
+    case 'u32':
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 0xffff_ffff) {
+        fail(path, `invalid value: ${describe(value)}, expected u32`);
+      }
+      return;
     case 'json':
       return;
     case 'datetime':
@@ -116,6 +126,10 @@ function check(schema: Schema, value: unknown, path: string): void {
     case 'array':
       if (!Array.isArray(value)) fail(path, `invalid type: ${describe(value)}, expected a sequence`);
       value.forEach((item, index) => check(schema.item, item, `${path}[${index}]`));
+      return;
+    case 'map':
+      if (!isMap(value)) fail(path, `invalid type: ${describe(value)}, expected a map`);
+      for (const [key, item] of Object.entries(value)) check(schema.item, item, path ? `${path}.${key}` : key);
       return;
     case 'object':
       if (!isMap(value)) fail(path, `invalid type: ${describe(value)}, expected a map`);

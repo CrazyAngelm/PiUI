@@ -198,6 +198,9 @@ pub struct PipelineDefinition {
     pub id: String,
     pub name: String,
     pub steps: Vec<PipelineStep>,
+    /// Values requested when a run starts (v6.1, additive).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<crate::PipelineInput>,
 }
 
 /// A reusable reference to definitions. It is not an executable shell string.
@@ -406,6 +409,9 @@ impl AgentRequestRecord {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Run {
+    /// Validated run inputs frozen at creation (v6.1, additive). Task data only.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub(crate) inputs: std::collections::BTreeMap<String, serde_json::Value>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) paused: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -424,6 +430,9 @@ pub struct Run {
 }
 
 impl Run {
+    pub fn inputs(&self) -> &std::collections::BTreeMap<String, serde_json::Value> {
+        &self.inputs
+    }
     pub fn paused(&self) -> bool {
         self.paused
     }

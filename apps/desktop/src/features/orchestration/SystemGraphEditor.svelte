@@ -337,7 +337,7 @@
       });
       // A member may own several steps in older definitions; preserve the original editors for those graphs.
       if (new Set(nodes.filter(node => node.kind !== 'router' || node.router?.mode === 'agent').map(node => node.profile.id)).size !== nodes.filter(node => node.kind !== 'router' || node.router?.mode === 'agent').length || team.value.members.some(member => !pipeline.value.steps.some(step => step.id === member.id && step.assignedMemberId === member.id))) throw new Error('This definition uses reusable members. Open it in Library to preserve its assignments.');
-      const next: AgentGraph = { id, name: command.value.name, teamId: team.value.id, pipelineId: pipeline.value.id, orchestratorId: team.value.orchestratorMemberId, spawnedAgentsJoinTeam: team.value.spawnedAgentsJoinTeam, nodes, edges: [
+      const next: AgentGraph = { id, name: command.value.name, teamId: team.value.id, pipelineId: pipeline.value.id, orchestratorId: team.value.orchestratorMemberId, spawnedAgentsJoinTeam: team.value.spawnedAgentsJoinTeam, ...(pipeline.value.inputs ? { inputs: pipeline.value.inputs.map(input => ({ ...input })) } : {}), nodes, edges: [
         ...pipeline.value.steps.flatMap(step => [
           ...step.dependencyStepIds.filter(dependency => !(step.routeGates ?? []).some(gate => gate.routerStepId === dependency)).map(dependency => ({ from: dependency, to: step.id, kind: 'result' as const })),
           ...(step.routeGates ?? []).map(gate => ({ from: gate.routerStepId, to: step.id, kind: 'route' as const, branchId: gate.branchId })),

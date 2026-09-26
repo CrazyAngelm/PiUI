@@ -60,7 +60,8 @@
     const trigger = triggerType === 'once'
       ? { type: 'once' as const, at: instant.instant, timeZone }
       : { type: 'interval' as const, every: interval, unit, anchorAt: instant.instant, timeZone };
-    onSave({ id, name: name.trim(), launchCommandId, trigger, missedRunPolicy, overlapPolicy });
+    // This editor has no input form; keep recorded run inputs rather than dropping them.
+    onSave({ id, name: name.trim(), launchCommandId, trigger, missedRunPolicy, overlapPolicy, ...(source?.inputs ? { inputs: source.inputs } : {}) });
   }
 </script>
 

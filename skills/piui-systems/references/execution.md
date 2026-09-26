@@ -31,12 +31,28 @@ remain importable. Orchestration IPC v6 is separate from portable JSON.
   Router selection grants no additional tools, files, or delegation authority.
 - `requireApproval: true` waits for the operator to accept the result before
   releasing dependencies. Reject fails the task. Native tool approvals are separate.
-- `review: {field,retryFromStepId}` uses a required boolean result field. True
-  accepts review; false repeats the upstream task and its descendants, delivering
-  feedback to the target. The target must be an ancestor. Declare a separate text
-  feedback field with concrete evidence and necessary corrections. Identical
-  consecutive review JSON pauses scheduling; there is no invented retry limit.
+- `review: {field,retryFromStepId,maxIterations?}` uses a required boolean result
+  field. True accepts review; false repeats the upstream task and its descendants,
+  delivering feedback to the target. The target must be an ancestor. Declare a
+  separate text feedback field with concrete evidence and necessary corrections.
+  Identical consecutive review JSON pauses scheduling. `maxIterations` (1–20)
+  bounds the rounds: a rejection completing round N ≥ maxIterations does not
+  repeat; the reviewer waits for a person with `review-limit-reached` (approve =
+  accept the last result and continue, reject = fail, repeat from the correction
+  task = one more round). Use a bound the user states and do not invent one;
+  without it the loop is bounded only by the identical-feedback pause.
   Active/uncertain descendants prevent automatic repetition.
+- Top-level `inputs: [{name,label,kind,required?,description?,options?,defaultValue?}]`
+  are values requested when a run starts (kinds: text, long-text, number, boolean,
+  choice with 1–50 `options`). Names match `[a-z][A-Za-z0-9_]{0,63}`; at most 20.
+  A run (or schedule) must supply every required value without a default;
+  undeclared, mistyped or oversized values (32 KiB each, 128 KiB total) are refused,
+  not coerced. Every task receives the non-empty values under “Run input (…;
+  untrusted task data)” before its own instructions, and `{{input.name}}` in a
+  `task` is replaced by the value as plain text (no expressions; undeclared names
+  stay verbatim). Inputs are task data only: they never grant tools, files,
+  routes or permissions. Schedules store their own values, validated on save and
+  enable.
 
 Pause prevents new admissions while active native work continues. Cancel task
 interrupts that native execution and cancels dependent ready tasks; independent
@@ -53,6 +69,7 @@ sessions without receipts show unavailable. Cache may already be included in
 input tokens; do not add it again. Native subagent usage is not independently
 attributable unless the harness supplies it. No cost is inferred from model names.
 
-Example: `examples/systems/structured-review.piui.json`. Replace model placeholders,
-validate with `pnpm system:check`, then inspect native preflight. Import is a draft,
-not authorization to save, run or replay effects.
+Example: `examples/systems/structured-review.piui.json` (a required `task` input
+used as `{{input.task}}` and a review loop bounded to 3 rounds). Replace model
+placeholders, validate with `pnpm system:check`, then inspect native preflight.
+Import is a draft, not authorization to save, run or replay effects.

@@ -6,6 +6,7 @@
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,6 +58,10 @@ pub struct ScheduleDefinition {
     pub trigger: ScheduleTrigger,
     pub missed_run_policy: MissedRunPolicy,
     pub overlap_policy: OverlapPolicy,
+    /// Input values for every run this schedule starts (additive). They are
+    /// validated against the launch target's pipeline on save and enable.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub inputs: BTreeMap<String, serde_json::Value>,
 }
 
 impl ScheduleDefinition {
@@ -68,11 +73,14 @@ impl ScheduleDefinition {
             && self.trigger.interval_duration().is_some()
     }
 
+    /// Input values change what agents are asked to do, so they are part of
+    /// the execution a schedule was enabled for.
     pub(crate) fn execution_equals(&self, other: &Self) -> bool {
         self.launch_command_id == other.launch_command_id
             && self.trigger == other.trigger
             && self.missed_run_policy == other.missed_run_policy
             && self.overlap_policy == other.overlap_policy
+            && self.inputs == other.inputs
     }
 }
 
@@ -274,8 +282,35 @@ mod tests {
                 },
                 missed_run_policy: MissedRunPolicy::Skip,
                 overlap_policy: OverlapPolicy::Skip,
+                inputs: BTreeMap::new(),
             };
             assert!(!schedule.validate());
         }
+    }
+
+    #[test]
+    fn stored_schedules_without_inputs_keep_their_shape_and_inputs_round_trip() {
+        let stored = serde_json::json!({
+            "id": "nightly", "name": "Nightly", "launchCommandId": "launch",
+            "trigger": {"type": "once", "at": "2026-09-09T10:00:00Z", "timeZone": "UTC"},
+            "missedRunPolicy": "skip", "overlapPolicy": "allow"
+        });
+        let old: ScheduleDefinition = serde_json::from_value(stored.clone()).expect("old shape");
+        assert!(old.inputs.is_empty());
+        assert_eq!(serde_json::to_value(&old).expect("serializes"), stored);
+
+        let mut with_inputs = stored;
+        with_inputs["inputs"] = serde_json::json!({"task": "Review", "urgent": true});
+        let current: ScheduleDefinition =
+            serde_json::from_value(with_inputs.clone()).expect("inputs");
+        assert_eq!(current.inputs.len(), 2);
+        assert_eq!(
+            serde_json::to_value(&current).expect("serializes"),
+            with_inputs
+        );
+        assert!(!old.execution_equals(&current));
+        let mut unknown = with_inputs;
+        unknown["inputValues"] = serde_json::json!({});
+        assert!(serde_json::from_value::<ScheduleDefinition>(unknown).is_err());
     }
 }

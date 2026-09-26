@@ -123,6 +123,10 @@ pub(crate) fn agent_router_selection(
 pub struct ReviewRule {
     pub field: String,
     pub retry_from_step_id: String,
+    /// Upper bound on review rounds (1-20, v6.1). A rejection that would start
+    /// another round beyond it waits for a person instead. `None` is unbounded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_iterations: Option<u32>,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(
@@ -237,11 +241,11 @@ impl Coordinator {
                 } else {
                     TaskStatus::Failed
                 };
-                if !approved {
-                    task.failure = Some(FailureRecord {
-                        code: "result-rejected".into(),
-                    });
-                }
+                // Approval accepts the recorded result, including one held back
+                // by a review loop limit.
+                task.failure = (!approved).then(|| FailureRecord {
+                    code: "result-rejected".into(),
+                });
                 task.revision += 1;
             }
             FlowAction::Repeat {
@@ -368,6 +372,14 @@ impl Coordinator {
                     .and_then(|value| value.get(&review.field))
                     .and_then(Value::as_bool)
                 {
+                    Some(false) if review_limit_reached(run, step_id, review) => {
+                        // Another round would exceed the bound: keep the last
+                        // result and let a person approve, reject or repeat.
+                        run.tasks[index].status = TaskStatus::AwaitingApproval;
+                        run.tasks[index].failure = Some(FailureRecord {
+                            code: "review-limit-reached".into(),
+                        });
+                    }
                     Some(false) => {
                         let repeated = run
                             .attempts
@@ -405,6 +417,28 @@ impl Coordinator {
         refresh_status(run);
         Ok(())
     }
+}
+
+/// Whether a rejection completing a review round has used up the rule's bound.
+/// Rounds are this reviewer's archived attempts that returned a result, plus
+/// the one completing now; interrupted or uncertain attempts are not rounds.
+fn review_limit_reached(run: &Run, step_id: &str, review: &ReviewRule) -> bool {
+    let rounds = run
+        .attempts
+        .iter()
+        .filter(|task| {
+            task.step_id == step_id
+                && matches!(
+                    task.status,
+                    TaskStatus::Succeeded | TaskStatus::AwaitingApproval
+                )
+        })
+        .count()
+        .saturating_add(1);
+    review
+        .max_iterations
+        .and_then(|limit| usize::try_from(limit).ok())
+        .is_some_and(|limit| rounds >= limit)
 }
 
 fn repeat_from(run: &mut Run, step_id: &str) -> Result<(), CoordinatorError> {

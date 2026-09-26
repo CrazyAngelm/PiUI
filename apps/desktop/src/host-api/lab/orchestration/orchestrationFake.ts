@@ -28,6 +28,7 @@ import {
   controlFlow, CoordinatorFault, newRun, reconcileUncertain, retryUncertain, runSummary, runToWire, type LabRun,
 } from './runEngine';
 import type { LabRunScheduler } from './runScheduler';
+import { resolveRunInputs } from '../../runInputs';
 
 /**
  * Every `orchestration_*` command the UI client calls, with the host's scope
@@ -103,7 +104,10 @@ function startRun({ state, scheduler }: Context, request: StartRunRequest): Orch
     ...(launchCommand === undefined ? {} : { launchCommand }),
   });
   if (request.runId.trim() === '' || definitionIssue(definition) !== undefined) throw orchestrationFailure('invalid');
-  const run = newRun(request.runId, definition);
+  // `new_run_with_inputs`: values are validated and frozen before anything is scheduled.
+  const inputs = resolveRunInputs(definition.pipeline.inputs, request.inputs);
+  if (!inputs.ok) throw orchestrationFailure('invalid');
+  const run = newRun(request.runId, definition, inputs.values);
   workspace.runs.push(run);
   scheduler.emit(request.workspaceId, run);
   const admission = scheduler.schedule(request.workspaceId, run);

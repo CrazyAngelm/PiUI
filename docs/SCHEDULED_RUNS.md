@@ -19,7 +19,15 @@ schedule never adds or widens capabilities.
 
 - Creating or saving a schedule does not run anything. New schedules are disabled.
 - Enabling is a separate revision-bound action and rechecks project trust.
-- Changing timing, target, missed-run policy or overlap policy disables the record.
+- Changing timing, target, missed-run policy, overlap policy or input values
+  disables the record.
+- A schedule stores `inputs`: values for the run inputs its pipeline declares.
+  Save and enable resolve them against the launch target's current pipeline
+  exactly as a run start does; a missing required value, an undeclared name or
+  a value of the wrong kind is refused (`invalid`) and nothing is stored. Each
+  occurrence passes the values to its run, which freezes them with the defaults.
+  If the pipeline later gains a required input, occurrences fail (`invalid`)
+  until the schedule is updated; re-enabling rechecks the values.
 - An occurrence claim, deterministic occurrence/run identity, frozen run snapshot
   and next due time commit in one fsynced orchestration generation.
 - A committed run that has not crossed the native boundary is resumed with the

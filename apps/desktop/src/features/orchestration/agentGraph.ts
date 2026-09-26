@@ -1,8 +1,10 @@
-import type { AgentProfile, PipelineDefinition, TeamDefinition, LaunchCommandReference, RouterConfig, RouterBranch, RouterPredicate } from '../../../../../contracts/orchestration-v6';
+import type { AgentProfile, PipelineDefinition, PipelineInput, TeamDefinition, LaunchCommandReference, RouterConfig, RouterBranch, RouterPredicate } from '../../../../../contracts/orchestration-v6';
+import { pipelineInputIssues, reviewLimitValid, RUN_INPUT_ISSUES } from '../../host-api/runInputs';
 export interface GraphNode { kind?: 'agent' | 'router'; inputBindings?: import('../../../../../contracts/orchestration-v6').InputBinding[]; condition?: import('../../../../../contracts/orchestration-v6').ResultCondition; review?: import('../../../../../contracts/orchestration-v6').ReviewRule; requireApproval?: boolean; resultFields?: import('../../../../../contracts/orchestration-v6').ResultField[]; executionMode?: 'scheduled' | 'callable'; id: string; profile: AgentProfile; router?: RouterConfig; task: string; input?: string; x: number; y: number; }
 export type ConnectionKind = 'result' | 'send' | 'observe' | 'spawn' | 'route';
 export interface GraphEdge { from: string; to: string; kind: ConnectionKind; branchId?: string; }
-export interface AgentGraph { id: string; name: string; teamId: string; pipelineId: string; orchestratorId?: string; spawnedAgentsJoinTeam?: boolean; nodes: GraphNode[]; edges: GraphEdge[]; }
+/** `inputs` are the pipeline's run inputs (v6.1): values requested when a run starts. */
+export interface AgentGraph { id: string; name: string; teamId: string; pipelineId: string; orchestratorId?: string; spawnedAgentsJoinTeam?: boolean; inputs?: PipelineInput[]; nodes: GraphNode[]; edges: GraphEdge[]; }
 export function emptyGraph(): AgentGraph { return { id: crypto.randomUUID(), name: '', teamId: crypto.randomUUID(), pipelineId: crypto.randomUUID(), nodes: [], edges: [] }; }
 export function newGraphNode(index: number): GraphNode {
   return { kind: 'agent', id: crypto.randomUUID(), x: 60 + index * 280, y: 100, task: '', profile: {
@@ -48,7 +50,7 @@ export function compileGraph(graph: AgentGraph): { profiles: AgentProfile[]; tea
   return {
     profiles,
     team: { id: graph.teamId, name: graph.name, ...(graph.spawnedAgentsJoinTeam ? { spawnedAgentsJoinTeam: true } : {}), members: executionNodes.map(node => ({ id: node.id, profileId: node.profile.id })), orchestratorMemberId: graph.orchestratorId && executionIds.has(graph.orchestratorId) ? graph.orchestratorId : executionNodes[0]?.id ?? '', sendEdges: graph.edges.filter(edge => edge.kind === 'send' && executionIds.has(edge.from) && executionIds.has(edge.to)).map(edge => ({ fromMemberId: edge.from, toMemberId: edge.to })), observeEdges: graph.edges.filter(edge => edge.kind === 'observe' && executionIds.has(edge.from) && executionIds.has(edge.to)).map(edge => ({ fromMemberId: edge.from, toMemberId: edge.to })) },
-    pipeline: { id: graph.pipelineId, name: graph.name, steps },
+    pipeline: { id: graph.pipelineId, name: graph.name, steps, ...(graph.inputs?.length ? { inputs: graph.inputs.map(input => ({ ...input })) } : {}) },
     command: { id: graph.id, name: graph.name, teamId: graph.teamId, pipelineId: graph.pipelineId },
   };
 }
@@ -90,9 +92,11 @@ export function graphIssues(graph: AgentGraph): GraphIssue[] {
       const visited = new Set<string>(); const pending = [...dependencies];
       while (pending.length) { const id = pending.pop()!; if (visited.has(id)) continue; visited.add(id); pending.push(...graph.edges.filter(edge => edge.kind === 'result' && edge.to === id).map(edge => edge.from)); }
       if (!visited.has(node.review.retryFromStepId) || !node.resultFields?.some(field => field.name === node.review?.field && field.kind === 'boolean')) push('A review needs a boolean result field and an upstream correction task.', [node.id]);
+      if (!reviewLimitValid(node.review)) push(RUN_INPUT_ISSUES.reviewLimit, [node.id]);
     }
   }
   for (const node of graph.nodes) { const fields = node.resultFields ?? []; if (fields.some(field => !field.name.trim()) || new Set(fields.map(field => field.name)).size !== fields.length) push('Result fields need unique non-empty names.', [node.id]); }
+  for (const message of pipelineInputIssues(graph.inputs)) push(message);
   for (const edge of graph.edges.filter(edge => edge.kind === 'route')) {
     const source = graph.nodes.find(node => node.id === edge.from);
     if (!source || source.kind !== 'router' || !edge.branchId || !source.router?.branches.some(branch => branch.id === edge.branchId) || graph.nodes.some(node => node.id === edge.to && node.kind === 'router')) push('Route connections need a router branch and an agent target.', [edge.from,edge.to]);

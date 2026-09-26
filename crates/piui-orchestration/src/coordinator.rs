@@ -1,16 +1,17 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::flow::{advance_conditions, program_router_selection};
+use crate::inputs::{run_input_section, substitute_input_tokens};
 use crate::{
     AgentRequestKind, AgentRequestRecord, AuthenticatedSender, AuthorizationError, CancelRequest,
     CompletionOutcome, ControlledSpawnLease, DefinitionError, FailureRecord, LaunchRequest,
     MessageIntent, MessageRecord, MessageStatus, NativeExecutionReference,
-    ORCHESTRATION_SCHEMA_VERSION, Revision, Run, RunDefinitionSnapshot, RunStatus, TaskRecord,
-    TaskStatus, UncertainResolution, UncertaintyIdentity, authorize_send, authorize_spawn,
-    validate_definition, validate_history_reference,
+    ORCHESTRATION_SCHEMA_VERSION, Revision, Run, RunDefinitionSnapshot, RunInputError, RunStatus,
+    TaskRecord, TaskStatus, UncertainResolution, UncertaintyIdentity, authorize_send,
+    authorize_spawn, resolve_run_inputs, validate_definition, validate_history_reference,
 };
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -19,6 +20,8 @@ pub enum CoordinatorError {
     InvalidDefinition(#[from] DefinitionError),
     #[error(transparent)]
     Authorization(#[from] AuthorizationError),
+    #[error(transparent)]
+    InvalidRunInput(#[from] RunInputError),
     #[error("{scope} revision conflict: expected {expected}, actual {actual}")]
     RevisionConflict {
         scope: &'static str,
@@ -82,15 +85,28 @@ impl Coordinator {
         advance_program_routers(run);
     }
 
+    /// A run that supplies no input values. Declared defaults still apply, and
+    /// a pipeline with a required input without a default is refused.
     pub fn new_run(
         run_id: impl Into<String>,
         definition: RunDefinitionSnapshot,
+    ) -> Result<Run, CoordinatorError> {
+        Self::new_run_with_inputs(run_id, definition, BTreeMap::new())
+    }
+
+    /// Validates `inputs` against the snapshot's pipeline declarations and
+    /// freezes the resolved values (supplied values, then defaults) in the run.
+    pub fn new_run_with_inputs(
+        run_id: impl Into<String>,
+        definition: RunDefinitionSnapshot,
+        inputs: BTreeMap<String, Value>,
     ) -> Result<Run, CoordinatorError> {
         validate_definition(&definition)?;
         let run_id = run_id.into();
         if run_id.trim().is_empty() {
             return Err(CoordinatorError::EmptyId { kind: "run" });
         }
+        let inputs = resolve_run_inputs(&definition.pipeline.inputs, &inputs)?;
         let tasks = definition
             .pipeline
             .steps
@@ -107,6 +123,7 @@ impl Coordinator {
             })
             .collect();
         Ok(Run {
+            inputs,
             paused: false,
             attempts: Vec::new(),
             schema_version: ORCHESTRATION_SCHEMA_VERSION,
@@ -1097,7 +1114,14 @@ impl Coordinator {
 }
 
 fn task_instructions(run: &Run, step: &crate::PipelineStep) -> String {
-    let mut text = step.instructions.clone();
+    // Run inputs precede the step's own instructions as labelled task data.
+    let declared = &run.definition.pipeline.inputs;
+    let mut text = run_input_section(declared, &run.inputs);
+    text.push_str(&substitute_input_tokens(
+        &step.instructions,
+        declared,
+        &run.inputs,
+    ));
     for reviewer in &run.definition.pipeline.steps {
         if reviewer
             .review

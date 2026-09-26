@@ -138,7 +138,7 @@ This is a new external protocol; existing IPC and portable-file versions are unc
 | `saveSchedule` | Protocol v2 SaveScheduleRequest; creates disabled and revision-checks edits |
 | `setScheduleEnabled` | Protocol v2 SetScheduleEnabledRequest; explicit revision-bound enable or disable |
 | `deleteSchedule` | Protocol v2 ScheduleMutationRequest; revision checked |
-| `startRun` | StartRunRequest; durable run and current task states |
+| `startRun` | StartRunRequest (optional `inputs` for the pipeline's declared run inputs); durable run and current task states |
 | `listRuns`, `getRun`, `usage` | WorkspaceRequest / RunRequest / RunRequest |
 | `waitRun` | RunRequest plus `afterRevision`, `timeoutMs`; current run after change or caller-selected timeout |
 | `cancelRun`, `cancelTask` | RunMutationRequest / CancelTaskRequest; native cancellation |
@@ -165,7 +165,15 @@ fixed-rate positive whole-number intervals in minutes or hours. UTC instants are
 authoritative; the IANA time-zone name is retained for editing and display. The
 missed-occurrence policy is explicit (`skip` or one coalesced run), as is overlap
 handling (`skip` or allow). Saving never enables execution. Changing the target,
-timing or either policy disables the schedule and requires a new enable action.
+timing, either policy or the schedule's `inputs` disables the schedule and requires
+a new enable action.
+
+A pipeline may declare run `inputs`. `startRun` and schedules supply values as
+`inputs: {name: value}`; declared defaults fill omitted values, and a missing
+required value, an undeclared name or a value of the wrong kind is refused with
+`invalid` before anything runs. A prepared plan's `start` has no values: add them
+to the plan before `run` when the system requires them. Inputs are untrusted task
+data shown to every agent; they never change permissions.
 
 The host atomically records an occurrence and its frozen run before native
 dispatch. A restart can resume that same prepared run; a task that crossed the

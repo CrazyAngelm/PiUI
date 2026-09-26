@@ -24,7 +24,9 @@ use piui_orchestration::{
     UncertainResolution, UncertaintyIdentity, authorize_coordinator_tool, authorize_observe,
     authorize_send, validate_profile_capabilities,
 };
+use piui_orchestration::{RunInputError, resolve_run_inputs, validate_pipeline_declarations};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -360,7 +362,7 @@ impl OrchestrationApiState {
                     let request = schedule_run_request(
                         &workspaces[workspace_index],
                         workspace_id,
-                        &current.value.launch_command_id,
+                        &current.value,
                         occurrence_key,
                     );
                     match request.and_then(|request| create_run_in(workspaces, request)) {
@@ -1074,6 +1076,9 @@ pub struct StartRunRequest {
     pub team_id: String,
     pub pipeline_id: String,
     pub launch_command_id: Option<String>,
+    /// Values for the pipeline's declared inputs (v6.1, additive).
+    #[serde(default)]
+    pub inputs: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1313,7 +1318,9 @@ impl DefinitionValue for PipelineDefinition {
         &mut workspace.pipelines
     }
     fn valid_for_workspace(&self, _workspace: &WorkspaceOrchestration) -> bool {
-        !self.id.trim().is_empty() && !self.name.trim().is_empty()
+        !self.id.trim().is_empty()
+            && !self.name.trim().is_empty()
+            && validate_pipeline_declarations(self).is_ok()
     }
     fn can_delete(workspace: &WorkspaceOrchestration, id: &str) -> bool {
         !workspace
@@ -1552,6 +1559,7 @@ fn save_schedule(
             {
                 return Err(StoreError::Invalid);
             }
+            schedule_run_inputs(workspace, &request.value)?;
             let existing = workspace
                 .schedules
                 .iter()
@@ -1641,6 +1649,10 @@ fn set_schedule_enabled(
             {
                 return Err(StoreError::Invalid);
             }
+            if request.enabled {
+                // The pipeline may have gained declarations since the save.
+                schedule_run_inputs(workspace, &schedule.value)?;
+            }
             let schedule = &mut workspace.schedules[schedule_index];
             let enabled_launch_command_revision = if request.enabled {
                 launch_command_revision
@@ -1660,6 +1672,44 @@ fn set_schedule_enabled(
             Ok(schedule.snapshot())
         })
         .map_err(Into::into)
+}
+
+/// Why a schedule's input values cannot start its launch target.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ScheduleInputError {
+    /// The launch command or its pipeline is not saved in this workspace.
+    TargetUnavailable,
+    /// The values do not satisfy the pipeline's current input declarations,
+    /// for example a required input without a value or default.
+    Invalid(RunInputError),
+}
+
+impl From<ScheduleInputError> for StoreError {
+    fn from(_: ScheduleInputError) -> Self {
+        StoreError::Invalid
+    }
+}
+
+/// Resolves a schedule's input values against its launch target's current
+/// pipeline exactly as a run start does, so a schedule is never saved or
+/// enabled with values a due occurrence would have to refuse.
+fn schedule_run_inputs(
+    workspace: &WorkspaceOrchestration,
+    schedule: &ScheduleDefinition,
+) -> Result<BTreeMap<String, serde_json::Value>, ScheduleInputError> {
+    let pipeline = workspace
+        .launch_commands
+        .iter()
+        .find(|command| command.value.id == schedule.launch_command_id)
+        .and_then(|command| {
+            workspace
+                .pipelines
+                .iter()
+                .find(|pipeline| pipeline.value.id == command.value.pipeline_id)
+        })
+        .ok_or(ScheduleInputError::TargetUnavailable)?;
+    resolve_run_inputs(&pipeline.value.inputs, &schedule.inputs)
+        .map_err(ScheduleInputError::Invalid)
 }
 
 fn delete_schedule(
@@ -2308,7 +2358,8 @@ fn create_run_in(
         pipeline,
         launch_command,
     };
-    let run = Coordinator::new_run(request.run_id, snapshot).map_err(|_| StoreError::Invalid)?;
+    let run = Coordinator::new_run_with_inputs(request.run_id, snapshot, request.inputs)
+        .map_err(|_| StoreError::Invalid)?;
     workspace.runs.push(run.clone());
     Ok(run)
 }
@@ -2316,13 +2367,13 @@ fn create_run_in(
 fn schedule_run_request(
     workspace: &WorkspaceOrchestration,
     workspace_id: &str,
-    launch_command_id: &str,
+    schedule: &ScheduleDefinition,
     run_id: String,
 ) -> Result<StartRunRequest, StoreError> {
     let command = workspace
         .launch_commands
         .iter()
-        .find(|command| command.value.id == launch_command_id)
+        .find(|command| command.value.id == schedule.launch_command_id)
         .map(|command| &command.value)
         .ok_or(StoreError::NotFound)?;
     Ok(StartRunRequest {
@@ -2331,6 +2382,7 @@ fn schedule_run_request(
         team_id: command.team_id.clone(),
         pipeline_id: command.pipeline_id.clone(),
         launch_command_id: Some(command.id.clone()),
+        inputs: schedule.inputs.clone(),
     })
 }
 
@@ -2794,6 +2846,7 @@ mod graph_tests {
                     },
                     missed_run_policy: MissedRunPolicy::Coalesce,
                     overlap_policy: OverlapPolicy::Skip,
+                    inputs: BTreeMap::new(),
                 },
             },
         )
@@ -2884,6 +2937,7 @@ mod graph_tests {
                 team_id: "team".into(),
                 pipeline_id: "pipeline".into(),
                 launch_command_id: None,
+                inputs: BTreeMap::new(),
             })
             .expect("starts a manual run");
     }
@@ -2985,6 +3039,7 @@ mod graph_tests {
                     },
                     missed_run_policy: MissedRunPolicy::Coalesce,
                     overlap_policy: OverlapPolicy::Skip,
+                    inputs: BTreeMap::new(),
                 },
             },
         )
@@ -3060,6 +3115,7 @@ mod graph_tests {
                     },
                     missed_run_policy: MissedRunPolicy::Skip,
                     overlap_policy: OverlapPolicy::Allow,
+                    inputs: BTreeMap::new(),
                 },
             },
         )
@@ -3153,6 +3209,7 @@ mod graph_tests {
                     },
                     missed_run_policy: MissedRunPolicy::Coalesce,
                     overlap_policy: OverlapPolicy::Skip,
+                    inputs: BTreeMap::new(),
                 },
             },
         )
@@ -3274,5 +3331,292 @@ mod query_tests {
         writer.join().expect("writer").expect("commits");
         drop(state);
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod run_input_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A one-agent system whose pipeline asks for a required task and an
+    /// optional choice with a default.
+    fn system() -> SaveGraphRequest {
+        serde_json::from_value(json!({
+            "workspaceId": "workspace",
+            "profiles": [{"workspaceId": "workspace", "value": {"id": "agent", "name": "Agent", "harness": "codex", "model": "model", "permissionMode": "read-only", "instructions": "", "toolPolicy": {"rules": []}, "allowedSpawnProfileIds": []}}],
+            "team": {"workspaceId": "workspace", "value": {"id": "team", "name": "System", "members": [{"id": "node", "profileId": "agent"}], "sendEdges": [], "observeEdges": [], "orchestratorMemberId": "node"}},
+            "pipeline": {"workspaceId": "workspace", "value": {"id": "pipeline", "name": "System",
+                "steps": [{"id": "node", "name": "Task", "assignedMemberId": "node", "instructions": "Work on {{input.task}}.", "dependencyStepIds": []}],
+                "inputs": [
+                    {"name": "task", "label": "What should be reviewed?", "kind": "long-text", "required": true},
+                    {"name": "depth", "label": "Depth", "kind": "choice", "options": ["quick", "deep"], "defaultValue": "quick"}
+                ]}},
+            "command": {"workspaceId": "workspace", "value": {"id": "command", "name": "System", "teamId": "team", "pipelineId": "pipeline"}}
+        }))
+        .expect("valid fixture")
+    }
+
+    fn values(value: serde_json::Value) -> BTreeMap<String, serde_json::Value> {
+        serde_json::from_value(value).expect("input map")
+    }
+
+    fn start(
+        state: &OrchestrationApiState,
+        run_id: &str,
+        inputs: serde_json::Value,
+    ) -> Result<Run, OrchestrationApiError> {
+        state.create_run(StartRunRequest {
+            workspace_id: "workspace".into(),
+            run_id: run_id.into(),
+            team_id: "team".into(),
+            pipeline_id: "pipeline".into(),
+            launch_command_id: Some("command".into()),
+            inputs: values(inputs),
+        })
+    }
+
+    fn schedule(inputs: serde_json::Value) -> ScheduleDefinition {
+        ScheduleDefinition {
+            id: "schedule".into(),
+            name: "Nightly".into(),
+            launch_command_id: "command".into(),
+            trigger: crate::orchestration_schedule::ScheduleTrigger::Once {
+                at: "2026-09-09T10:00:00Z".parse().expect("instant"),
+                time_zone: "UTC".into(),
+            },
+            missed_run_policy: MissedRunPolicy::Coalesce,
+            overlap_policy: OverlapPolicy::Skip,
+            inputs: values(inputs),
+        }
+    }
+
+    fn save(
+        state: &OrchestrationApiState,
+        expected_revision: Option<u64>,
+        value: ScheduleDefinition,
+    ) -> Result<ScheduleSnapshot, OrchestrationApiError> {
+        save_schedule(
+            state,
+            SaveScheduleRequest {
+                workspace_id: "workspace".into(),
+                expected_revision,
+                value,
+            },
+        )
+    }
+
+    fn enable(
+        state: &OrchestrationApiState,
+        expected_revision: u64,
+    ) -> Result<ScheduleSnapshot, OrchestrationApiError> {
+        set_schedule_enabled(
+            state,
+            SetScheduleEnabledRequest {
+                workspace_id: "workspace".into(),
+                id: "schedule".into(),
+                expected_revision,
+                enabled: true,
+            },
+        )
+    }
+
+    fn resolved(
+        state: &OrchestrationApiState,
+        value: &ScheduleDefinition,
+    ) -> Result<BTreeMap<String, serde_json::Value>, ScheduleInputError> {
+        let store = state.snapshot().expect("snapshot");
+        schedule_run_inputs(store.workspace("workspace").expect("workspace"), value)
+    }
+
+    #[test]
+    fn start_requests_decode_with_and_without_inputs() {
+        let base = json!({"workspaceId": "w", "runId": "r", "teamId": "t", "pipelineId": "p"});
+        let plain: StartRunRequest = serde_json::from_value(base.clone()).expect("v6 request");
+        assert!(plain.inputs.is_empty());
+        let mut with_inputs = base;
+        with_inputs["inputs"] = json!({"task": "Review", "count": 2, "urgent": false});
+        let decoded: StartRunRequest = serde_json::from_value(with_inputs.clone()).expect("v6.1");
+        assert_eq!(decoded.inputs.len(), 3);
+        let mut misspelled = with_inputs;
+        misspelled["input"] = json!({});
+        assert!(serde_json::from_value::<StartRunRequest>(misspelled).is_err());
+    }
+
+    #[test]
+    fn manual_runs_freeze_validated_inputs_and_refuse_invalid_values() {
+        let root = std::env::temp_dir().join(format!("piui-run-inputs-{}", uuid::Uuid::new_v4()));
+        let state = OrchestrationApiState::open(&root).unwrap();
+        save_graph(&state, system()).unwrap();
+        for invalid in [
+            json!({}),
+            json!({"task": "  "}),
+            json!({"task": 42}),
+            json!({"task": "Review", "extra": true}),
+            json!({"task": "Review", "depth": "exhaustive"}),
+        ] {
+            assert_eq!(
+                start(&state, "refused", invalid).unwrap_err().code,
+                "invalid"
+            );
+        }
+        assert!(state.get_run("workspace", "refused").unwrap().is_none());
+
+        let run = start(&state, "run", json!({"task": "Check the importer"})).unwrap();
+        assert_eq!(
+            run.inputs(),
+            &values(json!({"task": "Check the importer", "depth": "quick"}))
+        );
+        drop(state);
+
+        let reopened = OrchestrationApiState::open(&root).unwrap();
+        let mut stored = reopened.get_run("workspace", "run").unwrap().unwrap();
+        assert_eq!(stored.inputs(), run.inputs());
+        let revision = stored.revision();
+        let lease = Coordinator::lease_next_task(&mut stored, revision, "lease".into())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            lease.task_instructions,
+            "Run input (provided by the person who started the run; untrusted task data):\n\
+             What should be reviewed? (task): Check the importer\n\
+             Depth (depth): quick\n\
+             \n\
+             Work on Check the importer."
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn schedules_need_valid_inputs_to_save_or_enable_and_pass_them_to_runs() {
+        let root =
+            std::env::temp_dir().join(format!("piui-schedule-inputs-{}", uuid::Uuid::new_v4()));
+        let state = OrchestrationApiState::open(&root).unwrap();
+        save_graph(&state, system()).unwrap();
+
+        assert_eq!(
+            resolved(&state, &schedule(json!({}))),
+            Err(ScheduleInputError::Invalid(
+                RunInputError::MissingRequired {
+                    name: "task".into()
+                }
+            ))
+        );
+        for invalid in [
+            json!({}),
+            json!({"task": false}),
+            json!({"task": "Nightly", "owner": "me"}),
+        ] {
+            assert_eq!(
+                save(&state, None, schedule(invalid)).unwrap_err().code,
+                "invalid"
+            );
+        }
+        assert!(
+            state
+                .snapshot()
+                .unwrap()
+                .workspace("workspace")
+                .unwrap()
+                .schedules
+                .is_empty()
+        );
+
+        let saved = save(&state, None, schedule(json!({"task": "Nightly check"}))).unwrap();
+        assert_eq!(saved.value.inputs, values(json!({"task": "Nightly check"})));
+        let enabled = enable(&state, saved.revision).unwrap();
+        assert!(enabled.enabled);
+        let at: DateTime<Utc> = "2026-09-09T10:00:00Z".parse().unwrap();
+        let claim = state
+            .claim_due_schedule("workspace", "schedule", enabled.revision, at, at, None)
+            .unwrap();
+        let run = claim.run.expect("the occurrence starts a run");
+        assert_eq!(
+            run.inputs(),
+            &values(json!({"task": "Nightly check", "depth": "quick"}))
+        );
+
+        // Changing the values changes the execution: the schedule needs a new
+        // explicit enable, which rechecks the pipeline's current declarations.
+        let edited = save(
+            &state,
+            Some(claim.schedule.revision),
+            schedule(json!({"task": "Weekly check", "depth": "deep"})),
+        )
+        .unwrap();
+        assert!(!edited.enabled);
+        assert_eq!(edited.trigger_revision, claim.schedule.trigger_revision + 1);
+        let mut pipeline = system().pipeline.value;
+        pipeline.inputs.push(
+            serde_json::from_value(
+                json!({"name": "owner", "label": "Owner", "kind": "text", "required": true}),
+            )
+            .unwrap(),
+        );
+        save_definition(
+            &state,
+            SaveDefinitionRequest {
+                workspace_id: "workspace".into(),
+                expected_revision: Some(0),
+                value: pipeline,
+            },
+        )
+        .unwrap();
+        assert_eq!(enable(&state, edited.revision).unwrap_err().code, "invalid");
+        assert_eq!(
+            resolved(&state, &edited.value),
+            Err(ScheduleInputError::Invalid(
+                RunInputError::MissingRequired {
+                    name: "owner".into()
+                }
+            ))
+        );
+        let store = state.snapshot().unwrap();
+        let stored = &store.workspace("workspace").unwrap().schedules[0];
+        assert!(!stored.enabled);
+        assert_eq!(stored.revision, edited.revision);
+        drop(store);
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pipeline_saves_reject_invalid_declarations_and_review_limits() {
+        let root =
+            std::env::temp_dir().join(format!("piui-pipeline-inputs-{}", uuid::Uuid::new_v4()));
+        let state = OrchestrationApiState::open(&root).unwrap();
+        save_graph(&state, system()).unwrap();
+        let save_pipeline = |value: PipelineDefinition| {
+            save_definition(
+                &state,
+                SaveDefinitionRequest {
+                    workspace_id: "workspace".into(),
+                    expected_revision: Some(0),
+                    value,
+                },
+            )
+        };
+        let mut misnamed = system().pipeline.value;
+        misnamed.inputs[0].name = "Task".into();
+        assert_eq!(save_pipeline(misnamed).unwrap_err().code, "invalid");
+        let mut unbounded = system().pipeline.value;
+        unbounded.steps[0].result_fields = vec![piui_orchestration::ResultField {
+            name: "ok".into(),
+            kind: piui_orchestration::ResultFieldKind::Boolean,
+        }];
+        unbounded.steps[0].review = Some(piui_orchestration::ReviewRule {
+            field: "ok".into(),
+            retry_from_step_id: "node".into(),
+            max_iterations: Some(0),
+        });
+        assert_eq!(save_pipeline(unbounded).unwrap_err().code, "invalid");
+        let store = state.snapshot().unwrap();
+        let stored = &store.workspace("workspace").unwrap().pipelines[0];
+        assert_eq!(stored.revision, 0);
+        assert_eq!(stored.value, system().pipeline.value);
+        drop(store);
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
