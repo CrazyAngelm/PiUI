@@ -64,6 +64,12 @@ export interface StartRunRequest extends WorkspaceRequest {
   readonly launchCommandId?: OrchestrationId;
   /** Additive (v6.1): values for the pipeline's declared inputs. */
   readonly inputs?: Readonly<Record<string, RunInputValue>>;
+  /**
+   * Additive (v6.3): admit pinned steps from their pinned data instead of
+   * running them. Refused with `conflict` when the saved pipeline has no
+   * pinned step. Absent or false runs every step and freezes no pins.
+   */
+  readonly usePinnedData?: boolean;
 }
 
 export interface RunRequest extends WorkspaceRequest {

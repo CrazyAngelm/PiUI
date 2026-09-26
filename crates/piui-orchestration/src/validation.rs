@@ -48,6 +48,11 @@ pub enum DefinitionError {
         step_id: String,
         reason: &'static str,
     },
+    #[error("pinned data of step {step_id} is invalid: {reason}")]
+    InvalidPinnedOutput {
+        step_id: String,
+        reason: &'static str,
+    },
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -75,6 +80,8 @@ pub enum AuthorizationError {
     CoordinatorToolDenied { member_id: String, tool: String },
     #[error("step {step_id} is not an agent step and cannot be spawned")]
     StepNotSpawnable { step_id: String },
+    #[error("step {step_id} runs from pinned data and cannot be spawned")]
+    StepPinned { step_id: String },
 }
 
 pub fn validate_definition(snapshot: &RunDefinitionSnapshot) -> Result<(), DefinitionError> {

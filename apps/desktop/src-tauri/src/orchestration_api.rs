@@ -1273,6 +1273,10 @@ pub struct StartRunRequest {
     /// Values for the pipeline's declared inputs (v6.1, additive).
     #[serde(default)]
     pub inputs: BTreeMap<String, serde_json::Value>,
+    /// Admit pinned steps from their pinned data (v6.3, additive). Only a
+    /// person's explicit start sets it; schedules never do.
+    #[serde(default)]
+    pub use_pinned_data: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -2562,8 +2566,16 @@ fn create_run_in(
         pipeline,
         launch_command,
     };
-    let run = Coordinator::new_run_with_inputs(request.run_id, snapshot, request.inputs)
-        .map_err(|_| StoreError::Invalid)?;
+    let options = piui_orchestration::RunOptions {
+        use_pinned_data: request.use_pinned_data,
+    };
+    let run = Coordinator::new_run_with_options(request.run_id, snapshot, request.inputs, options)
+        .map_err(|error| match error {
+            // The pins the person saw were removed meanwhile: never run every
+            // step instead.
+            CoordinatorError::NoPinnedData => StoreError::Conflict,
+            _ => StoreError::Invalid,
+        })?;
     workspace.runs.push(run.clone());
     Ok(run)
 }
@@ -2587,6 +2599,8 @@ fn schedule_run_request(
         pipeline_id: command.pipeline_id.clone(),
         launch_command_id: Some(command.id.clone()),
         inputs: schedule.inputs.clone(),
+        // Automations always run every step for real.
+        use_pinned_data: false,
     })
 }
 
@@ -3161,6 +3175,7 @@ mod graph_tests {
                 pipeline_id: "pipeline".into(),
                 launch_command_id: None,
                 inputs: BTreeMap::new(),
+                use_pinned_data: false,
             })
             .expect("starts a manual run");
     }
@@ -3596,6 +3611,7 @@ mod run_input_tests {
             pipeline_id: "pipeline".into(),
             launch_command_id: Some("command".into()),
             inputs: values(inputs),
+            use_pinned_data: false,
         })
     }
 

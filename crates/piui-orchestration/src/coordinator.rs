@@ -64,6 +64,8 @@ pub enum CoordinatorError {
     InvalidRunData { reason: &'static str },
     #[error("step {step_id} is not run by this executor")]
     ExecutorMismatch { step_id: String },
+    #[error("the pipeline has no pinned data to use")]
+    NoPinnedData,
 }
 
 #[derive(Debug, Error)]
@@ -81,10 +83,11 @@ pub enum RunDataError {
 pub struct Coordinator;
 
 impl Coordinator {
-    /// Materializes coordinator-owned steps (currently program routers) before
-    /// a host chooses a native profile. These steps never produce a launch.
+    /// Materializes coordinator-owned steps (program routers and, in a run
+    /// started with pinned data, pinned steps) before a host chooses a native
+    /// profile. These steps never produce a launch.
     pub fn advance_automatic_steps(run: &mut Run) {
-        advance_program_routers(run);
+        advance_automatic(run);
     }
 
     /// A run that supplies no input values. Declared defaults still apply, and
@@ -103,6 +106,33 @@ impl Coordinator {
         definition: RunDefinitionSnapshot,
         inputs: BTreeMap<String, Value>,
     ) -> Result<Run, CoordinatorError> {
+        Self::new_run_with_options(run_id, definition, inputs, crate::RunOptions::default())
+    }
+
+    /// `new_run_with_inputs` with the options a person chose at start (v6.3).
+    /// Without pinned data the snapshot is frozen without pins: they take no
+    /// part in the run. With it, a pipeline without pinned steps is refused
+    /// rather than silently running every step.
+    pub fn new_run_with_options(
+        run_id: impl Into<String>,
+        mut definition: RunDefinitionSnapshot,
+        inputs: BTreeMap<String, Value>,
+        options: crate::RunOptions,
+    ) -> Result<Run, CoordinatorError> {
+        if options.use_pinned_data {
+            if !definition
+                .pipeline
+                .steps
+                .iter()
+                .any(|step| step.pinned_output.is_some())
+            {
+                return Err(CoordinatorError::NoPinnedData);
+            }
+        } else {
+            for step in &mut definition.pipeline.steps {
+                step.pinned_output = None;
+            }
+        }
         validate_definition(&definition)?;
         let run_id = run_id.into();
         if run_id.trim().is_empty() {
@@ -123,6 +153,7 @@ impl Coordinator {
                 result_reference: None,
                 failure: None,
                 output: None,
+                pinned: false,
             })
             .collect();
         Ok(Run {
@@ -138,6 +169,7 @@ impl Coordinator {
             tasks,
             messages: Vec::new(),
             agent_requests: Vec::new(),
+            use_pinned_data: options.use_pinned_data,
         })
     }
 
@@ -195,7 +227,7 @@ impl Coordinator {
         if lease_id.trim().is_empty() {
             return Err(CoordinatorError::EmptyId { kind: "lease" });
         }
-        advance_program_routers(run);
+        advance_automatic(run);
         let Some(step_id) = Self::ready_task_ids(run).first().map(|id| (*id).to_owned()) else {
             return Ok(None);
         };
@@ -377,6 +409,7 @@ impl Coordinator {
             result_fields,
             execution_mode: None,
             executor: None,
+            pinned_output: None,
             input_instructions,
             id: id.clone(),
             name: name.into(),
@@ -399,6 +432,7 @@ impl Coordinator {
             result_reference: None,
             failure: None,
             output: None,
+            pinned: false,
         });
         run.revision += 1;
         Ok(id)
@@ -450,6 +484,13 @@ impl Coordinator {
         // collaboration and a script is host work outside the team.
         if step.executor_kind() != crate::ExecutorKind::Agent {
             return Err(AuthorizationError::StepNotSpawnable {
+                step_id: step_id.to_owned(),
+            }
+            .into());
+        }
+        // A pinned step's result is its pinned data; it is never launched.
+        if crate::pinned::admitted_from_pin(run, &step) {
+            return Err(AuthorizationError::StepPinned {
                 step_id: step_id.to_owned(),
             }
             .into());
@@ -661,7 +702,7 @@ impl Coordinator {
         if execution.id.trim().is_empty() {
             return Err(CoordinatorError::EmptyId { kind: "execution" });
         }
-        advance_program_routers(run);
+        advance_automatic(run);
         let Some(step_id) = Self::ready_task_ids(run).first().map(|id| (*id).to_owned()) else {
             return Ok(None);
         };
@@ -1024,6 +1065,7 @@ impl Coordinator {
         task.result_reference = None;
         task.failure = None;
         task.output = None;
+        task.pinned = false;
         task.revision += 1;
         run.revision += 1;
         run.status = RunStatus::Running;
@@ -1464,6 +1506,7 @@ fn validate_run_data(run: &Run) -> Result<(), CoordinatorError> {
             });
         }
         if task.output.is_some()
+            && !task.pinned
             && !run
                 .definition
                 .pipeline
@@ -1473,6 +1516,27 @@ fn validate_run_data(run: &Run) -> Result<(), CoordinatorError> {
         {
             return Err(CoordinatorError::InvalidRunData {
                 reason: "only host-executed tasks record output",
+            });
+        }
+        // A pinned task never ran: it has no execution, and its step holds
+        // the pinned data of a run started with it (v6.3).
+        if task.pinned
+            && (!run.use_pinned_data
+                || task.execution.is_some()
+                || task.result_reference.is_some()
+                || matches!(
+                    task.status,
+                    TaskStatus::Ready | TaskStatus::Running | TaskStatus::Uncertain
+                )
+                || !run
+                    .definition
+                    .pipeline
+                    .steps
+                    .iter()
+                    .any(|step| step.id == task.step_id && step.pinned_output.is_some()))
+        {
+            return Err(CoordinatorError::InvalidRunData {
+                reason: "a pinned task has no pinned data or was executed",
             });
         }
     }
@@ -1570,6 +1634,18 @@ pub(crate) fn route_gate_satisfied(run: &Run, step: &crate::PipelineStep) -> boo
                 })
             })
     })
+}
+
+/// Program routers, then (v6.3) pinned steps of a run started with pinned
+/// data, until neither admits anything more. Each admission leaves a ready
+/// task terminal or waiting for a person, so this ends.
+fn advance_automatic(run: &mut Run) {
+    loop {
+        advance_program_routers(run);
+        if !crate::pinned::admit_pinned_steps(run) {
+            break;
+        }
+    }
 }
 
 fn advance_program_routers(run: &mut Run) {

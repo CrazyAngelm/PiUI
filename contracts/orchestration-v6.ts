@@ -10,6 +10,11 @@
  * adds step executors: `PipelineStep.executor` (`agent` | `llm` | `script`),
  * `TaskRecord.output` for script results and `FailureRecord.detail`. Stored
  * v6.0/v6.1 data decodes unchanged and is re-encoded without the new fields.
+ *
+ * v6.3 (additive) adds pinned data for debugging without paid re-runs:
+ * `PipelineStep.pinnedOutput`, `OrchestrationRunV6.usePinnedData` and
+ * `TaskRecord.pinned` (see `PinnedOutput`). Stored v6.0-v6.2 data decodes
+ * unchanged and is re-encoded without the new fields.
  */
 
 export type OrchestrationId = string;
@@ -102,6 +107,11 @@ export interface TeamDefinition {
 export interface ResultField { readonly name: string; readonly kind: 'text' | 'number' | 'boolean' | 'text-list' | 'artifact'; }
 
 export interface ResultCondition { readonly sourceStepId: string; readonly field: string; readonly equals: string | number | boolean; }
+/**
+ * A rejection starts another round from `retryFromStepId`. In a run with
+ * pinned data whose correction step is pinned (v6.3), the reviewer's task
+ * instead waits for a person with failure code `review-retry-pinned`.
+ */
 export interface ReviewRule {
   readonly field: string;
   readonly retryFromStepId: string;
@@ -171,6 +181,34 @@ export type StepExecutor =
   | { readonly type: 'llm' }
   | { readonly type: 'script'; readonly runtime: ScriptRuntime; readonly source: string; readonly timeoutSeconds: number };
 
+/**
+ * Output a person pinned on a step (v6.3, additive), usually copied from a
+ * finished run. A run started with `usePinnedData` admits the step as
+ * succeeded with this output instead of running it (no native session, model
+ * call or script process); downstream steps receive it like a recorded
+ * script result, checked against the step's result fields. A run started
+ * without pinned data freezes its snapshot without pins. At least one of
+ * `text` and `data`. Not allowed on callable roles, program routers or
+ * reviewing steps. Portable system files never carry pinned data.
+ */
+export interface PinnedOutput {
+  /** At most 256 KiB (UTF-8): a native final answer or a script's stdout. */
+  readonly text?: string;
+  /** The text is the first part of a longer output that was cut. */
+  readonly truncated?: boolean;
+  /** A JSON object of at most 256 KiB (compact JSON). */
+  readonly data?: Record<string, unknown>;
+  /** RFC 3339 time it was pinned (at most 64 bytes). */
+  readonly pinnedAt: string;
+  /** The run it was copied from. */
+  readonly sourceRunId?: OrchestrationId;
+}
+
+/** Largest pinned text and pinned result, and all pins of one pipeline, in bytes. */
+export const MAX_PINNED_TEXT_BYTES = 256 * 1024;
+export const MAX_PINNED_DATA_BYTES = 256 * 1024;
+export const MAX_PIPELINE_PINNED_BYTES = 1024 * 1024;
+
 export interface PipelineStep {
   readonly inputBindings?: readonly InputBinding[];
   readonly condition?: ResultCondition;
@@ -183,6 +221,8 @@ export interface PipelineStep {
   readonly executionMode?: 'scheduled' | 'callable';
   /** Additive (v6.2): how the step runs; absent is a native agent turn. */
   readonly executor?: StepExecutor;
+  /** Additive (v6.3): output used instead of running the step by a run with pinned data. */
+  readonly pinnedOutput?: PinnedOutput;
   /** Expected input supplied by upstream agents. */
   readonly inputInstructions?: string;
   readonly id: OrchestrationId;
@@ -295,8 +335,13 @@ export interface TaskRecord {
   readonly execution?: NativeExecutionReference;
   readonly resultReference?: NativeHistoryReference;
   readonly failure?: FailureRecord;
-  /** Additive (v6.2): recorded text of a script that did not print a JSON object. */
+  /** Additive (v6.2): recorded text of a script that did not print a JSON object, or (v6.3) the pinned text of a pinned task. */
   readonly output?: TaskOutput;
+  /**
+   * Additive (v6.3): the result is the step's pinned data and nothing ran
+   * (no `execution`). Also set when that data failed the result contract.
+   */
+  readonly pinned?: boolean;
 }
 
 export interface MessageRecord {
@@ -336,6 +381,11 @@ export interface OrchestrationRunV6 {
   readonly tasks: readonly TaskRecord[];
   readonly messages: readonly MessageRecord[];
   readonly agentRequests: readonly AgentRequestRecord[];
+  /**
+   * Additive (v6.3): frozen at start. Pinned steps are admitted from their
+   * pinned data; without it the snapshot holds no pins.
+   */
+  readonly usePinnedData?: boolean;
 }
 
 /**

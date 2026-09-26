@@ -376,19 +376,24 @@ pub(crate) fn settle_result(run: &mut Run, index: usize, step: &PipelineStep) {
     let step_id = step.id.as_str();
     if run.tasks[index].status == TaskStatus::Succeeded {
         if let Some(review) = &step.review {
-            match run.tasks[index]
+            let verdict = run.tasks[index]
                 .result_data
                 .as_ref()
                 .and_then(|value| value.get(&review.field))
-                .and_then(Value::as_bool)
-            {
-                Some(false) if review_limit_reached(run, step_id, review) => {
-                    // Another round would exceed the bound: keep the last
-                    // result and let a person approve, reject or repeat.
+                .and_then(Value::as_bool);
+            let hold = match verdict {
+                Some(false) => review_hold(run, step_id, review),
+                _ => None,
+            };
+            match (verdict, hold) {
+                (Some(false), Some(code)) => {
+                    // Another round would exceed the bound or repeat pinned
+                    // input: keep the last result and let a person approve,
+                    // reject or repeat.
                     run.tasks[index].status = TaskStatus::AwaitingApproval;
-                    run.tasks[index].failure = Some(FailureRecord::new("review-limit-reached"));
+                    run.tasks[index].failure = Some(FailureRecord::new(code));
                 }
-                Some(false) => {
+                (Some(false), None) => {
                     let repeated = run
                         .attempts
                         .iter()
@@ -404,12 +409,12 @@ pub(crate) fn settle_result(run: &mut Run, index: usize, step: &PipelineStep) {
                         run.paused = true;
                     }
                 }
-                Some(true) => {
+                (Some(true), _) => {
                     if step.require_approval {
                         run.tasks[index].status = TaskStatus::AwaitingApproval;
                     }
                 }
-                None => {
+                (None, _) => {
                     run.tasks[index].status = TaskStatus::Failed;
                     run.tasks[index].failure = Some(FailureRecord::new("review-verdict-missing"));
                 }
@@ -420,6 +425,17 @@ pub(crate) fn settle_result(run: &mut Run, index: usize, step: &PipelineStep) {
     }
     advance_conditions(run);
     refresh_status(run);
+}
+
+/// Why a rejection waits for a person instead of starting another round:
+/// the rule's bound is used up, or (v6.3) the correction step runs from
+/// pinned data, so another round would repeat the same input.
+fn review_hold(run: &Run, step_id: &str, review: &ReviewRule) -> Option<&'static str> {
+    if review_limit_reached(run, step_id, review) {
+        return Some("review-limit-reached");
+    }
+    crate::pinned::retries_pinned_step(run, &review.retry_from_step_id)
+        .then_some(crate::REVIEW_RETRY_PINNED)
 }
 
 /// Whether a rejection completing a review round has used up the rule's bound.
@@ -481,6 +497,8 @@ fn repeat_from(run: &mut Run, step_id: &str) -> Result<(), CoordinatorError> {
             task.result_data = None;
             task.failure = None;
             task.output = None;
+            // A pinned step is admitted from its pinned data again.
+            task.pinned = false;
             task.revision += 1;
         }
     }
