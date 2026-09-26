@@ -141,7 +141,7 @@ test("Pi composer exposes typed compact and rejects idle steer", async () => {
   const completed = new Promise(resolve => settled = resolve);
   const adapter = await createPiAdapter(config(), event => { events.push(event); if (event.type === "status" && event.status === "idle") settled(); });
   try {
-    assert.deepEqual(await adapter.composerCapabilities(), {steer:true, compact:true});
+    assert.deepEqual(await adapter.composerCapabilities(), {steer:true, compact:true, images:true});
     await assert.rejects(adapter.prompt({text:"cannot start a turn",mode:"steer"}), {bridgeCode:"no-active-turn"});
     await adapter.compact();
     await completed;
@@ -298,5 +298,55 @@ test("Pi editor dialogs carry their prefill and retire when Pi's timeout ends th
     await waitFor(() => events.some((event) => event.type === "approvalResolved" && event.requestId === approval.id));
     await assert.rejects(adapter.respond({ requestId: approval.id, decision: "approve-once", text: "late" }), { bridgeCode: "stale-approval" });
     assert.equal((await adapter.snapshot()).approvals.length, 0);
+  } finally { await adapter.dispose(); }
+});
+
+const PNG = { mimeType: "image/png", data: "iVBORw0KGgo=" };
+
+test("Pi sends images as native ImageContent and lists them in the user block", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    assert.equal((await adapter.composerCapabilities()).images, true);
+    await adapter.prompt({ text: "look", mode: "prompt", images: [PNG, { mimeType: "image/webp", data: "UklGRg==" }] });
+    const snapshot = await waitFor(async () => {
+      const current = await adapter.snapshot();
+      return current.title.startsWith("images:") ? current : undefined;
+    });
+    assert.equal(snapshot.title, "images:prompt:image/image/png/iVBORw0KGgo=,image/image/webp/UklGRg==");
+    const user = await waitFor(() => events.find((event) => event.type === "block" && event.block.kind === "user")?.block);
+    assert.equal(user.text, "look\n\n[image]\n[image]");
+    assert.ok(!JSON.stringify(events).includes("iVBORw0KGgo="), "image bytes never reach a block");
+  } finally { await adapter.dispose(); }
+});
+
+test("Pi refuses images a text-only model cannot take and malformed images", async () => {
+  const adapter = await createPiAdapter(config({ runtimeArgs: [fixture, "--text-only-model"] }), () => {});
+  try {
+    assert.equal((await adapter.composerCapabilities()).images, false);
+    await assert.rejects(adapter.prompt({ text: "look", mode: "prompt", images: [PNG] }), { bridgeCode: "unsupported-input" });
+    assert.equal((await adapter.snapshot()).title, "Fixture", "nothing reached Pi");
+  } finally { await adapter.dispose(); }
+  const images = await createPiAdapter(config(), () => {});
+  try {
+    for (const invalid of [[{ mimeType: "image/svg+xml", data: "PHN2Zz4=" }], [{ mimeType: "image/png" }], "not-a-list", Array.from({ length: 7 }, () => PNG)]) {
+      await assert.rejects(images.prompt({ text: "look", mode: "prompt", images: invalid }), { bridgeCode: "invalid-request" });
+    }
+  } finally { await images.dispose(); }
+});
+
+test("Pi lists its own slash commands without native paths", async () => {
+  const adapter = await createPiAdapter(config(), () => {});
+  try {
+    const catalog = await adapter.composerCatalog();
+    assert.deepEqual(catalog, {
+      commands: [
+        { name: "skill:review", description: "Review a diff", source: "skill" },
+        { name: "fix-tests", description: "Fix failing tests", source: "prompt" },
+        { name: "session-name", description: "Set or clear session name", source: "extension" },
+      ],
+      skills: [],
+    });
+    assert.ok(!JSON.stringify(catalog).includes("SECRET"));
   } finally { await adapter.dispose(); }
 });

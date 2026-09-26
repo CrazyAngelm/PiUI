@@ -418,7 +418,10 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
         models: modelCatalog,
       };
     },
-    composerCapabilities() { return { steer: typeof connection.steer === "function", compact: typeof connection.compact === "function" }; },
+    // The Prime SDK connection PiUI drives takes text prompts only.
+    composerCapabilities() { return { steer: typeof connection.steer === "function", compact: typeof connection.compact === "function", images: false }; },
+    // No slash-command or skill-mention discovery is exposed through the SDK.
+    composerCatalog() { return { commands: [], skills: [] }; },
     async compact() {
       if (typeof connection.compact !== "function") throw fail("unsupported-method", "This SDK does not support compaction.");
       if (status !== "idle") throw fail("turn-active", "Wait for the current turn before compacting.");
@@ -426,9 +429,10 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
       void connection.compact().catch(() => emit({ type: "error", message: "Context compaction failed." })).finally(() => setStatus("idle"));
       return { accepted: true };
     },
-    async prompt({ text, mode }) {
+    async prompt({ text, mode, images }) {
       if (disposed) throw fail("not-running", "The Prime runtime is not running.");
       if (typeof text !== "string" || !text.trim()) throw fail("invalid-request", "A non-empty prompt is required.");
+      if (images !== undefined && images !== null) throw fail("unsupported-input", "Prime Agent does not accept images in PiUI.");
       if (mode === "prompt") await connection.prompt(text);
       else if (mode === "steer") {
         if (status !== "running") throw fail("no-active-turn", "There is no active turn to steer.");

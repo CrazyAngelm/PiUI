@@ -37,7 +37,7 @@ describe('UI Lab composer outbox', () => {
     const id = sessionId(host, 'Route host calls through one transport');
     const initial = await composer(host, { type: 'snapshot', sessionId: id });
     expect(initial).toEqual({
-      protocol: 19, sessionId: id, capabilities: { steer: true, compact: true }, queue: { revision: 0, paused: false, items: [] },
+      protocol: 19, sessionId: id, capabilities: { steer: true, compact: true, images: true }, queue: { revision: 0, paused: false, items: [] },
     });
     const requestId = labUuid('test:request:1');
     const queued = await composer(host, { type: 'send', sessionId: id, requestId, text: 'Summarize the diff', mode: 'prompt' });
@@ -129,7 +129,7 @@ describe('UI Lab composer outbox', () => {
     });
     if (hermes.type !== 'session') throw new Error('Expected a Hermes session.');
     const hermesId = hermes.snapshot.session.id;
-    expect((await composer(host, { type: 'snapshot', sessionId: hermesId })).capabilities).toEqual({ steer: false, compact: false });
+    expect((await composer(host, { type: 'snapshot', sessionId: hermesId })).capabilities).toEqual({ steer: false, compact: false, images: true });
     expect(await rejection(composer(host, { type: 'compact', sessionId: hermesId }))).toMatchObject({ code: 'NOT_SUPPORTED' });
   });
 

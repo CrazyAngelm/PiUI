@@ -243,6 +243,23 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
   // reminders and interrupt markers); such entries are not user prompts.
   const INTERNAL_USER_TEXT = /^(?:\s*<[a-z][\w-]*[\s>]|\[Request interrupted by user[^\]]*\])/;
   const userBlockId = (uuid) => opaque("claude-user", uuid);
+  // A user message lists each image it carried as an `[image]` line after
+  // its text; image bytes never reach a block.
+  const withImageMarkers = (text, images) => {
+    if (!images) return text;
+    const markers = Array.from({ length: images }, () => "[image]").join("\n");
+    return text ? `${text}\n\n${markers}` : markers;
+  };
+  // Native image input: stream-json user content blocks with a base64 source.
+  const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+  const promptImages = (images) => {
+    if (images === undefined || images === null) return [];
+    if (!Array.isArray(images) || images.length > 6 || images.some((image) => !isRecord(image)
+      || !IMAGE_TYPES.has(image.mimeType) || typeof image.data !== "string" || !image.data)) {
+      throw fail("invalid-request", "The prompt images are invalid.");
+    }
+    return images.map((image) => ({ type: "image", source: { type: "base64", media_type: image.mimeType, data: image.data } }));
+  };
   const toolBlockId = (toolUseId) => opaque("claude-tool", toolUseId);
 
   // ---------------------------------------------------------------------------
@@ -267,19 +284,28 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
     }
     return models;
   };
+  // Native slash commands (built-in headless commands, custom commands,
+  // skills and plugin commands) with their one-line description and hint.
   const mapCommands = (rows) => {
-    const names = new Set();
+    const seen = new Map();
     for (const row of Array.isArray(rows) ? rows : []) {
-      if (isRecord(row) && typeof row.name === "string" && row.name.trim() && row.name.length <= 200) names.add(row.name.trim());
+      if (!isRecord(row) || typeof row.name !== "string" || !row.name.trim() || row.name.length > 200) continue;
+      const name = row.name.trim();
+      if (seen.has(name)) continue;
+      seen.set(name, {
+        name,
+        ...(plain(row.description) ? { description: oneLine(row.description, 300) } : {}),
+        ...(plain(row.argumentHint) ? { hint: oneLine(row.argumentHint, 120) } : {}),
+      });
     }
-    return [...names];
+    return [...seen.values()];
   };
   const workspaceModel = (entry) => ({ id: entry.id, provider: "anthropic", name: entry.name, thinkingLevels: [...entry.thinkingLevels] });
   // Native fast-mode support is never advertised: PiUI does not offer it.
   const catalogModel = (entry) => ({ ...workspaceModel(entry), supportsFast: false });
   const findModel = (id) => catalog.find((entry) => entry.id === id);
   const resourceCatalog = () => ({
-    items: commands.map((name) => ({ kind: "skill", id: name, name, enabled: true, configurable: false })),
+    items: commands.map(({ name }) => ({ kind: "skill", id: name, name, enabled: true, configurable: false })),
     warnings: [],
   });
 
@@ -1129,15 +1155,17 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
       const content = entry.message.content;
       if (entry.type === "user") {
         const texts = [];
+        let images = 0;
         if (typeof content === "string") texts.push(content);
         else if (Array.isArray(content)) {
           for (const part of content) {
             if (!isRecord(part)) continue;
             if (part.type === "text" && typeof part.text === "string") texts.push(part.text);
+            else if (part.type === "image") images += 1;
             else if (part.type === "tool_result" && typeof part.tool_use_id === "string" && toolIndex.has(part.tool_use_id)) applyResult(part);
           }
         }
-        const text = texts.filter((value) => !INTERNAL_USER_TEXT.test(value)).join("\n");
+        const text = withImageMarkers(texts.filter((value) => !INTERNAL_USER_TEXT.test(value)).join("\n"), images);
         if (text.trim()) result.push({ id: userBlockId(key), kind: "user", label: "You", status: "complete", text, ...createdAt });
         continue;
       }
@@ -1450,10 +1478,17 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
     // Claude Code folds a message written during a turn into that turn at the
     // next tool boundary, which is native steering. Compaction is only a
     // `/compact` prompt in headless mode, so it is not offered.
-    composerCapabilities() { return { steer: true, compact: false }; },
-    async prompt({ text, mode } = {}) {
+    // Every Claude model takes image content blocks in stream-json input.
+    composerCapabilities() { return { steer: true, compact: false, images: true }; },
+    // Slash commands Claude Code runs itself when a prompt starts with
+    // `/<name>` (its skills are among them). Claude has no `$` mention syntax.
+    composerCatalog() {
+      return { commands: commands.map((command) => ({ ...command, source: "command" })), skills: [] };
+    },
+    async prompt({ text, mode, images: attached } = {}) {
       if (typeof text !== "string" || !text.trim()) throw fail("invalid-request", "A non-empty prompt is required.");
       if (mode !== "prompt" && mode !== "steer" && mode !== "follow-up") throw fail("invalid-request", "The prompt mode is invalid.");
+      const images = promptImages(attached);
       if (disposed || sessionFailed || !proc || proc.ended) throw fail("not-running", "Claude Code is not running.");
       if (restarting) throw fail("turn-active", "Claude Code is applying new settings.");
       const busy = running();
@@ -1470,7 +1505,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
         if (busy) priority = "later";
       }
       const uuid = randomUUID();
-      const block = { id: userBlockId(uuid), kind: "user", label: "You", status: "complete", text };
+      const block = { id: userBlockId(uuid), kind: "user", label: "You", status: "complete", text: withImageMarkers(text, images.length) };
       const immediate = !busy;
       // Admission precedes the write: native acknowledgements may arrive first.
       const admitted = !turns.includes(turn);
@@ -1484,7 +1519,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
       try {
         await writeFrame({
           type: "user",
-          message: { role: "user", content: [{ type: "text", text }] },
+          message: { role: "user", content: [{ type: "text", text }, ...images] },
           parent_tool_use_id: null,
           session_id: nativeId,
           uuid,

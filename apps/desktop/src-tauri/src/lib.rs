@@ -795,6 +795,7 @@ pub fn run() -> Result<(), tauri::Error> {
             app.manage(trigger_engine.clone());
             background::setup(app.handle(), safe_mode, autostart_allowed);
             app_update::install(app, &app_data_dir, safe_mode);
+            workspace_api::composer_inputs::watch_file_drops(app.handle());
             if !safe_mode {
                 orchestration_scheduler.start_timed_schedule_worker(app.handle().clone());
                 trigger_engine.start(app.handle().clone());
@@ -819,6 +820,7 @@ pub fn run() -> Result<(), tauri::Error> {
             app_update::app_update_install_v1,
             app_update::app_update_set_auto_check_v1,
             app_update::app_update_restart_v1,
+            workspace_api::composer_inputs::workspace_composer_inputs_v1,
             api::bootstrap,
             api::bootstrap_v10,
             api::update_preferences,

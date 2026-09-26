@@ -4,6 +4,7 @@ import { acpHandlers } from './acpFake';
 import { appUpdateHandlers, updateScenarioFromSearch, type LabUpdateScenario } from './appUpdateFake';
 import { classicHandlers } from './classicFake';
 import { composerHandlers } from './composerFake';
+import { composerInputsHandlers } from './composerInputsFake';
 import { demoExtensions, extensionHandlers } from './extensionsFake';
 import { LabEventBus } from './labBus';
 import { browserTimers, LabClock, type LabTimers } from './labClock';
@@ -114,6 +115,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
   const handlers: LabHandlers = {
     ...workspaceHandlers(runtime),
     ...composerHandlers(runtime),
+    ...composerInputsHandlers(runtime),
     ...classicHandlers(runtime),
     ...orchestrationHandlers(runtime, scheduler, bus),
     ...scriptTestHandlers(runtime),

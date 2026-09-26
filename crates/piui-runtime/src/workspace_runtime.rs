@@ -352,6 +352,166 @@ pub struct HarnessCapabilities {
 pub struct ComposerCapabilities {
     pub steer: bool,
     pub compact: bool,
+    /// The harness protocol and the current model accept image input.
+    #[serde(default)]
+    pub images: bool,
+}
+
+/// One image of a prompt: sniffed bytes, base64-encoded for the bridge frame.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptImage {
+    /// `image/png`, `image/jpeg`, `image/gif` or `image/webp`.
+    pub mime_type: String,
+    pub data: String,
+}
+
+impl fmt::Debug for ComposerCatalog {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ComposerCatalog")
+            .field("commands", &self.commands.len())
+            .field("skills", &self.skills.len())
+            .finish()
+    }
+}
+
+/// Where a native slash command comes from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NativeCommandSource {
+    Command,
+    Extension,
+    Prompt,
+    Skill,
+}
+
+/// A slash command the harness runs itself when a message starts with
+/// `/<name>`. PiUI only inserts the text; it never executes the command.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeCommandEntry {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    pub source: NativeCommandSource,
+}
+
+/// A skill the harness resolves from its own mention syntax (`mention`).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeSkillEntry {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub mention: String,
+}
+
+/// Native `/` commands and `$` skills of a live session (`composerCatalog`).
+#[derive(Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComposerCatalog {
+    #[serde(default)]
+    pub commands: Vec<NativeCommandEntry>,
+    #[serde(default)]
+    pub skills: Vec<NativeSkillEntry>,
+}
+
+/// Most commands and skills one catalog keeps.
+pub const MAX_COMPOSER_CATALOG_ENTRIES: usize = 500;
+const MAX_COMPOSER_NAME_CHARS: usize = 160;
+const MAX_COMPOSER_DESCRIPTION_CHARS: usize = 300;
+const MAX_COMPOSER_HINT_CHARS: usize = 120;
+
+fn valid_composer_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().count() <= MAX_COMPOSER_NAME_CHARS
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+}
+
+/// Stands in for the slash of a one-segment `/command` token during path
+/// redaction, which would otherwise read it as an absolute POSIX path.
+const SLASH_COMMAND_SENTINEL: char = '\u{fdd0}';
+
+fn protect_slash_command(word: &str) -> String {
+    let body = word.trim_start_matches(['(', '`', '"', '\'']);
+    let prefix = &word[..word.len() - body.len()];
+    match body.strip_prefix('/') {
+        Some(rest) if !rest.is_empty() && !rest.contains(['/', '\\']) => {
+            format!("{prefix}{SLASH_COMMAND_SENTINEL}{rest}")
+        }
+        _ => word.to_owned(),
+    }
+}
+
+/// One bounded display line: controls removed, absolute paths redacted,
+/// longer text cut at a character boundary with an ellipsis. One-segment
+/// `/command` mentions stay readable.
+fn composer_line(value: Option<String>, max_chars: usize) -> Option<String> {
+    let value = value?;
+    let line = value
+        .split_whitespace()
+        .map(protect_slash_command)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cut = if line.chars().count() > max_chars {
+        let mut cut = line.chars().take(max_chars - 1).collect::<String>();
+        cut.push('…');
+        cut
+    } else {
+        line
+    };
+    crate::extension_ui::sanitize_single_line(&cut, max_chars * 2)
+        .map(|line| line.replace(SLASH_COMMAND_SENTINEL, "/"))
+        .filter(|line| !line.trim().is_empty())
+}
+
+impl ComposerCatalog {
+    /// Keeps only well-formed, distinct entries within the catalog bounds.
+    /// Names that appear twice are dropped entirely: PiUI never guesses which
+    /// of two same-name native commands the harness would run.
+    #[must_use]
+    pub fn sanitized(self) -> Self {
+        let mut counts = HashMap::<String, usize>::new();
+        for command in &self.commands {
+            *counts.entry(command.name.clone()).or_default() += 1;
+        }
+        let commands = self
+            .commands
+            .into_iter()
+            .filter(|command| {
+                valid_composer_name(&command.name) && counts.get(&command.name) == Some(&1)
+            })
+            .take(MAX_COMPOSER_CATALOG_ENTRIES)
+            .map(|command| NativeCommandEntry {
+                description: composer_line(command.description, MAX_COMPOSER_DESCRIPTION_CHARS),
+                hint: composer_line(command.hint, MAX_COMPOSER_HINT_CHARS),
+                ..command
+            })
+            .collect();
+        let mut seen = HashSet::new();
+        let skills = self
+            .skills
+            .into_iter()
+            .filter(|skill| {
+                let mut mention = skill.mention.chars();
+                valid_composer_name(&skill.name)
+                    && matches!(mention.next(), Some('$' | '/'))
+                    && valid_composer_name(mention.as_str())
+                    && seen.insert(skill.name.clone())
+            })
+            .take(MAX_COMPOSER_CATALOG_ENTRIES)
+            .map(|skill| NativeSkillEntry {
+                description: composer_line(skill.description, MAX_COMPOSER_DESCRIPTION_CHARS),
+                ..skill
+            })
+            .collect();
+        Self { commands, skills }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -844,6 +1004,9 @@ pub enum BridgeFailureCode {
     /// The native login is not the user's Claude subscription (Claude Code
     /// only): signed out, an API key, a cloud provider or a bearer token.
     SubscriptionRequired,
+    /// The harness or its current model does not accept an input kind of the
+    /// prompt (images). Nothing was sent.
+    UnsupportedInput,
     OperationFailed,
 }
 
@@ -1380,14 +1543,26 @@ impl NativeRuntime {
     }
 
     pub async fn prompt(&self, text: String, mode: PromptMode) -> Result<(), NativeRuntimeError> {
-        self.request(
-            "prompt",
-            json!({ "text": text, "mode": mode }),
-            REQUEST_TIMEOUT,
-            false,
-        )
-        .await
-        .map(|_| ())
+        self.prompt_with_images(text, mode, Vec::new()).await
+    }
+
+    /// A prompt with native image input. An adapter that cannot deliver the
+    /// images (protocol or current model) rejects the whole prompt with
+    /// `unsupported-input` before anything is sent; images are never dropped.
+    pub async fn prompt_with_images(
+        &self,
+        text: String,
+        mode: PromptMode,
+        images: Vec<PromptImage>,
+    ) -> Result<(), NativeRuntimeError> {
+        let params = if images.is_empty() {
+            json!({ "text": text, "mode": mode })
+        } else {
+            json!({ "text": text, "mode": mode, "images": images })
+        };
+        self.request("prompt", params, REQUEST_TIMEOUT, false)
+            .await
+            .map(|_| ())
     }
 
     pub async fn composer_capabilities(&self) -> Result<ComposerCapabilities, NativeRuntimeError> {
@@ -1395,6 +1570,17 @@ impl NativeRuntime {
             .request("composerCapabilities", json!({}), REQUEST_TIMEOUT, false)
             .await?;
         serde_json::from_value(value).map_err(|_| NativeRuntimeError::Protocol)
+    }
+
+    /// Native `/` commands and `$` skills the session reports, bounded and
+    /// sanitized. PiUI only inserts their text; the harness runs them.
+    pub async fn composer_catalog(&self) -> Result<ComposerCatalog, NativeRuntimeError> {
+        let value = self
+            .request("composerCatalog", json!({}), REQUEST_TIMEOUT, false)
+            .await?;
+        serde_json::from_value::<ComposerCatalog>(value)
+            .map(ComposerCatalog::sanitized)
+            .map_err(|_| NativeRuntimeError::Protocol)
     }
 
     pub async fn compact(&self) -> Result<(), NativeRuntimeError> {
@@ -1964,6 +2150,7 @@ fn map_bridge_failure(code: &str) -> BridgeFailureCode {
         "not-initialized" => BridgeFailureCode::NotInitialized,
         "not-running" => BridgeFailureCode::NotRunning,
         "claude-subscription-required" => BridgeFailureCode::SubscriptionRequired,
+        "unsupported-input" => BridgeFailureCode::UnsupportedInput,
         _ => BridgeFailureCode::OperationFailed,
     }
 }
@@ -4174,5 +4361,112 @@ mod tests {
         assert_eq!(validate_config(&config), Ok(()));
         config.service_tier = None;
         assert_eq!(validate_config(&config), Ok(()));
+    }
+
+    #[test]
+    fn composer_capabilities_default_to_no_images_and_stay_strict() {
+        let older: ComposerCapabilities =
+            serde_json::from_value(json!({"steer": true, "compact": false}))
+                .expect("a bridge without the images field");
+        assert!(!older.images);
+        let current: ComposerCapabilities =
+            serde_json::from_value(json!({"steer": true, "compact": true, "images": true}))
+                .expect("current bridge");
+        assert!(current.images);
+        assert!(
+            serde_json::from_value::<ComposerCapabilities>(
+                json!({"steer": true, "compact": true, "images": true, "video": true})
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn prompt_images_use_the_bridge_spelling() {
+        let image = PromptImage {
+            mime_type: "image/png".into(),
+            data: "iVBORw0KGgo=".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&image).expect("serializes"),
+            json!({"mimeType": "image/png", "data": "iVBORw0KGgo="})
+        );
+    }
+
+    #[test]
+    fn composer_catalog_keeps_only_bounded_unambiguous_entries() {
+        let catalog: ComposerCatalog = serde_json::from_value(json!({
+            "commands": [
+                {"name": "review", "description": "Review   the\ndiff with /review", "hint": "<ref>", "source": "command"},
+                {"name": "skill:release-notes", "description": r"Draft notes from C:\Users\example\notes.md", "source": "skill"},
+                {"name": "twice", "source": "prompt"},
+                {"name": "twice", "source": "extension"},
+                {"name": "bad name", "source": "command"},
+                {"name": "", "source": "command"},
+                {"name": "long", "description": "x".repeat(400), "source": "command"},
+            ],
+            "skills": [
+                {"name": "test-runner", "description": "Runs tests", "mention": "$test-runner"},
+                {"name": "test-runner", "mention": "$test-runner"},
+                {"name": "spaced", "mention": "$spaced name"},
+                {"name": "plain", "mention": "plain"},
+            ]
+        }))
+        .expect("bridge catalog");
+        let catalog = catalog.sanitized();
+        let names: Vec<_> = catalog
+            .commands
+            .iter()
+            .map(|command| command.name.as_str())
+            .collect();
+        assert_eq!(names, ["review", "skill:release-notes", "long"]);
+        assert_eq!(
+            catalog.commands[0].description.as_deref(),
+            Some("Review the diff with /review")
+        );
+        assert_eq!(catalog.commands[0].hint.as_deref(), Some("<ref>"));
+        let redacted = catalog.commands[1]
+            .description
+            .as_deref()
+            .unwrap_or_default();
+        assert!(!redacted.contains("Users"), "{redacted}");
+        let long = catalog.commands[2]
+            .description
+            .as_deref()
+            .unwrap_or_default();
+        assert_eq!(long.chars().count(), 300);
+        assert!(long.ends_with('…'));
+        assert_eq!(catalog.skills.len(), 1);
+        assert_eq!(catalog.skills[0].mention, "$test-runner");
+        assert!(
+            serde_json::from_value::<ComposerCatalog>(
+                json!({"commands": [{"name": "x", "source": "command", "path": "/private"}]})
+            )
+            .is_err(),
+            "native paths never cross the bridge boundary"
+        );
+        let many = ComposerCatalog {
+            commands: (0..(MAX_COMPOSER_CATALOG_ENTRIES + 10))
+                .map(|index| NativeCommandEntry {
+                    name: format!("command-{index}"),
+                    description: None,
+                    hint: None,
+                    source: NativeCommandSource::Command,
+                })
+                .collect(),
+            skills: Vec::new(),
+        };
+        assert_eq!(
+            many.sanitized().commands.len(),
+            MAX_COMPOSER_CATALOG_ENTRIES
+        );
+    }
+
+    #[test]
+    fn unsupported_input_is_a_typed_bridge_refusal() {
+        assert_eq!(
+            map_bridge_failure("unsupported-input"),
+            BridgeFailureCode::UnsupportedInput
+        );
     }
 }

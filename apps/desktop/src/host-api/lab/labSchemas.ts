@@ -51,12 +51,23 @@ export const harnessModelsRequestSchema = object({ workspaceId: string, harness 
 
 export const composerCommandSchema = tagged('type', {
   snapshot: { sessionId: string },
-  send: { sessionId: string, requestId: string, text: string, mode: promptMode },
+  send: { sessionId: string, requestId: string, text: string, mode: promptMode, attachments: withDefault(arrayOf(string)) },
   edit: { sessionId: string, requestId: string, text: string },
   promote: { sessionId: string, requestId: string },
   remove: { sessionId: string, requestId: string },
   resume: { sessionId: string },
   compact: { sessionId: string },
+});
+
+/** `ComposerInputsCommand` (composer inputs v1). */
+export const composerInputsCommandSchema = tagged('type', {
+  pick: { workspaceId: string },
+  paste: { workspaceId: string, name: string, data: string },
+  drop: { workspaceId: string, dropId: string },
+  preview: { attachmentId: string },
+  discard: { attachmentIds: arrayOf(string) },
+  files: { workspaceId: string, query: string },
+  catalog: { sessionId: string },
 });
 
 const toolRule = object({

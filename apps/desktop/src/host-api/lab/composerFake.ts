@@ -1,5 +1,6 @@
 import { composerCapabilities } from './catalogFake';
-import type { ComposerCommand, ComposerSnapshot, Delivery } from './labContracts';
+import { claimLabImages, labImageSupport, releaseLabImages } from './composerInputsFake';
+import type { ComposerCommand, ComposerSnapshot, Delivery, QueuedAttachment } from './labContracts';
 import { NativeRejection, workspaceFailure, type NativeRejectionCode } from './labErrors';
 import { authorizeLive, requireLive, validText } from './labGuards';
 import type { LabHandlers } from './labHandlers';
@@ -13,8 +14,14 @@ import type { LabSessions } from './sessionRuntime';
  * The durable user outbox (`workspace_composer_v19`). Follow-ups queue and
  * drain one at a time when the session is idle; steer joins the active turn.
  * Every queue change bumps the revision and notifies `piui://composer-v19`.
+ * Images (composer inputs v1) move from the pending store to a message when
+ * it is queued and are released once it is delivered or removed.
  */
-type Capabilities = { steer: boolean; compact: boolean };
+type Capabilities = { steer: boolean; compact: boolean; images: boolean };
+
+/** Outbox text of a message whose images the session can no longer accept (host `IMAGES_REFUSED`). */
+const IMAGES_REFUSED =
+  'The harness or its current model does not accept images. Your message is still queued; remove it or switch to a model that accepts images.';
 
 function rejectedAsQueued(code: NativeRejectionCode): boolean {
   return code !== 'exited';
@@ -48,24 +55,54 @@ function composerNative(operation: () => void): void {
   }
 }
 
-function enqueue(queue: LabQueue, id: string, text: string): void {
+function enqueue(queue: LabQueue, id: string, text: string, attachments: readonly QueuedAttachment[] = []): void {
   // Request ids stay reserved after delivery, including across reloads.
-  if (!queue.items.some((item) => item.id === id)) queue.items.push({ id, text, status: 'queued' });
+  if (!queue.items.some((item) => item.id === id)) {
+    queue.items.push({ id, text, status: 'queued', ...(attachments.length ? { attachments: [...attachments] } : {}) });
+  }
+}
+
+/** `enqueue_message`: pending images move to the message only with it; a retried id claims nothing. */
+function enqueueMessage(
+  runtime: LabSessions,
+  record: LabSessionRecord,
+  requestId: string,
+  text: string,
+  attachmentIds: readonly string[],
+): void {
+  if (record.composer.items.some((item) => item.id === requestId)) return;
+  const images = claimLabImages(runtime.state, attachmentIds);
+  runtime.changeQueue(record, (queue) => enqueue(queue, requestId, text, images));
+}
+
+/** `hold_message`: nothing was sent; the message waits for the user. */
+function hold(runtime: LabSessions, record: LabSessionRecord, id: string, reason: string): void {
+  runtime.changeQueue(record, (queue) => {
+    const item = queue.items.find((candidate) => candidate.id === id);
+    if (item === undefined) throw workspaceFailure('CONFLICT');
+    item.status = 'queued';
+    item.error = reason;
+    queue.paused = true;
+  });
 }
 
 function settle(runtime: LabSessions, record: LabSessionRecord, id: string, rejection: NativeRejection | undefined): void {
-  runtime.changeQueue(record, (queue) => {
+  const delivered = runtime.changeQueue(record, (queue): QueuedAttachment[] => {
     const item = queue.items.find((candidate) => candidate.id === id);
     if (item === undefined) throw workspaceFailure('CONFLICT');
     if (rejection === undefined) {
       item.status = 'sent';
       item.text = '';
-      return;
+      const images = item.attachments ?? [];
+      delete item.attachments;
+      return images;
     }
     item.status = rejectedAsQueued(rejection.code) ? 'queued' : 'uncertain';
     item.error = deliveryError(rejection.code);
     queue.paused = true;
+    return [];
   });
+  releaseLabImages(runtime.state, delivered);
 }
 
 function attempt(operation: () => void): NativeRejection | undefined {
@@ -87,17 +124,22 @@ export function drain(runtime: LabSessions, record: LabSessionRecord): void {
   if (live.composerPaused || queue.paused || blocked || live.composerWaiting) return;
   const next = queue.items.find((item) => item.status === 'queued');
   if (next === undefined || live.status !== 'idle' || runtime.isBusy(record)) return;
-  const text = runtime.changeQueue(record, (draft) => {
+  const { text, images } = runtime.changeQueue(record, (draft) => {
     const item = draft.items.find((candidate) => candidate.id === next.id && candidate.status === 'queued');
     if (item === undefined) throw workspaceFailure('CONFLICT');
     item.status = 'sending';
     delete item.error;
-    return item.text;
+    return { text: item.text, images: item.attachments?.length ?? 0 };
   });
+  // The model may have changed since the message was queued.
+  if (images > 0 && !labImageSupport(record.harness, record.model)) {
+    hold(runtime, record, next.id, IMAGES_REFUSED);
+    return;
+  }
   live.composerWaiting = true;
   const rejection = attempt(() => runtime.prompt(record, text, 'prompt', () => {
     live.composerWaiting = false;
-  }));
+  }, images));
   if (rejection !== undefined) live.composerWaiting = false;
   settle(runtime, record, next.id, rejection);
 }
@@ -111,21 +153,25 @@ function steer(
   record: LabSessionRecord,
   capabilities: Capabilities,
   requestId: string,
-  text: string | undefined,
+  message: { text: string; attachments: readonly string[] } | undefined,
 ): void {
   if (!capabilities.steer) throw workspaceFailure('NOT_SUPPORTED');
   const settled: readonly Delivery[] = ['sent', 'cancelled', 'uncertain'];
   if (record.composer.items.some((item) => item.id === requestId && settled.includes(item.status))) return;
   if (record.live?.status !== 'running') throw workspaceFailure('NO_ACTIVE_TURN');
-  const body = runtime.changeQueue(record, (queue) => {
-    if (text !== undefined) enqueue(queue, requestId, text);
+  if (message !== undefined) enqueueMessage(runtime, record, requestId, message.text, message.attachments);
+  const { body, images } = runtime.changeQueue(record, (queue) => {
     const item = queue.items.find((candidate) => candidate.id === requestId && candidate.status === 'queued');
     if (item === undefined) throw workspaceFailure('CONFLICT');
     item.status = 'sending';
     delete item.error;
-    return item.text;
+    return { body: item.text, images: item.attachments?.length ?? 0 };
   });
-  settle(runtime, record, requestId, attempt(() => runtime.prompt(record, body, 'steer')));
+  if (images > 0 && !capabilities.images) {
+    hold(runtime, record, requestId, IMAGES_REFUSED);
+    return;
+  }
+  settle(runtime, record, requestId, attempt(() => runtime.prompt(record, body, 'steer', undefined, images)));
 }
 
 function composer(runtime: LabSessions, command: ComposerCommand): ComposerSnapshot {
@@ -137,20 +183,25 @@ function composer(runtime: LabSessions, command: ComposerCommand): ComposerSnaps
   const live = requireLive(record);
   live.composerNotify = true;
   if (live.status === 'failed') throw workspaceFailure('RUNTIME_FAILED');
-  const capabilities = composerCapabilities(record.harness);
+  const capabilities: Capabilities = { ...composerCapabilities(record.harness), images: labImageSupport(record.harness, record.model) };
   switch (command.type) {
     case 'snapshot':
       break;
-    case 'send':
+    case 'send': {
       if (!isUuid(command.requestId) || !validText(command.text)) throw workspaceFailure('INVALID_ARGUMENT');
+      const attachments = command.attachments ?? [];
+      if (attachments.length > 6 || !attachments.every(isUuid)) throw workspaceFailure('INVALID_ARGUMENT');
+      // Images the session cannot take are refused before anything is queued.
+      if (attachments.length > 0 && !capabilities.images) throw workspaceFailure('IMAGES_UNSUPPORTED');
       if (command.mode === 'steer') {
-        steer(runtime, record, capabilities, command.requestId, command.text);
+        steer(runtime, record, capabilities, command.requestId, { text: command.text, attachments });
         break;
       }
-      runtime.changeQueue(record, (queue) => enqueue(queue, command.requestId, command.text));
+      enqueueMessage(runtime, record, command.requestId, command.text, attachments);
       if (!record.composer.paused) live.composerPaused = false;
       scheduleDrain(runtime, record);
       break;
+    }
     case 'edit':
       if (!validText(command.text)) throw workspaceFailure('INVALID_ARGUMENT');
       runtime.changeQueue(record, (queue) => {
@@ -162,15 +213,20 @@ function composer(runtime: LabSessions, command: ComposerCommand): ComposerSnaps
     case 'promote':
       steer(runtime, record, capabilities, command.requestId, undefined);
       break;
-    case 'remove':
-      runtime.changeQueue(record, (queue) => {
+    case 'remove': {
+      const removed = runtime.changeQueue(record, (queue): QueuedAttachment[] => {
         const item = queue.items.find((candidate) => candidate.id === command.requestId
           && (candidate.status === 'queued' || candidate.status === 'uncertain'));
         if (item === undefined) throw workspaceFailure('CONFLICT');
         item.status = 'cancelled';
         item.text = '';
+        const images = item.attachments ?? [];
+        delete item.attachments;
+        return images;
       });
+      releaseLabImages(state, removed);
       break;
+    }
     case 'resume':
       runtime.changeQueue(record, (queue) => {
         if (queue.items.some((item) => item.status === 'sending' || item.status === 'uncertain')) {

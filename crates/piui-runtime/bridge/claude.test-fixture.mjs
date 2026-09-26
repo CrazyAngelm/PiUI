@@ -379,7 +379,8 @@ input.on("line", (line) => {
   if (message.type === "user") {
     const content = message.message?.content;
     const text = Array.isArray(content) ? content.filter((part) => part.type === "text").map((part) => part.text).join("") : String(content);
-    record({ kind: "user", uuid: message.uuid, priority: message.priority, text, sessionId: message.session_id });
+    const images = Array.isArray(content) ? content.filter((part) => part.type === "image") : [];
+    record({ kind: "user", uuid: message.uuid, priority: message.priority, text, sessionId: message.session_id, ...(images.length ? { images } : {}) });
     lifecycle(message.uuid, "queued");
     queue.push({ uuid: message.uuid, text, priority: message.priority ?? "next" });
     drain();

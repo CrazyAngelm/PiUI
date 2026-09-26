@@ -519,6 +519,17 @@ impl<'a> CodexProjectionBuilder<'a> {
         self.last_visible = Some((kind, text, source));
     }
 
+    /// Marks the user block pushed since `before` (if any) as carrying an
+    /// image; the image itself is never projected.
+    fn mark_user_image(&mut self, before: usize) {
+        if self.blocks.len() > before
+            && let Some(block) = self.blocks.last_mut()
+            && block.kind == GenericBlockKind::User
+        {
+            block.has_image = true;
+        }
+    }
+
     fn push_tool(&mut self, created_at: Option<String>, name: Option<&str>, call_id: Option<&str>) {
         let id = format!("timeline-{}", self.blocks.len());
         let title = name
@@ -769,13 +780,19 @@ fn project_codex_response_item(
                 .saturating_add(usize::from(has_image));
             let Some(text) = text else { return };
             match role {
-                Some("user") => builder.push_text(
-                    GenericBlockKind::User,
-                    "codex_response_message",
-                    created_at,
-                    text,
-                    CodexTextSource::Response,
-                ),
+                Some("user") => {
+                    let before = builder.blocks.len();
+                    builder.push_text(
+                        GenericBlockKind::User,
+                        "codex_response_message",
+                        created_at,
+                        text,
+                        CodexTextSource::Response,
+                    );
+                    if has_image {
+                        builder.mark_user_image(before);
+                    }
+                }
                 Some("assistant") => builder.push_text(
                     GenericBlockKind::Assistant,
                     "codex_response_message",
@@ -846,6 +863,7 @@ fn project_codex_event(
     let event_type = payload.get("type").and_then(Value::as_str).unwrap_or("");
     match event_type {
         "user_message" => {
+            let before = builder.blocks.len();
             if let Some(text) = payload.get("message").and_then(Value::as_str) {
                 builder.push_text(
                     GenericBlockKind::User,
@@ -866,6 +884,9 @@ fn project_codex_event(
             builder.image_entry_count = builder
                 .image_entry_count
                 .saturating_add(usize::from(has_image));
+            if has_image {
+                builder.mark_user_image(before);
+            }
         }
         "agent_message" => {
             if let Some(text) = payload.get("message").and_then(Value::as_str) {
@@ -1177,6 +1198,15 @@ mod tests {
         );
         assert_eq!(projection.report.parse_state, ParseState::Unsupported);
         assert_eq!(projection.report.image_entry_count, 1);
+        // The prompt that carried the image is marked; its bytes stay hidden.
+        assert_eq!(
+            blocks
+                .iter()
+                .filter(|block| block.has_image)
+                .map(|block| block.preview.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("Continue please")]
+        );
         assert_eq!(projection.report.compaction_entry_count, 1);
         assert_eq!(projection.report.branch_count, 1);
         assert_eq!(
@@ -2303,6 +2333,7 @@ fn project_claude_code_history(
                     .image_entry_count
                     .saturating_add(usize::from(*has_image));
                 if let Some(text) = text {
+                    let before = builder.blocks.len();
                     builder.push_text(
                         GenericBlockKind::User,
                         "claude_user",
@@ -2310,6 +2341,9 @@ fn project_claude_code_history(
                         text.clone(),
                         CodexTextSource::Response,
                     );
+                    if *has_image {
+                        builder.mark_user_image(before);
+                    }
                 }
             }
             ClaudeEntryContent::Assistant(parts) => {

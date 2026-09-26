@@ -27,7 +27,11 @@ export type WorkspaceErrorCode =
   | 'NO_ACTIVE_TURN'
   | 'QUEUE_PENDING'
   | 'DELIVERY_UNCERTAIN'
-  | 'SIGN_IN_REQUIRED';
+  | 'SIGN_IN_REQUIRED'
+  | 'IMAGES_UNSUPPORTED'
+  | 'ATTACHMENT_UNAVAILABLE'
+  | 'FILES_UNAVAILABLE'
+  | 'DROP_EXPIRED';
 
 /** `SESSION_CLOSED` is the host's `closed()` constructor: code NOT_FOUND with its own message. */
 const WORKSPACE_ERRORS: Readonly<Record<WorkspaceErrorCode, readonly [string, string]>> = {
@@ -47,6 +51,11 @@ const WORKSPACE_ERRORS: Readonly<Record<WorkspaceErrorCode, readonly [string, st
   QUEUE_PENDING: ['QUEUE_PENDING', 'Resolve queued messages before compacting.'],
   DELIVERY_UNCERTAIN: ['DELIVERY_UNCERTAIN', 'Check native history before dismissing the uncertain message.'],
   SIGN_IN_REQUIRED: ['SIGN_IN_REQUIRED', 'Sign in to Claude Code with your Claude subscription: run `claude` in a terminal and use /login.'],
+  // Composer inputs v1 and composer v19 attachments.
+  IMAGES_UNSUPPORTED: ['IMAGES_UNSUPPORTED', 'This harness or its current model does not accept images.'],
+  ATTACHMENT_UNAVAILABLE: ['ATTACHMENT_UNAVAILABLE', 'An attached image is no longer available. Attach it again.'],
+  FILES_UNAVAILABLE: ['FILES_UNAVAILABLE', 'The project files could not be listed.'],
+  DROP_EXPIRED: ['DROP_EXPIRED', 'The dropped files are no longer available. Drop them again.'],
 };
 
 export function workspaceFailure(kind: WorkspaceErrorCode): HostErrorPayload {

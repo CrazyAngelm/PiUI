@@ -654,6 +654,31 @@ sessions or project files; running and uncertain runs are refused and safe
 mode is read-only. Additive within orchestration v6 (v6.4) plus the
 independent run debugging v1 commands. See [RUN_DEBUGGING.md](RUN_DEBUGGING.md).
 
+## ADR-038 — Composer attachments stay host-owned and native-only
+
+**Decision:** the chat composers send images to a harness only through its
+own image input, keep attachment bytes in PiUI's application data, and never
+copy a file into a project. Any other file is a path reference the person
+confirms. The WebView never names a path for the host to read.
+
+**Implemented as** composer inputs v1 (`workspace_composer_inputs_v1`) and
+additive composer v19 fields. The host reads a file only when the person
+picked it in the native dialog or dropped it on the window; for a drop the
+host keeps the paths and gives the WebView a single-use id. Pasted bytes come
+from the clipboard. Image type is sniffed from the bytes (PNG, JPEG, GIF,
+WebP), bounded (5 MB, 6 per message), stored under `composer-attachments-v1`
+until the message is delivered or removed, and deleted at startup when no
+queued message needs it. A harness takes images only where its protocol does
+(Codex input items, Claude Code content blocks, Pi RPC `images`, ACP
+`promptCapabilities.image`) and the current model accepts them; otherwise the
+send is refused before anything is queued and the paperclip explains why. A
+bridge refuses an image it cannot deliver (`unsupported-input`) instead of
+dropping it. Previews are decoded in memory and drawn on a canvas, so the
+desktop CSP (`img-src 'self' asset:`) needs no `blob:`/`data:` source and the
+asset protocol stays off. `@` lists names of a trusted project's files only
+(no contents, `.gitignore` respected, links not followed). Native `/` commands
+and `$` skills are text the harness interprets; PiUI never runs them.
+
 ## ADR-039 — Signed updates are compiled in but off until a release configures them
 
 **Status:** Accepted 2026-09-27 (release 0.2.0; decisions delegated by the owner).

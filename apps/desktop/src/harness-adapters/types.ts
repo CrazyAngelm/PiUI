@@ -14,6 +14,25 @@ export interface OneShotSupport {
   /** User-visible explanation. It is never a stronger claim than `tools`. */
   readonly note: string;
 }
+/**
+ * Chat composer inputs of a harness (composer inputs v1). Presentation
+ * metadata only: a live session reports whether it takes images now (its
+ * protocol and current model) and which native commands and skills it has;
+ * the host refuses anything else before it reaches the harness.
+ */
+export interface ComposerSupport {
+  /**
+   * `native`: the harness protocol takes images (a model may still refuse
+   * them); `none`: PiUI never sends images to this harness.
+   */
+  readonly images: 'native' | 'none';
+  /** User-visible explanation of `images`, shown beside the attach button. */
+  readonly imagesNote: string;
+  /** The live session reports slash commands the harness runs itself. */
+  readonly nativeCommands: boolean;
+  /** The harness resolves `$name` skill mentions in the message text. */
+  readonly skillMentions: boolean;
+}
 /** Presentation manifest owned by each adapter. Host validation remains authoritative. */
 export interface HarnessConfiguration {
   readonly name: string;
@@ -30,6 +49,8 @@ export interface HarnessConfiguration {
   /** User-visible native limitations. They are never a sandbox claim. */
   readonly limitations?: readonly string[];
   readonly oneShot?: OneShotSupport;
+  /** Absent: no images, no native commands and no skill mentions. */
+  readonly composer?: ComposerSupport;
 }
 /** Built-in adapters only; ACP agents share one generic manifest (`harnessConfiguration`). */
 export type HarnessConfigurations = Readonly<Record<BuiltinHarness, HarnessConfiguration>>;

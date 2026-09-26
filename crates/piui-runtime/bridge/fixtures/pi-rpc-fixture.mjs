@@ -1,5 +1,6 @@
 let pending = Buffer.alloc(0);
 const toolFlag = process.argv.indexOf("--tools");
+const textOnly = process.argv.includes("--text-only-model");
 let sessionName = process.argv.includes("--no-tools") ? "no-tools" : toolFlag >= 0 ? process.argv[toolFlag + 1] : "Fixture";
 const write = (value, fragmented = false) => {
   const bytes = Buffer.from(`${JSON.stringify(value)}\n`);
@@ -72,8 +73,18 @@ process.stdin.on("data", (chunk) => {
     const line = pending.subarray(0, lf); pending = pending.subarray(lf + 1);
     if (!line.length) continue;
     const request = JSON.parse(line.toString("utf8"));
-    if (request.type === "get_state") write({ id: request.id, type: "response", command: request.type, success: true, data: { sessionId: "native-fixture", sessionFile: "host/private.jsonl", sessionName, isStreaming: false, thinkingLevel: "medium" } }, true);
-    else if (request.type === "get_commands") write({ id: request.id, type: "response", command: request.type, success: true, data: { commands: [{ name: "skill:review", source: "skill" }] } });
+    // Records the images a prompt carried so tests can read them back as the title.
+    if (Array.isArray(request.images)) {
+      sessionName = `images:${request.type}:${request.images.map((image) => `${image.type}/${image.mimeType}/${image.data}`).join(",")}`;
+      write({ type: "message_start", message: { id: `user-${request.id}`, role: "user", content: [{ type: "text", text: request.message }, ...request.images] } });
+    }
+    if (request.type === "get_state") write({ id: request.id, type: "response", command: request.type, success: true, data: { sessionId: "native-fixture", sessionFile: "host/private.jsonl", sessionName, isStreaming: false, thinkingLevel: "medium", model: { provider: "fixture", id: "model", name: "Fixture Model", input: textOnly ? ["text"] : ["text", "image"] } } }, true);
+    else if (request.type === "get_commands") write({ id: request.id, type: "response", command: request.type, success: true, data: { commands: [
+      { name: "skill:review", description: "Review a diff", source: "skill", location: "user", path: "/home/SECRET-MUST-NOT-LEAK/skills/review/SKILL.md" },
+      { name: "fix-tests", description: "Fix failing tests", source: "prompt", location: "project", path: "/home/SECRET-MUST-NOT-LEAK/prompts/fix-tests.md" },
+      { name: "session-name", description: "Set or clear session name", source: "extension", path: "/home/SECRET-MUST-NOT-LEAK/ext.ts" },
+      { name: "settings", source: "builtin" },
+    ] } });
     else if (request.type === "get_available_models") write({ id: request.id, type: "response", command: request.type, success: true, data: { models: [{ provider: "fixture", id: "model", name: "Fixture Model" }] } });
     else if (request.type === "get_entries") write({ id: request.id, type: "response", command: request.type, success: true, data: { entries: [{ id: "entry-private", type: "message", message: { role: "user", content: "hello" } }] } });
     else if (request.type === "prompt" && scenarios[request.message]) {

@@ -9,7 +9,9 @@
   import ChevronUp from '@lucide/svelte/icons/chevron-up';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import X from '@lucide/svelte/icons/x';
+  import ImageIcon from '@lucide/svelte/icons/image';
   import { t } from '../../../features/locale/language';
+  import { splitImageMarkers } from '../composer/mentions';
   import MarkdownContent from '../../../components/MarkdownContent.svelte';
   import { groupTimelineBlocks, type TimelineViewItem } from '../../../features/sessions/timelineView';
   import { readWorkspaceHistory } from '../../../host-api/workspaceHistory';
@@ -307,8 +309,17 @@
           {@const block = item.block}
           <div class="item" data-timeline-block={block.id}>
             {#if block.kind === 'user'}
+              <!-- Bridges list a message's images as trailing `[image]` lines; bytes never reach the transcript. -->
+              {@const user = splitImageMarkers(block.text ?? block.safeSummary ?? '')}
               <div class="user">
-                <MarkdownContent source={block.text ?? block.safeSummary ?? ''} />
+                {#if user.text || !user.images}<MarkdownContent source={user.text} />{/if}
+                {#if user.images}
+                  <ul class="user__images" aria-label={$t('Attached images')}>
+                    {#each Array.from({ length: user.images }, (_, index) => index) as index (index)}
+                      <li><ImageIcon size={14} /> {$t('Image')}</li>
+                    {/each}
+                  </ul>
+                {/if}
               </div>
             {:else if block.kind === 'assistant'}
               <article class="assistant" class:assistant--end={turnEnds.has(block.id)} class:assistant--failed={block.status === 'failed'} class:assistant--stopped={block.status === 'interrupted'}>
@@ -430,6 +441,24 @@
   }
   .user :global(.markdown-content) {
     font-size: var(--piui-chat-user-font-size);
+  }
+  .user__images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .user__images li {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border: 1px solid var(--piui-user-border);
+    border-radius: var(--piui-radius-sm);
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
   }
   .assistant {
     position: relative;

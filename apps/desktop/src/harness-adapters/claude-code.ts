@@ -1,3 +1,4 @@
+import { COMPOSER_SUPPORT } from './composer';
 import type { HarnessConfiguration } from './types';
 
 /**
@@ -28,6 +29,7 @@ export const claudeCodeConfiguration: HarnessConfiguration = {
     tools: 'disabled',
     note: 'Claude Code starts a model call with no tools and no MCP servers (--tools "" --strict-mcp-config).',
   },
+  composer: COMPOSER_SUPPORT['claude-code'],
   limitations: [
     'Runs only on your Claude subscription. API keys, cloud providers, fast mode and paid extra usage are never used.',
     "Read-only and workspace-write can only deny Claude Code permission prompts, so prompted tools such as Bash never run there. This is Claude Code's permission engine, not a sandbox.",

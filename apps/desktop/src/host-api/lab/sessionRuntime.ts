@@ -11,7 +11,7 @@ import {
   newLiveState, queuePending, sessionSummary,
   type LabQueue, type LabSessionRecord, type LabState,
 } from './labState';
-import { chatTurn, compactionTurn, type ApprovalStep, type TurnContext, type TurnStep } from './turnScripts';
+import { chatTurn, compactionTurn, withImageMarkers, type ApprovalStep, type TurnContext, type TurnStep } from './turnScripts';
 import { isAcpHarness } from '../../../../../contracts/harness-identity-v2';
 
 /** `lost`: the runtime was disposed before a terminal outcome (the host records uncertainty). */
@@ -113,10 +113,10 @@ export class LabSessions {
   }
 
   /** Native prompt semantics: steer joins the active turn; others queue behind it as follow-ups. */
-  prompt(record: LabSessionRecord, text: string, mode: 'prompt' | 'steer' | 'follow-up', onEnd?: TurnEndListener): void {
+  prompt(record: LabSessionRecord, text: string, mode: 'prompt' | 'steer' | 'follow-up', onEnd?: TurnEndListener, images = 0): void {
     this.requireRunning(record);
     if (mode === 'steer') {
-      this.steer(record, text);
+      this.steer(record, withImageMarkers(text, images));
       return;
     }
     if (this.turns.has(record.id)) {
@@ -124,7 +124,7 @@ export class LabSessions {
       return;
     }
     this.touch(record);
-    this.startTurn(record, chatTurn(this.nextContext(record), text), { onEnd });
+    this.startTurn(record, chatTurn(this.nextContext(record), text, images), { onEnd });
   }
 
   compact(record: LabSessionRecord): void {

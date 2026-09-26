@@ -177,6 +177,8 @@
                   {snapshot}
                   draft={store.draftFor(snapshot.session.id)}
                   updateDraft={(text: string) => store.updateDraft(snapshot.session.id, text)}
+                  images={store.attachmentsFor(snapshot.session.id)}
+                  updateImages={(images) => store.updateAttachments(snapshot.session.id, images)}
                   refresh={() => void store.reconcileSession(snapshot.session.id)}
                   interrupt={() => store.interrupt(snapshot.session.id)}
                   interruptBusy={store.interruptBusy}

@@ -310,6 +310,7 @@ mod tests {
                 text: "preserved draft".into(),
                 status: crate::workspace_api::composer::Delivery::Queued,
                 error: None,
+                attachments: Vec::new(),
             }],
         };
         registry

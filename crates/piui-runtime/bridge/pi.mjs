@@ -183,6 +183,27 @@ export async function createPiAdapter(config, emit) {
     if (!Array.isArray(message?.content)) return "";
     return message.content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("");
   };
+  // A user message lists each image it carried as an `[image]` line after
+  // its text; image bytes never reach a block.
+  const userText = (message) => {
+    const images = Array.isArray(message?.content) ? message.content.filter((part) => part?.type === "image").length : 0;
+    const text = textOf(message);
+    if (!images) return text;
+    const markers = Array.from({ length: images }, () => "[image]").join("\n");
+    return text ? `${text}\n\n${markers}` : markers;
+  };
+  // Native image input (Pi RPC `images`: ImageContent). Only a model that
+  // declares image input receives them; nothing is ever dropped silently.
+  const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+  const promptImages = (images) => {
+    if (images === undefined || images === null) return [];
+    if (!Array.isArray(images) || images.length > 6 || images.some((image) => !image || typeof image !== "object"
+      || !IMAGE_TYPES.has(image.mimeType) || typeof image.data !== "string" || !image.data)) {
+      throw fail("invalid-request", "The prompt images are invalid.");
+    }
+    return images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }));
+  };
+  const acceptsImages = (nativeModel) => Array.isArray(nativeModel?.input) && nativeModel.input.includes("image");
   const mapModel = (candidate) => candidate && typeof candidate.id === "string" ? {
     id: candidate.id,
     ...(typeof candidate.provider === "string" ? { provider: candidate.provider } : {}),
@@ -200,7 +221,7 @@ export async function createPiAdapter(config, emit) {
       kind: role,
       label: role === "user" ? "You" : "Pi",
       status: isError ? (entry.message.stopReason === "aborted" ? "interrupted" : "failed") : "complete",
-      text: textOf(entry.message),
+      text: role === "user" ? userText(entry.message) : textOf(entry.message),
       ...(typeof entry.timestamp === "string" ? { createdAt: entry.timestamp } : {}),
     };
   };
@@ -344,7 +365,7 @@ export async function createPiAdapter(config, emit) {
       case "message_start": {
         if (frame.message?.role === "user") {
           const id = opaque("pi-message", frame.message.id ?? `user-${++blockSequence}`);
-          putBlock({ id, kind: "user", label: "You", status: "complete", text: textOf(frame.message) });
+          putBlock({ id, kind: "user", label: "You", status: "complete", text: userText(frame.message) });
         }
         break;
       }
@@ -537,7 +558,28 @@ export async function createPiAdapter(config, emit) {
         capabilities, models: availableModels,
       };
     },
-    composerCapabilities() { return { steer: true, compact: true }; },
+    // Images follow the current model's declared input (Pi `Model.input`).
+    async composerCapabilities() {
+      const latest = await request("get_state").catch(() => undefined);
+      if (latest) state = latest;
+      return { steer: true, compact: true, images: acceptsImages(state.model) };
+    },
+    // Extension commands, prompt templates and skills Pi runs itself when a
+    // prompt starts with `/<name>`. Native paths and locations stay here.
+    async composerCatalog() {
+      const result = await request("get_commands");
+      const sources = new Set(["extension", "prompt", "skill"]);
+      const commands = [];
+      for (const command of Array.isArray(result?.commands) ? result.commands : []) {
+        if (!command || typeof command.name !== "string" || !sources.has(command.source)) continue;
+        commands.push({
+          name: command.name,
+          ...(typeof command.description === "string" && command.description.trim() ? { description: oneLine(command.description, 300) } : {}),
+          source: command.source,
+        });
+      }
+      return { commands, skills: [] };
+    },
     async compact() {
       if (status !== "idle") throw fail("turn-active", "Wait for the current turn before compacting.");
       setStatus("running");
@@ -550,18 +592,25 @@ export async function createPiAdapter(config, emit) {
         .finally(() => setStatus("idle"));
       return { accepted: true };
     },
-    async prompt({ text, mode }) {
+    async prompt({ text, mode, images: attached }) {
       if (typeof text !== "string" || !text.trim()) throw fail("invalid-request", "A non-empty prompt is required.");
+      const images = promptImages(attached);
+      if (images.length) {
+        const latest = await request("get_state").catch(() => undefined);
+        if (latest) state = latest;
+        if (!acceptsImages(state.model)) throw fail("unsupported-input", "The current Pi model does not accept images.");
+      }
+      const extra = images.length ? { images } : {};
       if (mode === "steer") {
         if (status !== "running") throw fail("no-active-turn", "There is no active turn to steer.");
-        await request("steer", { message: text });
+        await request("steer", { message: text, ...extra });
       } else {
         if (!["prompt", "follow-up"].includes(mode)) throw fail("invalid-request", "The prompt mode is invalid.");
         // Admission must precede native events, which may arrive before ACK.
         admittedTurns += 1;
         try {
-          if (mode === "follow-up") await request("follow_up", { message: text });
-          else await request("prompt", { message: text, streamingBehavior: "followUp" });
+          if (mode === "follow-up") await request("follow_up", { message: text, ...extra });
+          else await request("prompt", { message: text, streamingBehavior: "followUp", ...extra });
         } catch (error) { admittedTurns = Math.max(0, admittedTurns - 1); throw error; }
       }
       return { accepted: true };

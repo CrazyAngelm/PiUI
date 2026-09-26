@@ -567,7 +567,7 @@ test("steer is folded into the running turn at a tool boundary", async () => {
   const log = recorder();
   const adapter = await createClaudeAdapter(config, log.emit);
   try {
-    assert.deepEqual(adapter.composerCapabilities(), { steer: true, compact: false });
+    assert.deepEqual(adapter.composerCapabilities(), { steer: true, compact: false, images: true });
     await assert.rejects(adapter.prompt({ text: "no turn", mode: "steer" }), { bridgeCode: "no-active-turn" });
     await adapter.prompt({ text: "hold-fold", mode: "prompt" });
     await waitFor(async () => (await adapter.snapshot()).blocks.some((block) => block.text === "Starting."));
@@ -943,4 +943,61 @@ test("dispose retires pending approvals and ends the CLI", async () => {
   assert.equal(alive(startRecord(records).pid), false);
   assert.equal((await adapter.snapshot()).approvals.length, 0);
   assert.deepEqual(await adapter.dispose(), { disposed: true });
+});
+
+test("images reach Claude Code as base64 content blocks and show as markers", async () => {
+  const { config, records } = setup();
+  const log = recorder();
+  const adapter = await createClaudeAdapter(config, log.emit);
+  try {
+    const png = { mimeType: "image/png", data: "iVBORw0KGgo=" };
+    for (const invalid of [[{ mimeType: "image/svg+xml", data: "PHN2Zz4=" }], [{ data: "x" }], {}, Array.from({ length: 7 }, () => png)]) {
+      await assert.rejects(adapter.prompt({ text: "look", mode: "prompt", images: invalid }), { bridgeCode: "invalid-request" });
+    }
+    assert.equal(records().filter((record) => record.kind === "user").length, 0, "nothing was written for invalid images");
+    const before = log.of("turnCompleted").length;
+    await adapter.prompt({ text: "What is on this screen?", mode: "prompt", images: [png, { mimeType: "image/jpeg", data: "/9j/4A==" }] });
+    await waitFor(() => log.of("turnCompleted").length > before);
+    const sent = records().find((record) => record.kind === "user");
+    assert.equal(sent.text, "What is on this screen?");
+    assert.deepEqual(sent.images, [
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } },
+      { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "/9j/4A==" } },
+    ]);
+    const user = (await adapter.snapshot()).blocks.find((block) => block.kind === "user");
+    assert.equal(user.text, "What is on this screen?\n\n[image]\n[image]");
+    assert.doesNotMatch(JSON.stringify(log.events), /iVBORw0KGgo/);
+    assert.deepEqual(log.problems, []);
+  } finally { await adapter.dispose(); }
+});
+
+test("native slash commands keep their description and hint, and Claude has no $ skills", async () => {
+  const { config } = setup();
+  const adapter = await createClaudeAdapter(config, () => {});
+  try {
+    assert.deepEqual(adapter.composerCatalog(), {
+      commands: [
+        { name: "review", description: "Review code", source: "command" },
+        { name: "compact", description: "Compact", source: "command" },
+      ],
+      skills: [],
+    });
+  } finally { await adapter.dispose(); }
+});
+
+test("resumed user messages list their images as markers", async () => {
+  const nativeId = "22222222-2222-4333-8444-555555555555";
+  mkdirSync(projectDir, { recursive: true });
+  const line = (value) => JSON.stringify({ sessionId: nativeId, timestamp: "2026-09-26T10:00:00.000Z", ...value });
+  writeFileSync(join(projectDir, `${nativeId}.jsonl`), [
+    line({ type: "user", uuid: "u1", parentUuid: null, message: { role: "user", content: [{ type: "text", text: "Why is this red?" }, { type: "image", source: { type: "base64", media_type: "image/png", data: "SECRET-MUST-NOT-LEAK" } }] } }),
+    line({ type: "user", uuid: "u2", parentUuid: "u1", message: { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "SECRET-MUST-NOT-LEAK" } }] } }),
+  ].join("\n"));
+  const { config } = setup({ nativeId, nativePath: join(projectDir, `${nativeId}.jsonl`) });
+  const adapter = await createClaudeAdapter(config, () => {});
+  try {
+    const snapshot = await adapter.snapshot();
+    assert.deepEqual(snapshot.blocks.map((block) => block.text), ["Why is this red?\n\n[image]", "[image]"]);
+    assert.doesNotMatch(JSON.stringify(snapshot), /SECRET-MUST-NOT-LEAK/);
+  } finally { await adapter.dispose(); }
 });

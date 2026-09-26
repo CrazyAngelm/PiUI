@@ -29,6 +29,12 @@ const SAFE_ERRORS: Record<string, string> = {
   ACP_TRUST_REQUIRED: 'Review and trust this agent in Settings → Harnesses before starting it.',
   ACP_VERSION_UNCONFIRMED: "Confirm this agent's version in Settings → Harnesses before starting it.",
   ACP_SIGN_IN_REQUIRED: 'Sign in to this agent with its own app, then try again. Settings → Harnesses shows how.',
+  // Composer inputs v1 and composer v19 attachments.
+  IMAGES_UNSUPPORTED: 'This harness or its current model does not accept images. Remove the images or switch models.',
+  ATTACHMENT_UNAVAILABLE: 'An attached image is no longer available. Attach it again.',
+  FILES_UNAVAILABLE: 'The project files could not be listed.',
+  DROP_EXPIRED: 'The dropped files are no longer available. Drop them again.',
+  PROJECT_UNAVAILABLE: 'The project folder is unavailable.',
 };
 export class WorkspaceOperationError extends Error {
   constructor(readonly code: string, message: string) { super(message); this.name = 'WorkspaceOperationError'; }

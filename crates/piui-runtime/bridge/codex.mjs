@@ -109,6 +109,9 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   let currentProvider = currentModel?.provider;
   let modelCatalog = [];
   const modelDefaults = new Map();
+  // Native `Model.inputModalities` per model id; images go only to a model
+  // that declares image input.
+  const modelModalities = new Map();
   const mcpStartupFailures = new Set();
   const controlPlaneWarnings = new Set();
   let serviceTier = config.serviceTier;
@@ -189,6 +192,16 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     return "Codex reported a turn error.";
   };
   const textInput = (text) => ({ type: "text", text, text_elements: [] });
+  // Native image input: `UserInput` `{type:"image", url}` with a data URL.
+  const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+  const imageInputs = (images) => {
+    if (images === undefined || images === null) return [];
+    if (!Array.isArray(images) || images.length > 6 || images.some((image) => !image || typeof image !== "object"
+      || !IMAGE_TYPES.has(image.mimeType) || typeof image.data !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(image.data))) {
+      throw fail("invalid-request", "The prompt images are invalid.");
+    }
+    return images.map((image) => ({ type: "image", url: `data:${image.mimeType};base64,${image.data}` }));
+  };
   const fileChangesText = (changes) => (changes || []).map((change) => {
     const move = change.kind?.type === "update" && change.kind.move_path ? ` -> ${change.kind.move_path}` : "";
     return `${change.kind?.type || "change"}: ${change.path || "unknown path"}${move}${change.diff ? `\n${change.diff}` : ""}`;
@@ -263,7 +276,14 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   };
   const itemText = (item) => {
     if (item?.type === "userMessage") {
-      return (item.content || []).filter((value) => value?.type === "text").map((value) => value.text).join("\n");
+      // Images the message carried are listed as `[image]` lines after its
+      // text; their data URLs and local paths never reach a block.
+      const content = item.content || [];
+      const text = content.filter((value) => value?.type === "text").map((value) => value.text).join("\n");
+      const images = content.filter((value) => value?.type === "image" || value?.type === "localImage").length;
+      if (!images) return text;
+      const markers = Array.from({ length: images }, () => "[image]").join("\n");
+      return text ? `${text}\n\n${markers}` : markers;
     }
     if (item?.type === "agentMessage" || item?.type === "plan") return item.text || "";
     if (item?.type === "reasoning") return [...(item.summary || []), ...(item.content || [])].join("\n");
@@ -1310,6 +1330,32 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       .map((option) => option.reasoningEffort || option.effort)
       .filter((value) => typeof value === "string"),
   });
+  const acceptsImages = () => {
+    const modalities = currentModel ? modelModalities.get(currentModel.id) : undefined;
+    return Array.isArray(modalities) && modalities.includes("image");
+  };
+  // Skills of this thread's folder (`skills/list`). A `$name` mention of an
+  // enabled skill in the prompt text also gets its native `skill` input item,
+  // as the Codex app-server documents, so Codex injects the skill itself.
+  const loadSkills = async () => {
+    const response = await callNative("skills/list", { cwds: [config.cwd], forceReload: false });
+    const skills = [];
+    for (const group of response?.data ?? []) for (const skill of group?.skills ?? []) {
+      if (typeof skill?.name === "string" && typeof skill.path === "string" && skill.enabled !== false) skills.push(skill);
+    }
+    return skills;
+  };
+  const mentionPattern = (name) => new RegExp(`(^|\\s)\\$${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[\\s.,;:!?)\\]])`);
+  const skillInputs = async (text) => {
+    if (!text.includes("$")) return [];
+    const skills = await loadSkills().catch(() => []);
+    const counts = new Map();
+    for (const skill of skills) counts.set(skill.name, (counts.get(skill.name) ?? 0) + 1);
+    // An ambiguous name is left for Codex to resolve from the text alone.
+    return skills
+      .filter((skill) => counts.get(skill.name) === 1 && mentionPattern(skill.name).test(text))
+      .map((skill) => ({ type: "skill", name: skill.name, path: skill.path }));
+  };
   const adapter = {
     async resources() {
       const items = [];
@@ -1363,26 +1409,53 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
         models: modelCatalog,
       };
     },
-    composerCapabilities() { return { steer: true, compact: true }; },
+    // Images follow the current model's native `inputModalities`.
+    async composerCapabilities() {
+      if (!modelModalities.size) await adapter.models().catch(() => undefined);
+      return { steer: true, compact: true, images: acceptsImages() };
+    },
+    // Codex app-server exposes no slash-command catalog (its TUI expands
+    // custom prompts itself); skills are mentioned as `$name`.
+    async composerCatalog() {
+      const skills = await loadSkills();
+      return {
+        commands: [],
+        skills: skills.map((skill) => {
+          const description = [skill.interface?.shortDescription, skill.shortDescription, skill.description]
+            .find((value) => typeof value === "string" && value.trim());
+          return { name: skill.name, ...(description ? { description: oneLine(description, 300) } : {}), mention: `$${skill.name}` };
+        }),
+      };
+    },
     async compact() {
       if (status !== "idle" || activeTurnId || startingTurn) throw fail("turn-active", "Wait for the current turn before compacting.");
       startingTurn = true;
       try { await callNative("thread/compact/start", { threadId: nativeId }); return { accepted: true }; }
       finally { startingTurn = false; }
     },
-    async prompt({ text, mode }) {
+    async prompt({ text, mode, images }) {
       if (typeof text !== "string" || !new Set(["prompt", "steer", "follow-up"]).has(mode)) {
         throw fail("invalid-prompt", "The Codex prompt request is invalid.");
       }
+      const attached = imageInputs(images);
+      // Awaits only for images or `$` mentions, after admission is decided.
+      const nativeInput = async () => {
+        if (attached.length) {
+          if (!modelModalities.size) await adapter.models().catch(() => undefined);
+          if (!acceptsImages()) throw fail("unsupported-input", "The current Codex model does not accept images.");
+        }
+        return [textInput(text), ...attached, ...(await skillInputs(text))];
+      };
       if (status === "failed" || status === "closed" || status === "stopping") {
         throw fail("native-not-ready", "The Codex thread is not ready for a prompt.");
       }
       if (activeTurnId) {
         if (mode !== "steer") throw fail("turn-active", "Codex is already running a turn.");
+        const expectedTurnId = activeTurnId;
         await callNative("turn/steer", {
           threadId: nativeId,
-          expectedTurnId: activeTurnId,
-          input: [textInput(text)],
+          expectedTurnId,
+          input: await nativeInput(),
         });
         return { accepted: true };
       }
@@ -1390,9 +1463,10 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       if (mode === "steer") throw fail("no-active-turn", "There is no active turn to steer.");
       startingTurn = true;
       try {
+        const input = await nativeInput();
         const response = await callNative("turn/start", {
           threadId: nativeId,
-          input: [textInput(text)],
+          input,
           ...(serviceTier ? { serviceTier: serviceTier === "fast" ? "fast" : "default" } : {}),
           ...(currentModel ? { model: currentModel.id } : {}),
           ...(thinkingLevel ? { effort: thinkingLevel } : {}),
@@ -1435,7 +1509,10 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
         // A native default/resumed model may be hidden from new-model discovery.
         // Keep its authoritative reasoning metadata and selected menu entry.
         const page = await callNative("model/list", { cursor, includeHidden: true });
-        for (const model of page?.data || []) modelDefaults.set(model.model || model.id, model.defaultReasoningEffort);
+        for (const model of page?.data || []) {
+          modelDefaults.set(model.model || model.id, model.defaultReasoningEffort);
+          modelModalities.set(model.model || model.id, Array.isArray(model.inputModalities) ? model.inputModalities : undefined);
+        }
         data.push(...(page?.data || []).filter((model) => !model.hidden || (model.model || model.id) === currentModel?.id).map(mapModel));
         cursor = page?.nextCursor || null;
       } while (cursor);

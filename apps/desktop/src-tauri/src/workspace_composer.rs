@@ -1,7 +1,9 @@
 //! Durable user-message outbox. Native harnesses still own every model turn.
+use super::attachments::{AttachmentStore, MAX_ATTACHMENTS_PER_MESSAGE, StoredImage};
 use super::*;
+use base64::Engine as _;
 use piui_runtime::workspace_runtime::{
-    BridgeFailureCode, ComposerCapabilities, NativeRuntimeError,
+    BridgeFailureCode, ComposerCapabilities, NativeRuntimeError, PromptImage,
 };
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -21,6 +23,10 @@ pub struct QueuedMessage {
     pub status: Delivery,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Additive within v19: images whose bytes stay in PiUI's app data until
+    /// this message is delivered or removed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) attachments: Vec<StoredImage>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -52,14 +58,30 @@ impl QueueState {
             }
         }
     }
-    fn enqueue(&mut self, id: String, text: String) {
+    /// Ids of the images that undelivered messages still need.
+    pub(crate) fn referenced_images(&self) -> impl Iterator<Item = &str> {
+        self.items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.status,
+                    Delivery::Queued | Delivery::Sending | Delivery::Uncertain
+                )
+            })
+            .flat_map(|item| item.attachments.iter().map(|image| image.id.as_str()))
+    }
+    fn contains(&self, id: &str) -> bool {
+        self.items.iter().any(|item| item.id == id)
+    }
+    fn enqueue(&mut self, id: String, text: String, attachments: Vec<StoredImage>) {
         // IDs are retained after delivery, including across reload/restart.
-        if !self.items.iter().any(|item| item.id == id) {
+        if !self.contains(&id) {
             self.items.push(QueuedMessage {
                 id,
                 text,
                 status: Delivery::Queued,
                 error: None,
+                attachments,
             });
         }
     }
@@ -90,6 +112,9 @@ pub enum ComposerCommand {
         request_id: String,
         text: String,
         mode: PromptMode,
+        /// Additive within v19: pending image ids (composer inputs v1).
+        #[serde(default)]
+        attachments: Vec<String>,
     },
     Edit {
         session_id: String,
@@ -125,7 +150,7 @@ impl ComposerCommand {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComposerSnapshot {
     protocol: u8,
@@ -141,6 +166,18 @@ fn operation_error(code: &'static str, message: &'static str) -> WorkspaceError 
         recoverable: true,
     }
 }
+fn images_unsupported() -> WorkspaceError {
+    operation_error(
+        "IMAGES_UNSUPPORTED",
+        "This harness or its current model does not accept images.",
+    )
+}
+fn attachment_unavailable() -> WorkspaceError {
+    operation_error(
+        "ATTACHMENT_UNAVAILABLE",
+        "An attached image is no longer available. Attach it again.",
+    )
+}
 fn native_error(error: NativeRuntimeError) -> WorkspaceError {
     match error {
         NativeRuntimeError::Bridge(BridgeFailureCode::TurnActive) => {
@@ -152,6 +189,7 @@ fn native_error(error: NativeRuntimeError) -> WorkspaceError {
         NativeRuntimeError::Bridge(BridgeFailureCode::UnsupportedMethod) => {
             WorkspaceError::not_supported()
         }
+        NativeRuntimeError::Bridge(BridgeFailureCode::UnsupportedInput) => images_unsupported(),
         _ => WorkspaceError::runtime(),
     }
 }
@@ -166,6 +204,7 @@ fn delivery_error(error: &NativeRuntimeError) -> &'static str {
         NativeRuntimeError::Bridge(BridgeFailureCode::UnsupportedMethod) => {
             "This harness does not support the requested operation. Your message is still queued."
         }
+        NativeRuntimeError::Bridge(BridgeFailureCode::UnsupportedInput) => IMAGES_REFUSED,
         error if rejected(error) => {
             "The harness declined the message. Edit it or resume the queue to try again."
         }
@@ -174,6 +213,11 @@ fn delivery_error(error: &NativeRuntimeError) -> &'static str {
         }
     }
 }
+/// Outbox text of a message whose images the session can no longer accept.
+const IMAGES_REFUSED: &str = "The harness or its current model does not accept images. Your message is still queued; remove it or switch to a model that accepts images.";
+/// Outbox text of a message whose stored image bytes are gone.
+const IMAGE_MISSING: &str =
+    "An attached image is no longer available. Remove this message and attach the image again.";
 fn rejected(error: &NativeRuntimeError) -> bool {
     matches!(
         error,
@@ -181,10 +225,22 @@ fn rejected(error: &NativeRuntimeError) -> bool {
             BridgeFailureCode::TurnActive
                 | BridgeFailureCode::NoActiveTurn
                 | BridgeFailureCode::UnsupportedMethod
+                | BridgeFailureCode::UnsupportedInput
                 | BridgeFailureCode::InvalidRequest
                 | BridgeFailureCode::NativeCommandRejected
         )
     )
+}
+
+/// Validates attachment ids before any state changes.
+fn validate_attachment_ids(ids: &[String]) -> Result<(), WorkspaceError> {
+    if ids.len() > MAX_ATTACHMENTS_PER_MESSAGE {
+        return Err(WorkspaceError::invalid());
+    }
+    for id in ids {
+        validate_session_id(id)?;
+    }
+    Ok(())
 }
 
 impl WorkspaceHost {
@@ -215,13 +271,6 @@ impl WorkspaceHost {
             .registry
             .lock()
             .map_err(|_| std::io::Error::other("registry poisoned"))?;
-        if !registry
-            .sessions()
-            .iter()
-            .any(|record| record.composer.pending())
-        {
-            return Ok(());
-        }
         let records = registry.sessions().to_vec();
         for mut record in records {
             if !record.composer.pending() {
@@ -235,7 +284,15 @@ impl WorkspaceHost {
                 .ok_or_else(|| std::io::Error::other("outbox revision exhausted"))?;
             registry.save_composer(&record.id, record.composer)?;
         }
-        Ok(())
+        // Pending images of unsent drafts do not survive a restart; images of
+        // undelivered queued messages stay until those messages settle.
+        let referenced = registry
+            .sessions()
+            .iter()
+            .flat_map(|record| record.composer.referenced_images().map(str::to_owned))
+            .collect();
+        drop(registry);
+        self.inner.attachments.retain_only(&referenced)
     }
 
     fn notify_composer(&self, id: &str) {
@@ -270,6 +327,118 @@ impl WorkspaceHost {
                 host.pause_queue(&id);
             }
         });
+    }
+
+    /// Enqueues one message. Its images must be pending in the attachment
+    /// store; they move to the message only if the queue change is saved. A
+    /// retried request id is accepted once without claiming anything again.
+    pub(super) fn enqueue_message(
+        &self,
+        id: &str,
+        request_id: String,
+        text: String,
+        attachments: &[String],
+    ) -> Result<(), WorkspaceError> {
+        validate_attachment_ids(attachments)?;
+        if self.record(id)?.composer.contains(&request_id) {
+            return Ok(());
+        }
+        self.inner
+            .attachments
+            .claim_with(attachments, attachment_unavailable(), |images| {
+                self.change_queue(id, |queue| {
+                    queue.enqueue(request_id, text, images);
+                    Ok(())
+                })
+            })
+    }
+
+    /// Native image input for a queued message, or the outbox text that
+    /// explains why the message cannot be delivered as it is.
+    async fn prompt_images(
+        runtime: &NativeRuntime,
+        store: &AttachmentStore,
+        images: &[StoredImage],
+    ) -> Result<Vec<PromptImage>, &'static str> {
+        if images.is_empty() {
+            return Ok(Vec::new());
+        }
+        // The model may have changed since the message was queued.
+        let capabilities = runtime
+            .composer_capabilities()
+            .await
+            .map_err(|_| IMAGES_REFUSED)?;
+        if !capabilities.images {
+            return Err(IMAGES_REFUSED);
+        }
+        images
+            .iter()
+            .map(|image| {
+                store
+                    .read(image)
+                    .map(|bytes| PromptImage {
+                        mime_type: image.mime_type.mime_type().to_owned(),
+                        data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                    })
+                    .map_err(|_| IMAGE_MISSING)
+            })
+            .collect()
+    }
+
+    /// Settles a message after its native prompt: delivered messages lose
+    /// their text and image bytes; refused ones stay queued and pause.
+    fn settle_message(
+        &self,
+        id: &str,
+        request_id: &str,
+        result: &Result<(), NativeRuntimeError>,
+    ) -> Result<(), WorkspaceError> {
+        let delivered = self.change_queue(id, |queue| {
+            let current = queue
+                .items
+                .iter_mut()
+                .find(|current| current.id == request_id)
+                .ok_or_else(WorkspaceError::conflict)?;
+            match result {
+                Ok(()) => {
+                    current.status = Delivery::Sent;
+                    current.text.clear();
+                    Ok(std::mem::take(&mut current.attachments))
+                }
+                Err(error) => {
+                    current.status = if rejected(error) {
+                        Delivery::Queued
+                    } else {
+                        Delivery::Uncertain
+                    };
+                    current.error = Some(delivery_error(error).into());
+                    queue.paused = true;
+                    Ok(Vec::new())
+                }
+            }
+        })?;
+        self.inner.attachments.remove(&delivered);
+        Ok(())
+    }
+
+    /// Returns a message to the queue without sending it.
+    fn hold_message(
+        &self,
+        id: &str,
+        request_id: &str,
+        reason: &'static str,
+    ) -> Result<(), WorkspaceError> {
+        self.change_queue(id, |queue| {
+            let current = queue
+                .items
+                .iter_mut()
+                .find(|current| current.id == request_id)
+                .ok_or_else(WorkspaceError::conflict)?;
+            current.status = Delivery::Queued;
+            current.error = Some(reason.into());
+            queue.paused = true;
+            Ok(())
+        })
     }
 
     async fn drain(&self, id: &str) -> Result<(), WorkspaceError> {
@@ -311,7 +480,7 @@ impl WorkspaceHost {
             if lock(&state.composer_waiting)?.is_some_and(|before| generation <= before) {
                 return Ok(());
             }
-            let text = self.change_queue(id, |queue| {
+            let (text, attachments) = self.change_queue(id, |queue| {
                 if queue.paused {
                     return Err(WorkspaceError::conflict());
                 }
@@ -322,33 +491,22 @@ impl WorkspaceHost {
                     .ok_or_else(WorkspaceError::conflict)?;
                 current.status = Delivery::Sending;
                 current.error = None;
-                Ok(current.text.clone())
+                Ok((current.text.clone(), current.attachments.clone()))
             })?;
+            let images =
+                match Self::prompt_images(&runtime, &self.inner.attachments, &attachments).await {
+                    Ok(images) => images,
+                    Err(reason) => {
+                        // Nothing was sent: the message waits for the user.
+                        self.hold_message(id, &item.id, reason)?;
+                        return Ok(());
+                    }
+                };
             *lock(&state.composer_waiting)? = Some(generation);
-            let result = runtime.prompt(text, PromptMode::Prompt).await;
-            self.change_queue(id, |queue| {
-                let current = queue
-                    .items
-                    .iter_mut()
-                    .find(|current| current.id == item.id)
-                    .ok_or_else(WorkspaceError::conflict)?;
-                match &result {
-                    Ok(()) => {
-                        current.status = Delivery::Sent;
-                        current.text.clear();
-                    }
-                    Err(error) => {
-                        current.status = if rejected(error) {
-                            Delivery::Queued
-                        } else {
-                            Delivery::Uncertain
-                        };
-                        current.error = Some(delivery_error(error).into());
-                        queue.paused = true;
-                    }
-                }
-                Ok(())
-            })?;
+            let result = runtime
+                .prompt_with_images(text, PromptMode::Prompt, images)
+                .await;
+            self.settle_message(id, &item.id, &result)?;
             if let Err(error) = result {
                 *lock(&state.composer_waiting)? = None;
                 return Err(native_error(error));
@@ -365,7 +523,19 @@ pub async fn workspace_composer_v19(
     state: State<'_, HostState>,
     command: ComposerCommand,
 ) -> Result<ComposerSnapshot, WorkspaceError> {
-    let host = state.inner();
+    run_composer(state.inner(), command, move |id| {
+        let _ = app.emit("piui://composer-v19", id);
+    })
+    .await
+}
+
+/// The composer command without the Tauri boundary; `notify` receives the
+/// opaque session id of every outbox change.
+pub(crate) async fn run_composer(
+    host: &HostState,
+    command: ComposerCommand,
+    notify: impl Fn(&str) + Send + Sync + 'static,
+) -> Result<ComposerSnapshot, WorkspaceError> {
     if host.safe_mode {
         return Err(WorkspaceError::safe_mode());
     }
@@ -380,9 +550,7 @@ pub async fn workspace_composer_v19(
         .live_runtime(&id)?
         .ok_or_else(WorkspaceError::closed)?;
     let notify_id = id.clone();
-    *lock(&live.composer_notify)? = Some(Arc::new(move || {
-        let _ = app.emit("piui://composer-v19", &notify_id);
-    }));
+    *lock(&live.composer_notify)? = Some(Arc::new(move || notify(&notify_id)));
     let capabilities = runtime
         .composer_capabilities()
         .await
@@ -393,10 +561,17 @@ pub async fn workspace_composer_v19(
             request_id,
             text,
             mode,
+            attachments,
             ..
         } => {
             validate_session_id(&request_id)?;
             validate_text(&text)?;
+            validate_attachment_ids(&attachments)?;
+            // Images the session cannot take are refused before anything is
+            // queued; they are never dropped from the message.
+            if !attachments.is_empty() && !capabilities.images {
+                return Err(images_unsupported());
+            }
             if mode == PromptMode::Steer {
                 steer(
                     &host.workspace,
@@ -405,14 +580,12 @@ pub async fn workspace_composer_v19(
                     &live,
                     &capabilities,
                     request_id,
-                    Some(text),
+                    Some((text, attachments)),
                 )
                 .await?;
             } else {
-                host.workspace.change_queue(&id, |queue| {
-                    queue.enqueue(request_id, text);
-                    Ok(())
-                })?;
+                host.workspace
+                    .enqueue_message(&id, request_id, text, &attachments)?;
                 if !host.workspace.record(&id)?.composer.paused {
                     live.composer_paused.store(false, Ordering::Release);
                 }
@@ -439,7 +612,7 @@ pub async fn workspace_composer_v19(
             .await?;
         }
         ComposerCommand::Remove { request_id, .. } => {
-            host.workspace.change_queue(&id, |queue| {
+            let removed = host.workspace.change_queue(&id, |queue| {
                 let item = queue
                     .items
                     .iter_mut()
@@ -450,8 +623,9 @@ pub async fn workspace_composer_v19(
                     .ok_or_else(WorkspaceError::conflict)?;
                 item.status = Delivery::Cancelled;
                 item.text.clear();
-                Ok(())
+                Ok(std::mem::take(&mut item.attachments))
             })?;
+            host.workspace.inner.attachments.remove(&removed);
         }
         ComposerCommand::Resume { .. } => {
             host.workspace.change_queue(&id, |queue| {
@@ -504,7 +678,7 @@ async fn steer(
     live: &Arc<LiveState>,
     capabilities: &ComposerCapabilities,
     request_id: String,
-    text: Option<String>,
+    message: Option<(String, Vec<String>)>,
 ) -> Result<(), WorkspaceError> {
     if !capabilities.steer {
         return Err(WorkspaceError::not_supported());
@@ -526,10 +700,10 @@ async fn steer(
             "There is no active turn to steer.",
         ));
     }
-    let body = host.change_queue(id, |queue| {
-        if let Some(text) = text {
-            queue.enqueue(request_id.clone(), text);
-        }
+    if let Some((text, attachments)) = message {
+        host.enqueue_message(id, request_id.clone(), text, &attachments)?;
+    }
+    let (body, attachments) = host.change_queue(id, |queue| {
         let item = queue
             .items
             .iter_mut()
@@ -537,32 +711,20 @@ async fn steer(
             .ok_or_else(WorkspaceError::conflict)?;
         item.status = Delivery::Sending;
         item.error = None;
-        Ok(item.text.clone())
+        Ok((item.text.clone(), item.attachments.clone()))
     })?;
-    let result = runtime.prompt(body, PromptMode::Steer).await;
-    host.change_queue(id, |queue| {
-        let item = queue
-            .items
-            .iter_mut()
-            .find(|item| item.id == request_id)
-            .ok_or_else(WorkspaceError::conflict)?;
-        match &result {
-            Ok(()) => {
-                item.status = Delivery::Sent;
-                item.text.clear();
+    let images =
+        match WorkspaceHost::prompt_images(runtime, &host.inner.attachments, &attachments).await {
+            Ok(images) => images,
+            Err(reason) => {
+                host.hold_message(id, &request_id, reason)?;
+                return Ok(());
             }
-            Err(error) => {
-                item.status = if rejected(error) {
-                    Delivery::Queued
-                } else {
-                    Delivery::Uncertain
-                };
-                item.error = Some(delivery_error(error).into());
-                queue.paused = true;
-            }
-        }
-        Ok(())
-    })?;
+        };
+    let result = runtime
+        .prompt_with_images(body, PromptMode::Steer, images)
+        .await;
+    host.settle_message(id, &request_id, &result)?;
     // Once stored, failed delivery stays visible in the outbox. Returning it
     // avoids leaving a second editable copy in the composer after an ACK loss.
     Ok(())
@@ -572,13 +734,22 @@ async fn steer(
 mod tests {
     use super::*;
 
+    fn image(id: &str) -> StoredImage {
+        StoredImage {
+            id: id.into(),
+            name: "shot.png".into(),
+            mime_type: crate::workspace_api::attachments::ImageType::Png,
+            size: 8,
+        }
+    }
+
     #[test]
     fn queued_edits_keep_identity_and_admitted_messages_cannot_be_edited() {
         let mut queue = QueueState::default();
-        queue.enqueue("one".into(), "initial".into());
-        queue.enqueue("two".into(), "next".into());
+        queue.enqueue("one".into(), "initial".into(), Vec::new());
+        queue.enqueue("two".into(), "next".into(), Vec::new());
         queue.edit("one", "edited".into()).expect("queued edit");
-        queue.enqueue("one".into(), "retry of original request".into());
+        queue.enqueue("one".into(), "retry of original request".into(), Vec::new());
         assert_eq!(queue.items.len(), 2);
         assert_eq!(queue.items[0].text, "edited");
         queue.items[0].status = Delivery::Sending;
@@ -594,7 +765,7 @@ mod tests {
         queue.items[0].text.clear();
         let bytes = serde_json::to_vec(&queue).expect("serialize");
         let mut restored: QueueState = serde_json::from_slice(&bytes).expect("reload");
-        restored.enqueue("one".into(), "replayed".into());
+        restored.enqueue("one".into(), "replayed".into(), Vec::new());
         assert_eq!(restored.items.len(), 2);
         assert_eq!(restored.items[0].status, Delivery::Sent);
         assert_eq!(restored.items[1].id, "two");
@@ -603,9 +774,9 @@ mod tests {
     #[test]
     fn recovery_preserves_unknown_delivery_without_replaying_it() {
         let mut queue = QueueState::default();
-        queue.enqueue("admitted".into(), "unknown result".into());
+        queue.enqueue("admitted".into(), "unknown result".into(), Vec::new());
         queue.items[0].status = Delivery::Sending;
-        queue.enqueue("waiting".into(), "later".into());
+        queue.enqueue("waiting".into(), "later".into(), Vec::new());
         queue.recover();
         assert!(queue.paused);
         assert_eq!(queue.items[0].status, Delivery::Uncertain);
@@ -626,5 +797,100 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn attachments_are_additive_and_carry_ids_only() {
+        let with = serde_json::json!({"type":"send","sessionId":"s","requestId":"r","text":"look","mode":"prompt","attachments":["a"]});
+        let Ok(ComposerCommand::Send { attachments, .. }) =
+            serde_json::from_value::<ComposerCommand>(with)
+        else {
+            panic!("a send with attachments parses");
+        };
+        assert_eq!(attachments, ["a"]);
+        let Ok(ComposerCommand::Send { attachments, .. }) = serde_json::from_value::<ComposerCommand>(
+            serde_json::json!({"type":"send","sessionId":"s","requestId":"r","text":"look","mode":"prompt"}),
+        ) else {
+            panic!("a v19 send without attachments still parses");
+        };
+        assert!(attachments.is_empty());
+        assert!(
+            serde_json::from_value::<ComposerCommand>(serde_json::json!({
+                "type":"send","sessionId":"s","requestId":"r","text":"look","mode":"prompt",
+                "attachments":[{"path":"C:/secret.png"}]
+            }))
+            .is_err(),
+            "a path is never an attachment"
+        );
+        assert!(
+            validate_attachment_ids(&vec![uuid::Uuid::new_v4().to_string(); 7]).is_err(),
+            "at most six images per message"
+        );
+        assert!(validate_attachment_ids(&["../escape".into()]).is_err());
+    }
+
+    #[test]
+    fn queue_files_without_attachments_keep_their_exact_shape() {
+        let mut queue = QueueState::default();
+        queue.enqueue("plain".into(), "hello".into(), Vec::new());
+        queue.enqueue("picture".into(), "look".into(), vec![image("image-1")]);
+        let value = serde_json::to_value(&queue).expect("serialize");
+        assert_eq!(
+            value["items"][0],
+            serde_json::json!({"id":"plain","text":"hello","status":"queued"})
+        );
+        assert_eq!(
+            value["items"][1]["attachments"],
+            serde_json::json!([{"id":"image-1","name":"shot.png","mimeType":"image/png","size":8}])
+        );
+        let restored: QueueState = serde_json::from_value(value).expect("reload");
+        assert_eq!(
+            restored.referenced_images().collect::<Vec<_>>(),
+            ["image-1"]
+        );
+        let older: QueueState = serde_json::from_value(serde_json::json!({
+            "revision": 3, "paused": false, "items": [{"id":"old","text":"hi","status":"queued"}]
+        }))
+        .expect("a v19 queue file from before attachments");
+        assert!(older.items[0].attachments.is_empty());
+    }
+
+    #[test]
+    fn delivered_or_cancelled_messages_release_their_images() {
+        let mut queue = QueueState::default();
+        queue.enqueue("sent".into(), "a".into(), vec![image("image-1")]);
+        queue.enqueue("waiting".into(), "b".into(), vec![image("image-2")]);
+        queue.enqueue("unknown".into(), "c".into(), vec![image("image-3")]);
+        queue.items[0].status = Delivery::Sent;
+        queue.items[2].status = Delivery::Uncertain;
+        assert_eq!(
+            queue.referenced_images().collect::<Vec<_>>(),
+            ["image-2", "image-3"]
+        );
+    }
+
+    #[test]
+    fn the_golden_composer_snapshot_keeps_its_shape() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/fixtures/workspace-composer-inputs-v1.json"
+        ))
+        .expect("fixture");
+        let expected = fixture["composer"]["snapshot"].clone();
+        let snapshot = ComposerSnapshot {
+            protocol: 19,
+            session_id: expected["sessionId"].as_str().expect("session id").into(),
+            capabilities: serde_json::from_value(expected["capabilities"].clone())
+                .expect("capabilities"),
+            queue: serde_json::from_value(expected["queue"].clone()).expect("queue"),
+        };
+        assert_eq!(serde_json::to_value(&snapshot).expect("json"), expected);
+    }
+
+    #[test]
+    fn refused_images_keep_the_message_queued() {
+        let refused = NativeRuntimeError::Bridge(BridgeFailureCode::UnsupportedInput);
+        assert!(rejected(&refused));
+        assert_eq!(delivery_error(&refused), IMAGES_REFUSED);
+        assert_eq!(native_error(refused).code, "IMAGES_UNSUPPORTED");
     }
 }
