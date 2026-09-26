@@ -3,20 +3,22 @@
   import Folder from '@lucide/svelte/icons/folder';
   import Library from '@lucide/svelte/icons/library';
   import { t } from '../../features/locale/language';
-  import type { OrchestrationRunV6 } from '../../host-api/orchestrationClient';
+  import { orchestrationHost, type OrchestrationRunV6 } from '../../host-api/orchestrationClient';
   import { EmptyState, Menu, Picker, Segmented, Skeleton, type PickerItem } from '../../lib/ui';
   import type { PipelineSection } from '../workspaceStore.svelte';
   import { useWorkspace } from './context';
 
   interface Props {
     section: PipelineSection;
+    runId?: string;
   }
-  let { section }: Props = $props();
+  let { section, runId }: Props = $props();
   const store = useWorkspace();
 
   // The graph editor is rebuilt on Svelte Flow; runs, schedules and the
   // library still use the existing orchestration contribution.
   const editor = import('../pipelines/PipelineEditor.svelte');
+  const runsView = import('../runs/RunsView.svelte');
   const panel = import('../../features/orchestration/OrchestrationPanel.svelte');
   let epoch = $state(0);
   let startedRun = $state.raw<OrchestrationRunV6 | undefined>();
@@ -45,7 +47,7 @@
   function opened(run: OrchestrationRunV6): void {
     startedRun = run;
     store.pipelineDirty = false;
-    setSection('runs');
+    store.navigate({ name: 'pipelines', section: 'runs', runId: run.id });
   }
 </script>
 
@@ -95,6 +97,24 @@
       <EmptyState title={$t('Choose a project')} description={$t('Pipelines belong to a project folder.')} />
     {:else if !workspace.personal && workspace.trust !== 'trusted'}
       <EmptyState title={$t('This folder is restricted')} description={$t('Trust the folder from the sidebar to build and run pipelines in it.')} />
+    {:else if section === 'runs'}
+      {#await runsView}
+        <div class="loading"><Skeleton lines={5} /></div>
+      {:then module}
+        {#key `${workspace.id}:${epoch}`}
+          <module.default
+            workspaceId={workspace.id}
+            safeMode={store.safeMode}
+            client={orchestrationHost}
+            {runId}
+            initialRun={startedRun?.id === runId ? startedRun : undefined}
+            onOpenRun={(id) => store.navigate({ name: 'pipelines', section: 'runs', runId: id })}
+            onEdit={() => setSection('systems')}
+          />
+        {/key}
+      {:catch}
+        <EmptyState title={$t('Pipelines are unavailable')} description={$t('Chats and history still work.')} />
+      {/await}
     {:else if section === 'systems'}
       {#await editor}
         <div class="loading"><Skeleton lines={5} /></div>

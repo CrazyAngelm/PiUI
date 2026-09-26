@@ -4,7 +4,7 @@
   import Pencil from '@lucide/svelte/icons/pencil';
   import CornerDownRight from '@lucide/svelte/icons/corner-down-right';
   import X from '@lucide/svelte/icons/x';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { t } from '../../features/locale/language';
   import { composerRequest, listenComposer, type ComposerCommand, type ComposerSnapshot } from '../../host-api/composerClient';
   import type { SessionSnapshot } from '../../host-api/workspaceClient';
@@ -36,7 +36,8 @@
   let editText = $state('');
   let slashIndex = $state(0);
   let slashDismissed = $state(false);
-  let text = $state(draft);
+  // Keyed per chat by the parent: the saved draft seeds the editor once.
+  let text = $state(untrack(() => draft));
   let input = $state<HTMLTextAreaElement | null>(null);
 
   const sessionId = $derived(snapshot.session.id);

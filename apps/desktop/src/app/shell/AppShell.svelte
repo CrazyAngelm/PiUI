@@ -150,7 +150,7 @@
             <InboxView />
           {:else if store.route.name === 'pipelines' && lazyViews.loaded.pipelines}
             {@const PipelinesView = lazyViews.loaded.pipelines}
-            <PipelinesView section={store.route.section} />
+            <PipelinesView section={store.route.section} runId={store.route.runId} />
           {:else if store.route.name === 'settings' && lazyViews.loaded.settings}
             {@const SettingsView = lazyViews.loaded.settings}
             <SettingsView section={store.route.section} onTrust={openTrust} />

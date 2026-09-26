@@ -10,7 +10,13 @@
 
   const store = useWorkspace();
   const items = $derived(store.inboxApprovals);
-  const running = $derived(store.runningSessions);
+  const running = $derived(store.runningSessions.filter((session) => !session.runId));
+  const pipelineAgents = $derived(store.runningSessions.filter((session) => session.runId));
+
+  /** Run sessions are titled "<role> - <run id>" by the host; show the role. */
+  function roleName(title: string): string {
+    return title.replace(/\s+-\s+[0-9a-f-]{8,}$/iu, '');
+  }
   const failed = $derived(store.catalog.sessions.filter((session) => session.status === 'failed'));
 
   function origin(sessionId: string): string {
@@ -61,6 +67,22 @@
           {/each}
         </ul>
       {/if}
+    {/if}
+
+    {#if pipelineAgents.length}
+      <h2>{$t('Pipeline agents at work')} <span class="count">{pipelineAgents.length}</span></h2>
+      <ul class="rows">
+        {#each pipelineAgents as session (session.id)}
+          <li>
+            <button type="button" onclick={() => store.openRun(session.workspaceId, session.runId)}>
+              <HarnessMark kind={session.harness} />
+              <span class="rows__title">{roleName(session.title)}</span>
+              <StatusDot status="running" />
+              <span class="muted">{$t('Pipeline run')}</span>
+            </button>
+          </li>
+        {/each}
+      </ul>
     {/if}
 
     {#if running.length}

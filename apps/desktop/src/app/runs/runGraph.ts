@@ -5,7 +5,11 @@
  */
 import type { AgentProfile, OrchestrationRunV6, TaskRecord } from '../../host-api/orchestrationClient';
 import type { GraphEdge, GraphNode } from '../../features/orchestration/agentGraph';
+import dagre from '@dagrejs/dagre';
 import { readPositions } from '../pipelines/graphDocument';
+
+const RUN_NODE_WIDTH = 232;
+const RUN_NODE_HEIGHT = 92;
 
 export interface RunGraph {
   nodes: GraphNode[];
@@ -28,6 +32,9 @@ export function buildRunGraph(run: OrchestrationRunV6, workspaceId: string): Run
   const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
   const positions = launchCommand ? readPositions(workspaceId, launchCommand.id) : new Map<string, { x: number; y: number }>();
   const spawned = new Set<string>();
+  // Members and steps share ids for saved graphs; spawned work may not.
+  const memberStep = new Map(pipeline.steps.map((step) => [step.assignedMemberId, step.id]));
+  const stepOf = (memberId: string) => memberStep.get(memberId) ?? memberId;
 
   const fallbackProfile = (name: string): AgentProfile => ({
     id: `router:${name}`,
@@ -66,24 +73,56 @@ export function buildRunGraph(run: OrchestrationRunV6, workspaceId: string): Run
         .map((dependency) => ({ from: dependency, to: step.id, kind: 'result' as const })),
       ...(step.routeGates ?? []).map((gate) => ({ from: gate.routerStepId, to: step.id, kind: 'route' as const, branchId: gate.branchId })),
     ]),
-    ...team.sendEdges.map((edge) => ({ from: edge.fromMemberId, to: edge.toMemberId, kind: 'send' as const })),
-    ...team.observeEdges.map((edge) => ({ from: edge.fromMemberId, to: edge.toMemberId, kind: 'observe' as const })),
+    ...team.sendEdges.map((edge) => ({ from: stepOf(edge.fromMemberId), to: stepOf(edge.toMemberId), kind: 'send' as const })),
+    ...team.observeEdges.map((edge) => ({ from: stepOf(edge.fromMemberId), to: stepOf(edge.toMemberId), kind: 'observe' as const })),
   ].filter((edge) => nodes.some((node) => node.id === edge.from) && nodes.some((node) => node.id === edge.to));
 
-  // Place spawned helpers next to the agent that created them (it observes them).
-  const placedPerParent = new Map<string, number>();
+  // A spawned helper hangs off the agent that created it (it observes them).
+  const parents = new Map<string, string>();
   for (const node of nodes) {
-    if (!spawned.has(node.id) || positions.has(node.id)) continue;
-    const parentId = team.observeEdges.find((edge) => edge.toMemberId === node.id)?.fromMemberId;
-    const parent = nodes.find((item) => item.id === parentId);
-    if (!parent) continue;
-    const slot = placedPerParent.get(parent.id) ?? 0;
-    placedPerParent.set(parent.id, slot + 1);
-    node.x = parent.x + 320;
-    node.y = parent.y + slot * 150 - 40;
-    edges.push({ from: parent.id, to: node.id, kind: 'spawn' });
+    if (!spawned.has(node.id)) continue;
+    const observer = team.observeEdges.find((edge) => stepOf(edge.toMemberId) === node.id)?.fromMemberId;
+    const parentId = observer === undefined ? undefined : stepOf(observer);
+    if (!parentId || !nodes.some((item) => item.id === parentId)) continue;
+    parents.set(node.id, parentId);
+    if (!edges.some((edge) => edge.from === parentId && edge.to === node.id && edge.kind === 'spawn')) {
+      edges.push({ from: parentId, to: node.id, kind: 'spawn' });
+    }
+  }
+
+  // Saved editor positions win; otherwise lay the whole run out left to right.
+  const needsLayout = nodes.some((node) => !spawned.has(node.id) && !positions.has(node.id));
+  if (needsLayout) {
+    layoutRun(nodes, edges);
+  } else {
+    const placedPerParent = new Map<string, number>();
+    for (const node of nodes) {
+      const parent = nodes.find((item) => item.id === parents.get(node.id));
+      if (!parent || positions.has(node.id)) continue;
+      const slot = placedPerParent.get(parent.id) ?? 0;
+      placedPerParent.set(parent.id, slot + 1);
+      node.x = parent.x + 320;
+      node.y = parent.y + slot * 130 - 40;
+    }
   }
   return { nodes, edges, spawned };
+}
+
+function layoutRun(nodes: GraphNode[], edges: readonly GraphEdge[]): void {
+  const layout = new dagre.graphlib.Graph();
+  layout.setGraph({ rankdir: 'LR', nodesep: 36, ranksep: 88, marginx: 40, marginy: 40 });
+  layout.setDefaultEdgeLabel(() => ({}));
+  for (const node of nodes) layout.setNode(node.id, { width: RUN_NODE_WIDTH, height: RUN_NODE_HEIGHT });
+  for (const edge of edges) {
+    if (edge.kind === 'result' || edge.kind === 'route' || edge.kind === 'spawn') layout.setEdge(edge.from, edge.to);
+  }
+  dagre.layout(layout);
+  for (const node of nodes) {
+    const placed = layout.node(node.id);
+    if (!placed) continue;
+    node.x = Math.round(placed.x - RUN_NODE_WIDTH / 2);
+    node.y = Math.round(placed.y - RUN_NODE_HEIGHT / 2);
+  }
 }
 
 export const RUN_STATUS_TONE = {

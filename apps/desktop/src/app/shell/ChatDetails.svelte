@@ -63,7 +63,7 @@
     </dl>
 
     {#if session.runId}
-      <Button size="sm" onclick={() => store.navigate({ name: 'pipelines', section: 'runs' })}>
+      <Button size="sm" onclick={() => store.openRun(session.workspaceId, session.runId)}>
         {#snippet leading()}<Workflow />{/snippet}
         {$t('Part of a pipeline run')}
       </Button>

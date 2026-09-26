@@ -44,7 +44,7 @@ export type Route =
   | { name: 'home' }
   | { name: 'chat'; sessionId: string }
   | { name: 'inbox' }
-  | { name: 'pipelines'; section: PipelineSection }
+  | { name: 'pipelines'; section: PipelineSection; runId?: string }
   | { name: 'settings'; section: SettingsSection };
 
 export interface InboxApproval {
@@ -97,6 +97,9 @@ function writeJson(key: string, value: unknown): void {
   }
 }
 
+const PIPELINE_SECTIONS: readonly PipelineSection[] = ['systems', 'runs', 'schedules', 'agents', 'teams', 'pipelines'];
+const SETTINGS_SECTIONS: readonly SettingsSection[] = ['general', 'harnesses', 'projects', 'shortcuts', 'about'];
+
 function isRoute(value: unknown): value is Route {
   if (typeof value !== 'object' || value === null || !('name' in value)) return false;
   switch ((value as Route).name) {
@@ -105,10 +108,12 @@ function isRoute(value: unknown): value is Route {
       return true;
     case 'chat':
       return typeof (value as { sessionId?: unknown }).sessionId === 'string';
-    case 'pipelines':
-      return typeof (value as { section?: unknown }).section === 'string';
+    case 'pipelines': {
+      const { section, runId } = value as { section?: unknown; runId?: unknown };
+      return PIPELINE_SECTIONS.includes(section as PipelineSection) && (runId === undefined || typeof runId === 'string');
+    }
     case 'settings':
-      return typeof (value as { section?: unknown }).section === 'string';
+      return SETTINGS_SECTIONS.includes((value as { section?: unknown }).section as SettingsSection);
     default:
       return false;
   }
@@ -267,6 +272,16 @@ export class WorkspaceStore {
       this.route = route;
       this.sessionError = undefined;
       writeJson(ROUTE_KEY, route);
+    });
+  }
+
+  /** Open a pipeline run in its own project, e.g. from a run's chat. */
+  openRun(workspaceId: string, runId: string | undefined): void {
+    this.guard(() => {
+      this.selectWorkspace(workspaceId);
+      this.route = runId ? { name: 'pipelines', section: 'runs', runId } : { name: 'pipelines', section: 'runs' };
+      this.sessionError = undefined;
+      writeJson(ROUTE_KEY, this.route);
     });
   }
 
