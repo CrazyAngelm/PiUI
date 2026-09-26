@@ -14,8 +14,8 @@ pub use executors::{
     MAX_SCRIPT_STDERR_BYTES, MAX_SCRIPT_STDOUT_BYTES, MAX_SCRIPT_TIMEOUT_SECONDS,
     MIN_SCRIPT_TIMEOUT_SECONDS, SCRIPT_FAILED, SCRIPT_INPUT_UNAVAILABLE,
     SCRIPT_RUNTIME_UNAVAILABLE, SCRIPT_START_FAILED, SCRIPT_TIMEOUT, ScriptCompletion,
-    ScriptDependency, ScriptLease, ScriptRuntime, StepExecutor, TaskOutput, bounded_text,
-    failure_detail,
+    ScriptDependency, ScriptLease, ScriptRuntime, ScriptStdoutResult, StepExecutor, TaskOutput,
+    bounded_text, failure_detail, script_stdout_result,
 };
 mod flow;
 pub use flow::*;

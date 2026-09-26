@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { AgentProfile, PipelineStep, RunDefinitionSnapshot } from '../../../../contracts/orchestration-v6';
 import {
   boundedText, dependencyOutputText, EXECUTOR_REASONS, executorAuthorityIssue, executorKind, failureDetail, failureWithDetail,
-  MAX_FAILURE_DETAIL_BYTES, MAX_SCRIPT_SOURCE_BYTES, MAX_SCRIPT_STDOUT_BYTES, SCRIPT_FAILURE_CODES, scriptResult,
-  scriptStdinDocument, stepExecutorIssue,
+  MAX_FAILURE_DETAIL_BYTES, MAX_SCRIPT_SOURCE_BYTES, MAX_SCRIPT_STDOUT_BYTES, resultFieldIssues, resultValueIssue,
+  SCRIPT_FAILURE_CODES, scriptResult, scriptStdinDocument, stepExecutorIssue,
 } from './stepExecutors';
 
 /** The Rust authority these helpers mirror. */
@@ -90,6 +90,22 @@ describe('step executor mirror (v6.2)', () => {
     const long = scriptResult([], 'é'.repeat(MAX_SCRIPT_STDOUT_BYTES));
     expect(long.status === 'succeeded' && long.output?.truncated).toBe(true);
     expect(long.status === 'succeeded' ? new TextEncoder().encode(long.output?.text).length : 0).toBe(MAX_SCRIPT_STDOUT_BYTES);
+  });
+
+  it('lists every failing result field like result_field_issues, first one as the run code', () => {
+    const fields = [
+      { name: 'files', kind: 'number' as const },
+      { name: 'summary', kind: 'text' as const },
+      { name: 'passed', kind: 'boolean' as const },
+    ];
+    const value = { files: '3', passed: true };
+    expect(resultFieldIssues(fields, value)).toEqual([
+      { field: 'files', code: 'result-field-type' },
+      { field: 'summary', code: 'result-missing-field' },
+    ]);
+    expect(resultValueIssue(fields, value)).toBe('result-field-type');
+    expect(resultFieldIssues(fields, { files: 3, summary: 'ok', passed: false })).toEqual([]);
+    expect(rust).toContain('pub fn script_stdout_result(');
   });
 
   it('bounds failure detail to whole last lines without control characters', () => {

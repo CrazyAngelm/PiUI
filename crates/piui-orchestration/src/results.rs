@@ -69,25 +69,59 @@ pub fn validate_result_value(fields: &[ResultField], value: &Value) -> Result<()
         return Ok(());
     }
     let object = value.as_object().ok_or("result-not-object")?;
-    for field in fields {
-        let value = object.get(&field.name).ok_or("result-missing-field")?;
-        let valid = match field.kind {
-            ResultFieldKind::Text | ResultFieldKind::Artifact => {
-                value.as_str().is_some_and(|v| !v.trim().is_empty())
-            }
-            ResultFieldKind::Number => value.is_number(),
-            ResultFieldKind::Boolean => value.is_boolean(),
-            ResultFieldKind::TextList => value.as_array().is_some_and(|items| {
-                items
-                    .iter()
-                    .all(|v| v.as_str().is_some_and(|s| !s.trim().is_empty()))
-            }),
-        };
-        if !valid {
-            return Err("result-field-type");
+    fields
+        .iter()
+        .find_map(|field| field_issue(field, object))
+        .map_or(Ok(()), Err)
+}
+
+/// One declared result field that a result object does not satisfy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResultFieldIssue {
+    pub field: String,
+    /// `result-missing-field` or `result-field-type`, the code
+    /// [`validate_result_value`] reports for this field.
+    pub code: &'static str,
+}
+
+/// Every declared field of `value` that fails the check of
+/// [`validate_result_value`], in declared order. Empty when `value` is not an
+/// object: that is a whole-result failure (`result-not-object`).
+pub fn result_field_issues(fields: &[ResultField], value: &Value) -> Vec<ResultFieldIssue> {
+    let Some(object) = value.as_object() else {
+        return Vec::new();
+    };
+    fields
+        .iter()
+        .filter_map(|field| {
+            field_issue(field, object).map(|code| ResultFieldIssue {
+                field: field.name.clone(),
+                code,
+            })
+        })
+        .collect()
+}
+
+fn field_issue(
+    field: &ResultField,
+    object: &serde_json::Map<String, Value>,
+) -> Option<&'static str> {
+    let Some(value) = object.get(&field.name) else {
+        return Some("result-missing-field");
+    };
+    let valid = match field.kind {
+        ResultFieldKind::Text | ResultFieldKind::Artifact => {
+            value.as_str().is_some_and(|v| !v.trim().is_empty())
         }
-    }
-    Ok(())
+        ResultFieldKind::Number => value.is_number(),
+        ResultFieldKind::Boolean => value.is_boolean(),
+        ResultFieldKind::TextList => value.as_array().is_some_and(|items| {
+            items
+                .iter()
+                .all(|v| v.as_str().is_some_and(|s| !s.trim().is_empty()))
+        }),
+    };
+    (!valid).then_some("result-field-type")
 }
 
 #[cfg(test)]
@@ -110,5 +144,51 @@ mod tests {
             Err("result-invalid-json")
         );
         assert!(validate_result(&[], "Ordinary free-form response").is_ok());
+    }
+
+    #[test]
+    fn field_issues_list_every_failing_field_with_the_run_codes() {
+        let fields = vec![
+            ResultField {
+                name: "files".into(),
+                kind: ResultFieldKind::Number,
+            },
+            ResultField {
+                name: "summary".into(),
+                kind: ResultFieldKind::Text,
+            },
+            ResultField {
+                name: "passed".into(),
+                kind: ResultFieldKind::Boolean,
+            },
+        ];
+        let value = serde_json::json!({"files": "3", "passed": true});
+        assert_eq!(
+            result_field_issues(&fields, &value),
+            vec![
+                ResultFieldIssue {
+                    field: "files".into(),
+                    code: "result-field-type",
+                },
+                ResultFieldIssue {
+                    field: "summary".into(),
+                    code: "result-missing-field",
+                },
+            ]
+        );
+        // The first issue is exactly what a run records.
+        assert_eq!(
+            validate_result_value(&fields, &value),
+            Err("result-field-type")
+        );
+        let valid = serde_json::json!({"files": 3, "summary": "ok", "passed": false});
+        assert!(result_field_issues(&fields, &valid).is_empty());
+        assert!(validate_result_value(&fields, &valid).is_ok());
+        // A non-object is a whole-result failure, not a field issue.
+        assert!(result_field_issues(&fields, &serde_json::json!([1])).is_empty());
+        assert_eq!(
+            validate_result_value(&fields, &serde_json::json!([1])),
+            Err("result-not-object")
+        );
     }
 }

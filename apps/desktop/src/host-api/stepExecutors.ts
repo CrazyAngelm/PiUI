@@ -162,23 +162,45 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+export type ResultFieldIssueCode = 'result-missing-field' | 'result-field-type';
+
+/** `field_issue`: the code one declared field of a result object fails with. */
+function fieldIssue(field: ResultField, value: Record<string, unknown>): ResultFieldIssueCode | undefined {
+  if (!Object.hasOwn(value, field.name)) return 'result-missing-field';
+  const item = value[field.name];
+  const valid = field.kind === 'text' || field.kind === 'artifact'
+    ? typeof item === 'string' && item.trim() !== ''
+    : field.kind === 'number'
+      ? typeof item === 'number'
+      : field.kind === 'boolean'
+        ? typeof item === 'boolean'
+        : Array.isArray(item) && item.every((entry) => typeof entry === 'string' && entry.trim() !== '');
+  return valid ? undefined : 'result-field-type';
+}
+
 /** `validate_result_value`: the native result codes for an already parsed result. */
 export function resultValueIssue(fields: readonly ResultField[], value: unknown): string | undefined {
   if (fields.length === 0) return undefined;
   if (!isObject(value)) return 'result-not-object';
   for (const field of fields) {
-    if (!Object.hasOwn(value, field.name)) return 'result-missing-field';
-    const item = value[field.name];
-    const valid = field.kind === 'text' || field.kind === 'artifact'
-      ? typeof item === 'string' && item.trim() !== ''
-      : field.kind === 'number'
-        ? typeof item === 'number'
-        : field.kind === 'boolean'
-          ? typeof item === 'boolean'
-          : Array.isArray(item) && item.every((entry) => typeof entry === 'string' && entry.trim() !== '');
-    if (!valid) return 'result-field-type';
+    const issue = fieldIssue(field, value);
+    if (issue !== undefined) return issue;
   }
   return undefined;
+}
+
+/**
+ * `result_field_issues`: every declared field a result object fails, in
+ * declared order; the first one is what `resultValueIssue` reports.
+ */
+export function resultFieldIssues(
+  fields: readonly ResultField[],
+  value: Record<string, unknown>,
+): { field: string; code: ResultFieldIssueCode }[] {
+  return fields.flatMap((field) => {
+    const code = fieldIssue(field, value);
+    return code === undefined ? [] : [{ field: field.name, code }];
+  });
 }
 
 export type ScriptResult =

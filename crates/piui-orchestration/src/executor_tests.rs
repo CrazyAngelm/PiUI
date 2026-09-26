@@ -631,6 +631,52 @@ fn declared_script_results_fail_exactly_like_native_results() {
 }
 
 #[test]
+fn the_shared_stdout_check_is_what_a_run_records() {
+    let fields = vec![ResultField {
+        name: "files".into(),
+        kind: ResultFieldKind::Number,
+    }];
+    assert_eq!(
+        script_stdout_result(&fields, " {\"files\": 3}\n".into(), false),
+        ScriptStdoutResult::Data(json!({"files": 3}))
+    );
+    for (stdout, truncated, code) in [
+        ("3 files", false, "result-invalid-json"),
+        ("[3]", false, "result-not-object"),
+        ("{}", false, "result-missing-field"),
+        ("{\"files\": \"3\"}", false, "result-field-type"),
+        ("{\"files\": 3}", true, "result-invalid-json"),
+    ] {
+        assert_eq!(
+            script_stdout_result(&fields, stdout.into(), truncated),
+            ScriptStdoutResult::Failed(FailureRecord::new(code)),
+            "{stdout}"
+        );
+    }
+    // Without declared fields, anything that is not a JSON object is text.
+    assert_eq!(
+        script_stdout_result(&[], "[3]".into(), false),
+        ScriptStdoutResult::Output(TaskOutput {
+            text: "[3]".into(),
+            truncated: false,
+        })
+    );
+    assert_eq!(
+        script_stdout_result(&[], "{\"any\": true}".into(), true),
+        ScriptStdoutResult::Output(TaskOutput {
+            text: "{\"any\": true}".into(),
+            truncated: true,
+        })
+    );
+    let long = "x".repeat(MAX_SCRIPT_STDOUT_BYTES + 1);
+    let ScriptStdoutResult::Output(output) = script_stdout_result(&[], long, false) else {
+        panic!("long text is output");
+    };
+    assert!(output.truncated);
+    assert_eq!(output.text.len(), MAX_SCRIPT_STDOUT_BYTES);
+}
+
+#[test]
 fn failed_and_timed_out_scripts_fail_fast_with_bounded_detail() {
     let mut run = started(fixture());
     finish_native(&mut run, "plan-session", "Plan.");
