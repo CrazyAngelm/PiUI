@@ -44,6 +44,26 @@ not a sandbox. `TaskRecord.output`, `FailureRecord.detail` and
 host. Older builds reject a document with an executor instead of running it as
 an agent. See `crates/piui-orchestration/src/executors.rs`.
 
+# Triggers (orchestration host v7.2, orchestration v6.3, background v1)
+
+All additive. `orchestration-host-v7.ts` adds `ScheduleTrigger` `{type:"event"}`
+with `run-finished` (`launchCommandId`, `outcomes`) and `files-changed`
+(`include`, optional `exclude`, `debounceSeconds` 2-3600) rules, the skip
+outcomes `skippedChainLimit`, `skippedCooldown` and `skippedPaused`, optional
+`sourceRunId`/`chainDepth` on occurrences, `StartRunRequestV7.trigger`
+(`{kind:"chat"}` only; hosts reject any other claimed origin), and the global
+pause switch as a separate command set (`orchestration_automations_v7`,
+`orchestration_set_automations_paused_v7`) with the scalar event
+`piui://orchestration-automations-event`. `orchestration-v6.ts` adds
+`OrchestrationRunV6.trigger` (`schedule` | `event` | `chat`, written by the host
+at creation). `background-v1.ts` is the host-applied tray and sign-in contract.
+Stored v7.0/v7.1 schedules, v6.0-v6.2 runs and journals without the pause field
+decode unchanged and are re-encoded without the new fields; older builds refuse
+an event trigger or a run trigger instead of misreading it. Golden JSON in
+`fixtures/triggers-v7-2.json` and the pattern fixtures in
+`fixtures/trigger-patterns-v7.json` are checked by the Rust host and the
+TypeScript contract tests. See `docs/SCHEDULED_RUNS.md`.
+
 # Harness identities (ADR-028)
 
 A harness value is an open registry identity, not a protocol revision. Rule 3
