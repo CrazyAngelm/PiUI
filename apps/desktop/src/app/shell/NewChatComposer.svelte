@@ -6,6 +6,7 @@
   import Shield from '@lucide/svelte/icons/shield';
   import Zap from '@lucide/svelte/icons/zap';
   import Brain from '@lucide/svelte/icons/brain';
+  import { untrack } from 'svelte';
   import { t } from '../../features/locale/language';
   import { harnessModels } from '../../host-api/harnessModels';
   import type { HarnessCatalogModel } from '../../../../../contracts/harness-models-v18';
@@ -16,6 +17,7 @@
   import { workspaceError } from '../../host-api/workspaceClient';
   import HarnessMark from './HarnessMark.svelte';
   import { useWorkspace } from './context';
+  import { reconcileSelection, restoredSelection, type NewChatChoice, type NewChatSelection } from './newChatChoice';
 
   interface Props {
     onTrust: (workspace: WorkspaceSummary) => void;
@@ -25,16 +27,9 @@
   const DRAFT_KEY = 'new-chat';
   const CHOICE_KEY = 'piui.shell.newchat.v1';
 
-  interface Choice {
-    harness?: HarnessKind;
-    modelKey?: string;
-    thinkingLevel?: string;
-    fast?: boolean;
-    permissionMode?: PermissionMode;
-  }
-  function readChoices(): Record<string, Choice> {
+  function readChoices(): Record<string, NewChatChoice> {
     try {
-      return JSON.parse(localStorage.getItem(CHOICE_KEY) ?? '{}') as Record<string, Choice>;
+      return JSON.parse(localStorage.getItem(CHOICE_KEY) ?? '{}') as Record<string, NewChatChoice>;
     } catch {
       return {};
     }
@@ -67,15 +62,24 @@
     }
   });
 
-  // Restore per-project choices, falling back to the first available harness.
+  // Restore a project's remembered choice when the project changes. A catalog
+  // refresh (any session event replaces it) only replaces a harness that is
+  // no longer available; it never undoes the user's picks.
+  let restoredFor: string | undefined;
   $effect(() => {
-    const choice = saved[workspaceId] ?? {};
-    const preferred = choice.harness && available.some((item) => item.kind === choice.harness) ? choice.harness : undefined;
-    harness = preferred ?? available[0]?.kind ?? '';
-    permissionMode = choice.permissionMode ?? 'native';
-    thinkingLevel = choice.thinkingLevel ?? '';
-    fast = choice.fast ?? false;
-    modelKey = choice.modelKey ?? '';
+    const id = workspaceId;
+    const kinds = available.map((item) => item.kind);
+    untrack(() => {
+      const current: NewChatSelection = { harness, modelKey, thinkingLevel, fast, permissionMode };
+      const next = restoredFor === id ? reconcileSelection(current, kinds, saved[id]) : restoredSelection(saved[id], kinds);
+      restoredFor = id;
+      if (next === current) return;
+      harness = next.harness;
+      modelKey = next.modelKey;
+      thinkingLevel = next.thinkingLevel;
+      fast = next.fast;
+      permissionMode = next.permissionMode;
+    });
   });
 
   $effect(() => {
