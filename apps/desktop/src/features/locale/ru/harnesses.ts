@@ -26,4 +26,8 @@ export const harnessesRu: Readonly<Record<string, string>> = {
   'Enter {0} or more.': 'Введите {0} или больше.',
   'Enter {0} or less.': 'Введите {0} или меньше.',
   'Choose one of the options.': 'Выберите один из вариантов.',
+
+  // Claude Code sign-in: run panel.
+  'Claude Code is not signed in with your Claude subscription, so this step did not start. Run `claude` in a terminal and use /login, then run this step again.':
+    'Claude Code не вошёл по вашей подписке Claude, поэтому шаг не запускался. Выполните `claude` в терминале, войдите через /login и запустите шаг снова.',
 };

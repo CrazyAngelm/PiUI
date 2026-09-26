@@ -1,6 +1,14 @@
 import { expect, it } from 'vitest';
+import { failureText } from '../../../app/runs/runGraph';
 import { APPROVAL_FIELD_ISSUES } from '../../../host-api/approvalForms';
 import { translate } from '../language';
+
+it('explains a refused Claude Code sign-in in the run panel, in both languages', () => {
+  const text = failureText('harness-sign-in-required');
+  expect(text).toContain('/login');
+  expect(text).toContain('run this step again');
+  expect(translate(text, 'ru')).not.toBe(text);
+});
 
 it('translates the MCP form request copy, including every field problem', () => {
   for (const message of [

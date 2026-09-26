@@ -152,6 +152,7 @@ export function failureText(code: string): string {
     'result-invalid': 'The agent returned a result that does not match the declared fields.',
     'native-turn-failed': 'The agent’s turn failed in the harness.',
     'native-unavailable': 'The harness was not available.',
+    'harness-sign-in-required': 'Claude Code is not signed in with your Claude subscription, so this step did not start. Run `claude` in a terminal and use /login, then run this step again.',
     'dependency-failed': 'An earlier step failed.',
     'cancelled': 'The step was cancelled.',
     'review-limit-reached': 'The review loop reached its round limit. Accept the last result, reject it, or allow one more round.',

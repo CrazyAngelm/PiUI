@@ -2428,6 +2428,11 @@ fn unavailable_capabilities(reason: &str) -> HarnessCapabilities {
 /// Side-effect-free capability description for scheduler admission. If the
 /// installed version or platform is not verified, every capability is returned
 /// unsupported so no durable task can reserve against an unproven adapter.
+///
+/// A cached Claude Code sign-in verdict is not a capability: every start
+/// verifies the login again at the native handshake, before any task text is
+/// written, and a refusal there is a typed pre-execution failure. So a step
+/// runs again as soon as the user has signed in.
 #[must_use]
 pub fn offline_harness_capabilities(kind: HarnessKind) -> HarnessCapabilities {
     let summary = probe_native_harnesses()
@@ -2437,11 +2442,6 @@ pub fn offline_harness_capabilities(kind: HarnessKind) -> HarnessCapabilities {
         return unavailable_capabilities(
             "The installed native adapter is unavailable or unverified.",
         );
-    }
-    // A managed run cannot start while Claude Code is known to be signed in
-    // with something other than the user's Claude subscription.
-    if kind == HarnessKind::ClaudeCode && claude_sign_in_required() {
-        return unavailable_capabilities(CLAUDE_SIGN_IN_MESSAGE);
     }
     verified_harness_capabilities(kind)
 }

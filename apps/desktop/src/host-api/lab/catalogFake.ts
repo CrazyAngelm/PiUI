@@ -71,11 +71,13 @@ export function firstRunHarnesses(): HarnessSummary[] {
 const supported = (enforcement: Capability['enforcement'] = 'native'): Capability => ({ supported: true, enforcement });
 const unsupported = (reason: string): Capability => ({ supported: false, enforcement: 'unsupported', reason });
 
-/** Mirrors `offline_harness_capabilities`. */
+/**
+ * Mirrors `offline_harness_capabilities`. A cached Claude Code sign-in verdict
+ * is not a capability: every start checks the login again.
+ */
 export function harnessCapabilities(kind: HarnessKind, summary: HarnessSummary | undefined): HarnessCapabilities {
-  const signInRequired = kind === 'claude-code' && summary?.reason === CLAUDE_SIGN_IN_MESSAGE;
-  if (summary?.status !== 'available' || signInRequired) {
-    const blocked = unsupported(signInRequired ? CLAUDE_SIGN_IN_MESSAGE : 'The installed native adapter is unavailable or unverified.');
+  if (summary?.status !== 'available') {
+    const blocked = unsupported('The installed native adapter is unavailable or unverified.');
     return {
       prompt: blocked, resume: blocked, models: blocked, approvals: blocked,
       instructions: blocked, toolPolicy: blocked, nativeSubagents: blocked,

@@ -311,6 +311,11 @@ impl WorkspaceError {
             recoverable: true,
         }
     }
+    /// Whether a native start was refused at the harness login check: the
+    /// runtime never reached a prompt, so nothing was executed.
+    pub(crate) fn is_sign_in_required(&self) -> bool {
+        self.code == Self::subscription_required().code
+    }
     /// Fast mode can bill paid extra usage beyond the base subscription.
     pub(crate) fn fast_mode_unsupported() -> Self {
         Self {
@@ -851,6 +856,19 @@ impl WorkspaceHost {
             }
         }
         NativeRuntime::spawn(config).await
+    }
+
+    /// Test builds only: replaces native harness resolution of this host, for
+    /// tests outside this module that drive managed launches.
+    #[cfg(test)]
+    pub(crate) fn replace_native_spawner<F, Fut>(&self, spawner: F)
+    where
+        F: Fn(NativeRuntimeConfig) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = NativeSpawnResult> + Send + 'static,
+    {
+        if let Ok(mut slot) = self.inner.test_spawner.lock() {
+            *slot = Some(Arc::new(move |config| Box::pin(spawner(config))));
+        }
     }
 
     #[must_use]

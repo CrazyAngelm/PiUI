@@ -70,3 +70,13 @@ answer keeps the request pending. Approvals without a form keep their exact
 shape, so an older consumer that ignores the field still sees a valid approval
 (a form it cannot show is only answerable with deny/cancel there). The golden
 fixture carries one form approval for the Rust/TypeScript round trip.
+
+# Harness sign-in failures (orchestration v6, additive)
+
+`FailureRecord.code` gains `harness-sign-in-required`: the harness refused the
+native login at its start handshake (Claude Code signed out or not on a Claude
+subscription) before PiUI wrote any task text, so the step fails certainly
+instead of becoming uncertain. A step spawned by an agent returns to ready and
+its caller receives the same code. Commands keep their established
+`runtime-unavailable` error code. A cached signed-out verdict is not a
+capability: running the step again after signing in starts it normally.

@@ -231,7 +231,12 @@ model loop.
   the fixed sign-in message (the host maps it to a typed `SIGN_IN_REQUIRED`
   status); a breach during a turn kills the CLI before its model request and
   fails the turn and the session. Credentials are never read, copied or logged;
-  stderr is discarded.
+  stderr is discarded. The refusal comes before any user message is written,
+  so a managed pipeline step refused this way fails with the task code
+  `harness-sign-in-required` instead of an uncertain outcome. The host's cached
+  verdict (the catalog `reason`) is shown in the UI but never blocks a start:
+  every start and every "Check again" (a catalog-only `initialize`) verifies
+  the login anew.
 - No paid extra usage. Fast mode is unsupported: `serviceTier:"fast"` fails with
   `unsupported-settings` before anything spawns (`standard` is accepted and is
   what every launch pins), the child runs with `CLAUDE_CODE_DISABLE_FAST_MODE=1`
