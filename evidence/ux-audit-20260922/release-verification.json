@@ -1,0 +1,23 @@
+{
+  "installedPath": "C:\\Users\\redmi\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PiUI\\piui-desktop.exe",
+  "sourceSha256": "E3028D7F506C60C84D977C53B09AAB6E547E3157AC4B047411F4A3F56A7F7F93",
+  "portableSha256": "E3028D7F506C60C84D977C53B09AAB6E547E3157AC4B047411F4A3F56A7F7F93",
+  "installedSha256": "E3028D7F506C60C84D977C53B09AAB6E547E3157AC4B047411F4A3F56A7F7F93",
+  "installerSha256": "CE6C193D0EDAFEB7D49E4BECD71773C62230BFEF2664A209E77BEE9CC9876398",
+  "currentFrontendAssetsVerifiedInExecutable": [
+    "assets/ConversationViewport-CdTiqA9F.css",
+    "assets/ConversationViewport-ChBpBkbn.js",
+    "assets/OrchestrationPanel-DJLZFK0_.js",
+    "assets/OrchestrationPanel-YLGjXrOg.css",
+    "assets/Timeline-B1PCrzxa.js",
+    "assets/Timeline-DgDpcdJL.css",
+    "assets/index-BwjJQyj3.js",
+    "assets/App-CqYK2Zc1.js",
+    "assets/systemFile-BS-cMihR.js",
+    "assets/WorkspaceSettings-Cz6cLLPH.js",
+    "assets/conversationSurface-DXbbCypV.js",
+    "assets/mockClient-CIIn4sR3.js"
+  ],
+  "rollbackPath": "D:\\Projects\\PIUI\\evidence\\ux-audit-20260922\\rollback\\installed-before.exe",
+  "packagedAtUtc": "2026-09-22T16:41:02.8784309Z"
+}

@@ -16,6 +16,9 @@
   export let readOnly = false;
   export let onSave: (value: ScheduleDefinition) => void;
   export let onCancel: () => void;
+  export let onCreateSystem: (() => void) | undefined = undefined;
+  let pendingNavigation: (() => void) | undefined;
+  function navigate(action: () => void): void { if (dirty && !readOnly) { pendingNavigation = action; discardPrompt = true; } else action(); }
   export let onDirtyChange: (dirty: boolean) => void = () => {};
 
   const source = schedule?.value;
@@ -31,6 +34,9 @@
   let missedRunPolicy: MissedRunPolicy | '' = source?.missedRunPolicy ?? '';
   let overlapPolicy: OverlapPolicy | '' = source?.overlapPolicy ?? '';
   let validation: string | undefined;
+  $: preview = localDateTimeToInstant(localAt, timeZone);
+  $: interval = positiveInteger(every);
+  $: nextAt = preview.ok && triggerType === 'interval' && interval ? new Date(new Date(preview.instant).getTime() + interval * (unit === 'hours' ? 3600000 : 60000)) : undefined;
   let discardPrompt = false;
   const baseline = JSON.stringify({ id, name, launchCommandId, triggerType, localAt, every, unit, missedRunPolicy, overlapPolicy });
   $: dirty = JSON.stringify({ id, name, launchCommandId, triggerType, localAt, every, unit, missedRunPolicy, overlapPolicy }) !== baseline;
@@ -61,7 +67,7 @@
 <form class="editor" onsubmit={save} aria-labelledby="schedule-editor-title">
   <header>
     <div><h2 id="schedule-editor-title">{schedule ? $t('Edit schedule') : $t('Create schedule')}</h2></div>
-    <span>{readOnly ? $t('Read-only') : dirty ? $t('Unsaved changes') : $t('No unsaved changes')}</span>
+    <span>{readOnly ? $t('Read-only') : dirty ? $t('Unsaved changes') : $t(source ? 'No unsaved changes' : 'New draft')}</span>
   </header>
   <p class="notice">{$t('Schedules run only while the PiUI host is open. They do not wake the computer or start PiUI.')}</p>
   <p class="hint">{$t('Saving does not enable execution. New schedules and execution-affecting edits must be enabled separately.')}</p>
@@ -108,10 +114,11 @@
     </select>
   </fieldset>
 
+  <section aria-label={$t('Schedule summary')}><h3>{$t('Schedule summary')}</h3><p>{launchCommands.find(command => command.id === launchCommandId)?.name ?? $t('Choose launch command')}</p>{#if preview.ok}<p>{$t('First run at')}: {new Date(preview.instant).toLocaleString(undefined,{timeZone})} · {timeZone}</p>{#if nextAt && Number.isFinite(nextAt.getTime())}<p>{$t('Following occurrence')}: {nextAt.toLocaleString(undefined,{timeZone})}</p>{/if}{:else}<p>{$t('Choose a valid date and time.')}</p>{/if}<p>{$t(missedRunPolicy === 'skip' ? 'Skip missed occurrences' : missedRunPolicy === 'coalesce' ? 'Run once when PiUI returns' : 'Choose what happens after PiUI was closed.')}</p><p>{$t(overlapPolicy === 'skip' ? 'Skip the new occurrence' : overlapPolicy === 'allow' ? 'Allow another run' : 'Choose what happens while the previous run is active.')}</p></section>
   {#if validation || error}<p class="error" role="alert">{$t(error ?? validation ?? '')}</p>{/if}
-  {#if launchCommands.length === 0}<p class="notice" role="status">{$t('Create a saved launch command before adding a schedule.')}</p>{/if}
-  {#if discardPrompt}<div class="discard" role="group" aria-label={$t('Unsaved schedule changes')}><p>{$t('Discard unsaved changes?')}</p><button type="button" onclick={() => discardPrompt = false}>{$t('Keep editing')}</button><button type="button" onclick={onCancel}>{$t('Discard changes')}</button></div>{/if}
-  <footer><button type="button" disabled={busy} onclick={() => { if (dirty && !readOnly) discardPrompt = true; else onCancel(); }}>{readOnly ? $t('Back') : $t('Cancel')}</button>{#if !readOnly}<button class="primary" type="submit" disabled={busy || launchCommands.length === 0}>{busy ? $t('Saving…') : $t('Save schedule')}</button>{/if}</footer>
+  {#if launchCommands.length === 0}<p class="notice" role="status">{$t('Create a saved launch command before adding a schedule.')}{#if onCreateSystem}<button type="button" onclick={() => onCreateSystem && navigate(onCreateSystem)}>{$t('Create system')}</button>{/if}</p>{/if}
+  {#if discardPrompt}<div class="discard" role="group" aria-label={$t('Unsaved schedule changes')}><p>{$t('Discard unsaved changes?')}</p><button type="button" onclick={() => discardPrompt = false}>{$t('Keep editing')}</button><button type="button" onclick={() => { const action = pendingNavigation ?? onCancel; pendingNavigation = undefined; action(); }}>{$t('Discard changes')}</button></div>{/if}
+  <footer><button type="button" disabled={busy} onclick={() => navigate(onCancel)}>{readOnly ? $t('Back') : $t('Cancel')}</button>{#if !readOnly}<button class="primary" type="submit" disabled={busy || launchCommands.length === 0}>{busy ? $t('Saving…') : $t('Save schedule')}</button>{/if}</footer>
 </form>
 
 <style>

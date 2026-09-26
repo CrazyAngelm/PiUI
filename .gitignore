@@ -53,3 +53,6 @@ Thumbs.db
 .vscode/
 .idea/
 NUL
+
+# Local rollback copies of installers/executables are never committed
+evidence/**/rollback/

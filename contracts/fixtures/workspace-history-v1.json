@@ -1,0 +1,10 @@
+{
+  "request": {
+    "sessionId": "opaque-session"
+  },
+  "result": {
+    "protocol": 1,
+    "sessionId": "opaque-session",
+    "blocks": []
+  }
+}

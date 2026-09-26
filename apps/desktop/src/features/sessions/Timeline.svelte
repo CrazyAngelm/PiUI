@@ -9,6 +9,10 @@
   export let loading = false;
   export let sessionKey: string | undefined = undefined;
   export let agentLabel = 'Pi';
+  export let readFullAnswer: ((block: TimelineBlock) => Promise<string>) | undefined = undefined;
+  let fullAnswers: Record<string, string> = {};
+  let feedback: Record<string, string> = {};
+  let pending = new Set<string>();
 
   let rememberedSessionKey = sessionKey;
   let activityOpenState: Record<string, boolean> = {};
@@ -16,6 +20,7 @@
   $: if (sessionKey !== rememberedSessionKey) {
     rememberedSessionKey = sessionKey;
     activityOpenState = {};
+    fullAnswers = {}; feedback = {}; pending = new Set();
   }
   $: viewItems = groupTimelineBlocks(blocks);
 
@@ -40,6 +45,18 @@
 
   function fullTime(value: string): string {
     return new Date(value).toLocaleString();
+  }
+  async function answerAction(block: TimelineBlock, copy: boolean): Promise<void> {
+    const key = sessionKey;
+    pending = new Set([...pending, block.id]);
+    try {
+      const text = fullAnswers[block.id] ?? (block.truncated && readFullAnswer ? await readFullAnswer(block) : block.text ?? '');
+      if (key !== sessionKey) return;
+      if (block.truncated && readFullAnswer) fullAnswers = { ...fullAnswers, [block.id]: text };
+      if (copy) await navigator.clipboard.writeText(text);
+      if (key === sessionKey) feedback = { ...feedback, [block.id]: copy ? 'Copied' : 'Full answer loaded' };
+    } catch { if (key === sessionKey) feedback = { ...feedback, [block.id]: copy ? 'Could not copy the answer. Select the text and copy it manually.' : 'Could not load the full answer from native history. Try again.' }; }
+    finally { if (key === sessionKey) { pending.delete(block.id); pending = new Set(pending); } }
   }
 </script>
 
@@ -85,8 +102,13 @@
               {#if block.createdAt}<time datetime={block.createdAt} title={fullTime(block.createdAt)}>{displayTime(block.createdAt)}</time>{/if}
             </header>
             {#if block.text}
-              <MarkdownContent source={block.text} />
-              {#if block.truncated}<p class="truncation-note">{$t("Long message was shortened to keep this session responsive.")}</p>{/if}
+              <MarkdownContent source={fullAnswers[block.id] ?? block.text} />
+              {#if block.kind === 'assistant'}<div class="answer-actions">
+                {#if block.truncated && fullAnswers[block.id] === undefined && readFullAnswer}<button disabled={pending.has(block.id)} onclick={() => answerAction(block, false)}>{$t('Show full answer')}</button>{/if}
+                <button disabled={pending.has(block.id)} onclick={() => answerAction(block, true)}>{$t(block.truncated && !readFullAnswer ? 'Copy preview' : 'Copy answer')}</button>
+                {#if feedback[block.id]}<span role="status">{$t(feedback[block.id])}</span>{/if}
+              </div>{/if}
+              {#if block.truncated && fullAnswers[block.id] === undefined}<p class="truncation-note">{$t("Long message was shortened to keep this session responsive.")}</p>{/if}
             {:else if block.safeSummary}
               <p class="safe-summary">{block.safeSummary}</p>
             {/if}
@@ -98,6 +120,9 @@
 </section>
 
 <style>
+  .answer-actions { display:flex; gap:var(--piui-space-2); align-items:center; flex-wrap:wrap; margin-top:var(--piui-space-2); font-size:12px; color:var(--piui-text-muted); }
+  .answer-actions button { font:inherit; color:inherit; background:var(--piui-bg-raised); padding:5px 8px; border:1px solid var(--piui-border); border-radius:var(--piui-radius-sm); cursor:pointer; }
+  .answer-actions button:focus-visible { outline:2px solid var(--piui-focus); }
   .timeline { width: min(100%, var(--piui-chat-column-width)); min-width: 0; margin: 0 auto; padding: 28px var(--piui-chat-inline-padding) 40px; }
   .block { position: relative; min-width: 0; max-width: 100%; margin: 0 0 24px; }
   .block header { display: flex; min-height: 20px; align-items: baseline; gap: var(--piui-space-2); margin-bottom: 7px; color: var(--piui-text-muted); font-size: 11px; font-weight: 720; letter-spacing: .02em; }

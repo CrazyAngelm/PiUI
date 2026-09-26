@@ -3,6 +3,7 @@
 </script>
 
 <script lang="ts">
+  import { statusPresentation } from './runView';
   import { t } from '../locale/language';
   import { onDestroy, onMount } from 'svelte';
   import SystemGraphEditor from './SystemGraphEditor.svelte';
@@ -68,6 +69,8 @@
   let listError: string | undefined;
   let editorError: string | undefined;
   let query = '';
+  let runStatus = '';
+  let pendingRunToOpen: { workspaceId: string; run: OrchestrationRunV6 } | undefined;
   let deleteRequest: { workspaceId: string; kind: OrchestrationDefinitionKind | 'schedule'; summary: DefinitionSummary } | undefined;
   let epoch = 0;
   let mounted = false;
@@ -76,6 +79,7 @@
   const sectionTitles: Record<OrchestrationSection, string> = { systems: 'Systems', agents: 'Agents', teams: 'Teams', pipelines: 'Pipelines', schedules: 'Schedules', runs: 'Runs' };
   const firstTitles = { agents: 'Create your first agent', teams: 'Bring your agents together', pipelines: 'Plan the work', systems: 'Build an agent system', schedules: 'Create your first schedule', runs: 'Start your first run' };
   const firstDescriptions = { agents: 'Choose a model and give it a clear job.', teams: 'Assign roles to saved agents and choose a coordinator.', pipelines: 'Add tasks, choose who does them, and set what runs next.', systems: 'Connect agents and their tasks in one workspace.', schedules: 'Choose a saved launch, timing, and explicit missed-run and overlap policies.', runs: 'Choose a saved team and process to begin.' };
+  $: if (pendingRunToOpen && pendingRunToOpen.workspaceId !== workspaceId) pendingRunToOpen = undefined;
   $: scope = `${workspaceId}\u0000${section}`;
   $: if (mounted && streamReady && observedScope !== scope) {
     observedScope = scope;
@@ -97,7 +101,7 @@
   $: selectedActionError = selectedRun?.id === runActionError?.runId && workspaceId === runActionError?.workspaceId ? runActionError?.message : undefined;
   $: rows = section === 'agents' ? catalog?.profiles ?? [] : section === 'teams' ? catalog?.teams ?? [] : section === 'pipelines' ? catalog?.pipelines ?? [] : [];
   $: visibleRows = rows.filter((row) => row.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
-  $: visibleRuns = runs.filter((run) => `${run.teamName} ${run.pipelineName}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  $: visibleRuns = runs.filter((run) => `${run.teamName} ${run.pipelineName} ${run.id}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()) && (!runStatus || run.status === runStatus));
   $: visibleCommands = (catalog?.launchCommands ?? []).filter((row) => row.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   $: visibleSchedules = schedules.filter((schedule) => schedule.value.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
 
@@ -171,6 +175,7 @@
         const result = await client.orchestration_list_runs_v6({ workspaceId: targetWorkspace });
         if (!mounted || epoch !== requestEpoch || scope !== targetScope) return;
         runs = mergeRunSummaries(runs, result);
+        if (pendingRunToOpen && pendingRunToOpen.workspaceId === workspaceId) { selectedRun = pendingRunToOpen.run; pendingRunToOpen = undefined; }
         runUpdateError = undefined;
       } else if (targetSection === 'schedules') {
         const [latest, stored] = await Promise.all([
@@ -488,7 +493,7 @@
 <section class="orchestration-panel" class:graph-view={section === 'systems'} aria-labelledby="orchestration-title">
   {#if section === 'systems'}
     <h1 id="orchestration-title" class="sr-only">{$t('Systems')}</h1>
-    {#key workspaceId}<SystemGraphEditor {modelsFor} {workspaceId} {safeMode} {client} {onDirtyChange} onRun={() => { section = 'runs'; onSectionChange('runs'); }} />{/key}
+    {#key workspaceId}<SystemGraphEditor {modelsFor} {workspaceId} {safeMode} {client} {onDirtyChange} onLibrary={() => { section = 'agents'; onSectionChange('agents'); }} onRun={(run) => { pendingRunToOpen = { workspaceId, run }; section = 'runs'; onSectionChange('runs'); }} />{/key}
   {:else}
   {#if safeMode}<p class="notice" role="status">{$t('Safe mode. Definitions and recorded runs are read-only. No native work starts here.')}</p>{/if}
   {#if (section === 'runs' || selectedRun !== undefined) && !editor && !launcher && streamError}<p class="notice" role="status">{$t("Live updates are unavailable. Use Refresh to load recorded state.")} {$t(streamError)}</p>{/if}
@@ -502,7 +507,7 @@
       {:else if editor.kind === 'team'}<TeamEditor team={editor.stored?.value} profiles={editor.profiles} busy={actionBusy} error={editorError} readOnly={safeMode || staleEditorScope} onSave={(value) => void saveDefinition(value)} onCancel={closeEditor} {onDirtyChange} />
       {:else if editor.kind === 'pipeline'}<PipelineEditor pipeline={editor.stored?.value} profiles={editor.profiles} teams={editor.teams} busy={actionBusy} error={editorError} readOnly={safeMode || staleEditorScope} onSave={(value) => void saveDefinition(value)} onCancel={closeEditor} {onDirtyChange} />
       {:else if editor.kind === 'launch-command'}<LaunchCommandEditor command={editor.stored?.value} teams={editor.catalog.teams} pipelines={editor.catalog.pipelines} busy={actionBusy} error={editorError} readOnly={safeMode || staleEditorScope} onSave={(value) => void saveDefinition(value)} onCancel={closeEditor} {onDirtyChange} />
-      {:else}<ScheduleEditor schedule={editor.stored} launchCommands={editor.catalog.launchCommands} busy={actionBusy} error={editorError} readOnly={safeMode || staleEditorScope} onSave={(value) => void saveDefinition(value)} onCancel={closeEditor} {onDirtyChange} />{/if}
+      {:else}<ScheduleEditor onCreateSystem={() => { closeEditor(); section = 'systems'; onSectionChange('systems'); }} schedule={editor.stored} launchCommands={editor.catalog.launchCommands} busy={actionBusy} error={editorError} readOnly={safeMode || staleEditorScope} onSave={(value) => void saveDefinition(value)} onCancel={closeEditor} {onDirtyChange} />{/if}
     {/key}
   {:else if launcher}
     <h1 id="orchestration-title" class="sr-only">{$t('Launch a recorded run')}</h1>
@@ -517,6 +522,7 @@
   {:else}
     <header class="page-header"><div><h1 id="orchestration-title">{$t(sectionTitles[section])}</h1></div><div class="page-actions"><button type="button" class="secondary" onclick={() => void refresh()} disabled={listBusy || actionBusy} aria-label={$t("Refresh {0}", [$t(sectionTitles[section]).toLowerCase()])}>{listBusy ? $t('Refreshing…') : $t('Refresh')}</button>{#if section !== 'runs' && !safeMode}<button type="button" class="primary" disabled={actionBusy || listBusy} onclick={() => void openEditor(section === 'schedules' ? 'schedule' : kindForSection(section))}>{$t(section === 'agents' ? 'Create profile' : section === 'teams' ? 'Create team' : section === 'schedules' ? 'Create schedule' : 'Create pipeline')}</button>{/if}{#if section === 'runs'}<button type="button" class="primary" disabled={safeMode || actionBusy || listBusy} onclick={() => void openLauncher()}>{$t('Start run')}</button>{/if}</div></header>
     <label class="search"><span>{$t("Search")} {$t(sectionTitles[section])}</span><input type="search" bind:value={query} placeholder={$t("Find {0}…", [$t(sectionTitles[section]).toLowerCase()])} /></label>
+    {#if section === 'runs'}<label>{$t('Status')}<select aria-label={$t('Filter runs')} bind:value={runStatus}><option value="">{$t('All runs')}</option>{#each ['running','succeeded','failed','cancelled','uncertain'] as status}<option value={status}>{$t(status)}</option>{/each}</select></label>{/if}
     {#if listError}<div class="error" role="alert"><strong>{$t('Could not complete the workspace action')}</strong><p>{$t(listError)}</p><button type="button" onclick={() => void refresh()} disabled={listBusy || actionBusy}>{$t('Try again')}</button></div>{/if}
     {#if section === 'runs' && runUpdateError}<div class="error" role="alert"><strong>{$t('Could not refresh a recorded run')}</strong><p>{$t(runUpdateError.message)}</p><button type="button" onclick={() => void refresh()} disabled={listBusy}>{$t('Refresh runs')}</button></div>{/if}
     {#if deleteRequest}<div class="delete-confirm" role="group" aria-label={$t('Confirm definition deletion')}><strong>{$t("Delete")} {deleteRequest.summary.name}?</strong><p>{$t('Delete this definition? Existing sessions and recorded runs are kept.')}</p><div class="page-actions"><button type="button" class="secondary" disabled={actionBusy} onclick={() => deleteRequest = undefined}>{$t('Keep definition')}</button><button type="button" class="danger" disabled={actionBusy || safeMode} onclick={() => void deleteDefinition()}>{actionBusy ? $t('Deleting…') : $t('Delete definition')}</button></div></div>{/if}
@@ -524,7 +530,7 @@
     {:else if dataScope === scope}
       {#if section === 'runs'}
         {#if visibleRuns.length === 0}<div class="empty"><h2>{query.trim() ? $t('No matching runs') : $t('No runs recorded')}</h2><p>{query.trim() ? $t('Change the search to see other runs.') : $t('Choose Start run to use a saved team and pipeline. Only recorded runs appear here.')}</p></div>
-        {:else}<ul class="definition-list" aria-label={$t('Recorded runs')}>{#each visibleRuns as run (run.id)}<li><button type="button" class="row-open" onclick={() => void openRun(run)} disabled={actionBusy}><strong>{run.pipelineName}</strong><span>{run.teamName} · {run.status === 'uncertain' ? $t('Needs reconciliation') : $t(run.status)}</span></button></li>{/each}</ul>{/if}
+        {:else}<ul class="definition-list" aria-label={$t('Recorded runs')}>{#each visibleRuns as run (run.id)}<li><button type="button" class="row-open" onclick={() => void openRun(run)} disabled={actionBusy}><strong>{run.pipelineName}</strong><span>{run.teamName} · {$t(statusPresentation(run.status).label)} · {run.id}</span></button></li>{/each}</ul>{/if}
       {:else if section === 'schedules'}
         {#if visibleSchedules.length === 0}<div class="empty"><h2>{query.trim() ? $t('No matching schedules') : $t(firstTitles.schedules)}</h2><p>{query.trim() ? $t('Change the search to see other schedules.') : safeMode ? $t('Create actions are disabled in safe mode.') : $t(firstDescriptions.schedules)}</p>{#if !safeMode && !query.trim()}<button type="button" class="primary empty-action" onclick={() => void openEditor('schedule')}>{$t('Create schedule')}</button>{/if}</div>
         {:else}<ul class="definition-list" aria-label={$t('Schedules')}>{#each visibleSchedules as schedule (schedule.value.id)}<li><button type="button" class="row-open" onclick={() => void openEditor('schedule', scheduleSummary(schedule))} disabled={actionBusy}><strong>{schedule.value.name}</strong><span>{schedule.enabled ? $t('Enabled') : $t('Disabled')} · {$t('Next')}: {scheduleTime(schedule.nextDueAt)}</span>{#if schedule.lastOccurrence}<span>{$t('Last')}: {$t(schedule.lastOccurrence.outcome)}{schedule.lastOccurrence.failureCode ? ` · ${$t(schedule.lastOccurrence.failureCode)}` : ''}</span>{/if}</button>{#if schedule.lastOccurrence?.runId}<button type="button" class="secondary" disabled={actionBusy} onclick={() => void openScheduledRun(schedule.lastOccurrence?.runId ?? '')}>{$t('Open run')}</button>{/if}{#if !safeMode}<button type="button" class="secondary" disabled={actionBusy} aria-label={$t(schedule.enabled ? 'Disable {0}' : 'Enable {0}', [schedule.value.name])} onclick={() => void toggleSchedule(schedule)}>{schedule.enabled ? $t('Disable') : $t('Enable')}</button><button type="button" class="row-delete" disabled={actionBusy} aria-label={$t('Delete {0}', [schedule.value.name])} onclick={() => deleteRequest = { workspaceId, kind: 'schedule', summary: scheduleSummary(schedule) }}>{$t('Delete')}</button>{/if}</li>{/each}</ul>{/if}

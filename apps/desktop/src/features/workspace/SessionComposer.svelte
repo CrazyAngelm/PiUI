@@ -61,7 +61,7 @@
   }
   async function send(): Promise<void> {
     if (busy || !draft.trim() || !state) return;
-    if (draft.startsWith('/')) { await runCommand(draft.slice(1).trim()); return; }
+    if (commands.some(command => draft.trim() === `/${command.name}`)) { await runCommand(draft.trim().slice(1)); return; }
     const text = draft;
     const effectiveMode = running ? mode : 'prompt';
     if (!requestIdentity || requestIdentity.text !== text) {

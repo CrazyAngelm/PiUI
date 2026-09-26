@@ -2,10 +2,10 @@
   import { harnessModels } from '../../host-api/harnessModels';
   import { t } from '../locale/language';
   import { onMount, tick } from 'svelte';
-  import SessionComposer from './SessionComposer.svelte';
+  let conversationSurface: Promise<typeof import('./conversationSurface')> | undefined;
+  $: if (selectedSnapshot && !conversationSurface) conversationSurface = import('./conversationSurface');
   import PanelResize from '../../components/PanelResize.svelte';
   import { deleteWorkspaceSession } from '../../host-api/workspaceLifecycle';
-  import ConversationViewport from './ConversationViewport.svelte';
   import { host } from '../../host-api/client';
   import type { Preferences } from '../../host-api/types';
   import {
@@ -24,7 +24,6 @@
     WorkspaceSession,
     WorkspaceSummary,
   } from '../../../../../contracts/workspace-v15';
-  import WorkspaceSettings from './WorkspaceSettings.svelte';
   import { modalFocus, sessionForProject, shortcutModifier } from './workspaceUx';
   import { acceptWorkspaceSnapshot, applyWorkspaceEvent, harnessLabel, mergeCatalogSession, protectClosedCatalogSessions, resolveCloseAfterCatalog, sortedSessions, statusLabel } from './workspaceState';
 
@@ -804,7 +803,7 @@
     {#if catalogError}<div class="top-error" role="alert"><span>{$t(catalogError)}</span><button type="button" onclick={() => loadCatalog()}>{$t('Refresh')}</button></div>{/if}
 
     {#if mainView === 'settings'}
-      <WorkspaceSettings {preferences} busy={preferencesBusy} error={preferencesError} onChange={savePreferences} onClose={closeSettings} />
+      {#await import('./WorkspaceSettings.svelte')}<p role="status">{$t('Loading…')}</p>{:then settings}<settings.default {preferences} busy={preferencesBusy} error={preferencesError} onChange={savePreferences} onClose={closeSettings} />{:catch}<p role="alert">{$t('Could not load settings.')} <button onclick={closeSettings}>{$t('Back')}</button></p>{/await}
     {:else if mainView === 'workspace'}
       <section class="workspace-view" aria-labelledby="workspace-view-title">
         <header class="workspace-header">
@@ -856,16 +855,18 @@
           <button type="button" onclick={(event) => openInspector('details', event)}>{$t('Session details')}</button>
         </header>
         {#if sessionError}<div class="inline-error" role="alert"><span>{$t(sessionError)}</span><button type="button" onclick={() => reconcileSession(selectedSnapshot.session.id)}>{$t('Check status')}</button></div>{/if}
-        <ConversationViewport blocks={selectedSnapshot.blocks} loading={sessionLoading} sessionKey={selectedSnapshot.session.id} agentLabel={harnessLabel(selectedSnapshot.session.harness)} />
+        {#await conversationSurface}<p role="status">{$t('Opening chat…')}</p>{:then surface}{#if surface}
+        <surface.ConversationViewport blocks={selectedSnapshot.blocks} loading={sessionLoading} sessionKey={selectedSnapshot.session.id} historySessionId={selectedSnapshot.session.id} agentLabel={harnessLabel(selectedSnapshot.session.harness)} />
         <div class="composer-shell">
           {#if catalog.safeMode}<p class="composer-notice">{$t('Runtime actions are disabled in safe mode. Your draft is preserved.')}</p>
           {:else if selectedSnapshot.session.status === 'closed'}<p class="composer-notice">{$t(sessionLoading ? 'Opening chat…' : 'This native session is closed. Its transcript remains readable.')}</p>
           {:else if !selectedSnapshot.capabilities.prompt.supported}<p class="composer-notice">{selectedSnapshot.capabilities.prompt.reason ?? $t("{0} is read-only in this mode.", [harnessLabel(selectedSnapshot.session.harness)])}</p>
           {:else}
-            {#key selectedSnapshot.session.id}<SessionComposer snapshot={selectedSnapshot} draft={drafts[selectedSnapshot.session.id] ?? ''} updateDraft={text => updateDraft(selectedSnapshot.session.id, text)} refresh={() => reconcileSession(selectedSnapshot.session.id)} interrupt={interruptSession} {interruptBusy} />{/key}
+            {#key selectedSnapshot.session.id}<surface.SessionComposer snapshot={selectedSnapshot} draft={drafts[selectedSnapshot.session.id] ?? ''} updateDraft={text => updateDraft(selectedSnapshot.session.id, text)} refresh={() => reconcileSession(selectedSnapshot.session.id)} interrupt={interruptSession} {interruptBusy} />{/key}
           {/if}
           {#if sendError}<p class="error composer-error" role="alert">{$t(sendError)}</p>{/if}
         </div>
+        {/if}{:catch}<p role="alert">{$t('Could not open conversation controls. Try again.')} <button onclick={() => conversationSurface = import('./conversationSurface')}>{$t('Try again')}</button></p>{/await}
       </section>
     {:else if sessionLoading}
       <div class="state" role="status"><h1>{$t('Opening chat…')}</h1></div>

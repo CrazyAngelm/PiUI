@@ -4,6 +4,18 @@ import type { GraphEdge, GraphNode } from './agentGraph';
 export const GRAPH_NODE_WIDTH = 232;
 export const GRAPH_NODE_HEIGHT = 132;
 export const GRAPH_PORT_Y = 66;
+// Reuse Arrange's existing horizontal and vertical spacing for new cards.
+const COLUMN_DISTANCE = 320;
+const ROW_GAP = 176 - GRAPH_NODE_HEIGHT;
+export function unoccupiedPosition(nodes: readonly GraphNode[], point: {x:number;y:number}, height: number, heights: ReadonlyMap<string, number>): {x:number;y:number} {
+  let x = point.x;
+  const y = point.y;
+  for (;;) {
+    const collision = nodes.find(node => x < node.x + GRAPH_NODE_WIDTH + ROW_GAP && x + GRAPH_NODE_WIDTH + ROW_GAP > node.x && y < node.y + (heights.get(node.id) ?? graphNodeHeight(node)) + ROW_GAP && y + height + ROW_GAP > node.y);
+    if (!collision) return {x,y};
+    x = collision.x + COLUMN_DISTANCE;
+  }
+}
 export function graphNodeHeight(node: Pick<GraphNode, 'kind' | 'router'>): number {
   return node.kind === 'router' ? Math.max(GRAPH_NODE_HEIGHT, 126 + (node.router?.branches.length ?? 0) * 28) : GRAPH_NODE_HEIGHT;
 }
@@ -24,14 +36,14 @@ export interface DependencyLayout {
 }
 
 /** Return the occupied area of the editable graph in canvas coordinates. */
-export function graphBounds(nodes: readonly GraphNode[], padding = 64): GraphBounds {
+export function graphBounds(nodes: readonly GraphNode[], padding = 64, heights: ReadonlyMap<string, number> = new Map()): GraphBounds {
   if (!nodes.length) {
     return { left: padding, top: padding, right: padding + GRAPH_NODE_WIDTH, bottom: padding + GRAPH_NODE_HEIGHT, width: GRAPH_NODE_WIDTH, height: GRAPH_NODE_HEIGHT };
   }
   const left = Math.max(0, Math.min(...nodes.map((node) => node.x)) - padding);
   const top = Math.max(0, Math.min(...nodes.map((node) => node.y)) - padding);
   const right = Math.max(...nodes.map((node) => node.x + GRAPH_NODE_WIDTH)) + padding;
-  const bottom = Math.max(...nodes.map((node) => node.y + graphNodeHeight(node))) + padding;
+  const bottom = Math.max(...nodes.map((node) => node.y + (heights.get(node.id) ?? graphNodeHeight(node)))) + padding;
   return { left, top, right, bottom, width: right - left, height: bottom - top };
 }
 
@@ -49,7 +61,7 @@ export function fitGraphZoom(nodes: readonly GraphNode[], viewportWidth: number,
  * observation connections are permissions and intentionally do not influence
  * the execution order.
  */
-export function arrangeResultDependencies(nodes: readonly GraphNode[], edges: readonly GraphEdge[]): DependencyLayout {
+export function arrangeResultDependencies(nodes: readonly GraphNode[], edges: readonly GraphEdge[], heights: ReadonlyMap<string, number> = new Map()): DependencyLayout {
   const order = new Map(nodes.map((node, index) => [node.id, index]));
   const indegree = new Map(nodes.map((node) => [node.id, 0]));
   const outgoing = new Map<string, string[]>();
@@ -84,7 +96,7 @@ export function arrangeResultDependencies(nodes: readonly GraphNode[], edges: re
     const level = levels.get(node.id) ?? 0;
     const column = columns.get(level) ?? [node];
     const row = column.findIndex((candidate) => candidate.id === node.id);
-    return { ...node, x: 80 + level * 320, y: 80 + Math.max(0, row) * 176 };
+    return { ...node, x: 80 + level * COLUMN_DISTANCE, y: 80 + column.slice(0, Math.max(0, row)).reduce((sum, prior) => sum + (heights.get(prior.id) ?? graphNodeHeight(prior)) + ROW_GAP, 0) };
   });
   return { nodes: arranged, cycle: false, levels: Math.max(...levels.values(), 0) + 1 };
 }

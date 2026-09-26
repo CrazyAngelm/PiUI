@@ -52,8 +52,11 @@ export function compileGraph(graph: AgentGraph): { profiles: AgentProfile[]; tea
     command: { id: graph.id, name: graph.name, teamId: graph.teamId, pipelineId: graph.pipelineId },
   };
 }
-export function graphErrors(graph: AgentGraph): string[] {
-  const errors: string[] = [];
+export interface GraphIssue { message: string; nodeIds: string[] }
+export function graphErrors(graph: AgentGraph): string[] { return graphIssues(graph).map(issue => issue.message); }
+export function graphIssues(graph: AgentGraph): GraphIssue[] {
+  const errors: GraphIssue[] = [];
+  const push = (message: string, nodeIds: string[] = []) => errors.push({message,nodeIds});
   const isRouter = (node: GraphNode): boolean => node.kind === 'router';
   const agentNodes = graph.nodes.filter(node => node.kind !== 'router' || node.router?.mode === 'agent');
   const predicateValid = (predicate: RouterPredicate, fields: readonly { name: string; kind: string }[]): boolean => {
@@ -69,43 +72,43 @@ export function graphErrors(graph: AgentGraph): string[] {
     const routeDependencies = graph.edges.filter(edge => edge.kind === 'route' && edge.to === node.id).map(edge => edge.from);
     const dependencies = [...resultDependencies, ...routeDependencies];
     const hasField = (id: string, field: string) => graph.nodes.find(source => source.id === id)?.resultFields?.some(item => item.name === field);
-    if (node.condition && (!resultDependencies.includes(node.condition.sourceStepId) || !hasField(node.condition.sourceStepId, node.condition.field) || (typeof node.condition.equals === 'number' && !Number.isFinite(node.condition.equals)))) errors.push('A condition must select a declared field on a result dependency.');
+    if (node.condition && (!resultDependencies.includes(node.condition.sourceStepId) || !hasField(node.condition.sourceStepId, node.condition.field) || (typeof node.condition.equals === 'number' && !Number.isFinite(node.condition.equals)))) push('A condition must select a declared field on a result dependency.', [node.id]);
     const bindings = node.inputBindings ?? [];
-    if (new Set(bindings.map(binding => binding.name)).size !== bindings.length || bindings.some(binding => !binding.name.trim() || !resultDependencies.includes(binding.sourceStepId) || !hasField(binding.sourceStepId, binding.field))) errors.push('Input mappings need unique names and declared dependency fields.');
+    if (new Set(bindings.map(binding => binding.name)).size !== bindings.length || bindings.some(binding => !binding.name.trim() || !resultDependencies.includes(binding.sourceStepId) || !hasField(binding.sourceStepId, binding.field))) push('Input mappings need unique names and declared dependency fields.', [node.id]);
     if (isRouter(node)) {
       const router = node.router;
       const inputEdges = graph.edges.filter(edge => edge.kind === 'result' && edge.to === node.id);
       const branchIds = router?.branches.map(branch => branch.id) ?? [];
-      if (!router || inputEdges.length !== 1 || router.inputStepId !== inputEdges[0]?.from) errors.push('A router needs one direct result input.');
-      if (!router || !router.branches.length || branchIds.some(id => !id.trim()) || new Set(branchIds).size !== branchIds.length || router.branches.some(branch => !branch.label.trim())) errors.push('Router branches need unique ids and labels.');
+      if (!router || inputEdges.length !== 1 || router.inputStepId !== inputEdges[0]?.from) push('A router needs one direct result input.', [node.id]);
+      if (!router || !router.branches.length || branchIds.some(id => !id.trim()) || new Set(branchIds).size !== branchIds.length || router.branches.some(branch => !branch.label.trim())) push('Router branches need unique ids and labels.', [node.id]);
       const sourceFields = graph.nodes.find(candidate => candidate.id === router?.inputStepId)?.resultFields ?? [];
-      if (router?.mode === 'program' && router.branches.some(branch => !branch.predicate || !predicateValid(branch.predicate, sourceFields))) errors.push('Program router predicates must use declared input fields.');
-      if (router?.mode === 'agent' && (!router.selectionField?.trim() || router.branches.some(branch => branch.predicate || !branch.description?.trim()))) errors.push('Agent routers need descriptions and a selection field, not program predicates.');
-      if (router?.mode === 'agent' && !node.profile.model.trim()) errors.push('Choose a model for the agent router.');
+      if (router?.mode === 'program' && router.branches.some(branch => !branch.predicate || !predicateValid(branch.predicate, sourceFields))) push('Program router predicates must use declared input fields.', [node.id]);
+      if (router?.mode === 'agent' && (!router.selectionField?.trim() || router.branches.some(branch => branch.predicate || !branch.description?.trim()))) push('Agent routers need descriptions and a selection field, not program predicates.', [node.id]);
+      if (router?.mode === 'agent' && !node.profile.model.trim()) push('Choose a model for the agent router.', [node.id]);
     }
     if (node.review) {
       const visited = new Set<string>(); const pending = [...dependencies];
       while (pending.length) { const id = pending.pop()!; if (visited.has(id)) continue; visited.add(id); pending.push(...graph.edges.filter(edge => edge.kind === 'result' && edge.to === id).map(edge => edge.from)); }
-      if (!visited.has(node.review.retryFromStepId) || !node.resultFields?.some(field => field.name === node.review?.field && field.kind === 'boolean')) errors.push('A review needs a boolean result field and an upstream correction task.');
+      if (!visited.has(node.review.retryFromStepId) || !node.resultFields?.some(field => field.name === node.review?.field && field.kind === 'boolean')) push('A review needs a boolean result field and an upstream correction task.', [node.id]);
     }
   }
-  for (const node of graph.nodes) { const fields = node.resultFields ?? []; if (fields.some(field => !field.name.trim()) || new Set(fields.map(field => field.name)).size !== fields.length) errors.push('Result fields need unique non-empty names.'); }
+  for (const node of graph.nodes) { const fields = node.resultFields ?? []; if (fields.some(field => !field.name.trim()) || new Set(fields.map(field => field.name)).size !== fields.length) push('Result fields need unique non-empty names.', [node.id]); }
   for (const edge of graph.edges.filter(edge => edge.kind === 'route')) {
     const source = graph.nodes.find(node => node.id === edge.from);
-    if (!source || source.kind !== 'router' || !edge.branchId || !source.router?.branches.some(branch => branch.id === edge.branchId) || graph.nodes.some(node => node.id === edge.to && node.kind === 'router')) errors.push('Route connections need a router branch and an agent target.');
+    if (!source || source.kind !== 'router' || !edge.branchId || !source.router?.branches.some(branch => branch.id === edge.branchId) || graph.nodes.some(node => node.id === edge.to && node.kind === 'router')) push('Route connections need a router branch and an agent target.', [edge.from,edge.to]);
   }
-  if (!agentNodes.some(node => node.executionMode !== 'callable')) errors.push('Add a scheduled agent to start this system.');
-  if (graph.edges.some(edge => (edge.kind === 'result' || edge.kind === 'route') && graph.nodes.some(node => node.executionMode === 'callable' && (node.id === edge.from || node.id === edge.to)))) errors.push('Callable agents exchange results through their caller, not pipeline dependencies.');
-  if (!graph.name.trim() || !graph.nodes.length || agentNodes.some(node => !node.profile.name.trim() || (node.kind !== 'router' || node.router?.mode === 'agent') && !node.profile.model.trim())) errors.push('Enter a name and model for every agent.');
+  if (!agentNodes.some(node => node.executionMode !== 'callable')) push('Add a scheduled agent to start this system.');
+  if (graph.edges.some(edge => (edge.kind === 'result' || edge.kind === 'route') && graph.nodes.some(node => node.executionMode === 'callable' && (node.id === edge.from || node.id === edge.to)))) push('Callable agents exchange results through their caller, not pipeline dependencies.');
+  if (!graph.name.trim() || !graph.nodes.length || agentNodes.some(node => !node.profile.name.trim() || (node.kind !== 'router' || node.router?.mode === 'agent') && !node.profile.model.trim())) push('Enter a name and model for every agent.', agentNodes.filter(node => !node.profile.name.trim() || !node.profile.model.trim()).map(node=>node.id));
   const definition = compileGraph(graph);
-  if (definition.profiles.some(parent => parent.allowedSpawnProfileIds.some(id => { const child = definition.profiles.find(profile => profile.id === id); return !child || !permissionsSubset(parent, child); }))) errors.push('Child permissions must be the same or lower.');
+  if (definition.profiles.some(parent => parent.allowedSpawnProfileIds.some(id => { const child = definition.profiles.find(profile => profile.id === id); return !child || !permissionsSubset(parent, child); }))) push('Child permissions must be the same or lower.');
   const indegree = new Map(graph.nodes.map(node => [node.id, 0]));
   const outgoing = new Map<string, string[]>();
   for (const edge of graph.edges.filter(edge => edge.kind === 'result' || edge.kind === 'route')) { indegree.set(edge.to, (indegree.get(edge.to) ?? 0) + 1); outgoing.set(edge.from, [...outgoing.get(edge.from) ?? [], edge.to]); }
   const ready = [...indegree].filter(([, degree]) => degree === 0).map(([id]) => id);
   let visited = 0;
   while (ready.length) { const id = ready.pop()!; visited++; for (const child of outgoing.get(id) ?? []) { const degree = (indegree.get(child) ?? 0) - 1; indegree.set(child, degree); if (!degree) ready.push(child); } }
-  if (visited !== graph.nodes.length) errors.push('Result connections must not form a cycle.');
+  if (visited !== graph.nodes.length) push('Result connections must not form a cycle.');
   return errors;
 }
 export function patternEdges(nodes: readonly GraphNode[], pattern: string): GraphEdge[] {

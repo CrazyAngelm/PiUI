@@ -1,0 +1,97 @@
+{
+  "status": "pass",
+  "target": "isolated Tauri WebView2 dev harness",
+  "scenario": "workspace-v15",
+  "timings": {
+    "normal": {
+      "browser": {
+        "sample": "tauri-webview2-dev",
+        "domInteractiveMs": 64,
+        "domContentLoadedMs": 179,
+        "loadEventMs": 226,
+        "responseEndMs": 18,
+        "firstPaintMs": null,
+        "firstContentfulPaintMs": null,
+        "shellObservedMs": 239
+      },
+      "startup": 27,
+      "projectTrust": 217,
+      "total": 11546
+    },
+    "safe": {
+      "browser": {
+        "sample": "tauri-webview2-dev",
+        "domInteractiveMs": 45,
+        "domContentLoadedMs": 123,
+        "loadEventMs": 166,
+        "responseEndMs": 11,
+        "firstPaintMs": null,
+        "firstContentfulPaintMs": null,
+        "shellObservedMs": 180
+      }
+    }
+  },
+  "ownedWindowMeasurements": [
+    {
+      "name": "ux-graph-navigation",
+      "width": 2360,
+      "height": 1560,
+      "memory": {
+        "scope": "snapshot-of-owned-app-process-tree",
+        "processesFound": 13,
+        "processesMeasured": 13,
+        "complete": true,
+        "sumWorkingSetBytes": 893403136,
+        "sumPrivateBytes": 553242624
+      }
+    },
+    {
+      "name": "ux-safe-graph",
+      "width": 2360,
+      "height": 1560,
+      "memory": {
+        "scope": "snapshot-of-owned-app-process-tree",
+        "processesFound": 8,
+        "processesMeasured": 8,
+        "complete": true,
+        "sumWorkingSetBytes": 584978432,
+        "sumPrivateBytes": 347242496
+      }
+    }
+  ],
+  "screenshots": [
+    "D:\\Projects\\PIUI\\target\\piui-evidence\\17980-1790093487681\\ux-graph-navigation.png",
+    "D:\\Projects\\PIUI\\target\\piui-evidence\\17980-1790093487681\\ux-safe-graph.png"
+  ],
+  "webviewVersion": "153.0.0.0",
+  "checks": [
+    "sessions-default-startup",
+    "workspace-accessible-landmarks",
+    "typed-host-project-registration",
+    "explicit-ui-project-trust",
+    "graph-undo-redo",
+    "graph-grouped-text-undo",
+    "graph-dirty-navigation-keep",
+    "graph-pattern-consent-and-recovery",
+    "graph-find-node",
+    "graph-wheel-and-keyboard-zoom",
+    "native-full-answer-read",
+    "native-history-search",
+    "answer-copy-success-and-failure-synthetic-clipboard",
+    "graph-new-draft-and-empty-canvas",
+    "graph-check-invalidation",
+    "graph-run-exact-id-synthetic-provider",
+    "schedule-summary-disabled-save",
+    "agent-api-auth-and-typed-allowlist",
+    "agent-api-atomic-save-conflict-and-denied-escalation",
+    "agent-api-native-codex-synthetic-provider-result-dag",
+    "agent-api-same-ui-run-and-native-answers",
+    "agent-api-stable-run-id-prevents-duplicate",
+    "safe-mode-graph-view-navigation",
+    "safe-mode-run-rejected",
+    "safe-mode-create-rejected",
+    "agent-api-safe-mode-read-and-denied-execution",
+    "debug-only-loopback-webview-automation",
+    "no-provider-credentials-in-fixture"
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "evidenceType": "synthetic execution of existing pure source functions; not native UI or provider proof",
+  "layout": {
+    "defaultRouterBranchCount": 2,
+    "reportedRouterHeight": 182,
+    "followingNodeOffset": 176,
+    "overlapAccordingToLayoutGeometry": 6
+  },
+  "checkSystem": {
+    "scenario": "agent with a catalog-valid model, but system name is empty",
+    "nativeCatalogIssues": [],
+    "graphValidationErrors": [
+      "Enter a name and model for every agent."
+    ]
+  },
+  "pattern": {
+    "scenario": "the editor replaces its entire edges array with the parallel pattern",
+    "priorKinds": [
+      "result",
+      "send",
+      "observe",
+      "spawn"
+    ],
+    "resultingEdges": []
+  }
+}

@@ -177,6 +177,47 @@ export async function runWorkspaceWebview2Proof({
     assertion(changed, `Could not set ${selector}.`);
   }
 
+  async function proveGraphUsability() {
+    const nodesBefore = await evaluate(`document.querySelectorAll('.node').length`);
+    const edgesBefore = await evaluate(`document.querySelectorAll('.connections li').length`);
+    const nameBefore = await evaluate(`document.querySelector('.system-name').value`);
+    await clickButton('Duplicate agent', '.system-editor');
+    await waitFor(`document.querySelectorAll('.node').length === ${nodesBefore+1}`, 'duplicate node');
+    assertion(await evaluate(`document.querySelectorAll('.connections li').length`) === edgesBefore, 'Duplicate inherited connections');
+    await clickButton('Undo', '.document-tools');
+    await waitFor(`document.querySelectorAll('.node').length === ${nodesBefore}`, 'undo duplicate');
+    await clickButton('Redo', '.document-tools');
+    await waitFor(`document.querySelectorAll('.node').length === ${nodesBefore+1}`, 'redo duplicate');
+    await clickButton('Undo', '.document-tools');
+    await evaluate(`document.querySelector('.system-name').focus()`);
+    await setControl('.system-name', nameBefore + ' edit');
+    await setControl('.system-name', nameBefore + ' edits');
+    await evaluate(`document.querySelector('.system-name').blur()`);
+    await clickButton('New system', '.system-editor');
+    await waitFor(`document.querySelector('.navigation-dialog')`, 'dirty navigation choices');
+    await clickButton('Keep editing', '.navigation-dialog');
+    assertion(await evaluate(`document.querySelector('.system-name').value`) === nameBefore + ' edits', 'Keep editing lost draft');
+    await clickButton('Undo', '.document-tools');
+    await waitFor(`document.querySelector('.system-name').value === ${JSON.stringify(nameBefore)}`, 'one undo for text gesture');
+    await evaluate(`(() => {const select=document.querySelector('select[aria-label="Pattern"]'); select.value='sequential'; select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await waitFor(`document.querySelector('[aria-label="Replace connections"]')`, 'pattern confirmation');
+    assertion(await evaluate(`document.querySelectorAll('.connections li').length`) === edgesBefore, 'Pattern changed connections before consent');
+    await clickButton('Replace connections', '[aria-label="Replace connections"]');
+    await waitFor(`document.querySelectorAll('.connections li').length === ${nodesBefore-1}`, 'pattern replaces edges');
+    await clickButton('Undo', '.document-tools');
+    await waitFor(`document.querySelectorAll('.connections li').length === ${edgesBefore}`, 'undo restores all edge types');
+    const lastName = await evaluate(`[...document.querySelectorAll('.node strong')].at(-1).textContent`);
+    await setControl('input[aria-label="Find node"]', lastName);
+    await clickButton(lastName, '.node-results');
+    await waitFor(`document.querySelector('.node.selected strong')?.textContent === ${JSON.stringify(lastName)}`, 'node search focuses result');
+    await clickButton('Reset view', '.graph-navigation');
+    await evaluate(`(() => { const c=document.querySelector('.canvas'), r=c.getBoundingClientRect(); c.dispatchEvent(new WheelEvent('wheel',{ctrlKey:true,deltaY:-120,clientX:r.left+r.width/2,clientY:r.top+r.height/2,bubbles:true,cancelable:true})); })()`);
+    await waitFor(`document.querySelector('.world').style.transform !== 'scale(1)'`, 'wheel zoom');
+    await evaluate(`(() => { const c=document.querySelector('.canvas'); c.focus(); c.dispatchEvent(new KeyboardEvent('keydown',{key:'0',bubbles:true})); })()`);
+    await waitFor(`document.querySelector('.world').style.transform === 'scale(1)'`, 'keyboard reset');
+    checks.push('graph-undo-redo', 'graph-grouped-text-undo', 'graph-dirty-navigation-keep', 'graph-pattern-consent-and-recovery', 'graph-find-node', 'graph-wheel-and-keyboard-zoom');
+  }
+
   async function setLabelledControl(label, value, eventName = 'input') {
     const changed = await evaluate(`(() => {
       const wanted = ${JSON.stringify(label)};
@@ -313,13 +354,13 @@ export async function runWorkspaceWebview2Proof({
       const label = [...document.querySelectorAll('aside label')].find(e => e.textContent.trim() === 'Use base prompt');
       const checkbox = label?.querySelector('input');
       if (!checkbox?.checked) return false;
-      checkbox.focus(); checkbox.click(); checkbox.click();
+      label.closest('details').open = true; checkbox.focus(); checkbox.click(); checkbox.click();
       return checkbox.checked && document.activeElement === checkbox && !label.querySelector('textarea');
     })()`), 'Graph base prompt must default on and toggle without a text editor.');
     await setControl('aside[aria-label="Agent settings"] select[aria-label="Reasoning"]', 'low', 'change');
-    await setControl('aside label:nth-of-type(5) select', 'fast', 'change');
+    await setLabelledControl('Speed', 'fast', 'change');
     await clickButton('＋ Add agent', '.canvas-tools');
-    await setControl('aside label:nth-of-type(2) select', 'prime-agent', 'change');
+    await setLabelledControl('Harness', 'prime-agent', 'change');
     await chooseNativeModel('aside[aria-label="Agent settings"] select[aria-label="Model"]');
     // DOM pointer events exercise the real WebView hit testing and graph handlers.
     await evaluate(`(() => {
@@ -592,8 +633,9 @@ export async function runWorkspaceWebview2Proof({
     await waitFor(`document.querySelector('select[aria-label="Open system"] option[value="${graphCommand.summary.id}"]')`, 'saved graph catalog loaded');
     await setControl('select[aria-label="Open system"]', graphCommand.summary.id, 'change');
     await waitFor(`document.querySelectorAll('.node').length === 2 && document.querySelectorAll('.connections li').length === 3`, 'reopened mixed graph');
+    await proveGraphUsability();
     const fitBefore = await evaluate(`document.querySelector('.world')?.style.transform ?? ''`);
-    await clickButton('Fit graph', '.canvas-tools');
+    await clickButton('Fit', '.graph-navigation');
     await waitFor(`Boolean(document.querySelector('.world')?.style.transform) && document.querySelector('.world')?.style.transform !== ${JSON.stringify(fitBefore)}`, 'fit graph viewport');
     checks.push('graph-fit-viewport');
     await capture('workspace-mixed-graph-reopened');
@@ -746,6 +788,19 @@ export async function runWorkspaceWebview2Proof({
       teamId: SAFE_FIXTURE.teamId, pipelineId: SAFE_FIXTURE.pipelineId, launchCommandId: SAFE_FIXTURE.launchId,
     } }, 'Safe-mode orchestration run creation', 'runtime-unavailable');
 
+    if (process.env.PIUI_E2E_UX_ONLY === '1') {
+      await clickButton('Workspace','.view-switch');
+      await selectWorkspaceSection('Systems');
+      const saved = definitions.launchCommands.find(c=>c.name==='UX graph proof');
+      await setControl('select[aria-label="Open system"]',saved.id,'change');
+      await waitFor(`document.querySelectorAll('.node').length === 2`,'safe graph load');
+      await clickButton('Zoom in','.graph-navigation');
+      await clickButton('Fit','.graph-navigation');
+      assertion(await evaluate(`document.querySelector('.system-name').disabled && [...document.querySelectorAll('.document-tools button')].filter(b=>['Undo','Redo'].includes(b.textContent.trim())).every(b=>b.disabled)`),'Safe graph mutation enabled');
+      await capture('ux-safe-graph');
+      return {checks:['safe-mode-graph-view-navigation','safe-mode-run-rejected','safe-mode-create-rejected'],timings,screenshots};
+    }
+
     try {
       await clickButton('Workspace', '.view-switch');
       await waitFor(`/read-only|viewing only/.test(document.querySelector('.orchestration-panel .notice')?.textContent ?? '')`, 'safe-mode workspace notice', startupBoundMs);
@@ -780,9 +835,9 @@ export async function runWorkspaceWebview2Proof({
     viewSwitch: document.querySelector('[aria-label="Workspace view"]') !== null,
     mainFocusable: document.querySelector('#workspace-main')?.getAttribute('tabindex') === '-1',
     actions: ['Settings','New chat','Add project'].every((name) =>
-      [...document.querySelectorAll('button')].some((button) => button.textContent?.trim().startsWith(name))),
+      [...document.querySelectorAll('button')].some((button) => { const clone = button.cloneNode(true); clone.querySelectorAll('[aria-hidden="true"],kbd').forEach(child=>child.remove()); return button.getAttribute('aria-label') === name || clone.textContent?.trim() === name; })),
   }))()`);
-  assertion(Object.values(shellAccessibility).every(Boolean), 'The Sessions startup surface lost a keyboard or screen-reader label.');
+  assertion(Object.values(shellAccessibility).every(Boolean), `The Sessions startup surface lost a keyboard or screen-reader label: ${JSON.stringify(shellAccessibility)}`);
   end('startup');
   checks.push('sessions-default-startup', 'workspace-accessible-landmarks');
 
@@ -811,6 +866,91 @@ export async function runWorkspaceWebview2Proof({
   assertion(workspace?.trust === 'trusted', 'The visible trust action did not update the typed host catalog.');
   end('projectTrust');
   checks.push('typed-host-project-registration', 'explicit-ui-project-trust');
+
+  if (process.env.PIUI_E2E_UX_ONLY === '1') {
+    await clickButton('Workspace', '.view-switch');
+    await selectWorkspaceSection('Systems');
+    assertion(await evaluate(`document.querySelector('.save-state').textContent === 'New draft'`), 'New graph falsely claims persistence');
+    assertion(await evaluate(`(() => {const c=document.querySelector('.canvas'); return c.scrollWidth === c.clientWidth && c.scrollHeight === c.clientHeight;})()`), 'Empty graph has fake scroll extent');
+    await setControl('.system-name', 'UX graph proof');
+    await clickButton('＋ Add agent', '.canvas-tools');
+    await chooseNativeModel('aside[aria-label="Agent settings"] select[aria-label="Model"]');
+    await setControl('textarea[aria-label="Task"]', 'Return the requested result.');
+    await clickButton('＋ Add agent', '.canvas-tools');
+    await chooseNativeModel('aside[aria-label="Agent settings"] select[aria-label="Model"]');
+    await setControl('textarea[aria-label="Task"]', 'Read the upstream result and respond.');
+    await evaluate(`document.querySelector('.connections').open = true`);
+    const ids = await evaluate(`[...document.querySelectorAll('[data-port="out"]')].map(p=>p.dataset.nodeId)`);
+    await setControl('.connection-form select[aria-label="From"]', ids[0], 'change');
+    await setControl('.connection-form select[aria-label="To"]', ids[1], 'change');
+    await clickButton('Connect', '.connection-form');
+    await waitFor(`document.querySelectorAll('.connections li').length === 1`, 'result dependency');
+    await setControl('.canvas-tools select[aria-label="Connection type"]','send','change');
+    await setControl('.canvas-tools select[aria-label="Direction"]','both','change');
+    await clickButton('Connect','.connection-form');
+    await waitFor(`document.querySelectorAll('.connections li').length === 3`,'mixed connection types');
+    await clickButton('Save', '.system-editor .toolbar');
+    await waitFor(`document.querySelector('.save-state').textContent === 'Saved'`, 'host saved UX graph');
+    await proveGraphUsability();
+    await clickButton('Check system', '.system-editor .toolbar');
+    await waitFor(`document.querySelector('.system-editor .notice')?.textContent.includes('verified')`, 'full graph preflight');
+    await setControl('.system-name', 'UX graph changed');
+    await waitFor(`document.querySelector('.system-editor .notice')?.textContent.includes('Check it again')`, 'stale check invalidated');
+    await clickButton('Undo', '.document-tools');
+    await clickButton('Run', '.system-editor .toolbar');
+    await waitFor(`document.querySelector('#run-inspector-title')`, 'UI opens created run', startupBoundMs);
+    const runs = await invoke('orchestration_list_runs_v6', {request:{workspaceId:workspace.id}});
+    const started = runs.find(r=>r.pipelineName === 'UX graph proof');
+    assertion(started && await evaluate(`document.querySelector('aside[aria-labelledby="run-inspector-title"]')?.textContent.includes(${JSON.stringify(started.id)})`), 'Run opened the wrong ID');
+    await waitFor(`document.querySelector('[aria-label="Run status: Succeeded"]')`, 'synthetic provider graph completion', startupBoundMs);
+    const completed = await invoke('orchestration_get_run_v6',{request:{workspaceId:workspace.id,runId:started.id}});
+    const nativeHistory = await invoke('workspace_history_v1',{request:{sessionId:completed.tasks[0].execution.id}});
+    assertion(nativeHistory.protocol === 1 && nativeHistory.sessionId === completed.tasks[0].execution.id, 'Native history identity mismatch');
+    const answer = nativeHistory.blocks.find(b=>b.kind==='assistant' && b.text);
+    assertion(answer && !answer.truncated, 'Native answer missing from explicit history read');
+    await evaluate(`document.querySelector('[aria-label="Execution graph"] .agent').click()`);
+    await waitFor(`document.querySelector('.agent-inspector')`,'selected agent');
+    await clickButton('Conversation','.agent-inspector');
+    await waitFor(`document.querySelector('.agent-inspector .conversation-viewport')`,'native conversation');
+    await clickButton('Search messages','.agent-inspector');
+    await setControl('.agent-inspector input[aria-label="Search messages"]',answer.text);
+    await waitFor(`document.querySelector('.agent-inspector [aria-label="Next match"]')?.disabled === false`,'native history search match');
+    await clickButton('Close search','.agent-inspector');
+    await evaluate(`(() => { window.__piuiClipboardWrite = navigator.clipboard.writeText; navigator.clipboard.writeText = async text => {window.__piuiCopiedAnswer = text;}; })()`);
+    try {
+      await clickButton('Copy answer','.agent-inspector');
+      await waitFor(`window.__piuiCopiedAnswer === ${JSON.stringify(answer.text)}`, 'copy complete answer through clipboard boundary');
+      await evaluate(`navigator.clipboard.writeText = async () => { throw new Error('Fixture clipboard denial'); }`);
+      await clickButton('Copy answer','.agent-inspector');
+      await waitFor(`document.querySelector('.agent-inspector').textContent.includes('Could not copy the answer')`, 'copy failure feedback');
+    } finally { await evaluate(`navigator.clipboard.writeText = window.__piuiClipboardWrite; delete window.__piuiClipboardWrite; delete window.__piuiCopiedAnswer;`); }
+    checks.push('native-full-answer-read','native-history-search','answer-copy-success-and-failure-synthetic-clipboard');
+    await clickButton('Close run inspector');
+    await selectWorkspaceSection('Systems');
+    const saved = (await orchestrationCatalog(workspace.id)).launchCommands.find(c=>c.name==='UX graph proof');
+    await setControl('select[aria-label="Open system"]', saved.id, 'change');
+    await waitFor(`document.querySelectorAll('.node').length === 2`, 'reopen saved graph');
+    await clickButton('Fit', '.graph-navigation');
+    await capture('ux-graph-navigation');
+    await seedSafeModeRunDefinitions(workspace.id);
+    await selectWorkspaceSection('Schedules');
+    await clickButton('Create schedule');
+    await waitFor(`document.querySelector('#schedule-editor-title')`, 'UX schedule editor');
+    assertion(await evaluate(`document.querySelector('form.editor header').textContent.includes('New draft')`), 'New schedule falsely claims saved');
+    await setControl('#schedule-name','UX schedule');
+    await setControl('#schedule-launch',saved.id,'change');
+    await setControl('#schedule-at','2099-12-31T23:59');
+    await setControl('#schedule-missed','coalesce','change');
+    await setControl('#schedule-overlap','skip','change');
+    assertion(await evaluate(`document.querySelector('[aria-label="Schedule summary"]').textContent.includes('UX graph proof')`), 'Schedule summary has wrong target');
+    await clickButton('Save schedule');
+    await waitFor(`document.querySelector('ul[aria-label="Schedules"]')?.textContent.includes('UX schedule')`, 'saved schedule');
+    assertion((await invoke('orchestration_list_schedules_v7',{request:{workspaceId:workspace.id}})).every(s=>!s.enabled),'Saving enabled a schedule');
+    await assertRejected('workspace_history_v1',{request:{sessionId:'unknown-ui-session'}},'unknown native history','NOT_FOUND');
+    checks.push('graph-new-draft-and-empty-canvas','graph-check-invalidation','graph-run-exact-id-synthetic-provider','schedule-summary-disabled-save');
+    timings.total = normalizedMilliseconds(performance.now()-startedAt);
+    return {checks,timings,screenshots,cleanup:{workspaceId:workspace.id,safeFixture:SAFE_FIXTURE}};
+  }
 
   if (process.env.PIUI_E2E_SCHEDULE_ONLY === '1') {
     await seedSafeModeRunDefinitions(workspace.id);

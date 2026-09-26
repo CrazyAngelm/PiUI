@@ -7,6 +7,7 @@
   import { workspaceHost, type SessionSnapshot, type WorkspaceClient } from '../../host-api/workspaceClient';
   import { applyWorkspaceEvent } from '../workspace/workspaceState';
   import ConversationViewport from '../workspace/ConversationViewport.svelte';
+  import GraphCanvas from '../../components/GraphCanvas.svelte';
   import PanelResize from '../../components/PanelResize.svelte';
   import { t } from '../locale/language';
   import { executionLayout } from './executionLayout';
@@ -18,6 +19,7 @@
   export let onCancelTask: ((stepId: string) => void) | undefined = undefined;
   export let onFlow: ((action: import('../../../../../contracts/orchestration-host-v6').FlowAction) => void) | undefined = undefined;
   export let onOpenSession: ((id: string) => void) | undefined;
+  let canvas: HTMLDivElement, world: HTMLDivElement;
   let usage: Record<string, UsageReceipt[]> = {};
   let usageBusy = false;
   let usagePending = false;
@@ -114,8 +116,7 @@
     {#if run.paused}<p>{$t('New tasks are paused. Already running agents continue.')}</p>{/if}
     {#if errors.usage}<p role="status">{$t(errors.usage)}</p>{/if}
     {#if errors.stream}<p role="status">{$t(errors.stream)}</p>{/if}
-    <div class="canvas" role="region" aria-label={$t('Execution graph')}>
-      <div class="world" style:width={`${Math.max(...positions.map(p => p.x + 280), 320)}px`} style:min-height={`${Math.max(...positions.map(p => p.y + 170), 260)}px`}>
+    <GraphCanvas bind:canvas bind:world label={$t('Execution graph')} storageKey={`piui.run.view.${workspaceId}.${run.id}`} width={Math.max(...positions.map(p => p.x + 280), 0)} height={Math.max(...positions.map(p => p.y + 170), 0)}>
         <svg aria-hidden="true" width="100%" height="100%">
           {#each run.definition.pipeline.steps as destination}
             {#each destination.dependencyStepIds as source}
@@ -132,8 +133,7 @@
             {#if display.sessionId}<small>{$t(activity(display.sessionId))}</small>{/if}
           </button>
         {/each}
-      </div>
-    </div>
+    </GraphCanvas>
     <details class="events"><summary>{$t('Communication history')} · {run.messages.length}</summary>
       {#each run.messages as message (message.id)}<article><strong>{run.definition.team.members.find(member => member.id === message.senderMemberId)?.id} → {message.recipientMemberId}</strong><small>{$t(message.status)}</small><pre>{message.body}</pre></article>{/each}
     </details>
@@ -148,7 +148,7 @@
       </nav>
       {#if viewedSessionId && errors[viewedSessionId]}<p role="alert">{$t(errors[viewedSessionId]!)} <button onclick={() => viewedSessionId && read(viewedSessionId)}>{$t('Refresh')}</button></p>{/if}
       {#if tab === 'conversation' || tab === 'actions'}
-        {#if snapshot}<ConversationViewport blocks={tab === 'actions' ? actionBlocks : snapshot.blocks} loading={false} sessionKey={`${snapshot.session.id}:${tab}`} agentLabel={selected.profile?.name ?? ''} />
+        {#if snapshot}<ConversationViewport blocks={tab === 'actions' ? actionBlocks : snapshot.blocks} loading={false} sessionKey={`${snapshot.session.id}:${tab}`} historySessionId={snapshot.session.id} agentLabel={selected.profile?.name ?? ''} />
         {:else}<p>{$t(selected.sessionId ? 'Loading…' : 'This agent has not started.')}</p>{/if}
       {:else}
         <div class="details">
@@ -185,12 +185,12 @@
 <style>
   .attempt-picker { display:flex; justify-content:space-between; padding:var(--piui-space-3); gap:var(--piui-space-2); } select { min-width:0; color:var(--piui-text); background:var(--piui-surface-1); border:1px solid var(--piui-border); }
   dl div { display:flex; justify-content:space-between; gap:var(--piui-space-3); } dd { font-variant-numeric:tabular-nums; }
-  .execution { display:flex; min-height:560px; height:65dvh; border:1px solid var(--piui-border); border-radius:var(--piui-radius-md); overflow:hidden; margin-block:var(--piui-space-4); }
+  .execution { display:flex; min-height:0; height:65dvh; border:1px solid var(--piui-border); border-radius:var(--piui-radius-md); overflow:hidden; margin-block:var(--piui-space-4); }
   .graph-column { min-width:0; flex:1; display:flex; flex-direction:column; } header { display:flex; align-items:center; justify-content:space-between; gap:var(--piui-space-3); padding:var(--piui-space-3); } header span,small { color:var(--piui-text-muted); font-size:12px; }
-  .canvas { overflow:auto; flex:1; background:var(--piui-bg); } .world { position:relative; height:100%; min-height:260px; } svg { position:absolute; pointer-events:none; } path { fill:none; stroke:var(--piui-border); stroke-width:2; } path.complete { stroke:var(--piui-accent); }
+  svg { position:absolute; pointer-events:none; } path { fill:none; stroke:var(--piui-border); stroke-width:2; } path.complete { stroke:var(--piui-accent); }
   button { font:inherit; cursor:pointer; color:var(--piui-text); background:transparent; border:0; border-radius:var(--piui-radius-sm); padding:var(--piui-space-2); } button:hover { background:var(--piui-surface-2); } button:focus-visible { outline:2px solid var(--piui-focus); }
   .agent { position:absolute; width:240px; min-height:120px; padding:var(--piui-space-4); display:grid; gap:var(--piui-space-2); text-align:left; background:var(--piui-surface-1); border:1px solid var(--piui-border); border-radius:var(--piui-radius-md); } .agent.selected { border-color:var(--piui-accent); } .agent small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .state { font-size:12px; } .danger { color:var(--piui-danger-text); } .active { color:var(--piui-accent); }
   .agent-inspector { position:relative; display:flex; flex-direction:column; width:var(--inspector-width); flex-shrink:0; min-width:0; background:var(--piui-surface-1); border-left:1px solid var(--piui-border); } nav { display:flex; flex-wrap:wrap; padding:var(--piui-space-2); border-block:1px solid var(--piui-border); } nav button[aria-current] { background:var(--piui-surface-2); }
   .details { overflow:auto; padding:var(--piui-space-4); } pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; line-height:1.6; } h3 { font-size:12px; color:var(--piui-text-muted); margin-block:var(--piui-space-4) var(--piui-space-2); } .events { border-top:1px solid var(--piui-border); padding:var(--piui-space-3); max-height:40%; overflow:auto; } article { border-top:1px solid var(--piui-border); padding-block:var(--piui-space-2); } article small { margin-left:var(--piui-space-2); }
-  @media(max-width:760px) { .execution { flex-direction:column; height:auto; } .canvas { min-height:240px; } .agent-inspector { width:100%; height:60dvh; border-left:0; border-top:1px solid var(--piui-border); } }
+  @media(max-width:760px) { .execution { flex-direction:column; height:100dvh; } .graph-column { flex:1; min-height:0; }  .agent-inspector { width:100%; height:60dvh; border-left:0; border-top:1px solid var(--piui-border); } }
 </style>

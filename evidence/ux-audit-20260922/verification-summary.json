@@ -1,0 +1,7 @@
+{
+  "baselineCommit": "58bd1337287740ffcabcb370d3f6d0d23a3df71a",
+  "baselineInitialBytes": 336179,
+  "currentInitialBytes": 263132,
+  "rustPassed": 360,
+  "rustIgnored": 16
+}

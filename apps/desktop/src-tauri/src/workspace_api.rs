@@ -1416,6 +1416,14 @@ fn historical_snapshot_blocking(
     record: PersistedSession,
     directory: &ProjectDirectory,
 ) -> Result<SessionSnapshot, WorkspaceError> {
+    historical_content_blocking(record, directory, false)
+}
+
+fn historical_content_blocking(
+    record: PersistedSession,
+    directory: &ProjectDirectory,
+    full_answers: bool,
+) -> Result<SessionSnapshot, WorkspaceError> {
     if known_absent_draft(&record)? {
         return Ok(empty_closed_snapshot(record));
     }
@@ -1433,7 +1441,20 @@ fn historical_snapshot_blocking(
         history_format(record.harness),
     );
     project_native_workspace_history(&source, directory)
-        .map(|projection| snapshot_from_history(record, &projection))
+        .map(|projection| {
+            let mut snapshot = snapshot_from_history(record, &projection);
+            if full_answers {
+                for block in &mut snapshot.blocks {
+                    if block.kind == BlockKind::Assistant
+                        && let Some(text) = projection.final_assistant_text(Some(&block.id), None)
+                    {
+                        block.text = Some(text.to_owned());
+                        block.truncated = None;
+                    }
+                }
+            }
+            snapshot
+        })
         .map_err(|_| WorkspaceError::not_found())
 }
 
@@ -1770,6 +1791,40 @@ pub async fn workspace_lifecycle_v17(
     Ok(WorkspaceLifecycleResult {
         protocol: 17,
         session_id,
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceHistoryRequestV1 {
+    session_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceHistoryResultV1 {
+    protocol: u8,
+    session_id: String,
+    blocks: Vec<NativeBlock>,
+}
+
+/// Explicit, process-free read from registered native history; available in safe mode.
+#[tauri::command]
+pub async fn workspace_history_v1(
+    state: State<'_, HostState>,
+    request: WorkspaceHistoryRequestV1,
+) -> Result<WorkspaceHistoryResultV1, WorkspaceError> {
+    let host = state.inner();
+    let record = host.workspace.record(&request.session_id)?;
+    let directory = verified_project_directory(host, &record.workspace_id, false)?;
+    let snapshot =
+        tokio::task::spawn_blocking(move || historical_content_blocking(record, &directory, true))
+            .await
+            .map_err(|_| WorkspaceError::io())??;
+    Ok(WorkspaceHistoryResultV1 {
+        protocol: 1,
+        session_id: request.session_id,
+        blocks: snapshot.blocks,
     })
 }
 
@@ -2782,6 +2837,31 @@ mod tests {
     }
 
     #[test]
+    fn workspace_history_v1_matches_public_fixture_and_rejects_native_paths() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/fixtures/workspace-history-v1.json"
+        ))
+        .expect("fixture");
+        let request: super::WorkspaceHistoryRequestV1 =
+            serde_json::from_value(fixture["request"].clone()).expect("request");
+        let result = super::WorkspaceHistoryResultV1 {
+            protocol: 1,
+            session_id: request.session_id,
+            blocks: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(result).expect("result"),
+            fixture["result"]
+        );
+        assert!(
+            serde_json::from_value::<super::WorkspaceHistoryRequestV1>(
+                serde_json::json!({"sessionId":"opaque", "nativePath":"forged"})
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn zero_turn_close_is_truthfully_closed_without_fabricating_history() {
         let root =
             std::env::temp_dir().join(format!("piui-zero-turn-close-{}", uuid::Uuid::new_v4()));
@@ -2846,7 +2926,32 @@ mod tests {
                 .any(|block| block.text.as_deref() == Some("preserved"))
         );
 
+        // Cross the scanner's existing 64 KiB display boundary, including UTF-8.
+        let full_answer = format!("{}END-OF-ANSWER", "🦀".repeat(64 * 1024));
+        let assistant = serde_json::json!({"type":"message","id":"answer", "message":{"role":"assistant","content":[{"type":"text","text":full_answer}]}});
+        let original = fs::read_to_string(&native_path).expect("reads fixture");
+        fs::write(&native_path, format!("{original}{assistant}\n")).expect("adds long answer");
+        let compact =
+            historical_snapshot_blocking(record.clone(), &directory).expect("display projection");
+        assert_eq!(compact.blocks.last().expect("answer").truncated, Some(true));
+        let complete = super::historical_content_blocking(record.clone(), &directory, true)
+            .expect("full history projection");
+        assert_eq!(
+            complete.blocks.last().expect("answer").text.as_deref(),
+            Some(full_answer.as_str())
+        );
+        assert_eq!(complete.blocks.last().expect("answer").truncated, None);
+        assert_eq!(
+            compact.blocks.last().expect("answer").id,
+            complete.blocks.last().expect("answer").id
+        );
+        assert_eq!(
+            fs::read_to_string(&native_path).expect("native history unchanged"),
+            format!("{original}{assistant}\n")
+        );
+
         fs::write(&native_path, "{not-json\n").expect("corrupts native history");
+        assert!(super::historical_content_blocking(record.clone(), &directory, true).is_err());
         assert!(
             historical_snapshot_blocking(record.clone(), &directory).is_err(),
             "existing corrupt history must not become an empty draft"

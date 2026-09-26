@@ -30,7 +30,7 @@
 
   $: displays = taskDisplays(run);
   $: visibleDisplays = displays.filter(display => `${display.stepName} ${display.profile?.name ?? ''} ${display.profile?.harness ?? ''}`.toLowerCase().includes(taskQuery.toLowerCase())
-    && (taskFilter === 'all' || (taskFilter === 'active' ? ['running', 'ready'].includes(display.task?.status ?? '') : taskFilter === 'attention' ? ['failed', 'uncertain'].includes(display.task?.status ?? '') : ['succeeded', 'cancelled'].includes(display.task?.status ?? ''))));
+    && (taskFilter === 'all' || (taskFilter === 'active' ? ['running', 'ready'].includes(display.task?.status ?? '') : taskFilter === 'attention' ? ['failed', 'uncertain', 'awaitingApproval'].includes(display.task?.status ?? '') : ['succeeded', 'cancelled'].includes(display.task?.status ?? ''))));
   $: snapshotStepIds = new Set(run.definition.pipeline.steps.map((step) => step.id));
   $: journalOnlyTasks = run.tasks.filter((task) => !snapshotStepIds.has(task.stepId));
   $: runState = statusPresentation(run.status);
@@ -128,14 +128,14 @@
 <aside class="inspector" aria-labelledby="run-inspector-title">
   <header class="inspector__header">
     <div>
-      <p class="eyebrow">{$t('Run')}</p>
+      <p class="eyebrow">{$t('Run details')}</p>
       <h2 id="run-inspector-title">{run.definition.pipeline.name || run.id}</h2>
       <details class="metadata"><summary>{$t('Run details')}</summary><p>{run.id} · r{run.revision}</p></details>
     </div>
     <button class="quiet-button" type="button" onclick={onClose} aria-label={$t('Close run inspector')}>{$t('Close')}</button>
   </header>
 
-  <p class:status--neutral={runState.tone === 'neutral'} class:status--active={runState.tone === 'active'} class:status--success={runState.tone === 'success'} class:status--danger={runState.tone === 'danger'} class:status--warning={runState.tone === 'warning'} class="status" aria-label={$t("Run status: {0}", [runState.label])}><span aria-hidden="true">{runState.icon}</span> {runState.label}</p>
+  <p class:status--neutral={runState.tone === 'neutral'} class:status--active={runState.tone === 'active'} class:status--success={runState.tone === 'success'} class:status--danger={runState.tone === 'danger'} class:status--warning={runState.tone === 'warning'} class="status" aria-label={$t("Run status: {0}", [$t(runState.label)])}><span aria-hidden="true">{runState.icon}</span> {$t(runState.label)}</p>
   {#if run.status === 'uncertain'}<p class="reconcile" role="status">{$t('Run state needs reconciliation. No outcome is inferred.')}</p>{/if}
   {#if onCancelRun !== undefined && run.status === 'running'}
     <section class="run-controls" aria-label={$t('Run controls')}>
@@ -155,7 +155,7 @@
     <ol class="task-list">
       {#each visibleDisplays as display (display.stepId)}
         <li class="task">
-          <div class="task__title"><strong>{display.stepName}</strong><span class={`status status--${display.status.tone}`} aria-label={$t("Task status: {0}", [display.status.label])}><span aria-hidden="true">{display.status.icon}</span> {display.status.label}</span></div>
+          <div class="task__title"><strong>{display.stepName}</strong><span class={`status status--${display.status.tone}`} aria-label={$t("Task status: {0}", [$t(display.status.label)])}><span aria-hidden="true">{display.status.icon}</span> {$t(display.status.label)}</span></div>
           <p class="metadata">{$t("Member:")} {display.profile?.name || display.member?.id || $t("Unknown member ({0})", [display.stepId])}</p>
           {#if display.task === undefined}
             <p class="reconcile">{$t('No task journal record. Needs reconciliation.')}</p>
@@ -208,7 +208,7 @@
         <h4 id="journal-only-title">{$t('Journal records needing reconciliation')}</h4>
         {#each journalOnlyTasks as task (task.stepId)}
           {@const state = statusPresentation(task.status)}
-          <p><strong>{task.stepId}</strong>  /  <span class={`status status--${state.tone}`}><span aria-hidden="true">{state.icon}</span> {state.label}</span>  {$t("/  This step is absent from the definition snapshot.")}</p>
+          <p><strong>{task.stepId}</strong>  /  <span class={`status status--${state.tone}`}><span aria-hidden="true">{state.icon}</span> {$t(state.label)}</span>  {$t("/  This step is absent from the definition snapshot.")}</p>
         {/each}
       </section>
     {/if}
@@ -223,7 +223,7 @@
       {#each run.messages as message (message.id)}
         {@const delivery = statusPresentation(message.status)}
         <li>
-          <p><strong>{memberLabel(run, message.senderMemberId)}</strong> {$t("to")} <strong>{memberLabel(run, message.recipientMemberId)}</strong> <span class={`status status--${delivery.tone}`} aria-label={$t("Delivery state: {0}", [delivery.label])}><span aria-hidden="true">{delivery.icon}</span> {delivery.label}</span></p>
+          <p><strong>{memberLabel(run, message.senderMemberId)}</strong> {$t("to")} <strong>{memberLabel(run, message.recipientMemberId)}</strong> <span class={`status status--${delivery.tone}`} aria-label={$t("Delivery state: {0}", [$t(delivery.label)])}><span aria-hidden="true">{delivery.icon}</span> {$t(delivery.label)}</span></p>
           <p class="metadata">{$t("Message revision")} {message.revision}</p>
           <details><summary>{$t('Message content')}</summary><pre>{message.body}</pre></details>
         </li>

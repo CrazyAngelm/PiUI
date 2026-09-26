@@ -9,6 +9,7 @@
   export let disabled = false;
   export let onchange: () => void = () => {};
   let open = false;
+  let query = '';
   let view: 'effort' | 'models' = 'effort';
   let busy = false;
   let error = '';
@@ -72,9 +73,10 @@
     <section class="popover" bind:this={panel} aria-label={$t('Model and reasoning')} aria-busy={busy}>
       {#if view === 'models'}
         <div class="list-heading"><button type="button" class="back" aria-label={$t('Back to reasoning')} onclick={() => view = 'effort'}>‹</button><span>{$t('Select model')}</span></div>
+        <label>{$t('Find model')}<input type="search" bind:value={query} /></label>
         <div class="model-list" role="menu" tabindex="-1" aria-label={$t('Model')} onkeydown={listKeys}>
           {#if model && !catalogHasModel}<button type="button" class="model-option" role="menuitemradio" aria-checked="true" disabled><span>{model.name}</span><span aria-hidden="true">✓</span></button>{/if}
-          {#each current?.models ?? [] as entry}
+          {#each (current?.models ?? []).filter(entry => `${entry.name} ${entry.id} ${entry.provider ?? ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())) as entry}
             <button type="button" class="model-option" role="menuitemradio" aria-checked={entry.id === model?.id && entry.provider === model?.provider} disabled={busy || disabled} onclick={() => update(entry)}>
               <span>{entry.name}{#if current?.models.some(other => other.id === entry.id && other.provider !== entry.provider)}<small>{entry.provider}</small>{/if}</span>
               {#if entry.id === model?.id && entry.provider === model?.provider}<span class="check" aria-hidden="true">✓</span>{/if}

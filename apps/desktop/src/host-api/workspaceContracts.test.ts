@@ -18,3 +18,11 @@ describe('workspace v11 cross-language fixture', () => {
     check(workspaceFixture);
   });
 });
+
+it('keeps the explicit history read independently versioned without changing workspace v15', async () => {
+  const { default: fixture } = await import('../../../../contracts/fixtures/workspace-history-v1.json');
+  const request: import('../../../../contracts/workspace-history-v1').WorkspaceHistoryRequestV1 = fixture.request;
+  const result: import('../../../../contracts/workspace-history-v1').WorkspaceHistoryResultV1 = { ...fixture.result, protocol: 1 };
+  expect(request).toEqual({sessionId:'opaque-session'});
+  expect(result).toEqual({protocol:1,sessionId:'opaque-session',blocks:[]});
+});
