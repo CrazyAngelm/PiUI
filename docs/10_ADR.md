@@ -573,7 +573,12 @@ principles of ADR-009/010/016.
   (`http://piui-plugin.localhost/<id>/…` on Windows,
   `piui-plugin://localhost/<id>/…` elsewhere) from the entry's folder only,
   and framed with `sandbox="allow-scripts"`, so it has an opaque origin, no
-  Tauri API, no same-origin access, navigation, forms or popups. The response
+  same-origin access, navigation, forms or popups. It has no Tauri API
+  either: Tauri treats an app-registered protocol as a local origin, but it
+  injects its IPC script and invoke key into the main frame only, and the
+  panel policy forbids every connection (including `ipc.localhost`). The main
+  frame must therefore never show the plugin origin: panels cannot navigate
+  the top window and PiUI renders links as text. The response
   carries a per-plugin policy (`default-src 'none'`; scripts, styles, images
   and fonts only from the plugin's UI folder; no connections, frames,
   workers, forms or base URI; `sandbox allow-scripts`), shared with the UI

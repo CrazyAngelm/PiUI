@@ -247,11 +247,19 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   protocol, picker and supervisor are covered by Rust tests with real Node
   backends but no plugin has been run in the packaged WebView2 app yet.
   `network`, `project.read` and `project.write` are declarations, not
-  enforcement. Not in v1: MCP tool, renderer, status-item, keybinding and
+  enforcement. Tauri counts the plugin protocol as a local origin, so a
+  main-frame navigation to it would get the IPC script; nothing navigates
+  there today (sandboxed frames, links rendered as text), and a host-side
+  main-frame navigation guard is a follow-up once it is verified on every
+  platform. Not in v1: MCP tool, renderer, status-item, keybinding and
   sidebar contributions, other harness adapters, project-local plugins,
-  backend-to-host requests, signed packages. `csp.spec.ts` "main screens"
-  fails at the base commit too (the script editor's CodeMirror field is not
-  an input for `toHaveValue`).
+  backend-to-host requests, signed packages.
+- UI Lab E2E drift already present at `5375419` (unrelated to plugins): the
+  two automations dialog specs (empty default name), the Inbox approval spec
+  (the count stays at "2 waiting"), the script-node editor spec and prod-csp
+  "main screens" (the CodeMirror field is not an input for `toHaveValue`),
+  and the axe audits of `inbox` (low-contrast "optional" field labels) and
+  `pipeline-script` (CodeMirror scroller not focusable) in both themes.
 
 ## Next
 
