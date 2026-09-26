@@ -77,7 +77,8 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   fails with `harness-sign-in-required` before any task text instead of
   "outcome uncertain", and runs again after `/login`; the node inspector lists
   every harness's manifest limitations. UI Lab: demo chat "File an issue for
-  the broken docs link" is paused on an MCP form request.
+  the broken docs link" is paused on an MCP form request; `&claude=signed-out`
+  shows the sign-in status and a "Claude check" system whose run fails typed.
 
 ## In progress
 
@@ -94,6 +95,11 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   declined, not shown; an MCP tool approval is for one call (no session or
   always scope). The live Codex shapes were checked against 0.157.1 bindings
   only; 0.147/0.153 are covered by the fixture, not a rerun binary.
+- `perf:smoke` initial-asset budget: at `84f6021` the first-paint graph was
+  572,580 B raw / 163,548 B gzip (budget 573,440 / 163,840). Every Russian
+  feature catalog is loaded eagerly, so `feat/harness-polish` (+6.3 KB raw,
+  +1.8 KB gzip, all from `ru/harnesses.ts`; its UI code is lazy) exceeds it.
+  Lazy-load the Russian catalogs or raise the budget.
 - Codex command output is unbounded in the bridge; a non-string Pi input
   placeholder would break Rust parsing.
 
