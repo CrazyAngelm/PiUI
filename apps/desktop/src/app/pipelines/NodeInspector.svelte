@@ -30,6 +30,7 @@
   import HarnessMark from '../shell/HarnessMark.svelte';
   import { useWorkspace } from '../shell/context';
   import type { PipelineEditorStore } from './editorStore.svelte';
+  import ScriptEditor from './code/ScriptEditor.svelte';
 
   interface Props {
     editor: PipelineEditorStore;
@@ -253,18 +254,16 @@
                 <button type="button" class="link" onclick={() => setScript({ source: SCRIPT_EXAMPLES[script.runtime] })}>{$t('Insert example')}</button>
               {/if}
             {/snippet}
-            <Textarea
+            <ScriptEditor
               id="node-script"
-              class="code"
               value={script.source}
-              minRows={10}
-              maxRows={28}
-              spellcheck={false}
-              wrap="off"
-              disabled={readOnly}
+              runtime={script.runtime}
+              label={$t('Code')}
+              readOnly={readOnly}
+              keyboardHint={$t('Tab indents. Press Esc, then Tab, to move focus out of the code.')}
               placeholder={$t('Read JSON from stdin, print the result to stdout.')}
-              oninput={(event) => setScript({ source: event.currentTarget.value }, true)}
-              onblur={() => editor.settle()}
+              onChange={(source) => setScript({ source }, true)}
+              onBlur={() => editor.settle()}
             />
           </Field>
           <Field
@@ -544,11 +543,6 @@
     font-family: var(--piui-font-mono);
     font-size: 11px;
     white-space: pre-wrap;
-  }
-  .body :global(textarea.code) {
-    font-family: var(--piui-font-mono);
-    font-size: 12px;
-    tab-size: 2;
   }
   .router-mark {
     display: inline-flex;

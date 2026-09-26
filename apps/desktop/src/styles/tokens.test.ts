@@ -32,6 +32,12 @@ describe('workspace semantic palette', () => {
       expect(ratio(values['--piui-action-ink'], values['--piui-action'])).toBeGreaterThanOrEqual(4.5);
       expect(ratio(values['--piui-accent-ink'], values['--piui-accent'])).toBeGreaterThanOrEqual(4.5);
     });
+    it(`keeps highlighted code readable on the code surface for ${selector}`, () => {
+      const values = tokens(selector);
+      for (const token of ['keyword', 'string', 'number', 'comment', 'function', 'type', 'property', 'punctuation']) {
+        expect(ratio(values[`--piui-syntax-${token}`], values['--piui-code-surface']), `${selector}: ${token}`).toBeGreaterThanOrEqual(4.5);
+      }
+    });
   }
   it('keeps system light identical to explicit light', () => {
     expect(tokens(':root[data-theme="system"]')).toEqual(tokens(':root[data-theme="light"]'));

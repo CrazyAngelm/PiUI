@@ -70,6 +70,15 @@
   --piui-user-surface: #242024;
   --piui-user-border: #383039;
   --piui-code-surface: #0f0e10;
+  /* Code syntax (script editor); at least 4.5:1 on the code surface. */
+  --piui-syntax-keyword: #d7a0dc;
+  --piui-syntax-string: #a9cc8e;
+  --piui-syntax-number: #e2b87c;
+  --piui-syntax-comment: #8f8793;
+  --piui-syntax-function: #93bbe2;
+  --piui-syntax-type: #7fcbc4;
+  --piui-syntax-property: #c6b3e3;
+  --piui-syntax-punctuation: #b5adb7;
   --piui-diff-add: rgba(111, 170, 96, 0.16);
   --piui-diff-add-text: #b9dca8;
   --piui-diff-remove: rgba(196, 92, 84, 0.16);
@@ -207,6 +216,14 @@
   --piui-user-surface: #efe7eb;
   --piui-user-border: #d6bdc6;
   --piui-code-surface: #f7f5f6;
+  --piui-syntax-keyword: #8c2b69;
+  --piui-syntax-string: #3a6823;
+  --piui-syntax-number: #865210;
+  --piui-syntax-comment: #65606a;
+  --piui-syntax-function: #22578a;
+  --piui-syntax-type: #1b6a64;
+  --piui-syntax-property: #5b3d84;
+  --piui-syntax-punctuation: #545454;
   --piui-diff-add: rgba(70, 140, 60, 0.12);
   --piui-diff-add-text: #2f5a24;
   --piui-diff-remove: rgba(180, 60, 50, 0.1);
@@ -264,6 +281,14 @@
     --piui-user-surface: #efe7eb;
     --piui-user-border: #d6bdc6;
     --piui-code-surface: #f7f5f6;
+    --piui-syntax-keyword: #8c2b69;
+    --piui-syntax-string: #3a6823;
+    --piui-syntax-number: #865210;
+    --piui-syntax-comment: #65606a;
+    --piui-syntax-function: #22578a;
+    --piui-syntax-type: #1b6a64;
+    --piui-syntax-property: #5b3d84;
+    --piui-syntax-punctuation: #545454;
     --piui-diff-add: rgba(70, 140, 60, 0.12);
     --piui-diff-add-text: #2f5a24;
     --piui-diff-remove: rgba(180, 60, 50, 0.1);

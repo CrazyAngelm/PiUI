@@ -199,7 +199,8 @@
   }
 
   function keydown(event: KeyboardEvent): void {
-    const target = event.target as HTMLElement;
+    // The script editor lives in a shadow root: read the real target, not its host.
+    const target = (event.composedPath()[0] ?? event.target) as HTMLElement;
     if (target.closest('input, textarea, [contenteditable="true"]')) return;
     if (matchesShortcut(event, 'Mod+Z')) {
       event.preventDefault();
