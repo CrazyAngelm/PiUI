@@ -1,4 +1,5 @@
 import type { Language } from '../features/locale/language';
+import { parseTimestamp } from '../host-api/projectsClient';
 
 const UNITS: Record<Language, { now: string; minute: string; hour: string; day: string }> = {
   en: { now: 'now', minute: 'm', hour: 'h', day: 'd' },
@@ -8,7 +9,7 @@ const UNITS: Record<Language, { now: string; minute: string; hour: string; day: 
 /** Compact relative time for dense lists: "now", "5m", "3h", "2d", then a date. */
 export function relativeTime(iso: string | undefined, language: Language, now = Date.now()): string {
   if (!iso) return '';
-  const time = Date.parse(iso);
+  const time = parseTimestamp(iso);
   if (!Number.isFinite(time)) return '';
   const seconds = Math.max(0, Math.round((now - time) / 1000));
   const unit = UNITS[language];

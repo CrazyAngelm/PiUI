@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { parseTimestamp } from '../../host-api/projectsClient';
   import { Command, Dialog } from 'bits-ui';
   import SquarePen from '@lucide/svelte/icons/square-pen';
   import InboxIcon from '@lucide/svelte/icons/inbox';
@@ -22,7 +23,7 @@
   const chats = $derived(
     [...store.catalog.sessions]
       .filter((session) => !session.runId)
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .sort((left, right) => (parseTimestamp(right.updatedAt) || 0) - (parseTimestamp(left.updatedAt) || 0))
       .slice(0, 200),
   );
   const projectName = (id: string) => {

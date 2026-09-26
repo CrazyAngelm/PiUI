@@ -6,8 +6,7 @@
   import X from '@lucide/svelte/icons/x';
   import { onMount } from 'svelte';
   import { t } from '../../features/locale/language';
-  import { composerRequest, type ComposerCommand, type ComposerSnapshot } from '../../host-api/composerClient';
-  import { hostListen } from '../../host-api/transport';
+  import { composerRequest, listenComposer, type ComposerCommand, type ComposerSnapshot } from '../../host-api/composerClient';
   import type { SessionSnapshot } from '../../host-api/workspaceClient';
   import { Button, IconButton, Segmented, Spinner, Textarea } from '../../lib/ui';
   import { errorMessage } from '../workspaceStore.svelte';
@@ -75,9 +74,7 @@
   onMount(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    void hostListen<string>('piui://composer-v19', (payload) => {
-      if (payload === sessionId) void read();
-    }).then((stop) => {
+    void listenComposer(sessionId, () => void read()).then((stop) => {
       if (disposed) stop();
       else {
         unlisten = stop;

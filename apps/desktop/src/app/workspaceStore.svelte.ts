@@ -7,7 +7,7 @@
  * this store adds per-frame event batching so streaming no longer re-renders
  * the whole transcript for every token.
  */
-import { host } from '../host-api/client';
+import { projectsHost as host } from '../host-api/projectsClient';
 import type { Preferences } from '../host-api/types';
 import { composerRequest } from '../host-api/composerClient';
 import { runtimeSettings } from '../host-api/runtimeSettings';
@@ -686,7 +686,7 @@ export class WorkspaceStore {
     this.addingProject = true;
     this.catalogError = undefined;
     try {
-      const project = await host.pickAndAddProject('pi');
+      const project = await host.pickAndAddProject();
       if (project) await this.loadCatalog(project.id);
     } catch (error) {
       this.catalogError = errorMessage(error);

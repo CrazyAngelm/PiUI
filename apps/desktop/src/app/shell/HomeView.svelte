@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { parseTimestamp } from '../../host-api/projectsClient';
   import Workflow from '@lucide/svelte/icons/workflow';
   import MessageSquare from '@lucide/svelte/icons/message-square';
   import { t, language } from '../../features/locale/language';
@@ -18,7 +19,7 @@
   const recent = $derived(
     [...store.catalog.sessions]
       .filter((session) => !session.runId)
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .sort((left, right) => (parseTimestamp(right.updatedAt) || 0) - (parseTimestamp(left.updatedAt) || 0))
       .slice(0, 5),
   );
   const workspaceNames = $derived(

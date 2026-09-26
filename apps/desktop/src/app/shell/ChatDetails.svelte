@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { parseTimestamp } from '../../host-api/projectsClient';
   import X from '@lucide/svelte/icons/x';
   import Check from '@lucide/svelte/icons/check';
   import Minus from '@lucide/svelte/icons/minus';
@@ -58,7 +59,7 @@
       <div><dt>{$t('Model')}</dt><dd>{session.model?.name ?? $t('Harness default')}{#if session.model?.provider} <span class="muted">· {session.model.provider}</span>{/if}</dd></div>
       <div><dt>{$t('Status')}</dt><dd>{$t(statusLabel(session.status))}</dd></div>
       <div><dt>{$t('Project')}</dt><dd>{workspace ? (workspace.personal ? $t('Personal chats') : workspace.name) : '—'}{#if workspace && !workspace.personal} <span class="muted">· {workspace.trust === 'trusted' ? $t('trusted') : $t('restricted')}</span>{/if}</dd></div>
-      <div><dt>{$t('Updated')}</dt><dd>{new Date(session.updatedAt).toLocaleString()}</dd></div>
+      <div><dt>{$t('Updated')}</dt><dd>{Number.isFinite(parseTimestamp(session.updatedAt)) ? new Date(parseTimestamp(session.updatedAt)).toLocaleString() : '—'}</dd></div>
     </dl>
 
     {#if session.runId}

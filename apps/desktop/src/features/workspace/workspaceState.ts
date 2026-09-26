@@ -1,3 +1,4 @@
+import { parseTimestamp } from '../../host-api/projectsClient';
 import type {
   HarnessKind,
   SessionSnapshot,
@@ -145,7 +146,7 @@ export function statusLabel(status: WorkspaceSession['status']): string {
 
 export function sortedSessions(sessions: WorkspaceSession[]): WorkspaceSession[] {
   return [...sessions].sort((left, right) => {
-    const timeOrder = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+    const timeOrder = parseTimestamp(right.updatedAt) - parseTimestamp(left.updatedAt);
     return Number.isNaN(timeOrder) || timeOrder === 0
       ? left.title.localeCompare(right.title)
       : timeOrder;
