@@ -28,17 +28,21 @@ import type { ScriptRuntime } from '../../../host-api/orchestrationClient';
 
 export type CodeEditorSize = 'editor' | 'viewer';
 
-export interface CodeEditorOptions {
-  readonly value: string;
-  readonly runtime: ScriptRuntime;
+/** Translated text of the editor; it follows the UI language. */
+export interface CodeEditorLabels {
   /** Accessible name of the text box. */
   readonly label: string;
-  /** Read-only content stays focusable and selectable. */
-  readonly readOnly: boolean;
-  readonly size: CodeEditorSize;
   /** Accessible description, e.g. how to leave the editor with the keyboard. */
   readonly description?: string;
   readonly placeholder?: string;
+}
+
+export interface CodeEditorOptions extends CodeEditorLabels {
+  readonly value: string;
+  readonly runtime: ScriptRuntime;
+  /** Read-only content stays focusable and selectable. */
+  readonly readOnly: boolean;
+  readonly size: CodeEditorSize;
   readonly onChange?: (value: string) => void;
   readonly onBlur?: () => void;
 }
@@ -48,6 +52,7 @@ export interface CodeEditorHandle {
   setValue(value: string): void;
   setRuntime(runtime: ScriptRuntime): Promise<void>;
   setReadOnly(readOnly: boolean): void;
+  setLabels(labels: CodeEditorLabels): void;
   focus(): void;
   destroy(): void;
 }
@@ -157,18 +162,22 @@ export async function mountCodeEditor(host: HTMLElement, options: CodeEditorOpti
   if (!('adoptedStyleSheets' in root)) throw new Error('Constructable stylesheets are unavailable.');
   const language = new Compartment();
   const access = new Compartment();
+  const text = new Compartment();
   const initialLanguage = await languageFor(options.runtime);
   root.replaceChildren();
-  const describedBy: Record<string, string> = {};
-  if (options.description) {
-    // IDs resolve inside this shadow root; a hidden node still describes.
-    const hint = document.createElement('p');
-    hint.id = 'piui-code-description';
-    hint.hidden = true;
-    hint.textContent = options.description;
-    root.append(hint);
-    describedBy['aria-describedby'] = hint.id;
-  }
+  // IDs resolve inside this shadow root; a hidden node still describes.
+  const hint = document.createElement('p');
+  hint.id = 'piui-code-description';
+  hint.hidden = true;
+  root.append(hint);
+  /** The accessible name, description and placeholder, which follow the UI language. */
+  const textExtensions = (labels: CodeEditorLabels): Extension => {
+    hint.textContent = labels.description ?? '';
+    return [
+      EditorView.contentAttributes.of({ 'aria-label': labels.label, ...(labels.description ? { 'aria-describedby': hint.id } : {}) }),
+      ...(labels.placeholder ? [placeholderText(labels.placeholder)] : []),
+    ];
+  };
   let languageRequest = 0;
   const view = new EditorView({
     root,
@@ -188,8 +197,7 @@ export async function mountCodeEditor(host: HTMLElement, options: CodeEditorOpti
         SIZE[options.size],
         language.of(initialLanguage),
         access.of(accessExtensions(options.readOnly)),
-        EditorView.contentAttributes.of({ 'aria-label': options.label, ...describedBy }),
-        ...(options.placeholder ? [placeholderText(options.placeholder)] : []),
+        text.of(textExtensions(options)),
         EditorView.updateListener.of((update) => {
           if (update.docChanged && !update.transactions.some((transaction) => transaction.annotation(external))) {
             options.onChange?.(update.state.doc.toString());
@@ -212,6 +220,9 @@ export async function mountCodeEditor(host: HTMLElement, options: CodeEditorOpti
     },
     setReadOnly(readOnly) {
       view.dispatch({ effects: access.reconfigure(accessExtensions(readOnly)) });
+    },
+    setLabels(labels) {
+      view.dispatch({ effects: text.reconfigure(textExtensions(labels)) });
     },
     focus() {
       view.focus();

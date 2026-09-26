@@ -95,6 +95,10 @@
   $effect(() => {
     handle?.setReadOnly(readOnly);
   });
+  // The accessible name, keyboard help and placeholder follow the UI language.
+  $effect(() => {
+    handle?.setLabels({ label, description: keyboardHint, placeholder });
+  });
 </script>
 
 <div class="script-editor">
