@@ -46,26 +46,39 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   headless stream-json + control protocol, subscription-only verification,
   approvals, AskUserQuestion, steer, resume from native JSONL; 28 tests.
 
+- `ab5bc58`, `d5c571c` — orchestration v6.1 (additive): run inputs
+  (`{{input.name}}`, typed start form) and review loop limits
+  (`maxIterations`; at the limit the task waits for a person).
+- `9d041fd` — pipeline assistant in the editor: read-only builder chat that
+  proposes whole-graph changes, validated and applied in place.
+- `35dafa6` — Automations screen in the new shell (cards, on/off, edit, delete).
+- `db7870a`, `5b8004c` — run inputs and review limits across the editor (Start
+  node, inputs editor, run form), Runs (inputs, "accept last result" / "one more
+  round") and Automations (inputs for every run); lab assistant proposals.
+- `1db2a11` — day-of-week schedules (host v7.1 `calendar` trigger on chrono-tz,
+  DST-safe) with "On days" mode, presets and next-run preview.
+- `32b1a65` — Codex verified range 0.147.0–0.158.0 instead of exact pins,
+  app-server protocol audit fixes (settings, warnings, `currentTime/read`).
+- `86b8e98` — Claude Code as a first-class harness on the subscription only:
+  launcher/version range, wide env scrub, Fast pinned off, extra-usage guard,
+  sign-in status, pipeline delegation through PiUI, native history projection.
+- `main` fast-forwarded to `rework/piui-2` (local only, not pushed).
+
 ## In progress
 
-- Host wiring for the `claude-code` harness (identity, launch resolver with
-  version range, env scrubbing, capabilities, native history projection,
-  presentation manifest, lab catalog) — separate worktree branch.
+- Engine for one-shot LLM and script steps (`feat/step-executors`, not merged).
 
 ## Known issues found on the way
 
-- Installed Codex is 0.157.1 but the adapter accepts only 0.147.0 / 0.153.4 —
-  version ranges are the first Ф3 task.
+- Codex asks for MCP tool approvals via `mcpServer/elicitation/request`; the
+  bridge answers with an error, so such MCP tools are always declined.
+- A pipeline step whose first Claude Code launch hits a signed-out CLI is
+  recorded as "outcome uncertain"; later steps are refused cleanly.
+- The standalone `claude` CLI on this machine is signed out; PiUI shows a
+  sign-in hint until the user runs `claude` → `/login`.
 - Codex command output is unbounded in the bridge; a non-string Pi input
   placeholder would break Rust parsing.
-- The standalone `claude` CLI on this machine is signed out; PiUI shows a
-  sign-in hint instead of a model list until the user runs `claude` → `/login`.
-- Review loops have no iteration limit yet (Ф4 must add `maxIterations`).
 
 ## Next
 
-- Ф3: open harness registry, version ranges, generic ACP adapter.
-- Ф4: run inputs (manual trigger form), loop limits, LLM and script nodes,
-  pipeline document v5.
-- Ф6: chat assistant that builds and tests pipelines (PiUI Builder MCP).
-- Replace legacy E2E/smoke targets with the new shell; remove classic UI.
+See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).
