@@ -8,6 +8,9 @@ import { createClaudeAdapter } from "./claude.mjs";
 
 const fixture = fileURLToPath(new URL("./claude.test-fixture.mjs", import.meta.url));
 const SUBSCRIPTION_MESSAGE = "Sign in to Claude Code with your Claude subscription. API keys and cloud providers are not used by PiUI.";
+const FAST_MODE_MESSAGE = "Claude Code fast mode is not available in PiUI because it can use paid extra usage. PiUI runs Claude Code only on your base Claude subscription.";
+const FAST_MODE_ACTIVE_MESSAGE = "Claude Code reported fast mode as active, so PiUI did not start the session. PiUI runs Claude Code only on your base Claude subscription.";
+const EXTRA_USAGE_MESSAGE = "Claude Code started using paid extra usage, so PiUI stopped this session. PiUI runs Claude Code only on your base Claude subscription.";
 // Fixture transcripts and the adapter's native history lookups stay in a
 // temporary Claude config directory, never in the user's ~/.claude.
 const temporary = [];
@@ -104,7 +107,7 @@ async function runTurn(adapter, log, text, mode = "prompt") {
   await waitFor(() => log.of("turnCompleted").length > before && log.events.at(-1)?.type === "status");
 }
 
-test("catalog mode maps native models, skills and fast support, then stops the CLI", async () => {
+test("catalog mode maps native models and skills, never offers fast mode, then stops the CLI", async () => {
   const { config, records } = setup({ catalogOnly: true });
   const adapter = await createClaudeAdapter(config, () => {});
   try {
@@ -113,7 +116,8 @@ test("catalog mode maps native models, skills and fast support, then stops the C
       { id: "sonnet", provider: "anthropic", name: "Sonnet", thinkingLevels: ["low", "medium", "high"] },
       { id: "haiku", provider: "anthropic", name: "Haiku", thinkingLevels: [] },
     ]);
-    assert.deepEqual((await adapter.catalogModels()).map((model) => [model.id, model.supportsFast]), [["default", true], ["sonnet", false], ["haiku", false]]);
+    // The native catalog reports fast support for "default"; PiUI never offers it.
+    assert.deepEqual((await adapter.catalogModels()).map((model) => [model.id, model.supportsFast]), [["default", false], ["sonnet", false], ["haiku", false]]);
     assert.deepEqual(await adapter.resources(), {
       items: [
         { kind: "skill", id: "review", name: "review", enabled: true, configurable: false },
@@ -148,14 +152,18 @@ test("only a Claude subscription login is accepted", async () => {
   }
 });
 
-test("the CLI environment carries no API key, provider switch or operator credential", async () => {
+test("the CLI environment carries no API key, provider switch, billing override or operator credential", async () => {
   const injected = {
     ANTHROPIC_API_KEY: "SECRET-MUST-NOT-LEAK", ANTHROPIC_AUTH_TOKEN: "SECRET", ANTHROPIC_BASE_URL: "https://proxy.invalid",
     ANTHROPIC_BEDROCK_BASE_URL: "https://bedrock.invalid", ANTHROPIC_VERTEX_PROJECT_ID: "project", CLAUDE_CODE_USE_BEDROCK: "1",
     CLAUDE_CODE_USE_VERTEX: "1", CLAUDE_CODE_USE_FOUNDRY: "1", AWS_BEARER_TOKEN_BEDROCK: "SECRET", PIUI_AGENT_API_TOKEN: "SECRET",
     PIUI_AGENT_API_PORT: "1", CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: "3", CLAUDECODE: "1",
     CLAUDE_CODE_MESSAGING_SOCKET: "\\\\.\\pipe\\host", CLAUDE_CODE_MESSAGING_TOKEN: "SECRET", CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH: "1",
-    CLAUDE_CODE_SESSION_ID: "host-session", PIUI_FIXTURE_KEEP: "1", CLAUDE_CODE_GIT_BASH_PATH: "C:\\fixture\\bash.exe",
+    CLAUDE_CODE_SESSION_ID: "host-session", CLAUDE_CODE_SSE_PORT: "12345", CLAUDE_CODE_ENTRYPOINT: "sdk-ts",
+    ANTHROPIC_UNIX_SOCKET: "/tmp/proxy.sock", ANTHROPIC_CUSTOM_HEADERS: "x-api-key: SECRET", ANTHROPIC_IDENTITY_TOKEN: "SECRET",
+    CLAUDE_CODE_USE_GATEWAY: "1", CLAUDE_CODE_USE_MANTLE: "1", CLAUDE_CODE_USE_ANTHROPIC_AWS: "1", CLAUDE_CODE_EXTRA_BODY: "{}",
+    CLAUDE_CODE_SUBSCRIPTION_TYPE: "max", CLAUDE_CODE_API_BASE_URL: "https://proxy.invalid", CLAUDE_CODE_DISABLE_FAST_MODE: "0",
+    PIUI_FIXTURE_KEEP: "1", CLAUDE_CODE_GIT_BASH_PATH: "C:\\fixture\\bash.exe",
   };
   const previous = Object.fromEntries(Object.keys(injected).map((key) => [key, process.env[key]]));
   Object.assign(process.env, injected);
@@ -164,12 +172,15 @@ test("the CLI environment carries no API key, provider switch or operator creden
   try {
     adapter = await createClaudeAdapter(config, () => {});
     const start = startRecord(records);
-    assert.deepEqual(start.env.filter((key) => key in injected).sort(), ["CLAUDE_CODE_GIT_BASH_PATH", "PIUI_FIXTURE_KEEP"], "only user configuration reaches the CLI");
+    assert.deepEqual(start.env.filter((key) => key in injected).sort(), ["CLAUDE_CODE_DISABLE_FAST_MODE", "CLAUDE_CODE_GIT_BASH_PATH", "PIUI_FIXTURE_KEEP"], "only user configuration reaches the CLI");
+    assert.equal(start.disableFastMode, "1", "PiUI disables fast mode for the whole CLI process");
     assert.ok(!start.args.includes("--bare"), "bare mode requires an API key and is never used");
-    assert.deepEqual(start.args.slice(0, 13), [
+    assert.ok(!start.args.includes("--permission-mode"), "native permissions keep the user's own configured mode");
+    assert.deepEqual(start.args.slice(0, 11), [
       "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-      "--replay-user-messages", "--permission-prompt-tool", "stdio", "--permission-mode", "default", "--session-id",
+      "--replay-user-messages", "--permission-prompt-tool", "stdio", "--session-id",
     ]);
+    assert.equal(argValue(start.args, "--settings"), JSON.stringify({ fastMode: false }), "standard speed is pinned per session");
   } finally {
     await adapter?.dispose();
     for (const [key, value] of Object.entries(previous)) {
@@ -180,7 +191,7 @@ test("the CLI environment carries no API key, provider switch or operator creden
 });
 
 test("permission modes map to native Claude Code modes and must be applied", async () => {
-  for (const [permissionMode, native] of [["native", "default"], ["read-only", "plan"], ["workspace-write", "acceptEdits"], ["full-access", "bypassPermissions"]]) {
+  for (const [permissionMode, native] of [["native", undefined], ["read-only", "plan"], ["workspace-write", "acceptEdits"], ["full-access", "bypassPermissions"]]) {
     const { config, records } = setup({ permissionMode });
     const adapter = await createClaudeAdapter(config, () => {});
     assert.equal(argValue(startRecord(records).args, "--permission-mode"), native);
@@ -188,6 +199,18 @@ test("permission modes map to native Claude Code modes and must be applied", asy
   }
   const { config } = setup({ permissionMode: "full-access" }, ["--fixture-mode-override", "default"]);
   await assert.rejects(createClaudeAdapter(config, () => {}), { bridgeCode: "unsupported-policy" });
+  // `native` never overrides the user's own configured default mode.
+  const configured = setup({ permissionMode: "native" }, ["--fixture-mode-override", "acceptEdits"]);
+  const log = recorder();
+  const adapter = await createClaudeAdapter(configured.config, log.emit);
+  try {
+    assert.ok(!startRecord(configured.records).args.includes("--permission-mode"));
+    await adapter.prompt({ text: "approve", mode: "prompt" });
+    const { approval } = await waitFor(() => log.of("approval")[0]);
+    assert.deepEqual(approval.decisions, ["approve-once", "approve-session", "deny", "cancel"], "native approvals are not restricted by PiUI");
+    await adapter.respond({ requestId: approval.id, decision: "deny" });
+    await waitFor(() => log.of("turnCompleted").length === 1);
+  } finally { await adapter.dispose(); }
 });
 
 test("session settings become native launch arguments and stay off the command line when private", async () => {
@@ -222,14 +245,64 @@ test("session settings become native launch arguments and stay off the command l
     assert.equal(existsSync(instructionsFile), false, "private launch files are removed on dispose");
   } finally { await adapter.dispose(); }
 
-  const subagentsOff = setup({ nativeSubagents: false, serviceTier: "fast" });
+  const subagentsOff = setup({ nativeSubagents: false, serviceTier: "standard" });
   const second = await createClaudeAdapter(subagentsOff.config, () => {});
   try {
     const { args } = startRecord(subagentsOff.records);
     assert.equal(argValue(args, "--disallowed-tools"), "Agent");
-    assert.equal(argValue(args, "--settings"), JSON.stringify({ fastMode: true }));
-    assert.equal((await second.snapshot()).serviceTier, "fast");
+    assert.equal(argValue(args, "--settings"), JSON.stringify({ fastMode: false }));
+    assert.equal((await second.snapshot()).serviceTier, "standard");
   } finally { await second.dispose(); }
+});
+
+test("fast mode is refused before launch and an active native fast mode stops the start", async () => {
+  const fast = setup({ serviceTier: "fast", runtimeProgram: "must-not-launch" });
+  await assert.rejects(createClaudeAdapter(fast.config, () => {}), (error) => {
+    assert.equal(error.bridgeCode, "unsupported-settings");
+    assert.equal(error.safeMessage, FAST_MODE_MESSAGE);
+    return true;
+  });
+  assert.equal(fast.records().length, 0, "nothing spawns for a fast request");
+  for (const state of ["on", "cooldown"]) {
+    const active = setup({}, ["--fixture-fast-mode", state]);
+    await assert.rejects(createClaudeAdapter(active.config, () => {}), (error) => {
+      assert.equal(error.bridgeCode, "unsupported-policy");
+      assert.equal(error.safeMessage, FAST_MODE_ACTIVE_MESSAGE);
+      return true;
+    });
+    assert.equal(alive(startRecord(active.records).pid), false, `${state} process stopped`);
+  }
+  // A catalog read runs no turns, so it still lists models.
+  const catalog = await createClaudeAdapter(setup({ catalogOnly: true }, ["--fixture-fast-mode", "on"]).config, () => {});
+  assert.equal((await catalog.models()).length, 3);
+  await catalog.dispose();
+});
+
+test("an effort environment override never wins over a PiUI effort", async () => {
+  const previous = process.env.CLAUDE_CODE_EFFORT_LEVEL;
+  process.env.CLAUDE_CODE_EFFORT_LEVEL = "low";
+  try {
+    const explicit = setup({ thinkingLevel: "high" });
+    const first = await createClaudeAdapter(explicit.config, () => {});
+    assert.equal(startRecord(explicit.records).effortOverride, undefined, "an explicit effort drops the override");
+    assert.equal(argValue(startRecord(explicit.records).args, "--effort"), "high");
+    await first.dispose();
+
+    const inherited = setup();
+    const second = await createClaudeAdapter(inherited.config, () => {});
+    try {
+      assert.equal(startRecord(inherited.records).effortOverride, "low", "without a PiUI effort the user's own default stays");
+      await second.setModel({ model: { id: "default", name: "Default" }, thinkingLevel: "max" });
+      const starts = inherited.records().filter((record) => record.kind === "start");
+      assert.equal(starts.length, 2, "the runtime setting cannot beat the override, so the CLI restarts");
+      assert.equal(starts[1].effortOverride, undefined);
+      assert.equal(argValue(starts[1].args, "--effort"), "max");
+      assert.equal((await second.snapshot()).thinkingLevel, "max");
+    } finally { await second.dispose(); }
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CODE_EFFORT_LEVEL;
+    else process.env.CLAUDE_CODE_EFFORT_LEVEL = previous;
+  }
 });
 
 test("an extended-length Windows workspace path maps to the native project directory", { skip: process.platform !== "win32" }, async () => {
@@ -255,6 +328,7 @@ test("unsupported or unsafe settings fail before the CLI starts", async () => {
     [{ resourceRules: [{ kind: "skill", id: "review", enabled: false }] }, "unsupported-resource-policy"],
     [{ thinkingLevel: "ultra" }, "unsupported-settings"],
     [{ serviceTier: "turbo" }, "unsupported-settings"],
+    [{ serviceTier: "fast" }, "unsupported-settings"],
     [{ model: { id: "--dangerously-skip-permissions", name: "x" } }, "unsupported-settings"],
     [{ model: { id: "gpt-5", provider: "openai", name: "x" } }, "unsupported-settings"],
     [{ allowedTools: ["Bash(rm *)"] }, "unsupported-policy"],
@@ -563,12 +637,35 @@ test("model, effort and speed changes use native runtime controls", async () => 
     const snapshot = await adapter.snapshot();
     assert.deepEqual([snapshot.model.id, snapshot.thinkingLevel], ["sonnet", "high"]);
     await assert.rejects(adapter.setModel({ model: { id: "haiku", name: "Haiku" }, thinkingLevel: "low" }), { bridgeCode: "unsupported-settings" });
-    await assert.rejects(adapter.setModel({ model: { id: "sonnet", name: "Sonnet" }, serviceTier: "fast" }), { bridgeCode: "unsupported-settings" });
+    const before = controls().length;
+    for (const model of [{ id: "sonnet", name: "Sonnet" }, { id: "default", name: "Default" }]) {
+      await assert.rejects(adapter.setModel({ model, serviceTier: "fast" }), { bridgeCode: "unsupported-settings", safeMessage: FAST_MODE_MESSAGE });
+    }
+    assert.equal(controls().length, before, "a fast request never reaches Claude Code");
     await assert.rejects(adapter.setModel({ model: { id: "opus-legacy", name: "x" } }), { bridgeCode: "model-unavailable" });
-    await adapter.setModel({ model: { id: "default", name: "Default" }, serviceTier: "fast" });
-    assert.deepEqual(controls().slice(-2), [{ subtype: "set_model", model: "default" }, { subtype: "apply_flag_settings", settings: { fastMode: true } }]);
-    assert.equal((await adapter.snapshot()).serviceTier, "fast");
+    await adapter.setModel({ model: { id: "default", name: "Default" }, serviceTier: "standard" });
+    assert.deepEqual(controls().slice(before), [{ subtype: "set_model", model: "default" }], "standard speed is already pinned");
+    assert.equal((await adapter.snapshot()).serviceTier, "standard");
+    assert.ok(!controls().some((request) => request.subtype === "apply_flag_settings" && "fastMode" in request.settings));
     assert.equal(records().filter((record) => record.kind === "start").length, 1, "no restart was needed");
+    assert.deepEqual(log.problems, []);
+  } finally { await adapter.dispose(); }
+});
+
+test("paid extra usage stops the session at the first report", async () => {
+  const { config, records } = setup();
+  const log = recorder();
+  const adapter = await createClaudeAdapter(config, log.emit);
+  try {
+    await adapter.prompt({ text: "overage", mode: "prompt" });
+    await waitFor(() => log.of("turnCompleted").length === 1);
+    assert.deepEqual(log.of("turnCompleted"), [{ type: "turnCompleted", outcome: "failed" }]);
+    assert.ok(log.of("error").some((event) => event.message === EXTRA_USAGE_MESSAGE));
+    await waitFor(() => !alive(startRecord(records).pid));
+    const snapshot = await adapter.snapshot();
+    assert.equal(snapshot.status, "failed");
+    assert.equal(snapshot.blocks.find((block) => block.kind === "error").safeSummary, EXTRA_USAGE_MESSAGE);
+    await assert.rejects(adapter.prompt({ text: "again", mode: "prompt" }), { bridgeCode: "not-running" });
     assert.deepEqual(log.problems, []);
   } finally { await adapter.dispose(); }
 });

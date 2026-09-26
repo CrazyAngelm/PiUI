@@ -34,7 +34,7 @@ Pi tool blocks and Codex MCP/dynamic tool blocks are built from arbitrary native
 - `{type:'binding',nativeId,nativePath?}` (host-private only)
 - `{type:'error',message:safeFixedSummary}`
 
-Runner request LF JSON: `{id:string,method:'initialize'|'snapshot'|'prompt'|'interrupt'|'models'|'setModel'|'respond'|'rename'|'dispose',params:object}`. Initialize params add `harness:'pi'|'prime-agent'|'codex'` to config; exactly once. Return `{id,ok:true,result}` or `{id,ok:false,error:{code,message}}`; event `{event:NativeEvent}`. Buffer raw bytes, split only LF. Pending native operations must not serialize interruption/approval behind an active turn. EOF closes admission, calls dispose, then exits; Rust handles hung descendants. No generic evaluate/exec/file method.
+Runner request LF JSON: `{id:string,method:'initialize'|'snapshot'|'prompt'|'interrupt'|'models'|'setModel'|'respond'|'rename'|'dispose',params:object}`. Initialize params add `harness:'pi'|'prime-agent'|'codex'|'hermes'|'claude-code'` to config; exactly once. Return `{id,ok:true,result}` or `{id,ok:false,error:{code,message}}`; event `{event:NativeEvent}`. Buffer raw bytes, split only LF. Pending native operations must not serialize interruption/approval behind an active turn. EOF closes admission, calls dispose, then exits; Rust handles hung descendants. No generic evaluate/exec/file method.
 
 Fixtures may inject fake adapters/transport only via separate test module imports; never production env switches. Runtime proofs use native installed harness with synthetic provider where supported, not a replacement agent loop. Missing package/auth/platform behavior is explicit.
 
@@ -83,28 +83,48 @@ items with a safe `error` event. A failed native prompt emits
 
 Drives the user's own installed, unmodified `claude` executable (`runtimeProgram`,
 resolved by the host; `shell:false`, never `--bare`) as
-`-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --replay-user-messages --permission-prompt-tool stdio --permission-mode <mode>`
-plus `--session-id <uuid>` (new) or `--resume <uuid>` (open). Protocol verified
-against Claude Code 2.1.232; no provider client or model loop.
+`-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --replay-user-messages --permission-prompt-tool stdio [--permission-mode <mode>]`
+plus `--session-id <uuid>` (new) or `--resume <uuid>` (open) and
+`--settings {"fastMode":false}`. Protocol verified against Claude Code 2.1.232;
+the host accepts `>=2.1.0 <3.0.0` from `claude --version`. No provider client or
+model loop.
 
-- Subscription only. The child environment drops `ANTHROPIC_API_KEY`,
-  `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_*_BASE_URL`, Vertex/Foundry settings,
-  `CLAUDE_CODE_USE_{BEDROCK,VERTEX,FOUNDRY}`, `AWS_BEARER_TOKEN_BEDROCK`,
-  `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR`, `PIUI_AGENT_API_*`, and the coupling a
-  parent Claude Code host injects into its children (`CLAUDECODE`, session ids,
-  messaging socket/token, host auth refresh). The `initialize` `account` must report
-  `apiProvider:"firstParty"`, no `apiKeySource`, no bearer/`apiKeyHelper` token
-  source, and either `subscriptionType` (claude.ai login) or a
-  `CLAUDE_CODE_OAUTH_TOKEN*` token source (`tokenSource:"none"` means signed
-  out). Every `system/init` must report `apiKeySource:"none"`. Violations fail
-  with `claude-subscription-required` and the fixed sign-in message; a breach
-  during a turn kills the CLI before its model request and fails the turn and
-  the session. Credentials are never read, copied or logged; stderr is discarded.
-- Permission modes: native→`default`, read-only→`plan`,
-  workspace-write→`acceptEdits`, full-access→`bypassPermissions`, verified from
-  `current_permission_mode` (and `system/init` for non-native modes). This is
-  Claude Code's permission engine, not an OS sandbox. Read-only and
-  workspace-write approvals offer only deny/cancel.
+- Subscription only. The child environment drops API keys, bearer, identity and
+  federation tokens (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+  `ANTHROPIC_IDENTITY_TOKEN*`, `AWS_BEARER_TOKEN_BEDROCK`, ...), every provider
+  switch (`CLAUDE_CODE_USE_{BEDROCK,VERTEX,FOUNDRY,MANTLE,ANTHROPIC_AWS,ANTHROPIC_GOOGLE_CLOUD,GATEWAY}`
+  and their `SKIP_*_AUTH`), API routing (`ANTHROPIC_BASE_URL`, `ANTHROPIC_*_BASE_URL`,
+  `ANTHROPIC_UNIX_SOCKET`, `ANTHROPIC_CUSTOM_HEADERS`, `CLAUDE_CODE_API_BASE_URL`),
+  billing/account overrides (`CLAUDE_CODE_EXTRA_BODY`, `CLAUDE_CODE_SUBSCRIPTION_TYPE`,
+  `CLAUDE_CODE_RATE_LIMIT_TIER`, account ids), `PIUI_AGENT_API_*`, and the coupling
+  a parent Claude Code host injects into its children (`CLAUDECODE`,
+  `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SSE_PORT`, session ids, messaging
+  socket/token, host auth refresh, host proxies). The Rust launcher removes the
+  same list before the bridge starts (a host test keeps both lists identical).
+  The `initialize` `account` must report `apiProvider:"firstParty"`, no
+  `apiKeySource`, no bearer/`apiKeyHelper` token source, and either
+  `subscriptionType` (claude.ai login) or a `CLAUDE_CODE_OAUTH_TOKEN*` token
+  source (`tokenSource:"none"` means signed out). Every `system/init` must report
+  `apiKeySource:"none"`. Violations fail with `claude-subscription-required` and
+  the fixed sign-in message (the host maps it to a typed `SIGN_IN_REQUIRED`
+  status); a breach during a turn kills the CLI before its model request and
+  fails the turn and the session. Credentials are never read, copied or logged;
+  stderr is discarded.
+- No paid extra usage. Fast mode is unsupported: `serviceTier:"fast"` fails with
+  `unsupported-settings` before anything spawns (`standard` is accepted and is
+  what every launch pins), the child runs with `CLAUDE_CODE_DISABLE_FAST_MODE=1`
+  and `--settings {"fastMode":false}` (an inline per-session layer, never a file
+  edit), the catalog reports `supportsFast:false`, and an `initialize`
+  `fast_mode_state` other than `off` refuses a session start. A
+  `rate_limit_event` with `isUsingOverage:true` stops the CLI, fails the turn and
+  the session; the request that reported it may already have been billed.
+- Permission modes: native passes no `--permission-mode` (the user's own
+  configured default applies and is not verified); read-only→`plan`,
+  workspace-write→`acceptEdits`, full-access→`bypassPermissions` are verified
+  from `current_permission_mode` and every `system/init`. This is Claude Code's
+  permission engine, not an OS sandbox. Read-only and workspace-write approvals
+  offer only deny/cancel, so such a session can never approve a Bash command or
+  any other prompted tool.
 - Tool policy: `allowedTools` → `--tools` + `--strict-mcp-config` (and
   `--disallowed-tools mcp__*` without coordination). `--allowedTools` is only
   pre-approval and never expresses a restriction. `nativeSubagents:false` and
@@ -127,11 +147,12 @@ against Claude Code 2.1.232; no provider client or model loop.
   `priority:"later"`. `interrupt` sends `{subtype:"interrupt",cancel_queued:true}`.
   `composerCapabilities` is `{steer:true,compact:false}` (compaction is only a
   literal `/compact` prompt headlessly).
-- Settings: `set_model`; effort and fast mode use
-  `apply_flag_settings {effortLevel|fastMode}`. If the CLI rejects that request
-  (older CLIs) while idle, the adapter restarts it transparently on the same
-  conversation (`--resume`, or `--session-id` for an unmaterialized draft) with
-  the new `--effort`.
+- Settings: `set_model`; effort uses `apply_flag_settings {effortLevel}`. If the
+  CLI rejects that request (older CLIs) while idle, the adapter restarts it
+  transparently on the same conversation (`--resume`, or `--session-id` for an
+  unmaterialized draft) with the new `--effort`. An explicit PiUI effort drops an
+  inherited `CLAUDE_CODE_EFFORT_LEVEL` override, which would otherwise win; a
+  later effort change with that override present restarts the CLI without it.
 - Approvals map `can_use_tool` (Bash/PowerShell → command, Edit/Write/
   MultiEdit/NotebookEdit → file-change, AskUserQuestion → input, others →
   permission). approve-once → `allow` with the original input; approve-session →
@@ -147,6 +168,6 @@ against Claude Code 2.1.232; no provider client or model loop.
   meta, sidechain and internal entries skipped; newest 2000 blocks within 8 MiB).
   A missing transcript fails with `invalid-session`; a new conversation is never
   substituted. `rename` is PiUI metadata only.
-- Catalog: models map `value`/`displayName`/`supportedEffortLevels`/
-  `supportsFastMode` (disabled rows dropped, provider `anthropic`); commands map
-  to `skill` resources. Subagent types are omitted (no matching resource kind).
+- Catalog: models map `value`/`displayName`/`supportedEffortLevels` (disabled
+  rows dropped, provider `anthropic`, `supportsFast` always `false`); commands
+  map to `skill` resources. Subagent types are omitted (no matching resource kind).

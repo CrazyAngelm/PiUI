@@ -11,7 +11,7 @@ import { createInterface } from "node:readline";
 const argv = process.argv.slice(2);
 const option = (name) => { const index = argv.indexOf(name); return index >= 0 ? argv[index + 1] : undefined; };
 const has = (name) => argv.includes(name);
-const FIXTURE_OPTIONS_WITH_VALUES = new Set(["--fixture-record", "--fixture-account", "--fixture-mode-override"]);
+const FIXTURE_OPTIONS_WITH_VALUES = new Set(["--fixture-record", "--fixture-account", "--fixture-mode-override", "--fixture-fast-mode"]);
 const cliArgs = [];
 for (let index = 0; index < argv.length; index += 1) {
   if (!argv[index].startsWith("--fixture-")) cliArgs.push(argv[index]);
@@ -52,6 +52,9 @@ record({
   args: cliArgs,
   cwd: process.cwd(),
   env: Object.keys(process.env).filter((key) => /^(ANTHROPIC_|CLAUDE|AWS_BEARER_TOKEN_BEDROCK$|PIUI_AGENT_API_|PIUI_FIXTURE_)/i.test(key)),
+  // Values of PiUI's own speed and effort controls only; never credentials.
+  disableFastMode: process.env.CLAUDE_CODE_DISABLE_FAST_MODE,
+  effortOverride: process.env.CLAUDE_CODE_EFFORT_LEVEL,
 });
 
 // Native transcript, written only under a test-provided CLAUDE_CONFIG_DIR.
@@ -277,6 +280,17 @@ const scenarios = {
   async crash() {
     process.exit(3);
   },
+  async overage(current) {
+    stream({ type: "message_start", message: { id: "msg-overage", type: "message", role: "assistant", content: [] } });
+    // The subscription limit is exhausted and the account allows extra usage.
+    send({
+      type: "rate_limit_event",
+      rate_limit_info: { status: "rejected", overageStatus: "allowed", isUsingOverage: true, rateLimitType: "five_hour", resetsAt: 1790000000 },
+      uuid: randomUUID(), session_id: sessionId,
+    });
+    await until(() => false);
+    current.aborted = true;
+  },
 };
 
 const startRun = async (batch) => {
@@ -327,7 +341,7 @@ const initializeResponse = () => ({
   ...(accountName === "missing" ? {} : { account: accounts[accountName] }),
   pid: process.pid,
   current_permission_mode: option("--fixture-mode-override") ?? (permissionMode === "manual" ? "default" : permissionMode),
-  fast_mode_state: "off",
+  fast_mode_state: option("--fixture-fast-mode") ?? "off",
 });
 
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
