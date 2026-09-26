@@ -147,6 +147,21 @@ describe('updates in a configured build', () => {
     updates.dispose();
   });
 
+  it('keeps the saved automatic-check choice when saving fails', async () => {
+    const host = labHost('demo', { updates: 'current' });
+    const client = createAppUpdateClient(
+      (command, args) => (command === 'app_update_set_auto_check_v1' ? Promise.reject({ code: 'settings-failed' }) : host.invoke(command, args)),
+      (channel, handler) => host.listen(channel, handler),
+    );
+    const updates = new AppUpdates(client);
+    await updates.load();
+    expect(await updates.setAutoCheck(true)).toBe(false);
+    expect(updates.error).toBe(APP_UPDATE_ERROR_COPY['settings-failed']);
+    expect(updates.status?.autoCheck).toBe(false);
+    expect(updates.action).toBeUndefined();
+    updates.dispose();
+  });
+
   it('announces a version found by an automatic check once', async () => {
     const opened = vi.fn();
     const stop = await watchUpdateNotices(opened, labClient('available'));

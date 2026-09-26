@@ -27,11 +27,17 @@
   const lastCheck = $derived(status?.lastCheck ?? undefined);
   const percent = $derived(progressPercent(updates.progress));
   const locale = $derived($language === 'ru' ? 'ru-RU' : 'en-US');
+  // Follows the host; a flip the host refused snaps back to the kept value.
+  let autoCheck = $derived(status?.autoCheck ?? false);
 
   onMount(() => {
     if (updates.status === undefined) void updates.load();
     return () => updates.dispose();
   });
+
+  async function toggleAutoCheck(enabled: boolean): Promise<void> {
+    if (!(await updates.setAutoCheck(enabled))) autoCheck = updates.status?.autoCheck ?? false;
+  }
 
   function formatDate(iso: string, withTime: boolean): string {
     const time = Date.parse(iso);
@@ -141,9 +147,9 @@
         <Switch
           label={$t('Check for updates automatically')}
           hideLabel
-          checked={status.autoCheck}
+          bind:checked={autoCheck}
           disabled={updates.action === 'auto-check'}
-          onCheckedChange={(checked) => void updates.setAutoCheck(checked)}
+          onCheckedChange={(checked) => void toggleAutoCheck(checked)}
         />
       </div>
     </div>
