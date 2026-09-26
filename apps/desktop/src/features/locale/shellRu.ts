@@ -401,4 +401,5 @@ export const shellRu: Readonly<Record<string, string>> = {
   "To verify delivered work independently.": "Для независимой проверки результата.",
   "Worker": "Исполнитель задач",
   "Pipeline": "Пайплайн",
+  "Table": "Таблица",
 };

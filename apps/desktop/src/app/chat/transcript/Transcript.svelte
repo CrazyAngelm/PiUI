@@ -52,6 +52,19 @@
       : [],
   );
   const searching = $derived(searchOpen && query.trim().length > 0);
+  // The last assistant message before the reader's next prompt carries the
+  // copy/time actions; intermediate narration between tools stays compact.
+  const turnEnds = $derived.by(() => {
+    const ends = new Set<string>();
+    const list = searching ? [] : visible;
+    for (let index = 0; index < list.length; index += 1) {
+      const item = list[index];
+      if (item?.type !== 'block' || item.block.kind !== 'assistant') continue;
+      const next = list[index + 1];
+      if (!next || (next.type === 'block' && next.block.kind === 'user')) ends.add(item.block.id);
+    }
+    return ends;
+  });
   const shown = $derived<TimelineViewItem[]>(
     searching ? (matches[match] ? [{ type: 'block', block: matches[match] }] : []) : visible,
   );
@@ -94,56 +107,97 @@
   }
 
   // Follow new content while the reader is at the bottom; remember the
-  // position per chat so switching chats returns to the same place.
-  function follow(node: HTMLDivElement, key: string) {
-    let current = key;
-    let restoring = true;
+  // position per chat so switching chats returns to the same place. Only a
+  // reader's own gesture stops following: layout shifts from streaming text,
+  // lazily rendered rows or images must never strand the view mid-chat.
+  const NEAR_BOTTOM = 32;
+  const viewReady = $derived(blocks.length > 0 || !loading);
+
+  function follow(node: HTMLDivElement, params: { key: string; ready: boolean }) {
+    let current = params.key;
+    let pendingView: { top: number; following: boolean } | undefined;
+    let gestureAt = 0;
     const storageKey = () => `piui.conversation.view.${current}`;
+    const distance = () => node.scrollHeight - node.clientHeight - node.scrollTop;
+    const pin = () => {
+      node.scrollTop = node.scrollHeight;
+    };
     const persist = () => {
-      if (restoring || searchOpen) return;
+      if (pendingView || searchOpen) return;
       try {
-        localStorage.setItem(storageKey(), JSON.stringify({ top: node.scrollTop, following }));
+        localStorage.setItem(storageKey(), JSON.stringify({ top: Math.round(node.scrollTop), following }));
       } catch {
         // Optional reading position only.
       }
     };
-    const restore = async () => {
-      restoring = true;
-      let view = { top: 0, following: true };
+    const load = () => {
+      pendingView = { top: 0, following: true };
       try {
         const saved = JSON.parse(localStorage.getItem(storageKey()) ?? 'null');
-        if (saved && Number.isFinite(saved.top) && typeof saved.following === 'boolean') view = saved;
+        if (saved && Number.isFinite(saved.top) && typeof saved.following === 'boolean') pendingView = saved;
       } catch {
         // Ignore damaged metadata.
       }
+      following = pendingView?.following ?? true;
+    };
+    const apply = async (ready: boolean) => {
+      if (!pendingView || !ready) return;
+      const view = pendingView;
       await tick();
       following = view.following;
-      node.scrollTop = following ? node.scrollHeight : view.top;
-      restoring = false;
+      if (following) pin();
+      else node.scrollTop = view.top;
+      // Rows render lazily; settle once more after their real sizes land.
+      requestAnimationFrame(() => {
+        if (following) pin();
+        pendingView = undefined;
+      });
+    };
+    const gesture = () => {
+      gestureAt = performance.now();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (['ArrowUp', 'PageUp', 'Home', ' '].includes(event.key)) gesture();
+    };
+    const onWheel = (event: WheelEvent) => {
+      if (event.deltaY < 0) gesture();
     };
     const onScroll = () => {
-      if (restoring || searchOpen) return;
-      following = node.scrollHeight - node.clientHeight - node.scrollTop <= 2;
+      if (pendingView || searchOpen) return;
+      if (distance() <= NEAR_BOTTOM) following = true;
+      else if (performance.now() - gestureAt < 1_000) following = false;
+      else if (following) pin();
       persist();
     };
     const observer = new ResizeObserver(() => {
-      if (!restoring && !searchOpen && following) node.scrollTop = node.scrollHeight;
+      if (!searchOpen && following) pin();
     });
     observer.observe(node);
     if (node.firstElementChild) observer.observe(node.firstElementChild);
     node.addEventListener('scroll', onScroll, { passive: true });
-    void restore();
+    node.addEventListener('wheel', onWheel, { passive: true });
+    node.addEventListener('touchmove', gesture, { passive: true });
+    node.addEventListener('pointerdown', gesture, { passive: true });
+    node.addEventListener('keydown', onKey);
+    load();
+    void apply(params.ready);
     return {
-      update(next: string) {
-        if (next === current) return;
-        persist();
-        current = next;
-        void restore();
+      update(next: { key: string; ready: boolean }) {
+        if (next.key !== current) {
+          persist();
+          current = next.key;
+          load();
+        }
+        void apply(next.ready);
       },
       destroy() {
         persist();
         observer.disconnect();
         node.removeEventListener('scroll', onScroll);
+        node.removeEventListener('wheel', onWheel);
+        node.removeEventListener('touchmove', gesture);
+        node.removeEventListener('pointerdown', gesture);
+        node.removeEventListener('keydown', onKey);
       },
     };
   }
@@ -210,7 +264,7 @@
   {/if}
 
   <!-- svelte-ignore a11y_no_noninteractive_tabindex (The scroll region must support keyboard scrolling.) -->
-  <div class="scroller" bind:this={scroller} use:follow={sessionKey} tabindex="0" role="region" aria-label={$t('Conversation messages')}>
+  <div class="scroller" bind:this={scroller} use:follow={{ key: sessionKey, ready: viewReady }} tabindex="0" role="region" aria-label={$t('Conversation messages')}>
     <div class="column">
       {#if blocks.length === 0 && loading}
         <div class="loading"><Skeleton lines={4} /></div>
@@ -237,17 +291,18 @@
                 <MarkdownContent source={block.text ?? block.safeSummary ?? ''} />
               </div>
             {:else if block.kind === 'assistant'}
-              <article class="assistant" class:assistant--failed={block.status === 'failed'} class:assistant--stopped={block.status === 'interrupted'}>
+              <article class="assistant" class:assistant--end={turnEnds.has(block.id)} class:assistant--failed={block.status === 'failed'} class:assistant--stopped={block.status === 'interrupted'}>
                 {#if block.text}
                   <MarkdownContent source={fullAnswers[block.id] ?? block.text} />
                 {:else if block.safeSummary}
                   <p class="muted">{block.safeSummary}</p>
                 {/if}
                 {#if block.status === 'streaming'}<span class="caret" aria-hidden="true"></span>{/if}
+                {#if block.status === 'failed' || block.status === 'interrupted' || (turnEnds.has(block.id) && block.status !== 'streaming' && block.text)}
                 <div class="assistant__meta">
                   {#if block.status === 'failed'}<span class="warn">{$t('The turn failed')}</span>{/if}
                   {#if block.status === 'interrupted'}<span class="warn">{$t('Stopped')}</span>{/if}
-                  {#if block.status !== 'streaming' && block.text}
+                  {#if block.text}
                     <span class="assistant__actions">
                       <IconButton size="sm" label={$t('Copy answer')} onclick={() => void answerAction(block, true)} disabled={busyAnswers[block.id]}><Copy /></IconButton>
                       {#if block.truncated && !fullAnswers[block.id] && historySessionId}
@@ -260,6 +315,7 @@
                     </span>
                   {/if}
                 </div>
+                {/if}
               </article>
             {:else if block.kind === 'error'}
               <div class="notice notice--error" role="note">
@@ -357,7 +413,10 @@
   }
   .assistant {
     position: relative;
-    margin: 0 0 var(--piui-space-6);
+    margin: 0 0 var(--piui-space-4);
+  }
+  .assistant--end {
+    margin-bottom: var(--piui-space-6);
   }
   .assistant--failed,
   .assistant--stopped {

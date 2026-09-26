@@ -66,6 +66,20 @@
       {:else}
         <ul>{#each block.items as item}<li>{@render inline(item)}</li>{/each}</ul>
       {/if}
+    {:else if block.kind === 'table'}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <div class="table-wrap" tabindex="0" role="region" aria-label={$t('Table')}>
+        <table>
+          <thead>
+            <tr>{#each block.head as cell, column}<th style:text-align={block.align[column]}>{@render inline(cell)}</th>{/each}</tr>
+          </thead>
+          <tbody>
+            {#each block.rows as row}
+              <tr>{#each row as cell, column}<td style:text-align={block.align[column]}>{@render inline(cell)}</td>{/each}</tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
     {:else}
       <hr />
     {/if}
@@ -82,6 +96,13 @@
   .markdown-content strong { font-weight: 720; }.markdown-content em { color: color-mix(in srgb, var(--piui-text) 88%, var(--piui-text-muted)); }
   .markdown-content blockquote { margin: .9em 0; padding: .05em 0 .05em 1em; border-left: 2px solid var(--piui-border); color: var(--piui-text-muted); }.markdown-content blockquote p { margin: 0; }
   .markdown-content hr { height: 1px; margin: 1.4em 0; border: 0; background: var(--piui-border-subtle); }
+  .table-wrap { max-width: 100%; margin: .9em 0; overflow-x: auto; border: 1px solid var(--piui-border-subtle); border-radius: var(--piui-radius-md); outline: none; }
+  .table-wrap:focus-visible { outline: 2px solid var(--piui-focus); outline-offset: 2px; }
+  .table-wrap table { width: 100%; border-collapse: collapse; font-size: .94em; line-height: 1.45; font-variant-numeric: tabular-nums; }
+  .table-wrap th, .table-wrap td { padding: 7px 12px; border-bottom: 1px solid var(--piui-border-subtle); text-align: left; vertical-align: top; overflow-wrap: normal; }
+  .table-wrap th { background: var(--piui-surface-1); color: var(--piui-text-muted); font-weight: 650; white-space: nowrap; }
+  .table-wrap tbody tr:last-child td { border-bottom: 0; }
+  .table-wrap tbody tr:hover td { background: var(--piui-hover); }
   .inline-code { padding: .1em .35em; border: 1px solid var(--piui-border-subtle); border-radius: 5px; background: var(--piui-surface-1); color: color-mix(in srgb, var(--piui-text) 92%, var(--piui-accent)); font-family: var(--piui-font-mono); font-size: .88em; white-space: break-spaces; }
   .safe-link { color: var(--piui-accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--piui-accent) 45%, transparent); text-underline-offset: .18em; cursor: help; }
   .code-block { width: min(100%, 78ch); margin: 1em 0; overflow: hidden; border: 1px solid var(--piui-border-subtle); border-radius: var(--piui-radius-md); background: color-mix(in srgb, var(--piui-bg) 72%, var(--piui-surface-1)); }

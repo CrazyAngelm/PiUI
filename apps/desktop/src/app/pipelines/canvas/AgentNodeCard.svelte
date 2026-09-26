@@ -33,7 +33,7 @@
     <div class="title">
       <strong title={profile.name}>{profile.name || $t('Untitled agent')}</strong>
       <span class="sub" title={profile.model}>
-        {harnessMeta(profile.harness).short}{#if profile.model} · {profile.model}{/if}{#if profile.reasoning} · {profile.reasoning}{/if}
+        {[harnessMeta(profile.harness).short, profile.model, profile.reasoning].filter(Boolean).join(' · ')}
         {#if profile.serviceTier === 'fast'}<Zap size={11} />{/if}
       </span>
     </div>

@@ -19,6 +19,15 @@
   }
   let { open = $bindable(false) }: Props = $props();
   const store = useWorkspace();
+  let input = $state<HTMLInputElement | null>(null);
+
+  // The palette mounts lazily on first use, after the dialog's own open
+  // auto-focus has run; focus the search field explicitly every time.
+  $effect(() => {
+    if (!open) return;
+    const frame = requestAnimationFrame(() => input?.focus());
+    return () => cancelAnimationFrame(frame);
+  });
 
   const chats = $derived(
     [...store.catalog.sessions]
@@ -40,12 +49,19 @@
 <Dialog.Root bind:open>
   <Dialog.Portal>
     <Dialog.Overlay class="piui-dialog__overlay" />
-    <Dialog.Content class="palette" aria-label={$t('Search and commands')}>
+    <Dialog.Content
+      class="palette"
+      aria-label={$t('Search and commands')}
+      onOpenAutoFocus={(event) => {
+        event.preventDefault();
+        input?.focus();
+      }}
+    >
       <Dialog.Title class="visually-hidden">{$t('Search and commands')}</Dialog.Title>
       <Command.Root loop>
         <div class="palette__search">
           <Search size={16} />
-          <Command.Input class="palette__input" placeholder={$t('Search chats, projects and commands…')} />
+          <Command.Input bind:ref={input} class="palette__input" placeholder={$t('Search chats, projects and commands…')} />
         </div>
         <Command.List class="palette__list">
           <Command.Viewport>

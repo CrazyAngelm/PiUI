@@ -107,7 +107,7 @@
             {$t(statusLabel(session.status))}
           </Badge>
         {/if}
-        <span class="chat__meta">{harnessMeta(session.harness).label}{#if workspace} · {workspace.personal ? $t('Personal chats') : workspace.name}{/if}</span>
+        <span class="chat__meta">{harnessMeta(session.harness).label}{workspace ? ` · ${workspace.personal ? $t('Personal chats') : workspace.name}` : ''}</span>
         <div class="chat__actions">
           {#if running}
             <Button size="sm" variant="ghost" onclick={() => void store.interrupt(session.id)} loading={store.interruptBusy}>

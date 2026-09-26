@@ -354,6 +354,7 @@
   .tree {
     flex: 1;
     min-height: 0;
+    overflow-x: hidden;
     overflow-y: auto;
     padding-bottom: var(--piui-space-3);
     scrollbar-width: thin;
@@ -427,6 +428,7 @@
   }
   .chats {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 1px;
     margin: 0;
     padding: 1px 0 4px 22px;

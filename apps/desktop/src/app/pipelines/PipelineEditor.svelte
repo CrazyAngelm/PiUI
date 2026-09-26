@@ -63,7 +63,7 @@
     return () => onDirtyChange(false);
   });
 
-  function addAt(kind: 'agent' | 'router', screen?: { x: number; y: number }): void {
+  function addAt(kind: 'agent' | 'router', screen: { x: number; y: number } | undefined = undefined): void {
     if (editor.readOnly) return;
     const point = screen && api ? api.toFlow(screen) : (api?.viewportCenter() ?? { x: 80, y: 80 });
     const id = editor.addNode(kind, { x: point.x - 124, y: point.y - 50 });

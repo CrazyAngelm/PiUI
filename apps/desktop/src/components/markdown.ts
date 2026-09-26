@@ -12,10 +12,17 @@ export type MarkdownBlock =
   | { kind: 'code'; language?: string; text: string }
   | { kind: 'quote'; inline: InlineNode[] }
   | { kind: 'list'; ordered: boolean; start?: number; items: InlineNode[][] }
+  | { kind: 'table'; align: TableAlign[]; head: InlineNode[][]; rows: InlineNode[][][] }
   | { kind: 'rule' };
+
+export type TableAlign = 'left' | 'center' | 'right' | undefined;
 
 const BLOCK_START = /^(?:```|#{1,4}\s|>\s?|[-+*]\s+|\d+[.)]\s+|(?:-{3,}|\*{3,}|_{3,})\s*$)/u;
 const LIST_ITEM = /^([-+*]|\d+[.)])\s+(.*)$/u;
+const TABLE_DELIMITER = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/u;
+/** Tables wider than this are shown as prose rather than a huge grid. */
+const MAX_TABLE_COLUMNS = 24;
+const BACKSLASH = String.fromCharCode(92);
 
 /** A deliberately small, non-HTML Markdown projection for chat prose. */
 export function parseMarkdown(source: string): MarkdownBlock[] {
@@ -67,6 +74,13 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
       continue;
     }
 
+    const table = tableAt(lines, index);
+    if (table) {
+      blocks.push(table.block);
+      index = table.end;
+      continue;
+    }
+
     const firstListItem = line.match(LIST_ITEM);
     if (firstListItem) {
       const ordered = /^\d/u.test(firstListItem[1] ?? '');
@@ -86,7 +100,7 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
     index += 1;
     while (index < lines.length) {
       const next = lines[index] ?? '';
-      if (next.trim().length === 0 || BLOCK_START.test(next)) break;
+      if (next.trim().length === 0 || BLOCK_START.test(next) || isTableStart(lines, index)) break;
       paragraph.push(next);
       index += 1;
     }
@@ -94,6 +108,68 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
   }
 
   return blocks;
+}
+
+function isTableStart(lines: string[], index: number): boolean {
+  const header = lines[index] ?? '';
+  const delimiter = lines[index + 1] ?? '';
+  if (!header.includes('|')) return false;
+  if (!TABLE_DELIMITER.test(delimiter)) return false;
+  const columns = splitRow(header).length;
+  return columns > 0 && columns <= MAX_TABLE_COLUMNS && splitRow(delimiter).length === columns;
+}
+
+/** GitHub-style pipe table: header, delimiter row, then rows until a blank line. */
+function tableAt(lines: string[], index: number): { block: MarkdownBlock; end: number } | undefined {
+  if (!isTableStart(lines, index)) return undefined;
+  const head = splitRow(lines[index] ?? '');
+  const align = splitRow(lines[index + 1] ?? '').map((cell): TableAlign => {
+    const left = cell.startsWith(':');
+    const right = cell.endsWith(':');
+    if (left && right) return 'center';
+    if (right) return 'right';
+    if (left) return 'left';
+    return undefined;
+  });
+  const rows: InlineNode[][][] = [];
+  let cursor = index + 2;
+  while (cursor < lines.length) {
+    const line = lines[cursor] ?? '';
+    if (line.trim().length === 0 || !line.includes('|')) break;
+    const cells = splitRow(line);
+    rows.push(head.map((_, column) => parseInline(cells[column] ?? '')));
+    cursor += 1;
+  }
+  return {
+    block: { kind: 'table', align, head: head.map((cell) => parseInline(cell)), rows },
+    end: cursor,
+  };
+}
+
+function splitRow(line: string): string[] {
+  let row = line.trim();
+  if (row.startsWith('|')) row = row.slice(1);
+  if (row.endsWith('|') && !row.endsWith(`${BACKSLASH}|`)) row = row.slice(0, -1);
+  const cells: string[] = [];
+  let cell = '';
+  let code = false;
+  for (let index = 0; index < row.length; index += 1) {
+    const char = row[index];
+    if (char === BACKSLASH && row[index + 1] === '|') {
+      cell += '|';
+      index += 1;
+    } else if (char === '`') {
+      code = !code;
+      cell += char;
+    } else if (char === '|' && !code) {
+      cells.push(cell.trim());
+      cell = '';
+    } else {
+      cell += char;
+    }
+  }
+  cells.push(cell.trim());
+  return cells;
 }
 
 export function parseInline(source: string): InlineNode[] {
