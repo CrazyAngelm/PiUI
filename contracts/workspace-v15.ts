@@ -29,11 +29,44 @@ export interface WorkspaceSession {
 export type ApprovalDecision = 'approve-once' | 'approve-session' | 'deny' | 'cancel';
 /** One select-style choice; answer with `respond.text` set to its opaque `id`. */
 export interface WorkspaceApprovalOption { id: string; label: string }
+interface ApprovalFieldBase {
+  /** Opaque adapter id; the adapter maps it back to the native property. */
+  id: string;
+  /** Native label (not translated). */
+  label: string;
+  description?: string;
+  required: boolean;
+}
+/** One primitive field of a native form request (Codex MCP elicitation). */
+export type WorkspaceApprovalField =
+  | (ApprovalFieldBase & {
+    type: 'text'; default?: string; minLength?: number; maxLength?: number;
+    format?: 'email' | 'uri' | 'date' | 'date-time';
+  })
+  | (ApprovalFieldBase & { type: 'number'; integer: boolean; default?: number; minimum?: number; maximum?: number })
+  | (ApprovalFieldBase & { type: 'boolean'; default?: boolean })
+  /** A single choice: answer with an option id; `default` is an option id. */
+  | (ApprovalFieldBase & { type: 'choice'; default?: string; options: WorkspaceApprovalOption[] });
+/**
+ * A native form request (a Codex MCP elicitation). Answer `approve-once` with
+ * `respond.text` set to a JSON object of field id -> value (string, number,
+ * boolean or option id); `deny` declines and `cancel` dismisses it.
+ * `limitation` says what PiUI could not show: optional values that stay empty,
+ * or a required value, in which case only `deny`/`cancel` are offered.
+ */
+export interface WorkspaceApprovalForm {
+  /** One-line display name of the MCP server that asked (native text). */
+  server: string;
+  fields: WorkspaceApprovalField[];
+  limitation?: 'optional-fields-omitted' | 'input-unsupported';
+}
 export interface WorkspaceApproval {
   id: string; sessionId: string; kind: 'command' | 'file-change' | 'permission' | 'input';
   title: string; description: string; decisions: ApprovalDecision[]; inputLabel?: string;
   /** Additive v15 field; absent for approvals without native choices. */
   options?: WorkspaceApprovalOption[];
+  /** Additive v15 field; absent for approvals that are not native form requests. */
+  form?: WorkspaceApprovalForm;
 }
 export interface SessionSnapshot {
   session: WorkspaceSession; revision: number; blocks: DesktopTimelineBlock[];

@@ -22,7 +22,8 @@ Optional `listSessions({cwd})` -> native references for read-only discovery; do 
 `WorkspaceModel`: `{id:string,provider?:string,name:string,thinkingLevels?:string[]}`.
 `NativeBlock` matches frozen `DesktopTimelineBlock` in contracts/runtime-protocol.ts: `{id,kind:'user'|'assistant'|'thinking'|'tool'|'custom'|'error'|'compaction'|'unknown',label,status:'complete'|'streaming'|'failed'|'interrupted',text?,createdAt?,parentId?,safeSummary?,title?,toolName?,collapsible?,truncated?,fallback?}`. Generic unknown content has safe text, no raw JSON/native private ids. Delta text belongs to a previously emitted block.
 Pi tool blocks and Codex MCP/dynamic tool blocks are built from arbitrary native arguments/results. They carry a one-line `title` and at most ~16 KiB of `text`: longer output keeps its head and tail around an explicit `… N characters omitted …` marker and sets `truncated:true`. Cuts never split a UTF-16 surrogate pair. Arguments appear only as a compact bounded summary; nested values, binary content and tool `details` are never forwarded.
-`NativeApproval`: `{id,kind:'command'|'file-change'|'permission'|'input',title,description,decisions:ApprovalDecision[],inputLabel?,options?:Array<{id,label}>}`. Internal native request maps stay adapter-owned; do not auto-approve. Validate supported decisions and exact origin. Superseded/resolved requests reject duplicate reply. `options` lists select-style choices with opaque adapter ids and bounded one-line labels; `respond({decision:'approve-once',text})` names one option id (an exact label is also accepted), the adapter maps it back to the exact native value, and any other value is rejected while the request stays pending.
+`NativeApproval`: `{id,kind:'command'|'file-change'|'permission'|'input',title,description,decisions:ApprovalDecision[],inputLabel?,options?:Array<{id,label}>,form?:ApprovalForm}`. Internal native request maps stay adapter-owned; do not auto-approve. Validate supported decisions and exact origin. Superseded/resolved requests reject duplicate reply. `options` lists select-style choices with opaque adapter ids and bounded one-line labels; `respond({decision:'approve-once',text})` names one option id (an exact label is also accepted), the adapter maps it back to the exact native value, and any other value is rejected while the request stays pending.
+`ApprovalForm` (a native form request, today a Codex MCP elicitation): `{server:string,fields:ApprovalField[],limitation?:'optional-fields-omitted'|'input-unsupported'}` where `ApprovalField` is one of `{type:'text',id,label,description?,required,default?,minLength?,maxLength?,format?:'email'|'uri'|'date'|'date-time'}`, `{type:'number',id,label,description?,required,integer,default?,minimum?,maximum?}`, `{type:'boolean',id,label,description?,required,default?}` or `{type:'choice',id,label,description?,required,default?:optionId,options:Array<{id,label}>}`. Field and option ids are opaque adapter ids; native property names, schemas and choice values never leave the adapter. `approve-once` carries `text` = a JSON object of field id -> value (string, finite number, boolean or option id); the adapter validates every value (required, length, format, bounds, integer, known option) and maps it back, and any other answer is rejected with `invalid-response` while the request stays pending. With `limitation:'input-unsupported'` there are no fields and only deny/cancel.
 `HarnessCapabilities`: keys `prompt,resume,models,approvals,instructions,toolPolicy,nativeSubagents`; each `{supported:boolean,enforcement:'native'|'coordinator'|'advisory'|'unsupported',reason?:string}`. A supported boolean means tested implementation; no silent fallback for mandatory policy.
 
 `emit(event)` events:
@@ -157,11 +158,47 @@ is identical.
 | `item/commandExecution/requestApproval` | 0.153.4 adds `kind: command\|writeStdin`; `writeStdin` needs the off-by-default `write_stdin_approval` feature (0.157.1: `command` is the shell-joined `write_stdin --session-id <id> <input>`, decisions accept/cancel) | **Added**: `writeStdin` is titled "Send input to a running command" with a "Terminal input:" line; decisions unchanged |
 | File-change, permissions, user-input approvals, `item/tool/call` | Unchanged | Unchanged |
 | `currentTime/read` | Present at every version; 0.157.1 sends it only when the user config selects `features.current_time_reminder.clock_source = "external"` and treats an error reply as a fatal native error | **Fixed**: answered with `{currentTimeAt}` (Unix seconds) instead of `-32601` |
-| `mcpServer/elicitation/request` | Present at every version; MCP tool-call approvals use it (`mode:"form"`, `_meta.codex_approval_kind:"mcp_tool_call"`, `tool_call_mcp_elicitation` on by default) | Known gap, unchanged: answered with `-32601`, which Codex treats as decline |
+| `mcpServer/elicitation/request` | Present at every version; MCP tool-call approvals use it (`mode:"form"`, `_meta.codex_approval_kind:"mcp_tool_call"`, `tool_call_mcp_elicitation` on by default); 0.157.1 modes `form`, `url`, `openai/userVerification`, `openai/form`, `openaiForm`; reply `{action:"accept"\|"decline"\|"cancel",content}` | **Added**: form requests become approvals with typed fields (below); every other shape is declined at once. All 11 reply frames of the audit flows validate against the 0.157.1 schema |
 | `attestation/generate` | Sent only when `requestAttestation` is true | Never negotiated; rejected if received |
 | `ThreadItem` types | 0.153.4 adds `functionCallOutput`, `agentMessage.delivery/questions`; 0.157.1 adds `mcpToolCall.mcpAppUi` | Projections unchanged; unprojected types use the generic fallback |
 | `CodexErrorInfo` | 0.153.4 adds `rateLimitExceeded`, `misalignmentPolicyViolation` | **Fixed**: mapped to the usage-limit and provider-policy summaries |
 | Not used | `thread/rollback` removed in 0.157.1; `turn/settings/update` added in 0.153.4; `item/fileChange/outputDelta` and `thread/compacted` are never emitted | — |
+
+### MCP elicitations (`mcpServer/elicitation/request`)
+
+Codex forwards an MCP server's `elicitation/create` and asks MCP tool-call
+approvals through the same request. Shape (0.157.1 bindings from
+`generate-json-schema`/`generate-ts`): `{threadId, turnId|null, serverName,
+mode, message, requestedSchema, _meta}`; a request without `mode` (MCP before
+2025-11-25) is treated as a form.
+
+- Form requests (`mode:"form"`) become an approval with `form`. Primitive
+  properties become fields: `string` (with `minLength`, `maxLength`, `format`
+  email/uri/date/date-time), `number`/`integer` (`minimum`, `maximum`),
+  `boolean` and single-select `choice` (`enum`, `enum`+`enumNames` or `oneOf`
+  of `{const,title}`), at most 24 fields and 100 choices, with bounded one-line
+  labels. Arrays, objects, unknown formats and other shapes are not shown: an
+  optional one is left empty (`limitation:"optional-fields-omitted"`), a
+  required one allows only deny/cancel (`limitation:"input-unsupported"`).
+  Accept never sends content that violates the requested schema.
+- `_meta.codex_approval_kind:"mcp_tool_call"` is an MCP tool approval: title
+  "Allow an MCP tool", kind `permission`, the message plus `tool_title` and a
+  compact argument summary of `tool_params` (nested values are `{…}`).
+  Read-only and workspace-write sessions offer only deny/cancel. `persist`
+  (always/session scopes) is never offered: accept is for this call only.
+- Decisions map exactly: approve-once -> `{action:"accept",content}` (the
+  validated values under their native names, `{}` without fields), deny ->
+  `{action:"decline",content:null}`, cancel -> `{action:"cancel",content:null}`.
+- Declined at once with a fixed `error` event, never left waiting: `url` mode
+  (PiUI does not open pages), `openai/userVerification`, `openai/form` and
+  `openaiForm` (never negotiated), any other `codex_approval_kind`, and
+  malformed params or schemas. A descendant thread's request is answered
+  `cancel` like its approvals.
+- Interrupt answers every pending elicitation `cancel` before `turn/interrupt`;
+  `turn/completed` dismisses the elicitations correlated with that turn;
+  `serverRequest/resolved` and dispose clear the card. Managed runs follow the
+  same path (the request reaches the Inbox like any native approval); nothing
+  is accepted automatically.
 
 
 ## Claude Code (`claude.mjs`, harness `claude-code`)

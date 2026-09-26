@@ -107,6 +107,62 @@
             "label": "Block"
           }
         ]
+      },
+      {
+        "id": "approval-form-fixture",
+        "sessionId": "11111111-1111-4111-8111-111111111111",
+        "kind": "input",
+        "title": "Fixture form",
+        "description": "A test-only MCP form request.",
+        "decisions": [
+          "approve-once",
+          "deny",
+          "cancel"
+        ],
+        "form": {
+          "server": "fixture-mcp",
+          "fields": [
+            {
+              "type": "text",
+              "id": "field-1",
+              "label": "Title",
+              "required": true,
+              "maxLength": 80
+            },
+            {
+              "type": "number",
+              "id": "field-2",
+              "label": "Count",
+              "required": false,
+              "integer": true,
+              "minimum": 1
+            },
+            {
+              "type": "boolean",
+              "id": "field-3",
+              "label": "Notify",
+              "required": false,
+              "default": false
+            },
+            {
+              "type": "choice",
+              "id": "field-4",
+              "label": "Priority",
+              "required": true,
+              "options": [
+                {
+                  "id": "choice-1",
+                  "label": "Low"
+                },
+                {
+                  "id": "choice-2",
+                  "label": "High"
+                }
+              ]
+            }
+          ],
+          "limitation": "optional-fields-omitted"
+        }
       }
     ],
     "capabilities": {
@@ -343,6 +399,62 @@
                 "label": "Block"
               }
             ]
+          },
+          {
+            "id": "approval-form-fixture",
+            "sessionId": "11111111-1111-4111-8111-111111111111",
+            "kind": "input",
+            "title": "Fixture form",
+            "description": "A test-only MCP form request.",
+            "decisions": [
+              "approve-once",
+              "deny",
+              "cancel"
+            ],
+            "form": {
+              "server": "fixture-mcp",
+              "fields": [
+                {
+                  "type": "text",
+                  "id": "field-1",
+                  "label": "Title",
+                  "required": true,
+                  "maxLength": 80
+                },
+                {
+                  "type": "number",
+                  "id": "field-2",
+                  "label": "Count",
+                  "required": false,
+                  "integer": true,
+                  "minimum": 1
+                },
+                {
+                  "type": "boolean",
+                  "id": "field-3",
+                  "label": "Notify",
+                  "required": false,
+                  "default": false
+                },
+                {
+                  "type": "choice",
+                  "id": "field-4",
+                  "label": "Priority",
+                  "required": true,
+                  "options": [
+                    {
+                      "id": "choice-1",
+                      "label": "Low"
+                    },
+                    {
+                      "id": "choice-2",
+                      "label": "High"
+                    }
+                  ]
+                }
+              ],
+              "limitation": "optional-fields-omitted"
+            }
           }
         ],
         "capabilities": {

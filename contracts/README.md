@@ -55,3 +55,18 @@ field changed, earlier documents keep their exact meaning, and v1-v3 system
 files stay closed (their schemas never accept it). Older builds reject the new
 value with an explicit validation error instead of misreading it. Round-trip and
 compatibility tests cover every extended contract.
+
+# MCP form requests (additive workspace v15)
+
+`WorkspaceApproval.form` is an optional field like `options` before it: a native
+form request, today a Codex MCP elicitation (`mcpServer/elicitation/request`).
+It carries the MCP server's display name, typed primitive fields (`text`,
+`number`, `boolean`, single `choice`) with opaque adapter ids, and an optional
+`limitation`. `approve-once` answers with `respond.text` set to a JSON object of
+field id -> value, `deny` declines and `cancel` dismisses; the command shape is
+unchanged. No JSON schema, native property name or choice value crosses the
+boundary: the adapter maps ids back and validates every value, and an invalid
+answer keeps the request pending. Approvals without a form keep their exact
+shape, so an older consumer that ignores the field still sees a valid approval
+(a form it cannot show is only answerable with deny/cancel there). The golden
+fixture carries one form approval for the Rust/TypeScript round trip.

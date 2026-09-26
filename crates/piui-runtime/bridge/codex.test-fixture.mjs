@@ -22,6 +22,33 @@ const settingsIndex = process.argv.indexOf("--expect-settings");
 const expectedSettings = settingsIndex >= 0 ? JSON.parse(process.argv[settingsIndex + 1]) : undefined;
 const unknownItemsFixture = process.argv.includes("--unknown-items");
 const toolItemsFixture = process.argv.includes("--tool-items");
+// MCP elicitations (`mcpServer/elicitation/request`, ids 960-979). Every
+// client reply is echoed back as an agent message `reply-<id>` whose text is
+// the exact reply JSON, so tests can read all of them from the snapshot.
+const elicitationFixture = process.argv.includes("--mcp-elicitation");
+const elicitationEdgeFixture = process.argv.includes("--mcp-elicitation-edge");
+const elicitationResolvedFixture = process.argv.includes("--mcp-elicitation-resolved");
+const elicitationTurnFixture = process.argv.includes("--mcp-elicitation-turn");
+const isElicitationReply = (message) => typeof message.id === "number" && message.id >= 960 && message.id < 980 && message.method === undefined;
+const elicitation = (id, params) => send({ method: "mcpServer/elicitation/request", id, params: { threadId, turnId: "turn-approval", serverName: "docs", ...params } });
+const issueForm = {
+  mode: "form",
+  _meta: null,
+  message: "Create an issue in the docs tracker?",
+  requestedSchema: {
+    type: "object",
+    properties: {
+      title: { type: "string", title: "Title", minLength: 3, maxLength: 40 },
+      priority: { type: "string", title: "Priority", oneOf: [{ const: "p1", title: "Urgent" }, { const: "p2", title: "Normal" }], default: "p2" },
+      count: { type: "integer", title: "Copies", minimum: 1, maximum: 5 },
+      notify: { type: "boolean", title: "Notify the team", default: false },
+      contact: { type: "string", format: "email", description: "Who to ask" },
+      // A computed key is an own property, as JSON.parse creates it.
+      ["__proto__"]: { type: "string", title: "Prototype key" },
+    },
+    required: ["title", "priority"],
+  },
+};
 // Emulated app-server version (default: the newest verified protocol). Shapes
 // that changed between versions follow it; see CONTRACT.md (Codex section).
 const codexVersion = process.argv.find((argument) => argument.startsWith("--codex-version="))?.slice("--codex-version=".length) ?? "0.157.1";
@@ -49,6 +76,14 @@ const permissionMatches = (params) => {
 input.on("line", (line) => {
   const message = JSON.parse(line);
   if (poolFixture && message.params?.threadId) threadId = message.params.threadId;
+  if (isElicitationReply(message)) {
+    send({ method: "item/completed", params: { threadId, turnId: "turn-elicitation", completedAtMs: 9, item: {
+      type: "agentMessage", id: `reply-${message.id}`, text: JSON.stringify("result" in message ? message.result : { error: message.error }),
+      phase: null, memoryCitation: null,
+    } } });
+    if (message.id === 960 || message.id === 961) send({ method: "serverRequest/resolved", params: { threadId, requestId: message.id } });
+    return;
+  }
   if (message.method === "initialize") {
     // Real shape: `<client name>/<codex version> (<os>; <arch>) <terminal> (<client name>; <client version>)`.
     const userAgent = process.argv.includes("--raw-user-agent")
@@ -159,6 +194,36 @@ input.on("line", (line) => {
       send({ method: "item/started", params: { threadId: "child-thread", turnId: "child-turn", startedAtMs: 5, item: { type: "agentMessage", id: "child-item", text: "child secret", phase: null, memoryCitation: null } } });
       send({ method: "turn/completed", params: { threadId: "child-thread", turn: { id: "child-turn", status: "completed", items: [] } } });
       send({ method: "item/commandExecution/requestApproval", id: 920, params: { ...commandKind, threadId: "child-thread", turnId: "child-turn", itemId: "child-command", startedAtMs: 6, environmentId: null, command: "child command", availableDecisions: ["accept", "decline", "cancel"] } });
+    }
+    if (elicitationFixture) {
+      elicitation(960, issueForm);
+      elicitation(961, {
+        mode: "form",
+        message: 'Allow the docs MCP server to run tool "search_docs"?',
+        requestedSchema: { type: "object", properties: {} },
+        _meta: {
+          codex_approval_kind: "mcp_tool_call", persist: ["session", "always"], tool_title: "Search docs",
+          tool_description: "Searches the docs.", tool_params: { query: "fixture", filters: { token: "SECRET-MUST-NOT-LEAK" } },
+        },
+      });
+    }
+    if (elicitationEdgeFixture) {
+      elicitation(962, { mode: "url", _meta: null, message: "Sign in to docs", url: "https://example.invalid/oauth", elicitationId: "elicitation-962" });
+      elicitation(963, { mode: "form", _meta: null, message: "No schema" });
+      elicitation(964, { mode: "openai/userVerification", _meta: null, title: "Verify", description: "Prove it", challenge: "challenge" });
+      elicitation(965, { mode: "form", _meta: null, message: "Pick files", requestedSchema: { type: "object", properties: { files: { type: "array", items: { type: "string", enum: ["a", "b"] } } }, required: ["files"] } });
+      elicitation(966, { mode: "form", message: "Install a plugin?", requestedSchema: { type: "object", properties: {} }, _meta: { codex_approval_kind: "tool_suggestion" } });
+      // A request without a mode (MCP before 2025-11-25) with an optional array.
+      elicitation(967, { message: "Which branch?", requestedSchema: { type: "object", properties: {
+        branch: { type: "string", enum: ["main", "dev"], enumNames: ["Main line", "Development"] },
+        tags: { type: "array", items: { type: "string" } },
+      } } });
+      send({ method: "mcpServer/elicitation/request", id: 968, params: { threadId: "child-thread", turnId: "child-turn", serverName: "docs", mode: "form", _meta: null, message: "Child request", requestedSchema: { type: "object", properties: {} } } });
+      elicitation(971, { mode: "openai/form", _meta: null, message: "Extension form", requestedSchema: { type: "object", properties: {} } });
+    }
+    if (elicitationResolvedFixture) {
+      elicitation(969, { mode: "form", _meta: null, message: "Answered in another client", requestedSchema: { type: "object", properties: {} } });
+      send({ method: "serverRequest/resolved", params: { threadId, requestId: 969 } });
     }
     if (userInputFixture) {
       send({ method: "item/tool/requestUserInput", id: 905, params: { threadId, turnId: "turn-input", itemId: "input-item", isBlocking: true, autoResolutionMs: null, questions: [{ id: "choice", header: "Choose mode", question: "Which mode should Codex use?", isOther: false, isSecret: false, options: [{ label: "Safe", description: "Use safe mode" }] }] } });
@@ -276,6 +341,9 @@ input.on("line", (line) => {
     send({ method: "item/started", params: { threadId, turnId: "turn-fixture", startedAtMs: 3, item: { type: "agentMessage", id: "agent-fixture", text: "", phase: null, memoryCitation: null } } });
     send({ method: "item/agentMessage/delta", params: { threadId, turnId: "turn-fixture", itemId: "agent-fixture", delta: responseText } });
     send({ method: "item/completed", params: { threadId, turnId: "turn-fixture", completedAtMs: 4, item: { type: "agentMessage", id: "agent-fixture", text: responseText, phase: null, memoryCitation: null } } });
+    if (elicitationTurnFixture) {
+      elicitation(970, { turnId: "turn-fixture", mode: "form", _meta: null, message: "Continue the search?", requestedSchema: { type: "object", properties: {} } });
+    }
     if (!holdTurnFixture) {
       const requestedText = message.params.input?.[0]?.text;
       // `rateLimitExceeded` and `misalignmentPolicyViolation` are 0.153+ error infos.

@@ -118,6 +118,11 @@ pub struct WorkspaceApproval {
     /// sending one option id as `respond.text`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<ApprovalOption>>,
+    /// Additive v15 field: a native form request (Codex MCP elicitation),
+    /// answered by sending a JSON object of field id -> value as
+    /// `respond.text` with `approve-once`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub form: Option<piui_runtime::workspace_runtime::ApprovalForm>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -3017,6 +3022,7 @@ fn workspace_approval(session_id: &str, approval: &NativeApproval) -> WorkspaceA
         decisions: approval.decisions.clone(),
         input_label: approval.input_label.clone(),
         options: approval.options.clone(),
+        form: approval.form.clone(),
     }
 }
 

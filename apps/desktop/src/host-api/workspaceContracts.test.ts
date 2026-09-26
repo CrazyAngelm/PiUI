@@ -37,6 +37,21 @@ it('accepts Claude Code as an additive v15 harness value without changing the ca
   expect(Object.keys(command).sort()).toEqual(['harness', 'permissionMode', 'type', 'workspaceId']);
 });
 
+it('carries MCP form requests as an additive v15 approval field without changing other approvals', () => {
+  const approvals: readonly import('../../../../contracts/workspace-v15').WorkspaceApproval[] = workspaceFixture.snapshot.approvals;
+  // Approvals without a form keep their exact earlier v15 shape.
+  expect(approvals.filter((approval) => approval.form === undefined).map((approval) => approval.id)).toEqual(['approval-fixture', 'approval-select-fixture']);
+  const form = approvals.find((approval) => approval.id === 'approval-form-fixture');
+  expect(form?.form?.fields.map((field) => field.type)).toEqual(['text', 'number', 'boolean', 'choice']);
+  // Only opaque ids and native labels cross the boundary: no schema or native property names.
+  expect(JSON.stringify(form)).not.toMatch(/"(properties|requestedSchema|enum|const|name)"/);
+  const answer: import('../../../../contracts/workspace-v15').WorkspaceCommand = {
+    type: 'respond', sessionId: 'session', requestId: 'approval-form-fixture', decision: 'approve-once',
+    text: JSON.stringify({ 'field-1': 'Fixture', 'field-4': 'choice-2' }),
+  };
+  expect(Object.keys(answer).sort()).toEqual(['decision', 'requestId', 'sessionId', 'text', 'type']);
+});
+
 it('keeps the explicit history read independently versioned without changing workspace v15', async () => {
   const { default: fixture } = await import('../../../../contracts/fixtures/workspace-history-v1.json');
   const request: import('../../../../contracts/workspace-history-v1').WorkspaceHistoryRequestV1 = fixture.request;
