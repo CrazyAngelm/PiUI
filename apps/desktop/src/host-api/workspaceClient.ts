@@ -26,6 +26,12 @@ const SAFE_ERRORS: Record<string, string> = {
   SAFE_MODE: 'Runtime actions are disabled in safe mode.',
   APPROVAL_EXPIRED: 'This approval is no longer pending. Refresh the session.',
   IO_ERROR: 'The local workspace data could not be saved. Your native session history has not been removed.',
+  // Composer inputs v1 and composer v19 attachments.
+  IMAGES_UNSUPPORTED: 'This harness or its current model does not accept images. Remove the images or switch models.',
+  ATTACHMENT_UNAVAILABLE: 'An attached image is no longer available. Attach it again.',
+  FILES_UNAVAILABLE: 'The project files could not be listed.',
+  DROP_EXPIRED: 'The dropped files are no longer available. Drop them again.',
+  PROJECT_UNAVAILABLE: 'The project folder is unavailable.',
 };
 export class WorkspaceOperationError extends Error {
   constructor(readonly code: string, message: string) { super(message); this.name = 'WorkspaceOperationError'; }

@@ -29,8 +29,22 @@ export type {
   ComposerCommand,
   ComposerSnapshot,
   Delivery,
+  QueuedAttachment,
   QueuedMessage,
 } from '../../../../../contracts/workspace-composer-v19';
+export type {
+  ComposerAttachmentsResult,
+  ComposerCatalogResult,
+  ComposerFileReference,
+  ComposerFilesResult,
+  ComposerImage,
+  ComposerImageType,
+  ComposerInputsCommand,
+  ComposerInputsResult,
+  ComposerRejection,
+  NativeCommand,
+  NativeSkill,
+} from '../../../../../contracts/workspace-composer-inputs-v1';
 export type {
   HarnessCatalogModel,
   HarnessModelsRequest,

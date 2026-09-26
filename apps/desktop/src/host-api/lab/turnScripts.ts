@@ -261,7 +261,14 @@ function builderTurn(context: TurnContext, prompt: string): TurnStep[] {
 }
 
 /** A complete chat turn of roughly 2–6 seconds, sometimes pausing for approval. */
-export function chatTurn(context: TurnContext, prompt: string): TurnStep[] {
+/** The bridges list each image a user message carried as an `[image]` line. */
+export function withImageMarkers(text: string, images: number): string {
+  if (images <= 0) return text;
+  const markers = Array.from({ length: images }, () => '[image]').join('\n');
+  return text ? `${text}\n\n${markers}` : markers;
+}
+
+export function chatTurn(context: TurnContext, prompt: string, images = 0): TurnStep[] {
   if (prompt.trimStart().startsWith(BUILDER_MARKER)) return builderTurn(context, prompt);
   if (context.harness === 'pi' && isExtensionDemo(prompt)) return extensionDemoTurn(context, prompt);
   const random = createRandom(`${context.sessionId}:turn:${context.turn}`);
@@ -272,7 +279,7 @@ export function chatTurn(context: TurnContext, prompt: string): TurnStep[] {
   const assistant = textBlock(context, 'assistant', ids.next());
   const steps: TurnStep[] = [
     { kind: 'status', status: 'running' },
-    { kind: 'block', block: { ...textBlock(context, 'user', ids.next()), text: prompt } },
+    { kind: 'block', block: { ...textBlock(context, 'user', ids.next()), text: withImageMarkers(prompt, images) } },
     wait(random.int(250, 450)),
     ...streamSteps(textBlock(context, 'thinking', ids.next()), random.pick(LIVE_THINKING), random, style, [25, 70]),
     wait(random.int(150, 300)),
