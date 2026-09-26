@@ -11,6 +11,9 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:lab": "playwright test",
+    "test:lab:prod": "playwright test --project=prod-csp",
+    "check:e2e": "tsc -p e2e/tsconfig.json",
     "test:smoke": "node scripts/e2e-smoke.mjs",
     "test:e2e": "node scripts/e2e-platform.mjs",
     "test:e2e:workspace": "cargo build --quiet --target-dir ../../target -p piui-platform --features e2e-harness --bin piui-e2e-job && node scripts/tauri-webview2-e2e-controller.mjs --workspace",
@@ -29,6 +32,8 @@
     "svelte": "5.57.1"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.63.0",
     "@sveltejs/vite-plugin-svelte": "5.1.1",
     "@tauri-apps/cli": "2.11.4",
     "@types/node": "22.15.21",
