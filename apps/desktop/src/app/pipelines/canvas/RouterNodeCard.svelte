@@ -14,6 +14,7 @@
   import { Handle, Position, type NodeProps } from '@xyflow/svelte';
   import Split from '@lucide/svelte/icons/split';
   import CircleAlert from '@lucide/svelte/icons/circle-alert';
+  import Pin from '@lucide/svelte/icons/pin';
   import { t } from '../../../features/locale/language';
 
   let { data, selected }: NodeProps<RouterFlowNode> = $props();
@@ -30,6 +31,7 @@
       <strong title={node.profile.name}>{node.profile.name || $t('Router')}</strong>
       <span class="sub">{agentMode ? $t('Agent decides') : $t('Rules decide')}</span>
     </div>
+    {#if node.pinnedOutput}<span class="pinned" title={$t('Pinned data: a run with pinned data skips this step')}><Pin size={12} /><span class="visually-hidden">{$t('Pinned')}</span></span>{/if}
     {#if data.problems > 0}<span class="problem"><CircleAlert size={13} /> {data.problems}</span>{/if}
   </header>
   <ul class="branches">
@@ -103,6 +105,10 @@
     gap: 2px;
     color: var(--piui-danger);
     font-size: var(--piui-text-xs);
+  }
+  .pinned {
+    display: inline-flex;
+    color: var(--piui-accent);
   }
   .branches {
     display: grid;

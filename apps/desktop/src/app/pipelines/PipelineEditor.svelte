@@ -33,17 +33,20 @@
   import { PipelineEditorStore } from './editorStore.svelte';
   import { TEMPLATES, buildTemplate, type TemplateId } from './templates';
   import { useWorkspace } from '../shell/context';
+  import type { AgentGraph } from '../../features/orchestration/agentGraph';
 
   interface Props {
     workspaceId: string;
     safeMode: boolean;
     /** A saved pipeline to open on mount, e.g. from a run. */
     openCommandId?: string;
+    /** A new unsaved draft to open on mount, e.g. a past run to debug (wins over `openCommandId`). */
+    openDraft?: AgentGraph;
     onDirtyChange: (dirty: boolean) => void;
     onRun: (run: OrchestrationRunV6) => void;
     onLibrary: () => void;
   }
-  let { workspaceId, safeMode, openCommandId, onDirtyChange, onRun, onLibrary }: Props = $props();
+  let { workspaceId, safeMode, openCommandId, openDraft, onDirtyChange, onRun, onLibrary }: Props = $props();
   const workspace = useWorkspace();
   const editor = new PipelineEditorStore(untrack(() => workspaceId), untrack(() => safeMode));
 
@@ -88,6 +91,8 @@
           (item) => item.status === 'available' && harnessConfigurations[item.kind as AgentProfile['harness']]?.oneShot,
         )?.kind as AgentProfile['harness'] | undefined) ?? 'codex'),
   );
+  /** Names of pinned steps (v6.3): the Start dialog offers to use their pinned data. */
+  const pinnedSteps = $derived(editor.graph.nodes.filter((node) => node.pinnedOutput !== undefined).map((node) => node.profile.name || node.id));
   const systemItems = $derived<PickerItem[]>(editor.systems.map((item) => ({ value: item.id, label: item.name || $t('Untitled pipeline') })));
   const profileItems = $derived<PickerItem[]>(editor.profiles.map((item) => ({ value: item.id, label: item.name })));
 
@@ -101,8 +106,13 @@
 
   onMount(() => {
     void editor.refresh();
+    const draft = untrack(() => openDraft);
     const initial = untrack(() => openCommandId);
-    if (initial) editor.open(initial);
+    if (draft) {
+      editor.startFrom(draft);
+      toasts.show({ title: $t('Opened from a run as a new draft'), description: $t('Saving creates a new pipeline; the saved one is not changed.') });
+      setTimeout(() => api?.fitView(), 60);
+    } else if (initial) editor.open(initial);
     return () => {
       onDirtyChange(false);
       // Leaving the editor stops its script tests' process trees.
@@ -163,6 +173,7 @@
       link.download = `${(editor.graph.name || 'pipeline').replace(/[^\p{L}\p{N}_-]+/gu, '-')}.piui.json`;
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
+      if (pinnedSteps.length) toasts.show({ title: $t('Pinned data is not exported'), description: $t('System files never include pinned data; the pins stay in PiUI.') });
     } catch (error) {
       toasts.error($t('Could not export'), error instanceof Error ? error.message : undefined);
     }
@@ -181,16 +192,16 @@
   }
 
   async function run(): Promise<void> {
-    // Pipelines that ask for inputs start from the form; the rest start now.
-    if (editor.graph.inputs?.length) {
+    // Pipelines that ask for inputs or hold pinned data start from the form; the rest start now.
+    if (editor.graph.inputs?.length || pinnedSteps.length) {
       inputsOpen = true;
       return;
     }
     await startRun(undefined);
   }
 
-  async function startRun(values: Record<string, RunInputValue> | undefined): Promise<boolean> {
-    const ok = await editor.save(true, values);
+  async function startRun(values: Record<string, RunInputValue> | undefined, usePinnedData: boolean = false): Promise<boolean> {
+    const ok = await editor.save(true, values, usePinnedData);
     if (!ok && problemCount) toasts.error($t('The pipeline has problems'), $t('Open a highlighted node to see what to fix.'));
     else if (!ok && editor.errors.length) toasts.error($t('Could not start the run'), $t(editor.errors[0]!));
     return ok;
@@ -386,8 +397,9 @@
   bind:open={inputsOpen}
   pipelineName={editor.graph.name}
   inputs={editor.graph.inputs ?? []}
+  pinned={pinnedSteps}
   busy={editor.operation === 'run'}
-  onStart={(values) => startRun(values)}
+  onStart={(values, options) => startRun(values, options.usePinnedData)}
 />
 
 <Dialog

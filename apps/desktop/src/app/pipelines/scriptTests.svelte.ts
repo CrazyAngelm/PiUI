@@ -6,6 +6,7 @@
  * or a model call.
  */
 import { initialValues } from './inputs/runInputs';
+import { pinnedResult } from '../../host-api/pinnedData';
 import type { AgentGraph, GraphNode } from '../../features/orchestration/agentGraph';
 import type { ResultField, ScriptRuntime } from '../../host-api/orchestrationClient';
 import {
@@ -58,14 +59,31 @@ export function dependencyStepIds(graph: AgentGraph, nodeId: string): string[] {
   return [...new Set([...incoming('result'), ...incoming('route')])];
 }
 
+/** Direct dependencies of a node that hold pinned data (v6.3). */
+export function pinnedDependencies(graph: AgentGraph, nodeId: string): GraphNode[] {
+  return dependencyStepIds(graph, nodeId).flatMap((id) => {
+    const source = graph.nodes.find((candidate) => candidate.id === id);
+    return source?.pinnedOutput === undefined ? [] : [source];
+  });
+}
+
 /**
  * The document a run would write to stdin, with the run inputs' defaults and
- * an empty result for every direct dependency:
- * `{inputs, dependencies: {<stepId>: {text: null, data: null}}, step: {id, name}}`.
+ * each direct dependency's pinned data, or an empty result where none is pinned:
+ * `{inputs, dependencies: {<stepId>: {text, data}}, step: {id, name}}`.
  */
 export function defaultSample(graph: AgentGraph, node: GraphNode): string {
   const inputs = Object.fromEntries(Object.entries(initialValues(graph.inputs ?? [])).filter(([, value]) => value !== undefined));
-  const dependencies = Object.fromEntries(dependencyStepIds(graph, node.id).map((id) => [id, { text: null, data: null }]));
+  const dependencies = Object.fromEntries(
+    dependencyStepIds(graph, node.id).map((id) => {
+      const source = graph.nodes.find((candidate) => candidate.id === id);
+      const pinned = source?.pinnedOutput;
+      // What a run with pinned data records for it (text that is one JSON object is also its result).
+      const recorded = source === undefined || pinned === undefined ? undefined : pinnedResult(source, pinned);
+      const data = recorded?.ok === true ? recorded.data : pinned?.data;
+      return [id, { text: pinned?.text ?? null, data: data ?? null }];
+    }),
+  );
   return JSON.stringify({ inputs, dependencies, step: { id: node.id, name: node.profile.name } }, null, 2);
 }
 

@@ -35,6 +35,8 @@ export function duplicateNode(source: GraphNode, name: string): GraphNode {
   copy.profile = {...copy.profile,id:crypto.randomUUID(),name,allowedSpawnProfileIds:[]};
   copy.x += 40; copy.y += 40;
   copy.condition = undefined; copy.inputBindings = undefined; copy.review = undefined;
+  // A copy has produced no output: pinned data stays with the original.
+  delete copy.pinnedOutput;
   if (copy.router) copy.router = { ...copy.router, inputStepId: '', branches: copy.router.branches.map(branch => ({ ...branch, id: crypto.randomUUID() })) };
   return copy;
 }
