@@ -1,4 +1,5 @@
 import type { HostTransport } from '../transport';
+import { acpHandlers } from './acpFake';
 import { classicHandlers } from './classicFake';
 import { composerHandlers } from './composerFake';
 import { LabEventBus } from './labBus';
@@ -97,6 +98,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     ...composerHandlers(runtime),
     ...classicHandlers(runtime),
     ...orchestrationHandlers(runtime, scheduler, bus),
+    ...acpHandlers(runtime, bus),
   };
   startActivity(seed.activity, runtime, scheduler, options.ambient ?? true);
 

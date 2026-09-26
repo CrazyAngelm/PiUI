@@ -19,7 +19,9 @@ export type Schema =
   | { readonly kind: 'map'; readonly item: Schema }
   | { readonly kind: 'object'; readonly fields: Readonly<Record<string, Field>> }
   | { readonly kind: 'tagged'; readonly tag: string; readonly variants: Readonly<Record<string, Readonly<Record<string, Field>>>> }
-  | { readonly kind: 'lazy'; readonly get: () => Schema };
+  | { readonly kind: 'lazy'; readonly get: () => Schema }
+  /** A string with a custom `Deserialize` (for example a harness identity); `reject` returns serde's message. */
+  | { readonly kind: 'custom'; readonly reject: (value: string) => string | undefined };
 
 /** `required`: must be present and non-null. `option`: may be missing or null. `default`: may be missing. */
 export interface Field {
@@ -37,6 +39,7 @@ export const enumOf = (values: readonly string[]): Schema => ({ kind: 'enum', va
 export const arrayOf = (item: Schema): Schema => ({ kind: 'array', item });
 export const mapOf = (item: Schema): Schema => ({ kind: 'map', item });
 export const lazy = (get: () => Schema): Schema => ({ kind: 'lazy', get });
+export const custom = (reject: (value: string) => string | undefined): Schema => ({ kind: 'custom', reject });
 export const option = (schema: Schema): Field => ({ schema, presence: 'option' });
 export const withDefault = (schema: Schema): Field => ({ schema, presence: 'default' });
 
@@ -149,6 +152,12 @@ function check(schema: Schema, value: unknown, path: string): void {
     case 'lazy':
       check(schema.get(), value, path);
       return;
+    case 'custom': {
+      if (typeof value !== 'string') fail(path, `invalid type: ${describe(value)}, expected a string`);
+      const message = schema.reject(value);
+      if (message !== undefined) fail(path, message);
+      return;
+    }
     default: {
       const exhaustive: never = schema;
       return exhaustive;

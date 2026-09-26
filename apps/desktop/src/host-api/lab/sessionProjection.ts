@@ -1,4 +1,5 @@
-import { harnessCapabilities, historyLabel, runtimeModels } from './catalogFake';
+import { ACP_LAB_MODES, harnessCapabilities, historyLabel, runtimeModels } from './catalogFake';
+import { isAcpHarness } from '../../../../../contracts/harness-identity-v2';
 import type { DesktopTimelineBlock, SessionSnapshot } from './labContracts';
 import { sessionSummary, type LabSessionRecord, type LabState } from './labState';
 
@@ -78,6 +79,10 @@ export function liveSnapshot(state: LabState, record: LabSessionRecord): Session
     approvals: (record.live?.approvals ?? []).map((approval) => ({ ...approval })),
     capabilities: harnessCapabilities(record.harness, summary),
     models: runtimeModels(record.harness),
+    // Agent-advertised session modes (additive, ADR-034): live ACP sessions only.
+    ...(isAcpHarness(record.harness)
+      ? { modes: { current: record.mode ?? ACP_LAB_MODES[0]?.id ?? '', available: ACP_LAB_MODES.map((mode) => ({ ...mode })) } }
+      : {}),
   };
 }
 

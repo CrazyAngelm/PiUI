@@ -1,6 +1,7 @@
 import { liveLabel } from './catalogFake';
 import { labIso, SECOND } from './labClock';
 import type { DesktopTimelineBlock, HarnessKind } from './labContracts';
+import { isAcpHarness } from '../../../../../contracts/harness-identity-v2';
 
 type BlockStatus = DesktopTimelineBlock['status'];
 export type ToolRole = 'command' | 'edit' | 'search' | 'read';
@@ -15,8 +16,11 @@ const TOOL_NAMES: Readonly<Record<HarnessKind, Readonly<Record<ToolRole, string>
 };
 
 const CODEX_TOOL_LABELS: Readonly<Record<string, string>> = { commandExecution: 'Command', fileChange: 'File change' };
+const ACP_TOOL_TITLES: Readonly<Record<ToolRole, string>> = { command: 'Run command', edit: 'Edit file', search: 'Search files', read: 'Read file' };
 
 export function toolBlock(harness: HarnessKind, tool: ToolRole, id: string): DesktopTimelineBlock {
+  // The generic ACP bridge labels every tool call "Tool" and names its ACP kind.
+  if (isAcpHarness(harness)) return { id, kind: 'tool', label: 'Tool', title: ACP_TOOL_TITLES[tool], toolName: tool, collapsible: true, status: 'streaming' };
   const toolName = TOOL_NAMES[harness][tool];
   if (harness === 'hermes') return { id, kind: 'tool', label: toolName, title: toolName, collapsible: true, status: 'streaming' };
   const label = harness === 'codex' ? CODEX_TOOL_LABELS[toolName] ?? toolName : toolName;

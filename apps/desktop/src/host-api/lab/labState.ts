@@ -55,6 +55,8 @@ export interface LabSessionRecord {
   thinkingLevel?: string;
   serviceTier?: 'standard' | 'fast';
   permissionMode: PermissionMode;
+  /** The agent-advertised session mode of a live ACP session (`workspace_session_mode_v1`). */
+  mode?: string;
   profileId?: string;
   runId?: string;
   memberId?: string;
