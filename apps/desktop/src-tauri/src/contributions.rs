@@ -216,14 +216,23 @@ fn package_manifest_roots(resources: &[AgentExtensionResource]) -> Vec<PathBuf> 
 mod tests {
     use super::{MANIFEST_FILE, project_manifest_roots};
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    // Parallel tests and concurrent test processes share the temp directory:
+    // the process id and a counter keep every package root distinct.
+    static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
     fn package_root() -> std::path::PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("piui-contribution-{nonce}"));
+        let root = std::env::temp_dir().join(format!(
+            "piui-contribution-{}-{}-{nonce}",
+            std::process::id(),
+            NEXT_ROOT.fetch_add(1, Ordering::Relaxed)
+        ));
         fs::create_dir_all(&root).expect("create package");
         root
     }

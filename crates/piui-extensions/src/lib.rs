@@ -809,14 +809,23 @@ mod tests {
     #[cfg(unix)]
     use std::fs::remove_file;
     use std::fs::{create_dir_all, remove_dir_all, write};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    // Parallel tests and concurrent test processes share the temp directory:
+    // the process id and a counter keep every package root distinct.
+    static NEXT_PACKAGE: AtomicU64 = AtomicU64::new(0);
 
     fn temp_package() -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("piui-extension-{nonce}"));
+        let root = std::env::temp_dir().join(format!(
+            "piui-extension-{}-{}-{nonce}",
+            std::process::id(),
+            NEXT_PACKAGE.fetch_add(1, Ordering::Relaxed)
+        ));
         create_dir_all(root.join("piui")).expect("create package");
         write(root.join("piui/worker.js"), b"not executed").expect("write worker");
         root
