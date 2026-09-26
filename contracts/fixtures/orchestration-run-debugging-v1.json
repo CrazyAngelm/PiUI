@@ -1,0 +1,75 @@
+{
+  "outputsRequest": { "workspaceId": "workspace", "runId": "run-1" },
+  "outputsResult": {
+    "protocol": 1,
+    "runId": "run-1",
+    "outputs": [
+      { "stepId": "collect", "data": { "files": 2 } },
+      { "stepId": "plan", "text": "The plan" },
+      { "stepId": "notes", "text": "first part", "truncated": true },
+      { "stepId": "draft", "issue": "unavailable" },
+      { "stepId": "report", "issue": "too-large" }
+    ]
+  },
+  "pinRequest": {
+    "workspaceId": "workspace",
+    "runId": "run-1",
+    "stepId": "collect",
+    "pipelineId": "pipeline",
+    "expectedRevision": 3
+  },
+  "pinResult": {
+    "protocol": 1,
+    "revision": 4,
+    "pinnedOutput": { "data": { "files": 2 }, "pinnedAt": "2026-09-27T10:00:00Z", "sourceRunId": "run-1" }
+  },
+  "archiveRequest": { "workspaceId": "workspace", "runId": "run-1", "archived": true },
+  "archiveResult": { "protocol": 1, "runId": "run-1", "archived": true },
+  "deleteRequest": { "workspaceId": "workspace", "runId": "run-1", "expectedRunRevision": 12 },
+  "deleteResult": { "protocol": 1, "runId": "run-1" },
+  "errors": [
+    { "code": "invalid" },
+    { "code": "not-found" },
+    { "code": "conflict" },
+    { "code": "safe-mode" },
+    { "code": "shutting-down" },
+    { "code": "run-active" },
+    { "code": "step-not-succeeded" },
+    { "code": "not-pinnable" },
+    { "code": "no-output" },
+    { "code": "too-large" },
+    { "code": "output-unavailable" },
+    { "code": "io" }
+  ],
+  "startRequest": {
+    "workspaceId": "workspace",
+    "runId": "run-2",
+    "teamId": "team",
+    "pipelineId": "pipeline",
+    "launchCommandId": "command",
+    "usePinnedData": true
+  },
+  "runSummary": {
+    "id": "run-1",
+    "status": "succeeded",
+    "revision": 12,
+    "teamName": "Team",
+    "pipelineName": "Pipeline",
+    "archived": true
+  },
+  "pinnedStep": {
+    "id": "plan",
+    "name": "Plan",
+    "assignedMemberId": "planner",
+    "instructions": "Plan.",
+    "dependencyStepIds": [],
+    "pinnedOutput": {
+      "text": "{\"files\": 2}",
+      "truncated": true,
+      "data": { "files": 2 },
+      "pinnedAt": "2026-09-27T10:00:00Z",
+      "sourceRunId": "run-1"
+    }
+  },
+  "pinnedTask": { "stepId": "plan", "status": "succeeded", "revision": 1, "resultData": { "files": 2 }, "output": { "text": "{\"files\": 2}" }, "pinned": true }
+}

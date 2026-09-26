@@ -100,6 +100,8 @@ export interface RunSummary {
   readonly revision: Revision;
   readonly teamName: string;
   readonly pipelineName: string;
+  /** Additive (v6.3): hidden from the default run list (run debugging v1). */
+  readonly archived?: boolean;
 }
 
 

@@ -13,6 +13,7 @@ mod contributions;
 mod dto;
 mod harness_configuration;
 mod orchestration_api;
+mod orchestration_run_debugging;
 mod orchestration_schedule;
 mod orchestration_scheduler;
 mod orchestration_script_test;
@@ -841,6 +842,10 @@ pub fn run() -> Result<(), tauri::Error> {
             orchestration_api::orchestration_retry_uncertain_task_v6,
             orchestration_script_test::orchestration_script_test_v1,
             orchestration_script_test::orchestration_cancel_script_test_v1,
+            orchestration_run_debugging::orchestration_run_outputs_v1,
+            orchestration_run_debugging::orchestration_pin_step_output_v1,
+            orchestration_run_debugging::orchestration_set_run_archived_v1,
+            orchestration_run_debugging::orchestration_delete_run_v1,
         ])
         .build(context)?;
     app.run(|app, event| {

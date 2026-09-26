@@ -234,6 +234,11 @@ impl OrchestrationApiState {
         &self.script_work_root
     }
 
+    /// The durable journal, for run debugging v1 (`orchestration_run_debugging`).
+    pub(crate) fn store(&self) -> &OrchestrationStore {
+        &self.store
+    }
+
     pub fn get_run(
         &self,
         workspace_id: &str,
@@ -1382,6 +1387,9 @@ pub struct RunSummary {
     pub revision: u64,
     pub team_name: String,
     pub pipeline_name: String,
+    /// Hidden from the default run list (v6.3, additive; omitted when false).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
 }
 
 pub(crate) struct ScheduleClaim {
@@ -2223,7 +2231,7 @@ pub async fn orchestration_list_runs_v6(
     .await
 }
 
-fn orchestration_list_runs(
+pub(crate) fn orchestration_list_runs(
     state: &OrchestrationApiState,
     host_state: &HostState,
     request: &WorkspaceRequest,
@@ -2243,6 +2251,7 @@ fn orchestration_list_runs(
             revision: run.revision(),
             team_name: run.definition().team.name.clone(),
             pipeline_name: run.definition().pipeline.name.clone(),
+            archived: workspace.archived_run_ids.contains(run.id()),
         })
         .collect();
     runs.sort_by(|left, right| left.id.cmp(&right.id));

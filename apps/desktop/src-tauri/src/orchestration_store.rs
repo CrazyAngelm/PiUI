@@ -40,6 +40,10 @@ pub(crate) struct WorkspaceOrchestration {
     #[serde(default)]
     pub schedules: Vec<StoredSchedule>,
     pub runs: Vec<Run>,
+    /// Runs hidden from the default run list (run debugging v1). UI metadata
+    /// only: it never changes a run record, its revision or its scheduling.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub archived_run_ids: std::collections::BTreeSet<String>,
 }
 
 impl WorkspaceOrchestration {
@@ -52,6 +56,7 @@ impl WorkspaceOrchestration {
             launch_commands: Vec::new(),
             schedules: Vec::new(),
             runs: Vec::new(),
+            archived_run_ids: std::collections::BTreeSet::new(),
         }
     }
 }
