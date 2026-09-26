@@ -190,7 +190,8 @@ describe('updates in a configured build', () => {
 });
 
 it('formats download sizes and unknown totals', () => {
-  expect(megabytes(12 * 1024 * 1024)).toBe('12.0 MB');
+  expect(megabytes(12 * 1024 * 1024, 'en-US')).toBe('12.0');
+  expect(megabytes(12.5 * 1024 * 1024, 'ru-RU')).toBe('12,5');
   expect(progressPercent({ downloadedBytes: 5, totalBytes: 10 })).toBe(50);
   expect(progressPercent({ downloadedBytes: 20, totalBytes: 10 })).toBe(100);
   expect(progressPercent({ downloadedBytes: 5, totalBytes: null })).toBeUndefined();

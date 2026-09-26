@@ -56,6 +56,22 @@ describe('Settings → About', () => {
     expect(body).not.toContain('Install PiUI 0.2.1?');
   });
 
+  it('shows download progress with sizes in the interface language', async () => {
+    const updates = await loaded('available');
+    const status = updates.status;
+    if (status === undefined) throw new Error('Expected a loaded status.');
+    updates.apply({ type: 'status', status: { ...status, phase: 'downloading' } });
+    updates.apply({ type: 'progress', downloadedBytes: 3 * 1024 * 1024, totalBytes: 12 * 1024 * 1024 });
+    const body = html(updates);
+    expect(body).toContain('Downloading PiUI 0.2.1…');
+    expect(body).toMatch(/<progress[^>]*max="100"[^>]*value="25"[^>]*aria-label="Download progress"[^>]*aria-valuetext="3\.0 of 12\.0 MB"/);
+    expect(body).toContain('3.0 of 12.0 MB</p>');
+    setLanguage('ru');
+    expect(html(updates)).toContain('3,0 из 12,0 МБ</p>');
+    updates.apply({ type: 'progress', downloadedBytes: 1024 * 1024, totalBytes: null });
+    expect(html(updates)).toContain('Загружено 1,0 МБ</p>');
+  });
+
   it('never renders feed notes as markup', async () => {
     const offer = {
       protocol: 1, configured: true, currentVersion: '0.2.0', feedHost: 'github.com', autoCheck: false, phase: 'idle',

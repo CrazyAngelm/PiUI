@@ -142,7 +142,7 @@ export function progressPercent(progress: AppUpdateProgress | undefined): number
   return Math.min(100, Math.floor((progress.downloadedBytes / progress.totalBytes) * 100));
 }
 
-/** Human-readable megabytes with one decimal, e.g. `12.4 MB`. */
-export function megabytes(bytes: number): string {
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+/** Megabytes with one decimal in the interface locale, e.g. `12.4` or `12,4`; the view adds the unit. */
+export function megabytes(bytes: number, locale: string): string {
+  return new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(bytes / (1024 * 1024));
 }

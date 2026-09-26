@@ -16,6 +16,8 @@ export const releaseRu: Readonly<Record<string, string>> = {
   'Restart PiUI': 'Перезапустить PiUI',
   'This release has no notes.': 'У этого выпуска нет описания изменений.',
   'Download progress': 'Ход загрузки',
+  '{0} MB downloaded': 'Загружено {0} МБ',
+  '{0} of {1} MB': '{0} из {1} МБ',
   'Download and restart': 'Загрузить и перезапустить',
   'Check for updates automatically': 'Проверять обновления автоматически',
   'When PiUI starts and once a day. Nothing installs without your confirmation.':

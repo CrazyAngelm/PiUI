@@ -29,6 +29,14 @@
   const locale = $derived($language === 'ru' ? 'ru-RU' : 'en-US');
   // Follows the host; a flip the host refused snaps back to the kept value.
   let autoCheck = $derived(status?.autoCheck ?? false);
+  const downloaded = $derived.by(() => {
+    const progress = updates.progress;
+    if (progress === undefined) return '';
+    const done = megabytes(progress.downloadedBytes, locale);
+    return progress.totalBytes === null
+      ? $t('{0} MB downloaded', [done])
+      : $t('{0} of {1} MB', [done, megabytes(progress.totalBytes, locale)]);
+  });
 
   onMount(() => {
     if (updates.status === undefined) void updates.load();
@@ -117,17 +125,8 @@
         </div>
         {#if status.phase === 'downloading'}
           <!-- A native progress element: no inline styles under the desktop CSP. -->
-          <progress
-            max="100"
-            value={percent}
-            aria-label={$t('Download progress')}
-            aria-valuetext={percent === undefined ? megabytes(updates.progress?.downloadedBytes ?? 0) : `${percent}%`}
-          ></progress>
-          <p class="muted small">
-            {percent === undefined
-              ? megabytes(updates.progress?.downloadedBytes ?? 0)
-              : `${megabytes(updates.progress?.downloadedBytes ?? 0)} / ${megabytes(updates.progress?.totalBytes ?? 0)}`}
-          </p>
+          <progress max="100" value={percent} aria-label={$t('Download progress')} aria-valuetext={downloaded}></progress>
+          <p class="muted small">{downloaded}</p>
         {/if}
         {#if offer.notes}
           <!-- Release notes are plain text from the feed, never HTML. -->
