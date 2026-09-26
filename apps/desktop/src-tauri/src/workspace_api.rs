@@ -10,6 +10,9 @@ mod workspace_store;
 #[path = "workspace_composer.rs"]
 pub mod composer;
 
+#[path = "workspace_placement.rs"]
+pub(crate) mod placement;
+
 use crate::acp_agents::{AcpAgents, AcpRefusal};
 use crate::api::verified_project_directory;
 use crate::dto::ApiError;
@@ -867,6 +870,9 @@ struct WorkspaceHostInner {
     extension_ui: Mutex<Option<ExtensionUiPublisher>>,
     /// ACP agent descriptors, decisions and discovery (ADR-034).
     acp: AcpAgents,
+    /// Chat placement (worktrees, handoff links, adopted sessions) and the
+    /// paths git needs; see `session_placement`.
+    tools: crate::session_placement::SessionTools,
     /// Test builds only: replaces native harness resolution with a test
     /// adapter that still runs the production bridge runner and transport.
     #[cfg(test)]
@@ -902,6 +908,7 @@ impl WorkspaceHost {
                 native_root,
                 extension_ui: Mutex::new(None),
                 acp: AcpAgents::open(app_data_dir)?,
+                tools: crate::session_placement::SessionTools::open(app_data_dir)?,
                 #[cfg(test)]
                 test_spawner: Mutex::new(None),
             }),
@@ -1033,6 +1040,8 @@ impl WorkspaceHost {
             .clone()
             .unwrap_or_else(|| Uuid::new_v4().to_string());
         validate_session_id(&session_id)?;
+        // A worktree chat's placement is recorded before its first start.
+        let cwd = self.launch_cwd(&session_id, directory)?;
         let StartAdmission::Reserved(reservation) =
             self.reserve_start(&session_id, &request.workspace_id)?
         else {
@@ -1067,7 +1076,7 @@ impl WorkspaceHost {
         self.insert_record(record.clone())?;
         Ok(PendingStart {
             reservation,
-            cwd: directory.canonical_path().to_path_buf(),
+            cwd,
             record,
             options: RuntimeStartOptions {
                 model: runtime_model,
@@ -1138,6 +1147,11 @@ impl WorkspaceHost {
         session_id: &str,
         publisher: WorkspaceEventPublisher,
     ) -> Result<SessionSnapshot, WorkspaceError> {
+        if self.live_runtime(session_id)?.is_none() {
+            // Runs git for worktree chats, so it stays outside the gate.
+            self.verify_worktree_before_open(session_id, authorize)
+                .await?;
+        }
         loop {
             let admission = {
                 let _operation = gate.lock().await;
@@ -1177,6 +1191,7 @@ impl WorkspaceHost {
             // History remains readable through the process-free snapshot path.
             return Err(WorkspaceError::not_supported());
         }
+        let cwd = self.launch_cwd(session_id, directory)?;
         Ok(
             match self.reserve_start(session_id, &record.workspace_id)? {
                 StartAdmission::Live => OpenAdmission::Live,
@@ -1184,7 +1199,7 @@ impl WorkspaceHost {
                 StartAdmission::Reserved(reservation) => {
                     OpenAdmission::Reserved(Box::new(PendingStart {
                         reservation,
-                        cwd: directory.canonical_path().to_path_buf(),
+                        cwd,
                         record,
                         // Catalog values are observed metadata, not a user request.
                         // Native resume/history/settings remain authoritative.
@@ -1343,7 +1358,9 @@ impl WorkspaceHost {
                 session_dir: session_directory,
                 native_id: resume_native_id,
                 native_path: resume_native_path,
-                title: Some(record.title.clone()),
+                // Pi writes a passed title into the session file; a session
+                // adopted from the terminal keeps the name it has.
+                title: (!self.adopted(&record.id)).then(|| record.title.clone()),
                 model,
                 thinking_level,
                 instructions,
@@ -2123,6 +2140,9 @@ impl WorkspaceHost {
         snapshot: &NativeSnapshot,
         persist_binding: bool,
     ) -> Result<(), WorkspaceError> {
+        // An adopted session keeps its PiUI title; renaming it in PiUI
+        // updates both the chat and the native session name.
+        let keep_title = self.adopted(session_id);
         self.update_record(session_id, |record| {
             if persist_binding {
                 record.native_id = Some(snapshot.native_id.clone());
@@ -2131,7 +2151,9 @@ impl WorkspaceHost {
                 }
             }
             record.materialized = merge_materialization(record.materialized, snapshot.materialized);
-            record.title = snapshot.title.clone();
+            if !keep_title {
+                record.title = snapshot.title.clone();
+            }
             record.model = snapshot.model.clone();
             record.updated_at = now_string();
         })
@@ -2707,6 +2729,7 @@ pub async fn workspace_history_v1(
     let host = state.inner();
     let record = host.workspace.record(&request.session_id)?;
     let directory = verified_project_directory(host, &record.workspace_id, false)?;
+    let directory = host.workspace.history_directory(&record.id, directory)?;
     let snapshot =
         tokio::task::spawn_blocking(move || historical_content_blocking(record, &directory, true))
             .await
@@ -2750,6 +2773,7 @@ pub(crate) async fn dispatch_workspace_command(
             host.workspace.snapshot(session_id).await?
         } else {
             let directory = verified_project_directory(host, &record.workspace_id, false)?;
+            let directory = host.workspace.history_directory(&record.id, directory)?;
             historical_snapshot(record, directory).await?
         };
         return Ok(WorkspaceResult::Session {
@@ -2889,7 +2913,7 @@ async fn authorize_live_session<'a>(
     Ok(guard)
 }
 
-fn event_publisher(app: AppHandle) -> WorkspaceEventPublisher {
+pub(crate) fn event_publisher(app: AppHandle) -> WorkspaceEventPublisher {
     Arc::new(move |event| {
         let _ = app.emit(WORKSPACE_EVENT_NAME, event);
     })

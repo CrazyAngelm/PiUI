@@ -7,6 +7,7 @@
 //! nor credentials, raw process handles, or raw Pi RPC frames.
 
 mod acp_agents;
+mod adopt_api;
 mod agent_api;
 mod api;
 mod automation_paths;
@@ -25,6 +26,13 @@ mod orchestration_script_test;
 pub use orchestration_scheduler::run_native_prime_scheduler_two_step_dependency_dag;
 mod orchestration_store;
 mod orchestration_triggers;
+mod placement_api;
+mod review_api;
+mod session_placement;
+#[cfg(test)]
+mod session_tools_contract_tests;
+#[cfg(test)]
+mod session_tools_test_support;
 mod state;
 mod workspace_api;
 
@@ -809,6 +817,9 @@ pub fn run() -> Result<(), tauri::Error> {
             workspace_api::workspace_lifecycle_v17,
             workspace_api::harness_models_v18,
             workspace_api::workspace_session_mode_v1,
+            review_api::workspace_review_v1,
+            placement_api::workspace_placement_v1,
+            adopt_api::workspace_adopt_v1,
             harness_registry_api::harness_registry_v1,
             api::bootstrap,
             api::bootstrap_v10,
