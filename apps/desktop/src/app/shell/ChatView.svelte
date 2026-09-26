@@ -21,6 +21,7 @@
   import GitCompare from '@lucide/svelte/icons/git-compare';
   import ArrowRightLeft from '@lucide/svelte/icons/arrow-right-left';
   import { composerInserts } from '../review/composerInserts.svelte';
+  import { placements } from '../worktrees/placements.svelte';
   import { startHandoff } from '../handoff/startHandoff';
   import { useWorkspace } from './context';
 
@@ -183,6 +184,8 @@
             <ExtensionSurface sessionId={snapshot.session.id} status={snapshot.session.status} placement="above" agentLabel={harnessMeta(snapshot.session.harness).label} />
             {#if store.safeMode}
               <p class="notice">{$t('Runtime actions are disabled in safe mode. Your draft is preserved.')}</p>
+            {:else if snapshot.session.status === 'closed' && placements.get(session.id)?.worktree?.state === 'removed'}
+              <p class="notice">{$t("This chat's worktree was removed. Its history stays readable; start a new chat to keep working.")}</p>
             {:else if snapshot.session.status === 'closed'}
               <p class="notice">
                 {$t('The agent process is stopped. The transcript stays readable.')}

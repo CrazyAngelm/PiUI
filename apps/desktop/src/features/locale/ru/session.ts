@@ -4,7 +4,9 @@
  * are the English source strings; code, paths and branch names stay as is.
  */
 export const sessionRu: Readonly<Record<string, string>> = {
-  // Chat header, menu and sidebar.
+  // Chat header, menu, sidebar and delete dialog.
+  'Its worktree folder and branch stay on disk. Remove the worktree from the chat details first if you no longer need it.':
+    'Папка worktree и ветка останутся на диске. Если они больше не нужны, сначала удалите worktree в деталях чата.',
   'Review changes': 'Ревью изменений',
   'Continue in another harness…': 'Продолжить в другом харнесе…',
   'in worktree {0}': 'в worktree {0}',

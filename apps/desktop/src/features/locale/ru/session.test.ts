@@ -43,6 +43,8 @@ describe('Russian copy for the session tools', () => {
       'Review changes',
       'Continue in another harness…',
       'in worktree {0}',
+      "This chat's worktree was removed. Its history stays readable; start a new chat to keep working.",
+      'Its worktree folder and branch stay on disk. Remove the worktree from the chat details first if you no longer need it.',
     ];
     expect(keys.filter((key) => !translated(key))).toEqual([]);
   });

@@ -3,6 +3,7 @@
   import type { ReviewFileV1 } from '../../../../../contracts/workspace-review-v1';
   import { Button, Checkbox, Dialog, toasts } from '../../lib/ui';
   import { AREA_LABELS } from '../review/review';
+  import { useWorkspace } from '../shell/context';
   import { placementRequest, placements } from './placements.svelte';
 
   interface Props {
@@ -12,6 +13,7 @@
     onClose: () => void;
   }
   let { sessionId, branch, path, onClose }: Props = $props();
+  const store = useWorkspace();
 
   let stage = $state<'confirm' | 'dirty'>('confirm');
   let busy = $state(false);
@@ -53,8 +55,11 @@
         acknowledged = false;
         await listChanges();
       } else if (result.type === 'removed') {
+        // The worktree's chats were stopped: show their closed state.
+        const stopped = placements.sharingWorktree(sessionId);
         placements.put(result.placement);
         void placements.refresh();
+        for (const id of stopped) void store.reconcileSession(id);
         toasts.success($t('Worktree removed'), $t('The branch {0} stays with its commits.', [branch]));
         onClose();
       }

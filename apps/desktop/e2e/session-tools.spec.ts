@@ -164,6 +164,9 @@ test.describe('worktree chats', () => {
     await expect(lab.toast('Worktree removed')).toBeVisible();
     await expect(details).toContainText('The worktree was removed. The branch stays; this chat stays readable.');
     await expect(page.getByRole('region', { name: 'Conversation messages' })).toContainText('Try a denser layout for the review panel');
+    // Its runtime stopped; it cannot resume without the worktree.
+    await expect(page.getByText("This chat's worktree was removed. Its history stays readable; start a new chat to keep working.")).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Resume' })).toHaveCount(0);
   });
 });
 
