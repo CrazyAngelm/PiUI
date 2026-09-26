@@ -14,6 +14,7 @@
   import { useWorkspace } from '../shell/context';
   import { toolKind, type ToolKind } from '../chat/transcript/toolKinds';
   import RunCanvas from './RunCanvas.svelte';
+  import RunTriggerLabel from './RunTriggerLabel.svelte';
   import TaskPanel from './TaskPanel.svelte';
   import { RUN_LABEL, RUN_TONE, matchesRunFilter, runCounts, shortId, sortRuns, stepViews, type RunFilter } from './runPresentation';
   import { RunsStore } from './runsStore.svelte';
@@ -159,6 +160,7 @@
             {run.paused && run.status === 'running' ? $t('Paused') : $t(RUN_LABEL[run.status])}
           </Badge>
           <span class="muted">{$t('{0} of {1} steps done', [counts.done, counts.total])}</span>
+          <RunTriggerLabel trigger={run.trigger} {onOpenRun} />
           {#if counts.attention > 0}<Badge tone="warning">{$t('{0} need attention', [counts.attention])}</Badge>{/if}
         </div>
         {#if Object.keys(run.inputs ?? {}).length}
