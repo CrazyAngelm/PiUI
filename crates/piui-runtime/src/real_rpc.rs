@@ -2909,10 +2909,11 @@ fn prime_cli_from_launcher(launcher: &Path) -> Option<PathBuf> {
         // npm/nvm normally exposes `<prefix>/bin/prime-agent` as a symlink to
         // the package entry point under `<prefix>/lib/node_modules`. Resolve
         // that target instead of assuming a fixed global prefix.
-        if let Ok(target) = std::fs::canonicalize(launcher) {
-            if target.is_file() && target.ends_with(Path::new(REL)) {
-                return Some(target);
-            }
+        if let Ok(target) = std::fs::canonicalize(launcher)
+            && target.is_file()
+            && target.ends_with(Path::new(REL))
+        {
+            return Some(target);
         }
     }
     let bin_dir = launcher.parent()?;
@@ -4299,13 +4300,15 @@ mod tests {
     fn configured_live_prime_daemon_socket() -> std::ffi::OsString {
         let socket = std::env::var_os("PIUI_PRIME_AGENT_DAEMON_SOCKET")
             .expect("requires an explicit isolated PIUI_PRIME_AGENT_DAEMON_SOCKET");
-        let rendered = socket.to_string_lossy();
         #[cfg(windows)]
-        assert!(
-            rendered.starts_with(r"\\.\pipe\piui-")
-                && rendered.as_ref() != r"\\.\pipe\prime-agent-daemon",
-            "the live Prime test socket must be a non-default PiUI named pipe"
-        );
+        {
+            let rendered = socket.to_string_lossy();
+            assert!(
+                rendered.starts_with(r"\\.\pipe\piui-")
+                    && rendered.as_ref() != r"\\.\pipe\prime-agent-daemon",
+                "the live Prime test socket must be a non-default PiUI named pipe"
+            );
+        }
         #[cfg(not(windows))]
         assert!(
             std::path::Path::new(socket.as_os_str()).is_absolute()
