@@ -10,6 +10,8 @@
  * adds step executors: `PipelineStep.executor` (`agent` | `llm` | `script`),
  * `TaskRecord.output` for script results and `FailureRecord.detail`. Stored
  * v6.0/v6.1 data decodes unchanged and is re-encoded without the new fields.
+ * v6.3 (additive) records what started a run in `OrchestrationRunV6.trigger`;
+ * runs without one (started by a person in the editor) keep their shape.
  */
 
 export type OrchestrationId = string;
@@ -322,9 +324,42 @@ export interface AgentRequestRecord {
   readonly operation: AgentRequestKind;
 }
 
+/** Most event hops one automation chain may take from a person or a clock (v6.3). */
+export const MAX_TRIGGER_CHAIN_DEPTH = 3;
+
+/** The event an event automation reacted to (v6.3). */
+export type RunTriggerEvent = 'run-finished' | 'files-changed';
+
+/**
+ * Who or what started a run (v6.3, additive). Written once by the host at
+ * creation; display and loop-protection metadata, never authority.
+ */
+export type RunTrigger =
+  /** A time-based automation occurrence (`occurrenceId` is also the run id). */
+  | {
+      readonly kind: 'schedule';
+      readonly scheduleId: OrchestrationId;
+      readonly scheduleName: string;
+      readonly occurrenceId: OrchestrationId;
+    }
+  /** An event automation; `chainDepth` counts event hops (1..MAX_TRIGGER_CHAIN_DEPTH). */
+  | {
+      readonly kind: 'event';
+      readonly scheduleId: OrchestrationId;
+      readonly scheduleName: string;
+      readonly occurrenceId: OrchestrationId;
+      readonly event: RunTriggerEvent;
+      readonly sourceRunId?: OrchestrationId;
+      readonly chainDepth: number;
+    }
+  /** A person started it from a chat (`/run` or the command palette). */
+  | { readonly kind: 'chat'; readonly sessionId?: OrchestrationId };
+
 export interface OrchestrationRunV6 {
   /** Additive (v6.1): validated run inputs, frozen when the run starts. */
   readonly inputs?: Readonly<Record<string, RunInputValue>>;
+  /** Additive (v6.3): what started the run; absent for a person's manual start. */
+  readonly trigger?: RunTrigger;
   readonly paused?: boolean;
   readonly attempts?: readonly TaskRecord[];
   readonly schemaVersion: 6;

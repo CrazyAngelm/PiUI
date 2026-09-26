@@ -740,6 +740,41 @@ mod tests {
         assert!(!start_hidden(&manual, true, false));
     }
 
+    /// Shared with the TypeScript contract tests (`contracts/background-v1.ts`).
+    #[test]
+    fn golden_json_matches_the_typescript_contract() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/fixtures/triggers-v7-2.json"
+        ))
+        .expect("fixture JSON");
+        let settings = BackgroundSettingsV1 {
+            protocol: 1,
+            keep_in_tray: true,
+            launch_at_login: false,
+            tray_available: true,
+            launch_at_login_available: true,
+            read_only: false,
+        };
+        assert_eq!(
+            serde_json::to_value(&settings).expect("encodes"),
+            fixture["backgroundSettings"]
+        );
+        let update: BackgroundUpdateRequest =
+            serde_json::from_value(fixture["backgroundUpdate"].clone()).expect("decodes");
+        assert_eq!(update.keep_in_tray, Some(true));
+        assert_eq!(update.launch_at_login, None);
+        assert!(
+            serde_json::from_value::<BackgroundUpdateRequest>(
+                serde_json::json!({"keepInTray": true, "startMinimized": true})
+            )
+            .is_err()
+        );
+        let labels: TrayLabels =
+            serde_json::from_value(fixture["trayLabels"].clone()).expect("decodes");
+        assert_eq!(labels, TrayLabels::default());
+        assert!(serde_json::from_value::<BackgroundSettingsRequest>(serde_json::json!({})).is_ok());
+    }
+
     #[test]
     fn tray_labels_are_bounded_and_literal() {
         let labels = sanitized_labels(TrayLabels {

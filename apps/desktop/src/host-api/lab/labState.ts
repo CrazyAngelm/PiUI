@@ -1,8 +1,8 @@
 import type {
   AgentKind, AgentProfile, DesktopTimelineBlock, HarnessKind, HarnessSummary, LaunchCommandReference,
   PermissionMode, PipelineDefinition, Preferences, ProjectSummary, ProjectTrustState, QueuedMessage,
-  ScheduleDefinition, ScheduleOccurrence, ScriptRuntime, SessionStatus, StoredDefinition, TeamDefinition, UsageReceipt,
-  WorkspaceApproval, WorkspaceModel, WorkspaceSession, WorkspaceSummary,
+  ScheduleDefinition, ScheduleOccurrence, ScriptRuntime, SessionStatus, StoredDefinition, TeamDefinition, TrayLabelsV1,
+  UsageReceipt, WorkspaceApproval, WorkspaceModel, WorkspaceSession, WorkspaceSummary,
 } from './labContracts';
 import type { LabRun } from './orchestration/runEngine';
 import { apiFailure } from './labErrors';
@@ -88,11 +88,21 @@ export interface LabOrchestrationWorkspace {
   runs: LabRun[];
 }
 
+/** Background mode (background-v1): nothing real is registered in the lab. */
+export interface LabBackground {
+  keepInTray: boolean;
+  launchAtLogin: boolean;
+  trayLabels?: TrayLabelsV1;
+}
+
 export interface LabState {
   scenario: LabScenarioName;
   safeMode: boolean;
   appVersion: string;
   preferences: Preferences;
+  /** Host v7.2 durable "pause all automations" switch. */
+  automationsPaused?: boolean;
+  background?: LabBackground;
   projects: LabProject[];
   harnesses: HarnessSummary[];
   /** Script interpreters this fake machine lacks (v6.2); all are present unless listed. */

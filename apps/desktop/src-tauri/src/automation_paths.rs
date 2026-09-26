@@ -329,6 +329,51 @@ mod tests {
         assert!(!matches("a*b*c", "a-long-b-and-d"));
     }
 
+    /// The editor's `triggerPatterns.ts` reads the same file.
+    #[test]
+    fn shared_fixtures_agree_with_the_editor() {
+        let fixtures: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/fixtures/trigger-patterns-v7.json"
+        ))
+        .expect("fixture JSON");
+        let code = |error: PatternError| match error {
+            PatternError::Empty => "empty",
+            PatternError::TooLong => "too-long",
+            PatternError::Control => "control",
+            PatternError::Backslash => "backslash",
+            PatternError::Absolute => "absolute",
+            PatternError::DotSegment => "dot-segment",
+            PatternError::EmptySegment => "empty-segment",
+            PatternError::DoubleStar => "double-star",
+            PatternError::Bracket => "bracket",
+            PatternError::Brace => "brace",
+        };
+        for valid in fixtures["valid"].as_array().expect("valid list") {
+            let pattern = valid.as_str().expect("pattern");
+            assert!(PathPattern::parse(pattern).is_ok(), "{pattern:?}");
+        }
+        for entry in fixtures["invalid"].as_array().expect("invalid list") {
+            let pattern = entry[0].as_str().expect("pattern");
+            let expected = entry[1].as_str().expect("code");
+            assert_eq!(
+                PathPattern::parse(pattern).map_err(code),
+                Err(expected),
+                "{pattern:?}"
+            );
+        }
+        for entry in fixtures["matches"].as_array().expect("match list") {
+            let (pattern, path) = (
+                entry[0].as_str().expect("pattern"),
+                entry[1].as_str().expect("path"),
+            );
+            assert_eq!(
+                matches(pattern, path),
+                entry[2].as_bool().expect("expected"),
+                "{pattern:?} vs {path:?}"
+            );
+        }
+    }
+
     #[test]
     fn case_folding_is_explicit() {
         let pattern = PathPattern::parse("*.MD").expect("valid");

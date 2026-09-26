@@ -150,6 +150,12 @@ const runInputValues = withDefault(mapOf(json));
 export const pipelineSchema = object({ id: string, name: string, steps: arrayOf(step), inputs: withDefault(arrayOf(pipelineInput)) });
 export const launchCommandSchema = object({ id: string, name: string, teamId: string, pipelineId: string });
 
+/** Host v7.2 event rules (`EventTrigger`, kebab-case kinds). */
+const eventTrigger = tagged('kind', {
+  'run-finished': { launchCommandId: string, outcomes: arrayOf(enumOf(['succeeded', 'failed', 'cancelled'])) },
+  'files-changed': { include: arrayOf(string), exclude: withDefault(arrayOf(string)), debounceSeconds: u32 },
+});
+
 export const scheduleSchema = object({
   id: string,
   name: string,
@@ -158,6 +164,7 @@ export const scheduleSchema = object({
     once: { at: datetime, timeZone: string },
     interval: { every: u64, unit: enumOf(['minutes', 'hours']), anchorAt: datetime, timeZone: string },
     calendar: { time: string, days: arrayOf(u64), startsAt: datetime, timeZone: string },
+    event: { event: eventTrigger },
   }),
   missedRunPolicy: enumOf(['skip', 'coalesce']),
   overlapPolicy: enumOf(['allow', 'skip']),
@@ -189,6 +196,8 @@ export const startRunSchema = object({
   pipelineId: string,
   launchCommandId: option(string),
   inputs: runInputValues,
+  // Host v7.2 `StartRunCommand`: only a chat may be stated.
+  trigger: option(tagged('kind', { chat: { sessionId: option(string) } })),
 });
 export const cancelTaskSchema = object({ workspaceId: string, runId: string, expectedRunRevision: u64, stepId: string });
 export const flowControlSchema = object({
@@ -231,3 +240,10 @@ export const saveGraphSchema = object({
 export const saveScheduleSchema = saveRequest(scheduleSchema);
 export const scheduleMutationSchema = object({ workspaceId: string, id: string, expectedRevision: u64 });
 export const setScheduleEnabledSchema = object({ workspaceId: string, id: string, expectedRevision: u64, enabled: boolean });
+export const automationsStateSchema = object({});
+export const setAutomationsPausedSchema = object({ paused: boolean });
+export const backgroundSettingsSchema = object({});
+export const backgroundUpdateSchema = object({ keepInTray: option(boolean), launchAtLogin: option(boolean) });
+export const trayLabelsSchema = object({
+  open: string, pause: string, resume: string, quit: string, tooltip: string, pausedTooltip: string,
+});

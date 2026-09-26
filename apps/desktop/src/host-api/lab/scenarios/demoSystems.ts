@@ -371,6 +371,8 @@ export function demoSystems(): { orchestration: LabOrchestrationWorkspace[]; ses
     [NODE.planner, 'succeeded'], [NODE.developer, 'succeeded'], [NODE.reviewer, 'succeeded'],
     [NODE.developer, 'succeeded'], [NODE.reviewer, 'succeeded'],
   ], { task: NIGHTLY_REVIEW });
+  // Scheduled runs record the automation occurrence that started them (v6.3).
+  nightly.run.trigger = { kind: 'schedule', scheduleId: id('schedule:nightly'), scheduleName: 'Nightly code review', occurrenceId: nightlyRunId };
   const failed = seedRun(DEMO_PROJECTS.piui, id('run:failed'), reviewSnapshot, LAB_BASE_TIME - 18 * HOUR - 20 * MINUTE, [
     [NODE.planner, 'succeeded'], [NODE.developer, 'failed'],
   ], { task: TRANSPORT_REVIEW });

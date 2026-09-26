@@ -882,3 +882,79 @@ fn firing_identity_is_stable_per_cause() {
         format!("files:{}", wall.timestamp_millis())
     );
 }
+
+/// `contracts/fixtures/triggers-v7-2.json` is also decoded by the TypeScript
+/// contract tests: both sides read and write exactly these shapes.
+#[test]
+fn golden_json_matches_the_typescript_contracts() {
+    use crate::orchestration_api::{
+        AutomationsStateRequest, AutomationsStateV7, OrchestrationAutomationsChangedEventV7,
+        SetAutomationsPausedRequest, StartRunCommand, StartRunTrigger,
+    };
+    use crate::orchestration_schedule::ScheduleOccurrence;
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/fixtures/triggers-v7-2.json"
+    ))
+    .expect("fixture JSON");
+    let items = |key: &str| fixture[key].as_array().cloned().expect("fixture list");
+    for schedule in items("schedules") {
+        let decoded: ScheduleDefinition =
+            serde_json::from_value(schedule.clone()).expect("schedule decodes");
+        assert!(decoded.validate(), "{schedule}");
+        assert_eq!(serde_json::to_value(&decoded).expect("encodes"), schedule);
+    }
+    for occurrence in items("occurrences") {
+        let decoded: ScheduleOccurrence =
+            serde_json::from_value(occurrence.clone()).expect("occurrence decodes");
+        assert_eq!(serde_json::to_value(&decoded).expect("encodes"), occurrence);
+    }
+    for trigger in items("runTriggers") {
+        let decoded: RunTrigger = serde_json::from_value(trigger.clone()).expect("trigger decodes");
+        assert!(decoded.is_valid(), "{trigger}");
+        assert_eq!(serde_json::to_value(&decoded).expect("encodes"), trigger);
+    }
+    let start: StartRunCommand =
+        serde_json::from_value(fixture["startRun"].clone()).expect("start decodes");
+    assert!(matches!(
+        start.trigger,
+        Some(StartRunTrigger::Chat { session_id: Some(ref id) }) if id == "chat-session-1"
+    ));
+    let mut claimed = fixture["startRun"].clone();
+    claimed["trigger"] =
+        json!({"kind": "schedule", "scheduleId": "s", "scheduleName": "S", "occurrenceId": "o"});
+    assert!(serde_json::from_value::<StartRunCommand>(claimed).is_err());
+    let mut without = fixture["startRun"].clone();
+    if let Some(object) = without.as_object_mut() {
+        object.remove("trigger");
+    }
+    assert!(
+        serde_json::from_value::<StartRunCommand>(without)
+            .expect("v6 start")
+            .trigger
+            .is_none()
+    );
+    assert_eq!(
+        serde_json::to_value(AutomationsStateV7 { paused: true }).expect("encodes"),
+        fixture["automationsState"]
+    );
+    let set: SetAutomationsPausedRequest =
+        serde_json::from_value(fixture["setAutomationsPaused"].clone()).expect("decodes");
+    assert!(!set.paused);
+    assert!(
+        serde_json::from_value::<SetAutomationsPausedRequest>(json!({"paused": true, "all": true}))
+            .is_err()
+    );
+    assert!(serde_json::from_value::<AutomationsStateRequest>(json!({})).is_ok());
+    assert!(
+        serde_json::from_value::<AutomationsStateRequest>(json!({"workspaceId": "w"})).is_err()
+    );
+    assert_eq!(
+        serde_json::to_value(OrchestrationAutomationsChangedEventV7 {
+            protocol: 7,
+            event_type: "automationsChanged",
+            paused: true,
+        })
+        .expect("encodes"),
+        fixture["automationsEvent"]
+    );
+}
