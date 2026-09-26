@@ -21,6 +21,7 @@ const userInputFixture = process.argv.includes("--user-input");
 const settingsIndex = process.argv.indexOf("--expect-settings");
 const expectedSettings = settingsIndex >= 0 ? JSON.parse(process.argv[settingsIndex + 1]) : undefined;
 const unknownItemsFixture = process.argv.includes("--unknown-items");
+const toolItemsFixture = process.argv.includes("--tool-items");
 
 const permissionMatches = (params) => {
   if (expectedPermission === "native") return params.permissions === undefined && params.approvalPolicy === undefined;
@@ -115,7 +116,7 @@ input.on("line", (line) => {
     }
     if (unknownItemsFixture) {
       send({ method: "item/started", params: { threadId, turnId: "turn-items", startedAtMs: 7, item: { type: "commandExecution", id: "command-display", command: "display command", cwd: process.cwd(), aggregatedOutput: "", status: "inProgress" } } });
-      for (const type of ["mcpToolCall", "collabAgentToolCall", "imageView", "imageGeneration"]) {
+      for (const type of ["collabAgentToolCall", "imageView", "imageGeneration"]) {
         send({ method: "item/started", params: { threadId, turnId: "turn-items", startedAtMs: 8, item: { type, id: `unsupported-${type}`, status: "inProgress" } } });
       }
       send({ method: "item/started", params: { threadId, turnId: "turn-items", startedAtMs: 8, item: {
@@ -126,6 +127,39 @@ input.on("line", (line) => {
         results: [{ title: "Fixture result", secret: "SECRET-MUST-NOT-LEAK" }],
         status: "inProgress",
       } } });
+    }
+    if (toolItemsFixture) {
+      const secret = "SECRET-MUST-NOT-LEAK";
+      const item = (method, value) => send({ method, params: { threadId, turnId: "turn-tools", item: value } });
+      const mcp = {
+        type: "mcpToolCall", id: "mcp-item", server: "docs", tool: "search_docs",
+        arguments: { query: "fixture", limit: 3, filters: { token: secret } },
+        appContext: null, mcpAppUi: null, pluginId: null, readOnlyHint: true, result: null, error: null, durationMs: null,
+      };
+      item("item/started", { ...mcp, status: "inProgress" });
+      send({ method: "item/mcpToolCall/progress", params: { threadId, turnId: "turn-tools", itemId: "mcp-item", message: "Searching" } });
+      item("item/completed", { ...mcp, status: "completed", durationMs: 12, result: {
+        content: [{ type: "text", text: "found 3 docs" }, { type: "image", data: secret, mimeType: "image/png" }],
+        structuredContent: { token: secret },
+        _meta: { token: secret },
+      } });
+      item("item/completed", { ...mcp, id: "mcp-failed", status: "failed", error: { message: "docs server unavailable" } });
+      const dynamic = {
+        type: "dynamicToolCall", id: "dynamic-item", namespace: "workspace", tool: "spawn_agent",
+        arguments: { profileId: "reviewer", name: "Helper", instructions: "Review\nthe change" },
+        contentItems: null, success: null, durationMs: null,
+      };
+      item("item/started", { ...dynamic, status: "inProgress" });
+      item("item/completed", { ...dynamic, status: "completed", success: true, durationMs: 5, contentItems: [
+        { type: "inputText", text: "x".repeat(20000) },
+        { type: "inputImage", imageUrl: `data:image/png;base64,${secret}` },
+      ] });
+      item("item/completed", {
+        ...dynamic, id: "dynamic-denied", namespace: null, tool: "send",
+        arguments: { recipientMemberId: "member", body: "hi" },
+        status: "completed", success: false, durationMs: 1,
+        contentItems: [{ type: "inputText", text: "{\"ok\":false}" }],
+      });
     }
     if (coordinatorFixture) {
       const tools = message.params.dynamicTools?.[0]?.tools?.map((tool) => tool.name).sort();
