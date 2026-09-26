@@ -1,0 +1,45 @@
+{
+  "timestamp": "2026-09-26T23:02:32+07:00",
+  "commit": "86b8e98",
+  "branch": "rework/piui-2 (main fast-forwarded locally, not pushed)",
+  "release": {
+    "portable": {
+      "path": "artifacts/PiUI_0.1.1_windows_x86_64.exe",
+      "bytes": 24366080,
+      "sha256": "6c65e824d63f28720b852a061bee2e7210a25336e7fabb3410fd144d6c086308"
+    },
+    "installer": {
+      "path": "artifacts/PiUI_0.1.1_x64-setup.exe",
+      "bytes": 6228825,
+      "sha256": "17c5502aa53772384936c7eafaffaa89bb61050f7c6c00326ac26cbca00cffad"
+    },
+    "installed": null,
+    "launch": "not performed: release builds have no isolated data directories, and launching would load the owner's real projects and enabled schedules (paid native runs); the owner launches it for testing"
+  },
+  "rollback": {
+    "path": "evidence/local-release-20260926/rollback-0.1.1-20260922/ (git-ignored)",
+    "portableSha256": "e3028d7f506c60c84d977c53b09aab6e547e3157ac4b047411f4a3f56a7f7f93",
+    "installerSha256": "ce6c193d0edafeb7d49e4becd71773c62230bfef2664a209e77bee9cc9876398"
+  },
+  "verification": {
+    "desktopCheck": "svelte-check found 0 errors and 0 warnings",
+    "desktopTests": "60 files, 349 tests passed",
+    "contractTests": "8 files, 62 tests passed; system file validators current",
+    "systemExamples": "7 valid examples",
+    "bridgeTests": "112 tests: 111 passed, 1 skipped (live handshake)",
+    "cargoFmt": "clean",
+    "cargoClippy": "cargo clippy --workspace --all-targets -- -D warnings passed",
+    "cargoTest": "cargo test --workspace passed (desktop 124, runtime 140, index 77, orchestration 45, platform 19, contracts 13, extensions 6)",
+    "labBrowser": "UI Lab: day-of-week automation created, validated inputs, edited to custom days"
+  },
+  "cleanup": {
+    "removed": ["target/release", "target/claude-host", "target/main"],
+    "kept": {
+      "target/debug": "rust-analyzer running",
+      "target/step-executors": "background agent worktree build in progress"
+    },
+    "freeBytesBefore": 148180520960,
+    "freeBytesAfter": 165532225536,
+    "freedBytes": 17351704576
+  }
+}
