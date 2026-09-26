@@ -1,0 +1,169 @@
+{
+  "review": {
+    "statusRequest": { "type": "status", "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10" },
+    "diffRequest": {
+      "type": "diff",
+      "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10",
+      "path": "src/f.txt",
+      "area": "unstaged"
+    },
+    "stageHunkRequest": {
+      "type": "stage",
+      "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10",
+      "path": "src/f.txt",
+      "area": "unstaged",
+      "fingerprint": "5e0b7a4c2d1f3e6a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a",
+      "hunk": 1
+    },
+    "unstageRequest": {
+      "type": "unstage",
+      "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10",
+      "path": "src/f.txt",
+      "fingerprint": "5e0b7a4c2d1f3e6a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a"
+    },
+    "trashRequest": {
+      "type": "revert",
+      "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10",
+      "path": "notes.md",
+      "area": "untracked",
+      "fingerprint": "5e0b7a4c2d1f3e6a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a"
+    },
+    "status": {
+      "type": "status",
+      "protocol": 1,
+      "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10",
+      "repository": { "state": "ready", "branch": "main", "head": "0123456789ab", "worktree": false, "folder": "repo" },
+      "files": [
+        { "path": "src/f.txt", "area": "staged", "change": "modified", "added": 1, "removed": 1 },
+        { "path": "src/f.txt", "area": "unstaged", "change": "modified", "added": 1, "removed": 1 },
+        { "path": "image.bin", "area": "unstaged", "change": "modified", "binary": true },
+        { "path": "notes.md", "area": "untracked", "change": "added" }
+      ],
+      "truncated": false,
+      "hidden": 0,
+      "readOnly": false
+    },
+    "notRepository": {
+      "type": "status",
+      "protocol": 1,
+      "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10",
+      "repository": { "state": "not-repository" },
+      "files": [],
+      "truncated": false,
+      "hidden": 0,
+      "readOnly": true
+    },
+    "diff": {
+      "type": "diff",
+      "protocol": 1,
+      "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10",
+      "path": "src/f.txt",
+      "area": "unstaged",
+      "fingerprint": "5e0b7a4c2d1f3e6a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a",
+      "content": {
+        "kind": "text",
+        "text": "diff --git a/src/f.txt b/src/f.txt\n--- a/src/f.txt\n+++ b/src/f.txt\n@@ -1,4 +1,4 @@\n-a\n+A\n b\n c\n d\n",
+        "hunks": 1,
+        "hunkActions": true
+      },
+      "actions": { "stage": true, "unstage": false, "revert": true }
+    },
+    "binaryDiff": {
+      "type": "diff",
+      "protocol": 1,
+      "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10",
+      "path": "image.bin",
+      "area": "unstaged",
+      "fingerprint": "5e0b7a4c2d1f3e6a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a",
+      "content": { "kind": "binary", "size": 14 },
+      "actions": { "stage": true, "unstage": false, "revert": true }
+    },
+    "error": { "code": "STALE", "message": "This changed since you reviewed it. Check it again before continuing.", "recoverable": true }
+  },
+  "placement": {
+    "listRequest": { "type": "list" },
+    "previewRequest": { "type": "previewWorktree", "workspaceId": "project-1", "branch": "piui/login" },
+    "createRequest": {
+      "type": "createChat",
+      "workspaceId": "project-1",
+      "harness": "codex",
+      "permissionMode": "workspace-write",
+      "worktree": {
+        "type": "new",
+        "branch": "piui/login",
+        "folder": "piui-login",
+        "expectedBase": "0123456789abcdef0123456789abcdef01234567"
+      },
+      "continuedFrom": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10"
+    },
+    "sharedRequest": {
+      "type": "createChat",
+      "workspaceId": "project-1",
+      "harness": "claude-code",
+      "permissionMode": "native",
+      "worktree": { "type": "shared", "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10" },
+      "continuedFrom": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10"
+    },
+    "removeRequest": {
+      "type": "removeWorktree",
+      "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10",
+      "discardChanges": true,
+      "expectedChanges": "5e0b7a4c2d1f3e6a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a"
+    },
+    "placements": {
+      "type": "placements",
+      "protocol": 1,
+      "placements": [
+        {
+          "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10",
+          "worktree": {
+            "branch": "piui/login",
+            "path": "~/AppData/Roaming/dev.piui.desktop/worktrees/piui-1a2b3c4d/piui-login",
+            "state": "ready",
+            "base": "0123456789ab"
+          }
+        },
+        { "sessionId": "8c7b0d9e-1f2a-4b3c-8d4e-5f6a7b8c9d0e", "continuedFrom": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10" },
+        { "sessionId": "0d1e2f3a-4b5c-4d6e-8f7a-8b9c0d1e2f3a", "adopted": true }
+      ]
+    },
+    "preview": {
+      "type": "preview",
+      "protocol": 1,
+      "preview": {
+        "workspaceId": "project-1",
+        "branch": "piui/login",
+        "folder": "piui-login",
+        "path": "~/AppData/Roaming/dev.piui.desktop/worktrees/piui-1a2b3c4d/piui-login",
+        "base": { "commit": "0123456789abcdef0123456789abcdef01234567", "short": "0123456789ab", "branch": "main" },
+        "projectChanges": true
+      }
+    },
+    "dirty": {
+      "type": "dirty",
+      "protocol": 1,
+      "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10",
+      "changes": 2,
+      "fingerprint": "5e0b7a4c2d1f3e6a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a"
+    },
+    "removed": {
+      "type": "removed",
+      "protocol": 1,
+      "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10",
+      "placement": {
+        "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10",
+        "worktree": {
+          "branch": "piui/login",
+          "path": "~/AppData/Roaming/dev.piui.desktop/worktrees/piui-1a2b3c4d/piui-login",
+          "state": "removed",
+          "base": "0123456789ab"
+        }
+      }
+    }
+  },
+  "adopt": {
+    "request": { "projectId": "project-1", "sessionId": "index-session-7" },
+    "personalRequest": { "sessionId": "index-session-8" },
+    "result": { "protocol": 1, "sessionId": "0d1e2f3a-4b5c-4d6e-8f7a-8b9c0d1e2f3a", "created": true }
+  }
+}
