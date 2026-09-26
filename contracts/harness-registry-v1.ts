@@ -47,7 +47,8 @@ export interface CommandLineV1 { program: string; args: string[] }
 export interface HarnessStatusV1 {
   harness: HarnessId;
   name: string;
-  source: 'built-in' | 'acp-built-in' | 'acp-user';
+  /** `acp-plugin` (additive, ADR-032): an enabled plugin's ACP agent. */
+  source: 'built-in' | 'acp-built-in' | 'acp-user' | 'acp-plugin';
   state: HarnessState;
   /** Detected executable or entry script (display only). */
   location?: string;
@@ -65,7 +66,10 @@ export interface HarnessStatusV1 {
 
 export interface AcpAgentEntryV1 {
   descriptor: AcpAgentDescriptorV1;
-  source: 'built-in' | 'user';
+  /** `plugin` (additive, ADR-032): trusted like a user agent, removed with its plugin. */
+  source: 'built-in' | 'user' | 'plugin';
+  /** The plugin that contributes the agent (`source: 'plugin'` only). */
+  plugin?: { id: string; name: string };
   /** Trust and confirmations bind to this descriptor fingerprint. */
   fingerprint: string;
   state: HarnessState;
@@ -105,7 +109,9 @@ export type HarnessRegistryCommandV1 =
 
 export type HarnessRegistryErrorCode =
   | 'SAFE_MODE' | 'CONFLICT' | 'INVALID_DESCRIPTOR' | 'DUPLICATE' | 'NOT_FOUND' | 'BUILT_IN'
-  | 'TRUST_CHANGED' | 'NOT_INSTALLED' | 'NOTHING_TO_CONFIRM' | 'LIMIT' | 'IO_ERROR';
+  | 'TRUST_CHANGED' | 'NOT_INSTALLED' | 'NOTHING_TO_CONFIRM' | 'LIMIT' | 'IO_ERROR'
+  /** Additive (ADR-032): a plugin's agent is removed with its plugin. */
+  | 'PLUGIN_OWNED';
 
 export interface HarnessRegistryErrorV1 { code: HarnessRegistryErrorCode; message: string; recoverable: boolean }
 

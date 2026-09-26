@@ -2857,6 +2857,7 @@ dependencies = [
  "piui-index",
  "piui-orchestration",
  "piui-platform",
+ "piui-plugins",
  "piui-runtime",
  "rfd",
  "serde",

@@ -27,13 +27,23 @@ pub fn plugin_url(origin: &str, id: &str, path: &str) -> String {
     format!("{origin}/{id}/{path}")
 }
 
-/// The policy of one plugin's panel documents: scripts, styles, images and
-/// fonts only from the plugin's own folder on `origin`; no connections,
-/// frames, workers, forms or base changes; always sandboxed with scripts
-/// and without same-origin access.
+/// The folder panel files are served from: the folder of `ui.entry`, as a
+/// URL path under the plugin id ending in `/` (`example.hello/ui/`).
 #[must_use]
-pub fn panel_policy(origin: &str, id: &str) -> String {
-    let own = format!("{origin}/{id}/");
+pub fn ui_base(id: &str, ui_entry: &str) -> String {
+    match ui_entry.rsplit_once('/') {
+        Some((folder, _)) => format!("{id}/{folder}/"),
+        None => format!("{id}/"),
+    }
+}
+
+/// The policy of one plugin's panel documents: scripts, styles, images and
+/// fonts only from the plugin's UI folder on `origin`; no connections,
+/// frames, workers, forms or base changes; always sandboxed with scripts
+/// and without same-origin access. `base` comes from [`ui_base`].
+#[must_use]
+pub fn panel_policy(origin: &str, base: &str) -> String {
+    let own = format!("{origin}/{base}");
     format!(
         "default-src 'none'; script-src {own}; style-src {own}; img-src {own} data:; font-src {own}; \
          connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; \
@@ -71,9 +81,15 @@ mod tests {
 
     #[test]
     fn policy_limits_every_resource_to_the_plugin_folder() {
-        let policy = panel_policy("http://piui-plugin.localhost", "example.hello");
+        assert_eq!(
+            ui_base("example.hello", "ui/index.html"),
+            "example.hello/ui/"
+        );
+        assert_eq!(ui_base("example.hello", "index.html"), "example.hello/");
+        let base = ui_base("example.hello", "ui/index.html");
+        let policy = panel_policy("http://piui-plugin.localhost", &base);
         assert!(policy.starts_with("default-src 'none';"));
-        assert!(policy.contains("script-src http://piui-plugin.localhost/example.hello/;"));
+        assert!(policy.contains("script-src http://piui-plugin.localhost/example.hello/ui/;"));
         assert!(policy.contains("connect-src 'none'"));
         assert!(policy.ends_with("sandbox allow-scripts"));
         assert!(

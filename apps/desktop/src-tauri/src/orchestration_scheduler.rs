@@ -147,6 +147,12 @@ enum Admission {
         lease: Box<ScriptLease>,
         interpreter: ResolvedInterpreter,
     },
+    /// A plugin node step (v6.5).
+    Plugin {
+        lease: Box<piui_orchestration::PluginStepLease>,
+        spec: Box<crate::plugins::NodeSpec>,
+        config: serde_json::Map<String, serde_json::Value>,
+    },
 }
 
 /// A started script step handed to its watcher.
@@ -472,6 +478,40 @@ impl OrchestrationScheduler {
                         ScriptAdmission::Idle => return Ok(()),
                     }
                 }
+                if step.is_plugin() {
+                    let lease_id = host.workspace.allocate_orchestration_session_id();
+                    let plugins = app.try_state::<crate::plugins::PluginsState>();
+                    match plugin_steps::admit_plugin_step(
+                        plugins.as_deref(),
+                        &api,
+                        workspace_id,
+                        &run,
+                        &step,
+                        task_revision,
+                        lease_id,
+                    ) {
+                        plugin_steps::PluginAdmission::Leased {
+                            lease,
+                            spec,
+                            config,
+                            run,
+                        } => {
+                            self.emit_run_invalidation(app, workspace_id, &run);
+                            break 'admission Admission::Plugin {
+                                lease,
+                                spec,
+                                config,
+                            };
+                        }
+                        plugin_steps::PluginAdmission::Rejected { run, error } => {
+                            if let Some(run) = run {
+                                self.emit_run_invalidation(app, workspace_id, &run);
+                            }
+                            return Err(error);
+                        }
+                        plugin_steps::PluginAdmission::Idle => return Ok(()),
+                    }
+                }
                 let Some(profile) = profile_for_step(&run, &step) else {
                     return Ok(());
                 };
@@ -544,6 +584,14 @@ impl OrchestrationScheduler {
                 }
                 Admission::Script { lease, interpreter } => {
                     self.launch_script(app, workspace_id, *lease, interpreter)
+                        .await?;
+                }
+                Admission::Plugin {
+                    lease,
+                    spec,
+                    config,
+                } => {
+                    self.launch_plugin_step(app, workspace_id, *lease, *spec, config)
                         .await?;
                 }
             }
@@ -3432,6 +3480,9 @@ mod tests {
 #[cfg(test)]
 #[path = "orchestration_script_tests.rs"]
 mod script_tests;
+
+#[path = "orchestration_plugin_steps.rs"]
+mod plugin_steps;
 
 #[cfg(test)]
 #[path = "orchestration_sign_in_tests.rs"]

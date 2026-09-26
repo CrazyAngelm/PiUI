@@ -962,6 +962,16 @@ impl WorkspaceHost {
         &self.inner.acp
     }
 
+    /// The title and workspace of a registered chat (plugin command context).
+    pub(crate) fn session_title(&self, session_id: &str) -> Option<(String, String)> {
+        lock(&self.inner.registry)
+            .ok()?
+            .sessions()
+            .iter()
+            .find(|session| session.id == session_id)
+            .map(|session| (session.title.clone(), session.workspace_id.clone()))
+    }
+
     /// Test builds only: replaces native harness resolution of this host, for
     /// tests outside this module that drive managed launches.
     #[cfg(test)]

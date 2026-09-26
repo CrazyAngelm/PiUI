@@ -196,6 +196,10 @@ impl From<RegistryError> for HarnessRegistryError {
                 "LIMIT",
                 "Remove an agent before adding another (32 at most).",
             ),
+            RegistryError::PluginOwned => Self::new(
+                "PLUGIN_OWNED",
+                "This agent comes from a plugin. Disable or remove the plugin in Settings → Plugins.",
+            ),
             RegistryError::Io => Self::new("IO_ERROR", "PiUI could not save the harness list."),
         }
     }
@@ -245,6 +249,7 @@ fn acp_status(view: &AcpAgentView) -> HarnessStatusV1 {
         source: match view.source {
             AgentSource::BuiltIn => "acp-built-in",
             AgentSource::User => "acp-user",
+            AgentSource::Plugin => "acp-plugin",
         },
         state: view.state,
         location: view.command_line.as_ref().map(|line| {
