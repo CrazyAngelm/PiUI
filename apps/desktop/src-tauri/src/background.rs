@@ -92,7 +92,7 @@ impl BackgroundError {
     fn read_only() -> Self {
         Self { code: "read-only" }
     }
-    fn unavailable() -> Self {
+    pub(crate) fn unavailable() -> Self {
         Self {
             code: "unavailable",
         }
@@ -253,6 +253,9 @@ impl PreferenceStore for IndexPreferences<'_> {
     }
 }
 
+/// Sign-in registration on Linux and macOS. Windows writes its own quoted
+/// Run value (`autostart.rs`); this stays compiled there for type checking.
+#[cfg_attr(windows, allow(dead_code))]
 struct PluginAutostart<'a, R: Runtime>(&'a AppHandle<R>);
 
 impl<R: Runtime> AutostartBackend for PluginAutostart<'_, R> {
@@ -307,7 +310,18 @@ fn with_controller<R: Runtime, T>(
         .ok_or_else(BackgroundError::unavailable)?;
     let store = IndexPreferences(&host);
     let tray = RuntimeTray(app);
+    #[cfg(windows)]
+    let run_key = state
+        .autostart_allowed
+        .then(|| windows_autostart(app))
+        .flatten();
+    #[cfg(windows)]
+    let autostart = run_key
+        .as_ref()
+        .map(|backend| backend as &dyn AutostartBackend);
+    #[cfg(not(windows))]
     let plugin = PluginAutostart(app);
+    #[cfg(not(windows))]
     let autostart = (state.autostart_allowed
         && app
             .try_state::<tauri_plugin_autostart::AutoLaunchManager>()
@@ -321,9 +335,58 @@ fn with_controller<R: Runtime, T>(
     })
 }
 
+/// The quoted HKCU Run value for this executable, named after the app like
+/// the entries earlier builds wrote through the plugin.
+#[cfg(windows)]
+fn windows_autostart<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Option<crate::autostart::RunKeyAutostart<crate::autostart::WindowsRunKey>> {
+    let executable = std::env::current_exe().ok()?;
+    crate::autostart::RunKeyAutostart::new(
+        crate::autostart::WindowsRunKey,
+        &app.package_info().name,
+        executable.to_str()?,
+        &[AUTOSTART_ARG],
+    )
+    .ok()
+}
+
+/// What a second launch of PiUI asks the running one to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SecondLaunch {
+    /// Show and focus the main window, restoring it from the tray.
+    ShowWindow,
+    /// A sign-in start while PiUI already runs: change nothing.
+    StayAsIs,
+}
+
+/// Decides from the second process's arguments; it exits right after.
+pub(crate) fn second_launch(args: &[String]) -> SecondLaunch {
+    if args.iter().any(|argument| argument == AUTOSTART_ARG) {
+        SecondLaunch::StayAsIs
+    } else {
+        SecondLaunch::ShowWindow
+    }
+}
+
+/// The single-instance guard's callback in the running PiUI.
+pub(crate) fn on_second_launch<R: Runtime>(app: &AppHandle<R>, args: &[String]) {
+    match second_launch(args) {
+        SecondLaunch::ShowWindow => show_main(app),
+        SecondLaunch::StayAsIs => {}
+    }
+}
+
+/// Whether this process joins the one-instance-per-session guard. E2E hosts
+/// run in isolated data folders, several at a time, and stay outside it.
+pub(crate) fn single_instance_guard(e2e_isolated: bool) -> bool {
+    !e2e_isolated
+}
+
 /// Manages background state at startup, shows the tray when it is on and
-/// keeps a sign-in start hidden in it. Nothing here blocks first paint: the
-/// OS registration is read only when Settings asks for it.
+/// keeps a sign-in start hidden in it. Nothing here blocks first paint: on
+/// Windows it reads one registry value (quoting a legacy entry), elsewhere
+/// the OS registration is read only when Settings asks for it.
 pub(crate) fn setup<R: Runtime>(app: &AppHandle<R>, safe_mode: bool, autostart_allowed: bool) {
     app.manage(BackgroundState {
         safe_mode,
@@ -333,6 +396,14 @@ pub(crate) fn setup<R: Runtime>(app: &AppHandle<R>, safe_mode: bool, autostart_a
     });
     if safe_mode {
         return;
+    }
+    // An earlier build wrote the sign-in command unquoted; quote it now.
+    #[cfg(windows)]
+    if autostart_allowed
+        && let Some(run_key) = windows_autostart(app)
+        && matches!(run_key.repair(), Ok(true))
+    {
+        eprintln!("event=background_autostart_quoted");
     }
     let keep_in_tray = app
         .try_state::<HostState>()
@@ -729,6 +800,32 @@ mod tests {
         );
         assert_eq!(autostart.writes.get(), 0);
         assert!(!start_hidden(&[AUTOSTART_ARG.to_owned()], true, true));
+    }
+
+    #[test]
+    fn a_second_launch_shows_the_running_window_unless_it_is_a_sign_in_start() {
+        let args = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            second_launch(&args(&["piui-desktop"])),
+            SecondLaunch::ShowWindow
+        );
+        assert_eq!(second_launch(&args(&[])), SecondLaunch::ShowWindow);
+        assert_eq!(
+            second_launch(&args(&["piui-desktop", "--safe-mode"])),
+            SecondLaunch::ShowWindow
+        );
+        assert_eq!(
+            second_launch(&args(&["piui-desktop", AUTOSTART_ARG])),
+            SecondLaunch::StayAsIs
+        );
+        // E2E hosts run side by side in isolated folders, outside the guard.
+        assert!(single_instance_guard(false));
+        assert!(!single_instance_guard(true));
     }
 
     #[test]

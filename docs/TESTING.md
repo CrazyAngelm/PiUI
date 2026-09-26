@@ -105,7 +105,9 @@ explicitly) runs `scripts/tauri-webview2-e2e-controller.mjs`, which:
    with `e2e-webview-automation` (never a release build or the installed app);
 2. starts Vite on a random loopback port and the debug app inside Windows Job
    Objects, with app data and the WebView2 profile in the isolated fixture
-   `<repo>/target/piui-e2e/<run>` (the debug host accepts no other root);
+   `<repo>/target/piui-e2e/<run>` (the debug host accepts no other root; such
+   a host stays outside the single-instance guard and never registers a
+   sign-in start, so parallel runs and an open PiUI do not interfere);
 3. drives the WebView through the debug-only, exact-origin loopback automation
    seam, then restarts the app with `--safe-mode`;
 4. proves the Job is empty, removes the fixture and keeps logs, the report and

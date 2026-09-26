@@ -186,10 +186,18 @@ Settings -> Background offers, all off by default:
   only while this is on; closing the main window then hides it. The tray menu
   has Open PiUI, Pause all automations / Resume automations and Quit PiUI.
   Quit takes the ordinary exit path that stops every harness process tree.
-- **Start PiUI when I sign in.** The OS registration through
-  `tauri-plugin-autostart` (the Windows `Run` key), with the `--autostart`
-  argument; such a start stays hidden in the tray only when the tray is on.
-  The registration is the OS's record; only "keep in tray" is stored (in the
+- **Start PiUI when I sign in.** On Windows PiUI writes one value named
+  `PiUI` in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` itself
+  (`autostart.rs`): the executable path in double quotes, then `--autostart`,
+  for example `"C:\Users\John Smith\AppData\Local\PiUI\piui-desktop.exe"
+  --autostart`. An unquoted path with spaces would let Windows try
+  `C:\Users\John.exe` first. Turning it on also marks the entry enabled in
+  Task Manager's `StartupApproved\Run` record when that key exists; turning
+  it off removes the value. At startup an unquoted value an earlier build
+  wrote for the same executable is rewritten quoted; another installation's
+  value is left alone. Linux and macOS use `tauri-plugin-autostart`. A start
+  at sign-in stays hidden in the tray only when the tray is on. The
+  registration is the OS's record; only "keep in tray" is stored (in the
   PiUI preferences of the index database). E2E hosts never register.
 - **Pause all automations** (the switch above).
 
@@ -197,7 +205,13 @@ The WebView holds no tray, autostart-plugin or OS permission; it calls
 `background_settings_v1`, `background_update_v1` and `background_tray_labels_v1`
 (tray copy from the locale catalog). Safe mode shows the settings read-only
 and never creates a tray. Windows is the target; the Linux and macOS code paths
-compile but are not verified. The plugin writes the executable path unquoted
-into the `Run` value; a path with spaces then relies on Windows' search order
-for unquoted command lines. A second PiUI started while one waits in the tray
-is a separate instance (see the known gaps in `REWORK_PROGRESS.md`).
+compile but are not verified.
+
+One PiUI runs per user session (`tauri-plugin-single-instance`). A second
+launch (Start menu, double-click, a shortcut) hands its arguments to the
+running PiUI and exits before it opens any window, journal or runtime; the
+running PiUI then shows and focuses its window, restoring it from the tray.
+A second start at sign-in (`--autostart`) changes nothing. A development
+build shares the installed build's identifier and data folder, so it is the
+same instance too. E2E hosts in isolated data folders stay outside the guard,
+so parallel E2E runs keep working.

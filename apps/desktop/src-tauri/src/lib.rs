@@ -10,6 +10,7 @@ mod acp_agents;
 mod agent_api;
 mod api;
 mod automation_paths;
+mod autostart;
 mod background;
 mod catalog_watch;
 mod contributions;
@@ -692,11 +693,13 @@ pub fn run() -> Result<(), tauri::Error> {
         None
     };
     let context = tauri::generate_context!();
-    // E2E hosts never touch the person's real sign-in registration.
+    // E2E hosts never touch the person's real sign-in registration, and run
+    // side by side in isolated data folders outside the single-instance guard.
     #[cfg(debug_assertions)]
-    let autostart_allowed = e2e_directories.is_none();
+    let e2e_isolated = e2e_directories.is_some();
     #[cfg(not(debug_assertions))]
-    let autostart_allowed = true;
+    let e2e_isolated = false;
+    let autostart_allowed = !e2e_isolated;
     #[cfg(debug_assertions)]
     if e2e_directories.is_some()
         && context
@@ -713,13 +716,25 @@ pub fn run() -> Result<(), tauri::Error> {
         .into());
     }
 
-    let app = tauri::Builder::default()
-        // Host-driven only: the WebView has no autostart permission.
-        .plugin(
+    let mut builder = tauri::Builder::default();
+    // Registered first: a second launch hands its arguments to the running
+    // PiUI and exits before any window, journal or runtime opens.
+    if background::single_instance_guard(e2e_isolated) {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            background::on_second_launch(app, &args);
+        }));
+    }
+    // Host-driven only: the WebView has no autostart permission. Windows
+    // writes its own quoted Run value instead (autostart.rs).
+    #[cfg(not(windows))]
+    {
+        builder = builder.plugin(
             tauri_plugin_autostart::Builder::new()
                 .arg(background::AUTOSTART_ARG)
                 .build(),
-        )
+        );
+    }
+    let app = builder
         .on_window_event(background::on_window_event)
         .setup(move |app| {
             #[cfg(debug_assertions)]
