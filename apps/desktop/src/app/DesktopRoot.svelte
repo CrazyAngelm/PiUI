@@ -4,10 +4,17 @@
 
   // The classic entry is retained for explicit backwards-compatibility checks.
   // It does not bypass host permissions or enable any test-only runtime.
-  const classic = new URLSearchParams(window.location.search).get('view') === 'classic';
+  const view = new URLSearchParams(window.location.search).get('view');
+  const classic = view === 'classic';
+  // The primitive gallery is a development-only UI Lab page.
+  const gallery = view === 'gallery' && import.meta.env.DEV;
 </script>
 
-{#if classic}
+{#if gallery}
+  {#await import('../lab/Gallery.svelte') then page}
+    <page.default />
+  {/await}
+{:else if classic}
   {#await import('./App.svelte')}
     <p role="status">{$t("Loading classic view…")}</p>
   {:then legacy}

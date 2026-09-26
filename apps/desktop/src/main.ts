@@ -3,6 +3,7 @@ import App from './app/DesktopRoot.svelte';
 import './styles/reset.css';
 import './styles/tokens.css';
 import './styles/app.css';
+import './styles/motion.css';
 
 const target = document.getElementById('app');
 
