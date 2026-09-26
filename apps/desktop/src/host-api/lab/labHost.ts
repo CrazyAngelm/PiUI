@@ -15,6 +15,7 @@ import { EMPTY_NATIVE_HISTORY, piHistoryHandlers } from './piHistoryFake';
 import { LabRunScheduler } from './orchestration/runScheduler';
 import { scriptTestHandlers } from './orchestration/scriptTestFake';
 import { buildSeed, type SeedActivity } from './scenarios';
+import { sessionToolsHandlers } from './sessionToolsFake';
 import { withSignedOutClaude } from './scenarios/signedOutClaude';
 import { LabSessions } from './sessionRuntime';
 import { ambientSegment } from './turnScripts';
@@ -117,6 +118,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     ...extensionHandlers(scenario === 'empty' ? [] : demoExtensions()),
     ...backgroundHandlers(state),
     ...acpHandlers(runtime, bus),
+    ...sessionToolsHandlers(runtime, seed.nativeHistory ?? EMPTY_NATIVE_HISTORY),
   };
   startActivity(seed.activity, runtime, scheduler, options.ambient ?? true);
 
