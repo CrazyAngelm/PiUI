@@ -68,6 +68,17 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   a sandbox" warning), run panel (stdout, stderr tail, failure texts). Claude
   Code runs a model call with `--tools "" --strict-mcp-config`.
 - `main` fast-forwarded to `rework/piui-2` (local only, not pushed).
+- `feat/step-editing` (`ed824b2`…`9e72213`) — executor tails. A node's type
+  changes between agent, model call and script from a chip in the inspector
+  (id, name, position, result/route edges and result contract kept; removed
+  connections/settings and discarded data are confirmed first; one undo
+  step; checks re-run). Script code uses CodeMirror 6 (Node.js, Python,
+  PowerShell), loaded on demand in its own shadow root so it works under the
+  `style-src 'self'` CSP, with a plain-field fallback; the run panel shows the
+  code read-only. "Test script" (`orchestration_script_test_v1` /
+  `orchestration_cancel_script_test_v1`, contract `orchestration-script-test-v1`)
+  runs the draft once through the host script runner with an editable sample
+  stdin and shows what a run would record; it never starts an agent or model.
 
 ## In progress
 
@@ -75,7 +86,13 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
 
 ## Known issues found on the way
 
-- An existing node cannot change its executor type; add a new node instead.
+- A node's type changes only from the inspector (the canvas has no node
+  context menu); routers are not converted. A script test shows its output
+  when it ends, not while it runs.
+- Served with the desktop CSP, some library markup sets inline `style`
+  attributes that the policy refuses (xyflow MiniMap's `display: contents`
+  wrapper, bits-ui Command item wrappers, bits-ui's scroll-lock restore of
+  `body` style). Found while checking the script editor, which has none.
 - A Codex model call keeps its native tools (read-only sandbox only); the
   inspector says so. Pi and Claude Code run model calls without tools.
 - Codex asks for MCP tool approvals via `mcpServer/elicitation/request`; the

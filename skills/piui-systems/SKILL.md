@@ -71,7 +71,10 @@ prove the step's outcome.
   messages, observation, delegation, `callable` mode or router role. A system
   still needs at least one agent or model call. Scripts run only in trusted
   projects outside safe mode; importing a file never runs one — the user saves
-  and then runs the system.
+  and then runs the system. Before a run, the user can press **Test** in the
+  script's inspector: the host runs the draft once with an editable sample
+  stdin under the same rules and shows what a run would record, without
+  starting any agent or model call.
 
 Downstream agents and model calls receive a script's result where a native
 result would be (with `inputBindings` applied); downstream scripts receive
