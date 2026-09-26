@@ -152,6 +152,27 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   modes in chat details; UI Lab fakes (ready Gemini, missing and untrusted
   descriptors). No real ACP model turn was run.
 
+- `feat/session-tools` (plan P3.11 second half, classic parity gap 1,
+  ADR-036, [SESSION_TOOLS.md](SESSION_TOOLS.md)): a contained host git runner
+  (hooks and fsmonitor off, literal pathspecs, bounded output) and three
+  versioned commands. **Review panel** (`workspace_review_v1`, `Mod+Shift+G`):
+  staged/unstaged/untracked files of the chat's folder, the transcript diff
+  viewer with stage, unstage, revert and comment per hunk; every action
+  repeats the reviewed diff's SHA-256 and replays exactly those bytes through
+  `git apply` (a change in between is `STALE`); revert previews what is lost;
+  untracked files go to the system trash through the platform layer; line
+  comments go into the draft, never sent; read-only in safe mode.
+  **Worktree chats** (`workspace_placement_v1`): "New worktree…" in the new
+  chat composer with a confirmed branch, folder under app data and base
+  commit; trust through the project's common git dir; details with copy,
+  review and remove (dirty changes listed and acknowledged, branch kept);
+  sidebar marker. **Continue in another harness**: an editable draft from the
+  visible chat, the new chat links back. **Continue in PiUI** for terminal Pi
+  sessions (`workspace_adopt_v1`, gap 1 closed). Placement lives in
+  per-session sidecar files; the v11 registry format is unchanged. UI Lab
+  fakes (in-memory git, worktree chat, adoptable session), Rust tests on real
+  temporary repositories, Vitest and Playwright flows with failure paths.
+
 ## In progress
 
 - Nothing; next steps wait for the owner's review of the remaining-work plan.
@@ -209,6 +230,13 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   MCP support. Pickers learn an agent's models only after one of its sessions
   started in this host process. Mode changes the agent makes by itself appear
   on the next snapshot. A crash mid-turn is recorded as uncertain.
+
+- Session tools: reverting an untracked file is refused on macOS (no trash
+  support yet); repository clean/smudge filters still run during reads; hunks
+  cannot be split; a worktree left by a deleted chat has no management screen;
+  an older PiUI build ignores placement files (a worktree chat would start in
+  the project folder). The native Windows Recycle Bin path was probed once;
+  the WebView2 E2E does not cover the review panel yet.
 
 ## Next
 
