@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "Hello_World",
+  "name": "Hello",
+  "version": "1.0.0",
+  "publisher": "PiUI examples",
+  "engines": {
+    "piui": ">=0.1.0 <1.0.0"
+  },
+  "permissions": [
+    "commands"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "say-hello",
+        "title": "Say hello",
+        "insertText": "Hello from a plugin!"
+      }
+    ]
+  }
+}

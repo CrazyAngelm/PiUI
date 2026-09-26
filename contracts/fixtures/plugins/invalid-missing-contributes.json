@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "hello",
+  "name": "Hello",
+  "version": "1.0.0",
+  "publisher": "PiUI examples",
+  "engines": {
+    "piui": ">=0.1.0 <1.0.0"
+  },
+  "permissions": [
+    "commands"
+  ]
+}

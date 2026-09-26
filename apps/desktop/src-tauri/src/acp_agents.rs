@@ -94,6 +94,26 @@ impl Default for Document {
 pub(crate) enum AgentSource {
     BuiltIn,
     User,
+    /// An enabled plugin's `acpAgents` contribution (ADR-032). It is trusted
+    /// like a user descriptor, by its exact command line, and removed with
+    /// the plugin.
+    Plugin,
+}
+
+/// An ACP descriptor an enabled plugin contributes.
+#[derive(Clone, Debug)]
+pub(crate) struct PluginAgent {
+    pub plugin_id: String,
+    pub plugin_name: String,
+    pub descriptor: AcpAgentDescriptor,
+}
+
+/// The plugin an agent comes from (display only).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PluginOrigin {
+    pub id: String,
+    pub name: String,
 }
 
 /// Readiness of one harness, as Settings → Harnesses shows it.
@@ -167,6 +187,8 @@ struct State {
     sign_in: HashMap<AcpAgentId, Vec<String>>,
     /// Models the agent advertised in its last session in this host process.
     models: HashMap<AcpAgentId, Vec<WorkspaceModel>>,
+    /// Descriptors of enabled plugins; never persisted here.
+    plugin_agents: Vec<PluginAgent>,
 }
 
 /// One registered agent with its decisions and its latest discovery.
@@ -196,6 +218,9 @@ pub(crate) struct AcpAgentView {
     pub auth_methods: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checked_at: Option<String>,
+    /// The plugin that contributes this agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<PluginOrigin>,
 }
 
 #[derive(Debug)]
@@ -209,6 +234,8 @@ pub(crate) enum RegistryError {
     NotInstalled,
     NothingToConfirm,
     Limit,
+    /// A plugin's agent is removed by removing or disabling the plugin.
+    PluginOwned,
     Io,
 }
 
@@ -262,6 +289,7 @@ impl AcpAgents {
                 discovery: HashMap::new(),
                 sign_in: HashMap::new(),
                 models: HashMap::new(),
+                plugin_agents: Vec::new(),
             })),
             builtins: Arc::new(builtin_acp_descriptors()),
         })
@@ -289,7 +317,98 @@ impl AcpAgents {
                     .cloned()
                     .map(|descriptor| (descriptor, AgentSource::User)),
             )
+            .chain(
+                state
+                    .plugin_agents
+                    .iter()
+                    .filter(|agent| {
+                        !self
+                            .builtins
+                            .iter()
+                            .any(|builtin| builtin.id == agent.descriptor.id)
+                            && !state
+                                .document
+                                .agents
+                                .iter()
+                                .any(|user| user.id == agent.descriptor.id)
+                    })
+                    .map(|agent| (agent.descriptor.clone(), AgentSource::Plugin)),
+            )
             .collect()
+    }
+
+    /// Replaces the agents enabled plugins contribute (never persisted here).
+    /// An id another agent already uses is not added. Returns the plugin id,
+    /// agent id and whether it was added, for Settings → Plugins. Blocking:
+    /// new agents are resolved on the filesystem (nothing runs before trust).
+    pub(crate) fn set_plugin_agents(
+        &self,
+        agents: Vec<PluginAgent>,
+    ) -> Vec<(String, AcpAgentId, bool)> {
+        let (report, added) = {
+            let Ok(mut state) = self.lock() else {
+                return Vec::new();
+            };
+            let before = state
+                .plugin_agents
+                .iter()
+                .map(|agent| agent.descriptor.id)
+                .collect::<Vec<_>>();
+            let mut seen = Vec::new();
+            let accepted = agents
+                .into_iter()
+                .filter(|agent| {
+                    let id = agent.descriptor.id;
+                    let fresh = !seen.contains(&id);
+                    seen.push(id);
+                    fresh
+                })
+                .collect::<Vec<_>>();
+            let report = accepted
+                .iter()
+                .map(|agent| {
+                    let id = agent.descriptor.id;
+                    let taken = self.builtins.iter().any(|builtin| builtin.id == id)
+                        || state.document.agents.iter().any(|user| user.id == id);
+                    (agent.plugin_id.clone(), id, !taken)
+                })
+                .collect::<Vec<_>>();
+            let now = accepted
+                .iter()
+                .map(|agent| agent.descriptor.id)
+                .collect::<Vec<_>>();
+            state.plugin_agents = accepted;
+            for id in before.iter().filter(|id| !now.contains(id)) {
+                let owned_elsewhere = state.document.agents.iter().any(|user| user.id == *id)
+                    || self.builtins.iter().any(|builtin| builtin.id == *id);
+                if !owned_elsewhere {
+                    state.discovery.remove(id);
+                    state.sign_in.remove(id);
+                }
+            }
+            let added = report
+                .iter()
+                .filter(|(_, id, registered)| *registered && !before.contains(id))
+                .map(|(_, id, _)| *id)
+                .collect::<Vec<_>>();
+            (report, added)
+        };
+        for id in added {
+            self.check(Some(id), false);
+        }
+        report
+    }
+
+    /// The plugin that contributes `id`, when a plugin does.
+    fn plugin_origin(state: &State, id: AcpAgentId) -> Option<PluginOrigin> {
+        state
+            .plugin_agents
+            .iter()
+            .find(|agent| agent.descriptor.id == id)
+            .map(|agent| PluginOrigin {
+                id: agent.plugin_id.clone(),
+                name: agent.plugin_name.clone(),
+            })
     }
 
     fn find(&self, state: &State, id: AcpAgentId) -> Option<(AcpAgentDescriptor, AgentSource)> {
@@ -360,7 +479,15 @@ impl AcpAgents {
         };
         self.descriptors(&state)
             .into_iter()
-            .map(|(descriptor, source)| view(&state, descriptor, source))
+            .map(|(descriptor, source)| {
+                let plugin = (source == AgentSource::Plugin)
+                    .then(|| Self::plugin_origin(&state, descriptor.id))
+                    .flatten();
+                AcpAgentView {
+                    plugin,
+                    ..view(&state, descriptor, source)
+                }
+            })
             .collect()
     }
 
@@ -504,6 +631,17 @@ impl AcpAgents {
     ) -> Result<(), RegistryError> {
         if self.builtins.iter().any(|builtin| builtin.id == id) {
             return Err(RegistryError::BuiltIn);
+        }
+        {
+            let state = self.lock()?;
+            if !state.document.agents.iter().any(|agent| agent.id == id)
+                && state
+                    .plugin_agents
+                    .iter()
+                    .any(|agent| agent.descriptor.id == id)
+            {
+                return Err(RegistryError::PluginOwned);
+            }
         }
         self.transact(expected_revision, |_, document| {
             let before = document.agents.len();
@@ -876,6 +1014,7 @@ fn view(state: &State, descriptor: AcpAgentDescriptor, source: AgentSource) -> A
         command_line,
         trusted,
         auth_methods,
+        plugin: None,
     }
 }
 

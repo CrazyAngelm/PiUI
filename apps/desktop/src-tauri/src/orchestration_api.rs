@@ -18,6 +18,7 @@ use crate::orchestration_store::{
 use crate::orchestration_triggers::{EVENT_COOLDOWN_SECONDS, EventCause, EventFiring};
 use crate::state::HostState;
 use chrono::{DateTime, Utc};
+use piui_orchestration::HostStepLease;
 use piui_orchestration::{
     AgentProfile, AgentRequestKind, AuthenticatedSender, CompletionOutcome, ControlledSpawnLease,
     Coordinator, CoordinatorError, FailureRecord, Harness, LaunchCommandReference, LaunchRequest,
@@ -108,7 +109,7 @@ fn scheduler_error(
     // contract keeps its established error codes.
     let code = match error.code {
         "llm-read-only-unsupported" => "unsupported-policy",
-        code if code.starts_with("script-") => "runtime-unavailable",
+        code if code.starts_with("script-") || code.starts_with("plugin-") => "runtime-unavailable",
         crate::orchestration_scheduler::HARNESS_SIGN_IN_REQUIRED => "runtime-unavailable",
         code => code,
     };
@@ -295,6 +296,40 @@ impl OrchestrationApiState {
             store,
             script_work_root,
         })
+    }
+
+    /// The plugin node types a saved pipeline uses (orchestration v6.5), so a
+    /// start can be refused before any step runs.
+    pub(crate) fn pipeline_plugin_nodes(
+        &self,
+        workspace_id: &str,
+        pipeline_id: &str,
+    ) -> Result<Vec<(String, String)>, OrchestrationApiError> {
+        let store = self.snapshot()?;
+        Ok(store
+            .workspace(workspace_id)
+            .and_then(|workspace| {
+                workspace
+                    .pipelines
+                    .iter()
+                    .find(|pipeline| pipeline.value.id == pipeline_id)
+            })
+            .map(|pipeline| {
+                pipeline
+                    .value
+                    .steps
+                    .iter()
+                    .filter_map(|step| match &step.executor {
+                        Some(piui_orchestration::StepExecutor::Plugin {
+                            plugin_id,
+                            node_type,
+                            ..
+                        }) => Some((plugin_id.clone(), node_type.clone())),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     /// Where the host writes the source of a running script step.
@@ -593,24 +628,42 @@ impl OrchestrationApiState {
             .map_err(Into::into)
     }
 
-    /// Commits a leased script as running immediately before its process
-    /// starts. The execution id is an opaque host id, not a session.
+    /// Durably leases the next ready plugin node step (orchestration v6.5).
+    pub fn lease_next_plugin_step(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+        expected_run_revision: u64,
+        lease_id: String,
+    ) -> Result<Option<piui_orchestration::PluginStepLease>, OrchestrationApiError> {
+        self.store
+            .transact(|workspaces| {
+                let run = mutable_run(workspaces, workspace_id, run_id)?;
+                Coordinator::lease_next_plugin_step(run, expected_run_revision, lease_id)
+                    .map_err(|error| StoreError::from_api(error.into()))
+            })
+            .map_err(Into::into)
+    }
+
+    /// Commits a leased host-executed step (a script or a plugin node) as
+    /// running immediately before it starts. The execution id is an opaque
+    /// host id, not a session.
     pub fn commit_script_lease(
         &self,
         workspace_id: &str,
-        lease: &ScriptLease,
+        lease: &impl HostStepLease,
         execution_id: String,
     ) -> Result<Run, OrchestrationApiError> {
         self.store
             .transact(|workspaces| {
-                let run = mutable_run(workspaces, workspace_id, &lease.run_id)?;
+                let run = mutable_run(workspaces, workspace_id, lease.run_id())?;
                 let current_run_revision = run.revision();
                 Coordinator::dispatch_leased_script(
                     run,
                     current_run_revision,
-                    &lease.step_id,
-                    lease.task_revision,
-                    &lease.lease_id,
+                    lease.step_id(),
+                    lease.task_revision(),
+                    lease.lease_id(),
                     NativeExecutionReference { id: execution_id },
                 )
                 .map_err(|error| match error {
@@ -628,32 +681,32 @@ impl OrchestrationApiState {
     pub fn reject_leased_script(
         &self,
         workspace_id: &str,
-        lease: &ScriptLease,
+        lease: &impl HostStepLease,
         failure_code: &str,
     ) -> Result<Run, OrchestrationApiError> {
         self.store
             .transact(|workspaces| {
-                let run = mutable_run(workspaces, workspace_id, &lease.run_id)?;
+                let run = mutable_run(workspaces, workspace_id, lease.run_id())?;
                 let revision = run.revision();
                 Coordinator::release_task_lease(
                     run,
                     revision,
-                    &lease.step_id,
-                    lease.task_revision,
-                    &lease.lease_id,
+                    lease.step_id(),
+                    lease.task_revision(),
+                    lease.lease_id(),
                 )
                 .map_err(|_| StoreError::Conflict)?;
                 let revision = run.revision();
                 let task_revision = run
                     .tasks()
                     .iter()
-                    .find(|task| task.step_id() == lease.step_id)
+                    .find(|task| task.step_id() == lease.step_id())
                     .map(TaskRecord::revision)
                     .ok_or(StoreError::NotFound)?;
                 Coordinator::reject_ready_task(
                     run,
                     revision,
-                    &lease.step_id,
+                    lease.step_id(),
                     task_revision,
                     FailureRecord::new(failure_code),
                 )
@@ -709,18 +762,18 @@ impl OrchestrationApiState {
     pub fn release_script_lease(
         &self,
         workspace_id: &str,
-        lease: &ScriptLease,
+        lease: &impl HostStepLease,
     ) -> Result<Run, OrchestrationApiError> {
         self.store
             .transact(|workspaces| {
-                let run = mutable_run(workspaces, workspace_id, &lease.run_id)?;
+                let run = mutable_run(workspaces, workspace_id, lease.run_id())?;
                 let revision = run.revision();
                 Coordinator::release_task_lease(
                     run,
                     revision,
-                    &lease.step_id,
-                    lease.task_revision,
-                    &lease.lease_id,
+                    lease.step_id(),
+                    lease.task_revision(),
+                    lease.lease_id(),
                 )
                 .map_err(|_| StoreError::Conflict)?;
                 Ok(run.clone())
@@ -2348,13 +2401,13 @@ pub(crate) fn orchestration_run_usage(
         .ok_or_else(OrchestrationApiError::not_found)?;
     let mut usage = std::collections::BTreeMap::new();
     for task in run.tasks().iter().chain(run.attempts()) {
-        // A script execution is host work with no session or model usage.
+        // Host work (a script or a plugin node) has no session or model usage.
         let script = run
             .definition()
             .pipeline
             .steps
             .iter()
-            .any(|step| step.id == task.step_id() && step.is_script());
+            .any(|step| step.id == task.step_id() && step.is_host_executed());
         if script {
             continue;
         }
@@ -2631,6 +2684,17 @@ pub async fn orchestration_start_run_v6(
     let (request, trigger) = request.split();
     let operation = host_state.live_runtime_operation_gate.lock().await;
     validate_live_workspace_scope(&host_state, &request.workspace_id)?;
+    // A plugin node whose plugin is missing, disabled, unverified or no
+    // longer declares it refuses the start before any step runs (v6.5).
+    if let Some(plugins) = app.try_state::<crate::plugins::PluginsState>() {
+        let nodes = state.pipeline_plugin_nodes(&request.workspace_id, &request.pipeline_id)?;
+        if nodes
+            .iter()
+            .any(|(plugin_id, node_type)| plugins.node_spec(plugin_id, node_type).is_none())
+        {
+            return Err(OrchestrationApiError::runtime_unavailable());
+        }
+    }
     let workspace_id = request.workspace_id.clone();
     let run_id = request.run_id.clone();
     let created = state.create_run_with_trigger(request, trigger)?;

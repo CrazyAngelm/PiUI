@@ -83,6 +83,7 @@ export function graphFromDefinitions({ command, team, pipeline, profiles }: Grap
     const kind = step.router ? 'router' : 'agent';
     // Program routers and scripts have no team member, only a placeholder profile.
     const script = step.executor?.type === 'script';
+    const plugin = step.executor?.type === 'plugin';
     const noMember = nodeHasNoMember({ kind, router: step.router, executor: step.executor });
     const member = team.members.find((item) => item.id === step.assignedMemberId);
     const profile = member ? profiles.get(member.profileId) : undefined;
@@ -94,7 +95,10 @@ export function graphFromDefinitions({ command, team, pipeline, profiles }: Grap
       id: step.id,
       profile:
         profile ??
-        placeholderProfile(step.name || (script ? `Script ${index + 1}` : `Router ${index + 1}`), script ? 'script' : 'router'),
+        placeholderProfile(
+          step.name || (script ? `Script ${index + 1}` : plugin ? `Plugin node ${index + 1}` : `Router ${index + 1}`),
+          script ? 'script' : plugin ? 'plugin' : 'router',
+        ),
       router: step.router,
       task: step.instructions,
       inputBindings: step.inputBindings ? [...step.inputBindings] : undefined,

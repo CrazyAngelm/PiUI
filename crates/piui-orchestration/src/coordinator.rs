@@ -277,8 +277,9 @@ impl Coordinator {
                 reason: "task has no pipeline step",
             });
         };
-        // Scripts are leased by `lease_next_script`; they have no profile.
-        if step.is_script() {
+        // Scripts and plugin nodes are leased by `lease_next_script` and
+        // `lease_next_plugin_step`; they have no profile.
+        if step.is_host_executed() {
             return Err(CoordinatorError::ExecutorMismatch { step_id });
         }
         let Some(member) = run
@@ -650,7 +651,7 @@ impl Coordinator {
                 reason: "task has no pipeline step",
             });
         };
-        if step.is_script() {
+        if step.is_host_executed() {
             return Err(CoordinatorError::ExecutorMismatch {
                 step_id: step_id.to_owned(),
             });
@@ -752,7 +753,7 @@ impl Coordinator {
                 reason: "task has no pipeline step",
             });
         };
-        if step.is_script() {
+        if step.is_host_executed() {
             return Err(CoordinatorError::ExecutorMismatch { step_id });
         }
         let Some(member) = run
@@ -819,7 +820,7 @@ impl Coordinator {
             .pipeline
             .steps
             .iter()
-            .any(|step| step.id == step_id && step.is_script())
+            .any(|step| step.id == step_id && step.is_host_executed())
         {
             return Err(CoordinatorError::ExecutorMismatch {
                 step_id: step_id.to_owned(),
@@ -1014,14 +1015,14 @@ impl Coordinator {
             result_reference: Some(reference),
         } = &resolution
         {
-            // A script has no native history; its result exists only when
-            // the host observed it.
+            // Host-executed work (scripts, plugin nodes) has no native
+            // history; its result exists only when the host observed it.
             if run
                 .definition
                 .pipeline
                 .steps
                 .iter()
-                .any(|step| step.id == step_id && step.is_script())
+                .any(|step| step.id == step_id && step.is_host_executed())
             {
                 return Err(CoordinatorError::ExecutorMismatch {
                     step_id: step_id.to_owned(),
@@ -1555,7 +1556,7 @@ fn validate_run_data(run: &Run) -> Result<(), CoordinatorError> {
                 .pipeline
                 .steps
                 .iter()
-                .any(|step| step.id == task.step_id && step.is_script())
+                .any(|step| step.id == task.step_id && step.is_host_executed())
         {
             return Err(CoordinatorError::InvalidRunData {
                 reason: "only host-executed tasks record output",

@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "id": "example.midnight-theme",
+  "name": "Midnight and Paper themes",
+  "version": "1.0.0",
+  "publisher": "PiUI examples",
+  "description": "Two color themes built only from PiUI's documented color tokens. No code, no permissions.",
+  "engines": { "piui": ">=0.1.0 <1.0.0" },
+  "permissions": [],
+  "contributes": {
+    "themes": [
+      {
+        "id": "midnight",
+        "label": "Midnight",
+        "appearance": "dark",
+        "tokens": {
+          "bg": "#0f1420",
+          "bg-raised": "#141b29",
+          "bg-sunken": "#0b0f18",
+          "surface-1": "#1b2436",
+          "surface-2": "#232e44",
+          "surface-3": "#2c3952",
+          "hover": "rgba(220, 230, 255, 0.05)",
+          "pressed": "rgba(220, 230, 255, 0.08)",
+          "selected": "#1e2c4a",
+          "selected-strong": "#26385e",
+          "text": "#e6ecf5",
+          "text-muted": "#aab6c8",
+          "text-faint": "#9eabbf",
+          "text-disabled": "#5e6a80",
+          "border": "#2e3a52",
+          "border-subtle": "#222c40",
+          "border-strong": "#7f8ca6",
+          "accent": "#8fb4ff",
+          "accent-ink": "#0a1224",
+          "accent-soft": "#1c2a47",
+          "action": "#3d63b8",
+          "action-hover": "#4a72c9",
+          "action-pressed": "#3457a3",
+          "action-ink": "#ffffff",
+          "focus": "#8fb4ff",
+          "user-surface": "#18202f",
+          "user-border": "#2a3650",
+          "code-surface": "#0b0f18"
+        }
+      },
+      {
+        "id": "paper",
+        "label": "Paper",
+        "appearance": "light",
+        "tokens": {
+          "bg": "#f7f5f0",
+          "bg-raised": "#fdfcf9",
+          "bg-sunken": "#efece5",
+          "surface-1": "#f0ede6",
+          "surface-2": "#e6e2d9",
+          "surface-3": "#d9d4c8",
+          "selected": "#efe3d2",
+          "selected-strong": "#e6d3ba",
+          "text": "#22201c",
+          "text-muted": "#57524a",
+          "text-faint": "#5c574f",
+          "text-disabled": "#9c968c",
+          "border": "#cfc9bd",
+          "border-subtle": "#e2ddd3",
+          "border-strong": "#7a7468",
+          "accent": "#8a4b12",
+          "accent-ink": "#fdfcf9",
+          "accent-soft": "#f1e4d3",
+          "action": "#8a4b12",
+          "action-hover": "#7a4210",
+          "action-pressed": "#6a390e",
+          "action-ink": "#ffffff",
+          "focus": "#8a4b12"
+        }
+      }
+    ]
+  }
+}

@@ -14,6 +14,7 @@ import { LabIdSource } from './labRandom';
 import { LAB_SCENARIOS, wire, type LabScenarioName, type LabState } from './labState';
 import { orchestrationHandlers } from './orchestration/orchestrationFake';
 import { EMPTY_NATIVE_HISTORY, piHistoryHandlers } from './piHistoryFake';
+import { pluginHandlers } from './pluginsFake';
 import { LabRunScheduler } from './orchestration/runScheduler';
 import { scriptTestHandlers } from './orchestration/scriptTestFake';
 import { runDebuggingHandlers } from './orchestration/runDebuggingFake';
@@ -131,6 +132,8 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
       clock,
     ),
     ...sessionToolsHandlers(runtime, seed.nativeHistory ?? EMPTY_NATIVE_HISTORY),
+    // After the ACP registry: plugin ACP agents join it.
+    ...pluginHandlers(runtime, bus),
   };
   startActivity(seed.activity, runtime, scheduler, options.ambient ?? true);
 

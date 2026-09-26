@@ -1,0 +1,8 @@
+{
+  "description": "The Content-Security-Policy the plugin protocol sends with a panel document, checked by crates/piui-plugins (csp.rs) and apps/desktop/src/host-api/pluginFrame.ts.",
+  "origin": "http://piui-plugin.localhost",
+  "id": "example.hello-command",
+  "uiEntry": "ui/index.html",
+  "base": "example.hello-command/ui/",
+  "policy": "default-src 'none'; script-src http://piui-plugin.localhost/example.hello-command/ui/; style-src http://piui-plugin.localhost/example.hello-command/ui/; img-src http://piui-plugin.localhost/example.hello-command/ui/ data:; font-src http://piui-plugin.localhost/example.hello-command/ui/; connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; sandbox allow-scripts"
+}

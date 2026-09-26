@@ -16,6 +16,7 @@
   import { usageTotal } from '../../features/orchestration/runUsage';
   import { Badge, Button, Checkbox, Dialog, EmptyState, IconButton, Spinner, Tabs } from '../../lib/ui';
   import Transcript from '../chat/transcript/Transcript.svelte';
+  import Blocks from '@lucide/svelte/icons/blocks';
   import HarnessMark from '../shell/HarnessMark.svelte';
   import { harnessMeta } from '../harnessMeta';
   import { failureText } from './runGraph';
@@ -64,8 +65,10 @@
   const shown = $derived(attempt >= 0 && record ? stepState(view.step, record) : view.state);
   // A script runs on the host: its execution id is not a native session.
   const script = $derived(view.step.executor?.type === 'script' ? view.step.executor : undefined);
+  // A plugin node (v6.5) is host work too: its backend answers, no native session.
+  const pluginNode = $derived(view.step.executor?.type === 'plugin' ? view.step.executor : undefined);
   const llm = $derived(view.step.executor?.type === 'llm');
-  const sessionId = $derived(script ? undefined : record?.execution?.id);
+  const sessionId = $derived(script || pluginNode ? undefined : record?.execution?.id);
   const snapshot = $derived(sessionId ? snapshotFor(sessionId) : undefined);
   const entries = $derived(resultEntries(view.step, record?.resultData));
   const answer = $derived.by(() => {
@@ -127,11 +130,13 @@
 <aside class="panel" aria-labelledby="task-title">
   <header class="head">
     <div class="head__main">
-      {#if script}<span class="mark" aria-hidden="true"><Code size={14} /></span>{:else if profile}<HarnessMark kind={profile.harness} size={22} />{/if}
+      {#if script}<span class="mark" aria-hidden="true"><Code size={14} /></span>{:else if pluginNode}<span class="mark" aria-hidden="true"><Blocks size={14} /></span>{:else if profile}<HarnessMark kind={profile.harness} size={22} />{/if}
       <div class="head__text">
         <h2 id="task-title" title={view.name}>{view.name}</h2>
         {#if script}
           <span class="muted">{$t('Script')} · {RUNTIME_LABEL[script.runtime]} · {$t('{0} s limit', [script.timeoutSeconds])}</span>
+        {:else if pluginNode}
+          <span class="muted">{$t('Plugin node')} · {pluginNode.pluginId} · {pluginNode.nodeType}</span>
         {:else if profile}
           <span class="muted">{[llm ? $t('Model call') : profile.name, harnessMeta(profile.harness).label, profile.model, profile.reasoning].filter(Boolean).join(' · ')}</span>
         {:else if view.step.router}
@@ -197,7 +202,7 @@
           {$t('Retry step')}
         </Button>
       {/if}
-      {#if view.state === 'uncertain' && (view.sessionId || script)}
+      {#if view.state === 'uncertain' && (view.sessionId || script || pluginNode)}
         <Button size="sm" disabled={!!busyKey || runs.safeMode} onclick={() => (reconcileOpen = true)}>
           {#snippet leading()}<ClipboardCheck />{/snippet}
           {$t('Record outcome…')}
@@ -388,7 +393,9 @@
 <Dialog
   bind:open={reconcileOpen}
   title={$t('Record what happened')}
-  description={script
+  description={pluginNode
+    ? $t('PiUI could not confirm how the plugin node ended. Check what it changed, then record an operator assertion. It reconciles the journal only.')
+    : script
     ? $t('PiUI could not confirm how the script ended. Check its effects in the project folder, then record an operator assertion. It reconciles the journal only.')
     : $t('After checking the linked native session, record an operator assertion. It reconciles the journal only.')}
   size="md"
@@ -407,7 +414,9 @@
   </div>
   <Checkbox
     bind:checked={acknowledged}
-    label={script
+    label={pluginNode
+      ? $t('I checked what the plugin node did and understand this is an operator assertion.')
+      : script
       ? $t('I checked what the script did and understand this is an operator assertion.')
       : $t('I checked the linked native session and understand this is an operator assertion.')}
   />

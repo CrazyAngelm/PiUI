@@ -286,3 +286,57 @@ recoverable }`; clients show fixed copy per code. The golden fixture
 (`sessionTools.test.ts`). Placement is stored host-side in per-session sidecar
 files, so an older build ignores it (a worktree chat would then open in the
 project folder; see the rollback note in `docs/SESSION_TOOLS.md`).
+
+# Plugins v1 (ADR-032)
+
+`piui-plugin-v1.schema.json` (with the generated standalone validator
+`piui-plugin-v1-validator.mjs`) and `piui-plugin-v1.ts` define the plugin
+package manifest `piui-plugin.json`: identity, `engines.piui`, permissions,
+an optional Node backend and panel entry, and the contributions commands,
+settings, panels, themes, templates, node types and ACP agents. Unknown
+fields and permissions are rejected, never dropped. `crates/piui-plugins` is
+the authority; `apps/desktop/src/host-api/pluginManifest.ts` and
+`pnpm plugin:check` mirror its semantic rules, and all share
+`fixtures/plugins/` (`valid-*` pass, `invalid-*` fail the schema,
+`invalid-semantic-*` only the semantic rules, with the host's first problem
+code in `expected.json`).
+
+`plugins-v1.ts` is the host protocol of Settings → Plugins and every surface
+plugins contribute to: `plugins_v1` (list, pick — the host opens the native
+picker, the WebView never sends a path —, install the reviewed staging id and
+code hash, discard, enable/disable, remove, reload, restart a backend,
+settings, the active theme; every change names `expectedRevision`),
+`plugin_command_v1`, `plugin_template_v1` and the event `piui://plugins-v1`.
+Messages are fixed English locale keys; a plugin's own error text only
+arrives as the bounded `detail` of `BACKEND_FAILED`. `fixtures/plugins-v1.json`
+is written by the host's tests and mirrored by `fixtures/plugins-v1.ts`.
+
+`plugin-backend-v1.ts` is JSON-RPC 2.0 between the host and a plugin's
+contained Node backend (LF-only framing, 1 MiB frames; `initialize`,
+`command/execute`, `node/run`, `settings/changed`, `shutdown`). A backend
+never sends requests in v1.
+
+`plugin-panel-v1.ts` is the `postMessage` bridge of a sandboxed panel frame
+(`ready`/`init` with a per-mount channel, `request`/`response`, `event`), each
+method gated by one permission. `fixtures/plugin-panel-csp.json` pins the
+panel document policy for `crates/piui-plugins/src/csp.rs`, the UI Lab and
+the E2E stand-ins.
+
+Additive changes elsewhere: `harness-registry-v1.ts` gains
+`source: 'plugin'` agents with a `plugin` origin, the harness source
+`acp-plugin` and the error `PLUGIN_OWNED`; older consumers only ever saw
+built-in and user agents, and a plugin agent still needs command-line trust.
+
+# Plugin node steps (orchestration v6.5)
+
+`StepExecutor` gains `{type:"plugin", pluginId, nodeType, config}` (a flat
+object of at most 30 string/number/boolean values, 64 KiB encoded) in
+orchestration v6 and portable system files v4. Like a script it is host work
+outside the team and takes no input bindings; the host admits it only while
+the plugin is active with `node.run` and the configuration passes the node
+type's declared fields. `FailureRecord.code` gains `plugin-unavailable`,
+`plugin-config-invalid`, `plugin-input-unavailable`, `plugin-start-failed`,
+`plugin-node-failed` and `plugin-node-timeout`. Stored v6.0-v6.4 definitions
+and runs decode unchanged; older builds reject a document with a plugin
+executor instead of running it as an agent. See
+`crates/piui-orchestration/src/plugin_steps.rs`.

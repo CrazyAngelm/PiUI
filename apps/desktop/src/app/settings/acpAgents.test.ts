@@ -49,6 +49,9 @@ describe('Settings → Harnesses presentation', () => {
   it('offers only the decisions the host accepts', () => {
     expect([canTrust(user), canRemove(user), canConfirmVersion(user), canChooseSecrets(user)]).toEqual([true, true, false, false]);
     expect(canTrust({ ...user, commandLine: undefined })).toBe(false);
+    // A plugin's agent is trusted by its command line too, but leaves with its plugin (ADR-032).
+    const fromPlugin = { ...user, source: 'plugin' as const, plugin: { id: 'example.agent', name: 'Example' } };
+    expect([canTrust(fromPlugin), canRemove(fromPlugin)]).toEqual([true, false]);
     // Shipped agents are trusted by PiUI and cannot be removed.
     expect([canTrust(gemini), canRemove(gemini), canChooseSecrets(gemini)]).toEqual([false, false, true]);
     expect(canConfirmVersion({ ...gemini, state: 'unverified-version', version: '0.39.1' })).toBe(true);

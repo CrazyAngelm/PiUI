@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "example.opencode-acp",
+  "name": "OpenCode agent",
+  "version": "1.0.0",
+  "publisher": "PiUI examples",
+  "description": "Adds OpenCode as an ACP agent. It appears in Settings → Harnesses and runs only after you trust its exact command line there.",
+  "engines": { "piui": ">=0.1.0 <1.0.0" },
+  "permissions": ["acp.agents"],
+  "contributes": {
+    "acpAgents": [
+      {
+        "schemaVersion": 1,
+        "id": "opencode",
+        "displayName": "OpenCode",
+        "command": { "program": "opencode", "args": ["acp"] },
+        "version": { "args": ["--version"] },
+        "environment": ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"],
+        "authHint": "Run `opencode auth login` in a terminal to sign in with OpenCode's own flow, then check the agent again.",
+        "docsUrl": "https://github.com/sst/opencode"
+      }
+    ]
+  }
+}

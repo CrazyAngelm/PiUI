@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "id": "example.pipeline-pack",
+  "name": "Pipeline pack",
+  "version": "1.0.0",
+  "publisher": "PiUI examples",
+  "description": "Two pipeline templates and a JSON transform node that reshapes results without a model call. Pure JavaScript: no files, no network.",
+  "engines": { "piui": ">=0.1.0 <1.0.0" },
+  "permissions": ["node.run"],
+  "backend": { "entry": "backend/main.mjs" },
+  "contributes": {
+    "templates": [
+      {
+        "id": "draft-and-critique",
+        "title": "Draft and critique",
+        "description": "One agent drafts, a second one critiques until the draft is approved.",
+        "file": "templates/draft-and-critique.piui.json"
+      },
+      {
+        "id": "collect-and-reshape",
+        "title": "Collect, reshape and review",
+        "description": "An agent collects findings, the JSON transform keeps what matters, a reviewer checks it.",
+        "file": "templates/collect-and-reshape.piui.json"
+      }
+    ],
+    "nodeTypes": [
+      {
+        "id": "json-transform",
+        "title": "JSON transform",
+        "description": "Merges the JSON results it receives, keeps some fields and renames them.",
+        "config": [
+          {
+            "key": "source",
+            "label": "Read from",
+            "type": "choice",
+            "options": [
+              { "value": "dependencies", "label": "Results of connected steps" },
+              { "value": "inputs", "label": "Run inputs" }
+            ],
+            "default": "dependencies"
+          },
+          { "key": "pick", "label": "Keep fields", "description": "Comma-separated field names; empty keeps every field.", "type": "text", "maxLength": 400 },
+          { "key": "rename", "label": "Rename fields", "description": "One old=new pair per line.", "type": "long-text", "maxLength": 2000 },
+          { "key": "wrap", "label": "Wrap in field", "description": "Put the result under this field name; empty returns it as is.", "type": "text", "maxLength": 64 }
+        ],
+        "timeoutSeconds": 10
+      }
+    ]
+  }
+}

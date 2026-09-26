@@ -5,7 +5,7 @@ import { executorConfigurationErrors, profileConfigurationErrors } from '../../h
 export interface PreflightIssue { nodeId: string; message: string }
 /** Catalog preflight is advisory freshness; the trusted host rechecks launch authority. Scripts have no native profile. */
 export async function preflightGraph(graph: AgentGraph, catalog: (harness: AgentProfile['harness']) => Promise<HarnessModelsResult>): Promise<PreflightIssue[]> {
-  const nativeNodes = graph.nodes.filter(node => (node.kind !== 'router' || node.router?.mode === 'agent') && node.executor?.type !== 'script');
+  const nativeNodes = graph.nodes.filter(node => (node.kind !== 'router' || node.router?.mode === 'agent') && node.executor?.type !== 'script' && node.executor?.type !== 'plugin');
   const catalogs = new Map<AgentProfile['harness'], HarnessModelsResult>();
   const failed = new Set<AgentProfile['harness']>();
   await Promise.all([...new Set(nativeNodes.map(node => node.profile.harness))].map(async harness => {

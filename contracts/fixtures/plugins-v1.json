@@ -1,0 +1,100 @@
+{
+  "checked": false,
+  "piuiVersion": "0.1.1",
+  "plugins": [
+    {
+      "active": true,
+      "codeHash": "f627e9bdef14e11cc0e1e82cb08a98f8199a2cd965a4373653a6c9b7bfca6167",
+      "contributes": {
+        "acpAgents": [],
+        "commands": [],
+        "nodeTypes": [],
+        "panels": [],
+        "settings": [],
+        "templates": [],
+        "themes": [
+          {
+            "appearance": "dark",
+            "id": "midnight",
+            "label": "Midnight",
+            "tokens": {
+              "accent": "#8fb4ff",
+              "accent-ink": "#0a1224",
+              "accent-soft": "#1c2a47",
+              "action": "#3d63b8",
+              "action-hover": "#4a72c9",
+              "action-ink": "#ffffff",
+              "action-pressed": "#3457a3",
+              "bg": "#0f1420",
+              "bg-raised": "#141b29",
+              "bg-sunken": "#0b0f18",
+              "border": "#2e3a52",
+              "border-strong": "#7f8ca6",
+              "border-subtle": "#222c40",
+              "code-surface": "#0b0f18",
+              "focus": "#8fb4ff",
+              "hover": "rgba(220, 230, 255, 0.05)",
+              "pressed": "rgba(220, 230, 255, 0.08)",
+              "selected": "#1e2c4a",
+              "selected-strong": "#26385e",
+              "surface-1": "#1b2436",
+              "surface-2": "#232e44",
+              "surface-3": "#2c3952",
+              "text": "#e6ecf5",
+              "text-disabled": "#5e6a80",
+              "text-faint": "#9eabbf",
+              "text-muted": "#aab6c8",
+              "user-border": "#2a3650",
+              "user-surface": "#18202f"
+            }
+          },
+          {
+            "appearance": "light",
+            "id": "paper",
+            "label": "Paper",
+            "tokens": {
+              "accent": "#8a4b12",
+              "accent-ink": "#fdfcf9",
+              "accent-soft": "#f1e4d3",
+              "action": "#8a4b12",
+              "action-hover": "#7a4210",
+              "action-ink": "#ffffff",
+              "action-pressed": "#6a390e",
+              "bg": "#f7f5f0",
+              "bg-raised": "#fdfcf9",
+              "bg-sunken": "#efece5",
+              "border": "#cfc9bd",
+              "border-strong": "#7a7468",
+              "border-subtle": "#e2ddd3",
+              "focus": "#8a4b12",
+              "selected": "#efe3d2",
+              "selected-strong": "#e6d3ba",
+              "surface-1": "#f0ede6",
+              "surface-2": "#e6e2d9",
+              "surface-3": "#d9d4c8",
+              "text": "#22201c",
+              "text-disabled": "#9c968c",
+              "text-faint": "#5c574f",
+              "text-muted": "#57524a"
+            }
+          }
+        ]
+      },
+      "description": "Two color themes built only from PiUI's documented color tokens. No code, no permissions.",
+      "enabled": true,
+      "id": "example.midnight-theme",
+      "installedAt": "2026-09-27T00:00:00Z",
+      "log": [],
+      "name": "Midnight and Paper themes",
+      "permissions": [],
+      "problems": [],
+      "publisher": "PiUI examples",
+      "settings": {},
+      "source": "installed",
+      "version": "1.0.0"
+    }
+  ],
+  "protocol": 1,
+  "revision": 1,
+  "safeMode": false
+}

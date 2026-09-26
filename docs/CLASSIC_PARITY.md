@@ -112,8 +112,11 @@ deleted.
 2. **Pi slash-command discovery** — done in the composer
    (`workspace_composer_inputs_v1` `catalog` over the bridge's
    `get_commands`, merged with PiUI's commands); the palette still lacks it.
-3. **Tier 1A contributions** (`list_piui_contributions`): decide between the
-   plugin registry and a thin port that inserts `/<command> ` for review.
+3. ~~**Tier 1A contributions**~~ — closed by plugins v1 (ADR-032): the new
+   shell reads `list_piui_contributions` lazily for Pi chats and projects its
+   commands into Ctrl+K and its composer actions above the message box
+   through the plugin command registry (`app/plugins/pluginRegistry.svelte.ts`);
+   choosing one prepares `/<command> ` for review and never sends it.
 
 Known limitation (shared with the classic view): the host redacts anything
 that looks like an absolute path in extension text, so prepared composer text
@@ -148,7 +151,8 @@ v8/v9 duplicates (`bootstrap`, `update_preferences`, `list_extensions`,
 `set_extension_enabled`, `add_project`, `pick_and_add_project`), cache-only
 lists (`list_sessions`, `list_personal_sessions`, `get_timeline`), `get_tree`
 and `get_personal_tree` (the new shell reads the tree from the timeline page),
-`probe_system_runtime`, and `list_piui_contributions` unless gap 3 keeps it.
+and `probe_system_runtime`. `list_piui_contributions` stays: the new shell
+uses it for Tier 1A (gap 3).
 
 ## UI Lab walkthrough
 

@@ -228,6 +228,11 @@ export const SCREENS: readonly Screen[] = [
       const nav = await lab.openSettings();
       await nav.getByRole('button', { name: 'Background' }).click();
       await expect(lab.page.getByRole('switch', { name: 'Pause all automations' })).toBeVisible();
+    name: 'settings-plugins',
+    async open(lab) {
+      const nav = await lab.openSettings();
+      await nav.getByRole('button', { name: 'Plugins' }).click();
+      await expect(lab.page.getByRole('heading', { level: 2, name: 'Plugins' })).toBeVisible();
       await settled(lab.page);
     },
   },
@@ -237,6 +242,12 @@ export const SCREENS: readonly Screen[] = [
       const nav = await lab.openSettings();
       await nav.getByRole('button', { name: 'Extensions' }).click();
       await expect(lab.page.getByRole('list', { name: 'Global Pi extensions' })).toBeVisible();
+    name: 'plugin-trust-review',
+    async open(lab) {
+      const nav = await lab.openSettings();
+      await nav.getByRole('button', { name: 'Plugins' }).click();
+      await lab.page.getByRole('button', { name: 'Install from .zip…' }).click();
+      await expect(lab.page.getByRole('dialog', { name: 'Install Word count?' })).toBeVisible();
       await settled(lab.page);
     },
   },

@@ -30,6 +30,7 @@ pub use orchestration_scheduler::run_native_prime_scheduler_two_step_dependency_
 mod orchestration_store;
 mod orchestration_triggers;
 mod placement_api;
+mod plugins;
 mod review_api;
 mod session_placement;
 #[cfg(test)]
@@ -745,6 +746,25 @@ pub fn run() -> Result<(), tauri::Error> {
                 .build(),
         );
     }
+    // Plugin panels load from their own origin into sandboxed frames
+    // (ADR-032): only an active plugin's UI folder is served.
+    builder = builder.register_asynchronous_uri_scheme_protocol(
+        piui_plugins::csp::PLUGIN_SCHEME,
+        |context, request, responder| {
+            let app = context.app_handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let response = match app.try_state::<plugins::PluginsState>() {
+                    Some(plugins) => plugins::handle_protocol_request(&plugins, &request),
+                    None => {
+                        let mut response = tauri::http::Response::new(Vec::new());
+                        *response.status_mut() = tauri::http::StatusCode::NOT_FOUND;
+                        response
+                    }
+                };
+                responder.respond(response);
+            });
+        },
+    );
     let app = builder
         .on_window_event(background::on_window_event)
         .setup(move |app| {
@@ -793,6 +813,16 @@ pub fn run() -> Result<(), tauri::Error> {
                 orchestration_scheduler::OrchestrationScheduler::default();
             app.manage(orchestration_scheduler.clone());
             app.manage(orchestration_script_test::ScriptTestState::default());
+            let plugin_host =
+                plugins::PluginsState::open(&app_data_dir, safe_mode, env!("CARGO_PKG_VERSION"))
+                    .map_err(|_| std::io::Error::other("Could not open the plugin registry"))?;
+            let plugin_events = app.handle().clone();
+            plugin_host
+                .supervisor()
+                .set_notify(std::sync::Arc::new(move || {
+                    plugins::emit_changed(&plugin_events);
+                }));
+            app.manage(plugin_host);
             let watcher = catalog_watch::start_catalog_watcher(
                 app.handle().clone(),
                 state.all_session_roots(),
@@ -804,6 +834,9 @@ pub fn run() -> Result<(), tauri::Error> {
             background::setup(app.handle(), safe_mode, autostart_allowed);
             app_update::install(app, &app_data_dir, safe_mode);
             workspace_api::composer_inputs::watch_file_drops(app.handle());
+            // Packages are verified off the first-paint path (read only, even
+            // in safe mode, so the list stays readable).
+            plugins::start_verification(app.handle().clone());
             if !safe_mode {
                 orchestration_scheduler.start_timed_schedule_worker(app.handle().clone());
                 trigger_engine.start(app.handle().clone());
@@ -832,6 +865,9 @@ pub fn run() -> Result<(), tauri::Error> {
             app_update::app_update_set_auto_check_v1,
             app_update::app_update_restart_v1,
             workspace_api::composer_inputs::workspace_composer_inputs_v1,
+            plugins::api::plugins_v1,
+            plugins::api::plugin_command_v1,
+            plugins::api::plugin_template_v1,
             api::bootstrap,
             api::bootstrap_v10,
             api::update_preferences,
@@ -932,6 +968,9 @@ pub fn run() -> Result<(), tauri::Error> {
                     .begin_shutdown();
                 if let Some(engine) = app.try_state::<orchestration_triggers::TriggerEngine>() {
                     engine.begin_shutdown();
+                }
+                if let Some(plugins) = app.try_state::<plugins::PluginsState>() {
+                    plugins.begin_shutdown();
                 }
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {

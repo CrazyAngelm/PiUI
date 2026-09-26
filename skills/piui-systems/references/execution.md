@@ -79,6 +79,19 @@ remain importable. Orchestration IPC v6 is separate from portable JSON.
   read-only mode fails with `llm-read-only-unsupported` before anything starts.
   A script source is at most 64 KiB and is frozen in the run snapshot; its
   execution id is not a session, so it has no transcript or usage.
+- `{"type": "plugin", pluginId, nodeType, config}` (orchestration v6.5) runs a
+  node type of an installed, enabled plugin with `node.run` in the plugin's
+  contained backend (ADR-032, `docs/PLUGINS.md`); not a sandbox. The host
+  admits it only in trusted projects outside safe mode and checks `config`
+  (flat, at most 30 string/number/boolean values, 64 KiB) against the node
+  type's declared fields before the lease. The backend receives the script
+  stdin document plus `config` and returns text or one JSON object, recorded
+  exactly like script stdout. Codes: `plugin-unavailable`,
+  `plugin-config-invalid`, `plugin-input-unavailable`, `plugin-start-failed`
+  (nothing ran), `plugin-node-failed` (detail: the plugin's message, at most
+  2 KiB), `plugin-node-timeout` (backend stopped). A backend that stops
+  mid-node leaves the step uncertain. Importing a file never installs or
+  trusts a plugin.
 
 Pause prevents new admissions while active native work continues. Cancel task
 interrupts that native execution and cancels dependent ready tasks; independent

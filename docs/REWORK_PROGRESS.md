@@ -240,6 +240,37 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   117,872 → 120,596 B gzip (the worktree chip, placement store and sidebar
   marker; the review panel, dialogs, clients and handoff are lazy).
 
+- Branch `feat/plugins` (plan phase 8 / P3 item 9, ADR-032 accepted,
+  [PLUGINS.md](PLUGINS.md)) — plugins v1:
+  - `af35f4c` — package format v1 (`piui-plugin.json` schema, host validator
+    in `crates/piui-plugins` with a TS mirror and shared fixtures, package
+    reader with limits, a `.zip` reader, code hash, themes with contrast
+    checks, templates checked as system files v4), `@piui/plugin-sdk`
+    (backend helper, panel client, types), `pnpm create-plugin`,
+    `pnpm plugin:check` and four examples.
+  - `b2ce510` — contained Node backend (Job Object / process group,
+    allowlisted environment, LF JSON-RPC with 1 MiB frames, timeouts).
+  - `c4ca7a6` — orchestration v6.5 `plugin` step executor with host leases,
+    failure codes and uncertainty like scripts; system files v4 accept it.
+  - `1eb2a8b` — host: registry generations with revision checks, native
+    pickers and staging, trust review, install/update/remove/reload,
+    start-up verification off first paint, safe mode read-only, supervisor
+    (lazy start, crash backoff and crash loop, stop on disable/quit),
+    `piui-plugin` protocol with per-plugin CSP, plugin nodes in the
+    scheduler, plugin ACP agents in the harness registry; app CSP
+    `frame-src` now names only the plugin origin.
+  - `9c56ee9`, `8d6dc54`, `bef7ddb` — Settings → Plugins with the trust review
+    and plugin themes; palette commands and composer actions (also the Pi
+    Tier 1A contributions: CLASSIC_PARITY gap 3 closed) that only prepare
+    text; sandboxed chat panels with a checked `postMessage` bridge and a
+    fallback; plugin nodes and templates in the pipeline editor and runs.
+  - `39b5e65`, `ff511c0`, `c99ea62` — UI Lab plugin host (examples plus a
+    crash-looping "Broken sample", plugin nodes in lab runs, panels served on
+    the plugin origin by the dev server), Russian copy, Playwright specs
+    (trust review, enable/disable, commands, sandboxed panel isolation,
+    plugin node, safe mode; a panel, the review and a theme under the
+    production CSP).
+
 ## In progress
 
 - Nothing; next steps wait for the owner's review of the remaining-work plan.
@@ -322,6 +353,26 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   an older PiUI build ignores placement files (a worktree chat would start in
   the project folder). The native Windows Recycle Bin path was probed once;
   the WebView2 E2E does not cover the review panel yet.
+
+- Plugins (ADR-032): panels, the trust review and themes were verified in the
+  browser UI Lab and under the production CSP, where a Playwright route and
+  the Vite dev server stand in for the `piui-plugin` protocol; the native
+  protocol, picker and supervisor are covered by Rust tests with real Node
+  backends but no plugin has been run in the packaged WebView2 app yet.
+  `network`, `project.read` and `project.write` are declarations, not
+  enforcement. Tauri counts the plugin protocol as a local origin, so a
+  main-frame navigation to it would get the IPC script; nothing navigates
+  there today (sandboxed frames, links rendered as text), and a host-side
+  main-frame navigation guard is a follow-up once it is verified on every
+  platform. Not in v1: MCP tool, renderer, status-item, keybinding and
+  sidebar contributions, other harness adapters, project-local plugins,
+  backend-to-host requests, signed packages.
+- UI Lab E2E drift already present at `5375419` (unrelated to plugins): the
+  two automations dialog specs (empty default name), the Inbox approval spec
+  (the count stays at "2 waiting"), the script-node editor spec and prod-csp
+  "main screens" (the CodeMirror field is not an input for `toHaveValue`),
+  and the axe audits of `inbox` (low-contrast "optional" field labels) and
+  `pipeline-script` (CodeMirror scroller not focusable) in both themes.
 
 ## Next
 

@@ -141,6 +141,8 @@ const step = object({
     agent: {},
     llm: {},
     script: { runtime: enumOf(['node', 'python', 'powershell']), source: string, timeoutSeconds: u32 },
+    // v6.5 plugin nodes; the configuration is a flat JSON object.
+    plugin: { pluginId: string, nodeType: string, config: json },
   })),
   // v6.4 pinned data; the host checks its bounds and where it may be used.
   pinnedOutput: option(object({

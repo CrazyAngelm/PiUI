@@ -17,6 +17,7 @@ import {
 const REGISTRY_CODES: ReadonlySet<string> = new Set<HarnessRegistryErrorCode>([
   'SAFE_MODE', 'CONFLICT', 'INVALID_DESCRIPTOR', 'DUPLICATE', 'NOT_FOUND', 'BUILT_IN',
   'TRUST_CHANGED', 'NOT_INSTALLED', 'NOTHING_TO_CONFIRM', 'LIMIT', 'IO_ERROR',
+  'PLUGIN_OWNED',
 ]);
 
 const UNAVAILABLE_MESSAGE = 'PiUI could not read the harness list.';

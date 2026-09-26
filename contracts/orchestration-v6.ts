@@ -18,6 +18,8 @@
  * `PipelineStep.pinnedOutput`, `OrchestrationRunV6.usePinnedData` and
  * `TaskRecord.pinned` (see `PinnedOutput`). Stored v6.0-v6.4 data decodes
  * unchanged and is re-encoded without the new fields.
+ * v6.5 (additive) adds the `plugin` step executor: a node type contributed by
+ * an installed, enabled plugin (ADR-032) that the plugin's backend runs.
  */
 
 import type { HarnessId } from './harness-identity-v2';
@@ -185,11 +187,23 @@ export type ScriptRuntime = 'node' | 'python' | 'powershell';
  *   stdout that is one JSON object becomes `resultData`, other stdout becomes
  *   `TaskRecord.output`. `source` is at most 64 KiB and is frozen in the run.
  *   A script step is host work, not a team member, and has no profile.
+ * - `plugin` (v6.5, additive): a node type of an installed plugin. The host
+ *   admits it only in a trusted, live project outside safe mode while the
+ *   plugin is enabled, verified and still declares the node type with the
+ *   `node.run` permission; otherwise the step fails before anything runs
+ *   (`plugin-unavailable`, `plugin-config-invalid`). The plugin's contained
+ *   backend receives the script stdin document plus `config` (`node/run`)
+ *   and returns text or one JSON object, checked like a script's stdout. Like
+ *   a script it is host work, not a team member, has no profile or input
+ *   bindings, and becomes uncertain (never replayed) if the backend stops
+ *   mid-run. `config` is a flat object of strings, numbers and booleans, at
+ *   most 64 KiB encoded; the node type's timeout applies (1-3600 s).
  */
 export type StepExecutor =
   | { readonly type: 'agent' }
   | { readonly type: 'llm' }
-  | { readonly type: 'script'; readonly runtime: ScriptRuntime; readonly source: string; readonly timeoutSeconds: number };
+  | { readonly type: 'script'; readonly runtime: ScriptRuntime; readonly source: string; readonly timeoutSeconds: number }
+  | { readonly type: 'plugin'; readonly pluginId: string; readonly nodeType: string; readonly config: Readonly<Record<string, string | number | boolean>> };
 
 /**
  * Output a person pinned on a step (v6.4, additive), usually copied from a
@@ -313,6 +327,10 @@ export interface FailureRecord {
    * (additive): the harness refused its native login at the start handshake
    * (Claude Code signed out or not on a Claude subscription) before any task
    * text was written; running the step again after signing in starts it.
+   * Plugin codes (v6.5): `plugin-unavailable`, `plugin-config-invalid`,
+   * `plugin-input-unavailable` and `plugin-start-failed` (nothing was
+   * executed), `plugin-node-failed` (the backend answered with an error; its
+   * message is the detail) and `plugin-node-timeout` (the backend was stopped).
    */
   readonly code: string;
   /**
@@ -322,7 +340,7 @@ export interface FailureRecord {
   readonly detail?: string;
 }
 
-/** Additive (v6.2): bounded text result of a host-executed (script) step. */
+/** Additive (v6.2): bounded text result of a host-executed (script or plugin) step. */
 export interface TaskOutput {
   /** At most 256 KiB of stdout. */
   readonly text: string;

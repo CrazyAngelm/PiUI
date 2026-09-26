@@ -5,7 +5,7 @@ import type {
 import type { LabOrchestrationWorkspace } from '../labState';
 import { isAcpHarness, isBuiltinHarness, type BuiltinHarness } from '../../../../../../contracts/harness-identity-v2';
 import { pipelineInputIssues, reviewLimitValid } from '../../runInputs';
-import { executorAuthorityIssue, isScriptStep, LLM_READ_ONLY_UNSUPPORTED, llmProfileIssue, stepExecutorIssue } from '../../stepExecutors';
+import { executorAuthorityIssue, isHostExecutedStep, LLM_READ_ONLY_UNSUPPORTED, llmProfileIssue, stepExecutorIssue } from '../../stepExecutors';
 import { pipelinePinsIssue } from '../../pinnedData';
 import type { PinnedOutput } from '../labContracts';
 
@@ -103,7 +103,7 @@ function stepIssue(steps: readonly PipelineStep[], step: PipelineStep, members: 
   if (fields.some(blank) || duplicates(fields)) return 'result fields';
   if (blank(step.name)) return 'step name';
   // Program routers and scripts are coordinator and host work, not members.
-  if (step.router?.mode !== 'program' && !isScriptStep(step) && !members.has(step.assignedMemberId)) return 'assigned member';
+  if (step.router?.mode !== 'program' && !isHostExecutedStep(step) && !members.has(step.assignedMemberId)) return 'assigned member';
   if (duplicates(step.dependencyStepIds) || step.dependencyStepIds.some((id) => !steps.some((candidate) => candidate.id === id))) {
     return 'dependencies';
   }

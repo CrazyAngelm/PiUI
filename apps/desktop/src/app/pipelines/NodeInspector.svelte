@@ -35,6 +35,8 @@
   import ScriptTestPanel from './ScriptTestPanel.svelte';
   import HarnessLimitations from './HarnessLimitations.svelte';
   import PinnedDataSection from './PinnedDataSection.svelte';
+  import Blocks from '@lucide/svelte/icons/blocks';
+  import PluginNodeSettings from '../plugins/PluginNodeSettings.svelte';
 
   interface Props {
     editor: PipelineEditorStore;
@@ -45,12 +47,14 @@
   let { editor, node, onClose, onFocusNode }: Props = $props();
   const workspace = useWorkspace();
 
-  type TabId = 'basics' | 'io' | 'access' | 'flow' | 'routes' | 'script';
+  type TabId = 'basics' | 'io' | 'access' | 'flow' | 'routes' | 'script' | 'plugin';
   let tab = $state<TabId>('basics');
   const isRouter = $derived(node.kind === 'router');
   // v6.2 executors: a script runs on the host; a model call is one read-only turn.
   const script = $derived(node.executor?.type === 'script' ? node.executor : undefined);
   const llm = $derived(node.executor?.type === 'llm');
+  // v6.5: a plugin node's backend runs it; its form comes from the node type.
+  const plugin = $derived(node.executor?.type === 'plugin');
   const scriptBytes = $derived(script ? sourceBytes(script.source) : 0);
   let timeoutText = $state('');
   $effect(() => {
@@ -70,13 +74,15 @@
 
   // Load the native catalog of the selected harness when the agent is shown.
   $effect(() => {
-    if ((!isRouter || agentRouter) && !script && !editor.catalogs[profile.harness] && !editor.catalogErrors[profile.harness]) {
+    if ((!isRouter || agentRouter) && !script && !plugin && !editor.catalogs[profile.harness] && !editor.catalogErrors[profile.harness]) {
       void editor.loadCatalog(profile.harness);
     }
   });
 
   $effect(() => {
     if (isRouter && tab !== 'routes' && tab !== 'basics') tab = 'routes';
+    else if (plugin && tab !== 'plugin' && tab !== 'io' && tab !== 'flow') tab = 'plugin';
+    else if (!plugin && tab === 'plugin') tab = 'basics';
     else if (script && tab !== 'script' && tab !== 'io' && tab !== 'flow') tab = 'script';
     else if (!script && tab === 'script') tab = 'basics';
     else if (llm && tab === 'access') tab = 'basics';
@@ -88,6 +94,12 @@
           { value: 'routes' as const, label: $t('Routes') },
           { value: 'basics' as const, label: $t('Agent') },
         ]
+      : plugin
+        ? [
+            { value: 'plugin' as const, label: $t('Plugin node') },
+            { value: 'io' as const, label: $t('Output') },
+            { value: 'flow' as const, label: $t('Flow') },
+          ]
       : script
         ? [
             { value: 'script' as const, label: $t('Script') },
@@ -187,6 +199,8 @@
       <span class="router-mark" aria-hidden="true">⑂</span>
     {:else if script}
       <span class="router-mark" aria-hidden="true"><Code size={14} /></span>
+    {:else if plugin}
+      <span class="router-mark" aria-hidden="true"><Blocks size={14} /></span>
     {:else}
       <HarnessMark kind={profile.harness} size={22} />
     {/if}
@@ -237,6 +251,8 @@
             onchange={(change) => editor.updateNode(node.id, change)}
             onselectinput={onFocusNode}
           />
+        {:else if current === 'plugin' && plugin}
+          <PluginNodeSettings {editor} {node} />
         {:else if current === 'script' && script}
           <p class="warning" role="note">
             <TriangleAlert size={14} />
@@ -376,10 +392,10 @@
               />
             </Field>
           {/if}
-        {:else if current === 'io' && script}
+        {:else if current === 'io' && (script || plugin)}
           <div class="section">
             <h3>{$t('Structured result fields')}</h3>
-            <p class="hint">{$t('Named fields the script prints as one JSON object. Without fields, its output is passed on as text.')}</p>
+            <p class="hint">{plugin ? $t('Named fields the node returns as one JSON object. Without fields, its output is passed on as text.') : $t('Named fields the script prints as one JSON object. Without fields, its output is passed on as text.')}</p>
             <ResultFields fields={node.resultFields ?? []} disabled={readOnly} onchange={(fields) => editor.updateNode(node.id, { resultFields: fields.length ? fields : undefined })} />
           </div>
         {:else if current === 'io'}

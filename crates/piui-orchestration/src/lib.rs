@@ -19,6 +19,12 @@ pub use executors::{
 };
 mod flow;
 pub use flow::*;
+mod plugin_steps;
+pub use plugin_steps::{
+    HostStepLease, MAX_PLUGIN_CONFIG_BYTES, MAX_PLUGIN_CONFIG_KEYS, PLUGIN_CONFIG_INVALID,
+    PLUGIN_INPUT_UNAVAILABLE, PLUGIN_NODE_FAILED, PLUGIN_NODE_TIMEOUT, PLUGIN_START_FAILED,
+    PLUGIN_UNAVAILABLE, PluginStepLease,
+};
 mod inputs;
 mod pinned;
 pub use inputs::{
@@ -53,5 +59,7 @@ mod executor_tests;
 mod input_tests;
 #[cfg(test)]
 mod pinned_tests;
+#[cfg(test)]
+mod plugin_step_tests;
 #[cfg(test)]
 mod tests;

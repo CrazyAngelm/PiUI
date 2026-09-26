@@ -31,8 +31,9 @@ import {
 import type { LabRunScheduler } from './runScheduler';
 import { LabEventTriggers } from './eventTriggers';
 import { resolveRunInputs } from '../../runInputs';
-import { isScriptStep } from '../../stepExecutors';
+import { isHostExecutedStep } from '../../stepExecutors';
 import { hasPinnedSteps } from '../../pinnedData';
+import { labPluginHost } from '../pluginsFake';
 
 /**
  * Every `orchestration_*` command the UI client calls, with the host's scope
@@ -119,6 +120,11 @@ function startRun({ state, scheduler }: Context, request: StartRunRequestV7): Or
     ...(launchCommand === undefined ? {} : { launchCommand }),
   });
   if (request.runId.trim() === '' || definitionIssue(definition) !== undefined) throw orchestrationFailure('invalid');
+  // v6.5: a plugin node whose plugin is unavailable refuses the start before any step runs.
+  const plugins = labPluginHost(state);
+  if (definition.pipeline.steps.some((step) => step.executor?.type === 'plugin' && plugins?.node(step.executor.pluginId, step.executor.nodeType) === undefined)) {
+    throw orchestrationFailure('runtime-unavailable');
+  }
   // `new_run_with_options`: values are validated and frozen before anything is scheduled.
   const inputs = resolveRunInputs(definition.pipeline.inputs, request.inputs);
   if (!inputs.ok) throw orchestrationFailure('invalid');
@@ -206,7 +212,7 @@ function runUsage(state: LabState, request: RunRequest): Record<string, UsageRec
   for (const task of [...run.tasks, ...run.attempts]) {
     if (task.execution === undefined) continue;
     // A script execution is host work with no session or model usage.
-    if (run.definition.pipeline.steps.some((step) => step.id === task.stepId && isScriptStep(step))) continue;
+    if (run.definition.pipeline.steps.some((step) => step.id === task.stepId && isHostExecutedStep(step))) continue;
     const record = state.sessions.get(task.execution.id);
     if (record === undefined || record.workspaceId !== request.workspaceId) throw orchestrationFailure('not-found');
     usage[task.execution.id] = record.usage.map((receipt) => ({ ...receipt }));

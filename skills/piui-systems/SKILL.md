@@ -76,10 +76,26 @@ prove the step's outcome.
   stdin under the same rules and shows what a run would record, without
   starting any agent or model call.
 
-Downstream agents and model calls receive a script's result where a native
-result would be (with `inputBindings` applied); downstream scripts receive
-native results as their verified final text. Conditions, program routers and
-review loops read script results like any structured result.
+- **plugin** (`{"type": "plugin", "pluginId": "…", "nodeType": "…", "config":
+  {…}}`, orchestration v6.5): a node type contributed by a PiUI plugin that the
+  user installed and trusted (Settings → Plugins). Its contained Node backend
+  receives the same document a script reads on stdin plus `config` (a flat
+  object of at most 30 string/number/boolean values, 64 KiB) and returns text
+  or one JSON object, recorded like a script's stdout. Like a script it is host
+  work (placeholder profile, no `inputBindings`, messages, delegation,
+  `callable` mode, router or orchestrator role) and **not a sandbox**. A file
+  only names the plugin and node type: importing it never installs or trusts a
+  plugin. Use it only when the user says the plugin is installed; the plugin's
+  own declared fields (checked at launch) define valid `config` keys. Codes:
+  `plugin-unavailable` and `plugin-config-invalid` (nothing ran),
+  `plugin-input-unavailable`, `plugin-start-failed`, `plugin-node-failed` (the
+  plugin's message is the detail) and `plugin-node-timeout`.
+
+Downstream agents and model calls receive a script's or plugin node's result
+where a native result would be (with `inputBindings` applied); downstream
+scripts and plugin nodes receive native results as their verified final text.
+Conditions, program routers and review loops read these results like any
+structured result.
 
 ## Configure and verify
 

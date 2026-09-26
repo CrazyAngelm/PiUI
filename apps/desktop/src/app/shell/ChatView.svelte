@@ -15,6 +15,7 @@
   import ChatDetails from './ChatDetails.svelte';
   import ChatComposer from '../chat/ChatComposer.svelte';
   import ExtensionSurface from '../chat/extensions/ExtensionSurface.svelte';
+  import PluginComposerActions from '../plugins/PluginComposerActions.svelte';
   import { extensionSurfaces } from '../chat/extensions/extensionSurfaces.svelte';
   import Transcript from '../chat/transcript/Transcript.svelte';
   import SearchIcon from '@lucide/svelte/icons/search';
@@ -194,6 +195,7 @@
             {:else if !snapshot.capabilities.prompt.supported}
               <p class="notice">{snapshot.capabilities.prompt.reason ?? $t('{0} is read-only in this mode.', [harnessMeta(session.harness).label])}</p>
             {:else}
+              <PluginComposerActions sessionId={snapshot.session.id} harness={snapshot.session.harness} />
               <!-- Extension-prepared text remounts the composer with the new draft. -->
               {#key `${snapshot.session.id}:${extensionSurfaces.composerEpoch(snapshot.session.id)}:${composerInserts.epoch(snapshot.session.id)}`}
                 <ChatComposer

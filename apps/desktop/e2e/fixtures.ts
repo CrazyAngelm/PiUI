@@ -12,9 +12,16 @@ export type LabScenario = 'demo' | 'empty' | 'safe' | 'long';
 const LAZY_VIEW_MS = 30_000;
 
 /** Browser noise that is not an application error. */
+const PLUGIN_FRAME = /^https?:\/\/piui-plugin\.localhost(?::\d+)?\//;
+
 function ignorable(message: ConsoleMessage): boolean {
   // Vite's dev server has no favicon; the desktop app never requests one.
-  return message.location().url.endsWith('/favicon.ico');
+  if (message.location().url.endsWith('/favicon.ico')) return true;
+  // A plugin panel is a third-party page in a sandboxed frame: its own policy
+  // refusing a request (a plugin's or axe's stylesheet preload) is the
+  // isolation working, not a PiUI error.
+  const refused = /Content Security Policy/.test(message.text()) ? (message.text().match(/https?:\/\/[^'"\s]+/)?.[0] ?? '') : '';
+  return PLUGIN_FRAME.test(message.location().url) || PLUGIN_FRAME.test(refused);
 }
 
 export class Lab {

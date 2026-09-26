@@ -34,6 +34,7 @@ piui-contracts = { path = "../../../crates/piui-contracts" }
 piui-extensions = { path = "../../../crates/piui-extensions" }
 piui-index = { path = "../../../crates/piui-index" }
 piui-orchestration = { path = "../../../crates/piui-orchestration" }
+piui-plugins = { path = "../../../crates/piui-plugins" }
 piui-platform = { path = "../../../crates/piui-platform" }
 piui-runtime = { path = "../../../crates/piui-runtime" }
 serde.workspace = true

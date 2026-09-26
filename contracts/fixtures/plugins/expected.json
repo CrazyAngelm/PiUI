@@ -1,0 +1,23 @@
+{
+  "description": "First problem code of each invalid fixture, checked by the Rust host (crates/piui-plugins) and the TypeScript mirror (apps/desktop/src/host-api/pluginManifest.ts). invalid-* files fail the JSON Schema; invalid-semantic-* files match the schema and fail a host rule.",
+  "codes": {
+    "invalid-unknown-field.json": "shape",
+    "invalid-schema-version.json": "schema-version",
+    "invalid-unknown-permission.json": "shape",
+    "invalid-id.json": "shape",
+    "invalid-entry-path.json": "shape",
+    "invalid-theme-token.json": "shape",
+    "invalid-theme-css.json": "shape",
+    "invalid-missing-contributes.json": "shape",
+    "invalid-shell-command.json": "shape",
+    "invalid-semantic-permission-missing.json": "permission-missing",
+    "invalid-semantic-backend-missing.json": "backend-missing",
+    "invalid-semantic-ui-missing.json": "ui-missing",
+    "invalid-semantic-duplicate-command.json": "duplicate-contribution",
+    "invalid-semantic-field-options.json": "field",
+    "invalid-semantic-color-channel.json": "theme-color",
+    "invalid-semantic-contrast.json": "theme-contrast",
+    "invalid-semantic-acp-shell.json": "acp-descriptor",
+    "invalid-semantic-insert-text.json": "text"
+  }
+}

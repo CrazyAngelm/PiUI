@@ -15,6 +15,7 @@
   import { t } from '../../features/locale/language';
   import { runLauncher } from '../triggers/runLauncher.svelte';
   import HarnessMark from './HarnessMark.svelte';
+  import PluginPaletteGroup from '../plugins/PluginPaletteGroup.svelte';
   import { useWorkspace } from './context';
 
   interface Props {
@@ -125,6 +126,7 @@
                 </Command.Item>
               </Command.GroupItems>
             </Command.Group>
+            <PluginPaletteGroup onDone={() => (open = false)} />
             {#if chats.length}
               <Command.Group>
                 <Command.GroupHeading class="palette__heading">{$t('Chats')}</Command.GroupHeading>
