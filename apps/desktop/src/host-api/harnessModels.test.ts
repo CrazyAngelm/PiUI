@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock('./transport', () => ({ hostInvoke: invoke, hostListen: vi.fn(), desktopAvailable: true }));
 let harnessModels: typeof import('./harnessModels').harnessModels;
-beforeEach(async () => { vi.resetModules(); invoke.mockReset(); ({ harnessModels } = await import('./harnessModels')); });
+let workspaceModel: typeof import('./harnessModels').workspaceModel;
+beforeEach(async () => { vi.resetModules(); invoke.mockReset(); ({ harnessModels, workspaceModel } = await import('./harnessModels')); });
 
 describe('native harness catalog v18', () => {
   it('preserves provider identity and native capability values', async () => {
@@ -56,5 +57,10 @@ describe('native harness catalog v18', () => {
     const result = { protocol: 18, harness: 'claude-code', models: [{ id: 'sonnet', provider: 'anthropic', name: 'Sonnet', thinkingLevels: ['low', 'high'], supportsFast: false }], resources: { items: [], warnings: [] } };
     invoke.mockResolvedValueOnce(result);
     expect(await harnessModels(request), 'a failure is never cached').toEqual(result);
+  });
+  it('forwards only session model fields: the host rejects catalog-only fields', () => {
+    const catalogEntry = { id: 'gpt-5.5', provider: null as unknown as string, name: 'GPT-5.5', thinkingLevels: ['low', 'high'], supportsFast: true };
+    expect(workspaceModel(catalogEntry)).toEqual({ id: 'gpt-5.5', name: 'GPT-5.5', thinkingLevels: ['low', 'high'] });
+    expect(workspaceModel({ id: 'sonnet', provider: 'anthropic', name: 'Sonnet' })).toEqual({ id: 'sonnet', provider: 'anthropic', name: 'Sonnet' });
   });
 });
