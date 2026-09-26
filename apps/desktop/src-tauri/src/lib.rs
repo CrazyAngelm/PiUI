@@ -8,6 +8,7 @@
 
 mod agent_api;
 mod api;
+mod automation_paths;
 mod catalog_watch;
 mod contributions;
 mod dto;
@@ -18,6 +19,7 @@ mod orchestration_scheduler;
 #[cfg(feature = "native-prime-scheduler-test")]
 pub use orchestration_scheduler::run_native_prime_scheduler_two_step_dependency_dag;
 mod orchestration_store;
+mod orchestration_triggers;
 mod state;
 mod workspace_api;
 
@@ -747,8 +749,11 @@ pub fn run() -> Result<(), tauri::Error> {
             );
             state.set_catalog_watcher(watcher);
             app.manage(state);
+            let trigger_engine = orchestration_triggers::TriggerEngine::default();
+            app.manage(trigger_engine.clone());
             if !safe_mode {
                 orchestration_scheduler.start_timed_schedule_worker(app.handle().clone());
+                trigger_engine.start(app.handle().clone());
             }
             if let Some(server) = agent_server {
                 server.start(app.handle().clone());
@@ -831,6 +836,8 @@ pub fn run() -> Result<(), tauri::Error> {
             orchestration_api::orchestration_save_schedule_v7,
             orchestration_api::orchestration_set_schedule_enabled_v7,
             orchestration_api::orchestration_delete_schedule_v7,
+            orchestration_api::orchestration_automations_v7,
+            orchestration_api::orchestration_set_automations_paused_v7,
             orchestration_api::orchestration_list_runs_v6,
             orchestration_api::orchestration_get_run_v6,
             orchestration_api::orchestration_start_run_v6,
@@ -849,6 +856,9 @@ pub fn run() -> Result<(), tauri::Error> {
             if state.begin_shutdown() {
                 app.state::<orchestration_scheduler::OrchestrationScheduler>()
                     .begin_shutdown();
+                if let Some(engine) = app.try_state::<orchestration_triggers::TriggerEngine>() {
+                    engine.begin_shutdown();
+                }
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
                     let state = app.state::<HostState>();

@@ -180,6 +180,10 @@ struct SchedulerInner {
     completed: Mutex<HashMap<String, WorkspaceRuntimeHandle>>,
     run_gates: Mutex<RunGateMap>,
     cancelling_runs: Mutex<HashSet<RunKey>>,
+    /// When automations were last resumed in this process (host v7.2).
+    /// Occurrences that came due while paused count as missed, exactly like
+    /// ones that came due while PiUI was closed.
+    resumed_at: Mutex<Option<chrono::DateTime<chrono::Utc>>>,
 }
 
 /// Managed Tauri state. Clones share active native execution handles and the
@@ -220,6 +224,31 @@ impl OrchestrationScheduler {
         self.inner.timed_wake.notify_one();
     }
 
+    pub(crate) fn note_automations_resumed(&self, at: chrono::DateTime<chrono::Utc>) {
+        if let Ok(mut resumed) = self.inner.resumed_at.lock() {
+            *resumed = Some(at);
+        }
+    }
+
+    /// Occurrences due before this instant were missed: PiUI was closed or
+    /// automations were paused.
+    fn missed_boundary(
+        &self,
+        host_started_at: chrono::DateTime<chrono::Utc>,
+    ) -> chrono::DateTime<chrono::Utc> {
+        self.inner
+            .resumed_at
+            .lock()
+            .ok()
+            .and_then(|resumed| *resumed)
+            .map_or(host_started_at, |resumed| resumed.max(host_started_at))
+    }
+
+    /// Whether this host still admits new work (not shutting down).
+    pub(crate) fn accepts_work(&self) -> bool {
+        self.admits_work()
+    }
+
     pub(crate) fn start_timed_schedule_worker<R: Runtime>(&self, app: AppHandle<R>) {
         if self
             .inner
@@ -254,6 +283,15 @@ impl OrchestrationScheduler {
             }
         }
         while self.admits_work() {
+            // Paused automations wait for the resume request's wake-up.
+            if app
+                .state::<OrchestrationApiState>()
+                .automations_paused()
+                .unwrap_or(false)
+            {
+                self.inner.timed_wake.notified().await;
+                continue;
+            }
             let next_due = app
                 .state::<OrchestrationApiState>()
                 .next_schedule_due()
@@ -262,7 +300,8 @@ impl OrchestrationScheduler {
             let now = chrono::Utc::now();
             match next_due {
                 Some(due) if due <= now => {
-                    if !self.process_due_schedules(&app, now, host_started_at).await {
+                    let missed_before = self.missed_boundary(host_started_at);
+                    if !self.process_due_schedules(&app, now, missed_before).await {
                         // A durable claim that cannot commit must not become a
                         // hot retry loop. Schedule mutations retain a Notify
                         // permit and explicitly wake the worker after recovery.
@@ -1579,7 +1618,9 @@ impl OrchestrationScheduler {
         }
     }
 
-    fn spawn_reschedule<R: Runtime>(
+    /// Schedules a run's ready steps on a new task (also used by event
+    /// automations for the runs they start).
+    pub(crate) fn spawn_reschedule<R: Runtime>(
         &self,
         app: AppHandle<R>,
         workspace_id: String,

@@ -7,22 +7,25 @@
 
 use crate::api::verified_project_directory;
 use crate::orchestration_schedule::{
-    MissedRunPolicy, OverlapPolicy, ScheduleDefinition, ScheduleOccurrence,
-    ScheduleOccurrenceOutcome, ScheduleSnapshot, StoredSchedule, occurrence_id,
+    EventTrigger, MissedRunPolicy, OverlapPolicy, ScheduleDefinition, ScheduleOccurrence,
+    ScheduleOccurrenceOutcome, ScheduleSnapshot, StoredSchedule, event_occurrence_id,
+    occurrence_id, push_occurrence,
 };
 use crate::orchestration_scheduler::OrchestrationScheduler;
 use crate::orchestration_store::{
     OrchestrationStore, StoreError, StoreSnapshot, StoredDefinition, WorkspaceOrchestration,
 };
+use crate::orchestration_triggers::{EVENT_COOLDOWN_SECONDS, EventCause, EventFiring};
 use crate::state::HostState;
 use chrono::{DateTime, Utc};
 use piui_orchestration::{
     AgentProfile, AgentRequestKind, AuthenticatedSender, CompletionOutcome, ControlledSpawnLease,
     Coordinator, CoordinatorError, FailureRecord, Harness, LaunchCommandReference, LaunchRequest,
-    MessageIntent, NativeBridgeCapabilities, NativeExecutionReference, NativeHistoryReference,
-    PipelineDefinition, Run, RunDefinitionSnapshot, RunStatus, ScriptCompletion, ScriptLease,
-    TaskRecord, TaskStatus, TeamDefinition, UncertainResolution, UncertaintyIdentity,
-    authorize_coordinator_tool, authorize_observe, authorize_send, validate_profile_capabilities,
+    MAX_TRIGGER_CHAIN_DEPTH, MessageIntent, NativeBridgeCapabilities, NativeExecutionReference,
+    NativeHistoryReference, PipelineDefinition, Run, RunDefinitionSnapshot, RunStatus, RunTrigger,
+    RunTriggerEvent, ScriptCompletion, ScriptLease, TaskRecord, TaskStatus, TeamDefinition,
+    UncertainResolution, UncertaintyIdentity, authorize_coordinator_tool, authorize_observe,
+    authorize_send, validate_profile_capabilities,
 };
 use piui_orchestration::{RunInputError, resolve_run_inputs, validate_pipeline_declarations};
 use serde::{Deserialize, Serialize};
@@ -195,6 +198,65 @@ pub fn emit_schedule_changed<R: tauri::Runtime>(
     );
 }
 
+/// Host v7.2: every automation paused or resumed (from the UI or the tray).
+pub const ORCHESTRATION_AUTOMATIONS_EVENT_V7: &str = "piui://orchestration-automations-event";
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OrchestrationAutomationsChangedEventV7 {
+    pub protocol: u8,
+    #[serde(rename = "type")]
+    pub event_type: &'static str,
+    pub paused: bool,
+}
+
+/// Whether automations may start runs (host v7.2).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutomationsStateV7 {
+    pub paused: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutomationsStateRequest {}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetAutomationsPausedRequest {
+    pub paused: bool,
+}
+
+/// Pauses or resumes every automation durably, then wakes the timed worker
+/// and tells every listener (the UI and the tray menu). Shared by the IPC
+/// command and the tray so both paths behave identically.
+pub(crate) fn apply_automations_paused<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    paused: bool,
+) -> Result<AutomationsStateV7, OrchestrationApiError> {
+    let state = app
+        .try_state::<OrchestrationApiState>()
+        .ok_or_else(OrchestrationApiError::io)?;
+    let changed = state.set_automations_paused(paused)?;
+    if changed {
+        if let Some(scheduler) = app.try_state::<OrchestrationScheduler>() {
+            if !paused {
+                scheduler.note_automations_resumed(Utc::now());
+            }
+            scheduler.wake_timed_schedules();
+        }
+        let _ = app.emit(
+            ORCHESTRATION_AUTOMATIONS_EVENT_V7,
+            OrchestrationAutomationsChangedEventV7 {
+                protocol: 7,
+                event_type: "automationsChanged",
+                paused,
+            },
+        );
+    }
+    Ok(AutomationsStateV7 { paused })
+}
+
 pub struct OrchestrationApiState {
     /// Writers serialize inside the store; readers take an immutable snapshot
     /// and never wait for a writer's serialization or fsync.
@@ -267,10 +329,27 @@ impl OrchestrationApiState {
             .map_err(Into::into)
     }
 
+    #[cfg(any(test, feature = "native-prime-scheduler-test"))]
     pub fn create_run(&self, request: StartRunRequest) -> Result<Run, OrchestrationApiError> {
+        self.create_run_with_trigger(request, None)
+    }
+
+    /// A start requested by a person, optionally from a chat (v7.2).
+    pub fn create_run_with_trigger(
+        &self,
+        request: StartRunRequest,
+        trigger: Option<StartRunTrigger>,
+    ) -> Result<Run, OrchestrationApiError> {
         validate_workspace_id(&request.workspace_id)?;
+        let trigger = trigger.map(StartRunTrigger::into_run_trigger);
+        if trigger
+            .as_ref()
+            .is_some_and(|trigger| !trigger.is_valid() || trigger_session_too_long(trigger))
+        {
+            return Err(OrchestrationApiError::invalid());
+        }
         self.store
-            .transact(|workspaces| create_run_in(workspaces, request))
+            .transact(|workspaces| create_run_in(workspaces, request, trigger))
             .map_err(Into::into)
     }
 
@@ -339,7 +418,11 @@ impl OrchestrationApiState {
         admission_failure: Option<&str>,
     ) -> Result<ScheduleClaim, OrchestrationApiError> {
         self.store
-            .transact(|workspaces| {
+            .transact_automations(|workspaces, paused| {
+                // Paused occurrences stay due; resuming treats them as missed.
+                if paused {
+                    return Err(StoreError::Conflict);
+                }
                 let workspace_index = workspaces
                     .iter()
                     .position(|workspace| workspace.workspace_id == workspace_id)
@@ -374,16 +457,7 @@ impl OrchestrationApiState {
                 let active_overlap = current.value.overlap_policy == OverlapPolicy::Skip
                     && current.occurrences.iter().any(|occurrence| {
                         occurrence.run_id.as_ref().is_some_and(|run_id| {
-                            workspaces[workspace_index]
-                                .runs
-                                .iter()
-                                .find(|run| run.id() == run_id)
-                                .is_some_and(|run| {
-                                    matches!(
-                                        run.status(),
-                                        RunStatus::Running | RunStatus::Uncertain
-                                    )
-                                })
+                            run_is_active(&workspaces[workspace_index].runs, run_id)
                         })
                     });
                 let occurrence_key =
@@ -395,6 +469,8 @@ impl OrchestrationApiState {
                     outcome: ScheduleOccurrenceOutcome::Failed,
                     run_id: None,
                     failure_code: None,
+                    source_run_id: None,
+                    chain_depth: None,
                 };
                 let mut run = None;
 
@@ -411,9 +487,17 @@ impl OrchestrationApiState {
                         &workspaces[workspace_index],
                         workspace_id,
                         &current.value,
-                        occurrence_key,
+                        occurrence_key.clone(),
                     );
-                    match request.and_then(|request| create_run_in(workspaces, request)) {
+                    // Scheduled runs record which automation occurrence started them.
+                    let trigger = RunTrigger::Schedule {
+                        schedule_id: current.value.id.clone(),
+                        schedule_name: trigger_label(&current.value.name),
+                        occurrence_id: occurrence_key,
+                    };
+                    match request
+                        .and_then(|request| create_run_in(workspaces, request, Some(trigger)))
+                    {
                         Ok(created) => {
                             occurrence.outcome = ScheduleOccurrenceOutcome::Started;
                             occurrence.run_id = Some(created.id().to_owned());
@@ -426,7 +510,9 @@ impl OrchestrationApiState {
                 }
 
                 let next = current.value.trigger.first_after(nominal_at);
-                let schedule = &mut workspaces[workspace_index].schedules[schedule_index];
+                let workspace = &mut workspaces[workspace_index];
+                let runs = &workspace.runs;
+                let schedule = &mut workspace.schedules[schedule_index];
                 schedule.revision = schedule
                     .revision
                     .checked_add(1)
@@ -436,7 +522,9 @@ impl OrchestrationApiState {
                     schedule.enabled = false;
                     schedule.enabled_launch_command_revision = None;
                 }
-                schedule.occurrences.push(occurrence);
+                push_occurrence(&mut schedule.occurrences, occurrence, |run_id| {
+                    run_is_active(runs, run_id)
+                });
                 Ok(ScheduleClaim {
                     schedule: schedule.snapshot(),
                     run,
@@ -1140,8 +1228,84 @@ impl OrchestrationApiState {
             .map_err(Into::into)
     }
 
-    fn snapshot(&self) -> Result<StoreSnapshot, OrchestrationApiError> {
+    pub(crate) fn snapshot(&self) -> Result<StoreSnapshot, OrchestrationApiError> {
         self.store.snapshot().map_err(Into::into)
+    }
+
+    /// Wakes after every committed generation (event automations, v7.2).
+    pub(crate) fn subscribe_commits(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.store.subscribe_commits()
+    }
+
+    pub(crate) fn automations_paused(&self) -> Result<bool, OrchestrationApiError> {
+        Ok(self.snapshot()?.automations_paused())
+    }
+
+    /// Returns whether the durable value changed.
+    pub(crate) fn set_automations_paused(
+        &self,
+        paused: bool,
+    ) -> Result<bool, OrchestrationApiError> {
+        self.store
+            .set_automations_paused(paused)
+            .map_err(Into::into)
+    }
+
+    /// Claims one event firing (v7.2) in a single durable generation: the
+    /// occurrence record, the outcome decision and, when it starts, the new
+    /// run with its frozen trigger identity. A stale firing (the automation
+    /// was edited, disabled or deleted) or one already recorded returns
+    /// `None` and writes nothing.
+    pub(crate) fn claim_event_occurrence(
+        &self,
+        firing: &crate::orchestration_triggers::EventFiring,
+        now: DateTime<Utc>,
+        admission_failure: Option<&str>,
+    ) -> Result<Option<ScheduleClaim>, OrchestrationApiError> {
+        match self.store.transact_automations(|workspaces, paused| {
+            claim_event_in(workspaces, firing, now, admission_failure, paused)
+        }) {
+            Ok(claim) => Ok(Some(claim)),
+            // Stale or already recorded: the failed closure wrote nothing.
+            Err(StoreError::Conflict | StoreError::AlreadyExists) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
+/// Test seams for event automations: drive a run with coordinator
+/// transitions and delete a launch command through the ordinary rules.
+#[cfg(test)]
+impl OrchestrationApiState {
+    pub(crate) fn update_run_for_test(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+        change: impl FnOnce(&mut Run),
+    ) -> Run {
+        self.store
+            .transact(|workspaces| {
+                let run = mutable_run(workspaces, workspace_id, run_id)?;
+                change(run);
+                Ok(run.clone())
+            })
+            .expect("updates the run")
+    }
+
+    pub(crate) fn delete_launch_command_for_test(
+        &self,
+        workspace_id: &str,
+        id: &str,
+        expected_revision: u64,
+    ) -> Result<(), OrchestrationApiError> {
+        delete_definition::<LaunchCommandReference>(
+            self,
+            DeleteDefinitionRequest {
+                workspace_id: workspace_id.to_owned(),
+                id: id.to_owned(),
+                expected_revision,
+            },
+        )
     }
 }
 
@@ -1273,6 +1437,69 @@ pub struct StartRunRequest {
     /// Values for the pipeline's declared inputs (v6.1, additive).
     #[serde(default)]
     pub inputs: BTreeMap<String, serde_json::Value>,
+}
+
+/// `orchestration_start_run_v6` arguments: a start request plus, additive in
+/// host v7.2, where a person started it. Automations record their own
+/// identity in the host; a caller can only say `chat`.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StartRunCommand {
+    pub workspace_id: String,
+    pub run_id: String,
+    pub team_id: String,
+    pub pipeline_id: String,
+    pub launch_command_id: Option<String>,
+    #[serde(default)]
+    pub inputs: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub trigger: Option<StartRunTrigger>,
+}
+
+impl StartRunCommand {
+    fn split(self) -> (StartRunRequest, Option<StartRunTrigger>) {
+        (
+            StartRunRequest {
+                workspace_id: self.workspace_id,
+                run_id: self.run_id,
+                team_id: self.team_id,
+                pipeline_id: self.pipeline_id,
+                launch_command_id: self.launch_command_id,
+                inputs: self.inputs,
+            },
+            self.trigger,
+        )
+    }
+}
+
+/// The only run origin a WebView or local API caller may state (v7.2).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum StartRunTrigger {
+    Chat {
+        #[serde(default)]
+        session_id: Option<String>,
+    },
+}
+
+/// Longest chat session identity a run records.
+const MAX_CHAT_SESSION_ID_BYTES: usize = 128;
+
+impl StartRunTrigger {
+    fn into_run_trigger(self) -> RunTrigger {
+        match self {
+            Self::Chat { session_id } => RunTrigger::Chat { session_id },
+        }
+    }
+}
+
+fn trigger_session_too_long(trigger: &RunTrigger) -> bool {
+    matches!(trigger, RunTrigger::Chat { session_id: Some(id) } if id.len() > MAX_CHAT_SESSION_ID_BYTES)
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1550,10 +1777,16 @@ impl DefinitionValue for LaunchCommandReference {
                 .any(|pipeline| pipeline.value.id == self.pipeline_id)
     }
     fn can_delete(workspace: &WorkspaceOrchestration, id: &str) -> bool {
-        !workspace
-            .schedules
-            .iter()
-            .any(|schedule| schedule.value.launch_command_id == id)
+        // Automations that start this pipeline or wait for it keep it.
+        !workspace.schedules.iter().any(|schedule| {
+            schedule.value.launch_command_id == id
+                || schedule
+                    .value
+                    .trigger
+                    .event()
+                    .and_then(EventTrigger::source_launch_command_id)
+                    == Some(id)
+        })
     }
     fn after_save(
         workspace: &mut WorkspaceOrchestration,
@@ -1581,7 +1814,7 @@ impl DefinitionValue for LaunchCommandReference {
                     .ok_or(StoreError::Invalid)?;
                 schedule.enabled = false;
                 schedule.enabled_launch_command_revision = None;
-                schedule.next_due_at = Some(schedule.value.trigger.initial_due());
+                schedule.next_due_at = schedule.value.trigger.initial_due();
             } else if schedule.enabled {
                 schedule.enabled_launch_command_revision = Some(saved.revision);
             }
@@ -1731,7 +1964,7 @@ fn delete_definition<T: DefinitionValue>(
         .map_err(Into::into)
 }
 
-fn save_schedule(
+pub(crate) fn save_schedule(
     state: &OrchestrationApiState,
     request: SaveScheduleRequest,
 ) -> Result<ScheduleSnapshot, OrchestrationApiError> {
@@ -1750,6 +1983,7 @@ fn save_schedule(
                 .launch_commands
                 .iter()
                 .any(|command| command.value.id == request.value.launch_command_id)
+                || !event_source_saved(workspace, &request.value)
             {
                 return Err(StoreError::Invalid);
             }
@@ -1763,7 +1997,7 @@ fn save_schedule(
                     let stored = StoredSchedule {
                         revision: 0,
                         trigger_revision: 0,
-                        next_due_at: Some(request.value.trigger.initial_due()),
+                        next_due_at: request.value.trigger.initial_due(),
                         value: request.value,
                         enabled: false,
                         enabled_launch_command_revision: None,
@@ -1791,7 +2025,7 @@ fn save_schedule(
                             .ok_or(StoreError::Invalid)?;
                         stored.enabled = false;
                         stored.enabled_launch_command_revision = None;
-                        stored.next_due_at = Some(stored.value.trigger.initial_due());
+                        stored.next_due_at = stored.value.trigger.initial_due();
                     }
                     let snapshot = stored.snapshot();
                     workspace.schedules[index] = stored;
@@ -1802,7 +2036,7 @@ fn save_schedule(
         .map_err(Into::into)
 }
 
-fn set_schedule_enabled(
+pub(crate) fn set_schedule_enabled(
     state: &OrchestrationApiState,
     request: SetScheduleEnabledRequest,
 ) -> Result<ScheduleSnapshot, OrchestrationApiError> {
@@ -1838,8 +2072,12 @@ fn set_schedule_enabled(
                             .any(|pipeline| pipeline.value.id == command.value.pipeline_id)
                 })
                 .map(|command| command.revision);
+            // Event rules have no due time; a timed rule without one is spent.
+            let spent = schedule.value.trigger.event().is_none() && schedule.next_due_at.is_none();
             if request.enabled
-                && (schedule.next_due_at.is_none() || launch_command_revision.is_none())
+                && (spent
+                    || launch_command_revision.is_none()
+                    || !event_source_saved(workspace, &schedule.value))
             {
                 return Err(StoreError::Invalid);
             }
@@ -1866,6 +2104,21 @@ fn set_schedule_enabled(
             Ok(schedule.snapshot())
         })
         .map_err(Into::into)
+}
+
+/// A "pipeline finished" rule must watch a launch command saved in the same
+/// workspace; other rules have no source.
+fn event_source_saved(workspace: &WorkspaceOrchestration, schedule: &ScheduleDefinition) -> bool {
+    schedule
+        .trigger
+        .event()
+        .and_then(EventTrigger::source_launch_command_id)
+        .is_none_or(|source| {
+            workspace
+                .launch_commands
+                .iter()
+                .any(|command| command.value.id == source)
+        })
 }
 
 /// Why a schedule's input values cannot start its launch target.
@@ -2209,6 +2462,34 @@ pub async fn orchestration_delete_schedule_v7(
 }
 
 #[tauri::command]
+pub async fn orchestration_automations_v7(
+    app: AppHandle,
+    request: AutomationsStateRequest,
+) -> Result<AutomationsStateV7, OrchestrationApiError> {
+    let AutomationsStateRequest {} = request;
+    orchestration_query(app, |state, _| {
+        Ok(AutomationsStateV7 {
+            paused: state.automations_paused()?,
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn orchestration_set_automations_paused_v7(
+    host_state: State<'_, HostState>,
+    app: AppHandle,
+    request: SetAutomationsPausedRequest,
+) -> Result<AutomationsStateV7, OrchestrationApiError> {
+    let _operation = host_state.live_runtime_operation_gate.lock().await;
+    // Safe mode keeps automations read-only, exactly like schedule writes.
+    if host_state.safe_mode || host_state.is_shutting_down() {
+        return Err(OrchestrationApiError::runtime_unavailable());
+    }
+    apply_automations_paused(&app, request.paused)
+}
+
+#[tauri::command]
 pub async fn orchestration_list_runs_v6(
     app: AppHandle,
     request: WorkspaceRequest,
@@ -2281,13 +2562,14 @@ pub async fn orchestration_start_run_v6(
     scheduler: State<'_, OrchestrationScheduler>,
     host_state: State<'_, HostState>,
     app: AppHandle,
-    request: StartRunRequest,
+    request: StartRunCommand,
 ) -> Result<Run, OrchestrationApiError> {
+    let (request, trigger) = request.split();
     let operation = host_state.live_runtime_operation_gate.lock().await;
     validate_live_workspace_scope(&host_state, &request.workspace_id)?;
     let workspace_id = request.workspace_id.clone();
     let run_id = request.run_id.clone();
-    let created = state.create_run(request)?;
+    let created = state.create_run_with_trigger(request, trigger)?;
     emit_run_changed(&app, &workspace_id, &created);
     drop(operation);
     scheduler
@@ -2521,6 +2803,7 @@ fn committed_spawn(run: &Run, step_id: &str) -> Option<AgentRequestAdmission> {
 fn create_run_in(
     workspaces: &mut [WorkspaceOrchestration],
     request: StartRunRequest,
+    trigger: Option<RunTrigger>,
 ) -> Result<Run, StoreError> {
     let workspace = workspaces
         .iter_mut()
@@ -2562,10 +2845,176 @@ fn create_run_in(
         pipeline,
         launch_command,
     };
-    let run = Coordinator::new_run_with_inputs(request.run_id, snapshot, request.inputs)
+    let run = Coordinator::new_triggered_run(request.run_id, snapshot, request.inputs, trigger)
         .map_err(|_| StoreError::Invalid)?;
     workspace.runs.push(run.clone());
     Ok(run)
+}
+
+fn run_is_active(runs: &[Run], run_id: &str) -> bool {
+    runs.iter()
+        .find(|run| run.id() == run_id)
+        .is_some_and(|run| matches!(run.status(), RunStatus::Running | RunStatus::Uncertain))
+}
+
+/// Longest automation name copied into a run's trigger.
+const MAX_TRIGGER_LABEL_BYTES: usize = 256;
+
+/// The automation name as a run records it: one line, bounded, so a long
+/// or unusual name never makes the run's trigger invalid.
+fn trigger_label(name: &str) -> String {
+    let single_line: String = name
+        .trim()
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect();
+    let mut end = single_line.len().min(MAX_TRIGGER_LABEL_BYTES);
+    while !single_line.is_char_boundary(end) {
+        end -= 1;
+    }
+    single_line[..end].trim_end().to_owned()
+}
+
+/// The transaction behind `claim_event_occurrence`. `Conflict` means the
+/// firing is stale and `AlreadyExists` that it was recorded before; both
+/// write nothing.
+fn claim_event_in(
+    workspaces: &mut [WorkspaceOrchestration],
+    firing: &EventFiring,
+    now: DateTime<Utc>,
+    admission_failure: Option<&str>,
+    paused: bool,
+) -> Result<ScheduleClaim, StoreError> {
+    let workspace_index = workspaces
+        .iter()
+        .position(|workspace| workspace.workspace_id == firing.workspace_id)
+        .ok_or(StoreError::Conflict)?;
+    let schedule_index = workspaces[workspace_index]
+        .schedules
+        .iter()
+        .position(|schedule| schedule.value.id == firing.schedule_id)
+        .ok_or(StoreError::Conflict)?;
+    let current = workspaces[workspace_index].schedules[schedule_index].clone();
+    if !current.enabled || current.trigger_revision != firing.trigger_revision {
+        return Err(StoreError::Conflict);
+    }
+    let (event, source_run_id) = match (current.value.trigger.event(), &firing.cause) {
+        (Some(EventTrigger::RunFinished { .. }), EventCause::RunFinished { source_run_id }) => {
+            (RunTriggerEvent::RunFinished, Some(source_run_id.clone()))
+        }
+        (Some(EventTrigger::FilesChanged { .. }), EventCause::FilesChanged) => {
+            (RunTriggerEvent::FilesChanged, None)
+        }
+        _ => return Err(StoreError::Conflict),
+    };
+    let occurrence_key = event_occurrence_id(
+        &current.value.id,
+        current.trigger_revision,
+        &firing.cause_key(),
+    );
+    let workspace = &workspaces[workspace_index];
+    if current
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.id == occurrence_key)
+        || workspace.runs.iter().any(|run| run.id() == occurrence_key)
+    {
+        return Err(StoreError::AlreadyExists);
+    }
+    let launch_command_changed = current.enabled_launch_command_revision
+        != workspace
+            .launch_commands
+            .iter()
+            .find(|command| command.value.id == current.value.launch_command_id)
+            .map(|command| command.revision);
+    let active_overlap = current.value.overlap_policy == OverlapPolicy::Skip
+        && current.occurrences.iter().any(|occurrence| {
+            occurrence
+                .run_id
+                .as_deref()
+                .is_some_and(|run_id| run_is_active(&workspace.runs, run_id))
+        });
+    let cooling = current
+        .occurrences
+        .iter()
+        .rev()
+        .find(|occurrence| occurrence.outcome == ScheduleOccurrenceOutcome::Started)
+        .is_some_and(|started| {
+            now < started.recorded_at + chrono::Duration::seconds(EVENT_COOLDOWN_SECONDS)
+        });
+    let mut occurrence = ScheduleOccurrence {
+        id: occurrence_key.clone(),
+        nominal_at: firing.observed_at,
+        recorded_at: now,
+        outcome: ScheduleOccurrenceOutcome::Failed,
+        run_id: None,
+        failure_code: None,
+        source_run_id: source_run_id.clone(),
+        chain_depth: Some(firing.chain_depth),
+    };
+    let mut run = None;
+    if paused {
+        occurrence.outcome = ScheduleOccurrenceOutcome::SkippedPaused;
+    } else if firing.chain_depth > MAX_TRIGGER_CHAIN_DEPTH {
+        occurrence.outcome = ScheduleOccurrenceOutcome::SkippedChainLimit;
+    } else if launch_command_changed {
+        occurrence.failure_code = Some("launch-command-changed".to_owned());
+    } else if let Some(code) = admission_failure {
+        occurrence.failure_code = Some(code.to_owned());
+    } else if cooling {
+        occurrence.outcome = ScheduleOccurrenceOutcome::SkippedCooldown;
+    } else if active_overlap {
+        occurrence.outcome = ScheduleOccurrenceOutcome::SkippedOverlap;
+    } else {
+        let request = schedule_run_request(
+            workspace,
+            &firing.workspace_id,
+            &current.value,
+            occurrence_key.clone(),
+        );
+        let trigger = RunTrigger::Event {
+            schedule_id: current.value.id.clone(),
+            schedule_name: trigger_label(&current.value.name),
+            occurrence_id: occurrence_key,
+            event,
+            source_run_id,
+            chain_depth: firing.chain_depth,
+        };
+        match request.and_then(|request| create_run_in(workspaces, request, Some(trigger))) {
+            Ok(created) => {
+                occurrence.outcome = ScheduleOccurrenceOutcome::Started;
+                occurrence.run_id = Some(created.id().to_owned());
+                run = Some(created);
+            }
+            Err(error) => {
+                occurrence.failure_code = Some(store_error_code(&error).to_owned());
+            }
+        }
+    }
+    let workspace = &mut workspaces[workspace_index];
+    let runs = &workspace.runs;
+    let schedule = &mut workspace.schedules[schedule_index];
+    schedule.revision = schedule
+        .revision
+        .checked_add(1)
+        .ok_or(StoreError::Invalid)?;
+    if launch_command_changed && !paused && firing.chain_depth <= MAX_TRIGGER_CHAIN_DEPTH {
+        schedule.enabled = false;
+        schedule.enabled_launch_command_revision = None;
+    }
+    push_occurrence(&mut schedule.occurrences, occurrence, |run_id| {
+        run_is_active(runs, run_id)
+    });
+    Ok(ScheduleClaim {
+        schedule: schedule.snapshot(),
+        run,
+    })
 }
 
 fn schedule_run_request(
