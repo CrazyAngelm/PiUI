@@ -33,6 +33,8 @@ const SEARCH_DELAY_MS = 150;
 const REFRESH_FAILED = 'Could not refresh. Showing the last indexed sessions.';
 const SELECTION_GONE = 'The selected session is no longer in the local index.';
 const SESSION_CHANGED = 'The session changed on disk. Showing its latest entries.';
+/** Notices the view translates; exported for the locale coverage test. */
+export const HISTORY_NOTICES = [REFRESH_FAILED, SELECTION_GONE, SESSION_CHANGED] as const;
 
 function messageOf(error: unknown): string {
   return piHistoryError(error).message;

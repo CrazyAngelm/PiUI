@@ -19,13 +19,13 @@ export type PiHistoryScope = { readonly kind: 'project'; readonly projectId: str
 export const SESSION_CATALOG_CHANNEL = 'piui://session-catalog';
 export const SESSION_ROOT_HINT_CHANNEL = 'piui://session-root-hint';
 
-const SAFE_MESSAGES: Readonly<Record<string, string>> = {
+export const PI_HISTORY_MESSAGES: Readonly<Record<string, string>> = {
   NOT_FOUND: 'This history is no longer in the local index. Refresh the list.',
   PROJECT_UNAVAILABLE: 'The folder is unavailable. Reconnect it, then refresh.',
   CONFLICT: 'This folder changed on disk. Add it again and confirm trust before continuing.',
   INVALID_ARGUMENT: 'PiUI could not read this part of the history. Refresh and try again.',
 };
-const FALLBACK_MESSAGE = 'Local session history could not be read. Try again.';
+export const FALLBACK_MESSAGE = 'Local session history could not be read. Try again.';
 
 export class PiHistoryError extends Error {
   constructor(readonly code: string, message: string) {
@@ -45,7 +45,7 @@ export function piHistoryError(cause: unknown): PiHistoryError {
     }
   }
   const code = typeof value === 'object' && value !== null && 'code' in value && typeof value.code === 'string' ? value.code : 'UNKNOWN';
-  return new PiHistoryError(code, SAFE_MESSAGES[code] ?? FALLBACK_MESSAGE);
+  return new PiHistoryError(code, PI_HISTORY_MESSAGES[code] ?? FALLBACK_MESSAGE);
 }
 
 export function isCatalogForScope(snapshot: SessionCatalogSnapshot, scope: PiHistoryScope): boolean {

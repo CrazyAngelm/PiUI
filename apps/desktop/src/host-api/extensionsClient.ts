@@ -13,6 +13,8 @@ export type ExtensionHarness = Extract<AgentKind, 'pi' | 'prime-agent'>;
 
 const LIST_FAILED = 'Could not read the installed extensions. Try again.';
 const CHANGE_FAILED = 'Could not change the extension. Its previous state is kept.';
+/** Messages the settings page translates; exported for the locale coverage test. */
+export const EXTENSIONS_MESSAGES = [LIST_FAILED, CHANGE_FAILED] as const;
 
 export class ExtensionsError extends Error {
   constructor(readonly code: string, message: string) {
