@@ -418,6 +418,62 @@ async fn cancellation_proof_maps_script_ends_like_native_turns() {
     assert_eq!(stop_script(&script).await, None);
 }
 
+#[test]
+fn graph_saves_refuse_invalid_executors_atomically() {
+    let harness = Fixture::new("save", TrustState::Trusted, false);
+    harness.save(json!([helper(), script("collect", COLLECT, 30, json!([]))]));
+    let workspace = harness.workspace_id.as_str();
+    let request = |steps: Value| -> SaveGraphRequest {
+        serde_json::from_value(json!({
+            "workspaceId": workspace,
+            "profiles": [{"workspaceId": workspace, "expectedRevision": 0, "value": {
+                "id": "helper-profile", "name": "Helper", "harness": "codex", "model": "model",
+                "permissionMode": "read-only", "instructions": "", "toolPolicy": {"rules": []},
+                "allowedSpawnProfileIds": []}}],
+            "team": {"workspaceId": workspace, "expectedRevision": 0, "value": {"id": "team", "name": "Scripts",
+                "members": [{"id": "helper", "profileId": "helper-profile"}],
+                "sendEdges": [], "observeEdges": [], "orchestratorMemberId": "helper"}},
+            "pipeline": {"workspaceId": workspace, "expectedRevision": 0, "value": {"id": "pipeline", "name": "Scripts",
+                "steps": steps}},
+            "command": {"workspaceId": workspace, "expectedRevision": 0, "value": {"id": "command", "name": "Scripts",
+                "teamId": "team", "pipelineId": "pipeline"}}
+        }))
+        .expect("graph request")
+    };
+    let mut member = script("collect", COLLECT, 30, json!([]));
+    member["assignedMemberId"] = json!("helper");
+    let mut llm_writer = json!({"id": "summary", "name": "Summary", "assignedMemberId": "helper",
+        "instructions": "Summarize.", "executor": {"type": "llm"}, "dependencyStepIds": []});
+    for steps in [
+        json!([helper(), script("collect", " ", 30, json!([]))]),
+        json!([helper(), script("collect", COLLECT, 0, json!([]))]),
+        json!([helper(), member]),
+        // The helper profile is read-only, but an llm step may not be callable.
+        {
+            llm_writer["executionMode"] = json!("callable");
+            json!([
+                llm_writer.clone(),
+                script("collect", COLLECT, 30, json!([]))
+            ])
+        },
+    ] {
+        assert_eq!(
+            save_graph(&harness.api, request(steps)).map_err(|error| error.code),
+            Err("invalid")
+        );
+    }
+    // Nothing changed: a run still snapshots the original script.
+    let run = harness.start("after-refusals");
+    assert_eq!(
+        run.definition().pipeline.steps[1].executor,
+        Some(piui_orchestration::StepExecutor::Script {
+            runtime: ScriptRuntime::Node,
+            source: COLLECT.into(),
+            timeout_seconds: 30,
+        })
+    );
+}
+
 #[tokio::test]
 async fn untrusted_projects_and_safe_mode_never_run_a_script() {
     let marker = "import { writeFileSync } from 'node:fs';\nwriteFileSync('ran.txt', 'x');";
