@@ -152,6 +152,37 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   modes in chat details; UI Lab fakes (ready Gemini, missing and untrusted
   descriptors). No real ACP model turn was run.
 
+- Branch `feat/plugins` (plan phase 8 / P3 item 9, ADR-032 accepted,
+  [PLUGINS.md](PLUGINS.md)) — plugins v1:
+  - `af35f4c` — package format v1 (`piui-plugin.json` schema, host validator
+    in `crates/piui-plugins` with a TS mirror and shared fixtures, package
+    reader with limits, a `.zip` reader, code hash, themes with contrast
+    checks, templates checked as system files v4), `@piui/plugin-sdk`
+    (backend helper, panel client, types), `pnpm create-plugin`,
+    `pnpm plugin:check` and four examples.
+  - `b2ce510` — contained Node backend (Job Object / process group,
+    allowlisted environment, LF JSON-RPC with 1 MiB frames, timeouts).
+  - `c4ca7a6` — orchestration v6.5 `plugin` step executor with host leases,
+    failure codes and uncertainty like scripts; system files v4 accept it.
+  - `1eb2a8b` — host: registry generations with revision checks, native
+    pickers and staging, trust review, install/update/remove/reload,
+    start-up verification off first paint, safe mode read-only, supervisor
+    (lazy start, crash backoff and crash loop, stop on disable/quit),
+    `piui-plugin` protocol with per-plugin CSP, plugin nodes in the
+    scheduler, plugin ACP agents in the harness registry; app CSP
+    `frame-src` now names only the plugin origin.
+  - `9c56ee9`, `8d6dc54`, `bef7ddb` — Settings → Plugins with the trust review
+    and plugin themes; palette commands and composer actions (also the Pi
+    Tier 1A contributions: CLASSIC_PARITY gap 3 closed) that only prepare
+    text; sandboxed chat panels with a checked `postMessage` bridge and a
+    fallback; plugin nodes and templates in the pipeline editor and runs.
+  - `39b5e65`, `ff511c0`, `c99ea62` — UI Lab plugin host (examples plus a
+    crash-looping "Broken sample", plugin nodes in lab runs, panels served on
+    the plugin origin by the dev server), Russian copy, Playwright specs
+    (trust review, enable/disable, commands, sandboxed panel isolation,
+    plugin node, safe mode; a panel, the review and a theme under the
+    production CSP).
+
 ## In progress
 
 - Nothing; next steps wait for the owner's review of the remaining-work plan.
@@ -209,6 +240,18 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   MCP support. Pickers learn an agent's models only after one of its sessions
   started in this host process. Mode changes the agent makes by itself appear
   on the next snapshot. A crash mid-turn is recorded as uncertain.
+
+- Plugins (ADR-032): panels, the trust review and themes were verified in the
+  browser UI Lab and under the production CSP, where a Playwright route and
+  the Vite dev server stand in for the `piui-plugin` protocol; the native
+  protocol, picker and supervisor are covered by Rust tests with real Node
+  backends but no plugin has been run in the packaged WebView2 app yet.
+  `network`, `project.read` and `project.write` are declarations, not
+  enforcement. Not in v1: MCP tool, renderer, status-item, keybinding and
+  sidebar contributions, other harness adapters, project-local plugins,
+  backend-to-host requests, signed packages. `csp.spec.ts` "main screens"
+  fails at the base commit too (the script editor's CodeMirror field is not
+  an input for `toHaveValue`).
 
 ## Next
 

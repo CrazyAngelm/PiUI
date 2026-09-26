@@ -16,6 +16,16 @@ file never runs one. `pnpm system:check` checks the executor rules and which
 harnesses can run a model call read-only. Example:
 [agent → script → model call](../examples/systems/agent-script-llm.piui.json).
 
+`{"type": "plugin", "pluginId", "nodeType", "config"}` (orchestration v6.5,
+ADR-032) names a node type of a PiUI plugin the user installed and trusted; its
+`config` is a flat object of at most 30 string, number or boolean values. The
+file only names the plugin: importing it never installs, enables or trusts
+one, and the host checks the plugin and the node type's declared fields at
+launch. Plugins can also ship pipeline templates, which are version 4 files
+opened through this same import; the example
+[collect-and-reshape](../examples/plugins/pipeline-pack/templates/collect-and-reshape.piui.json)
+uses the pipeline pack's JSON transform node. See [PLUGINS.md](PLUGINS.md).
+
 
 Use UTF-8 `*.piui.json`. JSON Schema is in [system-file-v1.schema.json](../contracts/system-file-v1.schema.json); [examples](../examples/systems) cover a single agent, Codex → Prime review, and parallel work followed by synthesis. Replace example model placeholders with actual available native model IDs before execution.
 

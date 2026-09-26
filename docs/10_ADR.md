@@ -509,7 +509,10 @@ rewrites under one mutex to a transactional store (SQLite WAL) with per-run
 locking, run archival/deletion and incremental run events. This data is
 authoritative, not cache (ADR-006/023 distinction kept).
 
-## ADR-032 — Plugins run outside the WebView with explicit trust (planned)
+## ADR-032 — Plugins run outside the WebView with explicit trust
+
+**Status:** Accepted and implemented as plugins v1 on 2026-09-27 (plan phase
+8); plugin node steps are orchestration v6.5.
 
 **Decision:** third-party plugins may contribute harnesses, node types, MCP
 tools, commands, settings, renderers, panels, themes and templates. Backend
@@ -519,6 +522,108 @@ an explicit trust decision with a permission list; safe mode disables plugins;
 every renderer has a generic fallback. This supersedes the earlier "arbitrary
 runtime-loaded JS is not a plugin API" rule for harnesses, not the isolation
 principles of ADR-009/010/016.
+
+**Implemented as (v1):**
+
+- **Package format.** A folder or `.zip` with `piui-plugin.json` at its top
+  (`contracts/piui-plugin-v1.schema.json`, `contracts/piui-plugin-v1.ts`).
+  `crates/piui-plugins` is the authority; the UI mirror
+  (`host-api/pluginManifest.ts`), the SDK check (`pnpm plugin:check`) and
+  both test suites share `contracts/fixtures/plugins/`. Unknown fields and
+  permissions are rejected, never dropped, and validation never runs plugin
+  code. Limits: 20 MiB, 8 MiB per file, 2000 files, depth 16; no links,
+  junctions, reserved Windows names or case-only duplicates; a `.zip` is read
+  by PiUI's own reader (stored/deflate, CRC-checked, no ZIP64, encryption or
+  symlinks). The code hash is SHA-256 over every file (path, NUL, length,
+  content hash, sorted), shown in the review and re-checked at every start.
+- **Trust and install.** The WebView never sends a path: `plugins_v1` `pick`
+  opens the host's native picker, the host validates and stages the package
+  under application data and returns a review — publisher, version, every
+  permission in plain words, the exact backend command line, contributions
+  and, for an update, added/removed permissions and whether the code changed.
+  `install` names the reviewed staging id and code hash; the host copies
+  exactly that package to `plugins-v1/packages/<uuid>` (never into a
+  project) and records the hash, permissions and backend entry in a
+  create-only registry generation with revision checks. An update is a new
+  review. "Load unpacked…" runs a development folder in place: code changes
+  load with Reload, a permission or backend change needs a new review. At
+  start-up every package is verified off the first-paint path; a changed
+  installed package, a changed development trust or an incompatible
+  `engines.piui` leaves the plugin listed with its problem and inactive.
+  Safe mode lists plugins read-only: nothing is active and every change is
+  refused.
+- **Backend.** An optional Node.js entry that the supervisor starts lazily
+  (`node <entry>` from the package folder, Node resolved like the bridges),
+  contained like scripts (Windows Job Object assigned before resume, or a
+  process group), with an allowlisted environment (no API keys, tokens,
+  `NODE_OPTIONS` or PiUI variables) and a private data folder. JSON-RPC 2.0
+  over stdio with LF-only framing and 1 MiB frames
+  (`contracts/plugin-backend-v1.ts`): `initialize` (15 s), `command/execute`
+  (30 s), `node/run` (the node type's timeout), `settings/changed`,
+  `shutdown` (2 s grace, then the tree is killed). A backend never sends
+  requests in v1; any other frame is a protocol violation that stops it. A
+  timeout stops it; a crash restarts on next use after 1, 2, 4 … 60 s, and
+  five crashes in ten minutes stop it until the user restarts it. Disable,
+  remove, reload and quit stop the whole tree. Logs are metadata only. A
+  backend is not a sandbox: it has the user's file and network access, and
+  `network`, `project.read` and `project.write` are declarations PiUI shows,
+  not restrictions it enforces.
+- **Panels and the CSP change.** A panel is the plugin's static `ui.entry`
+  page served by the `piui-plugin` custom protocol
+  (`http://piui-plugin.localhost/<id>/…` on Windows,
+  `piui-plugin://localhost/<id>/…` elsewhere) from the entry's folder only,
+  and framed with `sandbox="allow-scripts"`, so it has an opaque origin, no
+  Tauri API, no same-origin access, navigation, forms or popups. The response
+  carries a per-plugin policy (`default-src 'none'`; scripts, styles, images
+  and fonts only from the plugin's UI folder; no connections, frames,
+  workers, forms or base URI; `sandbox allow-scripts`), shared with the UI
+  and E2E stand-ins through `contracts/fixtures/plugin-panel-csp.json`. The
+  app policy changes only from `frame-src 'none'` to
+  `frame-src http://piui-plugin.localhost piui-plugin:` — the two spellings of
+  that one origin (WebView2 maps custom schemes to `http://<scheme>.localhost`)
+  — so PiUI can frame plugin panels and nothing else; `script-src`,
+  `connect-src` and `style-src` are unchanged. The frame talks to PiUI only
+  through the bridge (`contracts/plugin-panel-v1.ts`): a `ready`/`init`
+  handshake with a per-mount channel, messages checked for source window,
+  channel, 64 KiB size, 20 requests per second, method, parameters and
+  permission (`context.get` needs `chat.read`, `commands.run` `commands`,
+  `settings.*` `ui.settings`, `notice.show` `notifications`). A panel that
+  does not say `ready` within 10 s is replaced with a generic fallback.
+- **Declarative contributions.** Commands (palette and composer; declared
+  text or a backend command) prepare text in the chat's message box for
+  review and never send it; the same registry projects the Tier 1A
+  `piui.manifest.json` commands and composer actions of Pi packages in Pi
+  chats. Settings are forms PiUI renders and validates like the host.
+  Themes override only the documented color tokens with checked colors and
+  WCAG contrast pairs, applied through the CSSOM while PiUI shows their
+  appearance. Templates are portable system files (v4) checked at install
+  and opened through the normal import as a new unsaved draft.
+- **Node types (orchestration v6.5).** A `plugin` step executor
+  (`pluginId`, `nodeType`, flat `config`) is host work like a script: no team
+  member, no input mappings, the coordinator's lease and dispatch, admitted
+  only in trusted, live projects outside safe mode while the plugin is
+  active with `node.run` and the configuration passes the node type's
+  fields. The backend receives the script stdin document plus the
+  configuration and returns text or one JSON object, recorded exactly like a
+  script's stdout. Codes: `plugin-unavailable`, `plugin-config-invalid`,
+  `plugin-input-unavailable`, `plugin-start-failed` (nothing ran),
+  `plugin-node-failed` (plugin message as detail), `plugin-node-timeout`; a
+  backend lost mid-run leaves the step uncertain and it is never replayed.
+- **ACP agents.** A plugin's ACP descriptors join Settings → Harnesses as
+  `source: plugin` (`harness-registry-v1`, additive) and still need the
+  user's exact command-line trust (ADR-034) before they run; an id another
+  agent uses is not added, and the agent leaves with its plugin
+  (`PLUGIN_OWNED`).
+
+**Contracts:** new `plugins_v1`, `plugin_command_v1`, `plugin_template_v1`
+and the `piui://plugins-v1` event (`contracts/plugins-v1.ts`); the backend
+and panel protocols above; additive `harness-registry-v1` fields; the
+orchestration v6.5 `plugin` executor, also accepted by system file v4.
+
+**Not in v1:** MCP tool, renderer, status-item, keybinding and sidebar or
+right-panel contributions; harness adapters other than ACP descriptors;
+project-local plugins; backend requests to the host; signed packages or a
+catalog; any enforcement of `network` or project-folder permissions.
 
 ## ADR-033 — Script nodes are trusted user code (orchestration v6.2)
 
