@@ -1,0 +1,43 @@
+{
+  "timestamp": "2026-09-27T04:31:00+07:00",
+  "commit": "4f59885",
+  "branch": "rework/piui-2 (local, not pushed)",
+  "changes": "0.2.0: Codex MCP elicitation approvals; Claude Code sign-in status and typed refusal; node type change, CodeMirror script editor, script test; classic parity (Pi history and branches, extension surfaces, extension toggles, project rename/pin/remove); triggers (run from chat, run-finished and files-changed automations, pause all, tray, start at sign-in, single instance); generic ACP harness registry with Gemini CLI and Settings -> Harnesses; pinned data, debug in editor, archive and delete runs; signed updates compiled in but off; CSP hashes for three library inline styles; lazy Russian catalog",
+  "release": {
+    "portable": {
+      "path": "artifacts/PiUI_0.2.0_windows_x86_64.exe",
+      "bytes": 30233088,
+      "sha256": "875f9b60ffca3dfe625708c1857a4c3188316cac392a7febcb845ffc668cb1c3"
+    },
+    "installer": {
+      "path": "artifacts/PiUI_0.2.0_x64-setup.exe",
+      "bytes": 8085530,
+      "sha256": "22685c8494b423ec988f69e890f585f66ab817f655fe644e1b335202102949e9"
+    },
+    "authenticode": "NotSigned (no certificate configured)",
+    "updater": "not configured (no public key or endpoint); the app makes no update checks",
+    "installed": null,
+    "launch": "not performed: release builds have no isolated data directories; launching would load the owner's real projects and enabled schedules (paid native runs); the owner launches it for testing"
+  },
+  "rollback": "evidence/local-release-20260926/rollback-0.1.1-20260922/ (git-ignored)",
+  "verification": {
+    "desktopCheck": "svelte-check found 0 errors and 0 warnings",
+    "desktopTests": "110 files, 653 tests passed",
+    "contractTests": "12 files, 124 tests passed",
+    "bridgeTests": "142 tests: 141 passed, 1 skipped (live handshake)",
+    "labE2E": "Playwright: 94 passed (92 UI Lab incl. axe on 23 screens in both themes, 2 production build under the app CSP)",
+    "repoCheck": "public repository audit passed; version check 0.2.0 passed",
+    "cargoFmt": "clean",
+    "cargoClippy": "cargo clippy --workspace --all-targets -- -D warnings passed",
+    "cargoTest": "cargo test --workspace: 592 passed, 17 ignored, 0 failed"
+  },
+  "cleanup": {
+    "removed": ["target/release"],
+    "kept": {
+      "target/main": "merge checks for three branches still in progress",
+      "target/debug": "rust-analyzer"
+    },
+    "freeBytesBefore": 146886615040,
+    "freeBytesAfter": 148747227136
+  }
+}
