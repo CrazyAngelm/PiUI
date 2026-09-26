@@ -1,0 +1,42 @@
+{
+  "timestamp": "2026-09-27T06:37:00+07:00",
+  "commit": "7ba95da",
+  "branch": "rework/piui-2 (local, not pushed)",
+  "changes": "0.2.1: composer attachments (images per harness), @ file mentions, $ Codex skills, native slash commands, harness pick kept on catalog refresh; git review panel with exact-patch stage/unstage/revert and trash for untracked files; worktree chats; continue in another harness; continue a terminal Pi session in PiUI; plugins v1 (trust review, contained backends, sandboxed panels, palette/composer commands, plugin nodes orchestration v6.5, themes, templates, ACP agents, SDK and examples)",
+  "release": {
+    "portable": {
+      "path": "artifacts/PiUI_0.2.1_windows_x86_64.exe",
+      "bytes": 33299456,
+      "sha256": "47cc27b5826878de02105204ef2c5db14b15621ec135985d4e686df2b755284e"
+    },
+    "installer": {
+      "path": "artifacts/PiUI_0.2.1_x64-setup.exe",
+      "bytes": 8909384,
+      "sha256": "ba85e6c28d08d77ddd281754e79a779142af84549f03dcaf40cd671d09131a97"
+    },
+    "authenticode": "NotSigned (no certificate configured)",
+    "updater": "not configured (no public key or endpoint); the app makes no update checks",
+    "installed": null,
+    "launch": "not performed: release builds have no isolated data directories; launching would load the owner's real projects and enabled schedules (paid native runs); the owner launches it for testing"
+  },
+  "supersedes": "0.2.0 (evidence/local-release-20260927/release-0.2.0.json); its artifacts were replaced by this build",
+  "rollback": "evidence/local-release-20260926/rollback-0.1.1-20260922/ (git-ignored)",
+  "verification": {
+    "desktopCheck": "svelte-check found 0 errors and 0 warnings",
+    "desktopTests": "130 files, 769 tests passed",
+    "contractTests": "16 files, 153 tests passed",
+    "bridgeTests": "154 tests: 153 passed, 1 skipped (live handshake)",
+    "systemExamples": "9 valid examples",
+    "labE2E": "Playwright: 129 passed (UI Lab flows, axe on every main screen in both themes, production build under the app CSP)",
+    "repoCheck": "public repository audit passed; version check 0.2.1 passed",
+    "cargoFmt": "clean",
+    "cargoClippy": "cargo clippy --workspace --all-targets -- -D warnings passed",
+    "cargoTest": "cargo test --workspace: 727 passed, 18 ignored, 0 failed"
+  },
+  "cleanup": {
+    "removed": ["target/release", "target/main", "target/piui-e2e", "target/tmp", "all agent worktrees and their private target dirs"],
+    "kept": { "target/debug": "rust-analyzer running" },
+    "freeBytesBefore": 152643878912,
+    "freeBytesAfter": 182092587008
+  }
+}
