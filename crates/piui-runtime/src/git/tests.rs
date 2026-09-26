@@ -332,6 +332,49 @@ fn whole_file_patches_cover_binary_deleted_and_untracked_files() {
 }
 
 #[test]
+fn a_hunk_revert_keeps_crlf_work_trees_under_autocrlf() {
+    let scratch = Scratch::new("crlf");
+    let repo = init_repository(&scratch);
+    git(&repo, &["config", "core.autocrlf", "true"]);
+    let crlf =
+        |values: &[&str]| -> String { values.iter().map(|line| format!("{line}\r\n")).collect() };
+    std::fs::write(repo.join("win.txt"), crlf(&ORIGINAL)).expect("writes CRLF file");
+    git(&repo, &["add", "win.txt"]);
+    git(&repo, &["commit", "-q", "-m", "crlf"]);
+    // A fresh checkout writes CRLF like a Windows clone does.
+    std::fs::remove_file(repo.join("win.txt")).expect("removes");
+    git(&repo, &["checkout", "--", "win.txt"]);
+    let checked_out = std::fs::read(repo.join("win.txt")).expect("reads checkout");
+    let mut changed = ORIGINAL.to_vec();
+    changed[0] = "A";
+    changed[12] = "M";
+    std::fs::write(repo.join("win.txt"), crlf(&changed)).expect("agent edits");
+    block_on(async {
+        let top = std::fs::canonicalize(&repo).expect("top");
+        let patch = diff(&scratch.runner, &top, "win.txt", false)
+            .await
+            .expect("diff");
+        assert_eq!(patch.hunk_count(), 2, "line endings are not a change");
+        let first = patch.hunk_patch(0).expect("hunk");
+        apply(&scratch.runner, &top, &first, ApplyTarget::WorkTree, true)
+            .await
+            .expect("reverts the first hunk");
+        let second = diff(&scratch.runner, &top, "win.txt", false)
+            .await
+            .expect("diff");
+        let hunk = second.hunk_patch(0).expect("hunk");
+        apply(&scratch.runner, &top, &hunk, ApplyTarget::WorkTree, true)
+            .await
+            .expect("reverts the second hunk");
+    });
+    assert_eq!(
+        std::fs::read(repo.join("win.txt")).expect("reads"),
+        checked_out,
+        "the work tree is back to its CRLF checkout, byte for byte"
+    );
+}
+
+#[test]
 fn literal_pathspecs_never_expand_patterns() {
     let scratch = Scratch::new("literal");
     let repo = init_repository(&scratch);
