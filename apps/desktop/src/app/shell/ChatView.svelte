@@ -14,6 +14,8 @@
   import HarnessMark from './HarnessMark.svelte';
   import ChatDetails from './ChatDetails.svelte';
   import ChatComposer from '../chat/ChatComposer.svelte';
+  import Transcript from '../chat/transcript/Transcript.svelte';
+  import SearchIcon from '@lucide/svelte/icons/search';
   import { useWorkspace } from './context';
 
   interface Props {
@@ -23,13 +25,13 @@
   let { sessionId, onDelete }: Props = $props();
   const store = useWorkspace();
 
-  const surface = import('../../features/workspace/conversationSurface');
   const session = $derived(store.catalog.sessions.find((item) => item.id === sessionId));
   const snapshot = $derived(store.snapshots[sessionId]);
   const workspace = $derived(store.catalog.workspaces.find((item) => item.id === session?.workspaceId));
   const running = $derived(session ? ['starting', 'running', 'stopping'].includes(session.status) : false);
 
   let detailsOpen = $state(readDetailsOpen());
+  let searchOpen = $state(false);
   let renaming = $state(false);
   let titleDraft = $state('');
   let titleInput = $state<HTMLInputElement | null>(null);
@@ -66,6 +68,9 @@
     if (matchesShortcut(event, 'Mod+Alt+B')) {
       event.preventDefault();
       toggleDetails();
+    } else if (matchesShortcut(event, 'Mod+F')) {
+      event.preventDefault();
+      searchOpen = true;
     }
   }
 
@@ -110,6 +115,7 @@
               {$t('Stop')}
             </Button>
           {/if}
+          <IconButton label={$t('Search this chat')} shortcut="Mod+F" active={searchOpen} onclick={() => (searchOpen = !searchOpen)}><SearchIcon /></IconButton>
           <IconButton label={$t('Details')} shortcut="Mod+Alt+B" active={detailsOpen} onclick={toggleDetails}><PanelRight /></IconButton>
           <Menu
             align="end"
@@ -139,16 +145,14 @@
         </div>
       {/if}
 
-      {#await surface}
-        <div class="loading"><Skeleton lines={6} /></div>
-      {:then conversation}
-        {#if snapshot}
-          <conversation.ConversationViewport
+      {#if snapshot}
+          <Transcript
             blocks={snapshot.blocks}
             loading={store.sessionLoading}
             sessionKey={snapshot.session.id}
             historySessionId={snapshot.session.id}
             agentLabel={harnessMeta(snapshot.session.harness).label}
+            bind:searchOpen
           />
           <div class="composer-zone">
             {#each snapshot.approvals as approval (approval.id)}
@@ -185,9 +189,6 @@
             {/snippet}
           </EmptyState>
         {/if}
-      {:catch}
-        <EmptyState title={$t('Could not open conversation controls. Try again.')} />
-      {/await}
     </section>
 
     {#if detailsOpen && snapshot}
