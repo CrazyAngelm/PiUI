@@ -60,7 +60,8 @@
     id = value?.id ?? crypto.randomUUID();
     name = value?.name ?? '';
     nameTouched = !!value;
-    launchCommandId = value?.launchCommandId ?? launchCommands[0]?.id ?? '';
+    const target = value?.launchCommandId ?? launchCommands[0]?.id ?? '';
+    launchCommandId = target;
     const trigger = value?.trigger;
     const timed = trigger?.type === 'event' ? undefined : trigger;
     mode = trigger?.type === 'event' ? 'event' : 'schedule';
@@ -73,8 +74,9 @@
     days = timed?.type === 'calendar' ? sortDays(timed.days) : [...WEEKDAYS];
     missed = value?.missedRunPolicy ?? 'skip';
     overlap = value?.overlapPolicy ?? 'skip';
-    // A new rule waits for another pipeline than the one it starts.
-    const other = launchCommands.find((command) => command.id !== launchCommandId) ?? launchCommands[0];
+    // A new rule waits for another pipeline than the one it starts. Reading
+    // `launchCommandId` here would re-run this reset on every pipeline change.
+    const other = launchCommands.find((command) => command.id !== target) ?? launchCommands[0];
     draft = eventDraftFrom(trigger, other?.id ?? '');
     problem = '';
   });

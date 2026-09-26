@@ -82,8 +82,18 @@ test('main screens run under the app CSP without violations', async ({ lab, page
   const inspector = page.getByRole('complementary', { name: 'Node settings' });
   await expect(inspector.getByRole('note')).toContainText('It is not a sandbox');
   await inspector.getByRole('button', { name: 'Insert example' }).click();
-  await expect(inspector.getByRole('textbox', { name: 'Code' })).toHaveValue(/process\.stdin/);
-  await clean('pipeline editor with a script node');
+  // CodeMirror styles itself through constructable stylesheets in a shadow root.
+  await expect(inspector.getByRole('textbox', { name: 'Code' })).toContainText('process.stdin');
+  const testPanel = inspector.getByRole('region', { name: 'Test script' });
+  await testPanel.getByRole('button', { name: 'Test', exact: true }).click();
+  await expect(testPanel.getByRole('status').filter({ hasText: 'A run would succeed' })).toBeVisible({ timeout: 15_000 });
+  await clean('pipeline editor with a script node and its test');
+  await inspector.getByRole('button', { name: 'Node type: Script' }).click();
+  await page.getByRole('menuitem', { name: 'Agent' }).click();
+  const change = page.getByRole('dialog', { name: 'Change this node to Agent?' });
+  await change.getByRole('button', { name: 'Cancel' }).click();
+  await expect(change).toBeHidden();
+  await clean('node type dialog');
 
   // Leaving the unsaved draft asks first; discard and open Runs.
   await lab.nav('Runs').click();
@@ -93,18 +103,55 @@ test('main screens run under the app CSP without violations', async ({ lab, page
   const run = page.getByRole('region', { name: 'Run' });
   await run.getByRole('application').getByRole('group', { name: 'Reviewer', exact: true }).click();
   await page.getByRole('tablist', { name: 'Step details' }).getByRole('tab', { name: 'Conversation' }).click();
-  await clean('runs with the step panel');
+  await run.getByRole('button', { name: 'Inputs' }).click();
+  await expect(page.getByRole('dialog', { name: 'Run inputs' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await clean('runs with the step panel and the inputs popover');
+
+  // A chat: an MCP form request, /run and a Pi extension's surfaces.
+  await lab.chat(/File an issue for the broken docs link/).click();
+  const mcp = page.getByRole('article', { name: 'MCP server lab-issues' });
+  await mcp.getByRole('button', { name: 'Decline' }).click();
+  await expect(mcp).toBeHidden();
+  await clean('MCP form request');
+  await lab.chat(/Route host calls through one transport/).click();
+  await page.getByRole('textbox', { name: 'Message' }).fill('/run');
+  await page.getByRole('textbox', { name: 'Message' }).press('Enter');
+  const picker = page.getByRole('dialog', { name: 'Run a pipeline' });
+  await expect(picker.getByRole('button', { name: 'Next…' })).toBeEnabled();
+  await picker.getByRole('button', { name: 'Cancel' }).click();
+  await expect(picker).toBeHidden();
+  await clean('run a pipeline from a chat');
+  await lab.chat(/Pi extension playground/).click();
+  await page.getByRole('textbox', { name: 'Message' }).fill('/extension-demo');
+  await page.getByRole('textbox', { name: 'Message' }).press('Enter');
+  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'Build a preview?' }) }).getByRole('button', { name: 'Deny' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Preview build declined.' })).toBeVisible({ timeout: 20_000 });
+  await clean('Pi extension surfaces');
+
+  // Read-only Pi session history with its branches.
+  await lab.sidebar.getByRole('button', { name: 'Options for piui' }).click();
+  await page.getByRole('menuitem', { name: 'Pi session history' }).click();
+  await page.getByRole('button', { name: /^Make the session index incremental/ }).click();
+  await expect(page.getByRole('complementary', { name: 'Session details' }).getByRole('region', { name: 'Branches' })).toBeVisible();
+  await clean('Pi session history');
 
   // Automations: the schedule dialog opens and closes.
   const automations = await lab.openAutomations();
   await automations.getByRole('button', { name: 'New automation' }).click();
   await expect(page.getByRole('dialog', { name: 'New automation' })).toBeVisible();
+  await page.getByRole('dialog', { name: 'New automation' }).getByRole('group', { name: 'Start' }).getByRole('radio', { name: 'After an event' }).click();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog', { name: 'New automation' })).toBeHidden();
   await clean('automations and the schedule dialog');
 
-  // Settings: theme and language, then the palette.
-  await lab.openSettings();
+  // Settings: background, extensions, theme and language, then the palette.
+  const sections = await lab.openSettings();
+  await sections.getByRole('button', { name: 'Background' }).click();
+  await page.getByRole('switch', { name: 'Keep running in the tray when the window is closed' }).click();
+  await sections.getByRole('button', { name: 'Extensions' }).click();
+  await page.getByRole('switch', { name: 'Turn off permission-guard for Pi' }).click();
+  await sections.getByRole('button', { name: 'General' }).click();
   await page.getByRole('group', { name: 'Theme' }).getByRole('radio', { name: 'Dark' }).click();
   await page.getByRole('group', { name: 'Language' }).getByRole('radio', { name: 'Русский' }).click();
   await page.getByRole('group', { name: 'Язык' }).getByRole('radio', { name: 'English' }).click();

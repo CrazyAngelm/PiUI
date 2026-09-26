@@ -323,22 +323,28 @@
     min-width: 0;
     min-height: 0;
   }
+  /* Narrow stages (step panel open) wrap the title and the actions onto
+     separate lines instead of drawing them over each other. */
   .stage__head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    justify-content: space-between;
-    gap: var(--piui-space-3);
+    justify-content: flex-end;
+    gap: 6px var(--piui-space-3);
     min-height: 48px;
-    padding: 0 var(--piui-space-3) 0 var(--piui-space-4);
+    padding: 6px var(--piui-space-3) 6px var(--piui-space-4);
     border-bottom: 1px solid var(--piui-border-subtle);
   }
   .stage__title {
     display: flex;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
     align-items: center;
-    gap: var(--piui-space-2);
+    gap: 4px var(--piui-space-2);
     min-width: 0;
   }
   h2 {
+    max-width: 100%;
     margin: 0;
     overflow: hidden;
     font-size: var(--piui-text-lg);
@@ -348,8 +354,10 @@
   }
   .stage__actions {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: var(--piui-space-1);
-    flex: none;
+    min-width: 0;
   }
   .stage__canvas {
     flex: 1;

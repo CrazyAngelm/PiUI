@@ -193,6 +193,9 @@ export async function mountCodeEditor(host: HTMLElement, options: CodeEditorOpti
         bracketMatching(),
         EditorState.tabSize.of(4),
         syntaxHighlighting(codeHighlight),
+        // The text box is already in the tab order (contenteditable); saying so
+        // explicitly lets checkers see the scroll area is keyboard-reachable.
+        EditorView.contentAttributes.of({ tabindex: '0' }),
         codeTheme,
         SIZE[options.size],
         language.of(initialLanguage),

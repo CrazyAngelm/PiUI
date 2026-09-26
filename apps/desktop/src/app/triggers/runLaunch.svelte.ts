@@ -28,7 +28,12 @@ export class RunLaunch {
   busy = $state(false);
   error = $state('');
 
-  private target: Target | undefined;
+  /**
+   * Reactive: `ready` and `needsInputs` read it first and short-circuit, so a
+   * plain field would leave the dialog's buttons without a dependency on the
+   * values that change once the target has loaded.
+   */
+  private target = $state.raw<Target | undefined>();
   private generation = 0;
   /** Kept until the start is confirmed, so a retry cannot start a second run. */
   private pendingRunId: string | undefined;

@@ -39,6 +39,7 @@
       {side}
       sideOffset={6}
       collisionPadding={8}
+      role="dialog"
       aria-label={label}
       style="width: {typeof width === 'number' ? `${width}px` : width}"
     >

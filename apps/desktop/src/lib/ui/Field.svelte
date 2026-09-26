@@ -48,7 +48,7 @@
   }
   .field__optional {
     margin-left: 4px;
-    color: var(--piui-text-disabled);
+    color: var(--piui-text-faint);
     font-weight: var(--piui-weight-regular);
   }
   .field__hint,
