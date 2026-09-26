@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CLAUDE_SIGN_IN_MESSAGE, harnessCapabilities } from './catalogFake';
-import type { AgentProfile, OrchestrationRunV6 } from './labContracts';
-import type { LabHost } from './labHost';
+import type { AgentProfile, OrchestrationCatalogV6, OrchestrationRunV6 } from './labContracts';
+import { claudeSignedOutFromSearch, type LabHost } from './labHost';
 import { labUuid } from './labRandom';
 import { labHost, rejection } from './labTestKit';
 
@@ -58,6 +58,26 @@ describe('UI Lab Claude Code sign-in', () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('seeds ?claude=signed-out with a Claude check system whose run fails with the typed code', async () => {
+    expect(claudeSignedOutFromSearch('?lab=demo&claude=signed-out')).toBe(true);
+    expect(claudeSignedOutFromSearch('?lab=demo')).toBe(false);
+    const host = labHost('demo', { claudeSignedOut: true });
+    expect(host.state.harnesses.find((summary) => summary.kind === 'claude-code')?.reason).toBe(CLAUDE_SIGN_IN_MESSAGE);
+    const workspaceId = host.state.projects.find((project) => project.name === 'piui')?.id ?? '';
+    const catalog = await call<OrchestrationCatalogV6>(host, 'orchestration_catalog_v6', { workspaceId });
+    const command = catalog.launchCommands.find((item) => item.name === 'Claude check');
+    const team = catalog.teams.find((item) => item.name === 'Claude check');
+    const pipeline = catalog.pipelines.find((item) => item.name === 'Claude check');
+    expect(command).toBeDefined();
+    const runId = labUuid('test:claude-check');
+    expect(await rejection(call(host, 'orchestration_start_run_v6', { workspaceId, runId, teamId: team?.id, pipelineId: pipeline?.id })))
+      .toMatchObject({ code: 'runtime-unavailable' });
+    const run = await getRun(host, workspaceId, runId);
+    expect(run.tasks[0]?.failure).toEqual({ code: 'harness-sign-in-required' });
+    // The default demo is unchanged.
+    expect(labHost('demo').state.harnesses.find((summary) => summary.kind === 'claude-code')?.reason).toBeUndefined();
   });
 
   it('keeps a signed-out verdict out of the offline capabilities', () => {
