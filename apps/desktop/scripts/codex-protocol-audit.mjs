@@ -227,6 +227,24 @@ await flow('settings', ['--expect-settings', JSON.stringify({ tier: 'fast' })], 
 });
 await flow('coordinator', ['--coordinator'], settle, { coordination: true });
 await flow('current-time', ['--current-time'], settle);
+// MCP elicitations: accept with form values, accept without fields, decline,
+// dismiss, immediate refusals and the dismissal of an interrupted turn.
+const acceptForm = (approval) => {
+  if (!approval.form) return { decision: approval.decisions.includes('deny') ? 'deny' : 'cancel' };
+  const values = { 'field-1': 'Fixture', 'field-2': 'choice-1', 'field-4': true };
+  return { decision: 'approve-once', ...(approval.form.fields.length ? { text: JSON.stringify(values) } : {}) };
+};
+await flow('mcp-elicitation-accept', ['--mcp-elicitation'], (adapter) => respondAll(adapter, acceptForm));
+await flow('mcp-elicitation-decline', ['--mcp-elicitation'], (adapter) => respondAll(adapter, (approval) => ({
+  decision: approval.form?.fields.length ? 'deny' : 'cancel',
+})));
+await flow('mcp-elicitation-edge', ['--mcp-elicitation-edge'], settle);
+await flow('mcp-elicitation-interrupt', ['--hold-turn', '--mcp-elicitation-turn'], async (adapter) => {
+  await adapter.prompt({ text: 'elicitation', mode: 'prompt' });
+  await settle();
+  await adapter.interrupt();
+  await settle();
+});
 
 console.log(JSON.stringify({ checked: Object.fromEntries([...checked].sort()), findings }, null, 2));
 process.exitCode = findings.length ? 1 : 0;

@@ -2,7 +2,6 @@ import type {
   AgentProfile, HarnessSummary, LaunchCommandReference, OrchestrationHostErrorCode, PipelineDefinition, PipelineStep,
   ResultField, RouterPredicate, RunDefinitionSnapshot, TeamDefinition,
 } from '../labContracts';
-import { CLAUDE_SIGN_IN_MESSAGE } from '../catalogFake';
 import type { LabOrchestrationWorkspace } from '../labState';
 import { pipelineInputIssues, reviewLimitValid } from '../../runInputs';
 import { executorAuthorityIssue, isScriptStep, LLM_READ_ONLY_UNSUPPORTED, llmProfileIssue, stepExecutorIssue } from '../../stepExecutors';
@@ -277,11 +276,17 @@ function resourceRuleUnsupported(profile: AgentProfile, rule: NonNullable<AgentP
   }
 }
 
+/**
+ * Task failure of a managed start that the harness refused at its login
+ * check (Claude Code not signed in with a subscription); nothing ran.
+ */
+export const HARNESS_SIGN_IN_REQUIRED = 'harness-sign-in-required';
+
 /** `launch_policy`: adapter refusals recorded before any native process starts. */
 export function launchPolicyIssue(profile: AgentProfile, summary: HarnessSummary | undefined): OrchestrationHostErrorCode | undefined {
   if (summary?.status !== 'available') return 'runtime-unavailable';
-  // The host reports every Claude Code capability unsupported until a start verifies the subscription.
-  if (profile.harness === 'claude-code' && summary.reason === CLAUDE_SIGN_IN_MESSAGE) return 'runtime-unavailable';
+  // A signed-out Claude Code is not a policy refusal: its launch fails with
+  // `harness-sign-in-required` (see `LabRunScheduler`), so a retry can start it.
   const networkUnsupported = profile.networkAccess === true && (profile.harness !== 'codex'
     || (profile.permissionMode !== 'read-only' && profile.permissionMode !== 'workspace-write'));
   const claude = profile.harness === 'claude-code';

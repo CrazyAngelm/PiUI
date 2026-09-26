@@ -13,6 +13,7 @@ import { EMPTY_NATIVE_HISTORY, piHistoryHandlers } from './piHistoryFake';
 import { LabRunScheduler } from './orchestration/runScheduler';
 import { scriptTestHandlers } from './orchestration/scriptTestFake';
 import { buildSeed, type SeedActivity } from './scenarios';
+import { withSignedOutClaude } from './scenarios/signedOutClaude';
 import { LabSessions } from './sessionRuntime';
 import { ambientSegment } from './turnScripts';
 import { workspaceHandlers } from './workspaceFake';
@@ -31,6 +32,8 @@ export interface LabHostOptions {
   readonly timers?: LabTimers;
   /** Starts the scenario's background activity (a streaming chat, a running run). Default `true`. */
   readonly ambient?: boolean;
+  /** Claude Code signed out (see `withSignedOutClaude`). Defaults to `?claude=signed-out`. */
+  readonly claudeSignedOut?: boolean;
 }
 
 export interface LabHost extends HostTransport {
@@ -46,6 +49,11 @@ export function scenarioFromSearch(search: string): LabScenarioName {
 
 function currentScenario(): LabScenarioName {
   return typeof window === 'undefined' ? 'demo' : scenarioFromSearch(window.location.search);
+}
+
+/** `?claude=signed-out` shows Claude Code as not signed in with a Claude subscription. */
+export function claudeSignedOutFromSearch(search: string): boolean {
+  return new URLSearchParams(search).get('claude') === 'signed-out';
 }
 
 function startActivity(activity: readonly SeedActivity[], runtime: LabSessions, scheduler: LabRunScheduler, start: boolean): void {
@@ -81,7 +89,9 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
   const timers = options.timers ?? browserTimers;
   const clock = new LabClock(timers);
   const bus = new LabEventBus(timers);
-  const seed = buildSeed(scenario);
+  const signedOut = options.claudeSignedOut
+    ?? (typeof window !== 'undefined' && claudeSignedOutFromSearch(window.location.search));
+  const seed = signedOut ? withSignedOutClaude(buildSeed(scenario)) : buildSeed(scenario);
   const state: LabState = {
     scenario,
     safeMode: seed.safeMode,

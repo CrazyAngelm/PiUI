@@ -13,6 +13,7 @@
   import { Picker, Segmented, Spinner, Switch, Textarea, toasts, type PickerItem } from '../../lib/ui';
   import { harnessMeta } from '../harnessMeta';
   import { errorMessage } from '../workspaceStore.svelte';
+  import { workspaceError } from '../../host-api/workspaceClient';
   import HarnessMark from './HarnessMark.svelte';
   import { useWorkspace } from './context';
 
@@ -295,12 +296,13 @@
     </button>
   </div>
 </div>
+{#if harness === 'claude-code' && workspaceId}{#await import('../chat/ClaudeSignInStatus.svelte') then status}<status.default {workspaceId} observe />{/await}{/if}
 {#if workspace && !workspace.personal && workspace.trust !== 'trusted'}
   <p class="notice">
     {$t('This folder is restricted. Trust it to let agents work on its files.')}
     <button type="button" class="link" onclick={() => onTrust(workspace)}>{$t('Review trust…')}</button>
   </p>
-{:else if modelsError}
+{:else if modelsError && modelsError !== workspaceError({ code: 'SIGN_IN_REQUIRED' }).message}
   <p class="notice notice--error">{modelsError}</p>
 {/if}
 

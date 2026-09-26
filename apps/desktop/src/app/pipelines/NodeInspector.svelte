@@ -33,6 +33,7 @@
   import NodeTypeMenu from './NodeTypeMenu.svelte';
   import ScriptEditor from './code/ScriptEditor.svelte';
   import ScriptTestPanel from './ScriptTestPanel.svelte';
+  import HarnessLimitations from './HarnessLimitations.svelte';
 
   interface Props {
     editor: PipelineEditorStore;
@@ -302,6 +303,7 @@
                 {/snippet}
               </Picker>
             </Field>
+            <HarnessLimitations harness={profile.harness} />
             <Field label={$t('Model')} error={catalogError}>
               {#snippet action()}
                 <IconButton size="sm" label={$t('Refresh models')} onclick={() => void editor.loadCatalog(profile.harness, true)}><RefreshCw /></IconButton>

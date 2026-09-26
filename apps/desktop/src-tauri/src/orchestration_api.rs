@@ -106,6 +106,7 @@ fn scheduler_error(
     let code = match error.code {
         "llm-read-only-unsupported" => "unsupported-policy",
         code if code.starts_with("script-") => "runtime-unavailable",
+        crate::orchestration_scheduler::HARNESS_SIGN_IN_REQUIRED => "runtime-unavailable",
         code => code,
     };
     OrchestrationApiError { code }
@@ -205,7 +206,10 @@ pub struct OrchestrationApiState {
 }
 
 impl OrchestrationApiState {
-    fn control_flow(&self, request: FlowControlRequest) -> Result<Run, OrchestrationApiError> {
+    pub(crate) fn control_flow(
+        &self,
+        request: FlowControlRequest,
+    ) -> Result<Run, OrchestrationApiError> {
         self.store
             .transact(|workspaces| {
                 let run = mutable_run(workspaces, &request.workspace_id, &request.run_id)?;
@@ -530,6 +534,47 @@ impl OrchestrationApiState {
         &self,
         workspace_id: &str,
         lease: &ScriptLease,
+        failure_code: &str,
+    ) -> Result<Run, OrchestrationApiError> {
+        self.store
+            .transact(|workspaces| {
+                let run = mutable_run(workspaces, workspace_id, &lease.run_id)?;
+                let revision = run.revision();
+                Coordinator::release_task_lease(
+                    run,
+                    revision,
+                    &lease.step_id,
+                    lease.task_revision,
+                    &lease.lease_id,
+                )
+                .map_err(|_| StoreError::Conflict)?;
+                let revision = run.revision();
+                let task_revision = run
+                    .tasks()
+                    .iter()
+                    .find(|task| task.step_id() == lease.step_id)
+                    .map(TaskRecord::revision)
+                    .ok_or(StoreError::NotFound)?;
+                Coordinator::reject_ready_task(
+                    run,
+                    revision,
+                    &lease.step_id,
+                    task_revision,
+                    FailureRecord::new(failure_code),
+                )
+                .map_err(|_| StoreError::Conflict)?;
+                Ok(run.clone())
+            })
+            .map_err(Into::into)
+    }
+
+    /// Records a certain pre-execution refusal of a leased native task: the
+    /// harness refused its start (for example a signed-out login) before any
+    /// task text was written, so the task fails instead of becoming uncertain.
+    pub fn reject_leased_task(
+        &self,
+        workspace_id: &str,
+        lease: &ControlledSpawnLease,
         failure_code: &str,
     ) -> Result<Run, OrchestrationApiError> {
         self.store
@@ -2750,6 +2795,8 @@ mod tests {
             ("script-runtime-unavailable", "runtime-unavailable"),
             ("script-input-unavailable", "runtime-unavailable"),
             ("script-start-failed", "runtime-unavailable"),
+            // A refused harness login is a typed task failure; commands keep their code.
+            ("harness-sign-in-required", "runtime-unavailable"),
             ("unsupported-policy", "unsupported-policy"),
             ("conflict", "conflict"),
             ("native-outcome-uncertain", "native-outcome-uncertain"),

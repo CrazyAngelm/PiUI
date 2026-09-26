@@ -3,10 +3,19 @@
   import FilePen from '@lucide/svelte/icons/file-pen';
   import KeyRound from '@lucide/svelte/icons/key-round';
   import MessageCircleQuestion from '@lucide/svelte/icons/message-circle-question';
-  import { untrack } from 'svelte';
+  import Plug from '@lucide/svelte/icons/plug';
+  import { tick, untrack } from 'svelte';
   import { t } from '../../features/locale/language';
   import type { ApprovalDecision, WorkspaceApproval, WorkspaceSession } from '../../../../../contracts/workspace-v15';
+  import {
+    encodeFormAnswer,
+    formIssues,
+    initialDraft,
+    type ApprovalFieldIssue,
+    type ApprovalFormDraft,
+  } from '../../host-api/approvalForms';
   import { Button, Textarea, toasts } from '../../lib/ui';
+  import ApprovalForm from './ApprovalForm.svelte';
   import HarnessMark from './HarnessMark.svelte';
   import { useWorkspace } from './context';
 
@@ -27,34 +36,63 @@
   const options = $derived(approval.options ?? []);
   // An editor dialog may arrive with prepared text (additive v15 `prefill`).
   let input = $state(untrack(() => approval.prefill ?? ''));
+  // Native form request (a Codex MCP elicitation); absent for other requests.
+  const form = $derived(approval.form);
+  // Keyed per approval by the parent list: the form seeds its draft once.
+  let draft = $state<ApprovalFormDraft>(untrack(() => (approval.form ? initialDraft(approval.form) : {})));
+  let issues = $state.raw<Record<string, ApprovalFieldIssue>>({});
+  const idPrefix = $derived(`approval-${session.id}-${approval.id}`.replace(/[^A-Za-z0-9_-]/g, '-'));
 
   const icons = { command: Terminal, 'file-change': FilePen, permission: KeyRound, input: MessageCircleQuestion };
-  const Icon = $derived(icons[approval.kind] ?? KeyRound);
+  const Icon = $derived(form ? Plug : (icons[approval.kind] ?? KeyRound));
   const kindLabel = $derived(
-    approval.kind === 'command'
-      ? $t('Run a command')
-      : approval.kind === 'file-change'
-        ? $t('Change files')
-        : approval.kind === 'input'
-          ? $t('Answer a question')
-          : $t('Permission request'),
+    form
+      ? $t('MCP server {0}', [form.server])
+      : approval.kind === 'command'
+        ? $t('Run a command')
+        : approval.kind === 'file-change'
+          ? $t('Change files')
+          : approval.kind === 'input'
+            ? $t('Answer a question')
+            : $t('Permission request'),
   );
 
   function label(decision: ApprovalDecision): string {
+    // MCP requests answer with the protocol's accept, decline or dismiss.
     switch (decision) {
       case 'approve-once':
-        return approval.kind === 'input' ? $t('Send answer') : $t('Allow once');
+        return form ? $t('Accept') : approval.kind === 'input' ? $t('Send answer') : $t('Allow once');
       case 'approve-session':
         return $t('Allow for this chat');
       case 'deny':
-        return $t('Deny');
+        return form ? $t('Decline') : $t('Deny');
       case 'cancel':
         return $t('Dismiss');
     }
   }
 
+  function edit(fieldId: string, value: string | boolean): void {
+    draft = { ...draft, [fieldId]: value };
+    if (issues[fieldId]) {
+      const { [fieldId]: _fixed, ...rest } = issues;
+      issues = rest;
+    }
+  }
+
   async function decide(decision: ApprovalDecision, text: string | undefined = undefined): Promise<void> {
-    const ok = await store.respond(session.id, approval, decision, text ?? (approval.kind === 'input' ? input : undefined));
+    let answer = text ?? (approval.kind === 'input' && !form ? input : undefined);
+    if (form && decision === 'approve-once') {
+      issues = formIssues(form, draft);
+      const invalid = form.fields.find((field) => issues[field.id]);
+      if (invalid) {
+        // Move keyboard focus to the first value that cannot be sent.
+        await tick();
+        document.getElementById(`${idPrefix}-${invalid.id}`)?.focus();
+        return;
+      }
+      answer = encodeFormAnswer(form, draft);
+    }
+    const ok = await store.respond(session.id, approval, decision, answer);
     if (!ok) toasts.error($t('Could not send the decision'), store.approvalErrors[key]);
   }
 </script>
@@ -73,7 +111,16 @@
   <h3>{approval.title}</h3>
   {#if approval.description}<p class="approval__desc">{approval.description}</p>{/if}
 
-  {#if options.length}
+  {#if form}
+    {#if form.limitation === 'input-unsupported'}
+      <p class="approval__note">{$t('This request needs a value PiUI cannot show, so it can only be declined.')}</p>
+    {:else if form.limitation === 'optional-fields-omitted'}
+      <p class="approval__note">{$t('Some optional values cannot be entered here and are left empty.')}</p>
+    {/if}
+    {#if form.fields.length}
+      <ApprovalForm {form} {draft} {issues} {idPrefix} disabled={busy} onchange={edit} />
+    {/if}
+  {:else if options.length}
     <div class="options" role="group" aria-label={$t('Choices')}>
       {#each options as option (option.id)}
         <Button size="sm" disabled={busy || store.approvalBusy !== ''} onclick={() => void decide('approve-once', option.id)}>{option.label}</Button>
@@ -88,12 +135,12 @@
 
   <footer>
     {#each approval.decisions as decision (decision)}
-      {#if !(options.length && decision === 'approve-once')}
+      {#if !(options.length && !form && decision === 'approve-once')}
         <Button
           size="sm"
           variant={decision === 'approve-once' ? 'primary' : decision === 'deny' ? 'danger' : 'ghost'}
           loading={busy && decision === 'approve-once'}
-          disabled={store.approvalBusy !== '' || (decision === 'approve-once' && approval.kind === 'input' && !options.length && !input.trim())}
+          disabled={store.approvalBusy !== '' || (decision === 'approve-once' && approval.kind === 'input' && !form && !options.length && !input.trim())}
           onclick={() => void decide(decision)}
         >
           {label(decision)}
@@ -168,6 +215,11 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
+  }
+  .approval__note {
+    margin: 0;
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
   }
   .approval__error {
     margin: 0;

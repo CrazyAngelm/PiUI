@@ -26,11 +26,15 @@ through [`src/host-api/transport.ts`](src/host-api/transport.ts) to the UI Lab h
 JSON shapes, error codes and event channels. It simulates native turns and orchestration runs with timers and never
 runs an agent, touches a file or makes a network request. Choose a scenario with `?lab=`:
 
-- `demo` (default): four projects, ten chats on all four harnesses (one paused on an approval, one streaming),
-  two saved agent systems, a schedule and runs that succeeded, failed, are running or await approval;
+- `demo` (default): four projects, twelve chats on all five harnesses (one paused on an approval, one on an MCP
+  form request, one streaming), saved agent systems, schedules and runs that succeeded, failed, are running or await
+  approval;
 - `empty`: first run — only the host-owned Chats workspace and harness setup states;
 - `safe`: the demo after a restart in safe mode (runtime actions refused, interrupted runs need reconciliation);
 - `long`: one ~3,000-block transcript for performance work.
+
+Add `&claude=signed-out` to any scenario to see Claude Code without a subscription login: the new-chat composer's
+sign-in status and a saved "Claude check" system whose run fails before it starts.
 
 The classic `client.ts` routes (bootstrap, preferences, projects, trust) still use `mockClient.ts` in the browser.
 

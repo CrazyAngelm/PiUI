@@ -12,7 +12,8 @@ import { oneShotTurn, taskTurn, type TurnStep } from '../turnScripts';
 import {
   executorKind, failureWithDetail, LLM_READ_ONLY_UNSUPPORTED, SCRIPT_FAILURE_CODES, scriptStdinDocument,
 } from '../../stepExecutors';
-import { launchPolicyIssue, oneShotPolicyIssue } from './definitionRules';
+import { claudeSignInRequired } from '../catalogFake';
+import { HARNESS_SIGN_IN_REQUIRED, launchPolicyIssue, oneShotPolicyIssue } from './definitionRules';
 import {
   advanceProgramRouters, cancelRun, cancelTask, completeScript, completeTask, CoordinatorFault, dispatchTask, leaseTask,
   markUncertain, profileForStep, readyTaskIds, rejectReadyTask, runningExecutions, stepOf, taskOf, type Completion,
@@ -98,6 +99,14 @@ export class LabRunScheduler {
         this.emit(workspaceId, run);
         // The failure record keeps the step code; the command keeps its contract.
         return issue === LLM_READ_ONLY_UNSUPPORTED ? 'unsupported-policy' : issue;
+      }
+      // `launch_lease`: Claude Code refuses a login that is not the user's
+      // subscription at its start handshake, before any task text is written:
+      // a certain, typed failure. The same step starts once the user signed in.
+      if (profile.harness === 'claude-code' && claudeSignInRequired(this.runtime.state.harnesses)) {
+        rejectReadyTask(run, stepId, HARNESS_SIGN_IN_REQUIRED);
+        this.emit(workspaceId, run);
+        return 'runtime-unavailable';
       }
       leaseTask(run, stepId, executionId);
       this.emit(workspaceId, run);

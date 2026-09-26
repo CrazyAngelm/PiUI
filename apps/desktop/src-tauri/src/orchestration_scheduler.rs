@@ -48,6 +48,29 @@ use tokio::sync::{Mutex as AsyncMutex, Notify, watch};
 // NativeRuntime uses this bound for interrupt admission. The scheduler uses the
 // same established bound when waiting for proof that the admitted turn stopped.
 const INTERRUPT_PROOF_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Task failure code of a native start that the harness refused at its login
+/// check (Claude Code signed out or not on a Claude subscription). Nothing was
+/// executed: the refusal comes before any task text is written.
+pub(crate) const HARNESS_SIGN_IN_REQUIRED: &str = "harness-sign-in-required";
+
+/// A failed managed launch whose refusal proves that nothing ran, with the
+/// task failure code to record instead of uncertainty.
+fn certain_launch_refusal(error: &crate::workspace_api::WorkspaceError) -> Option<&'static str> {
+    error
+        .is_sign_in_required()
+        .then_some(HARNESS_SIGN_IN_REQUIRED)
+}
+
+/// Who asked for a managed launch; decides how a certain refusal is recorded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LaunchOrigin {
+    /// A ready step of the run: a certain refusal fails the step.
+    Scheduled,
+    /// A step leased by an agent's coordinator spawn: the lease is released
+    /// and the calling agent receives the typed failure.
+    Spawned,
+}
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct OrchestrationSchedulerError {
@@ -470,8 +493,15 @@ impl OrchestrationScheduler {
                     policy,
                     reserved_session_id,
                 } => {
-                    self.launch_lease(app, workspace_id, *lease, policy, Some(reserved_session_id))
-                        .await?;
+                    self.launch_lease(
+                        app,
+                        workspace_id,
+                        *lease,
+                        policy,
+                        Some(reserved_session_id),
+                        LaunchOrigin::Scheduled,
+                    )
+                    .await?;
                 }
                 Admission::Script { lease, interpreter } => {
                     self.launch_script(app, workspace_id, *lease, interpreter)
@@ -684,6 +714,7 @@ impl OrchestrationScheduler {
         lease: ControlledSpawnLease,
         policy: LaunchPolicy,
         reserved_session_id: Option<String>,
+        origin: LaunchOrigin,
     ) -> Result<String, OrchestrationSchedulerError> {
         if !self.admits_work() {
             return Err(OrchestrationSchedulerError::unavailable());
@@ -728,7 +759,21 @@ impl OrchestrationScheduler {
             .await
         {
             Ok(handle) => handle,
-            Err(_) => {
+            Err(error) => {
+                // A refusal at the harness login check proves that no task
+                // text was written: record it as a typed failure (or return
+                // the spawned step to its caller) instead of uncertainty.
+                // The step can run again once the user has signed in.
+                if let Some(code) = certain_launch_refusal(&error) {
+                    let api = app.state::<OrchestrationApiState>();
+                    if let Some(run) =
+                        record_launch_refusal(&api, workspace_id, &lease, origin, code)
+                    {
+                        drop(operation);
+                        self.emit_run_invalidation(app, workspace_id, &run);
+                        return Err(OrchestrationSchedulerError::new(code));
+                    }
+                }
                 drop(operation);
                 self.mark_lease_uncertain(app, workspace_id, &lease).await;
                 return Err(OrchestrationSchedulerError::uncertain());
@@ -1337,7 +1382,14 @@ impl OrchestrationScheduler {
                 let member_id = lease.member_id.clone();
                 let step_id = lease.step_id.clone();
                 match self
-                    .launch_lease(app, workspace_id, lease, policy, None)
+                    .launch_lease(
+                        app,
+                        workspace_id,
+                        lease,
+                        policy,
+                        None,
+                        LaunchOrigin::Spawned,
+                    )
                     .await
                 {
                     Ok(session_id) => CoordinatorResponse::Success(json!({
@@ -1345,6 +1397,10 @@ impl OrchestrationScheduler {
                         "stepId": step_id,
                         "sessionId": session_id,
                     })),
+                    // Certain: the step did not start and is ready to be spawned again.
+                    Err(error) if error.code == HARNESS_SIGN_IN_REQUIRED => {
+                        coordinator_failure(HARNESS_SIGN_IN_REQUIRED)
+                    }
                     Err(_) => coordinator_failure("managed-spawn-uncertain"),
                 }
             }
@@ -1711,6 +1767,31 @@ impl OrchestrationScheduler {
             .lock()
             .ok()
             .and_then(|completed| completed.get(execution_id).cloned())
+    }
+}
+
+/// Records a certain launch refusal (see `certain_launch_refusal`): a
+/// scheduled step fails with `code`, a step spawned by an agent returns to
+/// ready for its caller. `None` when the journal could not be updated; the
+/// caller then keeps the conservative uncertain path.
+fn record_launch_refusal(
+    api: &OrchestrationApiState,
+    workspace_id: &str,
+    lease: &ControlledSpawnLease,
+    origin: LaunchOrigin,
+    code: &str,
+) -> Option<Run> {
+    match origin {
+        LaunchOrigin::Scheduled => api.reject_leased_task(workspace_id, lease, code).ok(),
+        LaunchOrigin::Spawned => {
+            let context = ManagedAgentContext {
+                workspace_id: workspace_id.to_owned(),
+                run_id: lease.run_id.clone(),
+                workspace_session_id: String::new(),
+            };
+            api.release_spawn_lease(&context, lease).ok()?;
+            api.get_run(workspace_id, &lease.run_id).ok().flatten()
+        }
     }
 }
 
@@ -3246,3 +3327,7 @@ mod tests {
 #[cfg(test)]
 #[path = "orchestration_script_tests.rs"]
 mod script_tests;
+
+#[cfg(test)]
+#[path = "orchestration_sign_in_tests.rs"]
+mod sign_in_tests;

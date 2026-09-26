@@ -43,3 +43,16 @@ extra usage and PiUI never offers it. The same handshake verifies the Claude
 subscription login; any other login fails with `SIGN_IN_REQUIRED` and the fixed
 sign-in guidance, and no catalog is returned. Nothing is written to Claude
 Code's transcript directory.
+
+The new-chat composer shows that verdict before the first message when Claude
+Code is the selected harness: the host's cached verdict (the Claude Code catalog
+`reason`, set by the last refused start or catalog check in this host process)
+renders as "Not signed in — run `claude` in a terminal and use /login" with
+**Check again**. Nothing is checked on mount: the status shares the catalog
+request the composer's model picker makes anyway, and **Check again** is one
+fresh catalog request (the same `initialize` handshake, no conversation and no
+model turn); the newest verdict seen in the composer wins over the cached one.
+An open chat needs no status: its CLI passed the same check when it started. A
+cached verdict never blocks a start: every start checks the login again, and a
+managed pipeline step refused this way fails with `harness-sign-in-required`
+before any task text is written.

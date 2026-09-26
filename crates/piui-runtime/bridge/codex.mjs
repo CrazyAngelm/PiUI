@@ -480,6 +480,262 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     });
     emit({ type: "approval", approval });
   };
+  // MCP elicitations (`mcpServer/elicitation/request`, every verified
+  // version). Codex forwards an MCP server's `elicitation/create` through it
+  // and asks MCP tool-call approvals the same way (`mode:"form"`,
+  // `_meta.codex_approval_kind:"mcp_tool_call"`). Only form requests are
+  // shown: primitive properties become fields with opaque ids that are mapped
+  // back to the exact native names and values when answering. Anything PiUI
+  // cannot show or answer exactly is declined at once, so a turn never waits.
+  const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  const MCP_TOOL_APPROVAL = "mcp_tool_call";
+  const ELICITATION_FIELD_LIMIT = 24;
+  const ELICITATION_CHOICE_LIMIT = 100;
+  const ELICITATION_TEXT_LIMIT = 16 * 1024;
+  const ELICITATION_ANSWER_LIMIT = 512 * 1024;
+  const TEXT_FORMATS = new Set(["email", "uri", "date", "date-time"]);
+  const shortText = (value, limit) => {
+    const line = typeof value === "string" ? oneLine(value, limit) : "";
+    return line ? line : undefined;
+  };
+  const finiteNumber = (value) => (typeof value === "number" && Number.isFinite(value) ? value : undefined);
+  const lengthBound = (value) => (Number.isSafeInteger(value) && value >= 0 && value <= ELICITATION_TEXT_LIMIT ? value : undefined);
+  const codePoints = (text) => [...text].length;
+  const validDate = (text) => {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+    if (!match) return false;
+    const [year, month, day] = match.slice(1).map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+  };
+  const formatMatches = (format, text) => {
+    if (format === "email") return /^[^\s@]+@[^\s@]+$/.test(text);
+    if (format === "uri") return /^[A-Za-z][A-Za-z0-9+.-]*:\S+$/.test(text);
+    if (format === "date") return validDate(text);
+    if (format === "date-time") {
+      const match = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/i.exec(text);
+      return Boolean(match) && validDate(match[1]) && Number.isFinite(Date.parse(text));
+    }
+    return true;
+  };
+  // Single-select choices: titled (`oneOf` of {const,title}), untitled
+  // (`enum`) or legacy titled (`enum` with `enumNames`).
+  const elicitationChoices = (schema) => {
+    let entries;
+    if (Array.isArray(schema.oneOf) && schema.enum === undefined) {
+      entries = schema.oneOf.map((option) => (isRecord(option) && typeof option.const === "string"
+        ? { value: option.const, label: shortText(option.title, 200) ?? shortText(option.const, 200) }
+        : undefined));
+    } else if (Array.isArray(schema.enum) && schema.oneOf === undefined) {
+      const names = Array.isArray(schema.enumNames) ? schema.enumNames : [];
+      entries = schema.enum.map((value, index) => (typeof value === "string"
+        ? { value, label: shortText(names[index], 200) ?? shortText(value, 200) }
+        : undefined));
+    } else return undefined;
+    if (entries.length === 0 || entries.length > ELICITATION_CHOICE_LIMIT || entries.some((entry) => !entry?.label)) return undefined;
+    if (new Set(entries.map((entry) => entry.value)).size !== entries.length) return undefined;
+    return entries.map((entry, index) => ({ id: `choice-${index + 1}`, ...entry }));
+  };
+  // One property of the requested schema, or undefined when PiUI cannot
+  // render and answer it exactly (arrays, objects, unknown formats, ...).
+  const elicitationField = (name, schema, required, index) => {
+    if (!isRecord(schema)) return undefined;
+    const description = shortText(schema.description, 300);
+    const base = {
+      id: `field-${index}`,
+      label: shortText(schema.title, 120) ?? shortText(name, 120) ?? `Field ${index}`,
+      ...(description ? { description } : {}),
+      required,
+    };
+    if (schema.type === "string" && (schema.enum !== undefined || schema.oneOf !== undefined)) {
+      const choices = elicitationChoices(schema);
+      if (!choices) return undefined;
+      const initial = typeof schema.default === "string" ? choices.find((choice) => choice.value === schema.default) : undefined;
+      return {
+        field: { type: "choice", ...base, ...(initial ? { default: initial.id } : {}), options: choices.map(({ id, label }) => ({ id, label })) },
+        native: { name, values: new Map(choices.map((choice) => [choice.id, choice.value])) },
+      };
+    }
+    if (schema.type === "string") {
+      if (schema.format != null && !TEXT_FORMATS.has(schema.format)) return undefined;
+      const minLength = lengthBound(schema.minLength);
+      const maxLength = lengthBound(schema.maxLength);
+      if (minLength !== undefined && maxLength !== undefined && minLength > maxLength) return undefined;
+      const initial = typeof schema.default === "string" && schema.default.length <= ELICITATION_TEXT_LIMIT ? schema.default : undefined;
+      return {
+        field: {
+          type: "text", ...base,
+          ...(initial !== undefined ? { default: initial } : {}),
+          ...(minLength !== undefined ? { minLength } : {}),
+          ...(maxLength !== undefined ? { maxLength } : {}),
+          ...(schema.format != null ? { format: schema.format } : {}),
+        },
+        native: { name },
+      };
+    }
+    if (schema.type === "number" || schema.type === "integer") {
+      const integer = schema.type === "integer";
+      const minimum = finiteNumber(schema.minimum);
+      const maximum = finiteNumber(schema.maximum);
+      if (minimum !== undefined && maximum !== undefined && minimum > maximum) return undefined;
+      const initial = finiteNumber(schema.default);
+      return {
+        field: {
+          type: "number", ...base, integer,
+          ...(initial !== undefined && (!integer || Number.isSafeInteger(initial)) ? { default: initial } : {}),
+          ...(minimum !== undefined ? { minimum } : {}),
+          ...(maximum !== undefined ? { maximum } : {}),
+        },
+        native: { name },
+      };
+    }
+    if (schema.type === "boolean") {
+      return {
+        field: { type: "boolean", ...base, ...(typeof schema.default === "boolean" ? { default: schema.default } : {}) },
+        native: { name },
+      };
+    }
+    return undefined;
+  };
+  // The requested schema of a form request (MCP 2025-11-25 `requestedSchema`).
+  const elicitationForm = (requested) => {
+    if (!isRecord(requested) || (requested.type !== undefined && requested.type !== "object") || !isRecord(requested.properties)) return undefined;
+    if (requested.required != null && (!Array.isArray(requested.required) || requested.required.some((name) => typeof name !== "string"))) return undefined;
+    const required = new Set(requested.required ?? []);
+    const fields = [];
+    const natives = new Map();
+    let omittedOptional = false;
+    let unsupportedRequired = [...required].some((name) => !Object.hasOwn(requested.properties, name));
+    for (const [name, schema] of Object.entries(requested.properties)) {
+      const parsed = fields.length < ELICITATION_FIELD_LIMIT
+        ? elicitationField(name, schema, required.has(name), fields.length + 1)
+        : undefined;
+      if (!parsed) {
+        if (required.has(name)) unsupportedRequired = true;
+        else omittedOptional = true;
+        continue;
+      }
+      fields.push(parsed.field);
+      natives.set(parsed.field.id, parsed.native);
+    }
+    return { fields, natives, omittedOptional, unsupportedRequired };
+  };
+  const replyElicitation = (nativeRequestId, action, content = null) => writeNative({ id: nativeRequestId, result: { action, content } });
+  const registerElicitation = (message) => {
+    const params = isRecord(message.params) ? message.params : {};
+    const refuse = (reason) => {
+      void replyElicitation(message.id, "decline").catch(() => {});
+      emit({ type: "error", message: reason });
+    };
+    // Descendant threads have no PiUI decision surface: dismiss like their approvals.
+    if (nativeId && typeof params.threadId === "string" && params.threadId !== nativeId) {
+      void replyElicitation(message.id, "cancel").catch(() => {});
+      return;
+    }
+    // Requests before MCP 2025-11-25 carry no mode and are always forms.
+    const mode = params.mode === undefined ? "form" : params.mode;
+    if (mode === "url") {
+      refuse("An MCP server asked PiUI to open a web page. PiUI declined it; complete that step in Codex directly.");
+      return;
+    }
+    if (mode !== "form" || typeof params.message !== "string" || (params._meta != null && !isRecord(params._meta))) {
+      refuse("Codex sent an MCP request that PiUI cannot show, so it was declined.");
+      return;
+    }
+    const meta = isRecord(params._meta) ? params._meta : {};
+    const toolApproval = meta.codex_approval_kind === MCP_TOOL_APPROVAL;
+    if (meta.codex_approval_kind !== undefined && !toolApproval) {
+      refuse("Codex asked for an approval that PiUI does not support, so it was declined.");
+      return;
+    }
+    const form = elicitationForm(params.requestedSchema);
+    if (!form) {
+      refuse("Codex sent an MCP request that PiUI cannot show, so it was declined.");
+      return;
+    }
+    // Approvals never widen a restrictive profile: an MCP tool can only be declined there.
+    const strict = config.permissionMode === "read-only" || config.permissionMode === "workspace-write";
+    const canAccept = !form.unsupportedRequired && !(toolApproval && strict);
+    const lines = [boundText(params.message.trim() || "An MCP server needs a decision before Codex can continue.").text];
+    if (toolApproval) {
+      const tool = shortText(meta.tool_title, 160);
+      if (tool) lines.push(`Tool: ${tool}`);
+      const summary = argumentSummary(meta.tool_params);
+      if (summary) lines.push(`Arguments: ${summary}`);
+    }
+    const id = `approval-${++approvalSerial}`;
+    const fields = form.unsupportedRequired ? [] : form.fields;
+    const limitation = form.unsupportedRequired ? "input-unsupported" : form.omittedOptional ? "optional-fields-omitted" : undefined;
+    const approval = {
+      id,
+      kind: fields.length && !toolApproval ? "input" : "permission",
+      title: toolApproval ? "Allow an MCP tool" : "MCP server request",
+      description: lines.join("\n"),
+      decisions: canAccept ? ["approve-once", "deny", "cancel"] : ["deny", "cancel"],
+      form: {
+        server: shortText(params.serverName, 120) ?? "MCP server",
+        fields,
+        ...(limitation ? { limitation } : {}),
+      },
+    };
+    pendingApprovals.set(id, {
+      nativeRequestId: String(message.id),
+      nativeId: message.id,
+      method: message.method,
+      params,
+      approval,
+      elicitation: { natives: form.natives, turnId: typeof params.turnId === "string" ? params.turnId : undefined },
+    });
+    emit({ type: "approval", approval });
+  };
+  // Content of an accepted form: every answered value is checked against its
+  // field and mapped back to the native property name and choice value.
+  const elicitationContent = (entry, text) => {
+    const invalid = () => fail("invalid-response", "The answer does not match the requested MCP form.");
+    const { fields } = entry.approval.form;
+    if (fields.length === 0) {
+      if (text != null && (typeof text !== "string" || !["", "{}"].includes(text.trim()))) throw invalid();
+      return {};
+    }
+    if (typeof text !== "string" || text.length > ELICITATION_ANSWER_LIMIT) throw invalid();
+    let answer;
+    try { answer = JSON.parse(text); } catch { throw invalid(); }
+    if (!isRecord(answer)) throw invalid();
+    const byId = new Map(fields.map((field) => [field.id, field]));
+    if (Object.keys(answer).some((key) => !byId.has(key))) throw invalid();
+    const content = [];
+    for (const field of fields) {
+      const value = Object.hasOwn(answer, field.id) ? answer[field.id] : undefined;
+      if (value === undefined || value === null || value === "") {
+        if (field.required) throw invalid();
+        continue;
+      }
+      const native = entry.elicitation.natives.get(field.id);
+      if (field.type === "boolean") {
+        if (typeof value !== "boolean") throw invalid();
+      } else if (field.type === "number") {
+        if (typeof value !== "number" || !Number.isFinite(value) || (field.integer && !Number.isSafeInteger(value))
+          || (field.minimum !== undefined && value < field.minimum) || (field.maximum !== undefined && value > field.maximum)) throw invalid();
+      } else if (field.type === "choice") {
+        if (typeof value !== "string" || !native.values.has(value)) throw invalid();
+      } else if (typeof value !== "string" || codePoints(value) > (field.maxLength ?? ELICITATION_TEXT_LIMIT)
+        || codePoints(value) < (field.minLength ?? 0) || !formatMatches(field.format, value)) throw invalid();
+      content.push([native.name, field.type === "choice" ? native.values.get(value) : value]);
+    }
+    // Own data properties only: a native name such as `__proto__` stays a key.
+    return Object.fromEntries(content);
+  };
+  // Dismisses pending elicitations natively (`cancel`) and clears their cards:
+  // all of them on interrupt, or those of one finished turn.
+  const cancelElicitations = (turnId) => {
+    for (const [approvalId, entry] of [...pendingApprovals]) {
+      if (!entry.elicitation || entry.responding) continue;
+      if (turnId !== undefined && entry.elicitation.turnId !== turnId) continue;
+      entry.responding = true;
+      void replyElicitation(entry.nativeId, "cancel").catch(() => {});
+      retireApproval(approvalId);
+    }
+  };
   const coordinatorOperation = (params) => {
     if (
       !coordinationEnabled
@@ -585,6 +841,10 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       registerApproval(message);
       return;
     }
+    if (method === "mcpServer/elicitation/request" && message.id !== undefined) {
+      registerElicitation(message);
+      return;
+    }
     if (method === "currentTime/read" && message.id !== undefined) {
       // Sent when the user's config selects an external clock for the current
       // time reminder; Codex treats an error reply as fatal. Wall-clock time
@@ -665,6 +925,8 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     }
     if (method === "turn/completed") {
       abortCoordinatorCalls(params.turn?.id);
+      // An elicitation of a finished turn can no longer be answered usefully.
+      if (typeof params.turn?.id === "string") cancelElicitations(params.turn.id);
       const completedTurnId = params.turn?.id;
       lastCompletedTurnId = completedTurnId;
       if (!activeTurnId || activeTurnId === completedTurnId) activeTurnId = undefined;
@@ -1155,10 +1417,13 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     async interrupt() {
       if (startingTurn && !activeTurnId) {
         interruptStartingTurn = true;
+        cancelElicitations();
         return { interrupted: true };
       }
       if (!activeTurnId) throw fail("no-active-turn", "Codex has no active turn to interrupt.");
       abortCoordinatorCalls(activeTurnId);
+      // Stopping the turn dismisses its open MCP requests instead of leaving them waiting.
+      cancelElicitations();
       await callNative("turn/interrupt", { threadId: nativeId, turnId: activeTurnId });
       return { interrupted: true };
     },
@@ -1211,7 +1476,12 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
         throw fail("unsupported-decision", "The selected approval decision is not available.");
       }
       let result;
-      if (entry.method === "item/permissions/requestApproval") {
+      if (entry.elicitation) {
+        // Validated before the request retires: an invalid answer keeps it pending.
+        result = decision === "approve-once"
+          ? { action: "accept", content: elicitationContent(entry, text) }
+          : { action: decision === "deny" ? "decline" : "cancel", content: null };
+      } else if (entry.method === "item/permissions/requestApproval") {
         const approved = decision === "approve-once" || decision === "approve-session";
         result = {
           permissions: approved ? (entry.params.permissions || {}) : {},

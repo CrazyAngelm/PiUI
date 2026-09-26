@@ -127,6 +127,11 @@ pub struct WorkspaceApproval {
     /// Additive v15 field: the harness resolves the request itself afterwards.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Additive v15 field: a native form request (Codex MCP elicitation),
+    /// answered by sending a JSON object of field id -> value as
+    /// `respond.text` with `approve-once`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub form: Option<piui_runtime::workspace_runtime::ApprovalForm>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -327,6 +332,11 @@ impl WorkspaceError {
             message: CLAUDE_SIGN_IN_MESSAGE,
             recoverable: true,
         }
+    }
+    /// Whether a native start was refused at the harness login check: the
+    /// runtime never reached a prompt, so nothing was executed.
+    pub(crate) fn is_sign_in_required(&self) -> bool {
+        self.code == Self::subscription_required().code
     }
     /// Fast mode can bill paid extra usage beyond the base subscription.
     pub(crate) fn fast_mode_unsupported() -> Self {
@@ -879,6 +889,19 @@ impl WorkspaceHost {
             }
         }
         NativeRuntime::spawn(config).await
+    }
+
+    /// Test builds only: replaces native harness resolution of this host, for
+    /// tests outside this module that drive managed launches.
+    #[cfg(test)]
+    pub(crate) fn replace_native_spawner<F, Fut>(&self, spawner: F)
+    where
+        F: Fn(NativeRuntimeConfig) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = NativeSpawnResult> + Send + 'static,
+    {
+        if let Ok(mut slot) = self.inner.test_spawner.lock() {
+            *slot = Some(Arc::new(move |config| Box::pin(spawner(config))));
+        }
     }
 
     #[must_use]
@@ -3077,6 +3100,7 @@ fn workspace_approval(session_id: &str, approval: &NativeApproval) -> WorkspaceA
         options: approval.options.clone(),
         prefill: approval.prefill.clone(),
         timeout_ms: approval.timeout_ms,
+        form: approval.form.clone(),
     }
 }
 

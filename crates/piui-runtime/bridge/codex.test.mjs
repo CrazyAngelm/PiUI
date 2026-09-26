@@ -623,6 +623,209 @@ test("a cancelled MCP startup clears its earlier failure warning", async () => {
   finally { await adapter.dispose(); }
 });
 
+// MCP elicitations. The fixture echoes every client reply to request <id> as
+// the text of agent message `reply-<id>`.
+const elicitationReply = (adapter, id) => {
+  const block = adapter.snapshot().blocks.find((value) => value.id === `reply-${id}`);
+  return block ? JSON.parse(block.text) : undefined;
+};
+const formApproval = (adapter) => adapter.snapshot().approvals.find((approval) => approval.form && approval.title === "MCP server request");
+const toolApproval = (adapter) => adapter.snapshot().approvals.find((approval) => approval.title === "Allow an MCP tool");
+
+test("shows an MCP form request with typed opaque fields and accepts with the exact native content", async () => {
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--mcp-elicitation"] }, () => {});
+  try {
+    const request = await waitFor(() => formApproval(adapter));
+    assert.equal(request.kind, "input");
+    assert.equal(request.description, "Create an issue in the docs tracker?");
+    assert.deepEqual(request.decisions, ["approve-once", "deny", "cancel"]);
+    assert.equal(request.form.server, "docs");
+    assert.equal(request.form.limitation, undefined);
+    assert.deepEqual(request.form.fields, [
+      { type: "text", id: "field-1", label: "Title", required: true, minLength: 3, maxLength: 40 },
+      { type: "choice", id: "field-2", label: "Priority", required: true, default: "choice-2", options: [{ id: "choice-1", label: "Urgent" }, { id: "choice-2", label: "Normal" }] },
+      { type: "number", id: "field-3", label: "Copies", required: false, integer: true, minimum: 1, maximum: 5 },
+      { type: "boolean", id: "field-4", label: "Notify the team", required: false, default: false },
+      { type: "text", id: "field-5", label: "contact", description: "Who to ask", required: false, format: "email" },
+      { type: "text", id: "field-6", label: "Prototype key", required: false },
+    ]);
+    // Native property names and choice values stay in the adapter.
+    assert.doesNotMatch(JSON.stringify(request), /"p1"|"p2"|"priority"|"notify"/);
+
+    const valid = { "field-1": "Broken link", "field-2": "choice-1", "field-3": 2, "field-4": true, "field-6": "kept as a key" };
+    for (const [answer, why] of [
+      [undefined, "no answer"],
+      ["not json", "malformed JSON"],
+      [JSON.stringify([valid]), "not an object"],
+      [JSON.stringify({ ...valid, "field-1": undefined }), "missing required text"],
+      [JSON.stringify({ ...valid, "field-1": "ab" }), "shorter than minLength"],
+      [JSON.stringify({ ...valid, "field-1": "x".repeat(41) }), "longer than maxLength"],
+      [JSON.stringify({ ...valid, "field-2": "p1" }), "a native value instead of an option id"],
+      [JSON.stringify({ ...valid, "field-3": 7 }), "above maximum"],
+      [JSON.stringify({ ...valid, "field-3": 1.5 }), "not an integer"],
+      [JSON.stringify({ ...valid, "field-3": "2" }), "number as text"],
+      [JSON.stringify({ ...valid, "field-4": "yes" }), "boolean as text"],
+      [JSON.stringify({ ...valid, "field-5": "not-an-email" }), "invalid email"],
+      [JSON.stringify({ ...valid, title: "Broken link" }), "a native name instead of a field id"],
+    ]) {
+      await assert.rejects(adapter.respond({ requestId: request.id, decision: "approve-once", text: answer }), { bridgeCode: "invalid-response" }, why);
+      assert.ok(formApproval(adapter), `${why}: the request stays pending`);
+    }
+    await adapter.respond({ requestId: request.id, decision: "approve-once", text: JSON.stringify(valid) });
+    assert.equal(formApproval(adapter), undefined);
+    const reply = await waitFor(() => elicitationReply(adapter, 960));
+    assert.deepEqual(reply, {
+      action: "accept",
+      content: { title: "Broken link", priority: "p1", count: 2, notify: true, ["__proto__"]: "kept as a key" },
+    });
+    assert.ok(Object.hasOwn(reply.content, "__proto__"));
+    await assert.rejects(adapter.respond({ requestId: request.id, decision: "deny" }), { bridgeCode: "stale-approval" });
+  } finally {
+    await adapter.dispose();
+  }
+});
+
+test("shows an MCP tool approval with its server, tool and bounded arguments", async () => {
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--mcp-elicitation"] }, () => {});
+  try {
+    const request = await waitFor(() => toolApproval(adapter));
+    assert.equal(request.kind, "permission");
+    assert.deepEqual(request.form, { server: "docs", fields: [] });
+    assert.equal(request.description, 'Allow the docs MCP server to run tool "search_docs"?\nTool: Search docs\nArguments: query: fixture, filters: {…}');
+    assert.doesNotMatch(JSON.stringify(adapter.snapshot()), /SECRET-MUST-NOT-LEAK/);
+    assert.deepEqual(request.decisions, ["approve-once", "deny", "cancel"]);
+    await assert.rejects(adapter.respond({ requestId: request.id, decision: "approve-once", text: '{"field-1":"x"}' }), { bridgeCode: "invalid-response" });
+    await adapter.respond({ requestId: request.id, decision: "approve-once" });
+    assert.deepEqual(await waitFor(() => elicitationReply(adapter, 961)), { action: "accept", content: {} });
+  } finally {
+    await adapter.dispose();
+  }
+});
+
+test("declines and dismisses MCP requests with the exact protocol actions", async () => {
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--mcp-elicitation"] }, () => {});
+  try {
+    const form = await waitFor(() => formApproval(adapter));
+    const tool = await waitFor(() => toolApproval(adapter));
+    await adapter.respond({ requestId: form.id, decision: "deny" });
+    await adapter.respond({ requestId: tool.id, decision: "cancel" });
+    assert.deepEqual(await waitFor(() => elicitationReply(adapter, 960)), { action: "decline", content: null });
+    assert.deepEqual(await waitFor(() => elicitationReply(adapter, 961)), { action: "cancel", content: null });
+    assert.equal(adapter.snapshot().approvals.some((approval) => approval.form), false);
+    await assert.rejects(adapter.respond({ requestId: form.id, decision: "approve-session" }), { bridgeCode: "stale-approval" });
+  } finally {
+    await adapter.dispose();
+  }
+});
+
+test("restrictive permission modes can only decline an MCP tool approval", async () => {
+  const adapter = await createCodexAdapter({
+    ...config,
+    permissionMode: "workspace-write",
+    runtimeArgs: [fixture, "--expect-permission", "workspace-write", "--mcp-elicitation"],
+  }, () => {});
+  try {
+    assert.deepEqual((await waitFor(() => toolApproval(adapter))).decisions, ["deny", "cancel"]);
+    // Supplying requested values is not a permission grant.
+    assert.deepEqual((await waitFor(() => formApproval(adapter))).decisions, ["approve-once", "deny", "cancel"]);
+    await assert.rejects(adapter.respond({ requestId: toolApproval(adapter).id, decision: "approve-once" }), { bridgeCode: "unsupported-decision" });
+  } finally {
+    await adapter.dispose();
+  }
+});
+
+test("declines MCP requests PiUI cannot show at once and never leaves them waiting", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--mcp-elicitation-edge"] }, (event) => events.push(event));
+  try {
+    for (const id of [962, 963, 964, 966, 971]) {
+      assert.deepEqual(await waitFor(() => elicitationReply(adapter, id)), { action: "decline", content: null }, String(id));
+    }
+    // A descendant thread's request is dismissed like its approvals.
+    assert.deepEqual(await waitFor(() => elicitationReply(adapter, 968)), { action: "cancel", content: null });
+    const messages = events.filter((event) => event.type === "error").map((event) => event.message);
+    assert.ok(messages.includes("An MCP server asked PiUI to open a web page. PiUI declined it; complete that step in Codex directly."));
+    assert.ok(messages.includes("Codex asked for an approval that PiUI does not support, so it was declined."));
+    assert.equal(messages.filter((message) => message === "Codex sent an MCP request that PiUI cannot show, so it was declined.").length, 3);
+    // The requested web page and the descendant's request are never shown.
+    assert.doesNotMatch(JSON.stringify(events), /example\.invalid\/oauth|Child request/);
+
+    // A required value PiUI cannot show: only decline or dismiss.
+    const unsupported = await waitFor(() => adapter.snapshot().approvals.find((approval) => approval.description === "Pick files"));
+    assert.deepEqual(unsupported.decisions, ["deny", "cancel"]);
+    assert.deepEqual(unsupported.form, { server: "docs", fields: [], limitation: "input-unsupported" });
+    // A request without a mode is a form; an optional array stays empty.
+    const legacy = await waitFor(() => adapter.snapshot().approvals.find((approval) => approval.description === "Which branch?"));
+    assert.equal(legacy.form.limitation, "optional-fields-omitted");
+    assert.deepEqual(legacy.form.fields, [
+      { type: "choice", id: "field-1", label: "branch", required: false, options: [{ id: "choice-1", label: "Main line" }, { id: "choice-2", label: "Development" }] },
+    ]);
+    await adapter.respond({ requestId: legacy.id, decision: "approve-once", text: JSON.stringify({ "field-1": "choice-2" }) });
+    assert.deepEqual(await waitFor(() => elicitationReply(adapter, 967)), { action: "accept", content: { branch: "dev" } });
+    assert.equal(elicitationReply(adapter, 965), undefined, "a pending request is not answered by itself");
+    await adapter.respond({ requestId: unsupported.id, decision: "deny" });
+    assert.deepEqual(await waitFor(() => elicitationReply(adapter, 965)), { action: "decline", content: null });
+  } finally {
+    await adapter.dispose();
+  }
+});
+
+test("a request resolved by Codex clears its card without a PiUI answer", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--mcp-elicitation-resolved"] }, (event) => events.push(event));
+  try {
+    const shown = await waitFor(() => events.find((event) => event.type === "approval" && event.approval.form)?.approval);
+    await waitFor(() => events.some((event) => event.type === "approvalResolved" && event.requestId === shown.id));
+    assert.equal(adapter.snapshot().approvals.some((approval) => approval.id === shown.id), false);
+    await assert.rejects(adapter.respond({ requestId: shown.id, decision: "approve-once" }), { bridgeCode: "stale-approval" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(elicitationReply(adapter, 969), undefined);
+  } finally {
+    await adapter.dispose();
+  }
+});
+
+test("interrupting a turn dismisses its pending MCP request", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--hold-turn", "--mcp-elicitation-turn"] }, (event) => events.push(event));
+  try {
+    await adapter.prompt({ text: "search", mode: "prompt" });
+    const request = await waitFor(() => adapter.snapshot().approvals.find((approval) => approval.form));
+    assert.deepEqual(await adapter.interrupt(), { interrupted: true });
+    assert.deepEqual(await waitFor(() => elicitationReply(adapter, 970)), { action: "cancel", content: null });
+    assert.ok(events.some((event) => event.type === "approvalResolved" && event.requestId === request.id));
+    await waitFor(() => events.some((event) => event.type === "turnCompleted"));
+    assert.deepEqual(events.filter((event) => event.type === "turnCompleted"), [{ type: "turnCompleted", outcome: "interrupted" }]);
+    assert.equal(adapter.snapshot().approvals.length, 2, "only the fixture's command and file approvals remain");
+  } finally {
+    await adapter.dispose();
+  }
+});
+
+test("a finished turn dismisses an MCP request that is still open", async () => {
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--mcp-elicitation-turn"] }, () => {});
+  try {
+    await adapter.prompt({ text: "search", mode: "prompt" });
+    assert.deepEqual(await waitFor(() => elicitationReply(adapter, 970)), { action: "cancel", content: null });
+    assert.equal(adapter.snapshot().approvals.some((approval) => approval.form), false);
+  } finally {
+    await adapter.dispose();
+  }
+});
+
+for (const version of ["0.147.0", "0.153.4", "0.157.1"]) {
+  test(`answers MCP form requests on the ${version} protocol`, async () => {
+    const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, `--codex-version=${version}`, "--mcp-elicitation"] }, () => {});
+    try {
+      const request = await waitFor(() => formApproval(adapter));
+      await adapter.respond({ requestId: request.id, decision: "approve-once", text: JSON.stringify({ "field-1": "Fixture", "field-2": "choice-2" }) });
+      assert.deepEqual(await waitFor(() => elicitationReply(adapter, 960)), { action: "accept", content: { title: "Fixture", priority: "p2" } });
+    } finally {
+      await adapter.dispose();
+    }
+  });
+}
+
 // Real evidence, never part of the default run: set PIUI_CODEX_LIVE_HANDSHAKE
 // to the absolute path of the installed `@openai/codex/bin/codex.js`. Only
 // `initialize` reaches the real app-server. The bridge writes `initialized`

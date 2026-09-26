@@ -12,3 +12,6 @@ export function useWorkspace(): WorkspaceStore {
   if (store === undefined) throw new Error('Workspace store is not provided.');
   return store;
 }
+
+/** The context key, for component tests that render with a store of their own. */
+export const WORKSPACE_CONTEXT: symbol = KEY;

@@ -259,7 +259,10 @@ export interface FailureRecord {
    * `script-failed` (non-zero exit), `script-timeout` (tree killed),
    * `script-runtime-unavailable`, `script-input-unavailable` and
    * `script-start-failed` (nothing was executed). Declared-result failures use
-   * the same `result-*` codes as native results.
+   * the same `result-*` codes as native results. `harness-sign-in-required`
+   * (additive): the harness refused its native login at the start handshake
+   * (Claude Code signed out or not on a Claude subscription) before any task
+   * text was written; running the step again after signing in starts it.
    */
   readonly code: string;
   /**

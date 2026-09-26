@@ -92,6 +92,18 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   playground" chat (`/extension-demo`). Gaps before deleting classic:
   continue an indexed Pi session live, Pi slash-command discovery, Tier 1A.
 
+- `feat/harness-polish` (plan §3 P1 items 2–3): Codex MCP elicitations become
+  approval cards (MCP server name, message, typed primitive fields, Accept /
+  Decline / Dismiss mapped to accept / decline / cancel; unsupported shapes are
+  declined at once; interrupt and turn end dismiss them); additive workspace
+  v15 `WorkspaceApproval.form`. Claude Code: new-chat composer sign-in status
+  with Check again (catalog-only check, never a model turn); a signed-out managed step
+  fails with `harness-sign-in-required` before any task text instead of
+  "outcome uncertain", and runs again after `/login`; the node inspector lists
+  every harness's manifest limitations. UI Lab: demo chat "File an issue for
+  the broken docs link" is paused on an MCP form request; `&claude=signed-out`
+  shows the sign-in status and a "Claude check" system whose run fails typed.
+
 ## In progress
 
 - Nothing; next steps wait for the owner's review of the remaining-work plan.
@@ -107,12 +119,17 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   `body` style). Found while checking the script editor, which has none.
 - A Codex model call keeps its native tools (read-only sandbox only); the
   inspector says so. Pi and Claude Code run model calls without tools.
-- Codex asks for MCP tool approvals via `mcpServer/elicitation/request`; the
-  bridge answers with an error, so such MCP tools are always declined.
-- A pipeline step whose first Claude Code launch hits a signed-out CLI is
-  recorded as "outcome uncertain"; later steps are refused cleanly.
 - The standalone `claude` CLI on this machine is signed out; PiUI shows a
   sign-in hint until the user runs `claude` → `/login`.
+- MCP elicitations: `url` mode (open a page) and OpenAI user verification are
+  declined, not shown; an MCP tool approval is for one call (no session or
+  always scope). The live Codex shapes were checked against 0.157.1 bindings
+  only; 0.147/0.153 are covered by the fixture, not a rerun binary.
+- `perf:smoke` initial-asset budget: at `84f6021` the first-paint graph was
+  572,580 B raw / 163,548 B gzip (budget 573,440 / 163,840). Every Russian
+  feature catalog is loaded eagerly, so `feat/harness-polish` (+6.3 KB raw,
+  +1.8 KB gzip, all from `ru/harnesses.ts`; its UI code is lazy) exceeds it.
+  Lazy-load the Russian catalogs or raise the budget.
 - Codex command output is unbounded in the bridge; a non-string Pi input
   placeholder would break Rust parsing.
 - Extension text is path-redacted by the shared sanitizer, so prepared

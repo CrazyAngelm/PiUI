@@ -11,7 +11,7 @@ import type { LabSeed } from './seedTypes';
 export type { LabSeed, SeedActivity } from './seedTypes';
 
 /**
- * `demo`: four projects, twelve chats on all five harnesses, two saved agent
+ * `demo`: four projects, thirteen chats on all five harnesses, two saved agent
  *   systems, schedules and runs (succeeded, failed, running, awaiting approval).
  * `empty`: first run — only the host-owned Chats workspace, nothing saved.
  * `safe`: the demo after a restart in safe mode: every runtime closed,

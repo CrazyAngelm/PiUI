@@ -383,6 +383,102 @@ pub struct ApprovalOption {
     pub label: String,
 }
 
+/// Native text formats of a form text field (MCP elicitation string formats).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApprovalTextFormat {
+    Email,
+    Uri,
+    Date,
+    DateTime,
+}
+
+/// One primitive field of a native form request (a Codex MCP elicitation).
+/// Ids are adapter-owned and opaque; the adapter maps them back to the exact
+/// native property names and choice values when it answers.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum ApprovalField {
+    Text {
+        id: String,
+        label: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        required: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min_length: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_length: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        format: Option<ApprovalTextFormat>,
+    },
+    Number {
+        id: String,
+        label: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        required: bool,
+        integer: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<serde_json::Number>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        minimum: Option<serde_json::Number>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        maximum: Option<serde_json::Number>,
+    },
+    Boolean {
+        id: String,
+        label: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        required: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<bool>,
+    },
+    /// A single choice; `default` names one option id.
+    Choice {
+        id: String,
+        label: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        required: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<String>,
+        options: Vec<ApprovalOption>,
+    },
+}
+
+/// What a form request asked for that PiUI cannot show.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApprovalFormLimitation {
+    /// Optional values PiUI cannot show are left empty on accept.
+    OptionalFieldsOmitted,
+    /// A required value cannot be shown, so the request can only be declined.
+    InputUnsupported,
+}
+
+/// A native form request (a Codex MCP elicitation). `approve-once` answers
+/// with `text` set to a JSON object of field id -> value; the adapter
+/// validates every value and rejects anything else while the request stays
+/// pending.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApprovalForm {
+    /// One-line display name of the MCP server that asked (native text).
+    pub server: String,
+    pub fields: Vec<ApprovalField>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limitation: Option<ApprovalFormLimitation>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeApproval {
@@ -401,6 +497,9 @@ pub struct NativeApproval {
     /// The harness resolves the request itself after this many milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// A native form request (Codex MCP elicitation); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form: Option<ApprovalForm>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -2343,6 +2442,11 @@ fn unavailable_capabilities(reason: &str) -> HarnessCapabilities {
 /// Side-effect-free capability description for scheduler admission. If the
 /// installed version or platform is not verified, every capability is returned
 /// unsupported so no durable task can reserve against an unproven adapter.
+///
+/// A cached Claude Code sign-in verdict is not a capability: every start
+/// verifies the login again at the native handshake, before any task text is
+/// written, and a refusal there is a typed pre-execution failure. So a step
+/// runs again as soon as the user has signed in.
 #[must_use]
 pub fn offline_harness_capabilities(kind: HarnessKind) -> HarnessCapabilities {
     let summary = probe_native_harnesses()
@@ -2352,11 +2456,6 @@ pub fn offline_harness_capabilities(kind: HarnessKind) -> HarnessCapabilities {
         return unavailable_capabilities(
             "The installed native adapter is unavailable or unverified.",
         );
-    }
-    // A managed run cannot start while Claude Code is known to be signed in
-    // with something other than the user's Claude subscription.
-    if kind == HarnessKind::ClaudeCode && claude_sign_in_required() {
-        return unavailable_capabilities(CLAUDE_SIGN_IN_MESSAGE);
     }
     verified_harness_capabilities(kind)
 }
@@ -3090,6 +3189,66 @@ mod tests {
             "options": [{"id":"option-1","label":"Allow","value":"native"}]
         });
         assert!(serde_json::from_value::<NativeApproval>(leaked).is_err());
+    }
+
+    #[test]
+    fn approval_forms_round_trip_typed_primitive_fields_only() {
+        let form = json!({
+            "id": "approval-1", "kind": "input", "title": "MCP server request",
+            "description": "Create the issue?", "decisions": ["approve-once", "deny", "cancel"],
+            "form": {
+                "server": "issues",
+                "fields": [
+                    {"type":"text","id":"field-1","label":"Title","required":true,"minLength":3,"maxLength":80},
+                    {"type":"text","id":"field-2","label":"Contact","required":false,"format":"email"},
+                    {"type":"number","id":"field-3","label":"Count","required":false,"integer":true,"default":2,"minimum":1,"maximum":9},
+                    {"type":"boolean","id":"field-4","label":"Notify","description":"Mail the team","required":false,"default":true},
+                    {"type":"choice","id":"field-5","label":"Priority","required":true,"default":"choice-2",
+                     "options":[{"id":"choice-1","label":"Low"},{"id":"choice-2","label":"High"}]}
+                ],
+                "limitation": "optional-fields-omitted"
+            }
+        });
+        let approval: NativeApproval = serde_json::from_value(form.clone()).expect("form approval");
+        let parsed = approval.form.as_ref().expect("form");
+        assert_eq!(parsed.server, "issues");
+        assert_eq!(parsed.fields.len(), 5);
+        assert_eq!(
+            parsed.limitation,
+            Some(ApprovalFormLimitation::OptionalFieldsOmitted)
+        );
+        assert!(matches!(
+            &parsed.fields[1],
+            ApprovalField::Text {
+                format: Some(ApprovalTextFormat::Email),
+                ..
+            }
+        ));
+        assert_eq!(serde_json::to_value(&approval).ok(), Some(form.clone()));
+
+        // Native property names, JSON schemas and unknown field kinds never
+        // cross the contract: every shape outside the typed fields is refused.
+        for (pointer, value) in [
+            ("/form/fields/0/name", json!("title")),
+            ("/form/fields/0/type", json!("array")),
+            ("/form/fields/2/default", json!("2")),
+            ("/form/fields/1/format", json!("regex")),
+            ("/form/fields/4/options/0/value", json!("low")),
+            ("/form/limitation", json!("partial")),
+            ("/form/schema", json!({"type":"object"})),
+        ] {
+            let mut invalid = form.clone();
+            let (parent, key) = pointer.rsplit_once('/').expect("pointer");
+            invalid
+                .pointer_mut(parent)
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("parent object")
+                .insert(key.into(), value);
+            assert!(
+                serde_json::from_value::<NativeApproval>(invalid).is_err(),
+                "{pointer} must be rejected"
+            );
+        }
     }
 
     #[test]
