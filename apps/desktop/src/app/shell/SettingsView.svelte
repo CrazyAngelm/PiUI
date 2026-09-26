@@ -8,12 +8,14 @@
   import ShieldCheck from '@lucide/svelte/icons/shield-check';
   import ShieldAlert from '@lucide/svelte/icons/shield-alert';
   import Plus from '@lucide/svelte/icons/plus';
+  import Puzzle from '@lucide/svelte/icons/puzzle';
   import { t, language, setLanguage, type Language } from '../../features/locale/language';
   import type { Preferences } from '../../host-api/types';
   import type { WorkspaceSummary } from '../../../../../contracts/workspace-v15';
   import { Badge, Button, Kbd, Segmented } from '../../lib/ui';
   import type { SettingsSection } from '../workspaceStore.svelte';
   import HarnessMark from './HarnessMark.svelte';
+  import ExtensionsSettings from '../settings/ExtensionsSettings.svelte';
   import { useWorkspace } from './context';
 
   interface Props {
@@ -26,6 +28,7 @@
   const sections: { id: SettingsSection; label: string; icon: typeof Info }[] = [
     { id: 'general', label: 'General', icon: SlidersHorizontal },
     { id: 'harnesses', label: 'Harnesses', icon: Bot },
+    { id: 'extensions', label: 'Extensions', icon: Puzzle },
     { id: 'projects', label: 'Projects', icon: FolderCog },
     { id: 'shortcuts', label: 'Shortcuts', icon: Keyboard },
     { id: 'about', label: 'About', icon: Info },
@@ -172,6 +175,8 @@
         {/each}
       </div>
       <p class="muted small">{$t('Sign in inside each harness (for example in its terminal app). PiUI never reads or stores credentials.')}</p>
+    {:else if section === 'extensions'}
+      <ExtensionsSettings safeMode={store.safeMode} />
     {:else if section === 'projects'}
       <div class="title-row">
         <h2>{$t('Projects')}</h2>

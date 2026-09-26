@@ -1,6 +1,7 @@
 import type { HostTransport } from '../transport';
 import { classicHandlers } from './classicFake';
 import { composerHandlers } from './composerFake';
+import { demoExtensions, extensionHandlers } from './extensionsFake';
 import { LabEventBus } from './labBus';
 import { browserTimers, LabClock, type LabTimers } from './labClock';
 import { LabDecodeFailure, tauriArgumentError } from './labErrors';
@@ -99,6 +100,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     ...classicHandlers(runtime),
     ...orchestrationHandlers(runtime, scheduler, bus),
     ...piHistoryHandlers(runtime, seed.nativeHistory ?? EMPTY_NATIVE_HISTORY, bus),
+    ...extensionHandlers(scenario === 'empty' ? [] : demoExtensions()),
   };
   startActivity(seed.activity, runtime, scheduler, options.ambient ?? true);
 

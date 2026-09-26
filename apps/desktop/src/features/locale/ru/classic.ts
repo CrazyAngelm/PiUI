@@ -64,4 +64,18 @@ export const classicRu: Readonly<Record<string, string>> = {
   'Duplicate entry': 'Повтор записи',
   'Too deep to show': 'Слишком глубоко',
   'Not shown': 'Не показано',
+
+  // Settings → Extensions
+  'Global extensions run with your full user permissions. A change applies the next time that harness starts.': 'Глобальные расширения работают со всеми правами вашего пользователя. Изменение вступит в силу при следующем запуске харнеса.',
+  'Pi and Prime Agent keep separate extension folders. Turning an extension on here does not enable it for Prime Agent.': 'У Pi и Prime Agent отдельные папки расширений. Включение расширения здесь не включает его для Prime Agent.',
+  'Some extension APIs share names with Pi, but compatibility is not assumed. Install and test each extension for Prime Agent separately.': 'Часть API расширений совпадает по названиям с Pi, но совместимость не гарантируется. Устанавливайте и проверяйте каждое расширение для Prime Agent отдельно.',
+  'Safe mode: extensions are not loaded now. You can still turn one off before the next normal start.': 'Безопасный режим: расширения сейчас не загружаются. Их всё равно можно выключить до следующего обычного запуска.',
+  'Install extensions with {0}, then refresh this page.': 'Установите расширения через {0} и обновите эту страницу.',
+  'Package extension': 'Расширение из пакета',
+  'Global extension': 'Глобальное расширение',
+  'Turn off {0} for {1}': 'Выключить {0} для {1}',
+  'Turn on {0} for {1}': 'Включить {0} для {1}',
+  'Project extensions are not managed here. A harness loads a folder’s own extensions only after you trust that folder.': 'Расширения проектов здесь не настраиваются. Харнес загружает собственные расширения папки только после того, как вы доверите эту папку.',
+  'Could not read the installed extensions. Try again.': 'Не удалось прочитать установленные расширения. Попробуйте ещё раз.',
+  'Could not change the extension. Its previous state is kept.': 'Не удалось изменить расширение. Прежнее состояние сохранено.',
 };
