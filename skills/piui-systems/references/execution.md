@@ -53,6 +53,12 @@ remain importable. Orchestration IPC v6 is separate from portable JSON.
   stay verbatim). Inputs are task data only: they never grant tools, files,
   routes or permissions. Schedules store their own values, validated on save and
   enable.
+- Automations are not part of the system file. A person creates them in
+  PiUI to start a saved system on a timer, after another pipeline finishes
+  (chosen outcomes) or when project files matching glob patterns change; a
+  person can also start one from a chat. Event chains stop after three
+  automatic runs and one automation starts at most one run every 30 s, so do
+  not design a system that relies on re-triggering itself.
 
 - `executor` (orchestration v6.2) selects how a step runs: absent or
   `{"type": "agent"}` is a native harness session; `{"type": "llm"}` is one
