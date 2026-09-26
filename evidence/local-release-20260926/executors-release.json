@@ -1,0 +1,38 @@
+{
+  "timestamp": "2026-09-27T00:47:13+07:00",
+  "commit": "e302d79",
+  "branch": "rework/piui-2 (main fast-forwarded locally, not pushed)",
+  "changes": "step executors merged (model call and script nodes, orchestration v6.2) with editor and run view UI; Edit pipeline opens the run's pipeline",
+  "release": {
+    "portable": {
+      "path": "artifacts/PiUI_0.1.1_windows_x86_64.exe",
+      "bytes": 24799744,
+      "sha256": "8b89aede674055a5e742a29f324ac0084c93d94b96a56a9e2d9c2c3f34c7279c"
+    },
+    "installer": {
+      "path": "artifacts/PiUI_0.1.1_x64-setup.exe",
+      "bytes": 6331149,
+      "sha256": "0bd7264a988d8a907755c09783c077624a8ee1cf3db8ecf1b77946d3ded35d43"
+    },
+    "installed": null,
+    "launch": "not performed: release builds have no isolated data directories; launching would load the owner's real projects and enabled schedules (paid native runs); the owner launches it for testing"
+  },
+  "rollback": "evidence/local-release-20260926/rollback-0.1.1-20260922/ (git-ignored)",
+  "verification": {
+    "desktopCheck": "svelte-check found 0 errors and 0 warnings",
+    "desktopTests": "63 files, 390 tests passed",
+    "contractTests": "8 files, 85 tests passed; system file validators current",
+    "systemExamples": "8 valid examples",
+    "bridgeTests": "112 tests: 111 passed, 1 skipped (live handshake)",
+    "cargoFmt": "clean",
+    "cargoClippy": "cargo clippy --workspace --all-targets -- -D warnings passed",
+    "cargoTest": "cargo test --workspace passed (desktop 135, runtime 157, index 77, orchestration 61, platform 19, contracts 13, extensions 6)",
+    "labBrowser": "UI Lab: Release check (agent, Node script, Pi model call) opened, inspected, ran to success; lab:fail script showed failure text and stderr tail, downstream step cancelled; Edit pipeline opened the run's pipeline"
+  },
+  "cleanup": {
+    "removed": ["target/release", "target/main", "target/step-executors", ".claude/worktrees/agent-a5f048460a37cc865"],
+    "kept": { "target/debug": "rust-analyzer running" },
+    "freeBytesBefore": 198362664960,
+    "freeBytesAfter": 207680139264
+  }
+}
