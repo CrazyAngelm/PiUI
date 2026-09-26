@@ -66,7 +66,9 @@ function main(argv) {
     process.exitCode = 1;
     return;
   }
-  for (const notice of result.notices) console.log(notice);
+  // In GitHub Actions each line also becomes a run annotation.
+  const annotate = process.env.GITHUB_ACTIONS === 'true' ? '::notice::' : '';
+  for (const notice of result.notices) console.log(`${annotate}${notice}`);
   const tauriCli = createRequire(join(root, 'apps', 'desktop', 'package.json')).resolve('@tauri-apps/cli/tauri.js');
   const plan = releasePlan(root, platform, {
     configPath: result.config === null ? undefined : result.path,
