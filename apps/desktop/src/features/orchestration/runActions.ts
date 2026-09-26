@@ -1,14 +1,14 @@
 import {
   orchestrationError, OrchestrationOperationError,
   type OrchestrationClient, type OrchestrationRunV6, type TaskRecord,
-  type StartRunRequest, type RunMutationRequest, type RetryUncertainTaskRequest, type ReconcileUncertainTaskRequest,
+  type StartRunRequestV7, type RunMutationRequest, type RetryUncertainTaskRequest, type ReconcileUncertainTaskRequest,
 } from '../../host-api/orchestrationClient';
 import { checkedRunSnapshot } from './runUpdates';
 
 export type RunAction =
   | { readonly type: 'cancelTask'; readonly request: import('../../../../../contracts/orchestration-host-v6').CancelTaskRequest }
   | { readonly type: 'flow'; readonly request: import('../../../../../contracts/orchestration-host-v6').FlowControlRequest }
-  | { readonly type: 'start'; readonly request: StartRunRequest }
+  | { readonly type: 'start'; readonly request: StartRunRequestV7 }
   | { readonly type: 'cancel'; readonly request: RunMutationRequest }
   | { readonly type: 'retry'; readonly request: RetryUncertainTaskRequest }
   | { readonly type: 'reconcile'; readonly request: ReconcileUncertainTaskRequest };

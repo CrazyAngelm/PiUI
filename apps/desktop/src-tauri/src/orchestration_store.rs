@@ -62,6 +62,10 @@ struct StoreDocument {
     version: u32,
     generation: u64,
     workspaces: Vec<WorkspaceOrchestration>,
+    /// Host v7.2: no automation starts a run while set. Omitted when false,
+    /// so a store that never paused keeps its previous shape.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    automations_paused: bool,
 }
 
 impl Default for StoreDocument {
@@ -70,6 +74,7 @@ impl Default for StoreDocument {
             version: STORE_VERSION,
             generation: 0,
             workspaces: Vec::new(),
+            automations_paused: false,
         }
     }
 }
@@ -111,6 +116,11 @@ impl StoreSnapshot {
     pub fn workspaces(&self) -> &[WorkspaceOrchestration] {
         &self.0.workspaces
     }
+
+    /// Whether every automation is paused (host v7.2).
+    pub fn automations_paused(&self) -> bool {
+        self.0.automations_paused
+    }
 }
 
 /// Durable orchestration journal.
@@ -125,6 +135,9 @@ pub(crate) struct OrchestrationStore {
     directory: PathBuf,
     writer: Mutex<()>,
     current: RwLock<Arc<StoreDocument>>,
+    /// The newest committed generation, for observers such as event
+    /// automations. Values are published after the commit is current.
+    commits: tokio::sync::watch::Sender<u64>,
 }
 
 fn poisoned() -> StoreError {
@@ -163,13 +176,20 @@ impl OrchestrationStore {
                 newest = Some((generation, document));
             }
         }
+        let document = newest.map(|(_, document)| document).unwrap_or_default();
+        let (commits, _) = tokio::sync::watch::channel(document.generation);
         Ok(Self {
             directory,
             writer: Mutex::new(()),
-            current: RwLock::new(Arc::new(
-                newest.map(|(_, document)| document).unwrap_or_default(),
-            )),
+            current: RwLock::new(Arc::new(document)),
+            commits,
         })
+    }
+
+    /// Wakes whenever a newer generation commits. Several quick commits may
+    /// be observed once; observers read the latest snapshot.
+    pub fn subscribe_commits(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.commits.subscribe()
     }
 
     /// The newest durable generation. Never waits for a writer's fsync.
@@ -186,9 +206,41 @@ impl OrchestrationStore {
         &self,
         change: impl FnOnce(&mut Vec<WorkspaceOrchestration>) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
+        self.transact_document(|document| change(&mut document.workspaces))
+    }
+
+    /// Like `transact`, and the change also sees whether automations are
+    /// paused in the same generation, so a pause can never race a claim.
+    pub fn transact_automations<T>(
+        &self,
+        change: impl FnOnce(&mut Vec<WorkspaceOrchestration>, bool) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        self.transact_document(|document| {
+            let paused = document.automations_paused;
+            change(&mut document.workspaces, paused)
+        })
+    }
+
+    /// Durably pauses or resumes every automation. Returns whether the value
+    /// changed; an unchanged value writes nothing.
+    pub fn set_automations_paused(&self, paused: bool) -> Result<bool, StoreError> {
+        if self.snapshot()?.automations_paused() == paused {
+            return Ok(false);
+        }
+        self.transact_document(|document| {
+            let changed = document.automations_paused != paused;
+            document.automations_paused = paused;
+            Ok(changed)
+        })
+    }
+
+    fn transact_document<T>(
+        &self,
+        change: impl FnOnce(&mut StoreDocument) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
         let _writer = self.writer.lock().map_err(|_| poisoned())?;
         let mut staged = StoreDocument::clone(&self.snapshot()?.0);
-        let result = change(&mut staged.workspaces)?;
+        let result = change(&mut staged)?;
         staged.generation = staged
             .generation
             .checked_add(1)
@@ -197,6 +249,7 @@ impl OrchestrationStore {
         let generation = staged.generation;
         *self.current.write().map_err(|_| poisoned())? = Arc::new(staged);
         self.remove_older_generations(generation);
+        self.commits.send_replace(generation);
         Ok(result)
     }
 
@@ -340,6 +393,43 @@ mod tests {
         assert!(!run.definition().team.spawned_agents_join_team);
         assert_eq!(fs::read(path).unwrap(), source);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn automation_pause_is_durable_observed_and_absent_until_used() {
+        let root = root();
+        let store = OrchestrationStore::open(&root).expect("opens store");
+        let mut commits = store.subscribe_commits();
+        store
+            .transact(|workspaces| {
+                workspaces.push(WorkspaceOrchestration::empty("kept".to_owned()));
+                Ok(())
+            })
+            .expect("writes baseline");
+        assert!(commits.has_changed().expect("sender alive"));
+        assert_eq!(*commits.borrow_and_update(), 1);
+        let baseline = fs::read(generation_path(&store.directory, 1)).expect("reads generation");
+        assert!(!String::from_utf8_lossy(&baseline).contains("automationsPaused"));
+        assert!(!store.snapshot().unwrap().automations_paused());
+
+        assert!(store.set_automations_paused(true).expect("pauses"));
+        assert!(!store.set_automations_paused(true).expect("already paused"));
+        assert!(store.snapshot().unwrap().automations_paused());
+        assert_eq!(*commits.borrow_and_update(), 2);
+        let seen = store
+            .transact_automations(|_, paused| Ok(paused))
+            .expect("reads the flag inside the writer");
+        assert!(seen);
+        drop(store);
+
+        let reopened = OrchestrationStore::open(&root).expect("reopens");
+        assert!(reopened.snapshot().unwrap().automations_paused());
+        assert!(reopened.snapshot().unwrap().workspace("kept").is_some());
+        assert!(reopened.set_automations_paused(false).expect("resumes"));
+        drop(reopened);
+        let resumed = OrchestrationStore::open(&root).expect("reopens again");
+        assert!(!resumed.snapshot().unwrap().automations_paused());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

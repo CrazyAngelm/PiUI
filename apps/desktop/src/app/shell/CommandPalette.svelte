@@ -11,7 +11,9 @@
   import Moon from '@lucide/svelte/icons/moon';
   import Bot from '@lucide/svelte/icons/bot';
   import ScrollText from '@lucide/svelte/icons/scroll-text';
+  import Play from '@lucide/svelte/icons/play';
   import { t } from '../../features/locale/language';
+  import { runLauncher } from '../triggers/runLauncher.svelte';
   import HarnessMark from './HarnessMark.svelte';
   import { useWorkspace } from './context';
 
@@ -93,6 +95,14 @@
                     <ScrollText size={15} /><span>{$t('Open session history')}</span>
                   </Command.Item>
                 {/if}
+                <Command.Item
+                  class="palette__item"
+                  value="action:run-pipeline"
+                  keywords={[$t('Run pipeline…'), 'run', 'start', 'pipeline', 'запуск', 'пайплайн']}
+                  onSelect={() => run(() => runLauncher.open(store.selectedSession?.workspaceId ?? store.selectedWorkspace?.id, store.selectedSessionId || undefined))}
+                >
+                  <Play size={15} /><span>{$t('Run pipeline…')}</span>
+                </Command.Item>
                 <Command.Item class="palette__item" value="action:harnesses" keywords={[$t('Manage harnesses'), 'harness', 'codex', 'claude', 'pi']} onSelect={() => run(() => store.navigate({ name: 'settings', section: 'harnesses' }))}>
                   <Bot size={15} /><span>{$t('Manage harnesses')}</span>
                 </Command.Item>

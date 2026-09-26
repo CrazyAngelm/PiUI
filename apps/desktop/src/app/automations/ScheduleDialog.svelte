@@ -1,11 +1,13 @@
 <script lang="ts">
   import { language, t } from '../../features/locale/language';
   import { localDateTimeToInstant, localDateTimeValue, positiveInteger } from '../../features/orchestration/scheduleForm';
-  import type { DefinitionSummary, MissedRunPolicy, OverlapPolicy, PipelineInput, ScheduleDefinition, ScheduleSnapshot, ScheduleTrigger } from '../../host-api/orchestrationClient';
+  import type { DefinitionSummary, FinishedOutcome, MissedRunPolicy, OverlapPolicy, PipelineInput, ScheduleDefinition, ScheduleSnapshot, ScheduleTrigger } from '../../host-api/orchestrationClient';
   import { calendarFirstAfter, daySet, sortDays, validTime, weekdayNames, WEEKDAYS, WORKDAYS, type CalendarTrigger } from '../../host-api/scheduleCalendar';
-  import { Button, Dialog, Field, Input, Segmented, Spinner } from '../../lib/ui';
+  import { Button, Checkbox, Dialog, Field, Input, Segmented, Spinner, Textarea } from '../../lib/ui';
   import InputFields, { formState, formValues, type InputFormState } from '../pipelines/inputs/InputFields.svelte';
   import { checkValues, initialValues } from '../pipelines/inputs/runInputs';
+  import { eventPreview, FINISHED_OUTCOMES } from './cadence';
+  import { eventDraftFrom, eventDraftProblem, eventTriggerOf, startsItself, type EventDraft } from './eventDraft';
 
   interface Props {
     open: boolean;
@@ -24,12 +26,16 @@
   let inputErrors = $state<Record<string, string>>({});
   let loadedFor = '';
 
+  type Mode = 'schedule' | 'event';
+  type TimedKind = Exclude<ScheduleTrigger['type'], 'event'>;
+
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   let id = $state('');
   let name = $state('');
   let nameTouched = $state(false);
   let launchCommandId = $state('');
-  let kind = $state<ScheduleTrigger['type']>('calendar');
+  let mode = $state<Mode>('schedule');
+  let kind = $state<TimedKind>('calendar');
   let time = $state('09:00');
   let days = $state<number[]>([...WEEKDAYS]);
   let localAt = $state('');
@@ -39,6 +45,7 @@
   let overlap = $state<OverlapPolicy>('skip');
   let problem = $state('');
   let timeZone = $state(zone);
+  let draft = $state<EventDraft>(eventDraftFrom(undefined, ''));
 
   /** Next whole quarter hour in the local zone, as a datetime-local value. */
   function soon(): string {
@@ -55,15 +62,20 @@
     nameTouched = !!value;
     launchCommandId = value?.launchCommandId ?? launchCommands[0]?.id ?? '';
     const trigger = value?.trigger;
-    timeZone = trigger?.timeZone ?? zone;
-    kind = trigger?.type ?? 'calendar';
-    localAt = trigger && trigger.type !== 'calendar' ? localDateTimeValue(trigger.type === 'once' ? trigger.at : trigger.anchorAt, timeZone) : soon();
-    every = trigger?.type === 'interval' ? String(trigger.every) : '1';
-    unit = trigger?.type === 'interval' ? trigger.unit : 'hours';
-    time = trigger?.type === 'calendar' ? trigger.time : '09:00';
-    days = trigger?.type === 'calendar' ? sortDays(trigger.days) : [...WEEKDAYS];
+    const timed = trigger?.type === 'event' ? undefined : trigger;
+    mode = trigger?.type === 'event' ? 'event' : 'schedule';
+    timeZone = timed?.timeZone ?? zone;
+    kind = timed?.type ?? 'calendar';
+    localAt = timed && timed.type !== 'calendar' ? localDateTimeValue(timed.type === 'once' ? timed.at : timed.anchorAt, timeZone) : soon();
+    every = timed?.type === 'interval' ? String(timed.every) : '1';
+    unit = timed?.type === 'interval' ? timed.unit : 'hours';
+    time = timed?.type === 'calendar' ? timed.time : '09:00';
+    days = timed?.type === 'calendar' ? sortDays(timed.days) : [...WEEKDAYS];
     missed = value?.missedRunPolicy ?? 'skip';
     overlap = value?.overlapPolicy ?? 'skip';
+    // A new rule waits for another pipeline than the one it starts.
+    const other = launchCommands.find((command) => command.id !== launchCommandId) ?? launchCommands[0];
+    draft = eventDraftFrom(trigger, other?.id ?? '');
     problem = '';
   });
 
@@ -104,6 +116,23 @@
   const shortDays = $derived(weekdayNames(locale));
   const longDays = $derived(weekdayNames(locale, 'long'));
   const preset = $derived(daySet(days));
+  const pipelineIds = $derived(launchCommands.map((command) => command.id));
+
+  function pipelineName(commandId: string): string {
+    const command = launchCommands.find((item) => item.id === commandId);
+    return command ? command.name || $t('Untitled pipeline') : '';
+  }
+
+  const OUTCOME_LABELS: Record<FinishedOutcome, string> = {
+    succeeded: 'Succeeds',
+    failed: 'Fails',
+    cancelled: 'Is stopped',
+  };
+
+  function toggleOutcome(outcome: FinishedOutcome, checked: boolean): void {
+    const rest = draft.outcomes.filter((item) => item !== outcome);
+    draft.outcomes = checked ? [...rest, outcome] : rest;
+  }
 
   function toggleDay(day: number): void {
     days = days.includes(day) ? days.filter((item) => item !== day) : sortDays([...days, day]);
@@ -120,7 +149,7 @@
   }
 
   const nextRun = $derived.by(() => {
-    if (kind !== 'calendar' || !validTime(time) || days.length === 0) return '';
+    if (mode !== 'schedule' || kind !== 'calendar' || !validTime(time) || days.length === 0) return '';
     const now = Date.now();
     const at = calendarFirstAfter({ type: 'calendar', time, days, startsAt: new Date(now).toISOString(), timeZone }, now);
     return at === undefined
@@ -128,7 +157,16 @@
       : new Date(at).toLocaleString(locale, { timeZone, weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
   });
 
+  /** What a valid event rule will do, in plain words. */
+  const eventNotes = $derived.by(() => {
+    if (mode !== 'event') return [];
+    const trigger = eventTriggerOf(draft, pipelineIds);
+    return trigger ? eventPreview(trigger.event, pipelineName(launchCommandId) || $t('the pipeline'), $t, pipelineName) : [];
+  });
+  const selfLoop = $derived(mode === 'event' && startsItself(draft, launchCommandId));
+
   function timingProblem(): string {
+    if (mode === 'event') return eventDraftProblem(draft, pipelineIds, $t);
     if (kind === 'calendar') return !validTime(time) ? 'Choose a time.' : days.length === 0 ? 'Choose at least one day.' : '';
     if (!instant.ok) {
       return instant.reason === 'nonexistent'
@@ -141,6 +179,7 @@
   }
 
   function trigger(): ScheduleTrigger | undefined {
+    if (mode === 'event') return eventTriggerOf(draft, pipelineIds);
     if (kind === 'calendar') return calendarTrigger();
     if (!instant.ok) return undefined;
     return kind === 'once'
@@ -169,7 +208,8 @@
       name: name.trim(),
       launchCommandId,
       trigger: timing,
-      missedRunPolicy: missed,
+      // Events are never replayed after a restart; the host requires "skip".
+      missedRunPolicy: mode === 'event' ? 'skip' : missed,
       overlapPolicy: overlap,
       ...(Object.keys(checked.values).length ? { inputs: checked.values } : {}),
     };
@@ -182,9 +222,9 @@
   }
 </script>
 
-<Dialog bind:open title={schedule ? $t('Edit automation') : $t('New automation')} description={$t('Runs a saved pipeline on a schedule while PiUI is open.')} size="md">
+<Dialog bind:open title={schedule ? $t('Edit automation') : $t('New automation')} description={$t('Runs a saved pipeline on a schedule or after an event while PiUI is open or in the tray.')} size="md">
   <form class="form" id="schedule-form" onsubmit={(event) => { event.preventDefault(); void submit(true); }} novalidate>
-    <Field label={$t('Pipeline')} for="schedule-pipeline">
+    <Field label={$t('Pipeline to run')} for="schedule-pipeline">
       <select id="schedule-pipeline" class="select" bind:value={launchCommandId} disabled={busy}>
         {#if launchCommands.length === 0}<option value="">{$t('No saved pipelines')}</option>{/if}
         {#each launchCommands as command (command.id)}
@@ -195,68 +235,139 @@
     <Field label={$t('Name')} for="schedule-name">
       <Input id="schedule-name" value={name} disabled={busy} oninput={(event) => { name = event.currentTarget.value; nameTouched = true; }} />
     </Field>
-    <Field label={$t('When')}>
+    <Field label={$t('Start')}>
       <Segmented
-        label={$t('When')}
-        bind:value={kind}
+        label={$t('Start')}
+        bind:value={mode}
         options={[
-          { value: 'calendar', label: $t('On days') },
-          { value: 'interval', label: $t('Interval') },
-          { value: 'once', label: $t('Once') },
+          { value: 'schedule', label: $t('On a schedule') },
+          { value: 'event', label: $t('After an event') },
         ]}
       />
     </Field>
-    {#if kind === 'calendar'}
-      <fieldset class="days" disabled={busy}>
-        <legend>{$t('Days')}</legend>
-        <div class="days__line">
-          <div class="days__toggles">
-            {#each WEEKDAYS as day, index (day)}
-              <button type="button" class="day" aria-pressed={days.includes(day)} aria-label={longDays[index]} title={longDays[index]} onclick={() => toggleDay(day)}>
-                {shortDays[index]}
-              </button>
+    {#if mode === 'schedule'}
+      <Field label={$t('When')}>
+        <Segmented
+          label={$t('When')}
+          bind:value={kind}
+          options={[
+            { value: 'calendar', label: $t('On days') },
+            { value: 'interval', label: $t('Interval') },
+            { value: 'once', label: $t('Once') },
+          ]}
+        />
+      </Field>
+      {#if kind === 'calendar'}
+        <fieldset class="days" disabled={busy}>
+          <legend>{$t('Days')}</legend>
+          <div class="days__line">
+            <div class="days__toggles">
+              {#each WEEKDAYS as day, index (day)}
+                <button type="button" class="day" aria-pressed={days.includes(day)} aria-label={longDays[index]} title={longDays[index]} onclick={() => toggleDay(day)}>
+                  {shortDays[index]}
+                </button>
+              {/each}
+            </div>
+            <div class="days__presets">
+              <button type="button" class="preset" aria-pressed={preset === 'every'} onclick={() => (days = [...WEEKDAYS])}>{$t('Every day')}</button>
+              <button type="button" class="preset" aria-pressed={preset === 'workdays'} onclick={() => (days = [...WORKDAYS])}>{$t('Weekdays')}</button>
+            </div>
+          </div>
+        </fieldset>
+        <div class="row">
+          <Field label={$t('Time')} for="schedule-time" description={$t('Time zone: {0}', [timeZone])}>
+            <input id="schedule-time" class="select" type="time" bind:value={time} disabled={busy} />
+          </Field>
+        </div>
+        {#if nextRun}<p class="note">{$t('Next run: {0}', [nextRun])}</p>{/if}
+      {:else}
+        <div class="row">
+          <Field label={kind === 'once' ? $t('Run at') : $t('First run at')} for="schedule-at" description={$t('Time zone: {0}', [timeZone])}>
+            <input id="schedule-at" class="select" type="datetime-local" bind:value={localAt} disabled={busy} />
+          </Field>
+          {#if kind === 'interval'}
+            <Field label={$t('Repeat every')} for="schedule-every">
+              <div class="every">
+                <Input id="schedule-every" inputmode="numeric" value={every} disabled={busy} oninput={(event) => (every = event.currentTarget.value)} />
+                <select class="select" aria-label={$t('Interval unit')} bind:value={unit} disabled={busy}>
+                  <option value="minutes">{$t('minutes')}</option>
+                  <option value="hours">{$t('hours')}</option>
+                </select>
+              </div>
+            </Field>
+          {/if}
+        </div>
+      {/if}
+    {:else}
+      <Field label={$t('Event')}>
+        <Segmented
+          label={$t('Event')}
+          bind:value={draft.kind}
+          options={[
+            { value: 'run-finished', label: $t('When a pipeline finishes') },
+            { value: 'files-changed', label: $t('When files change') },
+          ]}
+        />
+      </Field>
+      {#if draft.kind === 'run-finished'}
+        <Field label={$t('Pipeline to wait for')} for="schedule-source">
+          <select id="schedule-source" class="select" bind:value={draft.sourceId} disabled={busy}>
+            {#if launchCommands.length === 0}<option value="">{$t('No saved pipelines')}</option>{/if}
+            {#each launchCommands as command (command.id)}
+              <option value={command.id}>{command.name || $t('Untitled pipeline')}</option>
+            {/each}
+          </select>
+        </Field>
+        <fieldset class="outcomes" disabled={busy}>
+          <legend>{$t('Start when that pipeline')}</legend>
+          <div class="outcomes__line">
+            {#each FINISHED_OUTCOMES as outcome (outcome)}
+              <Checkbox
+                label={$t(OUTCOME_LABELS[outcome])}
+                checked={draft.outcomes.includes(outcome)}
+                disabled={busy}
+                onCheckedChange={(checked) => toggleOutcome(outcome, checked)}
+              />
             {/each}
           </div>
-          <div class="days__presets">
-            <button type="button" class="preset" aria-pressed={preset === 'every'} onclick={() => (days = [...WEEKDAYS])}>{$t('Every day')}</button>
-            <button type="button" class="preset" aria-pressed={preset === 'workdays'} onclick={() => (days = [...WORKDAYS])}>{$t('Weekdays')}</button>
-          </div>
-        </div>
-      </fieldset>
-      <div class="row">
-        <Field label={$t('Time')} for="schedule-time" description={$t('Time zone: {0}', [timeZone])}>
-          <input id="schedule-time" class="select" type="time" bind:value={time} disabled={busy} />
-        </Field>
-      </div>
-      {#if nextRun}<p class="note">{$t('Next run: {0}', [nextRun])}</p>{/if}
-    {:else}
-      <div class="row">
-        <Field label={kind === 'once' ? $t('Run at') : $t('First run at')} for="schedule-at" description={$t('Time zone: {0}', [timeZone])}>
-          <input id="schedule-at" class="select" type="datetime-local" bind:value={localAt} disabled={busy} />
-        </Field>
-        {#if kind === 'interval'}
-          <Field label={$t('Repeat every')} for="schedule-every">
-            <div class="every">
-              <Input id="schedule-every" inputmode="numeric" value={every} disabled={busy} oninput={(event) => (every = event.currentTarget.value)} />
-              <select class="select" aria-label={$t('Interval unit')} bind:value={unit} disabled={busy}>
-                <option value="minutes">{$t('minutes')}</option>
-                <option value="hours">{$t('hours')}</option>
-              </select>
-            </div>
-          </Field>
+        </fieldset>
+        {#if selfLoop}
+          <p class="note note--warn" role="status">{$t('This automation starts the pipeline it waits for, so each run can start the next one. The chain stops after 3 automatic runs.')}</p>
         {/if}
-      </div>
+      {:else}
+        <Field
+          label={$t('Files to watch')}
+          for="schedule-include"
+          description={$t('One pattern per line, relative to the project folder. src/**/*.ts matches TypeScript files under src; *.md matches Markdown files in any folder.')}
+        >
+          <Textarea id="schedule-include" bind:value={draft.include} minRows={2} maxRows={6} placeholder="src/**/*.ts" spellcheck="false" disabled={busy} />
+        </Field>
+        <Field label={$t('Ignore')} for="schedule-exclude" optionalLabel={$t('optional')}>
+          <Textarea id="schedule-exclude" bind:value={draft.exclude} minRows={1} maxRows={4} placeholder="src/generated/**" spellcheck="false" disabled={busy} />
+        </Field>
+        <Field label={$t('Wait until files are quiet for')} for="schedule-debounce" description={$t('2 to 3600 seconds. Changes during the wait start one run together.')}>
+          <div class="every">
+            <Input id="schedule-debounce" inputmode="numeric" value={draft.debounce} disabled={busy} oninput={(event) => (draft.debounce = event.currentTarget.value)} />
+            <span class="unit">{$t('seconds')}</span>
+          </div>
+        </Field>
+      {/if}
+      {#each eventNotes as line (line)}
+        <p class="note">{line}</p>
+      {/each}
     {/if}
-    <Field label={$t('If PiUI was closed at that time')}>
-      <Segmented
-        label={$t('If PiUI was closed at that time')}
-        bind:value={missed}
-        options={[
-          { value: 'skip', label: $t('Skip it') },
-          { value: 'coalesce', label: $t('Run once when PiUI opens') },
-        ]}
-      />
-    </Field>
+    {#if mode === 'schedule'}
+      <Field label={$t('If PiUI was closed or paused at that time')}>
+        <Segmented
+          label={$t('If PiUI was closed or paused at that time')}
+          bind:value={missed}
+          options={[
+            { value: 'skip', label: $t('Skip it') },
+            { value: 'coalesce', label: $t('Run once when PiUI opens') },
+          ]}
+        />
+      </Field>
+    {/if}
     <Field label={$t('If the previous run is still working')}>
       <Segmented
         label={$t('If the previous run is still working')}
@@ -275,7 +386,7 @@
         <InputFields {inputs} bind:form errors={inputErrors} idPrefix="schedule-input" disabled={busy} />
       </fieldset>
     {/if}
-    <p class="note">{$t('Automations run only while PiUI is open; they do not wake the computer. Each run uses your harness subscriptions like a manual run.')}</p>
+    <p class="note">{$t('Automations run only while PiUI is open or in the tray; they do not wake the computer. Each run uses your harness subscriptions like a manual run.')}</p>
     {#if problem || error}<p class="error" role="alert">{$t(problem || error)}</p>{/if}
   </form>
   {#snippet footer()}
@@ -298,9 +409,15 @@
   .every {
     display: grid;
     grid-template-columns: 80px 1fr;
+    align-items: center;
     gap: var(--piui-space-2);
   }
-  .days {
+  .unit {
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
+  }
+  .days,
+  .outcomes {
     display: grid;
     gap: 6px;
     min-width: 0;
@@ -308,12 +425,18 @@
     padding: 0;
     border: 0;
   }
-  .days legend {
+  .days legend,
+  .outcomes legend {
     margin-bottom: 6px;
     padding: 0;
     color: var(--piui-text);
     font-size: var(--piui-text-sm);
     font-weight: var(--piui-weight-medium);
+  }
+  .outcomes__line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--piui-space-4);
   }
   .days__line {
     display: flex;
@@ -402,6 +525,9 @@
     margin: 0;
     color: var(--piui-text-muted);
     font-size: var(--piui-text-sm);
+  }
+  .note--warn {
+    color: var(--piui-warning-text);
   }
   .error {
     margin: 0;

@@ -1,21 +1,22 @@
 import type { LabEventBus } from '../labBus';
 import {
-  ORCHESTRATION_SCHEDULE_EVENT_V7,
-  type AgentProfile, type CancelTaskRequest, type DeleteDefinitionRequest, type FlowControlRequest, type GetDefinitionRequest,
-  type LaunchCommandReference, type OrchestrationCatalogV6, type OrchestrationRunV6, type OrchestrationScheduleChangedEventV7,
+  ORCHESTRATION_AUTOMATIONS_EVENT_V7, ORCHESTRATION_SCHEDULE_EVENT_V7,
+  type AgentProfile, type AutomationsStateV7, type CancelTaskRequest, type DeleteDefinitionRequest, type FlowControlRequest,
+  type GetDefinitionRequest, type LaunchCommandReference, type OrchestrationAutomationsChangedEventV7,
+  type OrchestrationCatalogV6, type OrchestrationRunV6, type OrchestrationScheduleChangedEventV7,
   type PipelineDefinition, type ReconcileUncertainTaskRequest, type RetryUncertainTaskRequest, type RunMutationRequest,
-  type RunRequest, type RunSummary, type SaveDefinitionRequest, type SaveGraphRequest, type SaveScheduleRequest,
-  type ScheduleMutationRequest, type ScheduleSnapshot, type SetScheduleEnabledRequest, type StartRunRequest,
-  type TeamDefinition, type UsageReceipt, type WorkspaceRequest,
+  type RunRequest, type RunSummary, type RunTrigger, type SaveDefinitionRequest, type SaveGraphRequest,
+  type SaveScheduleRequest, type ScheduleMutationRequest, type ScheduleSnapshot, type SetAutomationsPausedRequest,
+  type SetScheduleEnabledRequest, type StartRunRequestV7, type TeamDefinition, type UsageReceipt, type WorkspaceRequest,
 } from '../labContracts';
 import { orchestrationFailure } from '../labErrors';
 import type { LabHandler, LabHandlers } from '../labHandlers';
 import { decodeArgument, type Schema } from '../labSchema';
 import {
-  cancelTaskSchema, deleteDefinitionSchema, flowControlSchema, getDefinitionSchema, launchCommandSchema, pipelineSchema,
-  profileSchema, reconcileUncertainSchema, retryUncertainSchema, runMutationSchema, runRequestSchema, saveGraphSchema,
-  saveRequest, saveScheduleSchema, scheduleMutationSchema, setScheduleEnabledSchema, startRunSchema, teamSchema,
-  workspaceRequestSchema,
+  automationsStateSchema, cancelTaskSchema, deleteDefinitionSchema, flowControlSchema, getDefinitionSchema,
+  launchCommandSchema, pipelineSchema, profileSchema, reconcileUncertainSchema, retryUncertainSchema, runMutationSchema,
+  runRequestSchema, saveGraphSchema, saveRequest, saveScheduleSchema, scheduleMutationSchema, setAutomationsPausedSchema,
+  setScheduleEnabledSchema, startRunSchema, teamSchema, workspaceRequestSchema,
 } from '../labSchemas';
 import { emptyOrchestration, type LabOrchestrationWorkspace, type LabState } from '../labState';
 import type { LabSessions } from '../sessionRuntime';
@@ -28,6 +29,7 @@ import {
   controlFlow, CoordinatorFault, newRun, reconcileUncertain, retryUncertain, runSummary, runToWire, type LabRun,
 } from './runEngine';
 import type { LabRunScheduler } from './runScheduler';
+import { LabEventTriggers } from './eventTriggers';
 import { resolveRunInputs } from '../../runInputs';
 import { isScriptStep } from '../../stepExecutors';
 
@@ -86,8 +88,19 @@ function emitSchedule(bus: LabEventBus, workspaceId: string, scheduleId: string,
   bus.emit(ORCHESTRATION_SCHEDULE_EVENT_V7, event);
 }
 
-function startRun({ state, scheduler }: Context, request: StartRunRequest): OrchestrationRunV6 {
+/** `StartRunTrigger::into_run_trigger` plus its bounds (v7.2): only a chat may be stated. */
+function chatTrigger(request: StartRunRequestV7): RunTrigger | undefined {
+  if (request.trigger === undefined || request.trigger === null) return undefined;
+  const sessionId = request.trigger.sessionId ?? undefined;
+  if (sessionId !== undefined && (sessionId.trim() === '' || sessionId.length > 128 || /\p{Cc}/u.test(sessionId))) {
+    throw orchestrationFailure('invalid');
+  }
+  return { kind: 'chat', ...(sessionId === undefined ? {} : { sessionId }) };
+}
+
+function startRun({ state, scheduler }: Context, request: StartRunRequestV7): OrchestrationRunV6 {
   const workspace = liveScope(state, request.workspaceId);
+  const trigger = chatTrigger(request);
   if (workspace === undefined) throw orchestrationFailure('not-found');
   if (workspace.runs.some((run) => run.id === request.runId)) throw orchestrationFailure('already-exists');
   const team = workspace.teams.find((stored) => stored.value.id === request.teamId)?.value;
@@ -108,7 +121,7 @@ function startRun({ state, scheduler }: Context, request: StartRunRequest): Orch
   // `new_run_with_inputs`: values are validated and frozen before anything is scheduled.
   const inputs = resolveRunInputs(definition.pipeline.inputs, request.inputs);
   if (!inputs.ok) throw orchestrationFailure('invalid');
-  const run = newRun(request.runId, definition, inputs.values);
+  const run = newRun(request.runId, definition, inputs.values, trigger);
   workspace.runs.push(run);
   scheduler.emit(request.workspaceId, run);
   const admission = scheduler.schedule(request.workspaceId, run);
@@ -241,9 +254,32 @@ function definitionHandlers<T extends { readonly id: string; readonly name: stri
   };
 }
 
+/** `apply_automations_paused`: durable switch, then one scalar event. */
+function setAutomationsPaused({ state, bus }: Context, request: SetAutomationsPausedRequest): AutomationsStateV7 {
+  if (state.safeMode) throw orchestrationFailure('runtime-unavailable');
+  if ((state.automationsPaused ?? false) !== request.paused) {
+    state.automationsPaused = request.paused;
+    const event: OrchestrationAutomationsChangedEventV7 = { protocol: 7, type: 'automationsChanged', paused: request.paused };
+    bus.emit(ORCHESTRATION_AUTOMATIONS_EVENT_V7, event);
+  }
+  return { paused: request.paused };
+}
+
 export function orchestrationHandlers(runtime: LabSessions, scheduler: LabRunScheduler, bus: LabEventBus): LabHandlers {
   const context: Context = { state: runtime.state, scheduler, bus };
   const { state } = context;
+  // "Pipeline finished" automations observe every committed run change.
+  const triggers = new LabEventTriggers(
+    state,
+    runtime.clock,
+    (workspaceId) => scheduler.admits(workspaceId),
+    (workspaceId, run) => {
+      scheduler.emit(workspaceId, run);
+      scheduler.schedule(workspaceId, run);
+    },
+    (workspaceId, schedule) => emitSchedule(bus, workspaceId, schedule.value.id, schedule.revision),
+  );
+  scheduler.onRunChanged = (workspaceId, run) => triggers.observe(workspaceId, run);
   const profiles = definitionHandlers<AgentProfile>(context, PROFILES, profileSchema);
   const teams = definitionHandlers<TeamDefinition>(context, TEAMS, teamSchema);
   const pipelines = definitionHandlers<PipelineDefinition>(context, PIPELINES, pipelineSchema);
@@ -296,7 +332,7 @@ export function orchestrationHandlers(runtime: LabSessions, scheduler: LabRunSch
       const run = scope(state, read.workspaceId)?.runs.find((candidate) => candidate.id === read.runId);
       return run === undefined ? null : runToWire(run);
     },
-    orchestration_start_run_v6: (args) => startRun(context, request<StartRunRequest>(args, startRunSchema)),
+    orchestration_start_run_v6: (args) => startRun(context, request<StartRunRequestV7>(args, startRunSchema)),
     orchestration_cancel_run_v6: (args) => cancelRunCommand(context, request<RunMutationRequest>(args, runMutationSchema)),
     orchestration_cancel_task_v6: (args) => cancelTaskCommand(context, request<CancelTaskRequest>(args, cancelTaskSchema)),
     orchestration_control_flow_v6: (args) => flow(context, request<FlowControlRequest>(args, flowControlSchema)),
@@ -305,5 +341,11 @@ export function orchestrationHandlers(runtime: LabSessions, scheduler: LabRunSch
     orchestration_retry_uncertain_task_v6: (args) =>
       retry(context, request<RetryUncertainTaskRequest>(args, retryUncertainSchema)),
     orchestration_run_usage_v6: (args) => runUsage(state, request<RunRequest>(args, runRequestSchema)),
+    orchestration_automations_v7: (args): AutomationsStateV7 => {
+      request<Record<string, never>>(args, automationsStateSchema);
+      return { paused: state.automationsPaused ?? false };
+    },
+    orchestration_set_automations_paused_v7: (args) =>
+      setAutomationsPaused(context, request<SetAutomationsPausedRequest>(args, setAutomationsPausedSchema)),
   };
 }

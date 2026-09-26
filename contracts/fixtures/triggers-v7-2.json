@@ -1,0 +1,50 @@
+{
+  "description": "Golden JSON for orchestration host v7.2, run triggers (orchestration v6.3) and background-v1. The Rust host and the TypeScript contracts decode and re-encode every entry unchanged.",
+  "schedules": [
+    {
+      "id": "after-build",
+      "name": "Deploy after build",
+      "launchCommandId": "deploy",
+      "trigger": { "type": "event", "event": { "kind": "run-finished", "launchCommandId": "build", "outcomes": ["succeeded", "failed"] } },
+      "missedRunPolicy": "skip",
+      "overlapPolicy": "skip"
+    },
+    {
+      "id": "on-sources",
+      "name": "Tests on source changes",
+      "launchCommandId": "tests",
+      "trigger": { "type": "event", "event": { "kind": "files-changed", "include": ["src/**/*.ts", "*.md"], "exclude": ["src/generated/**"], "debounceSeconds": 10 } },
+      "missedRunPolicy": "skip",
+      "overlapPolicy": "allow",
+      "inputs": { "scope": "changed files" }
+    }
+  ],
+  "occurrences": [
+    { "id": "event-1", "nominalAt": "2026-09-27T10:00:00Z", "recordedAt": "2026-09-27T10:00:01Z", "outcome": "started", "runId": "event-1", "sourceRunId": "build-7", "chainDepth": 1 },
+    { "id": "event-2", "nominalAt": "2026-09-27T10:05:00Z", "recordedAt": "2026-09-27T10:05:00Z", "outcome": "skippedChainLimit", "sourceRunId": "build-8", "chainDepth": 4 },
+    { "id": "event-3", "nominalAt": "2026-09-27T10:06:00Z", "recordedAt": "2026-09-27T10:06:00Z", "outcome": "skippedCooldown", "chainDepth": 1 },
+    { "id": "event-4", "nominalAt": "2026-09-27T10:07:00Z", "recordedAt": "2026-09-27T10:07:00Z", "outcome": "skippedPaused", "sourceRunId": "build-9", "chainDepth": 1 }
+  ],
+  "runTriggers": [
+    { "kind": "schedule", "scheduleId": "nightly", "scheduleName": "Nightly review", "occurrenceId": "schedule-1" },
+    { "kind": "event", "scheduleId": "after-build", "scheduleName": "Deploy after build", "occurrenceId": "event-1", "event": "run-finished", "sourceRunId": "build-7", "chainDepth": 1 },
+    { "kind": "event", "scheduleId": "on-sources", "scheduleName": "Tests on source changes", "occurrenceId": "event-5", "event": "files-changed", "chainDepth": 2 },
+    { "kind": "chat", "sessionId": "chat-session-1" },
+    { "kind": "chat" }
+  ],
+  "startRun": {
+    "workspaceId": "workspace",
+    "runId": "run-1",
+    "teamId": "team",
+    "pipelineId": "pipeline",
+    "launchCommandId": "deploy",
+    "inputs": { "task": "Ship it" },
+    "trigger": { "kind": "chat", "sessionId": "chat-session-1" }
+  },
+  "automationsState": { "paused": true },
+  "setAutomationsPaused": { "paused": false },
+  "automationsEvent": { "protocol": 7, "type": "automationsChanged", "paused": true },
+  "backgroundSettings": { "protocol": 1, "keepInTray": true, "launchAtLogin": false, "trayAvailable": true, "launchAtLoginAvailable": true, "readOnly": false },
+  "backgroundUpdate": { "keepInTray": true },
+  "trayLabels": { "open": "Open PiUI", "pause": "Pause all automations", "resume": "Resume automations", "quit": "Quit PiUI", "tooltip": "PiUI", "pausedTooltip": "PiUI (automations paused)" }
+}

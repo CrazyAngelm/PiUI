@@ -1,8 +1,10 @@
-//! Durable calendar triggers for orchestration launch commands.
+//! Durable calendar and event triggers for orchestration launch commands.
 //!
-//! This module computes nominal occurrence times only. Native execution still
-//! goes through the existing orchestration run journal and runtime adapters.
+//! This module computes nominal occurrence times and validates event rules
+//! only. Native execution still goes through the existing orchestration run
+//! journal and runtime adapters.
 
+use crate::automation_paths::{MAX_PATTERNS, parse_patterns};
 use chrono::offset::LocalResult;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, TimeZone, Utc};
 use chrono_tz::Tz;
@@ -45,6 +47,88 @@ pub enum ScheduleTrigger {
         starts_at: DateTime<Utc>,
         time_zone: String,
     },
+    /// Event rules (v7.2). They have no due time: the host fires them when
+    /// it observes the event while it runs.
+    Event { event: EventTrigger },
+}
+
+/// How a watched run ended (v7.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FinishedOutcome {
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+/// Shortest and longest quiet period before a file-change automation fires.
+pub(crate) const MIN_DEBOUNCE_SECONDS: u32 = 2;
+pub(crate) const MAX_DEBOUNCE_SECONDS: u32 = 3_600;
+
+/// What an event automation waits for (v7.2).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum EventTrigger {
+    /// A run of `launch_command_id` ended with one of `outcomes`.
+    RunFinished {
+        launch_command_id: String,
+        outcomes: Vec<FinishedOutcome>,
+    },
+    /// Files matching `include` and not `exclude` changed in the project
+    /// folder, then stayed quiet for `debounce_seconds`.
+    FilesChanged {
+        include: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        exclude: Vec<String>,
+        debounce_seconds: u32,
+    },
+}
+
+impl EventTrigger {
+    /// Structural checks; the source launch command is checked against the
+    /// workspace on save.
+    pub(crate) fn valid(&self) -> bool {
+        match self {
+            Self::RunFinished {
+                launch_command_id,
+                outcomes,
+            } => {
+                let mut seen = outcomes.clone();
+                seen.sort();
+                seen.dedup();
+                !launch_command_id.trim().is_empty()
+                    && !outcomes.is_empty()
+                    && seen.len() == outcomes.len()
+            }
+            Self::FilesChanged {
+                include,
+                exclude,
+                debounce_seconds,
+            } => {
+                !include.is_empty()
+                    && include.len() <= MAX_PATTERNS
+                    && exclude.len() <= MAX_PATTERNS
+                    && parse_patterns(include).is_ok()
+                    && parse_patterns(exclude).is_ok()
+                    && (MIN_DEBOUNCE_SECONDS..=MAX_DEBOUNCE_SECONDS).contains(debounce_seconds)
+            }
+        }
+    }
+
+    /// The launch command whose runs this rule watches.
+    pub(crate) fn source_launch_command_id(&self) -> Option<&str> {
+        match self {
+            Self::RunFinished {
+                launch_command_id, ..
+            } => Some(launch_command_id),
+            Self::FilesChanged { .. } => None,
+        }
+    }
 }
 
 /// Parsed calendar trigger: local time, weekday mask (Monday first) and zone.
@@ -179,10 +263,19 @@ pub struct ScheduleDefinition {
 
 impl ScheduleDefinition {
     pub(crate) fn validate(&self) -> bool {
+        let timing = match &self.trigger {
+            // Events are never "missed": nothing is replayed after a restart.
+            ScheduleTrigger::Event { event } => {
+                event.valid() && self.missed_run_policy == MissedRunPolicy::Skip
+            }
+            trigger => trigger
+                .time_zone()
+                .is_some_and(|zone| !zone.trim().is_empty()),
+        };
         !self.id.trim().is_empty()
             && !self.name.trim().is_empty()
             && !self.launch_command_id.trim().is_empty()
-            && !self.trigger.time_zone().trim().is_empty()
+            && timing
             && self.trigger.interval_duration().is_some()
             && self.trigger.calendar_valid()
     }
@@ -199,11 +292,20 @@ impl ScheduleDefinition {
 }
 
 impl ScheduleTrigger {
-    pub(crate) fn time_zone(&self) -> &str {
+    /// The display zone of a timed rule; event rules have none.
+    pub(crate) fn time_zone(&self) -> Option<&str> {
         match self {
             Self::Once { time_zone, .. }
             | Self::Interval { time_zone, .. }
-            | Self::Calendar { time_zone, .. } => time_zone,
+            | Self::Calendar { time_zone, .. } => Some(time_zone),
+            Self::Event { .. } => None,
+        }
+    }
+
+    pub(crate) fn event(&self) -> Option<&EventTrigger> {
+        match self {
+            Self::Event { event } => Some(event),
+            _ => None,
         }
     }
 
@@ -225,14 +327,17 @@ impl ScheduleTrigger {
         !matches!(self, Self::Calendar { .. }) || self.calendar().is_some()
     }
 
-    pub(crate) fn initial_due(&self) -> DateTime<Utc> {
+    /// The first due time of a timed rule; event rules are never due.
+    pub(crate) fn initial_due(&self) -> Option<DateTime<Utc>> {
         match self {
-            Self::Once { at, .. } => *at,
-            Self::Interval { anchor_at, .. } => *anchor_at,
-            Self::Calendar { starts_at, .. } => self
-                .calendar()
-                .and_then(|rule| rule.first_after(*starts_at - Duration::milliseconds(1)))
-                .unwrap_or(*starts_at),
+            Self::Once { at, .. } => Some(*at),
+            Self::Interval { anchor_at, .. } => Some(*anchor_at),
+            Self::Calendar { starts_at, .. } => Some(
+                self.calendar()
+                    .and_then(|rule| rule.first_after(*starts_at - Duration::milliseconds(1)))
+                    .unwrap_or(*starts_at),
+            ),
+            Self::Event { .. } => None,
         }
     }
 
@@ -254,7 +359,7 @@ impl ScheduleTrigger {
             return self.calendar()?.latest_at_or_before(instant);
         }
         let Self::Interval { anchor_at, .. } = self else {
-            return (self.initial_due() <= instant).then_some(self.initial_due());
+            return self.initial_due().filter(|due| *due <= instant);
         };
         if *anchor_at > instant {
             return None;
@@ -270,7 +375,7 @@ impl ScheduleTrigger {
     /// First nominal occurrence strictly after `instant`.
     pub(crate) fn first_after(&self, instant: DateTime<Utc>) -> Option<DateTime<Utc>> {
         match self {
-            Self::Once { .. } => None,
+            Self::Once { .. } | Self::Event { .. } => None,
             Self::Calendar { .. } => self.calendar()?.first_after(instant),
             Self::Interval { anchor_at, .. } if *anchor_at > instant => Some(*anchor_at),
             Self::Interval { anchor_at, .. } => {
@@ -296,6 +401,12 @@ pub enum ScheduleOccurrenceOutcome {
     SkippedMissed,
     SkippedOverlap,
     Failed,
+    /// v7.2: the run would exceed the event chain depth limit.
+    SkippedChainLimit,
+    /// v7.2: this automation started a run less than the cooldown ago.
+    SkippedCooldown,
+    /// v7.2: all automations were paused.
+    SkippedPaused,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -309,6 +420,34 @@ pub struct ScheduleOccurrence {
     pub run_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_code: Option<String>,
+    /// v7.2: the finished run a "pipeline finished" rule reacted to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_run_id: Option<String>,
+    /// v7.2: event hops the started (or refused) run would have.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain_depth: Option<u8>,
+}
+
+/// Recorded outcomes kept per automation. Older entries are dropped first,
+/// but never one whose run is still active (overlap checks read them).
+pub(crate) const MAX_STORED_OCCURRENCES: usize = 200;
+
+/// Appends `occurrence` and trims the history to its bound.
+pub(crate) fn push_occurrence(
+    occurrences: &mut Vec<ScheduleOccurrence>,
+    occurrence: ScheduleOccurrence,
+    run_active: impl Fn(&str) -> bool,
+) {
+    occurrences.push(occurrence);
+    while occurrences.len() > MAX_STORED_OCCURRENCES {
+        let Some(index) = occurrences
+            .iter()
+            .position(|item| item.run_id.as_deref().is_none_or(|run| !run_active(run)))
+        else {
+            break;
+        };
+        occurrences.remove(index);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -360,9 +499,26 @@ pub(crate) fn occurrence_id(
     hash.update(trigger_revision.to_be_bytes());
     hash.update([0]);
     hash.update(nominal_at.timestamp_millis().to_be_bytes());
+    hex_identity("schedule-", hash)
+}
+
+/// Deterministic identity of one event firing (v7.2): the same finished run
+/// or the same file burst always yields the same occurrence and run id, so
+/// a repeated observation cannot start a second run.
+pub(crate) fn event_occurrence_id(schedule_id: &str, trigger_revision: u64, cause: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(schedule_id.as_bytes());
+    hash.update([0]);
+    hash.update(trigger_revision.to_be_bytes());
+    hash.update([0]);
+    hash.update(cause.as_bytes());
+    hex_identity("event-", hash)
+}
+
+fn hex_identity(prefix: &str, hash: Sha256) -> String {
     let digest = hash.finalize();
-    let mut result = String::with_capacity(9 + digest.len() * 2);
-    result.push_str("schedule-");
+    let mut result = String::with_capacity(prefix.len() + digest.len() * 2);
+    result.push_str(prefix);
     for byte in digest {
         use std::fmt::Write as _;
         let _ = write!(result, "{byte:02x}");
@@ -398,7 +554,7 @@ mod tests {
         );
         assert!(trigger.calendar_valid());
         // Friday 09:00 MSK is 06:00Z, before the start, so Monday comes next.
-        assert_eq!(trigger.initial_due(), at("2026-09-28T06:00:00Z"));
+        assert_eq!(trigger.initial_due(), Some(at("2026-09-28T06:00:00Z")));
         assert_eq!(
             trigger.first_after(at("2026-09-28T06:00:00Z")),
             Some(at("2026-09-29T06:00:00Z"))
@@ -550,5 +706,146 @@ mod tests {
         let mut unknown = with_inputs;
         unknown["inputValues"] = serde_json::json!({});
         assert!(serde_json::from_value::<ScheduleDefinition>(unknown).is_err());
+    }
+
+    fn event_schedule(event: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "id": "after-build", "name": "After build", "launchCommandId": "deploy",
+            "trigger": {"type": "event", "event": event},
+            "missedRunPolicy": "skip", "overlapPolicy": "skip"
+        })
+    }
+
+    #[test]
+    fn event_triggers_round_trip_in_their_contract_shape() {
+        for event in [
+            serde_json::json!({"kind": "run-finished", "launchCommandId": "build", "outcomes": ["succeeded", "failed"]}),
+            serde_json::json!({"kind": "files-changed", "include": ["src/**/*.ts", "*.md"], "debounceSeconds": 10}),
+            serde_json::json!({"kind": "files-changed", "include": ["docs/"], "exclude": ["docs/draft/**"], "debounceSeconds": 3600}),
+        ] {
+            let stored = event_schedule(event);
+            let schedule: ScheduleDefinition =
+                serde_json::from_value(stored.clone()).expect("event schedule");
+            assert!(schedule.validate(), "{stored}");
+            assert_eq!(serde_json::to_value(&schedule).expect("serializes"), stored);
+            assert_eq!(schedule.trigger.initial_due(), None);
+            assert_eq!(schedule.trigger.time_zone(), None);
+            assert_eq!(
+                schedule.trigger.first_after(at("2026-09-09T10:00:00Z")),
+                None
+            );
+            assert_eq!(
+                schedule
+                    .trigger
+                    .latest_at_or_before(at("2026-09-09T10:00:00Z")),
+                None
+            );
+        }
+        // Unknown fields and kinds stay closed.
+        for event in [
+            serde_json::json!({"kind": "run-finished", "launchCommandId": "build", "outcomes": ["succeeded"], "extra": 1}),
+            serde_json::json!({"kind": "clock-ticked"}),
+            serde_json::json!({"kind": "run-finished", "launchCommandId": "build", "outcomes": ["uncertain"]}),
+        ] {
+            assert!(serde_json::from_value::<ScheduleDefinition>(event_schedule(event)).is_err());
+        }
+    }
+
+    #[test]
+    fn event_triggers_refuse_empty_duplicate_or_unbounded_rules() {
+        let parse = |event: serde_json::Value| -> ScheduleDefinition {
+            serde_json::from_value(event_schedule(event)).expect("decodes")
+        };
+        for event in [
+            serde_json::json!({"kind": "run-finished", "launchCommandId": " ", "outcomes": ["failed"]}),
+            serde_json::json!({"kind": "run-finished", "launchCommandId": "build", "outcomes": []}),
+            serde_json::json!({"kind": "run-finished", "launchCommandId": "build", "outcomes": ["failed", "failed"]}),
+            serde_json::json!({"kind": "files-changed", "include": [], "debounceSeconds": 10}),
+            serde_json::json!({"kind": "files-changed", "include": ["../secrets/*"], "debounceSeconds": 10}),
+            serde_json::json!({"kind": "files-changed", "include": ["src/*"], "exclude": ["C:/x"], "debounceSeconds": 10}),
+            serde_json::json!({"kind": "files-changed", "include": ["src/*"], "debounceSeconds": 1}),
+            serde_json::json!({"kind": "files-changed", "include": ["src/*"], "debounceSeconds": 3601}),
+        ] {
+            assert!(!parse(event.clone()).validate(), "{event}");
+        }
+        let too_many: Vec<String> = (0..=MAX_PATTERNS)
+            .map(|index| format!("a{index}/*"))
+            .collect();
+        assert!(
+            !parse(serde_json::json!({"kind": "files-changed", "include": too_many, "debounceSeconds": 10}))
+                .validate()
+        );
+        // Nothing is replayed for events, so "run once when PiUI opens" is refused.
+        let mut coalesce = parse(
+            serde_json::json!({"kind": "files-changed", "include": ["src/*"], "debounceSeconds": 10}),
+        );
+        assert!(coalesce.validate());
+        coalesce.missed_run_policy = MissedRunPolicy::Coalesce;
+        assert!(!coalesce.validate());
+    }
+
+    #[test]
+    fn older_occurrences_decode_and_new_fields_stay_optional() {
+        let old = serde_json::json!({
+            "id": "schedule-1", "nominalAt": "2026-09-09T10:00:00Z", "recordedAt": "2026-09-09T10:00:01Z",
+            "outcome": "skippedOverlap"
+        });
+        let decoded: ScheduleOccurrence = serde_json::from_value(old.clone()).expect("old shape");
+        assert_eq!(decoded.source_run_id, None);
+        assert_eq!(serde_json::to_value(&decoded).expect("serializes"), old);
+        let mut chained = old;
+        chained["outcome"] = serde_json::json!("skippedChainLimit");
+        chained["sourceRunId"] = serde_json::json!("build-run");
+        chained["chainDepth"] = serde_json::json!(4);
+        let decoded: ScheduleOccurrence =
+            serde_json::from_value(chained.clone()).expect("event shape");
+        assert_eq!(
+            decoded.outcome,
+            ScheduleOccurrenceOutcome::SkippedChainLimit
+        );
+        assert_eq!(serde_json::to_value(&decoded).expect("serializes"), chained);
+    }
+
+    #[test]
+    fn occurrence_history_is_bounded_but_keeps_active_runs() {
+        let occurrence = |index: usize, run: Option<&str>| ScheduleOccurrence {
+            id: format!("occurrence-{index}"),
+            nominal_at: at("2026-09-09T10:00:00Z"),
+            recorded_at: at("2026-09-09T10:00:00Z"),
+            outcome: ScheduleOccurrenceOutcome::Started,
+            run_id: run.map(str::to_owned),
+            failure_code: None,
+            source_run_id: None,
+            chain_depth: None,
+        };
+        let mut history = vec![occurrence(0, Some("active-run"))];
+        for index in 1..=MAX_STORED_OCCURRENCES + 5 {
+            push_occurrence(&mut history, occurrence(index, Some("done")), |run| {
+                run == "active-run"
+            });
+        }
+        assert_eq!(history.len(), MAX_STORED_OCCURRENCES);
+        assert_eq!(history[0].id, "occurrence-0");
+        assert_eq!(
+            history.last().map(|item| item.id.as_str()),
+            Some(format!("occurrence-{}", MAX_STORED_OCCURRENCES + 5).as_str())
+        );
+    }
+
+    #[test]
+    fn event_occurrence_identity_depends_on_cause_and_revision() {
+        assert_eq!(
+            event_occurrence_id("after-build", 1, "run:build-1"),
+            event_occurrence_id("after-build", 1, "run:build-1")
+        );
+        assert_ne!(
+            event_occurrence_id("after-build", 1, "run:build-1"),
+            event_occurrence_id("after-build", 1, "run:build-2")
+        );
+        assert_ne!(
+            event_occurrence_id("after-build", 1, "run:build-1"),
+            event_occurrence_id("after-build", 2, "run:build-1")
+        );
+        assert!(event_occurrence_id("a", 0, "files:1").starts_with("event-"));
     }
 }

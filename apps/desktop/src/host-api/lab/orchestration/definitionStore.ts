@@ -1,9 +1,12 @@
 import { labIso } from '../labClock';
-import type {
-  AgentProfile, DefinitionSummary, DeleteDefinitionRequest, LaunchCommandReference, PipelineDefinition,
-  SaveDefinitionRequest, SaveGraphRequest, SaveScheduleRequest, ScheduleDefinition, ScheduleSnapshot,
-  ScheduleTrigger, SetScheduleEnabledRequest, StoredDefinition, TeamDefinition,
+import {
+  MAX_DEBOUNCE_SECONDS, MAX_TRIGGER_PATTERNS, MIN_DEBOUNCE_SECONDS,
+  type AgentProfile, type DefinitionSummary, type DeleteDefinitionRequest, type EventTrigger, type LaunchCommandReference,
+  type PipelineDefinition, type SaveDefinitionRequest, type SaveGraphRequest, type SaveScheduleRequest,
+  type ScheduleDefinition, type ScheduleSnapshot, type ScheduleTrigger, type SetScheduleEnabledRequest,
+  type StoredDefinition, type TeamDefinition,
 } from '../labContracts';
+import { patternListIssue } from '../../triggerPatterns';
 import { orchestrationFailure } from '../labErrors';
 import type { LabOrchestrationWorkspace, LabSchedule } from '../labState';
 import { resolveRunInputs, type RunInputResolution } from '../../runInputs';
@@ -47,10 +50,17 @@ export const PIPELINES: DefinitionKind<PipelineDefinition> = {
   normalize: normalizePipeline,
 };
 
+/** The launch command a "pipeline finished" rule watches (v7.2). */
+export function eventSource(trigger: ScheduleTrigger): string | undefined {
+  return trigger.type === 'event' && trigger.event.kind === 'run-finished' ? trigger.event.launchCommandId : undefined;
+}
+
 export const LAUNCH_COMMANDS: DefinitionKind<LaunchCommandReference> = {
   values: (workspace) => workspace.launchCommands,
   valid: launchCommandValid,
-  canDelete: (workspace, id) => !workspace.schedules.some((schedule) => schedule.value.launchCommandId === id),
+  // Automations that start this pipeline or wait for it keep it.
+  canDelete: (workspace, id) =>
+    !workspace.schedules.some((schedule) => schedule.value.launchCommandId === id || eventSource(schedule.value.trigger) === id),
   normalize: (value) => value,
   afterSave: (workspace, previous, saved) => {
     if (previous === undefined) return;
@@ -191,7 +201,8 @@ export function saveGraph(workspace: LabOrchestrationWorkspace, request: SaveGra
   workspace.schedules = draft.schedules;
 }
 
-export function initialDue(trigger: ScheduleTrigger): string {
+/** A timed rule's first due time; event rules (v7.2) are never due. */
+export function initialDue(trigger: ScheduleTrigger): string | null {
   switch (trigger.type) {
     case 'once':
       return labIso(Date.parse(trigger.at));
@@ -199,6 +210,29 @@ export function initialDue(trigger: ScheduleTrigger): string {
       return labIso(Date.parse(trigger.anchorAt));
     case 'calendar':
       return labIso(calendarInitialDue(trigger));
+    case 'event':
+      return null;
+    default: {
+      const exhaustive: never = trigger;
+      return exhaustive;
+    }
+  }
+}
+
+/** serde's shape: `exclude` is omitted when empty. */
+function normalizeTrigger(trigger: ScheduleTrigger): ScheduleTrigger {
+  switch (trigger.type) {
+    case 'once':
+      return { ...trigger, at: labIso(Date.parse(trigger.at)) };
+    case 'interval':
+      return { ...trigger, anchorAt: labIso(Date.parse(trigger.anchorAt)) };
+    case 'calendar':
+      return { ...trigger, startsAt: labIso(Date.parse(trigger.startsAt)) };
+    case 'event': {
+      if (trigger.event.kind !== 'files-changed') return trigger;
+      const { exclude, ...event } = trigger.event;
+      return { type: 'event', event: { ...event, ...(exclude?.length ? { exclude } : {}) } };
+    }
     default: {
       const exhaustive: never = trigger;
       return exhaustive;
@@ -211,11 +245,7 @@ export function initialDue(trigger: ScheduleTrigger): string {
  * input values are a `BTreeMap` (sorted keys, omitted when empty).
  */
 function normalizeSchedule(value: ScheduleDefinition): ScheduleDefinition {
-  const trigger: ScheduleTrigger = value.trigger.type === 'once'
-    ? { ...value.trigger, at: labIso(Date.parse(value.trigger.at)) }
-    : value.trigger.type === 'interval'
-      ? { ...value.trigger, anchorAt: labIso(Date.parse(value.trigger.anchorAt)) }
-      : { ...value.trigger, startsAt: labIso(Date.parse(value.trigger.startsAt)) };
+  const trigger = normalizeTrigger(value.trigger);
   const { inputs, ...rest } = value;
   const entries = Object.entries(inputs ?? {}).sort(([left], [right]) => compareText(left, right));
   return { ...rest, trigger, ...(entries.length ? { inputs: Object.fromEntries(entries) } : {}) };
@@ -228,12 +258,33 @@ export function scheduleRunInputs(workspace: LabOrchestrationWorkspace, value: S
   return pipeline === undefined ? undefined : resolveRunInputs(pipeline.value.inputs, value.inputs);
 }
 
+/** `EventTrigger::valid` (v7.2). */
+function eventValid(event: EventTrigger): boolean {
+  if (event.kind === 'run-finished') {
+    return event.launchCommandId.trim() !== '' && event.outcomes.length > 0 && new Set(event.outcomes).size === event.outcomes.length;
+  }
+  const exclude = event.exclude ?? [];
+  return event.include.length > 0 && event.include.length <= MAX_TRIGGER_PATTERNS && exclude.length <= MAX_TRIGGER_PATTERNS
+    && patternListIssue(event.include, true) === undefined && patternListIssue(exclude, false) === undefined
+    && event.debounceSeconds >= MIN_DEBOUNCE_SECONDS && event.debounceSeconds <= MAX_DEBOUNCE_SECONDS;
+}
+
 function scheduleValid(value: ScheduleDefinition): boolean {
   const blank = (text: string): boolean => text.trim() === '';
-  return !blank(value.id) && !blank(value.name) && !blank(value.launchCommandId) && !blank(value.trigger.timeZone)
-    && (value.trigger.type === 'once'
-      || (value.trigger.type === 'interval' && value.trigger.every > 0)
-      || (value.trigger.type === 'calendar' && calendarValid(value.trigger)));
+  const timing = value.trigger.type === 'event'
+    // Events are never replayed, so "run once when PiUI opens" is refused.
+    ? eventValid(value.trigger.event) && value.missedRunPolicy === 'skip'
+    : !blank(value.trigger.timeZone)
+      && (value.trigger.type === 'once'
+        || (value.trigger.type === 'interval' && value.trigger.every > 0)
+        || (value.trigger.type === 'calendar' && calendarValid(value.trigger)));
+  return !blank(value.id) && !blank(value.name) && !blank(value.launchCommandId) && timing;
+}
+
+/** `event_source_saved`: a watched pipeline must be saved in the same project. */
+function eventSourceSaved(workspace: LabOrchestrationWorkspace, value: ScheduleDefinition): boolean {
+  const source = eventSource(value.trigger);
+  return source === undefined || workspace.launchCommands.some((command) => command.value.id === source);
 }
 
 /** Both sides are normalized, so input maps compare in sorted key order. */
@@ -266,7 +317,7 @@ export function saveSchedule(workspace: LabOrchestrationWorkspace | undefined, r
   if (!scheduleValid(request.value)) throw orchestrationFailure('invalid');
   if (workspace === undefined) throw orchestrationFailure('not-found');
   const launches = workspace.launchCommands.some((command) => command.value.id === request.value.launchCommandId);
-  if (!launches) throw orchestrationFailure('invalid');
+  if (!launches || !eventSourceSaved(workspace, request.value)) throw orchestrationFailure('invalid');
   if (scheduleRunInputs(workspace, request.value)?.ok !== true) throw orchestrationFailure('invalid');
   const value = normalizeSchedule(request.value);
   const index = workspace.schedules.findIndex((schedule) => schedule.value.id === value.id);
@@ -302,7 +353,11 @@ export function setScheduleEnabled(workspace: LabOrchestrationWorkspace | undefi
   const command = workspace.launchCommands.find((item) => item.value.id === schedule.value.launchCommandId
     && workspace.teams.some((team) => team.value.id === item.value.teamId)
     && workspace.pipelines.some((pipeline) => pipeline.value.id === item.value.pipelineId));
-  if (request.enabled && (schedule.nextDueAt === null || command === undefined)) throw orchestrationFailure('invalid');
+  // Event rules have no due time; a timed rule without one is spent.
+  const spent = schedule.value.trigger.type !== 'event' && schedule.nextDueAt === null;
+  if (request.enabled && (spent || command === undefined || !eventSourceSaved(workspace, schedule.value))) {
+    throw orchestrationFailure('invalid');
+  }
   // The pipeline may have gained declarations since the schedule was saved.
   if (request.enabled && scheduleRunInputs(workspace, schedule.value)?.ok !== true) throw orchestrationFailure('invalid');
   const commandRevision = request.enabled ? command?.revision ?? null : null;

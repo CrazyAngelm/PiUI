@@ -1,10 +1,14 @@
-# Scheduled orchestration runs
+# Scheduled and event orchestration runs
 
-Status: implemented host, desktop UI and local operator API contract.
+Status: implemented host, desktop UI and local operator API contract. Event
+triggers, the pause switch, run-from-chat and background mode are host v7.2
+(additive); run trigger identity is orchestration v6.3; background mode is
+`contracts/background-v1.ts`.
 
 PiUI can start a saved launch command once at an absolute time, repeatedly on
-a fixed elapsed interval in minutes or hours, or at a local wall-clock time on
-chosen days of the week. A launch command identifies the
+a fixed elapsed interval in minutes or hours, at a local wall-clock time on
+chosen days of the week, when another pipeline finishes, or when project files
+change. A person can also start one from a chat. A launch command identifies the
 team and pipeline; every occurrence snapshots their latest saved definitions into
 an ordinary orchestration run. Native harnesses still own inference, tools,
 credentials, approvals, processes and history.
@@ -74,10 +78,126 @@ UI metadata cache under ADR-023.
   nominal occurrence. `coalesce` creates one run for the latest elapsed occurrence.
 - Overlap `skip` treats running and uncertain prior runs as active. `allow` creates
   another independent run.
-- PiUI evaluates schedules only while its host process is running. OS startup,
-  background services, machine wake and cron expressions are outside this
-  contract.
+- PiUI evaluates schedules only while its host process is running (window open
+  or, with background mode on, in the tray). Background services, machine wake
+  and cron expressions are outside this contract.
+- While all automations are paused, due occurrences wait. Resuming treats the
+  occurrences that came due during the pause like ones missed while PiUI was
+  closed: `skip` records them as `skippedMissed`, `coalesce` runs once.
 
 The desktop uses orchestration host v7 schedule commands and scalar invalidation
 events while retaining every v6 definition/run command. The opt-in loopback API
-keeps protocol v1 and requires protocol v2 for schedule methods.
+keeps protocol v1 and requires protocol v2 for schedule methods; the same
+schedule methods accept event triggers, with the same checks.
+
+## Event triggers (host v7.2)
+
+An automation's trigger may be `{ "type": "event", "event": ... }`:
+
+- `{ "kind": "run-finished", "launchCommandId", "outcomes" }` fires when a run of
+  that launch command ends with one of `outcomes` (`succeeded`, `failed`,
+  `cancelled`; at least one, no repeats). The watched launch command must be
+  saved in the same project and cannot be deleted while a rule waits for it.
+  A run counts as "of" a launch command when it was started through it (the
+  editor's Run, a schedule, a chat or another automation).
+- `{ "kind": "files-changed", "include", "exclude"?, "debounceSeconds" }` fires
+  when files matching `include` and not `exclude` change in the project folder
+  and then stay quiet for `debounceSeconds` (2-3600). Patterns are relative to
+  the project folder with `/` separators: `*` and `?` stay inside one name,
+  `**` spans folders, `[a-z]`/`[!a]` and `{ts,svelte}` are allowed. A pattern
+  without a slash matches a file or folder name at any depth (`*.md`); one
+  with a slash is anchored (`src/**/*.ts`); a matching folder covers everything
+  inside it. At most 32 patterns per list, 256 bytes each. Matching folds ASCII
+  case on Windows and macOS. `.git`, `node_modules`, `target`, `dist`, `.pi`,
+  `.piui` and PiUI's own data folder are never watched. The host
+  (`automation_paths.rs`) and the editor (`host-api/triggerPatterns.ts`) share
+  `contracts/fixtures/trigger-patterns-v7.json`.
+
+Event rules have no due time (`nextDueAt` stays null) and must use
+`missedRunPolicy: "skip"`: nothing is replayed after a restart or a pause.
+Saving never runs anything; enabling is the same revision-bound, trust-checked
+request as for timed rules. Only trusted, present project folders are watched.
+
+The host observes every committed orchestration generation and fires a
+"pipeline finished" rule once per finished run; a firing's occurrence and run
+identity derive from the rule, its trigger revision and the source run, so a
+repeated observation cannot start a second run. File changes arrive from the
+platform watcher (`piui_platform::watch_project`) in coalesced batches; a burst
+fires once after the quiet period, or at the latest after ten quiet periods
+(bounded to an hour) while the folder keeps changing. A batch that only
+reports lost events is ignored, never guessed at. The firing, its outcome and
+the new run commit in one fsynced generation (`claim_event_occurrence`).
+
+A run that finishes, or a file that changes, while PiUI is not running is not
+observed. A run finishing in the moment PiUI exits may not fire.
+
+## Loop protection
+
+- A files-changed rule ignores changes while a run it started works, and for
+  three seconds after it ends (late watcher events).
+- Every run records its chain depth: runs started by a person, a clock or a
+  chat have depth 0; a "pipeline finished" run has the finished run's depth
+  plus one; a "files changed" run has one more than the deepest run that was
+  active during the burst or ended up to ten seconds before it (1 when none).
+  A firing deeper than 3 is recorded as `skippedChainLimit` and starts nothing.
+- One rule starts at most one run every 30 seconds. A "pipeline finished"
+  firing inside that window is recorded as `skippedCooldown`; a file burst is
+  deferred to the end of the window instead, so changes coalesce into one run.
+- Order of checks for a firing: paused (`skippedPaused`), chain limit
+  (`skippedChainLimit`), launch command changed (`failed`, the rule is turned
+  off), project not trusted or safe mode (`failed` with the admission code),
+  cooldown (`skippedCooldown`), overlap policy (`skippedOverlap`), then start.
+- Each rule keeps its last 200 occurrence records; an older record whose run
+  is still active is never dropped.
+
+## Pause all automations
+
+`orchestration_set_automations_paused_v7` pauses or resumes every automation
+of every project; the tray menu flips the same durable switch (a top-level
+journal field, absent until first used). While paused no timed occurrence is
+claimed, file changes are dropped and watchers stop, and a finished run records
+`skippedPaused` for the rules waiting for it. Runs already working continue.
+`piui://orchestration-automations-event` (`automationsChanged`) tells the UI.
+Safe mode refuses the switch (`runtime-unavailable`).
+
+## Trigger identity
+
+`OrchestrationRunV6.trigger` records what started a run, frozen at creation:
+`schedule` (automation id, name and occurrence id), `event` (also the event
+kind, the source run for "pipeline finished" and the chain depth) or `chat`
+(the chat's session id). Runs a person starts in the editor have none. The
+Runs header shows it. The start command accepts only `{ "kind": "chat" }` from
+a caller; automation identities are written by the host alone.
+
+## Run a pipeline from a chat
+
+`/run` in the composer and "Run pipeline…" in Ctrl+K list the saved pipelines
+of the chat's project, ask for run inputs with the editor's run form, and
+start the run through `orchestration_start_run_v6` with a `chat` trigger. A
+notice links to the run. Nothing is written into the chat's native history.
+Trust and safe mode apply exactly as for any start; a retry keeps its run id
+until the start is confirmed.
+
+## Background mode (background-v1)
+
+Settings -> Background offers, all off by default:
+
+- **Keep running in the tray when the window is closed.** A tray icon exists
+  only while this is on; closing the main window then hides it. The tray menu
+  has Open PiUI, Pause all automations / Resume automations and Quit PiUI.
+  Quit takes the ordinary exit path that stops every harness process tree.
+- **Start PiUI when I sign in.** The OS registration through
+  `tauri-plugin-autostart` (the Windows `Run` key), with the `--autostart`
+  argument; such a start stays hidden in the tray only when the tray is on.
+  The registration is the OS's record; only "keep in tray" is stored (in the
+  PiUI preferences of the index database). E2E hosts never register.
+- **Pause all automations** (the switch above).
+
+The WebView holds no tray, autostart-plugin or OS permission; it calls
+`background_settings_v1`, `background_update_v1` and `background_tray_labels_v1`
+(tray copy from the locale catalog). Safe mode shows the settings read-only
+and never creates a tray. Windows is the target; the Linux and macOS code paths
+compile but are not verified. The plugin writes the executable path unquoted
+into the `Run` value; a path with spaces then relies on Windows' search order
+for unquoted command lines. A second PiUI started while one waits in the tray
+is a separate instance (see the known gaps in `REWORK_PROGRESS.md`).

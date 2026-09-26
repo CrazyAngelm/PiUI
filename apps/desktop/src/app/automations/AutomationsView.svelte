@@ -4,12 +4,14 @@
   import Pencil from '@lucide/svelte/icons/pencil';
   import Trash2 from '@lucide/svelte/icons/trash-2';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+  import Pause from '@lucide/svelte/icons/pause';
+  import Play from '@lucide/svelte/icons/play';
   import { onMount, untrack } from 'svelte';
   import { language, t } from '../../features/locale/language';
   import type { OrchestrationClient, ScheduleSnapshot } from '../../host-api/orchestrationClient';
-  import { daySet, sortDays, weekdayNames } from '../../host-api/scheduleCalendar';
   import { Badge, Button, Dialog, EmptyState, IconButton, Skeleton, Switch } from '../../lib/ui';
   import { AutomationsStore } from './automationsStore.svelte';
+  import { cadenceText, OUTCOME, triggerTimeZone } from './cadence';
   import ScheduleDialog from './ScheduleDialog.svelte';
 
   interface Props {
@@ -30,39 +32,25 @@
   onMount(() => automations.start());
 
   const locale = $derived($language === 'ru' ? 'ru-RU' : 'en-US');
+  const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
-  function when(iso: string | null | undefined, timeZone: string): string {
+  function when(iso: string | null | undefined, schedule: ScheduleSnapshot): string {
     if (!iso) return '';
+    const timeZone = triggerTimeZone(schedule.value.trigger, localZone);
     return new Date(iso).toLocaleString(locale, { timeZone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   }
 
   function cadence(schedule: ScheduleSnapshot): string {
-    const trigger = schedule.value.trigger;
-    switch (trigger.type) {
-      case 'once':
-        return $t('Once');
-      case 'interval':
-        return trigger.unit === 'hours' ? $t('Every {0} h', [trigger.every]) : $t('Every {0} min', [trigger.every]);
-      case 'calendar': {
-        const preset = daySet(trigger.days);
-        if (preset === 'every') return $t('Every day at {0}', [trigger.time]);
-        if (preset === 'workdays') return $t('Weekdays at {0}', [trigger.time]);
-        const names = weekdayNames(locale);
-        return $t('{0} at {1}', [sortDays(trigger.days).map((day) => names[day - 1]).join(', '), trigger.time]);
-      }
-      default: {
-        const exhaustive: never = trigger;
-        return exhaustive;
-      }
-    }
+    return cadenceText(schedule.value.trigger, $t, locale, (id) => automations.pipelineName(id));
   }
 
-  const OUTCOME: Record<string, { label: string; tone: 'success' | 'neutral' | 'warning' | 'danger' }> = {
-    started: { label: 'Started', tone: 'success' },
-    skippedMissed: { label: 'Skipped: PiUI was closed', tone: 'neutral' },
-    skippedOverlap: { label: 'Skipped: previous run still working', tone: 'neutral' },
-    failed: { label: 'Could not start', tone: 'danger' },
-  };
+  /** What an enabled event rule is waiting for; timed rules show their next time. */
+  function waiting(schedule: ScheduleSnapshot): string {
+    const trigger = schedule.value.trigger;
+    if (trigger.type !== 'event') return '';
+    if (trigger.event.kind === 'files-changed') return $t('Watching project files');
+    return $t('Waiting for {0} to finish', [automations.pipelineName(trigger.event.launchCommandId) || $t('Missing pipeline')]);
+  }
 
   function edit(schedule: ScheduleSnapshot | undefined): void {
     editing = schedule;
@@ -74,10 +62,16 @@
   <header class="head">
     <div>
       <h2 id="automations-title">{$t('Automations')}</h2>
-      <p>{$t('Start saved pipelines on a schedule. They run while PiUI is open.')}</p>
+      <p>{$t('Start saved pipelines on a schedule or after an event. They run while PiUI is open or in the tray.')}</p>
     </div>
     <div class="head__actions">
       <IconButton label={$t('Refresh')} onclick={() => void automations.refresh()} disabled={automations.loading}><RefreshCw /></IconButton>
+      {#if !automations.paused}
+        <Button variant="ghost" onclick={() => void automations.setPaused(true)} disabled={safeMode || automations.busy !== ''}>
+          {#snippet leading()}<Pause />{/snippet}
+          {$t('Pause all')}
+        </Button>
+      {/if}
       <Button variant="primary" onclick={() => edit(undefined)} disabled={safeMode}>
         {#snippet leading()}<Plus />{/snippet}
         {$t('New automation')}
@@ -85,13 +79,23 @@
     </div>
   </header>
 
+  {#if automations.paused}
+    <div class="paused" role="status">
+      <span>{$t('All automations are paused. Nothing starts until you resume them.')}</span>
+      <Button size="sm" onclick={() => void automations.setPaused(false)} disabled={safeMode || automations.busy !== ''}>
+        {#snippet leading()}<Play />{/snippet}
+        {$t('Resume automations')}
+      </Button>
+    </div>
+  {/if}
+
   {#if automations.error}<p class="error" role="alert">{$t(automations.error)}</p>{/if}
   {#if automations.actionError}<p class="error" role="alert">{$t(automations.actionError)}</p>{/if}
 
   {#if automations.loading && automations.schedules.length === 0}
     <div class="loading"><Skeleton lines={4} /></div>
   {:else if automations.schedules.length === 0}
-    <EmptyState icon={AlarmClock} title={$t('No automations yet')} description={automations.launchCommands.length ? $t('Run a pipeline every hour, every morning or once at a set time.') : $t('Save a pipeline first, then schedule it here.')}>
+    <EmptyState icon={AlarmClock} title={$t('No automations yet')} description={automations.launchCommands.length ? $t('Run a pipeline every morning, when another pipeline finishes or when project files change.') : $t('Save a pipeline first, then schedule it here.')}>
       {#snippet actions()}
         {#if automations.launchCommands.length}
           <Button variant="primary" onclick={() => edit(undefined)} disabled={safeMode}>{$t('New automation')}</Button>
@@ -115,14 +119,16 @@
               {automations.pipelineName(schedule.value.launchCommandId) || $t('Missing pipeline')} · {cadence(schedule)}
             </p>
             <div class="meta">
-              {#if schedule.enabled && schedule.nextDueAt}
-                <span>{$t('Next')}: <b>{when(schedule.nextDueAt, schedule.value.trigger.timeZone)}</b></span>
+              {#if schedule.enabled && schedule.value.trigger.type === 'event'}
+                <span>{waiting(schedule)}</span>
+              {:else if schedule.enabled && schedule.nextDueAt}
+                <span>{$t('Next')}: <b>{when(schedule.nextDueAt, schedule)}</b></span>
               {:else if !schedule.enabled}
-                <span>{$t('Turn it on to schedule the next run.')}</span>
+                <span>{schedule.value.trigger.type === 'event' ? $t('Turn it on to react to events.') : $t('Turn it on to schedule the next run.')}</span>
               {/if}
               {#if last && outcome}
                 <span>
-                  {$t('Last')}: {when(last.nominalAt, schedule.value.trigger.timeZone)} ·
+                  {$t('Last')}: {when(last.nominalAt, schedule)} ·
                   <Badge tone={outcome.tone}>{$t(outcome.label)}</Badge>
                   {#if last.runId}
                     <button type="button" class="link" onclick={() => last.runId && onOpenRun(last.runId)}>{$t('Open run')}</button>
@@ -271,6 +277,18 @@
   .error {
     margin: 0;
     color: var(--piui-danger);
+  }
+  .paused {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--piui-space-3);
+    padding: var(--piui-space-2) var(--piui-space-3);
+    border: 1px solid var(--piui-warning-border);
+    border-radius: var(--piui-radius-md);
+    background: var(--piui-warning-surface);
+    color: var(--piui-warning-text);
+    font-size: var(--piui-text-sm);
   }
   .loading {
     padding: var(--piui-space-4) 0;

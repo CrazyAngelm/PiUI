@@ -67,6 +67,15 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   (read-only model call; script runtime, code, time limit, result fields, "not
   a sandbox" warning), run panel (stdout, stderr tail, failure texts). Claude
   Code runs a model call with `--tools "" --strict-mcp-config`.
+- `feat/triggers` (`752499d`…) — triggers (plan P2 item 8; host v7.2,
+  orchestration v6.3, background v1, all additive): event automations "when a
+  pipeline finishes" and "when files change" (platform project watcher,
+  include/exclude patterns, quiet period), loop protection (own-run
+  suppression, chain depth ≤ 3, 30 s cooldown, typed skip outcomes), durable
+  "pause all automations", run trigger identity shown in Runs, `/run` and
+  Ctrl+K "Run pipeline…" with a chat trigger, and background mode (tray with
+  Open/Pause/Quit, keep-in-tray and start-at-sign-in, both off by default, in
+  Settings -> Background). UI Lab parity; golden JSON shared by Rust and TS.
 - `main` fast-forwarded to `rework/piui-2` (local only, not pushed).
 - `feat/step-editing` (`ed824b2`…`9e72213`) — executor tails. A node's type
   changes between agent, model call and script from a chip in the inspector
@@ -166,6 +175,13 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   "Inputs" overlap. bits-ui Command points `aria-controls` at its viewport, so
   axe flags the palette list (`scrollable-region-focusable`, reviewed
   exception). The Ubuntu full-workspace Rust job has not run yet.
+
+- Triggers: no single-instance guard yet, so launching PiUI while it waits in
+  the tray starts a second process (its journal writes then fail instead of
+  double-claiming). Tray, sign-in start and file watching are verified by
+  unit tests and fakes only; the native tray, the real `Run` registration and
+  Linux/macOS paths still need a manual check. The UI Lab never fires "files
+  changed" rules (no project folders) and fires no timed schedules.
 
 ## Next
 

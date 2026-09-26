@@ -10,38 +10,52 @@ import {
   type ScheduleDefinition,
   type ScheduleSnapshot,
 } from '../../host-api/orchestrationClient';
+import { automationsHost, type AutomationsClient } from '../../host-api/automationsClient';
 
 export class AutomationsStore {
   schedules = $state.raw<readonly ScheduleSnapshot[]>([]);
   launchCommands = $state.raw<readonly DefinitionSummary[]>([]);
+  /** Host v7.2: every automation is paused (from here or the tray). */
+  paused = $state(false);
   loading = $state(false);
   error = $state('');
   busy = $state('');
   actionError = $state('');
 
   private generation = 0;
-  private stop: (() => void) | undefined;
+  private stops: (() => void)[] = [];
   private disposed = false;
 
   constructor(
     readonly workspaceId: string,
     readonly safeMode: boolean,
     private readonly client: OrchestrationClient,
+    private readonly automations: AutomationsClient = automationsHost,
   ) {}
 
   start(): () => void {
     this.disposed = false;
     const generation = ++this.generation;
+    const keep = (stop: () => void): void => {
+      if (this.disposed || generation !== this.generation) stop();
+      else this.stops.push(stop);
+    };
     void this.client
       .listenSchedules((event) => {
         if (event.workspaceId === this.workspaceId) void this.refresh();
       })
-      .then((stop) => {
-        if (this.disposed || generation !== this.generation) stop();
-        else this.stop = stop;
-      })
+      .then(keep)
       .catch(() => {
         // Without live events the list still refreshes after each action.
+      });
+    void this.automations
+      .listen((event) => {
+        this.paused = event.paused;
+        void this.refresh();
+      })
+      .then(keep)
+      .catch(() => {
+        // The pause state is also read on every refresh.
       });
     void this.refresh();
     return () => this.dispose();
@@ -50,8 +64,8 @@ export class AutomationsStore {
   dispose(): void {
     this.disposed = true;
     this.generation += 1;
-    this.stop?.();
-    this.stop = undefined;
+    for (const stop of this.stops) stop();
+    this.stops = [];
   }
 
   async refresh(): Promise<void> {
@@ -59,18 +73,29 @@ export class AutomationsStore {
     this.loading = true;
     this.error = '';
     try {
-      const [schedules, catalog] = await Promise.all([
+      const [schedules, catalog, automations] = await Promise.all([
         this.client.orchestration_list_schedules_v7({ workspaceId: this.workspaceId }),
         this.client.orchestration_catalog_v6({ workspaceId: this.workspaceId }),
+        // An older host without the switch reads as "not paused".
+        this.automations.state().catch(() => ({ paused: false })),
       ]);
       if (generation !== this.generation) return;
       this.schedules = [...schedules].sort((left, right) => left.value.name.localeCompare(right.value.name));
       this.launchCommands = catalog.launchCommands;
+      this.paused = automations.paused;
     } catch (error) {
       if (generation === this.generation) this.error = orchestrationError(error).message;
     } finally {
       if (generation === this.generation) this.loading = false;
     }
+  }
+
+  /** Pauses or resumes every automation of every project. */
+  async setPaused(paused: boolean): Promise<boolean> {
+    const next = await this.act('pause', () => this.automations.setPaused(paused));
+    if (!next) return false;
+    this.paused = next.paused;
+    return true;
   }
 
   /** The run inputs the scheduled pipeline asks for (empty when it has none). */

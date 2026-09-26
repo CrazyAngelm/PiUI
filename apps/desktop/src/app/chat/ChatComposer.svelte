@@ -10,6 +10,7 @@
   import type { SessionSnapshot } from '../../host-api/workspaceClient';
   import { Button, IconButton, Segmented, Spinner, Textarea } from '../../lib/ui';
   import { errorMessage } from '../workspaceStore.svelte';
+  import { runLauncher } from '../triggers/runLauncher.svelte';
   import RuntimeChip from './RuntimeChip.svelte';
 
   interface Props {
@@ -50,6 +51,7 @@
       ? [{ name: 'compact', description: 'Compact conversation context', enabled: snapshot.session.status === 'idle' && !composer.queue.items.length }]
       : []),
     { name: 'stop', description: 'Stop the current turn', enabled: running },
+    { name: 'run', description: 'Run a saved pipeline of this project', enabled: true },
   ]);
   const slash = $derived(
     !slashDismissed && /^\/[^\s]*$/.test(text) ? commands.filter((command) => command.name.startsWith(text.slice(1))) : [],
@@ -117,7 +119,11 @@
       error = 'This command is unavailable in the current session state.';
       return;
     }
-    if (name === 'stop') {
+    if (name === 'run') {
+      // Opens the run dialog; nothing is sent to the chat.
+      runLauncher.open(snapshot.session.workspaceId, sessionId);
+      setText('');
+    } else if (name === 'stop') {
       if (await interrupt()) setText('');
     } else if (await action({ type: 'compact', sessionId })) {
       setText('');

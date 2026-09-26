@@ -57,6 +57,7 @@ export type {
   RunDefinitionSnapshot,
   RunInputValue,
   RunStatus,
+  RunTrigger,
   ScriptRuntime,
   StepExecutor,
   TaskOutput,
@@ -65,13 +66,18 @@ export type {
   TeamDefinition,
 } from '../../../../../contracts/orchestration-v6';
 export type {
+  AutomationsStateV7,
   CancelTaskRequest,
+  ChatRunTrigger,
   DefinitionSummary,
   DeleteDefinitionRequest,
+  EventTrigger,
+  FinishedOutcome,
   FlowAction,
   FlowControlRequest,
   GetDefinitionRequest,
   OrchestrationCatalogV6,
+  OrchestrationAutomationsChangedEventV7,
   OrchestrationHostErrorCode,
   OrchestrationRunChangedEventV6,
   OrchestrationScheduleChangedEventV7,
@@ -88,16 +94,29 @@ export type {
   ScheduleOccurrence,
   ScheduleSnapshot,
   ScheduleTrigger,
+  SetAutomationsPausedRequest,
   SetScheduleEnabledRequest,
   StartRunRequest,
+  StartRunRequestV7,
   StoredDefinition,
   UsageReceipt,
   WorkspaceRequest,
 } from '../../../../../contracts/orchestration-host-v7';
 export {
+  EVENT_COOLDOWN_SECONDS,
+  MAX_DEBOUNCE_SECONDS,
+  MAX_TRIGGER_PATTERNS,
+  MIN_DEBOUNCE_SECONDS,
+  ORCHESTRATION_AUTOMATIONS_EVENT_V7,
   ORCHESTRATION_EVENT_V6,
   ORCHESTRATION_SCHEDULE_EVENT_V7,
 } from '../../../../../contracts/orchestration-host-v7';
+export { MAX_TRIGGER_CHAIN_DEPTH } from '../../../../../contracts/orchestration-v6';
+export type {
+  BackgroundSettingsV1,
+  BackgroundUpdateRequest,
+  TrayLabelsV1,
+} from '../../../../../contracts/background-v1';
 export type {
   AgentKind,
   AppSnapshot,

@@ -1,7 +1,7 @@
 import type {
   AgentProfile, AgentRequestRecord, FailureRecord, FlowAction, MessageRecord, NativeHistoryReference, OrchestrationRunV6,
   PipelineStep, ReconcileUncertainTaskRequest, ResultField, RouterConfig, RouterPredicate, RunDefinitionSnapshot,
-  RunInputValue, RunStatus, RunSummary, TaskOutput, TaskRecord,
+  RunInputValue, RunStatus, RunSummary, RunTrigger, TaskOutput, TaskRecord,
 } from '../labContracts';
 import { runInputSection, substituteInputTokens } from '../../runInputs';
 import { executorKind, isScriptStep, scriptResult } from '../../stepExecutors';
@@ -17,6 +17,8 @@ export type LabTask = Mutable<TaskRecord>;
 export interface LabRun {
   /** Validated input values frozen at creation (sorted keys, like the host's `BTreeMap`). */
   inputs: Readonly<Record<string, RunInputValue>>;
+  /** What started the run (v6.3); absent for a person's manual start. */
+  trigger?: RunTrigger;
   paused: boolean;
   attempts: LabTask[];
   schemaVersion: 6;
@@ -57,10 +59,16 @@ function objectValue(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
-/** `new_run_with_inputs` after the caller resolved `inputs` (see `resolveRunInputs`). */
-export function newRun(id: string, definition: RunDefinitionSnapshot, inputs: Readonly<Record<string, RunInputValue>> = {}): LabRun {
+/** `new_triggered_run` after the caller resolved `inputs` (see `resolveRunInputs`). */
+export function newRun(
+  id: string,
+  definition: RunDefinitionSnapshot,
+  inputs: Readonly<Record<string, RunInputValue>> = {},
+  trigger: RunTrigger | undefined = undefined,
+): LabRun {
   return {
     inputs,
+    ...(trigger === undefined ? {} : { trigger }),
     paused: false,
     attempts: [],
     schemaVersion: 6,

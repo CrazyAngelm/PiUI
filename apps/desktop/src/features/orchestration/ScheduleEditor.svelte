@@ -23,14 +23,14 @@
 
   const source = schedule?.value;
   const sourceTrigger = source?.trigger;
-  const timeZone = sourceTrigger?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC';
+  const timeZone = (sourceTrigger?.type === 'event' ? undefined : sourceTrigger?.timeZone) ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC';
   let id = source?.id ?? crypto.randomUUID();
   let name = source?.name ?? '';
   let launchCommandId = source?.launchCommandId ?? '';
-  // Day-of-week rules (v7.1) are edited only in the new Automations screen.
-  const calendarRule = sourceTrigger?.type === 'calendar';
+  // Day-of-week (v7.1) and event (v7.2) rules are edited only in the new Automations screen.
+  const calendarRule = sourceTrigger?.type === 'calendar' || sourceTrigger?.type === 'event';
   let triggerType: 'once' | 'interval' = sourceTrigger?.type === 'interval' ? 'interval' : 'once';
-  let localAt = sourceTrigger === undefined || sourceTrigger.type === 'calendar' ? '' : localDateTimeValue(sourceTrigger.type === 'once' ? sourceTrigger.at : sourceTrigger.anchorAt, timeZone);
+  let localAt = sourceTrigger === undefined || sourceTrigger.type === 'calendar' || sourceTrigger.type === 'event' ? '' : localDateTimeValue(sourceTrigger.type === 'once' ? sourceTrigger.at : sourceTrigger.anchorAt, timeZone);
   let every = sourceTrigger?.type === 'interval' ? String(sourceTrigger.every) : '1';
   let unit: 'minutes' | 'hours' = sourceTrigger?.type === 'interval' ? sourceTrigger.unit : 'minutes';
   let missedRunPolicy: MissedRunPolicy | '' = source?.missedRunPolicy ?? '';

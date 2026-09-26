@@ -11,8 +11,12 @@
   import { lazyViews, type LazyView } from './lazyViews.svelte';
   import { EmptyState, Skeleton } from '../../lib/ui';
   import { provideWorkspace } from './context';
+  import { runLauncher } from '../triggers/runLauncher.svelte';
+  import { syncTrayLabels } from '../settings/trayLabels';
 
   const store = provideWorkspace(new WorkspaceStore());
+  // The tray menu (background mode) speaks the interface language.
+  $effect(() => syncTrayLabels($t));
 
   let paletteOpen = $state(false);
   let drawerOpen = $state(false);
@@ -168,6 +172,15 @@
   {#if lazyViews.loaded.palette}
     {@const CommandPalette = lazyViews.loaded.palette}
     <CommandPalette bind:open={paletteOpen} />
+  {/if}
+
+  <!-- "Run a pipeline" from a chat or the palette; loaded on first request. -->
+  {#if runLauncher.request}
+    {#await import('../triggers/RunPipelineDialog.svelte') then module}
+      {#key runLauncher.request}
+        <module.default />
+      {/key}
+    {/await}
   {/if}
 
   <Dialog

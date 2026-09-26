@@ -69,9 +69,13 @@ export class LabRunScheduler {
     return this.runtime.state.orchestration.get(workspaceId)?.runs.find((run) => run.id === runId);
   }
 
+  /** Observes every committed run change, like the host's commit watch (event automations, v7.2). */
+  onRunChanged: ((workspaceId: string, run: LabRun) => void) | undefined;
+
   emit(workspaceId: string, run: LabRun): void {
     const event: OrchestrationRunChangedEventV6 = { protocol: 6, type: 'runChanged', workspaceId, runId: run.id, revision: run.revision };
     this.bus.emit(ORCHESTRATION_EVENT_V6, event);
+    this.onRunChanged?.(workspaceId, run);
   }
 
   /** `schedule_run`: launches every ready step now; returns the admission error, if any. */
