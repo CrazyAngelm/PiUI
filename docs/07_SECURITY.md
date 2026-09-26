@@ -361,6 +361,17 @@ The recovery shortcut must work outside extension-controlled DOM, for example th
 - reproducible-build goals tracked even if full reproducibility is not initially achieved;
 - compromised-key response/revocation process documented before public release.
 
+**Status (0.2.0):** a release build verifies every update artifact against the
+minisign public key compiled into it (Tauri updater; the check cannot be
+skipped), offers only newer versions, installs only the version the person
+confirmed, and stops native runtimes as on quit before installing. Update
+commands stay host-side: the WebView has no `updater:*` permission, and a build
+without the key never registers the updater or contacts a feed. The feed
+(`latest.json`) is HTTPS but unsigned, and `requireSignedVersion` stays off until
+the Tauri CLI records the signed version, so a tampered feed could offer an older
+signed build under a newer version number. Windows Authenticode is configured
+per release. Keys, rotation and compromise response: [Releasing PiUI](RELEASING.md).
+
 ## 18. Security testing
 
 Minimum suite:
