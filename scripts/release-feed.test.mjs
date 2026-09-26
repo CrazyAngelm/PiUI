@@ -1,7 +1,48 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { checksumLines, releaseFiles } from './prepare-release-artifacts.mjs';
 import { changelogSection, plainNotes, platformKeys, releaseNotes, updaterFeed } from './release-feed.mjs';
+
+function bundle(files) {
+  const root = mkdtempSync(join(tmpdir(), 'piui-release-bundle-'));
+  for (const path of files) {
+    mkdirSync(join(root, path, '..'), { recursive: true });
+    writeFileSync(join(root, path), path);
+  }
+  return root;
+}
+
+test('collects Linux packages with their update signatures', () => {
+  const root = bundle(['deb/PiUI_0.2.0_amd64.deb', 'appimage/PiUI_0.2.0_amd64.AppImage', 'appimage/PiUI_0.2.0_amd64.AppImage.sig', 'appimage/PiUI_0.1.1_amd64.AppImage']);
+  try {
+    assert.deepEqual(
+      releaseFiles(root, 'linux', '0.2.0').map((file) => file.name),
+      ['PiUI_0.2.0_amd64.deb', 'PiUI_0.2.0_amd64.AppImage', 'PiUI_0.2.0_amd64.AppImage.sig'],
+    );
+    assert.throws(() => releaseFiles(root, 'linux', '0.3.0'), /Expected exactly one \.deb for 0\.3\.0/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('names the macOS update archive with its version and writes sorted checksums', () => {
+  const root = bundle(['dmg/PiUI_0.2.0_universal.dmg', 'macos/PiUI.app.tar.gz', 'macos/PiUI.app.tar.gz.sig']);
+  try {
+    const files = releaseFiles(root, 'macos', '0.2.0');
+    assert.deepEqual(files.map((file) => file.name), ['PiUI_0.2.0_universal.dmg', 'PiUI_0.2.0_universal.app.tar.gz', 'PiUI_0.2.0_universal.app.tar.gz.sig']);
+    assert.equal(files[1].source, join(root, 'macos', 'PiUI.app.tar.gz'));
+    writeFileSync(join(root, 'dmg', 'SHA256SUMS.txt'), 'ignored');
+    const digest = createHash('sha256').update('dmg/PiUI_0.2.0_universal.dmg').digest('hex');
+    assert.deepEqual(checksumLines(join(root, 'dmg')), [`${digest}  PiUI_0.2.0_universal.dmg`]);
+    assert.throws(() => releaseFiles(root, 'windows', '0.2.0'), /Unsupported platform/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 const CHANGELOG = `# Changelog
 
