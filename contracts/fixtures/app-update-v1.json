@@ -1,0 +1,82 @@
+{
+  "notConfigured": {
+    "protocol": 1,
+    "configured": false,
+    "currentVersion": "0.2.0",
+    "feedHost": null,
+    "autoCheck": false,
+    "phase": "idle",
+    "lastCheck": null,
+    "available": null
+  },
+  "available": {
+    "protocol": 1,
+    "configured": true,
+    "currentVersion": "0.2.0",
+    "feedHost": "github.com",
+    "autoCheck": true,
+    "phase": "idle",
+    "lastCheck": {
+      "at": "2026-09-27T09:30:00Z",
+      "automatic": true,
+      "outcome": "available",
+      "error": null
+    },
+    "available": {
+      "version": "0.2.1",
+      "date": "2026-09-26T18:00:00Z",
+      "notes": "Fixes the sidebar.\n\n- Faster runs view."
+    }
+  },
+  "failedCheck": {
+    "protocol": 1,
+    "configured": true,
+    "currentVersion": "0.2.0",
+    "feedHost": "github.com",
+    "autoCheck": false,
+    "phase": "idle",
+    "lastCheck": {
+      "at": "2026-09-27T09:31:00Z",
+      "automatic": false,
+      "outcome": "failed",
+      "error": "network"
+    },
+    "available": null
+  },
+  "downloading": {
+    "protocol": 1,
+    "configured": true,
+    "currentVersion": "0.2.0",
+    "feedHost": "github.com",
+    "autoCheck": false,
+    "phase": "downloading",
+    "lastCheck": {
+      "at": "2026-09-27T09:32:00Z",
+      "automatic": false,
+      "outcome": "available",
+      "error": null
+    },
+    "available": {
+      "version": "0.2.1",
+      "date": null,
+      "notes": null
+    }
+  },
+  "installRequest": { "version": "0.2.1" },
+  "autoCheckRequest": { "enabled": true },
+  "statusEvent": {
+    "type": "status",
+    "status": {
+      "protocol": 1,
+      "configured": false,
+      "currentVersion": "0.2.0",
+      "feedHost": null,
+      "autoCheck": false,
+      "phase": "idle",
+      "lastCheck": null,
+      "available": null
+    }
+  },
+  "progressEvent": { "type": "progress", "downloadedBytes": 1048576, "totalBytes": 8388608 },
+  "error": { "code": "signature-invalid" }
+}

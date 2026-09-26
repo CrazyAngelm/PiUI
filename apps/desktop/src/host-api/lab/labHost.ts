@@ -1,6 +1,7 @@
 import type { HostTransport } from '../transport';
 import { backgroundHandlers } from './backgroundFake';
 import { acpHandlers } from './acpFake';
+import { appUpdateHandlers, updateScenarioFromSearch, type LabUpdateScenario } from './appUpdateFake';
 import { classicHandlers } from './classicFake';
 import { composerHandlers } from './composerFake';
 import { demoExtensions, extensionHandlers } from './extensionsFake';
@@ -37,6 +38,8 @@ export interface LabHostOptions {
   readonly ambient?: boolean;
   /** Claude Code signed out (see `withSignedOutClaude`). Defaults to `?claude=signed-out`. */
   readonly claudeSignedOut?: boolean;
+  /** App update state (see `appUpdateFake.ts`). Defaults to `?updates=`, then `off`. */
+  readonly updates?: LabUpdateScenario;
 }
 
 export interface LabHost extends HostTransport {
@@ -98,7 +101,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
   const state: LabState = {
     scenario,
     safeMode: seed.safeMode,
-    appVersion: '0.1.1-lab',
+    appVersion: '0.2.0-lab',
     preferences: { theme: 'system', density: 'comfortable', reducedMotion: 'system', fontSize: 'medium', chatWidth: 'wide' },
     projects: seed.projects,
     harnesses: seed.harnesses,
@@ -119,6 +122,11 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     ...backgroundHandlers(state),
     ...acpHandlers(runtime, bus),
     ...runDebuggingHandlers(runtime),
+    ...appUpdateHandlers(
+      options.updates ?? (typeof window === 'undefined' ? 'off' : updateScenarioFromSearch(window.location.search)),
+      bus,
+      clock,
+    ),
   };
   startActivity(seed.activity, runtime, scheduler, options.ambient ?? true);
 

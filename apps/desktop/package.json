@@ -1,6 +1,6 @@
 {
   "name": "@piui/desktop",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "description": "PiUI Tauri and Svelte desktop application",
   "license": "MIT",
@@ -22,7 +22,7 @@
     "contract:test": "vitest run src/host-api/composerClient.test.ts src/host-api/types.test.ts src/host-api/workspaceContracts.test.ts src/host-api/runtimeSettings.test.ts src/host-api/workspaceLifecycle.test.ts src/host-api/workspaceClient.test.ts src/host-api/orchestrationClient.test.ts src/features/orchestration/systemFile.test.ts src/host-api/scriptTestClient.test.ts src/host-api/extensionUiClient.test.ts src/host-api/triggersContracts.test.ts src/host-api/triggerPatterns.test.ts",
     "test:e2e:workspace": "cargo build --quiet --target-dir ../../target -p piui-platform --features e2e-harness --bin piui-e2e-job && node scripts/tauri-webview2-e2e-controller.mjs --workspace",
     "test:e2e:tauri:windows": "cargo build --quiet --target-dir ../../target -p piui-platform --features e2e-harness --bin piui-e2e-job && node scripts/tauri-webview2-e2e-controller.mjs",
-    "contract:test": "vitest run src/host-api/composerClient.test.ts src/host-api/types.test.ts src/host-api/workspaceContracts.test.ts src/host-api/runtimeSettings.test.ts src/host-api/workspaceLifecycle.test.ts src/host-api/workspaceClient.test.ts src/host-api/orchestrationClient.test.ts src/features/orchestration/systemFile.test.ts src/host-api/scriptTestClient.test.ts src/host-api/runDebuggingClient.test.ts",
+    "contract:test": "vitest run src/host-api/composerClient.test.ts src/host-api/types.test.ts src/host-api/workspaceContracts.test.ts src/host-api/runtimeSettings.test.ts src/host-api/workspaceLifecycle.test.ts src/host-api/workspaceClient.test.ts src/host-api/orchestrationClient.test.ts src/features/orchestration/systemFile.test.ts src/host-api/scriptTestClient.test.ts src/host-api/runDebuggingClient.test.ts src/host-api/extensionUiClient.test.ts src/host-api/appUpdateClient.test.ts",
     "perf:smoke": "node scripts/perf-smoke.mjs",
     "tauri": "tauri"
   },

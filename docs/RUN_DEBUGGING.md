@@ -4,7 +4,7 @@ Status: implemented on `feat/run-debugging` (P3 item 10 of
 [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md)).
 Contracts: orchestration v6.4 (additive, `contracts/orchestration-v6.ts`,
 `contracts/orchestration-host-v6.ts`) and run debugging v1
-(`contracts/orchestration-run-debugging-v1.ts`). Decisions: ADR-034.
+(`contracts/orchestration-run-debugging-v1.ts`). Decisions: ADR-035.
 
 The goal is n8n-style debugging without paid re-runs: reuse the outputs of
 steps that already worked, fix one step and run the rest.

@@ -27,7 +27,7 @@ const resumeId = option("--resume");
 const sessionId = resumeId ?? option("--session-id") ?? randomUUID();
 let model = option("--model") ?? "default";
 const accounts = {
-  subscription: { email: "fixture@example.invalid", subscriptionType: "Claude Max", apiProvider: "firstParty" },
+  subscription: { email: "fixture@example.test", subscriptionType: "Claude Max", apiProvider: "firstParty" },
   "setup-token": { tokenSource: "CLAUDE_CODE_OAUTH_TOKEN", apiProvider: "firstParty" },
   "signed-out": { tokenSource: "none", apiProvider: "firstParty" },
   "api-key": { tokenSource: "none", apiKeySource: "ANTHROPIC_API_KEY", apiProvider: "firstParty" },

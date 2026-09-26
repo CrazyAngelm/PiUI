@@ -1,24 +1,61 @@
 name: Release
 
+# Builds a tagged release for Windows (primary, verified), Linux and macOS
+# (experimental) and publishes one GitHub pre-release with checksums.
+# Signing is optional and driven only by repository secrets and variables;
+# without them the release is the unsigned build. See docs/RELEASING.md.
+#
+# Secrets:   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD (updates)
+#            WINDOWS_CERTIFICATE (base64 .pfx), WINDOWS_CERTIFICATE_PASSWORD
+#            AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID (Azure Artifact Signing)
+# Variables: PIUI_UPDATER_PUBKEY, PIUI_UPDATER_ENDPOINT, PIUI_UPDATER_CHANNEL_TAG
+#            PIUI_AZURE_SIGNING_ENDPOINT, PIUI_AZURE_SIGNING_ACCOUNT, PIUI_AZURE_SIGNING_PROFILE
+#            PIUI_WINDOWS_TIMESTAMP_URL
+
 on:
   push:
     tags:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  # Public updater settings; the private key stays a secret of the build steps.
+  PIUI_UPDATER_PUBKEY: ${{ vars.PIUI_UPDATER_PUBKEY }}
+  PIUI_UPDATER_ENDPOINT: ${{ vars.PIUI_UPDATER_ENDPOINT }}
+
 jobs:
+  verify:
+    name: Verify tag, versions and changelog
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: The tag matches every declared version
+        run: node scripts/check-version.mjs --tag "$GITHUB_REF_NAME"
+
+      - name: The changelog describes this version
+        run: node scripts/release-feed.mjs notes --version "${GITHUB_REF_NAME#v}" > /dev/null
+
   windows:
-    name: Windows x64 release
+    name: Windows x64
+    needs: verify
     runs-on: windows-latest
+    outputs:
+      authenticode: ${{ steps.authenticode.outputs.status }}
     env:
       PIUI_REQUIRE_WINDOWS_REPARSE_TEST: "1"
-      GH_TOKEN: ${{ github.token }}
+      HAS_WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
+      HAS_AZURE_SIGNING: ${{ vars.PIUI_AZURE_SIGNING_ENDPOINT != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,15 +74,6 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Verify tag and application versions
-        shell: pwsh
-        run: |
-          $config = Get-Content -Raw apps/desktop/src-tauri/tauri.conf.json | ConvertFrom-Json
-          $expectedTag = "v$($config.version)"
-          if ("${{ github.ref_name }}" -ne $expectedTag) {
-            throw "Tag ${{ github.ref_name }} does not match tauri.conf.json version $($config.version)."
-          }
-
       - run: pnpm install --frozen-lockfile
       - run: pnpm repo:check
       - run: python tools/validate_spec.py
@@ -58,8 +86,54 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
-      - name: Build NSIS installer and portable executable
+      - name: Import the Authenticode certificate
+        if: env.HAS_WINDOWS_CERTIFICATE == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP "piui-signing.pfx"
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+            $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+            $imported = @(Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password)
+          } finally {
+            Remove-Item -LiteralPath $pfx -Force -ErrorAction SilentlyContinue
+          }
+          $signing = @($imported | Where-Object { $_.HasPrivateKey })
+          if ($signing.Count -ne 1) {
+            throw "Expected one certificate with a private key in WINDOWS_CERTIFICATE; found $($signing.Count)."
+          }
+          "PIUI_WINDOWS_CERTIFICATE_THUMBPRINT=$($signing[0].Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install the Azure Artifact Signing client
+        if: env.HAS_AZURE_SIGNING == 'true'
+        run: cargo install artifact-signing-cli --version 0.11.0 --locked
+
+      - name: Build the NSIS installer and portable executable
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          PIUI_AZURE_SIGNING_ENDPOINT: ${{ vars.PIUI_AZURE_SIGNING_ENDPOINT }}
+          PIUI_AZURE_SIGNING_ACCOUNT: ${{ vars.PIUI_AZURE_SIGNING_ACCOUNT }}
+          PIUI_AZURE_SIGNING_PROFILE: ${{ vars.PIUI_AZURE_SIGNING_PROFILE }}
+          PIUI_WINDOWS_TIMESTAMP_URL: ${{ vars.PIUI_WINDOWS_TIMESTAMP_URL }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         run: pnpm release:windows
+
+      - name: Record the Authenticode status
+        id: authenticode
+        shell: pwsh
+        run: |
+          $installer = @(Get-ChildItem artifacts -File -Filter "*-setup.exe")
+          if ($installer.Count -ne 1) { throw "Expected one installer in artifacts." }
+          $status = (Get-AuthenticodeSignature -LiteralPath $installer[0].FullName).Status
+          $value = if ($status -eq [System.Management.Automation.SignatureStatus]::Valid) { "signed" } else { "unsigned" }
+          Write-Host "Authenticode: $status"
+          "status=$value" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - uses: actions/upload-artifact@v4
         with:
@@ -67,34 +141,161 @@ jobs:
           path: artifacts/*
           if-no-files-found: error
 
-      - name: Publish GitHub pre-release
-        shell: pwsh
+  linux:
+    name: Linux x64 (deb, AppImage)
+    needs: verify
+    # The oldest supported runner keeps the glibc requirement of the packages low.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.23.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@1.94.1
+
+      - name: Install the Tauri system packages
         run: |
-          $tag = "${{ github.ref_name }}"
-          $assets = @(Get-ChildItem artifacts -File | ForEach-Object FullName)
-          $installer = @(Get-ChildItem artifacts -File -Filter "*-setup.exe")
-          if ($assets.Count -lt 3 -or $installer.Count -ne 1) {
-            throw "Expected one installer, one portable executable, and checksums."
-          }
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf file
 
-          if (gh release view $tag 2>$null) {
-            gh release upload $tag $assets --clobber
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build the .deb and AppImage
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm release:linux
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PiUI-${{ github.ref_name }}-linux-x86_64
+          path: artifacts/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS universal (experimental)
+    needs: verify
+    runs-on: macos-latest
+    # Best effort: a failed macOS build never blocks the Windows and Linux release.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.23.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@1.94.1
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build the universal app and .dmg (ad-hoc signed, not notarized)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm release:macos
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PiUI-${{ github.ref_name }}-macos-universal
+          path: artifacts/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish the GitHub pre-release
+    needs: [verify, windows, linux, macos]
+    if: ${{ !cancelled() && needs.verify.result == 'success' && needs.windows.result == 'success' && needs.linux.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPDATER_CHANNEL: ${{ vars.PIUI_UPDATER_CHANNEL_TAG || 'updater' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: PiUI-${{ github.ref_name }}-*
+          path: downloads
+
+      - name: Verify each platform's checksums and collect the release files
+        run: |
+          set -euo pipefail
+          mkdir release
+          for platform in downloads/*/; do
+            echo "Verifying $platform"
+            (cd "$platform" && sha256sum --check --strict SHA256SUMS.txt)
+            for file in "$platform"*; do
+              name="$(basename "$file")"
+              [ "$name" = "SHA256SUMS.txt" ] && continue
+              if [ -e "release/$name" ]; then echo "Duplicate release file $name" >&2; exit 1; fi
+              cp "$file" "release/$name"
+            done
+          done
+          ls -la release
+
+      - name: Write the update feed when the builds signed update artifacts
+        run: node scripts/release-feed.mjs feed --dir release --tag "$GITHUB_REF_NAME" --repository "$GITHUB_REPOSITORY" --out release/latest.json
+
+      - name: Checksums for every release file
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          cd release
+          sha256sum -- * > "$RUNNER_TEMP/SHA256SUMS.txt"
+          mv "$RUNNER_TEMP/SHA256SUMS.txt" SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Release notes
+        env:
+          WINDOWS_SIGNING: ${{ needs.windows.outputs.authenticode }}
+        run: node scripts/release-feed.mjs release-notes --dir release --tag "$GITHUB_REF_NAME" --windows-signing "$WINDOWS_SIGNING" --out "$RUNNER_TEMP/release-notes.md"
+
+      - name: Publish the pre-release
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/* \
+              --verify-tag \
+              --prerelease \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
+              --title "PiUI $GITHUB_REF_NAME — developer preview"
+          fi
+
+      - name: Point the update channel at this release
+        run: |
+          set -euo pipefail
+          if [ ! -f release/latest.json ]; then
+            echo "::notice::No update signatures in this release; the update channel is unchanged."
             exit 0
-          }
-
-          @"
-          Windows x64 developer preview.
-
-          1. Install the official Pi CLI and confirm that ``pi --version`` works.
-          2. Download the NSIS ``setup.exe`` and ``SHA256SUMS.txt`` below.
-          3. In PowerShell, run ``Get-FileHash .\$($installer[0].Name) -Algorithm SHA256`` and compare it with ``Get-Content .\SHA256SUMS.txt``.
-          4. Run the installer and start PiUI from the Start menu.
-
-          The Windows artifacts are not code-signed and PiUI does not auto-update yet. Do not write to the same Pi session from PiUI and the Pi CLI concurrently. See the README and release checklist for all current limitations.
-          "@ | Set-Content -Encoding utf8 release-notes.md
-
-          gh release create $tag $assets `
-            --verify-tag `
-            --prerelease `
-            --notes-file release-notes.md `
-            --title "PiUI $tag — developer preview"
+          fi
+          if gh release view "$UPDATER_CHANNEL" >/dev/null 2>&1; then
+            gh release upload "$UPDATER_CHANNEL" release/latest.json --clobber
+          else
+            gh release create "$UPDATER_CHANNEL" release/latest.json \
+              --prerelease \
+              --target "$GITHUB_SHA" \
+              --title "PiUI update feed" \
+              --notes "latest.json for installed PiUI builds. Download PiUI from the versioned releases, not from here."
+          fi

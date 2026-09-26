@@ -93,7 +93,7 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   runs the draft once through the host script runner with an editable sample
   stdin and shows what a run would record; it never starts an agent or model.
 - `feat/run-debugging` (`96cd87a`…) — run observability+ (P3 item 10,
-  [RUN_DEBUGGING.md](RUN_DEBUGGING.md), ADR-034). Pinned data (orchestration
+  [RUN_DEBUGGING.md](RUN_DEBUGGING.md), ADR-035). Pinned data (orchestration
   v6.4, additive): "Pin output" in a finished run's step panel (the host reads
   the recorded output, hash-verified for native answers, and pins it at the
   saved pipeline's revision); pin chip and inspector section (view, unpin) in
@@ -176,6 +176,20 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   disabled "Start run"; CodeMirror scroll area, optional-label contrast and
   popover role (axe).
 
+- `feat/release-0.2` (plan §3 P3 item 12, release readiness): version 0.2.0
+  everywhere it is declared, checked by `scripts/check-version.mjs` in
+  `pnpm repo:check`. Signed updates (app update v1,
+  `contracts/app-update-v1.ts`): `tauri-plugin-updater` is registered only when
+  the build config carries a minisign key and HTTPS endpoints; Settings → About
+  shows the version, Check for updates, plain-text notes, a confirmed Download
+  and restart and an opt-in automatic check (off by default); UI Lab
+  `&updates=`. `pnpm release:windows|linux|macos` add Authenticode (certificate
+  thumbprint or Azure Artifact Signing) and update signing only from
+  environment variables; the tag workflow builds Windows, Linux (deb, AppImage)
+  and experimental macOS, publishes one pre-release with combined checksums and
+  a `latest.json` feed on a rolling `updater` release when keys exist. Owner
+  steps: [RELEASING.md](RELEASING.md).
+
 ## In progress
 
 - Nothing; next steps wait for the owner's review of the remaining-work plan.
@@ -212,6 +226,14 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   the statically bundled locale catalogs +1 454, sidebar/store +1 647). Any
   further visible copy exceeds it until per-language catalogs load lazily or
   the budget is revised.
+- Release readiness: `pnpm repo:check` failed at `a2b53a6` on a local user
+  folder in evidence scripts/records and on test values outside the audit
+  allowlist (redacted in `feat/release-0.2`). The update feed is unsigned and
+  `requireSignedVersion` stays off because Tauri CLI 2.11 does not record the
+  signed version. The desktop crate is not compiled for Linux in CI (only the
+  release workflow's `tauri build` does). `PiUI_MASTER_SPEC.md` is generated
+  (`tools/build_master.py`) and still quotes the 0.1.1 README; rebuild it after
+  the release branches merge.
 
 - bits-ui Command points `aria-controls` at its viewport, so axe flags the
   palette list (`scrollable-region-focusable`, reviewed exception). Approval

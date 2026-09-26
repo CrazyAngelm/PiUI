@@ -42,7 +42,7 @@ child.stdout.on('data',chunk=>{
 const call=(method,params)=>new Promise((resolve,reject)=>{const id=++serial;pending.set(id,{resolve,reject,method});child.stdin.write(JSON.stringify({id,method,params})+'\n');});
 const rss=()=>process.platform==='win32'?Number(execFileSync('powershell',['-NoProfile','-Command',`(Get-Process -Id ${child.pid}).WorkingSet64`],{windowsHide:true,encoding:'utf8'}).trim()):null;
 try {
- const init=await call('initialize',{clientInfo:{name:'piui_scale_probe',version:'0.1.1'},capabilities:{experimentalApi:true}});
+ const init=await call('initialize',{clientInfo:{name:'piui_scale_probe',version:'0.2.0'},capabilities:{experimentalApi:true}});
  child.stdin.write('{"method":"initialized"}\n');
  const baselineRss=rss(), started=performance.now();
  const threads=[];

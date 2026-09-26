@@ -9,6 +9,8 @@
 mod acp_agents;
 mod agent_api;
 mod api;
+#[doc(hidden)]
+pub mod app_update;
 mod automation_paths;
 mod autostart;
 mod background;
@@ -792,6 +794,7 @@ pub fn run() -> Result<(), tauri::Error> {
             let trigger_engine = orchestration_triggers::TriggerEngine::default();
             app.manage(trigger_engine.clone());
             background::setup(app.handle(), safe_mode, autostart_allowed);
+            app_update::install(app, &app_data_dir, safe_mode);
             if !safe_mode {
                 orchestration_scheduler.start_timed_schedule_worker(app.handle().clone());
                 trigger_engine.start(app.handle().clone());
@@ -811,6 +814,11 @@ pub fn run() -> Result<(), tauri::Error> {
             workspace_api::harness_models_v18,
             workspace_api::workspace_session_mode_v1,
             harness_registry_api::harness_registry_v1,
+            app_update::app_update_status_v1,
+            app_update::app_update_check_v1,
+            app_update::app_update_install_v1,
+            app_update::app_update_set_auto_check_v1,
+            app_update::app_update_restart_v1,
             api::bootstrap,
             api::bootstrap_v10,
             api::update_preferences,

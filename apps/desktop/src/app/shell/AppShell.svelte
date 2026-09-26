@@ -13,6 +13,7 @@
   import { provideWorkspace } from './context';
   import { runLauncher } from '../triggers/runLauncher.svelte';
   import { syncTrayLabels } from '../settings/trayLabels';
+  import { scheduleUpdateNotices } from '../settings/updateNoticeLoader';
 
   const store = provideWorkspace(new WorkspaceStore());
   // The tray menu (background mode) speaks the interface language.
@@ -42,12 +43,14 @@
   onMount(() => {
     void store.start();
     lazyViews.prefetch();
+    const stopUpdateNotices = scheduleUpdateNotices(() => store.navigate({ name: 'settings', section: 'about' }));
     const query = window.matchMedia('(max-width: 760px)');
     const update = () => (narrow = query.matches);
     update();
     query.addEventListener('change', update);
     return () => {
       query.removeEventListener('change', update);
+      stopUpdateNotices();
       store.dispose();
     };
   });

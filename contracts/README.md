@@ -196,3 +196,18 @@ orchestration v6 `Harness` (v6.3, additive) and portable system files v4 accept
 v2 additively with the same compatibility rules as `claude-code`; v1-v3 system
 files stay closed. Stored workspace registries and orchestration definitions
 decode unchanged (`piui_contracts::harness_identity`, Rust and TS tests).
+
+# App update v1
+
+`app-update-v1.ts` is an independently versioned set of commands and one event
+channel (`piui://app-update`) for signed application updates. Every build
+answers `app_update_status_v1`, but only a build whose Tauri configuration
+carries `plugins.updater` (a minisign public key and HTTPS endpoints, added by
+`scripts/release-config.mjs` at release time) registers the Tauri updater;
+otherwise `configured` is false and nothing contacts the network. Automatic
+checks follow the host-saved `autoCheck` preference (off by default) and never
+install. `app_update_install_v1` names the exact version the last check found;
+the updater verifies the minisign signature before anything is written or run.
+Refusals are typed `{code}` values (`not-configured`, `signature-invalid`, …);
+requests reject unknown fields. `fixtures/app-update-v1.json` is checked by the
+Rust host and the TypeScript client.

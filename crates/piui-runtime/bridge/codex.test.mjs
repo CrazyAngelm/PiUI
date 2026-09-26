@@ -416,7 +416,7 @@ test("admits app-server versions only inside the verified range", async () => {
     ["0.159.0-alpha.4", /newer than the versions tested/],
     ["1.0.0", /newer than the versions tested/],
     // Only the leading product token names Codex: the trailing client version
-    // `(piui; 0.1.1)` never stands in for an unrecognized Codex version.
+    // `(piui; 0.2.0)` never stands in for an unrecognized Codex version.
     ["latest", /requires a verified Codex/],
   ];
   for (const [version, message] of rejected) {
