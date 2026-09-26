@@ -27,6 +27,7 @@
   import Split from '@lucide/svelte/icons/split';
   import Sparkles from '@lucide/svelte/icons/sparkles';
   import Code from '@lucide/svelte/icons/code';
+  import Pin from '@lucide/svelte/icons/pin';
   import { RUNTIME_LABEL } from '../pipelines/executors';
   import { t } from '../../features/locale/language';
   import { Spinner } from '../../lib/ui';
@@ -89,6 +90,9 @@
     {/if}
     {#if view.spawned}
       <span class="chip chip--spawned" title={$t('Started by another agent during this run')}><Sparkles size={10} /> {$t('Spawned')}</span>
+    {/if}
+    {#if view.task?.pinned}
+      <span class="chip chip--pinned" title={$t('This step did not run: its result is pinned data')}><Pin size={10} /> {$t('Pinned')}</span>
     {/if}
   </div>
   {#if view.state === 'running' && data.activity}
@@ -225,6 +229,10 @@
   .chip--spawned {
     background: var(--piui-warning-surface);
     color: var(--piui-warning);
+  }
+  .chip--pinned {
+    background: color-mix(in srgb, var(--piui-accent) 16%, transparent);
+    color: var(--piui-accent);
   }
   .activity {
     margin: 6px 0 0;

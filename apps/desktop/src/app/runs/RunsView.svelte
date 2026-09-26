@@ -16,8 +16,11 @@
   import RunCanvas from './RunCanvas.svelte';
   import RunTriggerLabel from './RunTriggerLabel.svelte';
   import TaskPanel from './TaskPanel.svelte';
-  import { RUN_LABEL, RUN_TONE, matchesRunFilter, runCounts, shortId, sortRuns, stepViews, type RunFilter } from './runPresentation';
+  import { RUN_LABEL, RUN_TONE, listedRuns, runCounts, shortId, stepViews, type RunFilter } from './runPresentation';
   import { RunsStore } from './runsStore.svelte';
+  import Archive from '@lucide/svelte/icons/archive';
+  import RunActions from './RunActions.svelte';
+  import type { AgentGraph } from '../../features/orchestration/agentGraph';
 
   interface Props {
     workspaceId: string;
@@ -28,8 +31,10 @@
     onOpenRun: (runId: string) => void;
     /** Opens the editor, on the run's saved pipeline when it has one. */
     onEdit: (launchCommandId: string | undefined) => void;
+    /** Opens a past run in the editor as a new unsaved draft (run debugging v1). */
+    onDebug?: (draft: AgentGraph) => void;
   }
-  let { workspaceId, safeMode, client, runId, initialRun, onOpenRun, onEdit }: Props = $props();
+  let { workspaceId, safeMode, client, runId, initialRun, onOpenRun, onEdit, onDebug }: Props = $props();
   const store = useWorkspace();
   // The parent keys this view per project, so the store binds its first props.
   const runs = untrack(() => new RunsStore(workspaceId, safeMode, client));
@@ -42,14 +47,20 @@
 
   // The route owns which run is open; follow it when it changes.
   $effect(() => {
-    if (runId && runId !== runs.selectedRunId) void runs.open(runId);
+    if (runId && runId !== runs.selectedRunId && !runs.isDeleted(runId)) void runs.open(runId);
   });
 
   const run = $derived(runs.run);
   const views = $derived(run ? stepViews(run) : []);
   const counts = $derived(runCounts(views));
   const selected = $derived(views.find((view) => view.stepId === runs.selectedStepId));
-  const visibleRuns = $derived(sortRuns(runs.summaries.filter((item) => matchesRunFilter(item, filter))));
+  const visibleRuns = $derived(listedRuns(runs.summaries, filter, runs.archived, runs.showArchived));
+
+  /** After a delete, open the next listed run, if any. */
+  function deleted(id: string): void {
+    const next = visibleRuns.find((item) => item.id !== id);
+    if (next) onOpenRun(next.id);
+  }
   const statusDot = { running: 'running', succeeded: 'done', failed: 'failed', cancelled: 'idle', uncertain: 'waiting' } as const;
 
   // Keep native sessions of working or inspected steps live in the shared store.
@@ -120,6 +131,7 @@
           { value: 'finished', label: $t('Done') },
         ]}
       />
+      <IconButton size="sm" label={$t('Show archived runs')} active={runs.showArchived} onclick={() => (runs.showArchived = !runs.showArchived)}><Archive /></IconButton>
       <IconButton size="sm" label={$t('Refresh runs')} onclick={() => void runs.refresh()} disabled={runs.listLoading}><RefreshCw /></IconButton>
     </div>
     {#if runs.listError}<p class="error" role="alert">{$t(runs.listError)}</p>{/if}
@@ -141,7 +153,7 @@
               <StatusDot status={statusDot[item.status]} label={$t(RUN_LABEL[item.status])} />
               <span class="run-row__text">
                 <strong>{item.pipelineName || item.teamName || $t('Untitled pipeline')}</strong>
-                <small>{$t(RUN_LABEL[item.status])} · #{shortId(item.id)}</small>
+                <small>{$t(RUN_LABEL[item.status])} · #{shortId(item.id)}{runs.archived.has(item.id) ? ` · ${$t('Archived')}` : ''}</small>
               </span>
             </button>
           </li>
@@ -189,6 +201,7 @@
             {#snippet leading()}<PenLine />{/snippet}
             {$t('Edit pipeline')}
           </Button>
+          <RunActions {runs} {run} {onDebug} onDeleted={deleted} />
         </div>
       </header>
       {#if runs.actionError}<p class="error error--bar" role="alert">{$t(runs.actionError)}</p>{/if}

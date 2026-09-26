@@ -6,6 +6,7 @@
   import { orchestrationHost, type OrchestrationRunV6 } from '../../host-api/orchestrationClient';
   import { EmptyState, Menu, Picker, Segmented, Skeleton, type PickerItem } from '../../lib/ui';
   import type { PipelineSection } from '../workspaceStore.svelte';
+  import type { AgentGraph } from '../../features/orchestration/agentGraph';
   import { useWorkspace } from './context';
 
   interface Props {
@@ -35,13 +36,24 @@
 
   // "Edit pipeline" from a run opens that run's saved pipeline in the editor.
   let editCommand = $state<string | undefined>();
+  // "Debug in editor" opens a past run as a new unsaved draft instead.
+  let editDraft = $state.raw<AgentGraph | undefined>();
   function setSection(next: PipelineSection): void {
-    if (next !== 'systems') editCommand = undefined;
+    if (next !== 'systems') {
+      editCommand = undefined;
+      editDraft = undefined;
+    }
     if (next === section) return;
     store.navigate({ name: 'pipelines', section: next });
   }
   function editPipeline(commandId: string | undefined): void {
     editCommand = commandId;
+    editDraft = undefined;
+    setSection('systems');
+  }
+  function debugRun(draft: AgentGraph): void {
+    editCommand = undefined;
+    editDraft = draft;
     setSection('systems');
   }
   function selectProject(id: string): void {
@@ -118,6 +130,7 @@
             initialRun={startedRun?.id === runId ? startedRun : undefined}
             onOpenRun={(id) => store.navigate({ name: 'pipelines', section: 'runs', runId: id })}
             onEdit={editPipeline}
+            onDebug={debugRun}
           />
         {/key}
       {:catch}
@@ -148,6 +161,7 @@
             workspaceId={workspace.id}
             safeMode={store.safeMode}
             openCommandId={editCommand}
+            openDraft={editDraft}
             onDirtyChange={(dirty) => (store.pipelineDirty = dirty)}
             onRun={opened}
             onLibrary={() => setSection('agents')}

@@ -11,7 +11,7 @@
   import { formatValue } from '../runs/runPresentation';
   import { useWorkspace } from '../shell/context';
   import type { PipelineEditorStore } from './editorStore.svelte';
-  import { checkSample, testIsStale } from './scriptTests.svelte';
+  import { checkSample, pinnedDependencies, testIsStale } from './scriptTests.svelte';
 
   /**
    * "Test script": runs the node's current code once on the host with an
@@ -34,6 +34,7 @@
   const sample = $derived(tests.sample(editor.graph, node));
   // `in` is tracked by the state proxy, including keys added later.
   const edited = $derived(node.id in tests.samples);
+  const pinnedFrom = $derived(pinnedDependencies(editor.graph, node.id));
   const check = $derived(checkSample(sample));
   const view = $derived(tests.view(node.id));
   const running = $derived(view.status === 'running');
@@ -120,6 +121,9 @@
       oninput={(event) => tests.setSample(node.id, event.currentTarget.value)}
     />
   </Field>
+  {#if !edited && pinnedFrom.length}
+    <p class="hint">{$t('The sample uses the pinned data of: {0}', [pinnedFrom.map((item) => item.profile.name || item.id).join(', ')])}</p>
+  {/if}
 
   <div class="actions">
     {#if running}

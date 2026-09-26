@@ -18,6 +18,7 @@
   import Zap from '@lucide/svelte/icons/zap';
   import Code from '@lucide/svelte/icons/code';
   import MessageSquareText from '@lucide/svelte/icons/message-square-text';
+  import Pin from '@lucide/svelte/icons/pin';
   import { firstCodeLine, RUNTIME_LABEL } from '../executors';
   import { t } from '../../../features/locale/language';
   import HarnessMark from '../../shell/HarnessMark.svelte';
@@ -63,8 +64,9 @@
   {:else}
     <p class="task task--empty">{llm ? $t('No prompt yet') : $t('No task yet')}</p>
   {/if}
-  {#if callable || node.requireApproval || data.problems > 0 || llm || script}
+  {#if callable || node.requireApproval || data.problems > 0 || llm || script || node.pinnedOutput}
     <footer>
+      {#if node.pinnedOutput}<span class="chip chip--pinned" title={$t('Pinned data: a run with pinned data skips this step')}><Pin size={11} /> {$t('Pinned')}</span>{/if}
       {#if llm}<span class="chip" title={$t('One model answer, read-only and without tools')}><MessageSquareText size={11} /> {$t('Model call')}</span>{/if}
       {#if script}<span class="chip" title={$t('Runs on this computer in the project folder')}><Code size={11} /> {$t('Script')}</span>{/if}
       {#if callable}<span class="chip" title={$t('Started only when another agent calls it')}><PhoneIncoming size={11} /> {$t('On call')}</span>{/if}
@@ -180,5 +182,9 @@
   .chip--problem {
     background: var(--piui-danger-surface);
     color: var(--piui-danger-text);
+  }
+  .chip--pinned {
+    background: color-mix(in srgb, var(--piui-accent) 16%, transparent);
+    color: var(--piui-accent);
   }
 </style>

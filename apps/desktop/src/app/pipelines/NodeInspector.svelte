@@ -34,6 +34,7 @@
   import ScriptEditor from './code/ScriptEditor.svelte';
   import ScriptTestPanel from './ScriptTestPanel.svelte';
   import HarnessLimitations from './HarnessLimitations.svelte';
+  import PinnedDataSection from './PinnedDataSection.svelte';
 
   interface Props {
     editor: PipelineEditorStore;
@@ -223,6 +224,7 @@
       {/each}
     </ul>
   {/if}
+  <PinnedDataSection {editor} {node} />
 
   <Tabs label={$t('Node settings')} bind:value={tab} {tabs}>
     {#snippet panel(current)}

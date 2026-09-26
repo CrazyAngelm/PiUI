@@ -32,6 +32,7 @@ import type { LabRunScheduler } from './runScheduler';
 import { LabEventTriggers } from './eventTriggers';
 import { resolveRunInputs } from '../../runInputs';
 import { isScriptStep } from '../../stepExecutors';
+import { hasPinnedSteps } from '../../pinnedData';
 
 /**
  * Every `orchestration_*` command the UI client calls, with the host's scope
@@ -118,10 +119,13 @@ function startRun({ state, scheduler }: Context, request: StartRunRequestV7): Or
     ...(launchCommand === undefined ? {} : { launchCommand }),
   });
   if (request.runId.trim() === '' || definitionIssue(definition) !== undefined) throw orchestrationFailure('invalid');
-  // `new_run_with_inputs`: values are validated and frozen before anything is scheduled.
+  // `new_run_with_options`: values are validated and frozen before anything is scheduled.
   const inputs = resolveRunInputs(definition.pipeline.inputs, request.inputs);
   if (!inputs.ok) throw orchestrationFailure('invalid');
-  const run = newRun(request.runId, definition, inputs.values, trigger);
+  // Pinned data the person saw may have been removed: never run every step instead.
+  const usePinnedData = request.usePinnedData === true;
+  if (usePinnedData && !hasPinnedSteps(definition.pipeline.steps)) throw orchestrationFailure('conflict');
+  const run = newRun(request.runId, definition, inputs.values, trigger, usePinnedData);
   workspace.runs.push(run);
   scheduler.emit(request.workspaceId, run);
   const admission = scheduler.schedule(request.workspaceId, run);
@@ -211,7 +215,10 @@ function runUsage(state: LabState, request: RunRequest): Record<string, UsageRec
 }
 
 function listRuns(state: LabState, request: WorkspaceRequest): RunSummary[] {
-  return (scope(state, request.workspaceId)?.runs ?? []).map(runSummary).sort((left, right) => compareText(left.id, right.id));
+  const workspace = scope(state, request.workspaceId);
+  return (workspace?.runs ?? [])
+    .map((run) => runSummary(run, workspace?.archivedRunIds?.has(run.id) === true))
+    .sort((left, right) => compareText(left.id, right.id));
 }
 
 function catalog(state: LabState, request: WorkspaceRequest): OrchestrationCatalogV6 {

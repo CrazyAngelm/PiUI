@@ -302,6 +302,11 @@ impl OrchestrationApiState {
         &self.script_work_root
     }
 
+    /// The durable journal, for run debugging v1 (`orchestration_run_debugging`).
+    pub(crate) fn store(&self) -> &OrchestrationStore {
+        &self.store
+    }
+
     pub fn get_run(
         &self,
         workspace_id: &str,
@@ -1484,6 +1489,10 @@ pub struct StartRunRequest {
     /// Values for the pipeline's declared inputs (v6.1, additive).
     #[serde(default)]
     pub inputs: BTreeMap<String, serde_json::Value>,
+    /// Admit pinned steps from their pinned data (v6.4, additive). Only a
+    /// person's explicit start sets it; schedules never do.
+    #[serde(default)]
+    pub use_pinned_data: bool,
 }
 
 /// `orchestration_start_run_v6` arguments: a start request plus, additive in
@@ -1501,6 +1510,9 @@ pub struct StartRunCommand {
     pub inputs: BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     pub trigger: Option<StartRunTrigger>,
+    /// Admit pinned steps from their pinned data (v6.4, additive).
+    #[serde(default)]
+    pub use_pinned_data: bool,
 }
 
 impl StartRunCommand {
@@ -1513,6 +1525,7 @@ impl StartRunCommand {
                 pipeline_id: self.pipeline_id,
                 launch_command_id: self.launch_command_id,
                 inputs: self.inputs,
+                use_pinned_data: self.use_pinned_data,
             },
             self.trigger,
         )
@@ -1652,6 +1665,9 @@ pub struct RunSummary {
     pub revision: u64,
     pub team_name: String,
     pub pipeline_name: String,
+    /// Hidden from the default run list (v6.4, additive; omitted when false).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
 }
 
 pub(crate) struct ScheduleClaim {
@@ -2547,7 +2563,7 @@ pub async fn orchestration_list_runs_v6(
     .await
 }
 
-fn orchestration_list_runs(
+pub(crate) fn orchestration_list_runs(
     state: &OrchestrationApiState,
     host_state: &HostState,
     request: &WorkspaceRequest,
@@ -2567,6 +2583,7 @@ fn orchestration_list_runs(
             revision: run.revision(),
             team_name: run.definition().team.name.clone(),
             pipeline_name: run.definition().pipeline.name.clone(),
+            archived: workspace.archived_run_ids.contains(run.id()),
         })
         .collect();
     runs.sort_by(|left, right| left.id.cmp(&right.id));
@@ -2892,8 +2909,17 @@ fn create_run_in(
         pipeline,
         launch_command,
     };
-    let run = Coordinator::new_triggered_run(request.run_id, snapshot, request.inputs, trigger)
-        .map_err(|_| StoreError::Invalid)?;
+    let options = piui_orchestration::RunOptions {
+        use_pinned_data: request.use_pinned_data,
+    };
+    let run =
+        Coordinator::new_started_run(request.run_id, snapshot, request.inputs, trigger, options)
+            .map_err(|error| match error {
+                // The pins the person saw were removed meanwhile: never run every
+                // step instead.
+                CoordinatorError::NoPinnedData => StoreError::Conflict,
+                _ => StoreError::Invalid,
+            })?;
     workspace.runs.push(run.clone());
     Ok(run)
 }
@@ -3083,6 +3109,8 @@ fn schedule_run_request(
         pipeline_id: command.pipeline_id.clone(),
         launch_command_id: Some(command.id.clone()),
         inputs: schedule.inputs.clone(),
+        // Automations always run every step for real.
+        use_pinned_data: false,
     })
 }
 
@@ -3659,6 +3687,7 @@ mod graph_tests {
                 pipeline_id: "pipeline".into(),
                 launch_command_id: None,
                 inputs: BTreeMap::new(),
+                use_pinned_data: false,
             })
             .expect("starts a manual run");
     }
@@ -4094,6 +4123,7 @@ mod run_input_tests {
             pipeline_id: "pipeline".into(),
             launch_command_id: Some("command".into()),
             inputs: values(inputs),
+            use_pinned_data: false,
         })
     }
 

@@ -15,7 +15,7 @@ import {
 import { claudeSignInRequired } from '../catalogFake';
 import { HARNESS_SIGN_IN_REQUIRED, launchPolicyIssue, oneShotPolicyIssue } from './definitionRules';
 import {
-  advanceProgramRouters, cancelRun, cancelTask, completeScript, completeTask, CoordinatorFault, dispatchTask, leaseTask,
+  advanceAutomatic, cancelRun, cancelTask, completeScript, completeTask, CoordinatorFault, dispatchTask, leaseTask,
   markUncertain, profileForStep, readyTaskIds, rejectReadyTask, runningExecutions, stepOf, taskOf, type Completion,
   type LabRun, type ScriptCompletion,
 } from './runEngine';
@@ -82,7 +82,7 @@ export class LabRunScheduler {
   schedule(workspaceId: string, run: LabRun): OrchestrationHostErrorCode | undefined {
     if (!this.admits(workspaceId)) return 'runtime-unavailable';
     for (;;) {
-      if (advanceProgramRouters(run)) this.emit(workspaceId, run);
+      if (advanceAutomatic(run)) this.emit(workspaceId, run);
       const [stepId] = readyTaskIds(run);
       if (stepId === undefined) return undefined;
       const step = stepOf(run, stepId);

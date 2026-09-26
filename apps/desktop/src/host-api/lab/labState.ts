@@ -88,6 +88,8 @@ export interface LabOrchestrationWorkspace {
   launchCommands: StoredDefinition<LaunchCommandReference>[];
   schedules: LabSchedule[];
   runs: LabRun[];
+  /** Runs hidden from the default list (run debugging v1); absent means none. */
+  archivedRunIds?: Set<string>;
 }
 
 /** Background mode (background-v1): nothing real is registered in the lab. */

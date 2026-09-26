@@ -494,7 +494,8 @@ export class PipelineEditorStore {
     }
   }
 
-  async save(run = false, inputs: Readonly<Record<string, RunInputValue>> | undefined = undefined): Promise<boolean> {
+  /** `usePinnedData` (v6.4): a run started from here admits pinned steps from their pinned data. */
+  async save(run = false, inputs: Readonly<Record<string, RunInputValue>> | undefined = undefined, usePinnedData = false): Promise<boolean> {
     if (this.readOnly) return false;
     this.validationShown = true;
     this.errors = [];
@@ -520,6 +521,7 @@ export class PipelineEditorStore {
               pipelineId: this.graph.pipelineId,
               launchCommandId: this.graph.id,
               ...(inputs && Object.keys(inputs).length ? { inputs } : {}),
+              ...(usePinnedData ? { usePinnedData: true } : {}),
             },
           },
           this.safeMode,

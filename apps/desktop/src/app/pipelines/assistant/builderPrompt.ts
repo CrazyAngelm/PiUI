@@ -103,6 +103,7 @@ export function readProposal(answer: string): Proposal | undefined {
  * Replace the draft's content with a proposal while keeping the draft's
  * identity, so saving updates the same pipeline, and keeping profile ids of
  * agents that survive, so their saved definitions are updated in place.
+ * System files never carry pinned data: surviving nodes keep theirs.
  */
 export function applyProposal(current: AgentGraph, file: SystemFile): AgentGraph {
   const proposed = systemFileToGraph(file);
@@ -117,10 +118,14 @@ export function applyProposal(current: AgentGraph, file: SystemFile): AgentGraph
     id: current.id,
     teamId: current.teamId,
     pipelineId: current.pipelineId,
-    nodes: proposed.nodes.map((node) => ({
-      ...node,
-      profile: { ...node.profile, id: profileId(node.profile.id), allowedSpawnProfileIds: node.profile.allowedSpawnProfileIds.map(profileId) },
-    })),
+    nodes: proposed.nodes.map((node) => {
+      const pinned = current.nodes.find((item) => item.id === node.id)?.pinnedOutput;
+      return {
+        ...node,
+        ...(pinned === undefined ? {} : { pinnedOutput: pinned }),
+        profile: { ...node.profile, id: profileId(node.profile.id), allowedSpawnProfileIds: node.profile.allowedSpawnProfileIds.map(profileId) },
+      };
+    }),
   };
 }
 

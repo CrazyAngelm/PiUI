@@ -20,11 +20,17 @@ pub use executors::{
 mod flow;
 pub use flow::*;
 mod inputs;
+mod pinned;
 pub use inputs::{
     MAX_CHOICE_OPTIONS, MAX_INPUT_LABEL_CHARS, MAX_INPUT_NAME_LEN, MAX_INPUT_TEXT_BYTES,
     MAX_PIPELINE_INPUTS, MAX_REVIEW_ITERATIONS, MAX_RUN_INPUT_TEXT_BYTES, MIN_REVIEW_ITERATIONS,
     PipelineInput, PipelineInputKind, RunInputError, resolve_run_inputs,
     validate_pipeline_declarations, validate_pipeline_inputs,
+};
+pub use pinned::{
+    MAX_PINNED_AT_BYTES, MAX_PINNED_DATA_BYTES, MAX_PINNED_SOURCE_RUN_ID_BYTES,
+    MAX_PINNED_TEXT_BYTES, MAX_PIPELINE_PINNED_BYTES, PinnedOutput, REVIEW_RETRY_PINNED,
+    RunOptions, pinned_result, pinning_refusal, validate_pinned_output, validate_pipeline_pins,
 };
 mod results;
 pub use results::*;
@@ -45,5 +51,7 @@ pub use validation::{
 mod executor_tests;
 #[cfg(test)]
 mod input_tests;
+#[cfg(test)]
+mod pinned_tests;
 #[cfg(test)]
 mod tests;

@@ -241,6 +241,10 @@ pub struct PipelineStep {
     /// How the step runs (v6.2, additive). `None` is a native agent turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub executor: Option<crate::StepExecutor>,
+    /// Output a person pinned on this step (v6.4, additive). Used only by a
+    /// run started with pinned data; see `pinned.rs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_output: Option<crate::PinnedOutput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_instructions: Option<String>,
     pub id: String,
@@ -376,9 +380,13 @@ pub struct TaskRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) failure: Option<FailureRecord>,
     /// Bounded text result of a host-executed (script) step that did not
-    /// print a JSON object (v6.2, additive). Native results stay in history.
+    /// print a JSON object (v6.2, additive), or the pinned text of a pinned
+    /// task (v6.4). Native results stay in history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) output: Option<crate::TaskOutput>,
+    /// The result is the step's pinned data; nothing ran (v6.4, additive).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) pinned: bool,
 }
 
 impl TaskRecord {
@@ -408,6 +416,9 @@ impl TaskRecord {
     }
     pub fn failure(&self) -> Option<&FailureRecord> {
         self.failure.as_ref()
+    }
+    pub fn pinned(&self) -> bool {
+        self.pinned
     }
 }
 
@@ -624,6 +635,10 @@ pub struct Run {
     pub(crate) tasks: Vec<TaskRecord>,
     pub(crate) messages: Vec<MessageRecord>,
     pub(crate) agent_requests: Vec<AgentRequestRecord>,
+    /// The run admits pinned steps from their pinned data (v6.4, additive).
+    /// Frozen at creation; a run without it froze its snapshot without pins.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) use_pinned_data: bool,
 }
 
 impl Run {
@@ -666,6 +681,13 @@ impl Run {
     }
     pub fn agent_requests(&self) -> &[AgentRequestRecord] {
         &self.agent_requests
+    }
+    pub fn use_pinned_data(&self) -> bool {
+        self.use_pinned_data
+    }
+    /// The original user definitions, before any runtime graph expansion.
+    pub fn initial_definition(&self) -> &RunDefinitionSnapshot {
+        self.initial_definition.as_ref().unwrap_or(&self.definition)
     }
 }
 

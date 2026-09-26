@@ -70,6 +70,7 @@ impl Fixture {
                 pipeline_id: format!("{command}-pipeline"),
                 launch_command_id: Some(command.into()),
                 inputs: BTreeMap::new(),
+                use_pinned_data: false,
             })
             .expect("starts run")
     }
@@ -932,6 +933,17 @@ fn golden_json_matches_the_typescript_contracts() {
             .expect("v6 start")
             .trigger
             .is_none()
+    );
+    // A chat start may also ask for pinned data (v6.4): both additive fields
+    // travel in the same command.
+    let mut pinned = fixture["startRun"].clone();
+    pinned["usePinnedData"] = json!(true);
+    let pinned: StartRunCommand = serde_json::from_value(pinned).expect("pinned start decodes");
+    assert!(pinned.use_pinned_data && pinned.trigger.is_some());
+    assert!(
+        !serde_json::from_value::<StartRunCommand>(fixture["startRun"].clone())
+            .expect("start decodes")
+            .use_pinned_data
     );
     assert_eq!(
         serde_json::to_value(AutomationsStateV7 { paused: true }).expect("encodes"),

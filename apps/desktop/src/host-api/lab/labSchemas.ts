@@ -131,6 +131,14 @@ const step = object({
     llm: {},
     script: { runtime: enumOf(['node', 'python', 'powershell']), source: string, timeoutSeconds: u32 },
   })),
+  // v6.4 pinned data; the host checks its bounds and where it may be used.
+  pinnedOutput: option(object({
+    text: option(string),
+    truncated: withDefault(boolean),
+    data: option(json),
+    pinnedAt: string,
+    sourceRunId: option(string),
+  })),
   inputInstructions: option(string),
   id: string,
   name: string,
@@ -203,6 +211,7 @@ export const startRunSchema = object({
   inputs: runInputValues,
   // Host v7.2 `StartRunCommand`: only a chat may be stated.
   trigger: option(tagged('kind', { chat: { sessionId: option(string) } })),
+  usePinnedData: withDefault(boolean),
 });
 export const cancelTaskSchema = object({ workspaceId: string, runId: string, expectedRunRevision: u64, stepId: string });
 export const flowControlSchema = object({

@@ -5,6 +5,7 @@ import type {
 } from '../labContracts';
 import { runInputSection, substituteInputTokens } from '../../runInputs';
 import { executorKind, isScriptStep, scriptResult } from '../../stepExecutors';
+import { pinnedResult, REVIEW_RETRY_PINNED } from '../../pinnedData';
 
 /**
  * Pure run transitions ported from `piui-orchestration` (coordinator.rs and
@@ -29,6 +30,8 @@ export interface LabRun {
   tasks: LabTask[];
   messages: MessageRecord[];
   agentRequests: AgentRequestRecord[];
+  /** v6.4: pinned steps are admitted from their pinned data. */
+  usePinnedData: boolean;
 }
 
 export type FaultKind = 'revision-conflict' | 'unknown-task' | 'invalid';
@@ -59,13 +62,27 @@ function objectValue(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
-/** `new_triggered_run` after the caller resolved `inputs` (see `resolveRunInputs`). */
+/**
+ * `new_started_run` after the caller resolved `inputs` (see
+ * `resolveRunInputs`) and checked that a run with pinned data has a pin.
+ * Without pinned data the snapshot is frozen without pins (v6.4).
+ */
 export function newRun(
   id: string,
   definition: RunDefinitionSnapshot,
   inputs: Readonly<Record<string, RunInputValue>> = {},
   trigger: RunTrigger | undefined = undefined,
+  usePinnedData = false,
 ): LabRun {
+  const frozen: RunDefinitionSnapshot = usePinnedData
+    ? definition
+    : {
+        ...definition,
+        pipeline: {
+          ...definition.pipeline,
+          steps: definition.pipeline.steps.map(({ pinnedOutput: _pinned, ...step }) => step),
+        },
+      };
   return {
     inputs,
     ...(trigger === undefined ? {} : { trigger }),
@@ -73,12 +90,13 @@ export function newRun(
     attempts: [],
     schemaVersion: 6,
     id,
-    definition,
+    definition: frozen,
     status: 'running',
     revision: 0,
-    tasks: definition.pipeline.steps.map((step): LabTask => ({ stepId: step.id, status: 'ready', revision: 0 })),
+    tasks: frozen.pipeline.steps.map((step): LabTask => ({ stepId: step.id, status: 'ready', revision: 0 })),
     messages: [],
     agentRequests: [],
+    usePinnedData,
   };
 }
 
@@ -257,6 +275,57 @@ export function advanceProgramRouters(run: LabRun): boolean {
   }
 }
 
+/**
+ * `admit_pinned_steps` (v6.4): every ready pinned step of a run started with
+ * pinned data succeeds with its pinned output, checked against its result
+ * contract, without a session or a script. Invalid pinned data fails it.
+ */
+export function admitPinnedSteps(run: LabRun): boolean {
+  if (!run.usePinnedData) return false;
+  const candidates = readyTaskIds(run).filter((id) => stepOf(run, id)?.pinnedOutput !== undefined);
+  let changed = false;
+  for (const stepId of candidates) {
+    const step = stepOf(run, stepId);
+    const task = taskOf(run, stepId);
+    const pinned = step?.pinnedOutput;
+    if (step === undefined || pinned === undefined || task?.status !== 'ready' || task.leaseId !== undefined) continue;
+    task.pinned = true;
+    task.revision += 1;
+    const result = pinnedResult(step, pinned);
+    if (result.ok) {
+      task.status = 'succeeded';
+      delete task.failure;
+      if (result.data === undefined) delete task.resultData;
+      else task.resultData = result.data;
+      if (result.output === undefined) delete task.output;
+      else task.output = result.output;
+      run.revision += 1;
+      applyReviewAndApproval(run, step, task);
+      advanceConditions(run);
+      refreshStatus(run);
+    } else {
+      task.status = 'failed';
+      task.failure = result.failure;
+      cancelReady(run);
+      run.revision += 1;
+      refreshStatus(run);
+    }
+    changed = true;
+  }
+  return changed;
+}
+
+/** `advance_automatic`: program routers, then pinned steps, until neither admits more. */
+export function advanceAutomatic(run: LabRun): boolean {
+  let changed = false;
+  for (;;) {
+    const routed = advanceProgramRouters(run);
+    const pinned = admitPinnedSteps(run);
+    changed = changed || routed || pinned;
+    if (!pinned) return changed;
+  }
+}
+
 /** Durable lease before any native side effect (`lease_next_task` for one step). */
 export function leaseTask(run: LabRun, stepId: string, leaseId: string): void {
   ensureActive(run);
@@ -367,6 +436,8 @@ function repeatFrom(run: LabRun, stepId: string): void {
     delete task.resultData;
     delete task.failure;
     delete task.output;
+    // A pinned step is admitted from its pinned data again.
+    delete task.pinned;
     task.revision += 1;
   }
   run.status = 'running';
@@ -466,10 +537,12 @@ function applyReviewAndApproval(run: LabRun, step: PipelineStep, task: LabTask):
     return;
   }
   const verdict = task.resultData?.[step.review.field];
-  if (verdict === false && reviewLimitReached(run, step)) {
-    // Another round would exceed the bound: a person approves, rejects or repeats.
+  const retryPinned = run.usePinnedData && stepOf(run, step.review.retryFromStepId)?.pinnedOutput !== undefined;
+  if (verdict === false && (reviewLimitReached(run, step) || retryPinned)) {
+    // Another round would exceed the bound or repeat pinned input (v6.4):
+    // a person approves, rejects or repeats.
     task.status = 'awaitingApproval';
-    task.failure = { code: 'review-limit-reached' };
+    task.failure = { code: reviewLimitReached(run, step) ? 'review-limit-reached' : REVIEW_RETRY_PINNED };
   } else if (verdict === false) {
     const previous = [...run.attempts].reverse().find((attempt) => attempt.stepId === step.id);
     const repeated = previous !== undefined && jsonEqual(previous.resultData, task.resultData);
@@ -641,6 +714,7 @@ export function retryUncertain(run: LabRun, expectedRevision: number, stepId: st
   delete task.resultData;
   delete task.failure;
   delete task.output;
+  delete task.pinned;
   task.revision += 1;
   run.revision += 1;
   run.status = 'running';
@@ -663,25 +737,27 @@ export function restoreInterrupted(run: LabRun): void {
   }
 }
 
-/** The IPC shape: `inputs`, `paused` and `attempts` are omitted at their defaults, like serde. */
+/** The IPC shape: `inputs`, `paused`, `attempts` and `usePinnedData` are omitted at their defaults, like serde. */
 export function runToWire(run: LabRun): OrchestrationRunV6 {
-  const { inputs, paused, attempts, ...rest } = run;
+  const { inputs, paused, attempts, usePinnedData, ...rest } = run;
   const value = {
     ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
     ...(paused ? { paused } : {}),
     ...(attempts.length > 0 ? { attempts } : {}),
     ...rest,
+    ...(usePinnedData ? { usePinnedData } : {}),
   };
   return JSON.parse(JSON.stringify(value)) as OrchestrationRunV6;
 }
 
-export function runSummary(run: LabRun): RunSummary {
+export function runSummary(run: LabRun, archived = false): RunSummary {
   return {
     id: run.id,
     status: run.status,
     revision: run.revision,
     teamName: run.definition.team.name,
     pipelineName: run.definition.pipeline.name,
+    ...(archived ? { archived } : {}),
   };
 }
 
@@ -717,12 +793,12 @@ export interface LabDependencyOutput {
   readonly data?: Record<string, unknown>;
 }
 
-/** `dependency_outputs`: script results a native step receives where a reference would be. */
+/** `dependency_outputs`: script and pinned (v6.4) results a native step receives where a reference would be. */
 export function dependencyOutputs(run: LabRun, step: PipelineStep): LabDependencyOutput[] {
   return step.dependencyStepIds.flatMap((dependency) => {
     const source = stepOf(run, dependency);
     const task = taskOf(run, dependency);
-    if (source === undefined || !isScriptStep(source) || task?.status !== 'succeeded') return [];
+    if (source === undefined || (!isScriptStep(source) && task?.pinned !== true) || task?.status !== 'succeeded') return [];
     if (task.output === undefined && task.resultData === undefined) return [];
     const fields = (step.inputBindings ?? [])
       .filter((binding) => binding.sourceStepId === dependency)

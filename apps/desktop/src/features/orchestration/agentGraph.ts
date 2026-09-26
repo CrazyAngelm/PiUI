@@ -1,13 +1,14 @@
 import type { AgentProfile, PipelineDefinition, PipelineInput, TeamDefinition, LaunchCommandReference, RouterConfig, RouterBranch, RouterPredicate, StepExecutor } from '../../../../../contracts/orchestration-v6';
 import { pipelineInputIssues, reviewLimitValid, RUN_INPUT_ISSUES } from '../../host-api/runInputs';
 import { EXECUTOR_ISSUES, SCRIPT_RUNTIMES, scriptSourceValid, scriptTimeoutValid } from '../../host-api/stepExecutors';
+import { MAX_PIPELINE_PINNED_BYTES, PINNED_ISSUES, pinnedOutputIssue, pinnedSize, pinningRefusal } from '../../host-api/pinnedData';
 /**
  * `executor` (v6.2) selects a native agent (absent), a single model call
  * (`llm`) or a host-run `script`. A script node has no team member: like a
  * program router it carries a placeholder profile whose name is the step
  * name and which is never saved.
  */
-export interface GraphNode { kind?: 'agent' | 'router'; executor?: StepExecutor; inputBindings?: import('../../../../../contracts/orchestration-v6').InputBinding[]; condition?: import('../../../../../contracts/orchestration-v6').ResultCondition; review?: import('../../../../../contracts/orchestration-v6').ReviewRule; requireApproval?: boolean; resultFields?: import('../../../../../contracts/orchestration-v6').ResultField[]; executionMode?: 'scheduled' | 'callable'; id: string; profile: AgentProfile; router?: RouterConfig; task: string; input?: string; x: number; y: number; }
+export interface GraphNode { kind?: 'agent' | 'router'; executor?: StepExecutor; pinnedOutput?: import('../../../../../contracts/orchestration-v6').PinnedOutput; inputBindings?: import('../../../../../contracts/orchestration-v6').InputBinding[]; condition?: import('../../../../../contracts/orchestration-v6').ResultCondition; review?: import('../../../../../contracts/orchestration-v6').ReviewRule; requireApproval?: boolean; resultFields?: import('../../../../../contracts/orchestration-v6').ResultField[]; executionMode?: 'scheduled' | 'callable'; id: string; profile: AgentProfile; router?: RouterConfig; task: string; input?: string; x: number; y: number; }
 export type ConnectionKind = 'result' | 'send' | 'observe' | 'spawn' | 'route';
 export interface GraphEdge { from: string; to: string; kind: ConnectionKind; branchId?: string; }
 /** `inputs` are the pipeline's run inputs (v6.1): values requested when a run starts. */
@@ -69,7 +70,7 @@ export function compileGraph(graph: AgentGraph): { profiles: AgentProfile[]; tea
       ...(routeEdges.length ? { routeGates: routeEdges.map(edge => ({ routerStepId: edge.from, branchId: edge.branchId ?? '' })) } : {}),
       ...(router ? { router } : {}), ...(node.review ? { review: node.review } : {}), ...(node.requireApproval ? { requireApproval: true } : {}),
       ...(resultFields?.length ? { resultFields } : {}), ...(node.executionMode ? { executionMode: node.executionMode } : {}),
-      ...(node.executor ? { executor: node.executor } : {}),
+      ...(node.executor ? { executor: node.executor } : {}), ...(node.pinnedOutput ? { pinnedOutput: node.pinnedOutput } : {}),
       ...(node.input !== undefined ? { inputInstructions: node.input } : {}), dependencyStepIds: [...new Set(dependencies)] };
   });
   return {
@@ -145,6 +146,15 @@ export function graphIssues(graph: AgentGraph): GraphIssue[] {
       if ((node.profile.resourceRules ?? []).some(rule => rule.enabled)) push(EXECUTOR_ISSUES.llmResources, [node.id]);
     }
   }
+  // Pinned data (v6.4), the rules of `piui-orchestration/src/pinned.rs`.
+  let pinnedBytes = 0;
+  for (const node of graph.nodes) {
+    if (node.pinnedOutput === undefined) continue;
+    if (pinningRefusal(node) !== undefined) push(PINNED_ISSUES.notPinnable, [node.id]);
+    else if (pinnedOutputIssue(node, node.pinnedOutput) !== undefined) push(PINNED_ISSUES.invalid, [node.id]);
+    pinnedBytes += pinnedSize(node.pinnedOutput);
+  }
+  if (pinnedBytes > MAX_PIPELINE_PINNED_BYTES) push(PINNED_ISSUES.total, graph.nodes.filter(node => node.pinnedOutput !== undefined).map(node => node.id));
   if (graph.nodes.length > 0 && graph.nodes.every(nodeHasNoMember)) push(EXECUTOR_ISSUES.needsMember);
   if (!agentNodes.some(node => node.executionMode !== 'callable')) push('Add a scheduled agent to start this system.');
   if (graph.edges.some(edge => (edge.kind === 'result' || edge.kind === 'route') && graph.nodes.some(node => node.executionMode === 'callable' && (node.id === edge.from || node.id === edge.to)))) push('Callable agents exchange results through their caller, not pipeline dependencies.');

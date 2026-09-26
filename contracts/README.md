@@ -76,6 +76,34 @@ files stay closed (their schemas never accept it). Older builds reject the new
 value with an explicit validation error instead of misreading it. Round-trip and
 compatibility tests cover every extended contract.
 
+# Pinned data (orchestration v6.4) and run debugging v1
+
+`PipelineStep.pinnedOutput` (`text` up to 256 KiB with `truncated`, `data` a
+JSON object up to 256 KiB, `pinnedAt`, `sourceRunId`; at most 1 MiB of pins per
+pipeline; refused on callable roles, program routers and reviewing steps),
+`StartRunRequest.usePinnedData`, `OrchestrationRunV6.usePinnedData`,
+`TaskRecord.pinned` and `RunSummary.archived` are additive within orchestration
+v6 (v6.4). A run started with pinned data admits ready pinned steps as
+succeeded with their pinned output (checked against their result fields; no
+session or process) and hands it downstream like a recorded script result; a
+run without it freezes no pins, and asking for it without pins is `conflict`.
+The review code `review-retry-pinned` holds a rejection whose correction step
+is pinned. Older runs and definitions decode and re-encode unchanged; older
+builds reject a document with the new fields instead of misreading it.
+Portable system files (v4) never carry pinned data.
+
+`orchestration-run-debugging-v1.ts` is an independently versioned set of four
+commands with opaque ids only: `orchestration_run_outputs_v1` (recorded outputs
+of succeeded steps, native text verified by hash, read-only),
+`orchestration_pin_step_output_v1` (the host reads the output and pins it into
+the saved pipeline at an expected revision), `orchestration_set_run_archived_v1`
+(UI metadata beside the runs) and `orchestration_delete_run_v1` (a finished
+run's PiUI journal entry and verified script working copies; never native
+sessions or project files; running and uncertain runs are `run-active`).
+Writes are refused in safe mode. Refusals are typed `{code}` values; requests
+reject unknown fields. `fixtures/orchestration-run-debugging-v1.json` is checked
+by the Rust host and the TypeScript client. See `docs/RUN_DEBUGGING.md`.
+
 # Script step test v1
 
 `orchestration-script-test-v1.ts` is an independently versioned pair of

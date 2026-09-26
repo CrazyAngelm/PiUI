@@ -84,8 +84,8 @@ pub enum RunInputError {
 }
 
 /// Self-contained checks of one stored pipeline: its run input declarations,
-/// review loop bounds and step executors (v6.2). Cross-definition rules run
-/// with `validate_definition`.
+/// review loop bounds, step executors (v6.2) and pinned data (v6.4).
+/// Cross-definition rules run with `validate_definition`.
 pub fn validate_pipeline_declarations(
     pipeline: &PipelineDefinition,
 ) -> Result<(), DefinitionError> {
@@ -96,7 +96,7 @@ pub fn validate_pipeline_declarations(
         }
         crate::executors::validate_step_executor(step)?;
     }
-    Ok(())
+    crate::validate_pipeline_pins(pipeline)
 }
 
 pub(crate) fn validate_review_limit(

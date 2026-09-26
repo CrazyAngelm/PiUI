@@ -173,3 +173,29 @@ export function formatValue(value: unknown): string {
 export function shortId(id: string): string {
   return id.replace(/-/gu, '').slice(0, 6);
 }
+
+/** Running and uncertain runs may still hold native work: they are never archived or deleted. */
+export function isActiveRun(status: RunStatus): boolean {
+  return status === 'running' || status === 'uncertain';
+}
+
+/** The run list: the filter, then archived runs only when asked for. */
+export function listedRuns(runs: readonly RunSummary[], filter: RunFilter, archived: ReadonlySet<string>, showArchived: boolean): RunSummary[] {
+  return sortRuns(runs.filter((item) => matchesRunFilter(item, filter) && (showArchived || !archived.has(item.id))));
+}
+
+/**
+ * "Pin output" is offered for the latest attempt of a step that succeeded,
+ * once its run no longer runs, when the step belongs to the saved pipeline
+ * and can hold pinned data. The host checks every rule again.
+ */
+export function canPinOutput(run: Pick<OrchestrationRunV6, 'status'>, view: StepView): boolean {
+  return (
+    view.task?.status === 'succeeded' &&
+    run.status !== 'running' &&
+    !view.spawned &&
+    view.step.executionMode !== 'callable' &&
+    view.step.router?.mode !== 'program' &&
+    view.step.review === undefined
+  );
+}

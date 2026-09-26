@@ -106,6 +106,7 @@ impl Fixture {
                 pipeline_id: "pipeline".into(),
                 launch_command_id: Some("command".into()),
                 inputs: BTreeMap::from([("task".to_owned(), json!("demo"))]),
+                use_pinned_data: false,
             })
             .expect("creates the run")
     }
@@ -594,6 +595,7 @@ fn restart_makes_a_started_script_uncertain_and_never_resumes_it() {
             pipeline_id: "pipeline".into(),
             launch_command_id: None,
             inputs: BTreeMap::new(),
+            use_pinned_data: false,
         })
         .expect("run");
     let lease = state

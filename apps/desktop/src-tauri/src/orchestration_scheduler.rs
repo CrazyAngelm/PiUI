@@ -2484,6 +2484,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
                 result_fields: Vec::new(),
                 execution_mode: None,
                 executor: None,
+                pinned_output: None,
                 input_instructions: None,
                 id: "step-one".into(),
                 name: "First marker".into(),
@@ -2501,6 +2502,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
                 result_fields: Vec::new(),
                 execution_mode: None,
                 executor: None,
+                pinned_output: None,
                 input_instructions: None,
                 id: "step-two".into(),
                 name: "Second marker".into(),
@@ -2550,6 +2552,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
             pipeline_id: "prime-pipeline".into(),
             launch_command_id: None,
             inputs: Default::default(),
+            use_pinned_data: false,
         })
         .unwrap();
     assert_eq!(run.status(), RunStatus::Running);
@@ -3094,6 +3097,7 @@ mod tests {
                         result_fields: Vec::new(),
                         execution_mode: None,
                         executor: None,
+                        pinned_output: None,
                         input_instructions: None,
                         id: "build".into(),
                         name: "Build".into(),
@@ -3111,6 +3115,7 @@ mod tests {
                         result_fields: Vec::new(),
                         execution_mode: None,
                         executor: None,
+                        pinned_output: None,
                         input_instructions: None,
                         id: "review".into(),
                         name: "Review".into(),

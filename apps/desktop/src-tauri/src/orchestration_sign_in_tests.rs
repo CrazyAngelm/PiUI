@@ -101,6 +101,7 @@ impl Fixture {
                 pipeline_id: "pipeline".into(),
                 launch_command_id: Some("command".into()),
                 inputs: BTreeMap::new(),
+                use_pinned_data: false,
             })
             .expect("creates the run");
     }
