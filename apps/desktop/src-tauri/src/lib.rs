@@ -15,6 +15,7 @@ mod harness_configuration;
 mod orchestration_api;
 mod orchestration_schedule;
 mod orchestration_scheduler;
+mod orchestration_script_test;
 #[cfg(feature = "native-prime-scheduler-test")]
 pub use orchestration_scheduler::run_native_prime_scheduler_two_step_dependency_dag;
 mod orchestration_store;
@@ -741,6 +742,7 @@ pub fn run() -> Result<(), tauri::Error> {
             let orchestration_scheduler =
                 orchestration_scheduler::OrchestrationScheduler::default();
             app.manage(orchestration_scheduler.clone());
+            app.manage(orchestration_script_test::ScriptTestState::default());
             let watcher = catalog_watch::start_catalog_watcher(
                 app.handle().clone(),
                 state.all_session_roots(),
@@ -837,6 +839,8 @@ pub fn run() -> Result<(), tauri::Error> {
             orchestration_api::orchestration_cancel_run_v6,
             orchestration_api::orchestration_reconcile_uncertain_task_v6,
             orchestration_api::orchestration_retry_uncertain_task_v6,
+            orchestration_script_test::orchestration_script_test_v1,
+            orchestration_script_test::orchestration_cancel_script_test_v1,
         ])
         .build(context)?;
     app.run(|app, event| {

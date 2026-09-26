@@ -1,0 +1,47 @@
+{
+  "request": {
+    "workspaceId": "workspace",
+    "testId": "7f0c0a52-4b8e-4f2b-9c55-2f5f7bf1a9d1",
+    "runtime": "node",
+    "source": "import { readFileSync } from 'node:fs';\nconst input = JSON.parse(readFileSync(0, 'utf8'));\nconsole.log(JSON.stringify({ files: String(Object.keys(input.dependencies).length) }));\n",
+    "timeoutSeconds": 30,
+    "resultFields": [{ "name": "files", "kind": "number" }],
+    "stdin": {
+      "inputs": { "task": "demo" },
+      "dependencies": { "collect": { "text": null, "data": null } },
+      "step": { "id": "report", "name": "Report" }
+    }
+  },
+  "cancelRequest": {
+    "workspaceId": "workspace",
+    "testId": "7f0c0a52-4b8e-4f2b-9c55-2f5f7bf1a9d1"
+  },
+  "cancelResult": { "protocol": 1, "cancelled": true },
+  "result": {
+    "protocol": 1,
+    "outcome": "exited",
+    "exitCode": 0,
+    "durationMs": 42,
+    "stdout": "{\"files\":\"1\"}\n",
+    "stdoutTruncated": false,
+    "stderr": "",
+    "stderrTruncated": false,
+    "data": { "files": "1" },
+    "fieldIssues": [{ "field": "files", "code": "result-field-type" }],
+    "failure": { "code": "result-field-type" }
+  },
+  "timedOut": {
+    "protocol": 1,
+    "outcome": "timedOut",
+    "exitCode": null,
+    "durationMs": 1004,
+    "stdout": "first step done\n",
+    "stdoutTruncated": false,
+    "stderr": "still waiting\n",
+    "stderrTruncated": false,
+    "data": null,
+    "fieldIssues": [],
+    "failure": { "code": "script-timeout", "detail": "still waiting" }
+  },
+  "error": { "code": "not-trusted" }
+}

@@ -36,6 +36,9 @@ import { GraphHistory, duplicateNode } from '../../features/orchestration/graphH
 import { graphNodeHeight } from '../../features/orchestration/graphLayout';
 import { performRunAction } from '../../features/orchestration/runActions';
 import { GraphDocumentError, openGraph, saveGraph, type Revisions } from './graphDocument';
+import { applyConversion, planConversion, type ConversionContext, type NodeType } from './nodeConversion';
+import { ScriptTests } from './scriptTests.svelte';
+import { scriptTestHost, type ScriptTestClient } from '../../host-api/scriptTestClient';
 
 export type EditorOperation = 'open' | 'save' | 'check' | 'import' | 'run';
 export const NODE_WIDTH = 248;
@@ -110,11 +113,17 @@ export class PipelineEditorStore {
   private pendingRunId: string | undefined;
   private validationShown = false;
 
+  /** Script tests of this editor session: samples and last results per node. */
+  readonly scriptTests: ScriptTests;
+
   constructor(
     readonly workspaceId: string,
     readonly safeMode: boolean,
     private readonly client: OrchestrationClient = orchestrationHost,
-  ) {}
+    scriptTestClient: ScriptTestClient = scriptTestHost,
+  ) {
+    this.scriptTests = new ScriptTests(workspaceId, scriptTestClient);
+  }
 
   get dirty(): boolean {
     return JSON.stringify(this.graph) !== this.baseline;
@@ -318,6 +327,36 @@ export class PipelineEditorStore {
     this.commit({ ...this.graph, nodes: [...this.graph.nodes, node] });
     this.selectedId = node.id;
     return node.id;
+  }
+
+  /**
+   * Changes a node's type (agent, model call or script) as one undo step and
+   * re-runs the graph checks. The node keeps its id, name, position and every
+   * connection and setting the new type can keep (see `nodeConversion.ts`);
+   * `model` is the native default for a new or moved profile. Returns false
+   * when nothing changed.
+   */
+  convertNode(id: string, to: NodeType, context: ConversionContext, model: Pick<AgentProfile, 'model' | 'modelProvider'> | undefined = undefined): boolean {
+    if (this.readOnly) return false;
+    const plan = planConversion(this.graph, id, to, context);
+    if (plan === undefined) return false;
+    // A test of the old script stops with it; undo brings the code back, not the run.
+    if (plan.from === 'script') this.scriptTests.forget(id);
+    this.commit(applyConversion(this.graph, plan, model));
+    if (plan.removedEdges.some((edge) => edgeKey(edge) === this.selectedEdge)) this.selectedEdge = '';
+    this.checkedNotice = '';
+    // Native preflight described the old type; the structural checks run again now.
+    this.preflight = this.preflight.filter((issue) => issue.nodeId !== id);
+    this.validationShown = true;
+    this.issues = graphIssues(this.graph);
+    return true;
+  }
+
+  /** The first model of a harness's native catalog, so a new profile can run at once. */
+  async defaultModel(harness: AgentProfile['harness']): Promise<Pick<AgentProfile, 'model' | 'modelProvider'> | undefined> {
+    if (!this.catalogs[harness]) await this.loadCatalog(harness);
+    const model = this.catalogs[harness]?.models[0];
+    return model ? { model: model.id, ...(model.provider ? { modelProvider: model.provider } : {}) } : undefined;
   }
 
   duplicate(id: string, name: string): void {

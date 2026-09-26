@@ -8,6 +8,7 @@
   import ClipboardCheck from '@lucide/svelte/icons/clipboard-check';
   import Code from '@lucide/svelte/icons/code';
   import { RUNTIME_LABEL } from '../pipelines/executors';
+  import ScriptEditor from '../pipelines/code/ScriptEditor.svelte';
   import { t } from '../../features/locale/language';
   import MarkdownContent from '../../components/MarkdownContent.svelte';
   import type { OrchestrationRunV6, ReconcileUncertainTaskRequest, TaskRecord } from '../../host-api/orchestrationClient';
@@ -305,7 +306,7 @@
           {#if script}
             <section>
               <h3>{$t('Code')}</h3>
-              <pre class="output">{script.source}</pre>
+              <ScriptEditor id="run-script-{view.stepId}" value={script.source} runtime={script.runtime} label={$t('Code')} size="viewer" readOnly={true} />
             </section>
           {:else}
           <section>

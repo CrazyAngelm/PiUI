@@ -380,6 +380,27 @@ async fn timeout_terminates_the_whole_process_tree() {
     assert_heartbeat_stopped(&heartbeat).await;
 }
 
+#[tokio::test]
+async fn a_timed_out_script_keeps_the_output_it_printed() {
+    let fixture = Fixture::new("node-timeout-output");
+    let run = Launch {
+        fixture: &fixture,
+        kind: ScriptInterpreter::Node,
+        source: "process.stdout.write('first step done\\n');\nprocess.stderr.write('still waiting\\n');\nsetInterval(() => {}, 1000);\n",
+        stdin: document("slow"),
+        timeout: Duration::from_secs(3),
+        name: "node-timeout-output",
+    }
+    .finish()
+    .await;
+    let ScriptOutcome::TimedOut { stdout, stderr } = &run.outcome else {
+        panic!("expected a timeout, got {run:?}");
+    };
+    assert_eq!(stdout.text, "first step done\n");
+    assert!(!stdout.truncated);
+    assert_eq!(stderr.text, "still waiting\n");
+}
+
 #[cfg(windows)]
 #[tokio::test]
 async fn job_containment_also_ends_detached_descendants() {

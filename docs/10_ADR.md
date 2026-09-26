@@ -495,6 +495,12 @@ read-only, network-denied profile without allowed tools or enabled resources,
 and an empty native tool allowlist where the adapter enforces one. Where it
 cannot (Codex), the read-only sandbox is the only boundary and the manifest
 says so; harnesses without a read-only mode refuse the step. Scripts: ADR-033.
+An existing node changes between agent, model call and script in the editor
+(one undo step): it keeps its id, name, position, result/route connections,
+result fields, condition, review and approval; what the new type cannot keep
+(messages, observation, delegation, on-call mode, input mappings for a script,
+least-authority profile changes) and data it discards (code, task/prompt,
+instructions, harness and model) are listed and confirmed first.
 
 ## ADR-031 — Transactional orchestration storage (planned)
 
@@ -535,3 +541,22 @@ so the end, a timeout, a cancellation, shutdown or lost trust kills it.
 Outputs are bounded (stdout 256 KiB, stderr tail 64 KiB, failure detail 2 KiB)
 and never logged. Scripts use the coordinator's lease/dispatch machinery;
 restart marks a started script uncertain and never replays it.
+
+**Test script (script test v1).** The editor can run one script node's current
+draft once, without a pipeline run, when the person clicks Test: an explicit
+action with the same admission (trusted, live project outside safe mode,
+re-checked every 500 ms), the same runner, containment, environment, timeout,
+bounds and result checks, and a user-editable sample stdin (default: the run
+inputs' defaults, `{text: null, data: null}` for every direct dependency and
+the step). The result shows exactly what a run would record. Nothing is
+recorded in a run, cancellation stops the tree, and the command can only name a
+script runtime, so it never starts an agent or a paid model call. This grants
+no authority a saved script step lacks: whoever can edit a trusted project's
+pipeline can already save and run it.
+
+**Code editor.** Script code is edited with CodeMirror 6, loaded only when a
+script is shown (never in the main bundle). The desktop CSP allows
+`style-src 'self'` only; CodeMirror's style-mod writes a `<style>` element into
+a document, which that policy refuses, but uses constructable stylesheets in a
+shadow root, so the editor always mounts in its own shadow root. If it cannot
+load, the plain text field remains.

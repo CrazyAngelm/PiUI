@@ -137,8 +137,12 @@ pub enum ScriptOutcome {
         stdout: CapturedOutput,
         stderr: CapturedOutput,
     },
-    /// The timeout elapsed and the whole process tree was terminated.
-    TimedOut { stderr: CapturedOutput },
+    /// The timeout elapsed and the whole process tree was terminated. The
+    /// output is what arrived before that.
+    TimedOut {
+        stdout: CapturedOutput,
+        stderr: CapturedOutput,
+    },
     /// Cancellation was requested and the whole process tree was terminated.
     Cancelled,
 }
@@ -626,6 +630,7 @@ async fn run_prepared(
             stderr: tail_text(&stderr_capture),
         },
         Ended::TimedOut => ScriptOutcome::TimedOut {
+            stdout: head_text(&stdout_capture),
             stderr: tail_text(&stderr_capture),
         },
         Ended::Cancelled => ScriptOutcome::Cancelled,

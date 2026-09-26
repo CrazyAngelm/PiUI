@@ -30,6 +30,9 @@
   import HarnessMark from '../shell/HarnessMark.svelte';
   import { useWorkspace } from '../shell/context';
   import type { PipelineEditorStore } from './editorStore.svelte';
+  import NodeTypeMenu from './NodeTypeMenu.svelte';
+  import ScriptEditor from './code/ScriptEditor.svelte';
+  import ScriptTestPanel from './ScriptTestPanel.svelte';
 
   interface Props {
     editor: PipelineEditorStore;
@@ -194,6 +197,9 @@
       oninput={(event) => patch({ name: event.currentTarget.value }, true)}
       onblur={() => editor.settle()}
     />
+    {#if !isRouter}
+      <NodeTypeMenu {editor} {node} />
+    {/if}
     <Menu
       align="end"
       items={[
@@ -253,18 +259,16 @@
                 <button type="button" class="link" onclick={() => setScript({ source: SCRIPT_EXAMPLES[script.runtime] })}>{$t('Insert example')}</button>
               {/if}
             {/snippet}
-            <Textarea
+            <ScriptEditor
               id="node-script"
-              class="code"
               value={script.source}
-              minRows={10}
-              maxRows={28}
-              spellcheck={false}
-              wrap="off"
-              disabled={readOnly}
+              runtime={script.runtime}
+              label={$t('Code')}
+              readOnly={readOnly}
+              keyboardHint={$t('Tab indents. Press Esc, then Tab, to move focus out of the code.')}
               placeholder={$t('Read JSON from stdin, print the result to stdout.')}
-              oninput={(event) => setScript({ source: event.currentTarget.value }, true)}
-              onblur={() => editor.settle()}
+              onChange={(source) => setScript({ source }, true)}
+              onBlur={() => editor.settle()}
             />
           </Field>
           <Field
@@ -281,6 +285,7 @@
             <pre>{'{ "inputs": {…}, "dependencies": { "<step id>": { "text": "…", "data": {…} } }, "step": { "id": "…", "name": "…" } }'}</pre>
             <p>{$t('Print one JSON object to return named fields, or any text. A non-zero exit code fails the step; the end of stderr is shown in the run.')}</p>
           </details>
+          <ScriptTestPanel {editor} {node} />
         {:else if current === 'basics'}
           {#if !isRouter || agentRouter}
             <Field
@@ -544,11 +549,6 @@
     font-family: var(--piui-font-mono);
     font-size: 11px;
     white-space: pre-wrap;
-  }
-  .body :global(textarea.code) {
-    font-family: var(--piui-font-mono);
-    font-size: 12px;
-    tab-size: 2;
   }
   .router-mark {
     display: inline-flex;

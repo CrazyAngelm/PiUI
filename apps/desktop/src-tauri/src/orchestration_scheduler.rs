@@ -156,7 +156,7 @@ enum ScriptAdmission {
 }
 
 /// What the host records for a script that ended.
-enum ScriptResolution {
+pub(crate) enum ScriptResolution {
     Record(ScriptCompletion),
     /// A cancellation terminated the tree; the cancelling path records it.
     Stopped,
@@ -2008,14 +2008,30 @@ async fn execute_script(launch: &ScriptLaunch, cancel: watch::Receiver<bool>) ->
     )
     .await;
     log_script_end(&launch.lease, &result);
+    script_resolution(
+        &launch.project_dir,
+        &launch.result_fields,
+        result.map(|run| run.outcome),
+    )
+    .await
+}
+
+/// Maps what the runner observed to what a run records. Declared artifact
+/// fields are checked like native results. The editor's script test applies
+/// this same mapping, so a test reports exactly what a run would record.
+pub(crate) async fn script_resolution(
+    project_dir: &std::path::Path,
+    result_fields: &[piui_orchestration::ResultField],
+    result: Result<ScriptOutcome, ScriptRunError>,
+) -> ScriptResolution {
     let failed = |failure| ScriptResolution::Record(ScriptCompletion::Failed { failure });
-    match result.map(|run| run.outcome) {
+    match result {
         Ok(ScriptOutcome::Exited {
             code: Some(0),
             stdout,
             ..
         }) => {
-            if validate_artifact_files(&launch.project_dir, &launch.result_fields, &stdout.text)
+            if validate_artifact_files(project_dir, result_fields, &stdout.text)
                 .await
                 .is_err()
             {
@@ -2030,7 +2046,7 @@ async fn execute_script(launch: &ScriptLaunch, cancel: watch::Receiver<bool>) ->
         Ok(ScriptOutcome::Exited { stdout, stderr, .. }) => {
             failed(script_failure(SCRIPT_FAILED, &stdout.text, &stderr.text))
         }
-        Ok(ScriptOutcome::TimedOut { stderr }) => {
+        Ok(ScriptOutcome::TimedOut { stderr, .. }) => {
             failed(FailureRecord::with_detail(SCRIPT_TIMEOUT, &stderr.text))
         }
         Ok(ScriptOutcome::Cancelled) => ScriptResolution::Stopped,
@@ -2049,7 +2065,7 @@ fn script_runtime(step: &PipelineStep) -> Option<ScriptRuntime> {
     }
 }
 
-fn script_interpreter(runtime: ScriptRuntime) -> ScriptInterpreter {
+pub(crate) fn script_interpreter(runtime: ScriptRuntime) -> ScriptInterpreter {
     match runtime {
         ScriptRuntime::Node => ScriptInterpreter::Node,
         ScriptRuntime::Python => ScriptInterpreter::Python,

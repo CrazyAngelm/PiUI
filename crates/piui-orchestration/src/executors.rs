@@ -254,6 +254,53 @@ pub fn bounded_text(text: String, limit: usize) -> (String, bool) {
     (text[..end].to_owned(), true)
 }
 
+/// What a run records for the stdout of a script that exited with status 0.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ScriptStdoutResult {
+    /// Complete stdout that is one JSON object satisfying the declared fields.
+    Data(Value),
+    /// Any other stdout of a step without declared result fields.
+    Output(TaskOutput),
+    /// The declared result fields are not satisfied.
+    Failed(FailureRecord),
+}
+
+/// The result check of a script's stdout, shared by runs and the editor's
+/// script test: complete stdout that is one JSON object becomes result data
+/// checked against the declared fields exactly like a native result; any
+/// other stdout is text output, which a step with declared fields rejects. A
+/// cut stdout is never read as JSON: its end is unknown.
+pub fn script_stdout_result(
+    fields: &[crate::ResultField],
+    stdout: String,
+    truncated: bool,
+) -> ScriptStdoutResult {
+    let (stdout, cut) = bounded_text(stdout, MAX_SCRIPT_STDOUT_BYTES);
+    let truncated = truncated || cut;
+    let parsed = if truncated {
+        None
+    } else {
+        serde_json::from_str::<Value>(stdout.trim()).ok()
+    };
+    match parsed {
+        Some(value) if value.is_object() => match crate::validate_result_value(fields, &value) {
+            Ok(()) => ScriptStdoutResult::Data(value),
+            Err(code) => ScriptStdoutResult::Failed(FailureRecord::new(code)),
+        },
+        parsed if !fields.is_empty() => {
+            ScriptStdoutResult::Failed(FailureRecord::new(if parsed.is_some() {
+                "result-not-object"
+            } else {
+                "result-invalid-json"
+            }))
+        }
+        _ => ScriptStdoutResult::Output(TaskOutput {
+            text: stdout,
+            truncated,
+        }),
+    }
+}
+
 fn invalid(step: &PipelineStep, reason: &'static str) -> DefinitionError {
     DefinitionError::InvalidExecutor {
         step_id: step.id.clone(),
@@ -566,59 +613,20 @@ impl Coordinator {
         completion: ScriptCompletion,
     ) -> Result<(), CoordinatorError> {
         let step = script_step(run, step_id)?;
+        let succeeded = CompletionOutcome::Succeeded {
+            result_reference: None,
+        };
         let (outcome, data, output) = match completion {
             ScriptCompletion::Failed { failure } => {
                 (CompletionOutcome::Failed { failure }, None, None)
             }
             ScriptCompletion::Exited { stdout, truncated } => {
-                let (stdout, cut) = bounded_text(stdout, MAX_SCRIPT_STDOUT_BYTES);
-                let truncated = truncated || cut;
-                // A cut stdout is never read as JSON: its end is unknown.
-                let parsed = if truncated {
-                    None
-                } else {
-                    serde_json::from_str::<Value>(stdout.trim()).ok()
-                };
-                match parsed {
-                    Some(value) if value.is_object() => {
-                        match crate::validate_result_value(&step.result_fields, &value) {
-                            Ok(()) => (
-                                CompletionOutcome::Succeeded {
-                                    result_reference: None,
-                                },
-                                Some(value),
-                                None,
-                            ),
-                            Err(code) => (
-                                CompletionOutcome::Failed {
-                                    failure: FailureRecord::new(code),
-                                },
-                                None,
-                                None,
-                            ),
-                        }
+                match script_stdout_result(&step.result_fields, stdout, truncated) {
+                    ScriptStdoutResult::Data(value) => (succeeded, Some(value), None),
+                    ScriptStdoutResult::Output(output) => (succeeded, None, Some(output)),
+                    ScriptStdoutResult::Failed(failure) => {
+                        (CompletionOutcome::Failed { failure }, None, None)
                     }
-                    parsed if !step.result_fields.is_empty() => (
-                        CompletionOutcome::Failed {
-                            failure: FailureRecord::new(if parsed.is_some() {
-                                "result-not-object"
-                            } else {
-                                "result-invalid-json"
-                            }),
-                        },
-                        None,
-                        None,
-                    ),
-                    _ => (
-                        CompletionOutcome::Succeeded {
-                            result_reference: None,
-                        },
-                        None,
-                        Some(crate::TaskOutput {
-                            text: stdout,
-                            truncated,
-                        }),
-                    ),
                 }
             }
         };
