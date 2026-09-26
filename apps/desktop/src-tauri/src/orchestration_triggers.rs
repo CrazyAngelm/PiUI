@@ -510,11 +510,13 @@ impl TriggerEngine {
         let Some(api) = app.try_state::<OrchestrationApiState>() else {
             return;
         };
+        // Subscribe first: a commit between the two is then observed again
+        // (an empty difference) instead of being missed.
+        let mut commits = api.subscribe_commits();
         let Ok(snapshot) = api.snapshot() else {
             eprintln!("event=automation_events_unavailable");
             return;
         };
-        let mut commits = api.subscribe_commits();
         let mut core = TriggerCore::new(&snapshot, Utc::now());
         let (sender, mut receiver) =
             tokio::sync::mpsc::unbounded_channel::<(String, ChangeBatch)>();
