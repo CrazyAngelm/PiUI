@@ -10,6 +10,12 @@ mod workspace_store;
 #[path = "workspace_composer.rs"]
 pub mod composer;
 
+#[path = "workspace_attachments.rs"]
+pub(crate) mod attachments;
+
+#[path = "workspace_composer_inputs.rs"]
+pub mod composer_inputs;
+
 use crate::api::verified_project_directory;
 use crate::dto::ApiError;
 use crate::state::HostState;
@@ -823,6 +829,8 @@ struct WorkspaceHostInner {
     /// Sessions whose native runtime is starting outside the operation gate.
     starting: Mutex<HashMap<String, StartSlot>>,
     native_root: PathBuf,
+    /// Composer images held in PiUI's app data until their message settles.
+    attachments: attachments::AttachmentStore,
     /// Receives extension UI surface events; unset until the app is set up.
     extension_ui: Mutex<Option<ExtensionUiPublisher>>,
     /// Test builds only: replaces native harness resolution with a test
@@ -858,6 +866,7 @@ impl WorkspaceHost {
                 live: Mutex::new(HashMap::new()),
                 starting: Mutex::new(HashMap::new()),
                 native_root,
+                attachments: attachments::AttachmentStore::open(app_data_dir)?,
                 extension_ui: Mutex::new(None),
                 #[cfg(test)]
                 test_spawner: Mutex::new(None),

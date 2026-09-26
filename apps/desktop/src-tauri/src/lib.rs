@@ -774,6 +774,7 @@ pub fn run() -> Result<(), tauri::Error> {
             let trigger_engine = orchestration_triggers::TriggerEngine::default();
             app.manage(trigger_engine.clone());
             background::setup(app.handle(), safe_mode, autostart_allowed);
+            workspace_api::composer_inputs::watch_file_drops(app.handle());
             if !safe_mode {
                 orchestration_scheduler.start_timed_schedule_worker(app.handle().clone());
                 trigger_engine.start(app.handle().clone());
@@ -790,6 +791,7 @@ pub fn run() -> Result<(), tauri::Error> {
             workspace_api::composer::workspace_composer_v19,
             workspace_api::workspace_lifecycle_v17,
             workspace_api::harness_models_v18,
+            workspace_api::composer_inputs::workspace_composer_inputs_v1,
             api::bootstrap,
             api::bootstrap_v10,
             api::update_preferences,

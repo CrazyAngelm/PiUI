@@ -28,6 +28,8 @@ native-prime-scheduler-test = []
 tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
+# Composer image attachments cross the bridge frame as base64.
+base64 = "0.22"
 chrono.workspace = true
 chrono-tz.workspace = true
 piui-contracts = { path = "../../../crates/piui-contracts" }

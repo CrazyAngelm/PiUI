@@ -1,0 +1,92 @@
+{
+  "commands": [
+    { "type": "pick", "workspaceId": "workspace-1" },
+    { "type": "paste", "workspaceId": "workspace-1", "name": "clipboard.png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ" },
+    { "type": "drop", "workspaceId": "workspace-1", "dropId": "4b6f3a8e-2f21-4c7e-9a0d-5d2b4c1e9f70" },
+    { "type": "preview", "attachmentId": "0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b" },
+    { "type": "discard", "attachmentIds": ["0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b"] },
+    { "type": "files", "workspaceId": "workspace-1", "query": "src/app" },
+    { "type": "catalog", "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d" }
+  ],
+  "invalidCommands": [
+    { "type": "pick", "workspaceId": "workspace-1", "path": "C:\\Users\\me\\secret.txt" },
+    { "type": "read", "path": "/etc/passwd" },
+    { "type": "files", "workspaceId": "workspace-1", "query": "src", "root": "/" },
+    { "type": "paste", "workspaceId": "workspace-1", "name": "clipboard.png" },
+    { "type": "catalog", "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "execute": "/review" }
+  ],
+  "results": {
+    "attachments": {
+      "type": "attachments",
+      "protocol": 1,
+      "images": [{ "id": "0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b", "name": "screen.png", "mimeType": "image/png", "size": 1024 }],
+      "files": [
+        { "name": "spec sheet.pdf", "reference": "@\"docs/spec sheet.pdf\"", "inProject": true },
+        { "name": "notes.txt", "reference": "D:\\notes.txt", "inProject": false }
+      ],
+      "rejected": [
+        { "name": "src", "reason": "not-a-file" },
+        { "name": "huge.png", "reason": "too-large" }
+      ]
+    },
+    "preview": {
+      "type": "preview",
+      "protocol": 1,
+      "attachmentId": "0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b",
+      "mimeType": "image/png",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+    },
+    "discarded": { "type": "discarded", "protocol": 1 },
+    "files": {
+      "type": "files",
+      "protocol": 1,
+      "workspaceId": "workspace-1",
+      "query": "src/app",
+      "files": ["src/app/App.svelte", "src/app/shell/AppShell.svelte"],
+      "truncated": false
+    },
+    "catalog": {
+      "type": "catalog",
+      "protocol": 1,
+      "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      "commands": [
+        { "name": "review", "description": "Review the current diff", "hint": "<ref>", "source": "command" },
+        { "name": "skill:release-notes", "source": "skill" }
+      ],
+      "skills": [{ "name": "test-runner", "description": "Runs the tests", "mention": "$test-runner" }]
+    }
+  },
+  "dropEvents": [
+    { "protocol": 1, "type": "enter", "count": 2 },
+    { "protocol": 1, "type": "drop", "dropId": "4b6f3a8e-2f21-4c7e-9a0d-5d2b4c1e9f70", "count": 2 },
+    { "protocol": 1, "type": "leave" }
+  ],
+  "composer": {
+    "send": {
+      "type": "send",
+      "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      "requestId": "5a4b3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d",
+      "text": "What is wrong on this screen?",
+      "mode": "prompt",
+      "attachments": ["0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b"]
+    },
+    "snapshot": {
+      "protocol": 19,
+      "sessionId": "8d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      "capabilities": { "steer": true, "compact": true, "images": true },
+      "queue": {
+        "revision": 4,
+        "paused": false,
+        "items": [
+          {
+            "id": "5a4b3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d",
+            "text": "What is wrong on this screen?",
+            "status": "queued",
+            "attachments": [{ "id": "0f8e5a4c-1b2d-4e6f-8a9b-7c6d5e4f3a2b", "name": "screen.png", "mimeType": "image/png", "size": 1024 }]
+          },
+          { "id": "6b5c4d3e-2f1a-4b0c-9d8e-7f6a5b4c3d2e", "text": "And then run the tests", "status": "queued" }
+        ]
+      }
+    }
+  }
+}
