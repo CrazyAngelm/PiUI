@@ -32,6 +32,7 @@
   import type { PipelineEditorStore } from './editorStore.svelte';
   import NodeTypeMenu from './NodeTypeMenu.svelte';
   import ScriptEditor from './code/ScriptEditor.svelte';
+  import ScriptTestPanel from './ScriptTestPanel.svelte';
 
   interface Props {
     editor: PipelineEditorStore;
@@ -284,6 +285,7 @@
             <pre>{'{ "inputs": {…}, "dependencies": { "<step id>": { "text": "…", "data": {…} } }, "step": { "id": "…", "name": "…" } }'}</pre>
             <p>{$t('Print one JSON object to return named fields, or any text. A non-zero exit code fails the step; the end of stderr is shown in the run.')}</p>
           </details>
+          <ScriptTestPanel {editor} {node} />
         {:else if current === 'basics'}
           {#if !isRouter || agentRouter}
             <Field

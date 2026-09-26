@@ -103,7 +103,11 @@
     void editor.refresh();
     const initial = untrack(() => openCommandId);
     if (initial) editor.open(initial);
-    return () => onDirtyChange(false);
+    return () => {
+      onDirtyChange(false);
+      // Leaving the editor stops its script tests' process trees.
+      editor.scriptTests.cancelAll();
+    };
   });
 
   /** First model of the harness's native catalog, so new agents can run at once. */

@@ -37,6 +37,8 @@ import { graphNodeHeight } from '../../features/orchestration/graphLayout';
 import { performRunAction } from '../../features/orchestration/runActions';
 import { GraphDocumentError, openGraph, saveGraph, type Revisions } from './graphDocument';
 import { applyConversion, planConversion, type ConversionContext, type NodeType } from './nodeConversion';
+import { ScriptTests } from './scriptTests.svelte';
+import { scriptTestHost, type ScriptTestClient } from '../../host-api/scriptTestClient';
 
 export type EditorOperation = 'open' | 'save' | 'check' | 'import' | 'run';
 export const NODE_WIDTH = 248;
@@ -111,11 +113,17 @@ export class PipelineEditorStore {
   private pendingRunId: string | undefined;
   private validationShown = false;
 
+  /** Script tests of this editor session: samples and last results per node. */
+  readonly scriptTests: ScriptTests;
+
   constructor(
     readonly workspaceId: string,
     readonly safeMode: boolean,
     private readonly client: OrchestrationClient = orchestrationHost,
-  ) {}
+    scriptTestClient: ScriptTestClient = scriptTestHost,
+  ) {
+    this.scriptTests = new ScriptTests(workspaceId, scriptTestClient);
+  }
 
   get dirty(): boolean {
     return JSON.stringify(this.graph) !== this.baseline;
@@ -332,6 +340,8 @@ export class PipelineEditorStore {
     if (this.readOnly) return false;
     const plan = planConversion(this.graph, id, to, context);
     if (plan === undefined) return false;
+    // A test of the old script stops with it; undo brings the code back, not the run.
+    if (plan.from === 'script') this.scriptTests.forget(id);
     this.commit(applyConversion(this.graph, plan, model));
     if (plan.removedEdges.some((edge) => edgeKey(edge) === this.selectedEdge)) this.selectedEdge = '';
     this.checkedNotice = '';
