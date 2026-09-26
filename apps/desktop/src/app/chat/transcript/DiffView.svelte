@@ -155,7 +155,8 @@
   .num {
     width: 1%;
     padding: 0 6px;
-    color: var(--piui-text-disabled);
+    /* Line numbers are read (comments cite them): faint, not disabled. */
+    color: var(--piui-text-faint);
     text-align: right;
     user-select: none;
     white-space: nowrap;
