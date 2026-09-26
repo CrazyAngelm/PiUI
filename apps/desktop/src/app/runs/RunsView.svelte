@@ -130,7 +130,7 @@
           { value: 'finished', label: $t('Done') },
         ]}
       />
-      <IconButton size="sm" label={runs.showArchived ? $t('Hide archived runs') : $t('Show archived runs')} active={runs.showArchived} onclick={() => (runs.showArchived = !runs.showArchived)}><Archive /></IconButton>
+      <IconButton size="sm" label={$t('Show archived runs')} active={runs.showArchived} onclick={() => (runs.showArchived = !runs.showArchived)}><Archive /></IconButton>
       <IconButton size="sm" label={$t('Refresh runs')} onclick={() => void runs.refresh()} disabled={runs.listLoading}><RefreshCw /></IconButton>
     </div>
     {#if runs.listError}<p class="error" role="alert">{$t(runs.listError)}</p>{/if}
