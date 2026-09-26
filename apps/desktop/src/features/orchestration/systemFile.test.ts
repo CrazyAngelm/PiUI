@@ -53,6 +53,7 @@ describe('portable system files', () => {
     };
     expect(invalid({ serviceTier: 'fast' }), 'fast mode can use paid extra usage').toThrow(/speed is not supported/);
     expect(invalid({ reasoning: 'minimal' })).toThrow(/effort level/);
+    expect(invalid({ modelProvider: 'openai' })).toThrow(/only Anthropic models/);
     expect(invalid({ resourceRules: [{ kind: 'mcp', id: 'docs', enabled: false }] })).toThrow(/resource kind/);
     expect(invalid({ toolPolicy: { rules: [{ tool: 'Bash', decision: 'allow', enforcement: 'native', mandatory: true }] } }))
       .toThrow(/Bash cannot run/);

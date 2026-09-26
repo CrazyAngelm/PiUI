@@ -36,5 +36,8 @@ export function profileConfigurationErrors(id: string, profile: Omit<AgentProfil
     if (profile.harness === 'claude-code' && profile.reasoning !== undefined && !CLAUDE_CODE_EFFORT_LEVELS.includes(profile.reasoning)) {
       errors.push(`${id}: unsupported Claude Code effort level.`);
     }
+    if (profile.harness === 'claude-code' && profile.modelProvider !== undefined && profile.modelProvider !== 'anthropic') {
+      errors.push(`${id}: Claude Code runs only Anthropic models.`);
+    }
   return errors;
 }

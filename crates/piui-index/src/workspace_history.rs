@@ -1120,6 +1120,8 @@ mod tests {
                 "build failed at <workspace>/src/main.rs",
                 "Bash",
             ),
+            // A parallel call: its result hangs beside the active branch.
+            (K::Tool, S::Complete, "src/main.rs", "Glob"),
             (K::Unknown, S::Complete, "", "Unrecognized session entry"),
             (K::Assistant, S::Complete, "Retrying.", ""),
             (K::User, S::Complete, "Try a different fix", ""),
@@ -2229,9 +2231,31 @@ fn project_claude_code_history(
             .and_then(|parent| by_uuid.get(parent).copied());
     }
     chain.reverse();
+    // Parallel tool calls: Claude Code chains the calls of one message and
+    // hangs each result off its own call, so a result can sit beside the
+    // active branch. A tool_use id names exactly one call, so its result is
+    // looked up across the whole transcript.
+    let mut results_by_call = HashMap::<&str, &ClaudeToolResult>::new();
+    for entry in &entries {
+        if let ClaudeEntryContent::User { results, .. } = &entry.content {
+            for result in results {
+                results_by_call
+                    .entry(result.tool_use_id.as_str())
+                    .or_insert(result);
+            }
+        }
+    }
+    // A branch is a parent with several user prompts or replies, not the
+    // side result of a parallel tool call.
     let mut children = HashMap::<&str, usize>::new();
     for entry in entries.iter().filter(|entry| entry.conversational) {
-        if let Some(parent) = entry.parent.as_deref() {
+        let tool_result_only = matches!(
+            &entry.content,
+            ClaudeEntryContent::User { text: None, results, .. } if !results.is_empty()
+        );
+        if let Some(parent) = entry.parent.as_deref()
+            && !tool_result_only
+        {
             *children.entry(parent).or_default() += 1;
         }
     }
@@ -2341,6 +2365,17 @@ fn project_claude_code_history(
             unknown_summary(line, "unreadable", frame),
             None,
         );
+    }
+    let pending_calls = builder
+        .tools
+        .iter()
+        .filter(|(_, index)| builder.blocks[**index].status == GenericBlockStatus::Running)
+        .map(|(call, _)| call.clone())
+        .collect::<Vec<_>>();
+    for call in pending_calls {
+        if let Some(result) = results_by_call.get(call.as_str()) {
+            builder.finish_tool(Some(&call), result.output.clone(), result.failed);
+        }
     }
     // A call without a recorded result never finished.
     for block in &mut builder.blocks {

@@ -165,9 +165,12 @@ model loop.
 - History: the CLI does not replay on resume, so the adapter reads
   `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<cwd, non-alphanumerics → '-'>/<id>.jsonl`
   read-only and best-effort (active branch, compaction via `logicalParentUuid`;
-  meta, sidechain and internal entries skipped; newest 2000 blocks within 8 MiB).
-  A missing transcript fails with `invalid-session`; a new conversation is never
-  substituted. `rename` is PiUI metadata only.
+  results of parallel tool calls, which Claude Code hangs off each call beside
+  the branch, are matched by call id; meta, sidechain and internal entries
+  skipped; newest 2000 blocks within 8 MiB). A missing transcript fails with
+  `invalid-session`; a new conversation is never substituted. `rename` is PiUI
+  metadata only. Closed sessions use the host's own read-only projection
+  (`WorkspaceHistoryFormat::ClaudeCode`) with the same branch rules.
 - Catalog: models map `value`/`displayName`/`supportedEffortLevels` (disabled
   rows dropped, provider `anthropic`, `supportsFast` always `false`); commands
   map to `skill` resources. Subagent types are omitted (no matching resource kind).

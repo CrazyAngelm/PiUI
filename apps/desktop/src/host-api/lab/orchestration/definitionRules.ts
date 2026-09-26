@@ -272,6 +272,7 @@ export function launchPolicyIssue(profile: AgentProfile, summary: HarnessSummary
   const unsupported = (profile.baseInstructions !== undefined && profile.harness !== 'codex')
     || (profile.serviceTier !== undefined && (profile.harness === 'pi' || profile.harness === 'hermes' || claude))
     || (claude && profile.reasoning !== undefined && !CLAUDE_EFFORT_LEVELS.includes(profile.reasoning))
+    || (claude && profile.modelProvider !== undefined && profile.modelProvider !== 'anthropic')
     || networkUnsupported
     || (profile.resourceRules ?? []).some((rule) => resourceRuleUnsupported(profile, rule))
     || !PERMISSION_MODES[profile.harness].includes(profile.permissionMode)

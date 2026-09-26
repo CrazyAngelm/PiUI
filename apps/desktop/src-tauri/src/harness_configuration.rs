@@ -133,11 +133,17 @@ pub(crate) fn launch_policy(
     {
         return Err(OrchestrationSchedulerError::unsupported());
     }
+    // Claude Code runs only Anthropic models (through the user's subscription)
+    // and only its own effort vocabulary.
     if profile.harness == Harness::ClaudeCode
-        && profile
+        && (profile
             .reasoning
             .as_deref()
             .is_some_and(|level| !CLAUDE_EFFORT_LEVELS.contains(&level))
+            || profile
+                .model_provider
+                .as_deref()
+                .is_some_and(|provider| provider != "anthropic"))
     {
         return Err(OrchestrationSchedulerError::unsupported());
     }

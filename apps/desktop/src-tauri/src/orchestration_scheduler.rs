@@ -2081,6 +2081,12 @@ mod tests {
         let mut effort = claude.clone();
         effort.reasoning = Some("minimal".into());
         assert!(launch_policy(&effort, &native).is_err());
+        let mut provider = claude.clone();
+        provider.model_provider = Some("openai".into());
+        assert!(launch_policy(&provider, &native).is_err());
+        let mut unnamed = claude.clone();
+        unnamed.model_provider = None;
+        assert!(launch_policy(&unnamed, &native).is_ok());
         let mut resources = claude.clone();
         resources.resource_rules = vec![piui_orchestration::ResourceRule {
             kind: piui_orchestration::ResourceKind::Mcp,

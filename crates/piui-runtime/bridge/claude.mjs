@@ -1109,6 +1109,12 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
     }
     const result = [];
     const toolIndex = new Map();
+    const applyResult = (part) => {
+      const index = toolIndex.get(part.tool_use_id);
+      const output = boundText(toolResultText(part.content));
+      const failedTool = part.is_error === true;
+      result[index] = { ...result[index], status: failedTool ? "failed" : "complete", text: output.text, truncated: output.truncated, safeSummary: failedTool ? "The tool failed." : "The tool completed." };
+    };
     let lineSerial = 0;
     for (const entry of chain) {
       const key = typeof entry.uuid === "string" ? entry.uuid : `line-${++lineSerial}`;
@@ -1128,12 +1134,7 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
           for (const part of content) {
             if (!isRecord(part)) continue;
             if (part.type === "text" && typeof part.text === "string") texts.push(part.text);
-            else if (part.type === "tool_result" && typeof part.tool_use_id === "string" && toolIndex.has(part.tool_use_id)) {
-              const index = toolIndex.get(part.tool_use_id);
-              const output = boundText(toolResultText(part.content));
-              const failedTool = part.is_error === true;
-              result[index] = { ...result[index], status: failedTool ? "failed" : "complete", text: output.text, truncated: output.truncated, safeSummary: failedTool ? "The tool failed." : "The tool completed." };
-            }
+            else if (part.type === "tool_result" && typeof part.tool_use_id === "string" && toolIndex.has(part.tool_use_id)) applyResult(part);
           }
         }
         const text = texts.filter((value) => !INTERNAL_USER_TEXT.test(value)).join("\n");
@@ -1157,6 +1158,16 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
           result.push({ id: toolBlockId(part.id), kind: "tool", label: toolName, toolName, collapsible: true, status: "interrupted", title: toolTitle(toolName, isRecord(part.input) ? part.input : {}), ...createdAt });
         }
       });
+    }
+    // Parallel tool calls: Claude Code chains the calls of one message and hangs
+    // each result off its own call, so a result can sit beside the active
+    // branch. A tool_use id names exactly one call.
+    for (const entry of entries) {
+      if (entry.type !== "user" || entry.isSidechain === true || !Array.isArray(entry.message?.content)) continue;
+      for (const part of entry.message.content) {
+        if (!isRecord(part) || part.type !== "tool_result" || typeof part.tool_use_id !== "string") continue;
+        if (toolIndex.has(part.tool_use_id) && result[toolIndex.get(part.tool_use_id)].status === "interrupted") applyResult(part);
+      }
     }
     // Snapshots are single host frames: keep the newest history within budget.
     let budget = HISTORY_TEXT_BUDGET;

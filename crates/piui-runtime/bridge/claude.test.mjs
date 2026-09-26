@@ -706,9 +706,13 @@ test("resume rebuilds the active branch of the native transcript without replay"
     line({ type: "user", uuid: "u1", parentUuid: null, message: { role: "user", content: "Fix the build" } }),
     line({ type: "assistant", uuid: "a1", parentUuid: "u1", message: { id: "m1", role: "assistant", content: [{ type: "thinking", thinking: "Check logs", signature: "s" }] } }),
     line({ type: "assistant", uuid: "a2", parentUuid: "a1", message: { id: "m1", role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "npm run build" } }] } }),
+    // Parallel calls: the second call chains on the first, and each result
+    // hangs off its own call, so the first result sits beside the branch.
+    line({ type: "assistant", uuid: "a2b", parentUuid: "a2", message: { id: "m1", role: "assistant", content: [{ type: "tool_use", id: "toolu_3", name: "Glob", input: { pattern: "src/**" } }] } }),
     line({ type: "user", uuid: "u2", parentUuid: "a2", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "build failed", is_error: true }] } }),
-    line({ type: "user", uuid: "abandoned", parentUuid: "u2", message: { role: "user", content: "An abandoned branch" } }),
-    line({ type: "system", uuid: "c1", parentUuid: null, logicalParentUuid: "u2", subtype: "compact_boundary", compactMetadata: { trigger: "auto" } }),
+    line({ type: "user", uuid: "u2b", parentUuid: "a2b", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_3", content: "src/main.rs" }] } }),
+    line({ type: "user", uuid: "abandoned", parentUuid: "u2b", message: { role: "user", content: "An abandoned branch" } }),
+    line({ type: "system", uuid: "c1", parentUuid: null, logicalParentUuid: "u2b", subtype: "compact_boundary", compactMetadata: { trigger: "auto" } }),
     line({ type: "user", uuid: "s1", parentUuid: "c1", isCompactSummary: true, message: { role: "user", content: "Summary of the earlier conversation" } }),
     "{corrupted",
     line({ type: "user", uuid: "m2", parentUuid: "s1", isMeta: true, message: { role: "user", content: "<system-reminder>internal</system-reminder>" } }),
@@ -730,6 +734,7 @@ test("resume rebuilds the active branch of the native transcript without replay"
       ["user", "complete", "Fix the build", undefined],
       ["thinking", "complete", "Check logs", undefined],
       ["tool", "failed", "build failed", "Bash: npm run build"],
+      ["tool", "complete", "src/main.rs", "Glob: src/**"],
       ["compaction", "complete", "Context was compacted.", undefined],
       ["user", "complete", "Try again", undefined],
       ["error", "failed", "Claude Code could not complete this turn.", undefined],
