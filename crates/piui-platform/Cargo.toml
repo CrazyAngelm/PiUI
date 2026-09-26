@@ -17,6 +17,7 @@ path = "src/bin/piui-e2e-job.rs"
 required-features = ["e2e-harness"]
 
 [dependencies]
+notify = "8.2.0"
 sha2.workspace = true
 
 [lints.rust]

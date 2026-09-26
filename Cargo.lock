@@ -2633,6 +2633,7 @@ name = "piui-platform"
 version = "0.1.1"
 dependencies = [
  "libc",
+ "notify",
  "sha2",
  "windows-sys 0.61.2",
 ]
