@@ -1,5 +1,6 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { gzipSync } from 'node:zlib';
 
 const dist = resolve(import.meta.dirname, '..', 'dist');
 const manifest = JSON.parse(await readFile(resolve(dist, '.vite/manifest.json'), 'utf8'));
@@ -13,29 +14,44 @@ function includeStaticGraph(key) {
   initialFiles.add(chunk.file);
   for (const file of [...(chunk.css ?? []), ...(chunk.assets ?? [])]) initialFiles.add(file);
   for (const dependency of chunk.imports ?? []) includeStaticGraph(dependency);
-  // dynamicImports are loaded only when a user opens workspace editors/history.
+  // dynamicImports load only when a user opens a view (chat, pipelines, settings…).
 }
 includeStaticGraph('index.html');
+
 let initialBytes = 0;
-for (const file of initialFiles) initialBytes += (await stat(resolve(dist, file))).size;
+let initialGzipBytes = 0;
+for (const file of initialFiles) {
+  const path = resolve(dist, file);
+  initialBytes += (await stat(path)).size;
+  initialGzipBytes += gzipSync(await readFile(path), { level: 9 }).length;
+}
 let totalBytes = 0;
 for (const file of await readdir(resolve(dist, 'assets'))) {
   totalBytes += (await stat(resolve(dist, 'assets', file))).size;
 }
 
-// Preserve the existing 260 KiB frontend startup smoke ceiling. Before code
-// splitting, all emitted assets were the initial route. The build manifest now
-// measures that route directly; optional history/editor bytes are reported too,
-// not hidden inside an increased ceiling. This is not a measured RSS/startup test.
-const budget = 260 * 1024;
-if (initialBytes > budget) {
-  throw new Error(`Initial frontend asset smoke budget exceeded: ${initialBytes} bytes > ${budget} bytes (all lazy assets: ${totalBytes} bytes).`);
+// Budget (ADR-027): the first paint ships the shell, sidebar and home composer,
+// built on accessible headless primitives. The WebView reads assets from local
+// disk, so compressed size is the useful proxy for parse/compile cost; raw
+// bytes are still reported so regressions stay visible. This is an asset
+// smoke, not a startup/RSS measurement.
+const gzipBudget = 160 * 1024;
+const rawBudget = 560 * 1024;
+if (initialGzipBytes > gzipBudget || initialBytes > rawBudget) {
+  throw new Error(
+    `Initial frontend asset budget exceeded: ${initialGzipBytes} gzip bytes (budget ${gzipBudget}), ` +
+      `${initialBytes} raw bytes (budget ${rawBudget}); all assets: ${totalBytes} bytes.`,
+  );
 }
-console.log(JSON.stringify({
-  target: 'default Sessions static import graph',
-  initialAssetBytes: initialBytes,
-  totalAssetBytes: totalBytes,
-  deferredAssetBytes: totalBytes - initialBytes,
-  existingInitialBudgetBytes: budget,
-  note: 'Asset-size smoke only; startup/RSS/rendering require native measurements.',
-}));
+console.log(
+  JSON.stringify({
+    target: 'default shell static import graph',
+    initialAssetBytes: initialBytes,
+    initialGzipBytes,
+    totalAssetBytes: totalBytes,
+    deferredAssetBytes: totalBytes - initialBytes,
+    gzipBudgetBytes: gzipBudget,
+    rawBudgetBytes: rawBudget,
+    note: 'Asset-size smoke only; startup/RSS/rendering require native measurements.',
+  }),
+);

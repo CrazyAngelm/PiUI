@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listen } from '@tauri-apps/api/event';
+  import { hostListen } from '../../host-api/transport';
   import { composerRequest, type ComposerCommand, type ComposerSnapshot } from '../../host-api/composerClient';
   import type { SessionSnapshot } from '../../host-api/workspaceClient';
   import { t } from '../locale/language';
@@ -41,7 +41,7 @@
     let disposed = false;
     let unlisten: (() => void) | undefined;
     try { requestIdentity = JSON.parse(localStorage.getItem(identityKey()) ?? 'null') ?? undefined; } catch { /* A missing browser draft has no effect on the durable queue. */ }
-    void listen<string>('piui://composer-v19', event => { if (event.payload === snapshot.session.id) void read(); }).then(stop => { if (disposed) stop(); else { unlisten = stop; void read(); } });
+    void hostListen<string>('piui://composer-v19', payload => { if (payload === snapshot.session.id) void read(); }).then(stop => { if (disposed) stop(); else { unlisten = stop; void read(); } });
     return () => { disposed = true; unlisten?.(); };
   });
 

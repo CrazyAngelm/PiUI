@@ -1,0 +1,488 @@
+<script lang="ts">
+  import SquarePen from '@lucide/svelte/icons/square-pen';
+  import Search from '@lucide/svelte/icons/search';
+  import InboxIcon from '@lucide/svelte/icons/inbox';
+  import Workflow from '@lucide/svelte/icons/workflow';
+  import History from '@lucide/svelte/icons/history';
+  import Clock from '@lucide/svelte/icons/clock-3';
+  import Folder from '@lucide/svelte/icons/folder';
+  import MessagesSquare from '@lucide/svelte/icons/messages-square';
+  import Settings from '@lucide/svelte/icons/settings';
+  import Plus from '@lucide/svelte/icons/plus';
+  import ChevronRight from '@lucide/svelte/icons/chevron-right';
+  import Ellipsis from '@lucide/svelte/icons/ellipsis';
+  import ShieldAlert from '@lucide/svelte/icons/shield-alert';
+  import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+  import ShieldCheck from '@lucide/svelte/icons/shield-check';
+  import { t, language } from '../../features/locale/language';
+  import { Kbd, Menu, StatusDot, Skeleton, type Status } from '../../lib/ui';
+  import type { WorkspaceSession, WorkspaceSummary } from '../../../../../contracts/workspace-v15';
+  import { relativeTime } from '../format';
+  import { useWorkspace } from './context';
+
+  interface Props {
+    onSearch: () => void;
+    onTrust: (workspace: WorkspaceSummary) => void;
+    onNavigate?: () => void;
+  }
+  let { onSearch, onTrust, onNavigate = () => {} }: Props = $props();
+  const store = useWorkspace();
+
+  const projects = $derived(store.catalog.workspaces.filter((workspace) => !workspace.personal));
+  const personal = $derived(store.catalog.workspaces.find((workspace) => workspace.personal));
+  const approvalsBySession = $derived.by(() => {
+    const counts = new Map<string, number>();
+    for (const item of store.inboxApprovals) counts.set(item.session.id, (counts.get(item.session.id) ?? 0) + 1);
+    return counts;
+  });
+  const inboxCount = $derived(store.inboxApprovals.length);
+  let now = $state(Date.now());
+  $effect(() => {
+    const timer = setInterval(() => (now = Date.now()), 30_000);
+    return () => clearInterval(timer);
+  });
+
+  function sessionStatus(session: WorkspaceSession): Status | undefined {
+    if (approvalsBySession.has(session.id)) return 'waiting';
+    if (['starting', 'running', 'stopping'].includes(session.status)) return 'running';
+    if (session.status === 'failed') return 'failed';
+    return undefined;
+  }
+
+  function go(action: () => void): void {
+    action();
+    onNavigate();
+  }
+
+  const route = $derived(store.route);
+</script>
+
+<nav class="sidebar" aria-label={$t('Workspace navigation')}>
+  <div class="brand">
+    <span class="brand__mark" aria-hidden="true">π</span>
+    <span class="brand__name">PiUI</span>
+  </div>
+
+  <div class="primary">
+    <button type="button" class="nav-item nav-item--strong" onclick={() => go(() => store.goHome())} aria-current={route.name === 'home' ? 'page' : undefined}>
+      <SquarePen size={16} />
+      <span class="nav-item__label">{$t('New chat')}</span>
+      <Kbd keys="Mod+N" />
+    </button>
+    <button type="button" class="nav-item" onclick={onSearch}>
+      <Search size={16} />
+      <span class="nav-item__label">{$t('Search')}</span>
+      <Kbd keys="Mod+K" />
+    </button>
+    <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'inbox' }))} aria-current={route.name === 'inbox' ? 'page' : undefined}>
+      <InboxIcon size={16} />
+      <span class="nav-item__label">{$t('Inbox')}</span>
+      {#if inboxCount > 0}<span class="count" aria-label={$t('{0} waiting', [inboxCount])}>{inboxCount}</span>{/if}
+    </button>
+    <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'pipelines', section: 'systems' }))} aria-current={route.name === 'pipelines' && route.section === 'systems' ? 'page' : undefined}>
+      <Workflow size={16} />
+      <span class="nav-item__label">{$t('Pipelines')}</span>
+    </button>
+    <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'pipelines', section: 'runs' }))} aria-current={route.name === 'pipelines' && route.section === 'runs' ? 'page' : undefined}>
+      <History size={16} />
+      <span class="nav-item__label">{$t('Runs')}</span>
+      {#if store.runningSessions.some((session) => session.runId)}<StatusDot status="running" />{/if}
+    </button>
+    <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'pipelines', section: 'schedules' }))} aria-current={route.name === 'pipelines' && route.section === 'schedules' ? 'page' : undefined}>
+      <Clock size={16} />
+      <span class="nav-item__label">{$t('Automations')}</span>
+    </button>
+  </div>
+
+  <div class="section-head">
+    <span>{$t('Projects')}</span>
+    <div class="section-head__actions">
+      <Menu
+        align="end"
+        items={[
+          { label: $t('Add project…'), icon: Plus, onSelect: () => void store.addProject() },
+          { label: $t('Refresh projects'), icon: RefreshCw, onSelect: () => void store.loadCatalog() },
+        ]}
+      >
+        {#snippet trigger(props)}
+          <button type="button" class="tiny-action" aria-label={$t('Project options')} {...props}><Ellipsis size={14} /></button>
+        {/snippet}
+      </Menu>
+      <button type="button" class="tiny-action" aria-label={$t('Add project')} onclick={() => void store.addProject()} disabled={store.addingProject}>
+        <Plus size={14} />
+      </button>
+    </div>
+  </div>
+
+  <div class="tree" role="list">
+    {#if store.catalogLoading}
+      <div class="loading"><Skeleton lines={4} height="14px" /></div>
+    {:else}
+      {#each projects as workspace (workspace.id)}
+        {@render project(workspace, Folder, workspace.name)}
+      {/each}
+      {#if personal}{@render project(personal, MessagesSquare, $t('Personal chats'))}{/if}
+      {#if projects.length === 0}
+        <div class="hint">
+          <p>{$t('Add a project folder to work with agents on its files.')}</p>
+          <button type="button" class="link" onclick={() => void store.addProject()}>{$t('Add project…')}</button>
+        </div>
+      {/if}
+    {/if}
+  </div>
+
+  <div class="footer">
+    <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'settings', section: 'general' }))} aria-current={route.name === 'settings' ? 'page' : undefined}>
+      <Settings size={16} />
+      <span class="nav-item__label">{$t('Settings')}</span>
+      <Kbd keys="Mod+," />
+    </button>
+  </div>
+</nav>
+
+{#snippet project(workspace: WorkspaceSummary, Icon: typeof Folder, name: string)}
+  {@const collapsed = store.collapsedProjects.includes(workspace.id)}
+  {@const sessions = store.sessionsFor(workspace.id)}
+  <div class="project" role="listitem">
+    <div class="project__row" class:project__row--current={workspace.id === store.selectedWorkspaceId}>
+      <button
+        type="button"
+        class="project__toggle"
+        aria-expanded={!collapsed}
+        onclick={() => store.toggleProject(workspace.id)}
+        title={name}
+      >
+        <span class="chevron" class:chevron--open={!collapsed}><ChevronRight size={12} /></span>
+        <Icon size={15} />
+        <span class="project__name">{name}</span>
+        {#if workspace.missing}
+          <span class="tag">{$t('Missing')}</span>
+        {:else if workspace.trust === 'restricted' && !workspace.personal}
+          <span class="tag tag--warn" title={$t('Restricted until you trust this folder')}><ShieldAlert size={11} /></span>
+        {/if}
+      </button>
+      <div class="project__actions">
+        {#if !workspace.personal}
+          <Menu
+            align="end"
+            items={[
+              ...(workspace.trust === 'restricted'
+                ? [{ label: $t('Trust this folder…'), icon: ShieldCheck, onSelect: () => onTrust(workspace) }]
+                : []),
+              { label: $t('Pipelines'), icon: Workflow, onSelect: () => go(() => { store.selectWorkspace(workspace.id); store.navigate({ name: 'pipelines', section: 'systems' }); }) },
+              { label: $t('Refresh projects'), icon: RefreshCw, onSelect: () => void store.loadCatalog(workspace.id) },
+            ]}
+          >
+            {#snippet trigger(props)}
+              <button type="button" class="tiny-action" aria-label={$t('Options for {0}', [name])} {...props}><Ellipsis size={14} /></button>
+            {/snippet}
+          </Menu>
+        {/if}
+        <button
+          type="button"
+          class="tiny-action"
+          aria-label={$t('New chat in {0}', [name])}
+          onclick={() => go(() => store.goHome(workspace.id))}
+          disabled={workspace.missing}
+        >
+          <SquarePen size={13} />
+        </button>
+      </div>
+    </div>
+    {#if !collapsed}
+      <ul class="chats">
+        {#each sessions as session (session.id)}
+          {@const status = sessionStatus(session)}
+          <li><button
+            type="button"
+            class="chat"
+            class:chat--current={store.selectedSessionId === session.id}
+            aria-current={store.selectedSessionId === session.id ? 'page' : undefined}
+            onclick={() => go(() => void store.openSession(session.id))}
+            title={session.title}
+          >
+            <span class="chat__title">{session.title}</span>
+            {#if status}
+              <StatusDot {status} label={status === 'waiting' ? $t('Needs your decision') : status === 'running' ? $t('Running') : $t('Failed')} />
+            {:else}
+              <span class="chat__time">{relativeTime(session.updatedAt, $language, now)}</span>
+            {/if}
+          </button></li>
+        {/each}
+        {#if sessions.length === 0}
+          <li class="chats__empty">{$t('No chats yet')}</li>
+        {/if}
+      </ul>
+    {/if}
+  </div>
+{/snippet}
+
+<style>
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    padding: 0 var(--piui-space-2);
+    background: var(--piui-bg-raised);
+    border-right: 1px solid var(--piui-border-subtle);
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: var(--piui-space-2);
+    height: var(--piui-header-height);
+    padding: 0 var(--piui-space-2);
+    flex: none;
+  }
+  .brand__mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    background: var(--piui-action);
+    color: var(--piui-action-ink);
+    font-size: 14px;
+    font-weight: var(--piui-weight-semibold);
+  }
+  .brand__name {
+    font-size: var(--piui-text-lg);
+    font-weight: var(--piui-weight-semibold);
+    letter-spacing: -0.01em;
+  }
+  .primary,
+  .footer {
+    display: grid;
+    gap: 1px;
+    flex: none;
+  }
+  .footer {
+    padding: var(--piui-space-2) 0;
+    border-top: 1px solid var(--piui-border-subtle);
+  }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    height: 30px;
+    padding: 0 var(--piui-space-2);
+    border: 0;
+    border-radius: var(--piui-radius-sm);
+    background: transparent;
+    color: var(--piui-text-muted);
+    text-align: left;
+    transition:
+      background-color var(--piui-duration-fast) var(--piui-ease-out),
+      color var(--piui-duration-fast) var(--piui-ease-out);
+  }
+  .nav-item:hover {
+    background: var(--piui-hover);
+    color: var(--piui-text);
+  }
+  .nav-item[aria-current='page'] {
+    background: var(--piui-selected);
+    color: var(--piui-text);
+  }
+  .nav-item--strong {
+    color: var(--piui-text);
+    font-weight: var(--piui-weight-medium);
+  }
+  .nav-item__label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .nav-item :global(.kbd) {
+    opacity: 0;
+    transition: opacity var(--piui-duration-fast) var(--piui-ease-out);
+  }
+  .nav-item:hover :global(.kbd),
+  .nav-item:focus-visible :global(.kbd) {
+    opacity: 1;
+  }
+  .count {
+    min-width: 18px;
+    padding: 0 5px;
+    border-radius: var(--piui-radius-full);
+    background: var(--piui-action);
+    color: var(--piui-action-ink);
+    font-size: var(--piui-text-xs);
+    font-weight: var(--piui-weight-semibold);
+    line-height: 18px;
+    text-align: center;
+  }
+  .section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 28px;
+    margin-top: var(--piui-space-4);
+    padding: 0 var(--piui-space-2);
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-xs);
+    font-weight: var(--piui-weight-semibold);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    flex: none;
+  }
+  .section-head__actions,
+  .project__actions {
+    display: flex;
+    gap: 2px;
+  }
+  .tiny-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--piui-radius-xs);
+    background: transparent;
+    color: var(--piui-text-muted);
+  }
+  .tiny-action:hover:not(:disabled) {
+    background: var(--piui-hover);
+    color: var(--piui-text);
+  }
+  .tree {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-bottom: var(--piui-space-3);
+    scrollbar-width: thin;
+  }
+  .loading {
+    padding: var(--piui-space-2);
+  }
+  .project {
+    margin-top: 2px;
+  }
+  .project__row {
+    display: flex;
+    align-items: center;
+    border-radius: var(--piui-radius-sm);
+  }
+  .project__row:hover {
+    background: var(--piui-hover);
+  }
+  .project__row .project__actions {
+    padding-right: 4px;
+    opacity: 0;
+  }
+  .project__row:hover .project__actions,
+  .project__row:focus-within .project__actions {
+    opacity: 1;
+  }
+  .project__toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+    height: 30px;
+    padding: 0 var(--piui-space-1) 0 2px;
+    border: 0;
+    background: transparent;
+    color: var(--piui-text);
+    text-align: left;
+  }
+  .project__toggle :global(svg) {
+    flex: none;
+    color: var(--piui-text-muted);
+  }
+  .project__name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    font-weight: var(--piui-weight-medium);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .chevron {
+    display: inline-flex;
+    transition: transform var(--piui-duration-fast) var(--piui-ease-out);
+  }
+  .chevron--open {
+    transform: rotate(90deg);
+  }
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 4px;
+    border-radius: var(--piui-radius-xs);
+    background: var(--piui-surface-2);
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-xs);
+  }
+  .tag--warn {
+    background: var(--piui-warning-surface);
+    color: var(--piui-warning);
+  }
+  .chats {
+    display: grid;
+    gap: 1px;
+    margin: 0;
+    padding: 1px 0 4px 22px;
+    list-style: none;
+  }
+  .chat {
+    display: flex;
+    align-items: center;
+    gap: var(--piui-space-2);
+    width: 100%;
+    height: 28px;
+    padding: 0 var(--piui-space-2);
+    border: 0;
+    border-radius: var(--piui-radius-sm);
+    background: transparent;
+    color: var(--piui-text-muted);
+    text-align: left;
+  }
+  .chat:hover {
+    background: var(--piui-hover);
+    color: var(--piui-text);
+  }
+  .chat--current {
+    background: var(--piui-selected);
+    color: var(--piui-text);
+  }
+  .chat__title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .chat__time {
+    flex: none;
+    color: var(--piui-text-disabled);
+    font-size: var(--piui-text-xs);
+  }
+  .chats__empty {
+    margin: 2px 0 6px;
+    padding: 0 var(--piui-space-2);
+    color: var(--piui-text-disabled);
+    font-size: var(--piui-text-sm);
+  }
+  .hint {
+    padding: var(--piui-space-2);
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
+  }
+  .hint p {
+    margin: 0 0 var(--piui-space-2);
+  }
+  .link {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--piui-accent);
+  }
+</style>
