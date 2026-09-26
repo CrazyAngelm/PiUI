@@ -54,6 +54,17 @@ export class ExtensionSurfaces {
     if (reduction.draft !== draft) this.replaceDraft(sessionId, reduction.draft);
   }
 
+  /**
+   * Text a plugin command or a composer action prepared (ADR-032): the same
+   * rule as `set_editor_text`, so it is always reviewed before sending.
+   */
+  prepareText(sessionId: string, text: string): void {
+    const draft = this.drafts?.draftFor(sessionId) ?? '';
+    const reduction = reduceExtensionUiState(this.stateFor(sessionId), { action: 'editorText', text }, draft);
+    this.set(sessionId, reduction.state);
+    if (reduction.draft !== draft) this.replaceDraft(sessionId, reduction.draft);
+  }
+
   dismissNotice(sessionId: string, noticeId: string): void {
     this.set(sessionId, dismissExtensionNotification(this.stateFor(sessionId), noticeId));
   }

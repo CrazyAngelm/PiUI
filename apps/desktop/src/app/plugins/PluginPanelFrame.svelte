@@ -1,0 +1,233 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+  import { PLUGIN_PANEL_LIMITS, type PanelErrorCode, type PanelTheme } from '../../../../../contracts/plugin-panel-v1';
+  import type { PluginValue } from '../../../../../contracts/piui-plugin-v1';
+  import type { PluginEntryV1, PluginPanelV1 } from '../../../../../contracts/plugins-v1';
+  import { language, t } from '../../features/locale/language';
+  import {
+    currentAppearance,
+    envelope,
+    methodPermitted,
+    panelTheme,
+    parsePanelMessage,
+    RequestBudget,
+    type PanelInbound,
+  } from '../../host-api/pluginBridge';
+  import { pluginsError } from '../../host-api/pluginsClient';
+  import { Button, Skeleton, toasts } from '../../lib/ui';
+  import { runRegistryCommand } from './commands';
+  import { pluginRegistry } from './pluginRegistry.svelte';
+
+  /**
+   * One plugin panel: the plugin's static page in a frame with
+   * `sandbox="allow-scripts"` (an opaque origin: no same-origin access, top
+   * navigation, forms, popups or downloads) served by the host with the
+   * plugin's own restrictive CSP. Every message from the frame is untrusted:
+   * it must come from this frame's window, carry this mount's channel, stay
+   * within the size and rate limits, name a known method and pass the
+   * plugin's permissions. A panel that never says `ready` is replaced with
+   * a generic fallback.
+   */
+  interface Props {
+    plugin: PluginEntryV1;
+    panel: PluginPanelV1;
+    /** The open chat (sent only with `chat.read`). */
+    chat: { id: string; title: string } | null;
+  }
+  let { plugin, panel, chat }: Props = $props();
+
+  let frame = $state<HTMLIFrameElement | null>(null);
+  let status = $state<'loading' | 'ready' | 'failed'>('loading');
+  let generation = $state(0);
+  let channel = crypto.randomUUID();
+  let budget = new RequestBudget();
+
+  function post(message: object): void {
+    // An opaque-origin frame can only be addressed with '*'; the message goes
+    // to exactly this frame's window and carries no secret.
+    frame?.contentWindow?.postMessage(envelope(message), '*');
+  }
+
+  function theme(): PanelTheme {
+    const root = document.documentElement;
+    const style = getComputedStyle(root);
+    return panelTheme((name) => style.getPropertyValue(name), currentAppearance(root, window.matchMedia('(prefers-color-scheme: dark)').matches));
+  }
+
+  function refuse(id: string, code: PanelErrorCode, message: string): void {
+    post({ type: 'response', channel, id, error: { code, message } });
+  }
+
+  function respond(id: string, result: unknown): void {
+    post({ type: 'response', channel, id, result });
+  }
+
+  const context = () => ({ chat: plugin.permissions.includes('chat.read') ? chat : null });
+
+  async function handle(request: Extract<PanelInbound, { kind: 'request' }>): Promise<void> {
+    const { id, method } = request;
+    if (!budget.allow()) return refuse(id, 'rate-limited', 'Too many requests.');
+    if (!methodPermitted(method, plugin.permissions)) return refuse(id, 'permission-denied', 'The plugin does not have permission for this.');
+    const params = (request.params ?? {}) as Record<string, unknown>;
+    try {
+      switch (method) {
+        case 'context.get':
+          return respond(id, context());
+        case 'settings.get':
+          return respond(id, pluginRegistry.plugin(plugin.id)?.settings ?? plugin.settings);
+        case 'settings.set': {
+          const response = await pluginRegistry.run({
+            type: 'setSettings',
+            expectedRevision: pluginRegistry.revision,
+            id: plugin.id,
+            values: params.values as Record<string, PluginValue>,
+            origin: 'panel',
+          });
+          return respond(id, response.registry.plugins.find((item) => item.id === plugin.id)?.settings ?? {});
+        }
+        case 'commands.run': {
+          const command = plugin.contributes.commands.find((item) => item.id === params.commandId);
+          if (command === undefined) return refuse(id, 'failed', 'This plugin has no such command.');
+          const outcome = await runRegistryCommand(
+            { key: `plugin:${plugin.id}:${command.id}`, source: 'plugin', pluginId: plugin.id, pluginName: plugin.name, command },
+            'panel',
+            chat?.id,
+            $t,
+          );
+          return outcome === undefined ? refuse(id, 'failed', 'The command failed.') : respond(id, outcome);
+        }
+        case 'notice.show': {
+          const level = params.level;
+          toasts.show({ tone: level === 'error' ? 'danger' : level === 'warning' ? 'warning' : 'neutral', title: plugin.name, description: String(params.message) });
+          return respond(id, null);
+        }
+        default: {
+          const exhaustive: never = method;
+          return exhaustive;
+        }
+      }
+    } catch (error) {
+      refuse(id, 'failed', pluginsError(error).message);
+    }
+  }
+
+  onMount(() => {
+    const listener = (event: MessageEvent) => {
+      if (frame === null || event.source !== frame.contentWindow) return;
+      const inbound = parsePanelMessage(event.data, channel);
+      switch (inbound.kind) {
+        case 'ignore':
+          return;
+        case 'ready':
+          status = 'ready';
+          post({
+            type: 'init',
+            channel,
+            plugin: { id: plugin.id, name: plugin.name },
+            panel: { id: panel.id, title: panel.title },
+            permissions: plugin.permissions,
+            theme: theme(),
+            locale: $language,
+          });
+          return;
+        case 'refuse':
+          return refuse(inbound.id, inbound.code, inbound.message);
+        case 'request':
+          void handle(inbound);
+          return;
+        default: {
+          const exhaustive: never = inbound;
+          return exhaustive;
+        }
+      }
+    };
+    window.addEventListener('message', listener);
+    const observer = new MutationObserver(() => {
+      if (status === 'ready') post({ type: 'event', channel, event: 'theme', data: theme() });
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-plugin-theme'] });
+    return () => {
+      window.removeEventListener('message', listener);
+      observer.disconnect();
+    };
+  });
+
+  // A panel that does not answer is replaced with the generic fallback.
+  $effect(() => {
+    void generation;
+    const timer = setTimeout(() => {
+      if (status === 'loading') status = 'failed';
+    }, PLUGIN_PANEL_LIMITS.readyTimeoutMs);
+    return () => clearTimeout(timer);
+  });
+
+  $effect(() => {
+    const current = context();
+    if (status === 'ready' && plugin.permissions.includes('chat.read')) post({ type: 'event', channel, event: 'context', data: current });
+  });
+
+  function reload(): void {
+    channel = crypto.randomUUID();
+    budget = new RequestBudget();
+    status = 'loading';
+    generation += 1;
+  }
+</script>
+
+<div class="panel">
+  {#if status === 'failed'}
+    <div class="fallback" role="alert">
+      <p>{$t('The panel “{0}” did not load. PiUI and your chat are not affected.', [panel.title])}</p>
+      <Button size="sm" variant="ghost" onclick={reload}>
+        {#snippet leading()}<RefreshCw />{/snippet}
+        {$t('Reload panel')}
+      </Button>
+    </div>
+  {:else}
+    {#key generation}
+      <iframe
+        bind:this={frame}
+        class:loading={status !== 'ready'}
+        src={panel.url}
+        title={$t('{0} (plugin panel)', [panel.title])}
+        sandbox="allow-scripts"
+        referrerpolicy="no-referrer"
+      ></iframe>
+    {/key}
+    {#if status === 'loading'}<div class="skeleton"><Skeleton lines={2} /></div>{/if}
+  {/if}
+</div>
+
+<style>
+  .panel {
+    position: relative;
+    display: grid;
+  }
+  iframe {
+    width: 100%;
+    height: 240px;
+    border: 1px solid var(--piui-border-subtle);
+    border-radius: var(--piui-radius-sm);
+    background: var(--piui-bg-raised);
+  }
+  iframe.loading {
+    visibility: hidden;
+  }
+  .skeleton {
+    position: absolute;
+    inset: var(--piui-space-3);
+  }
+  .fallback {
+    display: grid;
+    gap: var(--piui-space-2);
+    padding: var(--piui-space-3);
+    border: 1px dashed var(--piui-border);
+    border-radius: var(--piui-radius-sm);
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
+  }
+  .fallback p {
+    margin: 0;
+  }
+</style>

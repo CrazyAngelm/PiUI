@@ -11,6 +11,7 @@
   import { Button, IconButton } from '../../lib/ui';
   import { harnessMeta } from '../harnessMeta';
   import AgentModePicker from './AgentModePicker.svelte';
+  import PluginChatPanels from '../plugins/PluginChatPanels.svelte';
   import { useWorkspace } from './context';
 
   interface Props {
@@ -85,6 +86,8 @@
         {/each}
       </ul>
     </section>
+
+    <PluginChatPanels sessionId={session.id} title={session.title} />
 
     <section class="danger">
       {#if session.status !== 'closed'}
