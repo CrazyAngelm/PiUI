@@ -6,6 +6,18 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-27
+
+### Added
+
+- Composer attachments: images go to Codex, Claude Code, Pi and Hermes when the harness and model accept them; other files are inserted as path references after a confirmation, never copied into the project. `@` mentions list project files (respecting `.gitignore`), `$` mentions list Codex skills, and the `/` menu shows each harness's own commands.
+- Session tools: a git review panel (stage, unstage and revert per hunk or file with the exact reviewed patch; untracked files go to the system trash), chats in their own git worktree, "Continue in another harness" with an editable handoff, and "Continue in PiUI" for a Pi session started in the terminal.
+- Plugins v1: installable packages with a trust review, contained Node backends, sandboxed chat panels, palette commands and composer actions, plugin pipeline nodes (orchestration v6.5), themes, templates and ACP agents; a plugin SDK, `pnpm create-plugin` and four examples. Pi Tier 1A commands now appear in the new interface.
+
+### Fixed
+
+- The new-chat composer keeps the chosen harness and model when the catalog refreshes.
+
 ## [0.2.0] - 2026-09-27
 
 PiUI is now a desktop workbench for native agent harnesses and multi-agent pipelines, not only a shell for Pi sessions. Harnesses still own inference, tools, credentials and history; PiUI never adds its own agent loop or provider client.
