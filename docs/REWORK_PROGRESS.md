@@ -66,7 +66,9 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
 
 ## In progress
 
-- Engine for one-shot LLM and script steps (`feat/step-executors`, not merged).
+- Engine for one-shot LLM and script steps is done on `feat/step-executors`
+  (orchestration v6.2, additive; not merged until the editor and run view
+  support it, since opening a graph with a script step fails today).
 
 ## Known issues found on the way
 
