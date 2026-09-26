@@ -145,10 +145,10 @@ impl OrchestrationScheduler {
         app: AppHandle<R>,
         host_started_at: chrono::DateTime<chrono::Utc>,
     ) {
-        if let Ok(runs) = app
-            .state::<OrchestrationApiState>()
-            .recoverable_schedule_runs()
-        {
+        // Resume manually started and scheduled runs alike. Only work that
+        // never crossed the native boundary is resumed; uncertain work waits
+        // for explicit reconciliation.
+        if let Ok(runs) = app.state::<OrchestrationApiState>().recoverable_runs() {
             for (workspace_id, run_id) in runs {
                 if !self.admits_work() {
                     return;

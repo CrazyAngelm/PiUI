@@ -23,7 +23,9 @@ schedule never adds or widens capabilities.
 - An occurrence claim, deterministic occurrence/run identity, frozen run snapshot
   and next due time commit in one fsynced orchestration generation.
 - A committed run that has not crossed the native boundary is resumed with the
-  same run ID after restart. Native work with an unknown outcome remains uncertain.
+  same run ID after restart, whether it was started manually or by a schedule.
+  Native work with an unknown outcome (a running or leased task) remains
+  uncertain and is never resumed or replayed automatically.
 - If the durable journal cannot commit a due claim, the worker logs one paused
   state and waits for an explicit schedule mutation or host restart. It neither
   spins on the failed write nor starts native work without the commit.

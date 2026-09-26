@@ -256,35 +256,24 @@ impl OrchestrationApiState {
         Ok(due)
     }
 
-    pub(crate) fn recoverable_schedule_runs(
-        &self,
-    ) -> Result<Vec<(String, String)>, OrchestrationApiError> {
+    /// Committed runs, started manually or by a schedule, whose remaining
+    /// work has not crossed the native boundary. The host resumes them after
+    /// a restart exactly like a fresh start. Work that did cross the boundary
+    /// was made uncertain by `recover_interrupted_runs` when the journal was
+    /// opened; such a run is never resumed or replayed automatically.
+    pub(crate) fn recoverable_runs(&self) -> Result<Vec<(String, String)>, OrchestrationApiError> {
         let store = self.snapshot()?;
-        let mut result = Vec::new();
-        for workspace in store.workspaces() {
-            for schedule in &workspace.schedules {
-                for run_id in schedule
-                    .occurrences
+        let mut result = store
+            .workspaces()
+            .iter()
+            .flat_map(|workspace| {
+                workspace
+                    .runs
                     .iter()
-                    .filter(|occurrence| occurrence.outcome == ScheduleOccurrenceOutcome::Started)
-                    .filter_map(|occurrence| occurrence.run_id.as_deref())
-                {
-                    let Some(run) = workspace.runs.iter().find(|run| run.id() == run_id) else {
-                        continue;
-                    };
-                    let has_ready = run.tasks().iter().any(|task| {
-                        task.status() == TaskStatus::Ready && task.lease_id().is_none()
-                    });
-                    let crossed_native_boundary = run.tasks().iter().any(|task| {
-                        matches!(task.status(), TaskStatus::Running | TaskStatus::Uncertain)
-                            || task.lease_id().is_some()
-                    });
-                    if run.status() == RunStatus::Running && has_ready && !crossed_native_boundary {
-                        result.push((workspace.workspace_id.clone(), run_id.to_owned()));
-                    }
-                }
-            }
-        }
+                    .filter(|run| resumable_after_restart(run))
+                    .map(|run| (workspace.workspace_id.clone(), run.id().to_owned()))
+            })
+            .collect::<Vec<_>>();
         result.sort();
         result.dedup();
         Ok(result)
@@ -2467,6 +2456,20 @@ fn history_references_for_member(run: &Run, member_id: &str) -> Vec<NativeHistor
     references
 }
 
+/// A running run with unleased ready work and nothing that crossed the native
+/// boundary (no running, uncertain or leased task).
+fn resumable_after_restart(run: &Run) -> bool {
+    let has_ready = run
+        .tasks()
+        .iter()
+        .any(|task| task.status() == TaskStatus::Ready && task.lease_id().is_none());
+    let crossed_native_boundary = run.tasks().iter().any(|task| {
+        matches!(task.status(), TaskStatus::Running | TaskStatus::Uncertain)
+            || task.lease_id().is_some()
+    });
+    run.status() == RunStatus::Running && has_ready && !crossed_native_boundary
+}
+
 fn mutable_run<'a>(
     workspaces: &'a mut [WorkspaceOrchestration],
     workspace_id: &str,
@@ -2860,7 +2863,7 @@ mod graph_tests {
 
         let reopened = OrchestrationApiState::open(&root).unwrap();
         assert_eq!(
-            reopened.recoverable_schedule_runs().unwrap(),
+            reopened.recoverable_runs().unwrap(),
             vec![("workspace".into(), run_id.clone())]
         );
         let store = reopened.snapshot().unwrap();
@@ -2869,6 +2872,91 @@ mod graph_tests {
         assert_eq!(workspace.runs[0].id(), run_id);
         assert_eq!(workspace.schedules[0].occurrences.len(), 2);
         drop(store);
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn start_manual_run(state: &OrchestrationApiState, run_id: &str) {
+        state
+            .create_run(StartRunRequest {
+                workspace_id: "workspace".into(),
+                run_id: run_id.into(),
+                team_id: "team".into(),
+                pipeline_id: "pipeline".into(),
+                launch_command_id: None,
+            })
+            .expect("starts a manual run");
+    }
+
+    fn advance_run(
+        state: &OrchestrationApiState,
+        run_id: &str,
+        advance: impl FnOnce(&mut Run) -> Result<(), CoordinatorError>,
+    ) {
+        state
+            .store
+            .transact(|workspaces| {
+                let run = mutable_run(workspaces, "workspace", run_id)?;
+                advance(run).map_err(|_| StoreError::Invalid)
+            })
+            .expect("advances the run");
+    }
+
+    #[test]
+    fn manual_runs_resume_after_restart_unless_work_crossed_the_native_boundary() {
+        let root =
+            std::env::temp_dir().join(format!("piui-manual-resume-{}", uuid::Uuid::new_v4()));
+        let state = OrchestrationApiState::open(&root).unwrap();
+        save_graph(&state, request()).unwrap();
+        // Committed before the first task was leased (for example, the host
+        // closed before scheduling): no native side effect exists yet.
+        start_manual_run(&state, "manual-ready");
+        // Leased, then interrupted before or while crossing the boundary.
+        start_manual_run(&state, "manual-leased");
+        advance_run(&state, "manual-leased", |run| {
+            let revision = run.revision();
+            Coordinator::lease_next_task(run, revision, "lease".into()).map(|_| ())
+        });
+        // Dispatched to a native session that the restart interrupted.
+        start_manual_run(&state, "manual-running");
+        advance_run(&state, "manual-running", |run| {
+            let revision = run.revision();
+            Coordinator::dispatch_next(
+                run,
+                revision,
+                NativeExecutionReference {
+                    id: "native-session".into(),
+                },
+            )
+            .map(|_| ())
+        });
+        assert_eq!(
+            state.recoverable_runs().unwrap(),
+            vec![("workspace".into(), "manual-ready".into())]
+        );
+        drop(state);
+
+        let reopened = OrchestrationApiState::open(&root).unwrap();
+        assert_eq!(
+            reopened.recoverable_runs().unwrap(),
+            vec![("workspace".into(), "manual-ready".into())],
+            "only the manual run that never crossed the boundary resumes"
+        );
+        for crossed in ["manual-leased", "manual-running"] {
+            let run = reopened.get_run("workspace", crossed).unwrap().unwrap();
+            assert_eq!(run.status(), RunStatus::Uncertain);
+            assert!(
+                run.tasks()
+                    .iter()
+                    .all(|task| task.status() == TaskStatus::Uncertain)
+            );
+        }
+        let ready = reopened
+            .get_run("workspace", "manual-ready")
+            .unwrap()
+            .unwrap();
+        assert_eq!(ready.status(), RunStatus::Running);
+        assert_eq!(ready.revision(), 0, "recovery itself changed nothing");
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }
