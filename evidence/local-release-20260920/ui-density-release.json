@@ -11,7 +11,7 @@
       "sha256": "a19a41f77f4bca3565502862d4c87dc372420e11d98849c688979828e34b62d4"
     },
     "installed": {
-      "path": "C:/Users/redmi/AppData/Local/PiUI/piui-desktop.exe",
+      "path": "%LOCALAPPDATA%/PiUI/piui-desktop.exe",
       "sha256": "04f75b226a50d30b6fe2b212dde17d610c9c222ffa3cc771bd3622aa66d82f8c",
       "processId": 23388,
       "responding": true

@@ -206,8 +206,8 @@ fn captured_text_keeps_character_boundaries() {
 #[test]
 fn verbatim_project_paths_become_plain_working_directories() {
     assert_eq!(
-        process_directory(Path::new(r"\\?\C:\Users\me\project")),
-        PathBuf::from(r"C:\Users\me\project")
+        process_directory(Path::new(r"\\?\C:\Users\test-user\project")),
+        PathBuf::from(r"C:\Users\test-user\project")
     );
     assert_eq!(
         process_directory(Path::new(r"\\?\UNC\server\share\repo")),

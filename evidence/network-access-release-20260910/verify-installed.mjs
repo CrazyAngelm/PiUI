@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { callApi, prepareSystem } from '../../scripts/agent-api.mjs';
 
-const installedPath = 'C:/Users/redmi/AppData/Local/PiUI/piui-desktop.exe';
+const installedPath = join(process.env.LOCALAPPDATA, 'PiUI/piui-desktop.exe');
 const binary = await readFile(installedPath);
 assert(binary.includes(Buffer.from('unsupported-network-policy')), 'Installed binary lacks the new Codex network policy');
 const codexBridge = await readFile(new URL('../../crates/piui-runtime/bridge/codex.mjs', import.meta.url));

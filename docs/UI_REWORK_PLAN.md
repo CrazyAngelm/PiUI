@@ -59,7 +59,7 @@ failures remain failures, never successful graph results. No global model change
 
 Current workspace v15 WebView proof: target/piui-evidence/17604-1788749013099/report.json.
 Unit/contract/native bridge and Rust tests pass, including read-only Hermes SQLite
-result references and denied unsupported settings. Final release installed at C:/Users/redmi/AppData/Local/Programs/PiUI/PiUI.exe.
+result references and denied unsupported settings. Final release installed at %LOCALAPPDATA%/Programs/PiUI/PiUI.exe.
 The desktop shortcut targets this EXE directly, without shell arguments.
 The executable PE subsystem is 2 (Windows GUI); installed/source SHA-256 matches:
 7625347F8A68D8A1C451C17E84517174DB6AB708925B6E0FF1D03F4AEB6F3AC0.

@@ -4,7 +4,7 @@ $repo = (Resolve-Path 'D:\Projects\PIUI').Path
 $evidence = Join-Path $repo 'evidence\ux-audit-20260922'
 $source = Join-Path $repo 'target\release\piui-desktop.exe'
 $installer = Join-Path $repo 'target\release\bundle\nsis\PiUI_0.1.1_x64-setup.exe'
-$installed = 'C:\Users\redmi\AppData\Local\Packages\OpenAI.Codex_2p2nqsd0c76g0\LocalCache\Local\PiUI\piui-desktop.exe'
+$installed = Join-Path $env:LOCALAPPDATA 'Packages\OpenAI.Codex_2p2nqsd0c76g0\LocalCache\Local\PiUI\piui-desktop.exe'
 $rollback = Join-Path $evidence 'rollback\installed-before.exe'
 if ((Get-FileHash -LiteralPath $rollback).Hash -ne '04F75B226A50D30B6FE2B212DDE17D610C9C222FFA3CC771BD3622AA66D82F8C') {
     throw 'The verified installed rollback copy is missing or changed.'

@@ -1,5 +1,5 @@
 {
-  "installedPath": "C:/Users/redmi/AppData/Local/PiUI/piui-desktop.exe",
+  "installedPath": "%LOCALAPPDATA%/PiUI/piui-desktop.exe",
   "installedSha256": "13a5251752d6d13042fd5830fea1cad87c99ee6624e6c5d1378d1af0b9d60c7e",
   "newNetworkPolicyEmbedded": true,
   "nativeBridgeMatchesSource": true,
