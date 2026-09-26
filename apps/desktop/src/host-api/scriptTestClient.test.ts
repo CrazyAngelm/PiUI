@@ -111,7 +111,7 @@ describe('script test in the UI Lab host', () => {
     expect(passed.failure).toBeNull();
     const text = await finished(client.run(request('// lab:text')));
     expect(text.data).toBeNull();
-    expect(text.stdout).toBe('Metrics: 1 dependencies\n');
+    expect(text.stdout).toMatch(/^Metrics: 1 dependencies, \d+ characters\n$/);
     expect(text.failure).toBeNull();
   });
 

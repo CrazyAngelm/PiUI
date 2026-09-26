@@ -64,7 +64,7 @@
       }}
     >
       <Dialog.Title class="visually-hidden">{$t('Search and commands')}</Dialog.Title>
-      <Command.Root loop>
+      <Command.Root loop label={$t('Search and commands')}>
         <div class="palette__search">
           <Search size={16} />
           <Command.Input bind:ref={input} class="palette__input" placeholder={$t('Search chats, projects and commands…')} />
@@ -72,19 +72,20 @@
         <Command.List class="palette__list">
           <Command.Viewport>
             <Command.Empty class="palette__empty">{$t('Nothing found')}</Command.Empty>
+            <!-- Keywords start with each command's visible label, so typing it finds the command. -->
             <Command.Group>
               <Command.GroupHeading class="palette__heading">{$t('Actions')}</Command.GroupHeading>
               <Command.GroupItems>
-                <Command.Item class="palette__item" value="action:new-chat" keywords={['new', 'chat', 'новый']} onSelect={() => run(() => store.goHome())}>
+                <Command.Item class="palette__item" value="action:new-chat" keywords={[$t('New chat'), 'new', 'chat', 'новый']} onSelect={() => run(() => store.goHome())}>
                   <SquarePen size={15} /><span>{$t('New chat')}</span>
                 </Command.Item>
-                <Command.Item class="palette__item" value="action:inbox" keywords={['inbox', 'approvals']} onSelect={() => run(() => store.navigate({ name: 'inbox' }))}>
+                <Command.Item class="palette__item" value="action:inbox" keywords={[$t('Open inbox'), 'inbox', 'approvals']} onSelect={() => run(() => store.navigate({ name: 'inbox' }))}>
                   <InboxIcon size={15} /><span>{$t('Open inbox')}</span>
                 </Command.Item>
-                <Command.Item class="palette__item" value="action:pipelines" keywords={['pipeline', 'graph', 'agents']} onSelect={() => run(() => store.navigate({ name: 'pipelines', section: 'systems' }))}>
+                <Command.Item class="palette__item" value="action:pipelines" keywords={[$t('Open pipelines'), 'pipeline', 'graph', 'agents']} onSelect={() => run(() => store.navigate({ name: 'pipelines', section: 'systems' }))}>
                   <Workflow size={15} /><span>{$t('Open pipelines')}</span>
                 </Command.Item>
-                <Command.Item class="palette__item" value="action:runs" keywords={['runs', 'history']} onSelect={() => run(() => store.navigate({ name: 'pipelines', section: 'runs' }))}>
+                <Command.Item class="palette__item" value="action:runs" keywords={[$t('Open runs'), 'runs', 'history']} onSelect={() => run(() => store.navigate({ name: 'pipelines', section: 'runs' }))}>
                   <History size={15} /><span>{$t('Open runs')}</span>
                 </Command.Item>
                 {#if historyWorkspaceId}
@@ -92,13 +93,13 @@
                     <ScrollText size={15} /><span>{$t('Open session history')}</span>
                   </Command.Item>
                 {/if}
-                <Command.Item class="palette__item" value="action:harnesses" keywords={['harness', 'codex', 'claude', 'pi']} onSelect={() => run(() => store.navigate({ name: 'settings', section: 'harnesses' }))}>
+                <Command.Item class="palette__item" value="action:harnesses" keywords={[$t('Manage harnesses'), 'harness', 'codex', 'claude', 'pi']} onSelect={() => run(() => store.navigate({ name: 'settings', section: 'harnesses' }))}>
                   <Bot size={15} /><span>{$t('Manage harnesses')}</span>
                 </Command.Item>
                 <Command.Item
                   class="palette__item"
                   value="action:theme"
-                  keywords={['theme', 'dark', 'light']}
+                  keywords={[$t('Toggle dark theme'), 'theme', 'dark', 'light']}
                   onSelect={() =>
                     run(() =>
                       void store.savePreferences({
@@ -109,7 +110,7 @@
                 >
                   <Moon size={15} /><span>{$t('Toggle dark theme')}</span>
                 </Command.Item>
-                <Command.Item class="palette__item" value="action:settings" keywords={['settings', 'preferences']} onSelect={() => run(() => store.navigate({ name: 'settings', section: 'general' }))}>
+                <Command.Item class="palette__item" value="action:settings" keywords={[$t('Settings'), 'settings', 'preferences']} onSelect={() => run(() => store.navigate({ name: 'settings', section: 'general' }))}>
                   <Settings size={15} /><span>{$t('Settings')}</span>
                 </Command.Item>
               </Command.GroupItems>

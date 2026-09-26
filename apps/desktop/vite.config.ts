@@ -24,5 +24,7 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts', 'scripts/**/*.test.mjs'],
     setupFiles: ['src/test/setupLocale.ts'],
+    // Playwright specs (e2e/) run with `pnpm test:lab`, never under Vitest.
+    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**'],
   },
 });

@@ -1,6 +1,21 @@
 import { hostInvoke } from './transport';
 import type { HarnessModelsRequest, HarnessModelsResult } from '../../../../contracts/harness-models-v18';
+import type { WorkspaceModel } from '../../../../contracts/workspace-v15';
 import { workspaceError } from './workspaceClient';
+
+/**
+ * Catalog entries carry catalog-only fields (`supportsFast`, a null provider);
+ * session commands take the strict `WorkspaceModel` (`deny_unknown_fields` in
+ * the host), so only its fields are forwarded.
+ */
+export function workspaceModel(model: WorkspaceModel): WorkspaceModel {
+  return {
+    id: model.id,
+    name: model.name,
+    ...(typeof model.provider === 'string' ? { provider: model.provider } : {}),
+    ...(Array.isArray(model.thinkingLevels) ? { thinkingLevels: [...model.thinkingLevels] } : {}),
+  };
+}
 
 // Session-local, workspace-scoped catalog reuse. Explicit refresh and preflight
 // bypass completed entries; concurrent consumers share the native request.

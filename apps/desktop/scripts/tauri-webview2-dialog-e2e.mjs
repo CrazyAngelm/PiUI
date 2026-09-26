@@ -9,9 +9,14 @@ import { fileURLToPath } from 'node:url';
 import { createWebviewAutomationServer } from './webview-automation.mjs';
 import { startComposerProvider } from './composer-provider.mjs';
 import { runWorkspaceWebview2Proof } from './workspace-webview2-e2e.mjs';
+import { runShellWebview2Proof } from './shell-webview2-e2e.mjs';
 
 const AGENT_API_SCENARIO = process.argv.includes('--agent-api');
 const WORKSPACE_SCENARIO = process.argv.includes('--workspace') || AGENT_API_SCENARIO;
+// The retained classic compatibility view (`?view=classic`) is opt-in; the
+// default proof drives the new shell, the default view of the app.
+const CLASSIC_SCENARIO = process.argv.includes('--classic') && !WORKSPACE_SCENARIO;
+const SHELL_SCENARIO = !WORKSPACE_SCENARIO && !CLASSIC_SCENARIO;
 
 if (process.platform !== 'win32') {
   throw new Error('This WebView2 proof is Windows-only; run the Linux WebKit harness separately.');
@@ -51,6 +56,30 @@ function canonicalRepositoryTarget() {
     throw new Error('The repository target must not resolve through a reparse escape.');
   }
   return canonicalTarget;
+}
+
+/** Cargo output directory chosen by the controller (a private one or <repo>/target). */
+function canonicalCargoTarget() {
+  const configured = process.env.PIUI_E2E_CARGO_TARGET_DIR;
+  if (!configured) return canonicalRepositoryTarget();
+  if (!isAbsolute(configured)) throw new Error('PIUI_E2E_CARGO_TARGET_DIR must be an absolute path.');
+  const canonical = realpathSync(configured);
+  if (relative(resolve(configured), canonical) !== '') {
+    throw new Error('PIUI_E2E_CARGO_TARGET_DIR must not resolve through a reparse point.');
+  }
+  return canonical;
+}
+
+/** The shipped CSP, widened only by the debug automation seam's needs. */
+function e2eContentSecurityPolicy(automationPort) {
+  const config = JSON.parse(readFileSync(join(DESKTOP_ROOT, 'src-tauri', 'tauri.conf.json'), 'utf8'));
+  const csp = config?.app?.security?.csp;
+  if (typeof csp !== 'string' || !csp.includes("script-src 'self'") || !csp.includes("connect-src 'self'")) {
+    throw new Error('tauri.conf.json has no recognizable app.security.csp.');
+  }
+  return csp
+    .replace("script-src 'self'", "script-src 'self' 'unsafe-eval'")
+    .replace("connect-src 'self'", `connect-src 'self' http://127.0.0.1:${automationPort}`);
 }
 
 function canonicalRepositoryE2eArea() {
@@ -434,9 +463,9 @@ function resolveJobRunner() {
     throw new Error('PIUI_E2E_JOB_RUNNER must be an existing absolute path.');
   }
   const canonicalRunner = realpathSync(configured);
-  const repositoryTarget = canonicalRepositoryTarget();
-  if (!isPathInside(repositoryTarget, canonicalRunner)) {
-    throw new Error('PIUI_E2E_JOB_RUNNER must stay inside the canonical repository target.');
+  const cargoTarget = canonicalCargoTarget();
+  if (!isPathInside(cargoTarget, canonicalRunner)) {
+    throw new Error('PIUI_E2E_JOB_RUNNER must stay inside the canonical cargo target.');
   }
   return canonicalRunner;
 }
@@ -1091,7 +1120,7 @@ async function runDialogProof(automation, expectedPageUrl, harness) {
     assert(opened.labelledBy === 'add-project-title' && opened.describedBy === 'add-project-description', 'Runtime chooser lacks an accessible name or description.');
     assert(JSON.stringify(opened.radioValues) === JSON.stringify(['pi', 'prime-agent']), 'Runtime chooser lacks the explicit Pi/Prime Agent choices.');
     assert(opened.activeValue === 'pi', 'Initial focus did not enter the runtime chooser.');
-    assert(opened.description.includes('Pi and Prime Agent sessions never mix'), 'Isolation decision is not visible to the user.');
+    assert(opened.description.includes('Pi and Prime Agent sessions stay separate'), 'Isolation decision is not visible to the user.');
     await automation.dispatchKey({ key: 'Tab', code: 'Tab', shiftKey: true });
     assert(await evaluate(`document.querySelector('dialog.add-project-modal').contains(document.activeElement)`), 'Shift+Tab escaped the modal.');
     assert(await evaluate(`document.activeElement?.classList.contains('primary')`), 'Backward focus wrapping did not reach the final control.');
@@ -1184,14 +1213,15 @@ async function runIsolatedHarness() {
     });
     const fixture = createIsolatedFixture(fixtureRoot);
     if (WORKSPACE_SCENARIO) composerProvider = await startComposerProvider();
-    // Cargo itself writes only to the canonical workspace target. The fixture
-    // remains a sibling-owned run directory below that target.
-    const cargoTargetDirectory = canonicalRepositoryTarget();
+    // Cargo writes only to the controller's canonical cargo target. The
+    // fixture stays a run directory below <repo>/target/piui-e2e.
+    const cargoTargetDirectory = canonicalCargoTarget();
+    // Default: the new shell. `--classic` proves the retained compatibility
+    // view; `--workspace` drives the legacy workspace shell until parity.
+    const entry = CLASSIC_SCENARIO ? '/?view=classic' : WORKSPACE_SCENARIO && !AGENT_API_SCENARIO ? '/?view=legacy' : '';
     const overlay = {
       identifier,
-      // This suite proves the retained v10 compatibility view. The workspace
-      // suite exercises the default v11 entry separately.
-      build: { devUrl: WORKSPACE_SCENARIO ? pageOrigin : `${pageOrigin}/?view=classic` },
+      build: { devUrl: `${pageOrigin}${entry}` },
       app: {
         windows: [{
           label: 'main', title: 'PiUI E2E', width: 1180, height: 780,
@@ -1203,13 +1233,13 @@ async function runIsolatedHarness() {
         // Production keeps the stricter checked-in CSP. Only this generated
         // debug overlay permits the injected loopback driver and its eval seam.
         security: {
-          csp: `default-src 'self'; base-uri 'none'; object-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' asset:; font-src 'self'; connect-src 'self' http://127.0.0.1:${automation.port}; frame-src 'none'; frame-ancestors 'none'; form-action 'none'`,
+          csp: e2eContentSecurityPolicy(automation.port),
         },
       },
     };
-    // Workspace lifecycle UI tests do not inherit provider credentials or Node
+    // Workspace and shell UI tests do not inherit provider credentials or Node
     // preload hooks. The classic fixture retains its original environment.
-    const inheritedEnvironment = WORKSPACE_SCENARIO
+    const inheritedEnvironment = WORKSPACE_SCENARIO || SHELL_SCENARIO
       ? Object.fromEntries(['PATH', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'windir', 'ComSpec', 'COMSPEC', 'SystemDrive', 'SYSTEMDRIVE', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'PROGRAMDATA', 'ALLUSERSPROFILE']
           .filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]))
       : process.env;
@@ -1243,6 +1273,13 @@ async function runIsolatedHarness() {
       PIUI_E2E_AUTOMATION_TOKEN: automation.token,
       TAURI_WEBVIEW_AUTOMATION: 'true',
     };
+    if (SHELL_SCENARIO) {
+      // The shell proof starts no agent: Claude Code and Hermes resolve only to
+      // missing fixture paths, Pi and Prime to the synthetic fixture peers.
+      runtimeEnvironment.PIUI_CLAUDE_BIN = join(fixture.fixtureRoot, 'no-claude', 'claude.exe');
+      runtimeEnvironment.PIUI_HERMES_ROOT = join(fixture.fixtureRoot, 'no-hermes');
+      runtimeEnvironment.PIUI_NODE = process.execPath;
+    }
     if (WORKSPACE_SCENARIO) {
       runtimeEnvironment.CODEX_HOME = exposeNativeCodeForWorkspaceFixture(fixture);
       writeFileSync(join(runtimeEnvironment.CODEX_HOME, 'config.toml'), `model_provider = "piui_composer"
@@ -1330,9 +1367,13 @@ wire_api = "responses"
       ? await runWorkspaceWebview2Proof({ automation, expectedPageUrl: pageOrigin,
           harness: { fixture, ownedChild: app, appOwnerPid: app.child.pid }, mode: 'normal',
           commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, ...workspaceCallbacks, composerProvider })
-      : { checks: await runDialogProof(automation, pageOrigin, {
-          fixture, ownedChild: app, setupProjects: true, regression: 'normal',
-        }) };
+      : SHELL_SCENARIO
+        ? await runShellWebview2Proof({ automation, expectedPageUrl: pageOrigin,
+            harness: { fixture, ownedChild: app }, mode: 'normal',
+            commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot })
+        : { checks: await runDialogProof(automation, pageOrigin, {
+            fixture, ownedChild: app, setupProjects: true, regression: 'normal',
+          }) };
     const normalChecks = normalResult.checks;
     if (WORKSPACE_SCENARIO) normalChecks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, automation, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
 
@@ -1359,14 +1400,18 @@ wire_api = "responses"
       ? await runWorkspaceWebview2Proof({ automation, expectedPageUrl: pageOrigin,
           harness: { fixture, ownedChild: app, appOwnerPid: app.child.pid }, mode: 'safe',
           commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, ...workspaceCallbacks, composerProvider })
-      : { checks: await runDialogProof(automation, pageOrigin, { fixture, ownedChild: app, regression: 'safe' }) };
+      : SHELL_SCENARIO
+        ? await runShellWebview2Proof({ automation, expectedPageUrl: pageOrigin,
+            harness: { fixture, ownedChild: app }, mode: 'safe',
+            commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot })
+        : { checks: await runDialogProof(automation, pageOrigin, { fixture, ownedChild: app, regression: 'safe' }) };
     const safeChecks = safeResult.checks;
     if (WORKSPACE_SCENARIO) safeChecks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, safe: true, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
     if (!WORKSPACE_SCENARIO) assertPrimeRuntimeWasNotLaunched(fixture);
     passReport = {
       status: 'pass',
       target: 'isolated Tauri WebView2 dev harness',
-      scenario: AGENT_API_SCENARIO ? 'agent-api-v1' : WORKSPACE_SCENARIO ? 'workspace-v15' : 'classic-v10',
+      scenario: AGENT_API_SCENARIO ? 'agent-api-v1' : WORKSPACE_SCENARIO ? 'workspace-v15-legacy-view' : CLASSIC_SCENARIO ? 'classic-v10' : 'shell-default-view',
       native: normalResult.native,
       timings: { normal: normalResult.timings, safe: safeResult.timings },
       ownedWindowMeasurements,
@@ -1376,7 +1421,8 @@ wire_api = "responses"
         ...normalChecks,
         ...safeChecks,
         'debug-only-loopback-webview-automation',
-        ...(WORKSPACE_SCENARIO ? ['no-provider-credentials-in-fixture'] : ['prime-runtime-not-launched']),
+        ...(WORKSPACE_SCENARIO || SHELL_SCENARIO ? ['no-provider-credentials-in-fixture'] : []),
+        ...(WORKSPACE_SCENARIO ? [] : ['prime-runtime-not-launched']),
       ],
     };
   } catch (error) {

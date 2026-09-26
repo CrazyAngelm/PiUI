@@ -12,6 +12,7 @@
     "check": "pnpm --filter @piui/desktop check",
     "test": "pnpm --filter @piui/desktop test",
     "test:smoke": "pnpm --filter @piui/desktop test:smoke",
+    "test:lab": "pnpm --filter @piui/desktop test:lab",
     "test:e2e": "pnpm --filter @piui/desktop test:e2e",
     "test:e2e:tauri:windows": "pnpm --filter @piui/desktop test:e2e:tauri:windows",
     "build": "pnpm --filter @piui/desktop build",

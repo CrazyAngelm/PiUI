@@ -104,6 +104,27 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   the broken docs link" is paused on an MCP form request; `&claude=signed-out`
   shows the sign-in status and a "Claude check" system whose run fails typed.
 
+- `feat/e2e-ci` — E2E and regression (P1 item 4), see [TESTING.md](TESTING.md):
+  - `5beca65`, `f07e7c9` — Playwright against the browser UI Lab
+    (`pnpm test:lab`): shell, palette, theme, Russian; chat harness → model →
+    reasoning → streamed answer, approvals, queue/steer; pipeline template →
+    Start inputs → Check → Run → run canvas → step tabs → review-limit
+    actions; model call and script nodes; weekday automations; keyboard-only;
+    axe on 12 screens in light and dark with screenshots. A `prod-csp`
+    project serves `vite build` under the shipped CSP.
+  - `7b23d64` — the WebView2 E2E drives the new shell by default (debug app,
+    isolated data, safe mode); classic is opt-in (`--classic`), the workspace
+    proof opens `?view=legacy`; cargo output honours a private target dir.
+  - `59aa9c9` — CI: lab E2E (Chromium) with report upload on failure,
+    contracts, example system files, bridge tests, full-workspace Rust on
+    Ubuntu and Windows.
+  - Fixes found by the new tests: `bbf78dc` a model chosen on Home broke chat
+    start (catalog-only fields hit `deny_unknown_fields`); `c22ab34` under the
+    shipped CSP the page stopped taking clicks after the first dialog or menu
+    (bits-ui scroll-lock reset blocked), now three exact style hashes;
+    `5a07a69` timestamp contrast, palette search label and matching, named
+    canvas nodes and connections.
+
 ## In progress
 
 - Nothing; next steps wait for the owner's review of the remaining-work plan.
@@ -140,6 +161,11 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   the statically bundled locale catalogs +1 454, sidebar/store +1 647). Any
   further visible copy exceeds it until per-language catalogs load lazily or
   the budget is revised.
+
+- Run view header: with the step panel open at 1280 px, the status badge and
+  "Inputs" overlap. bits-ui Command points `aria-controls` at its viewport, so
+  axe flags the palette list (`scrollable-region-focusable`, reviewed
+  exception). The Ubuntu full-workspace Rust job has not run yet.
 
 ## Next
 

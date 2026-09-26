@@ -23,6 +23,7 @@
     [RUN_INPUT_ISSUES.count, RUN_INPUT_ISSUES.names, RUN_INPUT_ISSUES.labels, RUN_INPUT_ISSUES.options, RUN_INPUT_ISSUES.defaults],
   );
   import FlowBridge, { type FlowApi } from './FlowBridge.svelte';
+  import { connectionLabel } from './connectionLabel';
 
   interface Props {
     editor: PipelineEditorStore;
@@ -64,9 +65,15 @@
   function sync(): void {
     const graph = editor.graph;
     const readOnly = editor.readOnly;
+    // Accessible names of nodes and connections (Svelte Flow defaults use ids).
+    const names = new Map(graph.nodes.map((node) => [
+      node.id,
+      node.profile.name || $t(node.kind === 'router' ? 'Router' : node.executor?.type === 'script' ? 'Untitled script' : 'Untitled agent'),
+    ]));
     const graphNodes = graph.nodes.map((node) => ({
       id: node.id,
       type: node.kind === 'router' ? 'router' : 'agent',
+      ariaLabel: names.get(node.id),
       position: { x: node.x, y: node.y },
       data: { node, problems: editor.nodeProblems(node.id).length, readOnly },
       selected: editor.selectedId === node.id,
@@ -88,6 +95,7 @@
         {
           id: START_NODE_ID,
           type: 'start',
+          ariaLabel: $t('Start'),
           position: { x, y },
           data: { inputs: graph.inputs ?? [], problems: inputProblems },
           selected: editor.selectedId === START_NODE_ID,
@@ -102,6 +110,7 @@
           type: 'piui',
           source: START_NODE_ID,
           target: entry.id,
+          ariaLabel: connectionLabel($t, 'start', $t('Start'), names.get(entry.id) ?? ''),
           sourceHandle: 'out',
           targetHandle: 'in',
           data: { kind: 'result' },
@@ -122,6 +131,7 @@
         type: 'piui',
         source: edge.from,
         target: edge.to,
+        ariaLabel: connectionLabel($t, edge.kind, names.get(edge.from) ?? '', names.get(edge.to) ?? ''),
         sourceHandle: edge.kind === 'route' ? `branch:${edge.branchId ?? ''}` : 'out',
         targetHandle: 'in',
         data: { kind: edge.kind, label },

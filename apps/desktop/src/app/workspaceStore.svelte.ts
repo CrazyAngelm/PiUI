@@ -11,6 +11,7 @@ import { projectsHost as host } from '../host-api/projectsClient';
 import type { Preferences, ProjectSummary } from '../host-api/types';
 import { composerRequest } from '../host-api/composerClient';
 import { runtimeSettings } from '../host-api/runtimeSettings';
+import { workspaceModel } from '../host-api/harnessModels';
 import { deleteWorkspaceSession } from '../host-api/workspaceLifecycle';
 import {
   workspaceHost,
@@ -582,12 +583,14 @@ export class WorkspaceStore {
     if (!harness || harness.status !== 'available') {
       throw new WorkspaceOperationError('UNAVAILABLE', harness?.reason ?? 'The selected harness is not available.');
     }
+    // A catalog entry may carry catalog-only fields the session contract rejects.
+    const model = request.model ? workspaceModel(request.model) : undefined;
     const result = await workspaceHost.request({
       type: 'createSession',
       workspaceId: request.workspaceId,
       harness: request.harness,
       permissionMode: request.permissionMode,
-      ...(request.model ? { model: request.model } : {}),
+      ...(model ? { model } : {}),
       ...(options.title ? { title: options.title } : {}),
     });
     if (result.type !== 'session' && result.type !== 'accepted') {
@@ -604,12 +607,12 @@ export class WorkspaceStore {
     else await this.reconcileSession(sessionId);
     void this.loadCatalog(request.workspaceId);
     let error: string | undefined;
-    if (request.model && (request.thinkingLevel || request.serviceTier)) {
+    if (model && (request.thinkingLevel || request.serviceTier)) {
       try {
         await runtimeSettings({
           type: 'set',
           sessionId,
-          model: request.model,
+          model,
           ...(request.thinkingLevel ? { thinkingLevel: request.thinkingLevel } : {}),
           ...(request.serviceTier ? { serviceTier: request.serviceTier } : {}),
         });
