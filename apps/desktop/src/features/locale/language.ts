@@ -367,6 +367,8 @@ const russian: Readonly<Record<string, string>> = {
   'Skills could not be loaded from Codex.': 'Не удалось загрузить skills Codex.',
   'MCP servers could not be loaded from Codex.': 'Не удалось загрузить MCP-серверы Codex.',
   'MCP tools could not be loaded from Codex.': 'Не удалось загрузить MCP-инструменты Codex.',
+  'Codex reported a configuration warning. Review your Codex config.toml.': 'Codex сообщил о предупреждении конфигурации. Проверьте config.toml Codex.',
+  'Codex reported a deprecated setting or feature. Review your Codex configuration.': 'Codex сообщил об устаревшей настройке или функции. Проверьте конфигурацию Codex.',
   'Skills could not be loaded from Pi.': 'Не удалось загрузить skills Pi.',
   'Skills could not be loaded from Prime Agent.': 'Не удалось загрузить skills Prime Agent.',
   'Tools could not be loaded from Prime Agent.': 'Не удалось загрузить инструменты Prime Agent.',

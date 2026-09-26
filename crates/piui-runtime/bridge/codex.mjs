@@ -110,6 +110,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   let modelCatalog = [];
   const modelDefaults = new Map();
   const mcpStartupFailures = new Set();
+  const controlPlaneWarnings = new Set();
   let serviceTier = config.serviceTier;
 
   const setStatus = (next) => {
@@ -174,14 +175,14 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     const detail = tag && typeof info?.[tag] === "object" ? info[tag] : undefined;
     const httpStatus = Number.isInteger(detail?.httpStatusCode) ? detail.httpStatusCode : undefined;
     if (tag === "unauthorized" || httpStatus === 401 || httpStatus === 403) return "Codex authentication is unavailable.";
-    if (tag === "usageLimitExceeded" || tag === "sessionBudgetExceeded" || httpStatus === 429) return "A Codex usage limit prevents this turn.";
+    if (["usageLimitExceeded", "sessionBudgetExceeded", "rateLimitExceeded"].includes(tag) || httpStatus === 429) return "A Codex usage limit prevents this turn.";
     if (tag === "contextWindowExceeded") return "This Codex thread exceeds the model context window.";
     if (["httpConnectionFailed", "responseStreamConnectionFailed", "responseStreamDisconnected", "responseTooManyFailedAttempts"].includes(tag)) {
       return httpStatus && httpStatus >= 500 ? "The Codex model provider is unavailable." : "Codex could not reach the model provider.";
     }
     if (tag === "serverOverloaded" || tag === "internalServerError" || (httpStatus && httpStatus >= 500)) return "The Codex model provider is unavailable.";
     if (tag === "badRequest") return "Codex rejected the model request.";
-    if (tag === "cyberPolicy") return "Codex blocked this turn under provider policy.";
+    if (tag === "cyberPolicy" || tag === "misalignmentPolicyViolation") return "Codex blocked this turn under provider policy.";
     if (tag === "sandboxError") return "Codex could not apply the local execution policy.";
     if (tag === "threadRollbackFailed") return "Codex could not restore the thread state.";
     if (tag === "activeTurnNotSteerable") return "The active Codex turn cannot accept more input.";
@@ -375,7 +376,10 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       }
     }
     const command = Array.isArray(params.command) ? undefined : params.command;
-    if (kind === "command" && typeof command === "string" && command) parts.push(`Command: ${command}`);
+    // `kind: "writeStdin"` (0.153+, behind write_stdin_approval) asks to send
+    // input to a running process; `command` then names that write.
+    const commandLabel = params.kind === "writeStdin" ? "Terminal input" : "Command";
+    if (kind === "command" && typeof command === "string" && command) parts.push(`${commandLabel}: ${command}`);
     if (kind === "command" && Array.isArray(params.command)) parts.push(`Command argv: ${params.command.map((argument) => JSON.stringify(argument)).join(" ")}`);
     if (typeof params.cwd === "string" && params.cwd) parts.push(`Working directory: ${params.cwd}`);
     if (typeof params.reason === "string" && params.reason) parts.push(`Reason: ${params.reason}`);
@@ -460,7 +464,9 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     const approval = {
       id,
       kind,
-      title: kind === "command" ? "Run command" : kind === "file-change" ? "Apply file changes" : kind === "permission" ? "Grant permissions" : "Codex needs input",
+      title: kind === "command"
+        ? params.kind === "writeStdin" ? "Send input to a running command" : "Run command"
+        : kind === "file-change" ? "Apply file changes" : kind === "permission" ? "Grant permissions" : "Codex needs input",
       description: approvalDescription(method, params, kind),
       decisions,
       ...(kind === "input" ? { inputLabel: params.questions?.[0]?.isSecret ? "Secret response" : params.questions?.[0]?.question || "Response" } : {}),
@@ -579,6 +585,13 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       registerApproval(message);
       return;
     }
+    if (method === "currentTime/read" && message.id !== undefined) {
+      // Sent when the user's config selects an external clock for the current
+      // time reminder; Codex treats an error reply as fatal. Wall-clock time
+      // grants no authority, so the thread and its descendants get the answer.
+      void writeNative({ id: message.id, result: { currentTimeAt: Math.floor(Date.now() / 1000) } }).catch(() => {});
+      return;
+    }
     if (message.id !== undefined && method) {
       void writeNative({
         id: message.id,
@@ -596,21 +609,40 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       return;
     }
     if (nativeId && typeof params.threadId === "string" && params.threadId !== nativeId) return;
-    // Account quota notifications are control-plane state, not conversation
-    // items. Actual turn failures (including usage limits) still surface below.
-    if (method === "account/rateLimits/updated") return;
+    // Account quota and gateway sign-in state (the latter new in 0.157) are
+    // control-plane state, not conversation items. Actual turn failures
+    // (including usage limits and authentication) still surface below.
+    if (method === "account/rateLimits/updated" || method === "account/gatewayOAuth/changed") return;
+    // Configuration and deprecation warnings describe the user's native Codex
+    // configuration (0.157.1 sends startup warnings right after initialize).
+    // They become fixed resource warnings; native text and config paths are
+    // not forwarded.
+    if (method === "configWarning" || method === "deprecationNotice") {
+      controlPlaneWarnings.add(method === "configWarning"
+        ? "Codex reported a configuration warning. Review your Codex config.toml."
+        : "Codex reported a deprecated setting or feature. Review your Codex configuration.");
+      return;
+    }
     if (method === "mcpServer/startupStatus/updated") {
       const name = typeof params.name === "string" && params.name.trim()
         ? params.name.trim().replace(/\s+/g, " ")
         : "Codex MCP";
+      // McpServerStartupState is starting|ready|failed|cancelled (0.147.0-0.157.1).
       if (params.status === "failed") mcpStartupFailures.add(name);
-      else if (["starting", "ready", "disabled", "stopped"].includes(params.status)) mcpStartupFailures.delete(name);
+      else if (["starting", "ready", "cancelled"].includes(params.status)) mcpStartupFailures.delete(name);
       return;
     }
     if (method === "thread/settings/updated") {
-      const settings = params.settings ?? params;
-      if (typeof settings.model === "string") currentModel = { id: settings.model, name: settings.model, ...(currentProvider ? { provider: currentProvider } : {}) };
-      if (typeof settings.reasoningEffort === "string") thinkingLevel = settings.reasoningEffort;
+      // Every verified version (0.147.0-0.157.1) sends the effective settings
+      // nested as `threadSettings`, with the reasoning level as `effort`.
+      const settings = params.threadSettings;
+      if (!settings || typeof settings !== "object") return;
+      if (typeof settings.modelProvider === "string") currentProvider = settings.modelProvider;
+      if (typeof settings.model === "string") {
+        const name = currentModel?.id === settings.model ? currentModel.name : settings.model;
+        currentModel = { id: settings.model, name, ...(currentProvider ? { provider: currentProvider } : {}) };
+      }
+      if (typeof settings.effort === "string") thinkingLevel = settings.effort;
       if ("serviceTier" in settings) serviceTier = settings.serviceTier === "fast" ? "fast" : "standard";
       return;
     }
@@ -1022,6 +1054,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       const warnings = [...mcpStartupFailures]
         .sort((left, right) => left.localeCompare(right))
         .map((name) => `MCP server ${name} could not start.`);
+      warnings.push(...controlPlaneWarnings);
       try {
         const response = await callNative("skills/list", { cwds: [config.cwd], forceReload: false });
         for (const group of response.data ?? []) for (const skill of group.skills ?? []) {

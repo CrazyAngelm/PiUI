@@ -174,7 +174,9 @@ test("renders web search items as safe tool activity and keeps other unknown typ
     assert.match(webSearch.text, /Action: search/);
     assert.match(webSearch.text, /Results: 1/);
     assert.doesNotMatch(webSearch.text, /SECRET-MUST-NOT-LEAK/);
-    for (const type of ["collabAgentToolCall", "imageView", "imageGeneration"]) {
+    // Item types without a dedicated projection (including 0.153's
+    // functionCallOutput) stay readable through the generic fallback.
+    for (const type of ["collabAgentToolCall", "imageView", "imageGeneration", "sleep", "subAgentActivity", "hookPrompt", "functionCallOutput"]) {
       const block = adapter.snapshot().blocks.find((value) => value.id === `unsupported-${type}`);
       assert.equal(block.kind, "unknown");
       assert.equal(block.fallback, true);
@@ -515,6 +517,110 @@ test('account quota updates stay out of the transcript without hiding unknown co
     assert.ok(!JSON.stringify(adapter.snapshot().blocks).includes('account/rateLimits/updated'));
     assert.ok(adapter.snapshot().blocks.some(block => block.safeSummary === 'Unsupported Codex event: future/conversation/event'));
   } finally { await adapter.dispose(); }
+});
+
+for (const version of ["0.147.0", "0.153.4", "0.157.1"]) {
+  test(`keeps the session flow and settings in sync on the ${version} protocol`, async () => {
+    const events = [];
+    const adapter = await createCodexAdapter({
+      ...config,
+      runtimeArgs: [fixture, `--codex-version=${version}`, "--external-settings", "--mcp-startup"],
+    }, (event) => events.push(event));
+    try {
+      await waitFor(() => adapter.snapshot().approvals.length === 2);
+      const command = adapter.snapshot().approvals.find((approval) => approval.kind === "command");
+      assert.equal(command.title, "Run command");
+      await adapter.respond({ requestId: command.id, decision: "approve-once" });
+      await waitFor(() => adapter.snapshot().title === "command:accept");
+      assert.deepEqual((await adapter.resources()).warnings, ["MCP server fixture could not start."]);
+      assert.deepEqual(await adapter.prompt({ text: "fixture prompt", mode: "prompt" }), { accepted: true });
+      await waitFor(() => events.some((event) => event.type === "turnCompleted"));
+      // Another client changed the thread settings; the snapshot follows the
+      // nested `threadSettings` (with `effort`) that every version sends.
+      const snapshot = adapter.snapshot();
+      assert.deepEqual(snapshot.model, { id: "fixture-model-2", provider: "openai", name: "fixture-model-2" });
+      assert.equal(snapshot.thinkingLevel, "high");
+      assert.equal(snapshot.serviceTier, "fast");
+      // Only the fixture's generic `warning` stays on the fallback path.
+      assert.deepEqual(snapshot.blocks.filter((block) => block.fallback).map((block) => block.safeSummary), ["Unsupported Codex event: warning"]);
+      assert.deepEqual(events.filter((event) => event.type === "turnCompleted"), [{ type: "turnCompleted", outcome: "succeeded" }]);
+    } finally { await adapter.dispose(); }
+  });
+}
+
+test("configuration and deprecation warnings become fixed resource warnings", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--config-warning", "--deprecation-notice"] }, (event) => events.push(event));
+  try {
+    assert.equal(adapter.snapshot().blocks.some((block) => /configWarning|deprecationNotice/.test(block.safeSummary ?? "")), false);
+    assert.deepEqual((await adapter.resources()).warnings, [
+      "Codex reported a configuration warning. Review your Codex config.toml.",
+      "Codex reported a deprecated setting or feature. Review your Codex configuration.",
+    ]);
+    const visible = JSON.stringify({ events, snapshot: adapter.snapshot(), resources: await adapter.resources() });
+    assert.doesNotMatch(visible, /PRIVATE_CONFIG|PRIVATE_DEPRECATION/);
+    // The fixture's unsupported attestation request is the only session error.
+    assert.deepEqual(events.filter((event) => event.type === "error").map((event) => event.message), ["Codex requested an unsupported host operation."]);
+  } finally { await adapter.dispose(); }
+});
+
+test("presents a write-stdin approval as terminal input, not a new command", async () => {
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--write-stdin"] }, () => {});
+  try {
+    const stdin = await waitFor(() => adapter.snapshot().approvals.find((approval) => approval.title === "Send input to a running command"));
+    assert.equal(stdin.kind, "command");
+    assert.match(stdin.description, /^Terminal input: write_stdin --session-id 7 'y'$/m);
+    assert.doesNotMatch(stdin.description, /^Command:/m);
+    assert.deepEqual(stdin.decisions, ["approve-once", "cancel"]);
+    await adapter.respond({ requestId: stdin.id, decision: "approve-once" });
+    await waitFor(() => adapter.snapshot().title === "stdin:accept");
+    assert.equal(adapter.snapshot().approvals.find((approval) => approval.kind === "command").title, "Run command");
+  } finally { await adapter.dispose(); }
+});
+
+test("grants a requested permission profile for the session only when approved", async () => {
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--permissions-request"] }, () => {});
+  try {
+    const request = await waitFor(() => adapter.snapshot().approvals.find((approval) => approval.kind === "permission"));
+    assert.equal(request.title, "Grant permissions");
+    assert.match(request.description, /Additional network access requested/);
+    await adapter.respond({ requestId: request.id, decision: "approve-session" });
+    await waitFor(() => adapter.snapshot().title === "permissions:session");
+  } finally { await adapter.dispose(); }
+});
+
+test("answers the current-time request for the thread and its descendants", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--current-time"] }, (event) => events.push(event));
+  try {
+    await waitFor(() => adapter.snapshot().title.startsWith("time:"));
+    assert.equal(adapter.snapshot().title, "time:ok,ok");
+    assert.equal(events.some((event) => event.type === "error" && /unsupported host operation/.test(event.message)), true, "attestation stays unsupported");
+    assert.equal(events.filter((event) => event.type === "error").length, 1);
+  } finally { await adapter.dispose(); }
+});
+
+test("maps the 0.153+ rate-limit and policy turn errors to fixed summaries", async () => {
+  for (const [text, message] of [
+    ["rate limit fixture", "A Codex usage limit prevents this turn."],
+    ["policy fixture", "Codex blocked this turn under provider policy."],
+  ]) {
+    const events = [];
+    const adapter = await createCodexAdapter(config, (event) => events.push(event));
+    try {
+      await adapter.prompt({ text, mode: "prompt" });
+      await waitFor(() => events.some((event) => event.type === "turnCompleted"));
+      assert.deepEqual(events.filter((event) => event.type === "turnCompleted"), [{ type: "turnCompleted", outcome: "failed" }]);
+      assert.ok(events.some((event) => event.type === "error" && event.message === message), text);
+      assert.equal(JSON.stringify(events).includes("raw fixture"), false);
+    } finally { await adapter.dispose(); }
+  }
+});
+
+test("a cancelled MCP startup clears its earlier failure warning", async () => {
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--mcp-cancelled"] }, () => {});
+  try { assert.deepEqual((await adapter.resources()).warnings, []); }
+  finally { await adapter.dispose(); }
 });
 
 // Real evidence, never part of the default run: set PIUI_CODEX_LIVE_HANDSHAKE
