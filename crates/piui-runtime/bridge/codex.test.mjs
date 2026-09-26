@@ -473,7 +473,9 @@ test("MCP recovery clears its resource warning", async () => {
   const events = [];
   const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--mcp-recovery"] }, event => events.push(event));
   try {
-    assert.equal(events.some(event => event.type === "error"), false);
+    // Only MCP errors matter here: the fixture's unsupported attestation request
+    // may or may not have produced its own error by this point.
+    assert.equal(events.some(event => event.type === "error" && /MCP/.test(event.message)), false);
     assert.equal((await adapter.resources()).warnings.some(warning => warning.includes("fixture")), false);
   } finally { await adapter.dispose(); }
 });
