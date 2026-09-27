@@ -57,7 +57,7 @@ jobs:
       HAS_WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
       HAS_AZURE_SIGNING: ${{ vars.PIUI_AZURE_SIGNING_ENDPOINT != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
