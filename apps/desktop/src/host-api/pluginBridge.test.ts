@@ -12,7 +12,7 @@ import {
   rendererHeight,
   RequestBudget,
 } from './pluginBridge';
-import { contentType, panelHeaders, panelPolicy, PLUGIN_ORIGIN_WINDOWS, uiBase } from './pluginFrame';
+import { ASSET_POLICY, contentType, panelHeaders, panelPolicy, PLUGIN_ORIGIN_WINDOWS, uiBase } from './pluginFrame';
 
 const channel = 'c-1';
 const request = (method: string, params: unknown = undefined, extra: Record<string, unknown> = {}) => ({
@@ -132,6 +132,7 @@ describe('plugin protocol responses (shared with crates/piui-plugins csp.rs)', (
     const base = uiBase(fixture.id ?? '', fixture.uiEntry ?? '');
     expect(base).toBe(fixture.base);
     expect(panelPolicy(fixture.origin ?? '', base)).toBe(fixture.policy);
+    expect(ASSET_POLICY).toBe(fixture.assetPolicy);
   });
 
   it('allows no connections, frames, workers, forms or navigation targets and keeps the sandbox', () => {
@@ -153,7 +154,8 @@ describe('plugin protocol responses (shared with crates/piui-plugins csp.rs)', (
     expect(page?.['Access-Control-Allow-Origin']).toBeUndefined();
     const script = panelHeaders(PLUGIN_ORIGIN_WINDOWS, 'example.hello/ui/', 'ui/panel.js');
     expect(script).toMatchObject({ 'Access-Control-Allow-Origin': '*', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' });
-    expect(script?.['Content-Security-Policy']).toBeUndefined();
+    // Opened on its own (an SVG, say), a file runs no script.
+    expect(script?.['Content-Security-Policy']).toBe('sandbox');
     expect(panelHeaders(PLUGIN_ORIGIN_WINDOWS, 'example.hello/ui/', 'ui/tool.exe')).toBeUndefined();
   });
 });

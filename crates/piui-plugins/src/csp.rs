@@ -63,6 +63,11 @@ pub fn panel_policy(origin: &str, base: &str) -> String {
     )
 }
 
+/// The policy of every other served file (scripts, styles, images, fonts,
+/// text): opened as a document of its own — an SVG, say — it runs no script
+/// and keeps an opaque origin. Subresources ignore it.
+pub const ASSET_POLICY: &str = "sandbox";
+
 /// The content type of a served file, by extension. Anything else is not
 /// served.
 #[must_use]
@@ -145,5 +150,6 @@ mod tests {
         let base = ui_base(&text("id"), &text("uiEntry"));
         assert_eq!(base, text("base"));
         assert_eq!(panel_policy(&text("origin"), &base), text("policy"));
+        assert_eq!(ASSET_POLICY, text("assetPolicy"));
     }
 }

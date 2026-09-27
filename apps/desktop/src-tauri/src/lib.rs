@@ -20,6 +20,7 @@ mod contributions;
 mod dto;
 mod harness_configuration;
 mod harness_registry_api;
+mod navigation_guard;
 mod orchestration_api;
 mod orchestration_run_debugging;
 mod orchestration_schedule;
@@ -395,6 +396,24 @@ fn resolved_e2e_data_directories() -> Result<Option<E2eDataDirectories>, std::io
     )
 }
 
+/// App commands refuse a webview that shows the plugin origin
+/// (`navigation_guard`): only PiUI's own pages may call them.
+fn guarded_commands<R: tauri::Runtime>(
+    commands: impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static,
+) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
+    move |invoke| {
+        let url = invoke.message.webview_ref().url().ok();
+        if navigation_guard::refuses_invoke(url.as_ref()) {
+            eprintln!("event=plugin_origin_invoke_refused");
+            invoke
+                .resolver
+                .reject("PiUI commands are not available to this page.");
+            return true;
+        }
+        commands(invoke)
+    }
+}
+
 #[cfg(all(test, debug_assertions))]
 mod tests {
     use super::{
@@ -766,22 +785,8 @@ pub fn run() -> Result<(), tauri::Error> {
         },
     );
     // The app window never shows the plugin origin: a top-level document
-    // there would count as local and get IPC. Windows only: WebView2 reports
-    // top-level navigations here, so panel frames are unaffected; WebKit
-    // reports frame navigations too and needs its own guard.
-    #[cfg(windows)]
-    {
-        builder = builder.plugin(
-            tauri::plugin::Builder::<tauri::Wry>::new("piui-navigation-guard")
-                .on_navigation(|_webview, url| {
-                    !piui_plugins::csp::is_plugin_location(
-                        url.scheme(),
-                        url.host_str().unwrap_or(""),
-                    )
-                })
-                .build(),
-        );
-    }
+    // there would count as local and get IPC (see navigation_guard).
+    builder = builder.plugin(navigation_guard::plugin::<tauri::Wry>());
     let app = builder
         .on_window_event(background::on_window_event)
         .setup(move |app| {
@@ -864,7 +869,7 @@ pub fn run() -> Result<(), tauri::Error> {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(guarded_commands(tauri::generate_handler![
             workspace_api::workspace_command_v15,
             workspace_api::workspace_history_v1,
             workspace_api::workspace_settings_v16,
@@ -971,7 +976,7 @@ pub fn run() -> Result<(), tauri::Error> {
             orchestration_run_debugging::orchestration_pin_step_output_v1,
             orchestration_run_debugging::orchestration_set_run_archived_v1,
             orchestration_run_debugging::orchestration_delete_run_v1,
-        ])
+        ]))
         .build(context)?;
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, code, .. } = event {

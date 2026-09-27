@@ -583,7 +583,8 @@ principles of ADR-009/010/016.
   the top window and PiUI renders links as text. On Windows the host also
   refuses every main-frame navigation to that origin (WebView2 reports
   top-level navigations only); WebKit reports frame navigations to the
-  same hook, so macOS and Linux need their own guard. The response
+  same hook, so macOS and Linux need their own guard (plugins v2, below).
+  The response
   carries a per-plugin policy (`default-src 'none'`; scripts, styles, images
   and fonts only from the plugin's UI folder; no connections, frames,
   workers, forms or base URI; `sandbox allow-scripts`), shared with the UI
@@ -689,6 +690,28 @@ catalog; any enforcement of `network` or project-folder permissions.
   readable without the plugin (AGENTS.md generic-fallback rule). The host
   serves the UI folder to `ui.renderer` as it does to `ui.panel`; the frame
   code is its own chunk, loaded only for an open matching row.
+- **Plugin origin guard on every platform** (`navigation_guard.rs`). wry
+  0.55 hands the navigation hook only a URL, and on WebKit it calls the hook
+  for sub-frame navigations too (`decidePolicyForNavigationAction` and
+  WebKitGTK `decide-policy` never look at the target frame), so the
+  Windows-only refusal cannot move to macOS and Linux without breaking every
+  panel. Instead, on all platforms: (1) a page load of the main document on
+  the plugin origin is sent back to the last app page — wry reports page
+  loads for the main frame only (WebView2 `NavigationCompleted`, WKWebView
+  `didCommitNavigation`/`didFinishNavigation`, WebKitGTK `load-changed`), so
+  frames are never touched, but it acts after the load started; (2) every
+  app command refuses a call from a webview whose URL is on the plugin
+  origin, which closes that window for PiUI's own commands; (3) every file
+  the plugin protocol serves other than a panel page carries
+  `Content-Security-Policy: sandbox`, so a file opened as a document of its
+  own (an SVG, say) runs no script. Residual on macOS and Linux: during the
+  moment before the redirect a top-level plugin page could still use the
+  core event listener the default capability grants; closing it needs wry
+  to report whether a navigation is for the main frame (or a native
+  navigation delegate), and no path to such a navigation is known (links
+  are text, panel frames cannot navigate the top window). Only the Windows
+  build was compiled and run here; macOS and Linux need a build and a manual
+  check that panels still load.
 
 ## ADR-033 — Script nodes are trusted user code (orchestration v6.2)
 
