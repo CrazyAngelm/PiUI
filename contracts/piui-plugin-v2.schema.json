@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "PiUI plugin package manifest v2 (piui-plugin.json)",
-  "description": "One PiUI plugin (ADR-032, plugins v2). Version 2 adds status-bar items, keybindings and chat renderers; version 1 manifests stay valid against piui-plugin-v1.schema.json. The host validator (crates/piui-plugins) applies the schema of the declared version and then semantic rules: permissions required by each contribution, unique contribution ids, commands that status items and keybindings name, files that exist inside the package, the PiUI engine range, theme contrast and ACP descriptor rules (acp-agent-descriptor-v1). Unknown fields are rejected, never dropped. A manifest is data: installing it never runs plugin code.",
+  "description": "One PiUI plugin (ADR-032, plugins v2). Version 2 adds status-bar items, keybindings, chat renderers and MCP servers; version 1 manifests stay valid against piui-plugin-v1.schema.json. The host validator (crates/piui-plugins) applies the schema of the declared version and then semantic rules: permissions required by each contribution, unique contribution ids, commands that status items and keybindings name, files that exist inside the package, the PiUI engine range, theme contrast and ACP descriptor rules (acp-agent-descriptor-v1). Unknown fields are rejected, never dropped. A manifest is data: installing it never runs plugin code.",
   "type": "object",
   "properties": {
     "$schema": {
@@ -47,7 +47,7 @@
     "permissions": {
       "description": "Every permission the plugin asks for, shown in plain words in the trust review. Contributions need their permission; project.read, project.write and network decide what Node's permission model lets the backend reach.",
       "type": "array",
-      "maxItems": 12,
+      "maxItems": 13,
       "uniqueItems": true,
       "items": {
         "type": "string",
@@ -59,6 +59,7 @@
           "ui.renderer",
           "node.run",
           "acp.agents",
+          "mcp.tools",
           "chat.read",
           "notifications",
           "project.read",
@@ -397,6 +398,45 @@
               "id",
               "title",
               "toolNames"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "mcpServers": {
+          "description": "MCP servers in the plugin's package. PiUI offers one to new chats only after the person turns it on in Settings → Plugins, and only to harnesses that accept an MCP server for one session (Claude Code, Hermes and ACP agents). The harness starts it with Node.js under the same permission model as the backend; the user's own harness configuration is never changed.",
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/definitions/slug"
+              },
+              "title": {
+                "$ref": "#/definitions/label60"
+              },
+              "description": {
+                "$ref": "#/definitions/text200"
+              },
+              "entry": {
+                "$ref": "#/definitions/backendEntry"
+              },
+              "args": {
+                "description": "Fixed arguments after the entry.",
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "entry"
             ],
             "additionalProperties": false
           }

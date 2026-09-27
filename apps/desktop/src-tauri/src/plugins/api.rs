@@ -98,6 +98,13 @@ pub enum PluginsCommand {
         expected_revision: u64,
         theme: Option<ThemeRefDto>,
     },
+    /// v1.1: offer one MCP server to new chats, or stop offering it.
+    SetMcpOffered {
+        expected_revision: u64,
+        id: String,
+        server_id: String,
+        offered: bool,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -173,6 +180,28 @@ pub struct KeybindingDto {
     pub key: String,
 }
 
+/// An MCP server (v1.1) with the command line a harness starts for a new
+/// chat (project folders are added per chat) and whether it is offered.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerDto {
+    pub id: String,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub offered: bool,
+    pub command_line: CommandLine,
+    pub node_found: bool,
+}
+
+/// An MCP server in a review (v1.1).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewMcpServerDto {
+    pub title: String,
+    pub command_line: CommandLine,
+}
+
 /// A chat renderer (v1.1); `url` only while the plugin is active.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -208,6 +237,8 @@ pub struct ContributesDto {
     pub keybindings: Vec<KeybindingDto>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub renderers: Vec<RendererDto>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<McpServerDto>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -292,6 +323,8 @@ pub struct ReviewContributesDto {
     pub keybindings: Vec<KeybindingDto>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub renderers: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<ReviewMcpServerDto>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -488,11 +521,22 @@ fn plain_detail(message: &str) -> String {
     cleaned[..end].trim().to_owned()
 }
 
+fn command_line_of(command: &super::McpCommand) -> CommandLine {
+    CommandLine {
+        program: command.node.as_ref().map_or_else(
+            || "node".to_owned(),
+            |node| node.to_string_lossy().into_owned(),
+        ),
+        args: command.args.clone(),
+    }
+}
+
 fn contributes(
     id: &str,
     package: &Package,
     active: bool,
     acp: &[(piui_runtime::acp::AcpAgentId, bool)],
+    mcp: Option<(&std::path::Path, &std::path::Path, &[String])>,
 ) -> ContributesDto {
     let manifest = &package.manifest.manifest;
     let contributes = &manifest.contributes;
@@ -583,6 +627,23 @@ fn contributes(
             .map(|binding| KeybindingDto {
                 command: binding.command.clone(),
                 key: binding.key.clone(),
+            })
+            .collect(),
+        mcp_servers: contributes
+            .mcp_servers
+            .iter()
+            .filter_map(|server| {
+                let (root, data_dir, offered) = mcp?;
+                let command =
+                    PluginsState::mcp_command(manifest, server, root, data_dir, None, false)?;
+                Some(McpServerDto {
+                    id: server.id.clone(),
+                    title: server.title.clone(),
+                    description: server.description.clone(),
+                    offered: offered.contains(&server.id),
+                    command_line: command_line_of(&command),
+                    node_found: command.node.is_some(),
+                })
             })
             .collect(),
         renderers: contributes
@@ -693,7 +754,18 @@ pub(crate) fn registry_view(plugins: &PluginsState) -> Result<PluginsRegistryDto
                 problems,
                 log,
                 contributes: package
-                    .map(|package| contributes(&stored.id, package, active, &plugin.acp))
+                    .map(|package| {
+                        let data_dir = plugins.plugin_data_dir(&stored);
+                        contributes(
+                            &stored.id,
+                            package,
+                            active,
+                            &plugin.acp,
+                            root.as_deref().map(|root| {
+                                (root, data_dir.as_path(), stored.mcp_offered.as_slice())
+                            }),
+                        )
+                    })
                     .unwrap_or_default(),
                 settings,
                 id: stored.id,
@@ -851,6 +923,25 @@ pub(crate) fn review_view(plugins: &PluginsState, staging_id: &str, staged: &Sta
                 .renderers
                 .iter()
                 .map(|renderer| renderer.title.clone())
+                .collect(),
+            mcp_servers: manifest
+                .contributes
+                .mcp_servers
+                .iter()
+                .filter_map(|server| {
+                    let command = PluginsState::mcp_command(
+                        manifest,
+                        server,
+                        &root,
+                        &plugins.staged_data_dir(staged),
+                        None,
+                        false,
+                    )?;
+                    Some(ReviewMcpServerDto {
+                        title: server.title.clone(),
+                        command_line: command_line_of(&command),
+                    })
+                })
                 .collect(),
         },
         update,
@@ -1063,6 +1154,15 @@ pub async fn plugins_v1(
                 blocking(move || host.set_settings(expected_revision, &key, &values, from_panel))
                     .await?;
             plugins.supervisor().settings_changed(&id, &resolved).await;
+            true
+        }
+        PluginsCommand::SetMcpOffered {
+            expected_revision,
+            id,
+            server_id,
+            offered,
+        } => {
+            plugins.set_mcp_offered(expected_revision, &id, &server_id, offered)?;
             true
         }
         PluginsCommand::SetTheme {

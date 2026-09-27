@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { PLUGIN_PERMISSIONS as PLUGIN_PERMISSIONS_V1 } from '../../../../contracts/piui-plugin-v1';
 import { PLUGIN_PERMISSIONS, PLUGIN_THEME_TOKENS, type PluginFieldV1 } from '../../../../contracts/piui-plugin-v2';
@@ -51,7 +52,7 @@ describe('plugin manifest v1 and v2 fixtures (shared with crates/piui-plugins)',
       // invalid-* fail the JSON Schema; invalid-semantic-* pass it and fail a host rule.
       expect(validateSchema(value), name).toBe(name.startsWith('invalid-semantic-'));
     }
-  });
+  }, 30_000);
 
   it('reads the v2 contributions and warns about keybindings on PiUI shortcuts', () => {
     const checked = checkPluginManifestText(read(new URL('valid-v2.json', fixtures)), '0.2.2');
@@ -65,7 +66,8 @@ describe('plugin manifest v1 and v2 fixtures (shared with crates/piui-plugins)',
     expect(checkPluginManifest(shadowing, '0.2.2').ok).toBe(true);
     expect(reservedKeybindings(shadowing)).toEqual(['Mod+K']);
     const v1 = checkPluginManifestText(read(new URL('valid-full.json', fixtures)), PIUI);
-    expect(v1.ok && v2Contributions(v1.manifest)).toEqual({ statusItems: [], keybindings: [], renderers: [] });
+    expect(v1.ok && v2Contributions(v1.manifest)).toEqual({ statusItems: [], keybindings: [], renderers: [], mcpServers: [] });
+    expect(added.mcpServers.map((server) => server.entry)).toEqual(['mcp/server.mjs']);
   });
 
   it('keeps permissions and theme tokens equal to the schema and the stylesheet', () => {
@@ -77,7 +79,7 @@ describe('plugin manifest v1 and v2 fixtures (shared with crates/piui-plugins)',
     const v2 = JSON.parse(read(new URL('contracts/piui-plugin-v2.schema.json', repository))) as Schema;
     expect(schema.properties.permissions.items.enum).toEqual([...PLUGIN_PERMISSIONS_V1]);
     expect(v2.properties.permissions.items.enum).toEqual([...PLUGIN_PERMISSIONS]);
-    expect(PLUGIN_PERMISSIONS.filter((permission) => !(PLUGIN_PERMISSIONS_V1 as readonly string[]).includes(permission))).toEqual(['ui.status', 'ui.renderer']);
+    expect(PLUGIN_PERMISSIONS.filter((permission) => !(PLUGIN_PERMISSIONS_V1 as readonly string[]).includes(permission))).toEqual(['ui.status', 'ui.renderer', 'mcp.tools']);
     expect(schema.definitions.themeToken.enum).toEqual([...PLUGIN_THEME_TOKENS]);
     expect(v2.definitions.themeToken.enum).toEqual([...PLUGIN_THEME_TOKENS]);
     const stylesheet = read(new URL('apps/desktop/src/styles/tokens.css', repository));
@@ -149,6 +151,40 @@ describe('plugin SDK and examples', () => {
     expect(read(new URL('hello-command/ui/piui-panel.js', examples))).toBe(panel);
     expect(read(new URL('tool-cards/ui/piui-panel.js', examples))).toBe(panel);
   });
+
+  it('the tool-cards MCP server answers over stdio under the permission model PiUI starts it with', async () => {
+    const { spawn } = await import('node:child_process');
+    const packageRoot = fileURLToPath(new URL('tool-cards', examples));
+    const server = spawn(process.execPath, ['--permission', `--allow-fs-read=${packageRoot}`, join(packageRoot, 'mcp', 'server.mjs'), '--stdio'], { stdio: ['pipe', 'pipe', 'ignore'] });
+    try {
+      const replies: Record<string, unknown>[] = [];
+      let buffer = '';
+      server.stdout.setEncoding('utf8');
+      server.stdout.on('data', (chunk: string) => {
+        buffer += chunk;
+        let index;
+        while ((index = buffer.indexOf('\n')) >= 0) {
+          replies.push(JSON.parse(buffer.slice(0, index)) as Record<string, unknown>);
+          buffer = buffer.slice(index + 1);
+        }
+      });
+      const lines = [
+        { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } } },
+        { jsonrpc: '2.0', method: 'notifications/initialized' },
+        { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+        { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'create_issue', arguments: { title: 'Broken link in the harness guide', priority: 'low' } } },
+        { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'create_issue', arguments: { title: 'x' } } },
+      ];
+      server.stdin.write(lines.map((line) => JSON.stringify(line)).join('\n') + '\n');
+      await expect.poll(() => replies.length, { timeout: 10_000 }).toBe(4);
+      expect(replies[0]).toMatchObject({ id: 1, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} } } });
+      expect(replies[1]).toMatchObject({ id: 2, result: { tools: [{ name: 'create_issue' }] } });
+      expect(replies[2]).toMatchObject({ id: 3, result: { content: [{ type: 'text', text: 'Arguments: title: Broken link in the harness guide, priority: low' }] } });
+      expect(replies[3]).toMatchObject({ id: 4, result: { isError: true } });
+    } finally {
+      server.kill();
+    }
+  }, 30_000);
 
   it('the JSON transform node reshapes results without side effects', async () => {
     const transformUrl = new URL('pipeline-pack/backend/transform.mjs', examples).href;

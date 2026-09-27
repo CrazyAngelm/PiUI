@@ -29,6 +29,8 @@ test("Pi rejects per-session resource filtering before starting the native proce
   for (const kind of ["skill", "mcp"]) {
     await assert.rejects(createPiAdapter(config({ runtimeProgram: "must-not-launch", resourceRules: [{ kind, id: "canary", enabled: false }] }), () => {}), { bridgeCode: "unsupported-resource-policy" });
   }
+  // Plugins v2: Pi cannot take a plugin MCP server for one chat.
+  await assert.rejects(createPiAdapter(config({ runtimeProgram: "must-not-launch", pluginMcpServers: [{ name: "example-tool-cards-issues", command: process.execPath, args: ["server.mjs"] }] }), () => {}), { bridgeCode: "unsupported-settings" });
 });
 
 test("Pi RPC adapter snapshots history and returns prompt admission", async () => {

@@ -104,7 +104,7 @@
       </section>
     {/if}
 
-    {#if contributions.length || review.contributes.acpAgents.length}
+    {#if contributions.length || review.contributes.acpAgents.length || review.contributes.mcpServers?.length}
       <section aria-labelledby="plugin-contributions">
         <h3 id="plugin-contributions">{$t('Adds')}</h3>
         <ul class="contributions">
@@ -114,9 +114,15 @@
           {#each review.contributes.acpAgents as agent (agent.id)}
             <li><span class="kind">{$t('ACP agent')}</span> {agent.displayName} <code>{commandLineText(agent.commandLine)}</code></li>
           {/each}
+          {#each review.contributes.mcpServers ?? [] as server, index (index)}
+            <li><span class="kind">{$t('MCP tool server')}</span> {server.title} <code>{commandLineText(server.commandLine)}</code></li>
+          {/each}
         </ul>
         {#if review.contributes.acpAgents.length}
           <p class="muted">{$t('Each ACP agent still needs its own command-line trust in Settings → Harnesses before it runs.')}</p>
+        {/if}
+        {#if review.contributes.mcpServers?.length}
+          <p class="muted">{$t('No MCP tool server runs until you offer it to new chats in Settings → Plugins. Only Claude Code, Hermes and ACP agent chats can take one, and your harness settings are not changed.')}</p>
         {/if}
       </section>
     {/if}

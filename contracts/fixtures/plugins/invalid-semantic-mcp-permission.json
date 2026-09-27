@@ -12,8 +12,7 @@
   "permissions": [
     "commands",
     "ui.status",
-    "ui.renderer",
-    "mcp.tools"
+    "ui.renderer"
   ],
   "backend": {
     "entry": "backend/main.mjs"

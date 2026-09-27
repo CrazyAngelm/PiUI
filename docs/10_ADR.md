@@ -690,6 +690,30 @@ catalog; any enforcement of `network` or project-folder permissions.
   readable without the plugin (AGENTS.md generic-fallback rule). The host
   serves the UI folder to `ui.renderer` as it does to `ui.panel`; the frame
   code is its own chunk, loaded only for an open matching row.
+- **MCP tool servers.** `mcpServers` (permission `mcp.tools`) are Node.js
+  stdio servers in the package. The person offers each one to new chats in
+  Settings → Plugins (`plugins_v1` `setMcpOffered`, stored per plugin; off
+  by default). At a runtime start the workspace host asks the plugin host
+  only for an ordinary chat — no run, coordinator, tool allowlist or
+  resource rules — of a harness that takes an MCP server for one session
+  (`HarnessKind::accepts_session_mcp`: Claude Code via its session
+  `--mcp-config`, Hermes and ACP agents via `mcpServers` of `session/new` and
+  `session/load`). `NativeRuntimeConfig.plugin_mcp_servers` carries them;
+  the runtime refuses them for any other harness, with the coordinator or an
+  allowlist, and the Codex, Pi and Prime bridges refuse them too (Codex's
+  dotted `mcp_servers.*` overrides were not verified to stay per thread in
+  its shared app-server pool). The command line is Node with the backend's
+  permission flags (the chat's folder only with a project permission in a
+  trusted project) plus the entry and its arguments; without the permission
+  model nothing is offered. Pipeline profiles are untouched, so delegation
+  authority checks stay exact. Verified with the bridge fixtures and a real
+  Node run of the example server under `--permission`; not verified against
+  a real Claude Code, Hermes or ACP agent session (that needs a signed-in
+  harness and model turns).
+- **Downgrade.** A registry that stores a v2-only permission or an MCP offer
+  cannot be read by PiUI 0.2.2 and earlier (they refuse unknown values);
+  such a version starts with an empty plugin list and the installed copies
+  stay on disk.
 - **Plugin origin guard on every platform** (`navigation_guard.rs`). wry
   0.55 hands the navigation hook only a URL, and on WebKit it calls the hook
   for sub-frame navigations too (`decidePolicyForNavigationAction` and

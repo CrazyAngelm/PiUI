@@ -50,6 +50,9 @@ pub enum Permission {
     NodeRun,
     #[serde(rename = "acp.agents")]
     AcpAgents,
+    /// v2: MCP servers offered to chats the person chooses.
+    #[serde(rename = "mcp.tools")]
+    McpTools,
     #[serde(rename = "chat.read")]
     ChatRead,
     #[serde(rename = "notifications")]
@@ -63,7 +66,7 @@ pub enum Permission {
 }
 
 impl Permission {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Commands,
         Self::UiPanel,
         Self::UiSettings,
@@ -71,6 +74,7 @@ impl Permission {
         Self::UiRenderer,
         Self::NodeRun,
         Self::AcpAgents,
+        Self::McpTools,
         Self::ChatRead,
         Self::Notifications,
         Self::ProjectRead,
@@ -88,6 +92,7 @@ impl Permission {
             Self::UiRenderer => "ui.renderer",
             Self::NodeRun => "node.run",
             Self::AcpAgents => "acp.agents",
+            Self::McpTools => "mcp.tools",
             Self::ChatRead => "chat.read",
             Self::Notifications => "notifications",
             Self::ProjectRead => "project.read",
@@ -202,6 +207,20 @@ pub struct RendererContribution {
     pub tool_names: Vec<String>,
 }
 
+/// An MCP server in the package (v2): `node <entry> <args>`, started by a
+/// harness for chats the person offered it to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpServerContribution {
+    pub id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub entry: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Appearance {
@@ -297,6 +316,8 @@ pub struct Contributions {
     pub keybindings: Vec<KeybindingContribution>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub renderers: Vec<RendererContribution>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<McpServerContribution>,
 }
 
 /// The typed manifest. Decoding refuses unknown fields at every level.
@@ -683,6 +704,7 @@ fn require(
                 Permission::UiRenderer => "Add the permission “ui.renderer”.",
                 Permission::NodeRun => "Add the permission “node.run”.",
                 Permission::AcpAgents => "Add the permission “acp.agents”.",
+                Permission::McpTools => "Add the permission “mcp.tools”.",
                 Permission::ChatRead
                 | Permission::Notifications
                 | Permission::ProjectRead
@@ -740,6 +762,9 @@ fn check_permissions(manifest: &PluginManifest, problems: &mut Vec<Problem>) {
     }
     if !contributes.keybindings.is_empty() {
         require(manifest, Permission::Commands, "keybindings", problems);
+    }
+    if !contributes.mcp_servers.is_empty() {
+        require(manifest, Permission::McpTools, "MCP servers", problems);
     }
     if !contributes.renderers.is_empty() {
         require(manifest, Permission::UiRenderer, "renderers", problems);
@@ -800,7 +825,7 @@ fn duplicates<'a>(ids: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
 
 fn check_unique_ids(manifest: &PluginManifest, problems: &mut Vec<Problem>) {
     let contributes = &manifest.contributes;
-    let lists: [Vec<&str>; 7] = [
+    let lists: [Vec<&str>; 8] = [
         contributes
             .commands
             .iter()
@@ -833,6 +858,11 @@ fn check_unique_ids(manifest: &PluginManifest, problems: &mut Vec<Problem>) {
             .collect(),
         contributes
             .renderers
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect(),
+        contributes
+            .mcp_servers
             .iter()
             .map(|item| item.id.as_str())
             .collect(),

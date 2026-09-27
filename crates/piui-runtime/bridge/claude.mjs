@@ -90,6 +90,19 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
   if (config.nativeSubagents === true && toolAllowlist && !toolAllowlist.some((name) => name === "Agent" || name === "Task")) {
     throw fail("unsupported-policy", "Native Claude Code subagents require the Agent tool in the enforced tool policy.");
   }
+  // Plugin MCP servers (plugins v2): stdio servers the host resolved for an
+  // ordinary chat. Only added to this session; the user's config is untouched.
+  const pluginMcpServers = config.pluginMcpServers ?? [];
+  if (!Array.isArray(pluginMcpServers) || pluginMcpServers.length > 16 || pluginMcpServers.some((server) => server === null || typeof server !== "object"
+    || typeof server.name !== "string" || !/^[a-z0-9_-]{1,64}$/.test(server.name) || server.name === "piui-workspace"
+    || typeof server.command !== "string" || !isAbsolute(server.command)
+    || !Array.isArray(server.args) || server.args.some((arg) => typeof arg !== "string"))
+    || new Set(pluginMcpServers.map((server) => server.name)).size !== pluginMcpServers.length) {
+    throw fail("unsupported-settings", "The plugin MCP servers for this chat are invalid.");
+  }
+  if (pluginMcpServers.length && (coordination || toolAllowlist)) {
+    throw fail("unsupported-settings", "Plugin MCP servers are only for ordinary Claude Code chats.");
+  }
   const disableSubagents = coordination || config.nativeSubagents === false;
   if (config.nativeId != null && (typeof config.nativeId !== "string" || !UUID_PATTERN.test(config.nativeId))) {
     throw fail("invalid-session", "The saved Claude Code conversation reference is invalid.");
@@ -1346,10 +1359,16 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
     if (typeof config.instructions === "string" && config.instructions.trim()) {
       args.push("--append-system-prompt-file", await scratchFile("instructions.md", config.instructions));
     }
+    const mcpServers = {};
     if (server) {
-      const mcpConfig = { mcpServers: { [COORDINATOR_SERVER]: { type: "http", url: `http://127.0.0.1:${server.address().port}/mcp`, headers: { Authorization: `Bearer ${mcpToken}` } } } };
+      mcpServers[COORDINATOR_SERVER] = { type: "http", url: `http://127.0.0.1:${server.address().port}/mcp`, headers: { Authorization: `Bearer ${mcpToken}` } };
+    }
+    // Plugin tools run under Claude Code's own permission prompts.
+    for (const plugin of pluginMcpServers) mcpServers[plugin.name] = { type: "stdio", command: plugin.command, args: [...plugin.args], env: {} };
+    if (Object.keys(mcpServers).length) {
+      args.push("--mcp-config", await scratchFile("mcp.json", JSON.stringify({ mcpServers })));
       // The coordinator enforces its own ACL, so its tool runs without prompts.
-      args.push("--mcp-config", await scratchFile("mcp.json", JSON.stringify(mcpConfig)), "--allowed-tools", COORDINATOR_TOOL);
+      if (server) args.push("--allowed-tools", COORDINATOR_TOOL);
     }
     if (toolAllowlist) args.push("--tools", toolAllowlist.join(","), "--strict-mcp-config");
     const denied = [...(disableSubagents ? ["Agent"] : []), ...(toolAllowlist && !coordination ? ["mcp__*"] : [])];

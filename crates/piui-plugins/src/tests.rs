@@ -241,7 +241,7 @@ fn theme_tokens_match_the_schema_and_the_stylesheet() {
             .into_iter()
             .filter(|permission| !matches!(
                 permission,
-                Permission::UiStatus | Permission::UiRenderer
+                Permission::UiStatus | Permission::UiRenderer | Permission::McpTools
             ))
             .map(Permission::as_str)
             .collect::<Vec<_>>()

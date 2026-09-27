@@ -23,8 +23,10 @@
     onReload: () => void;
     onRestart: () => void;
     onRemove: () => void;
+    /** Offer an MCP server to new chats, or stop offering it. */
+    onOfferMcp: (serverId: string, offered: boolean) => void;
   }
-  let { plugin, safeMode, busy, onToggle, onSettings, onReload, onRestart, onRemove }: Props = $props();
+  let { plugin, safeMode, busy, onToggle, onSettings, onReload, onRestart, onRemove, onOfferMcp }: Props = $props();
 
   // "Label: count" needs no plural forms in either language.
   const counts = $derived(
@@ -38,6 +40,7 @@
         [plugin.contributes.acpAgents.length, 'ACP agents: {0}'],
         [plugin.contributes.statusItems?.length ?? 0, 'Status items: {0}'],
         [plugin.contributes.renderers?.length ?? 0, 'Chat renderers: {0}'],
+        [plugin.contributes.mcpServers?.length ?? 0, 'MCP tool servers: {0}'],
       ] as const
     )
       .filter(([count]) => count > 0)
@@ -103,6 +106,33 @@
   {#each clashes as agent (agent.id)}
     <p class="muted">{$t('The ACP agent “{0}” was not added: another agent already uses its ID.', [agent.displayName])}</p>
   {/each}
+
+  {#if plugin.contributes.mcpServers?.length}
+    <section class="mcp" aria-labelledby="plugin-mcp-{plugin.id}">
+      <h4 id="plugin-mcp-{plugin.id}">{$t('MCP tool servers')}</h4>
+      <p class="muted">{$t('An offered server joins each new Claude Code, Hermes or ACP agent chat for that chat only; your harness settings are not changed. Codex, Pi, Prime Agent and pipeline runs never get it. It runs under the same Node.js limits as the backend.')}</p>
+      <ul>
+        {#each plugin.contributes.mcpServers as server (server.id)}
+          <li>
+            <div class="mcp__row">
+              <span>
+                <strong>{server.title}</strong>
+                {#if server.description}<small class="muted">{server.description}</small>{/if}
+              </span>
+              <Switch
+                label={$t('Offer {0} to new chats', [server.title])}
+                hideLabel
+                checked={server.offered}
+                disabled={safeMode || busy || !plugin.active}
+                onCheckedChange={(checked) => onOfferMcp(server.id, checked)}
+              />
+            </div>
+            <code class="command">{commandLineText(server.commandLine)}</code>
+          </li>
+        {/each}
+      </ul>
+    </section>
+  {/if}
 
   <details class="more">
     <summary>{$t('Permissions and backend')}</summary>
@@ -266,6 +296,31 @@
   }
   .log time {
     color: var(--piui-text-muted);
+  }
+  .mcp {
+    display: grid;
+    gap: var(--piui-space-2);
+  }
+  .mcp ul {
+    display: grid;
+    gap: var(--piui-space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .mcp li {
+    display: grid;
+    gap: var(--piui-space-1);
+  }
+  .mcp__row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--piui-space-3);
+  }
+  .mcp__row span {
+    display: grid;
+    gap: 2px;
   }
   kbd {
     padding: 0 4px;

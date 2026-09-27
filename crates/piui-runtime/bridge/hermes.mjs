@@ -9,6 +9,17 @@ export async function createHermesAdapter(config, emit, coordinatorRequest) {
   const fail = (code, message = 'Hermes could not complete the operation.') => Object.assign(new Error(code), { bridgeCode: code, safeMessage: message });
   if (config.harness !== 'hermes' || !isAbsolute(config.cwd) || !config.runtimeProgram || !isAbsolute(config.agentDir)) throw fail('invalid-configuration');
   if (config.permissionMode !== 'native' || config.baseInstructions != null || config.thinkingLevel || config.serviceTier === 'fast' || config.allowedTools != null || config.resourceRules?.length || config.nativeSubagents != null) throw fail('unsupported-settings', 'Hermes ACP does not support the requested per-session restriction.');
+  // Plugin MCP servers (plugins v2): stdio servers the host resolved for an
+  // ordinary chat. Only added to this session; the user's config is untouched.
+  const pluginMcpServers = config.pluginMcpServers ?? [];
+  if (!Array.isArray(pluginMcpServers) || pluginMcpServers.length > 16 || pluginMcpServers.some((server) => server === null || typeof server !== 'object'
+    || typeof server.name !== 'string' || !/^[a-z0-9_-]{1,64}$/.test(server.name) || server.name === 'piui-workspace'
+    || typeof server.command !== 'string' || !isAbsolute(server.command)
+    || !Array.isArray(server.args) || server.args.some((arg) => typeof arg !== 'string'))
+    || new Set(pluginMcpServers.map((server) => server.name)).size !== pluginMcpServers.length) {
+    throw fail('unsupported-settings', 'The plugin MCP servers for this chat are invalid.');
+  }
+  if (pluginMcpServers.length && config.coordination) throw fail('unsupported-settings', 'Plugin MCP servers are only for ordinary chats.');
   const canonical = path => process.platform === 'win32' ? path.toLowerCase() : path;
   const nativePath = join(config.agentDir, 'state.db');
   if (config.nativePath && config.nativePath !== nativePath) throw fail('invalid-session');
@@ -92,7 +103,8 @@ print(json.dumps({'models':models,'resources':{'items':items,'warnings':warnings
   }; }
 
   let server;
-  const mcpServers = [];
+  // Hermes takes stdio MCP servers over ACP; plugin servers join this session only.
+  const mcpServers = pluginMcpServers.map(plugin => ({ name: plugin.name, command: plugin.command, args: [...plugin.args], env: [] }));
   if (config.coordination) {
     const token = randomUUID();
     server = createServer(async (req, res) => {

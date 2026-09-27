@@ -12,6 +12,7 @@ export async function createPiAdapter(config, emit) {
   };
   if (config.harness !== "pi") throw fail("wrong-harness", "The Pi adapter received an invalid harness configuration.");
   if (config.resourceRules?.length) throw fail("unsupported-resource-policy", "Pi RPC does not expose per-session skill or MCP filtering.");
+  if (config.pluginMcpServers?.length) throw fail("unsupported-settings", "Pi cannot take a plugin's MCP server for one chat.");
   if (typeof config.runtimeProgram !== "string" || !Array.isArray(config.runtimeArgs)) {
     throw fail("runtime-unavailable", "The Pi runtime is not installed.");
   }

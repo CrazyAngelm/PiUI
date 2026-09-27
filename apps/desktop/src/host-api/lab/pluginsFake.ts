@@ -170,6 +170,8 @@ interface LabPlugin {
   log: PluginLogEntryV1[];
   /** Lab behaviour of the broken sample. */
   crashing?: boolean;
+  /** MCP servers offered to new chats. */
+  mcpOffered?: string[];
 }
 
 interface LabStaged {
@@ -261,6 +263,15 @@ export class LabPluginHost {
     return defaults.ok ? defaults.values : {};
   }
 
+  /** An MCP server's command line: the same permission flags, the entry and its arguments. */
+  private mcpCommandLine(plugin: { manifest: PluginManifest; root: string }, server: { entry: string; args?: string[] }): CommandLineV1 {
+    const data = `${DATA}/data/${labUuid(`data:${plugin.manifest.id}`)}`;
+    return {
+      program: NODE,
+      args: ['--permission', `--allow-fs-read=${plugin.root}`, `--allow-fs-read=${data}`, `--allow-fs-write=${data}`, `${plugin.root}/${server.entry}`, ...(server.args ?? [])],
+    };
+  }
+
   /** The host's command line: Node's permission flags for the package and its data folder, then the entry. */
   private commandLine(plugin: { manifest: PluginManifest; root: string }): CommandLineV1 | undefined {
     if (!plugin.manifest.backend) return undefined;
@@ -339,6 +350,18 @@ export class LabPluginHost {
             }
           : {}),
         ...(added.keybindings.length ? { keybindings: added.keybindings.map((binding) => ({ command: binding.command, key: binding.key })) } : {}),
+        ...(added.mcpServers.length
+          ? {
+              mcpServers: added.mcpServers.map((server) => ({
+                id: server.id,
+                title: server.title,
+                ...(server.description ? { description: server.description } : {}),
+                offered: (plugin.mcpOffered ?? []).includes(server.id),
+                commandLine: this.mcpCommandLine(plugin, server),
+                nodeFound: true,
+              })),
+            }
+          : {}),
         ...(added.renderers.length
           ? {
               renderers: added.renderers.map((renderer) => ({
@@ -426,6 +449,7 @@ export class LabPluginHost {
           ? { keybindings: added.keybindings.map((binding) => ({ command: (m.contributes.commands ?? []).find((command) => command.id === binding.command)?.title ?? binding.command, key: binding.key })) }
           : {}),
         ...(added.renderers.length ? { renderers: added.renderers.map((renderer) => renderer.title) } : {}),
+        ...(added.mcpServers.length ? { mcpServers: added.mcpServers.map((server) => ({ title: server.title, commandLine: this.mcpCommandLine(staged, server) })) } : {}),
       },
       ...(previous
         ? {
@@ -556,6 +580,18 @@ export class LabPluginHost {
         this.changed();
         return { registry: this.view() };
       }
+      case 'setMcpOffered': {
+        const plugin = this.find(command.id);
+        if (plugin === undefined || !this.isActive(plugin)) throw failure('INACTIVE');
+        if (!(plugin.manifest.permissions as readonly PluginPermission[]).includes('mcp.tools')) throw failure('PERMISSION_DENIED');
+        if (!v2Contributions(plugin.manifest).mcpServers.some((server) => server.id === command.serverId)) throw failure('NOT_FOUND');
+        this.transact(command.expectedRevision, () => {
+          const others = (plugin.mcpOffered ?? []).filter((id) => id !== command.serverId);
+          plugin.mcpOffered = command.offered ? [...others, command.serverId].sort() : others;
+        });
+        this.changed();
+        return { registry: this.view() };
+      }
       case 'setTheme': {
         const theme = command.theme;
         if (theme !== null) {
@@ -677,6 +713,7 @@ const commandSchema: Schema = tagged('type', {
   restartBackend: { id: pluginId },
   setSettings: { expectedRevision: u64, id: pluginId, values: json, origin: option(enumOf(['settings', 'panel'])) },
   setTheme: { expectedRevision: u64, theme: option(object({ pluginId: string, themeId: string })) },
+  setMcpOffered: { expectedRevision: u64, id: pluginId, serverId: string, offered: boolean },
 });
 const commandRequestSchema = object({
   pluginId: string,

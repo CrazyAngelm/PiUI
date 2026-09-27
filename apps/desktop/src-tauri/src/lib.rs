@@ -844,6 +844,21 @@ pub fn run() -> Result<(), tauri::Error> {
                 .set_notify(std::sync::Arc::new(move || {
                     plugins::emit_changed(&plugin_events);
                 }));
+            // Plugin MCP servers the person offered reach ordinary new chats
+            // of harnesses that take them per session; a trusted project's
+            // folder is granted only with a project permission.
+            let mcp_plugins = plugin_host.clone();
+            let mcp_app = app.handle().clone();
+            state.workspace.set_plugin_mcp_provider(std::sync::Arc::new(
+                move |workspace_id, cwd| {
+                    let project = mcp_app.try_state::<state::HostState>().and_then(|host| {
+                        (!host.is_personal_workspace(workspace_id)
+                            && api::verified_project_directory(&host, workspace_id, true).is_ok())
+                        .then(|| piui_runtime::script_runner::process_directory(cwd))
+                    });
+                    mcp_plugins.session_mcp_servers(project.as_deref())
+                },
+            ));
             app.manage(plugin_host);
             let watcher = catalog_watch::start_catalog_watcher(
                 app.handle().clone(),

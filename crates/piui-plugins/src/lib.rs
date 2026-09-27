@@ -19,9 +19,9 @@ pub mod zip;
 pub use fields::{Field, FieldKind, ValueIssue, carry_values, resolve_values};
 pub use manifest::{
     Appearance, CommandContribution, CommandSurface, KeybindingContribution, MANIFEST_FILE,
-    NodeTypeContribution, PanelContribution, Permission, PluginManifest, Problem, ProblemCode,
-    RendererContribution, StatusItemContribution, ThemeContribution, ValidatedManifest,
-    parse_manifest,
+    McpServerContribution, NodeTypeContribution, PanelContribution, Permission, PluginManifest,
+    Problem, ProblemCode, RendererContribution, StatusItemContribution, ThemeContribution,
+    ValidatedManifest, parse_manifest,
 };
 pub use package::{
     PackageFile, ValidatedPackage, code_hash, load_archive, load_folder, resolve_inside,

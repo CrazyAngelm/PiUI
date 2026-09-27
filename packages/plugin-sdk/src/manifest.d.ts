@@ -10,6 +10,7 @@ export type {
   PluginManifest,
   PluginManifestV1,
   PluginManifestV2,
+  PluginMcpServerContributionV2,
   PluginNodeTypeContributionV1,
   PluginPanelContributionV1,
   PluginPermission,

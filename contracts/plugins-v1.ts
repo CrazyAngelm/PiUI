@@ -31,7 +31,11 @@
  * `statusItems`, `keybindings` and `renderers` on an entry and in a review
  * (absent when empty), and the command origins `status` and `keybinding`,
  * which the host allows only for a command a status item (with `ui.status`)
- * or a keybinding names.
+ * or a keybinding names. It also carries MCP servers (`mcpServers`, with
+ * `mcp.tools`) and the `setMcpOffered` command: an offered server reaches
+ * ordinary new chats of Claude Code, Hermes and ACP agents only (the host
+ * adds it to that session; the person's harness configuration is never
+ * changed); Codex, Pi, Prime Agent and managed pipeline runs never get it.
  */
 import type { CommandLineV1 } from './harness-registry-v1';
 import type { PluginFieldV1, PluginPermission, PluginProblemCode, PluginValue } from './piui-plugin-v2';
@@ -134,6 +138,21 @@ export interface PluginStatusItemV1 {
   alignment: 'start' | 'end';
 }
 
+/**
+ * An MCP server of the plugin (v1.1). `commandLine` is what a harness starts
+ * for a new chat (Node's permission flags, the entry and its arguments); a
+ * trusted project's folder is added per chat with a project permission.
+ */
+export interface PluginMcpServerV1 {
+  id: string;
+  title: string;
+  description?: string;
+  /** The person turned it on for new chats. */
+  offered: boolean;
+  commandLine: CommandLineV1;
+  nodeFound: boolean;
+}
+
 /** A keybinding of one of the plugin's commands (v1.1, origin `keybinding`). */
 export interface PluginKeybindingV1 {
   command: string;
@@ -225,6 +244,7 @@ export interface PluginEntryV1 {
     statusItems?: PluginStatusItemV1[];
     keybindings?: PluginKeybindingV1[];
     renderers?: PluginRendererV1[];
+    mcpServers?: PluginMcpServerV1[];
   };
   /** Current values with declared defaults applied. */
   settings: Record<string, PluginValue>;
@@ -286,6 +306,8 @@ export interface PluginReviewV1 {
     keybindings?: PluginKeybindingV1[];
     /** v1.1: renderer titles. */
     renderers?: string[];
+    /** v1.1: MCP servers with their command lines (none is offered until turned on). */
+    mcpServers?: { title: string; commandLine: CommandLineV1 }[];
   };
   update?: PluginChangeV1;
   /** The same id, version and code are installed already: nothing to do. */
@@ -302,7 +324,9 @@ export type PluginsCommandV1 =
   | { type: 'reload'; expectedRevision: number; id: string }
   | { type: 'restartBackend'; id: string }
   | { type: 'setSettings'; expectedRevision: number; id: string; values: Record<string, PluginValue>; origin?: 'settings' | 'panel' }
-  | { type: 'setTheme'; expectedRevision: number; theme: PluginThemeRefV1 | null };
+  | { type: 'setTheme'; expectedRevision: number; theme: PluginThemeRefV1 | null }
+  /** v1.1: offer an MCP server to new chats, or stop offering it (running chats keep theirs). */
+  | { type: 'setMcpOffered'; expectedRevision: number; id: string; serverId: string; offered: boolean };
 
 export interface PluginsResponseV1 {
   registry: PluginsRegistryV1;

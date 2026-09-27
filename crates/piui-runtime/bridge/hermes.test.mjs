@@ -43,6 +43,17 @@ test('managed sessions route native MCP calls to the host coordinator', async ()
   const a = await createHermesAdapter({ ...config, coordination: true }, () => {}, async request => { calls.push(request); return { members: [] }; });
   try { assert.deepEqual(calls, [{ type: 'roster' }]); } finally { await a.dispose(); }
 });
+test('a plugin MCP server reaches Hermes as a stdio server for this session only (plugins v2)', async () => {
+  const server = { name: 'example-tool-cards-issues', command: process.execPath, args: ['--permission', 'server.mjs', '--stdio'] };
+  const events = [];
+  const adapter = await createHermesAdapter({ ...config, pluginMcpServers: [server] }, event => events.push(event));
+  try {
+    const text = JSON.stringify(events.concat(adapter.snapshot?.()?.blocks ?? []));
+    assert.ok(text.includes('example-tool-cards-issues'), 'the session received the plugin server');
+  } finally { await adapter.dispose(); }
+  await assert.rejects(createHermesAdapter({ ...config, pluginMcpServers: [{ ...server, command: 'node' }] }, () => {}), { bridgeCode: 'unsupported-settings' });
+});
+
 test('unsupported mandatory settings fail before spawning', async () => {
   for (const override of [{ permissionMode: 'read-only' }, { serviceTier: 'fast' }, { allowedTools: [] }, { resourceRules: [{ kind: 'skill', id: 'x', enabled: false }] }, { nativeSubagents: false }, { baseInstructions: '' }, { thinkingLevel: 'high' }]) {
     await assert.rejects(createHermesAdapter({ ...config, ...override, runtimeProgram: 'must-not-launch' }, () => {}), { bridgeCode: 'unsupported-settings' });

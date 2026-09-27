@@ -295,6 +295,27 @@ test.describe('plugins', () => {
     await expect(page.getByRole('group', { name: 'How to show this tool' }).getByRole('button', { name: 'Issue card (plugin Tool cards)' })).toBeDisabled();
   });
 
+  test('an MCP tool server is offered to new chats only after the person turns it on (v2)', async ({ lab, page }) => {
+    await openPlugins(lab, page);
+    const plugin = card(page, 'Tool cards');
+    const servers = plugin.getByRole('region', { name: 'MCP tool servers' });
+    await expect(servers).toContainText('Codex, Pi, Prime Agent and pipeline runs never get it.');
+    await expect(servers.locator('code')).toContainText('--permission');
+    const offer = servers.getByRole('switch', { name: 'Offer Issue drafts to new chats' });
+    await expect(offer).not.toBeChecked();
+    // Keyboard: Space turns the offer on and off.
+    await offer.focus();
+    await page.keyboard.press('Space');
+    await expect(lab.toast('New chats that can take it get this tool server')).toBeVisible();
+    await expect(offer).toBeChecked();
+    await page.keyboard.press('Space');
+    await expect(offer).not.toBeChecked();
+    // A disabled plugin offers nothing and its switch is off-limits.
+    await plugin.getByRole('switch', { name: 'Enable Tool cards' }).click();
+    await expect(plugin).toContainText('Disabled');
+    await expect(offer).toBeDisabled();
+  });
+
   test('safe mode lists plugins read-only', async ({ lab, page }) => {
     await openPlugins(lab, page, 'safe');
     await expect(page.getByText('Safe mode: plugins are listed, but none is active and changes are off.')).toBeVisible();

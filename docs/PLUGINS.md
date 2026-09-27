@@ -1,8 +1,8 @@
 # PiUI plugins
 
 Plugins add commands, chat panels, settings, themes, pipeline templates,
-pipeline node types, ACP agents, status-bar items, keyboard shortcuts and
-chat renderers to PiUI. This guide is for plugin authors;
+pipeline node types, ACP agents, status-bar items, keyboard shortcuts, chat
+renderers and MCP tool servers to PiUI. This guide is for plugin authors;
 the design and its limits are ADR-032 (`docs/10_ADR.md`), and the normative
 contracts are in `contracts/`:
 
@@ -51,8 +51,8 @@ Examples in `examples/plugins/`:
 - `acp-agent` — adds OpenCode as an ACP agent;
 - `status-tools` — manifest version 2: a status-bar item and two keyboard
   shortcuts;
-- `tool-cards` — manifest version 2: a chat renderer that shows issue-tracker
-  tool calls as a card.
+- `tool-cards` — manifest version 2: an MCP tool server that drafts issues
+  and a chat renderer that shows issue-tracker tool calls as a card.
 
 ## Package
 
@@ -92,14 +92,14 @@ every file; the review shows it and PiUI checks it again at every start.
 
 | Field | Rules |
 |---|---|
-| `schemaVersion` | `2` (current) or `1`. Version 1 manifests keep working unchanged but cannot use `ui.status`, `ui.renderer`, `statusItems`, `keybindings` or `renderers`. |
+| `schemaVersion` | `2` (current) or `1`. Version 1 manifests keep working unchanged but cannot use `ui.status`, `ui.renderer`, `mcp.tools`, `statusItems`, `keybindings`, `renderers` or `mcpServers`. |
 | `id` | Lowercase segments of letters, digits and inner hyphens joined by dots (`acme.word-count`), at most 100 characters. It never changes between versions. |
 | `name`, `publisher` | 1–64 characters, no control characters |
 | `version` | `MAJOR.MINOR.PATCH` with an optional pre-release |
 | `engines.piui` | Space-separated comparators that must all match: `>=`, `>`, `<=`, `<`, `=`, `^`, `~` |
 | `permissions` | See below. A contribution without its permission is an error. |
 | `backend.entry`, `ui.entry` | A file inside the package, forward slashes, no `.` or `..` |
-| `contributes` | `commands`, `settings`, `panels`, `themes`, `templates`, `nodeTypes`, `acpAgents`; version 2 adds `statusItems`, `keybindings`, `renderers` |
+| `contributes` | `commands`, `settings`, `panels`, `themes`, `templates`, `nodeTypes`, `acpAgents`; version 2 adds `statusItems`, `keybindings`, `renderers`, `mcpServers` |
 
 Unknown fields are errors, never ignored. The `$schema` field may point at
 `piui-plugin-v2.schema.json` (or `piui-plugin-v1.schema.json`) for editor
@@ -116,6 +116,7 @@ completion.
 | `ui.renderer` | Chat renderers (version 2); the renderer sees the output of the tools it names | Yes |
 | `node.run` | Pipeline node types | Yes |
 | `acp.agents` | ACP agents in Settings → Harnesses | Yes |
+| `mcp.tools` | MCP tool servers (version 2), offered to new chats once the person turns them on | Yes |
 | `chat.read` | The open chat's id and title (never its messages) | Yes |
 | `notifications` | Short notices from a panel | Yes |
 | `project.read` | The backend receives the chat's or run's project path and may read that folder | Yes, by Node's permission model |
@@ -203,6 +204,36 @@ const panel = window.piuiPanel;
 panel.ready.then((init) => { if (init.renderer) show(init.renderer.activity); panel.autoResize(); });
 panel.on('activity', show);
 ```
+
+### MCP tool servers (version 2)
+
+```json
+"mcpServers": [{ "id": "issues", "title": "Issue drafts", "entry": "mcp/server.mjs", "args": ["--stdio"] }]
+```
+
+Requires `mcp.tools`. The entry is a Node.js MCP server over stdio in your
+package. Nothing runs at install: Settings → Plugins lists each server with
+its exact command line and a switch, **Offer … to new chats**, which is off
+until the person turns it on. Then:
+
+- Every **new or reopened ordinary chat** of **Claude Code, Hermes or an ACP
+  agent** gets the server for that chat only — Claude Code through its
+  `--mcp-config` file for the session, Hermes and ACP agents through the
+  `mcpServers` of `session/new` / `session/load`. The person's own harness
+  configuration is never read or changed, and the harness asks its usual
+  permission for each tool call.
+- **Codex, Pi and Prime Agent** have no verified way to take an MCP server
+  for one session, and **pipeline runs** keep exactly their profile's tools
+  and resources, so they never get it; their bridges also refuse such a
+  configuration outright.
+- The harness starts `node <permission flags> <entry> <args>` inside the
+  chat's own process containment, with the same Node permission model as the
+  backend (your package, your `dataDir`, and the chat's project folder only
+  with `project.read` / `project.write` in a trusted project). Without a
+  Node.js that has the permission model, no chat gets the server.
+- The server is named `<plugin id with dots as hyphens>-<server id>` (at most
+  64 characters), so Claude Code shows its tools as
+  `mcp__<that name>__<tool>` — name your renderer's `toolNames` after that.
 
 ### Settings
 

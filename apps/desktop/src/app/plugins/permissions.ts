@@ -35,6 +35,10 @@ export const PERMISSION_TEXT: Readonly<Record<PluginPermission, { label: string;
     label: 'Add ACP agents to Settings → Harnesses',
     detail: 'Each agent runs only after you trust its exact command line there.',
   },
+  'mcp.tools': {
+    label: 'Offer MCP tools to chats',
+    detail: 'Only after you turn a tool server on in Settings → Plugins, and only in new Claude Code, Hermes and ACP agent chats. Your harness settings are not changed.',
+  },
   'chat.read': {
     label: 'See the title of the open chat',
     detail: 'Never the messages.',

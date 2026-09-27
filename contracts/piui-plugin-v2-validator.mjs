@@ -2,7 +2,7 @@
 "use strict";
 export const validate = validate10;
 export default validate10;
-const schema11 = {"$schema":"http://json-schema.org/draft-07/schema#","title":"PiUI plugin package manifest v2 (piui-plugin.json)","description":"One PiUI plugin (ADR-032, plugins v2). Version 2 adds status-bar items, keybindings and chat renderers; version 1 manifests stay valid against piui-plugin-v1.schema.json. The host validator (crates/piui-plugins) applies the schema of the declared version and then semantic rules: permissions required by each contribution, unique contribution ids, commands that status items and keybindings name, files that exist inside the package, the PiUI engine range, theme contrast and ACP descriptor rules (acp-agent-descriptor-v1). Unknown fields are rejected, never dropped. A manifest is data: installing it never runs plugin code.","type":"object","properties":{"$schema":{"type":"string","maxLength":300},"schemaVersion":{"const":2},"id":{"description":"Stable reverse-DNS id or slug: lowercase segments of letters, digits and inner hyphens, joined by dots.","type":"string","maxLength":100,"pattern":"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?){0,7}$"},"name":{"$ref":"#/definitions/label64"},"version":{"$ref":"#/definitions/semver"},"publisher":{"$ref":"#/definitions/label64"},"description":{"$ref":"#/definitions/text500"},"engines":{"type":"object","properties":{"piui":{"description":"Space-separated comparators that must all match: >=, >, <=, <, =, ^ or ~ followed by MAJOR.MINOR.PATCH.","type":"string","maxLength":100,"pattern":"^(?:>=|<=|>|<|=|\\^|~)?\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?: (?:>=|<=|>|<|=|\\^|~)?\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?){0,3}$"}},"required":["piui"],"additionalProperties":false},"permissions":{"description":"Every permission the plugin asks for, shown in plain words in the trust review. Contributions need their permission; project.read, project.write and network decide what Node's permission model lets the backend reach.","type":"array","maxItems":12,"uniqueItems":true,"items":{"type":"string","enum":["commands","ui.panel","ui.settings","ui.status","ui.renderer","node.run","acp.agents","chat.read","notifications","project.read","project.write","network"]}},"backend":{"description":"A Node.js ES module or script the host runs, contained, on first use.","type":"object","properties":{"entry":{"$ref":"#/definitions/backendEntry"}},"required":["entry"],"additionalProperties":false},"ui":{"description":"The static HTML entry of the plugin's sandboxed panels. Files are served only from the entry's folder.","type":"object","properties":{"entry":{"$ref":"#/definitions/uiEntry"}},"required":["entry"],"additionalProperties":false},"contributes":{"type":"object","properties":{"commands":{"type":"array","maxItems":50,"items":{"type":"object","properties":{"id":{"$ref":"#/definitions/slug"},"title":{"$ref":"#/definitions/label80"},"description":{"$ref":"#/definitions/text200"},"surfaces":{"description":"Where the command appears. Default: the command palette.","type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string","enum":["palette","composer"]}},"insertText":{"description":"Declarative command: this text is prepared in the message box for review. Without it the plugin's backend runs the command.","type":"string","minLength":1,"maxLength":4000}},"required":["id","title"],"additionalProperties":false}},"settings":{"type":"array","maxItems":30,"items":{"$ref":"#/definitions/field"}},"panels":{"type":"array","maxItems":5,"items":{"type":"object","properties":{"id":{"$ref":"#/definitions/slug"},"title":{"$ref":"#/definitions/label60"},"location":{"type":"string","enum":["chat-details"]}},"required":["id","title","location"],"additionalProperties":false}},"themes":{"type":"array","maxItems":10,"items":{"type":"object","properties":{"id":{"$ref":"#/definitions/slug"},"label":{"$ref":"#/definitions/label60"},"appearance":{"type":"string","enum":["dark","light"]},"tokens":{"description":"Overrides of documented color tokens (the --piui- prefix is implied).","type":"object","minProperties":1,"propertyNames":{"$ref":"#/definitions/themeToken"},"additionalProperties":{"$ref":"#/definitions/color"}}},"required":["id","label","appearance","tokens"],"additionalProperties":false}},"templates":{"type":"array","maxItems":20,"items":{"type":"object","properties":{"id":{"$ref":"#/definitions/slug"},"title":{"$ref":"#/definitions/label80"},"description":{"$ref":"#/definitions/text200"},"file":{"$ref":"#/definitions/templateFile"}},"required":["id","title","file"],"additionalProperties":false}},"acpAgents":{"description":"ACP agent descriptors (acp-agent-descriptor-v1). They go through Settings → Harnesses trust like any added agent.","type":"array","maxItems":5,"items":{"type":"object"}},"nodeTypes":{"type":"array","maxItems":20,"items":{"type":"object","properties":{"id":{"$ref":"#/definitions/slug"},"title":{"$ref":"#/definitions/label60"},"description":{"$ref":"#/definitions/text200"},"config":{"type":"array","maxItems":30,"items":{"$ref":"#/definitions/field"}},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":3600},"resultFields":{"description":"Result fields a new node of this type starts with.","type":"array","maxItems":20,"items":{"type":"object","properties":{"name":{"$ref":"#/definitions/key"},"kind":{"type":"string","enum":["text","number","boolean","text-list"]}},"required":["name","kind"],"additionalProperties":false}}},"required":["id","title"],"additionalProperties":false}},"statusItems":{"description":"Short items in the status bar at the bottom of the window. Clicking an item with a command runs that command.","type":"array","maxItems":3,"items":{"type":"object","properties":{"id":{"$ref":"#/definitions/slug"},"text":{"$ref":"#/definitions/label24"},"tooltip":{"$ref":"#/definitions/text200"},"command":{"description":"The id of one of the plugin's own commands.","$ref":"#/definitions/slug"},"alignment":{"description":"Default: end.","type":"string","enum":["start","end"]}},"required":["id","text"],"additionalProperties":false}},"keybindings":{"description":"Keyboard shortcuts for the plugin's own commands. \"Mod\" is Ctrl on Windows and Linux and Cmd on macOS. PiUI shortcuts always win: a binding that conflicts with PiUI or another plugin does nothing and is shown as a conflict.","type":"array","maxItems":10,"items":{"type":"object","properties":{"command":{"$ref":"#/definitions/slug"},"key":{"$ref":"#/definitions/shortcut"}},"required":["command","key"],"additionalProperties":false}},"renderers":{"description":"Custom views of chat tool activity, rendered by the plugin's ui.entry page in a sandboxed frame inside the chat. PiUI always keeps the generic view one click away and uses it whenever the plugin is off or its frame fails.","type":"array","maxItems":5,"items":{"type":"object","properties":{"id":{"$ref":"#/definitions/slug"},"title":{"$ref":"#/definitions/label60"},"toolNames":{"description":"Native tool names this renderer shows, compared without letter case (for example \"get_weather\" or \"mcp__weather__forecast\").","type":"array","minItems":1,"maxItems":10,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_][A-Za-z0-9_.:-]*$"}}},"required":["id","title","toolNames"],"additionalProperties":false}}},"additionalProperties":false}},"required":["schemaVersion","id","name","version","publisher","engines","permissions","contributes"],"additionalProperties":false,"definitions":{"slug":{"type":"string","pattern":"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$"},"key":{"type":"string","pattern":"^[a-z][A-Za-z0-9_]{0,63}$"},"semver":{"type":"string","maxLength":64,"pattern":"^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$"},"label60":{"type":"string","minLength":1,"maxLength":60,"pattern":"^\\S(?:[^\\u0000-\\u001f\\u007f]*\\S)?$"},"label64":{"type":"string","minLength":1,"maxLength":64,"pattern":"^\\S(?:[^\\u0000-\\u001f\\u007f]*\\S)?$"},"label80":{"type":"string","minLength":1,"maxLength":80,"pattern":"^\\S(?:[^\\u0000-\\u001f\\u007f]*\\S)?$"},"text200":{"type":"string","minLength":1,"maxLength":200,"pattern":"^[^\\u0000-\\u001f\\u007f]+$"},"text500":{"type":"string","minLength":1,"maxLength":500,"pattern":"^[^\\u0000-\\u001f\\u007f]+$"},"backendEntry":{"description":"A .mjs, .cjs or .js file inside the package: forward slashes, no leading slash, no . or .. segments.","type":"string","maxLength":200,"pattern":"^(?:[A-Za-z0-9_-][A-Za-z0-9._-]*/){0,15}[A-Za-z0-9_-][A-Za-z0-9._-]*\\.(?:mjs|cjs|js)$"},"uiEntry":{"description":"An .html file inside the package: forward slashes, no leading slash, no . or .. segments.","type":"string","maxLength":200,"pattern":"^(?:[A-Za-z0-9_-][A-Za-z0-9._-]*/){0,15}[A-Za-z0-9_-][A-Za-z0-9._-]*\\.html$"},"templateFile":{"description":"A portable system file (version 4) inside the package.","type":"string","maxLength":200,"pattern":"^(?:[A-Za-z0-9_-][A-Za-z0-9._-]*/){0,15}[A-Za-z0-9_-][A-Za-z0-9._-]*\\.piui\\.json$"},"field":{"description":"One declarative form field rendered by PiUI (plugin settings or a node type's configuration).","type":"object","properties":{"key":{"$ref":"#/definitions/key"},"label":{"$ref":"#/definitions/label80"},"description":{"$ref":"#/definitions/text200"},"type":{"type":"string","enum":["text","long-text","number","boolean","choice"]},"required":{"type":"boolean"},"default":{"anyOf":[{"type":"string"},{"type":"number"},{"type":"boolean"}]},"minimum":{"type":"number"},"maximum":{"type":"number"},"maxLength":{"type":"integer","minimum":1,"maximum":4000},"options":{"type":"array","minItems":1,"maxItems":50,"items":{"type":"object","properties":{"value":{"type":"string","minLength":1,"maxLength":100},"label":{"$ref":"#/definitions/label80"}},"required":["value","label"],"additionalProperties":false}}},"required":["key","label","type"],"additionalProperties":false},"color":{"type":"string","maxLength":40,"pattern":"^(?:#[0-9A-Fa-f]{3}|#[0-9A-Fa-f]{4}|#[0-9A-Fa-f]{6}|#[0-9A-Fa-f]{8}|rgba?\\(\\s*\\d{1,3}\\s*,\\s*\\d{1,3}\\s*,\\s*\\d{1,3}\\s*(?:,\\s*(?:0|1|0?\\.\\d{1,3})\\s*)?\\))$"},"themeToken":{"type":"string","enum":["bg","bg-raised","bg-sunken","surface-1","surface-2","surface-3","overlay","hover","pressed","selected","selected-strong","text","text-muted","text-faint","text-disabled","border","border-subtle","border-strong","accent","accent-ink","accent-soft","action","action-hover","action-pressed","action-ink","focus","danger","warning","success","info","danger-surface","danger-border","danger-text","warning-surface","warning-border","warning-text","success-surface","success-border","success-text","info-surface","info-border","info-text","user-surface","user-border","code-surface","syntax-keyword","syntax-string","syntax-number","syntax-comment","syntax-function","syntax-type","syntax-property","syntax-punctuation","diff-add","diff-add-text","diff-remove","diff-remove-text"]},"label24":{"type":"string","minLength":1,"maxLength":24,"pattern":"^\\S(?:[^\\u0000-\\u001f\\u007f]*\\S)?$"},"shortcut":{"description":"Mod, then optionally Alt and Shift in this order, then A-Z, 0-9 or F1-F12, joined by \"+\" (for example \"Mod+Shift+W\").","type":"string","pattern":"^Mod(?:\\+Alt)?(?:\\+Shift)?\\+(?:[A-Z0-9]|F(?:[1-9]|1[0-2]))$"}}};
+const schema11 = {"$schema":"http://json-schema.org/draft-07/schema#","title":"PiUI plugin package manifest v2 (piui-plugin.json)","description":"One PiUI plugin (ADR-032, plugins v2). Version 2 adds status-bar items, keybindings, chat renderers and MCP servers; version 1 manifests stay valid against piui-plugin-v1.schema.json. The host validator (crates/piui-plugins) applies the schema of the declared version and then semantic rules: permissions required by each contribution, unique contribution ids, commands that status items and keybindings name, files that exist inside the package, the PiUI engine range, theme contrast and ACP descriptor rules (acp-agent-descriptor-v1). Unknown fields are rejected, never dropped. A manifest is data: installing it never runs plugin code.","type":"object","properties":{"$schema":{"type":"string","maxLength":300},"schemaVersion":{"const":2},"id":{"description":"Stable reverse-DNS id or slug: lowercase segments of letters, digits and inner hyphens, joined by dots.","type":"string","maxLength":100,"pattern":"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?){0,7}$"},"name":{"$ref":"#/definitions/label64"},"version":{"$ref":"#/definitions/semver"},"publisher":{"$ref":"#/definitions/label64"},"description":{"$ref":"#/definitions/text500"},"engines":{"type":"object","properties":{"piui":{"description":"Space-separated comparators that must all match: >=, >, <=, <, =, ^ or ~ followed by MAJOR.MINOR.PATCH.","type":"string","maxLength":100,"pattern":"^(?:>=|<=|>|<|=|\\^|~)?\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?: (?:>=|<=|>|<|=|\\^|~)?\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?){0,3}$"}},"required":["piui"],"additionalProperties":false},"permissions":{"description":"Every permission the plugin asks for, shown in plain words in the trust review. Contributions need their permission; project.read, project.write and network decide what Node's permission model lets the backend reach.","type":"array","maxItems":13,"uniqueItems":true,"items":{"type":"string","enum":["commands","ui.panel","ui.settings","ui.status","ui.renderer","node.run","acp.agents","mcp.tools","chat.read","notifications","project.read","project.write","network"]}},"backend":{"description":"A Node.js ES module or script the host runs, contained, on first use.","type":"object","properties":{"entry":{"$ref":"#/definitions/backendEntry"}},"required":["entry"],"additionalProperties":false},"ui":{"description":"The static HTML entry of the plugin's sandboxed panels. Files are served only from the entry's folder.","type":"object","properties":{"entry":{"$ref":"#/definitions/uiEntry"}},"required":["entry"],"additionalProperties":false},"contributes":{"type":"object","properties":{"commands":{"type":"array","maxItems":50,"items":{"type":"object","properties":{"id":{"$ref":"#/definitions/slug"},"title":{"$ref":"#/definitions/label80"},"description":{"$ref":"#/definitions/text200"},"surfaces":{"description":"Where the command appears. Default: the command palette.","type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string","enum":["palette","composer"]}},"insertText":{"description":"Declarative command: this text is prepared in the message box for review. Without it the plugin's backend runs the command.","type":"string","minLength":1,"maxLength":4000}},"required":["id","title"],"additionalProperties":false}},"settings":{"type":"array","maxItems":30,"items":{"$ref":"#/definitions/field"}},"panels":{"type":"array","maxItems":5,"items":{"type":"object","properties":{"id":{"$ref":"#/definitions/slug"},"title":{"$ref":"#/definitions/label60"},"location":{"type":"string","enum":["chat-details"]}},"required":["id","title","location"],"additionalProperties":false}},"themes":{"type":"array","maxItems":10,"items":{"type":"object","properties":{"id":{"$ref":"#/definitions/slug"},"label":{"$ref":"#/definitions/label60"},"appearance":{"type":"string","enum":["dark","light"]},"tokens":{"description":"Overrides of documented color tokens (the --piui- prefix is implied).","type":"object","minProperties":1,"propertyNames":{"$ref":"#/definitions/themeToken"},"additionalProperties":{"$ref":"#/definitions/color"}}},"required":["id","label","appearance","tokens"],"additionalProperties":false}},"templates":{"type":"array","maxItems":20,"items":{"type":"object","properties":{"id":{"$ref":"#/definitions/slug"},"title":{"$ref":"#/definitions/label80"},"description":{"$ref":"#/definitions/text200"},"file":{"$ref":"#/definitions/templateFile"}},"required":["id","title","file"],"additionalProperties":false}},"acpAgents":{"description":"ACP agent descriptors (acp-agent-descriptor-v1). They go through Settings → Harnesses trust like any added agent.","type":"array","maxItems":5,"items":{"type":"object"}},"nodeTypes":{"type":"array","maxItems":20,"items":{"type":"object","properties":{"id":{"$ref":"#/definitions/slug"},"title":{"$ref":"#/definitions/label60"},"description":{"$ref":"#/definitions/text200"},"config":{"type":"array","maxItems":30,"items":{"$ref":"#/definitions/field"}},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":3600},"resultFields":{"description":"Result fields a new node of this type starts with.","type":"array","maxItems":20,"items":{"type":"object","properties":{"name":{"$ref":"#/definitions/key"},"kind":{"type":"string","enum":["text","number","boolean","text-list"]}},"required":["name","kind"],"additionalProperties":false}}},"required":["id","title"],"additionalProperties":false}},"statusItems":{"description":"Short items in the status bar at the bottom of the window. Clicking an item with a command runs that command.","type":"array","maxItems":3,"items":{"type":"object","properties":{"id":{"$ref":"#/definitions/slug"},"text":{"$ref":"#/definitions/label24"},"tooltip":{"$ref":"#/definitions/text200"},"command":{"description":"The id of one of the plugin's own commands.","$ref":"#/definitions/slug"},"alignment":{"description":"Default: end.","type":"string","enum":["start","end"]}},"required":["id","text"],"additionalProperties":false}},"keybindings":{"description":"Keyboard shortcuts for the plugin's own commands. \"Mod\" is Ctrl on Windows and Linux and Cmd on macOS. PiUI shortcuts always win: a binding that conflicts with PiUI or another plugin does nothing and is shown as a conflict.","type":"array","maxItems":10,"items":{"type":"object","properties":{"command":{"$ref":"#/definitions/slug"},"key":{"$ref":"#/definitions/shortcut"}},"required":["command","key"],"additionalProperties":false}},"renderers":{"description":"Custom views of chat tool activity, rendered by the plugin's ui.entry page in a sandboxed frame inside the chat. PiUI always keeps the generic view one click away and uses it whenever the plugin is off or its frame fails.","type":"array","maxItems":5,"items":{"type":"object","properties":{"id":{"$ref":"#/definitions/slug"},"title":{"$ref":"#/definitions/label60"},"toolNames":{"description":"Native tool names this renderer shows, compared without letter case (for example \"get_weather\" or \"mcp__weather__forecast\").","type":"array","minItems":1,"maxItems":10,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_][A-Za-z0-9_.:-]*$"}}},"required":["id","title","toolNames"],"additionalProperties":false}},"mcpServers":{"description":"MCP servers in the plugin's package. PiUI offers one to new chats only after the person turns it on in Settings → Plugins, and only to harnesses that accept an MCP server for one session (Claude Code, Hermes and ACP agents). The harness starts it with Node.js under the same permission model as the backend; the user's own harness configuration is never changed.","type":"array","maxItems":5,"items":{"type":"object","properties":{"id":{"$ref":"#/definitions/slug"},"title":{"$ref":"#/definitions/label60"},"description":{"$ref":"#/definitions/text200"},"entry":{"$ref":"#/definitions/backendEntry"},"args":{"description":"Fixed arguments after the entry.","type":"array","maxItems":16,"items":{"type":"string","minLength":1,"maxLength":200,"pattern":"^[^\\u0000-\\u001f\\u007f]+$"}}},"required":["id","title","entry"],"additionalProperties":false}}},"additionalProperties":false}},"required":["schemaVersion","id","name","version","publisher","engines","permissions","contributes"],"additionalProperties":false,"definitions":{"slug":{"type":"string","pattern":"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$"},"key":{"type":"string","pattern":"^[a-z][A-Za-z0-9_]{0,63}$"},"semver":{"type":"string","maxLength":64,"pattern":"^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$"},"label60":{"type":"string","minLength":1,"maxLength":60,"pattern":"^\\S(?:[^\\u0000-\\u001f\\u007f]*\\S)?$"},"label64":{"type":"string","minLength":1,"maxLength":64,"pattern":"^\\S(?:[^\\u0000-\\u001f\\u007f]*\\S)?$"},"label80":{"type":"string","minLength":1,"maxLength":80,"pattern":"^\\S(?:[^\\u0000-\\u001f\\u007f]*\\S)?$"},"text200":{"type":"string","minLength":1,"maxLength":200,"pattern":"^[^\\u0000-\\u001f\\u007f]+$"},"text500":{"type":"string","minLength":1,"maxLength":500,"pattern":"^[^\\u0000-\\u001f\\u007f]+$"},"backendEntry":{"description":"A .mjs, .cjs or .js file inside the package: forward slashes, no leading slash, no . or .. segments.","type":"string","maxLength":200,"pattern":"^(?:[A-Za-z0-9_-][A-Za-z0-9._-]*/){0,15}[A-Za-z0-9_-][A-Za-z0-9._-]*\\.(?:mjs|cjs|js)$"},"uiEntry":{"description":"An .html file inside the package: forward slashes, no leading slash, no . or .. segments.","type":"string","maxLength":200,"pattern":"^(?:[A-Za-z0-9_-][A-Za-z0-9._-]*/){0,15}[A-Za-z0-9_-][A-Za-z0-9._-]*\\.html$"},"templateFile":{"description":"A portable system file (version 4) inside the package.","type":"string","maxLength":200,"pattern":"^(?:[A-Za-z0-9_-][A-Za-z0-9._-]*/){0,15}[A-Za-z0-9_-][A-Za-z0-9._-]*\\.piui\\.json$"},"field":{"description":"One declarative form field rendered by PiUI (plugin settings or a node type's configuration).","type":"object","properties":{"key":{"$ref":"#/definitions/key"},"label":{"$ref":"#/definitions/label80"},"description":{"$ref":"#/definitions/text200"},"type":{"type":"string","enum":["text","long-text","number","boolean","choice"]},"required":{"type":"boolean"},"default":{"anyOf":[{"type":"string"},{"type":"number"},{"type":"boolean"}]},"minimum":{"type":"number"},"maximum":{"type":"number"},"maxLength":{"type":"integer","minimum":1,"maximum":4000},"options":{"type":"array","minItems":1,"maxItems":50,"items":{"type":"object","properties":{"value":{"type":"string","minLength":1,"maxLength":100},"label":{"$ref":"#/definitions/label80"}},"required":["value","label"],"additionalProperties":false}}},"required":["key","label","type"],"additionalProperties":false},"color":{"type":"string","maxLength":40,"pattern":"^(?:#[0-9A-Fa-f]{3}|#[0-9A-Fa-f]{4}|#[0-9A-Fa-f]{6}|#[0-9A-Fa-f]{8}|rgba?\\(\\s*\\d{1,3}\\s*,\\s*\\d{1,3}\\s*,\\s*\\d{1,3}\\s*(?:,\\s*(?:0|1|0?\\.\\d{1,3})\\s*)?\\))$"},"themeToken":{"type":"string","enum":["bg","bg-raised","bg-sunken","surface-1","surface-2","surface-3","overlay","hover","pressed","selected","selected-strong","text","text-muted","text-faint","text-disabled","border","border-subtle","border-strong","accent","accent-ink","accent-soft","action","action-hover","action-pressed","action-ink","focus","danger","warning","success","info","danger-surface","danger-border","danger-text","warning-surface","warning-border","warning-text","success-surface","success-border","success-text","info-surface","info-border","info-text","user-surface","user-border","code-surface","syntax-keyword","syntax-string","syntax-number","syntax-comment","syntax-function","syntax-type","syntax-property","syntax-punctuation","diff-add","diff-add-text","diff-remove","diff-remove-text"]},"label24":{"type":"string","minLength":1,"maxLength":24,"pattern":"^\\S(?:[^\\u0000-\\u001f\\u007f]*\\S)?$"},"shortcut":{"description":"Mod, then optionally Alt and Shift in this order, then A-Z, 0-9 or F1-F12, joined by \"+\" (for example \"Mod+Shift+W\").","type":"string","pattern":"^Mod(?:\\+Alt)?(?:\\+Shift)?\\+(?:[A-Z0-9]|F(?:[1-9]|1[0-2]))$"}}};
 const schema12 = {"type":"string","minLength":1,"maxLength":64,"pattern":"^\\S(?:[^\\u0000-\\u001f\\u007f]*\\S)?$"};
 const schema13 = {"type":"string","maxLength":64,"pattern":"^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$"};
 const schema15 = {"type":"string","minLength":1,"maxLength":500,"pattern":"^[^\\u0000-\\u001f\\u007f]+$"};
@@ -953,8 +953,8 @@ errors++;
 if(data.permissions !== undefined){
 let data9 = data.permissions;
 if(Array.isArray(data9)){
-if(data9.length > 12){
-const err36 = {instancePath:instancePath+"/permissions",schemaPath:"#/properties/permissions/maxItems",keyword:"maxItems",params:{limit: 12},message:"must NOT have more than 12 items"};
+if(data9.length > 13){
+const err36 = {instancePath:instancePath+"/permissions",schemaPath:"#/properties/permissions/maxItems",keyword:"maxItems",params:{limit: 13},message:"must NOT have more than 13 items"};
 if(vErrors === null){
 vErrors = [err36];
 }
@@ -976,7 +976,7 @@ vErrors.push(err37);
 }
 errors++;
 }
-if(!((((((((((((data10 === "commands") || (data10 === "ui.panel")) || (data10 === "ui.settings")) || (data10 === "ui.status")) || (data10 === "ui.renderer")) || (data10 === "node.run")) || (data10 === "acp.agents")) || (data10 === "chat.read")) || (data10 === "notifications")) || (data10 === "project.read")) || (data10 === "project.write")) || (data10 === "network"))){
+if(!(((((((((((((data10 === "commands") || (data10 === "ui.panel")) || (data10 === "ui.settings")) || (data10 === "ui.status")) || (data10 === "ui.renderer")) || (data10 === "node.run")) || (data10 === "acp.agents")) || (data10 === "mcp.tools")) || (data10 === "chat.read")) || (data10 === "notifications")) || (data10 === "project.read")) || (data10 === "project.write")) || (data10 === "network"))){
 const err38 = {instancePath:instancePath+"/permissions/" + i0,schemaPath:"#/properties/permissions/items/enum",keyword:"enum",params:{allowedValues: schema11.properties.permissions.items.enum},message:"must be equal to one of the allowed values"};
 if(vErrors === null){
 vErrors = [err38];
@@ -3231,9 +3231,11 @@ vErrors.push(err223);
 errors++;
 }
 }
-}
-else {
-const err224 = {instancePath:instancePath+"/contributes",schemaPath:"#/properties/contributes/type",keyword:"type",params:{type: "object"},message:"must be object"};
+if(data15.mcpServers !== undefined){
+let data75 = data15.mcpServers;
+if(Array.isArray(data75)){
+if(data75.length > 5){
+const err224 = {instancePath:instancePath+"/contributes/mcpServers",schemaPath:"#/properties/contributes/properties/mcpServers/maxItems",keyword:"maxItems",params:{limit: 5},message:"must NOT have more than 5 items"};
 if(vErrors === null){
 vErrors = [err224];
 }
@@ -3242,15 +3244,317 @@ vErrors.push(err224);
 }
 errors++;
 }
-}
-}
-else {
-const err225 = {instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"};
+const len15 = data75.length;
+for(let i18=0; i18<len15; i18++){
+let data76 = data75[i18];
+if(data76 && typeof data76 == "object" && !Array.isArray(data76)){
+if(data76.id === undefined){
+const err225 = {instancePath:instancePath+"/contributes/mcpServers/" + i18,schemaPath:"#/properties/contributes/properties/mcpServers/items/required",keyword:"required",params:{missingProperty: "id"},message:"must have required property '"+"id"+"'"};
 if(vErrors === null){
 vErrors = [err225];
 }
 else {
 vErrors.push(err225);
+}
+errors++;
+}
+if(data76.title === undefined){
+const err226 = {instancePath:instancePath+"/contributes/mcpServers/" + i18,schemaPath:"#/properties/contributes/properties/mcpServers/items/required",keyword:"required",params:{missingProperty: "title"},message:"must have required property '"+"title"+"'"};
+if(vErrors === null){
+vErrors = [err226];
+}
+else {
+vErrors.push(err226);
+}
+errors++;
+}
+if(data76.entry === undefined){
+const err227 = {instancePath:instancePath+"/contributes/mcpServers/" + i18,schemaPath:"#/properties/contributes/properties/mcpServers/items/required",keyword:"required",params:{missingProperty: "entry"},message:"must have required property '"+"entry"+"'"};
+if(vErrors === null){
+vErrors = [err227];
+}
+else {
+vErrors.push(err227);
+}
+errors++;
+}
+for(const key16 in data76){
+if(!(((((key16 === "id") || (key16 === "title")) || (key16 === "description")) || (key16 === "entry")) || (key16 === "args"))){
+const err228 = {instancePath:instancePath+"/contributes/mcpServers/" + i18,schemaPath:"#/properties/contributes/properties/mcpServers/items/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key16},message:"must NOT have additional properties"};
+if(vErrors === null){
+vErrors = [err228];
+}
+else {
+vErrors.push(err228);
+}
+errors++;
+}
+}
+if(data76.id !== undefined){
+let data77 = data76.id;
+if(typeof data77 === "string"){
+if(!pattern8.test(data77)){
+const err229 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/id",schemaPath:"#/definitions/slug/pattern",keyword:"pattern",params:{pattern: "^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$"},message:"must match pattern \""+"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$"+"\""};
+if(vErrors === null){
+vErrors = [err229];
+}
+else {
+vErrors.push(err229);
+}
+errors++;
+}
+}
+else {
+const err230 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/id",schemaPath:"#/definitions/slug/type",keyword:"type",params:{type: "string"},message:"must be string"};
+if(vErrors === null){
+vErrors = [err230];
+}
+else {
+vErrors.push(err230);
+}
+errors++;
+}
+}
+if(data76.title !== undefined){
+let data78 = data76.title;
+if(typeof data78 === "string"){
+if(func3(data78) > 60){
+const err231 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/title",schemaPath:"#/definitions/label60/maxLength",keyword:"maxLength",params:{limit: 60},message:"must NOT have more than 60 characters"};
+if(vErrors === null){
+vErrors = [err231];
+}
+else {
+vErrors.push(err231);
+}
+errors++;
+}
+if(func3(data78) < 1){
+const err232 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/title",schemaPath:"#/definitions/label60/minLength",keyword:"minLength",params:{limit: 1},message:"must NOT have fewer than 1 characters"};
+if(vErrors === null){
+vErrors = [err232];
+}
+else {
+vErrors.push(err232);
+}
+errors++;
+}
+if(!pattern1.test(data78)){
+const err233 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/title",schemaPath:"#/definitions/label60/pattern",keyword:"pattern",params:{pattern: "^\\S(?:[^\\u0000-\\u001f\\u007f]*\\S)?$"},message:"must match pattern \""+"^\\S(?:[^\\u0000-\\u001f\\u007f]*\\S)?$"+"\""};
+if(vErrors === null){
+vErrors = [err233];
+}
+else {
+vErrors.push(err233);
+}
+errors++;
+}
+}
+else {
+const err234 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/title",schemaPath:"#/definitions/label60/type",keyword:"type",params:{type: "string"},message:"must be string"};
+if(vErrors === null){
+vErrors = [err234];
+}
+else {
+vErrors.push(err234);
+}
+errors++;
+}
+}
+if(data76.description !== undefined){
+let data79 = data76.description;
+if(typeof data79 === "string"){
+if(func3(data79) > 200){
+const err235 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/description",schemaPath:"#/definitions/text200/maxLength",keyword:"maxLength",params:{limit: 200},message:"must NOT have more than 200 characters"};
+if(vErrors === null){
+vErrors = [err235];
+}
+else {
+vErrors.push(err235);
+}
+errors++;
+}
+if(func3(data79) < 1){
+const err236 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/description",schemaPath:"#/definitions/text200/minLength",keyword:"minLength",params:{limit: 1},message:"must NOT have fewer than 1 characters"};
+if(vErrors === null){
+vErrors = [err236];
+}
+else {
+vErrors.push(err236);
+}
+errors++;
+}
+if(!pattern4.test(data79)){
+const err237 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/description",schemaPath:"#/definitions/text200/pattern",keyword:"pattern",params:{pattern: "^[^\\u0000-\\u001f\\u007f]+$"},message:"must match pattern \""+"^[^\\u0000-\\u001f\\u007f]+$"+"\""};
+if(vErrors === null){
+vErrors = [err237];
+}
+else {
+vErrors.push(err237);
+}
+errors++;
+}
+}
+else {
+const err238 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/description",schemaPath:"#/definitions/text200/type",keyword:"type",params:{type: "string"},message:"must be string"};
+if(vErrors === null){
+vErrors = [err238];
+}
+else {
+vErrors.push(err238);
+}
+errors++;
+}
+}
+if(data76.entry !== undefined){
+let data80 = data76.entry;
+if(typeof data80 === "string"){
+if(func3(data80) > 200){
+const err239 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/entry",schemaPath:"#/definitions/backendEntry/maxLength",keyword:"maxLength",params:{limit: 200},message:"must NOT have more than 200 characters"};
+if(vErrors === null){
+vErrors = [err239];
+}
+else {
+vErrors.push(err239);
+}
+errors++;
+}
+if(!pattern6.test(data80)){
+const err240 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/entry",schemaPath:"#/definitions/backendEntry/pattern",keyword:"pattern",params:{pattern: "^(?:[A-Za-z0-9_-][A-Za-z0-9._-]*/){0,15}[A-Za-z0-9_-][A-Za-z0-9._-]*\\.(?:mjs|cjs|js)$"},message:"must match pattern \""+"^(?:[A-Za-z0-9_-][A-Za-z0-9._-]*/){0,15}[A-Za-z0-9_-][A-Za-z0-9._-]*\\.(?:mjs|cjs|js)$"+"\""};
+if(vErrors === null){
+vErrors = [err240];
+}
+else {
+vErrors.push(err240);
+}
+errors++;
+}
+}
+else {
+const err241 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/entry",schemaPath:"#/definitions/backendEntry/type",keyword:"type",params:{type: "string"},message:"must be string"};
+if(vErrors === null){
+vErrors = [err241];
+}
+else {
+vErrors.push(err241);
+}
+errors++;
+}
+}
+if(data76.args !== undefined){
+let data81 = data76.args;
+if(Array.isArray(data81)){
+if(data81.length > 16){
+const err242 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/args",schemaPath:"#/properties/contributes/properties/mcpServers/items/properties/args/maxItems",keyword:"maxItems",params:{limit: 16},message:"must NOT have more than 16 items"};
+if(vErrors === null){
+vErrors = [err242];
+}
+else {
+vErrors.push(err242);
+}
+errors++;
+}
+const len16 = data81.length;
+for(let i19=0; i19<len16; i19++){
+let data82 = data81[i19];
+if(typeof data82 === "string"){
+if(func3(data82) > 200){
+const err243 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/args/" + i19,schemaPath:"#/properties/contributes/properties/mcpServers/items/properties/args/items/maxLength",keyword:"maxLength",params:{limit: 200},message:"must NOT have more than 200 characters"};
+if(vErrors === null){
+vErrors = [err243];
+}
+else {
+vErrors.push(err243);
+}
+errors++;
+}
+if(func3(data82) < 1){
+const err244 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/args/" + i19,schemaPath:"#/properties/contributes/properties/mcpServers/items/properties/args/items/minLength",keyword:"minLength",params:{limit: 1},message:"must NOT have fewer than 1 characters"};
+if(vErrors === null){
+vErrors = [err244];
+}
+else {
+vErrors.push(err244);
+}
+errors++;
+}
+if(!pattern4.test(data82)){
+const err245 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/args/" + i19,schemaPath:"#/properties/contributes/properties/mcpServers/items/properties/args/items/pattern",keyword:"pattern",params:{pattern: "^[^\\u0000-\\u001f\\u007f]+$"},message:"must match pattern \""+"^[^\\u0000-\\u001f\\u007f]+$"+"\""};
+if(vErrors === null){
+vErrors = [err245];
+}
+else {
+vErrors.push(err245);
+}
+errors++;
+}
+}
+else {
+const err246 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/args/" + i19,schemaPath:"#/properties/contributes/properties/mcpServers/items/properties/args/items/type",keyword:"type",params:{type: "string"},message:"must be string"};
+if(vErrors === null){
+vErrors = [err246];
+}
+else {
+vErrors.push(err246);
+}
+errors++;
+}
+}
+}
+else {
+const err247 = {instancePath:instancePath+"/contributes/mcpServers/" + i18+"/args",schemaPath:"#/properties/contributes/properties/mcpServers/items/properties/args/type",keyword:"type",params:{type: "array"},message:"must be array"};
+if(vErrors === null){
+vErrors = [err247];
+}
+else {
+vErrors.push(err247);
+}
+errors++;
+}
+}
+}
+else {
+const err248 = {instancePath:instancePath+"/contributes/mcpServers/" + i18,schemaPath:"#/properties/contributes/properties/mcpServers/items/type",keyword:"type",params:{type: "object"},message:"must be object"};
+if(vErrors === null){
+vErrors = [err248];
+}
+else {
+vErrors.push(err248);
+}
+errors++;
+}
+}
+}
+else {
+const err249 = {instancePath:instancePath+"/contributes/mcpServers",schemaPath:"#/properties/contributes/properties/mcpServers/type",keyword:"type",params:{type: "array"},message:"must be array"};
+if(vErrors === null){
+vErrors = [err249];
+}
+else {
+vErrors.push(err249);
+}
+errors++;
+}
+}
+}
+else {
+const err250 = {instancePath:instancePath+"/contributes",schemaPath:"#/properties/contributes/type",keyword:"type",params:{type: "object"},message:"must be object"};
+if(vErrors === null){
+vErrors = [err250];
+}
+else {
+vErrors.push(err250);
+}
+errors++;
+}
+}
+}
+else {
+const err251 = {instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"};
+if(vErrors === null){
+vErrors = [err251];
+}
+else {
+vErrors.push(err251);
 }
 errors++;
 }

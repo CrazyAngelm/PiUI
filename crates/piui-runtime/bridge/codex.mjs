@@ -23,6 +23,11 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   if (!new Set(["native", "read-only", "workspace-write", "full-access"]).has(config.permissionMode)) {
     throw fail("unsupported-permission-mode", "The requested Codex permission mode is not supported.");
   }
+  // Codex has no verified way to add an MCP server for one thread without
+  // its shared configuration, so plugin servers never reach it.
+  if (config.pluginMcpServers?.length) {
+    throw fail("unsupported-settings", "Codex cannot take a plugin's MCP server for one chat.");
+  }
   if (config.networkAccess !== undefined && typeof config.networkAccess !== "boolean") {
     throw fail("unsupported-network-policy", "The requested Codex network policy is invalid.");
   }

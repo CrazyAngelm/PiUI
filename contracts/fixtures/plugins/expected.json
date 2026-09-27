@@ -25,6 +25,8 @@
     "invalid-semantic-unknown-command.json": "unknown-command",
     "invalid-semantic-status-permission.json": "permission-missing",
     "invalid-semantic-renderer-ui.json": "ui-missing",
-    "invalid-semantic-duplicate-keybinding.json": "duplicate-contribution"
+    "invalid-semantic-duplicate-keybinding.json": "duplicate-contribution",
+    "invalid-semantic-mcp-permission.json": "permission-missing",
+    "invalid-v2-mcp-entry.json": "shape"
   }
 }

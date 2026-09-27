@@ -61,7 +61,7 @@ describe('UI Lab plugin host', () => {
     expect(status.contributes.keybindings?.map((binding) => binding.key)).toEqual(['Mod+Alt+Shift+T', 'Mod+Alt+Shift+K']);
     expect(entry(registry, 'example.hello-command').contributes.statusItems).toBeUndefined();
     expect(entry(registry, 'example.tool-cards').contributes.renderers).toEqual([
-      { id: 'issue', title: 'Issue card', toolNames: ['create_issue', 'update_issue'], url: 'http://piui-plugin.localhost/example.tool-cards/ui/index.html?renderer=issue' },
+      { id: 'issue', title: 'Issue card', toolNames: ['create_issue', 'update_issue', 'mcp__example-tool-cards-issues__create_issue'], url: 'http://piui-plugin.localhost/example.tool-cards/ui/index.html?renderer=issue' },
     ]);
     const hello = entry(registry, 'example.hello-command');
     expect(hello.contributes.panels[0]?.url).toBe('http://piui-plugin.localhost/example.hello-command/ui/index.html?panel=hello');

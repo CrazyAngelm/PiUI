@@ -745,13 +745,20 @@ fn status_items_and_keybindings_run_only_the_commands_they_name() {
 }
 
 #[test]
-fn a_renderer_only_plugin_serves_its_ui_folder_and_lists_the_renderer() {
+fn a_renderer_plugin_without_panels_serves_its_ui_folder_and_lists_the_renderer() {
     let fixture = Fixture::new("renderer", false);
     let id = fixture.install(ReviewSource::Folder, &example("tool-cards"));
     let entry = fixture.entry(&id);
     assert!(entry.active, "{:?}", entry.problems);
     let renderer = &entry.contributes.renderers[0];
-    assert_eq!(renderer.tool_names, ["create_issue", "update_issue"]);
+    assert_eq!(
+        renderer.tool_names,
+        [
+            "create_issue",
+            "update_issue",
+            "mcp__example-tool-cards-issues__create_issue"
+        ]
+    );
     assert_eq!(
         renderer.url.as_deref(),
         Some(
@@ -782,4 +789,81 @@ fn a_renderer_only_plugin_serves_its_ui_folder_and_lists_the_renderer() {
     let entry = fixture.entry(&id);
     assert_eq!(entry.contributes.renderers[0].url, None);
     assert!(fixture.plugins.panel_file(&id, "ui/index.html").is_none());
+}
+
+#[test]
+fn an_offered_mcp_server_reaches_new_chats_with_its_permission_flags() {
+    let fixture = Fixture::new("mcp", false);
+    let id = fixture.install(ReviewSource::Folder, &example("tool-cards"));
+    let entry = fixture.entry(&id);
+    let server = &entry.contributes.mcp_servers[0];
+    assert!(
+        !server.offered,
+        "nothing is offered until the person turns it on"
+    );
+    let args = &server.command_line.args;
+    assert_eq!(args[0], "--permission");
+    assert!(args.iter().any(|arg| arg.ends_with("server.mjs")));
+    assert_eq!(args.last().map(String::as_str), Some("--stdio"));
+    assert!(fixture.plugins.session_mcp_servers(None).is_empty());
+
+    fixture
+        .plugins
+        .set_mcp_offered(fixture.plugins.revision(), &id, "issues", true)
+        .expect("offer");
+    assert!(fixture.entry(&id).contributes.mcp_servers[0].offered);
+    let node = piui_runtime::plugin_backend::resolve_plugin_node().expect("Node.js");
+    let supported = piui_runtime::plugin_backend::probe_node_permissions(&node)
+        .expect("probe")
+        .permission;
+    let project = fixture.root.join("project");
+    fs::create_dir_all(&project).expect("project");
+    let servers = fixture.plugins.session_mcp_servers(Some(&project));
+    if supported {
+        assert_eq!(servers.len(), 1);
+        let launched = &servers[0];
+        assert_eq!(launched.name, "example-tool-cards-issues");
+        assert!(launched.command.is_absolute());
+        assert_eq!(launched.args[0], "--permission");
+        // No project permission: the project folder is never granted.
+        let project_flag = piui_runtime::script_runner::process_directory(&project)
+            .to_string_lossy()
+            .into_owned();
+        assert!(!launched.args.iter().any(|arg| arg.contains(&project_flag)));
+        assert!(
+            !launched
+                .args
+                .iter()
+                .any(|arg| arg.contains("child-process") || arg.contains("allow-net"))
+        );
+    } else {
+        assert!(
+            servers.is_empty(),
+            "no permission model: nothing is offered"
+        );
+    }
+
+    // An unknown server, a plugin without the permission and a disabled plugin offer nothing.
+    assert_eq!(
+        fixture
+            .plugins
+            .set_mcp_offered(fixture.plugins.revision(), &id, "missing", true),
+        Err(PluginsError::NotFound)
+    );
+    fixture
+        .plugins
+        .set_enabled(fixture.plugins.revision(), &id, false)
+        .expect("disable");
+    assert!(
+        fixture
+            .plugins
+            .session_mcp_servers(Some(&project))
+            .is_empty()
+    );
+    assert_eq!(
+        fixture
+            .plugins
+            .set_mcp_offered(fixture.plugins.revision(), &id, "issues", false),
+        Err(PluginsError::Inactive)
+    );
 }

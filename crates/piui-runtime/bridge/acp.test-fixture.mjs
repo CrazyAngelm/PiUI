@@ -1,6 +1,7 @@
 // Fake ACP v1 agent for bridge tests. It speaks LF-framed JSON-RPC 2.0 on
 // stdio and never contacts a model. Flags: --protocol=N, --no-load, --no-http,
-// --auth-required, --config-options, --noise.
+// --auth-required, --config-options, --noise. Stdio MCP servers it receives
+// are answered back as the first agent message of the next prompt.
 import { createInterface } from 'node:readline';
 
 const flag = name => process.argv.includes(name);
@@ -25,7 +26,7 @@ const sessionState = () => configMode
     modes: { currentModeId: currentMode, availableModes: [{ id: 'default', name: 'Default' }, { id: 'plan', name: 'Plan', description: 'Read-only' }] },
   };
 
-let promptId, permissionReply, clientReply;
+let promptId, permissionReply, clientReply, stdioServers = [];
 async function callCoordinator(server) {
   const headers = { 'content-type': 'application/json', ...Object.fromEntries(server.headers.map(header => [header.name, header.value])) };
   const post = async (id, method, params) => (await (await fetch(server.url, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) })).json()).result;
@@ -38,6 +39,11 @@ async function callCoordinator(server) {
 }
 
 async function prompt(message) {
+  if (message.params.prompt?.[0]?.text === 'mcp') {
+    notify(message.params.sessionId, { sessionUpdate: 'agent_message_chunk', messageId: 'mcp', content: { type: 'text', text: JSON.stringify(stdioServers) } });
+    send({ id: message.id, result: { stopReason: 'end_turn' } });
+    return;
+  }
   const { sessionId } = message.params;
   const text = message.params.prompt[0].text;
   const say = (value, messageId) => notify(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: value }, ...(messageId ? { messageId } : {}) });
@@ -135,7 +141,8 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
     // the same short conversation.
     if (method === 'session/load' && !['saved', 'fixture-session'].includes(params.sessionId)) { send({ id, error: { code: -32002, message: 'Resource not found' } }); continue; }
     if (params.cwd.startsWith('\\\\?\\')) throw Error('verbatim cwd');
-    for (const server of params.mcpServers) await callCoordinator(server);
+    for (const server of params.mcpServers.filter(server => server.type === 'http')) await callCoordinator(server);
+    stdioServers = params.mcpServers.filter(server => server.type === undefined);
     if (method === 'session/load') {
       const loaded = params.sessionId;
       notify(loaded, { sessionUpdate: 'user_message_chunk', messageId: 'm1', content: { type: 'text', text: 'earlier question' } });

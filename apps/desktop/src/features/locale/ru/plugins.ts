@@ -43,6 +43,16 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Pipeline nodes: {0}': 'Ноды пайплайнов: {0}',
   'ACP agents: {0}': 'ACP-агенты: {0}',
   'Status items: {0}': 'Элементы строки состояния: {0}',
+  'MCP tool servers: {0}': 'MCP-серверы инструментов: {0}',
+  'MCP tool servers': 'MCP-серверы инструментов',
+  'MCP tool server': 'MCP-сервер инструментов',
+  'An offered server joins each new Claude Code, Hermes or ACP agent chat for that chat only; your harness settings are not changed. Codex, Pi, Prime Agent and pipeline runs never get it. It runs under the same Node.js limits as the backend.':
+    'Предложенный сервер подключается к каждому новому чату Claude Code, Hermes или ACP-агента только для этого чата; настройки харнеса не меняются. Codex, Pi, Prime Agent и запуски пайплайнов его никогда не получают. Он работает с теми же ограничениями Node.js, что и бэкенд.',
+  'Offer {0} to new chats': 'Предлагать {0} новым чатам',
+  'New chats that can take it get this tool server': 'Новые чаты, которые это поддерживают, получат этот сервер инструментов',
+  'New chats no longer get this tool server': 'Новые чаты больше не получают этот сервер инструментов',
+  'No MCP tool server runs until you offer it to new chats in Settings → Plugins. Only Claude Code, Hermes and ACP agent chats can take one, and your harness settings are not changed.':
+    'Ни один MCP-сервер не запустится, пока вы не предложите его новым чатам в «Настройки → Плагины». Подключить его могут только чаты Claude Code, Hermes и ACP-агентов, а настройки харнеса не меняются.',
   'Chat renderers: {0}': 'Отображения в чате: {0}',
   'Keyboard shortcuts': 'Сочетания клавиш',
   'PiUI uses this shortcut, so it does nothing.': 'Это сочетание занято PiUI, поэтому оно ничего не делает.',
@@ -76,6 +86,9 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Show notices': 'Показывать уведомления',
   'Short messages in PiUI.': 'Короткие сообщения в PiUI.',
   'Show items in the status bar': 'Показывать элементы в строке состояния',
+  'Offer MCP tools to chats': 'Предлагать чатам MCP-инструменты',
+  'Only after you turn a tool server on in Settings → Plugins, and only in new Claude Code, Hermes and ACP agent chats. Your harness settings are not changed.':
+    'Только после того, как вы включите сервер инструментов в «Настройки → Плагины», и только в новых чатах Claude Code, Hermes и ACP-агентов. Настройки харнеса не меняются.',
   'Short text PiUI shows at the bottom of the window; clicking an item runs its command.':
     'Короткий текст, который PiUI показывает внизу окна; щелчок по элементу запускает его команду.',
   'Show its own view of chat tool activity': 'Показывать собственное отображение работы инструментов в чате',
@@ -244,6 +257,7 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Add the permission “acp.agents”.': 'Добавьте разрешение «acp.agents».',
   'Add the permission “ui.status”.': 'Добавьте разрешение «ui.status».',
   'Add the permission “ui.renderer”.': 'Добавьте разрешение «ui.renderer».',
+  'Add the permission “mcp.tools”.': 'Добавьте разрешение «mcp.tools».',
   'Add the matching permission.': 'Добавьте соответствующее разрешение.',
   "The command “{0}” runs in the plugin's backend, but the plugin has no backend.": 'Команда «{0}» выполняется в бэкенде плагина, но у плагина нет бэкенда.',
   "Node types run in the plugin's backend, but the plugin has no backend.": 'Типы нод выполняются в бэкенде плагина, но у плагина нет бэкенда.',

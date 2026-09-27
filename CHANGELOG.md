@@ -9,6 +9,7 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 ### Added
 
 - Plugin manifest version 2 (version 1 still works unchanged): status-bar items and keyboard shortcuts for a plugin's own commands. PiUI's shortcuts always win, and Settings → Plugins shows every conflict. New example `status-tools`; `pnpm create-plugin` writes version 2.
+- MCP tool servers from plugins: once you offer one in Settings → Plugins, new Claude Code, Hermes and ACP agent chats get it for that chat only, started under the same Node.js limits as plugin backends. Your harness settings are never changed; Codex, Pi, Prime Agent and pipeline runs never get plugin servers.
 - Chat renderers from plugins: a plugin can show chosen tool calls in its own sandboxed view inside the chat. The plain view is always one click away and takes over when the plugin is off or its view fails. New example `tool-cards`.
 - A dialog whose content scrolls can now be scrolled with the keyboard.
 

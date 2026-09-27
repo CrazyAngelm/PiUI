@@ -74,7 +74,7 @@
         "id": "issues",
         "title": "Issue tools",
         "description": "Drafts issues without sending them.",
-        "entry": "mcp/server.mjs",
+        "entry": "mcp/server.sh",
         "args": [
           "--stdio"
         ]

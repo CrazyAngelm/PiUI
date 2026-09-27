@@ -302,6 +302,7 @@ export const PERMISSION_HINTS: Readonly<Partial<Record<PluginPermission, string>
   'acp.agents': 'Add the permission “acp.agents”.',
   'ui.status': 'Add the permission “ui.status”.',
   'ui.renderer': 'Add the permission “ui.renderer”.',
+  'mcp.tools': 'Add the permission “mcp.tools”.',
 };
 
 export type ManifestCheck =
@@ -309,10 +310,15 @@ export type ManifestCheck =
   | { ok: false; problems: PluginProblem[] };
 
 /** The v2 contributions of any manifest (empty for version 1). */
-export function v2Contributions(manifest: PluginManifest): Required<Pick<PluginManifestV2['contributes'], 'statusItems' | 'keybindings' | 'renderers'>> {
-  if (manifest.schemaVersion !== 2) return { statusItems: [], keybindings: [], renderers: [] };
+export function v2Contributions(manifest: PluginManifest): Required<Pick<PluginManifestV2['contributes'], 'statusItems' | 'keybindings' | 'renderers' | 'mcpServers'>> {
+  if (manifest.schemaVersion !== 2) return { statusItems: [], keybindings: [], renderers: [], mcpServers: [] };
   const contributes = manifest.contributes;
-  return { statusItems: contributes.statusItems ?? [], keybindings: contributes.keybindings ?? [], renderers: contributes.renderers ?? [] };
+  return {
+    statusItems: contributes.statusItems ?? [],
+    keybindings: contributes.keybindings ?? [],
+    renderers: contributes.renderers ?? [],
+    mcpServers: contributes.mcpServers ?? [],
+  };
 }
 
 /** Keybindings on a PiUI shortcut: they never run (a warning, not an error: PiUI's own shortcuts change between versions). */
@@ -376,12 +382,13 @@ export function checkPluginManifest(value: unknown, piuiVersion: string): Manife
   }
   if ((contributes.acpAgents ?? []).length) require('acp.agents', 'ACP agents');
   if (added.statusItems.length) require('ui.status', 'status items');
+  if (added.mcpServers.length) require('mcp.tools', 'MCP servers');
   if (added.keybindings.length) require('commands', 'keybindings');
   if (added.renderers.length) {
     require('ui.renderer', 'renderers');
     if (manifest.ui === undefined) problems.push(problem('ui-missing', MANIFEST_MESSAGES.renderersUi));
   }
-  for (const list of [commands, contributes.panels ?? [], contributes.themes ?? [], contributes.templates ?? [], nodeTypes, added.statusItems, added.renderers]) {
+  for (const list of [commands, contributes.panels ?? [], contributes.themes ?? [], contributes.templates ?? [], nodeTypes, added.statusItems, added.renderers, added.mcpServers]) {
     for (const id of duplicates(list.map((item) => item.id))) problems.push(problem('duplicate-contribution', MANIFEST_MESSAGES.duplicate, id));
   }
   for (const named of [...added.statusItems.flatMap((item) => (item.command === undefined ? [] : [item.command])), ...added.keybindings.map((binding) => binding.command)]) {

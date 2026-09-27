@@ -378,6 +378,14 @@ pub fn validate_files(
                 .templates
                 .iter()
                 .map(|template| template.file.clone()),
+        )
+        .chain(
+            manifest
+                .manifest
+                .contributes
+                .mcp_servers
+                .iter()
+                .map(|server| server.entry.clone()),
         );
     for path in named {
         if !has(&path) {
