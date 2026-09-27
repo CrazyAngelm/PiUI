@@ -581,7 +581,10 @@ principles of ADR-009/010/016.
   injects its IPC script and invoke key into the main frame only, and the
   panel policy forbids every connection (including `ipc.localhost`). The main
   frame must therefore never show the plugin origin: panels cannot navigate
-  the top window and PiUI renders links as text. The response
+  the top window and PiUI renders links as text. On Windows the host also
+  refuses every main-frame navigation to that origin (WebView2 reports
+  top-level navigations only); WebKit reports frame navigations to the
+  same hook, so macOS and Linux need their own guard. The response
   carries a per-plugin policy (`default-src 'none'`; scripts, styles, images
   and fonts only from the plugin's UI folder; no connections, frames,
   workers, forms or base URI; `sandbox allow-scripts`), shared with the UI

@@ -374,6 +374,14 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   and the axe audits of `inbox` (low-contrast "optional" field labels) and
   `pipeline-script` (CodeMirror scroller not focusable) in both themes.
 
+## 2026-09-27 — 0.2.2
+
+- Windows main-frame navigation guard for the plugin origin
+  (`piui_plugins::csp::is_plugin_location`, a Tauri `on_navigation` hook).
+  WebView2 `NavigationStarting` fires for the top-level document only, so
+  panel frames still load. On macOS and Linux wry forwards frame navigations
+  to the same hook, so the guard is not enabled there yet.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

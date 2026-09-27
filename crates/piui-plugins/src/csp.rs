@@ -21,6 +21,18 @@ pub fn plugin_origin() -> &'static str {
     }
 }
 
+/// Whether a URL with this scheme and host is on the plugin origin, in
+/// either spelling. The app window must never navigate there: Tauri treats an
+/// app-registered protocol as a local origin and would give that top-level
+/// document the IPC bridge (ADR-032).
+#[must_use]
+pub fn is_plugin_location(scheme: &str, host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    scheme.eq_ignore_ascii_case(PLUGIN_SCHEME)
+        || host == "piui-plugin.localhost"
+        || host.ends_with(".piui-plugin.localhost")
+}
+
 /// The URL of `path` (inside the plugin's UI folder) for plugin `id`.
 #[must_use]
 pub fn plugin_url(origin: &str, id: &str, path: &str) -> String {
@@ -78,6 +90,23 @@ pub fn content_type(path: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plugin_locations_are_recognised_in_both_spellings() {
+        assert!(is_plugin_location("http", "piui-plugin.localhost"));
+        assert!(is_plugin_location("https", "PIUI-PLUGIN.localhost"));
+        assert!(is_plugin_location("piui-plugin", "localhost"));
+        assert!(is_plugin_location("Piui-Plugin", ""));
+        assert!(is_plugin_location("http", "x.piui-plugin.localhost"));
+        assert!(!is_plugin_location("http", "tauri.localhost"));
+        assert!(!is_plugin_location("tauri", "localhost"));
+        assert!(!is_plugin_location("http", "localhost"));
+        assert!(!is_plugin_location(
+            "https",
+            "piui-plugin.localhost.example.com"
+        ));
+        assert!(!is_plugin_location("http", "notpiui-plugin.localhost"));
+    }
 
     #[test]
     fn policy_limits_every_resource_to_the_plugin_folder() {

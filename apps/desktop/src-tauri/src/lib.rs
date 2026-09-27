@@ -765,6 +765,23 @@ pub fn run() -> Result<(), tauri::Error> {
             });
         },
     );
+    // The app window never shows the plugin origin: a top-level document
+    // there would count as local and get IPC. Windows only: WebView2 reports
+    // top-level navigations here, so panel frames are unaffected; WebKit
+    // reports frame navigations too and needs its own guard.
+    #[cfg(windows)]
+    {
+        builder = builder.plugin(
+            tauri::plugin::Builder::<tauri::Wry>::new("piui-navigation-guard")
+                .on_navigation(|_webview, url| {
+                    !piui_plugins::csp::is_plugin_location(
+                        url.scheme(),
+                        url.host_str().unwrap_or(""),
+                    )
+                })
+                .build(),
+        );
+    }
     let app = builder
         .on_window_event(background::on_window_event)
         .setup(move |app| {

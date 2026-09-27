@@ -6,6 +6,12 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-27
+
+### Security
+
+- On Windows the app window refuses to navigate to the plugin panel origin, so a top-level document there can never receive the app's IPC bridge. Panel frames are unaffected.
+
 ## [0.2.1] - 2026-09-27
 
 ### Added
