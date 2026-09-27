@@ -169,6 +169,9 @@ struct SlotState {
     node_unsupported: bool,
     /// Project folders the running backend was started with.
     projects: Vec<PathBuf>,
+    /// Calls that hold the running backend (from `ensure` until their
+    /// answer), so a restart for another project never cuts one off.
+    in_use: usize,
     restarts: u32,
     log: VecDeque<LogEntry>,
 }
@@ -345,6 +348,7 @@ impl Supervisor {
             .ok_or(CallError::NotStarted(StartFailure::Failed))?;
         let project = project.filter(|_| spec.project_access());
         let backend = self.ensure(&slot, spec, project).await?;
+        let _use = InUse(Arc::clone(&slot));
         let started = Instant::now();
         let result = backend.request(method, params, timeout, cancel).await;
         eprintln!(
@@ -400,11 +404,12 @@ impl Supervisor {
                         state.projects.iter().any(|granted| granted == project)
                     }) =>
                 {
+                    state.in_use += 1;
                     return Ok(backend);
                 }
                 // Started for other projects and still working: never
                 // interrupt it; nothing is sent.
-                Some(backend) if backend.pending_requests() > 0 => {
+                Some(backend) if state.in_use > 0 || backend.pending_requests() > 0 => {
                     return Err(CallError::NotStarted(StartFailure::Busy));
                 }
                 Some(_) => {
@@ -554,6 +559,7 @@ impl Supervisor {
             state.generation = state.generation.wrapping_add(1);
             state.backend = Some(Arc::clone(&backend));
             state.projects = projects;
+            state.in_use += 1;
             push_log(&mut state, LogEvent::BackendStarted);
             state.generation
         };
@@ -621,6 +627,17 @@ impl Supervisor {
                 notify();
             }
         });
+    }
+}
+
+/// One call's hold on the running backend (see `SlotState::in_use`).
+struct InUse(Arc<Slot>);
+
+impl Drop for InUse {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.0.state.lock() {
+            state.in_use = state.in_use.saturating_sub(1);
+        }
     }
 }
 

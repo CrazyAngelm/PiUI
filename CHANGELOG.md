@@ -19,7 +19,7 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ### Security
 
-- The app window's guard against showing the plugin panel origin now works on macOS and Linux too: such a page is sent back to the app, PiUI's own commands refuse calls from it on every platform, and plugin files other than panel pages are served with a sandbox policy.
+- The guard against the app window showing the plugin panel origin now also covers macOS and Linux: such a page is sent back to the app as soon as it starts loading (Windows still refuses the navigation before it starts), PiUI's own commands refuse calls from it on every platform, and plugin files other than panel pages are served with a sandbox policy.
 - Plugin backends run under Node's permission model: a backend reads its own package, reads and writes its data folder, reaches a project folder only with `project.read` / `project.write`, and never starts other programs or worker threads; network access is blocked without `network` when the Node.js in use can block it. Node.js older than 22.13 no longer starts plugin backends. The trust review shows the exact flags and what is enforced, and still says that plugins are trusted code, not a sandbox.
 
 ## [0.2.2] - 2026-09-27
