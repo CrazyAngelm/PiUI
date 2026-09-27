@@ -18,6 +18,12 @@ the clients both check:
 Workspace v15 (commands, events, catalog) and the v11 session registry format
 are unchanged.
 
+Review and placement are at v1.1: additive fields and commands inside the
+same v1 routes (a staged rename's `renamedFrom`, a hunk `part`, the
+`worktrees` and `removeOrphanWorktree` commands). An older host refuses the
+new request fields and commands as unknown; an older client ignores
+`renamedFrom`. The fixture carries both the v1.0 and the v1.1 shapes.
+
 ## Git on the host
 
 `piui_runtime::git` runs git for every tool:
@@ -53,12 +59,19 @@ and its width is adjustable by pointer and arrow keys and remembered.
   folder). Reads work in safe mode (`readOnly: true`); every action is refused
   with `SAFE_MODE`.
 - **Status.** `git status --porcelain=v2 -z --untracked-files=all
-  --no-renames` plus `git diff --numstat` for staged and unstaged counts. One
-  entry per path and area (`staged`, `unstaged`, `untracked`); conflicts and
-  submodules are listed without actions. At most 2000 entries; paths that are
-  not UTF-8 or contain control characters are counted, not shown.
+  --find-renames` plus `git diff --numstat` for staged (with rename
+  detection) and unstaged counts. One entry per path and area (`staged`,
+  `unstaged`, `untracked`); conflicts and submodules are listed without
+  actions. At most 2000 entries; paths that are not UTF-8 or contain control
+  characters are counted, not shown.
+- **Renames.** A staged rename (`git mv`, or a deletion and a new file git
+  pairs up) is one `staged` entry of the new path with `renamedFrom`; the
+  panel marks it `R` and "Renamed from …". Its diff is `git diff --cached
+  --find-renames -- <from> <to>` (the rename header and any edits) and it
+  unstages as a whole. A work-tree rename git reports only for a `git add -N`
+  file stays a deletion and a new file, as before. A copy is a new file.
 - **Diff.** `git diff [--cached] --binary --full-index -U3 --no-renames` of
-  one path. The panel shows it without `index` lines through the transcript's
+  one path (`--find-renames` with both paths for a staged rename). The panel shows it without `index` lines through the transcript's
   diff viewer; binary, too-large (over 512 KiB of diff), symlink, submodule and
   conflict changes are summarized. Untracked files show as new-file diffs from
   a bounded read (256 KiB shown, the first 1 MiB plus size and modification
@@ -69,8 +82,19 @@ and its width is adjustable by pointer and arrow keys and remembered.
   it changed, and applies exactly those bytes (the whole output, or the hunk
   with its `diff --git`/`---`/`+++` lines) with `git apply [--cached]
   [--reverse] --whitespace=nowarn`, which checks every context line again.
-  Single hunks are offered only for text files that exist on both sides; new,
-  deleted, binary and type-changed files change as a whole. An untracked file
+  Single hunks are offered only for text files that exist on both sides under
+  the same name; new, deleted, renamed, binary and type-changed files change
+  as a whole.
+- **Split hunks.** A hunk with several runs of changes has "Split" (like
+  `git add -p`'s `s`): it shows one part per run, each with the context before
+  and after it (context between two runs belongs to both), numbered "change
+  1.2". An action on a part names the hunk and `part`; the host rebuilds the
+  parts from the recomputed, fingerprint-checked diff (`FilePatch::hunk_parts`)
+  and applies the file header plus that part under a header with the exact
+  positions of its lines on both sides, so `git apply` checks every context
+  line again. The panel's `splitHunk` and the host produce the same parts
+  (shared `review.hunkSplit` fixture cases). Parts are not edited; a split
+  resets when the diff changes. An untracked file
   is staged with `git add` after its fingerprint check. Revert discards
   unstaged changes only (unstage first); a change too large to show is not
   reverted; an intent-to-add file is unstaged first.
@@ -118,6 +142,19 @@ and its width is adjustable by pointer and arrow keys and remembered.
   deleted. An empty folder stays at the old path so harness histories that
   name it stay readable; the chat cannot start again (`WORKTREE_REMOVED`).
   Deleting a worktree chat keeps its worktree (the delete dialog says so).
+- **Orphans (Settings → Worktrees).** `worktrees` lists every managed
+  worktree that was not removed, one per folder, with the chats still in the
+  registry that run in it ("Open chat …"), its project, branch, base commit and
+  whether the folder exists. One without chats is an orphan: "Remove…"
+  (`removeOrphanWorktree` with its opaque id) asks first, then, when it has
+  changes or untracked files, answers `worktreeDirty` with the changes (up to
+  200 listed by path and area) and removes it only with the fingerprint of
+  exactly those changes and an explicit "I understand these N changes will
+  be lost". A worktree a chat still uses is refused (`CONFLICT`: remove it
+  from that chat). The same trust, managed-folder and common-directory checks
+  apply; a missing folder is only forgotten. The branch is never deleted and
+  no empty folder is kept (no chat needs its history path). Safe mode lists
+  worktrees read-only.
 - **Placement storage.** One JSON file per chat in
   `<app data>/workspace-placement-v1/`, written to a temporary file and
   renamed; unknown fields are refused; a file that cannot be read fails that
@@ -129,8 +166,11 @@ and its width is adjustable by pointer and arrow keys and remembered.
 Chat menu → "Continue in another harness…" opens Home for the same project
 with a banner and an editable draft built only from what the chat shows: the
 last request (quoted, up to 1200 characters), the start of the last answer
-(600) and, when the review panel was opened for that chat, the changed files.
-The template is translated; the quoted history is not. The person picks the
+(600) and the changed files of the chat's folder.
+The changed files are read from git (`workspace_review_v1` status) when the
+handoff starts, whether or not the review panel was opened; after 3 s, or
+when git refuses, the draft uses the files the review panel last listed, if
+any. The template is translated; the quoted history is not. The person picks the
 harness and model, edits and sends. The new chat records `continuedFrom` and
 its details link back; a worktree chat continues in the same worktree unless
 the person picks otherwise. Nothing is converted between history formats and
@@ -170,15 +210,18 @@ and handoff links are not shown. Nothing is deleted by the older build.
 ## UI Lab
 
 `?lab=demo` has a fake repository for `piui` (a staged file, a two-hunk
-change, a binary file, a deletion, a new file), a worktree chat "Try a denser
-review layout" with uncommitted changes, handoffs and adoption of the demo
+change, a hunk with three separate changes to split, a staged rename, a
+binary file, a deletion, a new file), a worktree chat "Try a denser review
+layout" with uncommitted changes, an orphan worktree `piui/old-experiment`
+whose chat was deleted, handoffs and adoption of the demo
 history ("Make the session index incremental"; "Draft release notes for 0.2.0"
 behaves as still open in the terminal). `?lab=safe` shows the review
 read-only. The lab's git is an in-memory model (`host-api/lab/gitFake.ts`).
 
 ## Tests
 
-- Rust: git runner, parsers and exact hunk patches on temporary repositories
+- Rust: git runner, parsers (renames in status and numstat), exact hunk and
+  hunk-part patches on temporary repositories
   (including hooks that must not run, literal pathspecs and CRLF work trees
   under `core.autocrlf`); review, placement
   and adoption host tests with real git and the production bridge runner
@@ -195,7 +238,7 @@ read-only. The lab's git is an in-memory model (`host-api/lab/gitFake.ts`).
 
 - macOS has no trash support; reverting an untracked file is refused there.
 - Clean/smudge filters configured for a repository still run during reads.
-- Hunks cannot be split or edited; renames show as a deletion and a new file.
-- A worktree left behind by a deleted chat has no management screen yet.
-- A handoff lists changed files only when the review panel was opened for the
-  source chat in this window.
+- Hunk parts cannot be edited (no `git add -p` `e`); a work-tree rename that
+  is not `git add -N` shows as a deletion and a new file (git reports it so).
+- Worktrees PiUI created before a placement file existed, or whose placement
+  file is damaged, are not listed under Settings → Worktrees.
