@@ -9,10 +9,11 @@
   import { onMount, tick, untrack } from 'svelte';
   import { t } from '../../features/locale/language';
   import { harnessModels } from '../../host-api/harnessModels';
+  import ModelPicker, { type ModelOption } from './ModelPicker.svelte';
   import type { HarnessCatalogModel, HarnessResource } from '../../../../../contracts/harness-models-v18';
   import type { HarnessKind, PermissionMode, WorkspaceSummary } from '../../../../../contracts/workspace-v15';
   import { composerSupport, imageSupport } from '../../harness-adapters/composer';
-  import { Picker, Segmented, Spinner, Switch, Textarea, toasts, type PickerItem } from '../../lib/ui';
+  import { Picker, Spinner, Textarea, toasts, type PickerItem } from '../../lib/ui';
   import { harnessMeta } from '../harnessMeta';
   import { errorMessage } from '../workspaceStore.svelte';
   import { workspaceError } from '../../host-api/workspaceClient';
@@ -218,16 +219,16 @@
       disabledReason: item.reason ?? $t('Not available'),
     })),
   );
-  const modelItems = $derived<PickerItem[]>([
-    { value: '', label: $t('Harness default'), description: $t('Use the model configured in the harness') },
-    ...models.map((item) => ({
-      value: JSON.stringify([item.provider, item.id]),
-      label: item.name,
-      description: item.id,
-      group: item.provider ?? $t('Models'),
-      badges: [...(item.thinkingLevels?.length ? [$t('reasoning')] : []), ...(item.supportsFast ? [$t('fast')] : [])],
+  const modelOptions = $derived<ModelOption[]>(
+    models.map((item) => ({
+      key: JSON.stringify([item.provider, item.id]),
+      name: item.name,
+      id: item.id,
+      ...(item.provider ? { provider: item.provider } : {}),
+      reasoning: Boolean(item.thinkingLevels?.length),
+      fast: Boolean(item.supportsFast),
     })),
-  ]);
+  );
   const permissionItems = $derived<PickerItem<PermissionMode>[]>([
     { value: 'native', label: $t('Harness settings'), description: $t('Use the permissions configured in the harness') },
     { value: 'read-only', label: $t('Read only'), description: $t('The agent can read but not change files') },
@@ -444,14 +445,21 @@
       </Picker>
 
       {#if harness}
-        <Picker
-          items={modelItems}
+        <ModelPicker
+          models={modelOptions}
           value={modelKey}
-          label={$t('Model')}
-          searchPlaceholder={$t('Search models')}
-          emptyText={modelsError ? $t('Could not load models') : $t('No models found')}
-          width={340}
-          onSelect={(value) => (modelKey = value)}
+          defaultOption={true}
+          loading={modelsLoading}
+          error={modelsError}
+          {levels}
+          level={thinkingLevel}
+          levelDefault={true}
+          fastAvailable={Boolean(model?.supportsFast)}
+          {fast}
+          hint={model ? $t('This model has no reasoning options.') : $t('Pick a model to tune reasoning.')}
+          onModel={(value) => (modelKey = value)}
+          onLevel={(value) => (thinkingLevel = value)}
+          onFast={(value) => (fast = value)}
         >
           {#snippet trigger(props)}
             <button type="button" class="chip" {...props}>
@@ -462,29 +470,7 @@
               <ChevronDown size={12} />
             </button>
           {/snippet}
-          {#snippet footer()}
-            {#if levels.length}
-              <div class="tuning">
-                <span class="tuning__label">{$t('Reasoning')}</span>
-                <Segmented
-                  size="sm"
-                  label={$t('Reasoning')}
-                  value={thinkingLevel || '__default'}
-                  options={[{ value: '__default', label: $t('Default') }, ...levels.map((level) => ({ value: level, label: level }))]}
-                  onValueChange={(value) => (thinkingLevel = value === '__default' ? '' : value)}
-                />
-              </div>
-            {/if}
-            {#if model?.supportsFast}
-              <div class="tuning">
-                <Switch bind:checked={fast} label={$t('Fast mode')} />
-              </div>
-            {/if}
-            {#if !levels.length && !model?.supportsFast}
-              <p class="tuning__hint">{model ? $t('This model has no reasoning options.') : $t('Pick a model to tune reasoning.')}</p>
-            {/if}
-          {/snippet}
-        </Picker>
+        </ModelPicker>
       {/if}
 
       <Picker items={permissionItems} value={permissionMode} label={$t('Permissions')} searchPlaceholder={$t('Search')} width={320} onSelect={(value) => (permissionMode = value)}>
@@ -628,22 +614,6 @@
     background: var(--piui-surface-3);
     color: var(--piui-text-disabled);
     opacity: 1;
-  }
-  .tuning {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--piui-space-2);
-    padding: 4px 0;
-  }
-  .tuning__label {
-    color: var(--piui-text-muted);
-    font-size: var(--piui-text-sm);
-  }
-  .tuning__hint {
-    margin: 2px 0;
-    color: var(--piui-text-muted);
-    font-size: var(--piui-text-sm);
   }
   .notice {
     margin: var(--piui-space-2) 4px 0;

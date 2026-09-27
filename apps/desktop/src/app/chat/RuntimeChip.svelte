@@ -6,7 +6,8 @@
   import { runtimeSettings } from '../../host-api/runtimeSettings';
   import type { RuntimeSettings } from '../../../../../contracts/workspace-settings-v16';
   import type { WorkspaceModel, WorkspaceSession } from '../../../../../contracts/workspace-v15';
-  import { Picker, Segmented, Spinner, Switch, type PickerItem } from '../../lib/ui';
+  import { Spinner } from '../../lib/ui';
+  import ModelPicker, { type ModelOption } from '../shell/ModelPicker.svelte';
   import { errorMessage } from '../workspaceStore.svelte';
 
   interface Props {
@@ -27,17 +28,17 @@
   const levels = $derived(
     current?.models.find((entry) => keyOf(entry) === keyOf(model))?.thinkingLevels ?? model?.thinkingLevels ?? [],
   );
-  const items = $derived<PickerItem[]>([
-    ...(model && !current?.models.some((entry) => keyOf(entry) === keyOf(model))
-      ? [{ value: keyOf(model), label: model.name, description: $t('Current model'), group: model.provider ?? $t('Models') }]
-      : []),
-    ...(current?.models ?? []).map((entry) => ({
-      value: keyOf(entry),
-      label: entry.name,
-      description: entry.id,
-      group: entry.provider ?? $t('Models'),
-      badges: entry.thinkingLevels?.length ? [$t('reasoning')] : [],
-    })),
+  const option = (entry: WorkspaceModel & { supportsFast?: boolean }): ModelOption => ({
+    key: keyOf(entry),
+    name: entry.name,
+    id: entry.id,
+    ...(entry.provider ? { provider: entry.provider } : {}),
+    reasoning: Boolean(entry.thinkingLevels?.length),
+    fast: Boolean(entry.supportsFast),
+  });
+  const options = $derived<ModelOption[]>([
+    ...(model && !current?.models.some((entry) => keyOf(entry) === keyOf(model)) ? [option(model)] : []),
+    ...(current?.models ?? []).map(option),
   ]);
 
   $effect(() => {
@@ -81,20 +82,24 @@
   function selectModel(value: string): void {
     const next = current?.models.find((entry) => keyOf(entry) === value);
     if (next) void apply(next, {});
-    open = true;
   }
 </script>
 
-<Picker
+<ModelPicker
   bind:open
-  {items}
+  models={options}
   value={keyOf(model)}
-  label={$t('Model and reasoning')}
-  searchPlaceholder={$t('Search models')}
-  emptyText={busy ? $t('Loading models…') : $t('No models found')}
-  width={340}
+  loading={open && busy && !current}
+  {error}
+  {levels}
+  level={current?.thinkingLevel ?? ''}
+  fastAvailable={Boolean(current && current.serviceTier !== null)}
+  fast={current?.serviceTier === 'fast'}
+  {busy}
   side="top"
-  onSelect={selectModel}
+  onModel={selectModel}
+  onLevel={(value) => void apply(current?.model, { thinkingLevel: value })}
+  onFast={(value) => void apply(current?.model, { serviceTier: value ? 'fast' : 'standard' })}
 >
   {#snippet trigger(props)}
     <button type="button" class="chip" {...props} {disabled} title={disabled ? $t('Available while the agent is idle') : undefined}>
@@ -105,32 +110,7 @@
       <ChevronDown size={12} />
     </button>
   {/snippet}
-  {#snippet footer()}
-    {#if levels.length}
-      <div class="row">
-        <span class="row__label">{$t('Reasoning')}</span>
-        <Segmented
-          size="sm"
-          label={$t('Reasoning')}
-          value={current?.thinkingLevel ?? levels[0]}
-          options={levels.map((level) => ({ value: level, label: level }))}
-          onValueChange={(value) => void apply(current?.model, { thinkingLevel: value })}
-        />
-      </div>
-    {/if}
-    {#if current && current.serviceTier !== null}
-      <div class="row">
-        <Switch
-          label={$t('Fast mode')}
-          checked={current.serviceTier === 'fast'}
-          disabled={busy}
-          onCheckedChange={(checked) => void apply(current?.model, { serviceTier: checked ? 'fast' : 'standard' })}
-        />
-      </div>
-    {/if}
-    {#if error}<p class="error" role="alert">{error}</p>{/if}
-  {/snippet}
-</Picker>
+</ModelPicker>
 
 <style>
   .chip {
@@ -161,21 +141,5 @@
   }
   .chip__sub {
     color: var(--piui-text-disabled);
-  }
-  .row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--piui-space-2);
-    padding: 4px 0;
-  }
-  .row__label {
-    color: var(--piui-text-muted);
-    font-size: var(--piui-text-sm);
-  }
-  .error {
-    margin: 4px 0 0;
-    color: var(--piui-danger);
-    font-size: var(--piui-text-sm);
   }
 </style>

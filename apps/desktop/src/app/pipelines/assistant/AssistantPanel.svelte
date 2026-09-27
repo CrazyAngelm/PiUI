@@ -7,16 +7,21 @@
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import Check from '@lucide/svelte/icons/check';
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
+  import Brain from '@lucide/svelte/icons/brain';
   import { tick } from 'svelte';
   import { t } from '../../../features/locale/language';
   import MarkdownContent from '../../../components/MarkdownContent.svelte';
   import { graphToSystemFile } from '../../../features/orchestration/systemFile';
   import { composerRequest } from '../../../host-api/composerClient';
+  import { workspaceModel } from '../../../host-api/harnessModels';
+  import { runtimeSettings } from '../../../host-api/runtimeSettings';
   import type { HarnessKind } from '../../../../../../contracts/workspace-v15';
   import { Button, IconButton, Picker, Spinner, Textarea, toasts, type PickerItem } from '../../../lib/ui';
   import ApprovalCard from '../../shell/ApprovalCard.svelte';
+  import ModelPicker, { type ModelOption } from '../../shell/ModelPicker.svelte';
   import HarnessMark from '../../shell/HarnessMark.svelte';
   import { useWorkspace } from '../../shell/context';
+  import { errorMessage } from '../../workspaceStore.svelte';
   import { harnessMeta } from '../../harnessMeta';
   import type { PipelineEditorStore } from '../editorStore.svelte';
   import { applyProposal, builderEnvelope, isEmptyChange, readProposal, stripEnvelope, summarizeChange, type HarnessChoice } from './builderPrompt';
@@ -32,6 +37,8 @@
   // Claude Code first once the host offers it; any available harness works.
   const PREFERRED: readonly string[] = ['claude-code', 'codex', 'pi', 'prime-agent', 'hermes'];
   const storageKey = $derived(`piui.pipeline.assistant.v1.${workspaceId}.${editor.graph.id}`);
+  // The last model picked per harness; empty means the harness default.
+  const MODEL_KEY = 'piui.pipeline.assistant.model.v1';
 
   let sessionId = $state('');
   let harness = $state<HarnessKind | ''>('');
@@ -41,10 +48,29 @@
   let list = $state<HTMLDivElement | null>(null);
   let input = $state<HTMLTextAreaElement | null>(null);
   let applied = $state<Record<string, boolean>>({});
+  let modelKey = $state('');
+  let modelBusy = $state(false);
+  let level = $state('');
 
   const available = $derived(store.catalog.harnesses.filter((item) => item.status === 'available'));
   const harnessItems = $derived<PickerItem<HarnessKind>[]>(
     available.map((item) => ({ value: item.kind, label: harnessMeta(item.kind).label, description: item.version ? `v${item.version}` : undefined })),
+  );
+  const keyOf = (value: { provider?: string | null; id: string }) => JSON.stringify([value.provider ?? null, value.id]);
+  const models = $derived(harness ? (editor.catalogs[harness]?.models ?? []) : []);
+  const modelsError = $derived(harness ? Boolean(editor.catalogErrors[harness]) : false);
+  const modelsLoading = $derived(Boolean(harness) && !editor.safeMode && !modelsError && !(harness && editor.catalogs[harness]));
+  const model = $derived(modelKey ? models.find((item) => keyOf(item) === modelKey) : undefined);
+  const levels = $derived(model?.thinkingLevels ?? []);
+  const modelOptions = $derived<ModelOption[]>(
+    models.map((item) => ({
+      key: keyOf(item),
+      name: item.name,
+      id: item.id,
+      ...(item.provider ? { provider: item.provider } : {}),
+      reasoning: Boolean(item.thinkingLevels?.length),
+      fast: Boolean(item.supportsFast),
+    })),
   );
   const snapshot = $derived(sessionId ? store.snapshots[sessionId] : undefined);
   const running = $derived(snapshot ? ['starting', 'running', 'stopping'].includes(snapshot.session.status) : false);
@@ -84,6 +110,18 @@
     if (harness || !available.length) return;
     harness = PREFERRED.map((kind) => available.find((item) => item.kind === kind)).find(Boolean)?.kind ?? available[0]!.kind;
   });
+  // Load the harness's models and restore the model last picked for it.
+  $effect(() => {
+    const kind = harness;
+    if (!kind) return;
+    modelKey = readModels()[kind] ?? '';
+    if (!editor.catalogs[kind]) void editor.loadCatalog(kind);
+  });
+  // A remembered model the harness no longer offers falls back to its default.
+  $effect(() => {
+    const catalog = harness ? editor.catalogs[harness] : undefined;
+    if (modelKey && catalog && !catalog.models.some((item) => keyOf(item) === modelKey)) modelKey = '';
+  });
   $effect(() => {
     void messages.length;
     void messages.at(-1)?.text.length;
@@ -99,6 +137,61 @@
     } catch {
       // The conversation stays reachable from the project's chats.
     }
+  }
+
+  function readModels(): Record<string, string> {
+    try {
+      const parsed: unknown = JSON.parse(localStorage.getItem(MODEL_KEY) ?? '{}');
+      return parsed && typeof parsed === 'object' ? (parsed as Record<string, string>) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  async function selectModel(value: string): Promise<void> {
+    if (value === modelKey || !harness) return;
+    const next = value ? models.find((item) => keyOf(item) === value) : undefined;
+    if (value && !next) return;
+    if (sessionId && next) {
+      // A live conversation switches model natively and keeps its history.
+      modelBusy = true;
+      error = '';
+      try {
+        await runtimeSettings({ type: 'set', sessionId, model: workspaceModel(next) });
+      } catch (cause) {
+        error = errorMessage(cause);
+        return;
+      } finally {
+        modelBusy = false;
+      }
+    } else if (sessionId) {
+      // A native session cannot return to "no override": start a new one.
+      reset();
+    }
+    modelKey = value;
+    level = '';
+    try {
+      localStorage.setItem(MODEL_KEY, JSON.stringify({ ...readModels(), [harness]: value }));
+    } catch {
+      // The choice lasts for this panel only.
+    }
+  }
+
+  async function selectLevel(value: string): Promise<void> {
+    if (value === level) return;
+    if (sessionId && model && value) {
+      modelBusy = true;
+      error = '';
+      try {
+        await runtimeSettings({ type: 'set', sessionId, model: workspaceModel(model), thinkingLevel: value });
+      } catch (cause) {
+        error = errorMessage(cause);
+        return;
+      } finally {
+        modelBusy = false;
+      }
+    }
+    level = value;
   }
 
   function reset(): void {
@@ -136,7 +229,7 @@
       });
       if (!sessionId) {
         const outcome = await store.createChat(
-          { workspaceId, harness, permissionMode: 'read-only', text: envelope },
+          { workspaceId, harness, ...(model ? { model, ...(level ? { thinkingLevel: level } : {}) } : {}), permissionMode: 'read-only', text: envelope },
           { open: false, title: $t('Pipeline assistant: {0}', [editor.graph.name || $t('Untitled pipeline')]) },
         );
         remember(outcome.sessionId);
@@ -183,6 +276,32 @@
         </button>
       {/snippet}
     </Picker>
+    {#if harness}
+      <ModelPicker
+        models={modelOptions}
+        value={modelKey}
+        defaultOption={true}
+        loading={modelsLoading}
+        error={modelsError ? $t('Could not load models') : ''}
+        {levels}
+        {level}
+        levelDefault={true}
+        busy={modelBusy}
+        width={340}
+        hint={model ? $t('This model has no reasoning options.') : $t('Pick a model to tune reasoning.')}
+        onModel={(value) => void selectModel(value)}
+        onLevel={(value) => void selectLevel(value)}
+      >
+        {#snippet trigger(props)}
+          <button type="button" class="chip chip--model" {...props} disabled={sending || running || modelBusy}>
+            {#if modelBusy || modelsLoading}<Spinner size={12} />{:else}<Brain size={13} />{/if}
+            <span>{model?.name ?? $t('Default model')}</span>
+            {#if level}<span class="chip__sub">{level}</span>{/if}
+            <ChevronDown size={12} />
+          </button>
+        {/snippet}
+      </ModelPicker>
+    {/if}
     <span class="spacer"></span>
     <IconButton size="sm" label={$t('New conversation')} disabled={!sessionId || sending} onclick={reset}><RotateCcw /></IconButton>
     <IconButton size="sm" label={$t('Close assistant')} onclick={onClose}><X /></IconButton>
@@ -316,6 +435,18 @@
     background: transparent;
     color: var(--piui-text);
     font-size: var(--piui-text-sm);
+  }
+  .chip--model {
+    min-width: 0;
+    max-width: 150px;
+  }
+  .chip__sub {
+    color: var(--piui-text-disabled);
+  }
+  .chip--model span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .chip:hover:not(:disabled) {
     background: var(--piui-hover);

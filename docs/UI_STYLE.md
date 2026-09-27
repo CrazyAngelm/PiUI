@@ -4,13 +4,21 @@ PiUI is a focused desktop workbench. Use charcoal surfaces, restrained burgundy
 actions and warm neutral text. Keep the graph and conversation as the main
 content. These rules apply to chat, systems, library, settings and dialogs.
 
+Visual direction (2026-09-28): "Chaos", inspired by Shadow the Hedgehog. Black
+and graphite bodies, crimson energy streaks, inhibitor-ring gold, a rare emerald
+spark; sharp slanted shapes (parallelogram bars, blade markers, speed streaks)
+instead of soft pills. Use the `--piui-chaos-*` tokens for emphasis only:
+gauges, the current selection, a popover's top streak. Text surfaces stay calm
+and readable; one energetic accent per surface, never a screen of glow.
+
 - Use `styles/tokens.css` for colors, typography, spacing and radii. The existing
   13px UI base, 4px spacing unit, 6px control radius and 10/16px surface radii are
   the shared scale. Larger text is for conversation reading and page titles.
   Do not add another font, palette or component framework per screen.
 - Reserve solid burgundy for the primary action. Use a quiet tinted surface for
   selection; hover, selection and keyboard focus remain distinguishable.
-  Avoid decorative gradients, neon glows, oversized cards and heavy outlines.
+  Gradients and glow belong to chaos accents (a lit gauge, the current item),
+  not to backgrounds of whole panels. Avoid oversized cards and heavy outlines.
 - Keep controls compact and labels close to fields. Grow writing areas, not
   every control. Task editing has a large area and a focused modal. Panels
   resize with pointer or keyboard and remember widths.
