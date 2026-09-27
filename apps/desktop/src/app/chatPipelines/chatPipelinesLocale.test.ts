@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { translate } from '../../features/locale/language';
+import { lookupRussian } from '../../features/locale/ruCatalog';
 import { PIPELINE_LIBRARY_ERROR_COPY } from '../../host-api/pipelineLibraryClient';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -48,6 +48,6 @@ describe('chat pipelines in Russian', () => {
   it('translate every visible string', () => {
     const copy = [...new Set([...FILES.flatMap(literals), ...MESSAGES])];
     expect(copy.length).toBeGreaterThan(40);
-    expect(copy.filter((value) => translate(value, 'ru') === value)).toEqual([]);
+    expect(copy.filter((value) => lookupRussian(value) === undefined)).toEqual([]);
   });
 });

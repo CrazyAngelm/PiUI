@@ -35,7 +35,6 @@ export const chatPipelinesRu: Readonly<Record<string, string>> = {
   'Project and permissions': 'Проект и права',
   'Project and permissions: {0}': 'Проект и права: {0}',
   'Where the chat works': 'Где работает чат',
-  'Worktree · {0}': 'В worktree · {0}',
   // Run card in the chat
   'Pipeline run': 'Прогон пайплайна',
   'Pipeline run: {0}': 'Прогон пайплайна: {0}',
