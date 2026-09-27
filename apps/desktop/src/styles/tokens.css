@@ -48,15 +48,6 @@
   --piui-action-ink: #ffffff;
   --piui-focus: #ec91a5;
 
-  /* Chaos energy (Shadow-inspired): crimson streaks, inhibitor-ring gold,
-     emerald spark. For emphasis only: gauges, selected states, highlights. */
-  --piui-chaos: #e0364a;
-  --piui-chaos-deep: #6e1422;
-  --piui-chaos-gold: #f0c050;
-  --piui-chaos-spark: #58e0a8;
-  --piui-chaos-glow: rgba(224, 54, 74, 0.38);
-  --piui-chaos-streak: linear-gradient(100deg, rgba(224, 54, 74, 0.2), rgba(224, 54, 74, 0) 70%);
-
   /* Status. */
   --piui-danger: #d68f82;
   --piui-warning: #d5b36c;
@@ -206,12 +197,6 @@
   --piui-action-pressed: #7a253a;
   --piui-action-ink: #ffffff;
   --piui-focus: #9d304b;
-  --piui-chaos: #b8243a;
-  --piui-chaos-deep: #f3d3d9;
-  --piui-chaos-gold: #9a6a00;
-  --piui-chaos-spark: #0f8a5c;
-  --piui-chaos-glow: rgba(184, 36, 58, 0.22);
-  --piui-chaos-streak: linear-gradient(100deg, rgba(184, 36, 58, 0.12), rgba(184, 36, 58, 0) 70%);
   --piui-danger: #963f36;
   --piui-warning: #785714;
   --piui-success: #436732;
@@ -277,12 +262,6 @@
     --piui-action-pressed: #7a253a;
     --piui-action-ink: #ffffff;
     --piui-focus: #9d304b;
-    --piui-chaos: #b8243a;
-    --piui-chaos-deep: #f3d3d9;
-    --piui-chaos-gold: #9a6a00;
-    --piui-chaos-spark: #0f8a5c;
-    --piui-chaos-glow: rgba(184, 36, 58, 0.22);
-    --piui-chaos-streak: linear-gradient(100deg, rgba(184, 36, 58, 0.12), rgba(184, 36, 58, 0) 70%);
     --piui-danger: #963f36;
     --piui-warning: #785714;
     --piui-success: #436732;
@@ -369,5 +348,39 @@
     --piui-duration-fast: 0ms;
     --piui-duration: 0ms;
     --piui-duration-slow: 0ms;
+  }
+}
+
+/*
+ * Chaos energy (Shadow-inspired): crimson streaks, inhibitor-ring gold, emerald
+ * spark. Emphasis only: gauges, selected states, highlights. Kept outside the
+ * theme blocks above: those colors are the plugin theme-token contract.
+ */
+:root {
+  --piui-chaos: #e0364a;
+  --piui-chaos-deep: #6e1422;
+  --piui-chaos-gold: #f0c050;
+  --piui-chaos-spark: #58e0a8;
+  --piui-chaos-glow: rgba(224, 54, 74, 0.38);
+  --piui-chaos-streak: linear-gradient(100deg, rgba(224, 54, 74, 0.2), rgba(224, 54, 74, 0) 70%);
+}
+
+:root[data-theme="light"] {
+  --piui-chaos: #b8243a;
+  --piui-chaos-deep: #f3d3d9;
+  --piui-chaos-gold: #9a6a00;
+  --piui-chaos-spark: #0f8a5c;
+  --piui-chaos-glow: rgba(184, 36, 58, 0.22);
+  --piui-chaos-streak: linear-gradient(100deg, rgba(184, 36, 58, 0.12), rgba(184, 36, 58, 0) 70%);
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] {
+    --piui-chaos: #b8243a;
+    --piui-chaos-deep: #f3d3d9;
+    --piui-chaos-gold: #9a6a00;
+    --piui-chaos-spark: #0f8a5c;
+    --piui-chaos-glow: rgba(184, 36, 58, 0.22);
+    --piui-chaos-streak: linear-gradient(100deg, rgba(184, 36, 58, 0.12), rgba(184, 36, 58, 0) 70%);
   }
 }
