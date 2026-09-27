@@ -567,10 +567,9 @@ principles of ADR-009/010/016.
   requests in v1; any other frame is a protocol violation that stops it. A
   timeout stops it; a crash restarts on next use after 1, 2, 4 … 60 s, and
   five crashes in ten minutes stop it until the user restarts it. Disable,
-  remove, reload and quit stop the whole tree. Logs are metadata only. A
-  backend is not a sandbox: it has the user's file and network access, and
-  `network`, `project.read` and `project.write` are declarations PiUI shows,
-  not restrictions it enforces.
+  remove, reload and quit stop the whole tree. Logs are metadata only. In v1
+  a backend had the user's file and network access; plugins v2 limits it
+  with Node's permission model (below).
 - **Panels and the CSP change.** A panel is the plugin's static `ui.entry`
   page served by the `piui-plugin` custom protocol
   (`http://piui-plugin.localhost/<id>/…` on Windows,
@@ -635,6 +634,31 @@ orchestration v6.5 `plugin` executor, also accepted by system file v4.
 right-panel contributions; harness adapters other than ACP descriptors;
 project-local plugins; backend requests to the host; signed packages or a
 catalog; any enforcement of `network` or project-folder permissions.
+
+**Plugins v2 (2026-09-27):**
+
+- **Backends under Node's permission model.** Every backend starts as
+  `node --permission --allow-fs-read=<package> --allow-fs-read=<data folder>
+  --allow-fs-write=<data folder> [--allow-net] <entry>`. `project.read` adds
+  `--allow-fs-read` and `project.write` also `--allow-fs-write` for the
+  project folder of a request, exactly as the request spells it; a backend
+  started for other projects restarts with the new folder added only while
+  it is idle, and a busy one refuses the request before anything is sent.
+  `--allow-child-process`, `--allow-worker`, `--allow-addons`,
+  `--allow-wasi` and the inspector are never passed. `--allow-net` exists
+  only in newer Node.js: PiUI probes the flags the Node.js in use accepts
+  (`process.allowedNodeEnvironmentFlags`, cached per executable, never on
+  the first-paint path) and, without `--allow-net`, the review says that an
+  undeclared network access cannot be blocked. A Node.js without the
+  permission model (older than 22.13) does not start backends at all
+  (backend state `unsupported`). The review and Settings show the exact
+  flags (the data folder is named before the review) and what is enforced;
+  they also say that Node documents its model as a guard against mistakes,
+  not against deliberately malicious code — plugins remain trusted code and
+  PiUI still does not call this a sandbox. Verified with real Node.js
+  22.17, 22.23 and 24.13 (reads, writes and `child_process` denied;
+  `--allow-net` was not available to test). `plugins-v1` v1.1 (additive):
+  `limits` on the backend and the review, state `unsupported`.
 
 ## ADR-033 — Script nodes are trusted user code (orchestration v6.2)
 

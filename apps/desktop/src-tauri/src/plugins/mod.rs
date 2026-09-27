@@ -112,6 +112,9 @@ pub(crate) struct Staged {
     pub package: Package,
     pub files: usize,
     pub bytes: u64,
+    /// The data folder a new plugin gets, named before the review so the
+    /// review shows the exact backend command line.
+    data_directory: String,
     created: Instant,
 }
 
@@ -217,7 +220,26 @@ impl PluginsState {
     }
 
     fn data_dir(&self, stored: &StoredPlugin) -> PathBuf {
-        self.inner.root.join("data").join(&stored.data_directory)
+        self.data_folder(&stored.data_directory)
+    }
+
+    fn data_folder(&self, directory: &str) -> PathBuf {
+        self.inner.root.join("data").join(directory)
+    }
+
+    /// The data folder a staged package will use: the installed plugin's,
+    /// or the one named for this review.
+    pub(crate) fn staged_data_dir(&self, staged: &Staged) -> PathBuf {
+        let manifest = &staged.package.manifest.manifest;
+        self.stored(&manifest.id).map_or_else(
+            || self.data_folder(&staged.data_directory),
+            |stored| self.data_dir(&stored),
+        )
+    }
+
+    /// The data folder of an installed or loaded plugin (display).
+    pub(crate) fn plugin_data_dir(&self, stored: &StoredPlugin) -> PathBuf {
+        self.data_dir(stored)
     }
 
     /// Reads and checks one stored plugin's package. Blocking.
@@ -504,6 +526,7 @@ impl PluginsState {
             directory,
             files: validated.files.len(),
             bytes: validated.bytes,
+            data_directory: uuid::Uuid::new_v4().to_string(),
             package: Package {
                 code_hash: validated.code_hash,
                 manifest: validated.manifest,
@@ -553,28 +576,81 @@ impl PluginsState {
         self.lock().ok()?.registry.document.plugin(id).cloned()
     }
 
-    /// The exact backend command line of a package in `root` (display).
-    pub(crate) fn command_line(
+    /// The exact backend command line of a package in `root` with its data
+    /// folder, and what Node's permission model enforces with the Node.js
+    /// PiUI found (display). Project folders are added per request and are
+    /// not part of it. `probe` asks Node.js when it was not asked yet
+    /// (blocking); otherwise only a cached answer is used.
+    pub(crate) fn backend_display(
         manifest: &PluginManifest,
         root: &Path,
-    ) -> Option<(crate::acp_agents::CommandLine, bool)> {
+        data_dir: &Path,
+        probe: bool,
+    ) -> Option<BackendDisplay> {
+        use piui_runtime::plugin_backend::{
+            NodePermissionSupport, cached_node_permissions, permission_arguments,
+            probe_node_permissions, resolve_plugin_node,
+        };
         let entry = resolve_inside(root, &manifest.backend.as_ref()?.entry)?;
-        let node = piui_runtime::plugin_backend::resolve_plugin_node().ok();
-        let found = node.is_some();
-        Some((
-            crate::acp_agents::CommandLine {
-                program: node.map_or_else(
+        let node = resolve_plugin_node().ok();
+        let support = node.as_deref().and_then(|node| {
+            if probe {
+                probe_node_permissions(node).ok()
+            } else {
+                cached_node_permissions(node)
+            }
+        });
+        let spec = BackendSpec {
+            plugin_id: manifest.id.clone(),
+            version: manifest.version.clone(),
+            root: root.to_path_buf(),
+            entry: entry.clone(),
+            permissions: sorted(&manifest.permissions),
+            settings: Map::new(),
+            data_dir: data_dir.to_path_buf(),
+            piui_version: String::new(),
+        };
+        // Until Node.js answered, show the flags a current Node.js gets.
+        let planned = support.clone().unwrap_or(NodePermissionSupport {
+            version: String::new(),
+            permission: true,
+            network: false,
+        });
+        let mut args = permission_arguments(
+            &NodePermissionSupport {
+                permission: true,
+                ..planned
+            },
+            &spec.grants(&[]),
+        )
+        .map(|flags| {
+            flags
+                .as_slice()
+                .iter()
+                .map(|flag| flag.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+        args.push(
+            piui_runtime::script_runner::process_directory(&entry)
+                .to_string_lossy()
+                .into_owned(),
+        );
+        Some(BackendDisplay {
+            command_line: crate::acp_agents::CommandLine {
+                program: node.as_ref().map_or_else(
                     || "node".to_owned(),
                     |node| node.to_string_lossy().into_owned(),
                 ),
-                args: vec![
-                    piui_runtime::script_runner::process_directory(&entry)
-                        .to_string_lossy()
-                        .into_owned(),
-                ],
+                args,
             },
-            found,
-        ))
+            node_found: node.is_some(),
+            limits: support.map(|support| BackendLimits {
+                node_version: support.version,
+                enforced: support.permission,
+                network: support.permission && support.network,
+            }),
+        })
     }
 
     /// Where a staged package will run from once installed.
@@ -679,7 +755,7 @@ impl PluginsState {
             enabled: true,
             installed_at: now_string(),
             data_directory: previous.as_ref().map_or_else(
-                || uuid::Uuid::new_v4().to_string(),
+                || staged.data_directory.clone(),
                 |stored| stored.data_directory.clone(),
             ),
             settings: previous
@@ -925,6 +1001,28 @@ impl PluginsState {
                 .collect(),
         })
     }
+}
+
+/// What Node's permission model enforces for a backend (display).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BackendLimits {
+    /// `node --version` of the Node.js PiUI found.
+    pub node_version: String,
+    /// Files, other programs, worker threads and add-ons are limited. False:
+    /// this Node.js has no permission model and PiUI does not start the
+    /// backend.
+    pub enforced: bool,
+    /// Network access is blocked unless the plugin asks for `network`.
+    pub network: bool,
+}
+
+/// The backend command line and its limits (display).
+pub(crate) struct BackendDisplay {
+    pub command_line: crate::acp_agents::CommandLine,
+    pub node_found: bool,
+    /// Absent until Node.js was asked (off the first-paint path).
+    pub limits: Option<BackendLimits>,
 }
 
 /// A runnable node type of an active plugin.

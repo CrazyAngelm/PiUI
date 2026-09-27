@@ -19,6 +19,13 @@
  * runs and every change is refused. Credentials, environment values, plugin
  * output and file contents never cross this boundary except the template
  * text the UI asked for and a command's own result.
+ *
+ * v1.1 (additive, ADR-032 plugins v2): a backend runs under Node's
+ * permission model. `PluginBackendV1.limits` and the review's
+ * `backend.limits` say what the Node.js PiUI found enforces, the command
+ * line carries the permission flags, and the backend state `unsupported`
+ * means that Node.js has no permission model, so PiUI does not start the
+ * backend. Older payloads without `limits` stay valid.
  */
 import type { CommandLineV1 } from './harness-registry-v1';
 import type { PluginFieldV1, PluginPermission, PluginProblemCode, PluginValue } from './piui-plugin-v1';
@@ -38,9 +45,29 @@ export type PluginSource = 'installed' | 'development';
  * `stopped`: starts on first use. `crashed`: stopped unexpectedly; the next
  * use restarts it after a backoff. `crash-loop`: five crashes within ten
  * minutes; it stays stopped until restarted from Settings. `unavailable`:
- * Node.js was not found. A plugin without a backend has no `backend` entry.
+ * Node.js was not found. `unsupported` (v1.1): Node.js has no permission
+ * model (older than 22.13), so the backend is not started. A plugin without
+ * a backend has no `backend` entry.
  */
-export type PluginBackendState = 'stopped' | 'starting' | 'running' | 'crashed' | 'crash-loop' | 'unavailable';
+export type PluginBackendState = 'stopped' | 'starting' | 'running' | 'crashed' | 'crash-loop' | 'unavailable' | 'unsupported';
+
+/**
+ * What Node's permission model enforces for a backend with the Node.js PiUI
+ * found (v1.1). A backend reads its package, reads and writes its own data
+ * folder and, with `project.read` / `project.write`, the project folders of
+ * the requests it gets; it never starts other programs, worker threads,
+ * native add-ons or WASI. Node documents that its permission model is not a
+ * security boundary against deliberately malicious code: this is a limit on
+ * trusted code, not a sandbox.
+ */
+export interface PluginBackendLimitsV1 {
+  /** `node --version`, for example `v24.13.0`. */
+  nodeVersion: string;
+  /** Files, other programs and worker threads are limited. False: PiUI does not start the backend. */
+  enforced: boolean;
+  /** Network access is blocked unless the plugin asks for `network`. False: this Node.js cannot block it. */
+  network: boolean;
+}
 
 /** A fixed English locale key; `{0}` is replaced with `subject`. */
 export interface PluginProblemV1 {
@@ -127,6 +154,8 @@ export interface PluginBackendV1 {
   commandLine: CommandLineV1;
   /** False when Node.js was not found; `commandLine.program` is then `node`. */
   nodeFound: boolean;
+  /** v1.1: absent until PiUI asked Node.js (never on the first-paint path). */
+  limits?: PluginBackendLimitsV1;
 }
 
 export interface PluginEntryV1 {
@@ -199,7 +228,7 @@ export interface PluginReviewV1 {
   publisher: string;
   description?: string;
   permissions: PluginPermission[];
-  backend?: { commandLine: CommandLineV1; nodeFound: boolean };
+  backend?: { commandLine: CommandLineV1; nodeFound: boolean; limits?: PluginBackendLimitsV1 };
   codeHash: string;
   files: number;
   bytes: number;

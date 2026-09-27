@@ -7,6 +7,7 @@
   import type { PluginEntryV1 } from '../../../../../contracts/plugins-v1';
   import { t } from '../../features/locale/language';
   import { Badge, Button, Switch } from '../../lib/ui';
+  import PluginBackendLimits from './PluginBackendLimits.svelte';
   import { BACKEND_STATE_TEXT, commandLineText, LOG_TEXT, PERMISSION_TEXT } from './permissions';
 
   /** One plugin in Settings → Plugins. */
@@ -107,6 +108,9 @@
           {#if plugin.backend.restarts}<span class="muted">· {$t('Restarts: {0}', [plugin.backend.restarts])}</span>{/if}
         </p>
         <code class="command">{commandLineText(plugin.backend.commandLine)}</code>
+        {#if plugin.backend.nodeFound}
+          <PluginBackendLimits limits={plugin.backend.limits} permissions={plugin.permissions} />
+        {/if}
       {/if}
       <p class="muted" title={plugin.codeHash}>{$t('Code {0}', [plugin.codeHash.slice(0, 12)])}</p>
       {#if plugin.log.length}

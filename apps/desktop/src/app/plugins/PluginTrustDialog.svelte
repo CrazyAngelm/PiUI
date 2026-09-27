@@ -3,6 +3,7 @@
   import type { PluginReviewV1 } from '../../../../../contracts/plugins-v1';
   import { t } from '../../features/locale/language';
   import { Badge, Button, Dialog } from '../../lib/ui';
+  import PluginBackendLimits from './PluginBackendLimits.svelte';
   import { commandLineText, formatBytes, PERMISSION_TEXT } from './permissions';
 
   /**
@@ -94,6 +95,8 @@
         <code class="command">{commandLineText(review.backend.commandLine)}</code>
         {#if !review.backend.nodeFound}
           <p class="warn">{$t('Node.js was not found. The backend cannot start until Node.js is installed.')}</p>
+        {:else}
+          <PluginBackendLimits limits={review.backend.limits} permissions={review.permissions} />
         {/if}
       </section>
     {/if}
@@ -118,7 +121,7 @@
     <p class="note" role="note">
       <ShieldAlert size={15} aria-hidden="true" />
       <span>
-        {$t("Plugins are not a sandbox. A backend runs with your account's access to files and the network; PiUI stops its whole process tree and gives it no API keys. Panels run isolated. Install only plugins you trust.")}
+        {$t("Plugins are not a sandbox. PiUI limits a backend's files and programs with Node's permission model, stops its whole process tree and gives it no API keys, but deliberately malicious code can get around those limits. Panels run isolated. Install only plugins you trust.")}
         {#if development}{' '}{$t('Development mode runs the plugin from its folder: code changes load without a new review, permission changes need one.')}{/if}
       </span>
     </p>
@@ -172,6 +175,7 @@
   }
   .command {
     display: block;
+    margin-bottom: var(--piui-space-2);
     padding: var(--piui-space-2) var(--piui-space-3);
     border: 1px solid var(--piui-border-subtle);
     border-radius: var(--piui-radius-sm);

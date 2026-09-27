@@ -12,13 +12,15 @@ contracts are in `contracts/`:
 | `plugin-panel-v1.ts` | `postMessage` bridge between PiUI and a panel |
 | `plugins-v1.ts` | What Settings → Plugins and the other screens receive from the host |
 
-**A plugin is not a sandbox.** A backend runs on your computer with your
-account's access to files and the network. PiUI shows every permission before
-install, starts only the exact command line it shows, contains the whole
-process tree, passes no API keys or tokens and stops the backend when the
-plugin is disabled, removed or PiUI quits — but it does not restrict what the
-backend reads, writes or connects to. Panels are different: they run
-isolated (see [Panels](#panels)).
+**A plugin is not a sandbox.** A backend runs on your computer as trusted
+code. PiUI shows every permission before install, starts only the exact
+command line it shows, contains the whole process tree, passes no API keys or
+tokens, stops the backend when the plugin is disabled, removed or PiUI quits,
+and starts it under Node's permission model so it reaches only its own files,
+its data folder and — when it asks — the project folder it works in (see
+[Backend limits](#backend-limits)). Node documents that model as a guard
+against mistakes, not against deliberately malicious code. Panels are
+different: they run isolated (see [Panels](#panels)).
 
 ## Quick start
 
@@ -107,13 +109,13 @@ Unknown fields are errors, never ignored. The `$schema` field may point at
 | `acp.agents` | ACP agents in Settings → Harnesses | Yes |
 | `chat.read` | The open chat's id and title (never its messages) | Yes |
 | `notifications` | Short notices from a panel | Yes |
-| `project.read` | The backend receives the chat's or run's project path | Declared only |
-| `project.write` | The same path, stating that files may change | Declared only |
-| `network` | States that the backend uses the network | Declared only |
+| `project.read` | The backend receives the chat's or run's project path and may read that folder | Yes, by Node's permission model |
+| `project.write` | The same path; the backend may also change files in it | Yes, by Node's permission model |
+| `network` | The backend may use the network | When the Node.js in use has `--allow-net` |
 
-"Declared only" means the permission is shown in the review and changes what
-PiUI passes to the backend, but PiUI does not stop a backend from reading
-files or opening connections. Ask only for what you need.
+Without `project.read`/`project.write` a backend cannot open project
+folders; without `network` its network access is blocked when Node.js can
+block it, and the review says so when it cannot. Ask only for what you need.
 
 ## Contributions
 
@@ -255,10 +257,10 @@ chat is not affected.
 
 ## Backend
 
-PiUI starts `node <backend.entry>` from the package folder the first time a
-command or node needs it, with a minimal environment (`PATH`, temp folders,
-home and locale variables; no API keys, tokens, `NODE_OPTIONS` or PiUI
-variables). Use the helper `create-plugin` copies:
+PiUI starts `node <permission flags> <backend.entry>` from the package
+folder the first time a command or node needs it, with a minimal environment
+(`PATH`, temp folders, home and locale variables; no API keys, tokens,
+`NODE_OPTIONS` or PiUI variables). Use the helper `create-plugin` copies:
 
 ```js
 import { PluginError, startPluginBackend } from './piui-plugin-backend.mjs';
@@ -297,6 +299,32 @@ Disable, remove, reload and quit stop the whole process tree.
 Keep your own files in `dataDir`. With `project.read`/`project.write` you
 receive the project path for chats and runs in project folders.
 
+### Backend limits
+
+PiUI needs Node.js 22.13 or later for backends and starts them under Node's
+permission model:
+
+```
+node --permission --allow-fs-read=<package> --allow-fs-read=<dataDir> --allow-fs-write=<dataDir>
+     [--allow-fs-read=<project>] [--allow-fs-write=<project>] [--allow-net] <backend.entry>
+```
+
+- Your package is readable, `dataDir` is readable and writable. The temp
+  folder is not: keep scratch files in `dataDir`.
+- A project folder is added for `project.read` (read) and `project.write`
+  (read and write) when a request for that project arrives, spelled exactly
+  like `context.project.path` / `project.path`. A backend started for other
+  projects restarts with the new folder when it is idle; while it is busy
+  the request is refused ("busy in another project") and nothing runs.
+- Child processes, worker threads, native add-ons, WASI and the inspector
+  are never allowed: a backend that needs another program cannot use it.
+  `process.permission.has('fs.read', path)` tells your code what it may do;
+  denied calls fail with `ERR_ACCESS_DENIED`.
+- `--allow-net` is passed with `network` when the Node.js in use knows it;
+  older Node.js versions cannot block the network, and the review says so.
+- With Node.js older than 22.13 the backend does not start and Settings →
+  Plugins shows "Node.js is too old to limit it".
+
 ## Install, trust and updates
 
 1. **Pick.** PiUI's own file dialog chooses the folder or `.zip`; the web
@@ -323,6 +351,9 @@ active and nothing can be changed.
   only).
 - "Node.js was not found": install Node.js; PiUI finds it like the harness
   bridges do (`PIUI_NODE`, then `PATH`).
+- `ERR_ACCESS_DENIED` in a backend: it reached outside its package, its
+  `dataDir` or a granted project folder, or tried to start a program or
+  worker (see [Backend limits](#backend-limits)).
 - A panel that stays blank or is replaced by the fallback usually uses an
   inline script, a `style` attribute or a file outside its UI folder, or
   loads `piui-panel.js` after its own script: its policy blocks the first

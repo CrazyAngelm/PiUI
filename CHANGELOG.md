@@ -6,6 +6,10 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+### Security
+
+- Plugin backends run under Node's permission model: a backend reads its own package, reads and writes its data folder, reaches a project folder only with `project.read` / `project.write`, and never starts other programs or worker threads; network access is blocked without `network` when the Node.js in use can block it. Node.js older than 22.13 no longer starts plugin backends. The trust review shows the exact flags and what is enforced, and still says that plugins are trusted code, not a sandbox.
+
 ## [0.2.2] - 2026-09-27
 
 ### Security

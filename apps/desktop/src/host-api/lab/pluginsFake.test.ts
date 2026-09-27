@@ -54,7 +54,11 @@ describe('UI Lab plugin host', () => {
     ]);
     const hello = entry(registry, 'example.hello-command');
     expect(hello.contributes.panels[0]?.url).toBe('http://piui-plugin.localhost/example.hello-command/ui/index.html?panel=hello');
-    expect(hello.backend?.commandLine.args[0]).toMatch(/\/backend\/main\.mjs$/);
+    // Node's permission model: the package and the data folder, nothing else.
+    expect(hello.backend?.commandLine.args[0]).toBe('--permission');
+    expect(hello.backend?.commandLine.args.at(-1)).toMatch(/\/backend\/main\.mjs$/);
+    expect(hello.backend?.commandLine.args.some((arg) => /allow-(net|child-process|worker)/.test(arg))).toBe(false);
+    expect(hello.backend?.limits).toEqual({ nodeVersion: 'v24.13.0', enforced: true, network: false });
     expect(hello.settings).toEqual({ greeting: 'Hello', prepareText: false });
 
     const broken = entry(registry, 'lab.broken-sample');

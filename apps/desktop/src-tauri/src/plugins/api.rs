@@ -17,8 +17,8 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use super::supervisor::{BackendState, LogEntry};
 use super::{
-    COMMAND_TIMEOUT, CallError, Package, PluginsError, PluginsState, ReviewSource, Staged,
-    StartFailure,
+    BackendLimits, COMMAND_TIMEOUT, CallError, Package, PluginsError, PluginsState, ReviewSource,
+    Staged, StartFailure,
 };
 use crate::acp_agents::CommandLine;
 use crate::state::HostState;
@@ -178,6 +178,8 @@ pub struct BackendDto {
     pub restarts: u32,
     pub command_line: CommandLine,
     pub node_found: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limits: Option<BackendLimits>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -223,6 +225,8 @@ pub struct PluginsRegistryDto {
 pub struct ReviewBackendDto {
     pub command_line: CommandLine,
     pub node_found: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limits: Option<BackendLimits>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -397,6 +401,14 @@ fn call_error(error: CallError) -> PluginsErrorDto {
         CallError::NotStarted(StartFailure::ShuttingDown) => {
             PluginsErrorDto::new("BACKEND_UNAVAILABLE", "PiUI is closing.")
         }
+        CallError::NotStarted(StartFailure::NodeUnsupported) => PluginsErrorDto::new(
+            "BACKEND_UNAVAILABLE",
+            "This Node.js cannot limit plugin backends. Install Node.js 22.13 or later to run this plugin's backend.",
+        ),
+        CallError::NotStarted(StartFailure::Busy) => PluginsErrorDto::new(
+            "BACKEND_UNAVAILABLE",
+            "The plugin's backend is busy in another project. Try again when it finishes.",
+        ),
         CallError::Remote(message) => PluginsErrorDto {
             detail: Some(plain_detail(&message)),
             ..PluginsErrorDto::new("BACKEND_FAILED", "The plugin reported an error.")
@@ -535,13 +547,18 @@ pub(crate) fn registry_view(plugins: &PluginsState) -> Result<PluginsRegistryDto
             let (state, restarts, log) = plugins.supervisor().status(&stored.id);
             let backend = package.and_then(|package| {
                 let root = root.as_ref()?;
-                let (command_line, node_found) =
-                    PluginsState::command_line(&package.manifest.manifest, root)?;
+                let display = PluginsState::backend_display(
+                    &package.manifest.manifest,
+                    root,
+                    &plugins.plugin_data_dir(&stored),
+                    false,
+                )?;
                 Some(BackendDto {
                     state,
                     restarts,
-                    command_line,
-                    node_found,
+                    command_line: display.command_line,
+                    node_found: display.node_found,
+                    limits: display.limits,
                 })
             });
             let settings = package
@@ -669,11 +686,16 @@ pub(crate) fn review_view(plugins: &PluginsState, staging_id: &str, staged: &Sta
         publisher: manifest.publisher.clone(),
         description: manifest.description.clone(),
         permissions,
-        backend: PluginsState::command_line(manifest, &root).map(|(command_line, node_found)| {
-            ReviewBackendDto {
-                command_line,
-                node_found,
-            }
+        backend: PluginsState::backend_display(
+            manifest,
+            &root,
+            &plugins.staged_data_dir(staged),
+            false,
+        )
+        .map(|display| ReviewBackendDto {
+            command_line: display.command_line,
+            node_found: display.node_found,
+            limits: display.limits,
         }),
         code_hash: staged.package.code_hash.clone(),
         files: staged.files,
@@ -765,6 +787,14 @@ async fn blocking<T: Send + 'static>(
         .map_err(PluginsErrorDto::from)
 }
 
+/// Asks Node.js which permission flags it has, so reviews and Settings can
+/// say what is enforced without blocking. Blocking; errors leave it unknown.
+fn warm_node_probe() {
+    if let Ok(node) = piui_runtime::plugin_backend::resolve_plugin_node() {
+        let _ = piui_runtime::plugin_backend::probe_node_permissions(&node);
+    }
+}
+
 fn pick_path(source: PickSource) -> Option<std::path::PathBuf> {
     match source {
         PickSource::Folder => rfd::FileDialog::new()
@@ -792,7 +822,11 @@ pub(crate) fn start_verification<R: Runtime>(app: AppHandle<R>) {
             return;
         };
         let acp = host.workspace.acp_agents().clone();
-        let _ = tauri::async_runtime::spawn_blocking(move || plugins.verify(&acp)).await;
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            plugins.verify(&acp);
+            warm_node_probe();
+        })
+        .await;
         emit_changed(&app);
         let revision = app.state::<HostState>().workspace.acp_agents().revision();
         let _ = app.emit(
@@ -827,6 +861,7 @@ pub async fn plugins_v1(
                     PickSource::Zip => ReviewSource::Zip,
                     PickSource::Development => ReviewSource::Development,
                 };
+                warm_node_probe();
                 host.stage(source, &path).map(Some)
             })
             .await?;
@@ -891,7 +926,11 @@ pub async fn plugins_v1(
             }
             plugins.supervisor().stop(&id).await;
             let host = plugins.clone();
-            let staged = blocking(move || host.reload(&id)).await?;
+            let staged = blocking(move || {
+                warm_node_probe();
+                host.reload(&id)
+            })
+            .await?;
             if let Some((staging_id, staged)) = staged {
                 review = Some(Some(review_view(&plugins, &staging_id, &staged)));
             }
@@ -1037,6 +1076,7 @@ pub async fn plugin_command_v1(
         });
     }
     let mut context = Map::new();
+    let mut project = None;
     if let Some((title, workspace_id)) = request
         .session_id
         .as_deref()
@@ -1052,10 +1092,9 @@ pub async fn plugin_command_v1(
             && let Ok(directory) =
                 crate::api::verified_project_directory(&host, &workspace_id, true)
         {
-            context.insert(
-                "project".into(),
-                json!({ "path": piui_runtime::script_runner::process_directory(directory.canonical_path()).to_string_lossy() }),
-            );
+            let path = piui_runtime::script_runner::process_directory(directory.canonical_path());
+            context.insert("project".into(), json!({ "path": path.to_string_lossy() }));
+            project = Some(path);
         }
     }
     let spec = plugins
@@ -1065,6 +1104,7 @@ pub async fn plugin_command_v1(
         .supervisor()
         .call(
             &spec,
+            project.as_deref(),
             "command/execute",
             json!({ "commandId": command.id, "context": context }),
             COMMAND_TIMEOUT,

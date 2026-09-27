@@ -37,15 +37,15 @@ export const PERMISSION_TEXT: Readonly<Record<PluginPermission, { label: string;
   },
   'project.read': {
     label: 'Read files in your project folder',
-    detail: 'The backend receives the project path. PiUI does not limit what it reads.',
+    detail: "The backend receives the project path and may read that folder. Node's permission model keeps it out of your other folders.",
   },
   'project.write': {
     label: 'Change files in your project folder',
-    detail: 'The backend receives the project path and can change files.',
+    detail: 'The backend receives the project path and may change files in that folder.',
   },
   network: {
     label: 'Use the network',
-    detail: "Declared by the plugin; PiUI does not block its backend's network access.",
+    detail: 'Without this permission PiUI blocks network access when the Node.js in use can.',
   },
 };
 
@@ -56,6 +56,7 @@ export const BACKEND_STATE_TEXT: Readonly<Record<PluginBackendState, string>> = 
   crashed: 'Stopped unexpectedly; restarts on next use',
   'crash-loop': 'Keeps stopping; restart it to try again',
   unavailable: 'Node.js was not found',
+  unsupported: 'Node.js is too old to limit it; install Node.js 22.13 or later',
 };
 
 export const LOG_TEXT: Readonly<Record<PluginLogEvent, string>> = {

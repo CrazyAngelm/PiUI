@@ -105,13 +105,35 @@ fn install_copies_into_app_data_after_a_review_that_shows_everything() {
         ]
     );
     let backend = review.backend.expect("backend command line");
-    assert!(backend.command_line.args[0].ends_with("main.mjs"));
+    let args = &backend.command_line.args;
+    let entry_argument = args.last().expect("entry");
+    assert!(entry_argument.ends_with("main.mjs"));
     assert!(
-        backend.command_line.args[0].contains("plugins-v1")
-            && backend.command_line.args[0].contains("packages"),
+        entry_argument.contains("plugins-v1") && entry_argument.contains("packages"),
         "the backend runs from PiUI's copy, not the chosen folder: {:?}",
         backend.command_line
     );
+    // Node's permission model: the package and its own data folder only; no
+    // project folder, network, other programs or worker threads.
+    assert_eq!(args[0], "--permission");
+    let package_root = entry_argument
+        .strip_suffix("main.mjs")
+        .and_then(|rest| {
+            rest.strip_suffix("backend\\")
+                .or_else(|| rest.strip_suffix("backend/"))
+        })
+        .and_then(|rest| rest.strip_suffix('\\').or_else(|| rest.strip_suffix('/')))
+        .expect("package root");
+    assert_eq!(args[1], format!("--allow-fs-read={package_root}"));
+    assert!(args[2].starts_with("--allow-fs-read=") && args[2].contains("data"));
+    assert_eq!(
+        args[3],
+        args[2].replace("--allow-fs-read=", "--allow-fs-write=")
+    );
+    assert_eq!(args.len(), 5, "{args:?}");
+    assert!(!args.iter().any(|arg| arg.contains("allow-net")
+        || arg.contains("child-process")
+        || arg.contains("worker")));
     assert!(review.update.is_none() && !review.already_installed);
     assert_eq!(
         review.contributes.commands,
@@ -125,6 +147,14 @@ fn install_copies_into_app_data_after_a_review_that_shows_everything() {
     let entry = fixture.entry("example.hello-command");
     assert!(entry.enabled && entry.active, "{:?}", entry.problems);
     assert_eq!(entry.source, "installed");
+    assert_eq!(
+        entry
+            .backend
+            .as_ref()
+            .map(|backend| &backend.command_line.args[2]),
+        Some(&args[2]),
+        "the installed plugin uses the data folder its review showed"
+    );
     assert_eq!(entry.settings.get("greeting"), Some(&json!("Hello")));
     let panel_url = entry.contributes.panels[0].url.clone().expect("panel url");
     assert!(
@@ -640,6 +670,7 @@ async fn a_backend_command_runs_contained_with_the_trusted_permissions() {
         .supervisor()
         .call(
             &spec,
+            None,
             "command/execute",
             json!({"commandId": "say-hello", "context": {"chat": {"id": "c1", "title": "Release notes"}}}),
             COMMAND_TIMEOUT,

@@ -54,6 +54,8 @@ import type { LabSessions } from './sessionRuntime';
 
 const LAB_PIUI = '0.1.1';
 const NODE = 'C:/Program Files/nodejs/node.exe';
+/** What the lab's Node.js enforces (v1.1): a current Node.js without `--allow-net`. */
+const LIMITS = { nodeVersion: 'v24.13.0', enforced: true, network: false } as const;
 const DATA = 'C:/Users/example/AppData/Roaming/dev.piui.desktop/plugins-v1/packages';
 const COMMAND_LATENCY_MS = 150;
 
@@ -253,8 +255,20 @@ export class LabPluginHost {
     return defaults.ok ? defaults.values : {};
   }
 
+  /** The host's command line: Node's permission flags for the package and its data folder, then the entry. */
   private commandLine(plugin: { manifest: PluginManifestV1; root: string }): CommandLineV1 | undefined {
-    return plugin.manifest.backend ? { program: NODE, args: [`${plugin.root}/${plugin.manifest.backend.entry}`] } : undefined;
+    if (!plugin.manifest.backend) return undefined;
+    const data = `${DATA}/data/${labUuid(`data:${plugin.manifest.id}`)}`;
+    return {
+      program: NODE,
+      args: [
+        '--permission',
+        `--allow-fs-read=${plugin.root}`,
+        `--allow-fs-read=${data}`,
+        `--allow-fs-write=${data}`,
+        `${plugin.root}/${plugin.manifest.backend.entry}`,
+      ],
+    };
   }
 
   private entry(plugin: LabPlugin): PluginEntryV1 {
@@ -275,7 +289,7 @@ export class LabPluginHost {
       permissions: sortedPermissions(m.permissions),
       codeHash: plugin.codeHash,
       installedAt: plugin.installedAt,
-      ...(line ? { backend: { state: plugin.backendState, restarts: plugin.restarts, commandLine: line, nodeFound: true } } : {}),
+      ...(line ? { backend: { state: plugin.backendState, restarts: plugin.restarts, commandLine: line, nodeFound: true, limits: { ...LIMITS } } } : {}),
       problems: structuredClone(plugin.problems),
       log: structuredClone(plugin.log),
       contributes: {
@@ -365,7 +379,7 @@ export class LabPluginHost {
       publisher: m.publisher,
       ...(m.description ? { description: m.description } : {}),
       permissions,
-      ...(line ? { backend: { commandLine: line, nodeFound: true } } : {}),
+      ...(line ? { backend: { commandLine: line, nodeFound: true, limits: { ...LIMITS } } } : {}),
       codeHash: staged.codeHash,
       files: staged.files,
       bytes: staged.bytes,
