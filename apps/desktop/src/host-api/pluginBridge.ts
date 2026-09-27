@@ -7,7 +7,7 @@ import {
   type PanelMethod,
   type PanelTheme,
 } from '../../../../contracts/plugin-panel-v1';
-import { PLUGIN_THEME_TOKENS, type PluginPermission, type PluginValue } from '../../../../contracts/piui-plugin-v1';
+import { PLUGIN_THEME_TOKENS, type PluginPermission, type PluginValue } from '../../../../contracts/piui-plugin-v2';
 
 /**
  * The PiUI side of the plugin panel bridge (`contracts/plugin-panel-v1.ts`),

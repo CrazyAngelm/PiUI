@@ -56,7 +56,7 @@ const title = name ?? slug.split('-').map((part) => part.charAt(0).toUpperCase()
 
 const permissions = ['commands', 'ui.settings', ...(panel ? ['ui.panel', 'chat.read', 'notifications'] : [])];
 const manifest = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   id: pluginId,
   name: title,
   version: '0.1.0',

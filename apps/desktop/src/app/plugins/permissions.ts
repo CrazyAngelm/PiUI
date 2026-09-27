@@ -1,4 +1,4 @@
-import type { PluginPermission } from '../../../../../contracts/piui-plugin-v1';
+import type { PluginPermission } from '../../../../../contracts/piui-plugin-v2';
 import type { PluginBackendState, PluginLogEvent } from '../../../../../contracts/plugins-v1';
 
 /**
@@ -18,6 +18,14 @@ export const PERMISSION_TEXT: Readonly<Record<PluginPermission, { label: string;
   'ui.settings': {
     label: 'Keep its own settings in PiUI',
     detail: 'PiUI shows the settings form and stores the values.',
+  },
+  'ui.status': {
+    label: 'Show items in the status bar',
+    detail: 'Short text PiUI shows at the bottom of the window; clicking an item runs its command.',
+  },
+  'ui.renderer': {
+    label: 'Show its own view of chat tool activity',
+    detail: 'The view runs in an isolated frame and sees the output of the tools it names. The plain view stays one click away.',
   },
   'node.run': {
     label: 'Run its own pipeline nodes',

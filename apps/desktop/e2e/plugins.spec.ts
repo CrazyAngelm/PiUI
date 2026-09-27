@@ -213,11 +213,41 @@ test.describe('plugins', () => {
     await expect(lab.toast('Hello to “Plan a weekend in Lisbon” from the Hello command plugin!')).toBeVisible();
   });
 
+  test('a status item and keybindings run their plugin commands and leave with the plugin (v2)', async ({ lab, page }) => {
+    await lab.open();
+    await lab.chat(/Plan a weekend in Lisbon/).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Plan a weekend in Lisbon' })).toBeVisible();
+    const status = page.getByRole('contentinfo', { name: 'Plugin status items' });
+    const item = status.getByRole('button', { name: "Show the open chat's title (Status tools plugin) (plugin Status tools)" });
+    await expect(item).toHaveText('Chat title');
+    await item.click();
+    await expect(lab.toast('“Plan a weekend in Lisbon” (5 words)')).toBeVisible();
+
+    // A keybinding prepares text in the message box for review; nothing is sent.
+    await page.getByRole('textbox', { name: 'Message' }).click();
+    await page.keyboard.press('Control+Alt+Shift+KeyK');
+    await expect(page.getByRole('textbox', { name: 'Message' })).toHaveValue(/^Please keep the next answer short/);
+    await expect(page.getByRole('button', { name: 'Stop turn' })).toHaveCount(0);
+
+    // Settings lists the shortcuts; switching the plugin off removes the item and the bindings.
+    await lab.openSettings();
+    await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Plugins' }).click();
+    const plugin = card(page, 'Status tools');
+    await plugin.getByText('Permissions and backend').click();
+    await expect(plugin.getByRole('listitem').filter({ hasText: 'Ask for a short answer' })).toBeVisible();
+    await expect(plugin.getByRole('listitem').filter({ hasText: 'Show items in the status bar' })).toBeVisible();
+    await plugin.getByRole('switch', { name: 'Enable Status tools' }).click();
+    await expect(plugin).toContainText('Disabled');
+    await expect(status).toHaveCount(0);
+  });
+
   test('safe mode lists plugins read-only', async ({ lab, page }) => {
     await openPlugins(lab, page, 'safe');
     await expect(page.getByText('Safe mode: plugins are listed, but none is active and changes are off.')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Install from folder…' })).toBeDisabled();
     await expect(card(page, 'Hello command')).toContainText('Off in safe mode');
     await expect(card(page, 'Hello command').getByRole('switch', { name: 'Enable Hello command' })).toBeDisabled();
+    // No plugin is active in safe mode: no status items either.
+    await expect(page.getByRole('contentinfo', { name: 'Plugin status items' })).toHaveCount(0);
   });
 });

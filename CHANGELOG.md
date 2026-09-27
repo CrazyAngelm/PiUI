@@ -6,6 +6,14 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+### Added
+
+- Plugin manifest version 2 (version 1 still works unchanged): status-bar items and keyboard shortcuts for a plugin's own commands. PiUI's shortcuts always win, and Settings → Plugins shows every conflict. New example `status-tools`; `pnpm create-plugin` writes version 2.
+
+### Fixed
+
+- `pnpm contract:test` in the desktop app runs every contract test again: a duplicated script entry had dropped five of them.
+
 ### Security
 
 - Plugin backends run under Node's permission model: a backend reads its own package, reads and writes its data folder, reaches a project folder only with `project.read` / `project.write`, and never starts other programs or worker threads; network access is blocked without `network` when the Node.js in use can block it. Node.js older than 22.13 no longer starts plugin backends. The trust review shows the exact flags and what is enforced, and still says that plugins are trusted code, not a sandbox.

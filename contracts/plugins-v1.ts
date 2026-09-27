@@ -26,9 +26,15 @@
  * line carries the permission flags, and the backend state `unsupported`
  * means that Node.js has no permission model, so PiUI does not start the
  * backend. Older payloads without `limits` stay valid.
+ *
+ * v1.1 also carries the manifest v2 contributions (`piui-plugin-v2.ts`):
+ * `statusItems`, `keybindings` and `renderers` on an entry and in a review
+ * (absent when empty), and the command origins `status` and `keybinding`,
+ * which the host allows only for a command a status item (with `ui.status`)
+ * or a keybinding names.
  */
 import type { CommandLineV1 } from './harness-registry-v1';
-import type { PluginFieldV1, PluginPermission, PluginProblemCode, PluginValue } from './piui-plugin-v1';
+import type { PluginFieldV1, PluginPermission, PluginProblemCode, PluginValue } from './piui-plugin-v2';
 
 export const PLUGINS_PROTOCOL = 1 as const;
 /** Emitted after any registry, verification or backend change; payload `PluginsChangedV1`. */
@@ -118,6 +124,35 @@ export interface PluginNodeTypeV1 {
   resultFields: { name: string; kind: 'text' | 'number' | 'boolean' | 'text-list' }[];
 }
 
+/** A status-bar item (v1.1). */
+export interface PluginStatusItemV1 {
+  id: string;
+  text: string;
+  tooltip?: string;
+  /** One of the plugin's own commands (`plugin_command_v1`, origin `status`). */
+  command?: string;
+  alignment: 'start' | 'end';
+}
+
+/** A keybinding of one of the plugin's commands (v1.1, origin `keybinding`). */
+export interface PluginKeybindingV1 {
+  command: string;
+  /** `Mod(+Alt)?(+Shift)?+<A-Z | 0-9 | F1-F12>`; conflicts are resolved by the UI (PiUI wins, clashes run nothing). */
+  key: string;
+}
+
+/**
+ * A chat renderer (v1.1): the plugin's `ui.entry` shows the tool activity
+ * named in `toolNames` inside a sandboxed frame in the chat. `url` exists
+ * only while the plugin is active; the generic view always stays available.
+ */
+export interface PluginRendererV1 {
+  id: string;
+  title: string;
+  toolNames: string[];
+  url?: string;
+}
+
 export interface PluginAcpAgentV1 {
   id: string;
   displayName: string;
@@ -186,6 +221,10 @@ export interface PluginEntryV1 {
     templates: PluginTemplateV1[];
     nodeTypes: PluginNodeTypeV1[];
     acpAgents: PluginAcpAgentV1[];
+    /** v1.1; absent when empty. */
+    statusItems?: PluginStatusItemV1[];
+    keybindings?: PluginKeybindingV1[];
+    renderers?: PluginRendererV1[];
   };
   /** Current values with declared defaults applied. */
   settings: Record<string, PluginValue>;
@@ -241,6 +280,12 @@ export interface PluginReviewV1 {
     nodeTypes: string[];
     /** Each still needs its own command-line trust in Settings → Harnesses. */
     acpAgents: { id: string; displayName: string; commandLine: CommandLineV1 }[];
+    /** v1.1; absent when empty. Status item texts. */
+    statusItems?: string[];
+    /** v1.1: `command` is the command's title. */
+    keybindings?: PluginKeybindingV1[];
+    /** v1.1: renderer titles. */
+    renderers?: string[];
   };
   update?: PluginChangeV1;
   /** The same id, version and code are installed already: nothing to do. */
@@ -270,7 +315,8 @@ export interface PluginCommandRequestV1 {
   commandId: string;
   /** The chat the command runs for; its title reaches the backend only with `chat.read`. */
   sessionId?: string;
-  origin: 'palette' | 'composer' | 'panel';
+  /** `status` and `keybinding` are v1.1. */
+  origin: 'palette' | 'composer' | 'panel' | 'status' | 'keybinding';
 }
 
 /** `text` is prepared in the message box for review (never sent); `notice` is shown once. */

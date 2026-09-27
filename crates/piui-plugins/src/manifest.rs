@@ -1,9 +1,13 @@
-//! `piui-plugin.json` v1: parsing and every rule the host applies before a
-//! package can be reviewed. The JSON Schema (`contracts/piui-plugin-v1.schema.json`)
+//! `piui-plugin.json` v1 and v2: parsing and every rule the host applies
+//! before a package can be reviewed. The JSON Schema of the declared version
+//! (`contracts/piui-plugin-v1.schema.json`, `piui-plugin-v2.schema.json`)
 //! checks the shape; the semantic pass checks what a schema cannot:
-//! permissions each contribution needs, unique ids, field declarations, theme
-//! colors and contrast, ACP descriptors and the PiUI engine range. Every
-//! failing rule is reported, and unknown fields are refused, never dropped.
+//! permissions each contribution needs, unique ids, the commands status items
+//! and keybindings name, field declarations, theme colors and contrast, ACP
+//! descriptors and the PiUI engine range. Every failing rule is reported, and
+//! unknown fields are refused, never dropped. Version 2 only adds
+//! contributions (status items, keybindings, renderers) and the permissions
+//! they need; a v1 manifest keeps its exact v1 meaning.
 
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
@@ -17,7 +21,8 @@ use crate::semver::{Version, VersionRange};
 use crate::theme::{CONTRAST_PAIRS, contrast_ratio, parse_color};
 
 pub const MANIFEST_FILE: &str = "piui-plugin.json";
-pub const SCHEMA_VERSION: u64 = 1;
+/// The newest manifest schema version; every earlier version stays valid.
+pub const SCHEMA_VERSION: u64 = 2;
 pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 /// Default and bounds of a node type's timeout, in seconds.
 pub const DEFAULT_NODE_TIMEOUT_SECONDS: u32 = 60;
@@ -35,6 +40,12 @@ pub enum Permission {
     UiPanel,
     #[serde(rename = "ui.settings")]
     UiSettings,
+    /// v2: status-bar items.
+    #[serde(rename = "ui.status")]
+    UiStatus,
+    /// v2: chat renderers (they see the output of the tools they render).
+    #[serde(rename = "ui.renderer")]
+    UiRenderer,
     #[serde(rename = "node.run")]
     NodeRun,
     #[serde(rename = "acp.agents")]
@@ -52,10 +63,12 @@ pub enum Permission {
 }
 
 impl Permission {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 12] = [
         Self::Commands,
         Self::UiPanel,
         Self::UiSettings,
+        Self::UiStatus,
+        Self::UiRenderer,
         Self::NodeRun,
         Self::AcpAgents,
         Self::ChatRead,
@@ -71,6 +84,8 @@ impl Permission {
             Self::Commands => "commands",
             Self::UiPanel => "ui.panel",
             Self::UiSettings => "ui.settings",
+            Self::UiStatus => "ui.status",
+            Self::UiRenderer => "ui.renderer",
             Self::NodeRun => "node.run",
             Self::AcpAgents => "acp.agents",
             Self::ChatRead => "chat.read",
@@ -142,6 +157,49 @@ pub struct PanelContribution {
     pub id: String,
     pub title: String,
     pub location: PanelLocation,
+}
+
+/// Where a status item sits in the status bar (v2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StatusAlignment {
+    Start,
+    #[default]
+    End,
+}
+
+/// A short, static item in the status bar; clicking it runs `command` (v2).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StatusItemContribution {
+    pub id: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tooltip: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<StatusAlignment>,
+}
+
+/// A keyboard shortcut for one of the plugin's own commands (v2). PiUI's
+/// shortcuts always win; conflicts are shown, never resolved silently.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KeybindingContribution {
+    pub command: String,
+    pub key: String,
+}
+
+/// A custom view of the chat tool activity named in `tool_names` (v2),
+/// rendered by the plugin's `ui.entry` in a sandboxed frame; the generic view
+/// stays available and is used whenever the plugin is off or fails.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RendererContribution {
+    pub id: String,
+    pub title: String,
+    pub tool_names: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -233,6 +291,12 @@ pub struct Contributions {
     pub acp_agents: Vec<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub node_types: Vec<NodeTypeContribution>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub status_items: Vec<StatusItemContribution>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keybindings: Vec<KeybindingContribution>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub renderers: Vec<RendererContribution>,
 }
 
 /// The typed manifest. Decoding refuses unknown fields at every level.
@@ -316,6 +380,8 @@ pub enum ProblemCode {
     Archive,
     Template,
     Integrity,
+    /// v2: a status item or keybinding names a command the plugin lacks.
+    UnknownCommand,
 }
 
 impl ProblemCode {
@@ -344,6 +410,7 @@ impl ProblemCode {
             Self::Archive => "archive",
             Self::Template => "template",
             Self::Integrity => "integrity",
+            Self::UnknownCommand => "unknown-command",
         }
     }
 }
@@ -406,17 +473,25 @@ pub struct ValidatedManifest {
     pub compatible: bool,
 }
 
-fn schema_validator() -> Option<&'static jsonschema::Validator> {
-    static VALIDATOR: OnceLock<Option<jsonschema::Validator>> = OnceLock::new();
-    VALIDATOR
-        .get_or_init(|| {
-            let schema: Value = serde_json::from_str(include_str!(
-                "../../../contracts/piui-plugin-v1.schema.json"
-            ))
-            .ok()?;
-            jsonschema::validator_for(&schema).ok()
-        })
-        .as_ref()
+fn schema_validator(version: u64) -> Option<&'static jsonschema::Validator> {
+    static V1: OnceLock<Option<jsonschema::Validator>> = OnceLock::new();
+    static V2: OnceLock<Option<jsonschema::Validator>> = OnceLock::new();
+    let (cell, text) = match version {
+        1 => (
+            &V1,
+            include_str!("../../../contracts/piui-plugin-v1.schema.json"),
+        ),
+        2 => (
+            &V2,
+            include_str!("../../../contracts/piui-plugin-v2.schema.json"),
+        ),
+        _ => return None,
+    };
+    cell.get_or_init(|| {
+        let schema: Value = serde_json::from_str(text).ok()?;
+        jsonschema::validator_for(&schema).ok()
+    })
+    .as_ref()
 }
 
 /// The message of an ACP descriptor rule, the same English locale key the
@@ -484,12 +559,18 @@ pub fn parse_manifest(bytes: &[u8], piui_version: &str) -> Result<ValidatedManif
             "piui-plugin.json is not valid JSON.",
         )]);
     };
-    match value.get("schemaVersion") {
-        Some(Value::Number(number)) if number.as_u64() == Some(SCHEMA_VERSION) => {}
+    let schema_version = match value.get("schemaVersion") {
+        Some(Value::Number(number))
+            if number
+                .as_u64()
+                .is_some_and(|version| (1..=SCHEMA_VERSION).contains(&version)) =>
+        {
+            number.as_u64().unwrap_or(SCHEMA_VERSION)
+        }
         Some(_) => {
             return Err(vec![Problem::new(
                 ProblemCode::SchemaVersion,
-                "Only plugin manifest schema version 1 is supported.",
+                "Only plugin manifest schema versions 1 and 2 are supported.",
             )]);
         }
         None => {
@@ -499,8 +580,8 @@ pub fn parse_manifest(bytes: &[u8], piui_version: &str) -> Result<ValidatedManif
                 "/schemaVersion",
             )]);
         }
-    }
-    let Some(validator) = schema_validator() else {
+    };
+    let Some(validator) = schema_validator(schema_version) else {
         return Err(vec![Problem::new(
             ProblemCode::Malformed,
             "The plugin schema is unavailable in this build.",
@@ -551,6 +632,7 @@ pub fn parse_manifest(bytes: &[u8], piui_version: &str) -> Result<ValidatedManif
     }
     check_permissions(&manifest, &mut problems);
     check_unique_ids(&manifest, &mut problems);
+    check_command_references(&manifest, &mut problems);
     check_texts(&manifest, &mut problems);
     check_fields(&manifest, &mut problems);
     check_themes(&manifest, &mut problems);
@@ -597,6 +679,8 @@ fn require(
                 Permission::Commands => "Add the permission “commands”.",
                 Permission::UiPanel => "Add the permission “ui.panel”.",
                 Permission::UiSettings => "Add the permission “ui.settings”.",
+                Permission::UiStatus => "Add the permission “ui.status”.",
+                Permission::UiRenderer => "Add the permission “ui.renderer”.",
                 Permission::NodeRun => "Add the permission “node.run”.",
                 Permission::AcpAgents => "Add the permission “acp.agents”.",
                 Permission::ChatRead
@@ -651,6 +735,56 @@ fn check_permissions(manifest: &PluginManifest, problems: &mut Vec<Problem>) {
     if !contributes.acp_agents.is_empty() {
         require(manifest, Permission::AcpAgents, "ACP agents", problems);
     }
+    if !contributes.status_items.is_empty() {
+        require(manifest, Permission::UiStatus, "status items", problems);
+    }
+    if !contributes.keybindings.is_empty() {
+        require(manifest, Permission::Commands, "keybindings", problems);
+    }
+    if !contributes.renderers.is_empty() {
+        require(manifest, Permission::UiRenderer, "renderers", problems);
+        if manifest.ui.is_none() {
+            problems.push(Problem::new(
+                ProblemCode::UiMissing,
+                "The plugin contributes renderers but has no ui.entry page.",
+            ));
+        }
+    }
+}
+
+/// Status items and keybindings run the plugin's own commands only.
+fn check_command_references(manifest: &PluginManifest, problems: &mut Vec<Problem>) {
+    let contributes = &manifest.contributes;
+    let named = contributes
+        .status_items
+        .iter()
+        .filter_map(|item| item.command.as_deref())
+        .chain(
+            contributes
+                .keybindings
+                .iter()
+                .map(|binding| binding.command.as_str()),
+        );
+    for command in named {
+        if manifest.command(command).is_none() {
+            problems.push(Problem::about(
+                ProblemCode::UnknownCommand,
+                "“{0}” names a command the plugin does not contribute.",
+                command,
+            ));
+        }
+    }
+    let keys = contributes
+        .keybindings
+        .iter()
+        .map(|binding| binding.key.as_str());
+    for key in duplicates(keys) {
+        problems.push(Problem::about(
+            ProblemCode::DuplicateContribution,
+            "Two keybindings use “{0}”.",
+            key,
+        ));
+    }
 }
 
 fn duplicates<'a>(ids: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
@@ -666,7 +800,7 @@ fn duplicates<'a>(ids: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
 
 fn check_unique_ids(manifest: &PluginManifest, problems: &mut Vec<Problem>) {
     let contributes = &manifest.contributes;
-    let lists: [Vec<&str>; 5] = [
+    let lists: [Vec<&str>; 7] = [
         contributes
             .commands
             .iter()
@@ -689,6 +823,16 @@ fn check_unique_ids(manifest: &PluginManifest, problems: &mut Vec<Problem>) {
             .collect(),
         contributes
             .node_types
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect(),
+        contributes
+            .status_items
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect(),
+        contributes
+            .renderers
             .iter()
             .map(|item| item.id.as_str())
             .collect(),

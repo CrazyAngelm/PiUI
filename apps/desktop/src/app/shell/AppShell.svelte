@@ -28,6 +28,8 @@
   let trustError = $state('');
   let deleteTarget = $state<string | undefined>();
   let deleteBusy = $state(false);
+  // Plugin status items and keybindings: their own chunk, after first paint.
+  let PluginShell = $state<typeof import('../plugins/PluginShellContributions.svelte').default | undefined>();
 
   const deleteSession = $derived(store.catalog.sessions.find((session) => session.id === deleteTarget));
 
@@ -46,7 +48,10 @@
     lazyViews.prefetch();
     const stopUpdateNotices = scheduleUpdateNotices(() => store.navigate({ name: 'settings', section: 'about' }));
     // An active plugin theme applies after first paint; plugin code is its own chunk.
-    setTimeout(() => void import('../plugins/pluginTheme.svelte').then((module) => module.startPluginTheme()).catch(() => undefined), 800);
+    setTimeout(() => {
+      void import('../plugins/pluginTheme.svelte').then((module) => module.startPluginTheme()).catch(() => undefined);
+      void import('../plugins/PluginShellContributions.svelte').then((module) => (PluginShell = module.default)).catch(() => undefined);
+    }, 800);
     const query = window.matchMedia('(max-width: 760px)');
     const update = () => (narrow = query.matches);
     update();
@@ -173,6 +178,7 @@
         </div>
       </main>
     </div>
+    {#if PluginShell}<PluginShell />{/if}
   </div>
 
   {#if lazyViews.loaded.palette}

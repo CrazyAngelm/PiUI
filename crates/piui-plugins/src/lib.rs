@@ -1,4 +1,4 @@
-//! PiUI plugin package format v1 (ADR-032).
+//! PiUI plugin package format, manifest versions 1 and 2 (ADR-032).
 //!
 //! This crate is the host authority for `piui-plugin.json` and whole plugin
 //! packages: the manifest schema and semantic rules, safe package reading
@@ -18,9 +18,10 @@ pub mod zip;
 
 pub use fields::{Field, FieldKind, ValueIssue, carry_values, resolve_values};
 pub use manifest::{
-    Appearance, CommandContribution, CommandSurface, MANIFEST_FILE, NodeTypeContribution,
-    PanelContribution, Permission, PluginManifest, Problem, ProblemCode, ThemeContribution,
-    ValidatedManifest, parse_manifest,
+    Appearance, CommandContribution, CommandSurface, KeybindingContribution, MANIFEST_FILE,
+    NodeTypeContribution, PanelContribution, Permission, PluginManifest, Problem, ProblemCode,
+    RendererContribution, StatusItemContribution, ThemeContribution, ValidatedManifest,
+    parse_manifest,
 };
 pub use package::{
     PackageFile, ValidatedPackage, code_hash, load_archive, load_folder, resolve_inside,

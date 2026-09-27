@@ -659,6 +659,25 @@ catalog; any enforcement of `network` or project-folder permissions.
   22.17, 22.23 and 24.13 (reads, writes and `child_process` denied;
   `--allow-net` was not available to test). `plugins-v1` v1.1 (additive):
   `limits` on the backend and the review, state `unsupported`.
+- **Manifest version 2.** `piui-plugin-v2.schema.json` / `piui-plugin-v2.ts`
+  add `statusItems`, `keybindings` and `renderers` and the permissions
+  `ui.status` and `ui.renderer`; the host validates each manifest with the
+  schema of its declared version, so a v1 manifest keeps its exact meaning
+  and cannot use v2 fields. One typed manifest serves both (v2 fields are
+  empty for v1). New problem code `unknown-command`. `create-plugin` writes
+  version 2.
+- **Status items and keybindings.** Declarative only: static text (1–24
+  characters) with an optional command, and `Mod(+Alt)?(+Shift)?+key`
+  bindings for the plugin's own commands. `plugin_command_v1` accepts the
+  origins `status` and `keybinding` only for a command a status item (with
+  `ui.status`) or keybinding names. PiUI's own shortcuts
+  (`PLUGIN_RESERVED_SHORTCUTS`, kept in step with the app by a test that
+  scans its handlers) always win and a key two active plugins share runs
+  neither; Settings shows every conflict instead of resolving it silently.
+  A binding is not a manifest error even on a reserved key, because PiUI's
+  shortcuts change between versions and must not deactivate an installed
+  plugin. The status bar and the key handler load after first paint and
+  appear only while an active plugin contributes something.
 
 ## ADR-033 — Script nodes are trusted user code (orchestration v6.2)
 

@@ -77,6 +77,57 @@ fn valid_fixtures_pass_every_rule() {
 }
 
 #[test]
+fn version_two_adds_status_items_keybindings_and_renderers() {
+    use crate::manifest::StatusAlignment;
+    let v2 = parse_manifest(&fixture("valid-v2.json"), "0.2.2").expect("v2");
+    let contributes = &v2.manifest.contributes;
+    assert_eq!(v2.manifest.schema_version, 2);
+    assert_eq!(contributes.status_items.len(), 2);
+    assert_eq!(
+        contributes.status_items[0].command.as_deref(),
+        Some("count")
+    );
+    assert_eq!(
+        contributes.status_items[1].alignment,
+        Some(StatusAlignment::Start)
+    );
+    assert_eq!(contributes.keybindings[0].key, "Mod+Alt+Shift+W");
+    assert_eq!(
+        contributes.renderers[0].tool_names,
+        ["get_weather", "mcp__weather__forecast"]
+    );
+    assert!(v2.manifest.has(Permission::UiStatus) && v2.manifest.has(Permission::UiRenderer));
+    // Unknown fields stay errors in the new contributions too.
+    let base: Value = serde_json::from_slice(&fixture("valid-v2.json")).expect("v2");
+    for pointer in [
+        "/contributes/statusItems/0",
+        "/contributes/keybindings/0",
+        "/contributes/renderers/0",
+    ] {
+        let mut manifest = base.clone();
+        manifest
+            .pointer_mut(pointer)
+            .and_then(Value::as_object_mut)
+            .expect(pointer)
+            .insert("unexpected".into(), json!(true));
+        let bytes = serde_json::to_vec(&manifest).expect("json");
+        assert!(
+            parse_manifest(&bytes, PIUI).is_err(),
+            "unknown field at {pointer:?}"
+        );
+    }
+    // A v1 manifest never gains the v2 permissions.
+    let mut v1 = base;
+    v1["schemaVersion"] = json!(1);
+    v1["contributes"] =
+        json!({ "commands": [{ "id": "count", "title": "Count", "insertText": "x" }] });
+    v1["permissions"] = json!(["commands", "ui.status"]);
+    let problems = parse_manifest(&serde_json::to_vec(&v1).expect("json"), PIUI)
+        .expect_err("ui.status is a v2 permission");
+    assert_eq!(problems[0].code, ProblemCode::Shape);
+}
+
+#[test]
 fn invalid_fixtures_fail_with_the_shared_first_code() {
     let expected: Value =
         serde_json::from_slice(&fixture("expected.json")).expect("expected codes");
@@ -163,15 +214,37 @@ fn theme_tokens_match_the_schema_and_the_stylesheet() {
             "{token} is a documented token"
         );
     }
-    let permissions = schema["properties"]["permissions"]["items"]["enum"]
-        .as_array()
-        .expect("permissions")
-        .iter()
-        .filter_map(Value::as_str)
-        .collect::<Vec<_>>();
+    let v2: Value = serde_json::from_str(include_str!(
+        "../../../contracts/piui-plugin-v2.schema.json"
+    ))
+    .expect("schema v2");
     assert_eq!(
-        permissions,
+        v2["definitions"]["themeToken"],
+        schema["definitions"]["themeToken"]
+    );
+    let enumerated = |schema: &Value| {
+        schema["properties"]["permissions"]["items"]["enum"]
+            .as_array()
+            .expect("permissions")
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        enumerated(&v2),
         Permission::ALL.map(Permission::as_str).to_vec()
+    );
+    assert_eq!(
+        enumerated(&schema),
+        Permission::ALL
+            .into_iter()
+            .filter(|permission| !matches!(
+                permission,
+                Permission::UiStatus | Permission::UiRenderer
+            ))
+            .map(Permission::as_str)
+            .collect::<Vec<_>>()
     );
 }
 

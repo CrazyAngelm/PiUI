@@ -9,6 +9,9 @@
   import { Badge, Button, Switch } from '../../lib/ui';
   import PluginBackendLimits from './PluginBackendLimits.svelte';
   import { BACKEND_STATE_TEXT, commandLineText, LOG_TEXT, PERMISSION_TEXT } from './permissions';
+  import { shortcutParts } from '../../lib/ui';
+  import { pluginRegistry } from './pluginRegistry.svelte';
+  import { resolveKeybindings, type KeybindingConflict } from './pluginShortcuts';
 
   /** One plugin in Settings → Plugins. */
   interface Props {
@@ -33,6 +36,8 @@
         [plugin.contributes.templates.length, 'Templates: {0}'],
         [plugin.contributes.nodeTypes.length, 'Pipeline nodes: {0}'],
         [plugin.contributes.acpAgents.length, 'ACP agents: {0}'],
+        [plugin.contributes.statusItems?.length ?? 0, 'Status items: {0}'],
+        [plugin.contributes.renderers?.length ?? 0, 'Chat renderers: {0}'],
       ] as const
     )
       .filter(([count]) => count > 0)
@@ -47,6 +52,15 @@
           ? { tone: 'neutral' as const, label: safeMode ? $t('Off in safe mode') : $t('Checking') }
           : { tone: 'neutral' as const, label: $t('Disabled') },
   );
+  // Keybindings with their conflicts among the active plugins (PiUI always wins).
+  const shortcuts = $derived.by(() => {
+    const resolved = plugin.active ? resolveKeybindings(pluginRegistry.active).filter((binding) => binding.plugin.id === plugin.id) : [];
+    return (plugin.contributes.keybindings ?? []).map((binding) => ({
+      key: binding.key,
+      title: plugin.contributes.commands.find((command) => command.id === binding.command)?.title ?? binding.command,
+      conflict: resolved.find((item) => item.key === binding.key)?.conflict as KeybindingConflict | undefined,
+    }));
+  });
   const restartable = $derived(plugin.backend?.state === 'crashed' || plugin.backend?.state === 'crash-loop');
   // An agent whose id another agent already has is not added (the other one wins).
   const clashes = $derived(plugin.active ? plugin.contributes.acpAgents.filter((agent) => !agent.registered) : []);
@@ -111,6 +125,21 @@
         {#if plugin.backend.nodeFound}
           <PluginBackendLimits limits={plugin.backend.limits} permissions={plugin.permissions} />
         {/if}
+      {/if}
+      {#if shortcuts.length}
+        <h4>{$t('Keyboard shortcuts')}</h4>
+        <ul class="shortcuts">
+          {#each shortcuts as shortcut (shortcut.key)}
+            <li>
+              <kbd>{shortcutParts(shortcut.key).join('+')}</kbd> {shortcut.title}
+              {#if shortcut.conflict?.kind === 'piui'}
+                <span class="conflict">{$t('PiUI uses this shortcut, so it does nothing.')}</span>
+              {:else if shortcut.conflict?.kind === 'plugin'}
+                <span class="conflict">{$t('Also used by {0}, so it does nothing until one of them is disabled.', [shortcut.conflict.with.join(', ')])}</span>
+              {/if}
+            </li>
+          {/each}
+        </ul>
       {/if}
       <p class="muted" title={plugin.codeHash}>{$t('Code {0}', [plugin.codeHash.slice(0, 12)])}</p>
       {#if plugin.log.length}
@@ -227,6 +256,7 @@
     padding-top: var(--piui-space-2);
   }
   .permissions,
+  .shortcuts,
   .log {
     display: grid;
     gap: 2px;
@@ -236,6 +266,17 @@
   }
   .log time {
     color: var(--piui-text-muted);
+  }
+  kbd {
+    padding: 0 4px;
+    border: 1px solid var(--piui-border);
+    border-radius: var(--piui-radius-sm);
+    font-family: var(--piui-font-mono);
+    font-size: var(--piui-text-xs);
+  }
+  .conflict {
+    display: block;
+    color: var(--piui-warning-text);
   }
   .backend {
     margin: 0;

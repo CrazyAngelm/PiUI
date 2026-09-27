@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { PluginPermission } from '../../../../../contracts/piui-plugin-v1';
+  import type { PluginPermission } from '../../../../../contracts/piui-plugin-v2';
   import type { PluginBackendLimitsV1 } from '../../../../../contracts/plugins-v1';
   import { t } from '../../features/locale/language';
 

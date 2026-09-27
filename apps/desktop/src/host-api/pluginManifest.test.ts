@@ -3,26 +3,34 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { PLUGIN_PERMISSIONS, PLUGIN_THEME_TOKENS, type PluginFieldV1 } from '../../../../contracts/piui-plugin-v1';
-import validateSchema from '../../../../contracts/piui-plugin-v1-validator.mjs';
+import { PLUGIN_PERMISSIONS as PLUGIN_PERMISSIONS_V1 } from '../../../../contracts/piui-plugin-v1';
+import { PLUGIN_PERMISSIONS, PLUGIN_THEME_TOKENS, type PluginFieldV1 } from '../../../../contracts/piui-plugin-v2';
+import validateSchemaV1 from '../../../../contracts/piui-plugin-v1-validator.mjs';
+import validateSchemaV2 from '../../../../contracts/piui-plugin-v2-validator.mjs';
 import {
   checkPluginManifest,
   checkPluginManifestText,
   contrastRatio,
   parseColor,
   rangeMatches,
+  reservedKeybindings,
   resolvePluginValues,
   safePackagePath,
+  v2Contributions,
 } from './pluginManifest';
+
+/** The schema of the version a fixture declares (the host picks it the same way). */
+const validateSchema = (value: unknown): boolean =>
+  (value as { schemaVersion?: unknown }).schemaVersion === 2 ? validateSchemaV2(value) : validateSchemaV1(value);
 
 const repository = new URL('../../../../', import.meta.url);
 const fixtures = new URL('contracts/fixtures/plugins/', repository);
 const read = (url: URL): string => readFileSync(url, 'utf8');
 const PIUI = '0.1.1';
 
-describe('plugin manifest v1 fixtures (shared with crates/piui-plugins)', () => {
+describe('plugin manifest v1 and v2 fixtures (shared with crates/piui-plugins)', () => {
   it('accepts the valid fixtures', () => {
-    for (const name of ['valid-minimal.json', 'valid-full.json']) {
+    for (const name of ['valid-minimal.json', 'valid-full.json', 'valid-v2.json']) {
       const checked = checkPluginManifestText(read(new URL(name, fixtures)), PIUI);
       expect(checked.ok, name).toBe(true);
       if (checked.ok) expect(checked.compatible).toBe(true);
@@ -45,13 +53,33 @@ describe('plugin manifest v1 fixtures (shared with crates/piui-plugins)', () => 
     }
   });
 
+  it('reads the v2 contributions and warns about keybindings on PiUI shortcuts', () => {
+    const checked = checkPluginManifestText(read(new URL('valid-v2.json', fixtures)), '0.2.2');
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    const added = v2Contributions(checked.manifest);
+    expect(added.statusItems.map((item) => item.id)).toEqual(['words', 'badge']);
+    expect(added.renderers[0]?.toolNames).toEqual(['get_weather', 'mcp__weather__forecast']);
+    expect(reservedKeybindings(checked.manifest)).toEqual([]);
+    const shadowing = { ...checked.manifest, contributes: { ...checked.manifest.contributes, keybindings: [{ command: 'count', key: 'Mod+K' }] } };
+    expect(checkPluginManifest(shadowing, '0.2.2').ok).toBe(true);
+    expect(reservedKeybindings(shadowing)).toEqual(['Mod+K']);
+    const v1 = checkPluginManifestText(read(new URL('valid-full.json', fixtures)), PIUI);
+    expect(v1.ok && v2Contributions(v1.manifest)).toEqual({ statusItems: [], keybindings: [], renderers: [] });
+  });
+
   it('keeps permissions and theme tokens equal to the schema and the stylesheet', () => {
-    const schema = JSON.parse(read(new URL('contracts/piui-plugin-v1.schema.json', repository))) as {
+    type Schema = {
       properties: { permissions: { items: { enum: string[] } } };
       definitions: { themeToken: { enum: string[] } };
     };
-    expect(schema.properties.permissions.items.enum).toEqual([...PLUGIN_PERMISSIONS]);
+    const schema = JSON.parse(read(new URL('contracts/piui-plugin-v1.schema.json', repository))) as Schema;
+    const v2 = JSON.parse(read(new URL('contracts/piui-plugin-v2.schema.json', repository))) as Schema;
+    expect(schema.properties.permissions.items.enum).toEqual([...PLUGIN_PERMISSIONS_V1]);
+    expect(v2.properties.permissions.items.enum).toEqual([...PLUGIN_PERMISSIONS]);
+    expect(PLUGIN_PERMISSIONS.filter((permission) => !(PLUGIN_PERMISSIONS_V1 as readonly string[]).includes(permission))).toEqual(['ui.status', 'ui.renderer']);
     expect(schema.definitions.themeToken.enum).toEqual([...PLUGIN_THEME_TOKENS]);
+    expect(v2.definitions.themeToken.enum).toEqual([...PLUGIN_THEME_TOKENS]);
     const stylesheet = read(new URL('apps/desktop/src/styles/tokens.css', repository));
     const colorTokens = [...(stylesheet.split(':root[data-theme="light"]')[0] ?? '').matchAll(/--piui-([a-z0-9-]+):\s*(?:#|rgba?\()/g)].map((match) => match[1]);
     expect([...PLUGIN_THEME_TOKENS]).toEqual(colorTokens);
@@ -117,6 +145,7 @@ describe('plugin SDK and examples', () => {
     const panel = read(new URL('packages/plugin-sdk/src/panel.js', repository));
     expect(read(new URL('hello-command/backend/piui-plugin-backend.mjs', examples))).toBe(backend);
     expect(read(new URL('pipeline-pack/backend/piui-plugin-backend.mjs', examples))).toBe(backend);
+    expect(read(new URL('status-tools/backend/piui-plugin-backend.mjs', examples))).toBe(backend);
     expect(read(new URL('hello-command/ui/piui-panel.js', examples))).toBe(panel);
   });
 
@@ -139,6 +168,7 @@ describe('plugin SDK and examples', () => {
       execFileSync(process.execPath, [new URL('packages/plugin-sdk/bin/create-plugin.mjs', repository).pathname.replace(/^\/([A-Za-z]:)/, '$1'), target, '--panel'], { stdio: 'pipe' });
       const checked = checkPluginManifestText(readFileSync(join(target, 'piui-plugin.json'), 'utf8'), PIUI);
       expect(checked.ok && checked.manifest.id).toBe('local.word-count');
+      expect(checked.ok && checked.manifest.schemaVersion).toBe(2);
       expect(readFileSync(join(target, 'ui', 'piui-panel.js'), 'utf8')).toBe(read(new URL('packages/plugin-sdk/src/panel.js', repository)));
       expect(() => execFileSync(process.execPath, [new URL('packages/plugin-sdk/bin/create-plugin.mjs', repository).pathname.replace(/^\/([A-Za-z]:)/, '$1'), target], { stdio: 'pipe' })).toThrow();
     } finally {

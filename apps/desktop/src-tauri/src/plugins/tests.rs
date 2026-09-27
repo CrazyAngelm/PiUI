@@ -717,3 +717,29 @@ fn registry_view_matches_the_shared_contract_fixture() {
         serde_json::to_string_pretty(&view).unwrap_or_default()
     );
 }
+
+#[test]
+fn status_items_and_keybindings_run_only_the_commands_they_name() {
+    use super::api::{CommandOrigin, command_allowed};
+    let bytes = include_bytes!("../../../../../contracts/fixtures/plugins/valid-v2.json");
+    let mut manifest = piui_plugins::parse_manifest(bytes, "0.2.2")
+        .expect("v2 fixture")
+        .manifest;
+    let allowed = |manifest: &piui_plugins::PluginManifest, id: &str, origin| {
+        command_allowed(manifest, manifest.command(id).expect("command"), origin)
+    };
+    assert!(allowed(&manifest, "count", CommandOrigin::Status));
+    assert!(allowed(&manifest, "count", CommandOrigin::Keybinding));
+    assert!(allowed(&manifest, "count", CommandOrigin::Palette));
+    assert!(!allowed(&manifest, "count", CommandOrigin::Composer));
+    assert!(!allowed(&manifest, "thanks", CommandOrigin::Status));
+    assert!(allowed(&manifest, "thanks", CommandOrigin::Keybinding));
+    assert!(!allowed(&manifest, "thanks", CommandOrigin::Palette));
+    // A status item needs `ui.status` to run anything.
+    manifest
+        .permissions
+        .retain(|permission| *permission != Permission::UiStatus);
+    assert!(!allowed(&manifest, "count", CommandOrigin::Status));
+    manifest.contributes.keybindings.clear();
+    assert!(!allowed(&manifest, "thanks", CommandOrigin::Keybinding));
+}

@@ -19,7 +19,7 @@
  * get an error response (or are ignored before `ready`). A panel that sends
  * no `ready` within `readyTimeoutMs` is replaced with a generic fallback.
  */
-import type { PluginPermission, PluginValue } from './piui-plugin-v1';
+import type { PluginPermission, PluginValue } from './piui-plugin-v2';
 
 export const PLUGIN_PANEL_PROTOCOL = 1 as const;
 /** The `piui` marker every bridge message carries. */

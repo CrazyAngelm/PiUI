@@ -2,7 +2,7 @@
   import ShieldAlert from '@lucide/svelte/icons/shield-alert';
   import type { PluginReviewV1 } from '../../../../../contracts/plugins-v1';
   import { t } from '../../features/locale/language';
-  import { Badge, Button, Dialog } from '../../lib/ui';
+  import { Badge, Button, Dialog, shortcutParts } from '../../lib/ui';
   import PluginBackendLimits from './PluginBackendLimits.svelte';
   import { commandLineText, formatBytes, PERMISSION_TEXT } from './permissions';
 
@@ -41,6 +41,9 @@
       ...review.contributes.templates.map((title) => [$t('Pipeline template'), title] as const),
       ...review.contributes.nodeTypes.map((title) => [$t('Pipeline node'), title] as const),
       ...(review.contributes.settings ? [[$t('Settings'), $t('Fields: {0}', [review.contributes.settings])] as const] : []),
+      ...(review.contributes.statusItems ?? []).map((text) => [$t('Status item'), text] as const),
+      ...(review.contributes.keybindings ?? []).map((binding) => [$t('Keyboard shortcut'), `${shortcutParts(binding.key).join('+')} — ${binding.command}`] as const),
+      ...(review.contributes.renderers ?? []).map((title) => [$t('Chat renderer'), title] as const),
     ],
   );
 </script>

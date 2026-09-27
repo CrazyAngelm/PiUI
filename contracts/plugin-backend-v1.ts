@@ -18,7 +18,7 @@
  * ten minutes stop it until the user restarts it. A backend is not a
  * sandbox: it runs with the user's file and network access.
  */
-import type { PluginPermission, PluginValue } from './piui-plugin-v1';
+import type { PluginPermission, PluginValue } from './piui-plugin-v2';
 
 export const PLUGIN_BACKEND_PROTOCOL = 1 as const;
 

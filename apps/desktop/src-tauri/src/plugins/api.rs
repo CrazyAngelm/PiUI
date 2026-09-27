@@ -9,6 +9,7 @@ use piui_plugins::csp::plugin_origin;
 use piui_plugins::fields::resolve_values;
 use piui_plugins::manifest::{
     Appearance, CommandSurface, NodeResultField, PanelLocation, Problem, ProblemCode,
+    StatusAlignment,
 };
 use piui_plugins::{Field, Permission};
 use serde::{Deserialize, Serialize};
@@ -151,6 +152,38 @@ pub struct NodeTypeDto {
     pub result_fields: Vec<NodeResultField>,
 }
 
+/// A status-bar item (v1.1).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusItemDto {
+    pub id: String,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tooltip: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    pub alignment: StatusAlignment,
+}
+
+/// A keybinding for one of the plugin's commands (v1.1).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeybindingDto {
+    pub command: String,
+    pub key: String,
+}
+
+/// A chat renderer (v1.1); `url` only while the plugin is active.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RendererDto {
+    pub id: String,
+    pub title: String,
+    pub tool_names: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpAgentDto {
@@ -169,6 +202,12 @@ pub struct ContributesDto {
     pub templates: Vec<TemplateDto>,
     pub node_types: Vec<NodeTypeDto>,
     pub acp_agents: Vec<AcpAgentDto>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub status_items: Vec<StatusItemDto>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub keybindings: Vec<KeybindingDto>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub renderers: Vec<RendererDto>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -247,6 +286,12 @@ pub struct ReviewContributesDto {
     pub templates: Vec<String>,
     pub node_types: Vec<String>,
     pub acp_agents: Vec<ReviewAcpAgentDto>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub status_items: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub keybindings: Vec<KeybindingDto>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub renderers: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -521,6 +566,46 @@ fn contributes(
                     .any(|(agent, registered)| *agent == descriptor.id && *registered),
             })
             .collect(),
+        status_items: contributes
+            .status_items
+            .iter()
+            .map(|item| StatusItemDto {
+                id: item.id.clone(),
+                text: item.text.clone(),
+                tooltip: item.tooltip.clone(),
+                command: item.command.clone(),
+                alignment: item.alignment.unwrap_or_default(),
+            })
+            .collect(),
+        keybindings: contributes
+            .keybindings
+            .iter()
+            .map(|binding| KeybindingDto {
+                command: binding.command.clone(),
+                key: binding.key.clone(),
+            })
+            .collect(),
+        renderers: contributes
+            .renderers
+            .iter()
+            .map(|renderer| RendererDto {
+                id: renderer.id.clone(),
+                title: renderer.title.clone(),
+                tool_names: renderer.tool_names.clone(),
+                url: manifest
+                    .ui
+                    .as_ref()
+                    .filter(|_| active && manifest.has(Permission::UiRenderer))
+                    .map(|ui| {
+                        format!(
+                            "{}/{id}/{}?renderer={}",
+                            plugin_origin(),
+                            ui.entry,
+                            renderer.id
+                        )
+                    }),
+            })
+            .collect(),
     }
 }
 
@@ -743,6 +828,29 @@ pub(crate) fn review_view(plugins: &PluginsState, staging_id: &str, staged: &Sta
                         args: descriptor.command.args.clone(),
                     },
                 })
+                .collect(),
+            status_items: manifest
+                .contributes
+                .status_items
+                .iter()
+                .map(|item| item.text.clone())
+                .collect(),
+            keybindings: manifest
+                .contributes
+                .keybindings
+                .iter()
+                .map(|binding| KeybindingDto {
+                    command: manifest
+                        .command(&binding.command)
+                        .map_or_else(|| binding.command.clone(), |command| command.title.clone()),
+                    key: binding.key.clone(),
+                })
+                .collect(),
+            renderers: manifest
+                .contributes
+                .renderers
+                .iter()
+                .map(|renderer| renderer.title.clone())
                 .collect(),
         },
         update,
@@ -986,6 +1094,37 @@ pub enum CommandOrigin {
     Palette,
     Composer,
     Panel,
+    /// v1.1: a status item that names the command.
+    Status,
+    /// v1.1: a keybinding of the command.
+    Keybinding,
+}
+
+/// A command runs only where it is contributed: its surfaces, a status item
+/// (with `ui.status`) or a keybinding that names it; a panel may run any of
+/// its own plugin's commands.
+pub(crate) fn command_allowed(
+    manifest: &piui_plugins::PluginManifest,
+    command: &piui_plugins::CommandContribution,
+    origin: CommandOrigin,
+) -> bool {
+    let contributes = &manifest.contributes;
+    match origin {
+        CommandOrigin::Palette => command.surfaces().contains(&CommandSurface::Palette),
+        CommandOrigin::Composer => command.surfaces().contains(&CommandSurface::Composer),
+        CommandOrigin::Panel => true,
+        CommandOrigin::Status => {
+            manifest.has(Permission::UiStatus)
+                && contributes
+                    .status_items
+                    .iter()
+                    .any(|item| item.command.as_deref() == Some(command.id.as_str()))
+        }
+        CommandOrigin::Keybinding => contributes
+            .keybindings
+            .iter()
+            .any(|binding| binding.command == command.id),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1056,16 +1195,7 @@ pub async fn plugin_command_v1(
         .command(&request.command_id)
         .ok_or(PluginsError::NotFound)?
         .clone();
-    // A command runs only where it is contributed; a panel may run any of
-    // its own plugin's commands.
-    let surface = match request.origin {
-        CommandOrigin::Palette => Some(CommandSurface::Palette),
-        CommandOrigin::Composer => Some(CommandSurface::Composer),
-        CommandOrigin::Panel => None,
-    };
-    if !manifest.has(Permission::Commands)
-        || surface.is_some_and(|surface| !command.surfaces().contains(&surface))
-    {
+    if !manifest.has(Permission::Commands) || !command_allowed(manifest, &command, request.origin) {
         return Err(PluginsError::PermissionDenied.into());
     }
     if let Some(text) = command.insert_text {

@@ -1,13 +1,15 @@
 # PiUI plugins
 
 Plugins add commands, chat panels, settings, themes, pipeline templates,
-pipeline node types and ACP agents to PiUI. This guide is for plugin authors;
+pipeline node types, ACP agents, status-bar items, keyboard shortcuts and
+chat renderers to PiUI. This guide is for plugin authors;
 the design and its limits are ADR-032 (`docs/10_ADR.md`), and the normative
 contracts are in `contracts/`:
 
 | Contract | What it defines |
 |---|---|
-| `piui-plugin-v1.schema.json`, `piui-plugin-v1.ts` | The `piui-plugin.json` manifest |
+| `piui-plugin-v2.schema.json`, `piui-plugin-v2.ts` | The `piui-plugin.json` manifest, version 2 (current) |
+| `piui-plugin-v1.schema.json`, `piui-plugin-v1.ts` | Manifest version 1, still accepted unchanged |
 | `plugin-backend-v1.ts` | JSON-RPC between PiUI and a plugin backend |
 | `plugin-panel-v1.ts` | `postMessage` bridge between PiUI and a panel |
 | `plugins-v1.ts` | What Settings → Plugins and the other screens receive from the host |
@@ -46,7 +48,9 @@ Examples in `examples/plugins/`:
   and a sandboxed chat panel;
 - `midnight-theme` — two color themes, no code and no permissions;
 - `pipeline-pack` — two pipeline templates and a JSON transform node;
-- `acp-agent` — adds OpenCode as an ACP agent.
+- `acp-agent` — adds OpenCode as an ACP agent;
+- `status-tools` — manifest version 2: a status-bar item and two keyboard
+  shortcuts.
 
 ## Package
 
@@ -69,7 +73,7 @@ every file; the review shows it and PiUI checks it again at every start.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "acme.word-count",
   "name": "Word count",
   "version": "1.2.0",
@@ -86,17 +90,18 @@ every file; the review shows it and PiUI checks it again at every start.
 
 | Field | Rules |
 |---|---|
-| `schemaVersion` | `1` |
+| `schemaVersion` | `2` (current) or `1`. Version 1 manifests keep working unchanged but cannot use `ui.status`, `ui.renderer`, `statusItems`, `keybindings` or `renderers`. |
 | `id` | Lowercase segments of letters, digits and inner hyphens joined by dots (`acme.word-count`), at most 100 characters. It never changes between versions. |
 | `name`, `publisher` | 1–64 characters, no control characters |
 | `version` | `MAJOR.MINOR.PATCH` with an optional pre-release |
 | `engines.piui` | Space-separated comparators that must all match: `>=`, `>`, `<=`, `<`, `=`, `^`, `~` |
 | `permissions` | See below. A contribution without its permission is an error. |
 | `backend.entry`, `ui.entry` | A file inside the package, forward slashes, no `.` or `..` |
-| `contributes` | `commands`, `settings`, `panels`, `themes`, `templates`, `nodeTypes`, `acpAgents` |
+| `contributes` | `commands`, `settings`, `panels`, `themes`, `templates`, `nodeTypes`, `acpAgents`; version 2 adds `statusItems`, `keybindings`, `renderers` |
 
 Unknown fields are errors, never ignored. The `$schema` field may point at
-`piui-plugin-v1.schema.json` for editor completion.
+`piui-plugin-v2.schema.json` (or `piui-plugin-v1.schema.json`) for editor
+completion.
 
 ### Permissions
 
@@ -105,6 +110,8 @@ Unknown fields are errors, never ignored. The `$schema` field may point at
 | `commands` | Commands in Ctrl+K and above the message box | Yes |
 | `ui.panel` | Panels in the chat details | Yes (panels without it are not shown) |
 | `ui.settings` | A settings form; panels may read and store the values | Yes |
+| `ui.status` | Status-bar items (version 2) | Yes (items without it are not shown and cannot run commands) |
+| `ui.renderer` | Chat renderers (version 2); the renderer sees the output of the tools it names | Yes |
 | `node.run` | Pipeline node types | Yes |
 | `acp.agents` | ACP agents in Settings → Harnesses | Yes |
 | `chat.read` | The open chat's id and title (never its messages) | Yes |
@@ -131,6 +138,36 @@ backend. Otherwise PiUI calls the backend's `command/execute`; its `text` is
 put in the chat's message box (an empty box takes it, a draft is kept) for
 the person to review, and its `notice` is shown once. Nothing is ever sent
 automatically.
+
+### Status-bar items (version 2)
+
+```json
+"statusItems": [{ "id": "title", "text": "Chat title", "tooltip": "Show the chat's title", "command": "chat-title", "alignment": "end" }]
+```
+
+Requires `ui.status`. At most three items of 1–24 characters, shown in a
+thin bar at the bottom of the window (the bar appears only while an active
+plugin has an item). `command` names one of the plugin's own commands; a
+click runs it exactly like the palette would (origin `status`), and the host
+refuses a status origin for any command no status item names. `alignment`
+is `start` or `end` (default). The text is static: a plugin cannot change
+it at run time.
+
+### Keybindings (version 2)
+
+```json
+"keybindings": [{ "command": "chat-title", "key": "Mod+Alt+Shift+T" }]
+```
+
+`Mod` is Ctrl on Windows and Linux and ⌘ on macOS; after it come optionally
+`Alt` and `Shift`, in this order, then one of A–Z, 0–9 or F1–F12. A binding
+needs the `commands` permission and names one of the plugin's own commands
+(origin `keybinding`). **PiUI always wins:** a binding on one of PiUI's
+shortcuts (`PLUGIN_RESERVED_SHORTCUTS` in `contracts/piui-plugin-v2.ts`:
+Ctrl+K, Ctrl+N, Ctrl+Z, Ctrl+C and the other editing and window keys) never
+runs, and when two active plugins bind the same key neither runs. Settings →
+Plugins shows each binding and its conflict; `pnpm plugin:check` warns about
+reserved keys. Bindings do nothing while a dialog is open.
 
 ### Settings
 
