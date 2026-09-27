@@ -9,6 +9,8 @@
   import Plus from '@lucide/svelte/icons/plus';
   import Puzzle from '@lucide/svelte/icons/puzzle';
   import Power from '@lucide/svelte/icons/power';
+  import GitBranch from '@lucide/svelte/icons/git-branch';
+  import WorktreesSettings from '../worktrees/WorktreesSettings.svelte';
   import BackgroundSettings from '../settings/BackgroundSettings.svelte';
   import { t, language, setLanguage, type Language } from '../../features/locale/language';
   import type { Preferences } from '../../host-api/types';
@@ -37,6 +39,7 @@
     { id: 'extensions', label: 'Extensions', icon: Puzzle },
     { id: 'plugins', label: 'Plugins', icon: Blocks },
     { id: 'projects', label: 'Projects', icon: FolderCog },
+    { id: 'worktrees', label: 'Worktrees', icon: GitBranch },
     { id: 'background', label: 'Background', icon: Power },
     { id: 'shortcuts', label: 'Shortcuts', icon: Keyboard },
     { id: 'about', label: 'About', icon: Info },
@@ -187,6 +190,8 @@
           <p class="muted">{$t('No project folders yet.')}</p>
         {/each}
       </div>
+    {:else if section === 'worktrees'}
+      <WorktreesSettings />
     {:else if section === 'background'}
       <BackgroundSettings />
     {:else if section === 'shortcuts'}

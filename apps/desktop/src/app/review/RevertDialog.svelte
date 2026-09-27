@@ -7,16 +7,20 @@
 
   interface Props {
     diff: ReviewDiffV1;
-    /** A hunk index, or undefined for the whole file. */
+    /** The diff text as shown (with split hunks as their parts). */
+    text?: string | undefined;
+    /** The index of a hunk in the shown text, or undefined for the whole file. */
     hunk: number | undefined;
     busy: boolean;
     onConfirm: () => void;
     onCancel: () => void;
   }
-  let { diff, hunk, busy, onConfirm, onCancel }: Props = $props();
+  let { diff, text: shownText = undefined, hunk, busy, onConfirm, onCancel }: Props = $props();
 
   const untracked = $derived(diff.area === 'untracked');
-  const text = $derived(diff.content.kind === 'text' ? (hunk === undefined ? diff.content.text : hunkText(diff.content.text, hunk)) : '');
+  const text = $derived(
+    diff.content.kind === 'text' ? (hunk === undefined ? diff.content.text : hunkText(shownText ?? diff.content.text, hunk)) : '',
+  );
   const title = $derived(
     untracked ? $t('Move {0} to the Trash?', [diff.path]) : hunk === undefined ? $t('Revert all changes in {0}?', [diff.path]) : $t('Revert this change in {0}?', [diff.path]),
   );

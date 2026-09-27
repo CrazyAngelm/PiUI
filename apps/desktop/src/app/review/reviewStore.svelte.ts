@@ -26,7 +26,40 @@ export function reviewedPaths(sessionId: string): string[] | undefined {
   return lastChangedPaths.get(sessionId);
 }
 
+/** How long a handoff waits for the changed files before it goes on without them. */
+export const CHANGED_PATHS_TIMEOUT_MS = 3000;
+
+/**
+ * The chat's changed paths, read from git now (the review panel need not be
+ * open). A refusal, a folder without git or a slow answer falls back to the
+ * paths the review panel last listed, if any.
+ */
+export async function changedPathsFor(
+  sessionId: string,
+  request: ReviewRequester = hostRequester,
+  timeoutMs: number = CHANGED_PATHS_TIMEOUT_MS,
+): Promise<string[] | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), timeoutMs);
+  });
+  try {
+    const result = await Promise.race([request({ type: 'status', sessionId }).catch(() => undefined), timeout]);
+    if (result?.type !== 'status') return reviewedPaths(sessionId);
+    const paths = changedPaths(result.files);
+    lastChangedPaths.set(sessionId, paths);
+    return paths;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export type ReviewAction = 'stage' | 'unstage' | 'revert';
+
+/** `action:hunk[.part]` (or `action:file`) of a running action. */
+export function busyKey(action: ReviewAction, hunk: number | undefined, part: number | undefined): string {
+  return `${action}:${hunk ?? 'file'}${hunk !== undefined && part !== undefined ? `.${part}` : ''}`;
+}
 
 /**
  * State of one chat's review panel: the folder status, the selected file's
@@ -121,13 +154,19 @@ export class ReviewStore {
     }
   }
 
-  /** Runs an action on the shown diff (or one of its hunks). */
-  async act(action: ReviewAction, hunk: number | undefined = undefined): Promise<boolean> {
+  /** Runs an action on the shown diff, one of its hunks or one part of a split hunk. */
+  async act(action: ReviewAction, hunk: number | undefined = undefined, part: number | undefined = undefined): Promise<boolean> {
     const diff = this.diff;
     if (diff === undefined || this.busy) return false;
-    this.busy = `${action}:${hunk ?? 'file'}`;
+    this.busy = busyKey(action, hunk, part);
     this.actionError = '';
-    const base = { sessionId: this.sessionId, path: diff.path, fingerprint: diff.fingerprint, ...(hunk === undefined ? {} : { hunk }) };
+    const base = {
+      sessionId: this.sessionId,
+      path: diff.path,
+      fingerprint: diff.fingerprint,
+      ...(hunk === undefined ? {} : { hunk }),
+      ...(hunk === undefined || part === undefined ? {} : { part }),
+    };
     const area = diff.area === 'untracked' ? 'untracked' : 'unstaged';
     let request: ReviewRequestV1;
     switch (action) {

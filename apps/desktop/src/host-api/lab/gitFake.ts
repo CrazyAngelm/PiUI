@@ -13,6 +13,8 @@ export interface LabRepoFile {
   worktree?: string;
   /** Binary files show as a summary and change only as a whole. */
   binary?: boolean;
+  /** The index entry is a rename of this path (whose index entry is gone). */
+  renamedFrom?: string;
 }
 
 export interface LabRepository {
@@ -134,6 +136,35 @@ function joinLines(lines: readonly string[]): string | undefined {
   return lines.length === 0 ? '' : `${lines.join('\n')}\n`;
 }
 
+/**
+ * The parts of a hunk split at its runs of context lines, like the host's
+ * `FilePatch::hunk_parts`: context between two runs belongs to both parts.
+ */
+export function splitLabHunk(hunk: LabHunk): LabHunk[] {
+  const runs: { start: number; end: number }[] = [];
+  hunk.lines.forEach((line, index) => {
+    if (line.kind === ' ') return;
+    const last = runs.at(-1);
+    if (last !== undefined && last.end === index) last.end = index + 1;
+    else runs.push({ start: index, end: index + 1 });
+  });
+  if (runs.length < 2) return [hunk];
+  const count = (lines: LabHunk['lines'], side: 'old' | 'new') => lines.filter((line) => line.kind !== (side === 'old' ? '+' : '-')).length;
+  return runs.map((_, number) => {
+    const first = number === 0 ? 0 : (runs[number - 1]?.end ?? 0);
+    const last = runs[number + 1]?.start ?? hunk.lines.length;
+    const before = hunk.lines.slice(0, first);
+    const lines = hunk.lines.slice(first, last);
+    return {
+      oldStart: hunk.oldStart + count(before, 'old'),
+      oldLines: count(lines, 'old'),
+      newStart: hunk.newStart + count(before, 'new'),
+      newLines: count(lines, 'new'),
+      lines,
+    };
+  });
+}
+
 /** Applies one hunk (forward: old → new; reverse: new → old) to `text`. */
 export function applyHunk(text: string | undefined, hunk: LabHunk, reverse: boolean): string | undefined {
   const lines = splitLines(text);
@@ -159,16 +190,25 @@ export interface LabChange {
   before?: string;
   after?: string;
   binary: boolean;
+  /** A staged rename: the path it came from. */
+  renamedFrom?: string;
 }
 
 /** Every change of the repository, per area, in path order. */
 export function changes(repository: LabRepository): LabChange[] {
   const result: LabChange[] = [];
+  const renamedAway = new Set(
+    [...repository.files.values()].flatMap((file) => (file.renamedFrom !== undefined && file.index !== undefined ? [file.renamedFrom] : [])),
+  );
   // Byte order, like git's index.
   for (const [path, file] of [...repository.files.entries()].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))) {
     const binary = file.binary === true;
     if (tracked(file)) {
-      if (file.index !== file.head) {
+      const source = file.renamedFrom === undefined ? undefined : repository.files.get(file.renamedFrom);
+      if (file.index !== undefined && file.head === undefined && source !== undefined && file.renamedFrom !== undefined) {
+        // One staged rename, like git's rename detection.
+        result.push({ path, area: 'staged', binary, before: source.head, after: file.index, change: 'modified', renamedFrom: file.renamedFrom });
+      } else if (file.index !== file.head && !(file.index === undefined && renamedAway.has(path))) {
         result.push({
           path, area: 'staged', binary, before: file.head, after: file.index,
           change: file.head === undefined ? 'added' : file.index === undefined ? 'deleted' : 'modified',
@@ -192,7 +232,17 @@ export function changeOf(repository: LabRepository, path: string, area: LabArea)
 }
 
 export function changeText(change: LabChange): string {
-  return diffText(change.path, change.before, change.after, change.binary);
+  if (change.renamedFrom === undefined) return diffText(change.path, change.before, change.after, change.binary);
+  const from = change.renamedFrom;
+  const hunks = hunksOf(change.before, change.after);
+  let text = `diff --git a/${from} b/${change.path}\nsimilarity index ${hunks.length ? 90 : 100}%\nrename from ${from}\nrename to ${change.path}\n`;
+  if (hunks.length === 0) return text;
+  text += `--- a/${from}\n+++ b/${change.path}\n`;
+  for (const hunk of hunks) {
+    text += `@@ -${range(hunk.oldStart, hunk.oldLines)} +${range(hunk.newStart, hunk.newLines)} @@\n`;
+    for (const line of hunk.lines) text += `${line.kind}${line.text}\n`;
+  }
+  return text;
 }
 
 /** The fingerprint the host would compute for the shown change. */
@@ -211,11 +261,23 @@ export function applyChange(
   change: LabChange,
   action: 'stage' | 'unstage' | 'revert',
   hunkIndex: number | undefined,
+  part: number | undefined = undefined,
 ): void {
   const file = repository.files.get(change.path);
   if (file === undefined) throw new Error('Unknown path.');
-  const hunk = hunkIndex === undefined ? undefined : hunksOf(change.before, change.after)[hunkIndex];
-  if (hunkIndex !== undefined && hunk === undefined) throw new Error('Unknown hunk.');
+  const whole = hunkIndex === undefined ? undefined : hunksOf(change.before, change.after)[hunkIndex];
+  if (hunkIndex !== undefined && whole === undefined) throw new Error('Unknown hunk.');
+  const hunk = whole === undefined || part === undefined ? whole : splitLabHunk(whole)[part];
+  if (part !== undefined && hunk === undefined) throw new Error('Unknown part.');
+  if (change.renamedFrom !== undefined) {
+    // A rename is unstaged as a whole: the source comes back to the index.
+    if (action !== 'unstage' || hunk !== undefined) throw new Error('A rename changes as a whole.');
+    const source = repository.files.get(change.renamedFrom);
+    if (source !== undefined) source.index = source.head;
+    file.index = undefined;
+    delete file.renamedFrom;
+    return;
+  }
   switch (action) {
     case 'stage':
       file.index = hunk === undefined ? file.worktree : applyHunk(file.index, hunk, false);

@@ -53,6 +53,8 @@ export const SESSION_TOOL_HOST_MESSAGES: readonly string[] = [
   'This chat does not run in a worktree.',
   'That chat does not run in a worktree.',
   'The chat this one continues is no longer available.',
+  'This worktree is no longer managed by PiUI.',
+  "A chat still works in this worktree. Remove it from that chat's details.",
 ];
 
 export class SessionToolError extends Error {

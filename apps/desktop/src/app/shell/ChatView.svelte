@@ -144,7 +144,7 @@
               { label: $t('Rename'), icon: Pencil, onSelect: beginRename },
               { label: $t('Refresh from history'), icon: RefreshCw, onSelect: () => void store.reconcileSession(session.id) },
               ...(snapshot && !session.runId
-                ? [{ label: $t('Continue in another harness…'), icon: ArrowRightLeft, disabled: store.safeMode, onSelect: () => startHandoff(store, snapshot, $t) }]
+                ? [{ label: $t('Continue in another harness…'), icon: ArrowRightLeft, disabled: store.safeMode, onSelect: () => void startHandoff(store, snapshot, $t) }]
                 : []),
               ...(session.status !== 'closed'
                 ? [{ label: $t('Stop agent process'), icon: Power, onSelect: () => void store.close(session.id) }]
