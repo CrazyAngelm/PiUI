@@ -10,25 +10,8 @@ use piui_index::{
     ReducedMotionPreference, SessionSummary, SessionTreeNode, ThemePreference, TitleSource,
     TrustState, redact_display_text,
 };
-use piui_runtime::{
-    LifecycleState, RuntimeEventEnvelope, SessionStateLite, SurfaceEvent,
-    SystemPiDiagnosticEligibility,
-};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiSnapshotV8 {
-    pub app_version: &'static str,
-    pub safe_mode: bool,
-    pub preferences: ApiPreferences,
-    pub projects: Vec<ApiProjectSummaryV2>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selected_project_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selected_session_id: Option<String>,
-}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,33 +68,6 @@ impl From<Preferences> for ApiPreferences {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ApiProjectSummaryV2 {
-    pub id: String,
-    pub name: String,
-    pub display_path: String,
-    pub trust_state: &'static str,
-    pub pinned: bool,
-    pub missing: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_opened_at: Option<String>,
-}
-
-impl From<ProjectSummary> for ApiProjectSummaryV2 {
-    fn from(value: ProjectSummary) -> Self {
-        Self {
-            id: value.id,
-            name: value.name,
-            display_path: value.display_path,
-            trust_state: trust_state(value.trust_state),
-            pinned: value.pinned,
-            missing: value.missing,
-            last_opened_at: value.last_opened_at.map(|time| time.to_string()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ApiProjectSummary {
     pub id: String,
     pub name: String,
@@ -140,15 +96,6 @@ impl From<ProjectSummary> for ApiProjectSummary {
             last_opened_at: value.last_opened_at.map(|time| time.to_string()),
         }
     }
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiExtensionSummary {
-    pub id: String,
-    pub name: String,
-    pub source: &'static str,
-    pub enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -431,253 +378,6 @@ pub fn api_tree(
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiRuntimeSnapshot {
-    pub runtime_id: String,
-    pub agent_kind: &'static str,
-    pub state: &'static str,
-    pub revision: u64,
-    pub capabilities: ApiRuntimeCapabilities,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub safe_summary: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ApiRuntimeCapabilities {
-    pub rpc: bool,
-    #[serde(rename = "session.tree.read")]
-    pub session_tree_read: bool,
-    #[serde(rename = "session.tree.navigate")]
-    pub session_tree_navigate: bool,
-    #[serde(rename = "auth.headless")]
-    pub auth_headless: bool,
-    #[serde(rename = "ui.standardDialogs")]
-    pub ui_standard_dialogs: bool,
-    #[serde(rename = "prime.activity")]
-    pub prime_activity: bool,
-    #[serde(rename = "runtime.liveAttach")]
-    pub live_attach: bool,
-    #[serde(rename = "runtime.residentSessions")]
-    pub resident_sessions: bool,
-    #[serde(rename = "runtime.eventReplay")]
-    pub event_replay: bool,
-    #[serde(rename = "runtime.multiClient")]
-    pub multi_client: bool,
-    #[serde(rename = "thinking.catalog")]
-    pub thinking_catalog: bool,
-}
-
-pub fn runtime_snapshot_named(
-    runtime_id: &str,
-    state: LifecycleState,
-    revision: u64,
-    summary: Option<String>,
-) -> ApiRuntimeSnapshot {
-    runtime_snapshot_named_for_kind(runtime_id, AgentKind::Pi, state, revision, summary)
-}
-
-pub fn runtime_snapshot_named_for_kind(
-    runtime_id: &str,
-    agent_kind: AgentKind,
-    state: LifecycleState,
-    revision: u64,
-    summary: Option<String>,
-) -> ApiRuntimeSnapshot {
-    let prime = agent_kind == AgentKind::PrimeAgent;
-    ApiRuntimeSnapshot {
-        runtime_id: runtime_id.to_owned(),
-        agent_kind: if prime { "prime-agent" } else { "pi" },
-        state: runtime_state(state),
-        revision,
-        capabilities: ApiRuntimeCapabilities {
-            rpc: true,
-            session_tree_read: true,
-            session_tree_navigate: false,
-            auth_headless: false,
-            // PiUI routes bounded standard extension dialogs through a
-            // host-owned mailbox; custom TUI components remain unsupported.
-            ui_standard_dialogs: true,
-            prime_activity: prime,
-            // v10 Prime is an owned stdio worker. Daemon attach/replay and
-            // background continuity are intentionally not advertised.
-            live_attach: false,
-            resident_sessions: false,
-            event_replay: false,
-            multi_client: false,
-            thinking_catalog: !prime,
-        },
-        safe_summary: summary,
-    }
-}
-
-pub fn runtime_snapshot(
-    state: LifecycleState,
-    revision: u64,
-    summary: Option<String>,
-) -> ApiRuntimeSnapshot {
-    let mut snapshot = runtime_snapshot_named("fake-runtime", state, revision, summary);
-    // The deterministic fixture has no extension-dialog bridge at all; its
-    // historical contract advertises the fake capability for UI smoke tests.
-    snapshot.capabilities.ui_standard_dialogs = true;
-    snapshot
-}
-
-/// v10 host projection of a runtime session state. Prime's native handshake
-/// id stays in the runtime/index layer; the WebView receives the correlated
-/// opaque catalog id or no id. Ordinary Pi keeps its legacy state shape.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiSessionState {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_name: Option<String>,
-    pub message_count: usize,
-    pub pending_message_count: usize,
-    pub is_streaming: bool,
-    pub is_compacting: bool,
-    pub auto_compaction_enabled: bool,
-    pub steering_mode: String,
-    pub follow_up_mode: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<piui_runtime::ModelLite>,
-    pub thinking_level: String,
-}
-
-impl ApiSessionState {
-    #[must_use]
-    pub fn project(
-        agent_kind: AgentKind,
-        opaque_session_id: Option<String>,
-        state: SessionStateLite,
-    ) -> Self {
-        let session_id = if agent_kind == AgentKind::PrimeAgent {
-            opaque_session_id
-        } else {
-            // Preserve the frozen Pi/v9 session-state JSON shape.
-            Some(state.session_id)
-        };
-        Self {
-            session_id,
-            session_name: state.session_name,
-            message_count: state.message_count,
-            pending_message_count: state.pending_message_count,
-            is_streaming: state.is_streaming,
-            is_compacting: state.is_compacting,
-            auto_compaction_enabled: state.auto_compaction_enabled,
-            steering_mode: state.steering_mode,
-            follow_up_mode: state.follow_up_mode,
-            model: state.model,
-            thinking_level: state.thinking_level,
-        }
-    }
-}
-
-/// Result of starting a live runtime.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiRuntimeStart {
-    pub runtime: ApiRuntimeSnapshot,
-    pub runtime_id: String,
-    pub agent_kind: &'static str,
-    pub launch_label: String,
-    /// Host-projected state captured from the startup `get_state` handshake.
-    pub session_state: ApiSessionState,
-    /// PiUI's opaque indexed id for a continued session or a newly bound Prime
-    /// project session.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-}
-
-/// Host-only serialization projection for `piui://runtime-event`. It reuses
-/// the runtime's envelope invariants, then replaces a Prime state snapshot's
-/// native id with the opaque catalog id before it reaches the WebView.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiRuntimeEventEnvelope {
-    pub protocol: u8,
-    pub runtime_id: String,
-    pub agent_kind: AgentKind,
-    pub scope: piui_runtime::real_rpc::RuntimeEventScope,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-    #[serde(flatten)]
-    pub event: ApiSurfaceEvent,
-}
-
-/// The one event arm that can carry a session id gets a typed host projection.
-/// Other runtime events already have their own safe serialization projection.
-#[derive(Debug, Clone, Serialize)]
-#[serde(untagged)]
-pub enum ApiSurfaceEvent {
-    StateSnapshot {
-        kind: &'static str,
-        state: ApiSessionState,
-        revision: u64,
-    },
-    Other(SurfaceEvent),
-}
-
-impl From<RuntimeEventEnvelope> for ApiRuntimeEventEnvelope {
-    fn from(value: RuntimeEventEnvelope) -> Self {
-        let agent_kind = value.agent_kind;
-        let session_id = value.session_id;
-        let event = match value.event {
-            SurfaceEvent::StateSnapshot { state, revision } => ApiSurfaceEvent::StateSnapshot {
-                kind: "stateSnapshot",
-                state: ApiSessionState::project(agent_kind, session_id.clone(), state),
-                revision,
-            },
-            event => ApiSurfaceEvent::Other(event),
-        };
-        Self {
-            protocol: value.protocol,
-            runtime_id: value.runtime_id,
-            agent_kind,
-            scope: value.scope,
-            project_id: value.project_id,
-            session_id,
-            event,
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiFakeScenarioResult {
-    pub runtime: ApiRuntimeSnapshot,
-    pub blocks: Vec<ApiTimelineBlock>,
-    /// These blocks are a local deterministic overlay, never Pi session entries.
-    pub ephemeral: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiSystemPiProbe {
-    /// Static eligibility only; this does not mean Pi was launched or probed.
-    pub eligibility: &'static str,
-    pub managed_runtime_required: bool,
-    /// Pi authentication remains intentionally external/interactive.
-    pub external_auth_guidance: bool,
-}
-
-impl From<SystemPiDiagnosticEligibility> for ApiSystemPiProbe {
-    fn from(value: SystemPiDiagnosticEligibility) -> Self {
-        let eligibility = match value {
-            SystemPiDiagnosticEligibility::CandidateUnverified => "candidate_unverified",
-            SystemPiDiagnosticEligibility::ManagedRuntimeRequired => "managed_runtime_required",
-        };
-        Self {
-            eligibility,
-            managed_runtime_required: value.requires_managed_runtime(),
-            external_auth_guidance: true,
-        }
-    }
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiError {
@@ -746,40 +446,19 @@ fn safe_block_summary(value: GenericBlockKind) -> &'static str {
     }
 }
 
-fn runtime_state(value: LifecycleState) -> &'static str {
-    match value {
-        LifecycleState::Dormant => "dormant",
-        LifecycleState::Starting => "starting",
-        LifecycleState::Ready => "ready",
-        LifecycleState::Running => "running",
-        LifecycleState::Recovering => "recovering",
-        LifecycleState::Stopping => "stopping",
-        LifecycleState::Failed => "failed",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        ApiExtensionSummary, ApiExtensionSummaryV10, ApiPreferences, ApiProjectSummary,
-        ApiProjectSummaryV2, ApiRuntimeEventEnvelope, ApiRuntimeStart, ApiSessionState,
-        MAX_TREE_RENDER_DEPTH, MAX_TREE_RENDER_ROWS, api_tree, runtime_snapshot_named_for_kind,
+        ApiExtensionSummaryV10, ApiPreferences, ApiProjectSummary, MAX_TREE_RENDER_DEPTH,
+        MAX_TREE_RENDER_ROWS, api_tree,
     };
     use piui_index::{
         AgentKind, ChatWidthPreference, DensityPreference, FontSizePreference, Preferences,
         ProjectSummary, ReducedMotionPreference, SessionTreeNode, ThemePreference, TrustState,
     };
-    use piui_runtime::{LifecycleState, RuntimeEventEnvelope, SessionStateLite, SurfaceEvent};
 
     #[test]
-    fn v10_extensions_add_runtime_kind_without_changing_the_legacy_shape() {
-        let legacy = serde_json::to_value(ApiExtensionSummary {
-            id: "ext-legacy".into(),
-            name: "Legacy".into(),
-            source: "Global",
-            enabled: true,
-        })
-        .expect("serializes legacy extension");
+    fn v10_extensions_carry_the_runtime_kind() {
         let v10 = serde_json::to_value(ApiExtensionSummaryV10 {
             id: "ext-v10".into(),
             agent_kind: "prime-agent",
@@ -788,7 +467,6 @@ mod tests {
             enabled: true,
         })
         .expect("serializes v10 extension");
-        assert!(legacy.get("agentKind").is_none());
         assert_eq!(v10["agentKind"], "prime-agent");
     }
 
@@ -809,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn v10_project_and_runtime_dtos_expose_kind_without_overclaiming_prime_capabilities() {
+    fn v10_project_dto_exposes_the_runtime_kind() {
         let project = ApiProjectSummary::from(ProjectSummary {
             id: "project".into(),
             name: "Prime project".into(),
@@ -820,124 +498,9 @@ mod tests {
             missing: false,
             last_opened_at: None,
         });
-        let prime = runtime_snapshot_named_for_kind(
-            "runtime",
-            AgentKind::PrimeAgent,
-            LifecycleState::Ready,
-            1,
-            None,
-        );
-        let pi = runtime_snapshot_named_for_kind(
-            "pi-runtime",
-            AgentKind::Pi,
-            LifecycleState::Ready,
-            1,
-            None,
-        );
-
         assert_eq!(project.agent_kind, "prime-agent");
-        let legacy_project = ApiProjectSummaryV2 {
-            id: project.id.clone(),
-            name: project.name.clone(),
-            display_path: project.display_path.clone(),
-            trust_state: project.trust_state,
-            pinned: project.pinned,
-            missing: project.missing,
-            last_opened_at: project.last_opened_at.clone(),
-        };
-        let legacy_json = serde_json::to_value(legacy_project).expect("serializes v8 project");
-        assert!(legacy_json.get("agentKind").is_none());
         let project_json = serde_json::to_value(&project).expect("serializes v10 project");
         assert_eq!(project_json["agentKind"], "prime-agent");
-        assert_eq!(prime.agent_kind, "prime-agent");
-        assert!(prime.capabilities.prime_activity);
-        assert!(!prime.capabilities.thinking_catalog);
-        assert!(!prime.capabilities.live_attach);
-        assert!(!prime.capabilities.resident_sessions);
-        assert!(!prime.capabilities.event_replay);
-        assert!(!prime.capabilities.multi_client);
-        assert_eq!(pi.agent_kind, "pi");
-        assert!(!pi.capabilities.prime_activity);
-        assert!(pi.capabilities.thinking_catalog);
-    }
-
-    #[test]
-    fn v10_prime_session_state_projections_hide_native_handshake_ids() {
-        const NATIVE_ID: &str = "sentinel-native-id";
-        const OPAQUE_ID: &str = "opaque-catalog-id";
-        let state = || SessionStateLite {
-            session_id: NATIVE_ID.into(),
-            session_name: Some("Session".into()),
-            message_count: 3,
-            pending_message_count: 0,
-            is_streaming: false,
-            is_compacting: false,
-            auto_compaction_enabled: true,
-            steering_mode: "all".into(),
-            follow_up_mode: "all".into(),
-            model: None,
-            thinking_level: "medium".into(),
-        };
-        let prime_start = ApiRuntimeStart {
-            runtime: runtime_snapshot_named_for_kind(
-                "prime-runtime",
-                AgentKind::PrimeAgent,
-                LifecycleState::Ready,
-                1,
-                None,
-            ),
-            runtime_id: "prime-runtime".into(),
-            agent_kind: "prime-agent",
-            launch_label: "test Prime".into(),
-            session_state: ApiSessionState::project(
-                AgentKind::PrimeAgent,
-                Some(OPAQUE_ID.into()),
-                state(),
-            ),
-            session_id: Some(OPAQUE_ID.into()),
-        };
-        let prime_start_json =
-            serde_json::to_value(prime_start).expect("serializes v10 Prime start projection");
-        assert_eq!(prime_start_json["sessionState"]["sessionId"], OPAQUE_ID);
-        assert_eq!(prime_start_json["sessionId"], OPAQUE_ID);
-        assert!(!prime_start_json.to_string().contains(NATIVE_ID));
-
-        let prime_event = ApiRuntimeEventEnvelope::from(RuntimeEventEnvelope::new_for_kind(
-            "prime-runtime".into(),
-            AgentKind::PrimeAgent,
-            Some("project".into()),
-            Some(OPAQUE_ID.into()),
-            SurfaceEvent::StateSnapshot {
-                state: state(),
-                revision: 2,
-            },
-        ));
-        let prime_event_json =
-            serde_json::to_value(prime_event).expect("serializes v10 Prime state snapshot");
-        assert_eq!(prime_event_json["state"]["sessionId"], OPAQUE_ID);
-        assert!(!prime_event_json.to_string().contains(NATIVE_ID));
-
-        let unbound_prime = serde_json::to_value(ApiSessionState::project(
-            AgentKind::PrimeAgent,
-            None,
-            state(),
-        ))
-        .expect("serializes unbound Prime state projection");
-        assert!(unbound_prime.get("sessionId").is_none());
-        assert!(!unbound_prime.to_string().contains(NATIVE_ID));
-
-        let legacy_pi =
-            serde_json::to_value(ApiRuntimeEventEnvelope::from(RuntimeEventEnvelope::new(
-                "pi-runtime".into(),
-                Some("project".into()),
-                Some("opaque-pi-session".into()),
-                SurfaceEvent::StateSnapshot {
-                    state: state(),
-                    revision: 3,
-                },
-            )))
-            .expect("serializes legacy Pi state snapshot");
-        assert_eq!(legacy_pi["state"]["sessionId"], NATIVE_ID);
     }
 
     #[test]

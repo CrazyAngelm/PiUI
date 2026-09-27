@@ -1,18 +1,13 @@
 use crate::contributions::{PiUiContributionCatalog, project_global_contributions};
 use crate::dto::{
-    ApiError, ApiExtensionSummary, ApiExtensionSummaryV10, ApiFakeScenarioResult, ApiPreferences,
-    ApiProjectSummary, ApiProjectSummaryV2, ApiRuntimeEventEnvelope, ApiRuntimeSnapshot,
-    ApiRuntimeStart, ApiSessionCatalogEvent, ApiSessionCatalogSnapshot, ApiSessionState,
-    ApiSessionSummary, ApiSessionTree, ApiSnapshot, ApiSnapshotV8, ApiSystemPiProbe,
-    ApiTimelineBlock, ApiTimelinePage, ApiTimelineStatus, api_tree, runtime_snapshot,
-    runtime_snapshot_named_for_kind,
+    ApiError, ApiExtensionSummaryV10, ApiPreferences, ApiProjectSummary, ApiSessionCatalogEvent,
+    ApiSessionCatalogSnapshot, ApiSessionSummary, ApiSessionTree, ApiSnapshot, ApiTimelineBlock,
+    ApiTimelinePage, api_tree,
 };
 use crate::state::{
-    CatalogFreshness, CatalogRefreshContext, CatalogRefreshStart, CatalogRefreshStatus,
-    FakeRuntimeSlot, HostState, LiveRuntimeSlot, SessionRevisionAdmission, TimelineCursorRecord,
-    TimelineProjectionCache,
+    CatalogFreshness, CatalogRefreshContext, CatalogRefreshStart, CatalogRefreshStatus, HostState,
+    SessionRevisionAdmission, TimelineCursorRecord, TimelineProjectionCache,
 };
-use piui_contracts::RuntimeEvent;
 use piui_index::{
     AgentKind, ChatWidthPreference, DensityPreference, FontSizePreference, IndexError, Preferences,
     ProjectIndex, ReducedMotionPreference, ScanReport, SessionDiscoveryLimits, SessionSummary,
@@ -22,10 +17,8 @@ use piui_index::{
 };
 use piui_platform::ProjectDirectory;
 use piui_runtime::{
-    AgentExtensionOrigin, AgentExtensionResource, ExtensionUiResponse, FakeCommand, FakeRuntime,
-    FakeScenario, FakeTransportEvent, FakeTransportReplay, LifecycleState, ModelLite, RealPiConfig,
-    RealPiRuntime, RealRuntimeError, RuntimeCommandLite, RuntimeEventEnvelope,
-    list_global_extensions_for_agent, probe_system_pi, set_global_extension_enabled_for_agent,
+    AgentExtensionOrigin, AgentExtensionResource, LifecycleState, list_global_extensions_for_agent,
+    set_global_extension_enabled_for_agent,
 };
 use sha2::{Digest, Sha256};
 use std::ffi::{OsStr, OsString};
@@ -33,13 +26,11 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::MutexGuard;
-use std::sync::atomic::{AtomicU64, Ordering};
-use tauri::{Emitter, Manager, State};
+use tauri::{Emitter, State};
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_PROJECT_PATH_BYTES: usize = 32 * 1024;
 const MAX_SESSION_RESCAN_BYTES: usize = 128 * 1024 * 1024;
-const MAX_FAKE_INPUT_CHARS: usize = 4_000;
 const DEFAULT_TIMELINE_PAGE_SIZE: usize = 100;
 const MAX_TIMELINE_CURSOR_BYTES: usize = 64;
 
@@ -54,31 +45,7 @@ struct ProjectRefreshOutcome {
 /// runtime-exit hint retries only when it was coalesced behind an older scan.
 struct CatalogRefreshAttempt {
     snapshot: ApiSessionCatalogSnapshot,
-    started: bool,
 }
-static NEXT_FAKE_SCENARIO_ID: AtomicU64 = AtomicU64::new(1);
-
-#[tauri::command]
-pub fn bootstrap(state: State<'_, HostState>) -> Result<ApiSnapshotV8, ApiError> {
-    let index = lock_index(&state)?;
-    let projects = index
-        .list_projects()
-        .map_err(|_| ApiError::io())?
-        .into_iter()
-        .filter(|project| !state.is_personal_workspace(&project.id))
-        .map(ApiProjectSummaryV2::from)
-        .collect();
-    let preferences = index.preferences().map_err(|_| ApiError::io())?.into();
-    Ok(ApiSnapshotV8 {
-        app_version: APP_VERSION,
-        safe_mode: state.safe_mode,
-        preferences,
-        projects,
-        selected_project_id: None,
-        selected_session_id: None,
-    })
-}
-
 #[tauri::command]
 pub fn bootstrap_v10(state: State<'_, HostState>) -> Result<ApiSnapshot, ApiError> {
     let index = lock_index(&state)?;
@@ -100,19 +67,6 @@ pub fn bootstrap_v10(state: State<'_, HostState>) -> Result<ApiSnapshot, ApiErro
         selected_project_id: None,
         selected_session_id: None,
     })
-}
-
-/// Legacy v2 preference command. It updates only the original three PiUI
-/// display values and preserves any v8 appearance choices already stored.
-/// Pi settings/auth files are never read or written by this command.
-#[tauri::command]
-pub fn update_preferences(
-    state: State<'_, HostState>,
-    theme: String,
-    density: String,
-    reduced_motion: String,
-) -> Result<ApiPreferences, ApiError> {
-    update_preference_values(&state, theme, density, reduced_motion, None, None)
 }
 
 /// Versioned v8 appearance command. Unlike the legacy route, both additional
@@ -202,17 +156,6 @@ fn parse_chat_width_preference(
     }
 }
 
-/// Legacy v9 route: lists only global Pi extension resources. Native paths and
-/// package source strings remain host-private.
-#[tauri::command]
-pub async fn list_extensions(
-    state: State<'_, HostState>,
-) -> Result<Vec<ApiExtensionSummary>, ApiError> {
-    list_extensions_for_agent(&state, AgentKind::Pi)
-        .await
-        .map(legacy_api_extensions)
-}
-
 /// Versioned v10 route: lists the selected runtime's separate global inventory.
 #[tauri::command]
 pub async fn list_extensions_v10(
@@ -250,19 +193,6 @@ pub async fn list_piui_contributions(
             .await
             .map_err(|_| ApiError::runtime())?;
     Ok(project_global_contributions(&resources))
-}
-
-/// Legacy v9 route: changes one current global Pi extension through Pi's
-/// upstream settings setter.
-#[tauri::command]
-pub async fn set_extension_enabled(
-    state: State<'_, HostState>,
-    extension_id: String,
-    enabled: bool,
-) -> Result<Vec<ApiExtensionSummary>, ApiError> {
-    set_extension_enabled_for_agent(&state, AgentKind::Pi, extension_id, enabled)
-        .await
-        .map(legacy_api_extensions)
 }
 
 /// Versioned v10 route: changes only the named runtime's separate inventory.
@@ -330,18 +260,6 @@ fn api_extensions_v10(resources: Vec<AgentExtensionResource>) -> Vec<ApiExtensio
         .collect()
 }
 
-fn legacy_api_extensions(resources: Vec<ApiExtensionSummaryV10>) -> Vec<ApiExtensionSummary> {
-    resources
-        .into_iter()
-        .map(|resource| ApiExtensionSummary {
-            id: resource.id,
-            name: resource.name,
-            source: resource.source,
-            enabled: resource.enabled,
-        })
-        .collect()
-}
-
 fn extension_resource_id(resource: &AgentExtensionResource) -> String {
     extension_resource_id_for(resource.agent_kind, &resource.path)
 }
@@ -362,16 +280,7 @@ fn extension_resource_id_for(agent_kind: AgentKind, path: &Path) -> String {
     format!("ext-{suffix}")
 }
 
-#[tauri::command]
-pub async fn add_project(
-    state: State<'_, HostState>,
-    path: String,
-) -> Result<ApiProjectSummary, ApiError> {
-    register_project(&state, path, AgentKind::Pi).await
-}
-
-/// v10 registration requires an explicit runtime kind while the legacy command
-/// above remains an ordinary-Pi compatibility route.
+/// v10 registration requires an explicit runtime kind.
 #[tauri::command]
 pub async fn add_project_v10(
     state: State<'_, HostState>,
@@ -379,16 +288,6 @@ pub async fn add_project_v10(
     agent_kind: String,
 ) -> Result<ApiProjectSummary, ApiError> {
     register_project(&state, path, parse_agent_kind(&agent_kind)?).await
-}
-
-/// Opens exactly one native folder picker in the trusted host. The WebView
-/// receives only the resulting safe project summary, never a general picker or
-/// filesystem capability.
-#[tauri::command]
-pub async fn pick_and_add_project(
-    state: State<'_, HostState>,
-) -> Result<Option<ApiProjectSummary>, ApiError> {
-    pick_and_register_project(&state, AgentKind::Pi).await
 }
 
 #[tauri::command]
@@ -574,29 +473,6 @@ pub async fn search_sessions(
         .map(|matches| matches.into_iter().map(ApiSessionSummary::from).collect())
 }
 
-/// Legacy list API now reads only the rebuildable SQLite catalog. It never
-/// opens Pi JSONL or waits for discovery; callers that need a fresh catalog use
-/// `refresh_session_catalog` and receive a versioned snapshot.
-#[tauri::command]
-pub fn list_sessions(
-    state: State<'_, HostState>,
-    project_id: String,
-) -> Result<Vec<ApiSessionSummary>, ApiError> {
-    require_user_project(&state, &project_id)?;
-    verify_catalog_project_visibility(&state, &project_id)?;
-    cached_session_summaries(&state, &project_id, false)
-}
-
-/// Lists cached sessions stored by Pi for the host-owned Chats workspace. The
-/// directory and opaque backing project id never cross IPC.
-#[tauri::command]
-pub fn list_personal_sessions(
-    state: State<'_, HostState>,
-) -> Result<Vec<ApiSessionSummary>, ApiError> {
-    verify_catalog_project_visibility(&state, &state.personal_workspace.project_id)?;
-    cached_session_summaries(&state, &state.personal_workspace.project_id, true)
-}
-
 /// Returns the last indexed sidebar catalog immediately. A snapshot watermark
 /// lets the WebView discard delayed event delivery safely after reloads.
 #[tauri::command]
@@ -766,7 +642,6 @@ async fn refresh_catalog_and_emit_attempt(
         // deterministic and avoids a second full root traversal.
         return Ok(CatalogRefreshAttempt {
             snapshot: catalog_snapshot(state, project_id, personal)?,
-            started: false,
         });
     };
     emit_catalog_event(
@@ -805,10 +680,7 @@ async fn refresh_catalog_and_emit_attempt(
                     snapshot: snapshot.clone(),
                 },
             );
-            Ok(CatalogRefreshAttempt {
-                snapshot,
-                started: true,
-            })
+            Ok(CatalogRefreshAttempt { snapshot })
         }
         Ok(_) => {
             let degraded =
@@ -824,10 +696,7 @@ async fn refresh_catalog_and_emit_attempt(
                     safe_summary: "Some local sessions could not be verified. Showing the last indexed catalog.",
                 },
             );
-            Ok(CatalogRefreshAttempt {
-                snapshot,
-                started: true,
-            })
+            Ok(CatalogRefreshAttempt { snapshot })
         }
         Err(error) => {
             let failed = finish_catalog_refresh(state, project_id, false, started.full_integrity)?;
@@ -844,31 +713,6 @@ async fn refresh_catalog_and_emit_attempt(
             Err(error)
         }
     }
-}
-
-#[tauri::command]
-pub async fn get_timeline(
-    state: State<'_, HostState>,
-    project_id: String,
-    session_id: String,
-) -> Result<Vec<ApiTimelineBlock>, ApiError> {
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    require_user_project(&state, &project_id)?;
-    let report = match observe_owned_session(&state, &project_id, &session_id) {
-        Ok(report) => report,
-        Err(error) => {
-            retire_project_runtime_after_verification_failure(&state, &project_id, &error).await;
-            return Err(error);
-        }
-    };
-    // Legacy compatibility path stays bounded; new callers use
-    // `get_timeline_page` for cursor-based history navigation.
-    Ok(report
-        .timeline_slice_latest(DEFAULT_TIMELINE_PAGE_SIZE)
-        .blocks
-        .iter()
-        .map(ApiTimelineBlock::from)
-        .collect())
 }
 
 /// Returns a bounded read-only timeline page. Cursors are random host-held
@@ -1043,42 +887,6 @@ fn timeline_page(
     })
 }
 
-#[tauri::command]
-pub async fn get_tree(
-    state: State<'_, HostState>,
-    project_id: String,
-    session_id: String,
-) -> Result<ApiSessionTree, ApiError> {
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    require_user_project(&state, &project_id)?;
-    let report = match observe_owned_session(&state, &project_id, &session_id) {
-        Ok(report) => report,
-        Err(error) => {
-            retire_project_runtime_after_verification_failure(&state, &project_id, &error).await;
-            return Err(error);
-        }
-    };
-    Ok(tree_from_report(&report))
-}
-
-/// Reads the generic fallback tree for one host-owned personal session.
-#[tauri::command]
-pub async fn get_personal_tree(
-    state: State<'_, HostState>,
-    session_id: String,
-) -> Result<ApiSessionTree, ApiError> {
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    let project_id = state.personal_workspace.project_id.clone();
-    let report = match observe_owned_session(&state, &project_id, &session_id) {
-        Ok(report) => report,
-        Err(error) => {
-            retire_project_runtime_after_verification_failure(&state, &project_id, &error).await;
-            return Err(error);
-        }
-    };
-    Ok(tree_from_report(&report))
-}
-
 fn tree_from_report(report: &piui_index::ScanReport) -> ApiSessionTree {
     api_tree(
         &report.tree,
@@ -1090,902 +898,14 @@ fn tree_from_report(report: &piui_index::ScanReport) -> ApiSessionTree {
     )
 }
 
-/// Performs static, non-executing system-runtime eligibility classification.
-/// A `PATH` hit is explicitly unverified and is never launched by PiUI.
-#[tauri::command]
-pub fn probe_system_runtime() -> ApiSystemPiProbe {
-    ApiSystemPiProbe::from(probe_system_pi())
-}
-
-/// Runs a deterministic local-only fake scenario. Its blocks are explicitly
-/// ephemeral UI overlays and never become Pi session JSONL entries.
-#[tauri::command]
-pub async fn run_fake_scenario(
-    state: State<'_, HostState>,
-    project_id: String,
-    session_id: String,
-    scenario: String,
-    text: String,
-) -> Result<ApiFakeScenarioResult, ApiError> {
-    if state.safe_mode {
-        return Err(ApiError::safe_mode());
-    }
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    require_user_project(&state, &project_id)?;
-    let admission = match admit_session_revision(&state, &project_id, &session_id) {
-        Ok(admission) => admission,
-        Err(error) => {
-            retire_project_runtime_after_verification_failure(&state, &project_id, &error).await;
-            return Err(error);
-        }
-    };
-    // The async live-operation gate is held for this standalone scenario, so
-    // another fake start cannot race its bounded snapshot.
-    if lock_fake_runtime(&state)?.is_some() {
-        return Err(ApiError::runtime_busy());
-    }
-    let scenario = match scenario.as_str() {
-        "stream" => FakeScenario::Stream,
-        "abort" => FakeScenario::Abort,
-        "crash" => FakeScenario::Crash,
-        "malformed" => FakeScenario::Malformed,
-        _ => return Err(ApiError::invalid()),
-    };
-    let text = safe_fake_text(&text);
-    if text.is_empty() {
-        return Err(ApiError::invalid());
-    }
-
-    let mut runtime = FakeRuntime::new(scenario);
-    let mut emissions = runtime.start().map_err(|_| ApiError::runtime())?;
-    emissions.extend(
-        runtime
-            .command(FakeCommand::Prompt {
-                command_id: "piui-fake-turn".to_owned(),
-                text: text.clone(),
-            })
-            .map_err(|_| ApiError::runtime())?,
-    );
-    if matches!(scenario, FakeScenario::Abort) {
-        emissions.extend(
-            runtime
-                .command(FakeCommand::Abort {
-                    command_id: "piui-fake-abort".to_owned(),
-                })
-                .map_err(|_| ApiError::runtime())?,
-        );
-    }
-    // A standalone fake run closes its simulated stdout just as a future
-    // contained process adapter must. Crash/malformed scenarios already emit
-    // EOF (or a failing frame) themselves.
-    if matches!(scenario, FakeScenario::Stream | FakeScenario::Abort) {
-        emissions.extend(
-            runtime
-                .command(FakeCommand::Stop)
-                .map_err(|_| ApiError::runtime())?,
-        );
-    }
-
-    let mut transport = FakeTransportReplay::new();
-    let mut protocol_failure = transport.replay(emissions).is_err();
-    protocol_failure |= !transport.saw_eof();
-    let mut assistant = String::new();
-    for event in transport.events() {
-        if let FakeTransportEvent::MessageTextDelta { text } = event {
-            assistant.push_str(text);
-        }
-    }
-
-    let run_id = next_fake_scenario_id();
-    let user_id = format!("fake-{run_id}-user");
-    let mut blocks = vec![ApiTimelineBlock {
-        id: user_id.clone(),
-        parent_id: None,
-        kind: "user",
-        created_at: None,
-        text: Some(text),
-        label: "You · fake scenario",
-        safe_summary: None,
-        title: None,
-        tool_name: None,
-        collapsible: false,
-        truncated: false,
-        fallback: false,
-        status: ApiTimelineStatus::Complete,
-    }];
-    let assistant = safe_fake_text(&assistant);
-    if !assistant.is_empty() {
-        blocks.push(ApiTimelineBlock {
-            id: format!("fake-{run_id}-assistant"),
-            parent_id: Some(user_id.clone()),
-            kind: "assistant",
-            created_at: None,
-            text: Some(assistant),
-            label: "Pi · fake scenario",
-            safe_summary: None,
-            title: None,
-            tool_name: None,
-            collapsible: false,
-            truncated: false,
-            fallback: false,
-            status: if matches!(scenario, FakeScenario::Abort) {
-                ApiTimelineStatus::Interrupted
-            } else {
-                ApiTimelineStatus::Complete
-            },
-        });
-    }
-    if protocol_failure || matches!(scenario, FakeScenario::Crash) {
-        blocks.push(ApiTimelineBlock {
-            id: format!("fake-{run_id}-runtime-notice"),
-            parent_id: Some(user_id.clone()),
-            kind: "error",
-            created_at: None,
-            text: None,
-            label: "Fake runtime notice",
-            safe_summary: Some(if protocol_failure {
-                "The deterministic fake runtime emitted malformed protocol bytes; no raw bytes were retained."
-                    .to_owned()
-            } else {
-                "The deterministic fake runtime simulated a process crash; no Pi process was started."
-                    .to_owned()
-            }),
-            title: None,
-            tool_name: None,
-            collapsible: false,
-            truncated: false,
-            fallback: false,
-            status: ApiTimelineStatus::Failed,
-        });
-    }
-    let safe_summary = match scenario {
-        FakeScenario::Stream => "Deterministic stream scenario completed locally.",
-        FakeScenario::Abort => "Deterministic turn was aborted locally.",
-        FakeScenario::Crash => "Deterministic crash scenario completed locally.",
-        FakeScenario::Malformed => "Deterministic malformed-frame scenario completed locally.",
-    };
-    let expected_completed_state = if matches!(scenario, FakeScenario::Crash) {
-        LifecycleState::Failed
-    } else {
-        LifecycleState::Dormant
-    };
-    let completed_state = completed_fake_transport_state(
-        transport.events(),
-        protocol_failure,
-        expected_completed_state,
-    )?;
-    // This fake run never writes Pi JSONL. Re-observation still exercises the
-    // exact stale-session boundary that a later real prompt must honor.
-    if let Err(error) = revalidate_session_admission(&state, &admission) {
-        retire_project_runtime_after_verification_failure(&state, &project_id, &error).await;
-        return Err(error);
-    }
-    Ok(ApiFakeScenarioResult {
-        runtime: runtime_snapshot(
-            completed_state,
-            runtime.revision(),
-            Some(format!("{safe_summary} No fake runtime remains active.")),
-        ),
-        blocks,
-        ephemeral: true,
-    })
-}
-
-#[tauri::command]
-pub async fn start_fake_runtime(
-    state: State<'_, HostState>,
-    project_id: String,
-    session_id: Option<String>,
-) -> Result<ApiRuntimeSnapshot, ApiError> {
-    if state.safe_mode {
-        return Err(ApiError::safe_mode());
-    }
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    require_user_project(&state, &project_id)?;
-    let session_id = session_id.ok_or_else(ApiError::invalid)?;
-    let admission = match admit_session_revision(&state, &project_id, &session_id) {
-        Ok(admission) => admission,
-        Err(error) => {
-            retire_project_runtime_after_verification_failure(&state, &project_id, &error).await;
-            return Err(error);
-        }
-    };
-
-    // Mirror the future launch rule: the admission must still match at the
-    // point the adapter becomes active. The operation gate keeps another fake
-    // start from entering between this check and slot acquisition.
-    if let Err(error) = revalidate_session_admission(&state, &admission) {
-        retire_project_runtime_after_verification_failure(&state, &project_id, &error).await;
-        return Err(error);
-    }
-    let mut slot = lock_fake_runtime(&state)?;
-    if slot.is_some() {
-        return Err(ApiError::runtime_busy());
-    }
-    let mut runtime = FakeRuntime::new(FakeScenario::Abort);
-    let mut transport = FakeTransportReplay::new();
-    transport
-        .replay(runtime.start().map_err(|_| ApiError::runtime())?)
-        .map_err(|_| ApiError::runtime())?;
-    let replayed_state =
-        last_replayed_fake_state(transport.events()).ok_or_else(ApiError::runtime)?;
-    if replayed_state != LifecycleState::Ready {
-        return Err(ApiError::runtime());
-    }
-    let snapshot = runtime_snapshot(
-        replayed_state,
-        runtime.revision(),
-        Some("Deterministic fake runtime is ready; no Pi process was started.".to_owned()),
-    );
-    *slot = Some(FakeRuntimeSlot {
-        runtime,
-        transport,
-        admission,
-        project_id,
-        session_id,
-    });
-    Ok(snapshot)
-}
-
-#[tauri::command]
-pub async fn stop_runtime(
-    state: State<'_, HostState>,
-) -> Result<Option<ApiRuntimeSnapshot>, ApiError> {
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    let (active, replayed_state) = {
-        let mut slot = lock_fake_runtime(&state)?;
-        let Some(mut active) = slot.take() else {
-            return Ok(None);
-        };
-        // Keep the operation guard until fake shutdown completes so another
-        // runtime cannot start in the gap between ownership removal and EOF.
-        let _ = (&active.project_id, &active.session_id);
-        let emissions = active
-            .runtime
-            .command(FakeCommand::Stop)
-            .map_err(|_| ApiError::runtime())?;
-        active
-            .transport
-            .replay(emissions)
-            .map_err(|_| ApiError::runtime())?;
-        if !active.transport.saw_eof() {
-            return Err(ApiError::runtime());
-        }
-        let replayed_state = last_replayed_fake_state(active.transport.events())
-            .filter(|state| *state == LifecycleState::Dormant)
-            .ok_or_else(ApiError::runtime)?;
-        // Return after the fake-slot mutex has been dropped; the following
-        // project re-observation may await a live-runtime retirement.
-        (active, replayed_state)
-    };
-    // This is reporting only, after shutdown. Any failed re-observation is a
-    // finite admission invalidation category, not evidence of one specific
-    // external edit. If it also represents project revocation/replacement,
-    // retire an independent live Pi writer before returning this snapshot.
-    let admission_invalidated = match revalidate_session_admission(&state, &active.admission) {
-        Ok(()) => false,
-        Err(error) => {
-            retire_project_runtime_after_verification_failure(&state, &active.project_id, &error)
-                .await;
-            true
-        }
-    };
-    Ok(Some(runtime_snapshot(
-        replayed_state,
-        active.runtime.revision(),
-        Some(if admission_invalidated {
-            "Fake runtime stopped after session admission invalidation; PiUI did not merge session JSONL."
-                .to_owned()
-        } else {
-            "Fake runtime stopped. Real Pi descendant containment is not exercised here.".to_owned()
-        }),
-    )))
-}
-
-const MAX_PROMPT_CHARS: usize = 128_000;
-const MAX_RUNTIME_ID_CHARS: usize = 128;
-const MAX_MODEL_IDENTIFIER_CHARS: usize = 256;
-const MAX_SESSION_NAME_CHARS: usize = 200;
-const MAX_EXTENSION_UI_RESPONSE_CHARS: usize = 128 * 1024;
-
-/// Spawns a real `pi --mode rpc` process bound to a user project cwd and,
-/// when a session id is given, continues the indexed Pi session. Streamed
-/// events are delivered to the WebView as `piui://runtime-event`.
-#[tauri::command]
-pub async fn start_runtime(
-    state: State<'_, HostState>,
-    app: tauri::AppHandle,
-    project_id: String,
-    session_id: Option<String>,
-) -> Result<ApiRuntimeStart, ApiError> {
-    require_user_project(&state, &project_id)?;
-    start_runtime_for_project(&state, app, project_id, session_id).await
-}
-
-/// Starts or continues a projectless personal chat through the same
-/// host-verified CWD, index, and Pi-owned JSONL path as a project chat. The
-/// backing workspace remains host-private and is never registered as a user
-/// project in the WebView.
-#[tauri::command]
-pub async fn start_personal_chat(
-    state: State<'_, HostState>,
-    app: tauri::AppHandle,
-    session_id: Option<String>,
-) -> Result<ApiRuntimeStart, ApiError> {
-    let project_id = state.personal_workspace.project_id.clone();
-    start_runtime_for_project(&state, app, project_id, session_id).await
-}
-
-async fn start_runtime_for_project(
-    state: &HostState,
-    app: tauri::AppHandle,
-    project_id: String,
-    session_id: Option<String>,
-) -> Result<ApiRuntimeStart, ApiError> {
-    if state.safe_mode {
-        return Err(ApiError::safe_mode());
-    }
-    let _transition = state
-        .try_begin_live_runtime_transition()
-        .ok_or_else(ApiError::runtime_busy)?;
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    {
-        let live = lock_live_runtime(state)?;
-        if live.is_some() {
-            return Err(ApiError::runtime_busy());
-        }
-    }
-
-    let agent_kind = lock_index(state)?
-        .project_agent_kind(&project_id)
-        .map_err(|_| ApiError::io())?
-        .ok_or_else(ApiError::not_found)?;
-    require_live_runtime_kind(agent_kind)?;
-    let directory = verified_project_directory(state, &project_id, true)?;
-    let pi_roots = discovery_roots_for_project(&state.session_roots, &directory);
-    let prime_roots = configured_roots_for_project(&state.prime_session_roots, &directory);
-    if session_root_sets_overlap(&pi_roots, &prime_roots) {
-        return Err(ApiError::agent_session_root_conflict());
-    }
-    let cwd = directory.canonical_path().to_path_buf();
-    let (session_path, mut admission) = match session_id.as_deref() {
-        Some(session_id) => {
-            // Capture one verified source identity/revision and use that exact
-            // host-private path for Pi. Revalidate immediately before spawn;
-            // this is an admission boundary, not a claim to lock JSONL.
-            let admission = admit_session_revision(state, &project_id, session_id)?;
-            revalidate_session_admission(state, &admission)?;
-            (Some(admission.session_file.clone()), Some(admission))
-        }
-        None => (None, None),
-    };
-
-    let config = RealPiConfig {
-        cwd,
-        session_path,
-        // Do not pass an existing id as `--name`: that would rename the
-        // user's session. Session naming has its own explicit RPC command.
-        session_name: None,
-    };
-    // `require_live_runtime_kind` above leaves only Pi. Do not keep a
-    // production call edge to Prime's shared default daemon.
-    let spawned = RealPiRuntime::spawn(config).await;
-    let (runtime, event_rx, runtime_id, session_state, _initial_revision) =
-        spawned.map_err(map_runtime_error)?;
-    if let Some(previous_admission) = admission.as_ref() {
-        // Pi can legitimately migrate legacy session headers or append a
-        // trusted session_start record while opening the file. Preserve the
-        // verified source/native identity, then recapture Pi's post-open
-        // revision as the baseline for PiUI's first mutation.
-        let refreshed_admission = match recapture_session_admission_after_start(
-            state,
-            previous_admission,
-            &session_state.session_id,
-        ) {
-            Ok(admission) => admission,
-            Err(error) => {
-                let _ = runtime.terminate().await;
-                return Err(error);
-            }
-        };
-        admission = Some(refreshed_admission);
-    }
-
-    let launch_label = runtime.launch_label().to_owned();
-    // PiUI session ids are opaque index ids. A fresh Prime project runtime has
-    // no caller-admitted opaque id, so synchronously reconcile only its
-    // isolated root and bind the handshake's native id to exactly one indexed
-    // opaque id before any slot or event can observe the runtime.
-    let resolved_session_id = if agent_kind == AgentKind::PrimeAgent
-        && session_id.is_none()
-        && !state.is_personal_workspace(&project_id)
-    {
-        let opened_pi_session_id = session_state.session_id.clone();
-        let opaque_session_id =
-            match resolve_new_prime_project_session_id(state, &project_id, &opened_pi_session_id)
-                .await
-            {
-                Ok(session_id) => session_id,
-                Err(error) => {
-                    let _ = runtime.terminate().await;
-                    return Err(error);
-                }
-            };
-        let new_admission = match admit_session_revision(state, &project_id, &opaque_session_id) {
-            Ok(admission)
-                if admission.pi_session_id.as_deref() == Some(opened_pi_session_id.as_str()) =>
-            {
-                admission
-            }
-            Ok(_) => {
-                let _ = runtime.terminate().await;
-                return Err(ApiError::runtime_protocol());
-            }
-            Err(error) => {
-                let _ = runtime.terminate().await;
-                return Err(error);
-            }
-        };
-        // The direct binding scan deliberately bypasses refresh coalescing so
-        // its lookup cannot use a stale snapshot. Publish a normal sequenced
-        // reconciliation afterward for the sidebar/cache lifecycle.
-        schedule_catalog_reconciliation(app.clone(), project_id.clone());
-        admission = Some(new_admission);
-        Some(opaque_session_id)
-    } else {
-        // Continued sessions retain the caller-admitted opaque ID. Ordinary Pi
-        // and personal-chat new sessions keep their existing behavior.
-        session_id.clone()
-    };
-    let event_runtime_id = runtime_id.as_str().to_owned();
-    let event_project_id = (!state.is_personal_workspace(&project_id)).then(|| project_id.clone());
-    let event_session_id = resolved_session_id.clone();
-    let runtime = Arc::new(runtime);
-    if !runtime_state_is_usable(runtime.state().await) {
-        let _ = runtime.terminate().await;
-        return Err(ApiError::runtime_protocol());
-    }
-
-    let reconcile_app = app.clone();
-    let catalog_reconcile = Arc::new(move |exited_project_id: String| {
-        schedule_catalog_reconciliation(reconcile_app.clone(), exited_project_id);
-    });
-    let forward_app = app;
-    let forward = tauri::async_runtime::spawn(async move {
-        let mut event_rx = event_rx;
-        while let Some(event) = event_rx.recv().await {
-            let terminal_failure = matches!(
-                &event,
-                piui_runtime::SurfaceEvent::State {
-                    state: LifecycleState::Failed,
-                    ..
-                }
-            );
-            let envelope = RuntimeEventEnvelope::new_for_kind(
-                event_runtime_id.clone(),
-                agent_kind,
-                event_project_id.clone(),
-                event_session_id.clone(),
-                event,
-            );
-            let _ = forward_app.emit(
-                "piui://runtime-event",
-                ApiRuntimeEventEnvelope::from(envelope),
-            );
-            if terminal_failure {
-                // The stdout reader is no longer trustworthy. Retire this
-                // exact slot and terminate its child without waiting on this
-                // forwarding task's own JoinHandle.
-                let host_state = forward_app.state::<HostState>();
-                retire_live_runtime_if_matches(&host_state, &event_runtime_id, false).await;
-                break;
-            }
-        }
-    });
-
-    let slot = LiveRuntimeSlot {
-        runtime: Arc::clone(&runtime),
-        runtime_id: runtime_id.clone(),
-        project_id: project_id.clone(),
-        catalog_reconcile,
-        admission,
-        forwarding: forward,
-    };
-    {
-        let mut live = lock_live_runtime(state)?;
-        *live = Some(slot);
-    }
-
-    // A Pi failure can arrive between the successful get_state handshake and
-    // slot installation. Do not hand the UI a stale Ready snapshot in that
-    // narrow window.
-    let exposed_state = runtime.state().await;
-    if !runtime_state_is_usable(exposed_state) {
-        retire_live_runtime_if_matches(state, runtime_id.as_str(), true).await;
-        return Err(ApiError::runtime_protocol());
-    }
-    let runtime_label = match agent_kind {
-        AgentKind::Pi => "Pi",
-        AgentKind::PrimeAgent => "Prime Agent",
-    };
-    let snapshot = runtime_snapshot_named_for_kind(
-        runtime_id.as_str(),
-        agent_kind,
-        exposed_state,
-        runtime.revision(),
-        Some(format!("{runtime_label} runtime ready ({launch_label}).")),
-    );
-
-    Ok(ApiRuntimeStart {
-        runtime: snapshot,
-        runtime_id: runtime_id.as_str().to_owned(),
-        agent_kind: if agent_kind == AgentKind::PrimeAgent {
-            "prime-agent"
-        } else {
-            "pi"
-        },
-        launch_label,
-        session_state: ApiSessionState::project(
-            agent_kind,
-            resolved_session_id.clone(),
-            session_state,
-        ),
-        session_id: resolved_session_id,
-    })
-}
-
-#[tauri::command]
-pub async fn send_prompt(
-    state: State<'_, HostState>,
-    runtime_id: String,
-    text: String,
-) -> Result<(), ApiError> {
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    let runtime = live_runtime_for_mutation(&state, &runtime_id).await?;
-    let text = prompt_text(&text).ok_or_else(ApiError::invalid)?;
-    runtime.send_prompt(text).await.map_err(map_runtime_error)?;
-    consume_live_runtime_admission(&state, &runtime_id)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn send_steer(
-    state: State<'_, HostState>,
-    runtime_id: String,
-    text: String,
-) -> Result<(), ApiError> {
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    let runtime = live_runtime_for_mutation(&state, &runtime_id).await?;
-    let text = prompt_text(&text).ok_or_else(ApiError::invalid)?;
-    runtime.send_steer(text).await.map_err(map_runtime_error)?;
-    consume_live_runtime_admission(&state, &runtime_id)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn send_follow_up(
-    state: State<'_, HostState>,
-    runtime_id: String,
-    text: String,
-) -> Result<(), ApiError> {
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    let runtime = live_runtime_for_mutation(&state, &runtime_id).await?;
-    let text = prompt_text(&text).ok_or_else(ApiError::invalid)?;
-    runtime
-        .send_follow_up(text)
-        .await
-        .map_err(map_runtime_error)?;
-    consume_live_runtime_admission(&state, &runtime_id)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn abort_runtime(
-    state: State<'_, HostState>,
-    runtime_id: String,
-) -> Result<(), ApiError> {
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    let runtime = live_runtime_for_mutation(&state, &runtime_id).await?;
-    runtime.abort().await.map_err(map_runtime_error)?;
-    consume_live_runtime_admission(&state, &runtime_id)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn stop_live_runtime(
-    state: State<'_, HostState>,
-    runtime_id: String,
-) -> Result<ApiRuntimeSnapshot, ApiError> {
-    // Stop is the preemptive escape hatch for an extension command waiting on
-    // an untimed dialog. It must not queue behind that prompt's operation gate.
-    let _transition = state
-        .try_begin_live_runtime_transition()
-        .ok_or_else(ApiError::runtime_busy)?;
-    let slot = take_live_runtime(&state, &runtime_id)?;
-    let stop_result = slot.runtime.stop().await;
-    let _ = slot.forwarding.await;
-    // Reconcile through the sequenced async catalog lifecycle. This publishes
-    // cache-first status/snapshots without blocking the runtime command task.
-    (slot.catalog_reconcile)(slot.project_id.clone());
-    stop_result.map_err(map_runtime_error)?;
-    let revision = slot.runtime.revision();
-    let agent_kind = slot.runtime.agent_kind();
-    let runtime_label = if agent_kind == AgentKind::PrimeAgent {
-        "Prime Agent"
-    } else {
-        "Pi"
-    };
-    Ok(runtime_snapshot_named_for_kind(
-        slot.runtime_id.as_str(),
-        agent_kind,
-        LifecycleState::Dormant,
-        revision,
-        Some(format!("{runtime_label} runtime stopped.")),
-    ))
-}
-
-#[tauri::command]
-pub async fn get_runtime_state(
-    state: State<'_, HostState>,
-    runtime_id: String,
-) -> Result<piui_runtime::SessionStateLite, ApiError> {
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    let runtime = live_runtime_for_read(&state, &runtime_id).await?;
-    runtime.get_state().await.map_err(map_runtime_error)
-}
-
-#[tauri::command]
-pub async fn get_runtime_models(
-    state: State<'_, HostState>,
-    runtime_id: String,
-) -> Result<Vec<ModelLite>, ApiError> {
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    let runtime = live_runtime_for_read(&state, &runtime_id).await?;
-    runtime.get_models().await.map_err(map_runtime_error)
-}
-
-#[tauri::command]
-pub async fn get_runtime_thinking_levels(
-    state: State<'_, HostState>,
-    runtime_id: String,
-) -> Result<Vec<String>, ApiError> {
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    let runtime = live_runtime_for_read(&state, &runtime_id).await?;
-    runtime
-        .get_thinking_levels()
-        .await
-        .map_err(map_runtime_error)
-}
-
-#[tauri::command]
-pub async fn get_runtime_commands(
-    state: State<'_, HostState>,
-    runtime_id: String,
-) -> Result<Vec<RuntimeCommandLite>, ApiError> {
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    let runtime = live_runtime_for_read(&state, &runtime_id).await?;
-    runtime.get_commands().await.map_err(map_runtime_error)
-}
-
-#[tauri::command]
-pub async fn respond_extension_ui(
-    state: State<'_, HostState>,
-    runtime_id: String,
-    request_id: String,
-    response: ExtensionUiResponse,
-) -> Result<(), ApiError> {
-    if !valid_opaque_surface_id(&request_id, "piui-extension-dialog-")
-        || !valid_extension_ui_response(&response)
-    {
-        return Err(ApiError::invalid());
-    }
-    // This is a response sub-protocol, not a new runtime operation. It must
-    // bypass the command-operation gate because the originating `prompt`
-    // request may still be awaiting this exact dialog response.
-    let runtime = live_runtime_for_read(&state, &runtime_id).await?;
-    runtime
-        .respond_extension_ui(request_id, response)
-        .await
-        .map_err(map_runtime_error)
-}
-
-#[tauri::command]
-pub async fn set_runtime_model(
-    state: State<'_, HostState>,
-    runtime_id: String,
-    provider: String,
-    model_id: String,
-) -> Result<(), ApiError> {
-    let provider = rpc_identifier(&provider).ok_or_else(ApiError::invalid)?;
-    let model_id = rpc_identifier(&model_id).ok_or_else(ApiError::invalid)?;
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    let runtime = live_runtime_for_mutation(&state, &runtime_id).await?;
-    runtime
-        .set_model(provider, model_id)
-        .await
-        .map_err(map_runtime_error)?;
-    consume_live_runtime_admission(&state, &runtime_id)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn set_runtime_thinking(
-    state: State<'_, HostState>,
-    runtime_id: String,
-    level: String,
-) -> Result<(), ApiError> {
-    let level = thinking_level(&level).ok_or_else(ApiError::invalid)?;
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    let runtime = live_runtime_for_mutation(&state, &runtime_id).await?;
-    runtime
-        .set_thinking_level(level)
-        .await
-        .map_err(map_runtime_error)?;
-    consume_live_runtime_admission(&state, &runtime_id)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn set_runtime_session_name(
-    state: State<'_, HostState>,
-    runtime_id: String,
-    name: String,
-) -> Result<(), ApiError> {
-    let name = session_name(&name).ok_or_else(ApiError::invalid)?;
-    let _operation_guard = state.live_runtime_operation_gate.lock().await;
-    let runtime = live_runtime_for_mutation(&state, &runtime_id).await?;
-    runtime
-        .set_session_name(name)
-        .await
-        .map_err(map_runtime_error)?;
-    consume_live_runtime_admission(&state, &runtime_id)?;
-    Ok(())
-}
-
-fn lock_live_runtime(
-    state: &HostState,
-) -> Result<MutexGuard<'_, Option<LiveRuntimeSlot>>, ApiError> {
-    state.live_runtime.lock().map_err(|_| ApiError::internal())
-}
-
-struct LiveRuntimeAccess {
-    runtime: Arc<RealPiRuntime>,
-    project_id: String,
-    admission: Option<SessionRevisionAdmission>,
-}
-
-fn live_runtime_access(state: &HostState, runtime_id: &str) -> Result<LiveRuntimeAccess, ApiError> {
-    if !valid_runtime_id(runtime_id) {
-        return Err(ApiError::invalid());
-    }
-    lock_live_runtime(state)?
-        .as_ref()
-        .filter(|slot| slot.runtime_id.as_str() == runtime_id)
-        .map(|slot| LiveRuntimeAccess {
-            runtime: Arc::clone(&slot.runtime),
-            project_id: slot.project_id.clone(),
-            admission: slot.admission.clone(),
-        })
-        .ok_or_else(ApiError::runtime_gone)
-}
-
-async fn live_runtime_for_read(
-    state: &HostState,
-    runtime_id: &str,
-) -> Result<Arc<RealPiRuntime>, ApiError> {
-    let access = live_runtime_access(state, runtime_id)?;
-    if let Err(error) = verified_project_directory(state, &access.project_id, true) {
-        retire_live_runtime_if_matches(state, runtime_id, true).await;
-        return Err(error);
-    }
-    Ok(access.runtime)
-}
-
-async fn live_runtime_for_mutation(
-    state: &HostState,
-    runtime_id: &str,
-) -> Result<Arc<RealPiRuntime>, ApiError> {
-    let access = live_runtime_access(state, runtime_id)?;
-    if let Err(error) = verified_project_directory(state, &access.project_id, true) {
-        retire_live_runtime_if_matches(state, runtime_id, true).await;
-        return Err(error);
-    }
-    if let Some(admission) = access.admission
-        && let Err(error) = revalidate_session_admission(state, &admission)
-    {
-        retire_live_runtime_if_matches(state, runtime_id, true).await;
-        return Err(error);
-    }
-    Ok(access.runtime)
-}
-
-/// The first successful PiUI mutation consumes a continued-session baseline:
-/// Pi itself can append after that command, so retaining the old revision would
-/// turn Pi's own valid output into a false external-writer conflict.
-fn consume_live_runtime_admission(state: &HostState, runtime_id: &str) -> Result<(), ApiError> {
-    let mut live = lock_live_runtime(state)?;
-    if let Some(slot) = live
-        .as_mut()
-        .filter(|slot| slot.runtime_id.as_str() == runtime_id)
-    {
-        slot.admission = None;
-    }
-    // A concurrent trust revocation may already have retired the slot after Pi
-    // acknowledged this command. Do not falsely report that accepted prompt as
-    // unsent merely because there is no longer a baseline to consume.
-    Ok(())
-}
-
-/// Schedules the same watermark-bearing catalog lifecycle used by explicit
-/// refresh commands. Runtime exit is a source change hint, never a shortcut
-/// around cache freshness or the blocking reconciliation boundary.
-fn schedule_catalog_reconciliation(app: tauri::AppHandle, project_id: String) {
-    // Detach deliberately: runtime teardown must not hold its lifecycle gate
-    // while a potentially long filesystem reconciliation runs. If an older
-    // scan owns the project gate, retry until this exit hint receives its own
-    // post-exit generation instead of silently coalescing it away.
-    std::mem::drop(tauri::async_runtime::spawn(async move {
-        loop {
-            let state = app.state::<HostState>();
-            let personal = state.is_personal_workspace(&project_id);
-            match refresh_catalog_and_emit_attempt(&state, &app, &project_id, personal).await {
-                Ok(attempt) if attempt.started => break,
-                // Wait for the active generation no matter how large/cold its
-                // bounded scan is, then acquire a distinct post-exit pass.
-                Ok(_) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
-                Err(_) => break,
-            }
-        }
-    }));
-}
-
-/// Retires only the runtime whose opaque identity still matches. `wait_forward`
-/// is false only inside the forwarding task itself, which must not await its
-/// own JoinHandle.
-async fn retire_live_runtime_if_matches(state: &HostState, runtime_id: &str, wait_forward: bool) {
-    let slot = match lock_live_runtime(state) {
-        Ok(mut live) => match live.as_ref() {
-            Some(slot) if slot.runtime_id.as_str() == runtime_id => live.take(),
-            _ => None,
-        },
-        Err(_) => None,
-    };
-    if let Some(slot) = slot {
-        let _ = slot.runtime.terminate().await;
-        (slot.catalog_reconcile)(slot.project_id.clone());
-        if wait_forward {
-            let _ = slot.forwarding.await;
-        }
-    }
-}
-
 /// Explicit application-exit cleanup. Navigation never calls this function.
 pub(crate) async fn shutdown_application_runtimes(state: &HostState) {
     let _operation_guard = state.live_runtime_operation_gate.lock().await;
     state.workspace.shutdown_all().await;
-    let slot = lock_live_runtime(state)
-        .ok()
-        .and_then(|mut live| live.take());
-    if let Some(slot) = slot {
-        let _ = slot.runtime.terminate().await;
-        let _ = slot.forwarding.await;
-    }
 }
 
 async fn retire_live_runtime_for_project(state: &HostState, project_id: &str) {
     state.workspace.shutdown_workspace(project_id).await;
-    let slot = match lock_live_runtime(state) {
-        Ok(mut live) => match live.as_ref() {
-            Some(slot) if slot.project_id == project_id => live.take(),
-            _ => None,
-        },
-        Err(_) => None,
-    };
-    if let Some(slot) = slot {
-        let _ = slot.runtime.terminate().await;
-        (slot.catalog_reconcile)(slot.project_id.clone());
-        let _ = slot.forwarding.await;
-    }
 }
 
 /// A history operation may be the first code to discover that a project
@@ -2002,95 +922,6 @@ async fn retire_project_runtime_after_verification_failure(
     ) {
         retire_live_runtime_for_project(state, project_id).await;
     }
-}
-
-fn runtime_state_is_usable(state: LifecycleState) -> bool {
-    matches!(state, LifecycleState::Ready | LifecycleState::Running)
-}
-
-fn take_live_runtime(state: &HostState, runtime_id: &str) -> Result<LiveRuntimeSlot, ApiError> {
-    if !valid_runtime_id(runtime_id) {
-        return Err(ApiError::invalid());
-    }
-    let mut live = lock_live_runtime(state)?;
-    match live.as_ref() {
-        Some(slot) if slot.runtime_id.as_str() == runtime_id => {
-            live.take().ok_or_else(ApiError::runtime_gone)
-        }
-        _ => Err(ApiError::runtime_gone()),
-    }
-}
-
-fn map_runtime_error(error: RealRuntimeError) -> ApiError {
-    match error {
-        RealRuntimeError::Resolve(_) => ApiError::pi_not_found(),
-        RealRuntimeError::Spawn(_) => ApiError::runtime_spawn(),
-        RealRuntimeError::Timeout => ApiError::runtime_timeout(),
-        RealRuntimeError::Command(_) => ApiError::runtime_rejected(),
-        RealRuntimeError::SessionAlreadyActive => ApiError::session_already_active(),
-        RealRuntimeError::Exited(_) | RealRuntimeError::Protocol(_) => ApiError::runtime_protocol(),
-        RealRuntimeError::NotRunning | RealRuntimeError::Channel => ApiError::runtime_gone(),
-        RealRuntimeError::InvalidExtensionUiResponse => ApiError::invalid(),
-    }
-}
-
-fn valid_extension_ui_response(response: &ExtensionUiResponse) -> bool {
-    match response {
-        ExtensionUiResponse::Selected { option_id } => {
-            valid_opaque_surface_id(option_id, "piui-extension-option-")
-        }
-        ExtensionUiResponse::Submitted { value } => {
-            value.chars().count() <= MAX_EXTENSION_UI_RESPONSE_CHARS
-        }
-        ExtensionUiResponse::Confirmed { .. } | ExtensionUiResponse::Cancelled => true,
-    }
-}
-
-fn valid_opaque_surface_id(value: &str, prefix: &str) -> bool {
-    value.len() == prefix.len() + 64
-        && value.starts_with(prefix)
-        && value[prefix.len()..]
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn prompt_text(value: &str) -> Option<String> {
-    if value.trim().is_empty() || value.chars().count() > MAX_PROMPT_CHARS {
-        return None;
-    }
-    // Validate semantic emptiness without rewriting the user's prompt.
-    Some(value.to_owned())
-}
-
-fn valid_runtime_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.chars().count() <= MAX_RUNTIME_ID_CHARS
-        && value
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '-')
-}
-
-fn rpc_identifier(value: &str) -> Option<String> {
-    (!value.is_empty()
-        && value.chars().count() <= MAX_MODEL_IDENTIFIER_CHARS
-        && value.chars().all(|character| character.is_ascii_graphic()))
-    .then_some(value.to_owned())
-}
-
-fn thinking_level(value: &str) -> Option<String> {
-    matches!(
-        value,
-        "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
-    )
-    .then_some(value.to_owned())
-}
-
-fn session_name(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()
-        && trimmed.chars().count() <= MAX_SESSION_NAME_CHARS
-        && trimmed.chars().all(|character| !character.is_control()))
-    .then_some(trimmed.to_owned())
 }
 
 /// Captures a host-private current revision after checking project trust,
@@ -2141,32 +972,6 @@ fn revalidate_session_admission(
     Ok(())
 }
 
-/// Pi may write a compatible migration/session-start record while it opens a
-/// continued session. That expected write gets a new baseline only when the
-/// verified source spelling and Pi-native session identity still match.
-fn recapture_session_admission_after_start(
-    state: &HostState,
-    previous: &SessionRevisionAdmission,
-    opened_pi_session_id: &str,
-) -> Result<SessionRevisionAdmission, ApiError> {
-    let refreshed = admit_session_revision(state, &previous.project_id, &previous.session_id)?;
-    let preserves_native_identity = previous
-        .pi_session_id
-        .as_deref()
-        .is_none_or(|expected| refreshed.pi_session_id.as_deref() == Some(expected));
-    let matches_opened_session = refreshed
-        .pi_session_id
-        .as_deref()
-        .is_none_or(|expected| expected == opened_pi_session_id);
-    if refreshed.session_file != previous.session_file
-        || !preserves_native_identity
-        || !matches_opened_session
-    {
-        return Err(ApiError::session_conflict());
-    }
-    Ok(refreshed)
-}
-
 /// An indexed Pi session admitted for continuing in the workspace
 /// (`workspace_adopt_v1`). The path stays host-private.
 pub(crate) struct AdoptionAdmission {
@@ -2175,10 +980,10 @@ pub(crate) struct AdoptionAdmission {
     pub title: String,
 }
 
-/// The classic live-start checks for continuing an indexed Pi session in the
-/// workspace: a trusted Pi folder, separate Pi and Prime roots, an indexed
+/// The admission checks for continuing an indexed Pi session in the
+/// workspace: a trusted Pi folder, separate Pi and Prime roots, and an indexed
 /// file owned by the project whose header names it, stable across two
-/// observations, and not held by the classic live runtime. Never writes JSONL.
+/// observations. Never writes JSONL.
 pub(crate) fn admit_adoption(
     state: &HostState,
     project_id: &str,
@@ -2196,12 +1001,6 @@ pub(crate) fn admit_adoption(
         return Err(ApiError::agent_session_root_conflict());
     }
     let admission = admit_session_revision(state, project_id, session_id)?;
-    if lock_live_runtime(state)?
-        .as_ref()
-        .is_some_and(|slot| slot.project_id == project_id)
-    {
-        return Err(ApiError::session_already_active());
-    }
     revalidate_session_admission(state, &admission)?;
     let pi_session_id = admission
         .pi_session_id
@@ -2334,55 +1133,6 @@ fn invalidate_project_identity_with_index(
         .update_project_trust(project_id, TrustState::Restricted)
         .map_err(|_| ApiError::io())?;
     Err(ApiError::conflict())
-}
-
-fn next_fake_scenario_id() -> u64 {
-    let id = NEXT_FAKE_SCENARIO_ID.fetch_add(1, Ordering::Relaxed);
-    if id == 0 {
-        NEXT_FAKE_SCENARIO_ID.fetch_add(1, Ordering::Relaxed)
-    } else {
-        id
-    }
-}
-
-fn safe_fake_text(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| !character.is_control())
-        .take(MAX_FAKE_INPUT_CHARS)
-        .collect()
-}
-
-/// Derives lifecycle state only from trusted fake lifecycle emissions that
-/// crossed the replay adapter. A malformed stdout frame is terminal evidence
-/// in its own right and forces `Failed`; the producer's in-memory state is
-/// never used to mask an unobserved transition.
-fn completed_fake_transport_state(
-    events: &[FakeTransportEvent],
-    protocol_failure: bool,
-    expected_clean_state: LifecycleState,
-) -> Result<LifecycleState, ApiError> {
-    if protocol_failure {
-        return Ok(LifecycleState::Failed);
-    }
-    let replayed_state = last_replayed_fake_state(events).ok_or_else(ApiError::runtime)?;
-    (replayed_state == expected_clean_state)
-        .then_some(replayed_state)
-        .ok_or_else(ApiError::runtime)
-}
-
-fn last_replayed_fake_state(events: &[FakeTransportEvent]) -> Option<LifecycleState> {
-    events.iter().rev().find_map(|event| match event {
-        FakeTransportEvent::Contract(event) => match event.as_ref() {
-            RuntimeEvent::State(state) => Some(state.state),
-            RuntimeEvent::Snapshot(_) => None,
-        },
-        FakeTransportEvent::TurnStarted
-        | FakeTransportEvent::MessageTextDelta { .. }
-        | FakeTransportEvent::TurnCompleted
-        | FakeTransportEvent::AbortAcknowledged
-        | FakeTransportEvent::Unknown(_) => None,
-    })
 }
 
 /// Returns the established project-local Pi session directory only when each
@@ -2616,51 +1366,6 @@ fn refresh_project_sessions_with_context_while_gated(
     })
 }
 
-/// Reconciles the isolated Prime root after a new runtime handshake and binds
-/// only an exact, project-scoped opaque session identity. The project gate stays
-/// held through the lookup so a watcher cannot replace the fresh catalog between
-/// its complete scan and this decision.
-fn resolve_new_prime_project_session_id_with_context(
-    context: &CatalogRefreshContext,
-    project_id: &str,
-    pi_session_id: &str,
-) -> Result<String, ApiError> {
-    let refresh_gate = context
-        .refresh_gate_for(project_id)
-        .ok_or_else(ApiError::internal)?;
-    let _refresh_guard = refresh_gate.lock().map_err(|_| ApiError::internal())?;
-    // A new or changed source is fully parsed by incremental discovery. Known
-    // sources retain only continuity evidence, whose header prefix includes the
-    // native id; `complete` below still requires full root coverage and every
-    // weak observation's transactional CAS. Avoid a needless full rehash of an
-    // unchanged project root on this runtime-start hot path.
-    let outcome = refresh_project_sessions_with_context_while_gated(context, project_id, false)?;
-    if !outcome.complete {
-        return Err(ApiError::runtime_protocol());
-    }
-    lock_project_index(context.index.as_ref())?
-        .unique_project_session_id_by_pi_session_id(project_id, pi_session_id)
-        .map_err(|_| ApiError::runtime_protocol())?
-        .ok_or_else(ApiError::runtime_protocol)
-}
-
-/// Moves the bounded, read-only Prime catalog reconciliation off the runtime
-/// task. The resulting opaque ID remains host-only until the existing runtime
-/// start DTO/event paths serialize it.
-async fn resolve_new_prime_project_session_id(
-    state: &HostState,
-    project_id: &str,
-    pi_session_id: &str,
-) -> Result<String, ApiError> {
-    let context = state.catalog_refresh_context();
-    let project_id = project_id.to_owned();
-    let pi_session_id = pi_session_id.to_owned();
-    let task = tauri::async_runtime::spawn_blocking(move || {
-        resolve_new_prime_project_session_id_with_context(&context, &project_id, &pi_session_id)
-    });
-    task.await.map_err(|_| ApiError::internal())?
-}
-
 /// Ensure the project directory resolved before filesystem work remains the
 /// same native object before the resulting projection can be used.
 fn revalidate_project_directory(
@@ -2851,12 +1556,6 @@ fn lock_timeline_cursors(
         .map_err(|_| ApiError::internal())
 }
 
-fn lock_fake_runtime(
-    state: &HostState,
-) -> Result<MutexGuard<'_, Option<FakeRuntimeSlot>>, ApiError> {
-    state.fake_runtime.lock().map_err(|_| ApiError::internal())
-}
-
 impl ApiError {
     const fn invalid() -> Self {
         Self {
@@ -2914,24 +1613,10 @@ impl ApiError {
             recoverable: true,
         }
     }
-    const fn safe_mode() -> Self {
-        Self {
-            code: "NOT_SUPPORTED",
-            message: "Runtime actions are disabled while PiUI starts in safe mode.",
-            recoverable: true,
-        }
-    }
     const fn prime_live_runtime_unavailable() -> Self {
         Self {
             code: "NOT_SUPPORTED",
             message: "Prime Agent 0.8.1 live control is disabled because its shared daemon cannot be contained without risking other active sessions. Read-only history remains available.",
-            recoverable: true,
-        }
-    }
-    const fn runtime_busy() -> Self {
-        Self {
-            code: "RUNTIME_FAILED",
-            message: "A foundation runtime is already active.",
             recoverable: true,
         }
     }
@@ -2942,52 +1627,10 @@ impl ApiError {
             recoverable: true,
         }
     }
-    const fn pi_not_found() -> Self {
-        Self {
-            code: "RUNTIME_FAILED",
-            message: "The selected agent runtime could not be found. Install it or configure its PIUI_*_CLI override, then try again.",
-            recoverable: true,
-        }
-    }
-    const fn runtime_spawn() -> Self {
-        Self {
-            code: "RUNTIME_FAILED",
-            message: "The selected agent runtime could not start. Open diagnostics for a safe status code.",
-            recoverable: true,
-        }
-    }
-    const fn session_already_active() -> Self {
-        Self {
-            code: "SESSION_ALREADY_ACTIVE",
-            message: "This Prime Agent session is active in another client. Stop it there, then try again.",
-            recoverable: true,
-        }
-    }
-    const fn runtime_timeout() -> Self {
-        Self {
-            code: "RUNTIME_FAILED",
-            message: "The agent runtime did not respond in time. You can stop and retry.",
-            recoverable: true,
-        }
-    }
-    const fn runtime_rejected() -> Self {
-        Self {
-            code: "RUNTIME_FAILED",
-            message: "The agent runtime rejected the command. See diagnostics for a safe status code.",
-            recoverable: true,
-        }
-    }
     const fn runtime_gone() -> Self {
         Self {
             code: "RUNTIME_FAILED",
             message: "The Pi runtime is no longer active. Restart it to continue.",
-            recoverable: true,
-        }
-    }
-    const fn runtime_protocol() -> Self {
-        Self {
-            code: "RUNTIME_FAILED",
-            message: "Pi reported an unexpected protocol error.",
             recoverable: true,
         }
     }
@@ -3024,27 +1667,18 @@ fn lifecycle_name(state: LifecycleState) -> &'static str {
 mod tests {
     use super::{
         SESSION_CATALOG_PROTOCOL, admit_session_revision, api_session_summaries, catalog_snapshot,
-        catalog_status, completed_fake_transport_state, configured_roots_for_project,
-        extension_resource_id_for, last_replayed_fake_state, map_runtime_error, parse_agent_kind,
-        parse_chat_width_preference, parse_font_size_preference, prompt_text,
-        recapture_session_admission_after_start, refresh_project_sessions,
+        catalog_status, configured_roots_for_project, extension_resource_id_for, parse_agent_kind,
+        parse_chat_width_preference, parse_font_size_preference, refresh_project_sessions,
         refresh_project_sessions_with_integrity, require_live_runtime_kind, require_user_project,
-        resolve_new_prime_project_session_id_with_context, revalidate_session_admission,
-        rpc_identifier, runtime_state_is_usable, session_name, session_root_sets_overlap,
-        thinking_level, timeline_page, valid_extension_ui_response, valid_opaque_surface_id,
-        valid_runtime_id, verified_project_directory,
+        revalidate_session_admission, session_root_sets_overlap, timeline_page,
+        verified_project_directory,
     };
-    use crate::dto::runtime_snapshot;
     use crate::state::HostState;
     use piui_index::{
         AgentKind, ChatWidthPreference, FontSizePreference, ParseState, SessionSummary,
         TitleSource, TrustState,
     };
     use piui_platform::ProjectDirectory;
-    use piui_runtime::{
-        ExtensionUiResponse, FakeCommand, FakeRuntime, FakeScenario, FakeTransportReplay,
-        LifecycleState, RealRuntimeError,
-    };
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -3064,15 +1698,6 @@ mod tests {
     }
 
     #[test]
-    fn prime_active_session_conflict_is_a_typed_path_free_host_error() {
-        let error = map_runtime_error(RealRuntimeError::SessionAlreadyActive);
-        assert_eq!(error.code, "SESSION_ALREADY_ACTIVE");
-        assert!(error.recoverable);
-        assert!(!error.message.contains('\\'));
-        assert!(!error.message.contains('/'));
-    }
-
-    #[test]
     fn prime_live_runtime_fails_closed_before_shared_daemon_launch() {
         assert!(require_live_runtime_kind(AgentKind::Pi).is_ok());
         let error = require_live_runtime_kind(AgentKind::PrimeAgent)
@@ -3085,19 +1710,7 @@ mod tests {
     }
 
     #[test]
-    fn live_runtime_control_arguments_are_bounded_and_typed() {
-        assert_eq!(
-            prompt_text("  preserve trailing newline\n"),
-            Some("  preserve trailing newline\n".into())
-        );
-        assert!(prompt_text(" \t\n").is_none());
-        assert!(valid_runtime_id("piui-live-42-7"));
-        assert!(!valid_runtime_id("piui_live_42"));
-        assert_eq!(rpc_identifier("openai-codex"), Some("openai-codex".into()));
-        assert!(rpc_identifier("invalid model").is_none());
-        assert_eq!(thinking_level("xhigh"), Some("xhigh".into()));
-        assert_eq!(thinking_level("off"), Some("off".into()));
-        assert!(thinking_level("not-a-level").is_none());
+    fn agent_kind_arguments_are_typed() {
         assert_eq!(parse_agent_kind("pi").expect("accepts Pi"), AgentKind::Pi);
         assert_eq!(
             parse_agent_kind("prime-agent").expect("accepts Prime Agent"),
@@ -3109,30 +1722,6 @@ mod tests {
                 .code,
             "INVALID_ARGUMENT"
         );
-        assert!(runtime_state_is_usable(LifecycleState::Ready));
-        assert!(runtime_state_is_usable(LifecycleState::Running));
-        assert!(!runtime_state_is_usable(LifecycleState::Failed));
-        assert_eq!(session_name("  My session  "), Some("My session".into()));
-        assert!(session_name("bad\u{0000}name").is_none());
-
-        let dialog_id = format!("piui-extension-dialog-{}", "a".repeat(64));
-        let option_id = format!("piui-extension-option-{}", "b".repeat(64));
-        assert!(valid_opaque_surface_id(
-            &dialog_id,
-            "piui-extension-dialog-"
-        ));
-        assert!(!valid_opaque_surface_id(
-            "piui-extension-dialog-private",
-            "piui-extension-dialog-"
-        ));
-        assert!(valid_extension_ui_response(
-            &ExtensionUiResponse::Selected { option_id }
-        ));
-        assert!(!valid_extension_ui_response(
-            &ExtensionUiResponse::Submitted {
-                value: "x".repeat(128 * 1024 + 1),
-            }
-        ));
     }
 
     #[test]
@@ -3206,39 +1795,6 @@ mod tests {
     }
 
     #[test]
-    fn malformed_fake_transport_forces_failed_snapshot_before_unreplayed_failure_event() {
-        let mut runtime = FakeRuntime::new(FakeScenario::Malformed);
-        let mut emissions = runtime.start().expect("starts deterministic fake");
-        emissions.extend(
-            runtime
-                .command(FakeCommand::Prompt {
-                    command_id: "turn-1".to_owned(),
-                    text: "fixture".to_owned(),
-                })
-                .expect("creates malformed fixture output"),
-        );
-        let mut transport = FakeTransportReplay::new();
-        let protocol_failure = transport.replay(emissions).is_err() || !transport.saw_eof();
-        assert!(protocol_failure);
-        // The producer did append a fake Failed contract event, but a real
-        // decoder must not consume it after malformed stdout made the stream
-        // terminal. The API derives Failed from transport failure instead.
-        assert_eq!(
-            last_replayed_fake_state(transport.events()),
-            Some(LifecycleState::Running)
-        );
-        let state = completed_fake_transport_state(
-            transport.events(),
-            protocol_failure,
-            LifecycleState::Dormant,
-        )
-        .expect("transport failure maps to a safe terminal lifecycle state");
-        assert_eq!(state, LifecycleState::Failed);
-        let snapshot = runtime_snapshot(state, runtime.revision(), None);
-        assert_eq!(snapshot.state, "failed");
-    }
-
-    #[test]
     fn session_revision_admission_detects_external_append_without_merging() {
         let nonce = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
@@ -3284,19 +1840,11 @@ mod tests {
         assert_eq!(admission.session_file, session_file);
         assert_eq!(admission.pi_session_id.as_deref(), Some("s"));
 
-        let pi_startup_append = format!(
-            "{source}{{\"type\":\"message\",\"id\":\"pi-startup\",\"message\":{{\"role\":\"assistant\",\"content\":\"Pi startup append\"}}}}\n"
-        );
-        fs::write(&session_file, &pi_startup_append).expect("simulates Pi startup append");
-        let refreshed_admission = recapture_session_admission_after_start(&state, &admission, "s")
-            .expect("Pi-owned startup append receives a new baseline");
-        assert_ne!(refreshed_admission.file_revision, admission.file_revision);
-
         let appended = format!(
-            "{pi_startup_append}{{\"type\":\"message\",\"id\":\"external\",\"message\":{{\"role\":\"user\",\"content\":\"external append\"}}}}\n"
+            "{source}{{\"type\":\"message\",\"id\":\"external\",\"message\":{{\"role\":\"user\",\"content\":\"external append\"}}}}\n"
         );
         fs::write(&session_file, &appended).expect("simulates CLI append");
-        let error = revalidate_session_admission(&state, &refreshed_admission)
+        let error = revalidate_session_admission(&state, &admission)
             .expect_err("changed source must not be merged or admitted");
         assert_eq!(error.code, "CONFLICT");
         assert!(!error.message.contains("external append"));
@@ -3311,7 +1859,7 @@ mod tests {
             .expect("locks index")
             .update_project_trust(&project.id, TrustState::Restricted)
             .expect("revokes trust");
-        let revoked = revalidate_session_admission(&state, &refreshed_admission)
+        let revoked = revalidate_session_admission(&state, &admission)
             .expect_err("a captured baseline must not survive trust revocation");
         assert_eq!(revoked.code, "NOT_TRUSTED");
 
@@ -3594,97 +2142,6 @@ mod tests {
         assert_eq!(pi_titles, vec!["Pi lane"]);
         assert_eq!(prime_titles, vec!["Prime fork", "Prime lane"]);
         drop(index);
-
-        drop(state);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn prime_new_session_binding_requires_one_fresh_project_scoped_native_match() {
-        let nonce = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "piui-api-prime-new-session-binding-{}-{nonce}",
-            std::process::id()
-        ));
-        let data = root.join("data");
-        let project_path = root.join("project");
-        let pi_sessions = root.join("pi-sessions");
-        let prime_sessions = root.join("prime-sessions");
-        let matching_file = prime_sessions.join("matching.jsonl");
-        let other_file = prime_sessions.join("other.jsonl");
-        let duplicate_file = prime_sessions.join("duplicate.jsonl");
-        let _ = fs::remove_dir_all(&root);
-        for directory in [&project_path, &pi_sessions, &prime_sessions] {
-            fs::create_dir_all(directory).expect("creates binding fixture directory");
-        }
-        let source = |native_id: &str| {
-            format!(
-                "{{\"type\":\"session\",\"id\":{},\"cwd\":{}}}\n",
-                serde_json::to_string(native_id).expect("encodes native id"),
-                serde_json::to_string(&project_path.to_string_lossy().to_string())
-                    .expect("encodes project cwd"),
-            )
-        };
-        let matching_source = source("native-root-session");
-        fs::write(&other_file, source("other-native-session")).expect("writes other Prime root");
-
-        let mut state = HostState::open(&data, false).expect("opens isolated host state");
-        state.session_roots = vec![pi_sessions];
-        state.prime_session_roots = vec![prime_sessions];
-        let directory = ProjectDirectory::resolve(&project_path).expect("resolves project");
-        let project = state
-            .index
-            .lock()
-            .expect("locks index")
-            .register_project_directory_with_kind(
-                &directory,
-                None,
-                TrustState::Trusted,
-                AgentKind::PrimeAgent,
-            )
-            .expect("registers trusted Prime project");
-        // Seed an unchanged catalog row first. The new matching file below must
-        // still be discovered by the direct incremental binding pass.
-        refresh_project_sessions(&state, &project.id).expect("indexes existing Prime root");
-        fs::write(&matching_file, &matching_source).expect("writes newly created Prime root");
-        let context = state.catalog_refresh_context();
-
-        let opaque_session_id = resolve_new_prime_project_session_id_with_context(
-            &context,
-            &project.id,
-            "native-root-session",
-        )
-        .expect("binds exactly one fresh Prime root");
-        assert_ne!(opaque_session_id, "native-root-session");
-        let admission = admit_session_revision(&state, &project.id, &opaque_session_id)
-            .expect("captures the bound opaque session admission");
-        assert_eq!(admission.session_id, opaque_session_id);
-        assert_eq!(
-            admission.pi_session_id.as_deref(),
-            Some("native-root-session")
-        );
-        assert_eq!(
-            fs::read(&matching_file).expect("reads unchanged root source"),
-            matching_source.as_bytes()
-        );
-
-        let missing = resolve_new_prime_project_session_id_with_context(
-            &context,
-            &project.id,
-            "missing-native-session",
-        )
-        .expect_err("missing native id must not select by catalog order");
-        assert_eq!(missing.code, "RUNTIME_FAILED");
-
-        fs::write(&duplicate_file, source("native-root-session"))
-            .expect("writes ambiguous Prime root");
-        let ambiguous = resolve_new_prime_project_session_id_with_context(
-            &context,
-            &project.id,
-            "native-root-session",
-        )
-        .expect_err("duplicate native ids must fail closed");
-        assert_eq!(ambiguous.code, "RUNTIME_FAILED");
 
         drop(state);
         let _ = fs::remove_dir_all(root);

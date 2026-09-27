@@ -72,7 +72,10 @@ async fn dispatch(app: &AppHandle, request: Request) -> Value {
                 path: String,
             }
             let params: Params = args!();
-            encode(protocol, api::add_project(app.state(), params.path).await)
+            encode(
+                protocol,
+                api::add_project_v10(app.state(), params.path, "pi".to_owned()).await,
+            )
         }
         "setProjectTrust" => {
             #[derive(Deserialize)]

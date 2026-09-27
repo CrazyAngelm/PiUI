@@ -33,7 +33,6 @@ pub mod read_only_probe;
 pub mod real_rpc;
 pub mod script_runner;
 pub mod supervisor;
-pub mod system_probe;
 pub mod workspace_runtime;
 
 // Deliberately crate-private: bytes-only upstream observation cannot authorize
@@ -72,5 +71,4 @@ pub use supervisor::{
     ManagedRuntimePurpose, ProbeAuthorization, ProductionRuntimePolicy,
     ProductionRuntimeSupervisor, SupervisorError,
 };
-pub use system_probe::{SystemPiDiagnosticEligibility, probe_system_pi};
 pub mod workspace_usage;

@@ -1,16 +1,13 @@
 use crate::catalog_watch::CatalogWatcher;
 use crate::workspace_api::WorkspaceHost;
-use piui_contracts::RuntimeId;
 use piui_index::{ProjectIndex, ScanReport, TrustState};
 use piui_platform::ProjectDirectory;
-use piui_runtime::{FakeRuntime, FakeTransportReplay, RealPiRuntime};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
-use tauri::async_runtime::JoinHandle;
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
@@ -233,63 +230,12 @@ impl std::fmt::Debug for SessionRevisionAdmission {
     }
 }
 
-pub struct FakeRuntimeSlot {
-    pub runtime: FakeRuntime,
-    /// Keeps the same LF decoder state across the fake runtime's lifetime so
-    /// `stop_runtime` must complete the stream with a real codec EOF check.
-    pub transport: FakeTransportReplay,
-    /// The current fake adapter has no mutating Pi command, but retaining the
-    /// admission makes the same conflict boundary explicit for its successor.
-    pub admission: SessionRevisionAdmission,
-    pub project_id: String,
-    pub session_id: String,
-}
-
-/// Host-only callback that schedules a versioned catalog reconciliation after
-/// a live runtime exits. Its implementation stays in the Tauri API layer.
-pub type CatalogReconcileTrigger = Arc<dyn Fn(String) + Send + Sync>;
-
-/// Owns one live Pi RPC process plus its event-forwarding task.
-pub struct LiveRuntimeSlot {
-    /// Wrapped in `Arc` so command handlers can call `&self` methods without
-    /// holding the host mutex across an await boundary.
-    pub runtime: Arc<RealPiRuntime>,
-    pub runtime_id: RuntimeId,
-    pub project_id: String,
-    /// Host-only callback used to publish a sequenced catalog reconciliation
-    /// after this runtime exits. It is never exposed to the WebView.
-    pub catalog_reconcile: CatalogReconcileTrigger,
-    /// A continued session keeps its observed baseline until PiUI's first
-    /// mutation-capable command. That command revalidates it and consumes the
-    /// baseline; afterward Pi itself may legitimately have appended JSONL.
-    pub admission: Option<SessionRevisionAdmission>,
-    pub forwarding: JoinHandle<()>,
-}
-
-/// RAII guard that serializes live-runtime start/stop transitions without
-/// holding a blocking mutex across async process I/O.
-pub struct LiveRuntimeTransition<'a> {
-    active: &'a AtomicBool,
-}
-
-impl Drop for LiveRuntimeTransition<'_> {
-    fn drop(&mut self) {
-        self.active.store(false, Ordering::Release);
-    }
-}
-
 pub struct HostState {
     /// Owns native workspace sessions independently of WebView navigation.
     pub workspace: WorkspaceHost,
     shutdown_started: AtomicBool,
     shutdown_complete: AtomicBool,
     pub index: Arc<Mutex<ProjectIndex>>,
-    pub fake_runtime: Mutex<Option<FakeRuntimeSlot>>,
-    /// The single live Pi runtime; independent of the deterministic fake slot.
-    pub live_runtime: Mutex<Option<LiveRuntimeSlot>>,
-    /// Held for the whole async start/stop transition so two requests cannot
-    /// spawn/replace overlapping Pi processes.
-    live_runtime_transition_active: AtomicBool,
     /// Serializes a live command's trust/identity authorization with its RPC
     /// write. Trust revocation takes this gate before becoming observable, so
     /// an already-authorized command finishes while trusted or a later one
@@ -361,9 +307,6 @@ impl HostState {
             shutdown_started: AtomicBool::new(false),
             shutdown_complete: AtomicBool::new(false),
             index: Arc::new(Mutex::new(index)),
-            fake_runtime: Mutex::new(None),
-            live_runtime: Mutex::new(None),
-            live_runtime_transition_active: AtomicBool::new(false),
             live_runtime_operation_gate: AsyncMutex::new(()),
             refresh_gates: Arc::new(Mutex::new(HashMap::new())),
             catalog_refreshes: Mutex::new(CatalogRefreshStore::default()),
@@ -390,15 +333,6 @@ impl HostState {
     #[must_use]
     pub fn is_personal_workspace_path(&self, directory: &ProjectDirectory) -> bool {
         directory.canonical_path() == self.personal_workspace.canonical_path
-    }
-
-    pub fn try_begin_live_runtime_transition(&self) -> Option<LiveRuntimeTransition<'_>> {
-        self.live_runtime_transition_active
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .ok()
-            .map(|_| LiveRuntimeTransition {
-                active: &self.live_runtime_transition_active,
-            })
     }
 
     pub fn all_session_roots(&self) -> Vec<PathBuf> {
@@ -688,13 +622,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         let state = HostState::open(&root, true).expect("opens isolated state");
         assert!(state.safe_mode);
-        assert!(
-            state
-                .fake_runtime
-                .lock()
-                .expect("locks fake slot")
-                .is_none()
-        );
         drop(state);
         let _ = fs::remove_dir_all(root);
     }
@@ -736,22 +663,6 @@ mod tests {
         assert!(state.live_runtime_operation_gate.try_lock().is_err());
         drop(guard);
         assert!(state.live_runtime_operation_gate.try_lock().is_ok());
-        drop(state);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn live_runtime_transition_is_exclusive_and_released_by_drop() {
-        let root =
-            std::env::temp_dir().join(format!("piui-state-transition-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        let state = HostState::open(&root, false).expect("opens isolated state");
-        let transition = state
-            .try_begin_live_runtime_transition()
-            .expect("acquires first transition");
-        assert!(state.try_begin_live_runtime_transition().is_none());
-        drop(transition);
-        assert!(state.try_begin_live_runtime_transition().is_some());
         drop(state);
         let _ = fs::remove_dir_all(root);
     }
