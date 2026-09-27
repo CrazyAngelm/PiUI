@@ -1,6 +1,9 @@
 {
   "review": {
-    "statusRequest": { "type": "status", "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10" },
+    "statusRequest": {
+      "type": "status",
+      "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10"
+    },
     "diffRequest": {
       "type": "diff",
       "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10",
@@ -32,12 +35,39 @@
       "type": "status",
       "protocol": 1,
       "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10",
-      "repository": { "state": "ready", "branch": "main", "head": "0123456789ab", "worktree": false, "folder": "repo" },
+      "repository": {
+        "state": "ready",
+        "branch": "main",
+        "head": "0123456789ab",
+        "worktree": false,
+        "folder": "repo"
+      },
       "files": [
-        { "path": "src/f.txt", "area": "staged", "change": "modified", "added": 1, "removed": 1 },
-        { "path": "src/f.txt", "area": "unstaged", "change": "modified", "added": 1, "removed": 1 },
-        { "path": "image.bin", "area": "unstaged", "change": "modified", "binary": true },
-        { "path": "notes.md", "area": "untracked", "change": "added" }
+        {
+          "path": "src/f.txt",
+          "area": "staged",
+          "change": "modified",
+          "added": 1,
+          "removed": 1
+        },
+        {
+          "path": "src/f.txt",
+          "area": "unstaged",
+          "change": "modified",
+          "added": 1,
+          "removed": 1
+        },
+        {
+          "path": "image.bin",
+          "area": "unstaged",
+          "change": "modified",
+          "binary": true
+        },
+        {
+          "path": "notes.md",
+          "area": "untracked",
+          "change": "added"
+        }
       ],
       "truncated": false,
       "hidden": 0,
@@ -47,7 +77,9 @@
       "type": "status",
       "protocol": 1,
       "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10",
-      "repository": { "state": "not-repository" },
+      "repository": {
+        "state": "not-repository"
+      },
       "files": [],
       "truncated": false,
       "hidden": 0,
@@ -66,7 +98,11 @@
         "hunks": 1,
         "hunkActions": true
       },
-      "actions": { "stage": true, "unstage": false, "revert": true }
+      "actions": {
+        "stage": true,
+        "unstage": false,
+        "revert": true
+      }
     },
     "binaryDiff": {
       "type": "diff",
@@ -75,14 +111,103 @@
       "path": "image.bin",
       "area": "unstaged",
       "fingerprint": "5e0b7a4c2d1f3e6a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a",
-      "content": { "kind": "binary", "size": 14 },
-      "actions": { "stage": true, "unstage": false, "revert": true }
+      "content": {
+        "kind": "binary",
+        "size": 14
+      },
+      "actions": {
+        "stage": true,
+        "unstage": false,
+        "revert": true
+      }
     },
-    "error": { "code": "STALE", "message": "This changed since you reviewed it. Check it again before continuing.", "recoverable": true }
+    "error": {
+      "code": "STALE",
+      "message": "This changed since you reviewed it. Check it again before continuing.",
+      "recoverable": true
+    },
+    "stagePartRequest": {
+      "type": "stage",
+      "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10",
+      "path": "src/f.txt",
+      "area": "unstaged",
+      "fingerprint": "5e0b7a4c2d1f3e6a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a",
+      "hunk": 0,
+      "part": 1
+    },
+    "renamedStatus": {
+      "type": "status",
+      "protocol": 1,
+      "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10",
+      "repository": {
+        "state": "ready",
+        "branch": "main",
+        "head": "0123456789ab",
+        "worktree": false,
+        "folder": "repo"
+      },
+      "files": [
+        {
+          "path": "docs/new.md",
+          "area": "staged",
+          "change": "modified",
+          "added": 0,
+          "removed": 0,
+          "renamedFrom": "docs/old.md"
+        }
+      ],
+      "truncated": false,
+      "hidden": 0,
+      "readOnly": false
+    },
+    "hunkSplit": [
+      {
+        "name": "three runs in one hunk",
+        "text": "diff --git a/src/f.txt b/src/f.txt\n--- a/src/f.txt\n+++ b/src/f.txt\n@@ -1,12 +1,12 @@\n a\n-b\n+B\n c\n d\n-e\n+E\n f\n g\n h\n-i\n+I\n j\n k\n l\n",
+        "hunk": 0,
+        "parts": [
+          "diff --git a/src/f.txt b/src/f.txt\n--- a/src/f.txt\n+++ b/src/f.txt\n@@ -1,4 +1,4 @@\n a\n-b\n+B\n c\n d\n",
+          "diff --git a/src/f.txt b/src/f.txt\n--- a/src/f.txt\n+++ b/src/f.txt\n@@ -3,6 +3,6 @@\n c\n d\n-e\n+E\n f\n g\n h\n",
+          "diff --git a/src/f.txt b/src/f.txt\n--- a/src/f.txt\n+++ b/src/f.txt\n@@ -6,7 +6,7 @@\n f\n g\n h\n-i\n+I\n j\n k\n l\n"
+        ]
+      },
+      {
+        "name": "a later hunk with a heading, an insertion and a blank context line",
+        "text": "diff --git a/x.ts b/x.ts\nold mode 100644\nnew mode 100755\n--- a/x.ts\n+++ b/x.ts\n@@ -1,2 +1,2 @@\n-one\n+ONE\n two\n@@ -20,6 +20,7 @@ function later() {\n keep\n-old\n+new\n\n middle\n+added\n tail\n end\n",
+        "hunk": 1,
+        "parts": [
+          "diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -20,4 +20,4 @@\n keep\n-old\n+new\n\n middle\n",
+          "diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -22,4 +22,5 @@\n\n middle\n+added\n tail\n end\n"
+        ]
+      },
+      {
+        "name": "a missing final newline stays with its line",
+        "text": "diff --git a/n.txt b/n.txt\n--- a/n.txt\n+++ b/n.txt\n@@ -1,4 +1,4 @@\n-first\n+First\n same\n same too\n-last\n\\ No newline at end of file\n+Last\n\\ No newline at end of file\n",
+        "hunk": 0,
+        "parts": [
+          "diff --git a/n.txt b/n.txt\n--- a/n.txt\n+++ b/n.txt\n@@ -1,3 +1,3 @@\n-first\n+First\n same\n same too\n",
+          "diff --git a/n.txt b/n.txt\n--- a/n.txt\n+++ b/n.txt\n@@ -2,3 +2,3 @@\n same\n same too\n-last\n\\ No newline at end of file\n+Last\n\\ No newline at end of file\n"
+        ]
+      },
+      {
+        "name": "one run stays one part",
+        "text": "diff --git a/o.txt b/o.txt\n--- a/o.txt\n+++ b/o.txt\n@@ -3,5 +3,6 @@ heading\n c\n d\n-e\n+E\n+E2\n f\n g\n",
+        "hunk": 0,
+        "parts": [
+          "diff --git a/o.txt b/o.txt\n--- a/o.txt\n+++ b/o.txt\n@@ -3,5 +3,6 @@\n c\n d\n-e\n+E\n+E2\n f\n g\n"
+        ]
+      }
+    ]
   },
   "placement": {
-    "listRequest": { "type": "list" },
-    "previewRequest": { "type": "previewWorktree", "workspaceId": "project-1", "branch": "piui/login" },
+    "listRequest": {
+      "type": "list"
+    },
+    "previewRequest": {
+      "type": "previewWorktree",
+      "workspaceId": "project-1",
+      "branch": "piui/login"
+    },
     "createRequest": {
       "type": "createChat",
       "workspaceId": "project-1",
@@ -101,7 +226,10 @@
       "workspaceId": "project-1",
       "harness": "claude-code",
       "permissionMode": "native",
-      "worktree": { "type": "shared", "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10" },
+      "worktree": {
+        "type": "shared",
+        "sessionId": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10"
+      },
       "continuedFrom": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10"
     },
     "removeRequest": {
@@ -123,8 +251,14 @@
             "base": "0123456789ab"
           }
         },
-        { "sessionId": "8c7b0d9e-1f2a-4b3c-8d4e-5f6a7b8c9d0e", "continuedFrom": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10" },
-        { "sessionId": "0d1e2f3a-4b5c-4d6e-8f7a-8b9c0d1e2f3a", "adopted": true }
+        {
+          "sessionId": "8c7b0d9e-1f2a-4b3c-8d4e-5f6a7b8c9d0e",
+          "continuedFrom": "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10"
+        },
+        {
+          "sessionId": "0d1e2f3a-4b5c-4d6e-8f7a-8b9c0d1e2f3a",
+          "adopted": true
+        }
       ]
     },
     "preview": {
@@ -135,7 +269,11 @@
         "branch": "piui/login",
         "folder": "piui-login",
         "path": "~/AppData/Roaming/dev.piui.desktop/worktrees/piui-1a2b3c4d/piui-login",
-        "base": { "commit": "0123456789abcdef0123456789abcdef01234567", "short": "0123456789ab", "branch": "main" },
+        "base": {
+          "commit": "0123456789abcdef0123456789abcdef01234567",
+          "short": "0123456789ab",
+          "branch": "main"
+        },
         "projectChanges": true
       }
     },
@@ -159,11 +297,78 @@
           "base": "0123456789ab"
         }
       }
+    },
+    "worktreesRequest": {
+      "type": "worktrees"
+    },
+    "removeOrphanRequest": {
+      "type": "removeOrphanWorktree",
+      "worktreeId": "0123456789abcdef0123456789abcdef",
+      "discardChanges": true,
+      "expectedChanges": "5e0b7a4c2d1f3e6a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a"
+    },
+    "worktrees": {
+      "type": "worktrees",
+      "protocol": 1,
+      "worktrees": [
+        {
+          "id": "0123456789abcdef0123456789abcdef",
+          "workspaceId": "project-1",
+          "branch": "piui/login",
+          "path": "~/AppData/Roaming/dev.piui.desktop/worktrees/piui-1a2b3c4d/piui-login",
+          "state": "ready",
+          "base": "0123456789ab",
+          "sessions": [
+            "3f1f2d52-8f0b-4c3e-9a51-6d7f0c2b9e10"
+          ]
+        },
+        {
+          "id": "fedcba9876543210fedcba9876543210",
+          "workspaceId": "project-1",
+          "branch": "piui/old",
+          "path": "~/AppData/Roaming/dev.piui.desktop/worktrees/piui-1a2b3c4d/piui-old",
+          "state": "missing",
+          "base": "0123456789ab",
+          "sessions": []
+        }
+      ]
+    },
+    "worktreeDirty": {
+      "type": "worktreeDirty",
+      "protocol": 1,
+      "worktreeId": "0123456789abcdef0123456789abcdef",
+      "changes": 2,
+      "fingerprint": "5e0b7a4c2d1f3e6a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a",
+      "files": [
+        {
+          "path": "src/f.txt",
+          "area": "unstaged"
+        },
+        {
+          "path": "notes.md",
+          "area": "untracked"
+        }
+      ],
+      "truncated": false
+    },
+    "worktreeRemoved": {
+      "type": "worktreeRemoved",
+      "protocol": 1,
+      "worktreeId": "0123456789abcdef0123456789abcdef"
     }
   },
   "adopt": {
-    "request": { "projectId": "project-1", "sessionId": "index-session-7" },
-    "personalRequest": { "sessionId": "index-session-8" },
-    "result": { "protocol": 1, "sessionId": "0d1e2f3a-4b5c-4d6e-8f7a-8b9c0d1e2f3a", "created": true }
+    "request": {
+      "projectId": "project-1",
+      "sessionId": "index-session-7"
+    },
+    "personalRequest": {
+      "sessionId": "index-session-8"
+    },
+    "result": {
+      "protocol": 1,
+      "sessionId": "0d1e2f3a-4b5c-4d6e-8f7a-8b9c0d1e2f3a",
+      "created": true
+    }
   }
 }

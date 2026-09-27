@@ -1,6 +1,6 @@
 import type { SessionSnapshot } from '../../../../../contracts/workspace-v15';
 import { harnessMeta } from '../harnessMeta';
-import { reviewedPaths } from '../review/reviewStore.svelte';
+import { changedPathsFor, type ReviewRequester } from '../review/reviewStore.svelte';
 import { newChatPlacement } from '../worktrees/newChatPlacement.svelte';
 import { placements } from '../worktrees/placements.svelte';
 import type { WorkspaceStore } from '../workspaceStore.svelte';
@@ -10,11 +10,19 @@ const NEW_CHAT_DRAFT = 'new-chat';
 
 /**
  * "Continue in another harness…": opens the new chat composer for the same
- * project with an editable draft built from what the chat shows. Nothing is
- * sent and the source chat is not changed; the new chat records the link.
+ * project with an editable draft built from what the chat shows. The changed
+ * files are read from git when the handoff starts, so the review panel need
+ * not have been opened. Nothing is sent and the source chat is not changed;
+ * the new chat records the link.
  */
-export function startHandoff(store: WorkspaceStore, snapshot: SessionSnapshot, translate: (value: string) => string): void {
+export async function startHandoff(
+  store: WorkspaceStore,
+  snapshot: SessionSnapshot,
+  translate: (value: string) => string,
+  review: ReviewRequester | undefined = undefined,
+): Promise<void> {
   const session = snapshot.session;
+  const changedFiles = await changedPathsFor(session.id, review);
   const worktree = placements.get(session.id)?.worktree;
   const copy = Object.fromEntries(
     Object.entries(HANDOFF_COPY).map(([key, value]) => [key, translate(value)]),
@@ -24,7 +32,7 @@ export function startHandoff(store: WorkspaceStore, snapshot: SessionSnapshot, t
       title: session.title,
       harnessLabel: harnessMeta(session.harness).label,
       blocks: snapshot.blocks,
-      changedFiles: reviewedPaths(session.id),
+      ...(changedFiles === undefined ? {} : { changedFiles }),
       ...(worktree?.state === 'ready' ? { branch: worktree.branch } : {}),
     },
     copy,

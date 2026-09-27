@@ -39,7 +39,7 @@ test.describe('review panel', () => {
     await lab.open();
     const review = await openReview(lab, /Route host calls through one transport/);
     const files = changedFiles(review);
-    await expect(files.getByRole('button')).toHaveCount(5);
+    await expect(files.getByRole('button')).toHaveCount(7);
     await files.getByRole('button', { name: /^transport\.ts/ }).click();
     const selected = review.getByRole('region', { name: 'Selected file' });
     await expect(selected).toContainText('apps/desktop/src/host-api/transport.ts');
@@ -82,6 +82,44 @@ test.describe('review panel', () => {
     await expect(trash).toContainText('goes to the system Trash, where you can restore it');
     await trash.getByRole('button', { name: 'Move to Trash' }).click();
     await expect(files.getByRole('button', { name: /^review-panel\.md/ })).toHaveCount(0);
+  });
+
+  test('splits a hunk into parts, stages one part and shows a rename as one change', async ({ lab, page }) => {
+    await lab.open();
+    const review = await openReview(lab, /Route host calls through one transport/);
+    const files = changedFiles(review);
+    const selected = review.getByRole('region', { name: 'Selected file' });
+
+    // A staged rename is one entry naming its source, changed as a whole.
+    await files.getByRole('button', { name: /Renamed from docs\/review-notes\.md/ }).click();
+    await expect(selected).toContainText('Renamed from docs/review-notes.md');
+    await expect(selected).toContainText('rename to docs/review/notes.md');
+    await expect(selected.getByRole('button', { name: /^Unstage change/ })).toHaveCount(0);
+    await selected.getByRole('button', { name: 'Unstage file' }).click();
+    await expect(files.getByRole('button', { name: /Renamed from/ })).toHaveCount(0);
+    await expect(files.getByRole('button', { name: /^review-notes\.md/ })).toBeVisible();
+
+    // One hunk with three separate changes splits into three parts (keyboard).
+    await files.getByRole('button', { name: /^labels\.ts/ }).click();
+    await expect(selected.getByRole('button', { name: 'Stage change 1', exact: true })).toBeVisible();
+    const split = selected.getByRole('button', { name: 'Split change 1 into 3 parts' });
+    await split.focus();
+    await page.keyboard.press('Enter');
+    await expect(selected.getByRole('button', { name: 'Stage change 1', exact: true })).toHaveCount(0);
+    await expect(selected.getByRole('button', { name: /^Stage change 1\.\d$/ })).toHaveCount(3);
+
+    // The revert preview shows only that part.
+    await selected.getByRole('button', { name: 'Revert change 1.3…' }).click();
+    const confirm = page.getByRole('dialog', { name: /Revert this change in/ });
+    await expect(confirm.getByRole('region', { name: /Changes in/ })).toContainText("staged: 'In the index'");
+    await expect(confirm.getByRole('region', { name: /Changes in/ })).not.toContainText('// work tree');
+    await confirm.getByRole('button', { name: 'Cancel' }).click();
+
+    await selected.getByRole('button', { name: 'Stage change 1.2', exact: true }).click();
+    await expect(files.getByRole('button', { name: /^labels\.ts/ })).toHaveCount(2);
+    await files.getByRole('button', { name: /^labels\.ts/ }).first().click();
+    await expect(selected).toContainText("'unstaged', // work tree");
+    await expect(selected).not.toContainText("staged: 'In the index'");
   });
 
   test('keyboard users reach every action and the panel resizes from the keyboard', async ({ lab, page }) => {
@@ -179,6 +217,59 @@ test.describe('worktree chats', () => {
   });
 });
 
+test.describe('worktree management', () => {
+  async function openWorktrees(lab: Lab): Promise<Locator> {
+    const nav = await lab.openSettings();
+    await nav.getByRole('button', { name: 'Worktrees' }).click();
+    await expect(lab.page.getByRole('heading', { level: 2, name: 'Worktrees' })).toBeVisible();
+    const list = lab.page.getByRole('list', { name: 'Worktrees' });
+    await expect(list).toBeVisible({ timeout: LAZY_VIEW_MS });
+    return list;
+  }
+
+  test('an orphan worktree is removed only after confirming its changes; a used one opens its chat', async ({ lab, page }) => {
+    await lab.open();
+    let list = await openWorktrees(lab);
+    await expect(page.getByText('Worktrees without a chat: 1')).toBeVisible();
+    const orphan = list.getByRole('article', { name: 'piui/old-experiment' });
+    await expect(orphan).toContainText('No chat');
+    await expect(orphan).toContainText('~/.piui-lab/worktrees/');
+
+    // Keyboard: the remove button opens the confirmation; Escape cancels.
+    await orphan.getByRole('button', { name: 'Remove worktree piui/old-experiment…' }).focus();
+    await page.keyboard.press('Enter');
+    let confirm = page.getByRole('dialog', { name: 'Remove this worktree?' });
+    await expect(confirm).toContainText('No chat works in this worktree any more.');
+    await page.keyboard.press('Escape');
+    await expect(confirm).toBeHidden();
+
+    await orphan.getByRole('button', { name: 'Remove worktree piui/old-experiment…' }).click();
+    confirm = page.getByRole('dialog', { name: 'Remove this worktree?' });
+    await confirm.getByRole('button', { name: 'Remove worktree' }).click();
+    const dirty = page.getByRole('dialog', { name: 'Remove the worktree and lose its changes?' });
+    await expect(dirty).toContainText('This worktree has 1 uncommitted changes.');
+    await expect(dirty.getByRole('list', { name: 'Changes that will be lost' })).toContainText('docs/experiment.md');
+    const remove = dirty.getByRole('button', { name: 'Remove and lose changes' });
+    await expect(remove).toBeDisabled();
+    await dirty.getByText('I understand that these 1 changes will be lost').click();
+    await remove.click();
+    await expect(lab.toast('Worktree removed')).toBeVisible();
+    await expect(list.getByRole('article', { name: 'piui/old-experiment' })).toHaveCount(0);
+
+    // A worktree a chat still uses opens that chat and offers no removal here.
+    const used = list.getByRole('article', { name: 'piui/review-layout' });
+    await expect(used.getByRole('button', { name: /^Remove worktree/ })).toHaveCount(0);
+    await used.getByRole('button', { name: 'Open chat Try a denser review layout' }).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Try a denser review layout' })).toBeVisible();
+
+    await page.goto('/?lab=safe');
+    await expect(lab.sidebar).toBeVisible({ timeout: LAZY_VIEW_MS });
+    list = await openWorktrees(lab);
+    await expect(page.getByText('Safe mode: worktrees are listed, but none can be removed.')).toBeVisible();
+    await expect(list.getByRole('button', { name: 'Remove worktree piui/old-experiment…' })).toBeDisabled();
+  });
+});
+
 test.describe('continue elsewhere', () => {
   test('continue in another harness prefills a draft and links back to the source', async ({ lab, page }) => {
     await lab.open();
@@ -190,6 +281,9 @@ test.describe('continue elsewhere', () => {
     const message = composer.getByRole('textbox', { name: 'Message' });
     await expect(message).toHaveValue(/I am continuing work from a Codex chat, "Route host calls through one transport"\./);
     await expect(message).toHaveValue(/The last request there was:\n> Does anything still import Tauri directly from a component\?/);
+    // The changed files come from git although the review panel was never opened.
+    await expect(message).toHaveValue(/Files changed so far:\n- `apps\/desktop\/icons\/badge\.png`/);
+    await expect(message).toHaveValue(/- `apps\/desktop\/src\/host-api\/transport\.ts`/);
     await message.fill(`${await message.inputValue()}Check the remaining imports.`);
     await composer.getByRole('button', { name: 'Pi', exact: true }).click();
     await lab.option(/^Hermes/).click();
@@ -247,12 +341,14 @@ for (const theme of ['light', 'dark'] as const) {
       test.slow(); // axe's contrast pass is CPU-heavy.
       await lab.open();
       const review = await openReview(lab, /Route host calls through one transport/);
-      await changedFiles(review).getByRole('button', { name: /^transport\.ts/ }).click();
-      await review.getByRole('button', { name: 'Comment on change 1…' }).click();
+      // A split hunk shows its parts with their own actions.
+      await changedFiles(review).getByRole('button', { name: /^labels\.ts/ }).click();
+      await review.getByRole('button', { name: 'Split change 1 into 3 parts' }).click();
+      await review.getByRole('button', { name: 'Comment on change 1.1…' }).click();
       await expect(review.getByRole('form', { name: /Comment for the agent/ })).toBeVisible();
       expect(await axeBlocking(page, 'aside[aria-label="Review changes"]'), 'review panel').toEqual([]);
 
-      await review.getByRole('button', { name: 'Revert change 1…' }).click();
+      await review.getByRole('button', { name: 'Revert change 1.1…' }).click();
       const revert = page.getByRole('dialog', { name: /Revert this change in/ });
       await expect(revert).toBeVisible();
       expect(await axeBlocking(page, '[role="dialog"]'), 'revert dialog').toEqual([]);
@@ -269,6 +365,19 @@ for (const theme of ['light', 'dark'] as const) {
       await expect(dirty.getByRole('list', { name: 'Changes that will be lost' })).toBeVisible();
       expect(await axeBlocking(page, '[role="dialog"]'), 'remove worktree dialog').toEqual([]);
       await dirty.getByRole('button', { name: 'Cancel' }).click();
+
+      await page.getByRole('dialog', { name: 'Remove the worktree and lose its changes?' }).waitFor({ state: 'hidden' });
+      const nav = await lab.openSettings();
+      await nav.getByRole('button', { name: 'Worktrees' }).click();
+      const managed = page.getByRole('list', { name: 'Worktrees' });
+      await expect(managed.getByRole('article', { name: 'piui/old-experiment' })).toBeVisible({ timeout: LAZY_VIEW_MS });
+      expect(await axeBlocking(page, '.settings__body'), 'worktrees settings').toEqual([]);
+      await managed.getByRole('button', { name: 'Remove worktree piui/old-experiment…' }).click();
+      await page.getByRole('dialog', { name: 'Remove this worktree?' }).getByRole('button', { name: 'Remove worktree' }).click();
+      const orphanDirty = page.getByRole('dialog', { name: 'Remove the worktree and lose its changes?' });
+      await expect(orphanDirty.getByRole('list', { name: 'Changes that will be lost' })).toBeVisible();
+      expect(await axeBlocking(page, '[role="dialog"]'), 'remove orphan worktree dialog').toEqual([]);
+      await orphanDirty.getByRole('button', { name: 'Cancel' }).click();
 
       await lab.nav('New chat').click();
       await home(page).getByRole('button', { name: 'Where the chat works: Local' }).click();

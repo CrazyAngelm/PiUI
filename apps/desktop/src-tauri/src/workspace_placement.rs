@@ -293,6 +293,17 @@ impl WorkspaceHost {
         Ok(())
     }
 
+    /// Drops a chat from the registry the way deleting it does (tests).
+    #[cfg(test)]
+    pub(crate) fn forget_session_for_test(&self, session_id: &str) -> Result<(), WorkspaceError> {
+        lock(&self.inner.registry)?
+            .transact(|sessions| {
+                sessions.retain(|record| record.id != session_id);
+                Ok(())
+            })
+            .map_err(|_| WorkspaceError::io())
+    }
+
     /// The current binding of a chat's worktree, if any.
     pub(crate) fn worktree_binding(
         &self,

@@ -7,6 +7,7 @@ import type {
 } from '../../../../../contracts/workspace-review-v1';
 import type {
   ChatPlacementV1,
+  ManagedWorktreeV1,
   WorkspacePlacementCommandV1,
   WorkspacePlacementResultV1,
 } from '../../../../../contracts/workspace-placement-v1';
@@ -44,9 +45,9 @@ const AREA = enumOf(['staged', 'unstaged', 'untracked']);
 const reviewSchema = tagged('type', {
   status: { sessionId: string },
   diff: { sessionId: string, path: string, area: AREA },
-  stage: { sessionId: string, path: string, area: AREA, fingerprint: string, hunk: option(u64) },
-  unstage: { sessionId: string, path: string, fingerprint: string, hunk: option(u64) },
-  revert: { sessionId: string, path: string, area: AREA, fingerprint: string, hunk: option(u64) },
+  stage: { sessionId: string, path: string, area: AREA, fingerprint: string, hunk: option(u64), part: option(u64) },
+  unstage: { sessionId: string, path: string, fingerprint: string, hunk: option(u64), part: option(u64) },
+  revert: { sessionId: string, path: string, area: AREA, fingerprint: string, hunk: option(u64), part: option(u64) },
 });
 
 const worktreeSchema = tagged('type', {
@@ -67,6 +68,8 @@ const placementSchema = tagged('type', {
     continuedFrom: option(string),
   },
   removeWorktree: { sessionId: string, discardChanges: boolean, expectedChanges: option(string) },
+  worktrees: {},
+  removeOrphanWorktree: { worktreeId: string, discardChanges: boolean, expectedChanges: option(string) },
 });
 
 const adoptSchema = object({ projectId: option(string), sessionId: string });
@@ -170,6 +173,24 @@ const LAYOUT_HEAD = [
   '}',
 ];
 
+const LABELS_HEAD = [
+  "import type { ReviewArea } from './contracts';",
+  '',
+  'export const AREA_ORDER = [',
+  "  'staged',",
+  "  'unstaged',",
+  "  'untracked',",
+  '] as const;',
+  '',
+  'export const AREA_LABELS = {',
+  "  staged: 'Staged',",
+  "  unstaged: 'Changes',",
+  "  untracked: 'New files',",
+  '};',
+];
+
+const REVIEW_NOTES = text(['# Review notes', '', 'Keep the file list short and the diff wide.']);
+
 function commitId(seed: string): string {
   return sha256Hex(seed).slice(0, 40);
 }
@@ -192,6 +213,19 @@ function demoRepository(): LabRepository {
     ['docs/OLD_NOTES.md', { head: 'Old notes that nobody reads.\n', index: 'Old notes that nobody reads.\n' }],
     ['apps/desktop/icons/badge.png', { head: 'png-v1', index: 'png-v1', worktree: 'png-v2-larger', binary: true }],
     ['docs/notes/review-panel.md', { worktree: text(['# Review panel', '', '- Stage and revert per hunk.', '- Comment on a line for the agent.']) }],
+    // One hunk with three separate changes: the review can split it.
+    ['apps/desktop/src/app/review/labels.ts', {
+      head: text(LABELS_HEAD),
+      index: text(LABELS_HEAD),
+      worktree: edited(LABELS_HEAD, {
+        0: "import type { ReviewArea } from '../../contracts';",
+        4: "  'unstaged', // work tree",
+        9: "  staged: 'In the index',",
+      }),
+    }],
+    // A staged rename (git mv).
+    ['docs/review-notes.md', { head: REVIEW_NOTES }],
+    ['docs/review/notes.md', { index: REVIEW_NOTES, worktree: REVIEW_NOTES, renamedFrom: 'docs/review-notes.md' }],
   ]);
   return { branch: 'main', head: commitId('lab:piui:head'), folder: 'piui', worktree: false, files, trash: [] };
 }
@@ -218,6 +252,8 @@ function checkout(source: LabRepository, branch: string, folder: string): LabRep
 }
 
 export const DEMO_WORKTREE_SESSION = labUuid('demo:session:worktree-layout');
+/** A chat that was deleted; its worktree stayed behind (an orphan). */
+const DELETED_WORKTREE_SESSION = labUuid('demo:session:deleted-worktree');
 
 function worktreeChat(workspaceId: string): LabSessionRecord {
   const at = seededIso(-25 * MINUTE);
@@ -274,6 +310,22 @@ function seed(tools: LabSessionTools, runtime: LabSessions): void {
     },
   });
   tools.activeInTerminal.add(labIndexId('release-notes'));
+
+  // An orphan: its chat was deleted, the worktree and its changes stayed.
+  const orphan = checkout(repository, 'piui/old-experiment', 'old-experiment');
+  orphan.files.set('docs/experiment.md', { worktree: text(['# Experiment', '', 'Unfinished notes.']) });
+  tools.repositories.set('worktree:old-experiment', orphan);
+  tools.branches.get(piui.id)?.add('piui/old-experiment');
+  tools.placements.set(DELETED_WORKTREE_SESSION, {
+    worktree: {
+      branch: 'piui/old-experiment',
+      folder: 'old-experiment',
+      path: worktreePath(piui, 'old-experiment'),
+      base: repository.head,
+      repoKey: 'worktree:old-experiment',
+      removed: false,
+    },
+  });
 }
 
 /** The demo history ids (`entryId('session:<key>')` in `demoPiHistory`). */
@@ -357,6 +409,7 @@ export function sessionToolsHandlers(runtime: LabSessions, history: LabNativeHis
       change: change.change,
       ...(counts === undefined ? {} : counts),
       ...(change.binary && change.area !== 'untracked' ? { binary: true as const } : {}),
+      ...(change.renamedFrom === undefined ? {} : { renamedFrom: change.renamedFrom }),
     };
   }
 
@@ -395,7 +448,7 @@ export function sessionToolsHandlers(runtime: LabSessions, history: LabNativeHis
   function diff(sessionId: string, path: string, area: ReviewArea): ReviewDiffV1 {
     const { change } = located(sessionId, path, area);
     const hunks = hunksOf(change.before, change.after).length;
-    const selectable = change.change === 'modified' && !change.binary && change.area !== 'untracked';
+    const selectable = change.change === 'modified' && !change.binary && change.area !== 'untracked' && change.renamedFrom === undefined;
     return {
       protocol: 1,
       type: 'diff',
@@ -420,13 +473,14 @@ export function sessionToolsHandlers(runtime: LabSessions, history: LabNativeHis
     const area: ReviewArea = request.type === 'unstage' ? 'staged' : request.area;
     const { repository, change } = located(request.sessionId, request.path, area);
     if (fingerprintOf(change) !== request.fingerprint) throw STALE;
-    if (request.hunk !== undefined && (change.binary || change.change !== 'modified' || area === 'untracked')) {
+    if (request.part !== undefined && request.hunk === undefined) throw INVALID;
+    if (request.hunk !== undefined && (change.binary || change.change !== 'modified' || area === 'untracked' || change.renamedFrom !== undefined)) {
       throw failure('NOT_SUPPORTED', 'This change can only be handled as a whole file.');
     }
     if (request.type === 'stage' && area === 'staged') throw INVALID;
     if (request.type === 'revert' && area === 'staged') throw failure('NOT_SUPPORTED', 'Unstage these changes first, then revert them.');
     try {
-      applyChange(repository, change, request.type, request.hunk);
+      applyChange(repository, change, request.type, request.hunk, request.part);
     } catch {
       throw STALE;
     }
@@ -568,6 +622,65 @@ export function sessionToolsHandlers(runtime: LabSessions, history: LabNativeHis
     return { protocol: 1, type: 'removed', sessionId, placement: placementView(sessionId, placement ?? {}) };
   }
 
+  /** Worktrees that were not removed, one per folder, with their existing chats. */
+  function managed(): { view: ManagedWorktreeV1; repoKey: string }[] {
+    const byKey = new Map<string, { view: ManagedWorktreeV1; repoKey: string }>();
+    for (const [sessionId, placement] of tools.placements) {
+      const worktree = placement.worktree;
+      if (worktree === undefined || worktree.removed) continue;
+      const owner = state.sessions.get(sessionId)?.workspaceId ?? DEMO_PROJECTS.piui;
+      let entry = byKey.get(worktree.repoKey);
+      if (entry === undefined) {
+        entry = {
+          repoKey: worktree.repoKey,
+          view: {
+            id: sha256Hex(worktree.path).slice(0, 32),
+            workspaceId: owner,
+            branch: worktree.branch,
+            path: worktree.path,
+            state: tools.repositories.has(worktree.repoKey) ? 'ready' : 'missing',
+            base: short(worktree.base),
+            sessions: [],
+          },
+        };
+        byKey.set(worktree.repoKey, entry);
+      }
+      if (state.sessions.has(sessionId)) entry.view.sessions.push(sessionId);
+    }
+    return [...byKey.values()].sort((left, right) => left.view.branch.localeCompare(right.view.branch));
+  }
+
+  function removeOrphan(worktreeId: string, discard: boolean, expected: string | undefined): WorkspacePlacementResultV1 {
+    if (state.safeMode) throw SAFE_MODE;
+    if (!/^[0-9a-f]{32}$/.test(worktreeId)) throw INVALID;
+    const found = managed().find((entry) => entry.view.id === worktreeId);
+    if (found === undefined) throw failure('NOT_FOUND', 'This worktree is no longer managed by PiUI.');
+    if (found.view.sessions.length > 0) throw failure('CONFLICT', "A chat still works in this worktree. Remove it from that chat's details.");
+    project(found.view.workspaceId, true);
+    const repository = tools.repositories.get(found.repoKey);
+    const pending = repository === undefined ? [] : changes(repository);
+    if (pending.length > 0) {
+      const fingerprint = sha256Hex(pending.map((change) => `${change.area}:${change.path}`).sort().join('\n'));
+      if (!discard) {
+        return {
+          protocol: 1,
+          type: 'worktreeDirty',
+          worktreeId,
+          changes: pending.length,
+          fingerprint,
+          files: pending.map((change) => ({ path: change.path, area: change.area })),
+          truncated: false,
+        };
+      }
+      if (expected !== fingerprint) throw STALE;
+    }
+    for (const placement of tools.placements.values()) {
+      if (placement.worktree?.repoKey === found.repoKey) placement.worktree.removed = true;
+    }
+    tools.repositories.delete(found.repoKey);
+    return { protocol: 1, type: 'worktreeRemoved', worktreeId };
+  }
+
   async function placementCommand(command: WorkspacePlacementCommandV1): Promise<WorkspacePlacementResultV1> {
     switch (command.type) {
       case 'list':
@@ -584,6 +697,10 @@ export function sessionToolsHandlers(runtime: LabSessions, history: LabNativeHis
         return createChat(command);
       case 'removeWorktree':
         return remove(command.sessionId, command.discardChanges, command.expectedChanges);
+      case 'worktrees':
+        return { protocol: 1, type: 'worktrees', worktrees: managed().map((entry) => entry.view) };
+      case 'removeOrphanWorktree':
+        return removeOrphan(command.worktreeId, command.discardChanges, command.expectedChanges);
       default: {
         const exhaustive: never = command;
         return exhaustive;

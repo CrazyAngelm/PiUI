@@ -9,6 +9,7 @@
   import Undo2 from '@lucide/svelte/icons/undo-2';
   import Trash from '@lucide/svelte/icons/trash-2';
   import MessageSquarePlus from '@lucide/svelte/icons/message-square-plus';
+  import Split from '@lucide/svelte/icons/split';
   import { t } from '../../features/locale/language';
   import type { SessionStatus } from '../../../../../contracts/workspace-v15';
   import { Badge, Button, EmptyState, IconButton, Skeleton, Spinner, toasts } from '../../lib/ui';
@@ -19,10 +20,10 @@
   import RevertDialog from './RevertDialog.svelte';
   import { composerInserts } from './composerInserts.svelte';
   import {
-    AREA_LABELS, CHANGE_LABELS, CHANGE_MARKS, commentReference, fileKey, formatSize, groupFiles, hunkLines, lineRef, splitPath,
-    type LineRef,
+    AREA_LABELS, CHANGE_LABELS, CHANGE_MARKS, commentReference, fileKey, formatSize, groupFiles, hunkLines, lineRef, splitDisplay, splitHunk,
+    splitPath, type HunkTarget, type LineRef,
   } from './review';
-  import { ReviewStore } from './reviewStore.svelte';
+  import { busyKey, ReviewStore } from './reviewStore.svelte';
 
   interface Props {
     sessionId: string;
@@ -39,12 +40,28 @@
   const MAX_WIDTH = 900;
   let panel = $state<HTMLElement | null>(null);
   let width = $state(readWidth());
-  let revert = $state<{ hunk: number | undefined } | undefined>();
+  /** `shown` is the index of a hunk in the shown text (split parts count separately). */
+  let revert = $state<{ shown: number | undefined } | undefined>();
   let comment = $state<{ hunk: number; line: LineRef | undefined } | undefined>();
+  /** Hunks shown as their parts, for the diff with this fingerprint. */
+  let split = $state.raw<{ fingerprint: string; hunks: ReadonlySet<number> }>({ fingerprint: '', hunks: new Set() });
 
   const groups = $derived(groupFiles(review.files));
   const diff = $derived(review.diff);
-  const parsed = $derived(diff?.content.kind === 'text' ? parseDiff(diff.content.text)[0] : undefined);
+  const splitHunks = $derived(diff !== undefined && split.fingerprint === diff.fingerprint ? split.hunks : new Set<number>());
+  const shown = $derived(diff?.content.kind === 'text' ? splitDisplay(diff.content.text, splitHunks) : undefined);
+  const parsed = $derived(shown === undefined ? undefined : parseDiff(shown.text)[0]);
+  const target = (index: number): HunkTarget => shown?.targets[index] ?? { hunk: index };
+  /** Parts a whole shown hunk splits into (1 when it cannot be split). */
+  const partCount = (index: number): number => {
+    const current = shown?.targets[index];
+    return diff?.content.kind === 'text' && current !== undefined && current.part === undefined ? splitHunk(diff.content.text, current.hunk).length : 1;
+  };
+  /** The label number of a shown hunk: `2` or `2.1` for part 1 of change 2. */
+  const hunkName = (index: number): string => {
+    const current = target(index);
+    return current.part === undefined ? String(current.hunk + 1) : `${current.hunk + 1}.${current.part + 1}`;
+  };
   const repository = $derived(review.status?.repository);
   const working = (value: SessionStatus) => value === 'starting' || value === 'running' || value === 'stopping';
 
@@ -112,15 +129,29 @@
     handle.addEventListener('pointercancel', end);
   }
 
-  async function act(action: 'stage' | 'unstage', hunk: number | undefined = undefined): Promise<void> {
-    await review.act(action, hunk);
+  async function act(action: 'stage' | 'unstage', shownIndex: number | undefined = undefined): Promise<void> {
+    const chosen = shownIndex === undefined ? undefined : target(shownIndex);
+    await review.act(action, chosen?.hunk, chosen?.part);
   }
 
+  function splitHunkAt(shownIndex: number): void {
+    if (diff === undefined) return;
+    const hunks = new Set(splitHunks);
+    hunks.add(target(shownIndex).hunk);
+    split = { fingerprint: diff.fingerprint, hunks };
+  }
+
+  const busyFor = (action: 'stage' | 'unstage' | 'revert', shownIndex: number | undefined) => {
+    const chosen = shownIndex === undefined ? undefined : target(shownIndex);
+    return review.busy === busyKey(action, chosen?.hunk, chosen?.part);
+  };
+
   async function confirmRevert(): Promise<void> {
-    const target = revert;
-    if (target === undefined) return;
+    const pending = revert;
+    if (pending === undefined) return;
     const moved = diff?.area === 'untracked';
-    if (await review.act('revert', target.hunk)) {
+    const chosen = pending.shown === undefined ? undefined : target(pending.shown);
+    if (await review.act('revert', chosen?.hunk, chosen?.part)) {
       revert = undefined;
       toasts.success(moved ? $t('Moved to the Trash') : $t('Changes reverted'));
     } else {
@@ -139,7 +170,6 @@
     toasts.success($t('Added to your message'), $t('Send it when you are ready.'));
   }
 
-  const busyFor = (key: string) => review.busy === key;
   const readOnly = $derived(review.readOnly);
 </script>
 
@@ -210,10 +240,18 @@
                       title={file.path}
                       onclick={() => review.select(file)}
                     >
-                      <span class="mark mark--{file.change}" title={$t(CHANGE_LABELS[file.change])} aria-hidden="true">{CHANGE_MARKS[file.change]}</span>
+                      {#if file.renamedFrom}
+                        <span class="mark mark--renamed" title={$t('Renamed from {0}', [file.renamedFrom])} aria-hidden="true">R</span>
+                      {:else}
+                        <span class="mark mark--{file.change}" title={$t(CHANGE_LABELS[file.change])} aria-hidden="true">{CHANGE_MARKS[file.change]}</span>
+                      {/if}
                       <span class="file__name">{parts.name}</span>
                       <span class="file__dir">{parts.directory.replace(/\/$/, '')}</span>
-                      <span class="visually-hidden">{$t(CHANGE_LABELS[file.change])}</span>
+                      {#if file.renamedFrom}
+                        <span class="visually-hidden">{$t('Renamed from {0}', [file.renamedFrom])}</span>
+                      {:else}
+                        <span class="visually-hidden">{$t(CHANGE_LABELS[file.change])}</span>
+                      {/if}
                       {#if file.binary}
                         <span class="stats">{$t('binary')}</span>
                       {:else if file.added !== undefined || file.removed !== undefined}
@@ -235,49 +273,57 @@
           {:else if review.diffError}
             <p class="note note--warn" role="alert">{$t(review.diffError)}</p>
           {:else if diff}
+            {@const renamedFrom = review.files.find((file) => file.path === diff.path && file.area === diff.area)?.renamedFrom}
             <header class="detail__head">
               <span class="detail__path" title={diff.path}>{diff.path}</span>
               <Badge>{$t(AREA_LABELS[diff.area])}</Badge>
             </header>
+            {#if renamedFrom}<p class="note">{$t('Renamed from {0}', [renamedFrom])}</p>{/if}
             <div class="detail__actions">
               {#if diff.actions.stage}
-                <Button size="sm" disabled={readOnly || Boolean(review.busy)} loading={busyFor('stage:file')} onclick={() => void act('stage')}>
+                <Button size="sm" disabled={readOnly || Boolean(review.busy)} loading={busyFor('stage', undefined)} onclick={() => void act('stage')}>
                   {#snippet leading()}<Plus />{/snippet}{$t('Stage file')}
                 </Button>
               {/if}
               {#if diff.actions.unstage}
-                <Button size="sm" disabled={readOnly || Boolean(review.busy)} loading={busyFor('unstage:file')} onclick={() => void act('unstage')}>
+                <Button size="sm" disabled={readOnly || Boolean(review.busy)} loading={busyFor('unstage', undefined)} onclick={() => void act('unstage')}>
                   {#snippet leading()}<Minus />{/snippet}{$t('Unstage file')}
                 </Button>
               {/if}
               {#if diff.actions.revert}
-                <Button size="sm" variant="ghost" disabled={readOnly || Boolean(review.busy)} onclick={() => (revert = { hunk: undefined })}>
+                <Button size="sm" variant="ghost" disabled={readOnly || Boolean(review.busy)} onclick={() => (revert = { shown: undefined })}>
                   {#snippet leading()}{#if diff.area === 'untracked'}<Trash />{:else}<Undo2 />{/if}{/snippet}
                   {diff.area === 'untracked' ? $t('Move to Trash…') : $t('Revert file…')}
                 </Button>
               {/if}
             </div>
             {#if review.actionError}<p class="note note--warn" role="alert">{$t(review.actionError)}</p>{/if}
-            {#if diff.content.kind === 'text'}
+            {#if diff.content.kind === 'text' && shown}
               {@const canHunk = diff.content.hunkActions}
-              <DiffView text={diff.content.text} collapseAfter={Number.MAX_SAFE_INTEGER}>
+              <DiffView text={shown.text} collapseAfter={Number.MAX_SAFE_INTEGER}>
                 {#snippet hunkActions(index)}
+                  {@const name = hunkName(index)}
                   {#if canHunk && diff.actions.stage && diff.area === 'unstaged'}
-                    <button type="button" class="hunk-btn" disabled={readOnly || Boolean(review.busy)} onclick={() => void act('stage', index)} aria-label={$t('Stage change {0}', [index + 1])}>
-                      {#if busyFor(`stage:${index}`)}<Spinner size={10} />{:else}<Plus size={12} />{/if}{$t('Stage')}
+                    <button type="button" class="hunk-btn" disabled={readOnly || Boolean(review.busy)} onclick={() => void act('stage', index)} aria-label={$t('Stage change {0}', [name])}>
+                      {#if busyFor('stage', index)}<Spinner size={10} />{:else}<Plus size={12} />{/if}{$t('Stage')}
                     </button>
                   {/if}
                   {#if canHunk && diff.actions.unstage}
-                    <button type="button" class="hunk-btn" disabled={readOnly || Boolean(review.busy)} onclick={() => void act('unstage', index)} aria-label={$t('Unstage change {0}', [index + 1])}>
-                      {#if busyFor(`unstage:${index}`)}<Spinner size={10} />{:else}<Minus size={12} />{/if}{$t('Unstage')}
+                    <button type="button" class="hunk-btn" disabled={readOnly || Boolean(review.busy)} onclick={() => void act('unstage', index)} aria-label={$t('Unstage change {0}', [name])}>
+                      {#if busyFor('unstage', index)}<Spinner size={10} />{:else}<Minus size={12} />{/if}{$t('Unstage')}
                     </button>
                   {/if}
                   {#if canHunk && diff.actions.revert && diff.area === 'unstaged'}
-                    <button type="button" class="hunk-btn" disabled={readOnly || Boolean(review.busy)} onclick={() => (revert = { hunk: index })} aria-label={$t('Revert change {0}…', [index + 1])}>
+                    <button type="button" class="hunk-btn" disabled={readOnly || Boolean(review.busy)} onclick={() => (revert = { shown: index })} aria-label={$t('Revert change {0}…', [name])}>
                       <Undo2 size={12} />{$t('Revert…')}
                     </button>
                   {/if}
-                  <button type="button" class="hunk-btn" onclick={() => openComment(index)} aria-label={$t('Comment on change {0}…', [index + 1])}>
+                  {#if canHunk && partCount(index) > 1}
+                    <button type="button" class="hunk-btn" onclick={() => splitHunkAt(index)} aria-label={$t('Split change {0} into {1} parts', [name, partCount(index)])}>
+                      <Split size={12} />{$t('Split')}
+                    </button>
+                  {/if}
+                  <button type="button" class="hunk-btn" onclick={() => openComment(index)} aria-label={$t('Comment on change {0}…', [name])}>
                     <MessageSquarePlus size={12} />{$t('Comment…')}
                   </button>
                 {/snippet}
@@ -323,7 +369,8 @@
 {#if revert && diff}
   <RevertDialog
     {diff}
-    hunk={revert.hunk}
+    text={shown?.text}
+    hunk={revert.shown}
     busy={review.busy.startsWith('revert')}
     onConfirm={() => void confirmRevert()}
     onCancel={() => (revert = undefined)}
@@ -460,6 +507,9 @@
   }
   .mark--conflict {
     color: var(--piui-danger);
+  }
+  .mark--renamed {
+    color: var(--piui-info);
   }
   .file__name {
     flex: none;

@@ -211,8 +211,12 @@
     border-radius: var(--piui-radius-sm);
     background: var(--piui-bg-raised);
   }
+  /* Transparent, not `visibility: hidden`: a hidden frame is an invisible
+     widget to the browser engine, which lowers the priority of its process
+     and throttles it, so a loading panel can miss its ready deadline. */
   iframe.loading {
-    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
   }
   .skeleton {
     position: absolute;

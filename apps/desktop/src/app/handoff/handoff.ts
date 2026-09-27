@@ -3,7 +3,7 @@ import type { DesktopTimelineBlock } from '../../../../../contracts/runtime-prot
 /**
  * The editable first message of "Continue in another harness", built only
  * from what the person can see: the chat's last request, a short excerpt of
- * the last answer and the changed files the review panel listed. Nothing is
+ * the last answer and the changed files git reports for its folder. Nothing is
  * converted between history formats; the person edits the draft before
  * sending it, and the source chat is not touched.
  */
@@ -11,7 +11,7 @@ export interface HandoffSource {
   title: string;
   harnessLabel: string;
   blocks: readonly DesktopTimelineBlock[];
-  /** Paths from the review panel, when it was loaded for this chat. */
+  /** Changed paths, read from git when the handoff starts. */
   changedFiles?: readonly string[];
   /** The source runs in this worktree branch. */
   branch?: string;

@@ -395,6 +395,29 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   for the native harness and the agent API; surviving IPC versions are
   unchanged. Details: [CLASSIC_PARITY.md](CLASSIC_PARITY.md).
 
+## 2026-09-27 — session tools follow-ups
+
+- Review v1.1 and placement v1.1 (additive, same routes; `docs/SESSION_TOOLS.md`,
+  ADR-036): staged renames with `renamedFrom`, hunk parts (`part`) rebuilt and
+  applied exactly by the host, `worktrees` and `removeOrphanWorktree` with the
+  dirty confirmation. Shared split fixture checked by Rust and TypeScript.
+- Ctrl+K lists the open chat's native `/` commands from the composer catalog
+  and inserts the chosen one; Settings → Worktrees; handoffs read changed
+  files from git on demand.
+- Plugin panel E2E flake: under the full `pnpm test:lab` run (four headless
+  Edge workers) the panel frame, hidden with `visibility: hidden` while
+  loading, is an invisible out-of-process frame whose renderer Chromium
+  deprioritizes; server logs showed every file answered within milliseconds
+  while the frame requested its scripts up to 8 s later, missing the 10 s
+  ready deadline. The loading frame is now `opacity: 0` (inert); the product
+  deadline is unchanged. 40/40 repeated panel runs passed (1/16 and 1/20
+  failed before).
+- `apps/desktop/package.json` had duplicate `contract:test` and e2e script
+  keys; the later ones silently dropped the session-tools and trigger
+  contract tests. Merged.
+- Not done: macOS trash (cannot be verified on Windows); visual check of the
+  split review and Settings → Worktrees in the packaged WebView2 app.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

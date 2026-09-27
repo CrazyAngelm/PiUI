@@ -10,6 +10,11 @@
 //! directory. Removing a worktree refuses uncommitted changes unless the
 //! person confirmed losing exactly those changes; the branch is never
 //! deleted. Nothing is copied from the project folder.
+//!
+//! `worktrees` lists every PiUI-managed worktree that was not removed, with
+//! the chats still bound to it; a worktree whose chats were all deleted is
+//! an orphan that `removeOrphanWorktree` removes under the same dirty check
+//! (it lists the changes that would be lost).
 
 use crate::api::verified_project_directory;
 use crate::session_placement::{
@@ -87,6 +92,15 @@ pub enum PlacementCommandV1 {
         #[serde(default)]
         expected_changes: Option<String>,
     },
+    /// Every PiUI-managed worktree that was not removed (additive in v1).
+    Worktrees {},
+    /// Removes a worktree no chat uses any more (additive in v1).
+    RemoveOrphanWorktree {
+        worktree_id: String,
+        discard_changes: bool,
+        #[serde(default)]
+        expected_changes: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
@@ -116,6 +130,39 @@ pub struct ChatPlacementV1 {
     pub continued_from: Option<String>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub adopted: bool,
+}
+
+/// A PiUI-managed worktree and the chats (still in PiUI) that run in it.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedWorktreeV1 {
+    /// Opaque id of the worktree (a hash of its folder).
+    pub id: String,
+    pub workspace_id: String,
+    pub branch: String,
+    pub path: String,
+    /// `ready` or `missing` (removed worktrees are not listed).
+    pub state: WorktreeState,
+    pub base: String,
+    /// Chats that run in it; empty for an orphan.
+    pub sessions: Vec<String>,
+}
+
+/// One uncommitted change that removing a worktree would lose.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeChangeV1 {
+    pub path: String,
+    pub area: WorktreeChangeArea,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum WorktreeChangeArea {
+    Staged,
+    Unstaged,
+    Untracked,
+    Conflict,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -170,6 +217,23 @@ pub enum PlacementResultV1 {
         changes: usize,
         fingerprint: String,
     },
+    Worktrees {
+        protocol: u8,
+        worktrees: Vec<ManagedWorktreeV1>,
+    },
+    /// An orphan worktree was not removed: these changes would be lost.
+    WorktreeDirty {
+        protocol: u8,
+        worktree_id: String,
+        changes: usize,
+        fingerprint: String,
+        files: Vec<WorktreeChangeV1>,
+        truncated: bool,
+    },
+    WorktreeRemoved {
+        protocol: u8,
+        worktree_id: String,
+    },
 }
 
 fn short(commit: &str) -> String {
@@ -223,6 +287,42 @@ pub(crate) async fn verify_worktree(
         return Err(worktree_missing());
     }
     Ok(())
+}
+
+/// Most changes an orphan's removal dialog lists by name.
+const MAX_LISTED_CHANGES: usize = 200;
+
+/// The opaque id of a worktree folder.
+pub(crate) fn managed_worktree_id(binding: &WorktreeBinding) -> String {
+    git::sha256_hex(git::plain_path(&binding.root).to_string_lossy().as_bytes())[..32].to_owned()
+}
+
+/// Changes of a status report by area, the way the review lists them.
+fn listed_changes(report: &StatusReport) -> Vec<WorktreeChangeV1> {
+    let mut files = Vec::new();
+    for entry in &report.entries {
+        let mut push = |area| {
+            files.push(WorktreeChangeV1 {
+                path: entry.path().to_owned(),
+                area,
+            });
+        };
+        match entry {
+            git::StatusEntry::Changed {
+                index, worktree, ..
+            } => {
+                if *index != git::StatusCode::Unmodified {
+                    push(WorktreeChangeArea::Staged);
+                }
+                if *worktree != git::StatusCode::Unmodified {
+                    push(WorktreeChangeArea::Unstaged);
+                }
+            }
+            git::StatusEntry::Unmerged { .. } => push(WorktreeChangeArea::Conflict),
+            git::StatusEntry::Untracked { .. } => push(WorktreeChangeArea::Untracked),
+        }
+    }
+    files
 }
 
 /// A stable fingerprint of what removing a worktree would lose.
@@ -671,6 +771,170 @@ async fn remove_worktree(
     })
 }
 
+/// Every managed worktree that was not removed, with its existing chats.
+fn worktrees(host: &HostState) -> Result<PlacementResultV1, WorkspaceError> {
+    let mut by_root: std::collections::BTreeMap<PathBuf, (SessionPlacement, Vec<String>)> =
+        std::collections::BTreeMap::new();
+    for placement in host.workspace.tools().placements()? {
+        let Some(binding) = placement.active_worktree() else {
+            continue;
+        };
+        let exists = host.workspace.session_exists(&placement.session_id);
+        let session_id = placement.session_id.clone();
+        let slot = by_root
+            .entry(binding.root.clone())
+            .or_insert_with(|| (placement.clone(), Vec::new()));
+        if exists {
+            slot.1.push(session_id);
+        }
+    }
+    let mut worktrees: Vec<ManagedWorktreeV1> = by_root
+        .into_values()
+        .filter_map(|(placement, mut sessions)| {
+            let binding = placement.worktree?;
+            sessions.sort();
+            Some(ManagedWorktreeV1 {
+                id: managed_worktree_id(&binding),
+                workspace_id: placement.workspace_id,
+                path: display_path(&binding.root),
+                state: if binding.cwd().is_dir() {
+                    WorktreeState::Ready
+                } else {
+                    WorktreeState::Missing
+                },
+                base: short(&binding.base_commit),
+                branch: binding.branch,
+                sessions,
+            })
+        })
+        .collect();
+    worktrees.sort_by(|left, right| {
+        (&left.workspace_id, &left.branch, &left.id).cmp(&(
+            &right.workspace_id,
+            &right.branch,
+            &right.id,
+        ))
+    });
+    Ok(PlacementResultV1::Worktrees {
+        protocol: WORKSPACE_PLACEMENT_PROTOCOL,
+        worktrees,
+    })
+}
+
+/// Removes a worktree whose chats are all gone, after the same checks as
+/// `remove_worktree`: managed folder of the project's repository, and an
+/// explicit confirmation of exactly the changes it would lose. Its placement
+/// records are marked removed; the branch stays.
+async fn remove_orphan_worktree(
+    host: &HostState,
+    worktree_id: String,
+    discard_changes: bool,
+    expected_changes: Option<String>,
+) -> Result<PlacementResultV1, WorkspaceError> {
+    if host.safe_mode {
+        return Err(safe_mode_error());
+    }
+    if worktree_id.len() != 32 || !worktree_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(tool_error(
+            "INVALID_ARGUMENT",
+            "Check the required fields and try again.",
+        ));
+    }
+    let tools = host.workspace.tools();
+    let placements = tools.placements()?;
+    let bound: Vec<&SessionPlacement> = placements
+        .iter()
+        .filter(|placement| {
+            placement
+                .active_worktree()
+                .is_some_and(|binding| managed_worktree_id(binding) == worktree_id)
+        })
+        .collect();
+    let (Some(first), Some(binding)) = (
+        bound.first(),
+        bound
+            .first()
+            .and_then(|placement| placement.active_worktree()),
+    ) else {
+        return Err(tool_error(
+            "NOT_FOUND",
+            "This worktree is no longer managed by PiUI.",
+        ));
+    };
+    let binding = binding.clone();
+    if bound
+        .iter()
+        .any(|placement| host.workspace.session_exists(&placement.session_id))
+    {
+        return Err(tool_error(
+            "CONFLICT",
+            "A chat still works in this worktree. Remove it from that chat's details.",
+        ));
+    }
+    let project = project_for_worktrees(host, &first.workspace_id)?;
+    let git = tools.git()?;
+    let present = binding.root.is_dir();
+    let mut force = false;
+    let mut project_top = None;
+    if present {
+        verify_worktree(tools, &binding, &project).await?;
+        let report = git::status(&git, &binding.root, "")
+            .await
+            .map_err(git_error)?;
+        if !report.entries.is_empty() || report.unrepresentable > 0 {
+            let fingerprint = changes_fingerprint(&report);
+            if !discard_changes {
+                let mut files = listed_changes(&report);
+                let truncated = files.len() > MAX_LISTED_CHANGES;
+                files.truncate(MAX_LISTED_CHANGES);
+                return Ok(PlacementResultV1::WorktreeDirty {
+                    protocol: WORKSPACE_PLACEMENT_PROTOCOL,
+                    worktree_id,
+                    changes: report.entries.len() + report.unrepresentable,
+                    fingerprint,
+                    files,
+                    truncated,
+                });
+            }
+            if expected_changes.as_deref() != Some(fingerprint.as_str()) {
+                return Err(stale_error());
+            }
+            force = true;
+        }
+        project_top = Some(
+            git::locate(&git, project.canonical_path())
+                .await
+                .map_err(git_error)?
+                .top,
+        );
+    }
+    {
+        // Under the operation gate, so no chat can start in it meanwhile.
+        let _gate = host.live_runtime_operation_gate.lock().await;
+        if !host
+            .workspace
+            .sessions_in_worktree(&binding.root)?
+            .is_empty()
+        {
+            return Err(tool_error(
+                "CONFLICT",
+                "A chat still works in this worktree. Remove it from that chat's details.",
+            ));
+        }
+        host.workspace.mark_worktree_removed(&binding.root, true)?;
+    }
+    if let Some(top) = project_top
+        && let Err(error) = git::worktree_remove(&git, &top, &binding.root, force).await
+    {
+        host.workspace.mark_worktree_removed(&binding.root, false)?;
+        return Err(git_error(error));
+    }
+    Ok(PlacementResultV1::WorktreeRemoved {
+        protocol: WORKSPACE_PLACEMENT_PROTOCOL,
+        worktree_id,
+    })
+}
+
 fn list(host: &HostState) -> Result<PlacementResultV1, WorkspaceError> {
     let mut placements: Vec<ChatPlacementV1> = host
         .workspace
@@ -726,6 +990,12 @@ pub(crate) async fn dispatch_placement(
             discard_changes,
             expected_changes,
         } => remove_worktree(host, session_id, discard_changes, expected_changes).await,
+        PlacementCommandV1::Worktrees {} => worktrees(host),
+        PlacementCommandV1::RemoveOrphanWorktree {
+            worktree_id,
+            discard_changes,
+            expected_changes,
+        } => remove_orphan_worktree(host, worktree_id, discard_changes, expected_changes).await,
     }
 }
 

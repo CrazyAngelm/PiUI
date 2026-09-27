@@ -225,4 +225,37 @@ export const sessionRu: Readonly<Record<string, string>> = {
   'This chat does not run in a worktree.': 'Этот чат не работает в worktree.',
   'That chat does not run in a worktree.': 'Тот чат не работает в worktree.',
   'The chat this one continues is no longer available.': 'Чат, который продолжает этот, больше недоступен.',
+
+  // Renames and split hunks in the review panel.
+  'Renamed from {0}': 'Переименован из {0}',
+  Split: 'Разделить',
+  'Split change {0} into {1} parts': 'Разделить изменение {0} на части ({1})',
+
+  // Settings → Worktrees and orphan worktrees.
+  Worktrees: 'Worktree',
+  'Manage worktrees': 'Управление worktree',
+  'Folders PiUI created for worktree chats. Deleting a chat keeps its worktree; remove one here when no chat uses it any more. Branches are never deleted.':
+    'Папки, которые PiUI создал для чатов в worktree. При удалении чата его worktree остаётся; удалите его здесь, когда ни один чат им больше не пользуется. Ветки никогда не удаляются.',
+  'Safe mode: worktrees are listed, but none can be removed.': 'Безопасный режим: worktree показаны, но удалить их нельзя.',
+  'No worktrees': 'Нет worktree',
+  'Worktrees you create for new chats appear here.': 'Здесь появятся worktree, созданные для новых чатов.',
+  'Worktrees without a chat: {0}': 'Worktree без чатов: {0}',
+  'No chat': 'Нет чата',
+  'Folder missing': 'Папки нет',
+  'Project no longer in PiUI': 'Проекта больше нет в PiUI',
+  'from commit {0}': 'от коммита {0}',
+  'Open chat {0}': 'Открыть чат {0}',
+  'Used by a chat PiUI does not list.': 'Используется чатом, которого нет в списке PiUI.',
+  'Remove worktree {0}…': 'Удалить worktree {0}…',
+  'Remove…': 'Удалить…',
+  'The worktree folder is already gone. PiUI forgets it:': 'Папки worktree уже нет. PiUI забудет её:',
+  'The branch {0} stays with its commits. No chat works in this worktree any more.':
+    'Ветка {0} остаётся со своими коммитами. Ни один чат больше не работает в этом worktree.',
+  '{0} more changes are not listed.': 'Ещё изменений не показано: {0}.',
+  'This worktree is no longer managed by PiUI.': 'PiUI больше не управляет этим worktree.',
+  "A chat still works in this worktree. Remove it from that chat's details.":
+    'В этом worktree ещё работает чат. Удалите worktree в деталях этого чата.',
+
+  // Ctrl+K: native commands of the open chat.
+  '{0} commands': 'Команды {0}',
 };

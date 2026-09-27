@@ -1,6 +1,8 @@
 import { hostInvoke, type HostInvoke } from './transport';
 import type {
   ChatPlacementV1,
+  ManagedWorktreeV1,
+  WorktreeChangeV1,
   WorkspacePlacementCommandV1,
   WorkspacePlacementResultV1,
   WorktreePreviewV1,
@@ -43,6 +45,27 @@ function isPreview(value: unknown): value is WorktreePreviewV1 {
   );
 }
 
+const CHANGE_AREAS: readonly WorktreeChangeV1['area'][] = ['staged', 'unstaged', 'untracked', 'conflict'];
+
+function isManagedWorktree(value: unknown): value is ManagedWorktreeV1 {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    /^[0-9a-f]{32}$/.test(value.id) &&
+    typeof value.workspaceId === 'string' &&
+    typeof value.branch === 'string' &&
+    typeof value.path === 'string' &&
+    (value.state === 'ready' || value.state === 'missing') &&
+    typeof value.base === 'string' &&
+    Array.isArray(value.sessions) &&
+    value.sessions.every((session) => typeof session === 'string')
+  );
+}
+
+function isWorktreeChange(value: unknown): value is WorktreeChangeV1 {
+  return isRecord(value) && typeof value.path === 'string' && CHANGE_AREAS.includes(value.area as WorktreeChangeV1['area']);
+}
+
 /** The result exactly as the contract describes it, or undefined. */
 export function decodePlacementResult(value: unknown): WorkspacePlacementResultV1 | undefined {
   if (!isRecord(value) || value.protocol !== 1) return undefined;
@@ -65,6 +88,21 @@ export function decodePlacementResult(value: unknown): WorkspacePlacementResultV
       return typeof value.sessionId === 'string' && count(value.changes) && typeof value.fingerprint === 'string'
         ? (value as unknown as WorkspacePlacementResultV1)
         : undefined;
+    case 'worktrees':
+      return Array.isArray(value.worktrees) && value.worktrees.every(isManagedWorktree)
+        ? (value as unknown as WorkspacePlacementResultV1)
+        : undefined;
+    case 'worktreeDirty':
+      return typeof value.worktreeId === 'string' &&
+        count(value.changes) &&
+        typeof value.fingerprint === 'string' &&
+        Array.isArray(value.files) &&
+        value.files.every(isWorktreeChange) &&
+        typeof value.truncated === 'boolean'
+        ? (value as unknown as WorkspacePlacementResultV1)
+        : undefined;
+    case 'worktreeRemoved':
+      return typeof value.worktreeId === 'string' ? (value as unknown as WorkspacePlacementResultV1) : undefined;
     default:
       return undefined;
   }

@@ -2,9 +2,10 @@
 //! exact patches PiUI applies back with `git apply`.
 //!
 //! The review shows this output; staging, unstaging or reverting replays the
-//! same bytes (the whole output, or one hunk of it with its file header), so
-//! git never receives anything the person did not see. The SHA-256 of the
-//! output is the fingerprint a later action must still match.
+//! same bytes (the whole output, one hunk of it, or one part of a hunk split
+//! at its context lines, with its file header), so git never receives
+//! anything the person did not see. The SHA-256 of the output is the
+//! fingerprint a later action must still match.
 
 use sha2::{Digest, Sha256};
 use std::ops::Range;
@@ -15,9 +16,11 @@ pub enum PatchError {
     Malformed,
     /// The requested hunk does not exist.
     NoSuchHunk,
-    /// Hunks of this change cannot be applied one at a time (a new, deleted
-    /// or binary file, or more than one file section).
+    /// Hunks of this change cannot be applied one at a time (a new, deleted,
+    /// renamed or binary file, or more than one file section).
     WholeFileOnly,
+    /// The requested part of a split hunk does not exist.
+    NoSuchPart,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,6 +43,8 @@ pub struct Section {
     pub new_file: bool,
     pub deleted_file: bool,
     pub mode_change: bool,
+    /// A rename or copy (`rename from`/`copy from` header lines).
+    pub rename: bool,
     pub binary: bool,
     pub hunks: Vec<Hunk>,
 }
@@ -128,6 +133,12 @@ impl FilePatch {
                     section.deleted_file = true;
                 } else if line.starts_with(b"old mode ") || line.starts_with(b"new mode ") {
                     section.mode_change = true;
+                } else if line.starts_with(b"rename from ")
+                    || line.starts_with(b"rename to ")
+                    || line.starts_with(b"copy from ")
+                    || line.starts_with(b"copy to ")
+                {
+                    section.rename = true;
                 } else if line.starts_with(b"--- ") {
                     section.old_path_line = Some(lines[index].clone());
                 } else if line.starts_with(b"+++ ") {
@@ -227,13 +238,14 @@ impl FilePatch {
     }
 
     /// Whether single hunks can be applied: one text section of a file that
-    /// exists on both sides.
+    /// exists on both sides under the same name.
     #[must_use]
     pub fn hunks_selectable(&self) -> bool {
         matches!(self.sections.as_slice(), [section]
             if !section.binary
                 && !section.new_file
                 && !section.deleted_file
+                && !section.rename
                 && section.old_path_line.is_some()
                 && section.new_path_line.is_some()
                 && !section.hunks.is_empty())
@@ -255,6 +267,16 @@ impl FilePatch {
     /// [`PatchError::WholeFileOnly`] when hunks are not selectable and
     /// [`PatchError::NoSuchHunk`] for an index out of range.
     pub fn hunk_patch(&self, index: usize) -> Result<Vec<u8>, PatchError> {
+        let (section, hunk) = self.selectable_hunk(index)?;
+        let mut patch = self.file_header(section)?;
+        patch.extend_from_slice(&self.raw[hunk.range.clone()]);
+        if !patch.ends_with(b"\n") {
+            patch.push(b'\n');
+        }
+        Ok(patch)
+    }
+
+    fn selectable_hunk(&self, index: usize) -> Result<(&Section, &Hunk), PatchError> {
         if !self.hunks_selectable() {
             return Err(PatchError::WholeFileOnly);
         }
@@ -262,17 +284,52 @@ impl FilePatch {
             return Err(PatchError::WholeFileOnly);
         };
         let hunk = section.hunks.get(index).ok_or(PatchError::NoSuchHunk)?;
+        Ok((section, hunk))
+    }
+
+    /// The `diff --git`, `---` and `+++` lines of a selectable section.
+    fn file_header(&self, section: &Section) -> Result<Vec<u8>, PatchError> {
         let (Some(old), Some(new)) = (&section.old_path_line, &section.new_path_line) else {
             return Err(PatchError::WholeFileOnly);
         };
-        let mut patch = Vec::with_capacity(hunk.range.len() + 256);
+        let mut header = Vec::with_capacity(256);
         for range in [&section.diff_line, old, new] {
-            patch.extend_from_slice(&self.raw[range.clone()]);
-            if !patch.ends_with(b"\n") {
-                patch.push(b'\n');
+            header.extend_from_slice(&self.raw[range.clone()]);
+            if !header.ends_with(b"\n") {
+                header.push(b'\n');
             }
         }
-        patch.extend_from_slice(&self.raw[hunk.range.clone()]);
+        Ok(header)
+    }
+
+    /// The parts hunk `index` splits into at its runs of context lines (like
+    /// the split of `git add -p`): one part per run of changed lines, each
+    /// with the context before and after it. A hunk with one run of changes
+    /// is one part.
+    ///
+    /// # Errors
+    ///
+    /// As [`FilePatch::hunk_patch`].
+    pub fn hunk_parts(&self, index: usize) -> Result<Vec<HunkPart>, PatchError> {
+        let (_, hunk) = self.selectable_hunk(index)?;
+        Ok(split_hunk(&self.raw, hunk))
+    }
+
+    /// The patch of part `part` of hunk `index` alone: the file header and
+    /// that part's lines, byte for byte, under a header with the exact
+    /// positions of those lines on both sides.
+    ///
+    /// # Errors
+    ///
+    /// As [`FilePatch::hunk_patch`], and [`PatchError::NoSuchPart`] for a
+    /// part out of range.
+    pub fn hunk_part_patch(&self, index: usize, part: usize) -> Result<Vec<u8>, PatchError> {
+        let (section, hunk) = self.selectable_hunk(index)?;
+        let parts = split_hunk(&self.raw, hunk);
+        let part = parts.get(part).ok_or(PatchError::NoSuchPart)?;
+        let mut patch = self.file_header(section)?;
+        patch.extend_from_slice(part.header().as_bytes());
+        patch.extend_from_slice(&self.raw[part.body.clone()]);
         if !patch.ends_with(b"\n") {
             patch.push(b'\n');
         }
@@ -302,6 +359,113 @@ impl FilePatch {
         }
         Some(String::from_utf8_lossy(&text).into_owned())
     }
+}
+
+/// One part of a split hunk: the byte range of its lines in the diff and
+/// their positions on the old and new side.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HunkPart {
+    body: Range<usize>,
+    pub old_start: u64,
+    pub old_lines: u64,
+    pub new_start: u64,
+    pub new_lines: u64,
+}
+
+impl HunkPart {
+    /// `@@ -a,b +c,d @@` the way git writes it (a count of 1 is omitted).
+    #[must_use]
+    pub fn header(&self) -> String {
+        let range = |start: u64, lines: u64| {
+            if lines == 1 {
+                start.to_string()
+            } else {
+                format!("{start},{lines}")
+            }
+        };
+        format!(
+            "@@ -{} +{} @@\n",
+            range(self.old_start, self.old_lines),
+            range(self.new_start, self.new_lines)
+        )
+    }
+}
+
+/// A hunk line (with any `\ No newline at end of file` marker after it)
+/// and how many lines it is on the old and new side.
+struct Row {
+    changed: bool,
+    range: Range<usize>,
+    old: u64,
+    new: u64,
+}
+
+/// Splits a hunk at the context lines between its runs of changes. Context
+/// between two runs belongs to both parts: after the first, before the
+/// second. Positions count the lines before each part on each side.
+fn split_hunk(raw: &[u8], hunk: &Hunk) -> Vec<HunkPart> {
+    let body = &raw[hunk.range.clone()];
+    let mut rows: Vec<Row> = Vec::new();
+    // The first line is the `@@` header.
+    for line in line_ranges(body).into_iter().skip(1) {
+        let absolute = hunk.range.start + line.start..hunk.range.start + line.end;
+        let (changed, old, new) = match body[line.start] {
+            b'\\' => {
+                if let Some(previous) = rows.last_mut() {
+                    previous.range.end = absolute.end;
+                }
+                continue;
+            }
+            b'-' => (true, 1, 0),
+            b'+' => (true, 0, 1),
+            _ => (false, 1, 1),
+        };
+        rows.push(Row {
+            changed,
+            range: absolute,
+            old,
+            new,
+        });
+    }
+    // Runs of changed rows, as index ranges into `rows`.
+    let mut runs: Vec<Range<usize>> = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        if !row.changed {
+            continue;
+        }
+        match runs.last_mut() {
+            Some(run) if run.end == index => run.end = index + 1,
+            _ => runs.push(index..index + 1),
+        }
+    }
+    if runs.len() < 2 {
+        return vec![HunkPart {
+            body: rows.first().map_or(hunk.range.end, |row| row.range.start)..hunk.range.end,
+            old_start: hunk.old_start,
+            old_lines: hunk.old_lines,
+            new_start: hunk.new_start,
+            new_lines: hunk.new_lines,
+        }];
+    }
+    let sum = |rows: &[Row]| {
+        rows.iter()
+            .fold((0, 0), |(old, new), row| (old + row.old, new + row.new))
+    };
+    (0..runs.len())
+        .map(|number| {
+            let first = if number == 0 { 0 } else { runs[number - 1].end };
+            let last = runs.get(number + 1).map_or(rows.len(), |next| next.start);
+            let (old_before, new_before) = sum(&rows[..first]);
+            let (old_lines, new_lines) = sum(&rows[first..last]);
+            HunkPart {
+                body: rows[first].range.start..rows[last - 1].range.end,
+                old_start: hunk.old_start + old_before,
+                old_lines,
+                new_start: hunk.new_start + new_before,
+                new_lines,
+            }
+        })
+        .collect()
 }
 
 #[must_use]

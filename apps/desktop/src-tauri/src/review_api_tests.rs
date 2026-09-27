@@ -151,6 +151,7 @@ fn hunks_are_staged_unstaged_and_reverted_with_the_reviewed_fingerprint() {
             area: ReviewArea::Unstaged,
             fingerprint: reviewed.fingerprint.clone(),
             hunk: Some(1),
+            part: None,
         },
     ))
     .expect("stages the second hunk");
@@ -168,6 +169,7 @@ fn hunks_are_staged_unstaged_and_reverted_with_the_reviewed_fingerprint() {
             area: ReviewArea::Unstaged,
             fingerprint: reviewed.fingerprint.clone(),
             hunk: Some(0),
+            part: None,
         },
     ))
     .expect_err("stale fingerprint");
@@ -182,6 +184,7 @@ fn hunks_are_staged_unstaged_and_reverted_with_the_reviewed_fingerprint() {
             path: "src/f.txt".into(),
             fingerprint: staged.fingerprint,
             hunk: Some(0),
+            part: None,
         },
     ))
     .expect("unstages");
@@ -196,6 +199,7 @@ fn hunks_are_staged_unstaged_and_reverted_with_the_reviewed_fingerprint() {
             area: ReviewArea::Unstaged,
             fingerprint: current.fingerprint,
             hunk: Some(0),
+            part: None,
         },
     ))
     .expect("reverts the first hunk");
@@ -223,6 +227,7 @@ fn a_file_changed_after_review_is_refused_and_left_alone() {
             area: ReviewArea::Unstaged,
             fingerprint: reviewed.fingerprint.clone(),
             hunk: None,
+            part: None,
         },
         ReviewRequestV1::Stage {
             session_id: session.clone(),
@@ -230,6 +235,7 @@ fn a_file_changed_after_review_is_refused_and_left_alone() {
             area: ReviewArea::Unstaged,
             fingerprint: reviewed.fingerprint.clone(),
             hunk: Some(0),
+            part: None,
         },
     ] {
         let error = block_on(dispatch_review(&fixture.state, request)).expect_err("stale");
@@ -266,6 +272,7 @@ fn untracked_files_go_to_the_trash_only_as_reviewed() {
             area: ReviewArea::Untracked,
             fingerprint: reviewed.fingerprint,
             hunk: None,
+            part: None,
         },
     ))
     .expect_err("stale");
@@ -281,6 +288,7 @@ fn untracked_files_go_to_the_trash_only_as_reviewed() {
             area: ReviewArea::Untracked,
             fingerprint: current.fingerprint,
             hunk: None,
+            part: None,
         },
     ))
     .expect("moves to the trash");
@@ -314,6 +322,7 @@ fn binary_and_deleted_files_are_whole_file_changes() {
             area: ReviewArea::Unstaged,
             fingerprint: binary.fingerprint.clone(),
             hunk: Some(0),
+            part: None,
         },
     ))
     .expect_err("no hunks in binary files");
@@ -326,6 +335,7 @@ fn binary_and_deleted_files_are_whole_file_changes() {
             area: ReviewArea::Unstaged,
             fingerprint: binary.fingerprint,
             hunk: None,
+            part: None,
         },
     ))
     .expect("reverts the binary file");
@@ -343,6 +353,7 @@ fn binary_and_deleted_files_are_whole_file_changes() {
             area: ReviewArea::Unstaged,
             fingerprint: deleted.fingerprint,
             hunk: None,
+            part: None,
         },
     ))
     .expect("restores the deleted file");
@@ -396,6 +407,7 @@ fn paths_must_be_in_the_current_status_of_the_chat_folder() {
             area: ReviewArea::Untracked,
             fingerprint: "not-a-fingerprint".into(),
             hunk: None,
+            part: None,
         },
     ))
     .expect_err("invalid");
@@ -433,6 +445,7 @@ fn safe_mode_reads_and_refuses_every_change() {
             area: ReviewArea::Unstaged,
             fingerprint: reviewed.fingerprint,
             hunk: None,
+            part: None,
         },
     ))
     .expect_err("refused in safe mode");
@@ -531,5 +544,143 @@ fn the_result_shape_matches_the_contract_fixture() {
         }))
         .is_err(),
         "unknown fields are refused"
+    );
+}
+
+fn act(fixture: &Fixture, request: ReviewRequestV1) -> Result<ReviewResultV1, String> {
+    block_on(dispatch_review(&fixture.state, request)).map_err(|error| error.code.to_owned())
+}
+
+#[test]
+fn a_split_hunk_stages_and_reverts_one_part_and_refuses_a_stale_or_unknown_part() {
+    let (fixture, repo, session) = setup("review-split");
+    let mut changed = ORIGINAL.to_vec();
+    changed[1] = "B";
+    changed[4] = "E";
+    changed[8] = "I";
+    std::fs::write(repo.join("src/f.txt"), lines(&changed)).expect("edits three places");
+    let reviewed = diff(&fixture, &session, "src/f.txt", ReviewArea::Unstaged);
+    assert!(matches!(
+        reviewed.content,
+        ReviewContentV1::Text {
+            hunks: 1,
+            hunk_actions: true,
+            ..
+        }
+    ));
+    let stage =
+        |part: Option<usize>, hunk: Option<usize>, fingerprint: &str| ReviewRequestV1::Stage {
+            session_id: session.clone(),
+            path: "src/f.txt".into(),
+            area: ReviewArea::Unstaged,
+            fingerprint: fingerprint.into(),
+            hunk,
+            part,
+        };
+    assert_eq!(
+        act(&fixture, stage(Some(0), None, &reviewed.fingerprint)).expect_err("part without hunk"),
+        "INVALID_ARGUMENT"
+    );
+    assert_eq!(
+        act(&fixture, stage(Some(3), Some(0), &reviewed.fingerprint)).expect_err("no such part"),
+        "STALE"
+    );
+    act(&fixture, stage(Some(1), Some(0), &reviewed.fingerprint)).expect("stages the middle part");
+    assert_eq!(
+        git_output(&repo, &["diff", "--cached", "--numstat"]),
+        "1\t1\tsrc/f.txt"
+    );
+    assert!(git_output(&repo, &["diff", "--cached"]).contains("+E"));
+
+    // The work tree diff changed: the old fingerprint is stale.
+    assert_eq!(
+        act(&fixture, stage(Some(0), Some(0), &reviewed.fingerprint)).expect_err("stale"),
+        "STALE"
+    );
+    let current = diff(&fixture, &session, "src/f.txt", ReviewArea::Unstaged);
+    act(
+        &fixture,
+        ReviewRequestV1::Revert {
+            session_id: session.clone(),
+            path: "src/f.txt".into(),
+            area: ReviewArea::Unstaged,
+            fingerprint: current.fingerprint,
+            hunk: Some(0),
+            part: Some(1),
+        },
+    )
+    .expect("reverts the last remaining part");
+    let mut expected = changed.clone();
+    expected[8] = "i";
+    assert_eq!(
+        std::fs::read_to_string(repo.join("src/f.txt")).expect("reads"),
+        lines(&expected)
+    );
+}
+
+#[test]
+fn a_staged_rename_is_listed_once_with_its_source_and_unstaged_as_a_whole() {
+    let (fixture, repo, session) = setup("review-rename");
+    git(&repo, &["mv", "src/f.txt", "src/moved.txt"]);
+    let ReviewResultV1::Status { files, .. } = status(&fixture, &session) else {
+        panic!("expected status");
+    };
+    let renamed: Vec<_> = files
+        .iter()
+        .filter(|file| file.area == ReviewArea::Staged)
+        .collect();
+    assert_eq!(renamed.len(), 1, "{files:?}");
+    assert_eq!(renamed[0].path, "src/moved.txt");
+    assert_eq!(renamed[0].renamed_from.as_deref(), Some("src/f.txt"));
+    assert_eq!((renamed[0].added, renamed[0].removed), (Some(0), Some(0)));
+    let json = serde_json::to_value(renamed[0]).expect("json");
+    assert_eq!(json["renamedFrom"], "src/f.txt");
+
+    let reviewed = diff(&fixture, &session, "src/moved.txt", ReviewArea::Staged);
+    let ReviewContentV1::Text {
+        text, hunk_actions, ..
+    } = &reviewed.content
+    else {
+        panic!("expected text");
+    };
+    assert!(text.contains("rename from src/f.txt"), "{text}");
+    assert!(!hunk_actions, "a rename changes as a whole");
+    assert!(reviewed.actions.unstage);
+    assert_eq!(
+        act(
+            &fixture,
+            ReviewRequestV1::Unstage {
+                session_id: session.clone(),
+                path: "src/moved.txt".into(),
+                fingerprint: reviewed.fingerprint.clone(),
+                hunk: Some(0),
+                part: None,
+            },
+        )
+        .expect_err("no single hunks of a rename"),
+        "NOT_SUPPORTED"
+    );
+    act(
+        &fixture,
+        ReviewRequestV1::Unstage {
+            session_id: session.clone(),
+            path: "src/moved.txt".into(),
+            fingerprint: reviewed.fingerprint,
+            hunk: None,
+            part: None,
+        },
+    )
+    .expect("unstages the rename");
+    let ReviewResultV1::Status { files, .. } = status(&fixture, &session) else {
+        panic!("expected status");
+    };
+    assert!(files.iter().all(|file| file.area != ReviewArea::Staged));
+    assert!(files.iter().any(|file| file.path == "src/f.txt"
+        && file.area == ReviewArea::Unstaged
+        && file.change == ReviewChange::Deleted));
+    assert!(
+        files
+            .iter()
+            .any(|file| file.path == "src/moved.txt" && file.area == ReviewArea::Untracked)
     );
 }

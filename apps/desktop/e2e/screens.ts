@@ -250,6 +250,15 @@ export const SCREENS: readonly Screen[] = [
     },
   },
   {
+    name: 'settings-worktrees',
+    async open(lab) {
+      const nav = await lab.openSettings();
+      await nav.getByRole('button', { name: 'Worktrees' }).click();
+      await expect(lab.page.getByRole('list', { name: 'Worktrees' }).getByRole('article', { name: 'piui/old-experiment' })).toBeVisible();
+      await settled(lab.page);
+    },
+  },
+  {
     name: 'plugin-trust-review',
     async open(lab) {
       const nav = await lab.openSettings();

@@ -8,6 +8,7 @@ import type { LabHost } from './labHost';
 import { labHost, rejection } from './labTestKit';
 import { DEMO_PROJECTS, demoSessionId } from './scenarios/demoChats';
 import { DEMO_WORKTREE_SESSION } from './sessionToolsFake';
+import { splitHunk } from '../../app/review/review';
 
 const TRANSPORT_CHAT = demoSessionId('transport');
 
@@ -38,11 +39,14 @@ describe('session tools lab fake', () => {
     expect(status.repository).toMatchObject({ state: 'ready', branch: 'main', worktree: false, folder: 'piui' });
     expect(status.files.map((file) => `${file.area}:${file.change}:${file.path}`)).toEqual([
       'unstaged:modified:apps/desktop/icons/badge.png',
+      'unstaged:modified:apps/desktop/src/app/review/labels.ts',
       'staged:modified:apps/desktop/src/app/shell/Sidebar.svelte',
       'unstaged:modified:apps/desktop/src/host-api/transport.ts',
       'unstaged:deleted:docs/OLD_NOTES.md',
       'untracked:added:docs/notes/review-panel.md',
+      'staged:modified:docs/review/notes.md',
     ]);
+    expect(status.files.find((file) => file.path === 'docs/review/notes.md')?.renamedFrom).toBe('docs/review-notes.md');
     const personal = await review<ReviewStatusV1>(host, { type: 'status', sessionId: demoSessionId('lisbon') });
     expect(personal.repository.state).toBe('not-repository');
   });
@@ -63,6 +67,71 @@ describe('session tools lab fake', () => {
     })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
     expect(await rejection(host.invoke('workspace_review_v1', { request: { type: 'status', sessionId: TRANSPORT_CHAT, extra: 1 } })))
       .toContain('unknown field `extra`');
+  });
+
+  it('stages one part of a split hunk like the host and refuses a part without its hunk', async () => {
+    const path = 'apps/desktop/src/app/review/labels.ts';
+    const diff = await review<ReviewDiffV1>(host, { type: 'diff', sessionId: TRANSPORT_CHAT, path, area: 'unstaged' });
+    expect(diff.content).toMatchObject({ kind: 'text', hunks: 1, hunkActions: true });
+    const text = diff.content.kind === 'text' ? diff.content.text : '';
+    expect(splitHunk(text, 0)).toHaveLength(3);
+    await expect(host.invoke('workspace_review_v1', {
+      request: { type: 'stage', sessionId: TRANSPORT_CHAT, path, area: 'unstaged', fingerprint: diff.fingerprint, part: 1 },
+    })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
+    await expect(host.invoke('workspace_review_v1', {
+      request: { type: 'stage', sessionId: TRANSPORT_CHAT, path, area: 'unstaged', fingerprint: diff.fingerprint, hunk: 0, part: 3 },
+    })).rejects.toMatchObject({ code: 'STALE' });
+    await review<ReviewStatusV1>(host, {
+      type: 'stage', sessionId: TRANSPORT_CHAT, path, area: 'unstaged', fingerprint: diff.fingerprint, hunk: 0, part: 1,
+    });
+    const staged = await review<ReviewDiffV1>(host, { type: 'diff', sessionId: TRANSPORT_CHAT, path, area: 'staged' });
+    expect(staged.content.kind === 'text' && staged.content.text).toContain("+  'unstaged', // work tree");
+    expect(staged.content.kind === 'text' && staged.content.text).not.toContain('+import');
+    const rest = await review<ReviewDiffV1>(host, { type: 'diff', sessionId: TRANSPORT_CHAT, path, area: 'unstaged' });
+    // The two remaining changes are now far apart: two hunks.
+    expect(rest.content).toMatchObject({ kind: 'text', hunks: 2 });
+  });
+
+  it('shows a staged rename as one change that unstages only as a whole', async () => {
+    const path = 'docs/review/notes.md';
+    const diff = await review<ReviewDiffV1>(host, { type: 'diff', sessionId: TRANSPORT_CHAT, path, area: 'staged' });
+    expect(diff.content).toMatchObject({ kind: 'text', hunkActions: false });
+    expect(diff.content.kind === 'text' && diff.content.text).toContain('rename from docs/review-notes.md\nrename to docs/review/notes.md');
+    await expect(host.invoke('workspace_review_v1', {
+      request: { type: 'unstage', sessionId: TRANSPORT_CHAT, path, fingerprint: diff.fingerprint, hunk: 0 },
+    })).rejects.toMatchObject({ code: 'NOT_SUPPORTED' });
+    const after = await review<ReviewStatusV1>(host, { type: 'unstage', sessionId: TRANSPORT_CHAT, path, fingerprint: diff.fingerprint });
+    expect(after.files.filter((file) => file.path.includes('review-notes') || file.path === path).map((file) => `${file.area}:${file.change}:${file.path}`))
+      .toEqual(['unstaged:deleted:docs/review-notes.md', 'untracked:added:docs/review/notes.md']);
+  });
+
+  it('lists managed worktrees and removes the orphan only after its changes are confirmed', async () => {
+    const listed = await placement(host, { type: 'worktrees' });
+    if (listed.type !== 'worktrees') throw new Error('expected worktrees');
+    expect(listed.worktrees.map((item) => [item.branch, item.sessions.length])).toEqual([
+      ['piui/old-experiment', 0],
+      ['piui/review-layout', 1],
+    ]);
+    const [orphan, used] = listed.worktrees;
+    if (orphan === undefined || used === undefined) throw new Error('expected two worktrees');
+    await expect(host.invoke('workspace_placement_v1', {
+      command: { type: 'removeOrphanWorktree', worktreeId: used.id, discardChanges: false },
+    })).rejects.toMatchObject({ code: 'CONFLICT' });
+    const dirty = await placement(host, { type: 'removeOrphanWorktree', worktreeId: orphan.id, discardChanges: false });
+    if (dirty.type !== 'worktreeDirty') throw new Error('expected changes');
+    expect(dirty.files).toEqual([{ path: 'docs/experiment.md', area: 'untracked' }]);
+    await expect(host.invoke('workspace_placement_v1', {
+      command: { type: 'removeOrphanWorktree', worktreeId: orphan.id, discardChanges: true, expectedChanges: 'f'.repeat(64) },
+    })).rejects.toMatchObject({ code: 'STALE' });
+    const removed = await placement(host, {
+      type: 'removeOrphanWorktree', worktreeId: orphan.id, discardChanges: true, expectedChanges: dirty.fingerprint,
+    });
+    expect(removed).toEqual({ protocol: 1, type: 'worktreeRemoved', worktreeId: orphan.id });
+    const after = await placement(host, { type: 'worktrees' });
+    expect(after.type === 'worktrees' && after.worktrees.map((item) => item.branch)).toEqual(['piui/review-layout']);
+    await expect(labHost('safe').invoke('workspace_placement_v1', {
+      command: { type: 'removeOrphanWorktree', worktreeId: orphan.id, discardChanges: false },
+    })).rejects.toMatchObject({ code: 'SAFE_MODE' });
   });
 
   it('moves an untracked file to the trash after review', async () => {

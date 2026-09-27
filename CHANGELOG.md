@@ -6,6 +6,20 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+### Added
+
+- Ctrl+K lists the open chat's native `/` commands (Pi extension, prompt-template and skill commands, or another harness's own commands) from the composer's catalog; choosing one puts it in the message box, like the `/` menu.
+- Review panel: split a hunk into its separate changes and stage, unstage, revert or comment on one part; staged renames show as one renamed file instead of a deletion and a new file.
+- Settings → Worktrees lists the worktrees PiUI created and removes one whose chats were deleted, after showing the uncommitted changes it would lose.
+
+### Changed
+
+- "Continue in another harness" lists the changed files even when the review panel was never opened.
+
+### Fixed
+
+- Plugin panels no longer miss their ready deadline on a busy machine: a loading panel frame stays transparent instead of hidden, so the browser engine does not deprioritize it.
+
 ### Removed
 
 - The classic interfaces: the previous workspace shell (`?view=legacy`) and the Pi-only view (`?view=classic`), with the Settings → About "Classic view" row. Everything they offered is in the default interface (see `docs/CLASSIC_PARITY.md`); both URLs now open it.

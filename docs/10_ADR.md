@@ -805,10 +805,17 @@ must never lose more than the person saw.
   Handoffs between harnesses are a new chat with an editable draft built from
   visible text; no history is translated.
 
+- **Parts and renames stay exact (v1.1).** A split hunk part is rebuilt by
+  the host from the fingerprinted diff and applied with exact positions; a
+  staged rename is one change applied as a whole. Orphan worktrees (all
+  chats deleted) are removed from Settings → Worktrees under the same dirty
+  confirmation; a worktree a chat still uses is removed from that chat.
+
 **Consequences:** repository filters configured by the user still run during
 reads. macOS cannot trash files yet. Concurrent terminal and PiUI writers
-remain risk R-06; the adoption check catches active turns only. Worktrees left
-by deleted chats need a later management screen. See `docs/SESSION_TOOLS.md`.
+remain risk R-06; the adoption check catches active turns only. Worktrees
+without a readable placement file are not managed. See
+`docs/SESSION_TOOLS.md`.
 
 ## ADR-038 — Composer attachments stay host-owned and native-only
 

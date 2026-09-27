@@ -62,7 +62,7 @@ deleted.
 | Live Pi chat: send, steer, follow-up queue, stop, model and thinking pickers, compaction | `features/runtime/ChatPanel.svelte` (classic RPC path) | Workspace Pi chats: `ChatComposer`, `RuntimeChip`, queue, `/compact`, `/stop` | Present |
 | New chat in a project or as a personal chat | Sidebar "New chat" / "New session" | Home composer, sidebar "New chat in …" | Present |
 | Continue a session found in the index (started in the Pi terminal app) live in PiUI | `ChatPanel` with `start_runtime(projectId, sessionId)` | History reader → "Continue in PiUI" (`app/history/ContinueInPiui.svelte`) → `workspace_adopt_v1`, then the ordinary `openSession` ([SESSION_TOOLS.md](SESSION_TOOLS.md)) | Ported (`feat/session-tools`; classic admission checks, never writes or renames the file; concurrent writers stay R-06) |
-| Pi runtime slash-command discovery (`get_commands`, provenance) in the composer and palette | `ChatPanel` slash menu, `CommandPalette` | Composer `/` menu: PiUI commands plus Pi extension commands, prompt templates and `skill:` commands from `get_commands` (source badge, inserted as text for Pi to run; paths never cross) | Ported in the composer; listing them in the palette as well is dropped (the palette lists PiUI and Tier 1A plugin commands; the runtime catalog belongs to the chat whose composer shows it) |
+| Pi runtime slash-command discovery (`get_commands`, provenance) in the composer and palette | `ChatPanel` slash menu, `CommandPalette` | Composer `/` menu: PiUI commands plus Pi extension commands, prompt templates and `skill:` commands from `get_commands` (source badge, inserted as text for Pi to run; paths never cross) | Ported: the composer `/` menu, and Ctrl+K lists the open chat's native commands ("Pi commands" group) from the same catalog |
 | PiUI "Tier 1A" contributions: composer action buttons and palette commands from `piui.manifest.json` | `ChatPanel`, `CommandPalette` (`list_piui_contributions`) | Plugin command registry: Ctrl+K commands and composer actions for Pi chats (`app/plugins/pluginRegistry.svelte.ts`) | Ported (plugins v1, ADR-032) |
 | Prime Agent live chat | Disabled (fail-closed) | Workspace Prime harness chats | Present (the new shell is ahead) |
 | Persistence feedback ("Finishing history sync…", retry discovery) | `ChatPanel` + `App.svelte` catalog resolution | Not needed: workspace chats are registered at creation; native history is read through `workspace_history_v1` | Dropped (the classic-only new-session discovery race does not exist in the workspace path) |
@@ -111,8 +111,8 @@ deleted.
    and PiUI writers stay risk R-06.
 2. ~~**Pi slash-command discovery**~~ — done in the composer
    (`workspace_composer_inputs_v1` `catalog` over the bridge's
-   `get_commands`, merged with PiUI's commands). A second listing in the
-   palette was dropped at removal time: the catalog is per chat runtime.
+   `get_commands`, merged with PiUI's commands) and in Ctrl+K, which lists
+   the open chat's native commands from the same catalog.
 3. ~~**Tier 1A contributions**~~ — closed by plugins v1 (ADR-032): the new
    shell reads `list_piui_contributions` lazily for Pi chats and projects its
    commands into Ctrl+K and its composer actions above the message box

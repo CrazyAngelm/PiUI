@@ -12,10 +12,12 @@
   import Bot from '@lucide/svelte/icons/bot';
   import ScrollText from '@lucide/svelte/icons/scroll-text';
   import Play from '@lucide/svelte/icons/play';
+  import GitBranch from '@lucide/svelte/icons/git-branch';
   import { t } from '../../features/locale/language';
   import { runLauncher } from '../triggers/runLauncher.svelte';
   import HarnessMark from './HarnessMark.svelte';
   import PluginPaletteGroup from '../plugins/PluginPaletteGroup.svelte';
+  import NativeCommandsPaletteGroup from './NativeCommandsPaletteGroup.svelte';
   import { useWorkspace } from './context';
 
   interface Props {
@@ -121,12 +123,16 @@
                 >
                   <Moon size={15} /><span>{$t('Toggle dark theme')}</span>
                 </Command.Item>
+                <Command.Item class="palette__item" value="action:worktrees" keywords={[$t('Manage worktrees'), 'worktree', 'branch', 'orphan']} onSelect={() => run(() => store.navigate({ name: 'settings', section: 'worktrees' }))}>
+                  <GitBranch size={15} /><span>{$t('Manage worktrees')}</span>
+                </Command.Item>
                 <Command.Item class="palette__item" value="action:settings" keywords={[$t('Settings'), 'settings', 'preferences']} onSelect={() => run(() => store.navigate({ name: 'settings', section: 'general' }))}>
                   <Settings size={15} /><span>{$t('Settings')}</span>
                 </Command.Item>
               </Command.GroupItems>
             </Command.Group>
             <PluginPaletteGroup onDone={() => (open = false)} />
+            <NativeCommandsPaletteGroup onDone={() => (open = false)} />
             {#if chats.length}
               <Command.Group>
                 <Command.GroupHeading class="palette__heading">{$t('Chats')}</Command.GroupHeading>

@@ -8,6 +8,7 @@ import { folderSlug, plainBranchName } from './branchNames';
 import { createPlacementClient, decodePlacementResult } from './placementClient';
 import { createReviewClient, decodeReviewResult } from './reviewClient';
 import { SESSION_TOOL_ERROR_COPY, SessionToolError, sessionToolError } from './sessionToolErrors';
+import { partPatch, splitHunk } from '../app/review/review';
 
 describe('session tools v1 contracts', () => {
   it('keeps the review fixture in the TypeScript contract shape', () => {
@@ -80,6 +81,51 @@ describe('session tools v1 contracts', () => {
       expect(decodePlacementResult({ ...fixture.placement.placements, ...change }), JSON.stringify(change)).toBeUndefined();
     }
     expect(decodePlacementResult({ ...fixture.placement.dirty, changes: -1 })).toBeUndefined();
+  });
+
+  it('decodes the additive v1.1 review fields: renames and hunk parts', () => {
+    const request = fixture.review.stagePartRequest as ReviewRequestV1;
+    expect(request.type === 'stage' && [request.hunk, request.part]).toEqual([0, 1]);
+    const renamed = decodeReviewResult(fixture.review.renamedStatus);
+    expect(renamed?.type === 'status' && renamed.files[0]?.renamedFrom).toBe('docs/old.md');
+    const file = fixture.review.renamedStatus.files[0];
+    for (const renamedFrom of ['', 7, null]) {
+      expect(decodeReviewResult({ ...fixture.review.renamedStatus, files: [{ ...file, renamedFrom }] }), String(renamedFrom)).toBeUndefined();
+    }
+    // A v1.0 status without the field still decodes.
+    expect(decodeReviewResult(fixture.review.status)?.type).toBe('status');
+  });
+
+  it('splits hunks exactly like the host (golden cases)', () => {
+    expect(fixture.review.hunkSplit.length).toBeGreaterThanOrEqual(4);
+    for (const item of fixture.review.hunkSplit) {
+      const parts = splitHunk(item.text, item.hunk);
+      expect(parts.map((_, index) => partPatch(item.text, item.hunk, index)), item.name).toEqual(item.parts);
+      expect(partPatch(item.text, item.hunk, parts.length), item.name).toBeUndefined();
+    }
+  });
+
+  it('decodes the additive v1.1 placement commands: managed and orphan worktrees', () => {
+    const commands: WorkspacePlacementCommandV1[] = [
+      fixture.placement.worktreesRequest as WorkspacePlacementCommandV1,
+      fixture.placement.removeOrphanRequest as WorkspacePlacementCommandV1,
+    ];
+    expect(commands.map((command) => command.type)).toEqual(['worktrees', 'removeOrphanWorktree']);
+    const listed = decodePlacementResult(fixture.placement.worktrees);
+    expect(listed?.type === 'worktrees' && listed.worktrees.map((item) => [item.state, item.sessions.length])).toEqual([
+      ['ready', 1],
+      ['missing', 0],
+    ]);
+    const dirty = decodePlacementResult(fixture.placement.worktreeDirty);
+    expect(dirty?.type === 'worktreeDirty' && dirty.files.map((item) => item.area)).toEqual(['unstaged', 'untracked']);
+    expect(decodePlacementResult(fixture.placement.worktreeRemoved)?.type).toBe('worktreeRemoved');
+    const managed = fixture.placement.worktrees.worktrees[0];
+    for (const change of [{ id: '../x' }, { state: 'removed' }, { sessions: [1] }]) {
+      expect(decodePlacementResult({ ...fixture.placement.worktrees, worktrees: [{ ...managed, ...change }] }), JSON.stringify(change)).toBeUndefined();
+    }
+    for (const change of [{ files: [{ path: 'x', area: 'elsewhere' }] }, { truncated: 'no' }, { changes: -1 }]) {
+      expect(decodePlacementResult({ ...fixture.placement.worktreeDirty, ...change }), JSON.stringify(change)).toBeUndefined();
+    }
   });
 
   it('keeps the adopt fixture in the TypeScript contract shape', () => {
