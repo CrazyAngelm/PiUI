@@ -18,6 +18,13 @@
  * types or methods, missing permissions and bursts over `requestsPerSecond`
  * get an error response (or are ignored before `ready`). A panel that sends
  * no `ready` within `readyTimeoutMs` is replaced with a generic fallback.
+ *
+ * v1.1 (additive, plugins v2): the same page also renders chat tool activity
+ * (manifest `renderers`, permission `ui.renderer`). A renderer frame's
+ * `init` carries `renderer` with the activity, later changes arrive as the
+ * `activity` event, and `frame.resize` sets the frame's height. PiUI keeps
+ * the generic view one click away and uses it whenever the frame does not
+ * become ready. Panels ignore both; old panels keep working unchanged.
  */
 import type { PluginPermission, PluginValue } from './piui-plugin-v2';
 
@@ -31,6 +38,11 @@ export const PLUGIN_PANEL_LIMITS = {
   idChars: 64,
   noticeChars: 500,
   readyTimeoutMs: 10_000,
+  /** v1.1: most activity text a renderer receives, encoded; longer text is cut and marked. */
+  rendererTextBytes: 48 * 1024,
+  /** v1.1: `frame.resize` bounds, in CSS pixels. */
+  minFrameHeight: 48,
+  maxFrameHeight: 600,
 } as const;
 
 /** Each method and the permission it needs. */
@@ -40,6 +52,8 @@ export const PLUGIN_PANEL_METHODS = {
   'settings.get': 'ui.settings',
   'settings.set': 'ui.settings',
   'notice.show': 'notifications',
+  /** v1.1: renderer frames only; a panel's request is answered and ignored. */
+  'frame.resize': 'ui.renderer',
 } as const satisfies Record<string, PluginPermission>;
 export type PanelMethod = keyof typeof PLUGIN_PANEL_METHODS;
 
@@ -53,6 +67,19 @@ export interface PanelTheme {
 
 export interface PanelChatContext {
   chat: { id: string; title: string } | null;
+}
+
+/**
+ * v1.1: the chat tool activity a renderer shows: plain data from the native
+ * harness, never HTML to insert. `text` is at most `rendererTextBytes`.
+ */
+export interface PanelRendererActivity {
+  toolName: string;
+  title: string;
+  status: 'streaming' | 'complete' | 'failed' | 'interrupted';
+  text: string;
+  /** The text was cut (by the harness, PiUI or both). */
+  truncated: boolean;
 }
 
 interface Envelope {
@@ -75,11 +102,14 @@ export type HostToPanelMessage =
       permissions: PluginPermission[];
       theme: PanelTheme;
       locale: 'en' | 'ru';
+      /** v1.1: present only in a renderer frame. */
+      renderer?: { id: string; title: string; activity: PanelRendererActivity };
     })
   | (Envelope & { type: 'response'; channel: string; id: string; result: unknown })
   | (Envelope & { type: 'response'; channel: string; id: string; error: { code: PanelErrorCode; message: string } })
   | (Envelope & { type: 'event'; channel: string; event: 'theme'; data: PanelTheme })
-  | (Envelope & { type: 'event'; channel: string; event: 'context'; data: PanelChatContext });
+  | (Envelope & { type: 'event'; channel: string; event: 'context'; data: PanelChatContext })
+  | (Envelope & { type: 'event'; channel: string; event: 'activity'; data: PanelRendererActivity });
 
 /** Request parameters and results per method. */
 export interface PanelMethodsV1 {
@@ -90,4 +120,6 @@ export interface PanelMethodsV1 {
   /** Replaces the values it names; validated like the Settings form. */
   'settings.set': { params: { values: Record<string, PluginValue> }; result: Record<string, PluginValue> };
   'notice.show': { params: { message: string; level?: 'info' | 'warning' | 'error' }; result: null };
+  /** v1.1: the renderer frame's height in CSS pixels, clamped to 48-600. */
+  'frame.resize': { params: { height: number }; result: null };
 }

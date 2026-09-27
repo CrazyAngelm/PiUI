@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
-  import { PLUGIN_PANEL_LIMITS, type PanelErrorCode, type PanelTheme } from '../../../../../contracts/plugin-panel-v1';
-  import type { PluginValue } from '../../../../../contracts/piui-plugin-v1';
-  import type { PluginEntryV1, PluginPanelV1 } from '../../../../../contracts/plugins-v1';
+  import { PLUGIN_PANEL_LIMITS, type PanelErrorCode, type PanelRendererActivity, type PanelTheme } from '../../../../../contracts/plugin-panel-v1';
+  import type { PluginValue } from '../../../../../contracts/piui-plugin-v2';
+  import type { PluginEntryV1 } from '../../../../../contracts/plugins-v1';
   import { language, t } from '../../features/locale/language';
   import {
     currentAppearance,
@@ -11,6 +11,7 @@
     methodPermitted,
     panelTheme,
     parsePanelMessage,
+    rendererHeight,
     RequestBudget,
     type PanelInbound,
   } from '../../host-api/pluginBridge';
@@ -28,14 +29,25 @@
    * within the size and rate limits, name a known method and pass the
    * plugin's permissions. A panel that never says `ready` is replaced with
    * a generic fallback.
+   *
+   * The same frame shows a chat renderer (plugins v2) when `activity` is
+   * given: the tool activity goes out in `init` and as `activity` events,
+   * `frame.resize` sets the height, and the parent shows the generic view
+   * instead when `onStatus` reports `failed`.
    */
   interface Props {
     plugin: PluginEntryV1;
-    panel: PluginPanelV1;
+    /** A panel, or a renderer (its id and title). */
+    panel: { id: string; title: string; url?: string };
     /** The open chat (sent only with `chat.read`). */
     chat: { id: string; title: string } | null;
+    /** A renderer frame: the tool activity it shows. */
+    activity?: PanelRendererActivity;
+    onStatus?: (status: 'loading' | 'ready' | 'failed') => void;
   }
-  let { plugin, panel, chat }: Props = $props();
+  let { plugin, panel, chat, activity, onStatus }: Props = $props();
+  const renderer = $derived(activity !== undefined);
+  let height = $state<number>(160);
 
   let frame = $state<HTMLIFrameElement | null>(null);
   let status = $state<'loading' | 'ready' | 'failed'>('loading');
@@ -102,6 +114,10 @@
           toasts.show({ tone: level === 'error' ? 'danger' : level === 'warning' ? 'warning' : 'neutral', title: plugin.name, description: String(params.message) });
           return respond(id, null);
         }
+        case 'frame.resize':
+          // Only a renderer frame follows its content; a panel keeps its size.
+          if (renderer) height = rendererHeight(Number(params.height));
+          return respond(id, null);
         default: {
           const exhaustive: never = method;
           return exhaustive;
@@ -129,6 +145,7 @@
             permissions: plugin.permissions,
             theme: theme(),
             locale: $language,
+            ...(activity !== undefined ? { renderer: { id: panel.id, title: panel.title, activity } } : {}),
           });
           return;
         case 'refuse':
@@ -167,6 +184,16 @@
     if (status === 'ready' && plugin.permissions.includes('chat.read')) post({ type: 'event', channel, event: 'context', data: current });
   });
 
+  // A streaming tool keeps its renderer up to date.
+  $effect(() => {
+    const current = activity;
+    if (status === 'ready' && current !== undefined) post({ type: 'event', channel, event: 'activity', data: current });
+  });
+
+  $effect(() => {
+    onStatus?.(status);
+  });
+
   function reload(): void {
     channel = crypto.randomUUID();
     budget = new RequestBudget();
@@ -176,7 +203,9 @@
 </script>
 
 <div class="panel">
-  {#if status === 'failed'}
+  {#if status === 'failed' && renderer}
+    <!-- The parent shows the generic view instead. -->
+  {:else if status === 'failed'}
     <div class="fallback" role="alert">
       <p>{$t('The panel “{0}” did not load. PiUI and your chat are not affected.', [panel.title])}</p>
       <Button size="sm" variant="ghost" onclick={reload}>
@@ -189,8 +218,10 @@
       <iframe
         bind:this={frame}
         class:loading={status !== 'ready'}
+        class:renderer
+        style:height={renderer ? `${height}px` : undefined}
         src={panel.url}
-        title={$t('{0} (plugin panel)', [panel.title])}
+        title={renderer ? $t('{0} (plugin view)', [panel.title]) : $t('{0} (plugin panel)', [panel.title])}
         sandbox="allow-scripts"
         referrerpolicy="no-referrer"
       ></iframe>

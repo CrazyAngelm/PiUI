@@ -147,6 +147,7 @@ describe('plugin SDK and examples', () => {
     expect(read(new URL('pipeline-pack/backend/piui-plugin-backend.mjs', examples))).toBe(backend);
     expect(read(new URL('status-tools/backend/piui-plugin-backend.mjs', examples))).toBe(backend);
     expect(read(new URL('hello-command/ui/piui-panel.js', examples))).toBe(panel);
+    expect(read(new URL('tool-cards/ui/piui-panel.js', examples))).toBe(panel);
   });
 
   it('the JSON transform node reshapes results without side effects', async () => {

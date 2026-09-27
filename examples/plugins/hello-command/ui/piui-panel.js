@@ -9,8 +9,11 @@
 //   commands.run (commands)       one of this plugin's commands
 //   settings.get / settings.set   (ui.settings) this plugin's settings
 //   notice.show  (notifications)  a short notice
+//   frame.resize (ui.renderer)    a chat renderer's height (see autoResize)
 // The theme's design tokens arrive as CSS custom properties (--piui-*) on the
-// root element; data-appearance says "dark" or "light".
+// root element; data-appearance says "dark" or "light". In a chat renderer
+// (manifest version 2) `ready` resolves with `renderer.activity` and later
+// changes arrive as the `activity` event: plain data, never HTML to insert.
 // See docs/PLUGINS.md and contracts/plugin-panel-v1.ts.
 (function () {
   'use strict';
@@ -18,7 +21,7 @@
   var channel = null;
   var nextId = 1;
   var pending = new Map();
-  var listeners = { theme: [], context: [] };
+  var listeners = { theme: [], context: [], activity: [] };
   var resolveReady;
   var ready = new Promise(function (resolve) {
     resolveReady = resolve;
@@ -83,7 +86,7 @@
     /** Resolves with the init message: plugin, panel, permissions, theme, locale. */
     ready: ready,
     request: request,
-    /** `theme` or `context`; returns an unsubscribe function. */
+    /** `theme`, `context` or `activity` (renderers); returns an unsubscribe function. */
     on: function (event, listener) {
       if (!listeners[event]) return function () {};
       listeners[event].push(listener);
@@ -107,6 +110,32 @@
     },
     showNotice: function (message, level) {
       return request('notice.show', { message: message, level: level || 'info' });
+    },
+    /** A chat renderer's height in CSS pixels (48-600); panels keep their size. */
+    resize: function (height) {
+      return request('frame.resize', { height: height });
+    },
+    /** Keeps a chat renderer as tall as its content. Returns a stop function. */
+    autoResize: function () {
+      var last = -1;
+      var scheduled = false;
+      function measure() {
+        scheduled = false;
+        var height = Math.ceil(document.documentElement.scrollHeight);
+        if (height === last) return;
+        last = height;
+        request('frame.resize', { height: height }).catch(function () {});
+      }
+      var observer = new ResizeObserver(function () {
+        if (!scheduled) {
+          scheduled = true;
+          requestAnimationFrame(measure);
+        }
+      });
+      observer.observe(document.body);
+      return function () {
+        observer.disconnect();
+      };
     },
   };
 

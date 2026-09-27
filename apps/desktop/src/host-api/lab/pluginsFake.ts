@@ -22,6 +22,7 @@ import themeManifest from '../../../../../examples/plugins/midnight-theme/piui-p
 import packManifest from '../../../../../examples/plugins/pipeline-pack/piui-plugin.json';
 import acpManifest from '../../../../../examples/plugins/acp-agent/piui-plugin.json';
 import statusManifest from '../../../../../examples/plugins/status-tools/piui-plugin.json';
+import toolCardsManifest from '../../../../../examples/plugins/tool-cards/piui-plugin.json';
 import collectTemplate from '../../../../../examples/plugins/pipeline-pack/templates/collect-and-reshape.piui.json?raw';
 import draftTemplate from '../../../../../examples/plugins/pipeline-pack/templates/draft-and-critique.piui.json?raw';
 import { transformJson } from '../../../../../examples/plugins/pipeline-pack/backend/transform.mjs';
@@ -94,6 +95,7 @@ const THEMES = manifest(themeManifest);
 const PACK = manifest(packManifest);
 const ACP = manifest(acpManifest);
 const STATUS = manifest(statusManifest);
+const TOOL_CARDS = manifest(toolCardsManifest);
 
 const WORD_COUNT = manifest({
   schemaVersion: 1,
@@ -226,6 +228,7 @@ export class LabPluginHost {
       add(THEMES);
       add(PACK);
       add(STATUS);
+      add(TOOL_CARDS);
       add(ACP, { enabled: false, log: [{ at, event: 'installed' }, { at, event: 'disabled' }] });
       add(BROKEN, {
         crashing: true,

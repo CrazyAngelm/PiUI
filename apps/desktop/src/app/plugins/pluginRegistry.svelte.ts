@@ -3,6 +3,7 @@ import type {
   PluginEntryV1,
   PluginNodeTypeV1,
   PluginPanelV1,
+  PluginRendererV1,
   PluginsCommandV1,
   PluginsRegistryV1,
   PluginsResponseV1,
@@ -203,6 +204,24 @@ export class PluginRegistry {
         .filter((panel) => panel.location === location && panel.url !== undefined)
         .map((panel) => ({ plugin, panel })),
     );
+  }
+
+  /**
+   * The renderer of an active plugin (with `ui.renderer`) for a native tool
+   * name, compared without letter case; the first plugin in the list wins.
+   * Undefined: the generic view.
+   */
+  renderer(toolName: string | undefined): { plugin: PluginEntryV1; renderer: PluginRendererV1 } | undefined {
+    if (!toolName || this.safeMode) return undefined;
+    const name = toolName.toLowerCase();
+    for (const plugin of this.active) {
+      if (!plugin.permissions.includes('ui.renderer')) continue;
+      const renderer = (plugin.contributes.renderers ?? []).find(
+        (candidate) => candidate.url !== undefined && candidate.toolNames.some((tool) => tool.toLowerCase() === name),
+      );
+      if (renderer) return { plugin, renderer };
+    }
+    return undefined;
   }
 
   themes(): { plugin: PluginEntryV1; theme: PluginThemeV1 }[] {

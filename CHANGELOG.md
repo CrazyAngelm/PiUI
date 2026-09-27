@@ -9,6 +9,8 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 ### Added
 
 - Plugin manifest version 2 (version 1 still works unchanged): status-bar items and keyboard shortcuts for a plugin's own commands. PiUI's shortcuts always win, and Settings → Plugins shows every conflict. New example `status-tools`; `pnpm create-plugin` writes version 2.
+- Chat renderers from plugins: a plugin can show chosen tool calls in its own sandboxed view inside the chat. The plain view is always one click away and takes over when the plugin is off or its view fails. New example `tool-cards`.
+- A dialog whose content scrolls can now be scrolled with the keyboard.
 
 ### Fixed
 

@@ -50,7 +50,9 @@ Examples in `examples/plugins/`:
 - `pipeline-pack` — two pipeline templates and a JSON transform node;
 - `acp-agent` — adds OpenCode as an ACP agent;
 - `status-tools` — manifest version 2: a status-bar item and two keyboard
-  shortcuts.
+  shortcuts;
+- `tool-cards` — manifest version 2: a chat renderer that shows issue-tracker
+  tool calls as a card.
 
 ## Package
 
@@ -168,6 +170,39 @@ Ctrl+K, Ctrl+N, Ctrl+Z, Ctrl+C and the other editing and window keys) never
 runs, and when two active plugins bind the same key neither runs. Settings →
 Plugins shows each binding and its conflict; `pnpm plugin:check` warns about
 reserved keys. Bindings do nothing while a dialog is open.
+
+### Chat renderers (version 2)
+
+```json
+"ui": { "entry": "ui/index.html" },
+"contributes": { "renderers": [{ "id": "issue", "title": "Issue card", "toolNames": ["create_issue"] }] }
+```
+
+Requires `ui.renderer` and a `ui.entry` page. When a chat shows a native
+tool call whose tool name matches one of `toolNames` (letter case ignored;
+the first active plugin in the list wins), the opened tool row shows the
+page in a sandboxed frame — the same frame, policy and bridge as a panel,
+with `?renderer=<id>` in its URL. Above it PiUI always offers **Plain view**,
+the generic view that needs nothing from the plugin; it takes over by itself
+when the plugin is off, in safe mode, or when the frame does not say `ready`
+within 10 seconds (then with a note and **Try again**). The frame is loaded
+only when the row is open.
+
+The renderer receives the activity as data, never HTML to insert: `init`
+carries `renderer: { id, title, activity }` and later changes arrive as the
+`activity` event, each `{ toolName, title, status, text, truncated }` with at
+most 48 KiB of `text`. `frame.resize` (or `panel.autoResize()`) sets the
+frame height, 48–600 pixels. A renderer sees the output of the tools it
+names — that is what the permission says in the review — but it gets no chat
+context (`chat` is `null`), and with `ui.settings` or `commands` whatever it
+stores or runs could reach the plugin's backend. Build the view with
+`textContent`, never `innerHTML`.
+
+```js
+const panel = window.piuiPanel;
+panel.ready.then((init) => { if (init.renderer) show(init.renderer.activity); panel.autoResize(); });
+panel.on('activity', show);
+```
 
 ### Settings
 

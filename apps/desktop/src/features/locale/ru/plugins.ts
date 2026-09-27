@@ -52,6 +52,7 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Chat renderer': 'Отображение в чате',
   'Plugin status items': 'Элементы плагинов в строке состояния',
   '{0} (plugin {1})': '{0} (плагин {1})',
+  '{0} (plugin view)': '{0} (отображение плагина)',
   '{0} settings': 'Настройки: {0}',
   'PiUI stores these values and passes them to the plugin. Do not put passwords or API keys here.':
     'PiUI хранит эти значения и передаёт их плагину. Не вводите здесь пароли и API-ключи.',

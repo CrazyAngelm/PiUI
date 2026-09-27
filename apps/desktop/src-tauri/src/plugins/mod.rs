@@ -432,12 +432,12 @@ impl PluginsState {
         })
     }
 
-    /// Reads a file a panel may load. `path` is relative to the package and
-    /// must be inside the folder of `ui.entry`. Blocking.
+    /// Reads a file a panel or chat renderer may load. `path` is relative to
+    /// the package and must be inside the folder of `ui.entry`. Blocking.
     pub(crate) fn panel_file(&self, id: &str, path: &str) -> Option<PanelFile> {
         let (_, package, root) = self.active(id).ok()?;
         let manifest = &package.manifest.manifest;
-        if !manifest.has(Permission::UiPanel) {
+        if !manifest.has(Permission::UiPanel) && !manifest.has(Permission::UiRenderer) {
             return None;
         }
         let entry = &manifest.ui.as_ref()?.entry;

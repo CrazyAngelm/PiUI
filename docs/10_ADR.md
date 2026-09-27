@@ -678,6 +678,17 @@ catalog; any enforcement of `network` or project-folder permissions.
   shortcuts change between versions and must not deactivate an installed
   plugin. The status bar and the key handler load after first paint and
   appear only while an active plugin contributes something.
+- **Chat renderers.** A renderer is the plugin's `ui.entry` page in the same
+  sandboxed frame, policy and bridge as a panel (`plugin-panel-v1` v1.1,
+  additive: `init.renderer`, the `activity` event and `frame.resize` with
+  `ui.renderer`), shown inside an opened tool row whose native tool name it
+  declares. The activity is bounded plain data (48 KiB of text, marked when
+  cut), never markup; the frame gets no chat context. The generic view is
+  always one click away and replaces the frame when the plugin is inactive,
+  in safe mode, or when the frame is not ready within 10 s, so a chat stays
+  readable without the plugin (AGENTS.md generic-fallback rule). The host
+  serves the UI folder to `ui.renderer` as it does to `ui.panel`; the frame
+  code is its own chunk, loaded only for an open matching row.
 
 ## ADR-033 — Script nodes are trusted user code (orchestration v6.2)
 

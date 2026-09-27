@@ -743,3 +743,43 @@ fn status_items_and_keybindings_run_only_the_commands_they_name() {
     manifest.contributes.keybindings.clear();
     assert!(!allowed(&manifest, "thanks", CommandOrigin::Keybinding));
 }
+
+#[test]
+fn a_renderer_only_plugin_serves_its_ui_folder_and_lists_the_renderer() {
+    let fixture = Fixture::new("renderer", false);
+    let id = fixture.install(ReviewSource::Folder, &example("tool-cards"));
+    let entry = fixture.entry(&id);
+    assert!(entry.active, "{:?}", entry.problems);
+    let renderer = &entry.contributes.renderers[0];
+    assert_eq!(renderer.tool_names, ["create_issue", "update_issue"]);
+    assert_eq!(
+        renderer.url.as_deref(),
+        Some(
+            format!(
+                "{}/example.tool-cards/ui/index.html?renderer=issue",
+                piui_plugins::csp::plugin_origin()
+            )
+            .as_str()
+        )
+    );
+    // `ui.renderer` without `ui.panel` still serves the UI folder, and only it.
+    assert!(
+        fixture
+            .plugins
+            .panel_file(&id, "ui/index.html")
+            .is_some_and(|file| file.html)
+    );
+    assert!(
+        fixture
+            .plugins
+            .panel_file(&id, "piui-plugin.json")
+            .is_none()
+    );
+    fixture
+        .plugins
+        .set_enabled(fixture.plugins.revision(), &id, false)
+        .expect("disable");
+    let entry = fixture.entry(&id);
+    assert_eq!(entry.contributes.renderers[0].url, None);
+    assert!(fixture.plugins.panel_file(&id, "ui/index.html").is_none());
+}

@@ -1,0 +1,65 @@
+/* PiUI's design tokens arrive as --piui-* custom properties. */
+html,
+body {
+  margin: 0;
+  background: transparent;
+  color: var(--piui-text, #222);
+  font-family: var(--piui-font-ui, system-ui, sans-serif);
+  font-size: var(--piui-text-sm, 13px);
+}
+
+.card {
+  padding: 10px 12px;
+  border: 1px solid var(--piui-border-subtle, #ddd);
+  border-radius: var(--piui-radius-md, 8px);
+  background: var(--piui-surface-1, #fff);
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+h1 {
+  margin: 0;
+  font-size: var(--piui-text-md, 14px);
+}
+
+.status {
+  color: var(--piui-text-muted, #666);
+}
+
+.status[data-status='failed'] {
+  color: var(--piui-danger-text, #a00);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 8px 0 0;
+}
+
+dt {
+  color: var(--piui-text-muted, #666);
+  text-transform: capitalize;
+}
+
+dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  margin: 8px 0 0;
+  font-family: var(--piui-font-mono, monospace);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.note {
+  margin: 8px 0 0;
+  color: var(--piui-text-muted, #666);
+}

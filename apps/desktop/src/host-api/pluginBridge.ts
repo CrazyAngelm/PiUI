@@ -5,6 +5,7 @@ import {
   type HostToPanelMessage,
   type PanelErrorCode,
   type PanelMethod,
+  type PanelRendererActivity,
   type PanelTheme,
 } from '../../../../contracts/plugin-panel-v1';
 import { PLUGIN_THEME_TOKENS, type PluginPermission, type PluginValue } from '../../../../contracts/piui-plugin-v2';
@@ -65,6 +66,10 @@ export function paramsIssue(method: PanelMethod, params: unknown): string | unde
       if (level !== undefined && level !== 'info' && level !== 'warning' && level !== 'error') return 'The level is info, warning or error.';
       return Object.keys(params).every((key) => key === 'message' || key === 'level') ? undefined : 'notice.show takes { message, level }.';
     }
+    case 'frame.resize':
+      return isObject(params) && Object.keys(params).length === 1 && typeof params.height === 'number' && Number.isFinite(params.height) && params.height >= 0 && params.height <= 100_000
+        ? undefined
+        : 'frame.resize needs { height } in pixels.';
     default: {
       const exhaustive: never = method;
       return exhaustive;
@@ -140,6 +145,49 @@ export function envelope<T extends object>(message: T): T & { piui: typeof PLUGI
 }
 
 export type OutboundMessage = HostToPanelMessage;
+
+/** A renderer frame's height: whole pixels within the bridge's bounds. */
+export function rendererHeight(requested: number): number {
+  return Math.round(Math.min(PLUGIN_PANEL_LIMITS.maxFrameHeight, Math.max(PLUGIN_PANEL_LIMITS.minFrameHeight, requested)));
+}
+
+/** The longest prefix of `text` that encodes to at most `limit` bytes. */
+function cutToBytes(text: string, limit: number): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(text).length <= limit) return text;
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (encoder.encode(text.slice(0, middle)).length <= limit) low = middle;
+    else high = middle - 1;
+  }
+  // Never end on half of a surrogate pair.
+  const end = low > 0 && /[\uD800-\uDBFF]/u.test(text[low - 1] ?? '') ? low - 1 : low;
+  return text.slice(0, end);
+}
+
+/** What a renderer receives about one tool block: plain, bounded data. */
+export function rendererActivity(block: {
+  toolName?: string;
+  title?: string;
+  label?: string;
+  status?: string;
+  text?: string;
+  safeSummary?: string;
+  truncated?: boolean;
+}): PanelRendererActivity {
+  const full = block.text ?? block.safeSummary ?? '';
+  const text = cutToBytes(full, PLUGIN_PANEL_LIMITS.rendererTextBytes);
+  const status = block.status === 'streaming' || block.status === 'failed' || block.status === 'interrupted' ? block.status : 'complete';
+  return {
+    toolName: block.toolName ?? '',
+    title: block.title ?? block.toolName ?? block.label ?? '',
+    status,
+    text,
+    truncated: block.truncated === true || text.length < full.length,
+  };
+}
 
 /** Only the settings a plugin declared, as the host resolved them. */
 export function settingsValues(values: Readonly<Record<string, PluginValue>>): Record<string, PluginValue> {

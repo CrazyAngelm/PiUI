@@ -250,6 +250,19 @@ export const SCREENS: readonly Screen[] = [
     },
   },
   {
+    name: 'chat-plugin-renderer',
+    async open(lab) {
+      // Plugins v2: a chat renderer (examples/plugins/tool-cards) for an MCP tool call.
+      await lab.chat(/File an issue for the broken docs link/).click();
+      await lab.page.getByRole('button', { name: 'Accept' }).click();
+      await expect(lab.page.getByText(/I filed/)).toBeVisible();
+      const group = lab.page.getByRole('button', { name: /Used 1 tool/ }).last();
+      if ((await group.getAttribute('aria-expanded')) !== 'true') await group.click();
+      await expect(lab.page.frameLocator('iframe[title="Issue card (plugin view)"]').getByText('Broken link in the harness guide')).toBeVisible();
+      await settled(lab.page);
+    },
+  },
+  {
     name: 'plugin-trust-review',
     async open(lab) {
       const nav = await lab.openSettings();

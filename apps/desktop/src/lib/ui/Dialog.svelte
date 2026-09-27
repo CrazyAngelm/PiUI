@@ -26,6 +26,26 @@
     footer,
     onOpenChange,
   }: Props = $props();
+
+  /**
+   * A body taller than the dialog scrolls; it joins the tab order only then,
+   * so keyboard users can scroll content that has nothing else to focus.
+   */
+  function keyboardScroll(node: HTMLElement): () => void {
+    const update = () => {
+      if (node.scrollHeight > node.clientHeight + 1) node.setAttribute('tabindex', '0');
+      else node.removeAttribute('tabindex');
+    };
+    const resize = new ResizeObserver(update);
+    resize.observe(node);
+    const mutations = new MutationObserver(update);
+    mutations.observe(node, { childList: true, subtree: true, characterData: true });
+    update();
+    return () => {
+      resize.disconnect();
+      mutations.disconnect();
+    };
+  }
 </script>
 
 <Dialog.Root bind:open {onOpenChange}>
@@ -49,7 +69,7 @@
           </Dialog.Close>
         {/if}
       </header>
-      {#if children}<div class="piui-dialog__body">{@render children()}</div>{/if}
+      {#if children}<div class="piui-dialog__body" {@attach keyboardScroll}>{@render children()}</div>{/if}
       {#if footer}<footer class="piui-dialog__foot">{@render footer()}</footer>{/if}
     </Dialog.Content>
   </Dialog.Portal>
@@ -128,6 +148,10 @@
     min-height: 0;
     padding: var(--piui-space-4);
     overflow-y: auto;
+  }
+  .piui-dialog__body:focus-visible {
+    outline: 2px solid var(--piui-focus);
+    outline-offset: -2px;
   }
   .piui-dialog__foot {
     display: flex;
