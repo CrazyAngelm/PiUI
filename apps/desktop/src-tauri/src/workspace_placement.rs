@@ -231,6 +231,11 @@ impl WorkspaceHost {
         Ok(self.record(session_id)?.workspace_id)
     }
 
+    /// Whether a chat was started by an orchestration run.
+    pub(crate) fn session_is_run(&self, session_id: &str) -> Result<bool, WorkspaceError> {
+        Ok(self.record(session_id)?.run_id.is_some())
+    }
+
     /// Whether a chat exists in the registry.
     pub(crate) fn session_exists(&self, session_id: &str) -> bool {
         self.record(session_id).is_ok()

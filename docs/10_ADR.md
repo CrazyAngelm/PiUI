@@ -966,3 +966,45 @@ asks or opts in. A release without the key cannot update itself later. The feed
 is unsigned; until the Tauri CLI records signed versions, `requireSignedVersion`
 stays off and a tampered feed could replay an older signed build under a newer
 number. Key handling, rotation and compromise response: `docs/RELEASING.md`.
+
+## ADR-040 — Chat pipelines: a chat's message can start a saved pipeline
+
+**Status:** Accepted 2026-09-28 (decisions delegated by the owner).
+
+**Context:** runs started only from the editor, an automation or `/run`, and a
+chat never showed them. The owner wants a chat to act as a pipeline's start,
+per chat or by project default, and pipeline templates in and outside a
+project, without crowding the composer further.
+
+**Decision:**
+
+- *Who answers* is one composer chip: a harness directly, a saved pipeline of
+  the project, or (new chats) a template. Choosing a pipeline hides the model
+  chip; project, permissions and worktree share one context chip.
+- A pipeline accepts chat messages when it declares a text input named
+  `message`, or has exactly one text input (templates' `task`). The message
+  fills it; the run has the `chat` trigger with the chat's session id. Every
+  step already receives run inputs as labelled, untrusted task data. The
+  editor's Start block offers "Accept chat messages" (adds `message`) and
+  "Start new chats of this project with this pipeline". New chats talk
+  directly unless the project sets that default.
+- The chat is an ordinary workspace session on the harness and model of the
+  pipeline's answering step (the last final agent step), so follow-ups talk
+  to that agent directly (owner's choice "b"). Run sessions stay closed to
+  user messages. Only the first message goes through the pipeline; picking a
+  pipeline again (or "Run again" on a run card) starts another run.
+- A finished run's answer reaches the chat's agent only inside the person's
+  next message, as a labelled `[PiUI pipeline result …]` block that the
+  transcript shows collapsed. No native history is written or converted.
+- Pipeline library v1 (`pipeline_library_v1`, `contracts/pipeline-library-v1.ts`)
+  stores templates (`piui-system` documents, global or per project), the
+  project chat default and each chat's run list, in generation files under
+  app data. It is UI metadata: runs keep `trigger.sessionId`. Using a
+  template opens it in the editor as a new draft; nothing is saved silently.
+
+**Consequences:** orchestration v6, the system file format and workspace v15
+are unchanged. The answering agent sees upstream results only through the
+handed-on text, not as a verified native history reference; a pipeline whose
+final step is a script continues on the composer's harness. Chat entries of
+deleted chats stay in the library until a cleanup exists. Images cannot be
+sent through a pipeline (run inputs are text).

@@ -25,6 +25,8 @@
   import { placements } from '../worktrees/placements.svelte';
   import { startHandoff } from '../handoff/startHandoff';
   import { useWorkspace } from './context';
+  import ChatRunCard from '../chatPipelines/ChatRunCard.svelte';
+  import { chatPipelines } from '../chatPipelines/chatPipelines.svelte';
 
   // Loaded on first use; a script-level import lets the dev server see its dependencies.
   const loadReviewPanel = () => import('../review/ReviewPanel.svelte');
@@ -40,6 +42,13 @@
   const snapshot = $derived(store.snapshots[sessionId]);
   const workspace = $derived(store.catalog.workspaces.find((item) => item.id === session?.workspaceId));
   const running = $derived(session ? ['starting', 'running', 'stopping'].includes(session.status) : false);
+  // Pipeline runs started from this chat, shown among its messages by time.
+  const chatPipeline = $derived(chatPipelines.chats[sessionId]);
+  const runInserts = $derived((chatPipeline?.runs ?? []).map((entry) => ({ id: entry.runId, at: entry.startedAt })));
+  $effect(() => {
+    const id = sessionId;
+    if (session && !session.runId) void chatPipelines.loadChat(id);
+  });
 
   let detailsOpen = $state(readDetailsOpen());
   /** The review panel replaces the details panel while open (one inspector). */
@@ -177,7 +186,15 @@
             historySessionId={snapshot.session.id}
             agentLabel={harnessMeta(snapshot.session.harness).label}
             bind:searchOpen
-          />
+            inserts={runInserts}
+          >
+            {#snippet insert(runId)}
+              {@const entry = chatPipeline?.runs.find((item) => item.runId === runId)}
+              {#if entry}
+                <ChatRunCard {entry} workspaceId={snapshot.session.workspaceId} sessionId={snapshot.session.id} safeMode={store.safeMode} onOpenRun={(id) => store.openRun(snapshot.session.workspaceId, id)} />
+              {/if}
+            {/snippet}
+          </Transcript>
           <div class="composer-zone">
             {#each snapshot.approvals as approval (approval.id)}
               <ApprovalCard {approval} session={snapshot.session} />
@@ -207,6 +224,7 @@
                   refresh={() => void store.reconcileSession(snapshot.session.id)}
                   interrupt={() => store.interrupt(snapshot.session.id)}
                   interruptBusy={store.interruptBusy}
+                  safeMode={store.safeMode}
                 />
               {/key}
             {/if}

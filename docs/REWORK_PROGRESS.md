@@ -448,6 +448,27 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   page-load guard active. Registries that store v2 permissions or MCP offers
   are not readable by 0.2.2 (downgrade shows an empty plugin list).
 
+## 2026-09-28 — chat pipelines and templates (unreleased)
+
+- **A chat can start a pipeline** (ADR-040). The composer's *who answers*
+  chip lists harnesses, the project's pipelines and templates; the model chip
+  shows only for direct chats; project, permissions and worktree moved into
+  one context chip. A pipeline's first message starts a run with the `chat`
+  trigger; the chat lives on the answering step's harness, shows run cards
+  (steps, answer, stop, run again, open run) among its messages, and hands a
+  finished answer to its agent inside the next message.
+- **Project default:** Start block → "Start new chats of this project with
+  this pipeline"; new chats talk directly otherwise.
+- **Templates:** "Save as template…" in the editor (every project or this
+  one), listed on the editor's start screen and in the composer; a template
+  opens as an unsaved draft with the harness's first model filled in.
+- **Pipeline library v1** host command with generation-file storage, UI Lab
+  fake and tests (12 Rust, 5 lab, client, store, locale).
+- Checked in the browser UI Lab: new pipeline chat, run card, handed-on
+  result, context chip, Start default, save template, template → editor.
+  Needs a real-app check: a real harness run started from a chat, and the
+  packaged WebView2 app.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

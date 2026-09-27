@@ -1,5 +1,6 @@
 import { acpRu } from './acp';
 import { chatRu } from './chat';
+import { chatPipelinesRu } from './chatPipelines';
 import { classicRu } from './classic';
 import { executorsRu } from './executors';
 import { harnessesRu } from './harnesses';
@@ -13,6 +14,7 @@ import { triggersRu } from './triggers';
 export const featureRu: Readonly<Record<string, string>> = {
   ...acpRu,
   ...chatRu,
+  ...chatPipelinesRu,
   ...classicRu,
   ...executorsRu,
   ...harnessesRu,

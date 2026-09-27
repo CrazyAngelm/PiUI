@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, type Snippet } from 'svelte';
+  import Route from '@lucide/svelte/icons/route';
   import ArrowDown from '@lucide/svelte/icons/arrow-down';
   import Copy from '@lucide/svelte/icons/copy';
   import Expand from '@lucide/svelte/icons/expand';
@@ -18,6 +19,8 @@
   import type { TimelineBlock } from '../../../host-api/types';
   import { Button, IconButton, Input, Skeleton, Spinner, toasts } from '../../../lib/ui';
   import ActivityGroupView from './ActivityGroupView.svelte';
+  import { interleave, timeOf, type TimedInsert } from '../../chatPipelines/interleave';
+  import { splitPipelineContext } from '../../chatPipelines/chatPipeline';
 
   interface Props {
     blocks: TimelineBlock[];
@@ -31,6 +34,9 @@
     olderLoading?: boolean;
     onLoadOlder?: () => void;
     emptyText?: string;
+    /** Rows placed among the messages by time, e.g. the chat's pipeline runs. */
+    inserts?: readonly TimedInsert[];
+    insert?: Snippet<[string]>;
   }
   let {
     blocks,
@@ -43,6 +49,8 @@
     olderLoading = false,
     onLoadOlder,
     emptyText,
+    inserts = [],
+    insert,
   }: Props = $props();
 
   const PAGE = 120;
@@ -86,6 +94,15 @@
   const shown = $derived<TimelineViewItem[]>(
     searching ? (matches[match] ? [{ type: 'block', block: matches[match] }] : []) : visible,
   );
+  const itemTime = (item: TimelineViewItem): number => timeOf(item.type === 'block' ? item.block.createdAt : item.blocks[0]?.createdAt);
+  // Runs before the first shown message wait until earlier messages are shown.
+  const placed = $derived.by(() => {
+    if (searching || !insert) return [];
+    if (hidden === 0) return inserts;
+    const first = visible.map(itemTime).find(Number.isFinite);
+    return first === undefined ? inserts : inserts.filter((entry) => !(timeOf(entry.at) < first));
+  });
+  const rows = $derived(interleave(shown, itemTime, placed));
 
   $effect(() => {
     if (searchOpen) void openSearch();
@@ -286,7 +303,7 @@
     <div class="column">
       {#if blocks.length === 0 && loading}
         <div class="loading"><Skeleton lines={4} /></div>
-      {:else if blocks.length === 0}
+      {:else if blocks.length === 0 && placed.length === 0}
         <p class="empty">{emptyText ?? $t('No messages yet. Say hello to start.')}</p>
       {/if}
 
@@ -300,7 +317,11 @@
         </div>
       {/if}
 
-      {#each shown as item (item.type === 'activity-group' ? item.id : item.block.id)}
+      {#each rows as row (row.type === 'insert' ? `insert:${row.id}` : row.item.type === 'activity-group' ? row.item.id : row.item.block.id)}
+        {#if row.type === 'insert'}
+          <div class="item item--insert">{@render insert?.(row.id)}</div>
+        {:else}
+        {@const item = row.item}
         {#if item.type === 'activity-group'}
           <div class="item">
             <ActivityGroupView group={item} {openState} onOpenChange={setOpen} />
@@ -310,7 +331,14 @@
           <div class="item" data-timeline-block={block.id}>
             {#if block.kind === 'user'}
               <!-- Bridges list a message's images as trailing `[image]` lines; bytes never reach the transcript. -->
-              {@const user = splitImageMarkers(block.text ?? block.safeSummary ?? '')}
+              {@const split = splitPipelineContext(block.text ?? block.safeSummary ?? '')}
+              {@const user = splitImageMarkers(split.text)}
+              {#each split.contexts as context, index (index)}
+                <details class="handed">
+                  <summary><Route size={12} /> {$t('Handed on the result of {0}', [context.pipelineName || $t('a pipeline')])}</summary>
+                  <MarkdownContent source={context.body} compact={true} />
+                </details>
+              {/each}
               <div class="user">
                 {#if user.text || !user.images}<MarkdownContent source={user.text} />{/if}
                 {#if user.images}
@@ -363,6 +391,7 @@
               </details>
             {/if}
           </div>
+        {/if}
         {/if}
       {/each}
     </div>
@@ -430,6 +459,27 @@
     display: flex;
     justify-content: center;
     margin-bottom: var(--piui-space-4);
+  }
+  .item--insert {
+    content-visibility: visible;
+  }
+  .handed {
+    width: fit-content;
+    max-width: min(80%, var(--piui-chat-reading-width));
+    margin: 0 0 6px auto;
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
+  }
+  .handed summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+  }
+  .handed[open] {
+    padding: 8px 12px;
+    border: 1px solid var(--piui-border-subtle);
+    border-radius: var(--piui-radius-md);
   }
   .user {
     width: fit-content;

@@ -108,7 +108,7 @@ test.describe('keyboard-only operation', () => {
     const harness = composer.getByRole('button', { name: 'Pi', exact: true });
     await harness.focus();
     await page.keyboard.press('Enter');
-    const search = page.getByRole('combobox', { name: 'Harness' });
+    const search = page.getByRole('combobox', { name: 'Who answers' });
     await expect(search).toBeFocused();
     await page.keyboard.type('hermes');
     await page.keyboard.press('Enter');

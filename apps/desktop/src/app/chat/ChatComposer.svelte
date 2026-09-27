@@ -16,6 +16,9 @@
   import { errorMessage } from '../workspaceStore.svelte';
   import { runLauncher } from '../triggers/runLauncher.svelte';
   import RuntimeChip from './RuntimeChip.svelte';
+  import ExecutorPicker, { type Executor } from '../chatPipelines/ExecutorPicker.svelte';
+  import PipelineInputsBar from '../chatPipelines/PipelineInputsBar.svelte';
+  import { chatPipelines, type ChatPipelineDetail } from '../chatPipelines/chatPipelines.svelte';
   import AttachButton from './composer/AttachButton.svelte';
   import AttachmentChips from './composer/AttachmentChips.svelte';
   import AttachmentNotices from './composer/AttachmentNotices.svelte';
@@ -37,8 +40,9 @@
     refresh: () => void;
     interrupt: () => Promise<boolean>;
     interruptBusy?: boolean;
+    safeMode?: boolean;
   }
-  let { snapshot, draft, updateDraft, images = [], updateImages = () => undefined, refresh, interrupt, interruptBusy = false }: Props = $props();
+  let { snapshot, draft, updateDraft, images = [], updateImages = () => undefined, refresh, interrupt, interruptBusy = false, safeMode = false }: Props = $props();
 
   interface Pending {
     id: string;
@@ -148,6 +152,68 @@
   );
   const activeIndex = $derived(menu && menu.items.length ? menuIndex % menu.items.length : 0);
   const queue = $derived(composer?.queue.items.filter((item) => item.status !== 'sent' && item.status !== 'cancelled') ?? []);
+
+  // The next message may go through a saved pipeline instead (ADR-040); after
+  // that run starts, the chat talks to its own agent again.
+  const pipelineId = $derived(chatPipelines.chats[sessionId]?.launchCommandId ?? '');
+  const executor = $derived<Executor>(pipelineId ? { kind: 'pipeline', commandId: pipelineId } : { kind: 'direct', harness });
+  const pendingResults = $derived(chatPipelines.pendingResults(sessionId).filter((run) => run.status === 'succeeded').length);
+  let pipelineDetail = $state.raw<ChatPipelineDetail | undefined>();
+  let pipelineLoading = $state(false);
+  let pipelineError = $state('');
+  let inputsBar = $state<ReturnType<typeof PipelineInputsBar> | undefined>();
+  $effect(() => {
+    const id = pipelineId;
+    const workspace = workspaceId;
+    pipelineDetail = undefined;
+    pipelineError = '';
+    if (!id) return;
+    let cancelled = false;
+    pipelineLoading = true;
+    chatPipelines
+      .detail(workspace, id)
+      .then((detail) => {
+        if (!cancelled) pipelineDetail = detail;
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) pipelineError = errorMessage(cause);
+      })
+      .finally(() => {
+        if (!cancelled) pipelineLoading = false;
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  async function chooseExecutor(next: Executor): Promise<void> {
+    try {
+      await chatPipelines.setChatPipeline(sessionId, workspaceId, next.kind === 'pipeline' ? next.commandId : undefined);
+    } catch (cause) {
+      error = errorMessage(cause);
+    }
+  }
+
+  async function sendThroughPipeline(): Promise<void> {
+    if (attachments.images.length) {
+      error = 'Pipelines take text only. Remove the images, or talk to the agent directly.';
+      return;
+    }
+    const values = inputsBar?.collect();
+    if (!values || busy) return;
+    const message = text;
+    busy = true;
+    error = '';
+    try {
+      await chatPipelines.send({ workspaceId, sessionId, commandId: pipelineId, text: message, values, safeMode });
+      if (text === message) setText('');
+      await chatPipelines.setChatPipeline(sessionId, workspaceId, undefined).catch(() => undefined);
+    } catch (cause) {
+      error = errorMessage(cause);
+    } finally {
+      busy = false;
+    }
+  }
 
   $effect(() => {
     if (!running || !canSteer) mode = 'follow-up';
@@ -310,7 +376,14 @@
       await runCommand(text.trim().slice(1));
       return;
     }
-    const message = text;
+    if (pipelineId) {
+      await sendThroughPipeline();
+      return;
+    }
+    const typed = text;
+    // Finished runs of this chat reach its agent inside this message, labelled.
+    const handed = await chatPipelines.withResults(sessionId, typed);
+    const message = handed.text;
     const imageIds = attachments.ids;
     const effectiveMode = running ? mode : 'prompt';
     // A durable request id prevents duplicate delivery if the reply is lost.
@@ -333,7 +406,8 @@
       ...(identity.attachments?.length ? { attachments: identity.attachments } : {}),
     });
     if (sent) {
-      if (text === message) setText('');
+      if (text === typed) setText('');
+      void chatPipelines.consume(sessionId, handed.runIds);
       // The host now owns the images of the queued message.
       if (attachments.ids.join() === imageIds.join()) attachments.handOver();
       try {
@@ -495,6 +569,11 @@
       <p class="composer__warning" role="alert">{$t(imageState.reason ?? '')} {$t('Remove the images to send this message.')}</p>
     {/if}
     <AttachmentNotices notices={attachments.notices} onDismiss={() => attachments.dismissNotices()} />
+    {#if pipelineId}
+      <PipelineInputsBar bind:this={inputsBar} detail={pipelineDetail} loading={pipelineLoading} error={pipelineError} disabled={busy} existingChat={true} />
+    {:else if pendingResults}
+      <p class="handoff">{$t('The next message hands the pipeline result to {0}.', [harnessMeta(harness).label])}</p>
+    {/if}
     <Textarea
       bind:ref={input}
       value={text}
@@ -517,16 +596,25 @@
       aria-autocomplete="list"
       aria-controls={menu ? menuId : undefined}
       aria-activedescendant={menu && menu.items.length ? `${menuId}-${activeIndex}` : undefined}
-      placeholder={running ? $t('Queue a follow-up…') : $t('Reply, type / for commands or @ to mention a file…')}
+      placeholder={pipelineId ? $t('Describe the task for the pipeline…') : running ? $t('Queue a follow-up…') : $t('Reply, type / for commands or @ to mention a file…')}
     />
     <div class="composer__bar">
       <div class="composer__left">
-        <AttachButton images={imageState} busy={attachments.busy} disabled={busy} onPick={() => void attachments.pick(workspaceId, imageState)} />
-        <RuntimeChip
-          session={snapshot.session}
-          disabled={busy || snapshot.session.status !== 'idle' || !snapshot.capabilities.models.supported}
-          onchange={refresh}
+        <AttachButton images={imageState} busy={attachments.busy} disabled={busy || Boolean(pipelineId)} onPick={() => void attachments.pick(workspaceId, imageState)} />
+        <ExecutorPicker
+          {workspaceId}
+          value={executor}
+          harnesses={[{ kind: harness, name: harnessMeta(harness).label, available: true }]}
+          disabled={busy || safeMode}
+          onChange={(next) => void chooseExecutor(next)}
         />
+        {#if !pipelineId}
+          <RuntimeChip
+            session={snapshot.session}
+            disabled={busy || snapshot.session.status !== 'idle' || !snapshot.capabilities.models.supported}
+            onchange={refresh}
+          />
+        {/if}
         {#if running && canSteer}
           <Segmented
             size="sm"
@@ -570,6 +658,12 @@
   .composer-wrap {
     display: grid;
     gap: var(--piui-space-2);
+  }
+  .handoff {
+    margin: 0;
+    padding: 6px 14px 0;
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
   }
   .queue {
     display: grid;
