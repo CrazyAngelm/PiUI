@@ -6,6 +6,12 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+### Removed
+
+- The classic interfaces: the previous workspace shell (`?view=legacy`) and the Pi-only view (`?view=classic`), with the Settings → About "Classic view" row. Everything they offered is in the default interface (see `docs/CLASSIC_PARITY.md`); both URLs now open it.
+- The host commands only those views used: the classic live Pi runtime (`start_runtime`, `start_personal_chat`, `send_prompt`, `send_steer`, `send_follow_up`, `abort_runtime`, `stop_live_runtime`, `get_runtime_*`, `set_runtime_*`, `respond_extension_ui`), the fake runtime (`run_fake_scenario`, `start_fake_runtime`, `stop_runtime`), the unversioned duplicates (`bootstrap`, `update_preferences`, `list_extensions`, `set_extension_enabled`, `add_project`, `pick_and_add_project`), `list_sessions`, `list_personal_sessions`, `get_timeline`, `get_tree`, `get_personal_tree` and `probe_system_runtime`. Every other command keeps its name and version.
+- The Windows WebView2 E2E `--classic` and `--workspace` scenarios (`test:e2e:classic`, `test:e2e:workspace`).
+
 ## [0.2.2] - 2026-09-27
 
 ### Security

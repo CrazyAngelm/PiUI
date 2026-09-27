@@ -34,8 +34,9 @@ Current plan and decisions: `docs/PLAN_2026-09-26_RU.md`; progress log:
   user's installed `claude` executable, scrub API-key/cloud-provider env vars,
   never pass `--bare`, refuse non-subscription auth, never touch credentials.
 - New UI code: Svelte 5 runes, tokens in `styles/tokens.css`, primitives in
-  `src/lib/ui`, Lucide icons, Svelte Flow for graphs (ADR-027). The new shell is
-  `src/app/shell`; the previous one stays at `?view=legacy` until parity.
+  `src/lib/ui`, Lucide icons, Svelte Flow for graphs (ADR-027). The shell is
+  `src/app/shell`; the classic views (`?view=legacy`, `?view=classic`) were
+  removed after parity (docs/CLASSIC_PARITY.md).
 - Every screen must work in the browser UI Lab (`pnpm --filter @piui/desktop dev`)
   through `host-api/transport.ts`; never import Tauri APIs outside the transport.
 - Svelte 5.38 native TS stripping keeps optional parameters (`fn(a?: T)`) in

@@ -1,11 +1,11 @@
 # Classic parity (release 0.2.0)
 
-Status: 2026-09-27, branch `feat/classic-port`. Plan item P2.7, first half
+Status: **done — the classic views were removed** (2026-09-27, after the 0.2.2
+test release, owner approved). Plan item P2.7
 ([PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md)).
 
-Decision: the new shell (`src/app/shell`, the default view) reaches parity now.
-The previous interfaces stay reachable in 0.2.0 and are deleted in the next
-release:
+Decision: the new shell (`src/app/shell`, the only view) reached parity. The
+previous interfaces stayed reachable in 0.2.0–0.2.2 and are now deleted:
 
 - `?view=legacy` — the previous multi-harness workspace shell
   (`features/workspace/WorkspaceShell.svelte`).
@@ -13,9 +13,9 @@ release:
   `features/projects`, `features/runtime`, `features/sessions`,
   `features/settings`, `features/tree`, `features/navigation`).
 
-Settings → About has one row that opens either view and says it goes away in
-the next release; both classic settings pages have a "New interface" button
-that returns to the default view.
+The Settings → About "Classic view" row, the `?view=` switch and both views'
+"New interface" buttons went with them; `?view=legacy` and `?view=classic` now
+open the default shell. See "Removal" below for what was deleted.
 
 Statuses: **Ported** — added to the new shell by this change. **Present** — the
 new shell already had it. **Dropped** — intentionally not carried over (reason
@@ -26,10 +26,10 @@ deleted.
 
 | Status | Count |
 | --- | --- |
-| Ported | 17 |
+| Ported | 18 |
 | Present | 27 |
-| Dropped | 9 |
-| Gap | 2 |
+| Dropped | 10 |
+| Gap | 0 |
 
 ## Pi-only classic view (`?view=classic`)
 
@@ -62,8 +62,8 @@ deleted.
 | Live Pi chat: send, steer, follow-up queue, stop, model and thinking pickers, compaction | `features/runtime/ChatPanel.svelte` (classic RPC path) | Workspace Pi chats: `ChatComposer`, `RuntimeChip`, queue, `/compact`, `/stop` | Present |
 | New chat in a project or as a personal chat | Sidebar "New chat" / "New session" | Home composer, sidebar "New chat in …" | Present |
 | Continue a session found in the index (started in the Pi terminal app) live in PiUI | `ChatPanel` with `start_runtime(projectId, sessionId)` | History reader → "Continue in PiUI" (`app/history/ContinueInPiui.svelte`) → `workspace_adopt_v1`, then the ordinary `openSession` ([SESSION_TOOLS.md](SESSION_TOOLS.md)) | Ported (`feat/session-tools`; classic admission checks, never writes or renames the file; concurrent writers stay R-06) |
-| Pi runtime slash-command discovery (`get_commands`, provenance) in the composer and palette | `ChatPanel` slash menu, `CommandPalette` | Composer `/` menu: PiUI commands plus Pi extension commands, prompt templates and `skill:` commands from `get_commands` (source badge, inserted as text for Pi to run; paths never cross) | Ported in the composer; the palette does not list them yet |
-| PiUI "Tier 1A" contributions: composer action buttons and palette commands from `piui.manifest.json` | `ChatPanel`, `CommandPalette` (`list_piui_contributions`) | Not available | **Gap** — superseded by the plugin registry (plan Ф8, ADR-032) or a small port on top of the dynamic slash commands |
+| Pi runtime slash-command discovery (`get_commands`, provenance) in the composer and palette | `ChatPanel` slash menu, `CommandPalette` | Composer `/` menu: PiUI commands plus Pi extension commands, prompt templates and `skill:` commands from `get_commands` (source badge, inserted as text for Pi to run; paths never cross) | Ported in the composer; listing them in the palette as well is dropped (the palette lists PiUI and Tier 1A plugin commands; the runtime catalog belongs to the chat whose composer shows it) |
+| PiUI "Tier 1A" contributions: composer action buttons and palette commands from `piui.manifest.json` | `ChatPanel`, `CommandPalette` (`list_piui_contributions`) | Plugin command registry: Ctrl+K commands and composer actions for Pi chats (`app/plugins/pluginRegistry.svelte.ts`) | Ported (plugins v1, ADR-032) |
 | Prime Agent live chat | Disabled (fail-closed) | Workspace Prime harness chats | Present (the new shell is ahead) |
 | Persistence feedback ("Finishing history sync…", retry discovery) | `ChatPanel` + `App.svelte` catalog resolution | Not needed: workspace chats are registered at creation; native history is read through `workspace_history_v1` | Dropped (the classic-only new-session discovery race does not exist in the workspace path) |
 | Appearance: theme, density, motion, chat text size, conversation width | Settings → Appearance | Settings → General | Present |
@@ -109,9 +109,10 @@ deleted.
    workspace session bound to it, and the ordinary `openSession` resumes it
    without `--name`. The history reader has "Continue in PiUI". Concurrent CLI
    and PiUI writers stay risk R-06.
-2. **Pi slash-command discovery** — done in the composer
+2. ~~**Pi slash-command discovery**~~ — done in the composer
    (`workspace_composer_inputs_v1` `catalog` over the bridge's
-   `get_commands`, merged with PiUI's commands); the palette still lacks it.
+   `get_commands`, merged with PiUI's commands). A second listing in the
+   palette was dropped at removal time: the catalog is per chat runtime.
 3. ~~**Tier 1A contributions**~~ — closed by plugins v1 (ADR-032): the new
    shell reads `list_piui_contributions` lazily for Pi chats and projects its
    commands into Ctrl+K and its composer actions above the message box
@@ -122,7 +123,40 @@ Known limitation (shared with the classic view): the host redacts anything
 that looks like an absolute path in extension text, so prepared composer text
 that starts with a slash command (`/review …`) shows as `<external-path>/review …`.
 
-## What the deletion must keep
+## Removal (done)
+
+Deleted with the classic views:
+
+- Frontend: `app/App.svelte`, `app/state.ts`, `app/viewSwitch.ts`,
+  `app/settings/ClassicViewEntry.svelte`, `components/EmptyState.svelte`,
+  `features/navigation`, `features/projects`, `features/settings`,
+  `features/tree`, the classic `features/runtime` screens and helpers
+  (`ChatPanel`, `ExtensionUiDialog`, `ModelPicker`, `RuntimeBar`,
+  `PrimeActivityPanel`, `FakeScenarioComposer`, `modelPicker`,
+  `primeActivityView`, `runtimeCommands`, `runtimeSelection`,
+  `sessionPersistenceFeedback`), `features/sessions/projectSessionPagination`,
+  the legacy workspace shell (`WorkspaceShell`, `WorkspaceSettings`,
+  `SessionComposer`, `RuntimePicker`, `runtimePickerState`,
+  `conversationSurface`), `host-api/client.ts` and `host-api/mockClient.ts`,
+  their unit tests, the lab `get_tree` / `get_personal_tree` fakes and the
+  Russian copy only those files used.
+- Host: the 30 classic-only Tauri commands listed below, the classic live and
+  fake runtime slots in `HostState`, their DTOs and error constructors, and
+  `piui-runtime`'s `system_probe` module. `workspace_adopt_v1` keeps its
+  admission checks; the check against the classic live runtime went with that
+  runtime (it could no longer hold a session). Surviving commands keep their
+  names and IPC versions.
+- Harness: the Windows WebView2 `--classic` dialog proof and the `--workspace`
+  legacy-view proof (`scripts/workspace-webview2-e2e.mjs`) with their package
+  scripts; `pnpm test:smoke` now checks the surviving shared modules.
+
+Kept on purpose: `contracts/runtime-protocol.ts` (its DTO shapes are still
+used by the surviving commands, the workspace contracts and the agent API),
+`add_project_v10` (the native E2E harness and the agent API register folders
+with it), and `piui-runtime`'s `RealPiRuntime` / `fake` modules (runtime-layer
+code with its own tests and upstream evidence; no UI calls them any more).
+
+## What the deletion had to keep
 
 Shared modules used by the new shell: `features/runtime/extensionUiState.ts`
 (extension surface reducer), `features/sessions/timelineView.ts` and
@@ -142,8 +176,7 @@ change: the `piui://workspace-extension-ui` event
 Gap 1 added `workspace_adopt_v1`
 ([contracts/workspace-adopt-v1.ts](../contracts/workspace-adopt-v1.ts)).
 
-Classic-only routes that can go with the classic code once the gaps are
-closed: the classic live runtime (`start_runtime`, `start_personal_chat`,
+Classic-only routes, removed with the classic code: the classic live runtime (`start_runtime`, `start_personal_chat`,
 `send_*`, `abort_runtime`, `stop_live_runtime`, `get_runtime_*`,
 `set_runtime_*`, `respond_extension_ui`, `piui://runtime-event`), fake
 runtimes (`run_fake_scenario`, `start_fake_runtime`, `stop_runtime`), legacy
@@ -173,10 +206,8 @@ Run the lab (`pnpm --filter @piui/desktop dev`, `?lab=demo`):
 3. Settings → Extensions: Pi and Prime Agent inventories with switches.
 4. Sidebar project menu: Rename…, Pin to top, Remove from PiUI… (blocked while
    `piui` has running chats).
-5. Settings → About → "Classic view": opens `?view=legacy` or `?view=classic`;
-   their Settings → "New interface" returns.
-6. `?lab=safe`: history and the extension list stay readable; project removal
+5. `?lab=safe`: history and the extension list stay readable; project removal
    is unavailable.
-7. `piui` history → "Make the session index incremental" → "Continue in PiUI":
+6. `piui` history → "Make the session index incremental" → "Continue in PiUI":
    the chat opens in the sidebar and resumes; "Draft release notes for 0.2.0"
    is refused as still open in the terminal.

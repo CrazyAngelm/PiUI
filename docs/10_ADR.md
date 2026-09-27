@@ -448,7 +448,8 @@ utility-class DSL (ADR-014 stands). The first-paint asset budget is measured in
 gzip (the WebView loads local files); raw bytes are still reported.
 
 **Consequences:** legacy components migrate as screens are rebuilt; the previous
-shell stays reachable at `?view=legacy` until parity and then is removed.
+shell stayed reachable at `?view=legacy` until parity and was removed after the
+0.2.2 test release ([CLASSIC_PARITY.md](CLASSIC_PARITY.md)).
 
 ## ADR-028 — Open harness registry and version ranges
 

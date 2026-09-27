@@ -154,12 +154,6 @@ Scenarios:
   disables the composer and keeps the catalog readable. Claude Code and Hermes
   resolve to missing fixture paths and Pi/Prime to synthetic fixture peers, so
   no agent starts.
-- `--classic` (`pnpm --filter @piui/desktop test:e2e:classic`) — the retained
-  compatibility view (`?view=classic`): runtime chooser, extension inventories,
-  Pi fallback and Prime read-only boundaries.
-- `--workspace` (`test:e2e:workspace`) — the legacy workspace shell
-  (`?view=legacy`) with installed native harness code and a local synthetic
-  provider, until the new shell reaches parity.
 - `--agent-api` (`pnpm agent:api:e2e`) — the agent API over the same harness.
 
 Cargo output goes to `PIUI_E2E_CARGO_TARGET_DIR`, else `CARGO_TARGET_DIR`,

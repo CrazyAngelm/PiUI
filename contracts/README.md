@@ -6,6 +6,15 @@
 - `piui-host-api.d.ts` — author-facing API for declarative workers and rich views.
 - `runtime-protocol.ts` — internal typed IPC between the Rust host and core Svelte UI; v3 introduced the local live-runtime surface, v4 added Pi thinking-level discovery, v5 added host-owned personal Chats, v6 versioned semantic timeline projection v2, v7 added cache-first catalogs and watcher hints, v8 versioned PiUI-only appearance preferences, v9 added bounded extension UI/runtime commands, and v10 adds an explicit `pi | prime-agent` project kind, separate session discovery, runtime-scoped global extension commands, and a bounded non-authorizing Prime activity contract. A project has one kind; Pi and Prime roots, inventories, and opaque IDs remain separate. Prime 0.8.1 live start/continue/prompt/stop is fail-closed because its shared detached daemon is not contained by the current supervisor. Catalog freshness never authorizes a JSONL mutation.
 
+The classic views were removed after parity (docs/CLASSIC_PARITY.md). Their
+host commands (the classic live and fake runtimes, `get_tree`,
+`get_personal_tree`, `list_sessions`, `list_personal_sessions`, `get_timeline`,
+`probe_system_runtime` and the unversioned `bootstrap`, `update_preferences`,
+`list_extensions`, `set_extension_enabled`, `add_project`,
+`pick_and_add_project`) are gone; `runtime-protocol.ts` stays frozen because
+the surviving v6-v10 commands, the workspace contracts and the agent API use
+its shapes.
+
 ## Rules
 
 1. These files are versioned and undergo compatibility tests.

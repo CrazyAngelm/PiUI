@@ -277,13 +277,13 @@
 - [Библиотека и навигация запусков](../apps/desktop/src/features/orchestration/OrchestrationPanel.svelte),
   [подробности запуска](../apps/desktop/src/features/orchestration/RunInspector.svelte),
   [граф выполнения](../apps/desktop/src/features/orchestration/RunExecution.svelte).
-- [Оболочка](../apps/desktop/src/features/workspace/WorkspaceShell.svelte),
-  [чат](../apps/desktop/src/features/workspace/SessionComposer.svelte),
+- Оболочка (`features/workspace/WorkspaceShell.svelte`, удалён вместе с классическим видом),
+  чат (`features/workspace/SessionComposer.svelte`, удалён вместе с классическим видом),
   [прокрутка истории](../apps/desktop/src/features/workspace/ConversationViewport.svelte),
   [сообщения](../apps/desktop/src/features/sessions/Timeline.svelte).
 - [Ресурсы](../apps/desktop/src/features/orchestration/ResourcePicker.svelte),
-  [выбор модели в чате](../apps/desktop/src/features/workspace/RuntimePicker.svelte),
-  [настройки](../apps/desktop/src/features/workspace/WorkspaceSettings.svelte),
+  выбор модели в чате (`features/workspace/RuntimePicker.svelte`, удалён вместе с классическим видом),
+  настройки (`features/workspace/WorkspaceSettings.svelte`, удалён вместе с классическим видом),
   [расписания](../apps/desktop/src/features/orchestration/ScheduleEditor.svelte).
 - [Правила интерфейса](UI_STYLE.md) и [предыдущий обзор](UI_UX_REVIEW.md)
   использованы для отделения уже реализованного от новых находок.

@@ -382,6 +382,19 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   panel frames still load. On macOS and Linux wry forwards frame navigations
   to the same hook, so the guard is not enabled there yet.
 
+## 2026-09-27 — classic views removed
+
+- P2.7 second half, owner approved after the 0.2.2 test release: deleted
+  `?view=legacy` (the previous workspace shell) and `?view=classic` (the
+  Pi-only view), the About entry, the classic frontend modules, 30
+  classic-only Tauri commands with the classic live/fake runtime slots and
+  DTOs, the `system_probe` module, the WebView2 `--classic`/`--workspace`
+  proofs and the Russian copy only they used. The two parity gaps were
+  already closed (Tier 1A by plugins v1) or dropped (palette listing of Pi
+  runtime commands; the composer `/` menu has them). `add_project_v10` stays
+  for the native harness and the agent API; surviving IPC versions are
+  unchanged. Details: [CLASSIC_PARITY.md](CLASSIC_PARITY.md).
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

@@ -2,7 +2,15 @@
 
 ## Status
 
-**Passed in the managed Windows Tauri/WebView2 harness. Evidence: `target/piui-evidence/28012-1788697591831/report.json`.**
+**Removed.** This proof drove the previous workspace shell (`?view=legacy`),
+which was deleted with the classic views after parity
+([CLASSIC_PARITY.md](CLASSIC_PARITY.md)). `workspace-webview2-e2e.mjs` and the
+`--workspace` scenario no longer exist; the default native proof drives the new
+shell (`scripts/shell-webview2-e2e.mjs`, see [TESTING.md](TESTING.md)) and
+`--agent-api` keeps the agent API proof. The text below is kept as the record of
+what the removed proof checked.
+
+It passed in the managed Windows Tauri/WebView2 harness. Evidence: `target/piui-evidence/28012-1788697591831/report.json`.
 
 `apps/desktop/scripts/workspace-webview2-e2e.mjs` is the redesigned-workspace scenario for the existing Windows Tauri/WebView2 harness. It does not start Vite, Cargo, Tauri, Node adapters, or any other process. The existing outside controller and the feature-gated Windows Job runner must remain the only process owners.
 
