@@ -82,7 +82,6 @@ Do not write to the same session from PiUI and the harness's own CLI at the same
 - Automations run only while PiUI is open.
 - A Codex model-call step keeps Codex's own tools inside a read-only sandbox; Pi and Claude Code run model calls without tools. Codex MCP tool approvals apply to one call, and URL-mode MCP requests are declined.
 - Script steps run your code on this computer with your permissions; they are not sandboxed.
-- The previous interface stays reachable from Settings → About for this release and is removed in the next one.
 - Concurrent writes to one session from PiUI and a harness CLI are unsupported.
 - Project-local extension JavaScript stays disabled until its trust and isolation design is complete.
 
