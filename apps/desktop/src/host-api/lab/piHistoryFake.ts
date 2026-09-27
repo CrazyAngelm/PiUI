@@ -199,17 +199,6 @@ export function piHistoryHandlers(runtime: LabSessions, history: LabNativeHistor
     refresh_personal_session_catalog: () => refresh(personalProject()),
     get_timeline_page: (args) => page(userProject(stringArgument(args, 'projectId')), args),
     get_personal_timeline_page: (args) => page(personalProject(), args),
-    get_tree: (args) => {
-      const project = userProject(stringArgument(args, 'projectId'));
-      const entry = sessionsOf(project.id).find((candidate) => candidate.summary.id === stringArgument(args, 'sessionId'));
-      if (entry === undefined) throw apiFailure('NOT_FOUND');
-      return entry.tree;
-    },
-    get_personal_tree: (args) => {
-      const entry = sessionsOf(personalProject().id).find((candidate) => candidate.summary.id === stringArgument(args, 'sessionId'));
-      if (entry === undefined) throw apiFailure('NOT_FOUND');
-      return entry.tree;
-    },
     search_sessions: (args) => search(args),
   };
 }

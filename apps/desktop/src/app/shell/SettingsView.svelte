@@ -16,7 +16,6 @@
   import { Badge, Button, Kbd, Segmented } from '../../lib/ui';
   import type { SettingsSection } from '../workspaceStore.svelte';
   import ExtensionsSettings from '../settings/ExtensionsSettings.svelte';
-  import ClassicViewEntry from '../settings/ClassicViewEntry.svelte';
   import HarnessesSettings from '../settings/HarnessesSettings.svelte';
   import AboutSettings from '../settings/AboutSettings.svelte';
   import Blocks from '@lucide/svelte/icons/blocks';
@@ -198,7 +197,6 @@
       </div>
     {:else}
       <AboutSettings safeMode={store.safeMode} />
-      <ClassicViewEntry />
     {/if}
   </div>
 </section>

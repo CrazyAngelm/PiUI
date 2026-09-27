@@ -105,11 +105,4 @@ export const classicRu: Readonly<Record<string, string>> = {
   'Extension panel': 'Панель расширения',
   'An extension prepared text for the message box. Your draft was kept.': 'Расширение подготовило текст для поля сообщения. Ваш черновик сохранён.',
   'This request closes automatically if you do not answer.': 'Запрос закроется сам, если не ответить.',
-
-  // Classic view entry
-  'Classic view': 'Классический вид',
-  'The previous interface is still available in this release and will be removed in the next one. To come back, open its Settings and choose “New interface”.': 'Прежний интерфейс доступен в этой версии и будет удалён в следующей. Чтобы вернуться, откройте в нём «Настройки» и выберите «Новый интерфейс».',
-  'Open classic view': 'Открыть классический вид',
-  'Open Pi-only view': 'Открыть вид только для Pi',
-  'New interface': 'Новый интерфейс',
 };

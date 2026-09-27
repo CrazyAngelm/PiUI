@@ -72,7 +72,7 @@ const API_MESSAGES: Readonly<Record<ApiErrorCode, string>> = {
   PROJECT_UNAVAILABLE: 'This project folder is currently unavailable. Its cached read-only history remains local.',
 };
 
-/** Classic `api.rs` errors (bootstrap, preferences, projects). */
+/** `api.rs` errors (bootstrap, preferences, projects). */
 export function apiFailure(code: ApiErrorCode): HostErrorPayload {
   return { code, message: API_MESSAGES[code], recoverable: true };
 }

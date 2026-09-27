@@ -5,10 +5,9 @@ import { projectSummary, type LabProject, type LabState } from './labState';
 import type { LabSessions } from './sessionRuntime';
 
 /**
- * The classic `api.rs` project and preference commands the workspace shell
- * needs, with the same top-level argument names as `client.ts` sends. The
- * index history routes live in `piHistoryFake.ts`; other classic routes stay
- * in `mockClient.ts`.
+ * The `api.rs` project and preference commands the shell calls, with the
+ * same top-level argument names as `projectsClient.ts` sends. The index
+ * history routes live in `piHistoryFake.ts`.
  */
 function stringArgument(args: LabArgs, name: string): string {
   const value = args[name];

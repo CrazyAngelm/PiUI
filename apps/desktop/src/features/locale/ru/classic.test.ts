@@ -13,12 +13,11 @@ const PORTED_FILES = [
   '../../../app/history/HistoryDetails.svelte',
   '../../../app/history/SessionBranches.svelte',
   '../../../app/settings/ExtensionsSettings.svelte',
-  '../../../app/settings/ClassicViewEntry.svelte',
   '../../../app/projects/ProjectDialogs.svelte',
   '../../../app/chat/extensions/ExtensionSurface.svelte',
 ];
 
-/** Keys added to shared screens (sidebar, palette, transcript, approval card, classic settings). */
+/** Keys added to shared screens (sidebar, palette, transcript, approval card). */
 const SHARED_KEYS = [
   '{0} session history',
   'Open session history',
@@ -29,7 +28,6 @@ const SHARED_KEYS = [
   'Remove from PiUI…',
   'Could not update the project',
   'This request closes automatically if you do not answer.',
-  'New interface',
 ];
 
 function literalKeys(path: string): string[] {
