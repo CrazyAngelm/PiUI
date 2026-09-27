@@ -1,0 +1,34 @@
+{
+  "timestamp": "2026-09-28T04:25:00+07:00",
+  "commit": "f7c130e",
+  "branch": "main (local, not pushed)",
+  "changes": "0.2.4: pipeline assistant model and reasoning picker beside the harness picker; one shared Chaos-style ModelPicker for the new chat composer, open chat and assistant (capability icons, reasoning as a slanted level gauge where every level fits); --piui-chaos-* accent tokens outside the plugin theme palette; Chaos visual direction in docs/UI_STYLE.md",
+  "release": {
+    "portable": { "path": "artifacts/PiUI_0.2.4_windows_x86_64.exe", "bytes": 32105984, "sha256": "b37a342ef657aa50662f33ea427723474db44fbe92268927be83809ebd19a72d" },
+    "installer": { "path": "artifacts/PiUI_0.2.4_x64-setup.exe", "bytes": 8635787, "sha256": "e1c8fca3d37c392bf16fb715ad2d3f1b04d7af484e0f296350deab87bb2ba0f8" },
+    "authenticode": "NotSigned (no certificate configured)",
+    "updater": "not configured; the app makes no update checks",
+    "installed": null,
+    "launch": "not performed: release builds have no isolated data directories; launching would load the owner's real projects and enabled schedules; the owner installs and launches it"
+  },
+  "supersedes": "0.2.3 (evidence/local-release-20260927/release-0.2.3.json); its artifacts were replaced by this build",
+  "downgrade": "no new persisted formats; the assistant model choice is a browser-storage preference",
+  "rollback": "evidence/local-release-20260926/rollback-0.1.1-20260922/ (git-ignored)",
+  "verification": {
+    "desktopCheck": "svelte-check found 0 errors and 0 warnings",
+    "desktopTests": "122 files, 738 tests passed",
+    "contractTests": "19 files, 178 tests passed (one earlier run under build load had 1 failure; rerun passed)",
+    "repoCheck": "public repository audit passed; version check 0.2.4 passed",
+    "artifactHashes": "artifacts equal target/release outputs and SHA256SUMS.txt",
+    "uiLab": "ModelPicker rendered in an isolated browser page with sample models: six reasoning steps fit, arrow keys change the level; the page was removed",
+    "rust": "no Rust source changes; cargo clippy/test not rerun"
+  },
+  "notVerified": "packaged WebView2 app; a real harness receiving the assistant's chosen model and reasoning level; light theme rendering of the picker",
+  "cleanup": {
+    "removed": ["target/"],
+    "freeBytesBeforeBuild": 226003742720,
+    "freeBytesBeforeCleanup": 209049022464,
+    "freeBytesAfter": 211035652096,
+    "note": "cleanup freed ~2.0 GB; the rest of the drop since before the build was not found in target/ or Temp and is not attributed to this build"
+  }
+}
