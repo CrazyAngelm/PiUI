@@ -1,8 +1,7 @@
 // Outside-Job controller for the isolated Windows Tauri/WebView2 E2E proof.
 //
-// Default: the new shell (default view). `--classic` keeps the retained
-// compatibility proof, `--workspace` the legacy workspace shell and
-// `--agent-api` the agent API proof. Cargo builds go to
+// Default: the new shell (default view); `--agent-api` runs the agent API
+// proof. Cargo builds go to
 // PIUI_E2E_CARGO_TARGET_DIR, else CARGO_TARGET_DIR, else <repo>/target; the
 // isolated fixture always lives in <repo>/target/piui-e2e (the debug host
 // accepts no other root).
@@ -23,7 +22,7 @@ const COMMAND_BOUND_MS = 5_000;
 // beyond this before its own 720 s terminal bound.
 const INNER_HARNESS_BOUND_MS = 700_000;
 const JOB_RUNNER_BUILD_BOUND_MS = 600_000;
-const SCENARIO_FLAGS = ['--workspace', '--agent-api', '--classic'];
+const SCENARIO_FLAGS = ['--agent-api'];
 
 function waitFor(milliseconds) {
   return new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));

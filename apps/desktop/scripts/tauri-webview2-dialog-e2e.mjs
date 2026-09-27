@@ -8,15 +8,12 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createWebviewAutomationServer } from './webview-automation.mjs';
 import { startComposerProvider } from './composer-provider.mjs';
-import { runWorkspaceWebview2Proof } from './workspace-webview2-e2e.mjs';
 import { runShellWebview2Proof } from './shell-webview2-e2e.mjs';
 
+// Default: the new shell proof. `--agent-api` runs the agent API proof with
+// the native workspace fixture instead.
 const AGENT_API_SCENARIO = process.argv.includes('--agent-api');
-const WORKSPACE_SCENARIO = process.argv.includes('--workspace') || AGENT_API_SCENARIO;
-// The retained classic compatibility view (`?view=classic`) is opt-in; the
-// default proof drives the new shell, the default view of the app.
-const CLASSIC_SCENARIO = process.argv.includes('--classic') && !WORKSPACE_SCENARIO;
-const SHELL_SCENARIO = !WORKSPACE_SCENARIO && !CLASSIC_SCENARIO;
+const SHELL_SCENARIO = !AGENT_API_SCENARIO;
 
 if (process.platform !== 'win32') {
   throw new Error('This WebView2 proof is Windows-only; run the Linux WebKit harness separately.');
@@ -351,7 +348,7 @@ function createIsolatedFixture(fixtureRoot) {
     appDataLocal,
     home,
   ]) mkdirSync(path, { recursive: true });
-  if (WORKSPACE_SCENARIO) {
+  if (AGENT_API_SCENARIO) {
     // Native catalog fixture only. No real credential or inference endpoint;
     // the run below must be rejected by permission preflight before transport.
     writeFileSync(join(primeAgentDir, 'models.json'), JSON.stringify({ providers: {
@@ -848,331 +845,6 @@ async function terminateContained(ownedChild, label) {
   throw cleanupError;
 }
 
-async function runDialogProof(automation, expectedPageUrl, harness) {
-  await waitForAutomationPage(
-    automation,
-    expectedPageUrl,
-    STARTUP_BOUND_MS,
-    harness?.ownedChild,
-  );
-  async function evaluate(expression) {
-    return automation.evaluate(expression);
-  }
-  async function waitFor(expression) {
-    const deadline = Date.now() + COMMAND_BOUND_MS;
-    while (Date.now() < deadline) {
-      try {
-        if (await evaluate(`Boolean(${expression})`)) return true;
-      } catch (error) {
-        if (!(error instanceof Error) || !error.message.includes('Execution context was destroyed')) throw error;
-      }
-      await new Promise((resolveWait) => setTimeout(resolveWait, 50));
-    }
-    throw new Error('DOM condition timeout.');
-  }
-  function assert(value, message) { if (!value) throw new Error(message); }
-
-  async function reloadPage() {
-    const before = automation.generation;
-    await automation.reload();
-    await waitForAutomationPage(
-      automation,
-      expectedPageUrl,
-      COMMAND_BOUND_MS,
-      harness?.ownedChild,
-      before,
-    );
-  }
-
-  async function invokeTauri(commandName, args) {
-    return evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(commandName)}, ${JSON.stringify(args)})`);
-  }
-
-  async function waitForFixtureCatalog(projectId, accepts) {
-    const deadline = performance.now() + STARTUP_BOUND_MS;
-    let catalog = await invokeTauri('refresh_session_catalog', { projectId });
-    while (!accepts(catalog)) {
-      if (performance.now() >= deadline) return catalog;
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
-      catalog = catalog.freshness === 'refreshing'
-        ? await invokeTauri('get_session_catalog', { projectId })
-        : await invokeTauri('refresh_session_catalog', { projectId });
-    }
-    return catalog;
-  }
-
-  let fixtureProjectIds;
-
-  async function setupFixtureProjects(fixture) {
-    await waitFor(`typeof window.__TAURI_INTERNALS__?.invoke === 'function'`);
-    const piProject = await invokeTauri('add_project_v10', {
-      path: fixture.piProject,
-      agentKind: 'pi',
-    });
-    const primeProject = await invokeTauri('add_project_v10', {
-      path: fixture.primeProject,
-      agentKind: 'prime-agent',
-    });
-    assert(typeof piProject?.id === 'string', 'The isolated Pi project was not registered through the typed host command.');
-    assert(typeof primeProject?.id === 'string', 'The isolated Prime project was not registered through the typed host command.');
-    fixtureProjectIds = { pi: piProject.id, prime: primeProject.id };
-    const trustedPi = await invokeTauri('set_project_trust', {
-      projectId: piProject.id,
-      trustState: 'trusted',
-    });
-    const trustedPrime = await invokeTauri('set_project_trust', {
-      projectId: primeProject.id,
-      trustState: 'trusted',
-    });
-    assert(trustedPi?.trustState === 'trusted', 'The isolated Pi project did not become trusted.');
-    assert(trustedPrime?.trustState === 'trusted', 'The isolated Prime project did not become trusted.');
-    const piCatalog = await invokeTauri('refresh_session_catalog', { projectId: piProject.id });
-    const primeCatalog = await invokeTauri('refresh_session_catalog', { projectId: primeProject.id });
-    assert(
-      piCatalog?.sessions?.some((session) => session.title === 'Pi compatibility fixture'),
-      'The typed host refresh did not index the isolated Pi compatibility session.',
-    );
-    assert(
-      primeCatalog?.sessions?.filter((session) => session.title.startsWith('Prime fixture')).length === 2,
-      'The typed host refresh did not index exactly two Prime root sessions.',
-    );
-    await reloadPage();
-    await waitFor(`document.querySelector('button[aria-label="Add a project folder"]')`);
-    // Wait until App's asynchronous bootstrap project selection has performed
-    // its synchronous state transition. Without this, it can close Settings
-    // after the dialog proof has already clicked the Settings control.
-    await waitFor(`document.querySelectorAll('button.project-row').length === 2
-      && document.querySelector('.project-group.selected .project-row')`);
-  }
-
-  async function selectProjectByName(name) {
-    const selected = await evaluate(`(() => {
-      const button = [...document.querySelectorAll('button.project-row')]
-        .find((item) => item.textContent?.includes(${JSON.stringify(name)}));
-      if (button?.getAttribute('aria-expanded') !== 'true') button?.click();
-      return Boolean(button);
-    })()`);
-    assert(selected, `Could not select isolated project ${name}.`);
-  }
-
-  async function selectProjectSessionByName(name) {
-    const selected = await evaluate(`(() => {
-      const button = [...document.querySelectorAll('.project-group.selected button.session-row')]
-        .find((item) => item.textContent?.includes(${JSON.stringify(name)}));
-      button?.click();
-      return Boolean(button);
-    })()`);
-    assert(selected, `Could not select isolated session ${name}.`);
-  }
-
-  async function runFixtureRegressionProof() {
-    await selectProjectByName('pi-project');
-    try {
-      await waitFor(`[
-        ...document.querySelectorAll('.project-group.selected button.session-row'),
-      ].some((item) => item.textContent?.includes('Pi compatibility fixture'))`);
-    } catch (error) {
-      const diagnostic = await evaluate(`(() => ({
-        selectedProject: document.querySelector('.project-group.selected .project-row')?.textContent?.trim(),
-        selectedSessions: [...document.querySelectorAll('.project-group.selected button.session-row')]
-          .map((item) => item.textContent?.trim()),
-        selectedText: document.querySelector('.project-group.selected')?.textContent?.trim(),
-      }))()`);
-      const hostCatalog = fixtureProjectIds === undefined
-        ? undefined
-        : await invokeTauri('get_session_catalog', { projectId: fixtureProjectIds.pi });
-      throw new Error(`Pi fixture catalog did not become ready: ${JSON.stringify({
-        ...diagnostic,
-        hostFreshness: hostCatalog?.freshness,
-        hostSequence: hostCatalog?.sequence,
-        hostSessions: hostCatalog?.sessions?.map((session) => session.title),
-      })}`, { cause: error });
-    }
-    const piCatalog = await evaluate(`(() => ({
-      selectedProject: document.querySelector('.project-group.selected .project-row')?.textContent?.trim(),
-      sessions: [...document.querySelectorAll('.project-group.selected button.session-row')]
-        .map((item) => item.textContent?.trim()),
-      primeActivityVisible: document.querySelector('details.prime-activity') !== null,
-    }))()`);
-    assert(piCatalog.selectedProject?.includes('pi-project'), 'Pi regression setup did not keep the selected project in Pi mode.');
-    assert(piCatalog.sessions.includes('Pi compatibility fixture'), 'Pi regression setup did not discover the isolated Pi session.');
-    assert(!piCatalog.primeActivityVisible, 'Pi mode incorrectly rendered a Prime activity disclosure.');
-
-    await selectProjectSessionByName('Pi compatibility fixture');
-    await waitFor(`document.querySelector('details.fallback-disclosure')`);
-    const fallback = await evaluate(`(() => {
-      const disclosure = document.querySelector('details.fallback-disclosure');
-      return {
-        title: disclosure?.querySelector('.activity-title')?.textContent?.trim(),
-        compatibilityLabel: disclosure?.textContent?.includes('Compatibility view') ?? false,
-        rawPayloadHidden: !document.body.textContent.includes('fixture-hidden-payload'),
-      };
-    })()`);
-    assert(fallback.title === 'Unrecognized session entry', 'Pi unknown session data lost the generic fallback title.');
-    assert(fallback.compatibilityLabel, 'Pi generic fallback did not identify its compatibility view.');
-    assert(fallback.rawPayloadHidden, 'Pi generic fallback disclosed the synthetic unknown payload.');
-    assert(await evaluate(`(() => {
-      const summary = document.querySelector('details.fallback-disclosure > summary');
-      summary?.click();
-      return Boolean(summary);
-    })()`), 'Pi generic fallback disclosure was not operable.');
-    await waitFor(`document.querySelector('details.fallback-disclosure')?.open === true`);
-
-    await selectProjectByName('prime-project');
-    await waitFor(`[
-      ...document.querySelectorAll('.project-group.selected button.session-row'),
-    ].filter((item) => item.textContent?.includes('Prime fixture')).length === 2`);
-    const primeCatalog = await evaluate(`(() => ({
-      sessions: [...document.querySelectorAll('.project-group.selected button.session-row')]
-        .map((item) => item.textContent?.trim()),
-      projectNewSession: [...document.querySelectorAll('.project-group.selected .session-actions button')]
-        .some((item) => item.getAttribute('aria-label')?.startsWith('Start a new Prime Agent session in ')),
-      primaryNewChat: (() => {
-        const item = document.querySelector('.side-actions .nav-button--primary');
-        return item ? { disabled: item.disabled, label: item.getAttribute('aria-label') } : null;
-      })(),
-    }))()`);
-    assert(
-      primeCatalog.sessions.length === 2
-      && primeCatalog.sessions.includes('Prime fixture one')
-      && primeCatalog.sessions.includes('Prime fixture two'),
-      'Prime read-only catalog did not show exactly the two isolated root sessions.',
-    );
-    assert(!primeCatalog.projectNewSession, 'Prime read-only project exposed a New session action.');
-    assert(
-      primeCatalog.primaryNewChat?.disabled === true
-      && primeCatalog.primaryNewChat?.label === 'New session unavailable for read-only Prime Agent history',
-      'The global New chat action did not fail closed for the selected Prime project.',
-    );
-    assert(await evaluate(`(() => {
-      const button = [...document.querySelectorAll('.project-group.selected button.session-row')]
-        .find((item) => item.textContent?.includes('Prime fixture one'));
-      button?.click();
-      return Boolean(button);
-    })()`), 'The read-only Prime session row was not operable.');
-    await waitFor(`document.querySelector('.history-scroll')?.textContent.includes('Synthetic Prime history one')`);
-    await waitFor(`document.querySelector('.chat-notice[role="status"]')?.textContent.includes('shared daemon')`);
-    const liveGate = await evaluate(`(() => ({
-      notice: document.querySelector('.chat-notice[role="status"]')?.textContent?.trim(),
-      sessions: [...document.querySelectorAll('.project-group.selected button.session-row')]
-        .map((item) => item.textContent?.trim()),
-      history: document.querySelector('.history-scroll')?.textContent,
-      composer: document.querySelector('#chat-draft') !== null,
-      runtimeTrigger: document.querySelector('button[aria-label="Load available models from Prime Agent"]') !== null,
-      activity: document.querySelector('details.prime-activity') !== null,
-    }))()`);
-    assert(liveGate.notice?.includes('shared daemon') && liveGate.notice?.includes('Read-only history remains available.'), 'Prime live-runtime containment gate is not explained.');
-    assert(
-      liveGate.sessions.length === 2
-      && liveGate.sessions.includes('Prime fixture one')
-      && liveGate.sessions.includes('Prime fixture two'),
-      'Prime live-runtime gate changed the isolated read-only session catalog.',
-    );
-    assert(liveGate.history?.includes('Synthetic Prime history one'), 'Prime read-only history did not remain readable.');
-    assert(!liveGate.composer && !liveGate.runtimeTrigger && !liveGate.activity, 'Prime live-runtime gate exposed an unsafe interaction surface.');
-
-    return [
-      'isolated-pi-generic-fallback',
-      'prime-project-multiple-sessions',
-      'prime-read-only-history',
-      'prime-live-runtime-containment-gate',
-    ];
-  }
-
-  async function runSafeModeRegressionProof() {
-    await selectProjectByName('prime-project');
-    await waitFor(`[...document.querySelectorAll('.project-group.selected button.session-row')]
-      .some((item) => item.textContent?.includes('Prime fixture one'))`);
-    await selectProjectSessionByName('Prime fixture one');
-    await waitFor(`document.querySelector('.safe-mode-banner') && document.querySelector('.chat-notice')`);
-    const safeMode = await evaluate(`(() => ({
-      banner: document.querySelector('.safe-mode-banner')?.textContent?.trim(),
-      notice: document.querySelector('.chat-notice')?.textContent?.trim(),
-      composer: document.querySelector('#chat-draft') !== null,
-      runtimeTrigger: document.querySelector('button[aria-label="Load available models from Prime Agent"]') !== null,
-      activity: document.querySelector('details.prime-activity') !== null,
-    }))()`);
-    assert(safeMode.banner?.includes('Safe mode.') && safeMode.banner?.includes('runtime actions are disabled'), 'Safe mode did not retain its project-wide runtime warning.');
-    assert(safeMode.notice?.includes('Safe mode is on. Runtime actions are disabled.'), 'Safe mode did not replace the live runtime surface.');
-    assert(!safeMode.composer && !safeMode.runtimeTrigger && !safeMode.activity, 'Safe mode exposed a live Prime runtime interaction.');
-    return ['safe-mode-runtime-disabled'];
-  }
-
-  {
-    await evaluate('true');
-    if (harness?.setupProjects) await setupFixtureProjects(harness.fixture);
-    await waitFor(`document.querySelector('button[aria-label="Add a project folder"]')`);
-    assert(await evaluate(`document.querySelector('button[aria-label="Add a project folder"]').click(); true`), 'Add-project trigger did not run.');
-    await waitFor(`document.querySelector('dialog.add-project-modal[open]')`);
-    const opened = await evaluate(`(() => {
-      const dialog = document.querySelector('dialog.add-project-modal[open]');
-      const radios = [...dialog.querySelectorAll('input[name="agent-kind"]')];
-      return {
-        ariaModal: dialog.getAttribute('aria-modal'),
-        labelledBy: dialog.getAttribute('aria-labelledby'),
-        describedBy: dialog.getAttribute('aria-describedby'),
-        radioValues: radios.map((radio) => radio.value),
-        activeValue: document.activeElement?.value,
-        description: dialog.querySelector('#add-project-description')?.textContent,
-      };
-    })()`);
-    assert(opened.ariaModal === 'true', 'Runtime chooser is not modal.');
-    assert(opened.labelledBy === 'add-project-title' && opened.describedBy === 'add-project-description', 'Runtime chooser lacks an accessible name or description.');
-    assert(JSON.stringify(opened.radioValues) === JSON.stringify(['pi', 'prime-agent']), 'Runtime chooser lacks the explicit Pi/Prime Agent choices.');
-    assert(opened.activeValue === 'pi', 'Initial focus did not enter the runtime chooser.');
-    assert(opened.description.includes('Pi and Prime Agent sessions stay separate'), 'Isolation decision is not visible to the user.');
-    await automation.dispatchKey({ key: 'Tab', code: 'Tab', shiftKey: true });
-    assert(await evaluate(`document.querySelector('dialog.add-project-modal').contains(document.activeElement)`), 'Shift+Tab escaped the modal.');
-    assert(await evaluate(`document.activeElement?.classList.contains('primary')`), 'Backward focus wrapping did not reach the final control.');
-    await automation.dispatchKey({ key: 'Tab', code: 'Tab' });
-    assert(await evaluate(`document.activeElement?.value === 'pi'`), 'Forward focus wrapping did not return to the first control.');
-    const primeChoice = await evaluate(`(() => {
-      const radio = document.querySelector('input[value="prime-agent"]');
-      radio.click();
-      return { checked: radio.checked, label: radio.closest('label')?.textContent };
-    })()`);
-    assert(primeChoice.checked && primeChoice.label.includes('Prime Agent'), 'Prime Agent choice is not operable or labelled.');
-    await automation.dispatchKey({ key: 'Escape', code: 'Escape' });
-    await waitFor(`!document.querySelector('dialog.add-project-modal') && document.activeElement?.getAttribute('aria-label') === 'Add a project folder'`);
-    assert(await evaluate(`document.activeElement?.getAttribute('aria-label') === 'Add a project folder'`), 'Closing the modal did not restore trigger focus.');
-
-    assert(await evaluate(`document.querySelector('button[aria-label="Open PiUI settings"]').click(); true`), 'Settings trigger did not run.');
-    await waitFor(`document.querySelector('.settings-nav')`);
-    assert(await evaluate(`(() => {
-      const button = [...document.querySelectorAll('.settings-nav button')].find((item) => item.textContent.includes('Extensions'));
-      button?.click();
-      return Boolean(button);
-    })()`), 'Extensions settings did not open.');
-    await waitFor(`document.querySelector('.runtime-inventory') && document.querySelector('.extension-empty') && document.querySelector('.refresh-extensions')?.textContent === 'Refresh'`);
-    const piInventory = await evaluate(`(() => {
-      const group = document.querySelector('.runtime-inventory');
-      const buttons = [...group.querySelectorAll('button')];
-      return {
-        label: group.getAttribute('aria-label'),
-        names: buttons.map((button) => button.textContent.trim()),
-        pressed: buttons.map((button) => button.getAttribute('aria-pressed')),
-        note: document.querySelector('.runtime-boundary')?.textContent,
-      };
-    })()`);
-    assert(piInventory.label === 'Extension runtime', 'Extension runtime selector is not labelled.');
-    assert(JSON.stringify(piInventory.names) === JSON.stringify(['Pi', 'Prime Agent']), 'Extension inventories do not expose both runtime choices.');
-    assert(JSON.stringify(piInventory.pressed) === JSON.stringify(['true', 'false']), 'Pi inventory is not the explicit default.');
-    assert(piInventory.note.includes('not enabled for Prime Agent automatically'), 'Pi inventory isolation is not explained.');
-
-    assert(await evaluate(`(() => {
-      const button = [...document.querySelectorAll('.runtime-inventory button')].find((item) => item.textContent.trim() === 'Prime Agent');
-      button?.click();
-      return Boolean(button);
-    })()`), 'Prime Agent inventory choice did not run.');
-    await waitFor(`document.querySelector('.runtime-inventory button[aria-pressed="true"]')?.textContent.trim() === 'Prime Agent' && document.querySelector('.extension-empty') && document.querySelector('.refresh-extensions')?.textContent === 'Refresh'`);
-    assert(await evaluate(`document.querySelector('.runtime-boundary')?.textContent.includes('compatibility is not assumed')`), 'Prime extension compatibility boundary is not visible.');
-    const checks = ['explicit-runtime-choice', 'accessible-modal', 'focus-trap', 'escape-focus-restore', 'separate-extension-inventories'];
-    if (harness?.regression === 'normal') checks.push(...await runFixtureRegressionProof());
-    if (harness?.regression === 'safe') checks.push(...await runSafeModeRegressionProof());
-    return checks;
-  }
-}
-
 function printLogTails(paths) {
   for (const path of paths) {
     try {
@@ -1212,13 +884,12 @@ async function runIsolatedHarness() {
       commandBoundMs: COMMAND_BOUND_MS,
     });
     const fixture = createIsolatedFixture(fixtureRoot);
-    if (WORKSPACE_SCENARIO) composerProvider = await startComposerProvider();
+    if (AGENT_API_SCENARIO) composerProvider = await startComposerProvider();
     // Cargo writes only to the controller's canonical cargo target. The
     // fixture stays a run directory below <repo>/target/piui-e2e.
     const cargoTargetDirectory = canonicalCargoTarget();
-    // Default: the new shell. `--classic` proves the retained compatibility
-    // view; `--workspace` drives the legacy workspace shell until parity.
-    const entry = CLASSIC_SCENARIO ? '/?view=classic' : WORKSPACE_SCENARIO && !AGENT_API_SCENARIO ? '/?view=legacy' : '';
+    // Both scenarios load the default view.
+    const entry = '';
     const overlay = {
       identifier,
       build: { devUrl: `${pageOrigin}${entry}` },
@@ -1237,15 +908,12 @@ async function runIsolatedHarness() {
         },
       },
     };
-    // Workspace and shell UI tests do not inherit provider credentials or Node
-    // preload hooks. The classic fixture retains its original environment.
-    const inheritedEnvironment = WORKSPACE_SCENARIO || SHELL_SCENARIO
-      ? Object.fromEntries(['PATH', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'windir', 'ComSpec', 'COMSPEC', 'SystemDrive', 'SYSTEMDRIVE', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'PROGRAMDATA', 'ALLUSERSPROFILE']
-          .filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]))
-      : process.env;
+    // The proofs do not inherit provider credentials or Node preload hooks.
+    const inheritedEnvironment = Object.fromEntries(['PATH', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'windir', 'ComSpec', 'COMSPEC', 'SystemDrive', 'SYSTEMDRIVE', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'PROGRAMDATA', 'ALLUSERSPROFILE']
+      .filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
     const runtimeEnvironment = {
       ...inheritedEnvironment,
-      ...(WORKSPACE_SCENARIO ? { PIUI_AGENT_API_PORT: String(agentConnection.port), PIUI_AGENT_API_TOKEN: agentConnection.token } : {}),
+      ...(AGENT_API_SCENARIO ? { PIUI_AGENT_API_PORT: String(agentConnection.port), PIUI_AGENT_API_TOKEN: agentConnection.token } : {}),
       // Every app, session, agent, profile, and temporary root is an owned fixture path.
       // The debug automation seam accepts only canonical paths below this fixture.
       USERPROFILE: fixture.home,
@@ -1280,7 +948,7 @@ async function runIsolatedHarness() {
       runtimeEnvironment.PIUI_HERMES_ROOT = join(fixture.fixtureRoot, 'no-hermes');
       runtimeEnvironment.PIUI_NODE = process.execPath;
     }
-    if (WORKSPACE_SCENARIO) {
+    if (AGENT_API_SCENARIO) {
       runtimeEnvironment.CODEX_HOME = exposeNativeCodeForWorkspaceFixture(fixture);
       writeFileSync(join(runtimeEnvironment.CODEX_HOME, 'config.toml'), `model_provider = "piui_composer"
 model = "gpt-5.5"
@@ -1290,7 +958,7 @@ base_url = "${composerProvider.baseUrl}"
 wire_api = "responses"
 `);
       runtimeEnvironment.PIUI_NODE = process.execPath;
-      // Native workspace tests must never run the classic synthetic CLI peers.
+      // The agent API proof must never run the synthetic CLI peers.
       delete runtimeEnvironment.PIUI_PI_CLI;
       delete runtimeEnvironment.PIUI_PRIME_AGENT_CLI;
       if (process.env.PIUI_PI_NODE) runtimeEnvironment.PIUI_PI_NODE = process.env.PIUI_PI_NODE;
@@ -1363,19 +1031,12 @@ wire_api = "responses"
       },
     };
     const apiWorkspace = AGENT_API_SCENARIO ? await setupAgentWorkspace(agentConnection, fixture.primeProjectCanonical) : undefined;
-    const normalResult = AGENT_API_SCENARIO ? { checks: [], cleanup: {workspaceId: apiWorkspace} } : WORKSPACE_SCENARIO
-      ? await runWorkspaceWebview2Proof({ automation, expectedPageUrl: pageOrigin,
-          harness: { fixture, ownedChild: app, appOwnerPid: app.child.pid }, mode: 'normal',
-          commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, ...workspaceCallbacks, composerProvider })
-      : SHELL_SCENARIO
-        ? await runShellWebview2Proof({ automation, expectedPageUrl: pageOrigin,
-            harness: { fixture, ownedChild: app }, mode: 'normal',
-            commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot })
-        : { checks: await runDialogProof(automation, pageOrigin, {
-            fixture, ownedChild: app, setupProjects: true, regression: 'normal',
-          }) };
+    const normalResult = AGENT_API_SCENARIO ? { checks: [], cleanup: {workspaceId: apiWorkspace} }
+      : await runShellWebview2Proof({ automation, expectedPageUrl: pageOrigin,
+          harness: { fixture, ownedChild: app }, mode: 'normal',
+          commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot });
     const normalChecks = normalResult.checks;
-    if (WORKSPACE_SCENARIO) normalChecks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, automation, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
+    if (AGENT_API_SCENARIO) normalChecks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, automation, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
 
     // A separate contained process proves that safe mode prevents the same
     // project from exposing a live runtime surface.
@@ -1396,22 +1057,17 @@ wire_api = "responses"
       app,
       safeModeMinimumGeneration,
     );
-    const safeResult = AGENT_API_SCENARIO ? {checks: []} : WORKSPACE_SCENARIO
-      ? await runWorkspaceWebview2Proof({ automation, expectedPageUrl: pageOrigin,
-          harness: { fixture, ownedChild: app, appOwnerPid: app.child.pid }, mode: 'safe',
-          commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, ...workspaceCallbacks, composerProvider })
-      : SHELL_SCENARIO
-        ? await runShellWebview2Proof({ automation, expectedPageUrl: pageOrigin,
-            harness: { fixture, ownedChild: app }, mode: 'safe',
-            commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot })
-        : { checks: await runDialogProof(automation, pageOrigin, { fixture, ownedChild: app, regression: 'safe' }) };
+    const safeResult = AGENT_API_SCENARIO ? {checks: []}
+      : await runShellWebview2Proof({ automation, expectedPageUrl: pageOrigin,
+          harness: { fixture, ownedChild: app }, mode: 'safe',
+          commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot });
     const safeChecks = safeResult.checks;
-    if (WORKSPACE_SCENARIO) safeChecks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, safe: true, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
-    if (!WORKSPACE_SCENARIO) assertPrimeRuntimeWasNotLaunched(fixture);
+    if (AGENT_API_SCENARIO) safeChecks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, safe: true, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
+    if (!AGENT_API_SCENARIO) assertPrimeRuntimeWasNotLaunched(fixture);
     passReport = {
       status: 'pass',
       target: 'isolated Tauri WebView2 dev harness',
-      scenario: AGENT_API_SCENARIO ? 'agent-api-v1' : WORKSPACE_SCENARIO ? 'workspace-v15-legacy-view' : CLASSIC_SCENARIO ? 'classic-v10' : 'shell-default-view',
+      scenario: AGENT_API_SCENARIO ? 'agent-api-v1' : 'shell-default-view',
       native: normalResult.native,
       timings: { normal: normalResult.timings, safe: safeResult.timings },
       ownedWindowMeasurements,
@@ -1421,8 +1077,8 @@ wire_api = "responses"
         ...normalChecks,
         ...safeChecks,
         'debug-only-loopback-webview-automation',
-        ...(WORKSPACE_SCENARIO || SHELL_SCENARIO ? ['no-provider-credentials-in-fixture'] : []),
-        ...(WORKSPACE_SCENARIO ? [] : ['prime-runtime-not-launched']),
+        'no-provider-credentials-in-fixture',
+        ...(AGENT_API_SCENARIO ? [] : ['prime-runtime-not-launched']),
       ],
     };
   } catch (error) {
