@@ -117,6 +117,45 @@ test.describe('command palette', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Plan a weekend in Lisbon' })).toBeVisible();
   });
 
+  test("Ctrl+K lists the open Pi chat's native commands and inserts one without sending", async ({ lab, page }) => {
+    await lab.open();
+    await lab.chat(/Pi extension playground/).click();
+    const message = page.getByRole('textbox', { name: 'Message' });
+    await expect(message).toBeVisible();
+    await page.keyboard.press('Control+k');
+    const palette = page.getByRole('dialog', { name: 'Search and commands' });
+    const search = palette.getByPlaceholder('Search chats, projects and commands…');
+    await search.fill('fix-tests');
+    const option = palette.getByRole('option', { name: /\/fix-tests/ });
+    await expect(option).toContainText('Fix failing tests');
+    await expect(option).toContainText('Pi · prompt');
+    await expect(palette.getByText('Pi commands')).toBeVisible();
+    await option.click();
+    await expect(palette).toBeHidden();
+    await expect(message).toHaveValue('/fix-tests ');
+    await expect(page.getByRole('button', { name: 'Stop turn' })).toHaveCount(0);
+
+    // Keyboard: a skill command is chosen with the arrow keys and Enter.
+    await message.fill('');
+    await page.keyboard.press('Control+k');
+    await search.fill('/skill:release');
+    await expect(palette.getByRole('option', { name: /\/skill:release-notes/ })).toHaveAttribute('data-selected', /.*/);
+    await page.keyboard.press('Enter');
+    await expect(message).toHaveValue('/skill:release-notes ');
+
+    // Extension commands are listed too; a harness without `/` commands (Codex) lists none.
+    await page.keyboard.press('Control+k');
+    await search.fill('deploy-preview');
+    await expect(palette.getByRole('option', { name: /\/deploy-preview/ })).toContainText('Pi · extension');
+    await page.keyboard.press('Escape');
+    await lab.chat(/Route host calls through one transport/).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Route host calls through one transport' })).toBeVisible();
+    await page.keyboard.press('Control+k');
+    await search.fill('fix-tests');
+    await expect(palette.getByRole('option', { name: /\/fix-tests/ })).toHaveCount(0);
+    await expect(palette.getByText('Pi commands')).toHaveCount(0);
+  });
+
   test('an unknown query finds nothing and Escape closes without navigating', async ({ lab, page }) => {
     await lab.open();
     const trigger = lab.nav('Search');
