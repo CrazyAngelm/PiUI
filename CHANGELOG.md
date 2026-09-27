@@ -6,6 +6,17 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-09-28
+
+### Added
+
+- Pipeline assistant: a model picker beside the harness picker, with reasoning levels. A new conversation starts with the chosen model; a running one switches natively and keeps its history. The choice is remembered per harness.
+
+### Changed
+
+- One model picker for the new chat composer, the open chat and the pipeline assistant: capability icons instead of repeated text badges, and reasoning as a slanted level gauge where every level fits (it used to overflow).
+- Visual direction "Chaos" (`docs/UI_STYLE.md`): `--piui-chaos-*` accent tokens in every theme.
+
 ## [0.2.3] - 2026-09-27
 
 ### Added
