@@ -562,3 +562,189 @@ async fn safe_mode_lists_placements_and_refuses_changes() {
         "unknown fields are refused"
     );
 }
+
+async fn listed(fixture: &Fixture) -> Vec<super::ManagedWorktreeV1> {
+    match run(fixture, PlacementCommandV1::Worktrees {})
+        .await
+        .expect("lists worktrees")
+    {
+        PlacementResultV1::Worktrees { worktrees, .. } => worktrees,
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+/// Closes and deletes a chat the way `deleteSession` does; its worktree stays.
+async fn delete_chat(fixture: &Fixture, session: &str) {
+    workspace(
+        fixture,
+        WorkspaceCommand::CloseSession {
+            session_id: session.into(),
+        },
+    )
+    .await
+    .expect("closes");
+    fixture
+        .state
+        .workspace
+        .forget_session_for_test(session)
+        .expect("deletes the chat");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_worktree_left_by_a_deleted_chat_is_listed_and_removed_only_after_confirming_its_changes()
+{
+    let (fixture, repo, project) = setup("placement-orphan");
+    record_starts(&fixture);
+    let planned = preview(&fixture, &project, Some("piui/orphan")).await;
+    let (session, root) = create_in_worktree(&fixture, &project, &planned).await;
+
+    let worktrees = listed(&fixture).await;
+    assert_eq!(worktrees.len(), 1);
+    assert_eq!(worktrees[0].sessions, vec![session.clone()]);
+    assert_eq!(worktrees[0].branch, "piui/orphan");
+    assert_eq!(worktrees[0].state, WorktreeState::Ready);
+    let id = worktrees[0].id.clone();
+    let remove =
+        |discard: bool, expected: Option<String>| PlacementCommandV1::RemoveOrphanWorktree {
+            worktree_id: id.clone(),
+            discard_changes: discard,
+            expected_changes: expected,
+        };
+    let in_use = run(&fixture, remove(false, None))
+        .await
+        .expect_err("a chat still works in it");
+    assert_eq!(in_use.code, "CONFLICT");
+
+    std::fs::write(root.join("agent-work.txt"), "uncommitted\n").expect("agent writes");
+    delete_chat(&fixture, &session).await;
+    let orphans = listed(&fixture).await;
+    assert_eq!(orphans.len(), 1);
+    assert!(orphans[0].sessions.is_empty(), "the chat is gone");
+
+    let PlacementResultV1::WorktreeDirty {
+        changes,
+        fingerprint,
+        files,
+        truncated,
+        ..
+    } = run(&fixture, remove(false, None))
+        .await
+        .expect("reports the changes")
+    else {
+        panic!("expected dirty");
+    };
+    assert_eq!(changes, 1);
+    assert!(!truncated);
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, "agent-work.txt");
+    assert_eq!(files[0].area, super::WorktreeChangeArea::Untracked);
+    assert!(root.join("agent-work.txt").exists(), "nothing was removed");
+
+    let unconfirmed = run(&fixture, remove(true, None))
+        .await
+        .expect_err("discarding needs the confirmed changes");
+    assert_eq!(unconfirmed.code, "STALE");
+    std::fs::write(root.join("later.txt"), "more\n").expect("more changes");
+    let stale = run(&fixture, remove(true, Some(fingerprint)))
+        .await
+        .expect_err("changes differ from the confirmed ones");
+    assert_eq!(stale.code, "STALE");
+    assert!(root.join("later.txt").exists());
+
+    let PlacementResultV1::WorktreeDirty { fingerprint, .. } = run(&fixture, remove(false, None))
+        .await
+        .expect("reports the current changes")
+    else {
+        panic!("expected dirty");
+    };
+    let removed = run(&fixture, remove(true, Some(fingerprint)))
+        .await
+        .expect("removes after confirmation");
+    assert!(matches!(removed, PlacementResultV1::WorktreeRemoved { .. }));
+    assert!(!root.exists(), "an orphan leaves no folder behind");
+    assert_eq!(worktree_count(&repo), 1);
+    assert_eq!(
+        git_output(&repo, &["branch", "--list", "piui/orphan"]),
+        "piui/orphan",
+        "the branch stays"
+    );
+    assert!(listed(&fixture).await.is_empty());
+    let gone = run(&fixture, remove(false, None))
+        .await
+        .expect_err("no longer managed");
+    assert_eq!(gone.code, "NOT_FOUND");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_clean_or_missing_orphan_is_removed_at_once_and_requests_are_checked() {
+    let (fixture, repo, project) = setup("placement-orphan-clean");
+    record_starts(&fixture);
+    let planned = preview(&fixture, &project, Some("piui/clean")).await;
+    let (session, root) = create_in_worktree(&fixture, &project, &planned).await;
+    delete_chat(&fixture, &session).await;
+    let second = preview(&fixture, &project, Some("piui/missing")).await;
+    let (other, other_root) = create_in_worktree(&fixture, &project, &second).await;
+    delete_chat(&fixture, &other).await;
+    // The folder vanished outside PiUI.
+    let other_path = other_root.to_string_lossy().into_owned();
+    git(&repo, &["worktree", "remove", "--force", &other_path]);
+
+    let worktrees = listed(&fixture).await;
+    assert_eq!(worktrees.len(), 2);
+    let missing = worktrees
+        .iter()
+        .find(|worktree| worktree.branch == "piui/missing")
+        .expect("listed");
+    assert_eq!(missing.state, WorktreeState::Missing);
+    for worktree in &worktrees {
+        let result = run(
+            &fixture,
+            PlacementCommandV1::RemoveOrphanWorktree {
+                worktree_id: worktree.id.clone(),
+                discard_changes: false,
+                expected_changes: None,
+            },
+        )
+        .await
+        .expect("removed at once");
+        assert!(matches!(result, PlacementResultV1::WorktreeRemoved { .. }));
+    }
+    assert!(!root.exists());
+    assert!(listed(&fixture).await.is_empty());
+
+    let invalid = run(
+        &fixture,
+        PlacementCommandV1::RemoveOrphanWorktree {
+            worktree_id: "../not-an-id".into(),
+            discard_changes: false,
+            expected_changes: None,
+        },
+    )
+    .await
+    .expect_err("invalid id");
+    assert_eq!(invalid.code, "INVALID_ARGUMENT");
+    assert!(
+        serde_json::from_value::<PlacementCommandV1>(serde_json::json!({
+            "type": "removeOrphanWorktree", "worktreeId": "a", "discardChanges": false, "path": "x"
+        }))
+        .is_err(),
+        "unknown fields are refused"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn safe_mode_lists_worktrees_but_never_removes_one() {
+    let fixture = Fixture::new("placement-orphan-safe", true);
+    assert!(listed(&fixture).await.is_empty());
+    let error = run(
+        &fixture,
+        PlacementCommandV1::RemoveOrphanWorktree {
+            worktree_id: "0".repeat(32),
+            discard_changes: true,
+            expected_changes: Some("x".into()),
+        },
+    )
+    .await
+    .expect_err("safe mode");
+    assert_eq!(error.code, "SAFE_MODE");
+}

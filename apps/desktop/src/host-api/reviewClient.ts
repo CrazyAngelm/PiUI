@@ -30,7 +30,8 @@ function isFile(value: unknown): value is ReviewFileV1 {
     CHANGES.includes(value.change as ReviewChange) &&
     optionalCount(value.added) &&
     optionalCount(value.removed) &&
-    (value.binary === undefined || value.binary === true)
+    (value.binary === undefined || value.binary === true) &&
+    (value.renamedFrom === undefined || (typeof value.renamedFrom === 'string' && value.renamedFrom.length > 0))
   );
 }
 

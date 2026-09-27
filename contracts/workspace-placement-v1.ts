@@ -22,8 +22,18 @@
  * - `adopted` marks a Pi session adopted from the terminal
  *   (`workspace-adopt-v1.ts`).
  *
- * `list` works in safe mode and needs no trust; the rest is refused in safe
- * mode (`SAFE_MODE`). Paths are home-relative display text (`~/…`).
+ * - `worktrees` (additive, v1.1) lists every PiUI-managed worktree that was
+ *   not removed, with the chats still in PiUI that run in it. One without
+ *   chats is an orphan (its chats were deleted): `removeOrphanWorktree`
+ *   removes it like `removeWorktree`, answering `worktreeDirty` with the
+ *   changes it would lose (at most 200 listed) until they are confirmed by
+ *   `fingerprint`. A worktree a chat still uses is refused (`CONFLICT`). A
+ *   missing folder is only forgotten. The branch is never deleted and no
+ *   empty folder is left behind. An older host refuses both commands.
+ *
+ * `list` and `worktrees` work in safe mode and need no trust; the rest is
+ * refused in safe mode (`SAFE_MODE`). Paths are home-relative display text
+ * (`~/…`).
  */
 import type { HarnessKind, PermissionMode, SessionSnapshot, WorkspaceModel } from './workspace-v15';
 
@@ -45,6 +55,25 @@ export interface ChatPlacementV1 {
   worktree?: ChatWorktreeV1;
   continuedFrom?: string;
   adopted?: true;
+}
+
+/** A PiUI-managed worktree (v1.1). */
+export interface ManagedWorktreeV1 {
+  /** Opaque id; repeat it in `removeOrphanWorktree`. */
+  id: string;
+  workspaceId: string;
+  branch: string;
+  path: string;
+  state: Exclude<WorktreeStateV1, 'removed'>;
+  base: string;
+  /** Chats that run in it; empty for an orphan. */
+  sessions: string[];
+}
+
+/** One change removing an orphan worktree would lose (v1.1). */
+export interface WorktreeChangeV1 {
+  path: string;
+  area: 'staged' | 'unstaged' | 'untracked' | 'conflict';
 }
 
 export interface WorktreePreviewV1 {
@@ -83,7 +112,9 @@ export type WorkspacePlacementCommandV1 =
     worktree?: WorktreeRequestV1;
     continuedFrom?: string;
   }
-  | { type: 'removeWorktree'; sessionId: string; discardChanges: boolean; expectedChanges?: string };
+  | { type: 'removeWorktree'; sessionId: string; discardChanges: boolean; expectedChanges?: string }
+  | { type: 'worktrees' }
+  | { type: 'removeOrphanWorktree'; worktreeId: string; discardChanges: boolean; expectedChanges?: string };
 
 export type WorkspacePlacementResultV1 =
   | { protocol: 1; type: 'placements'; placements: ChatPlacementV1[] }
@@ -91,7 +122,19 @@ export type WorkspacePlacementResultV1 =
   | { protocol: 1; type: 'created'; snapshot: SessionSnapshot; placement: ChatPlacementV1 }
   | { protocol: 1; type: 'removed'; sessionId: string; placement: ChatPlacementV1 }
   /** Not removed: `changes` uncommitted changes and untracked files. */
-  | { protocol: 1; type: 'dirty'; sessionId: string; changes: number; fingerprint: string };
+  | { protocol: 1; type: 'dirty'; sessionId: string; changes: number; fingerprint: string }
+  | { protocol: 1; type: 'worktrees'; worktrees: ManagedWorktreeV1[] }
+  /** Not removed: the orphan has `changes` changes; `files` lists them. */
+  | {
+    protocol: 1;
+    type: 'worktreeDirty';
+    worktreeId: string;
+    changes: number;
+    fingerprint: string;
+    files: WorktreeChangeV1[];
+    truncated: boolean;
+  }
+  | { protocol: 1; type: 'worktreeRemoved'; worktreeId: string };
 
 export type PlacementErrorCode =
   | 'SAFE_MODE'

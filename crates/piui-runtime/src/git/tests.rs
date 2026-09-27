@@ -209,18 +209,22 @@ fn a_single_hunk_is_staged_unstaged_and_reverted_exactly() {
     block_on(async {
         let top = std::fs::canonicalize(&repo).expect("top");
         let runner = &scratch.runner;
-        let unstaged = diff(runner, &top, "src/f.txt", false).await.expect("diff");
+        let unstaged = diff(runner, &top, "src/f.txt", false, None)
+            .await
+            .expect("diff");
         assert_eq!(unstaged.hunk_count(), 2);
         let second = unstaged.hunk_patch(1).expect("second hunk");
         apply(runner, &top, &second, ApplyTarget::Index, false)
             .await
             .expect("stages the second hunk");
-        let staged = diff(runner, &top, "src/f.txt", true)
+        let staged = diff(runner, &top, "src/f.txt", true, None)
             .await
             .expect("cached diff");
         assert_eq!(staged.hunk_count(), 1);
         assert_eq!(staged.line_counts(), (1, 1));
-        let remaining = diff(runner, &top, "src/f.txt", false).await.expect("diff");
+        let remaining = diff(runner, &top, "src/f.txt", false, None)
+            .await
+            .expect("diff");
         assert_eq!(remaining.hunk_count(), 1);
         assert!(
             remaining
@@ -240,13 +244,15 @@ fn a_single_hunk_is_staged_unstaged_and_reverted_exactly() {
             .await
             .expect("unstages it");
         assert!(
-            diff(runner, &top, "src/f.txt", true)
+            diff(runner, &top, "src/f.txt", true, None)
                 .await
                 .expect("cached")
                 .is_empty()
         );
 
-        let current = diff(runner, &top, "src/f.txt", false).await.expect("diff");
+        let current = diff(runner, &top, "src/f.txt", false, None)
+            .await
+            .expect("diff");
         let first = current.hunk_patch(0).expect("first hunk");
         apply(runner, &top, &first, ApplyTarget::WorkTree, true)
             .await
@@ -259,7 +265,9 @@ fn a_single_hunk_is_staged_unstaged_and_reverted_exactly() {
         );
 
         // A hunk from before an edit is refused: its context changed.
-        let before_edit = diff(runner, &top, "src/f.txt", false).await.expect("diff");
+        let before_edit = diff(runner, &top, "src/f.txt", false, None)
+            .await
+            .expect("diff");
         let stale = before_edit.hunk_patch(0).expect("hunk");
         let mut edited = expected.clone();
         edited[11] = "L";
@@ -286,7 +294,7 @@ fn whole_file_patches_cover_binary_deleted_and_untracked_files() {
     block_on(async {
         let top = std::fs::canonicalize(&repo).expect("top");
         let runner = &scratch.runner;
-        let binary = diff(runner, &top, "image.bin", false)
+        let binary = diff(runner, &top, "image.bin", false, None)
             .await
             .expect("binary diff");
         assert!(binary.binary());
@@ -294,12 +302,16 @@ fn whole_file_patches_cover_binary_deleted_and_untracked_files() {
         apply(runner, &top, binary.bytes(), ApplyTarget::Index, false)
             .await
             .expect("stages the binary file");
-        let staged = diff(runner, &top, "image.bin", true).await.expect("cached");
+        let staged = diff(runner, &top, "image.bin", true, None)
+            .await
+            .expect("cached");
         assert!(staged.binary());
         apply(runner, &top, staged.bytes(), ApplyTarget::Index, true)
             .await
             .expect("unstages it");
-        let unstaged = diff(runner, &top, "image.bin", false).await.expect("diff");
+        let unstaged = diff(runner, &top, "image.bin", false, None)
+            .await
+            .expect("diff");
         apply(runner, &top, unstaged.bytes(), ApplyTarget::WorkTree, true)
             .await
             .expect("reverts the binary file");
@@ -308,7 +320,7 @@ fn whole_file_patches_cover_binary_deleted_and_untracked_files() {
             b"bin\0ary"
         );
 
-        let deleted = diff(runner, &top, "gone.txt", false)
+        let deleted = diff(runner, &top, "gone.txt", false, None)
             .await
             .expect("deletion");
         assert!(deleted.sections()[0].deleted_file);
@@ -351,7 +363,7 @@ fn a_hunk_revert_keeps_crlf_work_trees_under_autocrlf() {
     std::fs::write(repo.join("win.txt"), crlf(&changed)).expect("agent edits");
     block_on(async {
         let top = std::fs::canonicalize(&repo).expect("top");
-        let patch = diff(&scratch.runner, &top, "win.txt", false)
+        let patch = diff(&scratch.runner, &top, "win.txt", false, None)
             .await
             .expect("diff");
         assert_eq!(patch.hunk_count(), 2, "line endings are not a change");
@@ -359,7 +371,7 @@ fn a_hunk_revert_keeps_crlf_work_trees_under_autocrlf() {
         apply(&scratch.runner, &top, &first, ApplyTarget::WorkTree, true)
             .await
             .expect("reverts the first hunk");
-        let second = diff(&scratch.runner, &top, "win.txt", false)
+        let second = diff(&scratch.runner, &top, "win.txt", false, None)
             .await
             .expect("diff");
         let hunk = second.hunk_patch(0).expect("hunk");
@@ -526,7 +538,9 @@ fn repository_hooks_never_run() {
     block_on(async {
         let runner = &scratch.runner;
         let top = std::fs::canonicalize(&repo).expect("top");
-        let patch = diff(runner, &top, "src/f.txt", false).await.expect("diff");
+        let patch = diff(runner, &top, "src/f.txt", false, None)
+            .await
+            .expect("diff");
         apply(runner, &top, patch.bytes(), ApplyTarget::Index, false)
             .await
             .expect("stages");
@@ -541,4 +555,162 @@ fn repository_hooks_never_run() {
         !marker.exists(),
         "no repository hook ran for PiUI's git commands"
     );
+}
+
+/// ORIGINAL with lines 2, 5 and 9 (1-based) changed: one hunk with three
+/// runs of changes separated by context.
+fn three_runs() -> Vec<&'static str> {
+    let mut changed = ORIGINAL.to_vec();
+    changed[1] = "B";
+    changed[4] = "E";
+    changed[8] = "I";
+    changed
+}
+
+#[test]
+fn a_split_hunk_stages_unstages_and_reverts_one_part_exactly() {
+    let scratch = Scratch::new("split");
+    let repo = init_repository(&scratch);
+    std::fs::write(repo.join("src/f.txt"), lines(&three_runs())).expect("edits three places");
+    block_on(async {
+        let top = std::fs::canonicalize(&repo).expect("top");
+        let runner = &scratch.runner;
+        let unstaged = diff(runner, &top, "src/f.txt", false, None)
+            .await
+            .expect("diff");
+        assert_eq!(unstaged.hunk_count(), 1);
+        let parts = unstaged.hunk_parts(0).expect("parts");
+        assert_eq!(parts.len(), 3);
+        assert_eq!(
+            (
+                parts[1].old_start,
+                parts[1].old_lines,
+                parts[1].new_start,
+                parts[1].new_lines
+            ),
+            (3, 6, 3, 6)
+        );
+        let middle = unstaged.hunk_part_patch(0, 1).expect("middle part");
+        assert_eq!(
+            String::from_utf8(middle.clone()).expect("utf8"),
+            "diff --git a/src/f.txt b/src/f.txt\n--- a/src/f.txt\n+++ b/src/f.txt\n@@ -3,6 +3,6 @@\n c\n d\n-e\n+E\n f\n g\n h\n"
+        );
+        assert_eq!(
+            unstaged.hunk_part_patch(0, 3),
+            Err(super::patch::PatchError::NoSuchPart)
+        );
+        apply(runner, &top, &middle, ApplyTarget::Index, false)
+            .await
+            .expect("stages only the middle part");
+        let staged = diff(runner, &top, "src/f.txt", true, None)
+            .await
+            .expect("cached diff");
+        assert_eq!(staged.line_counts(), (1, 1));
+        assert!(staged.display_text(1 << 20).expect("text").contains("+E"));
+
+        // The staged change is one run: its only part unstages it.
+        let staged_parts = staged.hunk_parts(0).expect("staged parts");
+        assert_eq!(staged_parts.len(), 1);
+        apply(
+            runner,
+            &top,
+            &staged.hunk_part_patch(0, 0).expect("the only part"),
+            ApplyTarget::Index,
+            true,
+        )
+        .await
+        .expect("unstages it");
+        assert!(
+            diff(runner, &top, "src/f.txt", true, None)
+                .await
+                .expect("cached")
+                .is_empty()
+        );
+
+        // Reverting the last part touches only line 9 of the work tree.
+        let current = diff(runner, &top, "src/f.txt", false, None)
+            .await
+            .expect("diff");
+        let last = current.hunk_part_patch(0, 2).expect("last part");
+        apply(runner, &top, &last, ApplyTarget::WorkTree, true)
+            .await
+            .expect("reverts the last part");
+        let mut expected = three_runs();
+        expected[8] = "i";
+        assert_eq!(
+            std::fs::read_to_string(repo.join("src/f.txt")).expect("reads"),
+            lines(&expected)
+        );
+
+        // A part from before an edit is refused like a stale hunk.
+        let before = diff(runner, &top, "src/f.txt", false, None)
+            .await
+            .expect("diff");
+        let stale = before.hunk_part_patch(0, 0).expect("first part");
+        let mut edited = expected.clone();
+        edited[2] = "C";
+        std::fs::write(repo.join("src/f.txt"), lines(&edited)).expect("edits again");
+        assert_eq!(
+            apply(runner, &top, &stale, ApplyTarget::WorkTree, true).await,
+            Err(GitError::DoesNotApply)
+        );
+    });
+}
+
+#[test]
+fn a_staged_rename_is_one_change_that_unstages_as_a_whole() {
+    let scratch = Scratch::new("rename");
+    let repo = init_repository(&scratch);
+    git(&repo, &["mv", "src/f.txt", "src/renamed.txt"]);
+    block_on(async {
+        let top = std::fs::canonicalize(&repo).expect("top");
+        let runner = &scratch.runner;
+        let report = status(runner, &top, "").await.expect("status");
+        assert!(
+            report.entries.iter().any(|entry| matches!(
+                entry,
+                StatusEntry::Changed { path, index: StatusCode::Renamed, original: Some(source), .. }
+                    if path == "src/renamed.txt" && source == "src/f.txt"
+            )),
+            "{:?}",
+            report.entries
+        );
+        assert!(
+            !report
+                .entries
+                .iter()
+                .any(|entry| entry.path() == "src/f.txt")
+        );
+        let counts = numstat(runner, &top, "", true).await.expect("numstat");
+        assert_eq!(
+            counts
+                .get("src/renamed.txt")
+                .and_then(|counts| counts.added),
+            Some(0)
+        );
+
+        let patch = diff(runner, &top, "src/renamed.txt", true, Some("src/f.txt"))
+            .await
+            .expect("rename diff");
+        assert_eq!(patch.sections().len(), 1);
+        assert!(patch.sections()[0].rename);
+        assert!(!patch.hunks_selectable());
+        let text = patch.display_text(1 << 20).expect("text");
+        assert!(
+            text.contains("rename from src/f.txt\nrename to src/renamed.txt"),
+            "{text}"
+        );
+        apply(runner, &top, patch.bytes(), ApplyTarget::Index, true)
+            .await
+            .expect("unstages the rename");
+        let after = status(runner, &top, "").await.expect("status");
+        assert!(after.entries.iter().any(|entry| matches!(
+            entry,
+            StatusEntry::Changed { path, worktree: StatusCode::Deleted, .. } if path == "src/f.txt"
+        )));
+        assert!(after.entries.iter().any(|entry| matches!(
+            entry,
+            StatusEntry::Untracked { path } if path == "src/renamed.txt"
+        )));
+    });
 }

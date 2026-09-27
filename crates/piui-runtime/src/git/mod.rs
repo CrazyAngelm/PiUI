@@ -196,7 +196,7 @@ pub async fn status(
         "-z",
         "--branch",
         "--untracked-files=all",
-        "--no-renames",
+        "--find-renames",
         "--ignore-submodules=none",
     ]);
     if !prefix.is_empty() {
@@ -208,6 +208,8 @@ pub async fn status(
 }
 
 /// Line counts of the staged (`cached`) or unstaged changes under `prefix`.
+/// Staged renames are counted as renames under their new path, like the
+/// status lists them.
 ///
 /// # Errors
 ///
@@ -225,7 +227,11 @@ pub async fn numstat(
     arguments.extend(args([
         "--numstat",
         "-z",
-        "--no-renames",
+        if cached {
+            "--find-renames"
+        } else {
+            "--no-renames"
+        },
         "--no-ext-diff",
         "--no-textconv",
         "--submodule=short",
@@ -238,7 +244,9 @@ pub async fn numstat(
     parse_numstat(&output.stdout).map_err(|_| GitError::Malformed)
 }
 
-/// The exact diff of one path: staged (`cached`) or unstaged.
+/// The exact diff of one path: staged (`cached`) or unstaged. With
+/// `original`, the staged rename from that path (both paths, with rename
+/// detection).
 ///
 /// # Errors
 ///
@@ -248,6 +256,7 @@ pub async fn diff(
     top: &Path,
     path: &str,
     cached: bool,
+    original: Option<&str>,
 ) -> Result<FilePatch, GitError> {
     let mut arguments = args(["diff"]);
     if cached {
@@ -259,13 +268,20 @@ pub async fn diff(
         "--no-textconv",
         "--binary",
         "--full-index",
-        "--no-renames",
+        if original.is_some() {
+            "--find-renames"
+        } else {
+            "--no-renames"
+        },
         "--submodule=short",
         "-U3",
         "--src-prefix=a/",
         "--dst-prefix=b/",
         "--",
     ]));
+    if let Some(original) = original {
+        arguments.push(original.into());
+    }
     arguments.push(path.into());
     let output = succeeded(read(runner, top, arguments, DIFF_OUTPUT_LIMIT).await?)?;
     FilePatch::parse(output.stdout).map_err(|_| GitError::Malformed)

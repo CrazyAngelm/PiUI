@@ -5,7 +5,9 @@
 //! the fingerprint of the exact diff (or untracked file) the person reviewed
 //! and PiUI recomputes it first: a change in between is refused as `STALE`.
 //! Staging, unstaging and reverting replay that exact diff (or one of its
-//! hunks) through `git apply`, which checks every context line again.
+//! hunks, or one part of a hunk split at its context lines) through
+//! `git apply`, which checks every context line again. A staged rename is
+//! one change of its new path that names the path it came from.
 //! Reverting an untracked file moves it to the system trash through the
 //! platform layer; nothing is deleted permanently. Paths come only from the
 //! current `git status` of the chat's folder.
@@ -66,6 +68,9 @@ pub enum ReviewRequestV1 {
         fingerprint: String,
         #[serde(default)]
         hunk: Option<usize>,
+        /// A part of `hunk` split at its context lines (additive in v1).
+        #[serde(default)]
+        part: Option<usize>,
     },
     Unstage {
         session_id: String,
@@ -73,6 +78,9 @@ pub enum ReviewRequestV1 {
         fingerprint: String,
         #[serde(default)]
         hunk: Option<usize>,
+        /// A part of `hunk` split at its context lines (additive in v1).
+        #[serde(default)]
+        part: Option<usize>,
     },
     Revert {
         session_id: String,
@@ -81,6 +89,9 @@ pub enum ReviewRequestV1 {
         fingerprint: String,
         #[serde(default)]
         hunk: Option<usize>,
+        /// A part of `hunk` split at its context lines (additive in v1).
+        #[serde(default)]
+        part: Option<usize>,
     },
 }
 
@@ -108,6 +119,9 @@ pub struct ReviewFileV1 {
     pub removed: Option<u64>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub binary: bool,
+    /// A staged rename: the path it came from (additive in v1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub renamed_from: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -281,6 +295,8 @@ fn change_of(code: StatusCode) -> ReviewChange {
 struct AreaEntry {
     change: ReviewChange,
     intent_to_add: bool,
+    /// The source of a staged rename.
+    original: Option<String>,
 }
 
 fn entry_in(report: &StatusReport, path: &str, area: ReviewArea) -> Option<AreaEntry> {
@@ -291,12 +307,14 @@ fn entry_in(report: &StatusReport, path: &str, area: ReviewArea) -> Option<AreaE
             Some(AreaEntry {
                 change: ReviewChange::Added,
                 intent_to_add: false,
+                original: None,
             })
         }
         (StatusEntry::Unmerged { path: candidate }, ReviewArea::Unstaged) if candidate == path => {
             Some(AreaEntry {
                 change: ReviewChange::Conflict,
                 intent_to_add: false,
+                original: None,
             })
         }
         (
@@ -306,6 +324,7 @@ fn entry_in(report: &StatusReport, path: &str, area: ReviewArea) -> Option<AreaE
                 worktree,
                 submodule,
                 intent_to_add,
+                original,
             },
             ReviewArea::Staged | ReviewArea::Unstaged,
         ) if candidate == path => {
@@ -323,6 +342,11 @@ fn entry_in(report: &StatusReport, path: &str, area: ReviewArea) -> Option<AreaE
                     change_of(code)
                 },
                 intent_to_add: area == ReviewArea::Unstaged && *intent_to_add,
+                original: if area == ReviewArea::Staged && *index == StatusCode::Renamed {
+                    original.clone()
+                } else {
+                    None
+                },
             })
         }
         _ => None,
@@ -336,14 +360,15 @@ fn files_of(
 ) -> Vec<ReviewFileV1> {
     let with_counts = |path: &str,
                        area: ReviewArea,
-                       change: ReviewChange,
+                       found: AreaEntry,
                        counts: Option<&git::LineCounts>| ReviewFileV1 {
         path: path.to_owned(),
         area,
-        change,
+        change: found.change,
         added: counts.and_then(|counts| counts.added),
         removed: counts.and_then(|counts| counts.removed),
         binary: counts.is_some_and(|counts| counts.added.is_none() && counts.removed.is_none()),
+        renamed_from: found.original,
     };
     let mut files = Vec::new();
     for entry in &report.entries {
@@ -359,7 +384,7 @@ fn files_of(
                     ReviewArea::Unstaged => unstaged.get(path),
                     ReviewArea::Untracked => None,
                 };
-                files.push(with_counts(path, area, found.change, counts));
+                files.push(with_counts(path, area, found, counts));
             }
         }
     }
@@ -551,9 +576,15 @@ async fn diff(
             ReviewActionsV1::default(),
         ),
         (ReviewArea::Staged | ReviewArea::Unstaged, _) => {
-            let patch = git::diff(&folder.git, &folder.top, &path, area == ReviewArea::Staged)
-                .await
-                .map_err(git_error)?;
+            let patch = git::diff(
+                &folder.git,
+                &folder.top,
+                &path,
+                area == ReviewArea::Staged,
+                entry.original.as_deref(),
+            )
+            .await
+            .map_err(git_error)?;
             if patch.is_empty() {
                 return Err(stale_error());
             }
@@ -591,17 +622,26 @@ async fn diff(
     })
 }
 
-fn hunk_bytes(patch: &FilePatch, hunk: Option<usize>) -> Result<Vec<u8>, WorkspaceError> {
-    match hunk {
-        None => Ok(patch.bytes().to_vec()),
-        Some(index) => patch.hunk_patch(index).map_err(|error| match error {
-            PatchError::NoSuchHunk => stale_error(),
-            PatchError::WholeFileOnly | PatchError::Malformed => tool_error(
-                "NOT_SUPPORTED",
-                "This change can only be handled as a whole file.",
-            ),
-        }),
-    }
+/// The exact bytes of the reviewed change, one hunk of it, or one part of a
+/// hunk split at its context lines.
+fn hunk_bytes(
+    patch: &FilePatch,
+    hunk: Option<usize>,
+    part: Option<usize>,
+) -> Result<Vec<u8>, WorkspaceError> {
+    let result = match (hunk, part) {
+        (None, None) => return Ok(patch.bytes().to_vec()),
+        (None, Some(_)) => return Err(invalid()),
+        (Some(index), None) => patch.hunk_patch(index),
+        (Some(index), Some(part)) => patch.hunk_part_patch(index, part),
+    };
+    result.map_err(|error| match error {
+        PatchError::NoSuchHunk | PatchError::NoSuchPart => stale_error(),
+        PatchError::WholeFileOnly | PatchError::Malformed => tool_error(
+            "NOT_SUPPORTED",
+            "This change can only be handled as a whole file.",
+        ),
+    })
 }
 
 fn fixed_change(entry: &AreaEntry) -> Result<(), WorkspaceError> {
@@ -622,10 +662,16 @@ fn fixed_change(entry: &AreaEntry) -> Result<(), WorkspaceError> {
 async fn reviewed_patch(
     folder: &ReviewFolder,
     path: &str,
+    entry: &AreaEntry,
     staged: bool,
     fingerprint: &str,
 ) -> Result<FilePatch, WorkspaceError> {
-    let patch = git::diff(&folder.git, &folder.top, path, staged)
+    let original = if staged {
+        entry.original.as_deref()
+    } else {
+        None
+    };
+    let patch = git::diff(&folder.git, &folder.top, path, staged, original)
         .await
         .map_err(git_error)?;
     if patch.is_empty() || patch.fingerprint() != fingerprint {
@@ -640,13 +686,14 @@ async fn stage(
     path: &str,
     area: ReviewArea,
     fingerprint: &str,
-    hunk: Option<usize>,
+    selection: Selection,
 ) -> Result<(), WorkspaceError> {
+    let Selection { hunk, part } = selection;
     let (folder, entry) = locate_entry(host, session_id, path, area).await?;
     fixed_change(&entry)?;
     match area {
         ReviewArea::Untracked => {
-            if hunk.is_some() {
+            if hunk.is_some() || part.is_some() {
                 return Err(tool_error("NOT_SUPPORTED", "Stage a new file as a whole."));
             }
             if untracked_view(&folder, path)?.fingerprint != fingerprint {
@@ -657,16 +704,16 @@ async fn stage(
                 .map_err(git_error)
         }
         ReviewArea::Unstaged => {
-            let patch = reviewed_patch(&folder, path, false, fingerprint).await?;
+            let patch = reviewed_patch(&folder, path, &entry, false, fingerprint).await?;
             if entry.intent_to_add {
-                if hunk.is_some() {
+                if hunk.is_some() || part.is_some() {
                     return Err(tool_error("NOT_SUPPORTED", "Stage a new file as a whole."));
                 }
                 return git::add_path(&folder.git, &folder.top, path)
                     .await
                     .map_err(git_error);
             }
-            let bytes = hunk_bytes(&patch, hunk)?;
+            let bytes = hunk_bytes(&patch, hunk, part)?;
             git::apply(&folder.git, &folder.top, &bytes, ApplyTarget::Index, false)
                 .await
                 .map_err(git_error)
@@ -680,12 +727,12 @@ async fn unstage(
     session_id: &str,
     path: &str,
     fingerprint: &str,
-    hunk: Option<usize>,
+    selection: Selection,
 ) -> Result<(), WorkspaceError> {
     let (folder, entry) = locate_entry(host, session_id, path, ReviewArea::Staged).await?;
     fixed_change(&entry)?;
-    let patch = reviewed_patch(&folder, path, true, fingerprint).await?;
-    let bytes = hunk_bytes(&patch, hunk)?;
+    let patch = reviewed_patch(&folder, path, &entry, true, fingerprint).await?;
+    let bytes = hunk_bytes(&patch, selection.hunk, selection.part)?;
     git::apply(&folder.git, &folder.top, &bytes, ApplyTarget::Index, true)
         .await
         .map_err(git_error)
@@ -716,13 +763,14 @@ async fn revert(
     path: &str,
     area: ReviewArea,
     fingerprint: &str,
-    hunk: Option<usize>,
+    selection: Selection,
 ) -> Result<(), WorkspaceError> {
+    let Selection { hunk, part } = selection;
     let (folder, entry) = locate_entry(host, session_id, path, area).await?;
     fixed_change(&entry)?;
     match area {
         ReviewArea::Untracked => {
-            if hunk.is_some() {
+            if hunk.is_some() || part.is_some() {
                 return Err(tool_error(
                     "NOT_SUPPORTED",
                     "Move a new file to the trash as a whole.",
@@ -769,14 +817,14 @@ async fn revert(
                     "Unstage this new file first, then move it to the trash.",
                 ));
             }
-            let patch = reviewed_patch(&folder, path, false, fingerprint).await?;
+            let patch = reviewed_patch(&folder, path, &entry, false, fingerprint).await?;
             if patch.display_text(DISPLAY_LIMIT).is_none() && !patch.binary() {
                 return Err(tool_error(
                     "NOT_SUPPORTED",
                     "This change is too large to show, so PiUI does not revert it.",
                 ));
             }
-            let bytes = hunk_bytes(&patch, hunk)?;
+            let bytes = hunk_bytes(&patch, hunk, part)?;
             git::apply(
                 &folder.git,
                 &folder.top,
@@ -792,6 +840,13 @@ async fn revert(
             "Unstage these changes first, then revert them.",
         )),
     }
+}
+
+/// Which part of a reviewed change an action applies to.
+#[derive(Clone, Copy, Debug)]
+struct Selection {
+    hunk: Option<usize>,
+    part: Option<usize>,
 }
 
 fn valid_fingerprint(value: &str) -> bool {
@@ -816,6 +871,7 @@ pub(crate) async fn dispatch_review(
             area,
             fingerprint,
             hunk,
+            part,
         } => {
             if host.safe_mode {
                 return Err(safe_mode_error());
@@ -823,7 +879,15 @@ pub(crate) async fn dispatch_review(
             if !valid_fingerprint(&fingerprint) {
                 return Err(invalid());
             }
-            stage(host, &session_id, &path, area, &fingerprint, hunk).await?;
+            stage(
+                host,
+                &session_id,
+                &path,
+                area,
+                &fingerprint,
+                Selection { hunk, part },
+            )
+            .await?;
             status(host, session_id).await
         }
         ReviewRequestV1::Unstage {
@@ -831,6 +895,7 @@ pub(crate) async fn dispatch_review(
             path,
             fingerprint,
             hunk,
+            part,
         } => {
             if host.safe_mode {
                 return Err(safe_mode_error());
@@ -838,7 +903,14 @@ pub(crate) async fn dispatch_review(
             if !valid_fingerprint(&fingerprint) {
                 return Err(invalid());
             }
-            unstage(host, &session_id, &path, &fingerprint, hunk).await?;
+            unstage(
+                host,
+                &session_id,
+                &path,
+                &fingerprint,
+                Selection { hunk, part },
+            )
+            .await?;
             status(host, session_id).await
         }
         ReviewRequestV1::Revert {
@@ -847,6 +919,7 @@ pub(crate) async fn dispatch_review(
             area,
             fingerprint,
             hunk,
+            part,
         } => {
             if host.safe_mode {
                 return Err(safe_mode_error());
@@ -854,7 +927,15 @@ pub(crate) async fn dispatch_review(
             if !valid_fingerprint(&fingerprint) {
                 return Err(invalid());
             }
-            revert(host, &session_id, &path, area, &fingerprint, hunk).await?;
+            revert(
+                host,
+                &session_id,
+                &path,
+                area,
+                &fingerprint,
+                Selection { hunk, part },
+            )
+            .await?;
             status(host, session_id).await
         }
     }

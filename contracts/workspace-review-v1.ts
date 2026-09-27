@@ -13,6 +13,15 @@
  * hunk) through `git apply`; reverting an untracked file moves it to the
  * system trash. Reads work in safe mode (`readOnly: true`); every action is
  * refused there with `SAFE_MODE`. Git runs without repository hooks.
+ *
+ * Additive within v1 (v1.1): a staged rename is one entry of its new path
+ * with `renamedFrom` (git rename detection); its diff shows the rename and
+ * it changes as a whole. `part` selects one part of hunk `hunk` split at its
+ * runs of context lines (like `git add -p`'s split, see `splitHunk` in the
+ * review panel and the `hunkSplit` fixture cases); the host rebuilds the
+ * parts from the fingerprinted diff and applies exactly that part. An older
+ * host refuses `part` as an unknown field; an older client ignores
+ * `renamedFrom` and shows the new path as modified.
  */
 export const WORKSPACE_REVIEW_PROTOCOL = 1 as const;
 
@@ -39,6 +48,8 @@ export interface ReviewFileV1 {
   added?: number;
   removed?: number;
   binary?: true;
+  /** A staged rename: the path it was renamed from (v1.1). */
+  renamedFrom?: string;
 }
 
 export type ReviewRepositoryV1 =
@@ -100,12 +111,13 @@ export interface ReviewDiffV1 {
   actions: ReviewActionsV1;
 }
 
+/** `part` (v1.1) needs `hunk`: that part of the hunk split at its context lines. */
 export type ReviewRequestV1 =
   | { type: 'status'; sessionId: string }
   | { type: 'diff'; sessionId: string; path: string; area: ReviewArea }
-  | { type: 'stage'; sessionId: string; path: string; area: 'unstaged' | 'untracked'; fingerprint: string; hunk?: number }
-  | { type: 'unstage'; sessionId: string; path: string; fingerprint: string; hunk?: number }
-  | { type: 'revert'; sessionId: string; path: string; area: 'unstaged' | 'untracked'; fingerprint: string; hunk?: number };
+  | { type: 'stage'; sessionId: string; path: string; area: 'unstaged' | 'untracked'; fingerprint: string; hunk?: number; part?: number }
+  | { type: 'unstage'; sessionId: string; path: string; fingerprint: string; hunk?: number; part?: number }
+  | { type: 'revert'; sessionId: string; path: string; area: 'unstaged' | 'untracked'; fingerprint: string; hunk?: number; part?: number };
 
 /** `status` and `diff` answer with their type; every action answers with a fresh status. */
 export type ReviewResultV1 = ReviewStatusV1 | ReviewDiffV1;
