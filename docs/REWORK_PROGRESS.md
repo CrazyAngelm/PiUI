@@ -382,6 +382,36 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   panel frames still load. On macOS and Linux wry forwards frame navigations
   to the same hook, so the guard is not enabled there yet.
 
+## 2026-09-27 — plugins v2 (unreleased)
+
+- **Backend limits.** Backends start under Node's permission model
+  (`--permission`, reads of the package, reads and writes of the data
+  folder, a request's project folder only with `project.read` /
+  `project.write`; no child processes, workers, add-ons or WASI;
+  `--allow-net` only with `network` where Node.js has it). Node.js without
+  the model does not start backends (state `unsupported`). Verified with
+  real Node.js 22.17, 22.23 and 24.13 in Rust tests (denied reads, writes and
+  `child_process`, a restart for a new project, a busy backend refusing
+  another project); `--allow-net` could not be tested (no Node.js 25 here).
+- **Manifest version 2** (`piui-plugin-v2.schema.json`), v1 unchanged:
+  status-bar items and keybindings (PiUI wins, conflicts shown), chat
+  renderers in the panel frame with the generic view always one click away
+  (`plugin-panel-v1` v1.1), and MCP tool servers offered to ordinary new
+  chats of Claude Code, Hermes and ACP agents only (never Codex, Pi, Prime
+  or pipeline runs; the user's harness config untouched). Examples
+  `status-tools` and `tool-cards`; `create-plugin` writes version 2.
+- **Plugin origin guard everywhere:** main-document page loads on the plugin
+  origin are sent back (all platforms), app commands refuse that origin, and
+  non-page plugin files carry `CSP: sandbox`. The Windows pre-navigation
+  refusal stays; WebKit's residual window is documented in ADR-032.
+- The desktop `contract:test` script was defined twice and skipped five
+  contract suites; merged.
+- Needs a real-app check: the status bar and renderer frames in the packaged
+  WebView2 app, a real Claude Code / Hermes / ACP chat with an offered MCP
+  server, and a macOS and Linux build with panels still loading and the
+  page-load guard active. Registries that store v2 permissions or MCP offers
+  are not readable by 0.2.2 (downgrade shows an empty plugin list).
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).
