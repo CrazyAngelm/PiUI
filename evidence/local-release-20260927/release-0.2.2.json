@@ -1,0 +1,42 @@
+{
+  "timestamp": "2026-09-27T16:47:00+07:00",
+  "commit": "a616325",
+  "branch": "rework/piui-2 = main (local, not pushed)",
+  "changes": "0.2.2: on Windows the app window refuses main-frame navigation to the plugin panel origin, so a top-level document there never receives the IPC bridge; remaining-work plan refreshed",
+  "release": {
+    "portable": {
+      "path": "artifacts/PiUI_0.2.2_windows_x86_64.exe",
+      "bytes": 33302528,
+      "sha256": "018fd32487bbc3b63e86bb7a389cc6d2ed7d96442a32908904c0a9a4b6ac6c46"
+    },
+    "installer": {
+      "path": "artifacts/PiUI_0.2.2_x64-setup.exe",
+      "bytes": 8906145,
+      "sha256": "10d47632f33b073380f853df78d1b01e17df2014a388615e17542bdcf8eb154b"
+    },
+    "authenticode": "NotSigned (no certificate configured)",
+    "updater": "not configured (no public key or endpoint); the app makes no update checks",
+    "installed": null,
+    "launch": "not performed: release builds have no isolated data directories; launching would load the owner's real projects and enabled schedules (paid native runs); the owner installs and launches it"
+  },
+  "supersedes": "0.2.1 (evidence/local-release-20260927/release-0.2.1.json); its artifacts were replaced by this build",
+  "rollback": "evidence/local-release-20260926/rollback-0.1.1-20260922/ (git-ignored)",
+  "verification": {
+    "cargoFmt": "clean",
+    "cargoClippy": "cargo clippy --workspace --all-targets -- -D warnings passed",
+    "cargoTest": "cargo test --workspace: 728 passed, 18 ignored, 0 failed",
+    "desktopCheck": "svelte-check found 0 errors and 0 warnings",
+    "desktopTests": "130 files, 769 tests passed",
+    "contractTests": "16 files, 153 tests passed",
+    "bridgeTests": "154 tests: 153 passed, 1 skipped (live handshake)",
+    "systemExamples": "valid",
+    "labE2E": "Playwright run per project: lab 124 passed, prod-csp 5 passed. Both projects in one run: 127 passed, 2 failed (plugin panel ready timeout of 10 s and one session-tools axe run under load; both pass alone)",
+    "repoCheck": "public repository audit passed; version check 0.2.2 passed",
+    "navigationGuard": "unit test only (piui_plugins::csp::is_plugin_location); not exercised in the packaged WebView2 app"
+  },
+  "cleanup": {
+    "removed": ["target/release", "target/main", "target/piui-e2e", "target/debug"],
+    "freeBytesBefore": 242030034944,
+    "freeBytesAfter": 260180942848
+  }
+}
