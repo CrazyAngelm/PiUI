@@ -151,6 +151,7 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
   }
   let selectedModel = config.model?.id ? { id: config.model.id, provider: config.model.provider } : undefined;
   if ((config.resourceRules ?? []).some(rule => rule.kind !== "skill")) throw fail("unsupported-resource-policy", "Prime does not expose per-session MCP disabling, including built-in integrations.");
+  if (config.pluginMcpServers?.length) throw fail("unsupported-settings", "Prime Agent cannot take a plugin's MCP server for one chat.");
   const createRuntime = async ({ cwd, sessionManager: manager, sessionStartEvent }) => {
     const settingsManager = sdk.SettingsManager.create(cwd, config.agentDir);
     const modelRegistry = sdk.ModelRegistry.create(authStorage, join(config.agentDir, "models.json"));

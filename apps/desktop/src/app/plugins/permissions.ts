@@ -1,4 +1,4 @@
-import type { PluginPermission } from '../../../../../contracts/piui-plugin-v1';
+import type { PluginPermission } from '../../../../../contracts/piui-plugin-v2';
 import type { PluginBackendState, PluginLogEvent } from '../../../../../contracts/plugins-v1';
 
 /**
@@ -19,6 +19,14 @@ export const PERMISSION_TEXT: Readonly<Record<PluginPermission, { label: string;
     label: 'Keep its own settings in PiUI',
     detail: 'PiUI shows the settings form and stores the values.',
   },
+  'ui.status': {
+    label: 'Show items in the status bar',
+    detail: 'Short text PiUI shows at the bottom of the window; clicking an item runs its command.',
+  },
+  'ui.renderer': {
+    label: 'Show its own view of chat tool activity',
+    detail: 'The view runs in an isolated frame and sees the output of the tools it names. The plain view stays one click away.',
+  },
   'node.run': {
     label: 'Run its own pipeline nodes',
     detail: "Nodes run in the plugin's backend when a pipeline in a trusted project reaches them.",
@@ -26,6 +34,10 @@ export const PERMISSION_TEXT: Readonly<Record<PluginPermission, { label: string;
   'acp.agents': {
     label: 'Add ACP agents to Settings → Harnesses',
     detail: 'Each agent runs only after you trust its exact command line there.',
+  },
+  'mcp.tools': {
+    label: 'Offer MCP tools to chats',
+    detail: 'Only after you turn a tool server on in Settings → Plugins, and only in new Claude Code, Hermes and ACP agent chats. Your harness settings are not changed.',
   },
   'chat.read': {
     label: 'See the title of the open chat',
@@ -37,15 +49,15 @@ export const PERMISSION_TEXT: Readonly<Record<PluginPermission, { label: string;
   },
   'project.read': {
     label: 'Read files in your project folder',
-    detail: 'The backend receives the project path. PiUI does not limit what it reads.',
+    detail: "The backend receives the project path and may read that folder. Node's permission model keeps it out of your other folders.",
   },
   'project.write': {
     label: 'Change files in your project folder',
-    detail: 'The backend receives the project path and can change files.',
+    detail: 'The backend receives the project path and may change files in that folder.',
   },
   network: {
     label: 'Use the network',
-    detail: "Declared by the plugin; PiUI does not block its backend's network access.",
+    detail: 'Without this permission PiUI blocks network access when the Node.js in use can.',
   },
 };
 
@@ -56,6 +68,7 @@ export const BACKEND_STATE_TEXT: Readonly<Record<PluginBackendState, string>> = 
   crashed: 'Stopped unexpectedly; restarts on next use',
   'crash-loop': 'Keeps stopping; restart it to try again',
   unavailable: 'Node.js was not found',
+  unsupported: 'Node.js is too old to limit it; install Node.js 22.13 or later',
 };
 
 export const LOG_TEXT: Readonly<Record<PluginLogEvent, string>> = {

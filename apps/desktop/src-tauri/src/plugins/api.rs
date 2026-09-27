@@ -9,6 +9,7 @@ use piui_plugins::csp::plugin_origin;
 use piui_plugins::fields::resolve_values;
 use piui_plugins::manifest::{
     Appearance, CommandSurface, NodeResultField, PanelLocation, Problem, ProblemCode,
+    StatusAlignment,
 };
 use piui_plugins::{Field, Permission};
 use serde::{Deserialize, Serialize};
@@ -17,8 +18,8 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use super::supervisor::{BackendState, LogEntry};
 use super::{
-    COMMAND_TIMEOUT, CallError, Package, PluginsError, PluginsState, ReviewSource, Staged,
-    StartFailure,
+    BackendLimits, COMMAND_TIMEOUT, CallError, Package, PluginsError, PluginsState, ReviewSource,
+    Staged, StartFailure,
 };
 use crate::acp_agents::CommandLine;
 use crate::state::HostState;
@@ -97,6 +98,13 @@ pub enum PluginsCommand {
         expected_revision: u64,
         theme: Option<ThemeRefDto>,
     },
+    /// v1.1: offer one MCP server to new chats, or stop offering it.
+    SetMcpOffered {
+        expected_revision: u64,
+        id: String,
+        server_id: String,
+        offered: bool,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -151,6 +159,60 @@ pub struct NodeTypeDto {
     pub result_fields: Vec<NodeResultField>,
 }
 
+/// A status-bar item (v1.1).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusItemDto {
+    pub id: String,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tooltip: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    pub alignment: StatusAlignment,
+}
+
+/// A keybinding for one of the plugin's commands (v1.1).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeybindingDto {
+    pub command: String,
+    pub key: String,
+}
+
+/// An MCP server (v1.1) with the command line a harness starts for a new
+/// chat (project folders are added per chat) and whether it is offered.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerDto {
+    pub id: String,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub offered: bool,
+    pub command_line: CommandLine,
+    pub node_found: bool,
+}
+
+/// An MCP server in a review (v1.1).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewMcpServerDto {
+    pub title: String,
+    pub command_line: CommandLine,
+}
+
+/// A chat renderer (v1.1); `url` only while the plugin is active.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RendererDto {
+    pub id: String,
+    pub title: String,
+    pub tool_names: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpAgentDto {
@@ -169,6 +231,14 @@ pub struct ContributesDto {
     pub templates: Vec<TemplateDto>,
     pub node_types: Vec<NodeTypeDto>,
     pub acp_agents: Vec<AcpAgentDto>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub status_items: Vec<StatusItemDto>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub keybindings: Vec<KeybindingDto>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub renderers: Vec<RendererDto>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<McpServerDto>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -178,6 +248,8 @@ pub struct BackendDto {
     pub restarts: u32,
     pub command_line: CommandLine,
     pub node_found: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limits: Option<BackendLimits>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -223,6 +295,8 @@ pub struct PluginsRegistryDto {
 pub struct ReviewBackendDto {
     pub command_line: CommandLine,
     pub node_found: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limits: Option<BackendLimits>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -243,6 +317,14 @@ pub struct ReviewContributesDto {
     pub templates: Vec<String>,
     pub node_types: Vec<String>,
     pub acp_agents: Vec<ReviewAcpAgentDto>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub status_items: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub keybindings: Vec<KeybindingDto>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub renderers: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<ReviewMcpServerDto>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -397,6 +479,14 @@ fn call_error(error: CallError) -> PluginsErrorDto {
         CallError::NotStarted(StartFailure::ShuttingDown) => {
             PluginsErrorDto::new("BACKEND_UNAVAILABLE", "PiUI is closing.")
         }
+        CallError::NotStarted(StartFailure::NodeUnsupported) => PluginsErrorDto::new(
+            "BACKEND_UNAVAILABLE",
+            "This Node.js cannot limit plugin backends. Install Node.js 22.13 or later to run this plugin's backend.",
+        ),
+        CallError::NotStarted(StartFailure::Busy) => PluginsErrorDto::new(
+            "BACKEND_UNAVAILABLE",
+            "The plugin's backend is busy in another project. Try again when it finishes.",
+        ),
         CallError::Remote(message) => PluginsErrorDto {
             detail: Some(plain_detail(&message)),
             ..PluginsErrorDto::new("BACKEND_FAILED", "The plugin reported an error.")
@@ -431,11 +521,22 @@ fn plain_detail(message: &str) -> String {
     cleaned[..end].trim().to_owned()
 }
 
+fn command_line_of(command: &super::McpCommand) -> CommandLine {
+    CommandLine {
+        program: command.node.as_ref().map_or_else(
+            || "node".to_owned(),
+            |node| node.to_string_lossy().into_owned(),
+        ),
+        args: command.args.clone(),
+    }
+}
+
 fn contributes(
     id: &str,
     package: &Package,
     active: bool,
     acp: &[(piui_runtime::acp::AcpAgentId, bool)],
+    mcp: Option<(&std::path::Path, &std::path::Path, &[String])>,
 ) -> ContributesDto {
     let manifest = &package.manifest.manifest;
     let contributes = &manifest.contributes;
@@ -509,6 +610,63 @@ fn contributes(
                     .any(|(agent, registered)| *agent == descriptor.id && *registered),
             })
             .collect(),
+        status_items: contributes
+            .status_items
+            .iter()
+            .map(|item| StatusItemDto {
+                id: item.id.clone(),
+                text: item.text.clone(),
+                tooltip: item.tooltip.clone(),
+                command: item.command.clone(),
+                alignment: item.alignment.unwrap_or_default(),
+            })
+            .collect(),
+        keybindings: contributes
+            .keybindings
+            .iter()
+            .map(|binding| KeybindingDto {
+                command: binding.command.clone(),
+                key: binding.key.clone(),
+            })
+            .collect(),
+        mcp_servers: contributes
+            .mcp_servers
+            .iter()
+            .filter_map(|server| {
+                let (root, data_dir, offered) = mcp?;
+                let command =
+                    PluginsState::mcp_command(manifest, server, root, data_dir, None, false)?;
+                Some(McpServerDto {
+                    id: server.id.clone(),
+                    title: server.title.clone(),
+                    description: server.description.clone(),
+                    offered: offered.contains(&server.id),
+                    command_line: command_line_of(&command),
+                    node_found: command.node.is_some(),
+                })
+            })
+            .collect(),
+        renderers: contributes
+            .renderers
+            .iter()
+            .map(|renderer| RendererDto {
+                id: renderer.id.clone(),
+                title: renderer.title.clone(),
+                tool_names: renderer.tool_names.clone(),
+                url: manifest
+                    .ui
+                    .as_ref()
+                    .filter(|_| active && manifest.has(Permission::UiRenderer))
+                    .map(|ui| {
+                        format!(
+                            "{}/{id}/{}?renderer={}",
+                            plugin_origin(),
+                            ui.entry,
+                            renderer.id
+                        )
+                    }),
+            })
+            .collect(),
     }
 }
 
@@ -535,13 +693,18 @@ pub(crate) fn registry_view(plugins: &PluginsState) -> Result<PluginsRegistryDto
             let (state, restarts, log) = plugins.supervisor().status(&stored.id);
             let backend = package.and_then(|package| {
                 let root = root.as_ref()?;
-                let (command_line, node_found) =
-                    PluginsState::command_line(&package.manifest.manifest, root)?;
+                let display = PluginsState::backend_display(
+                    &package.manifest.manifest,
+                    root,
+                    &plugins.plugin_data_dir(&stored),
+                    false,
+                )?;
                 Some(BackendDto {
                     state,
                     restarts,
-                    command_line,
-                    node_found,
+                    command_line: display.command_line,
+                    node_found: display.node_found,
+                    limits: display.limits,
                 })
             });
             let settings = package
@@ -591,7 +754,18 @@ pub(crate) fn registry_view(plugins: &PluginsState) -> Result<PluginsRegistryDto
                 problems,
                 log,
                 contributes: package
-                    .map(|package| contributes(&stored.id, package, active, &plugin.acp))
+                    .map(|package| {
+                        let data_dir = plugins.plugin_data_dir(&stored);
+                        contributes(
+                            &stored.id,
+                            package,
+                            active,
+                            &plugin.acp,
+                            root.as_deref().map(|root| {
+                                (root, data_dir.as_path(), stored.mcp_offered.as_slice())
+                            }),
+                        )
+                    })
                     .unwrap_or_default(),
                 settings,
                 id: stored.id,
@@ -669,11 +843,16 @@ pub(crate) fn review_view(plugins: &PluginsState, staging_id: &str, staged: &Sta
         publisher: manifest.publisher.clone(),
         description: manifest.description.clone(),
         permissions,
-        backend: PluginsState::command_line(manifest, &root).map(|(command_line, node_found)| {
-            ReviewBackendDto {
-                command_line,
-                node_found,
-            }
+        backend: PluginsState::backend_display(
+            manifest,
+            &root,
+            &plugins.staged_data_dir(staged),
+            false,
+        )
+        .map(|display| ReviewBackendDto {
+            command_line: display.command_line,
+            node_found: display.node_found,
+            limits: display.limits,
         }),
         code_hash: staged.package.code_hash.clone(),
         files: staged.files,
@@ -722,6 +901,48 @@ pub(crate) fn review_view(plugins: &PluginsState, staging_id: &str, staged: &Sta
                     },
                 })
                 .collect(),
+            status_items: manifest
+                .contributes
+                .status_items
+                .iter()
+                .map(|item| item.text.clone())
+                .collect(),
+            keybindings: manifest
+                .contributes
+                .keybindings
+                .iter()
+                .map(|binding| KeybindingDto {
+                    command: manifest
+                        .command(&binding.command)
+                        .map_or_else(|| binding.command.clone(), |command| command.title.clone()),
+                    key: binding.key.clone(),
+                })
+                .collect(),
+            renderers: manifest
+                .contributes
+                .renderers
+                .iter()
+                .map(|renderer| renderer.title.clone())
+                .collect(),
+            mcp_servers: manifest
+                .contributes
+                .mcp_servers
+                .iter()
+                .filter_map(|server| {
+                    let command = PluginsState::mcp_command(
+                        manifest,
+                        server,
+                        &root,
+                        &plugins.staged_data_dir(staged),
+                        None,
+                        false,
+                    )?;
+                    Some(ReviewMcpServerDto {
+                        title: server.title.clone(),
+                        command_line: command_line_of(&command),
+                    })
+                })
+                .collect(),
         },
         update,
         already_installed,
@@ -765,6 +986,14 @@ async fn blocking<T: Send + 'static>(
         .map_err(PluginsErrorDto::from)
 }
 
+/// Asks Node.js which permission flags it has, so reviews and Settings can
+/// say what is enforced without blocking. Blocking; errors leave it unknown.
+fn warm_node_probe() {
+    if let Ok(node) = piui_runtime::plugin_backend::resolve_plugin_node() {
+        let _ = piui_runtime::plugin_backend::probe_node_permissions(&node);
+    }
+}
+
 fn pick_path(source: PickSource) -> Option<std::path::PathBuf> {
     match source {
         PickSource::Folder => rfd::FileDialog::new()
@@ -792,7 +1021,11 @@ pub(crate) fn start_verification<R: Runtime>(app: AppHandle<R>) {
             return;
         };
         let acp = host.workspace.acp_agents().clone();
-        let _ = tauri::async_runtime::spawn_blocking(move || plugins.verify(&acp)).await;
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            plugins.verify(&acp);
+            warm_node_probe();
+        })
+        .await;
         emit_changed(&app);
         let revision = app.state::<HostState>().workspace.acp_agents().revision();
         let _ = app.emit(
@@ -827,6 +1060,7 @@ pub async fn plugins_v1(
                     PickSource::Zip => ReviewSource::Zip,
                     PickSource::Development => ReviewSource::Development,
                 };
+                warm_node_probe();
                 host.stage(source, &path).map(Some)
             })
             .await?;
@@ -891,7 +1125,11 @@ pub async fn plugins_v1(
             }
             plugins.supervisor().stop(&id).await;
             let host = plugins.clone();
-            let staged = blocking(move || host.reload(&id)).await?;
+            let staged = blocking(move || {
+                warm_node_probe();
+                host.reload(&id)
+            })
+            .await?;
             if let Some((staging_id, staged)) = staged {
                 review = Some(Some(review_view(&plugins, &staging_id, &staged)));
             }
@@ -916,6 +1154,15 @@ pub async fn plugins_v1(
                 blocking(move || host.set_settings(expected_revision, &key, &values, from_panel))
                     .await?;
             plugins.supervisor().settings_changed(&id, &resolved).await;
+            true
+        }
+        PluginsCommand::SetMcpOffered {
+            expected_revision,
+            id,
+            server_id,
+            offered,
+        } => {
+            plugins.set_mcp_offered(expected_revision, &id, &server_id, offered)?;
             true
         }
         PluginsCommand::SetTheme {
@@ -947,6 +1194,37 @@ pub enum CommandOrigin {
     Palette,
     Composer,
     Panel,
+    /// v1.1: a status item that names the command.
+    Status,
+    /// v1.1: a keybinding of the command.
+    Keybinding,
+}
+
+/// A command runs only where it is contributed: its surfaces, a status item
+/// (with `ui.status`) or a keybinding that names it; a panel may run any of
+/// its own plugin's commands.
+pub(crate) fn command_allowed(
+    manifest: &piui_plugins::PluginManifest,
+    command: &piui_plugins::CommandContribution,
+    origin: CommandOrigin,
+) -> bool {
+    let contributes = &manifest.contributes;
+    match origin {
+        CommandOrigin::Palette => command.surfaces().contains(&CommandSurface::Palette),
+        CommandOrigin::Composer => command.surfaces().contains(&CommandSurface::Composer),
+        CommandOrigin::Panel => true,
+        CommandOrigin::Status => {
+            manifest.has(Permission::UiStatus)
+                && contributes
+                    .status_items
+                    .iter()
+                    .any(|item| item.command.as_deref() == Some(command.id.as_str()))
+        }
+        CommandOrigin::Keybinding => contributes
+            .keybindings
+            .iter()
+            .any(|binding| binding.command == command.id),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1017,16 +1295,7 @@ pub async fn plugin_command_v1(
         .command(&request.command_id)
         .ok_or(PluginsError::NotFound)?
         .clone();
-    // A command runs only where it is contributed; a panel may run any of
-    // its own plugin's commands.
-    let surface = match request.origin {
-        CommandOrigin::Palette => Some(CommandSurface::Palette),
-        CommandOrigin::Composer => Some(CommandSurface::Composer),
-        CommandOrigin::Panel => None,
-    };
-    if !manifest.has(Permission::Commands)
-        || surface.is_some_and(|surface| !command.surfaces().contains(&surface))
-    {
+    if !manifest.has(Permission::Commands) || !command_allowed(manifest, &command, request.origin) {
         return Err(PluginsError::PermissionDenied.into());
     }
     if let Some(text) = command.insert_text {
@@ -1037,6 +1306,7 @@ pub async fn plugin_command_v1(
         });
     }
     let mut context = Map::new();
+    let mut project = None;
     if let Some((title, workspace_id)) = request
         .session_id
         .as_deref()
@@ -1052,10 +1322,9 @@ pub async fn plugin_command_v1(
             && let Ok(directory) =
                 crate::api::verified_project_directory(&host, &workspace_id, true)
         {
-            context.insert(
-                "project".into(),
-                json!({ "path": piui_runtime::script_runner::process_directory(directory.canonical_path()).to_string_lossy() }),
-            );
+            let path = piui_runtime::script_runner::process_directory(directory.canonical_path());
+            context.insert("project".into(), json!({ "path": path.to_string_lossy() }));
+            project = Some(path);
         }
     }
     let spec = plugins
@@ -1065,6 +1334,7 @@ pub async fn plugin_command_v1(
         .supervisor()
         .call(
             &spec,
+            project.as_deref(),
             "command/execute",
             json!({ "commandId": command.id, "context": context }),
             COMMAND_TIMEOUT,

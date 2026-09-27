@@ -18,6 +18,15 @@
     "invalid-semantic-color-channel.json": "theme-color",
     "invalid-semantic-contrast.json": "theme-contrast",
     "invalid-semantic-acp-shell.json": "acp-descriptor",
-    "invalid-semantic-insert-text.json": "text"
+    "invalid-semantic-insert-text.json": "text",
+    "invalid-v2-contribution-in-v1.json": "shape",
+    "invalid-v2-keybinding-key.json": "shape",
+    "invalid-v2-status-text.json": "shape",
+    "invalid-semantic-unknown-command.json": "unknown-command",
+    "invalid-semantic-status-permission.json": "permission-missing",
+    "invalid-semantic-renderer-ui.json": "ui-missing",
+    "invalid-semantic-duplicate-keybinding.json": "duplicate-contribution",
+    "invalid-semantic-mcp-permission.json": "permission-missing",
+    "invalid-v2-mcp-entry.json": "shape"
   }
 }

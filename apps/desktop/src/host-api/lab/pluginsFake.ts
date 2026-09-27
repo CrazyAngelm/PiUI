@@ -1,5 +1,5 @@
 import type { AcpAgentDescriptorV1, CommandLineV1 } from '../../../../../contracts/harness-registry-v1';
-import type { PluginManifestV1, PluginPermission, PluginValue } from '../../../../../contracts/piui-plugin-v1';
+import type { PluginManifest, PluginPermission, PluginValue } from '../../../../../contracts/piui-plugin-v2';
 import {
   PLUGINS_EVENT_V1,
   type PluginBackendState,
@@ -21,11 +21,13 @@ import helloManifest from '../../../../../examples/plugins/hello-command/piui-pl
 import themeManifest from '../../../../../examples/plugins/midnight-theme/piui-plugin.json';
 import packManifest from '../../../../../examples/plugins/pipeline-pack/piui-plugin.json';
 import acpManifest from '../../../../../examples/plugins/acp-agent/piui-plugin.json';
+import statusManifest from '../../../../../examples/plugins/status-tools/piui-plugin.json';
+import toolCardsManifest from '../../../../../examples/plugins/tool-cards/piui-plugin.json';
 import collectTemplate from '../../../../../examples/plugins/pipeline-pack/templates/collect-and-reshape.piui.json?raw';
 import draftTemplate from '../../../../../examples/plugins/pipeline-pack/templates/draft-and-critique.piui.json?raw';
 import { transformJson } from '../../../../../examples/plugins/pipeline-pack/backend/transform.mjs';
 import type { PiUiContributionCatalog } from '../types';
-import { checkPluginManifest, resolvePluginValues } from '../pluginManifest';
+import { checkPluginManifest, resolvePluginValues, v2Contributions } from '../pluginManifest';
 import { labAcpRegistry } from './acpFake';
 import type { LabEventBus } from './labBus';
 import type { LabClock } from './labClock';
@@ -54,6 +56,8 @@ import type { LabSessions } from './sessionRuntime';
 
 const LAB_PIUI = '0.1.1';
 const NODE = 'C:/Program Files/nodejs/node.exe';
+/** What the lab's Node.js enforces (v1.1): a current Node.js without `--allow-net`. */
+const LIMITS = { nodeVersion: 'v24.13.0', enforced: true, network: false } as const;
 const DATA = 'C:/Users/example/AppData/Roaming/dev.piui.desktop/plugins-v1/packages';
 const COMMAND_LATENCY_MS = 150;
 
@@ -80,7 +84,7 @@ function failure(code: PluginsErrorCode, extra: { message?: string; problems?: P
   return { code, message: extra.message ?? MESSAGES[code], recoverable: true, ...(extra.problems ? { problems: extra.problems } : {}), ...(extra.detail ? { detail: extra.detail } : {}) };
 }
 
-function manifest(value: unknown): PluginManifestV1 {
+function manifest(value: unknown): PluginManifest {
   const checked = checkPluginManifest(value, LAB_PIUI);
   if (!checked.ok) throw new Error(`Lab plugin manifest is invalid: ${JSON.stringify(checked.problems)}`);
   return checked.manifest;
@@ -90,6 +94,8 @@ const HELLO = manifest(helloManifest);
 const THEMES = manifest(themeManifest);
 const PACK = manifest(packManifest);
 const ACP = manifest(acpManifest);
+const STATUS = manifest(statusManifest);
+const TOOL_CARDS = manifest(toolCardsManifest);
 
 const WORD_COUNT = manifest({
   schemaVersion: 1,
@@ -151,7 +157,7 @@ const PI_CONTRIBUTIONS: PiUiContributionCatalog = {
 };
 
 interface LabPlugin {
-  manifest: PluginManifestV1;
+  manifest: PluginManifest;
   source: 'installed' | 'development';
   root: string;
   enabled: boolean;
@@ -164,10 +170,12 @@ interface LabPlugin {
   log: PluginLogEntryV1[];
   /** Lab behaviour of the broken sample. */
   crashing?: boolean;
+  /** MCP servers offered to new chats. */
+  mcpOffered?: string[];
 }
 
 interface LabStaged {
-  manifest: PluginManifestV1;
+  manifest: PluginManifest;
   source: 'folder' | 'zip' | 'development';
   location: string;
   root: string;
@@ -203,7 +211,7 @@ export class LabPluginHost {
     const seeded = state.scenario !== 'empty';
     if (seeded) {
       const at = clock.iso();
-      const add = (plugin: PluginManifestV1, extra: Partial<LabPlugin> = {}) =>
+      const add = (plugin: PluginManifest, extra: Partial<LabPlugin> = {}) =>
         this.plugins.push({
           manifest: plugin,
           source: 'installed',
@@ -221,6 +229,8 @@ export class LabPluginHost {
       add(HELLO);
       add(THEMES);
       add(PACK);
+      add(STATUS);
+      add(TOOL_CARDS);
       add(ACP, { enabled: false, log: [{ at, event: 'installed' }, { at, event: 'disabled' }] });
       add(BROKEN, {
         crashing: true,
@@ -253,8 +263,29 @@ export class LabPluginHost {
     return defaults.ok ? defaults.values : {};
   }
 
-  private commandLine(plugin: { manifest: PluginManifestV1; root: string }): CommandLineV1 | undefined {
-    return plugin.manifest.backend ? { program: NODE, args: [`${plugin.root}/${plugin.manifest.backend.entry}`] } : undefined;
+  /** An MCP server's command line: the same permission flags, the entry and its arguments. */
+  private mcpCommandLine(plugin: { manifest: PluginManifest; root: string }, server: { entry: string; args?: string[] }): CommandLineV1 {
+    const data = `${DATA}/data/${labUuid(`data:${plugin.manifest.id}`)}`;
+    return {
+      program: NODE,
+      args: ['--permission', `--allow-fs-read=${plugin.root}`, `--allow-fs-read=${data}`, `--allow-fs-write=${data}`, `${plugin.root}/${server.entry}`, ...(server.args ?? [])],
+    };
+  }
+
+  /** The host's command line: Node's permission flags for the package and its data folder, then the entry. */
+  private commandLine(plugin: { manifest: PluginManifest; root: string }): CommandLineV1 | undefined {
+    if (!plugin.manifest.backend) return undefined;
+    const data = `${DATA}/data/${labUuid(`data:${plugin.manifest.id}`)}`;
+    return {
+      program: NODE,
+      args: [
+        '--permission',
+        `--allow-fs-read=${plugin.root}`,
+        `--allow-fs-read=${data}`,
+        `--allow-fs-write=${data}`,
+        `${plugin.root}/${plugin.manifest.backend.entry}`,
+      ],
+    };
   }
 
   private entry(plugin: LabPlugin): PluginEntryV1 {
@@ -262,6 +293,7 @@ export class LabPluginHost {
     const active = this.isActive(plugin);
     const line = this.commandLine(plugin);
     const contributes = m.contributes;
+    const added = v2Contributions(m);
     return {
       id: m.id,
       name: m.name,
@@ -275,7 +307,7 @@ export class LabPluginHost {
       permissions: sortedPermissions(m.permissions),
       codeHash: plugin.codeHash,
       installedAt: plugin.installedAt,
-      ...(line ? { backend: { state: plugin.backendState, restarts: plugin.restarts, commandLine: line, nodeFound: true } } : {}),
+      ...(line ? { backend: { state: plugin.backendState, restarts: plugin.restarts, commandLine: line, nodeFound: true, limits: { ...LIMITS } } } : {}),
       problems: structuredClone(plugin.problems),
       log: structuredClone(plugin.log),
       contributes: {
@@ -306,6 +338,40 @@ export class LabPluginHost {
           displayName: agent.displayName,
           registered: this.acpReport.some(([pluginId, id, registered]) => pluginId === m.id && id === agent.id && registered),
         })),
+        ...(added.statusItems.length
+          ? {
+              statusItems: added.statusItems.map((item) => ({
+                id: item.id,
+                text: item.text,
+                ...(item.tooltip ? { tooltip: item.tooltip } : {}),
+                ...(item.command ? { command: item.command } : {}),
+                alignment: item.alignment ?? 'end',
+              })),
+            }
+          : {}),
+        ...(added.keybindings.length ? { keybindings: added.keybindings.map((binding) => ({ command: binding.command, key: binding.key })) } : {}),
+        ...(added.mcpServers.length
+          ? {
+              mcpServers: added.mcpServers.map((server) => ({
+                id: server.id,
+                title: server.title,
+                ...(server.description ? { description: server.description } : {}),
+                offered: (plugin.mcpOffered ?? []).includes(server.id),
+                commandLine: this.mcpCommandLine(plugin, server),
+                nodeFound: true,
+              })),
+            }
+          : {}),
+        ...(added.renderers.length
+          ? {
+              renderers: added.renderers.map((renderer) => ({
+                id: renderer.id,
+                title: renderer.title,
+                toolNames: [...renderer.toolNames],
+                ...(active && m.ui && (m.permissions as readonly PluginPermission[]).includes('ui.renderer') ? { url: `${labPluginOrigin()}/${m.id}/${m.ui.entry}?renderer=${renderer.id}` } : {}),
+              })),
+            }
+          : {}),
       },
       settings: this.settingsOf(plugin),
     };
@@ -355,6 +421,7 @@ export class LabPluginHost {
     const previous = this.find(m.id);
     const permissions = sortedPermissions(m.permissions);
     const line = this.commandLine(staged);
+    const added = v2Contributions(m);
     return {
       stagingId,
       source: staged.source,
@@ -365,7 +432,7 @@ export class LabPluginHost {
       publisher: m.publisher,
       ...(m.description ? { description: m.description } : {}),
       permissions,
-      ...(line ? { backend: { commandLine: line, nodeFound: true } } : {}),
+      ...(line ? { backend: { commandLine: line, nodeFound: true, limits: { ...LIMITS } } } : {}),
       codeHash: staged.codeHash,
       files: staged.files,
       bytes: staged.bytes,
@@ -377,12 +444,18 @@ export class LabPluginHost {
         templates: (m.contributes.templates ?? []).map((template) => template.title),
         nodeTypes: (m.contributes.nodeTypes ?? []).map((node) => node.title),
         acpAgents: (m.contributes.acpAgents ?? []).map((agent) => ({ id: agent.id, displayName: agent.displayName, commandLine: { program: agent.command.program, args: [...(agent.command.args ?? [])] } })),
+        ...(added.statusItems.length ? { statusItems: added.statusItems.map((item) => item.text) } : {}),
+        ...(added.keybindings.length
+          ? { keybindings: added.keybindings.map((binding) => ({ command: (m.contributes.commands ?? []).find((command) => command.id === binding.command)?.title ?? binding.command, key: binding.key })) }
+          : {}),
+        ...(added.renderers.length ? { renderers: added.renderers.map((renderer) => renderer.title) } : {}),
+        ...(added.mcpServers.length ? { mcpServers: added.mcpServers.map((server) => ({ title: server.title, commandLine: this.mcpCommandLine(staged, server) })) } : {}),
       },
       ...(previous
         ? {
             update: {
               fromVersion: previous.manifest.version,
-              permissionsAdded: permissions.filter((permission) => !previous.manifest.permissions.includes(permission)),
+              permissionsAdded: permissions.filter((permission) => !(previous.manifest.permissions as readonly PluginPermission[]).includes(permission)),
               permissionsRemoved: sortedPermissions(previous.manifest.permissions).filter((permission) => !permissions.includes(permission)),
               codeChanged: previous.codeHash !== staged.codeHash,
             },
@@ -507,6 +580,18 @@ export class LabPluginHost {
         this.changed();
         return { registry: this.view() };
       }
+      case 'setMcpOffered': {
+        const plugin = this.find(command.id);
+        if (plugin === undefined || !this.isActive(plugin)) throw failure('INACTIVE');
+        if (!(plugin.manifest.permissions as readonly PluginPermission[]).includes('mcp.tools')) throw failure('PERMISSION_DENIED');
+        if (!v2Contributions(plugin.manifest).mcpServers.some((server) => server.id === command.serverId)) throw failure('NOT_FOUND');
+        this.transact(command.expectedRevision, () => {
+          const others = (plugin.mcpOffered ?? []).filter((id) => id !== command.serverId);
+          plugin.mcpOffered = command.offered ? [...others, command.serverId].sort() : others;
+        });
+        this.changed();
+        return { registry: this.view() };
+      }
       case 'setTheme': {
         const theme = command.theme;
         if (theme !== null) {
@@ -534,7 +619,14 @@ export class LabPluginHost {
     const command = (plugin.manifest.contributes.commands ?? []).find((item) => item.id === request.commandId);
     if (command === undefined) throw failure('NOT_FOUND');
     const surfaces = command.surfaces ?? ['palette'];
-    if (request.origin !== 'panel' && !surfaces.includes(request.origin)) throw failure('PERMISSION_DENIED');
+    const added = v2Contributions(plugin.manifest);
+    const allowed = request.origin === 'panel'
+      || (request.origin === 'status'
+        ? (plugin.manifest.permissions as readonly PluginPermission[]).includes('ui.status') && added.statusItems.some((item) => item.command === command.id)
+        : request.origin === 'keybinding'
+          ? added.keybindings.some((binding) => binding.command === command.id)
+          : surfaces.includes(request.origin));
+    if (!allowed) throw failure('PERMISSION_DENIED');
     if (command.insertText !== undefined) return { protocol: 1, text: command.insertText };
     await this.clock.delay(COMMAND_LATENCY_MS);
     if (plugin.crashing) {
@@ -564,6 +656,11 @@ export class LabPluginHost {
           ...(settings.prepareText === true && chat ? { text: `${greeting}! Could you summarize where we are?` } : {}),
         };
       }
+      case 'example.status-tools/chat-title': {
+        if (!chat) return { protocol: 1, notice: 'Open a chat to see its title.' };
+        const words = chat.title.trim().split(/\s+/u).filter(Boolean).length;
+        return { protocol: 1, notice: `“${chat.title}” (${words} ${words === 1 ? 'word' : 'words'})` };
+      }
       case 'lab.word-count/count-words': {
         const words = chat ? chat.blocks.reduce((total, block) => total + JSON.stringify(block).split(/\s+/).length, 0) : 0;
         return { protocol: 1, notice: chat ? `About ${words} words in this chat.` : 'No chat is open.', text: 'Please keep your next answer under 200 words.' };
@@ -583,7 +680,7 @@ export class LabPluginHost {
   }
 
   /** A runnable node type for the lab run scheduler, like `PluginsState::node_spec`. */
-  node(pluginId: string, nodeType: string): { fields: NonNullable<NonNullable<PluginManifestV1['contributes']['nodeTypes']>[number]['config']>; run: (params: { config: Record<string, PluginValue>; inputs: Record<string, unknown>; dependencies: Record<string, { text: string | null; data: Record<string, unknown> | null }> }) => Record<string, unknown> | string } | undefined {
+  node(pluginId: string, nodeType: string): { fields: NonNullable<NonNullable<PluginManifest['contributes']['nodeTypes']>[number]['config']>; run: (params: { config: Record<string, PluginValue>; inputs: Record<string, unknown>; dependencies: Record<string, { text: string | null; data: Record<string, unknown> | null }> }) => Record<string, unknown> | string } | undefined {
     const plugin = this.find(pluginId);
     if (plugin === undefined || !this.isActive(plugin) || !plugin.manifest.permissions.includes('node.run')) return undefined;
     const node = (plugin.manifest.contributes.nodeTypes ?? []).find((item) => item.id === nodeType);
@@ -616,12 +713,13 @@ const commandSchema: Schema = tagged('type', {
   restartBackend: { id: pluginId },
   setSettings: { expectedRevision: u64, id: pluginId, values: json, origin: option(enumOf(['settings', 'panel'])) },
   setTheme: { expectedRevision: u64, theme: option(object({ pluginId: string, themeId: string })) },
+  setMcpOffered: { expectedRevision: u64, id: pluginId, serverId: string, offered: boolean },
 });
 const commandRequestSchema = object({
   pluginId: string,
   commandId: string,
   sessionId: option(string),
-  origin: enumOf(['palette', 'composer', 'panel']),
+  origin: enumOf(['palette', 'composer', 'panel', 'status', 'keybinding']),
 });
 const templateRequestSchema = object({ pluginId: string, templateId: string });
 

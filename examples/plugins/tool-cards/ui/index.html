@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Issue card</title>
+    <link rel="stylesheet" href="card.css" />
+  </head>
+  <body>
+    <article class="card" aria-labelledby="title">
+      <header>
+        <h1 id="title">Waiting for PiUI…</h1>
+        <span id="status" class="status"></span>
+      </header>
+      <dl id="fields"></dl>
+      <pre id="raw" hidden></pre>
+      <p id="note" class="note" hidden>The output was shortened.</p>
+    </article>
+    <script src="piui-panel.js"></script>
+    <script src="card.js"></script>
+  </body>
+</html>

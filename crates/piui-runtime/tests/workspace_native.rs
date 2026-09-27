@@ -112,6 +112,7 @@ fn native_config(kind: HarnessKind, label: &str) -> NativeRuntimeConfig {
         agent_dir: None,
         kernel_python: None,
         coordination: false,
+        plugin_mcp_servers: Vec::new(),
     }
 }
 

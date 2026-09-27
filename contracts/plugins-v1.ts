@@ -19,9 +19,26 @@
  * runs and every change is refused. Credentials, environment values, plugin
  * output and file contents never cross this boundary except the template
  * text the UI asked for and a command's own result.
+ *
+ * v1.1 (additive, ADR-032 plugins v2): a backend runs under Node's
+ * permission model. `PluginBackendV1.limits` and the review's
+ * `backend.limits` say what the Node.js PiUI found enforces, the command
+ * line carries the permission flags, and the backend state `unsupported`
+ * means that Node.js has no permission model, so PiUI does not start the
+ * backend. Older payloads without `limits` stay valid.
+ *
+ * v1.1 also carries the manifest v2 contributions (`piui-plugin-v2.ts`):
+ * `statusItems`, `keybindings` and `renderers` on an entry and in a review
+ * (absent when empty), and the command origins `status` and `keybinding`,
+ * which the host allows only for a command a status item (with `ui.status`)
+ * or a keybinding names. It also carries MCP servers (`mcpServers`, with
+ * `mcp.tools`) and the `setMcpOffered` command: an offered server reaches
+ * ordinary new chats of Claude Code, Hermes and ACP agents only (the host
+ * adds it to that session; the person's harness configuration is never
+ * changed); Codex, Pi, Prime Agent and managed pipeline runs never get it.
  */
 import type { CommandLineV1 } from './harness-registry-v1';
-import type { PluginFieldV1, PluginPermission, PluginProblemCode, PluginValue } from './piui-plugin-v1';
+import type { PluginFieldV1, PluginPermission, PluginProblemCode, PluginValue } from './piui-plugin-v2';
 
 export const PLUGINS_PROTOCOL = 1 as const;
 /** Emitted after any registry, verification or backend change; payload `PluginsChangedV1`. */
@@ -38,9 +55,29 @@ export type PluginSource = 'installed' | 'development';
  * `stopped`: starts on first use. `crashed`: stopped unexpectedly; the next
  * use restarts it after a backoff. `crash-loop`: five crashes within ten
  * minutes; it stays stopped until restarted from Settings. `unavailable`:
- * Node.js was not found. A plugin without a backend has no `backend` entry.
+ * Node.js was not found. `unsupported` (v1.1): Node.js has no permission
+ * model (older than 22.13), so the backend is not started. A plugin without
+ * a backend has no `backend` entry.
  */
-export type PluginBackendState = 'stopped' | 'starting' | 'running' | 'crashed' | 'crash-loop' | 'unavailable';
+export type PluginBackendState = 'stopped' | 'starting' | 'running' | 'crashed' | 'crash-loop' | 'unavailable' | 'unsupported';
+
+/**
+ * What Node's permission model enforces for a backend with the Node.js PiUI
+ * found (v1.1). A backend reads its package, reads and writes its own data
+ * folder and, with `project.read` / `project.write`, the project folders of
+ * the requests it gets; it never starts other programs, worker threads,
+ * native add-ons or WASI. Node documents that its permission model is not a
+ * security boundary against deliberately malicious code: this is a limit on
+ * trusted code, not a sandbox.
+ */
+export interface PluginBackendLimitsV1 {
+  /** `node --version`, for example `v24.13.0`. */
+  nodeVersion: string;
+  /** Files, other programs and worker threads are limited. False: PiUI does not start the backend. */
+  enforced: boolean;
+  /** Network access is blocked unless the plugin asks for `network`. False: this Node.js cannot block it. */
+  network: boolean;
+}
 
 /** A fixed English locale key; `{0}` is replaced with `subject`. */
 export interface PluginProblemV1 {
@@ -91,6 +128,50 @@ export interface PluginNodeTypeV1 {
   resultFields: { name: string; kind: 'text' | 'number' | 'boolean' | 'text-list' }[];
 }
 
+/** A status-bar item (v1.1). */
+export interface PluginStatusItemV1 {
+  id: string;
+  text: string;
+  tooltip?: string;
+  /** One of the plugin's own commands (`plugin_command_v1`, origin `status`). */
+  command?: string;
+  alignment: 'start' | 'end';
+}
+
+/**
+ * An MCP server of the plugin (v1.1). `commandLine` is what a harness starts
+ * for a new chat (Node's permission flags, the entry and its arguments); a
+ * trusted project's folder is added per chat with a project permission.
+ */
+export interface PluginMcpServerV1 {
+  id: string;
+  title: string;
+  description?: string;
+  /** The person turned it on for new chats. */
+  offered: boolean;
+  commandLine: CommandLineV1;
+  nodeFound: boolean;
+}
+
+/** A keybinding of one of the plugin's commands (v1.1, origin `keybinding`). */
+export interface PluginKeybindingV1 {
+  command: string;
+  /** `Mod(+Alt)?(+Shift)?+<A-Z | 0-9 | F1-F12>`; conflicts are resolved by the UI (PiUI wins, clashes run nothing). */
+  key: string;
+}
+
+/**
+ * A chat renderer (v1.1): the plugin's `ui.entry` shows the tool activity
+ * named in `toolNames` inside a sandboxed frame in the chat. `url` exists
+ * only while the plugin is active; the generic view always stays available.
+ */
+export interface PluginRendererV1 {
+  id: string;
+  title: string;
+  toolNames: string[];
+  url?: string;
+}
+
 export interface PluginAcpAgentV1 {
   id: string;
   displayName: string;
@@ -127,6 +208,8 @@ export interface PluginBackendV1 {
   commandLine: CommandLineV1;
   /** False when Node.js was not found; `commandLine.program` is then `node`. */
   nodeFound: boolean;
+  /** v1.1: absent until PiUI asked Node.js (never on the first-paint path). */
+  limits?: PluginBackendLimitsV1;
 }
 
 export interface PluginEntryV1 {
@@ -157,6 +240,11 @@ export interface PluginEntryV1 {
     templates: PluginTemplateV1[];
     nodeTypes: PluginNodeTypeV1[];
     acpAgents: PluginAcpAgentV1[];
+    /** v1.1; absent when empty. */
+    statusItems?: PluginStatusItemV1[];
+    keybindings?: PluginKeybindingV1[];
+    renderers?: PluginRendererV1[];
+    mcpServers?: PluginMcpServerV1[];
   };
   /** Current values with declared defaults applied. */
   settings: Record<string, PluginValue>;
@@ -199,7 +287,7 @@ export interface PluginReviewV1 {
   publisher: string;
   description?: string;
   permissions: PluginPermission[];
-  backend?: { commandLine: CommandLineV1; nodeFound: boolean };
+  backend?: { commandLine: CommandLineV1; nodeFound: boolean; limits?: PluginBackendLimitsV1 };
   codeHash: string;
   files: number;
   bytes: number;
@@ -212,6 +300,14 @@ export interface PluginReviewV1 {
     nodeTypes: string[];
     /** Each still needs its own command-line trust in Settings → Harnesses. */
     acpAgents: { id: string; displayName: string; commandLine: CommandLineV1 }[];
+    /** v1.1; absent when empty. Status item texts. */
+    statusItems?: string[];
+    /** v1.1: `command` is the command's title. */
+    keybindings?: PluginKeybindingV1[];
+    /** v1.1: renderer titles. */
+    renderers?: string[];
+    /** v1.1: MCP servers with their command lines (none is offered until turned on). */
+    mcpServers?: { title: string; commandLine: CommandLineV1 }[];
   };
   update?: PluginChangeV1;
   /** The same id, version and code are installed already: nothing to do. */
@@ -228,7 +324,9 @@ export type PluginsCommandV1 =
   | { type: 'reload'; expectedRevision: number; id: string }
   | { type: 'restartBackend'; id: string }
   | { type: 'setSettings'; expectedRevision: number; id: string; values: Record<string, PluginValue>; origin?: 'settings' | 'panel' }
-  | { type: 'setTheme'; expectedRevision: number; theme: PluginThemeRefV1 | null };
+  | { type: 'setTheme'; expectedRevision: number; theme: PluginThemeRefV1 | null }
+  /** v1.1: offer an MCP server to new chats, or stop offering it (running chats keep theirs). */
+  | { type: 'setMcpOffered'; expectedRevision: number; id: string; serverId: string; offered: boolean };
 
 export interface PluginsResponseV1 {
   registry: PluginsRegistryV1;
@@ -241,7 +339,8 @@ export interface PluginCommandRequestV1 {
   commandId: string;
   /** The chat the command runs for; its title reaches the backend only with `chat.read`. */
   sessionId?: string;
-  origin: 'palette' | 'composer' | 'panel';
+  /** `status` and `keybinding` are v1.1. */
+  origin: 'palette' | 'composer' | 'panel' | 'status' | 'keybinding';
 }
 
 /** `text` is prepared in the message box for review (never sent); `notice` is shown once. */

@@ -148,6 +148,12 @@
         }}
         onReload={() => void act(`reload:${plugin.id}`, { type: 'reload', expectedRevision: registry.revision, id: plugin.id }, 'Plugin reloaded')}
         onRestart={() => void act(`restart:${plugin.id}`, { type: 'restartBackend', id: plugin.id }, 'The backend starts again on next use')}
+        onOfferMcp={(serverId, offered) =>
+          void act(
+            `mcp:${plugin.id}:${serverId}`,
+            { type: 'setMcpOffered', expectedRevision: registry.revision, id: plugin.id, serverId, offered },
+            offered ? 'New chats that can take it get this tool server' : 'New chats no longer get this tool server',
+          )}
         onRemove={() => {
           removing = plugin;
           removeOpen = true;

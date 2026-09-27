@@ -105,13 +105,35 @@ fn install_copies_into_app_data_after_a_review_that_shows_everything() {
         ]
     );
     let backend = review.backend.expect("backend command line");
-    assert!(backend.command_line.args[0].ends_with("main.mjs"));
+    let args = &backend.command_line.args;
+    let entry_argument = args.last().expect("entry");
+    assert!(entry_argument.ends_with("main.mjs"));
     assert!(
-        backend.command_line.args[0].contains("plugins-v1")
-            && backend.command_line.args[0].contains("packages"),
+        entry_argument.contains("plugins-v1") && entry_argument.contains("packages"),
         "the backend runs from PiUI's copy, not the chosen folder: {:?}",
         backend.command_line
     );
+    // Node's permission model: the package and its own data folder only; no
+    // project folder, network, other programs or worker threads.
+    assert_eq!(args[0], "--permission");
+    let package_root = entry_argument
+        .strip_suffix("main.mjs")
+        .and_then(|rest| {
+            rest.strip_suffix("backend\\")
+                .or_else(|| rest.strip_suffix("backend/"))
+        })
+        .and_then(|rest| rest.strip_suffix('\\').or_else(|| rest.strip_suffix('/')))
+        .expect("package root");
+    assert_eq!(args[1], format!("--allow-fs-read={package_root}"));
+    assert!(args[2].starts_with("--allow-fs-read=") && args[2].contains("data"));
+    assert_eq!(
+        args[3],
+        args[2].replace("--allow-fs-read=", "--allow-fs-write=")
+    );
+    assert_eq!(args.len(), 5, "{args:?}");
+    assert!(!args.iter().any(|arg| arg.contains("allow-net")
+        || arg.contains("child-process")
+        || arg.contains("worker")));
     assert!(review.update.is_none() && !review.already_installed);
     assert_eq!(
         review.contributes.commands,
@@ -125,6 +147,14 @@ fn install_copies_into_app_data_after_a_review_that_shows_everything() {
     let entry = fixture.entry("example.hello-command");
     assert!(entry.enabled && entry.active, "{:?}", entry.problems);
     assert_eq!(entry.source, "installed");
+    assert_eq!(
+        entry
+            .backend
+            .as_ref()
+            .map(|backend| &backend.command_line.args[2]),
+        Some(&args[2]),
+        "the installed plugin uses the data folder its review showed"
+    );
     assert_eq!(entry.settings.get("greeting"), Some(&json!("Hello")));
     let panel_url = entry.contributes.panels[0].url.clone().expect("panel url");
     assert!(
@@ -640,6 +670,7 @@ async fn a_backend_command_runs_contained_with_the_trusted_permissions() {
         .supervisor()
         .call(
             &spec,
+            None,
             "command/execute",
             json!({"commandId": "say-hello", "context": {"chat": {"id": "c1", "title": "Release notes"}}}),
             COMMAND_TIMEOUT,
@@ -684,5 +715,155 @@ fn registry_view_matches_the_shared_contract_fixture() {
         expected,
         "update the fixture with:\n{}",
         serde_json::to_string_pretty(&view).unwrap_or_default()
+    );
+}
+
+#[test]
+fn status_items_and_keybindings_run_only_the_commands_they_name() {
+    use super::api::{CommandOrigin, command_allowed};
+    let bytes = include_bytes!("../../../../../contracts/fixtures/plugins/valid-v2.json");
+    let mut manifest = piui_plugins::parse_manifest(bytes, "0.2.2")
+        .expect("v2 fixture")
+        .manifest;
+    let allowed = |manifest: &piui_plugins::PluginManifest, id: &str, origin| {
+        command_allowed(manifest, manifest.command(id).expect("command"), origin)
+    };
+    assert!(allowed(&manifest, "count", CommandOrigin::Status));
+    assert!(allowed(&manifest, "count", CommandOrigin::Keybinding));
+    assert!(allowed(&manifest, "count", CommandOrigin::Palette));
+    assert!(!allowed(&manifest, "count", CommandOrigin::Composer));
+    assert!(!allowed(&manifest, "thanks", CommandOrigin::Status));
+    assert!(allowed(&manifest, "thanks", CommandOrigin::Keybinding));
+    assert!(!allowed(&manifest, "thanks", CommandOrigin::Palette));
+    // A status item needs `ui.status` to run anything.
+    manifest
+        .permissions
+        .retain(|permission| *permission != Permission::UiStatus);
+    assert!(!allowed(&manifest, "count", CommandOrigin::Status));
+    manifest.contributes.keybindings.clear();
+    assert!(!allowed(&manifest, "thanks", CommandOrigin::Keybinding));
+}
+
+#[test]
+fn a_renderer_plugin_without_panels_serves_its_ui_folder_and_lists_the_renderer() {
+    let fixture = Fixture::new("renderer", false);
+    let id = fixture.install(ReviewSource::Folder, &example("tool-cards"));
+    let entry = fixture.entry(&id);
+    assert!(entry.active, "{:?}", entry.problems);
+    let renderer = &entry.contributes.renderers[0];
+    assert_eq!(
+        renderer.tool_names,
+        [
+            "create_issue",
+            "update_issue",
+            "mcp__example-tool-cards-issues__create_issue"
+        ]
+    );
+    assert_eq!(
+        renderer.url.as_deref(),
+        Some(
+            format!(
+                "{}/example.tool-cards/ui/index.html?renderer=issue",
+                piui_plugins::csp::plugin_origin()
+            )
+            .as_str()
+        )
+    );
+    // `ui.renderer` without `ui.panel` still serves the UI folder, and only it.
+    assert!(
+        fixture
+            .plugins
+            .panel_file(&id, "ui/index.html")
+            .is_some_and(|file| file.html)
+    );
+    assert!(
+        fixture
+            .plugins
+            .panel_file(&id, "piui-plugin.json")
+            .is_none()
+    );
+    fixture
+        .plugins
+        .set_enabled(fixture.plugins.revision(), &id, false)
+        .expect("disable");
+    let entry = fixture.entry(&id);
+    assert_eq!(entry.contributes.renderers[0].url, None);
+    assert!(fixture.plugins.panel_file(&id, "ui/index.html").is_none());
+}
+
+#[test]
+fn an_offered_mcp_server_reaches_new_chats_with_its_permission_flags() {
+    let fixture = Fixture::new("mcp", false);
+    let id = fixture.install(ReviewSource::Folder, &example("tool-cards"));
+    let entry = fixture.entry(&id);
+    let server = &entry.contributes.mcp_servers[0];
+    assert!(
+        !server.offered,
+        "nothing is offered until the person turns it on"
+    );
+    let args = &server.command_line.args;
+    assert_eq!(args[0], "--permission");
+    assert!(args.iter().any(|arg| arg.ends_with("server.mjs")));
+    assert_eq!(args.last().map(String::as_str), Some("--stdio"));
+    assert!(fixture.plugins.session_mcp_servers(None).is_empty());
+
+    fixture
+        .plugins
+        .set_mcp_offered(fixture.plugins.revision(), &id, "issues", true)
+        .expect("offer");
+    assert!(fixture.entry(&id).contributes.mcp_servers[0].offered);
+    let node = piui_runtime::plugin_backend::resolve_plugin_node().expect("Node.js");
+    let supported = piui_runtime::plugin_backend::probe_node_permissions(&node)
+        .expect("probe")
+        .permission;
+    let project = fixture.root.join("project");
+    fs::create_dir_all(&project).expect("project");
+    let servers = fixture.plugins.session_mcp_servers(Some(&project));
+    if supported {
+        assert_eq!(servers.len(), 1);
+        let launched = &servers[0];
+        assert_eq!(launched.name, "example-tool-cards-issues");
+        assert!(launched.command.is_absolute());
+        assert_eq!(launched.args[0], "--permission");
+        // No project permission: the project folder is never granted.
+        let project_flag = piui_runtime::script_runner::process_directory(&project)
+            .to_string_lossy()
+            .into_owned();
+        assert!(!launched.args.iter().any(|arg| arg.contains(&project_flag)));
+        assert!(
+            !launched
+                .args
+                .iter()
+                .any(|arg| arg.contains("child-process") || arg.contains("allow-net"))
+        );
+    } else {
+        assert!(
+            servers.is_empty(),
+            "no permission model: nothing is offered"
+        );
+    }
+
+    // An unknown server, a plugin without the permission and a disabled plugin offer nothing.
+    assert_eq!(
+        fixture
+            .plugins
+            .set_mcp_offered(fixture.plugins.revision(), &id, "missing", true),
+        Err(PluginsError::NotFound)
+    );
+    fixture
+        .plugins
+        .set_enabled(fixture.plugins.revision(), &id, false)
+        .expect("disable");
+    assert!(
+        fixture
+            .plugins
+            .session_mcp_servers(Some(&project))
+            .is_empty()
+    );
+    assert_eq!(
+        fixture
+            .plugins
+            .set_mcp_offered(fixture.plugins.revision(), &id, "issues", false),
+        Err(PluginsError::Inactive)
     );
 }

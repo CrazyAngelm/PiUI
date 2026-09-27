@@ -222,6 +222,23 @@ test('managed sessions route the workspace tool over HTTP MCP or refuse before s
   await assert.rejects(createAcpAdapter(config([], { coordination: true, acp: { id: 'fixture-agent', displayName: 'Fixture Agent', disable: { mcpHttp: true } } }), () => {}, async () => ({})), { bridgeCode: 'unsupported-coordinator' });
 });
 
+test('a plugin MCP server joins only this session as a stdio server (plugins v2)', async () => {
+  const e = events();
+  const server = { name: 'example-tool-cards-issues', command: process.execPath, args: ['--permission', 'server.mjs', '--stdio'] };
+  const a = await createAcpAdapter(config([], { pluginMcpServers: [server] }), e.emit);
+  try {
+    const done = turnDone(e);
+    await a.prompt({ text: 'mcp', mode: 'prompt' });
+    await done;
+    const answer = a.snapshot().blocks.filter(b => b.kind === 'assistant').map(b => b.text).join('');
+    assert.deepEqual(JSON.parse(answer), [{ ...server, env: [] }]);
+  } finally { await a.dispose(); }
+  for (const bad of [[{ ...server, name: 'Bad Name' }], [{ ...server, command: 'node' }], [server, server], [{ ...server, name: 'piui-workspace' }]]) {
+    await assert.rejects(createAcpAdapter(config([], { pluginMcpServers: bad }), () => {}), { bridgeCode: 'unsupported-settings' }, JSON.stringify(bad));
+  }
+  await assert.rejects(createAcpAdapter(config([], { pluginMcpServers: [server], coordination: true }), () => {}, async () => ({})), { bridgeCode: 'unsupported-settings' });
+});
+
 test('unsupported settings and configuration fail before the agent starts', async () => {
   for (const override of [{ permissionMode: 'read-only' }, { serviceTier: 'fast' }, { allowedTools: [] }, { resourceRules: [{ kind: 'skill', id: 'x', enabled: false }] }, { nativeSubagents: false }, { baseInstructions: '' }, { networkAccess: true }]) {
     await assert.rejects(createAcpAdapter(config([], { ...override, runtimeProgram: process.execPath, runtimeArgs: ['-e', 'process.exit(42)'] }), () => {}), { bridgeCode: 'unsupported-settings' }, JSON.stringify(override));

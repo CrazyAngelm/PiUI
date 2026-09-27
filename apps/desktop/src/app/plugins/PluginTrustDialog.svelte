@@ -2,7 +2,8 @@
   import ShieldAlert from '@lucide/svelte/icons/shield-alert';
   import type { PluginReviewV1 } from '../../../../../contracts/plugins-v1';
   import { t } from '../../features/locale/language';
-  import { Badge, Button, Dialog } from '../../lib/ui';
+  import { Badge, Button, Dialog, shortcutParts } from '../../lib/ui';
+  import PluginBackendLimits from './PluginBackendLimits.svelte';
   import { commandLineText, formatBytes, PERMISSION_TEXT } from './permissions';
 
   /**
@@ -40,6 +41,9 @@
       ...review.contributes.templates.map((title) => [$t('Pipeline template'), title] as const),
       ...review.contributes.nodeTypes.map((title) => [$t('Pipeline node'), title] as const),
       ...(review.contributes.settings ? [[$t('Settings'), $t('Fields: {0}', [review.contributes.settings])] as const] : []),
+      ...(review.contributes.statusItems ?? []).map((text) => [$t('Status item'), text] as const),
+      ...(review.contributes.keybindings ?? []).map((binding) => [$t('Keyboard shortcut'), `${shortcutParts(binding.key).join('+')} — ${binding.command}`] as const),
+      ...(review.contributes.renderers ?? []).map((title) => [$t('Chat renderer'), title] as const),
     ],
   );
 </script>
@@ -94,11 +98,13 @@
         <code class="command">{commandLineText(review.backend.commandLine)}</code>
         {#if !review.backend.nodeFound}
           <p class="warn">{$t('Node.js was not found. The backend cannot start until Node.js is installed.')}</p>
+        {:else}
+          <PluginBackendLimits limits={review.backend.limits} permissions={review.permissions} />
         {/if}
       </section>
     {/if}
 
-    {#if contributions.length || review.contributes.acpAgents.length}
+    {#if contributions.length || review.contributes.acpAgents.length || review.contributes.mcpServers?.length}
       <section aria-labelledby="plugin-contributions">
         <h3 id="plugin-contributions">{$t('Adds')}</h3>
         <ul class="contributions">
@@ -108,9 +114,15 @@
           {#each review.contributes.acpAgents as agent (agent.id)}
             <li><span class="kind">{$t('ACP agent')}</span> {agent.displayName} <code>{commandLineText(agent.commandLine)}</code></li>
           {/each}
+          {#each review.contributes.mcpServers ?? [] as server, index (index)}
+            <li><span class="kind">{$t('MCP tool server')}</span> {server.title} <code>{commandLineText(server.commandLine)}</code></li>
+          {/each}
         </ul>
         {#if review.contributes.acpAgents.length}
           <p class="muted">{$t('Each ACP agent still needs its own command-line trust in Settings → Harnesses before it runs.')}</p>
+        {/if}
+        {#if review.contributes.mcpServers?.length}
+          <p class="muted">{$t('No MCP tool server runs until you offer it to new chats in Settings → Plugins. Only Claude Code, Hermes and ACP agent chats can take one, and your harness settings are not changed.')}</p>
         {/if}
       </section>
     {/if}
@@ -118,7 +130,7 @@
     <p class="note" role="note">
       <ShieldAlert size={15} aria-hidden="true" />
       <span>
-        {$t("Plugins are not a sandbox. A backend runs with your account's access to files and the network; PiUI stops its whole process tree and gives it no API keys. Panels run isolated. Install only plugins you trust.")}
+        {$t("Plugins are not a sandbox. PiUI limits a backend's files and programs with Node's permission model, stops its whole process tree and gives it no API keys, but deliberately malicious code can get around those limits. Panels run isolated. Install only plugins you trust.")}
         {#if development}{' '}{$t('Development mode runs the plugin from its folder: code changes load without a new review, permission changes need one.')}{/if}
       </span>
     </p>
@@ -172,6 +184,7 @@
   }
   .command {
     display: block;
+    margin-bottom: var(--piui-space-2);
     padding: var(--piui-space-2) var(--piui-space-3);
     border: 1px solid var(--piui-border-subtle);
     border-radius: var(--piui-radius-sm);

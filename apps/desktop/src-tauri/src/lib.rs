@@ -20,6 +20,7 @@ mod contributions;
 mod dto;
 mod harness_configuration;
 mod harness_registry_api;
+mod navigation_guard;
 mod orchestration_api;
 mod orchestration_run_debugging;
 mod orchestration_schedule;
@@ -395,6 +396,24 @@ fn resolved_e2e_data_directories() -> Result<Option<E2eDataDirectories>, std::io
     )
 }
 
+/// App commands refuse a webview that shows the plugin origin
+/// (`navigation_guard`): only PiUI's own pages may call them.
+fn guarded_commands<R: tauri::Runtime>(
+    commands: impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static,
+) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
+    move |invoke| {
+        let url = invoke.message.webview_ref().url().ok();
+        if navigation_guard::refuses_invoke(url.as_ref()) {
+            eprintln!("event=plugin_origin_invoke_refused");
+            invoke
+                .resolver
+                .reject("PiUI commands are not available to this page.");
+            return true;
+        }
+        commands(invoke)
+    }
+}
+
 #[cfg(all(test, debug_assertions))]
 mod tests {
     use super::{
@@ -766,22 +785,8 @@ pub fn run() -> Result<(), tauri::Error> {
         },
     );
     // The app window never shows the plugin origin: a top-level document
-    // there would count as local and get IPC. Windows only: WebView2 reports
-    // top-level navigations here, so panel frames are unaffected; WebKit
-    // reports frame navigations too and needs its own guard.
-    #[cfg(windows)]
-    {
-        builder = builder.plugin(
-            tauri::plugin::Builder::<tauri::Wry>::new("piui-navigation-guard")
-                .on_navigation(|_webview, url| {
-                    !piui_plugins::csp::is_plugin_location(
-                        url.scheme(),
-                        url.host_str().unwrap_or(""),
-                    )
-                })
-                .build(),
-        );
-    }
+    // there would count as local and get IPC (see navigation_guard).
+    builder = builder.plugin(navigation_guard::plugin::<tauri::Wry>());
     let app = builder
         .on_window_event(background::on_window_event)
         .setup(move |app| {
@@ -839,6 +844,21 @@ pub fn run() -> Result<(), tauri::Error> {
                 .set_notify(std::sync::Arc::new(move || {
                     plugins::emit_changed(&plugin_events);
                 }));
+            // Plugin MCP servers the person offered reach ordinary new chats
+            // of harnesses that take them per session; a trusted project's
+            // folder is granted only with a project permission.
+            let mcp_plugins = plugin_host.clone();
+            let mcp_app = app.handle().clone();
+            state.workspace.set_plugin_mcp_provider(std::sync::Arc::new(
+                move |workspace_id, cwd| {
+                    let project = mcp_app.try_state::<state::HostState>().and_then(|host| {
+                        (!host.is_personal_workspace(workspace_id)
+                            && api::verified_project_directory(&host, workspace_id, true).is_ok())
+                        .then(|| piui_runtime::script_runner::process_directory(cwd))
+                    });
+                    mcp_plugins.session_mcp_servers(project.as_deref())
+                },
+            ));
             app.manage(plugin_host);
             let watcher = catalog_watch::start_catalog_watcher(
                 app.handle().clone(),
@@ -864,7 +884,7 @@ pub fn run() -> Result<(), tauri::Error> {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(guarded_commands(tauri::generate_handler![
             workspace_api::workspace_command_v15,
             workspace_api::workspace_history_v1,
             workspace_api::workspace_settings_v16,
@@ -941,7 +961,7 @@ pub fn run() -> Result<(), tauri::Error> {
             orchestration_run_debugging::orchestration_pin_step_output_v1,
             orchestration_run_debugging::orchestration_set_run_archived_v1,
             orchestration_run_debugging::orchestration_delete_run_v1,
-        ])
+        ]))
         .build(context)?;
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, code, .. } = event {

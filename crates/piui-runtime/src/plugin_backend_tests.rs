@@ -83,6 +83,7 @@ impl Fixture {
             entry: &self.entry,
             working_dir: &self.root,
             host_environment: &environment,
+            permissions: None,
         })
         .await
         .expect("backend starts")
@@ -285,7 +286,251 @@ async fn an_entry_outside_the_package_is_refused() {
         entry: &outside,
         working_dir: &fixture.root,
         host_environment: &[],
+        permissions: None,
     })
     .await;
     assert!(matches!(result, Err(PluginBackendError::Spawn)));
+}
+
+/// A backend that reports what Node's permission model lets it do.
+const PROBING_PLUGIN: &str = r#"
+import { spawnSync } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
+let buffer = '';
+const send = (value) => process.stdout.write(JSON.stringify(value) + '\n');
+const attempt = (action) => { try { action(); return 'ok'; } catch (error) { return error.code ?? 'error'; } };
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  let index;
+  while ((index = buffer.indexOf('\n')) >= 0) {
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (!line.trim()) continue;
+    const { id, method, params } = JSON.parse(line);
+    if (method !== 'probe') { send({ jsonrpc: '2.0', id, result: {} }); continue; }
+    const spawned = attempt(() => { const result = spawnSync(process.execPath, ['-e', '0']); if (result.error) throw result.error; });
+    send({ jsonrpc: '2.0', id, result: {
+      readOwn: attempt(() => readFileSync(new URL('./data.txt', import.meta.url))),
+      readData: attempt(() => readFileSync(params.data + '/seed.txt')),
+      writeData: attempt(() => writeFileSync(params.data + '/written.txt', 'x')),
+      readProject: attempt(() => readFileSync(params.project + '/secret.txt')),
+      writeProject: attempt(() => writeFileSync(params.project + '/changed.txt', 'x')),
+      spawn: spawned,
+    } });
+  }
+});
+"#;
+
+#[test]
+fn the_probe_output_names_what_node_can_limit() {
+    let modern = NodePermissionSupport::from_probe(
+        r#"{"version":"v25.1.0","flags":["--permission","--allow-fs-read","--allow-fs-write","--allow-net"]}"#,
+    )
+    .expect("probe output");
+    assert!(modern.permission && modern.network);
+    let current = NodePermissionSupport::from_probe(
+        r#"{"version":"v24.13.0","flags":["--permission","--allow-fs-read","--allow-fs-write"]}"#,
+    )
+    .expect("probe output");
+    assert!(current.permission && !current.network);
+    let old = NodePermissionSupport::from_probe(r#"{"version":"v20.11.0","flags":[]}"#)
+        .expect("probe output");
+    assert!(!old.permission && !old.network);
+    assert_eq!(NodePermissionSupport::from_probe("not json"), None);
+    assert_eq!(
+        NodePermissionSupport::from_probe(r#"{"version":"24","flags":[]}"#),
+        None
+    );
+}
+
+#[test]
+fn permission_flags_follow_the_grants_and_never_allow_processes() {
+    let support = NodePermissionSupport {
+        version: "v25.1.0".into(),
+        permission: true,
+        network: true,
+    };
+    let root = std::env::temp_dir();
+    let package = root.join("package");
+    let data = root.join("data");
+    let grants = BackendGrants {
+        read: vec![package.clone(), data.clone(), data.clone()],
+        write: vec![data.clone()],
+        network: false,
+    };
+    let arguments = permission_arguments(&support, &grants).expect("flags");
+    let text = arguments
+        .as_slice()
+        .iter()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let value = |path: &Path| process_directory(path).to_string_lossy().into_owned();
+    assert_eq!(
+        text,
+        vec![
+            "--permission".to_owned(),
+            format!("--allow-fs-read={}", value(&package)),
+            format!("--allow-fs-read={}", value(&data)),
+            format!("--allow-fs-write={}", value(&data)),
+        ]
+    );
+    assert!(!text.iter().any(|flag| flag.contains("child-process")
+        || flag.contains("worker")
+        || flag.contains("addons")
+        || flag.contains("wasi")));
+    let networked = permission_arguments(
+        &support,
+        &BackendGrants {
+            network: true,
+            ..grants.clone()
+        },
+    )
+    .expect("flags");
+    assert_eq!(
+        networked
+            .as_slice()
+            .last()
+            .map(|flag| flag.to_string_lossy().into_owned()),
+        Some("--allow-net".to_owned())
+    );
+    let without_net = NodePermissionSupport {
+        network: false,
+        ..support.clone()
+    };
+    let unrestricted = permission_arguments(
+        &without_net,
+        &BackendGrants {
+            network: true,
+            ..grants.clone()
+        },
+    )
+    .expect("flags");
+    assert!(
+        !unrestricted
+            .as_slice()
+            .iter()
+            .any(|flag| flag.to_string_lossy() == "--allow-net")
+    );
+    assert_eq!(
+        permission_arguments(
+            &NodePermissionSupport {
+                permission: false,
+                ..support.clone()
+            },
+            &grants
+        ),
+        Err(PermissionPlanError::Unsupported)
+    );
+    assert_eq!(
+        permission_arguments(
+            &support,
+            &BackendGrants {
+                read: vec![PathBuf::from("relative")],
+                ..BackendGrants::default()
+            }
+        ),
+        Err(PermissionPlanError::Path)
+    );
+    assert_eq!(
+        permission_arguments(
+            &support,
+            &BackendGrants {
+                read: vec![root.join("*")],
+                ..BackendGrants::default()
+            }
+        ),
+        Err(PermissionPlanError::Path)
+    );
+}
+
+#[tokio::test]
+async fn node_denies_what_the_grants_leave_out() {
+    let node = resolve_plugin_node().expect("Node.js is installed for plugin tests");
+    let support = probe_node_permissions(&node).expect("the probe runs");
+    assert_eq!(cached_node_permissions(&node), Some(support.clone()));
+    if !support.permission {
+        eprintln!(
+            "skipped: Node.js {} has no permission model",
+            support.version
+        );
+        return;
+    }
+    let fixture = Fixture::new("permissions");
+    std::fs::write(&fixture.entry, PROBING_PLUGIN).expect("probing plugin");
+    std::fs::write(fixture.root.join("backend").join("data.txt"), "own").expect("own file");
+    let outside = std::fs::canonicalize(std::env::temp_dir())
+        .expect("temp")
+        .join(format!(
+            "piui-plugin-permissions-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+    let data = outside.join("data");
+    let project = outside.join("project");
+    std::fs::create_dir_all(&data).expect("data folder");
+    std::fs::create_dir_all(&project).expect("project folder");
+    std::fs::write(data.join("seed.txt"), "seed").expect("seed");
+    std::fs::write(project.join("secret.txt"), "secret").expect("secret");
+    let params = json!({
+        "data": process_directory(&data).to_string_lossy(),
+        "project": process_directory(&project).to_string_lossy(),
+    });
+    let run = |grants: BackendGrants| {
+        let node = node.clone();
+        let support = support.clone();
+        let fixture_root = fixture.root.clone();
+        let entry = fixture.entry.clone();
+        let params = params.clone();
+        async move {
+            let arguments = permission_arguments(&support, &grants).expect("flags");
+            let backend = PluginBackend::spawn(PluginBackendLaunch {
+                node: &node,
+                entry: &entry,
+                working_dir: &fixture_root,
+                host_environment: &std::env::vars_os().collect::<Vec<_>>(),
+                permissions: Some(&arguments),
+            })
+            .await
+            .expect("backend starts");
+            let answer = backend
+                .request("probe", params, TIMEOUT, None)
+                .await
+                .expect("probe answer");
+            backend.stop().await;
+            answer
+        }
+    };
+    let base = BackendGrants {
+        read: vec![fixture.root.clone(), data.clone()],
+        write: vec![data.clone()],
+        network: false,
+    };
+    let denied = run(base.clone()).await;
+    assert_eq!(denied["readOwn"], "ok");
+    assert_eq!(denied["readData"], "ok");
+    assert_eq!(denied["writeData"], "ok");
+    assert_eq!(denied["readProject"], "ERR_ACCESS_DENIED");
+    assert_eq!(denied["writeProject"], "ERR_ACCESS_DENIED");
+    assert_eq!(denied["spawn"], "ERR_ACCESS_DENIED");
+    assert!(!project.join("changed.txt").exists());
+
+    let reader = run(BackendGrants {
+        read: [base.read.clone(), vec![project.clone()]].concat(),
+        ..base.clone()
+    })
+    .await;
+    assert_eq!(reader["readProject"], "ok");
+    assert_eq!(reader["writeProject"], "ERR_ACCESS_DENIED");
+    assert_eq!(reader["spawn"], "ERR_ACCESS_DENIED");
+
+    let writer = run(BackendGrants {
+        read: [base.read.clone(), vec![project.clone()]].concat(),
+        write: [base.write.clone(), vec![project.clone()]].concat(),
+        ..base
+    })
+    .await;
+    assert_eq!(writer["writeProject"], "ok");
+    assert_eq!(writer["spawn"], "ERR_ACCESS_DENIED");
+    let _ = std::fs::remove_dir_all(&outside);
 }

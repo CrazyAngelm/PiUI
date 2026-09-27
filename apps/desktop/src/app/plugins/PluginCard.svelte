@@ -7,7 +7,11 @@
   import type { PluginEntryV1 } from '../../../../../contracts/plugins-v1';
   import { t } from '../../features/locale/language';
   import { Badge, Button, Switch } from '../../lib/ui';
+  import PluginBackendLimits from './PluginBackendLimits.svelte';
   import { BACKEND_STATE_TEXT, commandLineText, LOG_TEXT, PERMISSION_TEXT } from './permissions';
+  import { shortcutParts } from '../../lib/ui';
+  import { pluginRegistry } from './pluginRegistry.svelte';
+  import { resolveKeybindings, type KeybindingConflict } from './pluginShortcuts';
 
   /** One plugin in Settings → Plugins. */
   interface Props {
@@ -19,8 +23,10 @@
     onReload: () => void;
     onRestart: () => void;
     onRemove: () => void;
+    /** Offer an MCP server to new chats, or stop offering it. */
+    onOfferMcp: (serverId: string, offered: boolean) => void;
   }
-  let { plugin, safeMode, busy, onToggle, onSettings, onReload, onRestart, onRemove }: Props = $props();
+  let { plugin, safeMode, busy, onToggle, onSettings, onReload, onRestart, onRemove, onOfferMcp }: Props = $props();
 
   // "Label: count" needs no plural forms in either language.
   const counts = $derived(
@@ -32,6 +38,9 @@
         [plugin.contributes.templates.length, 'Templates: {0}'],
         [plugin.contributes.nodeTypes.length, 'Pipeline nodes: {0}'],
         [plugin.contributes.acpAgents.length, 'ACP agents: {0}'],
+        [plugin.contributes.statusItems?.length ?? 0, 'Status items: {0}'],
+        [plugin.contributes.renderers?.length ?? 0, 'Chat renderers: {0}'],
+        [plugin.contributes.mcpServers?.length ?? 0, 'MCP tool servers: {0}'],
       ] as const
     )
       .filter(([count]) => count > 0)
@@ -46,6 +55,15 @@
           ? { tone: 'neutral' as const, label: safeMode ? $t('Off in safe mode') : $t('Checking') }
           : { tone: 'neutral' as const, label: $t('Disabled') },
   );
+  // Keybindings with their conflicts among the active plugins (PiUI always wins).
+  const shortcuts = $derived.by(() => {
+    const resolved = plugin.active ? resolveKeybindings(pluginRegistry.active).filter((binding) => binding.plugin.id === plugin.id) : [];
+    return (plugin.contributes.keybindings ?? []).map((binding) => ({
+      key: binding.key,
+      title: plugin.contributes.commands.find((command) => command.id === binding.command)?.title ?? binding.command,
+      conflict: resolved.find((item) => item.key === binding.key)?.conflict as KeybindingConflict | undefined,
+    }));
+  });
   const restartable = $derived(plugin.backend?.state === 'crashed' || plugin.backend?.state === 'crash-loop');
   // An agent whose id another agent already has is not added (the other one wins).
   const clashes = $derived(plugin.active ? plugin.contributes.acpAgents.filter((agent) => !agent.registered) : []);
@@ -89,6 +107,33 @@
     <p class="muted">{$t('The ACP agent “{0}” was not added: another agent already uses its ID.', [agent.displayName])}</p>
   {/each}
 
+  {#if plugin.contributes.mcpServers?.length}
+    <section class="mcp" aria-labelledby="plugin-mcp-{plugin.id}">
+      <h4 id="plugin-mcp-{plugin.id}">{$t('MCP tool servers')}</h4>
+      <p class="muted">{$t('An offered server joins each new Claude Code, Hermes or ACP agent chat for that chat only; your harness settings are not changed. Codex, Pi, Prime Agent and pipeline runs never get it. It runs under the same Node.js limits as the backend.')}</p>
+      <ul>
+        {#each plugin.contributes.mcpServers as server (server.id)}
+          <li>
+            <div class="mcp__row">
+              <span>
+                <strong>{server.title}</strong>
+                {#if server.description}<small class="muted">{server.description}</small>{/if}
+              </span>
+              <Switch
+                label={$t('Offer {0} to new chats', [server.title])}
+                hideLabel
+                checked={server.offered}
+                disabled={safeMode || busy || !plugin.active}
+                onCheckedChange={(checked) => onOfferMcp(server.id, checked)}
+              />
+            </div>
+            <code class="command">{commandLineText(server.commandLine)}</code>
+          </li>
+        {/each}
+      </ul>
+    </section>
+  {/if}
+
   <details class="more">
     <summary>{$t('Permissions and backend')}</summary>
     <div class="more__body">
@@ -107,6 +152,24 @@
           {#if plugin.backend.restarts}<span class="muted">· {$t('Restarts: {0}', [plugin.backend.restarts])}</span>{/if}
         </p>
         <code class="command">{commandLineText(plugin.backend.commandLine)}</code>
+        {#if plugin.backend.nodeFound}
+          <PluginBackendLimits limits={plugin.backend.limits} permissions={plugin.permissions} />
+        {/if}
+      {/if}
+      {#if shortcuts.length}
+        <h4>{$t('Keyboard shortcuts')}</h4>
+        <ul class="shortcuts">
+          {#each shortcuts as shortcut (shortcut.key)}
+            <li>
+              <kbd>{shortcutParts(shortcut.key).join('+')}</kbd> {shortcut.title}
+              {#if shortcut.conflict?.kind === 'piui'}
+                <span class="conflict">{$t('PiUI uses this shortcut, so it does nothing.')}</span>
+              {:else if shortcut.conflict?.kind === 'plugin'}
+                <span class="conflict">{$t('Also used by {0}, so it does nothing until one of them is disabled.', [shortcut.conflict.with.join(', ')])}</span>
+              {/if}
+            </li>
+          {/each}
+        </ul>
       {/if}
       <p class="muted" title={plugin.codeHash}>{$t('Code {0}', [plugin.codeHash.slice(0, 12)])}</p>
       {#if plugin.log.length}
@@ -223,6 +286,7 @@
     padding-top: var(--piui-space-2);
   }
   .permissions,
+  .shortcuts,
   .log {
     display: grid;
     gap: 2px;
@@ -232,6 +296,42 @@
   }
   .log time {
     color: var(--piui-text-muted);
+  }
+  .mcp {
+    display: grid;
+    gap: var(--piui-space-2);
+  }
+  .mcp ul {
+    display: grid;
+    gap: var(--piui-space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .mcp li {
+    display: grid;
+    gap: var(--piui-space-1);
+  }
+  .mcp__row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--piui-space-3);
+  }
+  .mcp__row span {
+    display: grid;
+    gap: 2px;
+  }
+  kbd {
+    padding: 0 4px;
+    border: 1px solid var(--piui-border);
+    border-radius: var(--piui-radius-sm);
+    font-family: var(--piui-font-mono);
+    font-size: var(--piui-text-xs);
+  }
+  .conflict {
+    display: block;
+    color: var(--piui-warning-text);
   }
   .backend {
     margin: 0;

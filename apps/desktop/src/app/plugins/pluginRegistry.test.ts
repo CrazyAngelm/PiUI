@@ -33,12 +33,14 @@ describe('plugin registry', () => {
     const palette = registry.commands('palette');
     expect(palette.map((command) => command.key)).toEqual([
       'plugin:example.hello-command:say-hello',
+      'plugin:example.status-tools:chat-title',
       'plugin:lab.broken-sample:check',
     ]);
-    expect(palette.map(commandTitle)).toEqual(['Say hello', 'Run the broken check']);
+    expect(palette.map(commandTitle)).toEqual(['Say hello', 'Show the chat title', 'Run the broken check']);
     expect(registry.commands('composer').map((command) => command.key)).toEqual([
       'plugin:example.hello-command:say-hello',
       'plugin:example.hello-command:insert-thanks',
+      'plugin:example.status-tools:keep-short',
     ]);
     // Pi extension contributions join only for a Pi chat, composer actions in their declared order.
     const piPalette = registry.commands('palette', 'pi');
@@ -65,11 +67,23 @@ describe('plugin registry', () => {
     expect(registry.themes()).toEqual([]);
   });
 
+  it('finds the chat renderer of an active plugin by tool name, without letter case', async () => {
+    const { registry } = await labRegistry();
+    expect(registry.renderer('create_issue')).toMatchObject({ plugin: { id: 'example.tool-cards' }, renderer: { id: 'issue', title: 'Issue card' } });
+    expect(registry.renderer('CREATE_ISSUE')?.renderer.id).toBe('issue');
+    expect(registry.renderer('bash')).toBeUndefined();
+    expect(registry.renderer(undefined)).toBeUndefined();
+    // A disabled plugin renders nothing: the generic view takes over.
+    await registry.run({ type: 'setEnabled', expectedRevision: registry.revision, id: 'example.tool-cards', enabled: false });
+    expect(registry.renderer('create_issue')).toBeUndefined();
+  });
+
   it('shows nothing active in safe mode, including Pi contributions', async () => {
     const { registry } = await labRegistry('safe');
     expect(registry.safeMode).toBe(true);
     expect(registry.plugins.length).toBeGreaterThan(0);
     expect([registry.active, registry.commands('palette', 'pi'), registry.panels('chat-details'), registry.nodeTypes()]).toEqual([[], [], [], []]);
+    expect(registry.renderer('create_issue')).toBeUndefined();
   });
 
   it('keeps a translatable message when the host cannot list plugins', async () => {

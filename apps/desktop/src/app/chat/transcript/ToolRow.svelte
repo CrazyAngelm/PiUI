@@ -15,6 +15,8 @@
   import MarkdownContent from '../../../components/MarkdownContent.svelte';
   import DiffView from './DiffView.svelte';
   import { looksLikeDiff, toolKind, toolTitle, type ToolKind } from './toolKinds';
+  import { rendererActivity } from '../../../host-api/pluginBridge';
+  import { pluginRegistry } from '../../plugins/pluginRegistry.svelte';
 
   interface Props {
     block: TimelineBlock;
@@ -38,6 +40,21 @@
   const title = $derived(kind === 'thinking' ? $t('Reasoning') : toolTitle(block));
   const body = $derived(block.text ?? block.safeSummary ?? '');
   const isDiff = $derived(kind === 'edit' && looksLikeDiff(block.text));
+  // A plugin's own view of this tool (plugins v2). The plain view is always
+  // one click away and takes over when the plugin is off or its frame fails.
+  const renderer = $derived(kind === 'thinking' ? undefined : pluginRegistry.renderer(block.toolName));
+  let plain = $state(false);
+  let rendererFailed = $state(false);
+  const pluginView = $derived(renderer !== undefined && !plain && !rendererFailed);
+  const activity = $derived(renderer ? rendererActivity(block) : undefined);
+  // The frame is plugin code's host: its own chunk, loaded only when needed.
+  let Frame = $state<typeof import('../../plugins/PluginPanelFrame.svelte').default | undefined>();
+  $effect(() => {
+    if (!pluginView || !open || Frame) return;
+    import('../../plugins/PluginPanelFrame.svelte')
+      .then((module) => (Frame = module.default))
+      .catch(() => (rendererFailed = true));
+  });
 
   async function copy(): Promise<void> {
     try {
@@ -61,7 +78,33 @@
   </button>
   {#if open && body}
     <div class="row__body">
-      {#if isDiff}
+      {#if renderer}
+        <div class="views" role="group" aria-label={$t('How to show this tool')}>
+          <button type="button" class="views__option" aria-pressed={pluginView} disabled={rendererFailed} onclick={() => (plain = false)}>
+            {$t('{0} (plugin {1})', [renderer.renderer.title, renderer.plugin.name])}
+          </button>
+          <button type="button" class="views__option" aria-pressed={!pluginView} onclick={() => (plain = true)}>{$t('Plain view')}</button>
+        </div>
+        {#if rendererFailed}
+          <p class="note" role="status">
+            {$t('The plugin view did not load, so the plain view is shown.')}
+            <button type="button" class="note__retry" onclick={() => { rendererFailed = false; plain = false; }}>{$t('Try again')}</button>
+          </p>
+        {/if}
+      {/if}
+      {#if pluginView && renderer && activity}
+        {#if Frame}
+          <Frame
+            plugin={renderer.plugin}
+            panel={{ id: renderer.renderer.id, title: renderer.renderer.title, url: renderer.renderer.url }}
+            chat={null}
+            {activity}
+            onStatus={(status) => {
+              if (status === 'failed') rendererFailed = true;
+            }}
+          />
+        {/if}
+      {:else if isDiff}
         <DiffView text={body} />
       {:else if kind === 'thinking'}
         <div class="thinking"><MarkdownContent source={body} compact={true} /></div>
@@ -178,5 +221,38 @@
     margin: 4px 0 0;
     color: var(--piui-text-disabled);
     font-size: var(--piui-text-xs);
+  }
+  .views {
+    display: inline-flex;
+    gap: 2px;
+    margin-bottom: 6px;
+    padding: 2px;
+    border: 1px solid var(--piui-border-subtle);
+    border-radius: var(--piui-radius-sm);
+  }
+  .views__option {
+    padding: 2px 8px;
+    border: 0;
+    border-radius: var(--piui-radius-sm);
+    background: transparent;
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-xs);
+  }
+  .views__option[aria-pressed='true'] {
+    background: var(--piui-selected);
+    color: var(--piui-text);
+  }
+  .views__option:focus-visible,
+  .note__retry:focus-visible {
+    outline: 2px solid var(--piui-focus);
+    outline-offset: 1px;
+  }
+  .note__retry {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--piui-accent);
+    font: inherit;
+    text-decoration: underline;
   }
 </style>

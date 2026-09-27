@@ -34,6 +34,18 @@ export async function createAcpAdapter(config, emit, coordinatorRequest) {
     throw fail('unsupported-settings', `${name} does not support the requested per-session restriction.`);
   }
 
+  // Plugin MCP servers (plugins v2): stdio servers the host resolved for an
+  // ordinary chat. Only added to this session; the user's config is untouched.
+  const pluginMcpServers = config.pluginMcpServers ?? [];
+  if (!Array.isArray(pluginMcpServers) || pluginMcpServers.length > 16 || pluginMcpServers.some((server) => server === null || typeof server !== 'object'
+    || typeof server.name !== 'string' || !/^[a-z0-9_-]{1,64}$/.test(server.name) || server.name === 'piui-workspace'
+    || typeof server.command !== 'string' || !isAbsolute(server.command)
+    || !Array.isArray(server.args) || server.args.some((arg) => typeof arg !== 'string'))
+    || new Set(pluginMcpServers.map((server) => server.name)).size !== pluginMcpServers.length) {
+    throw fail('unsupported-settings', 'The plugin MCP servers for this chat are invalid.');
+  }
+  if (pluginMcpServers.length && config.coordination) throw fail('unsupported-settings', 'Plugin MCP servers are only for ordinary chats.');
+
   // Windows canonical paths are verbatim (`\\?\C:\...`); agents expect the plain spelling.
   const plainPath = value => value.startsWith('\\\\?\\UNC\\') ? `\\\\${value.slice(8)}` : value.startsWith('\\\\?\\') ? value.slice(4) : value;
   const cwd = plainPath(config.cwd);
@@ -432,7 +444,8 @@ export async function createAcpAdapter(config, emit, coordinatorRequest) {
 
   // --- Workspace tool for managed runs (HTTP MCP) ------------------------------------
   let server;
-  const mcpServers = [];
+  // Every ACP agent takes stdio MCP servers; plugin servers join this session only.
+  const mcpServers = pluginMcpServers.map(plugin => ({ name: plugin.name, command: plugin.command, args: [...plugin.args], env: [] }));
   const startCoordinator = async () => {
     const token = randomUUID();
     const tool = { name: 'workspace', description: 'Read roster before delegating. It describes when each allowed helper is useful, its required input and expected result. Use only authorized routes.', inputSchema: { type: 'object', properties: { type: { type: 'string', enum: ['roster', 'send', 'observe', 'wait', 'spawn', 'spawnAgent'] }, recipientMemberId: { type: 'string' }, targetMemberId: { type: 'string' }, body: { type: 'string' }, stepId: { type: 'string' }, profileId: { type: 'string' }, name: { type: 'string' }, instructions: { type: 'string' } }, required: ['type'], additionalProperties: false } };

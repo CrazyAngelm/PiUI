@@ -197,10 +197,15 @@ pub(super) async fn execute_plugin_step(
     let started = std::time::Instant::now();
     let result = match plugins {
         Some(plugins) => {
+            let project = launch
+                .spec
+                .project_access
+                .then(|| piui_runtime::script_runner::process_directory(&launch.project_dir));
             plugins
                 .supervisor()
                 .call(
                     &launch.spec.backend,
+                    project.as_deref(),
                     "node/run",
                     launch.params.clone(),
                     launch.spec.timeout,

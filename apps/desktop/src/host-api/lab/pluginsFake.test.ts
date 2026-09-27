@@ -49,12 +49,27 @@ describe('UI Lab plugin host', () => {
       ['example.hello-command', true],
       ['example.midnight-theme', true],
       ['example.pipeline-pack', true],
+      ['example.status-tools', true],
+      ['example.tool-cards', true],
       ['example.opencode-acp', false],
       ['lab.broken-sample', true],
     ]);
+    const status = entry(registry, 'example.status-tools');
+    expect(status.contributes.statusItems).toEqual([
+      { id: 'title', text: 'Chat title', tooltip: "Show the open chat's title (Status tools plugin)", command: 'chat-title', alignment: 'end' },
+    ]);
+    expect(status.contributes.keybindings?.map((binding) => binding.key)).toEqual(['Mod+Alt+Shift+T', 'Mod+Alt+Shift+K']);
+    expect(entry(registry, 'example.hello-command').contributes.statusItems).toBeUndefined();
+    expect(entry(registry, 'example.tool-cards').contributes.renderers).toEqual([
+      { id: 'issue', title: 'Issue card', toolNames: ['create_issue', 'update_issue', 'mcp__example-tool-cards-issues__create_issue'], url: 'http://piui-plugin.localhost/example.tool-cards/ui/index.html?renderer=issue' },
+    ]);
     const hello = entry(registry, 'example.hello-command');
     expect(hello.contributes.panels[0]?.url).toBe('http://piui-plugin.localhost/example.hello-command/ui/index.html?panel=hello');
-    expect(hello.backend?.commandLine.args[0]).toMatch(/\/backend\/main\.mjs$/);
+    // Node's permission model: the package and the data folder, nothing else.
+    expect(hello.backend?.commandLine.args[0]).toBe('--permission');
+    expect(hello.backend?.commandLine.args.at(-1)).toMatch(/\/backend\/main\.mjs$/);
+    expect(hello.backend?.commandLine.args.some((arg) => /allow-(net|child-process|worker)/.test(arg))).toBe(false);
+    expect(hello.backend?.limits).toEqual({ nodeVersion: 'v24.13.0', enforced: true, network: false });
     expect(hello.settings).toEqual({ greeting: 'Hello', prepareText: false });
 
     const broken = entry(registry, 'lab.broken-sample');
@@ -136,6 +151,19 @@ describe('UI Lab plugin host', () => {
     expect(await commandFailure(host, { pluginId: 'example.hello-command', commandId: 'say-hello', origin: 'palette' })).toMatchObject({ code: 'INACTIVE' });
     registry = (await plugins(host, { type: 'setEnabled', expectedRevision: registry.revision, id: 'example.hello-command', enabled: true })).registry;
     expect(entry(registry, 'example.hello-command').active).toBe(true);
+  });
+
+  it('runs a command from a status item or keybinding only when one names it', async () => {
+    const host = labHost();
+    const request = { pluginId: 'example.status-tools', commandId: 'chat-title' };
+    expect(await runCommand(host, { ...request, origin: 'status' })).toEqual({ protocol: 1, notice: 'Open a chat to see its title.' });
+    expect(await runCommand(host, { ...request, origin: 'keybinding' })).toMatchObject({ protocol: 1 });
+    const short = await runCommand(host, { pluginId: 'example.status-tools', commandId: 'keep-short', origin: 'keybinding' });
+    expect(short.text).toMatch(/^Please keep the next answer short/);
+    // No status item names "keep-short", and hello-command has neither.
+    expect(await commandFailure(host, { pluginId: 'example.status-tools', commandId: 'keep-short', origin: 'status' })).toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(await commandFailure(host, { pluginId: 'example.hello-command', commandId: 'say-hello', origin: 'keybinding' })).toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(await commandFailure(host, { pluginId: 'example.hello-command', commandId: 'say-hello', origin: 'status' })).toMatchObject({ code: 'PERMISSION_DENIED' });
   });
 
   it('runs commands for their surfaces only and never sends anything', async () => {

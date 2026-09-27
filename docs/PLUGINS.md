@@ -1,24 +1,28 @@
 # PiUI plugins
 
 Plugins add commands, chat panels, settings, themes, pipeline templates,
-pipeline node types and ACP agents to PiUI. This guide is for plugin authors;
+pipeline node types, ACP agents, status-bar items, keyboard shortcuts, chat
+renderers and MCP tool servers to PiUI. This guide is for plugin authors;
 the design and its limits are ADR-032 (`docs/10_ADR.md`), and the normative
 contracts are in `contracts/`:
 
 | Contract | What it defines |
 |---|---|
-| `piui-plugin-v1.schema.json`, `piui-plugin-v1.ts` | The `piui-plugin.json` manifest |
+| `piui-plugin-v2.schema.json`, `piui-plugin-v2.ts` | The `piui-plugin.json` manifest, version 2 (current) |
+| `piui-plugin-v1.schema.json`, `piui-plugin-v1.ts` | Manifest version 1, still accepted unchanged |
 | `plugin-backend-v1.ts` | JSON-RPC between PiUI and a plugin backend |
 | `plugin-panel-v1.ts` | `postMessage` bridge between PiUI and a panel |
 | `plugins-v1.ts` | What Settings → Plugins and the other screens receive from the host |
 
-**A plugin is not a sandbox.** A backend runs on your computer with your
-account's access to files and the network. PiUI shows every permission before
-install, starts only the exact command line it shows, contains the whole
-process tree, passes no API keys or tokens and stops the backend when the
-plugin is disabled, removed or PiUI quits — but it does not restrict what the
-backend reads, writes or connects to. Panels are different: they run
-isolated (see [Panels](#panels)).
+**A plugin is not a sandbox.** A backend runs on your computer as trusted
+code. PiUI shows every permission before install, starts only the exact
+command line it shows, contains the whole process tree, passes no API keys or
+tokens, stops the backend when the plugin is disabled, removed or PiUI quits,
+and starts it under Node's permission model so it reaches only its own files,
+its data folder and — when it asks — the project folder it works in (see
+[Backend limits](#backend-limits)). Node documents that model as a guard
+against mistakes, not against deliberately malicious code. Panels are
+different: they run isolated (see [Panels](#panels)).
 
 ## Quick start
 
@@ -44,7 +48,11 @@ Examples in `examples/plugins/`:
   and a sandboxed chat panel;
 - `midnight-theme` — two color themes, no code and no permissions;
 - `pipeline-pack` — two pipeline templates and a JSON transform node;
-- `acp-agent` — adds OpenCode as an ACP agent.
+- `acp-agent` — adds OpenCode as an ACP agent;
+- `status-tools` — manifest version 2: a status-bar item and two keyboard
+  shortcuts;
+- `tool-cards` — manifest version 2: an MCP tool server that drafts issues
+  and a chat renderer that shows issue-tracker tool calls as a card.
 
 ## Package
 
@@ -67,7 +75,7 @@ every file; the review shows it and PiUI checks it again at every start.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "acme.word-count",
   "name": "Word count",
   "version": "1.2.0",
@@ -84,17 +92,18 @@ every file; the review shows it and PiUI checks it again at every start.
 
 | Field | Rules |
 |---|---|
-| `schemaVersion` | `1` |
+| `schemaVersion` | `2` (current) or `1`. Version 1 manifests keep working unchanged but cannot use `ui.status`, `ui.renderer`, `mcp.tools`, `statusItems`, `keybindings`, `renderers` or `mcpServers`. |
 | `id` | Lowercase segments of letters, digits and inner hyphens joined by dots (`acme.word-count`), at most 100 characters. It never changes between versions. |
 | `name`, `publisher` | 1–64 characters, no control characters |
 | `version` | `MAJOR.MINOR.PATCH` with an optional pre-release |
 | `engines.piui` | Space-separated comparators that must all match: `>=`, `>`, `<=`, `<`, `=`, `^`, `~` |
 | `permissions` | See below. A contribution without its permission is an error. |
 | `backend.entry`, `ui.entry` | A file inside the package, forward slashes, no `.` or `..` |
-| `contributes` | `commands`, `settings`, `panels`, `themes`, `templates`, `nodeTypes`, `acpAgents` |
+| `contributes` | `commands`, `settings`, `panels`, `themes`, `templates`, `nodeTypes`, `acpAgents`; version 2 adds `statusItems`, `keybindings`, `renderers`, `mcpServers` |
 
 Unknown fields are errors, never ignored. The `$schema` field may point at
-`piui-plugin-v1.schema.json` for editor completion.
+`piui-plugin-v2.schema.json` (or `piui-plugin-v1.schema.json`) for editor
+completion.
 
 ### Permissions
 
@@ -103,17 +112,20 @@ Unknown fields are errors, never ignored. The `$schema` field may point at
 | `commands` | Commands in Ctrl+K and above the message box | Yes |
 | `ui.panel` | Panels in the chat details | Yes (panels without it are not shown) |
 | `ui.settings` | A settings form; panels may read and store the values | Yes |
+| `ui.status` | Status-bar items (version 2) | Yes (items without it are not shown and cannot run commands) |
+| `ui.renderer` | Chat renderers (version 2); the renderer sees the output of the tools it names | Yes |
 | `node.run` | Pipeline node types | Yes |
 | `acp.agents` | ACP agents in Settings → Harnesses | Yes |
+| `mcp.tools` | MCP tool servers (version 2), offered to new chats once the person turns them on | Yes |
 | `chat.read` | The open chat's id and title (never its messages) | Yes |
 | `notifications` | Short notices from a panel | Yes |
-| `project.read` | The backend receives the chat's or run's project path | Declared only |
-| `project.write` | The same path, stating that files may change | Declared only |
-| `network` | States that the backend uses the network | Declared only |
+| `project.read` | The backend receives the chat's or run's project path and may read that folder | Yes, by Node's permission model |
+| `project.write` | The same path; the backend may also change files in it | Yes, by Node's permission model |
+| `network` | The backend may use the network | When the Node.js in use has `--allow-net` |
 
-"Declared only" means the permission is shown in the review and changes what
-PiUI passes to the backend, but PiUI does not stop a backend from reading
-files or opening connections. Ask only for what you need.
+Without `project.read`/`project.write` a backend cannot open project
+folders; without `network` its network access is blocked when Node.js can
+block it, and the review says so when it cannot. Ask only for what you need.
 
 ## Contributions
 
@@ -129,6 +141,99 @@ backend. Otherwise PiUI calls the backend's `command/execute`; its `text` is
 put in the chat's message box (an empty box takes it, a draft is kept) for
 the person to review, and its `notice` is shown once. Nothing is ever sent
 automatically.
+
+### Status-bar items (version 2)
+
+```json
+"statusItems": [{ "id": "title", "text": "Chat title", "tooltip": "Show the chat's title", "command": "chat-title", "alignment": "end" }]
+```
+
+Requires `ui.status`. At most three items of 1–24 characters, shown in a
+thin bar at the bottom of the window (the bar appears only while an active
+plugin has an item). `command` names one of the plugin's own commands; a
+click runs it exactly like the palette would (origin `status`), and the host
+refuses a status origin for any command no status item names. `alignment`
+is `start` or `end` (default). The text is static: a plugin cannot change
+it at run time.
+
+### Keybindings (version 2)
+
+```json
+"keybindings": [{ "command": "chat-title", "key": "Mod+Alt+Shift+T" }]
+```
+
+`Mod` is Ctrl on Windows and Linux and ⌘ on macOS; after it come optionally
+`Alt` and `Shift`, in this order, then one of A–Z, 0–9 or F1–F12. A binding
+needs the `commands` permission and names one of the plugin's own commands
+(origin `keybinding`). **PiUI always wins:** a binding on one of PiUI's
+shortcuts (`PLUGIN_RESERVED_SHORTCUTS` in `contracts/piui-plugin-v2.ts`:
+Ctrl+K, Ctrl+N, Ctrl+Z, Ctrl+C and the other editing and window keys) never
+runs, and when two active plugins bind the same key neither runs. Settings →
+Plugins shows each binding and its conflict; `pnpm plugin:check` warns about
+reserved keys. Bindings do nothing while a dialog is open.
+
+### Chat renderers (version 2)
+
+```json
+"ui": { "entry": "ui/index.html" },
+"contributes": { "renderers": [{ "id": "issue", "title": "Issue card", "toolNames": ["create_issue"] }] }
+```
+
+Requires `ui.renderer` and a `ui.entry` page. When a chat shows a native
+tool call whose tool name matches one of `toolNames` (letter case ignored;
+the first active plugin in the list wins), the opened tool row shows the
+page in a sandboxed frame — the same frame, policy and bridge as a panel,
+with `?renderer=<id>` in its URL. Above it PiUI always offers **Plain view**,
+the generic view that needs nothing from the plugin; it takes over by itself
+when the plugin is off, in safe mode, or when the frame does not say `ready`
+within 10 seconds (then with a note and **Try again**). The frame is loaded
+only when the row is open.
+
+The renderer receives the activity as data, never HTML to insert: `init`
+carries `renderer: { id, title, activity }` and later changes arrive as the
+`activity` event, each `{ toolName, title, status, text, truncated }` with at
+most 48 KiB of `text`. `frame.resize` (or `panel.autoResize()`) sets the
+frame height, 48–600 pixels. A renderer sees the output of the tools it
+names — that is what the permission says in the review — but it gets no chat
+context (`chat` is `null`), and with `ui.settings` or `commands` whatever it
+stores or runs could reach the plugin's backend. Build the view with
+`textContent`, never `innerHTML`.
+
+```js
+const panel = window.piuiPanel;
+panel.ready.then((init) => { if (init.renderer) show(init.renderer.activity); panel.autoResize(); });
+panel.on('activity', show);
+```
+
+### MCP tool servers (version 2)
+
+```json
+"mcpServers": [{ "id": "issues", "title": "Issue drafts", "entry": "mcp/server.mjs", "args": ["--stdio"] }]
+```
+
+Requires `mcp.tools`. The entry is a Node.js MCP server over stdio in your
+package. Nothing runs at install: Settings → Plugins lists each server with
+its exact command line and a switch, **Offer … to new chats**, which is off
+until the person turns it on. Then:
+
+- Every **new or reopened ordinary chat** of **Claude Code, Hermes or an ACP
+  agent** gets the server for that chat only — Claude Code through its
+  `--mcp-config` file for the session, Hermes and ACP agents through the
+  `mcpServers` of `session/new` / `session/load`. The person's own harness
+  configuration is never read or changed, and the harness asks its usual
+  permission for each tool call.
+- **Codex, Pi and Prime Agent** have no verified way to take an MCP server
+  for one session, and **pipeline runs** keep exactly their profile's tools
+  and resources, so they never get it; their bridges also refuse such a
+  configuration outright.
+- The harness starts `node <permission flags> <entry> <args>` inside the
+  chat's own process containment, with the same Node permission model as the
+  backend (your package, your `dataDir`, and the chat's project folder only
+  with `project.read` / `project.write` in a trusted project). Without a
+  Node.js that has the permission model, no chat gets the server.
+- The server is named `<plugin id with dots as hyphens>-<server id>` (at most
+  64 characters), so Claude Code shows its tools as
+  `mcp__<that name>__<tool>` — name your renderer's `toolNames` after that.
 
 ### Settings
 
@@ -255,10 +360,10 @@ chat is not affected.
 
 ## Backend
 
-PiUI starts `node <backend.entry>` from the package folder the first time a
-command or node needs it, with a minimal environment (`PATH`, temp folders,
-home and locale variables; no API keys, tokens, `NODE_OPTIONS` or PiUI
-variables). Use the helper `create-plugin` copies:
+PiUI starts `node <permission flags> <backend.entry>` from the package
+folder the first time a command or node needs it, with a minimal environment
+(`PATH`, temp folders, home and locale variables; no API keys, tokens,
+`NODE_OPTIONS` or PiUI variables). Use the helper `create-plugin` copies:
 
 ```js
 import { PluginError, startPluginBackend } from './piui-plugin-backend.mjs';
@@ -297,6 +402,32 @@ Disable, remove, reload and quit stop the whole process tree.
 Keep your own files in `dataDir`. With `project.read`/`project.write` you
 receive the project path for chats and runs in project folders.
 
+### Backend limits
+
+PiUI needs Node.js 22.13 or later for backends and starts them under Node's
+permission model:
+
+```
+node --permission --allow-fs-read=<package> --allow-fs-read=<dataDir> --allow-fs-write=<dataDir>
+     [--allow-fs-read=<project>] [--allow-fs-write=<project>] [--allow-net] <backend.entry>
+```
+
+- Your package is readable, `dataDir` is readable and writable. The temp
+  folder is not: keep scratch files in `dataDir`.
+- A project folder is added for `project.read` (read) and `project.write`
+  (read and write) when a request for that project arrives, spelled exactly
+  like `context.project.path` / `project.path`. A backend started for other
+  projects restarts with the new folder when it is idle; while it is busy
+  the request is refused ("busy in another project") and nothing runs.
+- Child processes, worker threads, native add-ons, WASI and the inspector
+  are never allowed: a backend that needs another program cannot use it.
+  `process.permission.has('fs.read', path)` tells your code what it may do;
+  denied calls fail with `ERR_ACCESS_DENIED`.
+- `--allow-net` is passed with `network` when the Node.js in use knows it;
+  older Node.js versions cannot block the network, and the review says so.
+- With Node.js older than 22.13 the backend does not start and Settings →
+  Plugins shows "Node.js is too old to limit it".
+
 ## Install, trust and updates
 
 1. **Pick.** PiUI's own file dialog chooses the folder or `.zip`; the web
@@ -323,6 +454,9 @@ active and nothing can be changed.
   only).
 - "Node.js was not found": install Node.js; PiUI finds it like the harness
   bridges do (`PIUI_NODE`, then `PATH`).
+- `ERR_ACCESS_DENIED` in a backend: it reached outside its package, its
+  `dataDir` or a granted project folder, or tried to start a program or
+  worker (see [Backend limits](#backend-limits)).
 - A panel that stays blank or is replaced by the fallback usually uses an
   inline script, a `style` attribute or a file outside its UI folder, or
   loads `piui-panel.js` after its own script: its policy blocks the first

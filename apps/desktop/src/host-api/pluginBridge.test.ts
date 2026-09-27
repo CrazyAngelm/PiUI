@@ -1,8 +1,18 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { PLUGIN_THEME_TOKENS } from '../../../../contracts/piui-plugin-v1';
-import { currentAppearance, envelope, methodPermitted, panelTheme, paramsIssue, parsePanelMessage, RequestBudget } from './pluginBridge';
-import { contentType, panelHeaders, panelPolicy, PLUGIN_ORIGIN_WINDOWS, uiBase } from './pluginFrame';
+import {
+  currentAppearance,
+  envelope,
+  methodPermitted,
+  panelTheme,
+  paramsIssue,
+  parsePanelMessage,
+  rendererActivity,
+  rendererHeight,
+  RequestBudget,
+} from './pluginBridge';
+import { ASSET_POLICY, contentType, panelHeaders, panelPolicy, PLUGIN_ORIGIN_WINDOWS, uiBase } from './pluginFrame';
 
 const channel = 'c-1';
 const request = (method: string, params: unknown = undefined, extra: Record<string, unknown> = {}) => ({
@@ -14,6 +24,29 @@ const request = (method: string, params: unknown = undefined, extra: Record<stri
   method,
   ...(params === undefined ? {} : { params }),
   ...extra,
+});
+
+describe('chat renderers (bridge v1.1)', () => {
+  it('sends plain, bounded activity and never more than 48 KiB of text', () => {
+    const block = { toolName: 'create_issue', title: 'lab-issues.create_issue', status: 'streaming', text: 'Arguments: title: Broken link' };
+    expect(rendererActivity(block)).toEqual({ toolName: 'create_issue', title: 'lab-issues.create_issue', status: 'streaming', text: 'Arguments: title: Broken link', truncated: false });
+    expect(rendererActivity({ toolName: 'x', status: 'unknown-state' }).status).toBe('complete');
+    expect(rendererActivity({ label: 'Tool', safeSummary: 'summary', truncated: true })).toMatchObject({ title: 'Tool', text: 'summary', truncated: true });
+    const long = rendererActivity({ toolName: 'x', text: '😀'.repeat(20_000) });
+    expect(new TextEncoder().encode(long.text).length).toBeLessThanOrEqual(48 * 1024);
+    expect(long.truncated).toBe(true);
+    expect(long.text.endsWith('😀')).toBe(true);
+  });
+
+  it('checks frame.resize and clamps the height; only ui.renderer may ask', () => {
+    expect(parsePanelMessage(request('frame.resize', { height: 180 }), channel)).toMatchObject({ kind: 'request', method: 'frame.resize' });
+    for (const params of [undefined, { height: '180' }, { height: -1 }, { height: 180, width: 10 }, { height: Number.NaN }]) {
+      expect(paramsIssue('frame.resize', params)).toBeDefined();
+    }
+    expect(methodPermitted('frame.resize', ['ui.panel'])).toBe(false);
+    expect(methodPermitted('frame.resize', ['ui.renderer'])).toBe(true);
+    expect([rendererHeight(10), rendererHeight(180.4), rendererHeight(5000)]).toEqual([48, 180, 600]);
+  });
 });
 
 describe('plugin panel bridge v1', () => {
@@ -99,6 +132,7 @@ describe('plugin protocol responses (shared with crates/piui-plugins csp.rs)', (
     const base = uiBase(fixture.id ?? '', fixture.uiEntry ?? '');
     expect(base).toBe(fixture.base);
     expect(panelPolicy(fixture.origin ?? '', base)).toBe(fixture.policy);
+    expect(ASSET_POLICY).toBe(fixture.assetPolicy);
   });
 
   it('allows no connections, frames, workers, forms or navigation targets and keeps the sandbox', () => {
@@ -120,7 +154,8 @@ describe('plugin protocol responses (shared with crates/piui-plugins csp.rs)', (
     expect(page?.['Access-Control-Allow-Origin']).toBeUndefined();
     const script = panelHeaders(PLUGIN_ORIGIN_WINDOWS, 'example.hello/ui/', 'ui/panel.js');
     expect(script).toMatchObject({ 'Access-Control-Allow-Origin': '*', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' });
-    expect(script?.['Content-Security-Policy']).toBeUndefined();
+    // Opened on its own (an SVG, say), a file runs no script.
+    expect(script?.['Content-Security-Policy']).toBe('sandbox');
     expect(panelHeaders(PLUGIN_ORIGIN_WINDOWS, 'example.hello/ui/', 'ui/tool.exe')).toBeUndefined();
   });
 });

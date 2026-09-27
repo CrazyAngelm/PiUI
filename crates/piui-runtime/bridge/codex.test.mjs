@@ -301,6 +301,11 @@ test("maps each explicit permission mode and resumes without start-only fields",
     createCodexAdapter({ ...config, permissionMode: "workspace-write", runtimeArgs: [fixture, "--expect-permission", "workspace-write", "--effective-permission-mismatch"] }, () => {}),
     (error) => error.bridgeCode === "unsupported-permission-mode",
   );
+  // Plugins v2: Codex cannot take a plugin MCP server for one thread.
+  await assert.rejects(
+    createCodexAdapter({ ...config, pluginMcpServers: [{ name: "example-tool-cards-issues", command: process.execPath, args: ["server.mjs"] }] }, () => {}),
+    (error) => error.bridgeCode === "unsupported-settings",
+  );
   const systemError = await createCodexAdapter({ ...config, nativeId: "failed-thread", runtimeArgs: [fixture, "--system-error"] }, () => {});
   try {
     assert.equal(systemError.snapshot().status, "failed");

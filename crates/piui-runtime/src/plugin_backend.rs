@@ -9,8 +9,15 @@
 //! an unknown response id or a malformed or oversized frame is a protocol
 //! violation that stops it. A request that times out or is cancelled stops
 //! it too, so nothing it started keeps running. stderr is drained and
-//! discarded: plugin output is never logged. This is containment, not a
-//! sandbox: the backend runs with the user's file and network access.
+//! discarded: plugin output is never logged.
+//!
+//! The supervisor also starts every backend under Node's permission model
+//! ([`permission_arguments`]): it may read its package, read and write its
+//! data folder and the project folders it was given, and it cannot start
+//! other programs, worker threads, native add-ons or WASI. Network access is
+//! blocked too when the Node.js in use has `--allow-net`. This limits what
+//! trusted code does by accident; Node documents that it is not a security
+//! boundary against deliberately malicious code, so it is not a sandbox.
 
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
@@ -105,6 +112,218 @@ pub struct PluginBackendLaunch<'a> {
     pub working_dir: &'a Path,
     /// The host environment to filter, normally `std::env::vars_os()`.
     pub host_environment: &'a [(OsString, OsString)],
+    /// Node permission-model flags from [`permission_arguments`]. `None`
+    /// starts Node without the permission model (containment tests only).
+    pub permissions: Option<&'a PermissionArguments>,
+}
+
+/// What the Node.js that runs plugin backends can enforce.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodePermissionSupport {
+    /// `process.version`, for example `v24.13.0`.
+    pub version: String,
+    /// `--permission` with `--allow-fs-read` and `--allow-fs-write`: file
+    /// access, child processes, worker threads, add-ons and WASI are limited
+    /// (Node.js 22.13 and later).
+    pub permission: bool,
+    /// `--allow-net`: network access is denied unless allowed.
+    pub network: bool,
+}
+
+/// The script [`probe_node_permissions`] runs: which permission flags this
+/// Node.js accepts (`process.allowedNodeEnvironmentFlags`) and its version.
+const PROBE_SCRIPT: &str = "const f=process.allowedNodeEnvironmentFlags;\
+process.stdout.write(JSON.stringify({version:process.version,\
+flags:['--permission','--allow-fs-read','--allow-fs-write','--allow-net'].filter((x)=>f.has(x))}))";
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+const PROBE_OUTPUT_BYTES: u64 = 4096;
+
+impl NodePermissionSupport {
+    /// Parses the probe's output.
+    #[must_use]
+    pub fn from_probe(output: &str) -> Option<Self> {
+        let value = serde_json::from_str::<Value>(output.trim()).ok()?;
+        let version = value.get("version")?.as_str()?;
+        if version.len() > 64 || !version.starts_with('v') || version.chars().any(char::is_control)
+        {
+            return None;
+        }
+        let flags = value
+            .get("flags")?
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        let has = |flag: &str| flags.contains(&flag);
+        Some(Self {
+            version: version.to_owned(),
+            permission: has("--permission") && has("--allow-fs-read") && has("--allow-fs-write"),
+            network: has("--allow-net"),
+        })
+    }
+}
+
+type ProbeStamp = (Option<std::time::SystemTime>, u64);
+type ProbeCache = HashMap<PathBuf, (ProbeStamp, NodePermissionSupport)>;
+
+fn probe_cache() -> &'static StdMutex<ProbeCache> {
+    static CACHE: std::sync::OnceLock<StdMutex<ProbeCache>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+fn node_stamp(node: &Path) -> Option<ProbeStamp> {
+    let metadata = std::fs::metadata(node).ok()?;
+    Some((metadata.modified().ok(), metadata.len()))
+}
+
+/// The last probe of `node` while the executable is unchanged. Never starts
+/// a process, so it is safe on the first-paint path.
+#[must_use]
+pub fn cached_node_permissions(node: &Path) -> Option<NodePermissionSupport> {
+    let stamp = node_stamp(node)?;
+    let cache = probe_cache().lock().ok()?;
+    let (cached, support) = cache.get(node)?;
+    (*cached == stamp).then(|| support.clone())
+}
+
+/// Asks `node` which permission flags it accepts. Blocking (at most 10 s);
+/// cached per executable path, size and modification time. The probe runs
+/// PiUI's fixed script with the plugin environment allowlist, never plugin
+/// code.
+pub fn probe_node_permissions(node: &Path) -> Result<NodePermissionSupport, PluginBackendError> {
+    if let Some(support) = cached_node_permissions(node) {
+        return Ok(support);
+    }
+    let stamp = node_stamp(node).ok_or(PluginBackendError::NodeUnavailable)?;
+    let host = std::env::vars_os().collect::<Vec<_>>();
+    let mut command = std::process::Command::new(node);
+    command
+        .arg("-e")
+        .arg(PROBE_SCRIPT)
+        .env_clear()
+        .envs(plugin_environment(&host))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|_| PluginBackendError::NodeUnavailable)?;
+    let stdout = child.stdout.take().ok_or(PluginBackendError::Spawn)?;
+    let reader = std::thread::spawn(move || {
+        use std::io::Read as _;
+        let mut output = Vec::new();
+        let _ = stdout.take(PROBE_OUTPUT_BYTES).read_to_end(&mut output);
+        output
+    });
+    let started = std::time::Instant::now();
+    let succeeded = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.success(),
+            Ok(None) if started.elapsed() < PROBE_TIMEOUT => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break false;
+            }
+        }
+    };
+    let output = reader.join().map_err(|_| PluginBackendError::Spawn)?;
+    if !succeeded {
+        return Err(PluginBackendError::NodeUnavailable);
+    }
+    let support = NodePermissionSupport::from_probe(&String::from_utf8_lossy(&output))
+        .ok_or(PluginBackendError::NodeUnavailable)?;
+    if let Ok(mut cache) = probe_cache().lock() {
+        cache.insert(node.to_path_buf(), (stamp, support.clone()));
+    }
+    Ok(support)
+}
+
+/// What one backend may reach under Node's permission model. The caller
+/// always lists the package folder (read) and the data folder (read and
+/// write); project folders only with `project.read` / `project.write`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BackendGrants {
+    /// Folders (with everything inside) the backend may read.
+    pub read: Vec<PathBuf>,
+    /// Folders (with everything inside) the backend may change.
+    pub write: Vec<PathBuf>,
+    /// The plugin asks for `network`.
+    pub network: bool,
+}
+
+/// Node permission-model flags, only built by [`permission_arguments`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PermissionArguments(Vec<OsString>);
+
+impl PermissionArguments {
+    #[must_use]
+    pub fn as_slice(&self) -> &[OsString] {
+        &self.0
+    }
+}
+
+/// Why no permission flags could be built; the backend is not started.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum PermissionPlanError {
+    /// This Node.js has no permission model (older than 22.13).
+    #[error("this Node.js cannot limit plugin backends")]
+    Unsupported,
+    /// A granted path is not absolute or cannot be passed as a flag.
+    #[error("a granted folder cannot be passed to Node.js")]
+    Path,
+}
+
+fn grant_value(path: &Path) -> Result<OsString, PermissionPlanError> {
+    if !path.is_absolute() {
+        return Err(PermissionPlanError::Path);
+    }
+    // The spelling Node sees for the entry and for the paths PiUI passes in
+    // requests: Node compares permission paths case-sensitively.
+    let path = process_directory(path);
+    let text = path.to_str().ok_or(PermissionPlanError::Path)?;
+    if text.is_empty() || text.contains('*') || text.chars().any(char::is_control) {
+        return Err(PermissionPlanError::Path);
+    }
+    Ok(OsString::from(text))
+}
+
+/// The Node flags for `grants`: `--permission`, one `--allow-fs-read` or
+/// `--allow-fs-write` per folder, and `--allow-net` only when the plugin
+/// asks for the network. Child processes, worker threads, add-ons, WASI and
+/// the inspector are never allowed.
+pub fn permission_arguments(
+    support: &NodePermissionSupport,
+    grants: &BackendGrants,
+) -> Result<PermissionArguments, PermissionPlanError> {
+    if !support.permission {
+        return Err(PermissionPlanError::Unsupported);
+    }
+    let mut arguments = vec![OsString::from("--permission")];
+    for (flag, paths) in [
+        ("--allow-fs-read=", &grants.read),
+        ("--allow-fs-write=", &grants.write),
+    ] {
+        for path in paths {
+            let mut argument = OsString::from(flag);
+            argument.push(grant_value(path)?);
+            if !arguments.contains(&argument) {
+                arguments.push(argument);
+            }
+        }
+    }
+    if grants.network && support.network {
+        arguments.push(OsString::from("--allow-net"));
+    }
+    Ok(PermissionArguments(arguments))
 }
 
 /// Node.js as the harness bridges and script steps find it (`PIUI_NODE`
@@ -218,6 +437,9 @@ impl PluginBackend {
         #[cfg(windows)]
         let mut job = WindowsJob::new().map_err(|_| PluginBackendError::Containment)?;
         let mut standard = std::process::Command::new(launch.node);
+        if let Some(permissions) = launch.permissions {
+            standard.args(permissions.as_slice());
+        }
         standard
             // Node cannot load a module from a verbatim `\\?\` path.
             .arg(process_directory(launch.entry))
@@ -318,6 +540,15 @@ impl PluginBackend {
     #[must_use]
     pub fn exit(&self) -> watch::Receiver<Option<BackendExit>> {
         self.shared.exit.subscribe()
+    }
+
+    /// Requests still waiting for an answer.
+    #[must_use]
+    pub fn pending_requests(&self) -> usize {
+        self.shared
+            .pending
+            .lock()
+            .map_or(0, |pending| pending.len())
     }
 
     /// Whether the process is still accepting requests.

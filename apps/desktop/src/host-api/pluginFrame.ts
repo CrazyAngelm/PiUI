@@ -43,6 +43,9 @@ const TYPES: Readonly<Record<string, string>> = {
   md: 'text/plain; charset=utf-8',
 };
 
+/** The policy of every other served file: opened on its own (an SVG, say), it runs no script. */
+export const ASSET_POLICY = 'sandbox';
+
 /** The content type of a served file; anything else is not served. */
 export function contentType(path: string): string | undefined {
   const dot = path.lastIndexOf('.');
@@ -56,5 +59,5 @@ export function panelHeaders(origin: string, base: string, path: string): Record
   const common = { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' };
   return path.toLowerCase().endsWith('.html')
     ? { ...common, 'Content-Security-Policy': panelPolicy(origin, base) }
-    : { ...common, 'Access-Control-Allow-Origin': '*' };
+    : { ...common, 'Access-Control-Allow-Origin': '*', 'Content-Security-Policy': ASSET_POLICY };
 }

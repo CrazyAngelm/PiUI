@@ -42,6 +42,27 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Templates: {0}': 'Шаблоны: {0}',
   'Pipeline nodes: {0}': 'Ноды пайплайнов: {0}',
   'ACP agents: {0}': 'ACP-агенты: {0}',
+  'Status items: {0}': 'Элементы строки состояния: {0}',
+  'MCP tool servers: {0}': 'MCP-серверы инструментов: {0}',
+  'MCP tool servers': 'MCP-серверы инструментов',
+  'MCP tool server': 'MCP-сервер инструментов',
+  'An offered server joins each new Claude Code, Hermes or ACP agent chat for that chat only; your harness settings are not changed. Codex, Pi, Prime Agent and pipeline runs never get it. It runs under the same Node.js limits as the backend.':
+    'Предложенный сервер подключается к каждому новому чату Claude Code, Hermes или ACP-агента только для этого чата; настройки харнеса не меняются. Codex, Pi, Prime Agent и запуски пайплайнов его никогда не получают. Он работает с теми же ограничениями Node.js, что и бэкенд.',
+  'Offer {0} to new chats': 'Предлагать {0} новым чатам',
+  'New chats that can take it get this tool server': 'Новые чаты, которые это поддерживают, получат этот сервер инструментов',
+  'New chats no longer get this tool server': 'Новые чаты больше не получают этот сервер инструментов',
+  'No MCP tool server runs until you offer it to new chats in Settings → Plugins. Only Claude Code, Hermes and ACP agent chats can take one, and your harness settings are not changed.':
+    'Ни один MCP-сервер не запустится, пока вы не предложите его новым чатам в «Настройки → Плагины». Подключить его могут только чаты Claude Code, Hermes и ACP-агентов, а настройки харнеса не меняются.',
+  'Chat renderers: {0}': 'Отображения в чате: {0}',
+  'Keyboard shortcuts': 'Сочетания клавиш',
+  'PiUI uses this shortcut, so it does nothing.': 'Это сочетание занято PiUI, поэтому оно ничего не делает.',
+  'Also used by {0}, so it does nothing until one of them is disabled.': 'Его также использует {0}, поэтому оно ничего не делает, пока один из плагинов не выключен.',
+  'Status item': 'Элемент строки состояния',
+  'Keyboard shortcut': 'Сочетание клавиш',
+  'Chat renderer': 'Отображение в чате',
+  'Plugin status items': 'Элементы плагинов в строке состояния',
+  '{0} (plugin {1})': '{0} (плагин {1})',
+  '{0} (plugin view)': '{0} (отображение плагина)',
   '{0} settings': 'Настройки: {0}',
   'PiUI stores these values and passes them to the plugin. Do not put passwords or API keys here.':
     'PiUI хранит эти значения и передаёт их плагину. Не вводите здесь пароли и API-ключи.',
@@ -64,18 +85,30 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Never the messages.': 'Но не сообщения.',
   'Show notices': 'Показывать уведомления',
   'Short messages in PiUI.': 'Короткие сообщения в PiUI.',
+  'Show items in the status bar': 'Показывать элементы в строке состояния',
+  'Offer MCP tools to chats': 'Предлагать чатам MCP-инструменты',
+  'Only after you turn a tool server on in Settings → Plugins, and only in new Claude Code, Hermes and ACP agent chats. Your harness settings are not changed.':
+    'Только после того, как вы включите сервер инструментов в «Настройки → Плагины», и только в новых чатах Claude Code, Hermes и ACP-агентов. Настройки харнеса не меняются.',
+  'Short text PiUI shows at the bottom of the window; clicking an item runs its command.':
+    'Короткий текст, который PiUI показывает внизу окна; щелчок по элементу запускает его команду.',
+  'Show its own view of chat tool activity': 'Показывать собственное отображение работы инструментов в чате',
+  'The view runs in an isolated frame and sees the output of the tools it names. The plain view stays one click away.':
+    'Отображение работает в изолированном фрейме и видит вывод названных им инструментов. Обычный вид всегда доступен одним щелчком.',
   'Read files in your project folder': 'Читать файлы в папке проекта',
-  'The backend receives the project path. PiUI does not limit what it reads.': 'Бэкенд получает путь к проекту. PiUI не ограничивает, что он читает.',
+  "The backend receives the project path and may read that folder. Node's permission model keeps it out of your other folders.":
+    'Бэкенд получает путь к проекту и может читать эту папку. Модель разрешений Node не пускает его в другие ваши папки.',
   'Change files in your project folder': 'Изменять файлы в папке проекта',
-  'The backend receives the project path and can change files.': 'Бэкенд получает путь к проекту и может изменять файлы.',
+  'The backend receives the project path and may change files in that folder.': 'Бэкенд получает путь к проекту и может изменять файлы в этой папке.',
   'Use the network': 'Использовать сеть',
-  "Declared by the plugin; PiUI does not block its backend's network access.": 'Заявлено плагином; PiUI не блокирует доступ его бэкенда к сети.',
+  'Without this permission PiUI blocks network access when the Node.js in use can.':
+    'Без этого разрешения PiUI блокирует доступ к сети, если используемый Node.js это умеет.',
 
   // Backend states and the activity log.
   'Starts when needed': 'Запускается при необходимости',
   'Stopped unexpectedly; restarts on next use': 'Неожиданно остановился; перезапустится при следующем использовании',
   'Keeps stopping; restart it to try again': 'Постоянно останавливается; перезапустите его, чтобы попробовать снова',
   'Node.js was not found': 'Node.js не найден',
+  'Node.js is too old to limit it; install Node.js 22.13 or later': 'Node.js слишком старый, чтобы его ограничить; установите Node.js 22.13 или новее',
   Installed: 'Установлен',
   'Reloaded from its folder': 'Перезагружен из своей папки',
   'Did not pass the start-up check': 'Не прошёл проверку при запуске',
@@ -112,8 +145,26 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Fields: {0}': 'Поля: {0}',
   'Each ACP agent still needs its own command-line trust in Settings → Harnesses before it runs.':
     'Каждому ACP-агенту перед запуском всё равно нужно отдельное доверие к его командной строке в «Настройки → Харнесы».',
-  "Plugins are not a sandbox. A backend runs with your account's access to files and the network; PiUI stops its whole process tree and gives it no API keys. Panels run isolated. Install only plugins you trust.":
-    'Плагины — не песочница. Бэкенд работает с доступом вашей учётной записи к файлам и сети; PiUI останавливает всё его дерево процессов и не передаёт ему API-ключи. Панели работают изолированно. Устанавливайте только плагины, которым доверяете.',
+  "Plugins are not a sandbox. PiUI limits a backend's files and programs with Node's permission model, stops its whole process tree and gives it no API keys, but deliberately malicious code can get around those limits. Panels run isolated. Install only plugins you trust.":
+    'Плагины — не песочница. PiUI ограничивает файлы и программы бэкенда моделью разрешений Node, останавливает всё его дерево процессов и не передаёт ему API-ключи, но намеренно вредоносный код может обойти эти ограничения. Панели работают изолированно. Устанавливайте только плагины, которым доверяете.',
+  'PiUI checks what Node.js can limit before the backend first starts.': 'PiUI проверит, что может ограничить Node.js, перед первым запуском бэкенда.',
+  'Node.js {0} cannot limit plugin backends, so PiUI will not start this one. Install Node.js 22.13 or later.':
+    'Node.js {0} не умеет ограничивать бэкенды плагинов, поэтому PiUI не запустит этот бэкенд. Установите Node.js 22.13 или новее.',
+  'Limited by Node.js {0}: the backend reads its own files, keeps data in its own folder and cannot start other programs or worker threads.':
+    'Ограничен Node.js {0}: бэкенд читает свои файлы, хранит данные в своей папке и не может запускать другие программы или рабочие потоки.',
+  'It can read and change the folder of each project it works in.': 'Он может читать и изменять папку каждого проекта, в котором работает.',
+  'It can read the folder of each project it works in, but not change it.': 'Он может читать папку каждого проекта, в котором работает, но не изменять её.',
+  'It cannot open your project folders.': 'Он не может открывать папки ваших проектов.',
+  'It can use the network.': 'Он может использовать сеть.',
+  'Its network access is blocked.': 'Доступ к сети для него заблокирован.',
+  'This Node.js cannot block network access: the backend can use the network although it does not ask for it.':
+    'Этот Node.js не умеет блокировать доступ к сети: бэкенд может пользоваться сетью, хотя не запрашивает это.',
+  "Node's permission model guards against mistakes, not against deliberately malicious code.":
+    'Модель разрешений Node защищает от ошибок, но не от намеренно вредоносного кода.',
+  'This Node.js cannot limit plugin backends. Install Node.js 22.13 or later to run this plugin\'s backend.':
+    'Этот Node.js не умеет ограничивать бэкенды плагинов. Установите Node.js 22.13 или новее, чтобы запустить бэкенд этого плагина.',
+  "The plugin's backend is busy in another project. Try again when it finishes.":
+    'Бэкенд плагина занят в другом проекте. Попробуйте снова, когда он закончит.',
   'Development mode runs the plugin from its folder: code changes load without a new review, permission changes need one.':
     'В режиме разработки плагин запускается из своей папки: изменения кода загружаются без новой проверки, а изменения разрешений требуют её.',
   'Load for development': 'Загрузить для разработки',
@@ -191,7 +242,10 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'The default of field “{0}” is not an allowed value.': 'Значение по умолчанию поля «{0}» недопустимо.',
   'The manifest is larger than 64 KiB.': 'Манифест больше 64 КиБ.',
   'piui-plugin.json is not valid JSON.': 'piui-plugin.json — некорректный JSON.',
-  'Only plugin manifest schema version 1 is supported.': 'Поддерживается только версия 1 схемы манифеста плагина.',
+  'Only plugin manifest schema versions 1 and 2 are supported.': 'Поддерживаются только версии 1 и 2 схемы манифеста плагина.',
+  '“{0}” names a command the plugin does not contribute.': '«{0}» указывает на команду, которой нет в плагине.',
+  'Two keybindings use “{0}”.': 'Два сочетания клавиш используют «{0}».',
+  'The plugin contributes renderers but has no ui.entry page.': 'Плагин добавляет отображения, но у него нет страницы ui.entry.',
   'The manifest does not match the plugin schema at {0}.': 'Манифест не соответствует схеме плагина в {0}.',
   'The plugin schema is unavailable in this build.': 'Схема плагинов недоступна в этой сборке.',
   'The PiUI version range “{0}” is not valid.': 'Диапазон версий PiUI «{0}» некорректен.',
@@ -201,6 +255,9 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Add the permission “ui.settings”.': 'Добавьте разрешение «ui.settings».',
   'Add the permission “node.run”.': 'Добавьте разрешение «node.run».',
   'Add the permission “acp.agents”.': 'Добавьте разрешение «acp.agents».',
+  'Add the permission “ui.status”.': 'Добавьте разрешение «ui.status».',
+  'Add the permission “ui.renderer”.': 'Добавьте разрешение «ui.renderer».',
+  'Add the permission “mcp.tools”.': 'Добавьте разрешение «mcp.tools».',
   'Add the matching permission.': 'Добавьте соответствующее разрешение.',
   "The command “{0}” runs in the plugin's backend, but the plugin has no backend.": 'Команда «{0}» выполняется в бэкенде плагина, но у плагина нет бэкенда.',
   "Node types run in the plugin's backend, but the plugin has no backend.": 'Типы нод выполняются в бэкенде плагина, но у плагина нет бэкенда.',

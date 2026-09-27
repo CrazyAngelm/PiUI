@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 2,
+  "id": "example.tool-cards",
+  "name": "Tool cards",
+  "version": "1.0.0",
+  "publisher": "PiUI examples",
+  "description": "Drafts issues with an MCP tool and shows issue-tracker tool calls in the chat as a small card (manifest version 2).",
+  "engines": { "piui": ">=0.1.0 <1.0.0" },
+  "permissions": ["ui.renderer", "mcp.tools"],
+  "ui": { "entry": "ui/index.html" },
+  "contributes": {
+    "renderers": [
+      {
+        "id": "issue",
+        "title": "Issue card",
+        "toolNames": ["create_issue", "update_issue", "mcp__example-tool-cards-issues__create_issue"]
+      }
+    ],
+    "mcpServers": [
+      {
+        "id": "issues",
+        "title": "Issue drafts",
+        "description": "A create_issue tool that drafts an issue as text; it sends nothing.",
+        "entry": "mcp/server.mjs",
+        "args": ["--stdio"]
+      }
+    ]
+  }
+}

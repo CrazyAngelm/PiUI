@@ -210,6 +210,8 @@ test("Prime filters one skill per session and rejects unsupported MCP isolation"
   const adapter = await createPrimeAdapter(await config({ resourceRules: [{ kind: "skill", id: "alpha", enabled: false }] }), () => {});
   try { assert.deepEqual(lastConfiguredSkills(), ["beta"]); } finally { await adapter.dispose(); }
   await assert.rejects(createPrimeAdapter(await config({ resourceRules: [{ kind: "mcp", id: "example", enabled: false }] }), () => {}), { bridgeCode: "unsupported-resource-policy" });
+  // Plugins v2: Prime cannot take a plugin MCP server for one chat.
+  await assert.rejects(createPrimeAdapter(await config({ pluginMcpServers: [{ name: "example-tool-cards-issues", command: process.execPath, args: ["server.mjs"] }] }), () => {}), { bridgeCode: "unsupported-settings" });
 });
 
 

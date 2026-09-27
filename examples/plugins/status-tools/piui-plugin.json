@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 2,
+  "id": "example.status-tools",
+  "name": "Status tools",
+  "version": "1.0.0",
+  "publisher": "PiUI examples",
+  "description": "A status-bar item and keyboard shortcuts for two small commands (manifest version 2).",
+  "engines": { "piui": ">=0.1.0 <1.0.0" },
+  "permissions": ["commands", "ui.status", "chat.read"],
+  "backend": { "entry": "backend/main.mjs" },
+  "contributes": {
+    "commands": [
+      {
+        "id": "chat-title",
+        "title": "Show the chat title",
+        "description": "Shows the open chat's title and how many words it has.",
+        "surfaces": ["palette"]
+      },
+      {
+        "id": "keep-short",
+        "title": "Ask for a short answer",
+        "description": "Prepares a request for a shorter answer for you to review.",
+        "surfaces": ["composer"],
+        "insertText": "Please keep the next answer short: five bullet points at most."
+      }
+    ],
+    "statusItems": [
+      { "id": "title", "text": "Chat title", "tooltip": "Show the open chat's title (Status tools plugin)", "command": "chat-title" }
+    ],
+    "keybindings": [
+      { "command": "chat-title", "key": "Mod+Alt+Shift+T" },
+      { "command": "keep-short", "key": "Mod+Alt+Shift+K" }
+    ]
+  }
+}

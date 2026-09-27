@@ -112,6 +112,9 @@ pub(crate) struct Staged {
     pub package: Package,
     pub files: usize,
     pub bytes: u64,
+    /// The data folder a new plugin gets, named before the review so the
+    /// review shows the exact backend command line.
+    data_directory: String,
     created: Instant,
 }
 
@@ -217,7 +220,26 @@ impl PluginsState {
     }
 
     fn data_dir(&self, stored: &StoredPlugin) -> PathBuf {
-        self.inner.root.join("data").join(&stored.data_directory)
+        self.data_folder(&stored.data_directory)
+    }
+
+    fn data_folder(&self, directory: &str) -> PathBuf {
+        self.inner.root.join("data").join(directory)
+    }
+
+    /// The data folder a staged package will use: the installed plugin's,
+    /// or the one named for this review.
+    pub(crate) fn staged_data_dir(&self, staged: &Staged) -> PathBuf {
+        let manifest = &staged.package.manifest.manifest;
+        self.stored(&manifest.id).map_or_else(
+            || self.data_folder(&staged.data_directory),
+            |stored| self.data_dir(&stored),
+        )
+    }
+
+    /// The data folder of an installed or loaded plugin (display).
+    pub(crate) fn plugin_data_dir(&self, stored: &StoredPlugin) -> PathBuf {
+        self.data_dir(stored)
     }
 
     /// Reads and checks one stored plugin's package. Blocking.
@@ -410,12 +432,12 @@ impl PluginsState {
         })
     }
 
-    /// Reads a file a panel may load. `path` is relative to the package and
-    /// must be inside the folder of `ui.entry`. Blocking.
+    /// Reads a file a panel or chat renderer may load. `path` is relative to
+    /// the package and must be inside the folder of `ui.entry`. Blocking.
     pub(crate) fn panel_file(&self, id: &str, path: &str) -> Option<PanelFile> {
         let (_, package, root) = self.active(id).ok()?;
         let manifest = &package.manifest.manifest;
-        if !manifest.has(Permission::UiPanel) {
+        if !manifest.has(Permission::UiPanel) && !manifest.has(Permission::UiRenderer) {
             return None;
         }
         let entry = &manifest.ui.as_ref()?.entry;
@@ -504,6 +526,7 @@ impl PluginsState {
             directory,
             files: validated.files.len(),
             bytes: validated.bytes,
+            data_directory: uuid::Uuid::new_v4().to_string(),
             package: Package {
                 code_hash: validated.code_hash,
                 manifest: validated.manifest,
@@ -553,28 +576,81 @@ impl PluginsState {
         self.lock().ok()?.registry.document.plugin(id).cloned()
     }
 
-    /// The exact backend command line of a package in `root` (display).
-    pub(crate) fn command_line(
+    /// The exact backend command line of a package in `root` with its data
+    /// folder, and what Node's permission model enforces with the Node.js
+    /// PiUI found (display). Project folders are added per request and are
+    /// not part of it. `probe` asks Node.js when it was not asked yet
+    /// (blocking); otherwise only a cached answer is used.
+    pub(crate) fn backend_display(
         manifest: &PluginManifest,
         root: &Path,
-    ) -> Option<(crate::acp_agents::CommandLine, bool)> {
+        data_dir: &Path,
+        probe: bool,
+    ) -> Option<BackendDisplay> {
+        use piui_runtime::plugin_backend::{
+            NodePermissionSupport, cached_node_permissions, permission_arguments,
+            probe_node_permissions, resolve_plugin_node,
+        };
         let entry = resolve_inside(root, &manifest.backend.as_ref()?.entry)?;
-        let node = piui_runtime::plugin_backend::resolve_plugin_node().ok();
-        let found = node.is_some();
-        Some((
-            crate::acp_agents::CommandLine {
-                program: node.map_or_else(
+        let node = resolve_plugin_node().ok();
+        let support = node.as_deref().and_then(|node| {
+            if probe {
+                probe_node_permissions(node).ok()
+            } else {
+                cached_node_permissions(node)
+            }
+        });
+        let spec = BackendSpec {
+            plugin_id: manifest.id.clone(),
+            version: manifest.version.clone(),
+            root: root.to_path_buf(),
+            entry: entry.clone(),
+            permissions: sorted(&manifest.permissions),
+            settings: Map::new(),
+            data_dir: data_dir.to_path_buf(),
+            piui_version: String::new(),
+        };
+        // Until Node.js answered, show the flags a current Node.js gets.
+        let planned = support.clone().unwrap_or(NodePermissionSupport {
+            version: String::new(),
+            permission: true,
+            network: false,
+        });
+        let mut args = permission_arguments(
+            &NodePermissionSupport {
+                permission: true,
+                ..planned
+            },
+            &spec.grants(&[]),
+        )
+        .map(|flags| {
+            flags
+                .as_slice()
+                .iter()
+                .map(|flag| flag.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+        args.push(
+            piui_runtime::script_runner::process_directory(&entry)
+                .to_string_lossy()
+                .into_owned(),
+        );
+        Some(BackendDisplay {
+            command_line: crate::acp_agents::CommandLine {
+                program: node.as_ref().map_or_else(
                     || "node".to_owned(),
                     |node| node.to_string_lossy().into_owned(),
                 ),
-                args: vec![
-                    piui_runtime::script_runner::process_directory(&entry)
-                        .to_string_lossy()
-                        .into_owned(),
-                ],
+                args,
             },
-            found,
-        ))
+            node_found: node.is_some(),
+            limits: support.map(|support| BackendLimits {
+                node_version: support.version,
+                enforced: support.permission,
+                network: support.permission && support.network,
+            }),
+        })
     }
 
     /// Where a staged package will run from once installed.
@@ -679,12 +755,30 @@ impl PluginsState {
             enabled: true,
             installed_at: now_string(),
             data_directory: previous.as_ref().map_or_else(
-                || uuid::Uuid::new_v4().to_string(),
+                || staged.data_directory.clone(),
                 |stored| stored.data_directory.clone(),
             ),
             settings: previous
                 .as_ref()
                 .map(|stored| carry_values(&manifest.contributes.settings, &stored.settings))
+                .unwrap_or_default(),
+            // An update keeps an offer only for servers it still declares.
+            mcp_offered: previous
+                .as_ref()
+                .map(|stored| {
+                    stored
+                        .mcp_offered
+                        .iter()
+                        .filter(|id| {
+                            manifest
+                                .contributes
+                                .mcp_servers
+                                .iter()
+                                .any(|server| &server.id == *id)
+                        })
+                        .cloned()
+                        .collect()
+                })
                 .unwrap_or_default(),
         };
         let committed = {
@@ -846,6 +940,169 @@ impl PluginsState {
         Ok(resolved)
     }
 
+    /// Offers one of an active plugin's MCP servers to new chats, or stops
+    /// offering it. Running chats keep what they started with.
+    pub(crate) fn set_mcp_offered(
+        &self,
+        expected_revision: u64,
+        id: &str,
+        server_id: &str,
+        offered: bool,
+    ) -> Result<(), PluginsError> {
+        let (_, package, _) = self.active(id)?;
+        let manifest = &package.manifest.manifest;
+        if !manifest.has(Permission::McpTools) {
+            return Err(PluginsError::PermissionDenied);
+        }
+        if !manifest
+            .contributes
+            .mcp_servers
+            .iter()
+            .any(|server| server.id == server_id)
+        {
+            return Err(PluginsError::NotFound);
+        }
+        let mut state = self.lock()?;
+        state
+            .registry
+            .transact(Some(expected_revision), |document| {
+                let plugin = document.plugin_mut(id).ok_or(PluginsError::NotFound)?;
+                plugin.mcp_offered.retain(|offered| offered != server_id);
+                if offered {
+                    plugin.mcp_offered.push(server_id.to_owned());
+                    plugin.mcp_offered.sort();
+                }
+                Ok::<(), PluginsError>(())
+            })?;
+        Ok(())
+    }
+
+    /// The command line of one MCP server (display and launch): Node.js with
+    /// the permission flags of the plugin's grants, the entry and its
+    /// arguments. `project` is added to the grants with a project permission.
+    /// `probe` asks Node.js when it was not asked yet (blocking).
+    pub(crate) fn mcp_command(
+        manifest: &PluginManifest,
+        server: &piui_plugins::McpServerContribution,
+        root: &Path,
+        data_dir: &Path,
+        project: Option<&Path>,
+        probe: bool,
+    ) -> Option<McpCommand> {
+        use piui_runtime::plugin_backend::{
+            cached_node_permissions, permission_arguments, probe_node_permissions,
+            resolve_plugin_node,
+        };
+        let entry = resolve_inside(root, &server.entry)?;
+        let node = resolve_plugin_node().ok();
+        let support = node.as_deref().and_then(|node| {
+            if probe {
+                probe_node_permissions(node).ok()
+            } else {
+                cached_node_permissions(node)
+            }
+        });
+        let spec = BackendSpec {
+            plugin_id: manifest.id.clone(),
+            version: manifest.version.clone(),
+            root: root.to_path_buf(),
+            entry: entry.clone(),
+            permissions: sorted(&manifest.permissions),
+            settings: Map::new(),
+            data_dir: data_dir.to_path_buf(),
+            piui_version: String::new(),
+        };
+        let grants = spec.grants(
+            &project
+                .map(Path::to_path_buf)
+                .into_iter()
+                .collect::<Vec<_>>(),
+        );
+        let planned =
+            support
+                .clone()
+                .unwrap_or(piui_runtime::plugin_backend::NodePermissionSupport {
+                    version: String::new(),
+                    permission: true,
+                    network: false,
+                });
+        let flags = permission_arguments(&planned, &grants).ok();
+        let mut args = flags
+            .as_ref()
+            .map(|flags| {
+                flags
+                    .as_slice()
+                    .iter()
+                    .map(|flag| flag.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        args.push(
+            piui_runtime::script_runner::process_directory(&entry)
+                .to_string_lossy()
+                .into_owned(),
+        );
+        args.extend(server.args.iter().cloned());
+        let limits = support.map(|support| BackendLimits {
+            node_version: support.version,
+            enforced: support.permission,
+            network: support.permission && support.network,
+        });
+        Some(McpCommand {
+            node,
+            args,
+            limits,
+            launchable: flags.is_some(),
+        })
+    }
+
+    /// The MCP servers the person offered to new chats, ready for one
+    /// session working in `project` (a trusted project's folder; `None` for
+    /// personal chats). Only with a Node.js that has the permission model.
+    /// Blocking (may ask Node.js which flags it has).
+    pub(crate) fn session_mcp_servers(
+        &self,
+        project: Option<&Path>,
+    ) -> Vec<piui_runtime::workspace_runtime::SessionMcpServer> {
+        let mut servers = Vec::new();
+        for (stored, package, root) in self.active_packages() {
+            let manifest = &package.manifest.manifest;
+            if !manifest.has(Permission::McpTools) {
+                continue;
+            }
+            for server in &manifest.contributes.mcp_servers {
+                if !stored.mcp_offered.contains(&server.id) {
+                    continue;
+                }
+                let name = format!("{}-{}", stored.id.replace('.', "-"), server.id);
+                let data_dir = self.data_dir(&stored);
+                let _ = fs::create_dir_all(&data_dir);
+                let command = Self::mcp_command(manifest, server, &root, &data_dir, project, true);
+                match command {
+                    Some(McpCommand {
+                        node: Some(node),
+                        args,
+                        limits: Some(limits),
+                        launchable: true,
+                    }) if limits.enforced && name.len() <= 64 => {
+                        servers.push(piui_runtime::workspace_runtime::SessionMcpServer {
+                            name,
+                            // Harnesses expect the plain spelling, never a verbatim path.
+                            command: piui_runtime::script_runner::process_directory(&node),
+                            args,
+                        });
+                    }
+                    _ => eprintln!(
+                        "event=plugin_mcp_server_skipped plugin_id={:?} server_id={:?}",
+                        stored.id, server.id
+                    ),
+                }
+            }
+        }
+        servers.truncate(piui_runtime::workspace_runtime::MAX_SESSION_MCP_SERVERS);
+        servers
+    }
+
     pub(crate) fn set_theme(
         &self,
         expected_revision: u64,
@@ -925,6 +1182,39 @@ impl PluginsState {
                 .collect(),
         })
     }
+}
+
+/// What Node's permission model enforces for a backend (display).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BackendLimits {
+    /// `node --version` of the Node.js PiUI found.
+    pub node_version: String,
+    /// Files, other programs, worker threads and add-ons are limited. False:
+    /// this Node.js has no permission model and PiUI does not start the
+    /// backend.
+    pub enforced: bool,
+    /// Network access is blocked unless the plugin asks for `network`.
+    pub network: bool,
+}
+
+/// An MCP server's command line (display and launch).
+pub(crate) struct McpCommand {
+    /// Node.js, when found.
+    pub node: Option<PathBuf>,
+    pub args: Vec<String>,
+    /// Absent until Node.js was asked.
+    pub limits: Option<BackendLimits>,
+    /// The permission flags could be built for the grants.
+    pub launchable: bool,
+}
+
+/// The backend command line and its limits (display).
+pub(crate) struct BackendDisplay {
+    pub command_line: crate::acp_agents::CommandLine,
+    pub node_found: bool,
+    /// Absent until Node.js was asked (off the first-paint path).
+    pub limits: Option<BackendLimits>,
 }
 
 /// A runnable node type of an active plugin.

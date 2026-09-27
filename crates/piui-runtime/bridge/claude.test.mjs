@@ -770,6 +770,28 @@ test("a conversation written by the CLI reopens with stable block ids", async ()
   } finally { await reopened.dispose(); }
 });
 
+test("a plugin MCP server joins only this chat's --mcp-config, under Claude Code's own prompts (plugins v2)", async () => {
+  const server = { name: "example-tool-cards-issues", command: process.execPath, args: ["--permission", "server.mjs", "--stdio"] };
+  const { config, records } = setup({ pluginMcpServers: [server] });
+  const adapter = await createClaudeAdapter(config, recorder().emit);
+  try {
+    const { args } = startRecord(records);
+    const written = JSON.parse(readFileSync(argValue(args, "--mcp-config"), "utf8"));
+    assert.deepEqual(written, { mcpServers: { "example-tool-cards-issues": { type: "stdio", command: process.execPath, args: ["--permission", "server.mjs", "--stdio"], env: {} } } });
+    assert.ok(!args.includes("--allowed-tools"), "plugin tools are not pre-approved");
+    assert.ok(!args.includes("--strict-mcp-config"), "the user's own MCP servers stay as configured");
+  } finally { await adapter.dispose(); }
+  for (const overrides of [
+    { pluginMcpServers: [{ ...server, name: "Bad Name" }] },
+    { pluginMcpServers: [{ ...server, command: "node" }] },
+    { pluginMcpServers: [server, server] },
+    { pluginMcpServers: [server], allowedTools: ["Read"] },
+  ]) {
+    await assert.rejects(createClaudeAdapter(setup(overrides).config, () => {}), { bridgeCode: "unsupported-settings" }, JSON.stringify(overrides));
+  }
+  await assert.rejects(createClaudeAdapter(setup({ pluginMcpServers: [server], coordination: true }).config, () => {}, async () => ({})), { bridgeCode: "unsupported-settings" });
+});
+
 test("managed runs expose the coordinator through a session-scoped MCP endpoint", async () => {
   const calls = [];
   const { config, records } = setup({ coordination: true });

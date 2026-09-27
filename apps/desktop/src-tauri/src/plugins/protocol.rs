@@ -82,6 +82,10 @@ pub(crate) fn handle_request(
             header::ACCESS_CONTROL_ALLOW_ORIGIN,
             header::HeaderValue::from_static("*"),
         );
+        headers.insert(
+            header::CONTENT_SECURITY_POLICY,
+            header::HeaderValue::from_static(piui_plugins::csp::ASSET_POLICY),
+        );
     }
     response
 }

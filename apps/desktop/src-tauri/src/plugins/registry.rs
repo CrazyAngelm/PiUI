@@ -53,6 +53,9 @@ pub(crate) struct StoredPlugin {
     pub data_directory: String,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub settings: Map<String, Value>,
+    /// MCP servers the person offered to new chats (plugins v2), by id.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_offered: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

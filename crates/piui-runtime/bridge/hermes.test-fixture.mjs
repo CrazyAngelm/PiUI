@@ -10,8 +10,11 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
   else if (m.method === 'session/list') result = { sessions: [{ sessionId: 'saved', cwd: process.argv.includes('--wrong-cwd') ? '/' : process.cwd() }] };
   else if (m.method === 'session/new' || m.method === 'session/load') {
     if (m.method === 'session/load') notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'native history' } });
-    if (m.params.mcpServers.length) {
-      const server = m.params.mcpServers[0];
+    const stdio = m.params.mcpServers.filter(server => server.type === undefined);
+    if (stdio.length) notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `stdio:${JSON.stringify(stdio)}` } });
+    const http = m.params.mcpServers.filter(server => server.type === 'http');
+    if (http.length) {
+      const server = http[0];
       const headers = Object.fromEntries(server.headers.map(h => [h.name, h.value]));
       const response = await fetch(server.url, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'workspace', arguments: { type: 'roster' } } }) });
       if (!response.ok || !(await response.json()).result.content.length) throw Error('coordinator transport failed');

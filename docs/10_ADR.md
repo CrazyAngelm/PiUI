@@ -568,10 +568,9 @@ principles of ADR-009/010/016.
   requests in v1; any other frame is a protocol violation that stops it. A
   timeout stops it; a crash restarts on next use after 1, 2, 4 … 60 s, and
   five crashes in ten minutes stop it until the user restarts it. Disable,
-  remove, reload and quit stop the whole tree. Logs are metadata only. A
-  backend is not a sandbox: it has the user's file and network access, and
-  `network`, `project.read` and `project.write` are declarations PiUI shows,
-  not restrictions it enforces.
+  remove, reload and quit stop the whole tree. Logs are metadata only. In v1
+  a backend had the user's file and network access; plugins v2 limits it
+  with Node's permission model (below).
 - **Panels and the CSP change.** A panel is the plugin's static `ui.entry`
   page served by the `piui-plugin` custom protocol
   (`http://piui-plugin.localhost/<id>/…` on Windows,
@@ -585,7 +584,8 @@ principles of ADR-009/010/016.
   the top window and PiUI renders links as text. On Windows the host also
   refuses every main-frame navigation to that origin (WebView2 reports
   top-level navigations only); WebKit reports frame navigations to the
-  same hook, so macOS and Linux need their own guard. The response
+  same hook, so macOS and Linux need their own guard (plugins v2, below).
+  The response
   carries a per-plugin policy (`default-src 'none'`; scripts, styles, images
   and fonts only from the plugin's UI folder; no connections, frames,
   workers, forms or base URI; `sandbox allow-scripts`), shared with the UI
@@ -636,6 +636,107 @@ orchestration v6.5 `plugin` executor, also accepted by system file v4.
 right-panel contributions; harness adapters other than ACP descriptors;
 project-local plugins; backend requests to the host; signed packages or a
 catalog; any enforcement of `network` or project-folder permissions.
+
+**Plugins v2 (2026-09-27):**
+
+- **Backends under Node's permission model.** Every backend starts as
+  `node --permission --allow-fs-read=<package> --allow-fs-read=<data folder>
+  --allow-fs-write=<data folder> [--allow-net] <entry>`. `project.read` adds
+  `--allow-fs-read` and `project.write` also `--allow-fs-write` for the
+  project folder of a request, exactly as the request spells it; a backend
+  started for other projects restarts with the new folder added only while
+  it is idle, and a busy one refuses the request before anything is sent.
+  `--allow-child-process`, `--allow-worker`, `--allow-addons`,
+  `--allow-wasi` and the inspector are never passed. `--allow-net` exists
+  only in newer Node.js: PiUI probes the flags the Node.js in use accepts
+  (`process.allowedNodeEnvironmentFlags`, cached per executable, never on
+  the first-paint path) and, without `--allow-net`, the review says that an
+  undeclared network access cannot be blocked. A Node.js without the
+  permission model (older than 22.13) does not start backends at all
+  (backend state `unsupported`). The review and Settings show the exact
+  flags (the data folder is named before the review) and what is enforced;
+  they also say that Node documents its model as a guard against mistakes,
+  not against deliberately malicious code — plugins remain trusted code and
+  PiUI still does not call this a sandbox. Verified with real Node.js
+  22.17, 22.23 and 24.13 (reads, writes and `child_process` denied;
+  `--allow-net` was not available to test). `plugins-v1` v1.1 (additive):
+  `limits` on the backend and the review, state `unsupported`.
+- **Manifest version 2.** `piui-plugin-v2.schema.json` / `piui-plugin-v2.ts`
+  add `statusItems`, `keybindings` and `renderers` and the permissions
+  `ui.status` and `ui.renderer`; the host validates each manifest with the
+  schema of its declared version, so a v1 manifest keeps its exact meaning
+  and cannot use v2 fields. One typed manifest serves both (v2 fields are
+  empty for v1). New problem code `unknown-command`. `create-plugin` writes
+  version 2.
+- **Status items and keybindings.** Declarative only: static text (1–24
+  characters) with an optional command, and `Mod(+Alt)?(+Shift)?+key`
+  bindings for the plugin's own commands. `plugin_command_v1` accepts the
+  origins `status` and `keybinding` only for a command a status item (with
+  `ui.status`) or keybinding names. PiUI's own shortcuts
+  (`PLUGIN_RESERVED_SHORTCUTS`, kept in step with the app by a test that
+  scans its handlers) always win and a key two active plugins share runs
+  neither; Settings shows every conflict instead of resolving it silently.
+  A binding is not a manifest error even on a reserved key, because PiUI's
+  shortcuts change between versions and must not deactivate an installed
+  plugin. The status bar and the key handler load after first paint and
+  appear only while an active plugin contributes something.
+- **Chat renderers.** A renderer is the plugin's `ui.entry` page in the same
+  sandboxed frame, policy and bridge as a panel (`plugin-panel-v1` v1.1,
+  additive: `init.renderer`, the `activity` event and `frame.resize` with
+  `ui.renderer`), shown inside an opened tool row whose native tool name it
+  declares. The activity is bounded plain data (48 KiB of text, marked when
+  cut), never markup; the frame gets no chat context. The generic view is
+  always one click away and replaces the frame when the plugin is inactive,
+  in safe mode, or when the frame is not ready within 10 s, so a chat stays
+  readable without the plugin (AGENTS.md generic-fallback rule). The host
+  serves the UI folder to `ui.renderer` as it does to `ui.panel`; the frame
+  code is its own chunk, loaded only for an open matching row.
+- **MCP tool servers.** `mcpServers` (permission `mcp.tools`) are Node.js
+  stdio servers in the package. The person offers each one to new chats in
+  Settings → Plugins (`plugins_v1` `setMcpOffered`, stored per plugin; off
+  by default). At a runtime start the workspace host asks the plugin host
+  only for an ordinary chat — no run, coordinator, tool allowlist or
+  resource rules — of a harness that takes an MCP server for one session
+  (`HarnessKind::accepts_session_mcp`: Claude Code via its session
+  `--mcp-config`, Hermes and ACP agents via `mcpServers` of `session/new` and
+  `session/load`). `NativeRuntimeConfig.plugin_mcp_servers` carries them;
+  the runtime refuses them for any other harness, with the coordinator or an
+  allowlist, and the Codex, Pi and Prime bridges refuse them too (Codex's
+  dotted `mcp_servers.*` overrides were not verified to stay per thread in
+  its shared app-server pool). The command line is Node with the backend's
+  permission flags (the chat's folder only with a project permission in a
+  trusted project) plus the entry and its arguments; without the permission
+  model nothing is offered. Pipeline profiles are untouched, so delegation
+  authority checks stay exact. Verified with the bridge fixtures and a real
+  Node run of the example server under `--permission`; not verified against
+  a real Claude Code, Hermes or ACP agent session (that needs a signed-in
+  harness and model turns).
+- **Downgrade.** A registry that stores a v2-only permission or an MCP offer
+  cannot be read by PiUI 0.2.2 and earlier (they refuse unknown values);
+  such a version starts with an empty plugin list and the installed copies
+  stay on disk.
+- **Plugin origin guard on every platform** (`navigation_guard.rs`). wry
+  0.55 hands the navigation hook only a URL, and on WebKit it calls the hook
+  for sub-frame navigations too (`decidePolicyForNavigationAction` and
+  WebKitGTK `decide-policy` never look at the target frame), so the
+  Windows-only refusal cannot move to macOS and Linux without breaking every
+  panel. Instead, on all platforms: (1) a page load of the main document on
+  the plugin origin is sent back to the last app page — wry reports page
+  loads for the main frame only (WebView2 `NavigationCompleted`, WKWebView
+  `didCommitNavigation`/`didFinishNavigation`, WebKitGTK `load-changed`), so
+  frames are never touched, but it acts after the load started; (2) every
+  app command refuses a call from a webview whose URL is on the plugin
+  origin, which closes that window for PiUI's own commands; (3) every file
+  the plugin protocol serves other than a panel page carries
+  `Content-Security-Policy: sandbox`, so a file opened as a document of its
+  own (an SVG, say) runs no script. Residual on macOS and Linux: during the
+  moment before the redirect a top-level plugin page could still use the
+  core event listener the default capability grants; closing it needs wry
+  to report whether a navigation is for the main frame (or a native
+  navigation delegate), and no path to such a navigation is known (links
+  are text, panel frames cannot navigate the top window). Only the Windows
+  build was compiled and run here; macOS and Linux need a build and a manual
+  check that panels still load.
 
 ## ADR-033 — Script nodes are trusted user code (orchestration v6.2)
 

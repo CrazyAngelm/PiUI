@@ -1,0 +1,72 @@
+{
+  "$schema": "https://schemas.piui.dev/plugin/v2.json",
+  "schemaVersion": 2,
+  "id": "com.example.status-plugin",
+  "name": "Status example",
+  "version": "1.0.0",
+  "publisher": "Example Co.",
+  "description": "A status item, keybindings and a chat renderer.",
+  "engines": {
+    "piui": ">=0.1.0 <1.0.0"
+  },
+  "permissions": [
+    "commands",
+    "ui.status",
+    "ui.renderer"
+  ],
+  "backend": {
+    "entry": "backend/main.mjs"
+  },
+  "ui": {
+    "entry": "ui/index.html"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "id": "count",
+        "title": "Count words"
+      },
+      {
+        "id": "thanks",
+        "title": "Thank the agent",
+        "surfaces": [
+          "composer"
+        ],
+        "insertText": "Thanks!"
+      }
+    ],
+    "statusItems": [
+      {
+        "id": "words",
+        "text": "Words",
+        "tooltip": "Count the words of the open chat",
+        "command": "count"
+      },
+      {
+        "id": "badge",
+        "text": "Example",
+        "alignment": "start"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "count",
+        "key": "Mod+Alt+Shift+W"
+      },
+      {
+        "command": "thanks",
+        "key": "Mod+Alt+Shift+W"
+      }
+    ],
+    "renderers": [
+      {
+        "id": "weather",
+        "title": "Weather card",
+        "toolNames": [
+          "get_weather",
+          "mcp__weather__forecast"
+        ]
+      }
+    ]
+  }
+}

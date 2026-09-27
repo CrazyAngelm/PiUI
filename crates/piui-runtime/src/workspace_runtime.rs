@@ -227,6 +227,15 @@ impl HarnessKind {
         }
     }
 
+    /// The harness takes an MCP server for one session without touching the
+    /// user's own configuration: Claude Code (`--mcp-config`), and Hermes and
+    /// ACP agents (`mcpServers` of `session/new` and `session/load`). Codex,
+    /// Pi and Prime Agent do not, so plugin MCP servers never reach them.
+    #[must_use]
+    pub const fn accepts_session_mcp(self) -> bool {
+        matches!(self, Self::ClaudeCode | Self::Hermes | Self::Acp(_))
+    }
+
     /// The ACP descriptor id of an ACP identity.
     #[must_use]
     pub const fn acp_agent(self) -> Option<AcpAgentId> {
@@ -879,6 +888,22 @@ pub enum NativeEvent {
     },
 }
 
+/// A stdio MCP server one session receives (a plugin's `mcpServers` entry the
+/// person offered to chats): the harness starts `command args` itself, inside
+/// the session's containment. Never written to the user's configuration.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionMcpServer {
+    /// `[a-z0-9_-]{1,64}`, unique in the session.
+    pub name: String,
+    /// An absolute executable (Node.js).
+    pub command: PathBuf,
+    pub args: Vec<String>,
+}
+
+/// Most plugin MCP servers one session receives.
+pub const MAX_SESSION_MCP_SERVERS: usize = 16;
+
 /// Exact host-owned native session configuration. It is never serialized to a
 /// WebView and its Debug output omits paths, instructions and native ids.
 #[derive(Clone, Serialize)]
@@ -924,6 +949,10 @@ pub struct NativeRuntimeConfig {
     /// Enables the authenticated host coordinator tool for managed runs only.
     #[serde(default)]
     pub coordination: bool,
+    /// Plugin MCP servers for an ordinary chat of a harness that
+    /// [`HarnessKind::accepts_session_mcp`]; empty everywhere else.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugin_mcp_servers: Vec<SessionMcpServer>,
 }
 
 impl fmt::Debug for NativeRuntimeConfig {
@@ -946,6 +975,7 @@ impl fmt::Debug for NativeRuntimeConfig {
             .field("has_agent_dir", &self.agent_dir.is_some())
             .field("has_kernel_python", &self.kernel_python.is_some())
             .field("coordination", &self.coordination)
+            .field("plugin_mcp_servers", &self.plugin_mcp_servers.len())
             .finish()
     }
 }
@@ -2251,6 +2281,9 @@ fn validate_config(config: &NativeRuntimeConfig) -> Result<(), NativeRuntimeErro
     if !config.cwd.is_absolute() || !config.cwd.is_dir() || !config.session_dir.is_absolute() {
         return Err(NativeRuntimeError::InvalidConfiguration);
     }
+    if !valid_session_mcp(config) {
+        return Err(NativeRuntimeError::InvalidConfiguration);
+    }
     std::fs::create_dir_all(&config.session_dir)
         .map_err(|_| NativeRuntimeError::InvalidConfiguration)?;
     if let Some(path) = &config.native_path
@@ -2292,6 +2325,39 @@ fn validate_config(config: &NativeRuntimeConfig) -> Result<(), NativeRuntimeErro
         }
     }
     Ok(())
+}
+
+/// Plugin MCP servers only for a harness that takes them per session, never
+/// with the managed-run coordinator or a tool allowlist, with unique plain
+/// names, an absolute command and bounded arguments.
+fn valid_session_mcp(config: &NativeRuntimeConfig) -> bool {
+    let servers = &config.plugin_mcp_servers;
+    if servers.is_empty() {
+        return true;
+    }
+    if !config.harness.accepts_session_mcp()
+        || config.coordination
+        || config.allowed_tools.is_some()
+        || servers.len() > MAX_SESSION_MCP_SERVERS
+    {
+        return false;
+    }
+    let mut names = std::collections::BTreeSet::new();
+    servers.iter().all(|server| {
+        !server.name.is_empty()
+            && server.name.len() <= 64
+            && server.name.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
+            })
+            && server.name != "piui-workspace"
+            && names.insert(server.name.as_str())
+            && server.command.is_absolute()
+            && server.args.len() <= 64
+            && server
+                .args
+                .iter()
+                .all(|arg| arg.len() <= 4096 && !arg.chars().any(char::is_control))
+    })
 }
 
 fn verified_prime_package_root(root: &Path) -> bool {
@@ -3167,6 +3233,7 @@ mod tests {
             agent_dir: None,
             kernel_python: None,
             coordination: false,
+            plugin_mcp_servers: Vec::new(),
         }
     }
 
@@ -4346,6 +4413,62 @@ mod tests {
                 .as_deref()
                 .is_some_and(|reason| reason.contains("only deny"))
         );
+    }
+
+    #[test]
+    fn plugin_mcp_servers_reach_only_harnesses_that_take_them_per_session() {
+        let server = SessionMcpServer {
+            name: "example-tool-cards-issues".into(),
+            command: std::env::current_exe().expect("exe"),
+            args: vec!["--permission".into(), "server.mjs".into()],
+        };
+        let mut config = test_config();
+        config.plugin_mcp_servers = vec![server.clone()];
+        for harness in [HarnessKind::Pi, HarnessKind::Codex, HarnessKind::PrimeAgent] {
+            config.harness = harness;
+            assert!(!harness.accepts_session_mcp());
+            assert_eq!(
+                validate_config(&config),
+                Err(NativeRuntimeError::InvalidConfiguration),
+                "{harness:?}"
+            );
+        }
+        config.harness = HarnessKind::ClaudeCode;
+        assert_eq!(validate_config(&config), Ok(()));
+        config.harness = HarnessKind::Hermes;
+        assert_eq!(validate_config(&config), Ok(()));
+        // Never with the managed-run coordinator or a tool allowlist.
+        config.coordination = true;
+        assert!(validate_config(&config).is_err());
+        config.coordination = false;
+        config.allowed_tools = Some(vec!["Read".into()]);
+        assert!(validate_config(&config).is_err());
+        config.allowed_tools = None;
+        for bad in [
+            SessionMcpServer {
+                name: "Bad Name".into(),
+                ..server.clone()
+            },
+            SessionMcpServer {
+                name: "piui-workspace".into(),
+                ..server.clone()
+            },
+            SessionMcpServer {
+                command: "node".into(),
+                ..server.clone()
+            },
+            SessionMcpServer {
+                args: vec!["line\nbreak".into()],
+                ..server.clone()
+            },
+        ] {
+            config.plugin_mcp_servers = vec![bad];
+            assert!(validate_config(&config).is_err());
+        }
+        config.plugin_mcp_servers = vec![server.clone(), server];
+        assert!(validate_config(&config).is_err(), "names are unique");
+        // The Debug form never shows the command line.
+        assert!(!format!("{config:?}").contains("server.mjs"));
     }
 
     #[test]

@@ -265,6 +265,11 @@ pub struct WorkspaceExtensionUiEvent {
 }
 
 pub(crate) type ExtensionUiPublisher = Arc<dyn Fn(WorkspaceExtensionUiEvent) + Send + Sync>;
+/// The plugin MCP servers the person offered to new chats, for one ordinary
+/// chat of a project (workspace id) working in a folder. Blocking.
+pub(crate) type PluginMcpProvider = Arc<
+    dyn Fn(&str, &Path) -> Vec<piui_runtime::workspace_runtime::SessionMcpServer> + Send + Sync,
+>;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -876,6 +881,8 @@ struct WorkspaceHostInner {
     attachments: attachments::AttachmentStore,
     /// Receives extension UI surface events; unset until the app is set up.
     extension_ui: Mutex<Option<ExtensionUiPublisher>>,
+    /// Plugin MCP servers for ordinary chats; unset until the app is set up.
+    plugin_mcp: Mutex<Option<PluginMcpProvider>>,
     /// ACP agent descriptors, decisions and discovery (ADR-034).
     acp: AcpAgents,
     /// Chat placement (worktrees, handoff links, adopted sessions) and the
@@ -916,6 +923,7 @@ impl WorkspaceHost {
                 native_root,
                 attachments: attachments::AttachmentStore::open(app_data_dir)?,
                 extension_ui: Mutex::new(None),
+                plugin_mcp: Mutex::new(None),
                 acp: AcpAgents::open(app_data_dir)?,
                 tools: crate::session_placement::SessionTools::open(app_data_dir)?,
                 #[cfg(test)]
@@ -932,6 +940,40 @@ impl WorkspaceHost {
         if let Ok(mut slot) = self.inner.extension_ui.lock() {
             *slot = Some(publisher);
         }
+    }
+
+    pub(crate) fn set_plugin_mcp_provider(&self, provider: PluginMcpProvider) {
+        if let Ok(mut slot) = self.inner.plugin_mcp.lock() {
+            *slot = Some(provider);
+        }
+    }
+
+    /// Plugin MCP servers for one start. Only an ordinary chat (no run, no
+    /// coordinator, no tool or resource policy) of a harness that takes an
+    /// MCP server for one session gets them; everything else gets none.
+    async fn plugin_mcp_servers(
+        &self,
+        record: &PersistedSession,
+        cwd: &Path,
+        managed: bool,
+    ) -> Vec<piui_runtime::workspace_runtime::SessionMcpServer> {
+        if managed || record.run_id.is_some() || !record.harness.accepts_session_mcp() {
+            return Vec::new();
+        }
+        let provider = self
+            .inner
+            .plugin_mcp
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone());
+        let Some(provider) = provider else {
+            return Vec::new();
+        };
+        let workspace_id = record.workspace_id.clone();
+        let cwd = cwd.to_path_buf();
+        tauri::async_runtime::spawn_blocking(move || provider(&workspace_id, &cwd))
+            .await
+            .unwrap_or_default()
     }
 
     async fn spawn_native(
@@ -1367,6 +1409,12 @@ impl WorkspaceHost {
             coordinator,
             publisher,
         } = options;
+        let managed = coordinator.is_some()
+            || allowed_tools.is_some()
+            || resource_rules
+                .as_ref()
+                .is_some_and(|rules| !rules.as_array().is_some_and(Vec::is_empty));
+        let plugin_mcp_servers = self.plugin_mcp_servers(&record, &cwd, managed).await;
         let started: Result<StartedRuntime, WorkspaceError> = async {
             let session_directory = self.inner.native_root.join(&record.id);
             fs::create_dir_all(&session_directory).map_err(|_| WorkspaceError::io())?;
@@ -1391,6 +1439,7 @@ impl WorkspaceHost {
                 allowed_tools,
                 native_subagents,
                 coordination: coordinator.is_some(),
+                plugin_mcp_servers,
                 daemon_socket: isolated_daemon_socket(
                     record.harness,
                     &self.inner.native_root,
@@ -1979,6 +2028,7 @@ impl WorkspaceHost {
             allowed_tools: None,
             native_subagents: None,
             coordination: false,
+            plugin_mcp_servers: Vec::new(),
             daemon_socket: None,
             package_root: None,
             agent_dir: None,
@@ -2642,6 +2692,7 @@ pub async fn harness_models_v18(
         allowed_tools: None,
         native_subagents: None,
         coordination: false,
+        plugin_mcp_servers: Vec::new(),
         daemon_socket: isolated_daemon_socket(
             request.harness,
             &state.workspace.inner.native_root,
@@ -4392,6 +4443,71 @@ mod tests {
         let mut forged = command;
         forged["cwd"] = serde_json::json!("private-path");
         assert!(serde_json::from_value::<super::RuntimeSettingsCommand>(forged).is_err());
+    }
+
+    #[tokio::test]
+    async fn only_ordinary_chats_of_harnesses_that_take_them_get_plugin_mcp_servers() {
+        let root = std::env::temp_dir().join(format!("piui-plugin-mcp-{}", uuid::Uuid::new_v4()));
+        let host = super::WorkspaceHost::open(&root.join("app-data")).expect("host");
+        let server = piui_runtime::workspace_runtime::SessionMcpServer {
+            name: "example-tool-cards-issues".into(),
+            command: std::env::current_exe().expect("exe"),
+            args: vec!["server.mjs".into()],
+        };
+        let offered = server.clone();
+        host.set_plugin_mcp_provider(Arc::new(move |workspace_id, _cwd| {
+            assert_eq!(workspace_id, "project-1");
+            vec![offered.clone()]
+        }));
+        let record = |harness, run_id: Option<&str>| PersistedSession {
+            composer: Default::default(),
+            usage: Vec::new(),
+            id: uuid::Uuid::new_v4().to_string(),
+            workspace_id: "project-1".into(),
+            harness,
+            title: "Plugin tools".into(),
+            updated_at: "0".into(),
+            model: None,
+            thinking_level: None,
+            permission_mode: PermissionMode::Native,
+            profile_id: None,
+            run_id: run_id.map(str::to_owned),
+            member_id: None,
+            native_id: None,
+            native_path: None,
+            revision: 0,
+            materialized: Some(false),
+        };
+        let cwd = root.as_path();
+        let ordinary = record(HarnessKind::ClaudeCode, None);
+        assert_eq!(
+            host.plugin_mcp_servers(&ordinary, cwd, false).await,
+            vec![server.clone()]
+        );
+        assert_eq!(
+            host.plugin_mcp_servers(&record(HarnessKind::Hermes, None), cwd, false)
+                .await,
+            vec![server]
+        );
+        // Harnesses without per-session MCP, managed runs and restricted starts get none.
+        for harness in [HarnessKind::Pi, HarnessKind::Codex, HarnessKind::PrimeAgent] {
+            assert!(
+                host.plugin_mcp_servers(&record(harness, None), cwd, false)
+                    .await
+                    .is_empty()
+            );
+        }
+        assert!(
+            host.plugin_mcp_servers(&record(HarnessKind::ClaudeCode, Some("run-1")), cwd, false)
+                .await
+                .is_empty()
+        );
+        assert!(
+            host.plugin_mcp_servers(&ordinary, cwd, true)
+                .await
+                .is_empty()
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

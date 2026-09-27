@@ -1,17 +1,19 @@
-import validateSchema from '../../../../contracts/piui-plugin-v1-validator.mjs';
+import validateSchemaV1 from '../../../../contracts/piui-plugin-v1-validator.mjs';
+import validateSchemaV2 from '../../../../contracts/piui-plugin-v2-validator.mjs';
 import type { PluginProblemV1 } from '../../../../contracts/plugins-v1';
 import type {
   PluginFieldV1,
-  PluginManifestV1,
+  PluginManifest,
+  PluginManifestV2,
   PluginPermission,
   PluginProblemCode,
   PluginValue,
-} from '../../../../contracts/piui-plugin-v1';
-import { PLUGIN_LIMITS } from '../../../../contracts/piui-plugin-v1';
+} from '../../../../contracts/piui-plugin-v2';
+import { PLUGIN_LIMITS, PLUGIN_RESERVED_SHORTCUTS } from '../../../../contracts/piui-plugin-v2';
 import { ACP_DESCRIPTOR_PROBLEMS, checkAcpDescriptor } from './acpDescriptor';
 
 /**
- * Plugin package format v1 rules mirrored from the host
+ * Plugin package format rules (manifest versions 1 and 2) mirrored from the host
  * (`crates/piui-plugins`), so the UI Lab host rejects what the desktop host
  * rejects, the settings and node forms check values exactly like the host,
  * and `pnpm plugin:check` explains problems before a package is loaded. The
@@ -274,7 +276,7 @@ export function resolvePluginValues(fields: readonly PluginFieldV1[], values: Re
 export const MANIFEST_MESSAGES = {
   tooLarge: 'The manifest is larger than 64 KiB.',
   malformed: 'piui-plugin.json is not valid JSON.',
-  schemaVersion: 'Only plugin manifest schema version 1 is supported.',
+  schemaVersion: 'Only plugin manifest schema versions 1 and 2 are supported.',
   shape: 'The manifest does not match the plugin schema at {0}.',
   engineRange: 'The PiUI version range “{0}” is not valid.',
   permissionMissing: 'The plugin contributes {0} but does not ask for the matching permission.',
@@ -287,6 +289,9 @@ export const MANIFEST_MESSAGES = {
   themeColor: 'Theme “{0}” has a color PiUI cannot use.',
   themeContrast: 'Theme text is hard to read: {0} needs a contrast of at least 4.5:1.',
   acpDescriptor: 'ACP agent “{0}” is not a valid descriptor.',
+  unknownCommand: '“{0}” names a command the plugin does not contribute.',
+  duplicateKeybinding: 'Two keybindings use “{0}”.',
+  renderersUi: 'The plugin contributes renderers but has no ui.entry page.',
 } as const;
 
 export const PERMISSION_HINTS: Readonly<Partial<Record<PluginPermission, string>>> = {
@@ -295,11 +300,31 @@ export const PERMISSION_HINTS: Readonly<Partial<Record<PluginPermission, string>
   'ui.settings': 'Add the permission “ui.settings”.',
   'node.run': 'Add the permission “node.run”.',
   'acp.agents': 'Add the permission “acp.agents”.',
+  'ui.status': 'Add the permission “ui.status”.',
+  'ui.renderer': 'Add the permission “ui.renderer”.',
+  'mcp.tools': 'Add the permission “mcp.tools”.',
 };
 
 export type ManifestCheck =
-  | { ok: true; manifest: PluginManifestV1; compatible: boolean }
+  | { ok: true; manifest: PluginManifest; compatible: boolean }
   | { ok: false; problems: PluginProblem[] };
+
+/** The v2 contributions of any manifest (empty for version 1). */
+export function v2Contributions(manifest: PluginManifest): Required<Pick<PluginManifestV2['contributes'], 'statusItems' | 'keybindings' | 'renderers' | 'mcpServers'>> {
+  if (manifest.schemaVersion !== 2) return { statusItems: [], keybindings: [], renderers: [], mcpServers: [] };
+  const contributes = manifest.contributes;
+  return {
+    statusItems: contributes.statusItems ?? [],
+    keybindings: contributes.keybindings ?? [],
+    renderers: contributes.renderers ?? [],
+    mcpServers: contributes.mcpServers ?? [],
+  };
+}
+
+/** Keybindings on a PiUI shortcut: they never run (a warning, not an error: PiUI's own shortcuts change between versions). */
+export function reservedKeybindings(manifest: PluginManifest): string[] {
+  return v2Contributions(manifest).keybindings.map((binding) => binding.key).filter((key) => (PLUGIN_RESERVED_SHORTCUTS as readonly string[]).includes(key));
+}
 
 function duplicates(ids: readonly string[]): string[] {
   const seen = new Set<string>();
@@ -325,16 +350,18 @@ function dedupe(problems: PluginProblem[]): PluginProblem[] {
 export function checkPluginManifest(value: unknown, piuiVersion: string): ManifestCheck {
   const record = typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
   if (record === undefined || !('schemaVersion' in record)) return { ok: false, problems: [problem('shape', MANIFEST_MESSAGES.shape, '/schemaVersion')] };
-  if (record.schemaVersion !== 1) return { ok: false, problems: [problem('schema-version', MANIFEST_MESSAGES.schemaVersion)] };
+  if (record.schemaVersion !== 1 && record.schemaVersion !== 2) return { ok: false, problems: [problem('schema-version', MANIFEST_MESSAGES.schemaVersion)] };
+  const validateSchema = record.schemaVersion === 1 ? validateSchemaV1 : validateSchemaV2;
   if (!validateSchema(value)) {
     const shape = (validateSchema.errors ?? []).slice(0, 20).map((error) => problem('shape', MANIFEST_MESSAGES.shape, error.instancePath || '/'));
     return { ok: false, problems: dedupe(shape) };
   }
-  const manifest = value as PluginManifestV1;
+  const manifest = value as PluginManifest;
+  const added = v2Contributions(manifest);
   const contributes = manifest.contributes;
   const problems: PluginProblem[] = [];
   if (rangeMatches(manifest.engines.piui, '0.0.0') === undefined) problems.push(problem('engine-range', MANIFEST_MESSAGES.engineRange, manifest.engines.piui));
-  const has = (permission: PluginPermission) => manifest.permissions.includes(permission);
+  const has = (permission: PluginPermission) => (manifest.permissions as readonly PluginPermission[]).includes(permission);
   const require = (permission: PluginPermission, contribution: string) => {
     if (!has(permission)) problems.push(problem('permission-missing', MANIFEST_MESSAGES.permissionMissing, contribution, PERMISSION_HINTS[permission] ?? 'Add the matching permission.'));
   };
@@ -354,9 +381,20 @@ export function checkPluginManifest(value: unknown, piuiVersion: string): Manife
     if (manifest.backend === undefined) problems.push(problem('backend-missing', MANIFEST_MESSAGES.backendNodes));
   }
   if ((contributes.acpAgents ?? []).length) require('acp.agents', 'ACP agents');
-  for (const list of [commands, contributes.panels ?? [], contributes.themes ?? [], contributes.templates ?? [], nodeTypes]) {
+  if (added.statusItems.length) require('ui.status', 'status items');
+  if (added.mcpServers.length) require('mcp.tools', 'MCP servers');
+  if (added.keybindings.length) require('commands', 'keybindings');
+  if (added.renderers.length) {
+    require('ui.renderer', 'renderers');
+    if (manifest.ui === undefined) problems.push(problem('ui-missing', MANIFEST_MESSAGES.renderersUi));
+  }
+  for (const list of [commands, contributes.panels ?? [], contributes.themes ?? [], contributes.templates ?? [], nodeTypes, added.statusItems, added.renderers, added.mcpServers]) {
     for (const id of duplicates(list.map((item) => item.id))) problems.push(problem('duplicate-contribution', MANIFEST_MESSAGES.duplicate, id));
   }
+  for (const named of [...added.statusItems.flatMap((item) => (item.command === undefined ? [] : [item.command])), ...added.keybindings.map((binding) => binding.command)]) {
+    if (!commands.some((command) => command.id === named)) problems.push(problem('unknown-command', MANIFEST_MESSAGES.unknownCommand, named));
+  }
+  for (const key of duplicates(added.keybindings.map((binding) => binding.key))) problems.push(problem('duplicate-contribution', MANIFEST_MESSAGES.duplicateKeybinding, key));
   for (const node of nodeTypes) {
     for (const name of duplicates((node.resultFields ?? []).map((field) => field.name))) problems.push(problem('duplicate-contribution', MANIFEST_MESSAGES.duplicateResult, name));
   }

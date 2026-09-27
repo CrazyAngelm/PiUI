@@ -94,6 +94,9 @@ try {
           }
         }
         if (!checked.compatible) problems.push(`This plugin needs PiUI ${manifest.engines.piui}; this is PiUI ${piui}.`);
+        for (const key of rules.reservedKeybindings(manifest)) {
+          console.warn(`${folder}: warning: the keybinding ${key} is a PiUI shortcut; PiUI keeps it and the binding never runs.`);
+        }
       }
       if (problems.length) {
         console.error(`${folder}: invalid`);

@@ -1,0 +1,681 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PiUI plugin package manifest v2 (piui-plugin.json)",
+  "description": "One PiUI plugin (ADR-032, plugins v2). Version 2 adds status-bar items, keybindings, chat renderers and MCP servers; version 1 manifests stay valid against piui-plugin-v1.schema.json. The host validator (crates/piui-plugins) applies the schema of the declared version and then semantic rules: permissions required by each contribution, unique contribution ids, commands that status items and keybindings name, files that exist inside the package, the PiUI engine range, theme contrast and ACP descriptor rules (acp-agent-descriptor-v1). Unknown fields are rejected, never dropped. A manifest is data: installing it never runs plugin code.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "maxLength": 300
+    },
+    "schemaVersion": {
+      "const": 2
+    },
+    "id": {
+      "description": "Stable reverse-DNS id or slug: lowercase segments of letters, digits and inner hyphens, joined by dots.",
+      "type": "string",
+      "maxLength": 100,
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?){0,7}$"
+    },
+    "name": {
+      "$ref": "#/definitions/label64"
+    },
+    "version": {
+      "$ref": "#/definitions/semver"
+    },
+    "publisher": {
+      "$ref": "#/definitions/label64"
+    },
+    "description": {
+      "$ref": "#/definitions/text500"
+    },
+    "engines": {
+      "type": "object",
+      "properties": {
+        "piui": {
+          "description": "Space-separated comparators that must all match: >=, >, <=, <, =, ^ or ~ followed by MAJOR.MINOR.PATCH.",
+          "type": "string",
+          "maxLength": 100,
+          "pattern": "^(?:>=|<=|>|<|=|\\^|~)?\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?: (?:>=|<=|>|<|=|\\^|~)?\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?){0,3}$"
+        }
+      },
+      "required": [
+        "piui"
+      ],
+      "additionalProperties": false
+    },
+    "permissions": {
+      "description": "Every permission the plugin asks for, shown in plain words in the trust review. Contributions need their permission; project.read, project.write and network decide what Node's permission model lets the backend reach.",
+      "type": "array",
+      "maxItems": 13,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "commands",
+          "ui.panel",
+          "ui.settings",
+          "ui.status",
+          "ui.renderer",
+          "node.run",
+          "acp.agents",
+          "mcp.tools",
+          "chat.read",
+          "notifications",
+          "project.read",
+          "project.write",
+          "network"
+        ]
+      }
+    },
+    "backend": {
+      "description": "A Node.js ES module or script the host runs, contained, on first use.",
+      "type": "object",
+      "properties": {
+        "entry": {
+          "$ref": "#/definitions/backendEntry"
+        }
+      },
+      "required": [
+        "entry"
+      ],
+      "additionalProperties": false
+    },
+    "ui": {
+      "description": "The static HTML entry of the plugin's sandboxed panels. Files are served only from the entry's folder.",
+      "type": "object",
+      "properties": {
+        "entry": {
+          "$ref": "#/definitions/uiEntry"
+        }
+      },
+      "required": [
+        "entry"
+      ],
+      "additionalProperties": false
+    },
+    "contributes": {
+      "type": "object",
+      "properties": {
+        "commands": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/definitions/slug"
+              },
+              "title": {
+                "$ref": "#/definitions/label80"
+              },
+              "description": {
+                "$ref": "#/definitions/text200"
+              },
+              "surfaces": {
+                "description": "Where the command appears. Default: the command palette.",
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "palette",
+                    "composer"
+                  ]
+                }
+              },
+              "insertText": {
+                "description": "Declarative command: this text is prepared in the message box for review. Without it the plugin's backend runs the command.",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              }
+            },
+            "required": [
+              "id",
+              "title"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "settings": {
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "$ref": "#/definitions/field"
+          }
+        },
+        "panels": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/definitions/slug"
+              },
+              "title": {
+                "$ref": "#/definitions/label60"
+              },
+              "location": {
+                "type": "string",
+                "enum": [
+                  "chat-details"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "location"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "themes": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/definitions/slug"
+              },
+              "label": {
+                "$ref": "#/definitions/label60"
+              },
+              "appearance": {
+                "type": "string",
+                "enum": [
+                  "dark",
+                  "light"
+                ]
+              },
+              "tokens": {
+                "description": "Overrides of documented color tokens (the --piui- prefix is implied).",
+                "type": "object",
+                "minProperties": 1,
+                "propertyNames": {
+                  "$ref": "#/definitions/themeToken"
+                },
+                "additionalProperties": {
+                  "$ref": "#/definitions/color"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "appearance",
+              "tokens"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "templates": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/definitions/slug"
+              },
+              "title": {
+                "$ref": "#/definitions/label80"
+              },
+              "description": {
+                "$ref": "#/definitions/text200"
+              },
+              "file": {
+                "$ref": "#/definitions/templateFile"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "file"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "acpAgents": {
+          "description": "ACP agent descriptors (acp-agent-descriptor-v1). They go through Settings → Harnesses trust like any added agent.",
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object"
+          }
+        },
+        "nodeTypes": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/definitions/slug"
+              },
+              "title": {
+                "$ref": "#/definitions/label60"
+              },
+              "description": {
+                "$ref": "#/definitions/text200"
+              },
+              "config": {
+                "type": "array",
+                "maxItems": 30,
+                "items": {
+                  "$ref": "#/definitions/field"
+                }
+              },
+              "timeoutSeconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3600
+              },
+              "resultFields": {
+                "description": "Result fields a new node of this type starts with.",
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "$ref": "#/definitions/key"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "text",
+                        "number",
+                        "boolean",
+                        "text-list"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "kind"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "id",
+              "title"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "statusItems": {
+          "description": "Short items in the status bar at the bottom of the window. Clicking an item with a command runs that command.",
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/definitions/slug"
+              },
+              "text": {
+                "$ref": "#/definitions/label24"
+              },
+              "tooltip": {
+                "$ref": "#/definitions/text200"
+              },
+              "command": {
+                "description": "The id of one of the plugin's own commands.",
+                "$ref": "#/definitions/slug"
+              },
+              "alignment": {
+                "description": "Default: end.",
+                "type": "string",
+                "enum": [
+                  "start",
+                  "end"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "keybindings": {
+          "description": "Keyboard shortcuts for the plugin's own commands. \"Mod\" is Ctrl on Windows and Linux and Cmd on macOS. PiUI shortcuts always win: a binding that conflicts with PiUI or another plugin does nothing and is shown as a conflict.",
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "$ref": "#/definitions/slug"
+              },
+              "key": {
+                "$ref": "#/definitions/shortcut"
+              }
+            },
+            "required": [
+              "command",
+              "key"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "renderers": {
+          "description": "Custom views of chat tool activity, rendered by the plugin's ui.entry page in a sandboxed frame inside the chat. PiUI always keeps the generic view one click away and uses it whenever the plugin is off or its frame fails.",
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/definitions/slug"
+              },
+              "title": {
+                "$ref": "#/definitions/label60"
+              },
+              "toolNames": {
+                "description": "Native tool names this renderer shows, compared without letter case (for example \"get_weather\" or \"mcp__weather__forecast\").",
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 10,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:-]*$"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "toolNames"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "mcpServers": {
+          "description": "MCP servers in the plugin's package. PiUI offers one to new chats only after the person turns it on in Settings → Plugins, and only to harnesses that accept an MCP server for one session (Claude Code, Hermes and ACP agents). The harness starts it with Node.js under the same permission model as the backend; the user's own harness configuration is never changed.",
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/definitions/slug"
+              },
+              "title": {
+                "$ref": "#/definitions/label60"
+              },
+              "description": {
+                "$ref": "#/definitions/text200"
+              },
+              "entry": {
+                "$ref": "#/definitions/backendEntry"
+              },
+              "args": {
+                "description": "Fixed arguments after the entry.",
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "entry"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "id",
+    "name",
+    "version",
+    "publisher",
+    "engines",
+    "permissions",
+    "contributes"
+  ],
+  "additionalProperties": false,
+  "definitions": {
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$"
+    },
+    "key": {
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9_]{0,63}$"
+    },
+    "semver": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "label60": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 60,
+      "pattern": "^\\S(?:[^\\u0000-\\u001f\\u007f]*\\S)?$"
+    },
+    "label64": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^\\S(?:[^\\u0000-\\u001f\\u007f]*\\S)?$"
+    },
+    "label80": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "pattern": "^\\S(?:[^\\u0000-\\u001f\\u007f]*\\S)?$"
+    },
+    "text200": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "text500": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "backendEntry": {
+      "description": "A .mjs, .cjs or .js file inside the package: forward slashes, no leading slash, no . or .. segments.",
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^(?:[A-Za-z0-9_-][A-Za-z0-9._-]*/){0,15}[A-Za-z0-9_-][A-Za-z0-9._-]*\\.(?:mjs|cjs|js)$"
+    },
+    "uiEntry": {
+      "description": "An .html file inside the package: forward slashes, no leading slash, no . or .. segments.",
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^(?:[A-Za-z0-9_-][A-Za-z0-9._-]*/){0,15}[A-Za-z0-9_-][A-Za-z0-9._-]*\\.html$"
+    },
+    "templateFile": {
+      "description": "A portable system file (version 4) inside the package.",
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^(?:[A-Za-z0-9_-][A-Za-z0-9._-]*/){0,15}[A-Za-z0-9_-][A-Za-z0-9._-]*\\.piui\\.json$"
+    },
+    "field": {
+      "description": "One declarative form field rendered by PiUI (plugin settings or a node type's configuration).",
+      "type": "object",
+      "properties": {
+        "key": {
+          "$ref": "#/definitions/key"
+        },
+        "label": {
+          "$ref": "#/definitions/label80"
+        },
+        "description": {
+          "$ref": "#/definitions/text200"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "text",
+            "long-text",
+            "number",
+            "boolean",
+            "choice"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "default": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        },
+        "minimum": {
+          "type": "number"
+        },
+        "maximum": {
+          "type": "number"
+        },
+        "maxLength": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4000
+        },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "label": {
+                "$ref": "#/definitions/label80"
+              }
+            },
+            "required": [
+              "value",
+              "label"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "key",
+        "label",
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "color": {
+      "type": "string",
+      "maxLength": 40,
+      "pattern": "^(?:#[0-9A-Fa-f]{3}|#[0-9A-Fa-f]{4}|#[0-9A-Fa-f]{6}|#[0-9A-Fa-f]{8}|rgba?\\(\\s*\\d{1,3}\\s*,\\s*\\d{1,3}\\s*,\\s*\\d{1,3}\\s*(?:,\\s*(?:0|1|0?\\.\\d{1,3})\\s*)?\\))$"
+    },
+    "themeToken": {
+      "type": "string",
+      "enum": [
+        "bg",
+        "bg-raised",
+        "bg-sunken",
+        "surface-1",
+        "surface-2",
+        "surface-3",
+        "overlay",
+        "hover",
+        "pressed",
+        "selected",
+        "selected-strong",
+        "text",
+        "text-muted",
+        "text-faint",
+        "text-disabled",
+        "border",
+        "border-subtle",
+        "border-strong",
+        "accent",
+        "accent-ink",
+        "accent-soft",
+        "action",
+        "action-hover",
+        "action-pressed",
+        "action-ink",
+        "focus",
+        "danger",
+        "warning",
+        "success",
+        "info",
+        "danger-surface",
+        "danger-border",
+        "danger-text",
+        "warning-surface",
+        "warning-border",
+        "warning-text",
+        "success-surface",
+        "success-border",
+        "success-text",
+        "info-surface",
+        "info-border",
+        "info-text",
+        "user-surface",
+        "user-border",
+        "code-surface",
+        "syntax-keyword",
+        "syntax-string",
+        "syntax-number",
+        "syntax-comment",
+        "syntax-function",
+        "syntax-type",
+        "syntax-property",
+        "syntax-punctuation",
+        "diff-add",
+        "diff-add-text",
+        "diff-remove",
+        "diff-remove-text"
+      ]
+    },
+    "label24": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 24,
+      "pattern": "^\\S(?:[^\\u0000-\\u001f\\u007f]*\\S)?$"
+    },
+    "shortcut": {
+      "description": "Mod, then optionally Alt and Shift in this order, then A-Z, 0-9 or F1-F12, joined by \"+\" (for example \"Mod+Shift+W\").",
+      "type": "string",
+      "pattern": "^Mod(?:\\+Alt)?(?:\\+Shift)?\\+(?:[A-Z0-9]|F(?:[1-9]|1[0-2]))$"
+    }
+  }
+}

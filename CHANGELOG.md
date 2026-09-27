@@ -6,6 +6,8 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-09-27
+
 ### Added
 
 - Ctrl+K lists the open chat's native `/` commands (Pi extension, prompt-template and skill commands, or another harness's own commands) from the composer's catalog; choosing one puts it in the message box, like the `/` menu.
@@ -19,12 +21,22 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 ### Fixed
 
 - Plugin panels no longer miss their ready deadline on a busy machine: a loading panel frame stays transparent instead of hidden, so the browser engine does not deprioritize it.
+- `pnpm contract:test` in the desktop app runs every contract test again: a duplicated script entry had dropped five of them.
 
 ### Removed
 
 - The classic interfaces: the previous workspace shell (`?view=legacy`) and the Pi-only view (`?view=classic`), with the Settings → About "Classic view" row. Everything they offered is in the default interface (see `docs/CLASSIC_PARITY.md`); both URLs now open it.
 - The host commands only those views used: the classic live Pi runtime (`start_runtime`, `start_personal_chat`, `send_prompt`, `send_steer`, `send_follow_up`, `abort_runtime`, `stop_live_runtime`, `get_runtime_*`, `set_runtime_*`, `respond_extension_ui`), the fake runtime (`run_fake_scenario`, `start_fake_runtime`, `stop_runtime`), the unversioned duplicates (`bootstrap`, `update_preferences`, `list_extensions`, `set_extension_enabled`, `add_project`, `pick_and_add_project`), `list_sessions`, `list_personal_sessions`, `get_timeline`, `get_tree`, `get_personal_tree` and `probe_system_runtime`. Every other command keeps its name and version.
 - The Windows WebView2 E2E `--classic` and `--workspace` scenarios (`test:e2e:classic`, `test:e2e:workspace`).
+- Plugin manifest version 2 (version 1 still works unchanged): status-bar items and keyboard shortcuts for a plugin's own commands. PiUI's shortcuts always win, and Settings → Plugins shows every conflict. New example `status-tools`; `pnpm create-plugin` writes version 2.
+- MCP tool servers from plugins: once you offer one in Settings → Plugins, new Claude Code, Hermes and ACP agent chats get it for that chat only, started under the same Node.js limits as plugin backends. Your harness settings are never changed; Codex, Pi, Prime Agent and pipeline runs never get plugin servers.
+- Chat renderers from plugins: a plugin can show chosen tool calls in its own sandboxed view inside the chat. The plain view is always one click away and takes over when the plugin is off or its view fails. New example `tool-cards`.
+- A dialog whose content scrolls can now be scrolled with the keyboard.
+
+### Security
+
+- The guard against the app window showing the plugin panel origin now also covers macOS and Linux: such a page is sent back to the app as soon as it starts loading (Windows still refuses the navigation before it starts), PiUI's own commands refuse calls from it on every platform, and plugin files other than panel pages are served with a sandbox policy.
+- Plugin backends run under Node's permission model: a backend reads its own package, reads and writes its data folder, reaches a project folder only with `project.read` / `project.write`, and never starts other programs or worker threads; network access is blocked without `network` when the Node.js in use can block it. Node.js older than 22.13 no longer starts plugin backends. The trust review shows the exact flags and what is enforced, and still says that plugins are trusted code, not a sandbox.
 
 ## [0.2.2] - 2026-09-27
 
