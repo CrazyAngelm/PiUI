@@ -1,0 +1,35 @@
+{
+  "timestamp": "2026-09-27T22:36:00+07:00",
+  "commit": "66763d7",
+  "branch": "rework/piui-2 = main (local, not pushed)",
+  "changes": "0.2.3: classic and legacy views removed with their host commands; plugins v2 (Node permission model for backends, manifest v2 status items and keybindings, sandboxed chat renderers, MCP tool servers for Claude Code/Hermes/ACP chats, plugin-origin guard on every platform); Ctrl+K lists the open chat's native / commands; review panel hunk split and renames; handoff lists files without the review panel; Settings > Worktrees for orphan worktrees; plugin panel ready-timeout fix; contract:test runs every contract suite",
+  "release": {
+    "portable": { "path": "artifacts/PiUI_0.2.3_windows_x86_64.exe", "bytes": 32101888, "sha256": "ce5ae755c56789e22b166ed8ee2a617ad8520386e33960a27e9737a44d68b33b" },
+    "installer": { "path": "artifacts/PiUI_0.2.3_x64-setup.exe", "bytes": 8635943, "sha256": "d32a9911ab0ec22f80601c303cf5eb76a6fea5badd860bec370e00b4f3d5919d" },
+    "authenticode": "NotSigned (no certificate configured)",
+    "updater": "not configured; the app makes no update checks",
+    "installed": null,
+    "launch": "not performed: release builds have no isolated data directories; launching would load the owner's real projects and enabled schedules; the owner installs and launches it"
+  },
+  "supersedes": "0.2.2 (release-0.2.2.json); its artifacts were replaced by this build",
+  "downgrade": "a plugin registry that stores v2 permissions or MCP offers is not readable by 0.2.2 or earlier (empty plugin list)",
+  "rollback": "evidence/local-release-20260926/rollback-0.1.1-20260922/ (git-ignored)",
+  "verification": {
+    "cargoFmt": "clean",
+    "cargoClippy": "cargo clippy --workspace --all-targets -- -D warnings passed",
+    "cargoTest": "cargo test --workspace -- --test-threads=4: 743 passed, 18 ignored, 0 failed",
+    "desktopCheck": "svelte-check found 0 errors and 0 warnings",
+    "desktopTests": "122 files, 738 tests passed",
+    "contractTests": "19 files, 178 tests passed",
+    "bridgeTests": "157 tests: 156 passed, 1 skipped",
+    "systemExamples": "9 valid",
+    "labE2E": "Playwright lab: 131 passed, 4 failed (automations spec under load); automations.spec.ts alone 4 of 4 passed. prod-csp: 5 of 5",
+    "repoCheck": "public repository audit passed; version check 0.2.3 passed"
+  },
+  "notVerified": "packaged WebView2 app; real Claude Code/Hermes/ACP chat with a plugin MCP server; Node 25 --allow-net; macOS/Linux builds of the page-load plugin-origin guard",
+  "cleanup": {
+    "removed": ["target/release", "target/main", "target/piui-e2e", "all agent worktrees and branches"],
+    "freeBytesBefore": 208530968576,
+    "freeBytesAfter": 221043306496
+  }
+}
