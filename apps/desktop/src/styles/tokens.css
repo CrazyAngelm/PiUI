@@ -133,9 +133,11 @@
 
   /* Layers. */
   --piui-z-sticky: 20;
-  --piui-z-dropdown: 60;
   --piui-z-overlay: 90;
   --piui-z-modal: 100;
+  /* Above modals: pickers and menus open from inside dialogs and close on
+     any outside interaction, so they never linger over a later modal. */
+  --piui-z-dropdown: 110;
   --piui-z-toast: 120;
   --piui-z-tooltip: 130;
 
