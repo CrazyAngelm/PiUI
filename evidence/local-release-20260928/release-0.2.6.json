@@ -1,0 +1,32 @@
+{
+  "timestamp": "2026-09-28T21:30:00+07:00",
+  "commit": "732c3cd",
+  "branch": "main",
+  "changes": "0.2.6: project board (ADR-041): per-project kanban with columns, card drawer, comments, activity, undo, keyboard and drag moves; agents in chats get a board tool (Claude Code, Hermes, ACP, Prime, fresh Codex threads) with duplicate checks; teammates (@handle) backed by one agent or a saved pipeline; card assignment starts runs with concurrency limit, persisted queue, cooldown and chain-depth limit. Fix: pickers and menus open above modal dialogs.",
+  "release": {
+    "portable": { "path": "artifacts/PiUI_0.2.6_windows_x86_64.exe", "bytes": 34548736, "sha256": "254d6501d1d6efd8ad32f18432cbacd7c6b8a61de9465e6ade6c459f51ed921c" },
+    "installer": { "path": "artifacts/PiUI_0.2.6_x64-setup.exe", "bytes": 9234762, "sha256": "4329f2a4078c727a028ea7d67461ab4d71a3a403ad9999944f0d91839cc0b889" },
+    "authenticode": "NotSigned (no certificate configured)",
+    "updater": "not configured; the app makes no update checks",
+    "installed": null,
+    "desktopShortcut": "PiUI.lnk now targets artifacts/PiUI_0.2.6_windows_x86_64.exe",
+    "launch": "not performed: release builds have no isolated data directories; launching would load the owner's real projects and enabled schedules; the owner launches it"
+  },
+  "supersedes": "0.2.5 (evidence/local-release-20260928/release-0.2.5.json); its artifacts were replaced by this build",
+  "downgrade": "new host store boards-v1 in app data and teammates in orchestration state; 0.2.5 ignores boards; orchestration run trigger 'board' is unknown to 0.2.5",
+  "verification": {
+    "build": "built from a clean worktree of main (uncommitted harness-catalog work of another session excluded); release build compiled after restoring host_tools in the catalog probe config (732c3cd)",
+    "desktopCheck": "svelte-check 0 errors 0 warnings on the release tree",
+    "rust": "cargo test --workspace and clippy -D warnings passed on feat/project-board working tree (included foreign catalog hunks); not rerun on the release tree",
+    "desktopTests": "vitest 816 passed, 2 load timeouts passed on rerun (feature tree)",
+    "contractTests": "178 passed",
+    "e2eLab": "board.spec 3/3 passed; chat, composer, shell, keyboard, screens, chat-pipelines 88 of 89 passed; chat.spec 'new chat harness -> model -> reasoning -> send' also failed on 0.2.5",
+    "artifactHashes": "artifacts equal release outputs and SHA256SUMS.txt"
+  },
+  "notVerified": "packaged WebView2 app; a real harness using the board tool; full e2e suite",
+  "cleanup": {
+    "removed": ["worktree D:/Projects/PIUI-release (with its target/)"],
+    "kept": "D:/Projects/PIUI/target (dev build of the working tree shared with another session)",
+    "freeBytesBeforeCleanup": 184899956736
+  }
+}
