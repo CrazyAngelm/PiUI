@@ -1,0 +1,32 @@
+{
+  "timestamp": "2026-09-29T01:10:00+07:00",
+  "commit": "65de889",
+  "branch": "feat/subpipelines (local, not pushed); working tree also held the owner's uncommitted harness-model edits",
+  "changes": "0.2.7: sub-pipelines (ADR-042, orchestration v6.7): pipeline step executor, child runs, declared pipeline outputs, cancel cascade, cycle/depth limits, save guards for parents; system-file v5 with sub-pipeline references by name and outputs; board/chat answers from declared outputs",
+  "release": {
+    "portable": { "path": "artifacts/PiUI_0.2.7_windows_x86_64.exe", "bytes": 35046912, "sha256": "9bd5e82f01a71ebaf72e3009fecf55a9ee079ef2d1a58377766e6f104d7c3334" },
+    "installer": { "path": "artifacts/PiUI_0.2.7_x64-setup.exe", "bytes": 9370923, "sha256": "54880a116cc9be92ac0828b29718807142fa1b45f2a57dd397991303378f2b4d" },
+    "authenticode": "NotSigned (no certificate configured)",
+    "updater": "not configured; the app makes no update checks",
+    "installed": "desktop shortcut PiUI.lnk points to the portable executable",
+    "launch": "not performed: launching would load the owner's real projects and enabled schedules"
+  },
+  "supersedes": "0.2.6 (artifacts built 2026-09-28 without a recorded release); its artifacts were replaced by this build",
+  "downgrade": "new optional fields (pipeline executor, PipelineDefinition.outputs, pipeline run trigger) in the orchestration store; older builds reject definitions that use them. System-file v5 exports are not readable by builds before 0.2.7.",
+  "verification": {
+    "desktopCheck": "svelte-check found 0 errors and 0 warnings",
+    "desktopTests": "142 files, 879 tests passed",
+    "contractTests": "19 files, 202 tests passed",
+    "rust": "cargo clippy --workspace --all-targets -D warnings clean; cargo test --workspace passed after one fixture fix",
+    "e2eLab": "140 of 142 passed; chat.spec.ts reasoning picker fails on the pre-change HEAD too; shell.spec.ts command palette failed once under load and passed 2/2 alone",
+    "systemCheck": "all examples valid, including two version 5 files",
+    "repoCheck": "fails on pre-existing items: deleted .serena files in the working tree and a test email in chatBoard.test.ts (a7e1e89)",
+    "artifactHashes": "artifacts equal target/release outputs and SHA256SUMS.txt"
+  },
+  "notVerified": "packaged WebView2 app; a real harness running a sub-pipeline",
+  "cleanup": {
+    "removed": ["target/", "artifacts of 0.2.6"],
+    "freeBytesBeforeCleanup": 146560393216,
+    "freeBytesAfter": 163093745664
+  }
+}
