@@ -15,15 +15,20 @@
     label?: string;
     size?: number;
   }
+  import { isEmojiAvatar } from './handle';
+
   let { avatar, color, label, size = 20 }: Props = $props();
+  const emoji = $derived(isEmojiAvatar(avatar));
 </script>
 
 <span
   class="avatar"
+  class:avatar--emoji={emoji}
   style:--avatar-color={teammateColor(color)}
   style:width="{size}px"
   style:height="{size}px"
-  style:font-size="{Math.round(size * 0.48)}px"
+  style:border-radius="{Math.max(4, Math.round(size * 0.28))}px"
+  style:font-size="{Math.round(size * (emoji ? 0.6 : 0.42))}px"
   role={label ? 'img' : undefined}
   aria-label={label}
   aria-hidden={label ? undefined : 'true'}
@@ -35,15 +40,21 @@
     align-items: center;
     justify-content: center;
     flex: none;
-    border-radius: 6px;
+    overflow: hidden;
     background:
-      linear-gradient(135deg, color-mix(in srgb, var(--avatar-color) 38%, transparent), color-mix(in srgb, var(--avatar-color) 14%, transparent)),
+      linear-gradient(145deg, color-mix(in srgb, var(--avatar-color) 46%, transparent), color-mix(in srgb, var(--avatar-color) 16%, transparent)),
       var(--piui-surface-2);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--avatar-color) 55%, transparent);
-    color: var(--piui-text);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--avatar-color) 60%, transparent);
+    color: color-mix(in srgb, var(--avatar-color) 30%, var(--piui-text));
     font-weight: var(--piui-weight-semibold);
+    letter-spacing: -0.02em;
     line-height: 1;
-    clip-path: polygon(12% 0, 100% 0, 88% 100%, 0 100%);
     user-select: none;
+  }
+  .avatar--emoji {
+    background:
+      radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--avatar-color) 34%, transparent), color-mix(in srgb, var(--avatar-color) 10%, transparent) 72%),
+      var(--piui-surface-2);
+    font-weight: normal;
   }
 </style>

@@ -55,6 +55,19 @@ export function handleProblem(handle: string, taken: readonly string[]): HandleP
   return undefined;
 }
 
+/** Ready-made avatars offered by the teammate dialog; each fits the host's 8-char limit. */
+export const AVATAR_EMOJIS: readonly string[] = [
+  '🤖', '🧠', '🦾', '👾', '🚀', '⚡', '🔥', '🌀',
+  '🎯', '🛠️', '⚙️', '🔍', '🧪', '🐛', '🛡️', '📦',
+  '📝', '📚', '🎨', '🎬', '🎧', '📊', '💡', '🧭',
+  '🧩', '💎', '🌟', '🦊', '🦉', '🐙', '🐺', '🦅',
+];
+
+/** An avatar that is a symbol rather than letters (sized differently). */
+export function isEmojiAvatar(avatar: string): boolean {
+  return /\p{Extended_Pictographic}/u.test(avatar);
+}
+
 /** Up to two initials for an avatar. */
 export function initials(name: string): string {
   const words = name.trim().split(/\s+/u).filter(Boolean);

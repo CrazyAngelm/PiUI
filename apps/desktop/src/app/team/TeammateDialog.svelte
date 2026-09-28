@@ -26,7 +26,7 @@
   import { useWorkspace } from '../shell/context';
   import { errorMessage } from '../workspaceStore.svelte';
   import { PERMISSION_COPY } from '../board/boardModel';
-  import { handleFromName, handleProblem, initials, uniqueHandle } from './handle';
+  import { AVATAR_EMOJIS, handleFromName, handleProblem, initials, uniqueHandle } from './handle';
   import TeammateAvatar from './TeammateAvatar.svelte';
   import { teammates } from './teammatesStore.svelte';
 
@@ -193,10 +193,38 @@
   );
 
   const stepValid = $derived.by(() => {
-    if (step === 0) return name.trim().length > 0 && problem === undefined && [...avatar.trim()].length >= 1 && [...avatar.trim()].length <= 2 && [...role].length <= MAX_TEAMMATE_ROLE_CHARS;
+    if (step === 0) return name.trim().length > 0 && problem === undefined && [...avatar.trim()].length >= 1 && [...avatar.trim()].length <= 8 && [...role].length <= MAX_TEAMMATE_ROLE_CHARS;
     if (step === 1) return kind === 'simple' ? Boolean(harness) && Boolean(model ?? modelKey) && !profileLoading : Boolean(launchCommandId);
     return maxConcurrentRuns >= 1 && maxConcurrentRuns <= 8 && (cardInput === '' || textInputs.some((input) => input.name === cardInput) || kind === 'simple');
   });
+
+  /** Initials of the name, then an avatar kept from an older teammate, then the ready-made emoji. */
+  const nameInitials = $derived(initials(name || '?'));
+  const keptAvatar = initial !== undefined && !AVATAR_EMOJIS.includes(initial.avatar) ? initial.avatar : undefined;
+  const avatarChoices = $derived([
+    ...new Set([nameInitials, ...(keptAvatar !== undefined && keptAvatar !== nameInitials ? [keptAvatar] : []), ...AVATAR_EMOJIS]),
+  ]);
+
+  function pickAvatar(choice: string): void {
+    avatarEdited = choice !== nameInitials;
+    avatar = choice;
+  }
+
+  /** Radio-group keys: arrows move and select within the wrapping grid. */
+  function moveAvatarFocus(event: KeyboardEvent): void {
+    const grid = event.currentTarget as HTMLElement;
+    const buttons = [...grid.querySelectorAll<HTMLButtonElement>('button')];
+    const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    if (index < 0) return;
+    const columns = Math.max(1, getComputedStyle(grid).gridTemplateColumns.split(' ').length);
+    const delta = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: columns, ArrowUp: -columns, Home: -index, End: buttons.length - 1 - index }[event.key];
+    if (delta === undefined) return;
+    event.preventDefault();
+    const next = Math.min(buttons.length - 1, Math.max(0, index + delta));
+    const choice = avatarChoices[next];
+    if (choice !== undefined) pickAvatar(choice);
+    buttons[next]?.focus();
+  }
 
   function problemText(value: typeof problem): string | undefined {
     switch (value) {
@@ -317,39 +345,46 @@
           {problemText(problem) ?? $t('People and agents write @{0} to hand it work.', [handle])}
         </span>
       </label>
-      <div class="field">
-        <span class="field__label" id="teammate-color-label">{$t('Color')}</span>
-        <div class="swatches" role="radiogroup" aria-labelledby="teammate-color-label">
-          {#each COLORS as token, index (token)}
-            <button
-              type="button"
-              role="radio"
-              aria-checked={color === token}
-              aria-label={$t('Color {0}', [index + 1])}
-              class="swatch"
-              class:swatch--current={color === token}
-              style:--swatch={`var(--piui-${token})`}
-              onclick={() => (color = token)}
-            ></button>
-          {/each}
+      <div class="field field--wide look">
+        <div class="look__preview">
+          <TeammateAvatar avatar={avatar || '?'} {color} size={56} />
+          <span class="look__handle">@{handle || '…'}</span>
+        </div>
+        <div class="look__options">
+          <span class="field__label" id="teammate-color-label">{$t('Color')}</span>
+          <div class="swatches" role="radiogroup" aria-labelledby="teammate-color-label">
+            {#each COLORS as token, index (token)}
+              <button
+                type="button"
+                role="radio"
+                aria-checked={color === token}
+                aria-label={$t('Color {0}', [index + 1])}
+                class="swatch"
+                class:swatch--current={color === token}
+                style:--swatch={`var(--piui-${token})`}
+                onclick={() => (color = token)}
+              ></button>
+            {/each}
+          </div>
+          <span class="field__label" id="teammate-avatar-label">{$t('Avatar')}</span>
+          <!-- svelte-ignore a11y_interactive_supports_focus -->
+          <div class="emojis" role="radiogroup" aria-labelledby="teammate-avatar-label" onkeydown={moveAvatarFocus}>
+            {#each avatarChoices as choice (choice)}
+              <button
+                type="button"
+                role="radio"
+                aria-checked={avatar === choice}
+                aria-label={choice === nameInitials ? $t('Initials {0}', [choice]) : choice}
+                tabindex={avatar === choice || (!avatarChoices.includes(avatar) && choice === nameInitials) ? 0 : -1}
+                class="emoji"
+                class:emoji--initials={choice === nameInitials}
+                class:emoji--current={avatar === choice}
+                onclick={() => pickAvatar(choice)}
+              >{choice}</button>
+            {/each}
+          </div>
         </div>
       </div>
-      <label class="field">
-        <span class="field__label">{$t('Avatar')}</span>
-        <div class="avatar-row">
-          <TeammateAvatar avatar={avatar || '?'} {color} size={28} />
-          <Input
-            value={avatar}
-            maxlength={4}
-            aria-describedby="teammate-avatar-note"
-            oninput={(event) => {
-              avatarEdited = true;
-              avatar = event.currentTarget.value;
-            }}
-          />
-        </div>
-        <span id="teammate-avatar-note" class="note">{$t('One emoji or up to two letters.')}</span>
-      </label>
       <label class="field field--wide">
         <span class="field__label">{$t('Role')}</span>
         <Textarea bind:value={role} minRows={2} maxRows={5} maxlength={MAX_TEAMMATE_ROLE_CHARS} placeholder={$t('What it is good at and when to hand it work. Agents read this in the roster.')} />
@@ -603,10 +638,87 @@
     outline-offset: 1px;
     clip-path: none;
   }
-  .avatar-row {
+  .look {
     display: flex;
+    gap: var(--piui-space-4);
+    align-items: flex-start;
+  }
+  .look__preview {
+    display: grid;
+    justify-items: center;
+    gap: 6px;
+    flex: none;
+    width: 84px;
+    padding: var(--piui-space-3) 0;
+    border: 1px solid var(--piui-border);
+    border-radius: var(--piui-radius-md);
+    background: var(--piui-surface-1);
+  }
+  .look__handle {
+    max-width: 76px;
+    overflow: hidden;
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .look__options {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+  }
+  .emojis {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, 32px);
+    gap: 4px;
+    /* 11 columns: the initials tile and 32 emoji fill three even rows. */
+    max-width: calc(11 * 32px + 10 * 4px);
+  }
+  .look__options .field__label + .emojis,
+  .look__options .field__label + .swatches {
+    margin-bottom: 4px;
+  }
+  #teammate-avatar-label {
+    margin-top: 6px;
+  }
+  .emoji {
+    display: inline-flex;
     align-items: center;
-    gap: 8px;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    font-size: 18px;
+    line-height: 1;
+    transition: background var(--piui-duration-fast), border-color var(--piui-duration-fast);
+  }
+  .emoji:hover {
+    background: var(--piui-surface-2);
+  }
+  .emoji:focus-visible {
+    outline: 2px solid var(--piui-focus, var(--piui-accent));
+    outline-offset: 1px;
+  }
+  .emoji--initials {
+    border-color: var(--piui-border);
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-xs);
+    font-weight: var(--piui-weight-semibold);
+  }
+  .emoji--current {
+    border-color: var(--piui-chaos);
+    background: color-mix(in srgb, var(--piui-chaos) 18%, transparent);
+    box-shadow: 0 0 8px var(--piui-chaos-glow);
+    color: var(--piui-text);
+  }
+  @media (max-width: 520px) {
+    .look {
+      flex-direction: column;
+    }
   }
   .chips {
     display: flex;

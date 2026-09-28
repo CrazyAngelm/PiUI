@@ -50,6 +50,11 @@ test.describe('project board', () => {
 
     const dialog = page.getByRole('dialog', { name: 'New teammate' });
     await dialog.getByRole('textbox', { name: 'Name' }).fill('Docs writer');
+    // The avatar comes from a ready-made set; initials are the default.
+    const avatars = dialog.getByRole('radiogroup', { name: 'Avatar' });
+    await expect(avatars.getByRole('radio', { name: 'Initials DW' })).toBeChecked();
+    await avatars.getByRole('radio', { name: '🦉' }).click();
+    await expect(avatars.getByRole('radio', { name: '🦉' })).toBeChecked();
     await dialog.getByRole('button', { name: 'Next' }).click();
     // One agent: the harness is preselected; pick a model.
     await dialog.getByRole('button', { name: 'Model' }).click();
