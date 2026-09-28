@@ -1,0 +1,30 @@
+{
+  "timestamp": "2026-09-28T15:45:00+07:00",
+  "commit": "60b003f",
+  "branch": "main",
+  "changes": "0.2.5: chat pipelines (ADR-040): a chat's first message can start a saved pipeline, 'Who answers' composer chip (harnesses, project pipelines, templates), run cards in the chat, result handed to the answering agent in the next message; pipeline templates global or per project (pipeline library v1); project default pipeline for new chats in the Start block; one context chip for project, permissions and worktree; model pickers show a remembered catalog while the harness probe runs",
+  "release": {
+    "portable": { "path": "artifacts/PiUI_0.2.5_windows_x86_64.exe", "bytes": 32439296, "sha256": "5b685c995be3d89173bbe6b0fa416b1d009fefb265d0ba6cfed5ee03259c3b48" },
+    "installer": { "path": "artifacts/PiUI_0.2.5_x64-setup.exe", "bytes": 8714284, "sha256": "107c2358196e3d4dc60445aa8737161f23250491dffe6058cf1207d90acd0c89" },
+    "authenticode": "NotSigned (no certificate configured)",
+    "updater": "not configured; the app makes no update checks",
+    "installed": null,
+    "launch": "not performed: release builds have no isolated data directories; launching would load the owner's real projects and enabled schedules; the owner installs and launches it"
+  },
+  "supersedes": "0.2.4 (evidence/local-release-20260928/release-0.2.4.json); its artifacts were replaced by this build",
+  "downgrade": "new host store pipeline_library_v1 (templates, chat default, chat run lists) in app data; 0.2.4 ignores it. Model catalog snapshots are browser storage.",
+  "verification": {
+    "desktopCheck": "svelte-check found 0 errors and 0 warnings (merged main)",
+    "desktopTests": "128 files, 766 tests passed (merged main)",
+    "contractTests": "19 files, 178 tests passed",
+    "e2eLab": "142 of 143 passed; chat.spec.ts 'new chat harness -> model -> reasoning -> send' fails on main before the merge too",
+    "rust": "cargo clippy -D warnings clean and piui-desktop lib tests 306 passed on feat/chat-pipeline; the merge changed no Rust source",
+    "artifactHashes": "artifacts equal target/release outputs and SHA256SUMS.txt"
+  },
+  "notVerified": "packaged WebView2 app; a real harness run started from a chat",
+  "cleanup": {
+    "removed": ["target/", "worktree D:/Projects/PIUI-chat-pipeline (with its target/)"],
+    "freeBytesBeforeCleanup": 215263690752,
+    "freeBytesAfter": 218671976448
+  }
+}
