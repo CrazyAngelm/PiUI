@@ -167,16 +167,34 @@
     }
   }
 
+  // The start screen needs the default harness's models for its templates;
+  // probing starts the native harness, so it begins before the first click.
+  $effect(() => {
+    const harness = defaultHarness;
+    if (editor.graph.nodes.length === 0 && !editor.safeMode && !editor.readOnly && !untrack(() => editor.catalogs[harness])) {
+      void editor.loadCatalog(harness);
+    }
+  });
+
+  function withModel(graph: AgentGraph, model: Pick<AgentProfile, 'model' | 'modelProvider'>): AgentGraph {
+    return {
+      ...graph,
+      nodes: graph.nodes.map((node) =>
+        (node.kind === 'router' && node.router?.mode === 'program') || node.profile.model.trim() ? node : { ...node, profile: { ...node.profile, ...model } },
+      ),
+    };
+  }
+
   async function useTemplate(id: TemplateId): Promise<void> {
     const harness = defaultHarness;
-    const model = await defaultModel(harness);
     const graph = buildTemplate(id, harness, (value) => $t(value));
-    editor.startFrom(
-      model
-        ? { ...graph, nodes: graph.nodes.map((node) => (node.kind === 'router' && node.router?.mode === 'program' ? node : { ...node, profile: { ...node.profile, ...model } })) }
-        : graph,
-    );
+    const known = editor.catalogs[harness]?.models[0];
+    // The draft opens at once; a model still loading fills in when it arrives.
+    editor.startFrom(known ? withModel(graph, { model: known.id, ...(known.provider ? { modelProvider: known.provider } : {}) }) : graph);
     setTimeout(() => api?.fitView(), 60);
+    if (known) return;
+    const model = await defaultModel(harness);
+    if (model && editor.graph.id === graph.id) editor.fillIn(withModel(editor.graph, model));
   }
 
   async function exportFile(): Promise<void> {

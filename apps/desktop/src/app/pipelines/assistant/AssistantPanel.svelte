@@ -416,7 +416,9 @@
     color: var(--piui-accent);
   }
   h2 {
+    flex-shrink: 0;
     margin: 0;
+    white-space: nowrap;
     color: var(--piui-text);
     font-size: var(--piui-text-md);
     font-weight: var(--piui-weight-semibold);
@@ -435,9 +437,12 @@
     background: transparent;
     color: var(--piui-text);
     font-size: var(--piui-text-sm);
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .chip--model {
-    min-width: 0;
+    flex-shrink: 1;
+    min-width: 88px;
     max-width: 150px;
   }
   .chip__sub {

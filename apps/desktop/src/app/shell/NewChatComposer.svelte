@@ -8,9 +8,9 @@
   import Brain from '@lucide/svelte/icons/brain';
   import { onMount, tick, untrack } from 'svelte';
   import { t } from '../../features/locale/language';
-  import { harnessModels } from '../../host-api/harnessModels';
+  import { cachedHarnessModels } from '../../host-api/harnessModels';
   import ModelPicker, { type ModelOption } from './ModelPicker.svelte';
-  import type { HarnessCatalogModel, HarnessResource } from '../../../../../contracts/harness-models-v18';
+  import type { HarnessCatalogModel, HarnessModelsResult, HarnessResource } from '../../../../../contracts/harness-models-v18';
   import type { HarnessKind, PermissionMode, WorkspaceSummary } from '../../../../../contracts/workspace-v15';
   import { composerSupport, imageSupport } from '../../harness-adapters/composer';
   import { Picker, Spinner, Textarea, toasts, type PickerItem } from '../../lib/ui';
@@ -73,6 +73,7 @@
   // Before a session exists only the manifest is known; the host decides at send.
   const imageState = $derived(imageSupport(harness, undefined));
   const trusted = $derived(Boolean(workspace && (workspace.personal || workspace.trust === 'trusted')));
+  const catalogBlocked = $derived(Boolean(workspace) && !trusted);
   // Harness-native `$` mentions from the harness catalog (Codex skills).
   const skillMentions = $derived(
     harness && composerSupport(harness).skillMentions
@@ -147,16 +148,26 @@
     skills = [];
     modelsError = '';
     if (!id || !kind) return;
-    if (workspace && !workspace.personal && workspace.trust !== 'trusted') return;
+    // A boolean, not the workspace: every session event replaces the catalog.
+    if (catalogBlocked) return;
     let cancelled = false;
     modelsLoading = true;
-    harnessModels({ workspaceId: id, harness: kind })
-      .then((result) => {
-        if (cancelled) return;
-        models = result.models;
-        skills = result.resources.items;
-        if (modelKey && !result.models.some((item) => JSON.stringify([item.provider, item.id]) === modelKey)) modelKey = '';
-      })
+    const show = (result: HarnessModelsResult): void => {
+      if (cancelled) return;
+      models = result.models;
+      skills = result.resources.items;
+      if (modelKey && !result.models.some((item) => JSON.stringify([item.provider, item.id]) === modelKey)) modelKey = '';
+    };
+    cachedHarnessModels(
+      { workspaceId: id, harness: kind },
+      {
+        onFresh: show,
+        onError: (error) => {
+          if (!cancelled) modelsError = errorMessage(error);
+        },
+      },
+    )
+      .then(show)
       .catch((error: unknown) => {
         if (!cancelled) modelsError = errorMessage(error);
       })

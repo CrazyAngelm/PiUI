@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock('./transport', () => ({ hostInvoke: invoke, hostListen: vi.fn(), desktopAvailable: true }));
+const memory = new Map<string, string>();
+vi.stubGlobal('localStorage', {
+  getItem: (key: string) => memory.get(key) ?? null,
+  setItem: (key: string, value: string) => void memory.set(key, value),
+  removeItem: (key: string) => void memory.delete(key),
+  clear: () => memory.clear(),
+});
 let harnessModels: typeof import('./harnessModels').harnessModels;
 let workspaceModel: typeof import('./harnessModels').workspaceModel;
 beforeEach(async () => { vi.resetModules(); invoke.mockReset(); ({ harnessModels, workspaceModel } = await import('./harnessModels')); });
@@ -57,6 +64,37 @@ describe('native harness catalog v18', () => {
     const result = { protocol: 18, harness: 'claude-code', models: [{ id: 'sonnet', provider: 'anthropic', name: 'Sonnet', thinkingLevels: ['low', 'high'], supportsFast: false }], resources: { items: [], warnings: [] } };
     invoke.mockResolvedValueOnce(result);
     expect(await harnessModels(request), 'a failure is never cached').toEqual(result);
+  });
+  it('shows a remembered catalog at once and reports the probe that replaces it', async () => {
+    localStorage.clear();
+    const request = { workspaceId: 'project', harness: 'claude-code' as const };
+    const old = { protocol: 18, harness: 'claude-code', models: [{ id: 'sonnet', name: 'Sonnet' }], resources: { items: [], warnings: [] } };
+    invoke.mockResolvedValueOnce(old);
+    await harnessModels(request);
+    vi.resetModules();
+    const fresh = await import('./harnessModels');
+    const next = { ...old, models: [{ id: 'opus', name: 'Opus' }] };
+    let complete!: (value: typeof next) => void;
+    invoke.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const onFresh = vi.fn();
+    expect(await fresh.cachedHarnessModels(request, { onFresh }), 'no wait for the native probe').toEqual(old);
+    expect(onFresh).not.toHaveBeenCalled();
+    complete(next);
+    await vi.waitFor(() => expect(onFresh).toHaveBeenCalledWith(next));
+  });
+  it('forgets a remembered catalog when the probe fails and never serves it to direct callers', async () => {
+    localStorage.clear();
+    const request = { workspaceId: 'project', harness: 'claude-code' as const };
+    invoke.mockResolvedValueOnce({ protocol: 18, harness: 'claude-code', models: [], resources: { items: [], warnings: [] } });
+    await harnessModels(request);
+    vi.resetModules();
+    let fresh = await import('./harnessModels');
+    invoke.mockRejectedValueOnce({ code: 'SIGN_IN_REQUIRED', recoverable: true });
+    await expect(fresh.harnessModels(request), 'sign-in checks see the probe').rejects.toMatchObject({ code: 'SIGN_IN_REQUIRED' });
+    vi.resetModules();
+    fresh = await import('./harnessModels');
+    invoke.mockRejectedValueOnce({ code: 'SIGN_IN_REQUIRED', recoverable: true });
+    await expect(fresh.cachedHarnessModels(request), 'no snapshot after a failure').rejects.toMatchObject({ code: 'SIGN_IN_REQUIRED' });
   });
   it('forwards only session model fields: the host rejects catalog-only fields', () => {
     const catalogEntry = { id: 'gpt-5.5', provider: null as unknown as string, name: 'GPT-5.5', thinkingLevels: ['low', 'high'], supportsFast: true };

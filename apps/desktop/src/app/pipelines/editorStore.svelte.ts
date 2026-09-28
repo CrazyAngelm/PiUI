@@ -6,7 +6,7 @@
  * preflight and the host's atomic save.
  */
 import dagre from '@dagrejs/dagre';
-import { harnessModels } from '../../host-api/harnessModels';
+import { cachedHarnessModels, harnessModels } from '../../host-api/harnessModels';
 import {
   orchestrationError,
   orchestrationHost,
@@ -270,6 +270,12 @@ export class PipelineEditorStore {
     this.graph = next;
   }
 
+  /** Fills in what arrived after the draft opened (a template's model) without an undo step. */
+  fillIn(next: AgentGraph): void {
+    this.graph = next;
+    if (!this.canUndo) this.history.reset(next);
+  }
+
   settle(): void {
     this.history.record(this.graph);
     this.canUndo = this.history.canUndo;
@@ -474,13 +480,20 @@ export class PipelineEditorStore {
 
   async loadCatalog(harness: AgentProfile['harness'], refresh = false): Promise<void> {
     if (this.safeMode) return;
-    try {
-      const result = await harnessModels({ workspaceId: this.workspaceId, harness }, refresh);
+    const loaded = (result: HarnessModelsResult): void => {
       this.catalogs = { ...this.catalogs, [harness]: result };
       const { [harness]: _error, ...rest } = this.catalogErrors;
       this.catalogErrors = rest;
-    } catch (error) {
+    };
+    const failed = (error: unknown): void => {
       this.catalogErrors = { ...this.catalogErrors, [harness]: error instanceof Error ? error.message : 'Could not load models.' };
+    };
+    const request = { workspaceId: this.workspaceId, harness };
+    try {
+      // A remembered catalog shows at once; the native probe replaces it.
+      loaded(refresh ? await harnessModels(request, true) : await cachedHarnessModels(request, { onFresh: loaded, onError: failed }));
+    } catch (error) {
+      failed(error);
     }
   }
 
