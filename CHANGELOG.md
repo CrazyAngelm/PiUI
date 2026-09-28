@@ -6,6 +6,19 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-09-29
+
+### Added
+
+- Sub-pipelines (ADR-042, orchestration v6.7): a saved pipeline can run as one step of another. The step maps the child's inputs (fixed value, run input or an upstream result), starts an ordinary child run and returns the child's declared outputs; an Output block on the canvas declares what a pipeline returns. Runs link parent and child; cancelling the parent cancels the child; cycles and nesting deeper than 4 are refused.
+- System file version 5: exports carry sub-pipeline steps (by pipeline name) and outputs; versions 1-4 still import.
+- Project board and teammates (ADR-041).
+
+### Changed
+
+- Saving a pipeline that would break another pipeline using it as a sub-pipeline is refused with the affected pipelines named; referenced pipelines cannot be deleted.
+- Board and chat pipeline answers use a pipeline's declared outputs when it has them.
+
 ## [0.2.5] - 2026-09-28
 
 ### Added
