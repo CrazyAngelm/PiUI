@@ -29,6 +29,10 @@
   import { composerDropTargets } from './composer/dropTargets.svelte';
   import { activeMention, fileMention, rankFiles, rankNamed, replaceMention } from './composer/mentions';
   import type { ComposerMenuItem } from './composer/menuItems';
+  import HandoffChips from '../board/HandoffChips.svelte';
+  import { boards } from '../board/boardStore.svelte';
+  import { rankTeammates } from '../team/handle';
+  import { teammates } from '../team/teammatesStore.svelte';
 
   interface Props {
     snapshot: SessionSnapshot;
@@ -88,16 +92,26 @@
   ]);
   // A PiUI command wins over a native one of the same name: PiUI runs it on send.
   const nativeCommands = $derived(catalog.commands.filter((command) => !commands.some((own) => own.name === command.name)));
+  // `@` also mentions teammates when the project board is on (ADR-041).
+  const teamMentions = $derived(boards.stores.get(workspaceId)?.enabled === true);
   const mention = $derived(
     menuDismissed
       ? undefined
       : activeMention(text, caret, { slash: true, at: Boolean(workspaceId), dollar: support.skillMentions && catalog.skills.length > 0 }),
   );
+  $effect(() => {
+    const id = workspaceId;
+    if (mention?.trigger !== '@' || !id) return;
+    untrack(() => {
+      boards.ensure([id]);
+      void teammates.ensure(id);
+    });
+  });
   const SOURCE_LABELS: Readonly<Record<string, string>> = { extension: 'extension', prompt: 'prompt', skill: 'skill' };
 
   type Menu =
     | { kind: 'slash'; items: ComposerMenuItem[] }
-    | { kind: 'file'; items: ComposerMenuItem[]; paths: string[] }
+    | { kind: 'file'; items: ComposerMenuItem[]; paths: string[]; handles: string[] }
     | { kind: 'skill'; items: ComposerMenuItem[]; mentions: string[] };
   const menu = $derived.by((): Menu | undefined => {
     if (!mention) return undefined;
@@ -122,8 +136,18 @@
       return own.length || native.length ? { kind: 'slash', items: [...own, ...native] } : undefined;
     }
     if (mention.trigger === '@') {
+      // Teammates of a project with a board come first, as their own group (ADR-041).
+      const team = teamMentions ? rankTeammates(teammates.list(workspaceId), mention.query) : [];
       const paths = rankFiles(fileMentions.files, mention.query);
-      return { kind: 'file', paths, items: paths.map((path) => ({ key: `file:${path}`, title: path })) };
+      const people = team.map((teammate): ComposerMenuItem => ({
+        key: `teammate:${teammate.id}`,
+        title: `@${teammate.handle}`,
+        ...(teammate.role ? { detail: teammate.role } : {}),
+        group: $t('Teammates'),
+        avatar: { avatar: teammate.avatar, color: teammate.color },
+      }));
+      const files = paths.map((path): ComposerMenuItem => ({ key: `file:${path}`, title: path, ...(people.length ? { group: $t('Project files') } : {}) }));
+      return { kind: 'file', paths, handles: team.map((teammate) => teammate.handle), items: [...people, ...files] };
     }
     const skills = rankNamed(catalog.skills, mention.query);
     return {
@@ -139,7 +163,7 @@
   });
   const menuId = $derived(`composer-menu-${sessionId}`);
   const menuLabel = $derived(
-    menu?.kind === 'file' ? $t('Project files') : menu?.kind === 'skill' ? $t('Skills') : $t('Available commands'),
+    menu?.kind === 'file' ? (menu.handles.length ? $t('Teammates and project files') : $t('Project files')) : menu?.kind === 'skill' ? $t('Skills') : $t('Available commands'),
   );
   const menuEmpty = $derived(
     menu?.kind === 'file'
@@ -356,7 +380,12 @@
       void place(`${item.title} `, item.title.length + 1);
       return;
     }
-    const replacement = current.kind === 'file' ? fileMention(current.paths[index] ?? '') : current.mentions[index];
+    const replacement =
+      current.kind === 'file'
+        ? index < current.handles.length
+          ? `@${current.handles[index] ?? ''}`
+          : fileMention(current.paths[index - current.handles.length] ?? '')
+        : current.mentions[index];
     if (!replacement) return;
     const next = replaceMention(text, mention, replacement);
     void place(next.text, next.caret);
@@ -573,6 +602,9 @@
       <PipelineInputsBar bind:this={inputsBar} detail={pipelineDetail} loading={pipelineLoading} error={pipelineError} disabled={busy} existingChat={true} />
     {:else if pendingResults}
       <p class="handoff">{$t('The next message hands the pipeline result to {0}.', [harnessMeta(harness).label])}</p>
+    {/if}
+    {#if !pipelineId}
+      <HandoffChips {workspaceId} {sessionId} {text} disabled={busy || safeMode} onHandedOff={() => void place('', 0)} />
     {/if}
     <Textarea
       bind:ref={input}

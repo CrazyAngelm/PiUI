@@ -36,6 +36,9 @@ export async function createPiAdapter(config, emit) {
 
   if (config.nativeSubagents === true) throw fail("unsupported-policy", "This Pi adapter cannot enforce native subagent policy.");
   if (config.coordination === true) throw fail("unsupported-policy", "This Pi RPC adapter cannot register the coordinator tool.");
+  // Pi RPC has no custom host tools. The board is optional, so the chat
+  // starts without it and the host shows that board tools are unavailable.
+  if (Array.isArray(config.hostTools) && config.hostTools.includes("board")) emit({ type: "notice", code: "unsupported-board-tool" });
   if (config.permissionMode === "workspace-write") {
     throw fail("unsupported-policy", "This Pi adapter cannot enforce workspace-only writes as an OS boundary.");
   }

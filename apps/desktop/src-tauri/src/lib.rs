@@ -15,6 +15,9 @@ pub mod app_update;
 mod automation_paths;
 mod autostart;
 mod background;
+mod board;
+mod board_runs;
+mod board_sessions;
 mod catalog_watch;
 mod contributions;
 mod dto;
@@ -40,6 +43,7 @@ mod session_tools_contract_tests;
 #[cfg(test)]
 mod session_tools_test_support;
 mod state;
+mod teammates_api;
 mod workspace_api;
 
 use state::HostState;
@@ -839,6 +843,26 @@ pub fn run() -> Result<(), tauri::Error> {
             let pipeline_library = pipeline_library::PipelineLibrary::open(&app_data_dir)
                 .map_err(|_| std::io::Error::other("Could not open the pipeline library"))?;
             app.manage(pipeline_library);
+            let board_service = board::BoardService::open(&app_data_dir, safe_mode)
+                .map_err(|_| std::io::Error::other("Could not open the project boards"))?;
+            let board_events = app.handle().clone();
+            board_service.set_notifier(std::sync::Arc::new(
+                move |event: &board::model::BoardChangedEventV1| {
+                    use tauri::Emitter;
+                    let _ = board_events.emit(board::BOARD_CHANGED_EVENT_V1, event);
+                },
+            ));
+            // Board-driven runs go through the ordinary orchestration run
+            // path; sessions get the board tool from their record.
+            board_service.set_run_starter(std::sync::Arc::new(
+                board_runs::OrchestrationRunStarter::new(app.handle().clone()),
+            ));
+            state.workspace.set_board_hooks(std::sync::Arc::new(
+                board_sessions::BoardSessions::new(app.handle().clone()),
+            ));
+            app.manage(board_service);
+            let board_run_engine = board_runs::BoardRunEngine::default();
+            app.manage(board_run_engine.clone());
             let plugin_host =
                 plugins::PluginsState::open(&app_data_dir, safe_mode, env!("CARGO_PKG_VERSION"))
                     .map_err(|_| std::io::Error::other("Could not open the plugin registry"))?;
@@ -881,6 +905,7 @@ pub fn run() -> Result<(), tauri::Error> {
             if !safe_mode {
                 orchestration_scheduler.start_timed_schedule_worker(app.handle().clone());
                 trigger_engine.start(app.handle().clone());
+                board_run_engine.start(app.handle().clone());
                 harness_registry_api::start_background_discovery(app.handle().clone());
             }
             if let Some(server) = agent_server {
@@ -900,6 +925,8 @@ pub fn run() -> Result<(), tauri::Error> {
             placement_api::workspace_placement_v1,
             adopt_api::workspace_adopt_v1,
             pipeline_library::pipeline_library_v1,
+            board::board_command_v1,
+            teammates_api::teammates_command_v1,
             harness_registry_api::harness_registry_v1,
             app_update::app_update_status_v1,
             app_update::app_update_check_v1,
@@ -979,6 +1006,9 @@ pub fn run() -> Result<(), tauri::Error> {
                 app.state::<orchestration_scheduler::OrchestrationScheduler>()
                     .begin_shutdown();
                 if let Some(engine) = app.try_state::<orchestration_triggers::TriggerEngine>() {
+                    engine.begin_shutdown();
+                }
+                if let Some(engine) = app.try_state::<board_runs::BoardRunEngine>() {
                     engine.begin_shutdown();
                 }
                 if let Some(plugins) = app.try_state::<plugins::PluginsState>() {

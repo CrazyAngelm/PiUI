@@ -596,6 +596,7 @@ fn snapshot() -> RunDefinitionSnapshot {
             name: "Build and review".to_owned(),
             team_id: "team-1".to_owned(),
             pipeline_id: "pipeline-1".to_owned(),
+            managed_by_teammate_id: None,
         }),
     }
 }

@@ -1,9 +1,11 @@
+import type BoardView from '../board/BoardView.svelte';
 import type ChatView from './ChatView.svelte';
 import type CommandPalette from './CommandPalette.svelte';
 import type HistoryView from '../history/HistoryView.svelte';
 import type InboxView from './InboxView.svelte';
 import type PipelinesView from './PipelinesView.svelte';
 import type SettingsView from './SettingsView.svelte';
+import type TeamView from '../team/TeamView.svelte';
 
 /**
  * Route views load on first use so first paint only ships the sidebar and
@@ -17,6 +19,8 @@ interface Views {
   settings: typeof SettingsView;
   palette: typeof CommandPalette;
   history: typeof HistoryView;
+  board: typeof BoardView;
+  team: typeof TeamView;
 }
 
 export type LazyView = keyof Views;
@@ -28,6 +32,8 @@ const loaders: { [K in LazyView]: () => Promise<{ default: Views[K] }> } = {
   settings: () => import('./SettingsView.svelte'),
   palette: () => import('./CommandPalette.svelte'),
   history: () => import('../history/HistoryView.svelte'),
+  board: () => import('../board/BoardView.svelte'),
+  team: () => import('../team/TeamView.svelte'),
 };
 
 class LazyViews {

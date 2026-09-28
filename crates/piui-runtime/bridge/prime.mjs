@@ -1,4 +1,4 @@
-export async function createPrimeAdapter(config, emit, coordinatorRequest) {
+export async function createPrimeAdapter(config, emit, coordinatorRequest, boardRequest) {
   const { createHash } = await import("node:crypto");
   const { readFile, stat } = await import("node:fs/promises");
   const { createRequire } = await import("node:module");
@@ -58,9 +58,13 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
       break;
     }
   } catch { /* Older SDK packages can still run without optional model feature discovery. */ }
+  // The board host tool is optional: without the host callback it is simply
+  // not registered. It does not change coordination or native subagents.
+  let boardEnabled = Array.isArray(config.hostTools) && config.hostTools.includes("board") && typeof boardRequest === "function";
   let workspaceTool;
-  if (config.coordination === true) {
-    let Type;
+  let boardTool;
+  let Type;
+  if (config.coordination === true || boardEnabled) {
     try {
       const requireFromPrime = createRequire(join(packageRoot, "package.json"));
       let typeboxEntry;
@@ -74,8 +78,13 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
       }
       ({ Type } = await import(pathToFileURL(typeboxEntry).href));
     } catch {
-      throw fail("runtime-unavailable", "Prime's native tool schema dependency is unavailable.");
+      if (config.coordination === true) throw fail("runtime-unavailable", "Prime's native tool schema dependency is unavailable.");
+      // The board is optional: the chat still starts, without the tool.
+      boardEnabled = false;
+      emit({ type: "notice", code: "unsupported-board-tool" });
     }
+  }
+  if (config.coordination === true) {
     const exact = { additionalProperties: false };
     workspaceTool = sdk.defineTool({
       name: "workspace",
@@ -100,6 +109,51 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
       },
     });
   }
+  if (boardEnabled) {
+    const exact = { additionalProperties: false };
+    const status = Type.Union(["backlog", "todo", "inProgress", "inReview", "blocked", "done", "cancelled"].map((value) => Type.Literal(value)));
+    const priority = Type.Union(["urgent", "high", "normal", "low"].map((value) => Type.Literal(value)));
+    const card = Type.Integer({ minimum: 1 });
+    const title = Type.String({ minLength: 1, maxLength: 200 });
+    const labels = Type.Array(Type.String({ minLength: 1, maxLength: 64 }), { maxItems: 12 });
+    const optional = Type.Optional;
+    boardTool = sdk.defineTool({
+      name: "board",
+      label: "Project board",
+      description: "Manage this project's PiUI board: the cards the person tracks. Call op context before create and prefer updating, commenting on or moving the active or a similar card. Moving to done or cancelled only proposes it to the person. Do not retry ALREADY_CLAIMED or FORBIDDEN. The result is JSON.",
+      parameters: Type.Union([
+        Type.Object({ op: Type.Literal("context"), query: optional(Type.String({ maxLength: 500 })) }, exact),
+        Type.Object({ op: Type.Literal("search"), query: Type.String({ minLength: 1, maxLength: 500 }), includeClosed: optional(Type.Boolean()) }, exact),
+        Type.Object({ op: Type.Literal("list"), status: optional(status) }, exact),
+        Type.Object({ op: Type.Literal("get"), card }, exact),
+        Type.Object({ op: Type.Literal("create"), title, description: optional(Type.String()), priority: optional(priority), labels: optional(labels), status: optional(Type.Union([Type.Literal("backlog"), Type.Literal("todo")])), confirmNew: optional(Type.Boolean()) }, exact),
+        Type.Object({ op: Type.Literal("update"), card, title: optional(title), description: optional(Type.String()), priority: optional(priority), labels: optional(labels) }, exact),
+        Type.Object({ op: Type.Literal("move"), card, to: status, reason: optional(Type.String()) }, exact),
+        Type.Object({ op: Type.Literal("comment"), card, body: Type.String({ minLength: 1 }) }, exact),
+        Type.Object({ op: Type.Literal("claim"), card }, exact),
+        Type.Object({ op: Type.Literal("release"), card }, exact),
+        Type.Object({ op: Type.Literal("link"), card }, exact),
+        Type.Object({ op: Type.Literal("roster") }, exact),
+        Type.Object({ op: Type.Literal("assign"), card, handle: Type.String({ minLength: 1, maxLength: 64 }) }, exact),
+        Type.Object({ op: Type.Literal("handoff"), handle: Type.String({ minLength: 1, maxLength: 64 }), title, description: optional(Type.String()), priority: optional(priority) }, exact),
+      ]),
+      async execute(toolCallId, operation, signal) {
+        try {
+          const result = await boardRequest(operation, { toolCallId, ...(signal ? { signal } : {}) });
+          return { content: [{ type: "text", text: JSON.stringify(result ?? null) }], details: { operation: operation?.op, ok: result?.ok === true } };
+        } catch (error) {
+          const message = typeof error?.safeMessage === "string" ? error.safeMessage : "The board could not complete the request.";
+          throw new Error(message);
+        }
+      },
+    });
+  }
+  // The board is a host grant beside the profile's tool policy (as for Claude
+  // Code's MCP tool), so an allowlist gains exactly the `board` name.
+  const nativeToolAllowlist = Array.isArray(config.allowedTools)
+    ? (boardTool && !config.allowedTools.includes("board") ? [...config.allowedTools, "board"] : config.allowedTools)
+    : undefined;
+  const customTools = [workspaceTool, boardTool].filter(Boolean);
 
   const sessionRoot = resolve(config.sessionDir);
   const containedSessionPath = (input) => {
@@ -185,8 +239,8 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest) {
         ...(model ? { model } : {}),
         ...(config.thinkingLevel ? { thinkingLevel: config.thinkingLevel } : {}),
         ...(config.serviceTier ? { serviceTier: config.serviceTier === "fast" ? "priority" : "default" } : {}),
-        ...(Array.isArray(config.allowedTools) ? { tools: config.allowedTools } : {}),
-        ...(workspaceTool ? { customTools: [workspaceTool] } : {}),
+        ...(nativeToolAllowlist ? { tools: nativeToolAllowlist } : {}),
+        ...(customTools.length ? { customTools } : {}),
       })),
       services,
       diagnostics: services.diagnostics,

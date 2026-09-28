@@ -1,6 +1,6 @@
 // Hermes owns inference, tools, authentication and SQLite history. This adapter
 // translates ACP messages only; the containing host Job owns every child.
-export async function createHermesAdapter(config, emit, coordinatorRequest) {
+export async function createHermesAdapter(config, emit, coordinatorRequest, boardRequest) {
   const { spawn } = await import('node:child_process');
   const { realpath } = await import('node:fs/promises');
   const { join, isAbsolute } = await import('node:path');
@@ -105,16 +105,46 @@ print(json.dumps({'models':models,'resources':{'items':items,'warnings':warnings
   let server;
   // Hermes takes stdio MCP servers over ACP; plugin servers join this session only.
   const mcpServers = pluginMcpServers.map(plugin => ({ name: plugin.name, command: plugin.command, args: [...plugin.args], env: [] }));
-  if (config.coordination) {
+  // Board host tool: optional, independent of coordination.
+  const boardEnabled = Array.isArray(config.hostTools) && config.hostTools.includes('board') && typeof boardRequest === 'function';
+  if (Array.isArray(config.hostTools) && config.hostTools.includes('board') && !boardEnabled) emit({ type: 'notice', code: 'unsupported-board-tool' });
+  const boardStatuses = ['backlog', 'todo', 'inProgress', 'inReview', 'blocked', 'done', 'cancelled'];
+  const boardTool = {
+    name: 'board',
+    description: "Manage this project's PiUI board: the cards the person tracks. Call op context before create and prefer updating, commenting on or moving the active or a similar card. Moving to done or cancelled only proposes it to the person. Do not retry ALREADY_CLAIMED or FORBIDDEN. The result is JSON.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        op: { type: 'string', enum: ['context', 'search', 'list', 'get', 'create', 'update', 'move', 'comment', 'claim', 'release', 'link', 'roster', 'assign', 'handoff'] },
+        card: { type: 'integer', minimum: 1 }, query: { type: 'string', maxLength: 500 }, includeClosed: { type: 'boolean' },
+        status: { type: 'string', enum: boardStatuses }, title: { type: 'string', maxLength: 200 }, description: { type: 'string' },
+        priority: { type: 'string', enum: ['urgent', 'high', 'normal', 'low'] }, labels: { type: 'array', items: { type: 'string' }, maxItems: 12 },
+        confirmNew: { type: 'boolean' }, to: { type: 'string', enum: boardStatuses }, reason: { type: 'string' }, body: { type: 'string' }, handle: { type: 'string' },
+      },
+      required: ['op'],
+      additionalProperties: false,
+    },
+  };
+  if (config.coordination || boardEnabled) {
     const token = randomUUID();
+    const workspaceTool = { name: 'workspace', description: 'Read roster before delegating. It describes when each allowed helper is useful, its required input and expected result. Use only authorized routes.', inputSchema: { type: 'object', properties: { type: { type: 'string', enum: ['roster', 'send', 'observe', 'wait', 'spawn', 'spawnAgent'] }, recipientMemberId: { type: 'string' }, targetMemberId: { type: 'string' }, body: { type: 'string' }, stepId: { type: 'string' }, profileId: { type: 'string' }, name: { type: 'string' }, instructions: { type: 'string' } }, required: ['type'], additionalProperties: false } };
     server = createServer(async (req, res) => {
       if (req.method !== 'POST' || req.headers.authorization !== `Bearer ${token}`) { res.writeHead(403).end(); return; }
       try {
         let raw = ''; for await (const chunk of req) { raw += chunk; if (Buffer.byteLength(raw) > frameLimit) throw fail('frame-too-large'); }
         const message = JSON.parse(raw); let result;
         if (message.method === 'initialize') result = { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'piui-workspace', version: '1' } };
-        else if (message.method === 'tools/list') result = { tools: [{ name: 'workspace', description: 'Read roster before delegating. It describes when each allowed helper is useful, its required input and expected result. Use only authorized routes.', inputSchema: { type: 'object', properties: { type: { type: 'string', enum: ['roster', 'send', 'observe', 'wait', 'spawn', 'spawnAgent'] }, recipientMemberId: { type: 'string' }, targetMemberId: { type: 'string' }, body: { type: 'string' }, stepId: { type: 'string' }, profileId: { type: 'string' }, name: { type: 'string' }, instructions: { type: 'string' } }, required: ['type'], additionalProperties: false } }] };
-        else if (message.method === 'tools/call' && message.params?.name === 'workspace') {
+        else if (message.method === 'tools/list') result = { tools: [...(config.coordination ? [workspaceTool] : []), ...(boardEnabled ? [boardTool] : [])] };
+        else if (message.method === 'tools/call' && message.params?.name === 'board' && boardEnabled) {
+          try {
+            const value = await boardRequest(message.params.arguments, {});
+            result = { ...(value?.ok === false ? { isError: true } : {}), content: [{ type: 'text', text: JSON.stringify(value) }] };
+          } catch (error) {
+            const code = typeof error?.bridgeCode === 'string' ? error.bridgeCode : 'board-failed';
+            const text = typeof error?.safeMessage === 'string' ? error.safeMessage : 'The board could not complete this operation.';
+            result = { isError: true, content: [{ type: 'text', text: JSON.stringify({ ok: false, code, message: text }) }] };
+          }
+        } else if (message.method === 'tools/call' && message.params?.name === 'workspace' && config.coordination) {
           try { result = { content: [{ type: 'text', text: JSON.stringify(await coordinatorRequest(message.params.arguments)) }] }; }
           catch { result = { isError: true, content: [{ type: 'text', text: 'The workspace coordinator denied or could not complete this operation.' }] }; }
         } else if (message.id === undefined) { res.writeHead(202).end(); return; }

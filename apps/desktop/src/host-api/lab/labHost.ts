@@ -1,5 +1,6 @@
 import type { HostTransport } from '../transport';
 import { backgroundHandlers } from './backgroundFake';
+import { boardHandlers, createLabBoards, seedLabBoard } from './boardFake';
 import { acpHandlers } from './acpFake';
 import { appUpdateHandlers, updateScenarioFromSearch, type LabUpdateScenario } from './appUpdateFake';
 import { classicHandlers } from './classicFake';
@@ -21,6 +22,7 @@ import { scriptTestHandlers } from './orchestration/scriptTestFake';
 import { runDebuggingHandlers } from './orchestration/runDebuggingFake';
 import { buildSeed, type SeedActivity } from './scenarios';
 import { sessionToolsHandlers } from './sessionToolsFake';
+import { createLabTeam, seedLabTeam, teammatesHandlers } from './teammatesFake';
 import { withSignedOutClaude } from './scenarios/signedOutClaude';
 import { LabSessions } from './sessionRuntime';
 import { ambientSegment } from './turnScripts';
@@ -94,6 +96,23 @@ function startActivity(activity: readonly SeedActivity[], runtime: LabSessions, 
   }
 }
 
+/**
+ * Project board (ADR-041): the demo's video-studio folder gets two teammates
+ * and an enabled board (the piui folder's definitions stay as other suites
+ * expect them); other scenarios start without boards.
+ */
+function seedBoards(runtime: LabSessions, team: ReturnType<typeof createLabTeam>, boards: ReturnType<typeof createLabBoards>): void {
+  const { state } = runtime;
+  if (state.scenario !== 'demo' && state.scenario !== 'safe') return;
+  const trusted = state.projects.filter((item) => !item.personal && !item.missing && item.trustState === 'trusted');
+  const project = trusted.find((item) => item.name === 'video-studio') ?? trusted[0];
+  if (project === undefined) return;
+  seedLabTeam(runtime, team, project.id);
+  const session = [...state.sessions.values()].find((record) => record.workspaceId === project.id && record.runId === undefined);
+  const run = state.orchestration.get(project.id)?.runs[0];
+  seedLabBoard(runtime, team, boards, project.id, { sessionId: session?.id, runId: run?.id });
+}
+
 export function createLabHost(options: LabHostOptions = {}): LabHost {
   const scenario = options.scenario ?? currentScenario();
   const timers = options.timers ?? browserTimers;
@@ -115,6 +134,9 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
   };
   const runtime = new LabSessions(state, bus, clock);
   const scheduler = new LabRunScheduler(runtime, bus);
+  const team = createLabTeam();
+  const boards = createLabBoards();
+  seedBoards(runtime, team, boards);
   const handlers: LabHandlers = {
     ...workspaceHandlers(runtime),
     ...composerHandlers(runtime),
@@ -134,6 +156,8 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     ),
     ...sessionToolsHandlers(runtime, seed.nativeHistory ?? EMPTY_NATIVE_HISTORY),
     ...pipelineLibraryHandlers(runtime),
+    ...teammatesHandlers(runtime, bus, team),
+    ...boardHandlers(runtime, bus, team, boards),
     // After the ACP registry: plugin ACP agents join it.
     ...pluginHandlers(runtime, bus),
   };

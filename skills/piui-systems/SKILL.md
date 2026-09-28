@@ -21,6 +21,8 @@ Choose topology from dependencies: sequence for cumulative work; independent bra
 
 When the same system should run on different material (the change to review, a topic, a target file), declare top-level run `inputs` and reference them as `{{input.name}}` in tasks instead of hard-coding one run's details. Values are supplied at start (or by a schedule), validated, frozen in the run and shown to every agent as untrusted task data; substitution is plain text, never an expression, and inputs grant no authority. To let a chat start the system (ADR-040), declare a text input named `message` (or keep exactly one text input): the chat message fills it, and the last final agent step's harness continues the chat after the run. This is a UI convention, not a new file field.
 
+A system becomes addressable from a project board by wrapping it in a teammate inside PiUI (ADR-041, `docs/BOARD.md`): the card text fills an input named `card` (else `message`, else the single text input), so declare `card` when the system is meant to take board cards. Handles, wake rules and board permissions are project settings made in PiUI, not file fields; never invent them in a system file. A system file never grants board access.
+
 Routers are distinct from execution agents. A `router` node has exactly one
 direct result input and labeled route branches. In `program` mode, each branch
 uses a declarative `equals`, `exists`, `all`, `any`, or `not` predicate evaluated

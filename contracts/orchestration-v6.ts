@@ -20,6 +20,8 @@
  * unchanged and is re-encoded without the new fields.
  * v6.5 (additive) adds the `plugin` step executor: a node type contributed by
  * an installed, enabled plugin (ADR-032) that the plugin's backend runs.
+ * v6.6 (additive, ADR-041) adds the `board` run trigger and
+ * `LaunchCommandReference.managedByTeammateId`.
  */
 
 import type { HarnessId } from './harness-identity-v2';
@@ -289,6 +291,11 @@ export interface LaunchCommandReference {
   readonly name: string;
   readonly teamId: OrchestrationId;
   readonly pipelineId: OrchestrationId;
+  /**
+   * Additive (v6.6, ADR-041): set by the host on the launch command it
+   * generated for a `simple` teammate; absent on user-authored commands.
+   */
+  readonly managedByTeammateId?: OrchestrationId;
 }
 
 /** Captured by value. Existing runs never follow later definition edits. */
@@ -427,7 +434,19 @@ export type RunTrigger =
       readonly chainDepth: number;
     }
   /** A person started it from a chat (`/run` or the command palette). */
-  | { readonly kind: 'chat'; readonly sessionId?: OrchestrationId };
+  | { readonly kind: 'chat'; readonly sessionId?: OrchestrationId }
+  /**
+   * v6.6 (additive, ADR-041): started for a project board card and teammate
+   * (`board-v1.ts`). `chainDepth` is 0 when a person caused it and counts
+   * agent-caused hops otherwise (0..MAX_TRIGGER_CHAIN_DEPTH).
+   */
+  | {
+      readonly kind: 'board';
+      readonly cardId: OrchestrationId;
+      readonly teammateId: OrchestrationId;
+      readonly cause: 'assigned' | 'movedToTodo' | 'unblocked' | 'mention' | 'manual';
+      readonly chainDepth: number;
+    };
 
 export interface OrchestrationRunV6 {
   /** Additive (v6.1): validated run inputs, frozen when the run starts. */

@@ -1,6 +1,6 @@
 // Codex app-server adapter. All implementation bindings stay factory-local so
 // this source can be concatenated with the common embedded runner.
-export async function createCodexAdapter(config, emit, coordinatorRequest, openChild) {
+export async function createCodexAdapter(config, emit, coordinatorRequest, openChild, boardRequest) {
   const { spawn } = await import("node:child_process");
   const path = await import("node:path");
 
@@ -49,6 +49,14 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   }
   if (coordinationEnabled && config.nativeSubagents === true) {
     throw fail("unsupported-managed-native-subagents", "Managed Codex runs use coordinator-only spawning and cannot also enable native subagents.");
+  }
+  // Board host tool: optional and independent of coordination. Codex takes
+  // dynamic tools only on `thread/start`, so a resumed thread runs without it
+  // (a notice, never a failure: unlike the coordinator, the board is optional).
+  const boardRequested = Array.isArray(config.hostTools) && config.hostTools.includes("board");
+  const boardEnabled = boardRequested && typeof boardRequest === "function" && !config.nativeId;
+  if (boardRequested && !boardEnabled) {
+    emit({ type: "notice", code: config.nativeId ? "unsupported-board-tool-resume" : "unsupported-board-tool" });
   }
   if (config.nativeSubagents === true) {
     throw fail("unsupported-native-subagent-policy", "Codex cannot prove that native subagents are enabled for this session.");
@@ -838,6 +846,37 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       pendingCoordinatorCalls.delete(key);
     }
   };
+  const answerBoardCall = async (message) => {
+    const params = message.params || {};
+    const key = `board:${String(message.id)}:${String(params.callId)}`;
+    const reply = (text, success) => writeNative({ id: message.id, result: { contentItems: [{ type: "inputText", text }], success } });
+    if (
+      !boardEnabled
+      || params.threadId !== nativeId
+      || typeof params.turnId !== "string"
+      || typeof params.callId !== "string"
+      || !params.arguments
+      || typeof params.arguments !== "object"
+      || Array.isArray(params.arguments)
+      || pendingCoordinatorCalls.has(key)
+    ) {
+      await reply(JSON.stringify({ ok: false, code: "invalid-board-call", message: "The board request is invalid." }), false);
+      return;
+    }
+    const controller = new AbortController();
+    pendingCoordinatorCalls.set(key, { controller, turnId: params.turnId });
+    try {
+      const result = await boardRequest(params.arguments, { toolCallId: params.callId, signal: controller.signal });
+      if (controller.signal.aborted) throw fail("board-cancelled", "The board request was cancelled.");
+      await reply(JSON.stringify(result), result?.ok === true);
+    } catch (error) {
+      const code = typeof error?.bridgeCode === "string" ? error.bridgeCode : "board-failed";
+      const messageText = typeof error?.safeMessage === "string" ? error.safeMessage : "The board request failed.";
+      await reply(JSON.stringify({ ok: false, code, message: messageText }), false).catch(() => {});
+    } finally {
+      pendingCoordinatorCalls.delete(key);
+    }
+  };
   const abortCoordinatorCalls = (turnId) => {
     for (const entry of pendingCoordinatorCalls.values()) {
       if (turnId === undefined || entry.turnId === turnId) entry.controller.abort();
@@ -859,7 +898,8 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       return;
     }
     if (method === "item/tool/call" && message.id !== undefined) {
-      void answerCoordinatorCall(message);
+      if (params.namespace === "piui" && params.tool === "board") void answerBoardCall(message);
+      else void answerCoordinatorCall(message);
       return;
     }
     if (serverRequestMethods.has(method) && message.id !== undefined) {
@@ -1244,6 +1284,30 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       { type: "function", name: "spawn", description: "Lease one ready predefined pipeline step using its snapshotted profile.", inputSchema: { type: "object", properties: { stepId: { type: "string" } }, required: ["stepId"], additionalProperties: false } },
     ],
   }] : undefined;
+  const boardStatuses = ["backlog", "todo", "inProgress", "inReview", "blocked", "done", "cancelled"];
+  const boardTools = boardEnabled ? [{
+    type: "namespace",
+    name: "piui",
+    description: "PiUI host tools for this chat.",
+    tools: [{
+      type: "function",
+      name: "board",
+      description: "Manage this project's PiUI board: the cards the person tracks. Call op context before create and prefer updating, commenting on or moving the active or a similar card. Moving to done or cancelled only proposes it to the person. Do not retry ALREADY_CLAIMED or FORBIDDEN. The result is JSON.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          op: { type: "string", enum: ["context", "search", "list", "get", "create", "update", "move", "comment", "claim", "release", "link", "roster", "assign", "handoff"] },
+          card: { type: "integer", minimum: 1 }, query: { type: "string", maxLength: 500 }, includeClosed: { type: "boolean" },
+          status: { type: "string", enum: boardStatuses }, title: { type: "string", maxLength: 200 }, description: { type: "string" },
+          priority: { type: "string", enum: ["urgent", "high", "normal", "low"] }, labels: { type: "array", items: { type: "string" }, maxItems: 12 },
+          confirmNew: { type: "boolean" }, to: { type: "string", enum: boardStatuses }, reason: { type: "string" }, body: { type: "string" }, handle: { type: "string" },
+        },
+        required: ["op"],
+        additionalProperties: false,
+      },
+    }],
+  }] : [];
+  const dynamicTools = [...(workspaceTools ?? []), ...boardTools];
   const resourceConfig = {};
   for (const rule of config.resourceRules ?? []) {
     if (rule.kind === "skill") {
@@ -1269,7 +1333,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
         excludeTurns: true,
         initialTurnsPage: { sortDirection: "desc", itemsView: "full" },
       })
-    : await callDuringStartup("thread/start", { ...startThreadParams, ephemeral: false, ...(workspaceTools ? { dynamicTools: workspaceTools } : {}) });
+    : await callDuringStartup("thread/start", { ...startThreadParams, ephemeral: false, ...(dynamicTools.length ? { dynamicTools } : {}) });
   thinkingLevel ??= opened.reasoningEffort ?? undefined;
   serviceTier ??= opened.serviceTier === "fast" ? "fast" : "standard";
   const thread = opened?.thread;

@@ -503,6 +503,27 @@ impl PipelineLibrary {
         })
     }
 
+    /// Forgets `workspace_id`'s chat default when it names `launch_command_id`
+    /// (a deleted teammate's launch command, ADR-041). Returns whether it did.
+    pub(crate) fn clear_chat_default_for(
+        &self,
+        workspace_id: &str,
+        launch_command_id: &str,
+    ) -> Result<bool, LibraryError> {
+        check_id(workspace_id)?;
+        check_id(launch_command_id)?;
+        self.transact(|document| {
+            let names_it = document
+                .chat_defaults
+                .get(workspace_id)
+                .is_some_and(|command| command == launch_command_id);
+            if names_it {
+                document.chat_defaults.remove(workspace_id);
+            }
+            Ok(names_it)
+        })
+    }
+
     pub(crate) fn chat(&self, session_id: &str) -> Result<Option<ChatPipelineV1>, LibraryError> {
         check_id(session_id)?;
         Ok(self.lock()?.document.chats.get(session_id).cloned())

@@ -1,0 +1,81 @@
+{
+  "teammates": [
+    {
+      "id": "teammate-1",
+      "handle": "reviewer",
+      "name": "Reviewer",
+      "color": "#7c3aed",
+      "avatar": "RV",
+      "role": "Reviews diffs for correctness and missing tests.",
+      "kind": { "type": "simple", "profileId": "teammate-teammate-1-agent" },
+      "launchCommandId": "teammate-teammate-1-command",
+      "cardInput": { "type": "auto" },
+      "board": { "read": true, "comment": true, "create": false, "move": true, "claim": true, "assign": false },
+      "maxConcurrentRuns": 1,
+      "wake": { "onAssign": "ask", "onMention": true },
+      "enabled": true,
+      "revision": 2,
+      "createdAt": "2026-09-28T09:00:00.000Z",
+      "updatedAt": "2026-09-28T10:00:00.000Z"
+    },
+    {
+      "id": "teammate-2",
+      "handle": "release-train",
+      "name": "Release train",
+      "color": "chaos-red",
+      "avatar": "🚂",
+      "role": "Runs the release pipeline.",
+      "kind": { "type": "pipeline" },
+      "launchCommandId": "release",
+      "cardInput": { "type": "named", "inputName": "notes" },
+      "board": { "read": true, "comment": true, "create": false, "move": false, "claim": false, "assign": false },
+      "maxConcurrentRuns": 2,
+      "wake": { "onAssign": "never", "onMention": false },
+      "enabled": false,
+      "revision": 0,
+      "createdAt": "2026-09-28T09:00:00.000Z",
+      "updatedAt": "2026-09-28T09:00:00.000Z"
+    }
+  ],
+  "drafts": [
+    {
+      "handle": "reviewer",
+      "name": "Reviewer",
+      "color": "#7c3aed",
+      "avatar": "RV",
+      "role": "Reviews diffs for correctness and missing tests.",
+      "body": {
+        "type": "simple",
+        "agent": {
+          "harness": "codex",
+          "model": "gpt-5.5",
+          "permissionMode": "read-only",
+          "reasoning": "high",
+          "serviceTier": "fast",
+          "networkAccess": false,
+          "instructions": "Review carefully."
+        }
+      },
+      "cardInput": { "type": "auto" },
+      "board": { "read": true, "comment": true, "create": false, "move": true, "claim": true, "assign": false },
+      "maxConcurrentRuns": 1,
+      "wake": { "onAssign": "ask", "onMention": true },
+      "enabled": true
+    },
+    {
+      "id": "teammate-2",
+      "expectedRevision": 0,
+      "handle": "release-train",
+      "name": "Release train",
+      "color": "chaos-red",
+      "avatar": "🚂",
+      "role": "Runs the release pipeline.",
+      "body": { "type": "pipeline", "launchCommandId": "release" },
+      "cardInput": { "type": "named", "inputName": "notes" },
+      "board": { "read": true, "comment": true, "create": false, "move": false, "claim": false, "assign": false },
+      "maxConcurrentRuns": 2,
+      "wake": { "onAssign": "never", "onMention": false },
+      "enabled": false
+    }
+  ]
+}

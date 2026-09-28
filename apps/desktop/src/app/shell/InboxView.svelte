@@ -7,6 +7,8 @@
   import ApprovalCard from './ApprovalCard.svelte';
   import HarnessMark from './HarnessMark.svelte';
   import { useWorkspace } from './context';
+  import { boards } from '../board/boardStore.svelte';
+  import BoardInboxSections from '../board/BoardInboxSections.svelte';
 
   const store = useWorkspace();
   const items = $derived(store.inboxApprovals);
@@ -18,6 +20,7 @@
     return title.replace(/\s+-\s+[0-9a-f-]{8,}$/iu, '');
   }
   const failed = $derived(store.catalog.sessions.filter((session) => session.status === 'failed'));
+  const boardAttention = $derived(boards.attention().length);
 
   function origin(sessionId: string): string {
     const session = store.catalog.sessions.find((item) => item.id === sessionId);
@@ -35,8 +38,8 @@
   </header>
 
   <div class="content">
-    {#if items.length === 0 && failed.length === 0}
-      <EmptyState icon={InboxIcon} title={$t('Nothing needs you right now')} description={$t('Approvals, questions from agents and failed chats appear here.')} />
+    {#if items.length === 0 && failed.length === 0 && boardAttention === 0}
+      <EmptyState icon={InboxIcon} title={$t('Nothing needs you right now')} description={$t('Approvals, questions from agents, board proposals and failed chats appear here.')} />
     {:else}
       {#if items.length}
         <h2>{$t('Waiting for your decision')} <span class="count">{items.length}</span></h2>
@@ -68,6 +71,8 @@
         </ul>
       {/if}
     {/if}
+
+    <BoardInboxSections />
 
     {#if pipelineAgents.length}
       <h2>{$t('Pipeline agents at work')} <span class="count">{pipelineAgents.length}</span></h2>

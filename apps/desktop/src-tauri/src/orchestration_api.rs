@@ -399,6 +399,23 @@ impl OrchestrationApiState {
             .map_err(Into::into)
     }
 
+    /// A run the project board starts for a card and teammate (ADR-041).
+    /// Host-internal: the trigger is never a WebView argument, and only a
+    /// valid `RunTrigger::Board` is accepted.
+    pub(crate) fn create_board_run(
+        &self,
+        request: StartRunRequest,
+        trigger: RunTrigger,
+    ) -> Result<Run, OrchestrationApiError> {
+        validate_workspace_id(&request.workspace_id)?;
+        if !matches!(trigger, RunTrigger::Board { .. }) || !trigger.is_valid() {
+            return Err(OrchestrationApiError::invalid());
+        }
+        self.store
+            .transact(|workspaces| create_run_in(workspaces, request, Some(trigger)))
+            .map_err(Into::into)
+    }
+
     pub(crate) fn next_schedule_due(&self) -> Result<Option<DateTime<Utc>>, OrchestrationApiError> {
         let store = self.snapshot()?;
         Ok(store
@@ -1893,6 +1910,14 @@ impl DefinitionValue for LaunchCommandReference {
                 .any(|pipeline| pipeline.value.id == self.pipeline_id)
     }
     fn can_delete(workspace: &WorkspaceOrchestration, id: &str) -> bool {
+        // A teammate (ADR-041) always resolves to a saved launch command.
+        if workspace
+            .teammates
+            .iter()
+            .any(|teammate| teammate.launch_command_id == id)
+        {
+            return false;
+        }
         // Automations that start this pipeline or wait for it keep it.
         !workspace.schedules.iter().any(|schedule| {
             schedule.value.launch_command_id == id
@@ -3535,6 +3560,19 @@ pub(crate) fn save_graph(
     state: &OrchestrationApiState,
     request: SaveGraphRequest,
 ) -> Result<(), OrchestrationApiError> {
+    validate_graph_request(&request)?;
+    state
+        .store
+        .transact(|workspaces| apply_graph_in(workspaces, request).map(|_| ()))
+        .map_err(Into::into)
+}
+
+/// Checks a graph save before any store transaction: the definitions must
+/// form a valid run snapshot and every spawn grant must be authorized.
+/// Shared by `save_graph` and the teammates API (ADR-041).
+pub(crate) fn validate_graph_request(
+    request: &SaveGraphRequest,
+) -> Result<(), OrchestrationApiError> {
     validate_workspace_id(&request.workspace_id)?;
     let snapshot = RunDefinitionSnapshot {
         profiles: request
@@ -3554,36 +3592,45 @@ pub(crate) fn save_graph(
                 .map_err(|_| OrchestrationApiError::denied())?;
         }
     }
-    state
-        .store
-        .transact(|workspaces| {
-            let index = match workspaces
-                .iter()
-                .position(|value| value.workspace_id == request.workspace_id)
-            {
-                Some(index) => index,
-                None => {
-                    workspaces.push(WorkspaceOrchestration::empty(request.workspace_id.clone()));
-                    workspaces.len() - 1
-                }
-            };
-            let workspace = &mut workspaces[index];
-            for profile in request.profiles {
-                put_graph_definition(workspace, profile)?;
-            }
-            put_graph_definition(workspace, request.team)?;
-            put_graph_definition(workspace, request.pipeline)?;
-            put_graph_definition(workspace, request.command)?;
-            if snapshot
-                .profiles
-                .iter()
-                .any(|value| !value.valid_for_workspace(workspace))
-            {
-                return Err(StoreError::Invalid);
-            }
-            Ok(())
-        })
-        .map_err(Into::into)
+    Ok(())
+}
+
+/// Applies a request checked by `validate_graph_request` inside a store
+/// transaction, with revision checks per definition. Returns the index of
+/// the workspace it wrote. Any error must abort the whole transaction.
+pub(crate) fn apply_graph_in(
+    workspaces: &mut Vec<WorkspaceOrchestration>,
+    request: SaveGraphRequest,
+) -> Result<usize, StoreError> {
+    let profiles: Vec<AgentProfile> = request
+        .profiles
+        .iter()
+        .map(|entry| entry.value.clone())
+        .collect();
+    let index = match workspaces
+        .iter()
+        .position(|value| value.workspace_id == request.workspace_id)
+    {
+        Some(index) => index,
+        None => {
+            workspaces.push(WorkspaceOrchestration::empty(request.workspace_id.clone()));
+            workspaces.len() - 1
+        }
+    };
+    let workspace = &mut workspaces[index];
+    for profile in request.profiles {
+        put_graph_definition(workspace, profile)?;
+    }
+    put_graph_definition(workspace, request.team)?;
+    put_graph_definition(workspace, request.pipeline)?;
+    put_graph_definition(workspace, request.command)?;
+    if profiles
+        .iter()
+        .any(|value| !value.valid_for_workspace(workspace))
+    {
+        return Err(StoreError::Invalid);
+    }
+    Ok(index)
 }
 
 #[tauri::command]

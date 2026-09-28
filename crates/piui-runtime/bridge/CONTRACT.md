@@ -34,6 +34,8 @@ Pi tool blocks and Codex MCP/dynamic tool blocks are built from arbitrary native
 - `{type:'approvalResolved',requestId}`
 - `{type:'binding',nativeId,nativePath?}` (host-private only)
 - `{type:'error',message:safeFixedSummary}`
+- `{type:'notice',code:'unsupported-board-tool'|'unsupported-board-tool-resume'}` (non-fatal; see hostTools)
+- `{type:'boardRequest',requestId,operation}` / `{type:'coordinatorRequest',requestId,operation}` (runner-emitted, host-private)
 
 Runner request LF JSON: `{id:string,method:'initialize'|'snapshot'|'prompt'|'interrupt'|'models'|'setModel'|'setMode'|'respond'|'rename'|'dispose',params:object}`. Initialize params add `harness:'pi'|'prime-agent'|'codex'|'hermes'|'claude-code'|'acp:<descriptor id>'` to config; exactly once. Return `{id,ok:true,result}` or `{id,ok:false,error:{code,message,details?}}` (`details`: optional bounded plain data an adapter sets as `safeDetails`, today only an ACP sign-in refusal's method names); event `{event:NativeEvent}`. Buffer raw bytes, split only LF. Pending native operations must not serialize interruption/approval behind an active turn. EOF closes admission, calls dispose, then exits; Rust handles hung descendants. No generic evaluate/exec/file method.
 
@@ -55,6 +57,27 @@ Runner emits `{type:'coordinatorRequest',requestId:string,operation:CoordinatorO
 
 Codex implementation uses negotiated experimental dynamic tools and `item/tool/call` requests bound to native thread/turn/call/namespace/tool; no MCP server or global config changes. Prime/Pi use native SDK custom tool registration when supported; retain their generic tool-call timeline projection. If a runtime cannot implement this seam, reject mandatory coordinator-tool launches, not silent prompt-only fallback.
 
+## hostTools / board tool (optional)
+A session may carry `hostTools: ["board"]` in host-private config (`NativeRuntimeConfig.host_tools`, omitted when empty). It is independent of `coordination`: it never disables native subagents, never adds `--disallowed-tools Agent` / `multi_agent` switches and never enables the `workspace` tool. Factories receive an optional fourth callback `boardRequest(operation, {toolCallId?, signal?})` (Codex: fifth, after `openChild`). The board is optional: an adapter that cannot register it starts the session anyway and emits `{type:'notice',code}`; it never fails the start for the board.
+
+The runner validates `BoardToolOperationV1` (contracts/board-v1.ts) with `validateBoardOperation`: `op` is one of `context|search|list|get|create|update|move|comment|claim|release|link|roster|assign|handoff`; every other key must belong to that op (no scope, actor or workspace field exists); `card` is a positive safe integer; statuses/priorities are the contract enums (`create.status` only `backlog|todo`); caps: title 200 chars, query 500 chars, handle 64, reason 2000, labels ≤12 × 64 chars, comment body 16 KiB and description 64 KiB (UTF-8 bytes). An invalid call is refused in the bridge (`invalid-board-operation`) and never reaches the host; `board-disabled` when the session has no board.
+
+Runner emits `{type:'boardRequest',requestId:'piui-board-N',operation}`. The host derives workspace/session/run/member/teammate from the emitting runtime binding, never from the operation, and answers once through the Rust-only `NativeRuntime::board_response(request_id, result)`, which writes `boardResponse` with `{requestId,result:BoardToolResultV1}` (`result` is an object with a boolean `ok`; `{ok:false,code,message}` is a normal result the agent reads). Unknown, duplicate or retired ids fail with `stale-board-request`; a malformed result with `invalid-board-response`. Like coordinator calls, pending board calls settle as failures (`board-cancelled`) on turn completion, interrupt, EOF and dispose; there is no separate timeout. The `coordinatorResponse` wire is unchanged.
+
+The agent sees one tool `board` with a compact JSON schema (`op` enum plus the optional fields) and a short description (call `context` before `create`; do not retry `ALREADY_CLAIMED`/`FORBIDDEN`; done/cancelled only become a proposal). The tool result is the host result as JSON text (`isError` when `ok:false`).
+
+| Harness | Mechanism | Native tool name |
+|---|---|---|
+| Claude Code | the session-scoped HTTP MCP server `piui-workspace` (started for coordination or the board), pre-approved with `--allowed-tools` exactly the enabled host tools | `mcp__piui-workspace__board` |
+| Hermes | the same loopback HTTP MCP server in `session/new`/`session/load` `mcpServers` | `board` on server `piui-workspace` |
+| ACP | as Hermes; an agent without `mcpCapabilities.http` (or descriptor `mcpHttp:false`) gets notice `unsupported-board-tool` | `board` on server `piui-workspace` |
+| Prime Agent | second SDK custom tool (TypeBox union); an enforced allowlist gains exactly `board` | `board` |
+| Codex | dynamic tool namespace `piui`, function `board`, on `thread/start` only; a resumed thread gets notice `unsupported-board-tool-resume` | `piui` / `board` |
+| Pi | none; notice `unsupported-board-tool` | — |
+
+Notice codes (`NativeNoticeCode`): `unsupported-board-tool`, `unsupported-board-tool-resume`. `HarnessKind::supports_board_tool(resumed)` gives the static answer; ACP HTTP MCP support is known only after the agent starts.
+
+With a Claude Code tool allowlist (`--tools … --strict-mcp-config`) the board keeps `mcp__*` undenied, as the coordinator does: strict MCP config already limits MCP to this session's own server. `board` in `allowedTools` names this host tool and is accepted only when the board is enabled.
 
 ## Terminal turn outcome
 `idle` is a session readiness state, NOT proof of task success. Native providers may end failed/interrupted turns by returning to idle. Each adapter MUST emit `{type:'turnCompleted',outcome:'succeeded'|'failed'|'interrupted'}` exactly once after an admitted turn reaches its native terminal outcome, before final idle. Native stop reasons/turn status determine outcome, not absence of transport errors. A failed command that was never admitted rejects normally; a transport loss with no terminal proof stays uncertain. Host tracks outcome with turn generation; initial idle or later idle cannot overwrite it. Scheduler success requires explicit succeeded, never status-only idle. This is host-private metadata, not a persisted replacement transcript.
@@ -367,7 +390,7 @@ model loop.
   offer only deny/cancel, so such a session can never approve a Bash command or
   any other prompted tool.
 - Tool policy: `allowedTools` → `--tools` + `--strict-mcp-config` (and
-  `--disallowed-tools mcp__*` without coordination). `--allowedTools` is only
+  `--disallowed-tools mcp__*` without coordination or the board tool). `--allowedTools` is only
   pre-approval and never expresses a restriction. `nativeSubagents:false` and
   managed runs add `--disallowed-tools Agent`. Resource rules, network policy,
   base-instruction replacement and unknown effort/speed values are rejected

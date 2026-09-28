@@ -3,6 +3,7 @@
   import FolderSync from '@lucide/svelte/icons/folder-sync';
   import MessageSquare from '@lucide/svelte/icons/message-square';
   import Zap from '@lucide/svelte/icons/zap';
+  import KanbanSquare from '@lucide/svelte/icons/square-kanban';
   import { t } from '../../features/locale/language';
   import type { RunTrigger } from '../../host-api/orchestrationClient';
   import { MAX_TRIGGER_CHAIN_DEPTH } from '../../../../../contracts/orchestration-v6';
@@ -36,6 +37,9 @@
       {#if trigger.chainDepth > 1}
         <span class="depth">· {$t('chained run {0} of {1}', [trigger.chainDepth, MAX_TRIGGER_CHAIN_DEPTH])}</span>
       {/if}
+    {:else if trigger.kind === 'board'}
+      <KanbanSquare size={13} aria-hidden="true" />
+      <span>{$t('Started from a board card')}</span>
     {:else}
       <MessageSquare size={13} aria-hidden="true" />
       <span>{$t('Started from a chat')}</span>

@@ -32,10 +32,11 @@ use piui_orchestration::NativeHistoryReference;
 use piui_platform::ProjectDirectory;
 use piui_runtime::acp::AcpLaunch;
 use piui_runtime::workspace_runtime::{
-    AcpAgentId, BlockKind, BlockStatus, BridgeFailureCode, CLAUDE_SIGN_IN_MESSAGE,
-    CoordinatorOperation, CoordinatorResponse, HarnessAvailability, NativeApproval, NativeBlock,
-    NativeEvent, NativeEventReceiver, NativeRuntime, NativeRuntimeConfig, NativeRuntimeError,
-    NativeSessionModes, NativeSnapshot, offline_harness_capabilities, probe_native_harnesses,
+    AcpAgentId, BlockKind, BlockStatus, BoardToolOperation, BridgeFailureCode,
+    CLAUDE_SIGN_IN_MESSAGE, CoordinatorOperation, CoordinatorResponse, HarnessAvailability,
+    HostTool, NativeApproval, NativeBlock, NativeEvent, NativeEventReceiver, NativeNoticeCode,
+    NativeRuntime, NativeRuntimeConfig, NativeRuntimeError, NativeSessionModes, NativeSnapshot,
+    offline_harness_capabilities, probe_native_harnesses,
 };
 pub use piui_runtime::workspace_runtime::{
     ApprovalDecision, ApprovalOption, HarnessCapabilities, HarnessKind, PermissionMode, PromptMode,
@@ -157,6 +158,10 @@ pub struct SessionSnapshot {
     /// Additive v15 field: session modes a live ACP agent advertises.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modes: Option<NativeSessionModes>,
+    /// Additive v15 field: non-fatal notices of the live runtime (today only
+    /// "board tools unavailable in this chat"); omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notices: Vec<NativeNoticeCode>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -236,12 +241,30 @@ pub enum WorkspaceResult {
     rename_all_fields = "camelCase"
 )]
 pub enum WorkspaceEventPayload {
-    Session { session: WorkspaceSession },
-    Block { block: NativeBlock },
-    TextDelta { block_id: String, text: String },
-    Approval { approval: WorkspaceApproval },
-    ApprovalResolved { request_id: String },
-    Error { message: String },
+    Session {
+        session: WorkspaceSession,
+    },
+    Block {
+        block: NativeBlock,
+    },
+    TextDelta {
+        block_id: String,
+        text: String,
+    },
+    Approval {
+        approval: WorkspaceApproval,
+    },
+    ApprovalResolved {
+        request_id: String,
+    },
+    Error {
+        message: String,
+    },
+    /// Additive v15 event: a non-fatal runtime notice; the session keeps
+    /// running. Also listed in `SessionSnapshot.notices`.
+    Notice {
+        code: NativeNoticeCode,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -493,6 +516,63 @@ struct CoordinatorBinding {
     handler: CoordinatorRequestHandler,
 }
 
+/// Who a session's board tool acts for: taken from the session record when
+/// the runtime starts, never from a tool call (ADR-041).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BoardBinding {
+    pub workspace_id: String,
+    pub session_id: String,
+    pub harness: HarnessKind,
+    pub run_id: Option<String>,
+    pub member_id: Option<String>,
+    pub profile_id: Option<String>,
+}
+
+/// What the board adds to one session start.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct BoardSessionSetup {
+    /// Host tools for the native runtime (empty: no board tool).
+    pub host_tools: Vec<HostTool>,
+    /// Instruction block appended to the session instructions.
+    pub instructions: Option<String>,
+    /// Shown on the session when the board is enabled but its tool is not.
+    pub notice: Option<NativeNoticeCode>,
+}
+
+/// The project board as the workspace host sees it (installed at setup).
+/// Every method may block and is called off the async runtime threads.
+pub(crate) trait BoardSessionHooks: Send + Sync {
+    /// Decides the board tool, instruction block and notice of one start.
+    fn setup(&self, binding: &BoardBinding, resumed: bool) -> BoardSessionSetup;
+    /// Resets the write budget of a new agent turn.
+    fn begin_turn(&self, turn_key: &str);
+    /// Answers one board tool call with a `BoardToolResultV1` JSON object.
+    fn handle(
+        &self,
+        binding: &BoardBinding,
+        turn_key: &str,
+        operation: BoardToolOperation,
+    ) -> serde_json::Value;
+}
+
+/// Board state of one live session.
+struct LiveBoard {
+    binding: BoardBinding,
+    hooks: Arc<dyn BoardSessionHooks>,
+    /// Agent turn counter; with the session id it keys the write budget.
+    turn: AtomicU64,
+}
+
+impl LiveBoard {
+    fn turn_key(&self) -> String {
+        format!(
+            "{}:{}",
+            self.binding.session_id,
+            self.turn.load(Ordering::Acquire)
+        )
+    }
+}
+
 struct LiveState {
     composer_gate: tokio::sync::Mutex<()>,
     composer_notify: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
@@ -505,6 +585,10 @@ struct LiveState {
     materialized: Mutex<Option<bool>>,
     turns: watch::Sender<TurnState>,
     coordinator_tasks: Mutex<Vec<JoinHandle<()>>>,
+    /// Present when this session received the board tool.
+    board: Option<LiveBoard>,
+    /// Non-fatal notices (host-decided or reported by the adapter).
+    notices: Mutex<Vec<NativeNoticeCode>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -790,6 +874,7 @@ struct SpawnedStart {
     native: NativeSnapshot,
     binding_persisted: bool,
     coordinator: Option<CoordinatorBinding>,
+    board: Option<(BoardBinding, Arc<dyn BoardSessionHooks>, BoardSessionSetup)>,
     publisher: WorkspaceEventPublisher,
     created: bool,
 }
@@ -883,6 +968,8 @@ struct WorkspaceHostInner {
     extension_ui: Mutex<Option<ExtensionUiPublisher>>,
     /// Plugin MCP servers for ordinary chats; unset until the app is set up.
     plugin_mcp: Mutex<Option<PluginMcpProvider>>,
+    /// The project board; unset until the app is set up (no board tool).
+    board: Mutex<Option<Arc<dyn BoardSessionHooks>>>,
     /// ACP agent descriptors, decisions and discovery (ADR-034).
     acp: AcpAgents,
     /// Chat placement (worktrees, handoff links, adopted sessions) and the
@@ -924,6 +1011,7 @@ impl WorkspaceHost {
                 attachments: attachments::AttachmentStore::open(app_data_dir)?,
                 extension_ui: Mutex::new(None),
                 plugin_mcp: Mutex::new(None),
+                board: Mutex::new(None),
                 acp: AcpAgents::open(app_data_dir)?,
                 tools: crate::session_placement::SessionTools::open(app_data_dir)?,
                 #[cfg(test)]
@@ -946,6 +1034,44 @@ impl WorkspaceHost {
         if let Ok(mut slot) = self.inner.plugin_mcp.lock() {
             *slot = Some(provider);
         }
+    }
+
+    /// Installs the project board (ADR-041). Without it no session gets the
+    /// board tool.
+    pub(crate) fn set_board_hooks(&self, hooks: Arc<dyn BoardSessionHooks>) {
+        if let Ok(mut slot) = self.inner.board.lock() {
+            *slot = Some(hooks);
+        }
+    }
+
+    /// The board tool, instruction block and notice of one start.
+    async fn board_setup(
+        &self,
+        record: &PersistedSession,
+        resumed: bool,
+    ) -> Option<(BoardBinding, Arc<dyn BoardSessionHooks>, BoardSessionSetup)> {
+        let hooks = self.inner.board.lock().ok().and_then(|slot| slot.clone())?;
+        let binding = BoardBinding {
+            workspace_id: record.workspace_id.clone(),
+            session_id: record.id.clone(),
+            harness: record.harness,
+            run_id: record.run_id.clone(),
+            member_id: record.member_id.clone(),
+            profile_id: record.profile_id.clone(),
+        };
+        let blocking_hooks = Arc::clone(&hooks);
+        let blocking_binding = binding.clone();
+        let setup = tauri::async_runtime::spawn_blocking(move || {
+            blocking_hooks.setup(&blocking_binding, resumed)
+        })
+        .await
+        .ok()?;
+        Some((binding, hooks, setup))
+    }
+
+    /// The harness of a chat, as a board link records it.
+    pub(crate) fn session_harness(&self, session_id: &str) -> Result<HarnessKind, WorkspaceError> {
+        Ok(self.record(session_id)?.harness)
     }
 
     /// Plugin MCP servers for one start. Only an ordinary chat (no run, no
@@ -1415,6 +1541,17 @@ impl WorkspaceHost {
                 .as_ref()
                 .is_some_and(|rules| !rules.as_array().is_some_and(Vec::is_empty));
         let plugin_mcp_servers = self.plugin_mcp_servers(&record, &cwd, managed).await;
+        let board = match resume_binding(&record) {
+            Ok((native_id, _)) => self.board_setup(&record, native_id.is_some()).await,
+            Err(_) => None,
+        };
+        let (host_tools, instructions) = match &board {
+            Some((_, _, setup)) => (
+                setup.host_tools.clone(),
+                merge_instructions(instructions, setup.instructions.as_deref()),
+            ),
+            None => (Vec::new(), instructions),
+        };
         let started: Result<StartedRuntime, WorkspaceError> = async {
             let session_directory = self.inner.native_root.join(&record.id);
             fs::create_dir_all(&session_directory).map_err(|_| WorkspaceError::io())?;
@@ -1448,6 +1585,7 @@ impl WorkspaceHost {
                 package_root: None,
                 agent_dir: None,
                 kernel_python: None,
+                host_tools,
             };
             // An ACP agent starts only from its trusted, resolved descriptor.
             let acp = match record.harness.acp_agent() {
@@ -1511,6 +1649,7 @@ impl WorkspaceHost {
                 native,
                 binding_persisted,
                 coordinator,
+                board,
                 publisher,
                 created,
             }),
@@ -1554,9 +1693,21 @@ impl WorkspaceHost {
             native,
             binding_persisted,
             coordinator,
+            board,
             publisher,
             created: _,
         } = spawned;
+        let (live_board, notices) = match board {
+            Some((binding, hooks, setup)) => (
+                (!setup.host_tools.is_empty()).then(|| LiveBoard {
+                    binding,
+                    hooks,
+                    turn: AtomicU64::new(0),
+                }),
+                setup.notice.into_iter().collect(),
+            ),
+            None => (None, Vec::new()),
+        };
         let state = Arc::new(LiveState {
             composer_gate: tokio::sync::Mutex::new(()),
             composer_notify: Mutex::new(None),
@@ -1577,6 +1728,8 @@ impl WorkspaceHost {
             })
             .0,
             coordinator_tasks: Mutex::new(Vec::new()),
+            board: live_board,
+            notices: Mutex::new(notices),
         });
         let instance_id = Uuid::new_v4();
         let forwarding = spawn_event_forwarder(EventForwarding {
@@ -1656,6 +1809,11 @@ impl WorkspaceHost {
             capabilities: native.capabilities,
             models: native.models,
             modes: native.modes,
+            notices: state
+                .notices
+                .lock()
+                .map(|notices| notices.clone())
+                .unwrap_or_default(),
         })
     }
 
@@ -1741,6 +1899,14 @@ impl WorkspaceHost {
             .live_runtime(session_id)?
             .ok_or_else(WorkspaceError::closed)?;
         validate_text(&text)?;
+        // A steer joins the running turn; any other message starts a turn
+        // with a fresh board write budget.
+        if mode != PromptMode::Steer
+            && let Some(board) = state.board.as_ref()
+        {
+            board.turn.fetch_add(1, Ordering::AcqRel);
+            board.hooks.begin_turn(&board.turn_key());
+        }
         runtime
             .prompt(text, mode)
             .await
@@ -2033,6 +2199,7 @@ impl WorkspaceHost {
             package_root: None,
             agent_dir: None,
             kernel_python: None,
+            host_tools: Vec::new(),
         };
         let spawned = self.spawn_native(config, Some(launch)).await;
         let result = match spawned {
@@ -2358,6 +2525,7 @@ fn empty_closed_snapshot(record: PersistedSession) -> SessionSnapshot {
         capabilities: offline_harness_capabilities(record.harness),
         models: record.model.clone().into_iter().collect(),
         modes: None,
+        notices: Vec::new(),
     }
 }
 
@@ -2377,6 +2545,7 @@ fn snapshot_from_history(
         capabilities: offline_harness_capabilities(record.harness),
         models: record.model.clone().into_iter().collect(),
         modes: None,
+        notices: Vec::new(),
     }
 }
 
@@ -3264,6 +3433,55 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                     publish_extension_ui(&inner, &session_id, &request);
                     continue;
                 }
+                NativeEvent::BoardRequest {
+                    request_id,
+                    operation,
+                } => {
+                    let runtime = Arc::clone(&runtime);
+                    let board = state.board.as_ref().map(|board| {
+                        (
+                            board.binding.clone(),
+                            Arc::clone(&board.hooks),
+                            board.turn_key(),
+                        )
+                    });
+                    let task = tokio::spawn(async move {
+                        let result = match board {
+                            // The actor and project come from the session
+                            // binding; the operation carries neither.
+                            Some((binding, hooks, turn_key)) => {
+                                tauri::async_runtime::spawn_blocking(move || {
+                                    hooks.handle(&binding, &turn_key, operation)
+                                })
+                                .await
+                                .unwrap_or_else(|_| board_unavailable_result())
+                            }
+                            None => board_unavailable_result(),
+                        };
+                        let _ = runtime.board_response(request_id, result).await;
+                    });
+                    if let Ok(mut tasks) = state.coordinator_tasks.lock() {
+                        tasks.retain(|task| !task.is_finished());
+                        tasks.push(task);
+                    } else {
+                        task.abort();
+                    }
+                    continue;
+                }
+                NativeEvent::Notice { code } => {
+                    let added = state.notices.lock().is_ok_and(|mut notices| {
+                        if notices.contains(&code) {
+                            false
+                        } else {
+                            notices.push(code);
+                            true
+                        }
+                    });
+                    if !added {
+                        continue;
+                    }
+                    WorkspaceEventPayload::Notice { code }
+                }
                 NativeEvent::Error { message } => {
                     WorkspaceHost {
                         inner: inner.clone(),
@@ -3395,6 +3613,25 @@ fn mark_materialized(host: &WorkspaceHostInner, state: &LiveState, session_id: &
             Ok(())
         });
     }
+}
+
+/// Appends a host instruction block (the board's) to the session's own
+/// instructions; the session's text comes first.
+fn merge_instructions(own: Option<String>, block: Option<&str>) -> Option<String> {
+    match (own, block) {
+        (Some(own), Some(block)) if !own.trim().is_empty() => Some(format!("{own}\n\n{block}")),
+        (_, Some(block)) => Some(block.to_owned()),
+        (own, None) => own,
+    }
+}
+
+/// The board tool answer when this session has no board binding.
+fn board_unavailable_result() -> serde_json::Value {
+    serde_json::json!({
+        "ok": false,
+        "code": "DISABLED",
+        "message": "The project board is not available in this chat. Do not retry; ask the person to update the card.",
+    })
 }
 
 fn abort_coordinator_tasks(state: &LiveState) {
@@ -3695,6 +3932,89 @@ fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, WorkspaceError> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn the_board_block_follows_the_sessions_own_instructions() {
+        assert_eq!(
+            super::merge_instructions(Some("Be brief.".into()), Some("Board.")).as_deref(),
+            Some(
+                "Be brief.
+
+Board."
+            )
+        );
+        assert_eq!(
+            super::merge_instructions(None, Some("Board.")).as_deref(),
+            Some("Board.")
+        );
+        assert_eq!(
+            super::merge_instructions(Some("  ".into()), Some("Board.")).as_deref(),
+            Some("Board.")
+        );
+        assert_eq!(
+            super::merge_instructions(Some("Own".into()), None).as_deref(),
+            Some("Own")
+        );
+        let unavailable = super::board_unavailable_result();
+        assert_eq!(unavailable["ok"], serde_json::json!(false));
+        assert_eq!(unavailable["code"], serde_json::json!("DISABLED"));
+    }
+
+    #[test]
+    fn slow_resource_discovery_keeps_the_model_catalog() {
+        let degraded = super::catalog_resources(
+            Err(piui_runtime::workspace_runtime::NativeRuntimeError::Timeout),
+            super::HarnessKind::Codex,
+        );
+        assert!(degraded.items.is_empty());
+        assert_eq!(degraded.warnings, [super::CATALOG_RESOURCES_UNAVAILABLE]);
+
+        let answered = piui_runtime::workspace_runtime::NativeResourceCatalog {
+            items: Vec::new(),
+            warnings: vec!["native".into()],
+        };
+        let kept = super::catalog_resources(Ok(answered), super::HarnessKind::Codex);
+        assert_eq!(kept.warnings, ["native"]);
+    }
+
+    #[tokio::test]
+    async fn a_models_request_hands_its_resource_discovery_to_one_resources_request() {
+        let key = ("handoff-project".to_owned(), "Codex".to_owned());
+        let (sender, receiver) = tokio::sync::watch::channel(None);
+        super::pending_catalog_resources()
+            .lock()
+            .unwrap()
+            .insert(key.clone(), (std::time::Instant::now(), receiver));
+        let waiting = tokio::spawn({
+            let key = key.clone();
+            async move { super::take_catalog_resources(&key).await }
+        });
+        sender
+            .send(Some(
+                piui_runtime::workspace_runtime::NativeResourceCatalog {
+                    items: Vec::new(),
+                    warnings: vec!["discovered".into()],
+                },
+            ))
+            .unwrap();
+        let resources = waiting.await.unwrap().expect("handed-off resources");
+        assert_eq!(resources.warnings, ["discovered"]);
+        assert!(
+            super::take_catalog_resources(&key).await.is_none(),
+            "a handoff is claimed once"
+        );
+
+        let (dropped, receiver) = tokio::sync::watch::channel(None);
+        super::pending_catalog_resources()
+            .lock()
+            .unwrap()
+            .insert(key.clone(), (std::time::Instant::now(), receiver));
+        drop(dropped);
+        assert!(
+            super::take_catalog_resources(&key).await.is_none(),
+            "a failed discovery task makes the caller probe again"
+        );
+    }
+
+    #[test]
     fn editor_approvals_carry_additive_prefill_and_timeout_fields() {
         let native: super::NativeApproval = serde_json::from_value(serde_json::json!({
             "id": "pi-approval-1", "kind": "input", "title": "Edit message", "description": "Pi needs a response to continue.",
@@ -3880,6 +4200,7 @@ mod tests {
             capabilities,
             models,
             modes: None,
+            notices: Vec::new(),
         };
         assert_eq!(
             serde_json::to_value(WorkspaceResult::Session {
