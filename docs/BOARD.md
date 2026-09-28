@@ -72,13 +72,20 @@ Disabling keeps all data, hides the Board sidebar item, and removes the
 `backlog, todo` (unstarted) · `inProgress, inReview` (active) · `blocked` ·
 `done, cancelled` (closed). Backlog never starts a run.
 
+A card created without `status` (person `createCard`, agent `create`,
+`handoff`) starts in `todo`. `moveCard.order` is the 0-based position inside
+the target column (0 = top); the host renumbers that column's `order` keys
+(layout only, no card revision bump). An absent `order` appends to the end;
+a position past the end also appends.
+
 Starting a run for a card (person `startRun`, accepted pending start, or a
 wake rule) is one board generation plus one orchestration run creation:
 claim the card (run holds the claim), move to `inProgress`, add a `run` link
 and `runStarted` activity, create the run with
 `RunTrigger::Board { cardId, teammateId, cause, chainDepth }` and the card
 text in the resolved input. If run creation fails, the board change is rolled
-back (claim released, status restored) and an activity comment explains why.
+back (claim released, status restored, run link removed) and an activity
+comment explains why. A rolled-back start does not count toward the cooldown.
 
 Run end: `succeeded` → comment with the truncated final result (≤ 4 KiB) +
 run link, move to `inReview`; `failed` → comment with the failure, move to
@@ -101,7 +108,9 @@ Wake rules (host events, never polling):
 Loop protection: `chainDepth` is 0 when the cause actor is the person; +1 when
 it is a chat agent or run member (from the causing run's depth); stops at
 `MAX_TRIGGER_CHAIN_DEPTH` (pending start instead). A run's own board writes
-never wake the same card. Per-card cooldown 60 s between automatic starts. One
+never wake the same card. Per-card cooldown 60 s between automatic starts
+(only successful starts count: a `runStarted` whose run link is still on the
+card). One
 live run per card (claim). Concurrency: per teammate `maxConcurrentRuns`, per
 board `settings.maxConcurrentRuns`; excess starts queue in priority then age
 order and start when a slot frees.
@@ -109,6 +118,36 @@ order and start when a slot frees.
 Claims: lease `CLAIM_LEASE_SECONDS`, renewed by holder activity, held by runs
 until run end; host sweeps expired claims. `claim` on a claimed card →
 `ALREADY_CLAIMED` (tool text: do not retry, pick other work).
+
+Run engine (host, `board_runs.rs`): board runs are created through the same
+path as `orchestration_start_run_v6` (scope check, plugin-node check,
+frozen snapshot, scheduler). The engine observes committed orchestration
+generations; when a board run ends it records the end on its card once
+(idempotent across restarts: a `runFinished` activity or a host comment
+carrying the run id marks it) and retries queued starts of that project. The
+result is the last succeeded step's recorded output or verified native final
+answer; a failure comment names the failed step, its code and bounded
+detail. A 60 s sweep releases expired agent claims and run claims whose run
+is gone, then retries queues. Details:
+
+- A start that hits a concurrency limit waits in `BoardV1.queuedStarts`
+  (`QueuedStartV1`: id, cardId, teammateId, cause, chainDepth, requestedBy,
+  createdAt; stored in arrival order, started by card priority then age). The
+  entry and a `queued` card activity are written in one board generation; the
+  generation that starts the run removes the entry. The queue is part of the
+  board document, so it survives a restart: at startup the engine loads the
+  boards of projects with teammates and drains their queues. At most 500
+  queued starts per board. Teammate `queued` counts pending starts plus
+  queued starts, both read from the document.
+- Cooldown, too deep a chain or no run engine turn an `always` start into a
+  pending start for the person instead of dropping it.
+- A run member's own writes never wake the card whose claim or run link
+  belongs to its run.
+- A queued start is dropped when its card is closed, moved to `backlog`,
+  deleted, unassigned or reassigned, when its teammate is disabled or
+  deleted, and at drain time when it no longer applies (claimed, board off,
+  teammate not assignable, start refused). A start still without a slot keeps
+  its place. Without a run engine the queue is kept, not drained.
 
 ## Agent access: the `board` host tool
 
@@ -129,6 +168,18 @@ A second host tool beside the coordinator `workspace` tool, enabled by
 through the same response path as coordinator requests. Where the tool is
 unavailable the chat shows "Board tools unavailable in this chat" and the
 instruction block tells the agent to ask the person to update the card.
+
+The host offers the tool only when the project board is enabled, the
+project is not the personal chats pseudo-project, safe mode is off and
+`HarnessKind::supports_board_tool(resumed)` holds. Otherwise, with the board
+enabled, the session carries the notice `unsupported-board-tool` (or
+`unsupported-board-tool-resume` for a resumed Codex thread) and an ordinary
+chat gets the short "ask the person to update the card" block: additive
+`SessionSnapshot.notices` and workspace event `{type:'notice', code}`
+(contracts/workspace-v15.ts). An adapter that finds out at start (ACP without
+HTTP MCP) emits the same notice. The write budget
+(`MAX_AGENT_WRITES_PER_TURN`) is keyed by session and turn: every `prompt` or
+`follow-up` send starts a new turn; a `steer` joins the running one.
 
 Actor and scope come from the session binding (`BoardBinding { workspace_id,
 session_id, run_id?, member_id?, profile_id?, teammate_id? }`), never from

@@ -43,7 +43,7 @@ const USAGE_KEYS = new Set(["id", "inputTokens", "outputTokens", "cacheReadToken
 const EVENT_KEYS = {
   usage: ["usage"], block: ["block"], textDelta: ["blockId", "text"], status: ["status"], approval: ["approval"],
   approvalResolved: ["requestId"], binding: ["nativeId", "nativePath"], turnCompleted: ["outcome"],
-  coordinatorRequest: ["requestId", "operation"], error: ["message"],
+  coordinatorRequest: ["requestId", "operation"], boardRequest: ["requestId", "operation"], notice: ["code"], error: ["message"],
 };
 const BLOCK_KINDS = new Set(["user", "assistant", "thinking", "tool", "custom", "error", "compaction", "unknown"]);
 const BLOCK_STATUSES = new Set(["complete", "streaming", "failed", "interrupted"]);
@@ -823,6 +823,70 @@ test("managed runs expose the coordinator through a session-scoped MCP endpoint"
     await adapter.dispose();
     assert.equal(existsSync(mcpConfigPath), false);
   } finally { await adapter.dispose(); }
+});
+
+test("an ordinary chat gets the board tool without losing native subagents", async () => {
+  const calls = [];
+  const { config, records } = setup({ hostTools: ["board"] });
+  const log = recorder();
+  const adapter = await createClaudeAdapter(config, log.emit, undefined, async (operation, metadata) => {
+    calls.push({ operation, toolCallId: metadata.toolCallId });
+    if (operation.op === "claim") return { ok: false, code: "ALREADY_CLAIMED", message: "Card #4 is claimed." };
+    return { ok: true, op: "context", mode: "auto", similar: [] };
+  });
+  try {
+    assert.deepEqual(log.problems, []);
+    const { args } = startRecord(records);
+    assert.equal(argValue(args, "--allowed-tools"), "mcp__piui-workspace__board", "only the board tool is pre-approved");
+    assert.ok(!args.includes("--disallowed-tools"), "coordination stays off: the native Agent tool is kept");
+    assert.ok(!args.includes("--strict-mcp-config"), "the user's own MCP servers stay as configured");
+    assert.ok(!args.some((value) => /Bearer|127\.0\.0\.1/.test(value)), "the token stays off the command line");
+    const snapshot = await adapter.snapshot();
+    assert.deepEqual(snapshot.capabilities.nativeSubagents, { supported: true, enforcement: "native" });
+    const server = JSON.parse(readFileSync(argValue(args, "--mcp-config"), "utf8")).mcpServers["piui-workspace"];
+    const rpc = async (body) => (await fetch(server.url, { method: "POST", headers: { ...server.headers, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...body }) })).json();
+    assert.deepEqual((await rpc({ method: "tools/list" })).result.tools.map((tool) => tool.name), ["board"]);
+    const context = await rpc({ method: "tools/call", params: { name: "board", arguments: { op: "context" } } });
+    assert.deepEqual(JSON.parse(context.result.content[0].text), { ok: true, op: "context", mode: "auto", similar: [] });
+    assert.equal(context.result.isError, undefined);
+    const refused = await rpc({ method: "tools/call", params: { name: "board", arguments: { op: "claim", card: 4 } } });
+    assert.equal(refused.result.isError, true);
+    assert.equal(JSON.parse(refused.result.content[0].text).code, "ALREADY_CLAIMED");
+    const workspace = await rpc({ method: "tools/call", params: { name: "workspace", arguments: { type: "roster" } } });
+    assert.equal(workspace.error.code, -32601, "the coordinator tool does not exist without coordination");
+    assert.deepEqual(calls.map((call) => call.operation), [{ op: "context" }, { op: "claim", card: 4 }]);
+  } finally { await adapter.dispose(); }
+
+  // With a tool allowlist the session's own server stays reachable: no `mcp__*` denial.
+  const restricted = setup({ hostTools: ["board"], allowedTools: ["Read", "board"] });
+  const second = await createClaudeAdapter(restricted.config, recorder().emit, undefined, async () => ({ ok: true }));
+  try {
+    const { args } = startRecord(restricted.records);
+    assert.equal(argValue(args, "--tools"), "Read");
+    assert.ok(args.includes("--strict-mcp-config"));
+    assert.ok(!args.includes("--disallowed-tools"));
+    assert.equal(argValue(args, "--allowed-tools"), "mcp__piui-workspace__board");
+  } finally { await second.dispose(); }
+
+  // Managed runs list both tools and pre-approve exactly both.
+  const managed = setup({ coordination: true, hostTools: ["board"] });
+  const third = await createClaudeAdapter(managed.config, recorder().emit, async () => ({}), async () => ({ ok: true }));
+  try {
+    const { args } = startRecord(managed.records);
+    assert.equal(argValue(args, "--allowed-tools"), "mcp__piui-workspace__workspace,mcp__piui-workspace__board");
+    assert.equal(argValue(args, "--disallowed-tools"), "Agent");
+  } finally { await third.dispose(); }
+
+  // `board` in an allowlist needs the board host tool; without the host
+  // callback the chat still starts, with a notice and no MCP server.
+  await assert.rejects(createClaudeAdapter(setup({ allowedTools: ["board"], runtimeProgram: "must-not-launch" }).config, () => {}), { bridgeCode: "unsupported-policy" });
+  const plain = setup({ hostTools: ["board"] });
+  const events = [];
+  const fourth = await createClaudeAdapter(plain.config, (event) => events.push(event));
+  try {
+    assert.deepEqual(events.filter((event) => event.type === "notice"), [{ type: "notice", code: "unsupported-board-tool" }]);
+    assert.ok(!startRecord(plain.records).args.includes("--mcp-config"));
+  } finally { await fourth.dispose(); }
 });
 
 test("an API key reported during a turn stops the session before it continues", async () => {

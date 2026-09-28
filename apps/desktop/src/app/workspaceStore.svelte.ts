@@ -54,7 +54,11 @@ export type Route =
   | { name: 'pipelines'; section: PipelineSection; runId?: string }
   | { name: 'settings'; section: SettingsSection }
   /** Read-only native session history of one folder (or personal chats). */
-  | { name: 'history'; workspaceId: string; sessionId?: string };
+  | { name: 'history'; workspaceId: string; sessionId?: string }
+  /** Project board (ADR-041); `cardId` opens its drawer. */
+  | { name: 'board'; workspaceId: string; cardId?: string }
+  /** Project teammates (ADR-041); `teammateId` selects one. */
+  | { name: 'team'; workspaceId: string; teammateId?: string };
 
 export interface InboxApproval {
   approval: WorkspaceApproval;
@@ -130,6 +134,14 @@ function isRoute(value: unknown): value is Route {
     case 'history': {
       const { workspaceId, sessionId } = value as { workspaceId?: unknown; sessionId?: unknown };
       return typeof workspaceId === 'string' && (sessionId === undefined || typeof sessionId === 'string');
+    }
+    case 'board': {
+      const { workspaceId, cardId } = value as { workspaceId?: unknown; cardId?: unknown };
+      return typeof workspaceId === 'string' && (cardId === undefined || typeof cardId === 'string');
+    }
+    case 'team': {
+      const { workspaceId, teammateId } = value as { workspaceId?: unknown; teammateId?: unknown };
+      return typeof workspaceId === 'string' && (teammateId === undefined || typeof teammateId === 'string');
     }
     default:
       return false;
@@ -865,6 +877,7 @@ export class WorkspaceStore {
     const affected =
       (route.name === 'chat' && this.catalog.sessions.find((session) => session.id === route.sessionId)?.workspaceId === workspaceId) ||
       (route.name === 'history' && route.workspaceId === workspaceId) ||
+      ((route.name === 'board' || route.name === 'team') && route.workspaceId === workspaceId) ||
       (route.name === 'pipelines' && this.selectedWorkspaceId === workspaceId);
     if (affected) {
       this.pipelineDirty = false;

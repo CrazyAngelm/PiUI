@@ -264,6 +264,27 @@ test("registers strict workspace tools only for managed runs and origin-binds ca
   );
 });
 
+test("the board tool is optional: a resumed thread starts without it and a notice", async () => {
+  const board = async () => ({ ok: true, op: "roster", teammates: [] });
+  const resumedEvents = [];
+  const resumed = await createCodexAdapter({ ...config, nativeId: "resume-fixture", hostTools: ["board"] }, (event) => resumedEvents.push(event), undefined, undefined, board);
+  try {
+    assert.equal(resumed.snapshot().nativeId, "resume-fixture");
+    assert.deepEqual(resumedEvents.filter((event) => event.type === "notice"), [{ type: "notice", code: "unsupported-board-tool-resume" }]);
+    assert.equal(resumed.snapshot().capabilities.nativeSubagents.enforcement, "native");
+  } finally {
+    await resumed.dispose();
+  }
+  const freshEvents = [];
+  const fresh = await createCodexAdapter({ ...config, hostTools: ["board"] }, (event) => freshEvents.push(event), undefined, undefined, board);
+  try {
+    assert.equal(freshEvents.filter((event) => event.type === "notice").length, 0);
+    assert.equal(fresh.snapshot().capabilities.nativeSubagents.enforcement, "native", "the board never disables native subagents");
+  } finally {
+    await fresh.dispose();
+  }
+});
+
 test("maps each explicit permission mode and resumes without start-only fields", async () => {
   for (const permissionMode of ["native", "read-only", "workspace-write", "full-access"]) {
     const adapter = await createCodexAdapter({

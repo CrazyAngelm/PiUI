@@ -7,7 +7,7 @@
 use crate::orchestration_schedule::StoredSchedule;
 use piui_orchestration::{
     AgentProfile, Coordinator, LaunchCommandReference, PipelineDefinition, Run, TeamDefinition,
-    deserialize_run, serialize_run,
+    Teammate, deserialize_run, serialize_run,
 };
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
@@ -39,6 +39,10 @@ pub(crate) struct WorkspaceOrchestration {
     pub launch_commands: Vec<StoredDefinition<LaunchCommandReference>>,
     #[serde(default)]
     pub schedules: Vec<StoredSchedule>,
+    /// Project teammates (ADR-041, additive). Saved and deleted in the same
+    /// generation as the definitions they manage.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub teammates: Vec<Teammate>,
     pub runs: Vec<Run>,
     /// Runs hidden from the default run list (run debugging v1). UI metadata
     /// only: it never changes a run record, its revision or its scheduling.
@@ -55,6 +59,7 @@ impl WorkspaceOrchestration {
             pipelines: Vec::new(),
             launch_commands: Vec::new(),
             schedules: Vec::new(),
+            teammates: Vec::new(),
             runs: Vec::new(),
             archived_run_ids: std::collections::BTreeSet::new(),
         }

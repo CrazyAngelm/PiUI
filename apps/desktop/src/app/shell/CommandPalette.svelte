@@ -13,6 +13,11 @@
   import ScrollText from '@lucide/svelte/icons/scroll-text';
   import Play from '@lucide/svelte/icons/play';
   import GitBranch from '@lucide/svelte/icons/git-branch';
+  import KanbanSquare from '@lucide/svelte/icons/square-kanban';
+  import SquarePlus from '@lucide/svelte/icons/square-plus';
+  import UsersRound from '@lucide/svelte/icons/users-round';
+  import UserPlus from '@lucide/svelte/icons/user-plus';
+  import { boardIntents } from '../board/intents.svelte';
   import { t } from '../../features/locale/language';
   import { runLauncher } from '../triggers/runLauncher.svelte';
   import HarnessMark from './HarnessMark.svelte';
@@ -50,6 +55,28 @@
   const historyWorkspaceId = $derived(
     store.selectedWorkspaceId || (store.catalog.workspaces.find((item) => !item.missing)?.id ?? ''),
   );
+
+  /** Board and team act on the current project folder (never personal chats). */
+  const boardWorkspaceId = $derived.by(() => {
+    const id = store.selectedSession?.workspaceId ?? store.selectedWorkspaceId;
+    const workspace = store.catalog.workspaces.find((item) => item.id === id && !item.personal && !item.missing)
+      ?? store.catalog.workspaces.find((item) => !item.personal && !item.missing);
+    return workspace?.id ?? '';
+  });
+
+  function openBoard(newCard: boolean): void {
+    const workspaceId = boardWorkspaceId;
+    if (newCard) boardIntents.newCard = workspaceId;
+    store.selectWorkspace(workspaceId);
+    store.navigate({ name: 'board', workspaceId });
+  }
+
+  function openTeam(newTeammate: boolean): void {
+    const workspaceId = boardWorkspaceId;
+    if (newTeammate) boardIntents.newTeammate = workspaceId;
+    store.selectWorkspace(workspaceId);
+    store.navigate({ name: 'team', workspaceId });
+  }
 
   function run(action: () => void): void {
     open = false;
@@ -96,6 +123,20 @@
                 {#if historyWorkspaceId}
                   <Command.Item class="palette__item" value="action:history" keywords={['history', 'sessions', 'branches', 'pi']} onSelect={() => run(() => store.navigate({ name: 'history', workspaceId: historyWorkspaceId }))}>
                     <ScrollText size={15} /><span>{$t('Open session history')}</span>
+                  </Command.Item>
+                {/if}
+                {#if boardWorkspaceId}
+                  <Command.Item class="palette__item" value="action:board" keywords={[$t('Open board'), 'board', 'kanban', 'cards', 'доска']} onSelect={() => run(() => openBoard(false))}>
+                    <KanbanSquare size={15} /><span>{$t('Open board')}</span>
+                  </Command.Item>
+                  <Command.Item class="palette__item" value="action:new-card" keywords={[$t('New card'), 'card', 'task', 'issue', 'карточка']} onSelect={() => run(() => openBoard(true))}>
+                    <SquarePlus size={15} /><span>{$t('New card')}</span>
+                  </Command.Item>
+                  <Command.Item class="palette__item" value="action:team" keywords={[$t('Open team'), 'team', 'teammates', 'команда']} onSelect={() => run(() => openTeam(false))}>
+                    <UsersRound size={15} /><span>{$t('Open team')}</span>
+                  </Command.Item>
+                  <Command.Item class="palette__item" value="action:new-teammate" keywords={[$t('New teammate'), 'teammate', 'agent', 'handle']} onSelect={() => run(() => openTeam(true))}>
+                    <UserPlus size={15} /><span>{$t('New teammate')}</span>
                   </Command.Item>
                 {/if}
                 <Command.Item

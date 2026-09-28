@@ -236,6 +236,20 @@ impl HarnessKind {
         matches!(self, Self::ClaudeCode | Self::Hermes | Self::Acp(_))
     }
 
+    /// Whether the adapter registers the board host tool. Codex takes dynamic
+    /// tools only on a fresh thread (`thread/start`), so a resumed Codex
+    /// thread runs without it; Pi RPC has no custom tools. An ACP agent also
+    /// needs `mcpCapabilities.http`, known only after it starts: it reports a
+    /// missing capability with [`NativeNoticeCode::UnsupportedBoardTool`].
+    #[must_use]
+    pub const fn supports_board_tool(self, resumed: bool) -> bool {
+        match self {
+            Self::ClaudeCode | Self::Hermes | Self::PrimeAgent | Self::Acp(_) => true,
+            Self::Codex => !resumed,
+            Self::Pi => false,
+        }
+    }
+
     /// The ACP descriptor id of an ACP identity.
     #[must_use]
     pub const fn acp_agent(self) -> Option<AcpAgentId> {
@@ -828,6 +842,144 @@ pub enum CoordinatorResponse {
     Failure { code: String, message: String },
 }
 
+/// A host tool one session receives beside (and independent of) the
+/// managed-run coordinator. Enabling one never changes coordination or
+/// native subagent policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HostTool {
+    /// The project board tool (`BoardToolOperationV1`, contracts/board-v1.ts).
+    Board,
+}
+
+/// Board card status (`CardStatusV1`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BoardCardStatus {
+    Backlog,
+    Todo,
+    InProgress,
+    InReview,
+    Blocked,
+    Done,
+    Cancelled,
+}
+
+/// The only statuses a card may be created in.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BoardInitialStatus {
+    Backlog,
+    Todo,
+}
+
+/// Board card priority (`CardPriorityV1`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BoardCardPriority {
+    Urgent,
+    High,
+    Normal,
+    Low,
+}
+
+/// One agent board tool call, mirroring `BoardToolOperationV1` exactly. The
+/// bridge already checked key sets, types and length caps; the host checks
+/// again and derives actor and scope from the session binding, never from
+/// these fields.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "op",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum BoardToolOperation {
+    Context {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+    },
+    Search {
+        query: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        include_closed: Option<bool>,
+    },
+    List {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<BoardCardStatus>,
+    },
+    Get {
+        card: u64,
+    },
+    Create {
+        title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        priority: Option<BoardCardPriority>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        labels: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<BoardInitialStatus>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        confirm_new: Option<bool>,
+    },
+    Update {
+        card: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        priority: Option<BoardCardPriority>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        labels: Option<Vec<String>>,
+    },
+    Move {
+        card: u64,
+        to: BoardCardStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    Comment {
+        card: u64,
+        body: String,
+    },
+    Claim {
+        card: u64,
+    },
+    Release {
+        card: u64,
+    },
+    Link {
+        card: u64,
+    },
+    Roster {},
+    Assign {
+        card: u64,
+        handle: String,
+    },
+    Handoff {
+        handle: String,
+        title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        priority: Option<BoardCardPriority>,
+    },
+}
+
+/// A non-fatal adapter notice. The session keeps running; the host shows the
+/// matching fixed text (for example "Board tools unavailable in this chat").
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NativeNoticeCode {
+    /// The harness (or this agent) cannot receive the board tool.
+    UnsupportedBoardTool,
+    /// A resumed Codex thread cannot re-register dynamic tools.
+    UnsupportedBoardToolResume,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TurnOutcome {
@@ -874,6 +1026,17 @@ pub enum NativeEvent {
     CoordinatorRequest {
         request_id: String,
         operation: CoordinatorOperation,
+    },
+    /// An agent board tool call. Answer exactly once with
+    /// [`NativeRuntime::board_response`]; the actor and board come from the
+    /// emitting runtime's session binding, never from `operation`.
+    BoardRequest {
+        request_id: String,
+        operation: BoardToolOperation,
+    },
+    /// A non-fatal notice; the session keeps running.
+    Notice {
+        code: NativeNoticeCode,
     },
     /// A fire-and-forget extension UI request (Pi `notify`, `setStatus`,
     /// `setWidget`, `setTitle`, `set_editor_text`, or an unknown method).
@@ -953,6 +1116,12 @@ pub struct NativeRuntimeConfig {
     /// [`HarnessKind::accepts_session_mcp`]; empty everywhere else.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugin_mcp_servers: Vec<SessionMcpServer>,
+    /// Host tools for this session (today only the board), independent of
+    /// `coordination`: they never disable native subagents. A harness that
+    /// cannot take one starts without it and emits [`NativeEvent::Notice`]
+    /// (see [`HarnessKind::supports_board_tool`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_tools: Vec<HostTool>,
 }
 
 impl fmt::Debug for NativeRuntimeConfig {
@@ -976,6 +1145,7 @@ impl fmt::Debug for NativeRuntimeConfig {
             .field("has_kernel_python", &self.kernel_python.is_some())
             .field("coordination", &self.coordination)
             .field("plugin_mcp_servers", &self.plugin_mcp_servers.len())
+            .field("host_tools", &self.host_tools)
             .finish()
     }
 }
@@ -1714,6 +1884,28 @@ impl NativeRuntime {
         .map(|_| ())
     }
 
+    /// Resolves one origin-bound board tool request with the host's
+    /// `BoardToolResultV1` JSON (an object with a boolean `ok`; a refusal is
+    /// `{ok:false,code,message}` and still reaches the agent as its result).
+    /// Host-private; never workspace WebView IPC.
+    pub async fn board_response(
+        &self,
+        request_id: String,
+        result: Value,
+    ) -> Result<(), NativeRuntimeError> {
+        if !result.get("ok").is_some_and(Value::is_boolean) {
+            return Err(NativeRuntimeError::InvalidConfiguration);
+        }
+        self.request(
+            "boardResponse",
+            json!({ "requestId": request_id, "result": result }),
+            REQUEST_TIMEOUT,
+            false,
+        )
+        .await
+        .map(|_| ())
+    }
+
     pub async fn rename(&self, title: String) -> Result<(), NativeRuntimeError> {
         self.request("rename", json!({ "title": title }), REQUEST_TIMEOUT, false)
             .await
@@ -2397,7 +2589,7 @@ fn is_isolated_daemon(socket: Option<&str>) -> bool {
 
 fn bridge_source(kind: HarnessKind) -> Result<Vec<u8>, NativeRuntimeError> {
     if kind == HarnessKind::Codex {
-        return Ok(format!("{CODEX_SOURCE}\n{CODEX_POOL_SOURCE}\nglobalThis.__PIUI_BRIDGE_FACTORY__=(config,emit,coordinator)=>config.poolHost?createCodexPool(config,emit):createCodexAdapter(config,emit,coordinator);\n{RUNNER_SOURCE}").into_bytes());
+        return Ok(format!("{CODEX_SOURCE}\n{CODEX_POOL_SOURCE}\nglobalThis.__PIUI_BRIDGE_FACTORY__=(config,emit,coordinator,board)=>config.poolHost?createCodexPool(config,emit):createCodexAdapter(config,emit,coordinator,undefined,board);\n{RUNNER_SOURCE}").into_bytes());
     }
     let (factory, name) = match kind {
         HarnessKind::Pi => (PI_SOURCE, "createPiAdapter"),
@@ -3234,6 +3426,7 @@ mod tests {
             kernel_python: None,
             coordination: false,
             plugin_mcp_servers: Vec::new(),
+            host_tools: Vec::new(),
         }
     }
 
@@ -4591,5 +4784,143 @@ mod tests {
             map_bridge_failure("unsupported-input"),
             BridgeFailureCode::UnsupportedInput
         );
+    }
+
+    #[test]
+    fn board_operations_round_trip_exactly() {
+        let cases = [
+            json!({"op": "context"}),
+            json!({"op": "context", "query": "login"}),
+            json!({"op": "search", "query": "login", "includeClosed": true}),
+            json!({"op": "list", "status": "inProgress"}),
+            json!({"op": "get", "card": 42}),
+            json!({"op": "create", "title": "Fix login", "description": "Steps", "priority": "high", "labels": ["auth"], "status": "todo", "confirmNew": true}),
+            json!({"op": "update", "card": 42, "title": "Fix login flow"}),
+            json!({"op": "move", "card": 42, "to": "inReview", "reason": "Ready"}),
+            json!({"op": "comment", "card": 42, "body": "Done here."}),
+            json!({"op": "claim", "card": 42}),
+            json!({"op": "release", "card": 42}),
+            json!({"op": "link", "card": 42}),
+            json!({"op": "roster"}),
+            json!({"op": "assign", "card": 42, "handle": "reviewer"}),
+            json!({"op": "handoff", "handle": "reviewer", "title": "Review", "priority": "low"}),
+        ];
+        for case in cases {
+            let operation: BoardToolOperation =
+                serde_json::from_value(case.clone()).expect("valid board operation");
+            assert_eq!(serde_json::to_value(&operation).expect("serialize"), case);
+        }
+        assert_eq!(
+            serde_json::from_value::<BoardToolOperation>(
+                json!({"op": "move", "card": 7, "to": "done"})
+            )
+            .expect("move"),
+            BoardToolOperation::Move {
+                card: 7,
+                to: BoardCardStatus::Done,
+                reason: None
+            }
+        );
+    }
+
+    #[test]
+    fn board_operations_deny_unknown_fields_and_values() {
+        for case in [
+            json!({"op": "roster", "extra": true}),
+            json!({"op": "get", "card": 1, "actor": "someone"}),
+            json!({"op": "create", "title": "x", "status": "done"}),
+            json!({"op": "list", "status": "open"}),
+            json!({"op": "update", "card": 1, "priority": "p1"}),
+            json!({"op": "get", "card": -1}),
+            json!({"op": "get"}),
+            json!({"op": "delete", "card": 1}),
+            json!({"type": "roster"}),
+        ] {
+            assert!(
+                serde_json::from_value::<BoardToolOperation>(case.clone()).is_err(),
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn board_request_and_notice_events_parse() {
+        let event: NativeEvent = serde_json::from_value(json!({
+            "type": "boardRequest",
+            "requestId": "piui-board-1",
+            "operation": {"op": "context"}
+        }))
+        .expect("board request");
+        assert_eq!(
+            event,
+            NativeEvent::BoardRequest {
+                request_id: "piui-board-1".into(),
+                operation: BoardToolOperation::Context { query: None }
+            }
+        );
+        for (code, expected) in [
+            (
+                "unsupported-board-tool",
+                NativeNoticeCode::UnsupportedBoardTool,
+            ),
+            (
+                "unsupported-board-tool-resume",
+                NativeNoticeCode::UnsupportedBoardToolResume,
+            ),
+        ] {
+            let notice: NativeEvent =
+                serde_json::from_value(json!({"type": "notice", "code": code})).expect("notice");
+            assert_eq!(notice, NativeEvent::Notice { code: expected });
+        }
+        assert!(
+            serde_json::from_value::<NativeEvent>(
+                json!({"type": "notice", "code": "anything-else"})
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<NativeEvent>(json!({
+                "type": "boardRequest",
+                "requestId": "piui-board-2",
+                "operation": {"op": "roster", "workspaceId": "other"}
+            }))
+            .is_err(),
+            "scope never comes from the operation"
+        );
+    }
+
+    #[test]
+    fn board_host_tool_is_independent_of_coordination() {
+        let mut config = test_config();
+        config.harness = HarnessKind::ClaudeCode;
+        let plain = serde_json::to_value(&config).expect("config");
+        assert!(plain.get("hostTools").is_none(), "omitted when empty");
+        config.host_tools = vec![HostTool::Board];
+        let value = serde_json::to_value(InitializeConfig {
+            config: &config,
+            runtime_program: "claude".into(),
+            runtime_args: Vec::new(),
+            pool_host: false,
+            catalog_only: false,
+            acp: None,
+        })
+        .expect("initialize");
+        assert_eq!(value["hostTools"], json!(["board"]));
+        assert_eq!(value["coordination"], json!(false));
+        assert!(
+            value.get("nativeSubagents").is_none(),
+            "the board never changes native subagent policy"
+        );
+    }
+
+    #[test]
+    fn board_tool_support_per_harness() {
+        assert!(HarnessKind::ClaudeCode.supports_board_tool(false));
+        assert!(HarnessKind::ClaudeCode.supports_board_tool(true));
+        assert!(HarnessKind::Hermes.supports_board_tool(true));
+        assert!(HarnessKind::PrimeAgent.supports_board_tool(true));
+        assert!(HarnessKind::Codex.supports_board_tool(false));
+        assert!(!HarnessKind::Codex.supports_board_tool(true));
+        assert!(!HarnessKind::Pi.supports_board_tool(false));
     }
 }

@@ -4,10 +4,63 @@
 const MAX_FRAME_BYTES = 32 * 1024 * 1024;
 const METHODS = new Set([
   "initialize", "snapshot", "prompt", "interrupt", "models", "resources", "catalogModels",
-  "setModel", "respond", "rename", "dispose", "coordinatorResponse",
+  "setModel", "respond", "rename", "dispose", "coordinatorResponse", "boardResponse",
   "openSession", "sessionRequest", "composerCapabilities", "compact", "setMode", "composerCatalog",
 ]);
 const MAX_DETAILS_BYTES = 4 * 1024;
+
+const BOARD_STATUSES = new Set(["backlog", "todo", "inProgress", "inReview", "blocked", "done", "cancelled"]);
+const BOARD_PRIORITIES = new Set(["urgent", "high", "normal", "low"]);
+const BOARD_LIMITS = Object.freeze({
+  title: 200, query: 500, handle: 64, reason: 2000, label: 64, labels: 12,
+  bodyBytes: 16 * 1024, descriptionBytes: 64 * 1024,
+});
+
+// Strict `BoardToolOperationV1` check (contracts/board-v1.ts): exact key sets,
+// types, enum values and length caps. The host validates again; this keeps
+// malformed agent input off the host channel.
+export function validateBoardOperation(operation) {
+  if (!operation || typeof operation !== "object" || Array.isArray(operation) || typeof operation.op !== "string") return false;
+  const utf8Bytes = (value) => Buffer.byteLength(value, "utf8");
+  const text = (value, max) => typeof value === "string" && value.length <= max;
+  const nonEmpty = (value, max) => text(value, max) && value.trim().length > 0;
+  const card = (value) => Number.isSafeInteger(value) && value > 0;
+  const description = (value) => typeof value === "string" && utf8Bytes(value) <= BOARD_LIMITS.descriptionBytes;
+  const priority = (value) => BOARD_PRIORITIES.has(value);
+  const labels = (value) => Array.isArray(value) && value.length <= BOARD_LIMITS.labels
+    && value.every((label) => nonEmpty(label, BOARD_LIMITS.label));
+  const shapes = {
+    context: { optional: { query: (value) => text(value, BOARD_LIMITS.query) } },
+    search: { required: { query: (value) => nonEmpty(value, BOARD_LIMITS.query) }, optional: { includeClosed: (value) => typeof value === "boolean" } },
+    list: { optional: { status: (value) => BOARD_STATUSES.has(value) } },
+    get: { required: { card } },
+    create: {
+      required: { title: (value) => nonEmpty(value, BOARD_LIMITS.title) },
+      optional: { description, priority, labels, status: (value) => value === "backlog" || value === "todo", confirmNew: (value) => typeof value === "boolean" },
+    },
+    update: { required: { card }, optional: { title: (value) => nonEmpty(value, BOARD_LIMITS.title), description, priority, labels } },
+    move: { required: { card, to: (value) => BOARD_STATUSES.has(value) }, optional: { reason: (value) => text(value, BOARD_LIMITS.reason) } },
+    comment: { required: { card, body: (value) => typeof value === "string" && value.trim().length > 0 && utf8Bytes(value) <= BOARD_LIMITS.bodyBytes } },
+    claim: { required: { card } },
+    release: { required: { card } },
+    link: { required: { card } },
+    roster: {},
+    assign: { required: { card, handle: (value) => nonEmpty(value, BOARD_LIMITS.handle) } },
+    handoff: {
+      required: { handle: (value) => nonEmpty(value, BOARD_LIMITS.handle), title: (value) => nonEmpty(value, BOARD_LIMITS.title) },
+      optional: { description, priority },
+    },
+  };
+  if (!Object.hasOwn(shapes, operation.op)) return false;
+  const required = shapes[operation.op].required ?? {};
+  const optional = shapes[operation.op].optional ?? {};
+  for (const key of Object.keys(operation)) {
+    if (key === "op") continue;
+    const check = Object.hasOwn(required, key) ? required[key] : Object.hasOwn(optional, key) ? optional[key] : undefined;
+    if (!check || !check(operation[key])) return false;
+  }
+  return Object.keys(required).every((key) => Object.hasOwn(operation, key));
+}
 
 function safeFailure(id, code, message, details) {
   return { id, ok: false, error: { code, message, ...(details ? { details } : {}) } };
@@ -47,13 +100,22 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
   const coordinatorPending = new Map();
   let coordinatorSequence = 0;
 
-  const rejectCoordinatorPending = (code = "coordinator-cancelled", message = "The coordinator request was cancelled.") => {
-    const current = [...coordinatorPending.values()];
-    coordinatorPending.clear();
+  const boardPending = new Map();
+  let boardSequence = 0;
+
+  const rejectPending = (pendingMap, code, message) => {
+    const current = [...pendingMap.values()];
+    pendingMap.clear();
     for (const slot of current) {
       const error = Object.assign(new Error(code), { bridgeCode: code, safeMessage: message });
       slot.reject(error);
     }
+  };
+  // Host tool calls belong to one native turn: its end, an interrupt, EOF or
+  // dispose settles every waiting coordinator and board call as a failure.
+  const rejectCoordinatorPending = (code = "coordinator-cancelled", message = "The coordinator request was cancelled.") => {
+    rejectPending(coordinatorPending, code, message);
+    rejectPending(boardPending, "board-cancelled", "The board request was cancelled.");
   };
 
   const validateCoordinatorOperation = (operation) => {
@@ -80,6 +142,23 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
         }, { once: true });
       }
       emit({ type: "coordinatorRequest", requestId, operation });
+    });
+  };
+
+  // Board host tool (`hostTools: ["board"]`), independent of coordination.
+  const boardRequest = (operation, metadata = {}) => {
+    const enabled = Array.isArray(initializeConfig?.hostTools) && initializeConfig.hostTools.includes("board");
+    if (!enabled) return Promise.reject(Object.assign(new Error("unsupported"), { bridgeCode: "board-disabled", safeMessage: "Board tools are not enabled for this chat." }));
+    if (!validateBoardOperation(operation)) return Promise.reject(Object.assign(new Error("invalid"), { bridgeCode: "invalid-board-operation", safeMessage: "The board operation is invalid. Check `op` and its fields." }));
+    const requestId = `piui-board-${++boardSequence}`;
+    return new Promise((resolve, reject) => {
+      boardPending.set(requestId, { resolve, reject });
+      if (metadata?.signal && typeof metadata.signal.addEventListener === "function") {
+        metadata.signal.addEventListener("abort", () => {
+          if (boardPending.delete(requestId)) reject(Object.assign(new Error("cancelled"), { bridgeCode: "board-cancelled", safeMessage: "The board request was cancelled." }));
+        }, { once: true });
+      }
+      emit({ type: "boardRequest", requestId, operation });
     });
   };
 
@@ -128,7 +207,7 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
       }
       initialized = true;
       initializeConfig = params;
-      initializePromise = Promise.resolve().then(() => factory(params, emit, coordinatorRequest));
+      initializePromise = Promise.resolve().then(() => factory(params, emit, coordinatorRequest, boardRequest));
       try {
         adapter = await initializePromise;
         if (!adapter || typeof adapter !== "object") throw new TypeError("invalid adapter");
@@ -168,6 +247,26 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
       coordinatorPending.delete(requestId);
       if (success) slot.resolve(response.result);
       else slot.reject(Object.assign(new Error(response.error.code), { bridgeCode: response.error.code, safeMessage: response.error.message }));
+      writeFrame(output, { id, ok: true, result: null });
+      return;
+    }
+
+    if (request.method === "boardResponse") {
+      const requestId = typeof params.requestId === "string" ? params.requestId : "";
+      const slot = boardPending.get(requestId);
+      if (!slot) {
+        writeFrame(output, safeFailure(id, "stale-board-request", "The board request is invalid or no longer pending."));
+        return;
+      }
+      const result = params.result;
+      const parameterKeys = Object.keys(params).sort().join(",");
+      if (parameterKeys !== "requestId,result" || !result || typeof result !== "object" || Array.isArray(result) || typeof result.ok !== "boolean") {
+        writeFrame(output, safeFailure(id, "invalid-board-response", "The board response is invalid."));
+        return;
+      }
+      boardPending.delete(requestId);
+      // A board refusal (`ok:false`) is still a result the agent reads.
+      slot.resolve(result);
       writeFrame(output, { id, ok: true, result: null });
       return;
     }

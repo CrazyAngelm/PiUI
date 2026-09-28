@@ -128,7 +128,7 @@ export async function createCodexPool(config, emit) {
         if(value.event)emit({type:'pooledEvent',sessionId,event:value.event});
         else { const slot=waiting.get(value.id);waiting.delete(value.id);if(slot)value.ok?slot.resolve(value.result):slot.reject(Object.assign(fail(),{bridgeCode:value.error?.code})); }
       }};
-      const runner=runBridge((c,e,r)=>createCodexAdapter(c,e,r,openChild),input,output);
+      const runner=runBridge((c,e,r,b)=>createCodexAdapter(c,e,r,openChild,b),input,output);
       const request=(method,params)=>new Promise((resolve,reject)=>{const id=`session-${++requestId}`;waiting.set(id,{resolve,reject});input.write(JSON.stringify({id,method,params})+'\n');});
       sessions.set(sessionId,{request,runner,input});
       opening++;

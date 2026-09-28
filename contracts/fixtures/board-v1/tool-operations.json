@@ -1,0 +1,37 @@
+{
+  "valid": [
+    { "op": "context" },
+    { "op": "context", "query": "login redirect" },
+    { "op": "search", "query": "login", "includeClosed": true },
+    { "op": "list" },
+    { "op": "list", "status": "inReview" },
+    { "op": "get", "card": 42 },
+    {
+      "op": "create",
+      "title": "Fix login",
+      "description": "Loop after OAuth",
+      "priority": "high",
+      "labels": ["auth"],
+      "status": "todo",
+      "confirmNew": true
+    },
+    { "op": "update", "card": 42, "title": "Fix login loop", "labels": [] },
+    { "op": "move", "card": 42, "to": "inReview", "reason": "Ready" },
+    { "op": "comment", "card": 42, "body": "Started." },
+    { "op": "claim", "card": 42 },
+    { "op": "release", "card": 42 },
+    { "op": "link", "card": 42 },
+    { "op": "roster" },
+    { "op": "assign", "card": 42, "handle": "reviewer" },
+    { "op": "handoff", "handle": "reviewer", "title": "Review the fix", "priority": "normal" }
+  ],
+  "invalid": [
+    { "op": "context", "workspaceId": "other-project" },
+    { "op": "create", "title": "x", "status": "done" },
+    { "op": "move", "card": 42, "to": "shipped" },
+    { "op": "claim", "card": 42, "actor": { "kind": "person" } },
+    { "op": "roster", "extra": true },
+    { "op": "delete", "card": 42 },
+    { "op": "get", "card": "42" }
+  ]
+}

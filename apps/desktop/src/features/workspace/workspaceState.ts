@@ -8,6 +8,7 @@ import type {
   WorkspaceSession,
 } from '../../../../../contracts/workspace-v15';
 import { acpAgentId } from '../../../../../contracts/harness-identity-v2';
+import { isNoticeEvent, withNotice } from './sessionNotices';
 
 export type EventApplication =
   | { type: 'applied'; snapshot: SessionSnapshot }
@@ -29,6 +30,8 @@ export function applyWorkspaceEvent(snapshot: SessionSnapshot, incoming: Workspa
 
   const event = incoming.event;
   let next: SessionSnapshot = { ...snapshot, revision: incoming.revision };
+  // Additive v15 notice (e.g. the board tool is unavailable); the session keeps running.
+  if (isNoticeEvent(event)) return { type: 'applied', snapshot: withNotice(next, event.code) };
   switch (event.type) {
     case 'session':
       next = { ...next, session: event.session };

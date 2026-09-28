@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Spinner } from '../../../lib/ui';
+  import TeammateAvatar from '../../team/TeammateAvatar.svelte';
   import type { ComposerMenuItem } from './menuItems';
 
   interface Props {
@@ -18,6 +19,9 @@
 
 <div class="menu" {id} role="listbox" aria-label={label} aria-busy={loading || undefined}>
   {#each items as item, index (item.key)}
+    {#if item.group && item.group !== items[index - 1]?.group}
+      <div class="menu__group" role="presentation">{item.group}</div>
+    {/if}
     <button
       type="button"
       id={`${id}-${index}`}
@@ -28,6 +32,7 @@
       onmousedown={(event) => event.preventDefault()}
       onclick={() => onPick(index)}
     >
+      {#if item.avatar}<TeammateAvatar avatar={item.avatar.avatar} color={item.avatar.color} size={18} />{/if}
       <strong class="menu__title">{item.title}</strong>
       {#if item.hint}<span class="menu__hint">{item.hint}</span>{/if}
       {#if item.detail}<span class="menu__detail">{item.detail}</span>{/if}
@@ -112,6 +117,14 @@
   }
   .menu__note + .menu__badge {
     margin-left: 0;
+  }
+  .menu__group {
+    padding: 6px 10px 2px;
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-xs);
+    font-weight: var(--piui-weight-semibold);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
   }
   .menu__empty {
     display: flex;

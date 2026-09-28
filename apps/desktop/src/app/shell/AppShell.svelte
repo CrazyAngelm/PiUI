@@ -172,6 +172,16 @@
           {:else if store.route.name === 'history' && lazyViews.loaded.history}
             {@const HistoryView = lazyViews.loaded.history}
             <HistoryView workspaceId={store.route.workspaceId} sessionId={store.route.sessionId} />
+          {:else if store.route.name === 'board' && lazyViews.loaded.board}
+            {@const BoardView = lazyViews.loaded.board}
+            {#key store.route.workspaceId}
+              <BoardView workspaceId={store.route.workspaceId} cardId={store.route.cardId} />
+            {/key}
+          {:else if store.route.name === 'team' && lazyViews.loaded.team}
+            {@const TeamView = lazyViews.loaded.team}
+            {#key store.route.workspaceId}
+              <TeamView workspaceId={store.route.workspaceId} teammateId={store.route.teammateId} />
+            {/key}
           {:else}
             <div class="view-loading"><Skeleton lines={5} /></div>
           {/if}

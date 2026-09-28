@@ -113,6 +113,7 @@ fn native_config(kind: HarnessKind, label: &str) -> NativeRuntimeConfig {
         kernel_python: None,
         coordination: false,
         plugin_mcp_servers: Vec::new(),
+        host_tools: Vec::new(),
     }
 }
 

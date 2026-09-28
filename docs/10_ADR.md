@@ -1008,3 +1008,47 @@ handed-on text, not as a verified native history reference; a pipeline whose
 final step is a script continues on the composer's harness. Chat entries of
 deleted chats stay in the library until a cleanup exists. Images cannot be
 sent through a pipeline (run inputs are text).
+
+## ADR-041 — Project board and teammates
+
+**Status:** Accepted 2026-09-28 (owner approved the plan; details in
+`docs/BOARD.md`).
+
+**Context:** work could be handed to agents only through a chat or a pipeline
+run. The owner wants a per-project board (in the spirit of Multica and
+Paperclip) where people and agents create, move and comment cards, chats keep
+updating the same card instead of creating duplicates, and named "employees"
+can be assigned cards, whether a single agent or a large pipeline.
+
+**Decision:**
+
+- A per-project board (`board_command_v1`, `contracts/board-v1.ts`) stored as
+  authoritative user data in create-only generation files under
+  `boards-v1/`, never in the project folder. It can be enabled or disabled per
+  project; disabling keeps data and removes the agent tool.
+- Cards are durable intent; runs stay orchestration runs and are only linked.
+  Statuses `backlog/todo/inProgress/inReview/blocked/done/cancelled` grouped
+  in categories that drive automation; backlog never starts a run.
+- A teammate (`teammates_command_v1`, `contracts/teammates-v1.ts`) is a
+  project address `@handle` resolving to one launch command. A simple
+  teammate generates an ordinary one-step graph in the same atomic save; a
+  pipeline teammate wraps any existing launch command. No new run path and no
+  system-file v5.
+- Agents use a host tool `board` (next to the coordinator `workspace` tool,
+  independent of `coordination`). Actor and project come from the session
+  binding. Auto mode with undo is the default for chats; closing a card is
+  always a person decision. Host-side lexical dedup returns candidates;
+  agents decide; the chat's active card is in the instructions.
+- Board-driven runs use `RunTrigger::Board` (orchestration v6.5, additive),
+  wake on assignment, mention, unblock or move to todo (never polling), with
+  claims, per-teammate and per-board concurrency and chain-depth limits.
+
+**Extension test:** a board cannot be a plugin today (no main-view or sidebar
+slot, no plugin storage API) and its authority checks sit beside the
+coordinator. Core owns store, tool and views; tracker sync and exports are
+left to plugins.
+
+**Consequences:** Pi sessions and resumed Codex threads get no board tool
+until a CLI fallback lands; the UI says so. Whole-document board writes are
+bounded by caps and will move with ADR-031. Card text written by one agent is
+untrusted input for another.

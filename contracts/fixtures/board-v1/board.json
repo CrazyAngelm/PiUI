@@ -1,0 +1,174 @@
+{
+  "workspaceId": "project-1",
+  "enabled": true,
+  "settings": {
+    "agentMode": "auto",
+    "chatAgentPermissions": {
+      "read": true,
+      "comment": true,
+      "create": true,
+      "move": true,
+      "claim": false,
+      "assign": true
+    },
+    "maxConcurrentRuns": 4
+  },
+  "cards": [
+    {
+      "id": "card-1",
+      "number": 1,
+      "title": "Fix login redirect",
+      "description": "The login page loops after OAuth.",
+      "priority": "high",
+      "labels": ["auth", "bug"],
+      "blockedBy": [],
+      "parentId": null,
+      "status": "inProgress",
+      "order": 0,
+      "assignee": "teammate-1",
+      "claim": {
+        "actor": { "kind": "host" },
+        "runId": "run-1",
+        "claimedAt": "2026-09-28T10:00:00.000Z",
+        "expiresAt": "2026-09-28T10:30:00.000Z"
+      },
+      "links": [
+        { "kind": "session", "sessionId": "chat-1", "harness": "codex", "since": "2026-09-28T09:00:00.000Z" },
+        { "kind": "run", "runId": "run-1", "teammateId": "teammate-1", "since": "2026-09-28T10:00:00.000Z" }
+      ],
+      "comments": [
+        {
+          "id": "comment-1",
+          "actor": { "kind": "person" },
+          "body": "@reviewer please look",
+          "mentions": [{ "teammateId": "teammate-1", "start": 0, "length": 9 }],
+          "createdAt": "2026-09-28T09:30:00.000Z"
+        },
+        {
+          "id": "comment-2",
+          "actor": {
+            "kind": "runMember",
+            "runId": "run-1",
+            "memberId": "agent",
+            "profileId": "profile-1",
+            "teammateId": "teammate-1"
+          },
+          "body": "Working on it.",
+          "createdAt": "2026-09-28T10:01:00.000Z",
+          "runId": "run-1"
+        }
+      ],
+      "activity": [
+        { "id": "a-1", "actor": { "kind": "chatAgent", "sessionId": "chat-1", "harness": "codex" }, "at": "2026-09-28T09:00:00.000Z", "change": { "type": "created" } },
+        {
+          "id": "a-2",
+          "actor": { "kind": "chatAgent", "sessionId": "chat-1", "harness": "codex" },
+          "at": "2026-09-28T09:05:00.000Z",
+          "change": { "type": "edited", "fields": ["title", "parentId"], "previous": { "title": "Login bug", "parentId": null } },
+          "undoable": true
+        },
+        { "id": "a-3", "actor": { "kind": "person" }, "at": "2026-09-28T09:10:00.000Z", "change": { "type": "moved", "from": "todo", "to": "inProgress", "reason": "started" }, "undoable": true },
+        { "id": "a-4", "actor": { "kind": "person" }, "at": "2026-09-28T09:11:00.000Z", "change": { "type": "assigned", "to": "teammate-1" }, "undoable": true },
+        { "id": "a-5", "actor": { "kind": "person" }, "at": "2026-09-28T09:12:00.000Z", "change": { "type": "claimed" } },
+        { "id": "a-6", "actor": { "kind": "host" }, "at": "2026-09-28T09:13:00.000Z", "change": { "type": "released", "reason": "runEnded" } },
+        { "id": "a-7", "actor": { "kind": "person" }, "at": "2026-09-28T09:14:00.000Z", "change": { "type": "linked", "link": { "kind": "session", "sessionId": "chat-1", "harness": "codex", "since": "2026-09-28T09:00:00.000Z" } } },
+        { "id": "a-8", "actor": { "kind": "person" }, "at": "2026-09-28T09:15:00.000Z", "change": { "type": "commented", "commentId": "comment-1" } },
+        { "id": "a-9", "actor": { "kind": "person" }, "at": "2026-09-28T10:00:00.000Z", "change": { "type": "runStarted", "runId": "run-1", "teammateId": "teammate-1" } },
+        { "id": "a-10", "actor": { "kind": "host" }, "at": "2026-09-28T10:20:00.000Z", "change": { "type": "runFinished", "runId": "run-0", "outcome": "failed" } },
+        { "id": "a-11", "actor": { "kind": "host" }, "at": "2026-09-28T10:21:00.000Z", "change": { "type": "unblocked" } },
+        { "id": "a-12", "actor": { "kind": "person" }, "at": "2026-09-28T10:22:00.000Z", "change": { "type": "reverted", "activityId": "a-3" } },
+        { "id": "a-13", "actor": { "kind": "person" }, "at": "2026-09-28T10:23:00.000Z", "change": { "type": "unlinked", "link": { "kind": "run", "runId": "run-0", "since": "2026-09-28T08:00:00.000Z" } } },
+        { "id": "a-14", "actor": { "kind": "person" }, "at": "2026-09-28T10:24:00.000Z", "change": { "type": "queued", "teammateId": "teammate-1" } }
+      ],
+      "revision": 7,
+      "createdBy": { "kind": "chatAgent", "sessionId": "chat-1", "harness": "codex" },
+      "createdAt": "2026-09-28T09:00:00.000Z",
+      "updatedAt": "2026-09-28T10:23:00.000Z"
+    },
+    {
+      "id": "card-2",
+      "number": 2,
+      "title": "Ship release notes",
+      "description": "",
+      "priority": "normal",
+      "labels": [],
+      "blockedBy": ["card-1"],
+      "parentId": "card-1",
+      "status": "done",
+      "order": 0,
+      "links": [],
+      "comments": [],
+      "activity": [],
+      "revision": 0,
+      "createdBy": { "kind": "person" },
+      "createdAt": "2026-09-28T09:00:00.000Z",
+      "updatedAt": "2026-09-28T09:00:00.000Z",
+      "closedAt": "2026-09-28T11:00:00.000Z"
+    }
+  ],
+  "proposals": [
+    {
+      "id": "proposal-1",
+      "cardId": "card-1",
+      "operation": { "op": "move", "cardId": "card-1", "to": "done", "reason": "Tests pass" },
+      "actor": { "kind": "chatAgent", "sessionId": "chat-1", "harness": "codex" },
+      "createdAt": "2026-09-28T10:30:00.000Z",
+      "status": "pending"
+    },
+    {
+      "id": "proposal-2",
+      "operation": { "op": "create", "card": { "title": "Follow-up", "labels": ["auth"] }, "status": "todo" },
+      "actor": { "kind": "chatAgent", "sessionId": "chat-1", "harness": "codex" },
+      "createdAt": "2026-09-28T10:31:00.000Z",
+      "status": "rejected"
+    },
+    {
+      "id": "proposal-3",
+      "cardId": "card-1",
+      "operation": { "op": "assign", "cardId": "card-1", "teammateId": null },
+      "actor": { "kind": "chatAgent", "sessionId": "chat-1", "harness": "codex" },
+      "createdAt": "2026-09-28T10:32:00.000Z",
+      "status": "accepted"
+    },
+    {
+      "id": "proposal-4",
+      "cardId": "card-1",
+      "operation": { "op": "update", "cardId": "card-1", "patch": { "priority": "urgent", "parentId": null } },
+      "actor": { "kind": "chatAgent", "sessionId": "chat-1", "harness": "codex" },
+      "createdAt": "2026-09-28T10:33:00.000Z",
+      "status": "pending"
+    },
+    {
+      "id": "proposal-5",
+      "cardId": "card-1",
+      "operation": { "op": "comment", "cardId": "card-1", "body": "Done here." },
+      "actor": { "kind": "chatAgent", "sessionId": "chat-1", "harness": "codex" },
+      "createdAt": "2026-09-28T10:34:00.000Z",
+      "status": "pending"
+    }
+  ],
+  "pendingStarts": [
+    {
+      "id": "pending-1",
+      "cardId": "card-1",
+      "teammateId": "teammate-1",
+      "cause": "assigned",
+      "requestedBy": { "kind": "person" },
+      "createdAt": "2026-09-28T09:11:00.000Z"
+    }
+  ],
+  "queuedStarts": [
+    {
+      "id": "queued-1",
+      "cardId": "card-1",
+      "teammateId": "teammate-1",
+      "cause": "manual",
+      "chainDepth": 0,
+      "requestedBy": { "kind": "person" },
+      "createdAt": "2026-09-28T10:24:00.000Z"
+    }
+  ],
+  "nextNumber": 3,
+  "revision": 12,
+  "updatedAt": "2026-09-28T11:00:00.000Z"
+}

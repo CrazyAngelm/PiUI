@@ -27,6 +27,8 @@ it('translates the composer inputs copy, keeping placeholders', () => {
     'Insert references',
     'Reply, type / for commands or @ to mention a file…',
     'Project files',
+    'Teammates',
+    'Teammates and project files',
     'Loading project files…',
     'No matching files',
     'No matches',

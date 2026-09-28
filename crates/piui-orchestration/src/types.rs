@@ -273,6 +273,10 @@ pub struct LaunchCommandReference {
     pub name: String,
     pub team_id: String,
     pub pipeline_id: String,
+    /// Set by the host on the launch command it generated for a `simple`
+    /// teammate (v6.6, additive, ADR-041). Absent on user-authored commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_by_teammate_id: Option<String>,
 }
 
 /// Definition data captured by value at run creation. A run never follows
@@ -558,13 +562,21 @@ pub enum RunTrigger {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session_id: Option<String>,
     },
+    /// Started for a project board card and teammate (v6.6, additive,
+    /// ADR-041). `chain_depth` is 0 when a person caused it.
+    Board {
+        card_id: String,
+        teammate_id: String,
+        cause: BoardRunCause,
+        chain_depth: u8,
+    },
 }
 
 impl RunTrigger {
     /// Event hops behind this run; runs started by a person or a clock are 0.
     pub fn chain_depth(&self) -> u8 {
         match self {
-            Self::Event { chain_depth, .. } => *chain_depth,
+            Self::Event { chain_depth, .. } | Self::Board { chain_depth, .. } => *chain_depth,
             Self::Schedule { .. } | Self::Chat { .. } => 0,
         }
     }
@@ -575,7 +587,23 @@ impl RunTrigger {
             Self::Schedule { schedule_id, .. } | Self::Event { schedule_id, .. } => {
                 Some(schedule_id)
             }
-            Self::Chat { .. } => None,
+            Self::Chat { .. } | Self::Board { .. } => None,
+        }
+    }
+
+    /// The teammate a board run was started for, if any.
+    pub fn board_teammate_id(&self) -> Option<&str> {
+        match self {
+            Self::Board { teammate_id, .. } => Some(teammate_id),
+            Self::Schedule { .. } | Self::Event { .. } | Self::Chat { .. } => None,
+        }
+    }
+
+    /// The board card a run was started for, if any.
+    pub fn board_card_id(&self) -> Option<&str> {
+        match self {
+            Self::Board { card_id, .. } => Some(card_id),
+            Self::Schedule { .. } | Self::Event { .. } | Self::Chat { .. } => None,
         }
     }
 
@@ -607,8 +635,122 @@ impl RunTrigger {
                     && (1..=MAX_TRIGGER_CHAIN_DEPTH).contains(chain_depth)
             }
             Self::Chat { session_id } => session_id.as_deref().is_none_or(text),
+            Self::Board {
+                card_id,
+                teammate_id,
+                chain_depth,
+                ..
+            } => text(card_id) && text(teammate_id) && *chain_depth <= MAX_TRIGGER_CHAIN_DEPTH,
         }
     }
+}
+
+/// Why a board run started (v6.6, ADR-041; `BoardRunCauseV1`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BoardRunCause {
+    Assigned,
+    MovedToTodo,
+    Unblocked,
+    Mention,
+    Manual,
+}
+
+/// What an agent may do on a project board (`BoardPermissionsV1`).
+/// Closing a card (done/cancelled) is person-only in v1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoardPermissions {
+    pub read: bool,
+    pub comment: bool,
+    pub create: bool,
+    #[serde(rename = "move")]
+    pub move_cards: bool,
+    pub claim: bool,
+    /// Assign cards to teammates (create+assign for `handoff`).
+    pub assign: bool,
+}
+
+impl BoardPermissions {
+    /// Read and comment only: the default for runs not started for a teammate.
+    pub const READ_COMMENT: Self = Self {
+        read: true,
+        comment: true,
+        create: false,
+        move_cards: false,
+        claim: false,
+        assign: false,
+    };
+}
+
+/// A teammate's shape (`TeammateKindV1`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum TeammateKind {
+    /// The host generated and manages its profile, team, pipeline and
+    /// launch command.
+    Simple { profile_id: String },
+    /// Wraps an existing launch command; nothing is generated.
+    Pipeline,
+}
+
+/// Which pipeline input receives the card text (`TeammateCardInputV1`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum TeammateCardInput {
+    Auto,
+    Named { input_name: String },
+}
+
+/// `TeammateStartRuleV1`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TeammateStartRule {
+    Ask,
+    Always,
+    Never,
+}
+
+/// `TeammateWakeV1`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TeammateWake {
+    pub on_assign: TeammateStartRule,
+    pub on_mention: bool,
+}
+
+/// A project-scoped `@handle` that resolves to exactly one saved launch
+/// command of its project (`TeammateV1`, ADR-041). Addressing and automation
+/// metadata only; runs keep frozen-snapshot semantics.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Teammate {
+    pub id: String,
+    pub handle: String,
+    pub name: String,
+    pub color: String,
+    pub avatar: String,
+    pub role: String,
+    pub kind: TeammateKind,
+    pub launch_command_id: String,
+    pub card_input: TeammateCardInput,
+    pub board: BoardPermissions,
+    pub max_concurrent_runs: u8,
+    pub wake: TeammateWake,
+    pub enabled: bool,
+    pub revision: Revision,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

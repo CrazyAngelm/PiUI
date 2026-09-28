@@ -27,6 +27,9 @@
   import { useWorkspace } from './context';
   import ChatRunCard from '../chatPipelines/ChatRunCard.svelte';
   import { chatPipelines } from '../chatPipelines/chatPipelines.svelte';
+  import ActiveCardChip from '../board/ActiveCardChip.svelte';
+  import ChatBoardActivity from '../board/ChatBoardActivity.svelte';
+  import { sessionNotices } from '../../features/workspace/sessionNotices';
 
   // Loaded on first use; a script-level import lets the dev server see its dependencies.
   const loadReviewPanel = () => import('../review/ReviewPanel.svelte');
@@ -42,6 +45,9 @@
   const snapshot = $derived(store.snapshots[sessionId]);
   const workspace = $derived(store.catalog.workspaces.find((item) => item.id === session?.workspaceId));
   const running = $derived(session ? ['starting', 'running', 'stopping'].includes(session.status) : false);
+  // Project chats (not pipeline members) can have an active board card (ADR-041).
+  const boardProject = $derived(workspace !== undefined && !workspace.personal && !workspace.missing && !session?.runId ? workspace.id : undefined);
+  const notices = $derived(sessionNotices(snapshot));
   // Pipeline runs started from this chat, shown among its messages by time.
   const chatPipeline = $derived(chatPipelines.chats[sessionId]);
   const runInserts = $derived((chatPipeline?.runs ?? []).map((entry) => ({ id: entry.runId, at: entry.startedAt })));
@@ -137,6 +143,9 @@
           </Badge>
         {/if}
         <span class="chat__meta">{harnessMeta(session.harness).label}{workspace ? ` · ${workspace.personal ? $t('Personal chats') : workspace.name}` : ''}</span>
+        {#if boardProject}
+          <ActiveCardChip workspaceId={boardProject} sessionId={session.id} harness={session.harness} {notices} />
+        {/if}
         <div class="chat__actions">
           {#if running}
             <Button size="sm" variant="ghost" onclick={() => void store.interrupt(session.id)} loading={store.interruptBusy}>
@@ -199,6 +208,9 @@
             {#each snapshot.approvals as approval (approval.id)}
               <ApprovalCard {approval} session={snapshot.session} />
             {/each}
+            {#if boardProject}
+              <ChatBoardActivity workspaceId={boardProject} sessionId={snapshot.session.id} blocks={snapshot.blocks} />
+            {/if}
             <ExtensionSurface sessionId={snapshot.session.id} status={snapshot.session.status} placement="above" agentLabel={harnessMeta(snapshot.session.harness).label} />
             {#if store.safeMode}
               <p class="notice">{$t('Runtime actions are disabled in safe mode. Your draft is preserved.')}</p>

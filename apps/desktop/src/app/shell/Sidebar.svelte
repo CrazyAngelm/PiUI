@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import SquarePen from '@lucide/svelte/icons/square-pen';
   import Search from '@lucide/svelte/icons/search';
   import InboxIcon from '@lucide/svelte/icons/inbox';
@@ -20,6 +21,9 @@
   import PinOff from '@lucide/svelte/icons/pin-off';
   import FolderMinus from '@lucide/svelte/icons/folder-minus';
   import GitBranch from '@lucide/svelte/icons/git-branch';
+  import KanbanSquare from '@lucide/svelte/icons/square-kanban';
+  import UsersRound from '@lucide/svelte/icons/users-round';
+  import type { BoardRegistry } from '../board/boardStore.svelte';
   import { t, language } from '../../features/locale/language';
   import { placements } from '../worktrees/placements.svelte';
   import { Kbd, Menu, StatusDot, Skeleton, toasts, type MenuEntry, type Status } from '../../lib/ui';
@@ -72,6 +76,46 @@
       icon: ScrollText,
       onSelect: () => go(() => store.navigate({ name: 'history', workspaceId: workspace.id })),
     };
+  }
+
+  // Board state per project (ADR-041) loads after first paint, in its own chunk.
+  let boards = $state.raw<BoardRegistry | undefined>();
+  // Loaded once: project updates (a streaming chat) must not keep postponing it.
+  $effect(() => {
+    const timer = setTimeout(() => {
+      void import('../board/boardStore.svelte')
+        .then((module) => {
+          boards = module.boards;
+        })
+        .catch(() => undefined);
+    }, 1200);
+    return () => clearTimeout(timer);
+  });
+  $effect(() => {
+    const ids = projects.filter((workspace) => !workspace.missing).map((workspace) => workspace.id);
+    const registry = boards;
+    if (registry !== undefined) untrack(() => registry.ensure(ids));
+  });
+
+  /** "Board" when the project's board is on, else "Enable board"; then "Team". */
+  function boardItems(workspace: WorkspaceSummary): MenuEntry[] {
+    const open = (): void => go(() => { store.selectWorkspace(workspace.id); store.navigate({ name: 'board', workspaceId: workspace.id }); });
+    const registry = boards;
+    const board: MenuEntry = registry?.enabled(workspace.id)
+      ? { label: $t('Board'), icon: KanbanSquare, onSelect: open }
+      : {
+          label: $t('Enable board'),
+          icon: KanbanSquare,
+          disabled: store.safeMode,
+          onSelect: () =>
+            void import('../board/boardStore.svelte')
+              .then((module) => module.boards.get(workspace.id).setEnabled(true))
+              .then(open, () => toasts.error($t('Could not enable the board'))),
+        };
+    return [
+      board,
+      { label: $t('Team'), icon: UsersRound, onSelect: () => go(() => { store.selectWorkspace(workspace.id); store.navigate({ name: 'team', workspaceId: workspace.id }); }) },
+    ];
   }
 
   let projectDialog = $state<ProjectDialogRequest | undefined>();
@@ -214,6 +258,7 @@
               ...(workspace.trust === 'restricted'
                 ? [{ label: $t('Trust this folder…'), icon: ShieldCheck, onSelect: () => onTrust(workspace) }]
                 : []),
+              ...boardItems(workspace),
               { label: $t('Pipelines'), icon: Workflow, onSelect: () => go(() => { store.selectWorkspace(workspace.id); store.navigate({ name: 'pipelines', section: 'systems' }); }) },
               historyItem(workspace),
               { label: $t('Refresh projects'), icon: RefreshCw, onSelect: () => void store.loadCatalog(workspace.id) },
@@ -230,6 +275,17 @@
               <button type="button" class="tiny-action" aria-label={$t('Options for {0}', [name])} {...props}><Ellipsis size={14} /></button>
             {/snippet}
           </Menu>
+        {/if}
+        {#if !workspace.personal && boards?.enabled(workspace.id)}
+          <button
+            type="button"
+            class="tiny-action"
+            aria-label={$t('Board of {0}', [name])}
+            aria-current={route.name === 'board' && route.workspaceId === workspace.id ? 'page' : undefined}
+            onclick={() => go(() => { store.selectWorkspace(workspace.id); store.navigate({ name: 'board', workspaceId: workspace.id }); })}
+          >
+            <KanbanSquare size={13} />
+          </button>
         {/if}
         <button
           type="button"

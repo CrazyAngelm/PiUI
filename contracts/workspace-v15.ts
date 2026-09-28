@@ -81,7 +81,19 @@ export interface SessionSnapshot {
   approvals: WorkspaceApproval[]; capabilities: HarnessCapabilities; models: WorkspaceModel[];
   /** Additive v15 field: modes a live ACP agent advertises (`workspace-session-mode-v1`). */
   modes?: import('./workspace-session-mode-v1').SessionModesV1;
+  /**
+   * Additive v15 field (ADR-041): non-fatal notices of the live runtime, omitted
+   * when empty. Show "Board tools unavailable in this chat" for either code.
+   */
+  notices?: WorkspaceNoticeCode[];
 }
+/**
+ * Non-fatal runtime notices (bridge `NativeNoticeCode`). The project board is
+ * enabled but this chat has no `board` tool: the harness cannot register host
+ * tools (Pi, an ACP agent without HTTP MCP) or a resumed Codex thread cannot
+ * re-register dynamic tools. Unknown codes must be ignored.
+ */
+export type WorkspaceNoticeCode = 'unsupported-board-tool' | 'unsupported-board-tool-resume';
 export interface WorkspaceCatalog {
   protocol: 15; safeMode: boolean; workspaces: WorkspaceSummary[];
   sessions: WorkspaceSession[]; harnesses: HarnessSummary[];
@@ -107,7 +119,9 @@ export type WorkspaceEventPayload =
   | { type: 'textDelta'; blockId: string; text: string }
   | { type: 'approval'; approval: WorkspaceApproval }
   | { type: 'approvalResolved'; requestId: string }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  /** Additive v15 event (ADR-041): a notice also listed in `SessionSnapshot.notices`. */
+  | { type: 'notice'; code: WorkspaceNoticeCode };
 export interface WorkspaceEvent {
   protocol: 15; sessionId: string; revision: number; event: WorkspaceEventPayload;
 }

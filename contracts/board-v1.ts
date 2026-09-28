@@ -152,6 +152,8 @@ export type CardChangeV1 =
   | { type: 'unlinked'; link: CardLinkV1 }
   | { type: 'commented'; commentId: string }
   | { type: 'runStarted'; runId: string; teammateId: TeammateIdV1 }
+  /** A start for `teammateId` waits for a free concurrency slot. */
+  | { type: 'queued'; teammateId: TeammateIdV1 }
   | { type: 'runFinished'; runId: string; outcome: 'succeeded' | 'failed' | 'cancelled' }
   | { type: 'unblocked' }
   | { type: 'reverted'; activityId: string };
@@ -219,6 +221,22 @@ export interface PendingStartV1 {
   createdAt: string;
 }
 
+/**
+ * Start of a run that waits for a free concurrency slot (teammate or board
+ * `maxConcurrentRuns`). Stored in the board document, so it survives a host
+ * restart. Starts waiting for a free slot, ordered by priority then age.
+ */
+export interface QueuedStartV1 {
+  id: string;
+  cardId: string;
+  teammateId: TeammateIdV1;
+  cause: BoardRunCauseV1;
+  /** Automatic trigger-chain depth the started run gets. */
+  chainDepth: number;
+  requestedBy: BoardActorV1;
+  createdAt: string;
+}
+
 export type BoardRunCauseV1 = 'assigned' | 'movedToTodo' | 'unblocked' | 'mention' | 'manual';
 
 export interface BoardV1 {
@@ -228,6 +246,12 @@ export interface BoardV1 {
   cards: CardV1[];
   proposals: BoardProposalV1[];
   pendingStarts: PendingStartV1[];
+  /**
+   * Starts waiting for a free slot, ordered by priority then age (stored in
+   * arrival order; the host starts them by card priority, then age).
+   * Omitted when empty.
+   */
+  queuedStarts?: QueuedStartV1[];
   nextNumber: number;
   revision: number;
   updatedAt: string;

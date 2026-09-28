@@ -3,7 +3,7 @@
 // approvals, authentication and its JSONL history; this file only translates
 // the documented stream-json and control protocol. PiUI accepts a Claude
 // subscription login only: API keys and cloud providers are refused.
-export async function createClaudeAdapter(config, emit, coordinatorRequest) {
+export async function createClaudeAdapter(config, emit, coordinatorRequest, boardRequest) {
   const { spawn } = await import("node:child_process");
   const { createHash, randomUUID } = await import("node:crypto");
   const { createServer } = await import("node:http");
@@ -27,6 +27,8 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
   const EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
   const COORDINATOR_SERVER = "piui-workspace";
   const COORDINATOR_TOOL = `mcp__${COORDINATOR_SERVER}__workspace`;
+  // The board host tool shares the session-scoped MCP server.
+  const BOARD_TOOL = `mcp__${COORDINATOR_SERVER}__board`;
   const FRAME_LIMIT = 32 * 1024 * 1024;
 
   // ---------------------------------------------------------------------------
@@ -76,16 +78,23 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
   if (coordination && config.nativeSubagents === true) {
     throw fail("unsupported-policy", "Managed Claude Code runs use coordinator-only spawning and cannot also enable native subagents.");
   }
+  // The board host tool is optional and independent of coordination: it never
+  // disables native subagents. Without the host callback the chat starts
+  // without it and the host is told with a notice.
+  const boardRequested = Array.isArray(config.hostTools) && config.hostTools.includes("board");
+  const boardEnabled = boardRequested && typeof boardRequest === "function";
   // `--tools` restricts the built-in tool set; `--allowedTools` would only
   // pre-approve tools, so it is never used to express a restriction.
   let toolAllowlist;
   if (config.allowedTools != null) {
     if (!Array.isArray(config.allowedTools) || config.allowedTools.some((name) => typeof name !== "string"
-      || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name) || name.startsWith("mcp__") || (name === "workspace" && !coordination))) {
+      || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name) || name.startsWith("mcp__") || (name === "workspace" && !coordination)
+      || (name === "board" && !boardEnabled))) {
       throw fail("unsupported-policy", "The Claude Code tool allowlist contains an unsupported tool name.");
     }
-    // `workspace` names the coordinator tool, which only exists in managed runs.
-    toolAllowlist = [...new Set(config.allowedTools.filter((name) => name !== "workspace"))];
+    // `workspace` names the coordinator tool, which only exists in managed runs;
+    // `board` names the board host tool. Both are MCP tools, not built-ins.
+    toolAllowlist = [...new Set(config.allowedTools.filter((name) => name !== "workspace" && name !== "board"))];
   }
   if (config.nativeSubagents === true && toolAllowlist && !toolAllowlist.some((name) => name === "Agent" || name === "Task")) {
     throw fail("unsupported-policy", "Native Claude Code subagents require the Agent tool in the enforced tool policy.");
@@ -1261,6 +1270,23 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
       additionalProperties: false,
     },
   };
+  const BOARD_STATUSES = ["backlog", "todo", "inProgress", "inReview", "blocked", "done", "cancelled"];
+  const BOARD_MCP_TOOL = {
+    name: "board",
+    description: "Manage this project's PiUI board: the cards the person tracks. Call op context before create and prefer updating, commenting on or moving the active or a similar card. Moving to done or cancelled only proposes it to the person. Do not retry ALREADY_CLAIMED or FORBIDDEN. The result is JSON.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["context", "search", "list", "get", "create", "update", "move", "comment", "claim", "release", "link", "roster", "assign", "handoff"] },
+        card: { type: "integer", minimum: 1 }, query: { type: "string", maxLength: 500 }, includeClosed: { type: "boolean" },
+        status: { type: "string", enum: BOARD_STATUSES }, title: { type: "string", maxLength: 200 }, description: { type: "string" },
+        priority: { type: "string", enum: ["urgent", "high", "normal", "low"] }, labels: { type: "array", items: { type: "string" }, maxItems: 12 },
+        confirmNew: { type: "boolean" }, to: { type: "string", enum: BOARD_STATUSES }, reason: { type: "string" }, body: { type: "string" }, handle: { type: "string" },
+      },
+      required: ["op"],
+      additionalProperties: false,
+    },
+  };
   const mcpToken = randomUUID();
   const handleMcp = async (request, response) => {
     if (request.headers.authorization !== `Bearer ${mcpToken}`) { response.writeHead(403).end(); return; }
@@ -1292,8 +1318,18 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
         serverInfo: { name: COORDINATOR_SERVER, version: "1" },
       } });
     } else if (message.method === "ping") reply({ result: {} });
-    else if (message.method === "tools/list") reply({ result: { tools: [WORKSPACE_TOOL] } });
-    else if (message.method === "tools/call" && message.params?.name === "workspace") {
+    else if (message.method === "tools/list") reply({ result: { tools: [...(coordination ? [WORKSPACE_TOOL] : []), ...(boardEnabled ? [BOARD_MCP_TOOL] : [])] } });
+    else if (message.method === "tools/call" && message.params?.name === "board" && boardEnabled) {
+      // The agent reads the host's board result as JSON; refusals are results too.
+      try {
+        const result = await boardRequest(message.params.arguments, { toolCallId: `mcp-${String(message.id)}` });
+        reply({ result: { ...(result?.ok === false ? { isError: true } : {}), content: [{ type: "text", text: JSON.stringify(result) }] } });
+      } catch (error) {
+        const code = typeof error?.bridgeCode === "string" ? error.bridgeCode : "board-failed";
+        const text = typeof error?.safeMessage === "string" ? error.safeMessage : "The board could not complete this operation.";
+        reply({ result: { isError: true, content: [{ type: "text", text: JSON.stringify({ ok: false, code, message: text }) }] } });
+      }
+    } else if (message.method === "tools/call" && message.params?.name === "workspace" && coordination) {
       try {
         const result = await coordinatorRequest(message.params.arguments, { toolCallId: `mcp-${String(message.id)}` });
         reply({ result: { content: [{ type: "text", text: JSON.stringify({ ok: true, result: result ?? null }) }] } });
@@ -1346,7 +1382,8 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
       }
       for (const block of await readHistory(nativePath)) blocks.set(block.id, block);
     }
-    if (coordination) {
+    if (boardRequested && !boardEnabled) emit({ type: "notice", code: "unsupported-board-tool" });
+    if (coordination || boardEnabled) {
       server = createServer((request, response) => {
         void handleMcp(request, response).catch(() => { try { response.writeHead(500).end(); } catch { /* closed */ } });
       });
@@ -1367,11 +1404,15 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest) {
     for (const plugin of pluginMcpServers) mcpServers[plugin.name] = { type: "stdio", command: plugin.command, args: [...plugin.args], env: {} };
     if (Object.keys(mcpServers).length) {
       args.push("--mcp-config", await scratchFile("mcp.json", JSON.stringify({ mcpServers })));
-      // The coordinator enforces its own ACL, so its tool runs without prompts.
-      if (server) args.push("--allowed-tools", COORDINATOR_TOOL);
+      // The coordinator and the board enforce their own ACLs, so exactly these
+      // host tools run without prompts; nothing else is pre-approved.
+      const hostTools = [...(coordination ? [COORDINATOR_TOOL] : []), ...(boardEnabled ? [BOARD_TOOL] : [])];
+      if (server && hostTools.length) args.push("--allowed-tools", hostTools.join(","));
     }
     if (toolAllowlist) args.push("--tools", toolAllowlist.join(","), "--strict-mcp-config");
-    const denied = [...(disableSubagents ? ["Agent"] : []), ...(toolAllowlist && !coordination ? ["mcp__*"] : [])];
+    // With an allowlist, `--strict-mcp-config` already limits MCP to this
+    // session's own server; `mcp__*` is denied only when no host tool uses it.
+    const denied = [...(disableSubagents ? ["Agent"] : []), ...(toolAllowlist && !coordination && !boardEnabled ? ["mcp__*"] : [])];
     if (denied.length) args.push("--disallowed-tools", denied.join(","));
     staticArgs = args;
 
