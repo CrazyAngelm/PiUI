@@ -1,9 +1,6 @@
 <script lang="ts">
   import ArrowUp from '@lucide/svelte/icons/arrow-up';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
-  import Folder from '@lucide/svelte/icons/folder';
-  import MessagesSquare from '@lucide/svelte/icons/messages-square';
-  import Shield from '@lucide/svelte/icons/shield';
   import Zap from '@lucide/svelte/icons/zap';
   import Brain from '@lucide/svelte/icons/brain';
   import { onMount, tick, untrack } from 'svelte';
@@ -13,7 +10,7 @@
   import type { HarnessCatalogModel, HarnessModelsResult, HarnessResource } from '../../../../../contracts/harness-models-v18';
   import type { HarnessKind, PermissionMode, WorkspaceSummary } from '../../../../../contracts/workspace-v15';
   import { composerSupport, imageSupport } from '../../harness-adapters/composer';
-  import { Picker, Spinner, Textarea, toasts, type PickerItem } from '../../lib/ui';
+  import { Spinner, Textarea, toasts } from '../../lib/ui';
   import { harnessMeta } from '../harnessMeta';
   import { errorMessage } from '../workspaceStore.svelte';
   import { workspaceError } from '../../host-api/workspaceClient';
@@ -23,8 +20,15 @@
   import { composerDropTargets } from '../chat/composer/dropTargets.svelte';
   import { activeMention, fileMention, rankFiles, rankNamed, replaceMention } from '../chat/composer/mentions';
   import type { ComposerMenuItem } from '../chat/composer/menuItems';
-  import HarnessMark from './HarnessMark.svelte';
-  import WorktreeChip from '../worktrees/WorktreeChip.svelte';
+  import ContextChip from './ContextChip.svelte';
+  import ExecutorPicker, { type Executor } from '../chatPipelines/ExecutorPicker.svelte';
+  import PipelineInputsBar from '../chatPipelines/PipelineInputsBar.svelte';
+  import { chatPipelines, type ChatPipelineDetail } from '../chatPipelines/chatPipelines.svelte';
+  import { graphFromTemplate } from '../chatPipelines/templateLibrary';
+  import { pendingDrafts } from '../pipelines/pendingDraft.svelte';
+  import { buildTemplate, type TemplateId } from '../pipelines/templates';
+  import type { PipelineTemplateV1 } from '../../host-api/pipelineLibraryClient';
+  import type { AgentGraph } from '../../features/orchestration/agentGraph';
   import { useWorkspace } from './context';
   import { reconcileSelection, restoredSelection, type NewChatChoice, type NewChatSelection } from './newChatChoice';
 
@@ -53,6 +57,12 @@
   let thinkingLevel = $state('');
   let fast = $state(false);
   let permissionMode = $state<PermissionMode>('native');
+  /** A saved pipeline the first message goes through; empty talks to the harness directly. */
+  let pipelineId = $state('');
+  let pipelineDetail = $state.raw<ChatPipelineDetail | undefined>();
+  let pipelineLoading = $state(false);
+  let pipelineError = $state('');
+  let inputsBar = $state<ReturnType<typeof PipelineInputsBar> | undefined>();
   let models = $state.raw<HarnessCatalogModel[]>([]);
   let skills = $state.raw<HarnessResource[]>([]);
   let modelsLoading = $state(false);
@@ -179,6 +189,47 @@
     };
   });
 
+  // New chats talk directly unless the project names a default chat pipeline.
+  let defaultFor: string | undefined;
+  const chatDefault = $derived(chatPipelines.libraries[workspaceId]?.chatDefault);
+  const pipelinesAllowed = $derived(trusted && !store.safeMode);
+  $effect(() => {
+    const id = workspaceId;
+    if (!id || !pipelinesAllowed) return;
+    untrack(() => {
+      if (!chatPipelines.libraries[id]) void chatPipelines.loadLibrary(id);
+    });
+  });
+  $effect(() => {
+    const key = `${workspaceId}:${chatDefault ?? ''}:${pipelinesAllowed}`;
+    if (defaultFor === key) return;
+    defaultFor = key;
+    pipelineId = pipelinesAllowed ? (chatDefault ?? '') : '';
+  });
+  $effect(() => {
+    const id = workspaceId;
+    const command = pipelineId;
+    pipelineDetail = undefined;
+    pipelineError = '';
+    if (!id || !command) return;
+    let cancelled = false;
+    pipelineLoading = true;
+    chatPipelines
+      .detail(id, command)
+      .then((detail) => {
+        if (!cancelled) pipelineDetail = detail;
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) pipelineError = errorMessage(error);
+      })
+      .finally(() => {
+        if (!cancelled) pipelineLoading = false;
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
+
   $effect(() => {
     if (thinkingLevel && !levels.includes(thinkingLevel)) thinkingLevel = '';
     if (fast && !model?.supportsFast) fast = false;
@@ -209,27 +260,50 @@
     }
   }
 
-  const workspaceItems = $derived<PickerItem[]>(
-    workspaces.map((item) => ({
-      value: item.id,
-      label: item.personal ? $t('Personal chats') : item.name,
-      description: item.personal
-        ? $t('Not tied to a project folder')
-        : item.trust === 'trusted'
-          ? $t('Trusted folder')
-          : $t('Restricted — trust required'),
-      group: item.personal ? $t('Personal') : $t('Projects'),
-    })),
-  );
-  const harnessItems = $derived<PickerItem[]>(
+  const executor = $derived<Executor>(pipelineId ? { kind: 'pipeline', commandId: pipelineId } : { kind: 'direct', harness });
+  const executorHarnesses = $derived(
     store.catalog.harnesses.map((item) => ({
-      value: item.kind,
-      label: item.name,
-      description: item.version ? `v${item.version}` : undefined,
-      disabled: item.status !== 'available',
-      disabledReason: item.reason ?? $t('Not available'),
+      kind: item.kind,
+      name: item.name,
+      ...(item.version ? { version: item.version } : {}),
+      available: item.status === 'available',
+      ...(item.reason ? { reason: item.reason } : {}),
     })),
   );
+  /** The harness that holds the chat: the pipeline's answering agent, else the direct pick. */
+  const chatHarness = $derived<HarnessKind | ''>(pipelineId ? (pipelineDetail?.reply?.harness ?? harness) : harness);
+
+  function chooseExecutor(next: Executor): void {
+    if (next.kind === 'pipeline') {
+      pipelineId = next.commandId;
+      return;
+    }
+    pipelineId = '';
+    if (next.harness) harness = next.harness;
+  }
+
+  /** A template becomes a new draft in the editor; saving it there is the person's decision. */
+  function openTemplate(choice: { kind: 'builtin'; id: TemplateId } | { kind: 'saved'; template: PipelineTemplateV1 }): void {
+    if (!workspaceId) return;
+    let graph: AgentGraph;
+    try {
+      const base = (harness || available[0]?.kind || 'codex') as AgentGraph['nodes'][number]['profile']['harness'];
+      graph = choice.kind === 'builtin' ? buildTemplate(choice.id, base, (value) => $t(value)) : graphFromTemplate(choice.template);
+    } catch (error) {
+      toasts.error($t('This template could not be opened'), errorMessage(error));
+      return;
+    }
+    pendingDrafts.offer(workspaceId, graph, 'template');
+    store.selectWorkspace(workspaceId);
+    store.navigate({ name: 'pipelines', section: 'systems' });
+  }
+
+  function managePipelines(): void {
+    if (!workspaceId) return;
+    store.selectWorkspace(workspaceId);
+    store.navigate({ name: 'pipelines', section: 'systems' });
+  }
+
   const modelOptions = $derived<ModelOption[]>(
     models.map((item) => ({
       key: JSON.stringify([item.provider, item.id]),
@@ -240,7 +314,7 @@
       fast: Boolean(item.supportsFast),
     })),
   );
-  const permissionItems = $derived<PickerItem<PermissionMode>[]>([
+  const permissionItems = $derived<{ value: PermissionMode; label: string; description: string }[]>([
     { value: 'native', label: $t('Harness settings'), description: $t('Use the permissions configured in the harness') },
     { value: 'read-only', label: $t('Read only'), description: $t('The agent can read but not change files') },
     { value: 'workspace-write', label: $t('Edit project'), description: $t('Changes limited to the project folder') },
@@ -248,7 +322,11 @@
   ]);
 
   const canSend = $derived(
-    Boolean(text.trim()) && Boolean(workspaceId) && Boolean(harness) && !busy && !store.safeMode,
+    Boolean(text.trim()) &&
+      Boolean(workspaceId) &&
+      !busy &&
+      !store.safeMode &&
+      (pipelineId ? Boolean(pipelineDetail?.accepts) && available.length > 0 : Boolean(harness)),
   );
 
   function setText(value: string): void {
@@ -278,12 +356,49 @@
     void place(next.text, next.caret);
   }
 
+  async function sendThroughPipeline(): Promise<void> {
+    if (attachments.images.length) {
+      toasts.error($t('Pipelines take text only'), $t('Remove the images, or talk to the harness directly.'));
+      return;
+    }
+    const values = inputsBar?.collect();
+    const fallback = harness || available[0]?.kind;
+    if (!values || !fallback) return;
+    busy = true;
+    const message = text;
+    try {
+      await chatPipelines.startChat(store, {
+        workspaceId,
+        commandId: pipelineId,
+        text: message,
+        values,
+        permissionMode,
+        fallbackHarness: fallback,
+        available: available.map((item) => item.kind),
+        safeMode: store.safeMode,
+        title: (message.trim().split(/\r?\n/u)[0] ?? '').slice(0, 80),
+      });
+      text = '';
+      store.updateDraft(DRAFT_KEY, '');
+    } catch (error) {
+      toasts.error($t('Could not start the chat'), $t(errorMessage(error)));
+    } finally {
+      busy = false;
+    }
+  }
+
   async function send(): Promise<void> {
-    if (!canSend || !harness) return;
+    if (!canSend) return;
     if (workspace && !workspace.personal && workspace.trust !== 'trusted') {
       onTrust(workspace);
       return;
     }
+    if (pipelineId) {
+      remember();
+      await sendThroughPipeline();
+      return;
+    }
+    if (!harness) return;
     busy = true;
     remember();
     const message = text;
@@ -407,6 +522,9 @@
       <view.default notices={attachments.notices} onDismiss={() => attachments.dismissNotices()} />
     {/await}
   {/if}
+  {#if pipelineId}
+    <PipelineInputsBar bind:this={inputsBar} detail={pipelineDetail} loading={pipelineLoading} error={pipelineError} disabled={busy} />
+  {/if}
   <Textarea
     bind:ref={textarea}
     value={text}
@@ -424,7 +542,7 @@
     onpaste={pasted}
     minRows={3}
     maxRows={14}
-    placeholder={$t('Describe a task, ask a question or @mention a file…')}
+    placeholder={pipelineId ? $t('Describe the task for the pipeline…') : $t('Describe a task, ask a question or @mention a file…')}
     aria-label={$t('Message')}
     aria-autocomplete="list"
     aria-controls={menu ? 'new-chat-menu' : undefined}
@@ -434,28 +552,19 @@
   />
   <div class="composer__bar">
     <div class="chips">
-      <AttachButton images={imageState} busy={attachments.busy} disabled={busy || store.safeMode || !workspaceId} onPick={pick} />
-      <Picker items={workspaceItems} value={workspaceId} label={$t('Project')} searchPlaceholder={$t('Search projects')} onSelect={(value) => (workspaceId = value)}>
-        {#snippet trigger(props)}
-          <button type="button" class="chip" {...props}>
-            {#if workspace?.personal}<MessagesSquare size={14} />{:else}<Folder size={14} />{/if}
-            <span>{workspace ? (workspace.personal ? $t('Personal chats') : workspace.name) : $t('Choose project')}</span>
-            <ChevronDown size={12} />
-          </button>
-        {/snippet}
-      </Picker>
+      <AttachButton images={imageState} busy={attachments.busy} disabled={busy || store.safeMode || !workspaceId || Boolean(pipelineId)} onPick={pick} />
+      <ExecutorPicker
+        {workspaceId}
+        value={executor}
+        harnesses={executorHarnesses}
+        templates={pipelinesAllowed}
+        disabled={available.length === 0 && !pipelineId}
+        onChange={chooseExecutor}
+        onTemplate={openTemplate}
+        onManage={pipelinesAllowed ? managePipelines : undefined}
+      />
 
-      <Picker items={harnessItems} value={harness} label={$t('Harness')} searchPlaceholder={$t('Search harnesses')} width={300} onSelect={(value) => (harness = value as HarnessKind)}>
-        {#snippet trigger(props)}
-          <button type="button" class="chip" {...props} disabled={available.length === 0}>
-            {#if harness}<HarnessMark kind={harness} size={16} />{/if}
-            <span>{harness ? harnessMeta(harness).label : $t('No harness available')}</span>
-            <ChevronDown size={12} />
-          </button>
-        {/snippet}
-      </Picker>
-
-      {#if harness}
+      {#if harness && !pipelineId}
         <ModelPicker
           models={modelOptions}
           value={modelKey}
@@ -484,17 +593,17 @@
         </ModelPicker>
       {/if}
 
-      <Picker items={permissionItems} value={permissionMode} label={$t('Permissions')} searchPlaceholder={$t('Search')} width={320} onSelect={(value) => (permissionMode = value)}>
-        {#snippet trigger(props)}
-          <button type="button" class="chip" class:chip--warn={permissionMode === 'full-access'} {...props}>
-            <Shield size={14} />
-            <span>{permissionItems.find((item) => item.value === permissionMode)?.label}</span>
-            <ChevronDown size={12} />
-          </button>
-        {/snippet}
-      </Picker>
-
-      <WorktreeChip {workspace} disabled={store.safeMode} />
+      <span class="chips__gap"></span>
+      <ContextChip
+        {workspaces}
+        {workspaceId}
+        {permissionMode}
+        permissions={permissionItems}
+        worktree={!pipelineId}
+        disabled={store.safeMode}
+        onWorkspace={(value) => (workspaceId = value)}
+        onPermission={(value) => (permissionMode = value)}
+      />
     </div>
     <button type="button" class="send" onclick={() => void send()} disabled={!canSend} aria-label={$t('Start chat')}>
       {#if busy}<Spinner size={14} />{:else}<ArrowUp size={16} />{/if}
@@ -504,7 +613,7 @@
     <div class="composer__drop" aria-hidden="true">{$t('Drop images or files to attach')}</div>
   {/if}
 </div>
-{#if harness === 'claude-code' && workspaceId}{#await import('../chat/ClaudeSignInStatus.svelte') then status}<status.default {workspaceId} observe />{/await}{/if}
+{#if chatHarness === 'claude-code' && workspaceId}{#await import('../chat/ClaudeSignInStatus.svelte') then status}<status.default {workspaceId} observe />{/await}{/if}
 {#if workspace && !workspace.personal && workspace.trust !== 'trusted'}
   <p class="notice">
     {$t('This folder is restricted. Trust it to let agents work on its files.')}
@@ -596,6 +705,9 @@
   .chip[data-state='open'] {
     background: var(--piui-hover);
     color: var(--piui-text);
+  }
+  .chips__gap {
+    flex: 1;
   }
   .chip__sub {
     color: var(--piui-text-disabled);

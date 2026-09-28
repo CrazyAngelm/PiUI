@@ -30,6 +30,7 @@ mod orchestration_script_test;
 pub use orchestration_scheduler::run_native_prime_scheduler_two_step_dependency_dag;
 mod orchestration_store;
 mod orchestration_triggers;
+mod pipeline_library;
 mod placement_api;
 mod plugins;
 mod review_api;
@@ -835,6 +836,9 @@ pub fn run() -> Result<(), tauri::Error> {
                 orchestration_scheduler::OrchestrationScheduler::default();
             app.manage(orchestration_scheduler.clone());
             app.manage(orchestration_script_test::ScriptTestState::default());
+            let pipeline_library = pipeline_library::PipelineLibrary::open(&app_data_dir)
+                .map_err(|_| std::io::Error::other("Could not open the pipeline library"))?;
+            app.manage(pipeline_library);
             let plugin_host =
                 plugins::PluginsState::open(&app_data_dir, safe_mode, env!("CARGO_PKG_VERSION"))
                     .map_err(|_| std::io::Error::other("Could not open the plugin registry"))?;
@@ -895,6 +899,7 @@ pub fn run() -> Result<(), tauri::Error> {
             review_api::workspace_review_v1,
             placement_api::workspace_placement_v1,
             adopt_api::workspace_adopt_v1,
+            pipeline_library::pipeline_library_v1,
             harness_registry_api::harness_registry_v1,
             app_update::app_update_status_v1,
             app_update::app_update_check_v1,

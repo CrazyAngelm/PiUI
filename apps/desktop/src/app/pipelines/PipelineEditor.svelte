@@ -38,6 +38,12 @@
   import { pluginRegistry } from '../plugins/pluginRegistry.svelte';
   import { useWorkspace } from '../shell/context';
   import type { AgentGraph } from '../../features/orchestration/agentGraph';
+  import type { DraftSource } from './pendingDraft.svelte';
+  import { graphFromTemplate, withDefaultModels } from '../chatPipelines/templateLibrary';
+  import { chatPipelines } from '../chatPipelines/chatPipelines.svelte';
+  import SaveTemplateDialog from '../chatPipelines/SaveTemplateDialog.svelte';
+  import BookmarkPlus from '@lucide/svelte/icons/bookmark-plus';
+  import type { PipelineTemplateV1 } from '../../host-api/pipelineLibraryClient';
 
   interface Props {
     workspaceId: string;
@@ -46,11 +52,13 @@
     openCommandId?: string;
     /** A new unsaved draft to open on mount, e.g. a past run to debug (wins over `openCommandId`). */
     openDraft?: AgentGraph;
+    /** Where `openDraft` came from; a template's empty models are filled in. */
+    draftSource?: DraftSource;
     onDirtyChange: (dirty: boolean) => void;
     onRun: (run: OrchestrationRunV6) => void;
     onLibrary: () => void;
   }
-  let { workspaceId, safeMode, openCommandId, openDraft, onDirtyChange, onRun, onLibrary }: Props = $props();
+  let { workspaceId, safeMode, openCommandId, openDraft, draftSource = 'run', onDirtyChange, onRun, onLibrary }: Props = $props();
   const workspace = useWorkspace();
   const editor = new PipelineEditorStore(untrack(() => workspaceId), untrack(() => safeMode));
 
@@ -58,6 +66,12 @@
   let filePicker = $state<HTMLInputElement | null>(null);
   let addMenuOpen = $state(false);
   let inputsOpen = $state(false);
+  let saveTemplateOpen = $state(false);
+  const projectName = $derived.by(() => {
+    const project = workspace.catalog.workspaces.find((item) => item.id === workspaceId);
+    return project?.personal ? $t('Personal chats') : (project?.name ?? $t('This project'));
+  });
+  const userTemplates = $derived(chatPipelines.libraries[workspaceId]?.templates ?? []);
   const ASSISTANT_KEY = 'piui.pipeline.assistant.open';
   let assistantOpen = $state(readAssistantOpen());
   let assistantModule = $state<Promise<typeof import('./assistant/AssistantPanel.svelte')> | undefined>();
@@ -110,10 +124,13 @@
 
   onMount(() => {
     void editor.refresh();
+    void chatPipelines.loadLibrary(untrack(() => workspaceId));
     const draft = untrack(() => openDraft);
     void pluginRegistry.start();
     const initial = untrack(() => openCommandId);
-    if (draft) {
+    if (draft && untrack(() => draftSource) === 'template') {
+      void openTemplateDraft(draft);
+    } else if (draft) {
       editor.startFrom(draft);
       toasts.show({ title: $t('Opened from a run as a new draft'), description: $t('Saving creates a new pipeline; the saved one is not changed.') });
       setTimeout(() => api?.fitView(), 60);
@@ -124,6 +141,12 @@
       editor.scriptTests.cancelAll();
     };
   });
+
+  async function openTemplateDraft(draft: AgentGraph): Promise<void> {
+    editor.startFrom(await withDefaultModels(draft, defaultModel));
+    toasts.show({ title: $t('Opened a template as a new pipeline'), description: $t('Save it to use it in chats and runs.') });
+    setTimeout(() => api?.fitView(), 60);
+  }
 
   /** First model of the harness's native catalog, so new agents can run at once. */
   async function defaultModel(harness: AgentProfile['harness']): Promise<Pick<AgentProfile, 'model' | 'modelProvider'> | undefined> {
@@ -195,6 +218,14 @@
     if (known) return;
     const model = await defaultModel(harness);
     if (model && editor.graph.id === graph.id) editor.fillIn(withModel(editor.graph, model));
+  }
+
+  async function useUserTemplate(template: PipelineTemplateV1): Promise<void> {
+    try {
+      await openTemplateDraft(graphFromTemplate(template));
+    } catch (error) {
+      toasts.error($t('This template could not be opened'), error instanceof Error ? error.message : undefined);
+    }
   }
 
   async function exportFile(): Promise<void> {
@@ -327,6 +358,7 @@
         { label: $t('New pipeline'), icon: FilePlus, onSelect: () => editor.newGraph() },
         { label: $t('Import JSON…'), icon: Upload, disabled: safeMode, onSelect: () => filePicker?.click() },
         { label: $t('Export JSON'), icon: Download, disabled: editor.graph.nodes.length === 0, onSelect: () => void exportFile() },
+        { label: $t('Save as template…'), icon: BookmarkPlus, disabled: safeMode || editor.graph.nodes.length === 0, onSelect: () => (saveTemplateOpen = true) },
         { type: 'separator' },
         { label: $t('Agent library'), icon: Library, onSelect: onLibrary },
       ]}
@@ -395,6 +427,17 @@
             {/each}
             <PluginTemplates disabled={editor.readOnly} onImport={(text) => editor.importText(text)} />
           </div>
+          {#if userTemplates.length}
+            <h3 class="templates__title">{$t('Your templates')}</h3>
+            <div class="templates">
+              {#each userTemplates as template (template.id)}
+                <button type="button" class="template" onclick={() => void useUserTemplate(template)} disabled={editor.readOnly}>
+                  <strong>{template.name}</strong>
+                  <span>{template.description ?? (template.scope.kind === 'global' ? $t('Every project') : projectName)}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
         </div>
       {/if}
 
@@ -429,6 +472,8 @@
     {/if}
   </div>
 </section>
+
+<SaveTemplateDialog bind:open={saveTemplateOpen} graph={editor.graph} {workspaceId} {projectName} onSaved={() => void chatPipelines.loadLibrary(workspaceId)} />
 
 <RunInputsDialog
   bind:open={inputsOpen}
@@ -605,6 +650,15 @@
   .start p {
     margin: 6px 0 var(--piui-space-4);
     color: var(--piui-text-muted);
+  }
+  .templates__title {
+    margin: var(--piui-space-4) 0 var(--piui-space-2);
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-xs);
+    font-weight: var(--piui-weight-semibold);
+    letter-spacing: 0.04em;
+    text-align: left;
+    text-transform: uppercase;
   }
   .templates {
     display: grid;

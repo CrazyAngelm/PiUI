@@ -160,8 +160,8 @@ test.describe('worktree chats', () => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await lab.open();
     const composer = home(page);
-    await composer.getByRole('button', { name: 'Where the chat works: Local' }).click();
-    await page.getByRole('menuitem', { name: /New worktree/ }).click();
+    await composer.getByRole('button', { name: /^Project and permissions/ }).click();
+    await page.getByRole('button', { name: 'New worktree…' }).click();
     const dialog = page.getByRole('dialog', { name: 'New chat in a worktree' });
     const branch = dialog.getByRole('textbox', { name: 'New branch' });
     await expect(branch).toHaveValue(/^piui\/chat-/);
@@ -174,7 +174,7 @@ test.describe('worktree chats', () => {
     await expect(dialog).toContainText('~/.piui-lab/worktrees/');
     await expect(dialog).toContainText('Uncommitted changes in the project folder are not included');
     await dialog.getByRole('button', { name: 'Use this worktree' }).click();
-    await expect(composer.getByRole('button', { name: 'Where the chat works: Worktree · piui/diff-layout' })).toBeVisible();
+    await expect(composer.getByRole('button', { name: /^Project and permissions: .*Worktree · piui\/diff-layout$/ })).toBeVisible();
 
     await composer.getByRole('textbox', { name: 'Message' }).fill('Try the compact diff layout');
     await composer.getByRole('button', { name: 'Start chat' }).click();
@@ -380,8 +380,8 @@ for (const theme of ['light', 'dark'] as const) {
       await orphanDirty.getByRole('button', { name: 'Cancel' }).click();
 
       await lab.nav('New chat').click();
-      await home(page).getByRole('button', { name: 'Where the chat works: Local' }).click();
-      await page.getByRole('menuitem', { name: /New worktree/ }).click();
+      await home(page).getByRole('button', { name: /^Project and permissions/ }).click();
+      await page.getByRole('button', { name: 'New worktree…' }).click();
       const worktree = page.getByRole('dialog', { name: 'New chat in a worktree' });
       await expect(worktree).toContainText('Uncommitted changes in the project folder are not included');
       expect(await axeBlocking(page, '[role="dialog"]'), 'worktree dialog').toEqual([]);

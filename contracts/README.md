@@ -296,6 +296,23 @@ recoverable }`; clients show fixed copy per code. The golden fixture
 files, so an older build ignores it (a worktree chat would then open in the
 project folder; see the rollback note in `docs/SESSION_TOOLS.md`).
 
+# Pipeline library v1 (ADR-040)
+
+- `pipeline-library-v1.ts` (`pipeline_library_v1`, argument `command`):
+  pipeline templates (`piui-system` documents stored as data, `global` or
+  scoped to one workspace; the host checks only `format` and the 256 KiB size,
+  never evaluates or saves them as definitions) and chat pipelines (a chat
+  bound to one launch command of its project, plus the runs started from it,
+  at most 200, idempotent on `runId`). `list` and `chat` work in safe mode;
+  every change is refused with `SAFE_MODE`. `setChatDefault` answers the
+  project's `library`; a chat left with no binding and no runs answers
+  `chat: null`. Chat changes require the chat to belong to `workspaceId` and
+  not to be a run's chat (`NOT_FOUND`). Other refusals: `INVALID_ARGUMENT`,
+  `LIMIT` (200 templates), `IO_ERROR`. The host stores one document as
+  create-only generations in `pipeline-library-v1/`; a damaged generation is
+  skipped, never partially applied. Orchestration v6, workspace v15 and the
+  system file format are unchanged.
+
 # Plugins v1 (ADR-032)
 
 `piui-plugin-v1.schema.json` (with the generated standalone validator

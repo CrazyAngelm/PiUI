@@ -7,6 +7,7 @@
   import { EmptyState, Menu, Picker, Segmented, Skeleton, type PickerItem } from '../../lib/ui';
   import type { PipelineSection } from '../workspaceStore.svelte';
   import type { AgentGraph } from '../../features/orchestration/agentGraph';
+  import { pendingDrafts, type DraftSource } from '../pipelines/pendingDraft.svelte';
   import { useWorkspace } from './context';
 
   interface Props {
@@ -38,6 +39,17 @@
   let editCommand = $state<string | undefined>();
   // "Debug in editor" opens a past run as a new unsaved draft instead.
   let editDraft = $state.raw<AgentGraph | undefined>();
+  let draftSource = $state<DraftSource>('run');
+  // A draft offered by another screen (a template chosen in a chat) opens once.
+  $effect(() => {
+    const id = workspace?.id;
+    const pending = id ? pendingDrafts.take(id) : undefined;
+    if (!pending) return;
+    editCommand = undefined;
+    editDraft = pending.graph;
+    draftSource = pending.source;
+    epoch += 1;
+  });
   function setSection(next: PipelineSection): void {
     if (next !== 'systems') {
       editCommand = undefined;
@@ -54,6 +66,7 @@
   function debugRun(draft: AgentGraph): void {
     editCommand = undefined;
     editDraft = draft;
+    draftSource = 'run';
     setSection('systems');
   }
   function selectProject(id: string): void {
@@ -162,6 +175,7 @@
             safeMode={store.safeMode}
             openCommandId={editCommand}
             openDraft={editDraft}
+            {draftSource}
             onDirtyChange={(dirty) => (store.pipelineDirty = dirty)}
             onRun={opened}
             onLibrary={() => setSection('agents')}

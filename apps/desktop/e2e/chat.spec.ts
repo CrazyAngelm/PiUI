@@ -23,7 +23,7 @@ test.describe('new chat', () => {
     await lab.open();
     const composer = home(page);
     await composer.getByRole('button', { name: 'Pi', exact: true }).click();
-    await expect(page.getByRole('combobox', { name: 'Harness' })).toBeFocused();
+    await expect(page.getByRole('combobox', { name: 'Who answers' })).toBeFocused();
     await lab.option(/^Codex/).click();
     await composer.getByRole('button', { name: 'Default model' }).click();
     await lab.option(/^GPT Lab 5 Codex/).click();
@@ -56,8 +56,9 @@ test.describe('new chat', () => {
   test('a restricted project asks for trust instead of starting', async ({ lab, page }) => {
     await lab.open();
     const composer = home(page);
-    await composer.getByRole('button', { name: 'piui', exact: true }).click();
-    await lab.option(/^legacy-repo/).click();
+    await composer.getByRole('button', { name: /^Project and permissions: piui/ }).click();
+    await page.getByRole('radio', { name: /^legacy-repo/ }).check();
+    await page.keyboard.press('Escape');
     await expect(page.getByText('This folder is restricted. Trust it to let agents work on its files.')).toBeVisible();
     const message = composer.getByRole('textbox', { name: 'Message' });
     await message.fill('Refactor the auth module');
