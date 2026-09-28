@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { compileGraph, emptyGraph, newGraphNode, newRouterNode } from './agentGraph';
-import { parseSystemFile, systemFileToGraph, graphToSystemFile, serializeSystemFile } from './systemFile';
+import { compileGraph, emptyGraph, graphIssues, newGraphNode, newRouterNode } from './agentGraph';
+import { parseSystemFile, systemFileToGraph, graphToSystemFile, serializeSystemFile, SYSTEM_FILE_UNNAMED_PIPELINE, unresolvedPipelines } from './systemFile';
+import { formatIssue, parseIssue, SUBPIPELINE_ISSUE_TEMPLATES } from '../../host-api/subpipelines';
 
 const example = () => JSON.parse(readFileSync(new URL('../../../../../examples/systems/mixed-review.piui.json', import.meta.url), 'utf8'));
 const structured = () => JSON.parse(readFileSync(new URL('../../../../../examples/systems/structured-review.piui.json', import.meta.url), 'utf8'));
@@ -22,7 +23,7 @@ describe('portable system files', () => {
   it('keeps the generated validators self-contained browser modules', () => {
     // Some schema keywords (for example maxLength) make Ajv emit a CommonJS
     // runtime import, which fails in the WebView and in `pnpm system:check`.
-    for (const version of [1, 2, 3, 4]) {
+    for (const version of [1, 2, 3, 4, 5]) {
       const source = readFileSync(new URL(`../../../../../contracts/system-file-v${version}-validator.mjs`, import.meta.url), 'utf8');
       expect(source).not.toMatch(/\brequire\(/);
     }
@@ -78,14 +79,14 @@ describe('portable system files', () => {
     file.version = 3;
     const reopened = systemFileToGraph(parseSystemFile(JSON.stringify(file)));
     expect(reopened.nodes[1]!.profile.harness).toBe('hermes');
-    expect(parseSystemFile(serializeSystemFile(reopened)).version).toBe(4);
+    expect(parseSystemFile(serializeSystemFile(reopened)).version).toBe(5);
   });
   it('accepts Claude Code only in v4, round-trips it and keeps v1-v3 closed', () => {
     const file = JSON.parse(readFileSync(new URL('../../../../../examples/systems/codex-claude-pi-review.piui.json', import.meta.url), 'utf8'));
     const graph = systemFileToGraph(parseSystemFile(JSON.stringify(file)));
     expect(graph.nodes.map((node) => node.profile.harness)).toEqual(['codex', 'claude-code', 'pi']);
     const reopened = parseSystemFile(serializeSystemFile(graph));
-    expect(reopened.version).toBe(4);
+    expect(reopened.version).toBe(5);
     expect(reopened.agents[1]!.profile).toMatchObject({ harness: 'claude-code', reasoning: 'high', permissionMode: 'read-only' });
     expect(compileGraph(systemFileToGraph(reopened)).pipeline.steps.map((step) => step.dependencyStepIds.length)).toEqual([0, 1, 1]);
     for (const version of [1, 2, 3]) {
@@ -111,7 +112,7 @@ describe('portable system files', () => {
     const graph = systemFileToGraph(parseSystemFile(JSON.stringify(legacy)));
     graph.nodes[1]!.input = 'Changed file paths, test results and unresolved issues.';
     const file = parseSystemFile(serializeSystemFile(graph));
-    expect(file.version).toBe(4);
+    expect(file.version).toBe(5);
     expect(systemFileToGraph(file).nodes[1]!.input).toBe(graph.nodes[1]!.input);
     expect(file.agents[1]!.task).toBe(graph.nodes[1]!.task);
   });
@@ -254,7 +255,7 @@ describe('ACP agents in system files (harness identity v2, orchestration v6.3)',
     const graph = systemFileToGraph(parseSystemFile(JSON.stringify(file)));
     expect(graph.nodes.map((node) => node.profile.harness)).toEqual(['codex', 'acp:gemini-cli', 'pi']);
     const reopened = parseSystemFile(serializeSystemFile(graph));
-    expect(reopened.version).toBe(4);
+    expect(reopened.version).toBe(5);
     expect(reopened.agents[1]!.profile).toMatchObject({ harness: 'acp:gemini-cli', model: 'default', permissionMode: 'native' });
     expect(compileGraph(systemFileToGraph(reopened)).pipeline.steps.map((step) => step.dependencyStepIds.length)).toEqual([0, 1, 1]);
   });
@@ -283,5 +284,120 @@ describe('ACP agents in system files (harness identity v2, orchestration v6.3)',
     const file = acpReview();
     file.agents[1].executor = { type: 'llm' };
     expect(() => parseSystemFile(JSON.stringify(file))).toThrow(/cannot run a single model call read-only/);
+  });
+});
+
+describe('sub-pipelines in system files (v5, orchestration v6.7)', () => {
+  const development = () => JSON.parse(readFileSync(new URL('../../../../../examples/systems/development-with-testing.piui.json', import.meta.url), 'utf8'));
+  const testing = () => JSON.parse(readFileSync(new URL('../../../../../examples/systems/testing.piui.json', import.meta.url), 'utf8'));
+  const project = [{ id: 'cmd-testing', name: 'Testing' }, { id: 'cmd-release', name: 'Release check' }];
+
+  it('resolves a pipeline name at import and round-trips steps, mappings and outputs by name', () => {
+    const file = development();
+    const graph = systemFileToGraph(parseSystemFile(JSON.stringify(file)), project);
+    const call = graph.nodes.find((node) => node.id === 'testing');
+    expect(call?.executor).toEqual({
+      type: 'pipeline',
+      launchCommandId: 'cmd-testing',
+      inputs: { changes: { kind: 'step', stepId: 'developer', field: 'summary' }, focus: { kind: 'value', value: 'regressions in the changed files' } },
+    });
+    expect(call?.pipelineName).toBeUndefined();
+    expect(graph.outputs).toEqual([
+      { name: 'passed', kind: 'boolean', sourceStepId: 'testing', field: 'passed' },
+      { name: 'summary', kind: 'text', sourceStepId: 'report' },
+    ]);
+    const compiled = compileGraph(graph);
+    // Host work: no team member and no saved profile.
+    expect(compiled.team.members.map((member) => member.id)).toEqual(['developer', 'report']);
+    expect(compiled.pipeline.outputs).toEqual(graph.outputs);
+    const text = serializeSystemFile(graph, project);
+    const reopened = JSON.parse(text);
+    expect(reopened.version).toBe(5);
+    // Ids are local to a project: the file names the pipeline.
+    expect(reopened.agents[1].executor).toEqual(file.agents[1].executor);
+    expect(text).not.toContain('cmd-testing');
+    expect(reopened.outputs).toEqual(file.outputs);
+    expect(graphToSystemFile(systemFileToGraph(parseSystemFile(text), project), project)).toEqual(graphToSystemFile(graph, project));
+  });
+
+  it('parses the child example with its declared outputs', () => {
+    const file = testing();
+    const graph = systemFileToGraph(parseSystemFile(JSON.stringify(file)));
+    expect(graph.inputs?.map((input) => input.name)).toEqual(['changes', 'focus']);
+    expect(parseSystemFile(serializeSystemFile(graph)).outputs).toEqual(file.outputs);
+  });
+
+  it('matches a name case-insensitively only when that is unique', () => {
+    const file = development();
+    file.agents[1].executor.pipeline = 'testing';
+    const lower = systemFileToGraph(parseSystemFile(JSON.stringify(file)), project);
+    expect(lower.nodes[1]?.executor).toMatchObject({ launchCommandId: 'cmd-testing' });
+    const twice = [...project, { id: 'cmd-other', name: 'TESTING' }];
+    const ambiguous = systemFileToGraph(parseSystemFile(JSON.stringify(file)), twice);
+    expect(ambiguous.nodes[1]?.executor).toMatchObject({ launchCommandId: '' });
+    expect(ambiguous.nodes[1]?.pipelineName).toBe('testing');
+    // An exact name wins over case-insensitive ones.
+    file.agents[1].executor.pipeline = 'Testing';
+    expect(systemFileToGraph(parseSystemFile(JSON.stringify(file)), twice).nodes[1]?.executor).toMatchObject({ launchCommandId: 'cmd-testing' });
+  });
+
+  it('keeps an unknown name on the step as an issue that blocks saving, and never invents a pipeline', () => {
+    const graph = systemFileToGraph(parseSystemFile(JSON.stringify(development())), [{ id: 'cmd-release', name: 'Release check' }]);
+    const call = graph.nodes.find((node) => node.id === 'testing');
+    expect(call?.executor).toMatchObject({ type: 'pipeline', launchCommandId: '' });
+    expect(call?.pipelineName).toBe('Testing');
+    const issue = graphIssues(graph).find((item) => item.nodeIds.includes('testing'));
+    expect(issue?.message).toBe(formatIssue(SUBPIPELINE_ISSUE_TEMPLATES.unresolved, 'Testing'));
+    expect(parseIssue(issue?.message ?? '')).toEqual({ template: SUBPIPELINE_ISSUE_TEMPLATES.unresolved, parameter: 'Testing' });
+    expect(unresolvedPipelines(graph)).toEqual(['Testing']);
+    // Export keeps the imported name instead of dropping the step.
+    expect(JSON.parse(serializeSystemFile(graph)).agents[1].executor.pipeline).toBe('Testing');
+    // A step whose pipeline cannot be named is refused.
+    const unnamed = { ...graph, nodes: graph.nodes.map((node) => (node.id === 'testing' ? { ...node, pipelineName: undefined } : node)) };
+    expect(() => serializeSystemFile(unnamed)).toThrow(SYSTEM_FILE_UNNAMED_PIPELINE);
+  });
+
+  it('imports v4 files unchanged and exports them as v5', () => {
+    const file = JSON.parse(readFileSync(new URL('../../../../../examples/systems/agent-script-llm.piui.json', import.meta.url), 'utf8'));
+    expect(file.version).toBe(4);
+    const graph = systemFileToGraph(parseSystemFile(JSON.stringify(file)));
+    const exported = JSON.parse(serializeSystemFile(graph));
+    expect(exported.version).toBe(5);
+    expect(exported).not.toHaveProperty('outputs');
+    expect(exported.agents.map((agent: { executor?: unknown }) => agent.executor)).toEqual(file.agents.map((agent: { executor?: unknown }) => agent.executor));
+    expect(exported.agents.map((agent: { task: string }) => agent.task)).toEqual(file.agents.map((agent: { task: string }) => agent.task));
+    expect(exported.connections).toEqual(file.connections);
+    // Sub-pipelines and outputs stay v5-only.
+    const v4 = development(); v4.version = 4;
+    expect(() => parseSystemFile(JSON.stringify(v4))).toThrow();
+    const outputsOnly = testing(); outputsOnly.version = 4;
+    expect(() => parseSystemFile(JSON.stringify(outputsOnly))).toThrow();
+  });
+
+  it.each([
+    ['a launch command id instead of a name', (file: SystemFileJson) => { file.agents[1].executor.launchCommandId = 'cmd-testing'; }],
+    ['a blank pipeline name', (file: SystemFileJson) => { file.agents[1].executor.pipeline = ' '; }],
+    ['an input name that is not an identifier', (file: SystemFileJson) => { file.agents[1].executor.inputs.Changes = { kind: 'value', value: 'x' }; }],
+    ['a step source by step id', (file: SystemFileJson) => { file.agents[1].executor.inputs.changes = { kind: 'step', stepId: 'developer' }; }],
+    ['an unknown source kind', (file: SystemFileJson) => { file.agents[1].executor.inputs.changes = { kind: 'secret', name: 'x' }; }],
+    ['a source that is not a direct upstream agent', (file: SystemFileJson) => { file.agents[1].executor.inputs.changes = { kind: 'step', agent: 'report' }; }],
+    ['a field the upstream agent does not declare', (file: SystemFileJson) => { file.agents[1].executor.inputs.changes.field = 'undeclared'; }],
+    ['a run input the file does not declare', (file: SystemFileJson) => { file.agents[1].executor.inputs.focus = { kind: 'input', name: 'missing' }; }],
+    ['input mappings on a sub-pipeline', (file: SystemFileJson) => { file.agents[1].inputBindings = [{ sourceStepId: 'developer', field: 'summary', name: 'summary' }]; }],
+    ['a callable sub-pipeline', (file: SystemFileJson) => { file.agents[1].executionMode = 'callable'; }],
+    ['a sub-pipeline orchestrator', (file: SystemFileJson) => { file.orchestrator = 'testing'; }],
+    ['a sub-pipeline router', (file: SystemFileJson) => { file.agents[1].kind = 'router'; }],
+    ['an output of an unknown agent', (file: SystemFileJson) => { file.outputs[0].agent = 'absent'; }],
+    ['an output with an undeclared field', (file: SystemFileJson) => { file.outputs[0].field = 'undeclared'; }],
+    ['an output name that is not an identifier', (file: SystemFileJson) => { file.outputs[0].name = 'Passed'; }],
+    ['a duplicate output name', (file: SystemFileJson) => { file.outputs.push({ ...file.outputs[0] }); }],
+    ['a whole-text output that is not text', (file: SystemFileJson) => { file.outputs[1].kind = 'number'; }],
+    ['an output by step id', (file: SystemFileJson) => { file.outputs[0].sourceStepId = 'testing'; }],
+    ['33 outputs', (file: SystemFileJson) => { file.outputs = Array.from({ length: 33 }, (_, index) => ({ name: `out${index}`, kind: 'text', agent: 'report' })); }],
+  ])('rejects %s without dropping it', (_case, change) => {
+    const file = development();
+    parseSystemFile(JSON.stringify(file));
+    change(file);
+    expect(() => parseSystemFile(JSON.stringify(file))).toThrow();
   });
 });

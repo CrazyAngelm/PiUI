@@ -61,6 +61,70 @@ export const SUBPIPELINE_ISSUES = {
   outputs: 'Outputs need unique names (a lowercase letter, then letters, digits or underscores), at most 32, and a step with a declared field or its whole text.',
 } as const;
 
+/**
+ * Specific refusals of a definition save or delete (v6.7): the host returns
+ * these codes instead of the generic `invalid` / `conflict`.
+ * - `subpipeline-unknown-pipeline`: a sub-pipeline step names a launch command
+ *   that is not saved in this project.
+ * - `subpipeline-input-mismatch`: a step's input mapping does not fit the
+ *   inputs its child declares.
+ * - `subpipeline-cycle`: sub-pipeline references would form a loop.
+ * - `subpipeline-in-use`: a launch command another saved pipeline runs as a
+ *   sub-pipeline cannot be deleted.
+ * - `subpipeline-breaks-parent`: saving this pipeline would break the input
+ *   mapping or result fields of a saved pipeline that runs it (see
+ *   `parentBreakage`).
+ */
+export const SUBPIPELINE_SAVE_ERROR_CODES = [
+  'subpipeline-unknown-pipeline',
+  'subpipeline-input-mismatch',
+  'subpipeline-cycle',
+  'subpipeline-in-use',
+  'subpipeline-breaks-parent',
+] as const;
+export type SubpipelineSaveErrorCode = (typeof SUBPIPELINE_SAVE_ERROR_CODES)[number];
+
+/**
+ * Editor issues with one parameter (`{0}`); `formatIssue` fills them in and
+ * `parseIssue` recovers the template so the locale catalog translates it.
+ */
+export const SUBPIPELINE_ISSUE_TEMPLATES = {
+  /** A system file named a pipeline this project does not have (import, system-file v5). */
+  unresolved: 'Pipeline “{0}” is not in this project. Pick a saved pipeline for this step.',
+  /** Saved parents whose mapping or result fields this draft would break. */
+  breaksParent: 'Saved pipelines that run this one as a sub-pipeline would stop working: {0}. Keep the inputs and outputs they use, or change them first.',
+} as const;
+
+export function formatIssue(template: string, parameter: string): string {
+  return template.replace('{0}', parameter);
+}
+
+/** The template and parameter of a message made by `formatIssue`, if any. */
+export function parseIssue(message: string): { template: string; parameter: string } | undefined {
+  for (const template of Object.values(SUBPIPELINE_ISSUE_TEMPLATES)) {
+    const [before = '', after = ''] = template.split('{0}');
+    if (message.length > before.length + after.length && message.startsWith(before) && message.endsWith(after)) {
+      return { template, parameter: message.slice(before.length, message.length - after.length) };
+    }
+  }
+  return undefined;
+}
+
+/** A saved launch command a portable file's pipeline name resolves against (system-file v5). */
+export interface PipelineName { readonly id: string; readonly name: string }
+
+/**
+ * The launch command a file's pipeline name means in this project: the exact
+ * name, else a unique case-insensitive match. Ambiguous or missing names are
+ * undefined; the person picks one. Nothing is created or saved.
+ */
+export function resolvePipelineName(name: string, commands: readonly PipelineName[]): string | undefined {
+  const exact = commands.filter((command) => command.name === name);
+  if (exact.length > 0) return exact.length === 1 ? exact[0]?.id : undefined;
+  const folded = commands.filter((command) => command.name.toLowerCase() === name.toLowerCase());
+  return folded.length === 1 ? folded[0]?.id : undefined;
+}
+
 /** What the editor knows about a saved pipeline it can run as a child. */
 export interface SubpipelineInfo {
   readonly commandId: string;
@@ -70,6 +134,11 @@ export interface SubpipelineInfo {
   readonly outputs: readonly PipelineOutput[];
   /** Launch commands its own sub-pipeline steps run (for cycle checks). */
   readonly references: readonly string[];
+  /**
+   * Its steps and run inputs, so the editor can tell whether a change to a
+   * pipeline it runs would break it (`parentBreakage`). Absent while unknown.
+   */
+  readonly pipeline?: Pick<PipelineDefinition, 'steps' | 'inputs'>;
 }
 
 export function isPipelineStep(step: Pick<PipelineStep, 'executor'>): boolean {
@@ -354,4 +423,54 @@ export function subpipelineResult(
   }
   const issue = resultValueIssue(fields, parsed);
   return issue === undefined ? { status: 'succeeded', data: parsed as Record<string, unknown> } : { status: 'failed', failure: { code: issue } };
+}
+
+/** A saved pipeline that runs another one as a sub-pipeline. */
+export interface SubpipelineParent {
+  readonly commandId: string;
+  readonly name: string;
+  readonly pipeline: Pick<PipelineDefinition, 'steps' | 'inputs'>;
+}
+
+/** The declarations of a child a parent's sub-pipeline step depends on. */
+export interface ChildShape {
+  readonly inputs: readonly PipelineInput[];
+  readonly outputs: readonly PipelineOutput[];
+}
+
+/**
+ * Whether sub-pipeline step `step` of `parent` fits `child` (`step_fits`):
+ * its input mapping has no problem, and every result field it declares is an
+ * output of the child with the same name and kind (checked only while the
+ * child declares outputs: without outputs the step receives the last step's
+ * text, checked when it completes).
+ */
+export function stepFits(parent: Pick<PipelineDefinition, 'steps' | 'inputs'>, step: PipelineStep, child: ChildShape): boolean {
+  if (step.executor?.type !== 'pipeline') return true;
+  const fieldsOf = (id: string): readonly ResultField[] => parent.steps.find((candidate) => candidate.id === id)?.resultFields ?? [];
+  if (mappingProblems(step.executor, { inputs: child.inputs }, parent.inputs ?? [], step.dependencyStepIds, fieldsOf).length > 0) return false;
+  return child.outputs.length === 0
+    || (step.resultFields ?? []).every((field) => child.outputs.some((output) => output.name === field.name && output.kind === field.kind));
+}
+
+/**
+ * `subpipeline-breaks-parent` (v6.7, `validate_parents`): the saved parents
+ * that a new version (`next`) of the pipeline run by launch commands
+ * `commandIds` would break, once each in the given order. A parent breaks
+ * when one of its steps that runs such a command does not fit `next`
+ * (`stepFits`) but fitted `previous`; with `previous` unknown (a new
+ * pipeline) any step that does not fit counts. A step that already did not
+ * fit is not blamed on this change.
+ */
+export function parentBreakage(
+  commandIds: readonly string[],
+  next: ChildShape,
+  parents: readonly SubpipelineParent[],
+  previous: ChildShape | undefined = undefined,
+): SubpipelineParent[] {
+  const targets = new Set(commandIds);
+  return parents.filter((parent) => !targets.has(parent.commandId) && parent.pipeline.steps.some((step) => {
+    if (step.executor?.type !== 'pipeline' || !targets.has(step.executor.launchCommandId)) return false;
+    return !stepFits(parent.pipeline, step, next) && (previous === undefined || stepFits(parent.pipeline, step, previous));
+  }));
 }

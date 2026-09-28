@@ -1,7 +1,7 @@
-# Execution semantics — v4
+# Execution semantics — v5
 
-The current schema is `contracts/system-file-v4.schema.json`; versions 1–3
-remain importable. Orchestration IPC v6 is separate from portable JSON.
+The current schema is `contracts/system-file-v5.schema.json`; versions 1–4
+remain importable (version 5 adds sub-pipelines and `outputs`). Orchestration IPC v6 is separate from portable JSON.
 
 - `executionMode: "callable"` keeps a template out of automatic scheduling and
   completion accounting. Its profile needs `whenToCall`, input and expected-result
@@ -93,7 +93,8 @@ remain importable. Orchestration IPC v6 is separate from portable JSON.
   mid-node leaves the step uncertain. Importing a file never installs or
   trusts a plugin.
 - `{"type": "pipeline", launchCommandId, inputs}` (orchestration v6.7,
-  ADR-042) runs a saved launch command of the same project as an ordinary
+  ADR-042; in a file `{"type": "pipeline", "pipeline": "<name>", "inputs"}`,
+  below) runs a saved launch command of the same project as an ordinary
   **child run** (trigger `pipeline` with `parentRunId`, `parentStepId` and
   `depth`, at most 4 nested runs). `inputs` maps each child input name to a
   literal `{kind: "value", value}`, a parent run input `{kind: "input", name}`
@@ -107,8 +108,24 @@ remain importable. Orchestration IPC v6 is separate from portable JSON.
   `subpipeline-input-invalid`, `subpipeline-input-unavailable` (nothing
   started), `subpipeline-failed`, `subpipeline-cancelled`,
   `subpipeline-output-unavailable`. Cancelling the parent cancels the child
-  first. System files v4 cannot carry this executor or `outputs`: export is
-  refused rather than dropping them.
+  first.
+- In a version 5 file the executor names the child by its launch command
+  **name** (`"pipeline": "Testing"`), resolved against the project at import
+  (exact name, else a unique case-insensitive match; otherwise the person picks
+  one before saving). A step source is `{"kind": "step", "agent": "<direct
+  upstream agent id>", "field"?}`, and top-level `outputs` use `agent` instead
+  of `sourceStepId`: `{"name": "passed", "kind": "boolean", "agent": "tester",
+  "field": "passed"}`. An output without `field` is that agent's whole result
+  text and has `kind: "text"`. The step has no model, input bindings,
+  collaboration edges or callable mode and cannot be the orchestrator. When a
+  chat pipeline declares outputs, the chat answer is built from them.
+- Saving is refused with `subpipeline-unknown-pipeline`,
+  `subpipeline-input-mismatch` or `subpipeline-cycle`; deleting a pipeline
+  another one runs with `subpipeline-in-use`; and changing a pipeline so a
+  saved pipeline that runs it would lose a mapped input, get an unmapped
+  required input, a value of another kind, or a declared result field its
+  outputs no longer provide with `subpipeline-breaks-parent` (the editor warns
+  first and names those pipelines).
 
 Pause prevents new admissions while active native work continues. Cancel task
 interrupts that native execution and cancels dependent ready tasks; independent
@@ -131,6 +148,9 @@ Example: `examples/systems/structured-review.piui.json` (a required `task` input
 used as `{{input.task}}` and a review loop bounded to 3 rounds);
 `examples/systems/agent-script-llm.piui.json` (an agent lists dependencies, a
 Node script counts them deterministically, one read-only model call summarizes
-with bindings from the script result). Replace model
+with bindings from the script result);
+`examples/systems/development-with-testing.piui.json` (a developer agent, the
+saved "Testing" pipeline of `examples/systems/testing.piui.json` as a
+sub-pipeline with mapped inputs, and declared outputs). Replace model
 placeholders, validate with `pnpm system:check`, then inspect native preflight.
 Import is a draft, not authorization to save, run or replay effects.

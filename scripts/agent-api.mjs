@@ -61,9 +61,13 @@ export async function prepareSystem(text, workspaceId) {
   const { createServer } = await import(pathToFileURL(requireDesktop.resolve('vite')).href);
   const server = await createServer({ root: fileURLToPath(new URL('../apps/desktop', import.meta.url)), configFile: false, optimizeDeps: { noDiscovery: true, include: [] }, server: { middlewareMode: true, watch: null }, appType: 'custom' });
   try {
-    const { parseSystemFile, systemFileToGraph } = await server.ssrLoadModule('/src/features/orchestration/systemFile.ts');
+    const { parseSystemFile, systemFileToGraph, unresolvedPipelines } = await server.ssrLoadModule('/src/features/orchestration/systemFile.ts');
     const { compileGraph } = await server.ssrLoadModule('/src/features/orchestration/agentGraph.ts');
-    const definition = compileGraph(systemFileToGraph(parseSystemFile(text)));
+    const graph = systemFileToGraph(parseSystemFile(text));
+    // Sub-pipelines (system file v5) name saved pipelines; a plan made offline cannot resolve them.
+    const unresolved = unresolvedPipelines(graph);
+    if (unresolved.length) throw new Error(`Sub-pipelines ${unresolved.map((name) => `"${name}"`).join(', ')} name saved pipelines of the project. Import this file in PiUI to pick them.`);
+    const definition = compileGraph(graph);
     const wrap = value => ({ workspaceId, value });
     return {
       protocol: 1,

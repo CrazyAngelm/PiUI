@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { failureText } from '../../../app/runs/runGraph';
-import { SUBPIPELINE_FAILURE_CODES, SUBPIPELINE_ISSUES } from '../../../host-api/subpipelines';
-import { SYSTEM_FILE_SUBPIPELINES } from '../../orchestration/systemFile';
+import { orchestrationError } from '../../../host-api/orchestrationClient';
+import { SUBPIPELINE_FAILURE_CODES, SUBPIPELINE_ISSUE_TEMPLATES, SUBPIPELINE_ISSUES, SUBPIPELINE_SAVE_ERROR_CODES } from '../../../host-api/subpipelines';
+import { SYSTEM_FILE_UNNAMED_PIPELINE } from '../../orchestration/systemFile';
 import { translate } from '../language';
 import { subpipelinesRu } from './subpipelines';
 
@@ -29,11 +30,14 @@ describe('Russian copy for sub-pipelines', () => {
     expect(keys.filter((key) => !translated(key))).toEqual([]);
   });
 
-  it('translates issues, failure codes, run labels and the export refusal', () => {
+  it('translates issues, failure codes, save refusals, run labels and the export refusal', () => {
     const keys = [
       ...Object.values(SUBPIPELINE_ISSUES),
+      ...Object.values(SUBPIPELINE_ISSUE_TEMPLATES),
       ...Object.values(SUBPIPELINE_FAILURE_CODES).map((code) => failureText(code)),
-      SYSTEM_FILE_SUBPIPELINES,
+      ...SUBPIPELINE_SAVE_ERROR_CODES.map((code) => orchestrationError({ code }).message),
+      SYSTEM_FILE_UNNAMED_PIPELINE,
+      'A sub-pipeline runs on the host and cannot be the orchestrator.',
       'Sub-pipelines',
       'Sub-pipeline',
       'Open pipeline {0}',
@@ -46,6 +50,15 @@ describe('Russian copy for sub-pipelines', () => {
       'Inputs of the sub-pipeline',
     ];
     expect(keys.filter((key) => !translated(key))).toEqual([]);
+  });
+
+  it('gives every save refusal its own copy instead of the generic one', () => {
+    const generic = orchestrationError({ code: 'invalid' }).message;
+    for (const code of SUBPIPELINE_SAVE_ERROR_CODES) {
+      const error = orchestrationError({ code });
+      expect(error.code, code).toBe(code);
+      expect(error.message, code).not.toBe(generic);
+    }
   });
 
   it('gives every sub-pipeline failure code a readable text', () => {

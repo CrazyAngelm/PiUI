@@ -4,6 +4,7 @@
   import type { AgentGraph } from '../../features/orchestration/agentGraph';
   import { pipelineLibraryHost } from '../../host-api/pipelineLibraryClient';
   import { Button, Dialog, Field, Input, Segmented, Textarea, toasts } from '../../lib/ui';
+  import type { PipelineName } from '../../features/orchestration/systemFile';
   import { templateSystem } from './templateLibrary';
 
   interface Props {
@@ -11,9 +12,11 @@
     graph: AgentGraph;
     workspaceId: string;
     projectName: string;
+    /** Saved pipelines of the project: sub-pipeline steps are stored by their name (system-file v5). */
+    pipelines?: readonly PipelineName[];
     onSaved?: () => void;
   }
-  let { open = $bindable(false), graph, workspaceId, projectName, onSaved }: Props = $props();
+  let { open = $bindable(false), graph, workspaceId, projectName, pipelines = [], onSaved }: Props = $props();
 
   let name = $state('');
   let description = $state('');
@@ -39,7 +42,7 @@
     }
     let system: Record<string, unknown>;
     try {
-      system = templateSystem({ ...graph, name: name.trim() });
+      system = templateSystem({ ...graph, name: name.trim() }, pipelines);
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Fix the problems before saving';
       return;

@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   compileGraph, emptyGraph, graphIssues, newGraphNode, newSubpipelineNode, nodeHasNoMember, type AgentGraph, type GraphNode,
 } from '../../features/orchestration/agentGraph';
-import { subpipelineIssues } from '../../features/orchestration/graphPreflight';
-import { serializeSystemFile, SYSTEM_FILE_SUBPIPELINES } from '../../features/orchestration/systemFile';
-import { SUBPIPELINE_ISSUES, type PipelineExecutor, type SubpipelineInfo } from '../../host-api/subpipelines';
+import { parentIssues, subpipelineIssues } from '../../features/orchestration/graphPreflight';
+import { serializeSystemFile, SYSTEM_FILE_UNNAMED_PIPELINE } from '../../features/orchestration/systemFile';
+import type { PipelineStep } from '../../host-api/orchestrationClient';
+import {
+  formatIssue, parentBreakage, SUBPIPELINE_ISSUE_TEMPLATES, SUBPIPELINE_ISSUES, type PipelineExecutor, type SubpipelineInfo,
+} from '../../host-api/subpipelines';
+import { graphFromTemplate, templateSystem } from '../chatPipelines/templateLibrary';
 import { graphFromDefinitions } from './graphDocument';
 import { nodeType } from './nodeConversion';
 
@@ -108,11 +112,101 @@ describe('sub-pipeline steps in the graph', () => {
     expect(subpipelineIssues(wrongValue, children, undefined)[0]?.nodeIds).toEqual([call.id]);
   });
 
-  it('refuses to export a system file with sub-pipeline steps or outputs instead of dropping them', () => {
+  it('exports sub-pipeline steps by pipeline name and outputs by agent id (system-file v5)', () => {
     const graph = system();
-    expect(() => serializeSystemFile(graph)).toThrow(SYSTEM_FILE_SUBPIPELINES);
-    const outputsOnly: AgentGraph = { ...graph, nodes: [graph.nodes[0]!], edges: [], outputs: [{ name: 'plan', kind: 'text', sourceStepId: graph.nodes[0]!.id }] };
-    expect(() => serializeSystemFile(outputsOnly)).toThrow(SYSTEM_FILE_SUBPIPELINES);
-    expect(() => serializeSystemFile({ ...outputsOnly, outputs: undefined })).not.toThrow();
+    const call = graph.nodes[1]!;
+    const agent = graph.nodes[0]!;
+    const file = JSON.parse(serializeSystemFile(graph, [{ id: 'child-command', name: 'Testing' }]));
+    expect(file.version).toBe(5);
+    expect(file.agents[1].executor).toEqual({
+      type: 'pipeline',
+      pipeline: 'Testing',
+      inputs: { topic: { kind: 'step', agent: agent.id, field: 'summary' }, retries: { kind: 'value', value: 2 }, task: { kind: 'input', name: 'task' } },
+    });
+    expect(file.outputs).toEqual([{ name: 'passed', kind: 'boolean', agent: call.id, field: 'passed' }, { name: 'plan', kind: 'text', agent: agent.id }]);
+    // Without the project's names the pipeline cannot be named: refused, never dropped.
+    expect(() => serializeSystemFile(graph)).toThrow(SYSTEM_FILE_UNNAMED_PIPELINE);
+  });
+
+  it('saves a template with sub-pipelines and opens it resolved against the project', () => {
+    const graph = system();
+    const names = [{ id: 'child-command', name: 'Testing' }];
+    const document = templateSystem(graph, names);
+    expect(document.version).toBe(5);
+    const opened = graphFromTemplate({ system: document, name: 'Development' }, [{ id: 'other-project-command', name: 'Testing' }]);
+    expect(opened.nodes[1]?.executor).toMatchObject({ type: 'pipeline', launchCommandId: 'other-project-command' });
+    expect(opened.outputs).toEqual(graph.outputs);
+    // A project without that pipeline keeps the name for the person to pick.
+    expect(graphFromTemplate({ system: document, name: 'Development' }).nodes[1]?.pipelineName).toBe('Testing');
+  });
+
+  it('reports saved parents a change of inputs or outputs would break, by name', () => {
+    // The draft is the child; a saved parent runs it with a mapping and result fields.
+    const draft: AgentGraph = {
+      ...emptyGraph(),
+      name: 'Testing',
+      inputs: [{ name: 'topic', label: 'Topic', kind: 'text' }],
+      outputs: [{ name: 'passed', kind: 'boolean', sourceStepId: 'check', field: 'passed' }],
+    };
+    const parentStep = (patch: Partial<PipelineStep> = {}): PipelineStep => ({
+      id: 'call', name: 'Testing', assignedMemberId: 'call', instructions: '', dependencyStepIds: [],
+      executor: { type: 'pipeline', launchCommandId: draft.id, inputs: { topic: { kind: 'value', value: 'release' } } },
+      resultFields: [{ name: 'passed', kind: 'boolean' }],
+      ...patch,
+    });
+    const info = (name: string, step: PipelineStep, references = [draft.id]): SubpipelineInfo => ({
+      commandId: `cmd-${name}`, name, pipelineId: `pipe-${name}`, inputs: [], outputs: [], references, pipeline: { steps: [step], inputs: [] },
+    });
+    const saved = new Map([
+      ['cmd-Ship', info('Ship', parentStep())],
+      ['cmd-Nightly', info('Nightly', parentStep({ executor: { type: 'pipeline', launchCommandId: draft.id, inputs: {} }, resultFields: [] }))],
+    ]);
+    expect(parentIssues(draft, saved)).toEqual([]);
+    // Renaming the input breaks Ship's mapping and leaves the new required input unmapped in both.
+    const renamed = { ...draft, inputs: [{ name: 'subject', label: 'Subject', kind: 'text' as const, required: true }] };
+    const [issue] = parentIssues(renamed, saved);
+    expect(issue?.message).toBe(formatIssue(SUBPIPELINE_ISSUE_TEMPLATES.breaksParent, '“Ship”, “Nightly”'));
+    expect(issue?.nodeIds).toEqual([]);
+    // A number output where Ship declares a boolean field breaks Ship only.
+    const retyped = { ...draft, outputs: [{ name: 'passed', kind: 'number' as const, sourceStepId: 'check', field: 'score' }] };
+    expect(parentIssues(retyped, saved)[0]?.message).toBe(formatIssue(SUBPIPELINE_ISSUE_TEMPLATES.breaksParent, '“Ship”'));
+    // Without outputs the step receives the last step's text: fields are not checked.
+    expect(parentIssues({ ...draft, outputs: undefined }, saved)).toEqual([]);
+    // A new optional input or an extra output breaks nobody.
+    const grown = {
+      ...draft,
+      inputs: [...(draft.inputs ?? []), { name: 'depth', label: 'Depth', kind: 'number' as const }],
+      outputs: [...(draft.outputs ?? []), { name: 'report', kind: 'text' as const, sourceStepId: 'check' }],
+    };
+    expect(parentIssues(grown, saved)).toEqual([]);
+    // A parent that did not fit the saved version either is not blamed on this draft.
+    const savedDraft: SubpipelineInfo = {
+      commandId: draft.id, name: 'Testing', pipelineId: draft.pipelineId, inputs: renamed.inputs, outputs: draft.outputs ?? [], references: [],
+    };
+    expect(parentIssues(renamed, new Map([...saved, [draft.id, savedDraft]]))).toEqual([]);
+    // Pipelines that do not run the draft, or were not read yet, are not reported.
+    const unrelated = new Map([['cmd-Other', info('Other', parentStep(), [])], ['cmd-Unknown', { ...info('Unknown', parentStep()), pipeline: undefined }]]);
+    expect(parentIssues(renamed, unrelated)).toEqual([]);
+  });
+
+  it('checks a parent with the same rule the host uses', () => {
+    const parent = {
+      commandId: 'cmd-parent', name: 'Parent',
+      pipeline: {
+        inputs: [{ name: 'task', label: 'Task', kind: 'text' as const }],
+        steps: [{
+          id: 'call', name: 'Child', assignedMemberId: 'call', instructions: '', dependencyStepIds: [],
+          executor: { type: 'pipeline' as const, launchCommandId: 'cmd-child', inputs: { goal: { kind: 'input' as const, name: 'task' } } },
+        }],
+      },
+    };
+    const text = { inputs: [{ name: 'goal', label: 'Goal', kind: 'long-text' as const }], outputs: [] };
+    const number = { inputs: [{ name: 'goal', label: 'Goal', kind: 'number' as const }], outputs: [] };
+    expect(parentBreakage(['cmd-child'], text, [parent])).toEqual([]);
+    expect(parentBreakage(['cmd-child'], number, [parent])).toEqual([parent]);
+    expect(parentBreakage(['cmd-child'], number, [parent], text)).toEqual([parent]);
+    // A step that did not fit the saved version either is not blamed on this change.
+    expect(parentBreakage(['cmd-child'], number, [parent], { inputs: [], outputs: [] })).toEqual([]);
+    expect(parentBreakage(['cmd-other'], number, [parent])).toEqual([]);
   });
 });

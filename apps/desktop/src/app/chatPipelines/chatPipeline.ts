@@ -91,6 +91,37 @@ export function answerTask(run: Pick<OrchestrationRunV6, 'definition' | 'tasks'>
   return step && task ? { step, task } : undefined;
 }
 
+/**
+ * The chat answer built from the run's declared pipeline outputs (v6.7,
+ * ADR-042): one output gives its value, several give `name: value` lines, in
+ * declared order. `text` reads a step's whole result text (an output
+ * without a field); `format` shows a result field's value. Undefined when
+ * the pipeline declares no outputs or one of them has no value: the chat
+ * then answers with the answering step's text as before.
+ */
+export async function outputsAnswer(
+  run: Pick<OrchestrationRunV6, 'definition' | 'tasks'>,
+  text: (step: PipelineStep, task: TaskRecord) => Promise<string | undefined>,
+  format: (value: unknown) => string,
+): Promise<string | undefined> {
+  const outputs = run.definition.pipeline.outputs ?? [];
+  if (outputs.length === 0) return undefined;
+  const values: { name: string; value: string }[] = [];
+  for (const output of outputs) {
+    const step = run.definition.pipeline.steps.find((candidate) => candidate.id === output.sourceStepId);
+    const task = run.tasks.find((candidate) => candidate.stepId === output.sourceStepId);
+    if (step === undefined || task?.status !== 'succeeded') return undefined;
+    const field = output.field ?? undefined;
+    let value: string | undefined;
+    if (field === undefined) value = await text(step, task);
+    else if (task.resultData !== undefined && Object.hasOwn(task.resultData, field)) value = format(task.resultData[field]);
+    if (value === undefined) return undefined;
+    values.push({ name: output.name, value });
+  }
+  if (values.length === 1) return values[0]?.value;
+  return values.map((item) => `${item.name}: ${item.value}`).join('\n');
+}
+
 export function runMessage(run: Pick<OrchestrationRunV6, 'inputs' | 'definition'>): string {
   const name = chatInput(run.definition.pipeline.inputs)?.name;
   const value = name ? run.inputs?.[name] : undefined;

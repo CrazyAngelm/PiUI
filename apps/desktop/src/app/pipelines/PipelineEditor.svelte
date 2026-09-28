@@ -233,7 +233,7 @@
 
   async function useUserTemplate(template: PipelineTemplateV1): Promise<void> {
     try {
-      await openTemplateDraft(graphFromTemplate(template));
+      await openTemplateDraft(graphFromTemplate(template, editor.systems));
     } catch (error) {
       toasts.error($t('This template could not be opened'), error instanceof Error ? error.message : undefined);
     }
@@ -493,7 +493,7 @@
   </div>
 </section>
 
-<SaveTemplateDialog bind:open={saveTemplateOpen} graph={editor.graph} {workspaceId} {projectName} onSaved={() => void chatPipelines.loadLibrary(workspaceId)} />
+<SaveTemplateDialog bind:open={saveTemplateOpen} graph={editor.graph} {workspaceId} {projectName} pipelines={editor.systems} onSaved={() => void chatPipelines.loadLibrary(workspaceId)} />
 
 <RunInputsDialog
   bind:open={inputsOpen}

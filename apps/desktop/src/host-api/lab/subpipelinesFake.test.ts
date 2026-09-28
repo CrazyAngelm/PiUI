@@ -206,17 +206,17 @@ describe('UI Lab sub-pipelines', () => {
     expect(runs.some((item) => item.trigger?.kind === 'pipeline' && item.trigger.depth > MAX_SUBPIPELINE_DEPTH)).toBe(false);
   });
 
-  it('refuses saves with a missing launch command, a bad mapping or a cycle, and keeps referenced commands', async () => {
+  it('refuses saves with a missing launch command, a bad mapping or a cycle, and keeps referenced commands, with specific codes', async () => {
     const host = labHost();
     const system = await release(host);
     const missing: PipelineDefinition = { id: labUuid('test:missing'), name: 'Missing', steps: [subpipelineStep('no-such-command')] };
-    expect(await rejection(call(host, 'orchestration_save_pipeline_v6', { workspaceId: system.workspaceId, value: missing }))).toMatchObject({ code: 'invalid' });
+    expect(await rejection(call(host, 'orchestration_save_pipeline_v6', { workspaceId: system.workspaceId, value: missing }))).toMatchObject({ code: 'subpipeline-unknown-pipeline' });
 
     const unknownInput: PipelineDefinition = {
       id: labUuid('test:unknown'), name: 'Unknown input',
       steps: [subpipelineStep(system.command.id, { executor: { type: 'pipeline', launchCommandId: system.command.id, inputs: { nope: { kind: 'value', value: 'x' } } } })],
     };
-    expect(await rejection(call(host, 'orchestration_save_pipeline_v6', { workspaceId: system.workspaceId, value: unknownInput }))).toMatchObject({ code: 'invalid' });
+    expect(await rejection(call(host, 'orchestration_save_pipeline_v6', { workspaceId: system.workspaceId, value: unknownInput }))).toMatchObject({ code: 'subpipeline-input-mismatch' });
 
     const command = await parent(host, system, 'Outer', subpipelineStep(system.command.id));
     // Release check running Outer would run itself again.
@@ -224,10 +224,58 @@ describe('UI Lab sub-pipelines', () => {
       ...pipeline,
       steps: [...pipeline.steps, subpipelineStep(command.id, { id: 'loop', assignedMemberId: 'loop', dependencyStepIds: [pipeline.steps[2]?.id ?? ''] })],
     })));
-    expect(cycle).toMatchObject({ code: 'invalid' });
+    expect(cycle).toMatchObject({ code: 'subpipeline-cycle' });
 
     expect(await rejection(call(host, 'orchestration_delete_launch_command_v6', {
       workspaceId: system.workspaceId, id: system.command.id, expectedRevision: 0,
-    }))).toMatchObject({ code: 'conflict' });
+    }))).toMatchObject({ code: 'subpipeline-in-use' });
+  });
+
+  it('refuses a child change that breaks a saved parent with subpipeline-breaks-parent and keeps the child', async () => {
+    const host = labHost();
+    let system = await release(host);
+    system = await saveRelease(host, system, (pipeline) => ({
+      ...pipeline,
+      outputs: [{ name: 'characters', kind: 'number', sourceStepId: metricsId(system), field: 'characters' }],
+    }));
+    await parent(host, system, 'Ship', subpipelineStep(system.command.id, {
+      executor: { type: 'pipeline', launchCommandId: system.command.id, inputs: { since: { kind: 'value', value: 'yesterday' } } },
+      resultFields: [{ name: 'characters', kind: 'number' }],
+    }));
+    const before = system.pipeline;
+    // Dropping the input Ship maps.
+    expect(await rejection(saveRelease(host, system, (pipeline) => ({ ...pipeline, inputs: [] })))).toMatchObject({ code: 'subpipeline-breaks-parent' });
+    // Renaming the output Ship declares as a result field.
+    expect(await rejection(saveRelease(host, system, (pipeline) => ({
+      ...pipeline,
+      outputs: [{ name: 'count', kind: 'number', sourceStepId: metricsId(system), field: 'characters' }],
+    })))).toMatchObject({ code: 'subpipeline-breaks-parent' });
+    const workspace = host.state.orchestration.get(system.workspaceId);
+    const stored = (id: string) => workspace?.pipelines.find((item) => item.value.id === id);
+    expect(stored(before.value.id)?.revision).toBe(before.revision);
+    // A compatible change (a new optional input, another output) is saved.
+    const grown = await saveRelease(host, system, (pipeline) => ({
+      ...pipeline,
+      inputs: [...(pipeline.inputs ?? []), { name: 'depth', label: 'Depth', kind: 'number' }],
+      outputs: [...(pipeline.outputs ?? []), { name: 'count', kind: 'number', sourceStepId: metricsId(system), field: 'characters' }],
+    }));
+    expect(grown.pipeline.revision).toBe(before.revision + 1);
+  });
+
+  it('refuses to point a launch command a parent runs at a pipeline that breaks it', async () => {
+    const host = labHost();
+    const system = await release(host);
+    await parent(host, system, 'Ship', subpipelineStep(system.command.id, {
+      executor: { type: 'pipeline', launchCommandId: system.command.id, inputs: { since: { kind: 'value', value: 'yesterday' } } },
+    }));
+    // A pipeline without the `since` input Ship maps.
+    const other: PipelineDefinition = {
+      id: labUuid('test:other'), name: 'Other',
+      steps: [{ id: 'solo', name: 'Solo', assignedMemberId: system.team.members[0]?.id ?? '', instructions: 'Summarize.', dependencyStepIds: [] }],
+    };
+    await call(host, 'orchestration_save_pipeline_v6', { workspaceId: system.workspaceId, value: other });
+    expect(await rejection(call(host, 'orchestration_save_launch_command_v6', {
+      workspaceId: system.workspaceId, expectedRevision: 0, value: { ...system.command, pipelineId: other.id },
+    }))).toMatchObject({ code: 'subpipeline-breaks-parent' });
   });
 });

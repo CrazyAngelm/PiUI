@@ -106,28 +106,57 @@ fn workspace(state: &OrchestrationApiState) -> WorkspaceOrchestration {
         .expect("workspace")
 }
 
+/// The command error code of a refused call.
+fn code<T>(result: Result<T, crate::orchestration_api::OrchestrationApiError>) -> &'static str {
+    match result {
+        Ok(_) => "ok",
+        Err(error) => error.code,
+    }
+}
+
 #[test]
 fn saves_refuse_unknown_references_inputs_and_cycles() {
     let refused = [
-        json!({"type": "pipeline", "launchCommandId": "missing", "inputs": valid_inputs()}),
-        test_executor(json!({
-            "branch": {"kind": "input", "name": "branch"},
-            "unknown": {"kind": "value", "value": 1}
-        })),
-        test_executor(json!({
-            "branch": {"kind": "input", "name": "branch"},
-            "strict": {"kind": "value", "value": "yes"}
-        })),
-        test_executor(json!({"strict": {"kind": "value", "value": true}})),
-        test_executor(json!({"branch": {"kind": "step", "stepId": "collect", "field": "count"}})),
+        (
+            json!({"type": "pipeline", "launchCommandId": "missing", "inputs": valid_inputs()}),
+            SUBPIPELINE_UNKNOWN_PIPELINE,
+        ),
+        (
+            test_executor(json!({
+                "branch": {"kind": "input", "name": "branch"},
+                "unknown": {"kind": "value", "value": 1}
+            })),
+            SUBPIPELINE_INPUT_MISMATCH,
+        ),
+        (
+            test_executor(json!({
+                "branch": {"kind": "input", "name": "branch"},
+                "strict": {"kind": "value", "value": "yes"}
+            })),
+            SUBPIPELINE_INPUT_MISMATCH,
+        ),
+        (
+            test_executor(json!({"strict": {"kind": "value", "value": true}})),
+            SUBPIPELINE_INPUT_MISMATCH,
+        ),
+        (
+            test_executor(
+                json!({"branch": {"kind": "step", "stepId": "collect", "field": "count"}}),
+            ),
+            SUBPIPELINE_INPUT_MISMATCH,
+        ),
         // The pipeline would run its own launch command.
-        json!({"type": "pipeline", "launchCommandId": "develop", "inputs": {}}),
+        (
+            json!({"type": "pipeline", "launchCommandId": "develop", "inputs": {}}),
+            SUBPIPELINE_CYCLE,
+        ),
     ];
-    for executor in refused {
+    for (executor, expected) in refused {
         let state = state();
         save_graph(&state, testing()).expect("testing saves");
-        assert!(
-            save_graph(&state, development(executor.clone())).is_err(),
+        assert_eq!(
+            code(save_graph(&state, development(executor.clone()))),
+            expected,
             "{executor} must be refused"
         );
         assert!(
@@ -156,7 +185,10 @@ fn a_save_that_closes_a_cycle_is_refused() {
     // `testing` may not run `develop`, which runs `testing`.
     let mut looping: PipelineDefinition = serde_json::from_value(json!({
     "id": "testing", "name": "Testing",
-    "inputs": [{"name": "branch", "label": "Branch", "kind": "text", "required": true}],
+    "inputs": [
+        {"name": "branch", "label": "Branch", "kind": "text", "required": true},
+        {"name": "strict", "label": "Strict", "kind": "boolean"}
+    ],
     "steps": [
         {"id": "unit", "name": "Unit", "assignedMemberId": "tester", "instructions": "Test.",
          "dependencyStepIds": []},
@@ -165,10 +197,9 @@ fn a_save_that_closes_a_cycle_is_refused() {
          "dependencyStepIds": ["unit"]}
     ]}))
     .expect("pipeline");
-    assert!(
-        state
-            .save_pipeline_for_test(WORKSPACE, Some(0), looping.clone())
-            .is_err()
+    assert_eq!(
+        code(state.save_pipeline_for_test(WORKSPACE, Some(0), looping.clone())),
+        SUBPIPELINE_CYCLE
     );
     assert!(reference_cycle(&workspace(&state)).is_none());
     // Retargeting `testing` at the pipeline that runs it is a cycle too.
@@ -179,10 +210,9 @@ fn a_save_that_closes_a_cycle_is_refused() {
         pipeline_id: "development".into(),
         managed_by_teammate_id: None,
     };
-    assert!(
-        state
-            .save_launch_command_for_test(WORKSPACE, Some(0), retargeted)
-            .is_err()
+    assert_eq!(
+        code(state.save_launch_command_for_test(WORKSPACE, Some(0), retargeted)),
+        SUBPIPELINE_CYCLE
     );
     // Without the loop the same save is accepted.
     looping.steps.pop();
@@ -197,14 +227,219 @@ fn a_referenced_launch_command_is_never_deleted() {
     let snapshot = workspace(&state);
     assert!(launch_command_referenced(&snapshot, "testing"));
     assert!(!launch_command_referenced(&snapshot, "develop"));
-    assert!(
-        state
-            .delete_launch_command_for_test(WORKSPACE, "testing", 0)
-            .is_err()
+    assert_eq!(
+        code(state.delete_launch_command_for_test(WORKSPACE, "testing", 0)),
+        SUBPIPELINE_IN_USE
     );
+    // Nor is the pipeline or the team the referenced command runs.
+    assert_eq!(
+        code(state.delete_pipeline_for_test(WORKSPACE, "testing", 0)),
+        SUBPIPELINE_IN_USE
+    );
+    assert_eq!(
+        code(state.delete_team_for_test(WORKSPACE, "testing-team", 0)),
+        SUBPIPELINE_IN_USE
+    );
+    assert_eq!(workspace(&state).launch_commands.len(), 2);
     state
         .delete_launch_command_for_test(WORKSPACE, "develop", 0)
         .expect("an unreferenced command is deleted");
+}
+
+/// The saved `testing` pipeline with `change` applied.
+fn changed_testing(state: &OrchestrationApiState, change: Value) -> PipelineDefinition {
+    let mut value = serde_json::to_value(
+        workspace(state)
+            .pipelines
+            .iter()
+            .find(|pipeline| pipeline.value.id == "testing")
+            .map(|pipeline| pipeline.value.clone())
+            .expect("testing"),
+    )
+    .expect("serializes");
+    if let (Some(object), Some(change)) = (value.as_object_mut(), change.as_object()) {
+        for (key, field) in change {
+            object.insert(key.clone(), field.clone());
+        }
+    }
+    serde_json::from_value(value).expect("pipeline")
+}
+
+fn testing_pipeline(state: &OrchestrationApiState) -> (u64, PipelineDefinition) {
+    workspace(state)
+        .pipelines
+        .iter()
+        .find(|pipeline| pipeline.value.id == "testing")
+        .map(|pipeline| (pipeline.revision, pipeline.value.clone()))
+        .expect("testing")
+}
+
+#[test]
+fn a_child_change_that_breaks_a_saved_parent_is_refused() {
+    let state = saved();
+    let (_, before) = testing_pipeline(&state);
+    let refused = [
+        // A new required input without a default that the parent does not map.
+        json!({"inputs": [
+            {"name": "branch", "label": "Branch", "kind": "text", "required": true},
+            {"name": "strict", "label": "Strict", "kind": "boolean"},
+            {"name": "target", "label": "Target", "kind": "text", "required": true}
+        ]}),
+        // An input the parent maps is gone.
+        json!({"inputs": [
+            {"name": "branch", "label": "Branch", "kind": "text", "required": true}
+        ]}),
+        // The parent's literal `true` no longer fits the input kind.
+        json!({"inputs": [
+            {"name": "branch", "label": "Branch", "kind": "text", "required": true},
+            {"name": "strict", "label": "Strict", "kind": "number"}
+        ]}),
+    ];
+    for change in refused {
+        assert_eq!(
+            code(state.save_pipeline_for_test(
+                WORKSPACE,
+                Some(0),
+                changed_testing(&state, change.clone())
+            )),
+            SUBPIPELINE_BREAKS_PARENT,
+            "{change} must be refused"
+        );
+        assert_eq!(
+            testing_pipeline(&state),
+            (0, before.clone()),
+            "nothing written"
+        );
+    }
+    // The same change through a graph save is refused atomically too.
+    let mut graph = testing();
+    graph.profiles[0].expected_revision = Some(0);
+    graph.team.expected_revision = Some(0);
+    graph.pipeline.expected_revision = Some(0);
+    graph.command.expected_revision = Some(0);
+    graph
+        .pipeline
+        .value
+        .inputs
+        .retain(|input| input.name != "strict");
+    assert_eq!(code(save_graph(&state, graph)), SUBPIPELINE_BREAKS_PARENT);
+    assert_eq!(testing_pipeline(&state), (0, before));
+    // An optional input and a required one with a default keep the parent valid.
+    state
+        .save_pipeline_for_test(
+            WORKSPACE,
+            Some(0),
+            changed_testing(
+                &state,
+                json!({"inputs": [
+                    {"name": "branch", "label": "Branch", "kind": "text", "required": true},
+                    {"name": "strict", "label": "Strict", "kind": "boolean"},
+                    {"name": "notes", "label": "Notes", "kind": "long-text"},
+                    {"name": "target", "label": "Target", "kind": "text", "required": true,
+                     "defaultValue": "main"}
+                ]}),
+            ),
+        )
+        .expect("a compatible child change is accepted");
+}
+
+#[test]
+fn a_child_that_drops_an_output_its_parent_reads_is_refused() {
+    let state = state();
+    let mut child = testing();
+    child.pipeline.value = serde_json::from_value(json!({"id": "testing", "name": "Testing",
+        "inputs": [{"name": "branch", "label": "Branch", "kind": "text", "required": true}],
+        "outputs": [{"name": "passed", "kind": "boolean", "sourceStepId": "unit", "field": "passed"}],
+        "steps": [{"id": "unit", "name": "Unit", "assignedMemberId": "tester",
+            "instructions": "Test.", "dependencyStepIds": []}]}))
+    .expect("child");
+    save_graph(&state, child).expect("testing saves");
+    let mut parent = development_pipeline(test_executor(
+        json!({"branch": {"kind": "input", "name": "branch"}}),
+    ));
+    parent["steps"][1]["resultFields"] = json!([{"name": "passed", "kind": "boolean"}]);
+    save_graph(
+        &state,
+        graph("agent-d", "dev-team", "collector", parent, "develop"),
+    )
+    .expect("development saves");
+    let (_, before) = testing_pipeline(&state);
+    for outputs in [
+        json!([{"name": "ok", "kind": "boolean", "sourceStepId": "unit", "field": "passed"}]),
+        json!([{"name": "passed", "kind": "text", "sourceStepId": "unit", "field": "passed"}]),
+    ] {
+        assert_eq!(
+            code(state.save_pipeline_for_test(
+                WORKSPACE,
+                Some(0),
+                changed_testing(&state, json!({ "outputs": outputs }))
+            )),
+            SUBPIPELINE_BREAKS_PARENT
+        );
+        assert_eq!(testing_pipeline(&state), (0, before.clone()));
+    }
+    // A further output is fine.
+    state
+        .save_pipeline_for_test(
+            WORKSPACE,
+            Some(0),
+            changed_testing(
+                &state,
+                json!({"outputs": [
+                    {"name": "passed", "kind": "boolean", "sourceStepId": "unit", "field": "passed"},
+                    {"name": "log", "kind": "text", "sourceStepId": "unit"}
+                ]}),
+            ),
+        )
+        .expect("an added output is accepted");
+}
+
+#[test]
+fn retargeting_a_referenced_command_must_keep_its_parents_valid() {
+    let state = saved();
+    // `other` declares none of the inputs `development` maps.
+    save_graph(
+        &state,
+        graph(
+            "agent-o",
+            "other-team",
+            "worker",
+            json!({"id": "other", "name": "Other",
+                "steps": [{"id": "work", "name": "Work", "assignedMemberId": "worker",
+                    "instructions": "Work.", "dependencyStepIds": []}]}),
+            "other",
+        ),
+    )
+    .expect("other saves");
+    let retargeted = LaunchCommandReference {
+        id: "testing".into(),
+        name: "testing".into(),
+        team_id: "testing-team".into(),
+        pipeline_id: "other".into(),
+        managed_by_teammate_id: None,
+    };
+    assert_eq!(
+        code(state.save_launch_command_for_test(WORKSPACE, Some(0), retargeted)),
+        SUBPIPELINE_BREAKS_PARENT
+    );
+    let command = workspace(&state)
+        .launch_commands
+        .iter()
+        .find(|command| command.value.id == "testing")
+        .map(|command| (command.revision, command.value.pipeline_id.clone()))
+        .expect("testing");
+    assert_eq!(command, (0, "testing".to_owned()), "nothing written");
+    // An unreferenced command may run any pipeline.
+    let unreferenced = LaunchCommandReference {
+        id: "other".into(),
+        name: "other".into(),
+        team_id: "testing-team".into(),
+        pipeline_id: "testing".into(),
+        managed_by_teammate_id: None,
+    };
+    state
+        .save_launch_command_for_test(WORKSPACE, Some(0), unreferenced)
+        .expect("an unreferenced command is retargeted");
 }
 
 fn reference(session: &str) -> NativeHistoryReference {

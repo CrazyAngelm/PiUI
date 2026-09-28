@@ -2,14 +2,19 @@ import type { AgentProfile, PipelineDefinition, PipelineInput, PipelineOutput, T
 import { pipelineInputIssues, reviewLimitValid, RUN_INPUT_ISSUES } from '../../host-api/runInputs';
 import { EXECUTOR_ISSUES, pluginExecutorIssue, SCRIPT_RUNTIMES, scriptSourceValid, scriptTimeoutValid } from '../../host-api/stepExecutors';
 import { MAX_PIPELINE_PINNED_BYTES, PINNED_ISSUES, pinnedOutputIssue, pinnedSize, pinningRefusal } from '../../host-api/pinnedData';
-import { pipelineOutputIssues, SUBPIPELINE_ISSUES } from '../../host-api/subpipelines';
+import { formatIssue, pipelineOutputIssues, SUBPIPELINE_ISSUE_TEMPLATES, SUBPIPELINE_ISSUES } from '../../host-api/subpipelines';
 /**
  * `executor` (v6.2) selects a native agent (absent), a single model call
  * (`llm`) or a host-run `script`. A script node has no team member: like a
  * program router it carries a placeholder profile whose name is the step
  * name and which is never saved.
+ *
+ * `pipelineName` (system-file v5): a sub-pipeline step imported from a file
+ * whose pipeline name did not resolve in this project keeps that name here,
+ * with an empty `launchCommandId`, until the person picks a pipeline. It is
+ * never saved.
  */
-export interface GraphNode { kind?: 'agent' | 'router'; executor?: StepExecutor; pinnedOutput?: import('../../../../../contracts/orchestration-v6').PinnedOutput; inputBindings?: import('../../../../../contracts/orchestration-v6').InputBinding[]; condition?: import('../../../../../contracts/orchestration-v6').ResultCondition; review?: import('../../../../../contracts/orchestration-v6').ReviewRule; requireApproval?: boolean; resultFields?: import('../../../../../contracts/orchestration-v6').ResultField[]; executionMode?: 'scheduled' | 'callable'; id: string; profile: AgentProfile; router?: RouterConfig; task: string; input?: string; x: number; y: number; }
+export interface GraphNode { kind?: 'agent' | 'router'; executor?: StepExecutor; pipelineName?: string; pinnedOutput?: import('../../../../../contracts/orchestration-v6').PinnedOutput; inputBindings?: import('../../../../../contracts/orchestration-v6').InputBinding[]; condition?: import('../../../../../contracts/orchestration-v6').ResultCondition; review?: import('../../../../../contracts/orchestration-v6').ReviewRule; requireApproval?: boolean; resultFields?: import('../../../../../contracts/orchestration-v6').ResultField[]; executionMode?: 'scheduled' | 'callable'; id: string; profile: AgentProfile; router?: RouterConfig; task: string; input?: string; x: number; y: number; }
 export type ConnectionKind = 'result' | 'send' | 'observe' | 'spawn' | 'route';
 export interface GraphEdge { from: string; to: string; kind: ConnectionKind; branchId?: string; }
 /**
@@ -184,7 +189,7 @@ export function graphIssues(graph: AgentGraph): GraphIssue[] {
       if (node.inputBindings?.length) push(EXECUTOR_ISSUES.pluginBindings, [node.id]);
     } else if (executor.type === 'pipeline') {
       // v6.7: what the step shows by itself; references to other pipelines are checked in `subpipelineIssues`.
-      if (!executor.launchCommandId.trim()) push(SUBPIPELINE_ISSUES.command, [node.id]);
+      if (!executor.launchCommandId.trim()) push(node.pipelineName?.trim() ? formatIssue(SUBPIPELINE_ISSUE_TEMPLATES.unresolved, node.pipelineName) : SUBPIPELINE_ISSUES.command, [node.id]);
       else if (executor.launchCommandId === graph.id) push(SUBPIPELINE_ISSUES.self, [node.id]);
       if (node.inputBindings?.length) push(SUBPIPELINE_ISSUES.bindings, [node.id]);
       const dependencies = graph.edges.filter(edge => (edge.kind === 'result' || edge.kind === 'route') && edge.to === node.id).map(edge => edge.from);

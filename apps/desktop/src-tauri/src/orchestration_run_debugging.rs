@@ -74,7 +74,7 @@ impl From<StoreError> for RunDebuggingError {
         match error {
             StoreError::Conflict | StoreError::AlreadyExists => Self::Conflict,
             StoreError::NotFound => Self::NotFound,
-            StoreError::Invalid | StoreError::Denied => Self::Invalid,
+            StoreError::Invalid | StoreError::Denied | StoreError::Refused(_) => Self::Invalid,
             StoreError::Io(_) => Self::Io,
         }
     }

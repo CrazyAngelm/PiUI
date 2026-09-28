@@ -14,7 +14,10 @@ else {
     for (const file of files) {
       try {
         const definition = parseSystemFile(await readFile(resolve(file), 'utf8'));
-        console.log(`${file}: valid (${definition.agents.length} agents, ${definition.connections.length} connections). Native availability is checked at launch.`);
+        console.log(`${file}: valid (version ${definition.version}, ${definition.agents.length} agents, ${definition.connections.length} connections). Native availability is checked at launch.`);
+        // Sub-pipelines (version 5) name saved pipelines of the project the file is imported into.
+        const names = [...new Set(definition.agents.flatMap((agent) => agent.executor?.type === 'pipeline' ? [agent.executor.pipeline] : []))];
+        if (names.length) console.log(`${file}: sub-pipelines ${names.map((name) => `“${name}”`).join(', ')} are resolved at import against the project's saved pipelines.`);
       } catch (error) { console.error(`${file}: ${error.message}`); process.exitCode = 1; }
     }
   } finally { await server.close(); }

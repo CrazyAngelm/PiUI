@@ -1,5 +1,8 @@
 import type { AgentGraph, GraphIssue } from './agentGraph';
-import { mappingProblems, reaches, SUBPIPELINE_ISSUES, type SubpipelineInfo } from '../../host-api/subpipelines';
+import {
+  formatIssue, mappingProblems, parentBreakage, reaches, SUBPIPELINE_ISSUE_TEMPLATES, SUBPIPELINE_ISSUES,
+  type SubpipelineInfo, type SubpipelineParent,
+} from '../../host-api/subpipelines';
 import type { HarnessModelsResult } from '../../../../../contracts/harness-models-v18';
 import type { AgentProfile } from '../../../../../contracts/orchestration-v6';
 import { executorConfigurationErrors, profileConfigurationErrors } from '../../harness-adapters/validation';
@@ -62,4 +65,26 @@ export function subpipelineIssues(
     for (const problem of mappingProblems(executor, child, graph.inputs ?? [], dependencies, fieldsOf)) add(problem.message);
   }
   return issues;
+}
+
+/**
+ * `subpipeline-breaks-parent` (v6.7) before saving: other saved pipelines
+ * that run this one (the draft's launch command `graph.id`) as a
+ * sub-pipeline, and whose input mapping or result fields the draft's inputs
+ * and outputs would break while the saved version fits them
+ * (`parentBreakage`). One issue lists them by name; the host refuses such a
+ * save too. Parents not read yet are not reported.
+ */
+export function parentIssues(graph: AgentGraph, saved: ReadonlyMap<string, SubpipelineInfo>): GraphIssue[] {
+  const parents: SubpipelineParent[] = [];
+  for (const info of saved.values()) {
+    if (info.commandId === graph.id || info.pipeline === undefined || !info.references.includes(graph.id)) continue;
+    parents.push({ commandId: info.commandId, name: info.name, pipeline: info.pipeline });
+  }
+  if (parents.length === 0) return [];
+  const previous = saved.get(graph.id);
+  const broken = parentBreakage([graph.id], { inputs: graph.inputs ?? [], outputs: graph.outputs ?? [] }, parents, previous);
+  if (broken.length === 0) return [];
+  const names = broken.map(parent => `“${parent.name || 'Untitled pipeline'}”`).join(', ');
+  return [{ message: formatIssue(SUBPIPELINE_ISSUE_TEMPLATES.breaksParent, names), nodeIds: [] }];
 }

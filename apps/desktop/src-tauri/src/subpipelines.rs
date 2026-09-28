@@ -11,8 +11,11 @@
 //!   the child's inputs. Every refusal is certain: nothing started.
 //! - [`check_saved_pipeline`] and [`check_reference_cycles`] refuse saves
 //!   with unknown references, unknown or incompatible child inputs, missing
-//!   required inputs and reference cycles; [`launch_command_referenced`]
-//!   keeps a referenced launch command from being deleted.
+//!   required inputs and reference cycles; [`check_parents`] refuses a
+//!   child change that would break a saved parent's step; [`check_delete`]
+//!   keeps a referenced launch command (and its pipeline and team) from
+//!   being deleted. Refusals carry the specific `subpipeline-*` command
+//!   codes (`StoreError::Refused`).
 //! - [`SubpipelineEngine`] observes committed generations (like the board
 //!   engine) and completes a running parent step when its child run ended:
 //!   declared outputs (native text hash-verified), `subpipeline-failed` or
@@ -29,9 +32,10 @@ use crate::orchestration_scheduler::OrchestrationScheduler;
 use crate::orchestration_store::{StoreError, WorkspaceOrchestration};
 use crate::state::HostState;
 use piui_orchestration::{
-    MAX_SUBPIPELINE_DEPTH, PipelineDefinition, PipelineInput, PipelineInputKind, PipelineStepLease,
-    ResultFieldKind, Run, RunStatus, RunTrigger, SUBPIPELINE_CYCLE, SUBPIPELINE_INPUT_INVALID,
-    SUBPIPELINE_UNAVAILABLE, StepExecutor, SubpipelineInputSource, TaskStatus, UncertaintyIdentity,
+    MAX_SUBPIPELINE_DEPTH, PipelineDefinition, PipelineInput, PipelineInputKind, PipelineStep,
+    PipelineStepLease, ResultFieldKind, Run, RunStatus, RunTrigger, SUBPIPELINE_CYCLE,
+    SUBPIPELINE_INPUT_INVALID, SUBPIPELINE_UNAVAILABLE, StepExecutor, SubpipelineInputSource,
+    TaskStatus, UncertaintyIdentity,
 };
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -134,6 +138,19 @@ pub(crate) fn plan_child_start(
     ))
 }
 
+/// Command error code (v6.7): a sub-pipeline step names a launch command
+/// that is not saved in this project, or whose pipeline is gone.
+pub(crate) const SUBPIPELINE_UNKNOWN_PIPELINE: &str = "subpipeline-unknown-pipeline";
+/// Command error code (v6.7): a step maps an input the child does not
+/// declare, a value of another kind, or leaves a required input unmapped.
+pub(crate) const SUBPIPELINE_INPUT_MISMATCH: &str = "subpipeline-input-mismatch";
+/// Command error code (v6.7): a launch command, or its pipeline or team, is
+/// still run by a saved pipeline's sub-pipeline step.
+pub(crate) const SUBPIPELINE_IN_USE: &str = "subpipeline-in-use";
+/// Command error code (v6.7): the change would make a saved parent's
+/// sub-pipeline step no longer fit the child it runs.
+pub(crate) const SUBPIPELINE_BREAKS_PARENT: &str = "subpipeline-breaks-parent";
+
 /// Why a save's sub-pipeline references are refused.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum SubpipelineReferenceError {
@@ -147,19 +164,105 @@ pub(crate) enum SubpipelineReferenceError {
     MissingRequiredInput { step_id: String, name: String },
     #[error("launch command {launch_command_id} would run itself through sub-pipelines")]
     Cycle { launch_command_id: String },
+    #[error("step {step_id} of pipeline {pipeline_id} would no longer fit its sub-pipeline")]
+    BreaksParent {
+        pipeline_id: String,
+        step_id: String,
+    },
 }
 
 impl SubpipelineReferenceError {
-    /// A stable code for structured logs.
+    /// A stable, finer code for structured logs.
     pub(crate) fn code(&self) -> &'static str {
         match self {
             Self::UnknownLaunchCommand { .. } => "subpipeline-unknown-launch-command",
             Self::UnknownInput { .. } => "subpipeline-unknown-input",
             Self::IncompatibleInput { .. } => "subpipeline-incompatible-input",
             Self::MissingRequiredInput { .. } => "subpipeline-missing-input",
-            Self::Cycle { .. } => "subpipeline-cycle",
+            Self::Cycle { .. } => SUBPIPELINE_CYCLE,
+            Self::BreaksParent { .. } => SUBPIPELINE_BREAKS_PARENT,
         }
     }
+
+    /// The command error code the UI receives.
+    pub(crate) fn api_code(&self) -> &'static str {
+        match self {
+            Self::UnknownLaunchCommand { .. } => SUBPIPELINE_UNKNOWN_PIPELINE,
+            Self::UnknownInput { .. }
+            | Self::IncompatibleInput { .. }
+            | Self::MissingRequiredInput { .. } => SUBPIPELINE_INPUT_MISMATCH,
+            Self::Cycle { .. } => SUBPIPELINE_CYCLE,
+            Self::BreaksParent { .. } => SUBPIPELINE_BREAKS_PARENT,
+        }
+    }
+
+    /// The refusal for a store transaction, logged with metadata only.
+    fn refuse(&self) -> StoreError {
+        eprintln!(
+            "event=subpipeline_save_refused code={} api_code={}",
+            self.code(),
+            self.api_code()
+        );
+        StoreError::Refused(self.api_code())
+    }
+}
+
+/// The input mapping of sub-pipeline step `step_id` of `pipeline` against
+/// the child it runs: only declared child inputs with compatible values,
+/// and every required child input without a default.
+fn validate_step_inputs(
+    pipeline: &PipelineDefinition,
+    step_id: &str,
+    inputs: &BTreeMap<String, SubpipelineInputSource>,
+    child: &PipelineDefinition,
+) -> Result<(), SubpipelineReferenceError> {
+    for (name, source) in inputs {
+        let Some(input) = child.inputs.iter().find(|input| input.name == *name) else {
+            return Err(SubpipelineReferenceError::UnknownInput {
+                step_id: step_id.to_owned(),
+                name: name.clone(),
+            });
+        };
+        if !source_compatible(pipeline, source, input) {
+            return Err(SubpipelineReferenceError::IncompatibleInput {
+                step_id: step_id.to_owned(),
+                name: name.clone(),
+            });
+        }
+    }
+    if let Some(missing) = child.inputs.iter().find(|input| {
+        input.required && input.default_value.is_none() && !inputs.contains_key(&input.name)
+    }) {
+        return Err(SubpipelineReferenceError::MissingRequiredInput {
+            step_id: step_id.to_owned(),
+            name: missing.name.clone(),
+        });
+    }
+    Ok(())
+}
+
+/// Whether the result fields a sub-pipeline step declares are outputs of
+/// its child with the same name and kind. A child without declared outputs
+/// hands on its last step's text, which is checked when the step completes.
+fn result_fields_fit(step: &PipelineStep, child: &PipelineDefinition) -> bool {
+    child.outputs.is_empty()
+        || step.result_fields.iter().all(|field| {
+            child
+                .outputs
+                .iter()
+                .any(|output| output.name == field.name && output.kind == field.kind)
+        })
+}
+
+/// Whether sub-pipeline step `step` of `parent` fits `child`: its input
+/// mapping and its declared result fields.
+fn step_fits(
+    parent: &PipelineDefinition,
+    step: &PipelineStep,
+    inputs: &BTreeMap<String, SubpipelineInputSource>,
+    child: &PipelineDefinition,
+) -> bool {
+    validate_step_inputs(parent, &step.id, inputs, child).is_ok() && result_fields_fit(step, child)
 }
 
 /// The references of `pipeline` (already in place in `workspace`): every
@@ -191,28 +294,7 @@ pub(crate) fn validate_pipeline_references(
         } else {
             pipeline_of_command(workspace, launch_command_id).ok_or_else(unknown)?
         };
-        for (name, source) in inputs {
-            let Some(input) = child.inputs.iter().find(|input| input.name == *name) else {
-                return Err(SubpipelineReferenceError::UnknownInput {
-                    step_id: step.id.clone(),
-                    name: name.clone(),
-                });
-            };
-            if !source_compatible(pipeline, source, input) {
-                return Err(SubpipelineReferenceError::IncompatibleInput {
-                    step_id: step.id.clone(),
-                    name: name.clone(),
-                });
-            }
-        }
-        if let Some(missing) = child.inputs.iter().find(|input| {
-            input.required && input.default_value.is_none() && !inputs.contains_key(&input.name)
-        }) {
-            return Err(SubpipelineReferenceError::MissingRequiredInput {
-                step_id: step.id.clone(),
-                name: missing.name.clone(),
-            });
-        }
+        validate_step_inputs(pipeline, &step.id, inputs, child)?;
     }
     match reference_cycle(workspace) {
         Some(launch_command_id) => Err(SubpipelineReferenceError::Cycle { launch_command_id }),
@@ -239,21 +321,128 @@ pub(crate) fn check_saved_pipeline(
     workspace: &WorkspaceOrchestration,
     pipeline: &PipelineDefinition,
 ) -> Result<(), StoreError> {
-    validate_pipeline_references(workspace, pipeline).map_err(|error| {
-        eprintln!("event=subpipeline_save_refused code={}", error.code());
-        StoreError::Invalid
-    })
+    validate_pipeline_references(workspace, pipeline).map_err(|error| error.refuse())
 }
 
 /// Refuses a save after which a launch command reaches itself.
 pub(crate) fn check_reference_cycles(workspace: &WorkspaceOrchestration) -> Result<(), StoreError> {
     match reference_cycle(workspace) {
-        Some(_) => {
-            eprintln!("event=subpipeline_save_refused code=subpipeline-cycle");
-            Err(StoreError::Invalid)
+        Some(launch_command_id) => {
+            Err(SubpipelineReferenceError::Cycle { launch_command_id }.refuse())
         }
         None => Ok(()),
     }
+}
+
+/// What a save changed that saved parents' sub-pipeline steps may depend
+/// on. The workspace already holds the new definitions.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ChildChange<'a> {
+    /// A saved pipeline: its id and its definition before the save
+    /// (`None` when it is new).
+    pub pipeline: Option<(&'a str, Option<&'a PipelineDefinition>)>,
+    /// A launch command that now runs another pipeline: its id and the id
+    /// of the pipeline it ran before.
+    pub retargeted: Option<(&'a str, &'a str)>,
+}
+
+impl<'a> ChildChange<'a> {
+    /// The child launch command `id` ran before the change: `None` when the
+    /// change does not affect it, `Some(None)` when it is unknown.
+    fn previous_child(
+        &self,
+        workspace: &'a WorkspaceOrchestration,
+        id: &str,
+    ) -> Option<Option<&'a PipelineDefinition>> {
+        let before = |pipeline_id: &str| match self.pipeline {
+            Some((changed, previous)) if changed == pipeline_id => previous,
+            _ => workspace
+                .pipelines
+                .iter()
+                .find(|pipeline| pipeline.value.id == pipeline_id)
+                .map(|pipeline| &pipeline.value),
+        };
+        if let Some((command, old_pipeline_id)) = self.retargeted
+            && command == id
+        {
+            return Some(before(old_pipeline_id));
+        }
+        let (changed, previous) = self.pipeline?;
+        workspace
+            .launch_commands
+            .iter()
+            .any(|command| command.value.id == id && command.value.pipeline_id == changed)
+            .then_some(previous)
+    }
+}
+
+/// Every other saved pipeline whose sub-pipeline step runs a launch command
+/// the change affects must still fit its child: the same input rules as a
+/// save, and declared result fields among the child's outputs. A step that
+/// did not fit the child before the change does not block it.
+pub(crate) fn validate_parents<'a>(
+    workspace: &'a WorkspaceOrchestration,
+    change: ChildChange<'a>,
+) -> Result<(), SubpipelineReferenceError> {
+    let saved = change.pipeline.map(|(id, _)| id);
+    for parent in &workspace.pipelines {
+        // The saved pipeline's own steps are checked by its own save.
+        if saved == Some(parent.value.id.as_str()) {
+            continue;
+        }
+        for step in &parent.value.steps {
+            let Some(StepExecutor::Pipeline {
+                launch_command_id,
+                inputs,
+            }) = &step.executor
+            else {
+                continue;
+            };
+            let Some(before) = change.previous_child(workspace, launch_command_id) else {
+                continue;
+            };
+            let Some(after) = pipeline_of_command(workspace, launch_command_id) else {
+                continue;
+            };
+            if step_fits(&parent.value, step, inputs, after) {
+                continue;
+            }
+            if before.is_none_or(|before| step_fits(&parent.value, step, inputs, before)) {
+                return Err(SubpipelineReferenceError::BreaksParent {
+                    pipeline_id: parent.value.id.clone(),
+                    step_id: step.id.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `validate_parents` for a store transaction.
+pub(crate) fn check_parents<'a>(
+    workspace: &'a WorkspaceOrchestration,
+    change: ChildChange<'a>,
+) -> Result<(), StoreError> {
+    validate_parents(workspace, change).map_err(|error| error.refuse())
+}
+
+/// Refuses deleting a definition a saved sub-pipeline step still needs:
+/// a launch command such a step runs (`runs_it` selects the commands the
+/// deleted definition belongs to), or the pipeline or team of one.
+pub(crate) fn check_delete(
+    workspace: &WorkspaceOrchestration,
+    runs_it: impl Fn(&piui_orchestration::LaunchCommandReference) -> bool,
+) -> Result<(), StoreError> {
+    let in_use = workspace
+        .launch_commands
+        .iter()
+        .filter(|command| runs_it(&command.value))
+        .any(|command| launch_command_referenced(workspace, &command.value.id));
+    if in_use {
+        eprintln!("event=subpipeline_delete_refused code={SUBPIPELINE_IN_USE}");
+        return Err(StoreError::Refused(SUBPIPELINE_IN_USE));
+    }
+    Ok(())
 }
 
 /// Whether a text kind of child input can take a text value.

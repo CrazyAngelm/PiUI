@@ -84,6 +84,8 @@ impl From<StoreError> for OrchestrationApiError {
             StoreError::NotFound => Self::not_found(),
             StoreError::Invalid => Self::invalid(),
             StoreError::Denied => Self::denied(),
+            // Specific refusal codes are part of the command contract.
+            StoreError::Refused(code) => Self { code },
             StoreError::Io(_) => Self::io(),
         }
     }
@@ -1549,6 +1551,40 @@ impl OrchestrationApiState {
         )
     }
 
+    /// A pipeline deletion through the ordinary rules (sub-pipeline tests).
+    pub(crate) fn delete_pipeline_for_test(
+        &self,
+        workspace_id: &str,
+        id: &str,
+        expected_revision: u64,
+    ) -> Result<(), OrchestrationApiError> {
+        delete_definition::<PipelineDefinition>(
+            self,
+            DeleteDefinitionRequest {
+                workspace_id: workspace_id.to_owned(),
+                id: id.to_owned(),
+                expected_revision,
+            },
+        )
+    }
+
+    /// A team deletion through the ordinary rules (sub-pipeline tests).
+    pub(crate) fn delete_team_for_test(
+        &self,
+        workspace_id: &str,
+        id: &str,
+        expected_revision: u64,
+    ) -> Result<(), OrchestrationApiError> {
+        delete_definition::<TeamDefinition>(
+            self,
+            DeleteDefinitionRequest {
+                workspace_id: workspace_id.to_owned(),
+                id: id.to_owned(),
+                expected_revision,
+            },
+        )
+    }
+
     /// A single pipeline save through the ordinary rules (sub-pipeline tests).
     pub(crate) fn save_pipeline_for_test(
         &self,
@@ -1915,11 +1951,18 @@ trait DefinitionValue: Clone + Sized {
         Ok(())
     }
     /// Project-wide reference rules checked after the value is in place
-    /// (sub-pipelines, v6.7). A refusal aborts the whole save.
+    /// (sub-pipelines, v6.7). `previous` is the value before the save. A
+    /// refusal aborts the whole save.
     fn check_references(
         _workspace: &WorkspaceOrchestration,
+        _previous: Option<&Self>,
         _saved: &Self,
     ) -> Result<(), StoreError> {
+        Ok(())
+    }
+    /// A specific refusal of a deletion, checked before `can_delete`
+    /// (sub-pipelines, v6.7).
+    fn check_delete(_workspace: &WorkspaceOrchestration, _id: &str) -> Result<(), StoreError> {
         Ok(())
     }
 }
@@ -2019,6 +2062,9 @@ impl DefinitionValue for TeamDefinition {
             .iter()
             .any(|command| command.value.team_id == id)
     }
+    fn check_delete(workspace: &WorkspaceOrchestration, id: &str) -> Result<(), StoreError> {
+        crate::subpipelines::check_delete(workspace, |command| command.team_id == id)
+    }
 }
 
 impl DefinitionValue for PipelineDefinition {
@@ -2047,9 +2093,21 @@ impl DefinitionValue for PipelineDefinition {
     }
     fn check_references(
         workspace: &WorkspaceOrchestration,
+        previous: Option<&Self>,
         saved: &Self,
     ) -> Result<(), StoreError> {
-        crate::subpipelines::check_saved_pipeline(workspace, saved)
+        crate::subpipelines::check_saved_pipeline(workspace, saved)?;
+        // Saved parents that run this pipeline must still fit it.
+        crate::subpipelines::check_parents(
+            workspace,
+            crate::subpipelines::ChildChange {
+                pipeline: Some((saved.id.as_str(), previous)),
+                retargeted: None,
+            },
+        )
+    }
+    fn check_delete(workspace: &WorkspaceOrchestration, id: &str) -> Result<(), StoreError> {
+        crate::subpipelines::check_delete(workspace, |command| command.pipeline_id == id)
     }
 }
 
@@ -2137,10 +2195,25 @@ impl DefinitionValue for LaunchCommandReference {
     }
     fn check_references(
         workspace: &WorkspaceOrchestration,
-        _saved: &Self,
+        previous: Option<&Self>,
+        saved: &Self,
     ) -> Result<(), StoreError> {
         // A command may now run a pipeline that leads back to it.
-        crate::subpipelines::check_reference_cycles(workspace)
+        crate::subpipelines::check_reference_cycles(workspace)?;
+        // Saved parents that run this command must fit its new pipeline.
+        let retargeted = previous
+            .filter(|previous| previous.pipeline_id != saved.pipeline_id)
+            .map(|previous| (saved.id.as_str(), previous.pipeline_id.as_str()));
+        crate::subpipelines::check_parents(
+            workspace,
+            crate::subpipelines::ChildChange {
+                pipeline: None,
+                retargeted,
+            },
+        )
+    }
+    fn check_delete(workspace: &WorkspaceOrchestration, id: &str) -> Result<(), StoreError> {
+        crate::subpipelines::check_delete(workspace, |command| command.id == id)
     }
 }
 
@@ -2251,7 +2324,11 @@ fn save_definition<T: DefinitionValue>(
                 }
             }?;
             T::after_save(workspace, previous.as_ref(), &saved)?;
-            T::check_references(workspace, &saved.value)?;
+            T::check_references(
+                workspace,
+                previous.as_ref().map(|previous| &previous.value),
+                &saved.value,
+            )?;
             Ok(saved)
         })
         .map_err(Into::into)
@@ -2269,6 +2346,7 @@ fn delete_definition<T: DefinitionValue>(
                 .iter_mut()
                 .find(|workspace| workspace.workspace_id == request.workspace_id)
                 .ok_or(StoreError::NotFound)?;
+            T::check_delete(workspace, &request.id)?;
             if !T::can_delete(workspace, &request.id) {
                 return Err(StoreError::Conflict);
             }
@@ -3391,6 +3469,7 @@ fn store_error_code(error: &StoreError) -> &'static str {
         StoreError::NotFound => "not-found",
         StoreError::Invalid => "invalid",
         StoreError::Denied => "denied",
+        StoreError::Refused(code) => code,
         StoreError::Io(_) => "io",
     }
 }
@@ -3812,6 +3891,19 @@ pub(crate) fn apply_graph_in(
     };
     let workspace = &mut workspaces[index];
     let pipeline = request.pipeline.value.clone();
+    // What saved parents' sub-pipeline steps ran before (v6.7).
+    let previous_pipeline = workspace
+        .pipelines
+        .iter()
+        .find(|stored| stored.value.id == pipeline.id)
+        .map(|stored| stored.value.clone());
+    let command_id = request.command.value.id.clone();
+    let command_pipeline_id = request.command.value.pipeline_id.clone();
+    let previous_command_pipeline_id = workspace
+        .launch_commands
+        .iter()
+        .find(|stored| stored.value.id == command_id)
+        .map(|stored| stored.value.pipeline_id.clone());
     for profile in request.profiles {
         put_graph_definition(workspace, profile)?;
     }
@@ -3827,6 +3919,19 @@ pub(crate) fn apply_graph_in(
     // Sub-pipeline references (v6.7) with every definition of the graph in
     // place, so the graph's own launch command takes part in cycle checks.
     crate::subpipelines::check_saved_pipeline(workspace, &pipeline)?;
+    // Saved parents that run this pipeline or the retargeted command must
+    // still fit their child.
+    let retargeted = previous_command_pipeline_id
+        .as_deref()
+        .filter(|previous| *previous != command_pipeline_id)
+        .map(|previous| (command_id.as_str(), previous));
+    crate::subpipelines::check_parents(
+        workspace,
+        crate::subpipelines::ChildChange {
+            pipeline: Some((pipeline.id.as_str(), previous_pipeline.as_ref())),
+            retargeted,
+        },
+    )?;
     Ok(index)
 }
 

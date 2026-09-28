@@ -7,7 +7,10 @@ import { isAcpHarness, isBuiltinHarness, type BuiltinHarness } from '../../../..
 import { pipelineInputIssues, reviewLimitValid } from '../../runInputs';
 import { executorAuthorityIssue, isHostExecutedStep, LLM_READ_ONLY_UNSUPPORTED, llmProfileIssue, stepExecutorIssue } from '../../stepExecutors';
 import { pipelinePinsIssue } from '../../pinnedData';
-import { mappingProblems, pipelineOutputIssues, reaches, referencedCommands, subpipelineStepIssue } from '../../subpipelines';
+import {
+  mappingProblems, parentBreakage, pipelineOutputIssues, reaches, referencedCommands, subpipelineStepIssue,
+  type SubpipelineParent, type SubpipelineSaveErrorCode,
+} from '../../subpipelines';
 import type { PinnedOutput } from '../labContracts';
 
 /**
@@ -158,24 +161,49 @@ export function subpipelineCycle(scope: SubpipelineScope): boolean {
 
 /**
  * `validate_subpipeline_references` (v6.7, ADR-042) for a pipeline being
- * saved: every sub-pipeline step names a launch command of this project,
- * maps only declared child inputs with compatible values and every required
- * one without a default, and no reference cycle exists. A child saved later
- * may break its parents' mappings; admission checks those again.
+ * saved: every sub-pipeline step names a launch command of this project
+ * (`subpipeline-unknown-pipeline`), maps only declared child inputs with
+ * compatible values and every required one without a default
+ * (`subpipeline-input-mismatch`), and no reference cycle exists
+ * (`subpipeline-cycle`). Parents a new version would break are refused
+ * separately (`subpipelineParentIssue`).
  */
-export function subpipelineSaveIssue(pipeline: PipelineDefinition, scope: SubpipelineScope): string | undefined {
+export function subpipelineSaveIssue(pipeline: PipelineDefinition, scope: SubpipelineScope): SubpipelineSaveErrorCode | undefined {
   for (const step of pipeline.steps) {
     if (step.executor?.type !== 'pipeline') continue;
     const executor = step.executor;
     const command = scope.launchCommands.find((stored) => stored.value.id === executor.launchCommandId)?.value;
     const child = command === undefined ? undefined : scope.pipelines.find((stored) => stored.value.id === command.pipelineId)?.value;
-    if (child === undefined) return 'sub-pipeline launch command';
+    if (child === undefined) return 'subpipeline-unknown-pipeline';
     const fieldsOf = (id: string): readonly ResultField[] => pipeline.steps.find((candidate) => candidate.id === id)?.resultFields ?? [];
     if (mappingProblems(executor, { inputs: child.inputs ?? [] }, pipeline.inputs ?? [], step.dependencyStepIds, fieldsOf).length > 0) {
-      return 'sub-pipeline inputs';
+      return 'subpipeline-input-mismatch';
     }
   }
-  return subpipelineCycle(scope) ? 'sub-pipeline cycle' : undefined;
+  return subpipelineCycle(scope) ? 'subpipeline-cycle' : undefined;
+}
+
+/**
+ * `subpipeline-breaks-parent` (v6.7): saving `pipeline` would break a saved
+ * pipeline that runs one of its launch commands as a sub-pipeline
+ * (`parentBreakage`) that the saved version fits. `scope` is the project
+ * before the save.
+ */
+export function subpipelineParentIssue(pipeline: PipelineDefinition, scope: SubpipelineScope): 'subpipeline-breaks-parent' | undefined {
+  const commandIds = scope.launchCommands.filter((stored) => stored.value.pipelineId === pipeline.id).map((stored) => stored.value.id);
+  if (commandIds.length === 0) return undefined;
+  const before = scope.pipelines.find((stored) => stored.value.id === pipeline.id)?.value;
+  const previous = before === undefined ? undefined : { inputs: before.inputs ?? [], outputs: before.outputs ?? [] };
+  const next = { inputs: pipeline.inputs ?? [], outputs: pipeline.outputs ?? [] };
+  return parentBreakage(commandIds, next, subpipelineParents(scope, pipeline.id), previous).length > 0 ? 'subpipeline-breaks-parent' : undefined;
+}
+
+/** Saved pipelines (except `except`) with the launch commands that run them, as possible parents. */
+export function subpipelineParents(scope: SubpipelineScope, except: string | undefined = undefined): SubpipelineParent[] {
+  return scope.launchCommands.flatMap((stored) => {
+    const parent = scope.pipelines.find((candidate) => candidate.value.id === stored.value.pipelineId)?.value;
+    return parent === undefined || parent.id === except ? [] : [{ commandId: stored.value.id, name: stored.value.name, pipeline: parent }];
+  });
 }
 
 /** `validate_definition`: the whole snapshot a run or graph save would capture. */

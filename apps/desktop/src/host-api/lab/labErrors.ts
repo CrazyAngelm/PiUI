@@ -1,4 +1,5 @@
 import type { OrchestrationHostErrorCode } from './labContracts';
+import type { SubpipelineSaveErrorCode } from '../subpipelines';
 
 /**
  * Rejection values exactly as the Rust host serializes them. Tauri rejects an
@@ -77,8 +78,8 @@ export function apiFailure(code: ApiErrorCode): HostErrorPayload {
   return { code, message: API_MESSAGES[code], recoverable: true };
 }
 
-/** Orchestration errors carry only a stable code. */
-export function orchestrationFailure(code: OrchestrationHostErrorCode): { readonly code: OrchestrationHostErrorCode } {
+/** Orchestration errors carry only a stable code (with the sub-pipeline refusals of v6.7). */
+export function orchestrationFailure<Code extends OrchestrationHostErrorCode | SubpipelineSaveErrorCode>(code: Code): { readonly code: Code } {
   return { code };
 }
 

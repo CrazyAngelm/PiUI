@@ -84,8 +84,29 @@ export const subpipelinesRu: Readonly<Record<string, string>> = {
     'Шаг вложенного пайплайна сам сопоставляет свои входы; удалите его привязки входных данных.',
   'Outputs need unique names (a lowercase letter, then letters, digits or underscores), at most 32, and a step with a declared field or its whole text.':
     'Выходам нужны уникальные имена (строчная буква, затем буквы, цифры или подчёркивания), не более 32, и шаг с объявленным полем или весь его текст.',
-  'System files cannot hold sub-pipeline steps or declared outputs yet. Remove them to export this pipeline or save it as a template.':
-    'Системные файлы пока не могут содержать вложенные пайплайны и объявленные выходы. Удалите их, чтобы экспортировать пайплайн или сохранить его как шаблон.',
+
+  // System files v5: sub-pipelines by name, and saved parents.
+  'Pipeline “{0}” is not in this project. Pick a saved pipeline for this step.':
+    'Пайплайна «{0}» нет в этом проекте. Выберите для этого шага сохранённый пайплайн.',
+  'Saved pipelines that run this one as a sub-pipeline would stop working: {0}. Keep the inputs and outputs they use, or change them first.':
+    'Сохранённые пайплайны, которые запускают этот как вложенный, перестанут работать: {0}. Сохраните входы и выходы, которые они используют, или сначала измените их.',
+  '“{0}” not found': '«{0}» не найден',
+  'Pick a saved pipeline for this step': 'Выберите сохранённый пайплайн для этого шага',
+  'A sub-pipeline step runs a pipeline whose name is unknown. Pick a saved pipeline for it, then export again.':
+    'Шаг вложенного пайплайна запускает пайплайн с неизвестным именем. Выберите для него сохранённый пайплайн и экспортируйте снова.',
+  'A sub-pipeline runs on the host and cannot be the orchestrator.': 'Вложенный пайплайн выполняется на хосте и не может быть координатором.',
+
+  // Save and delete refusals of the host.
+  'A sub-pipeline step runs a pipeline that is not saved in this project. Pick a saved pipeline for it, then save again.':
+    'Шаг вложенного пайплайна запускает пайплайн, который не сохранён в этом проекте. Выберите для него сохранённый пайплайн и сохраните снова.',
+  'A sub-pipeline step’s inputs do not match what its pipeline asks for. Check the step’s input mapping, then save again.':
+    'Входы шага вложенного пайплайна не соответствуют тому, что запрашивает его пайплайн. Проверьте сопоставление входов шага и сохраните снова.',
+  'These pipelines would run each other as sub-pipelines in a loop. Remove one of the sub-pipeline steps, then save again.':
+    'Эти пайплайны запускали бы друг друга как вложенные по кругу. Удалите один из шагов вложенного пайплайна и сохраните снова.',
+  'Another saved pipeline runs this one as a sub-pipeline. Remove or change that step first, then delete this pipeline.':
+    'Другой сохранённый пайплайн запускает этот как вложенный. Сначала удалите или измените тот шаг, затем удалите этот пайплайн.',
+  'Saved pipelines that run this one as a sub-pipeline would stop working with this change. Keep the inputs and outputs they use, or change them first.':
+    'С этим изменением перестанут работать сохранённые пайплайны, которые запускают этот как вложенный. Сохраните входы и выходы, которые они используют, или сначала измените их.',
 
   // Runs.
   'Sub-pipeline of run': 'Вложенный пайплайн запуска',

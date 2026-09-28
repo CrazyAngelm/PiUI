@@ -101,6 +101,10 @@ pub(crate) enum StoreError {
     Invalid,
     #[error("orchestration operation is denied")]
     Denied,
+    /// A certain refusal with a specific, stable command code (for example
+    /// `subpipeline-in-use`, v6.7): nothing was written.
+    #[error("orchestration change refused ({0})")]
+    Refused(&'static str),
     #[error("orchestration storage failed")]
     Io(#[source] io::Error),
 }

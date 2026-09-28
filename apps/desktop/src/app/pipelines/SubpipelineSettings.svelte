@@ -154,6 +154,14 @@
       </Button>
     {/if}
 
+    {#if !executor.launchCommandId && node.pipelineName}
+      <!-- A system file (v5) named a pipeline this project does not have: nothing was created. -->
+      <p class="problem" role="alert">
+        <CircleAlert size={12} />
+        {$t('Pipeline “{0}” is not in this project. Pick a saved pipeline for this step.', [node.pipelineName])}
+      </p>
+    {/if}
+
     {#if executor.launchCommandId && !child}
       <p class="hint">
         {editor.systemsLoaded && !editor.systems.some((item) => item.id === executor.launchCommandId)

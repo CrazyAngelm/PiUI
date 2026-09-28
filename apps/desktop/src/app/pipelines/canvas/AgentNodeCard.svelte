@@ -65,7 +65,7 @@
       {#if script}
         <span class="sub">{RUNTIME_LABEL[script.runtime]} · {$t('{0} s limit', [script.timeoutSeconds])}</span>
       {:else if subpipeline}
-        <span class="sub" title={childName}>{$t('Sub-pipeline')} · {childName || (subpipeline.launchCommandId ? $t('Unknown pipeline') : $t('No pipeline chosen'))}</span>
+        <span class="sub" title={childName || node.pipelineName}>{$t('Sub-pipeline')} · {childName || (subpipeline.launchCommandId ? $t('Unknown pipeline') : node.pipelineName ? $t('“{0}” not found', [node.pipelineName]) : $t('No pipeline chosen'))}</span>
       {:else}
         <span class="sub" title={profile.model}>
           {[harnessMeta(profile.harness).short, profile.model, profile.reasoning].filter(Boolean).join(' · ')}
@@ -89,7 +89,7 @@
         <dd title={outputsLine}>{outputsLine || $t('last step text')}</dd>
       </dl>
     {:else}
-      <p class="task task--empty">{subpipeline.launchCommandId ? $t('Reading the pipeline…') : $t('Choose a saved pipeline to run')}</p>
+      <p class="task task--empty">{subpipeline.launchCommandId ? $t('Reading the pipeline…') : node.pipelineName ? $t('Pick a saved pipeline for this step') : $t('Choose a saved pipeline to run')}</p>
     {/if}
   {:else if node.task}
     <p class="task">{node.task}</p>

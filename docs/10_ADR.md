@@ -1117,3 +1117,35 @@ cancellation cascade and cycle checks sit in the coordinator; core owns it.
 **Consequences:** one more observer of committed generations (like the board
 engine). A later v5 may freeze the child definition at parent launch, add
 fan-out over a list and let board/chat prefer declared outputs.
+
+**Update (2026-09-28, save rules and board results):** save and delete
+refusals now return specific, additive command codes instead of `invalid` /
+`conflict`: `subpipeline-unknown-pipeline`, `subpipeline-input-mismatch`,
+`subpipeline-cycle`, `subpipeline-in-use` (deleting a referenced launch
+command, or its pipeline or team) and `subpipeline-breaks-parent`. Parents are
+protected when a child changes: saving a pipeline (also through a graph
+save) or retargeting a launch command is refused atomically when another
+saved pipeline's sub-pipeline step that fitted the old child would no longer
+fit the new one — its input mapping (same rules as a save) or a declared
+result field the child no longer outputs by name and kind (checked when the
+child declares outputs). A board run of a pipeline with declared outputs
+reports them as its result text (one output: its value; several:
+`name: value` lines), falling back to the last succeeded step.
+
+**Update (2026-09-29, system-file v5):** portable system files gain version 5
+(`contracts/system-file-v5.schema.json`); versions 1–4 import unchanged and
+every export writes version 5, so the export refusal above is gone. A
+sub-pipeline node is `{"type": "pipeline", "pipeline": "<launch command
+name>", "inputs": {…}}` with `step` sources naming a direct upstream agent by
+its local id, and top-level `outputs` use `agent` instead of `sourceStepId`.
+Names, not ids, cross projects: import resolves the name against the
+project's saved pipelines (exact, else a unique case-insensitive match) into
+the new draft; a missing or ambiguous name stays on the node as an unresolved
+reference that the editor reports and that blocks saving until the person
+picks a pipeline. Import never creates, saves or runs a pipeline.
+`pnpm system:check` reports names as resolved at import; the agent API
+`prepare` refuses such files. Pipeline-library templates may use v5;
+plugin-shipped templates stay v4 (the plugin package validator checks the v4
+schema). The editor warns before a save that `subpipeline-breaks-parent`
+would refuse, naming the affected saved pipelines, and a chat pipeline with
+declared outputs answers with them like a board run.
