@@ -6,6 +6,17 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-09-28
+
+### Added
+
+- Project board (ADR-041): a per-project kanban that can be turned on or off. Cards have status columns, a drawer with comments and activity, undo, keyboard moves and drag and drop. Agents in chats (Claude Code, Hermes, ACP, Prime, fresh Codex threads) get a `board` tool: they see the chat's active card, check for similar cards before creating one, and never close a card themselves.
+- Teammates: addressable `@handle` workers per project, backed by one agent with a model or by a saved pipeline. Assigning a card to a teammate starts a run (asked in the Inbox by default); the result is posted to the card, which moves to In review or Blocked. Runs have a concurrency limit, a persisted queue, a cooldown and a chain-depth limit.
+
+### Fixed
+
+- Pickers and menus opened from dialogs no longer render behind the dialog.
+
 ## [0.2.5] - 2026-09-28
 
 ### Added

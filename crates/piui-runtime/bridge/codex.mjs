@@ -1232,7 +1232,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   };
 
   const initialize = await callDuringStartup("initialize", {
-    clientInfo: { name: "piui", title: "PiUI", version: "0.2.5" },
+    clientInfo: { name: "piui", title: "PiUI", version: "0.2.6" },
     capabilities: { experimentalApi: true, requestAttestation: false },
   });
   if (!initialize || typeof initialize.codexHome !== "string") {

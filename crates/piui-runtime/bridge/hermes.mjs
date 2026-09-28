@@ -317,7 +317,7 @@ main()
   const exited = () => { for (const slot of pending.values()) slot.reject(fail('native-exited')); pending.clear(); rejectFollowUps(); if (!disposed) setStatus('failed'); server?.close(); };
   child.once('error', exited); child.once('exit', exited);
   try {
-    const initialized = await request('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'piui', version: '0.2.5' } });
+    const initialized = await request('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'piui', version: '0.2.6' } });
     if (initialized.protocolVersion !== 1 || initialized.agentInfo?.version !== '0.21.0') throw fail('unsupported-version', 'The Hermes ACP version or protocol is unsupported.');
     acceptsImages = initialized.agentCapabilities?.promptCapabilities?.image === true;
     if (config.nativeId) {
