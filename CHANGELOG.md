@@ -6,6 +6,18 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-09-28
+
+### Added
+
+- Chat pipelines (ADR-040): a chat's first message can start a saved pipeline. The composer's "Who answers" chip lists harnesses, the project's pipelines and templates; the chat shows a run card (steps, answer, stop, run again, open run) and continues with the pipeline's answering agent, which receives the result in the next message.
+- Pipeline templates for every project or one project: "Save as template…" in the editor; a template opens as an unsaved draft. The Start block can accept chat messages and make a pipeline the project's default for new chats.
+
+### Changed
+
+- Project, permissions and worktree of a new chat share one context chip; the model chip shows only for direct chats.
+- Model pickers show the project's last model catalog at once while the harness probe runs; templates open without waiting for models.
+
 ## [0.2.4] - 2026-09-28
 
 ### Added
