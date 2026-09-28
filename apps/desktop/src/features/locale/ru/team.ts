@@ -50,7 +50,7 @@ export const teamRu: Readonly<Record<string, string>> = {
   Color: 'Цвет',
   'Color {0}': 'Цвет {0}',
   Avatar: 'Аватар',
-  'One emoji or up to two letters.': 'Один эмодзи или до двух букв.',
+  'Initials {0}': 'Инициалы {0}',
   Role: 'Роль',
   'What it is good at and when to hand it work. Agents read this in the roster.':
     'В чём он силён и когда передавать ему работу. Агенты видят это в списке команды.',

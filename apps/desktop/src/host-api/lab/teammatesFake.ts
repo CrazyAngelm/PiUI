@@ -276,7 +276,7 @@ function validDraft(draft: TeammateDraftV1): boolean {
     && name.length > 0
     && [...name].length <= 80
     && avatar.length >= 1
-    && avatar.length <= 2
+    && avatar.length <= 8
     && (HEX_COLOR.test(draft.color) || TOKEN_COLOR.test(draft.color))
     && [...draft.role].length <= MAX_TEAMMATE_ROLE_CHARS
     && Number.isInteger(draft.maxConcurrentRuns)
