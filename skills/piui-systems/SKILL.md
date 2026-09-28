@@ -93,6 +93,12 @@ prove the step's outcome.
   `plugin-input-unavailable`, `plugin-start-failed`, `plugin-node-failed` (the
   plugin's message is the detail) and `plugin-node-timeout`.
 
+Sub-pipelines (a step that runs another saved pipeline as its own child run,
+orchestration v6.7) and a pipeline's declared outputs exist only in the PiUI
+editor: **system files v4 cannot carry them yet**. Never write an executor
+`{"type": "pipeline", …}` or top-level `outputs` into a file; PiUI refuses to
+export a graph that uses them instead of dropping them.
+
 Downstream agents and model calls receive a script's or plugin node's result
 where a native result would be (with `inputBindings` applied); downstream
 scripts and plugin nodes receive native results as their verified final text.

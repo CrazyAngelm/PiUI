@@ -84,8 +84,10 @@ pub enum RunInputError {
 }
 
 /// Self-contained checks of one stored pipeline: its run input declarations,
-/// review loop bounds, step executors (v6.2) and pinned data (v6.4).
-/// Cross-definition rules run with `validate_definition`.
+/// review loop bounds, step executors (v6.2), pinned data (v6.4) and
+/// sub-pipeline input sources and declared outputs (v6.7).
+/// Cross-definition rules run with `validate_definition`; references to
+/// other launch commands are checked by the host with the whole project.
 pub fn validate_pipeline_declarations(
     pipeline: &PipelineDefinition,
 ) -> Result<(), DefinitionError> {
@@ -96,6 +98,7 @@ pub fn validate_pipeline_declarations(
         }
         crate::executors::validate_step_executor(step)?;
     }
+    crate::subpipelines::validate_pipeline_subpipelines(pipeline)?;
     crate::validate_pipeline_pins(pipeline)
 }
 
@@ -214,7 +217,13 @@ pub fn resolve_run_inputs(
     Ok(resolved)
 }
 
-fn valid_input_name(name: &str) -> bool {
+/// Whether `value` is a valid value of `input`: its kind, its options and
+/// the text bound. Emptiness of a required input is checked on resolution.
+pub fn validate_input_value(input: &PipelineInput, value: &Value) -> Result<(), RunInputError> {
+    check_value(input, value)
+}
+
+pub(crate) fn valid_input_name(name: &str) -> bool {
     let mut bytes = name.bytes();
     name.len() <= MAX_INPUT_NAME_LEN
         && bytes.next().is_some_and(|first| first.is_ascii_lowercase())

@@ -114,11 +114,17 @@ export function isScriptStep(step: Pick<PipelineStep, 'executor'>): boolean {
   return executorKind(step) === 'script';
 }
 
-/** Host work with no native session or team member: a script or a plugin node (v6.5). */
+/**
+ * Host work with no native session or team member: a script, a plugin node
+ * (v6.5) or a sub-pipeline step (v6.7), whose execution is its child run.
+ */
 export function isHostExecutedStep(step: Pick<PipelineStep, 'executor'>): boolean {
   const kind = executorKind(step);
-  return kind === 'script' || kind === 'plugin';
+  return kind === 'script' || kind === 'plugin' || kind === 'pipeline';
 }
+
+/** A sub-pipeline step (v6.7) is host work: never a team member. */
+export const PIPELINE_MEMBER_REASON = 'a sub-pipeline runs as its own child run, not as a team member';
 
 /** `validate_plugin_executor`: the self-contained shape of a plugin node. */
 export function pluginExecutorIssue(pluginId: string, nodeType: string, config: Readonly<Record<string, unknown>>): string | undefined {
@@ -163,6 +169,9 @@ export function executorAuthorityIssue(snapshot: RunDefinitionSnapshot, step: Pi
   }
   if (kind === 'plugin') {
     return team.members.some((member) => member.id === step.assignedMemberId) ? EXECUTOR_REASONS.pluginMember : undefined;
+  }
+  if (kind === 'pipeline') {
+    return team.members.some((member) => member.id === step.assignedMemberId) ? PIPELINE_MEMBER_REASON : undefined;
   }
   const member = step.assignedMemberId;
   if ([...team.sendEdges, ...team.observeEdges].some((edge) => edge.fromMemberId === member || edge.toMemberId === member)) {

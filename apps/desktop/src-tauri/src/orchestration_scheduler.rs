@@ -23,7 +23,7 @@ use crate::workspace_api::{
 };
 use piui_orchestration::{
     AgentProfile, CompletionOutcome, ControlledSpawnLease, ExecutorKind, FailureRecord, Harness,
-    MessageStatus, PipelineStep, Run, SCRIPT_FAILED, SCRIPT_INPUT_UNAVAILABLE,
+    MessageStatus, PipelineStep, Run, RunStatus, SCRIPT_FAILED, SCRIPT_INPUT_UNAVAILABLE,
     SCRIPT_RUNTIME_UNAVAILABLE, SCRIPT_START_FAILED, SCRIPT_TIMEOUT, ScriptCompletion, ScriptLease,
     ScriptRuntime, StepExecutor, TaskStatus, UncertaintyIdentity,
 };
@@ -153,6 +153,10 @@ enum Admission {
         spec: Box<crate::plugins::NodeSpec>,
         config: serde_json::Map<String, serde_json::Value>,
     },
+    /// A sub-pipeline step (v6.7).
+    Pipeline {
+        lease: Box<piui_orchestration::PipelineStepLease>,
+    },
 }
 
 /// A started script step handed to its watcher.
@@ -225,6 +229,14 @@ pub(crate) struct OrchestrationScheduler {
 struct CancellationAdmission {
     inner: Arc<SchedulerInner>,
     key: RunKey,
+}
+
+/// A child run held by a cascading cancellation (v6.7): its cancellation
+/// admission and its dispatch gate, released when dropped.
+struct HeldRun {
+    run_id: String,
+    _admission: CancellationAdmission,
+    _dispatch: tokio::sync::OwnedMutexGuard<()>,
 }
 
 impl Drop for CancellationAdmission {
@@ -512,6 +524,25 @@ impl OrchestrationScheduler {
                         plugin_steps::PluginAdmission::Idle => return Ok(()),
                     }
                 }
+                if step.is_pipeline() {
+                    let lease_id = host.workspace.allocate_orchestration_session_id();
+                    match subpipeline_steps::admit_pipeline_step(
+                        &api,
+                        workspace_id,
+                        &run,
+                        &step,
+                        lease_id,
+                    ) {
+                        subpipeline_steps::PipelineAdmission::Leased { lease, run } => {
+                            self.emit_run_invalidation(app, workspace_id, &run);
+                            break 'admission Admission::Pipeline { lease };
+                        }
+                        subpipeline_steps::PipelineAdmission::Rejected { error } => {
+                            return Err(error);
+                        }
+                        subpipeline_steps::PipelineAdmission::Idle => return Ok(()),
+                    }
+                }
                 let Some(profile) = profile_for_step(&run, &step) else {
                     return Ok(());
                 };
@@ -594,6 +625,9 @@ impl OrchestrationScheduler {
                     self.launch_plugin_step(app, workspace_id, *lease, *spec, config)
                         .await?;
                 }
+                Admission::Pipeline { lease } => {
+                    self.launch_pipeline_step(app, workspace_id, *lease).await?;
+                }
             }
         }
     }
@@ -641,16 +675,114 @@ impl OrchestrationScheduler {
         if !self.admits_work() {
             return Err(OrchestrationSchedulerError::unavailable());
         }
-        let _cancellation = self.begin_cancellation(workspace_id, run_id)?;
+        let cancellation = self.begin_cancellation(workspace_id, run_id)?;
         let run_gate = self.run_gate(workspace_id, run_id)?;
-        let _dispatch = run_gate.lock().await;
-        let cancels = {
+        let dispatch = run_gate.lock().await;
+        // Sub-pipeline child runs (v6.7, ADR-042) are cancelled first,
+        // deepest first. Holding a run's gate keeps it from starting another
+        // child, and marking every held run as cancelling keeps the
+        // sub-pipeline engine from recording their ends as failures.
+        let held = self
+            .hold_subpipeline_children(app, workspace_id, run_id, step_id)
+            .await;
+        for child in held.iter().rev() {
+            let Ok(current) = self.current_run(app, workspace_id, &child.run_id).await else {
+                continue;
+            };
+            if current.status() == RunStatus::Running {
+                let _ = self
+                    .cancel_held_run(app, workspace_id, &child.run_id, current.revision(), None)
+                    .await;
+            }
+        }
+        drop(held);
+        let result = self
+            .cancel_held_run(app, workspace_id, run_id, expected_run_revision, step_id)
+            .await;
+        drop(dispatch);
+        drop(cancellation);
+        // Ends observed while the runs were held are recorded now.
+        if let Some(engine) = app.try_state::<crate::subpipelines::SubpipelineEngine>() {
+            engine.wake();
+        }
+        result
+    }
+
+    /// Takes the cancellation admission and the dispatch gate of every
+    /// running child run below `run_id` (below `step_id` when given), level
+    /// by level, and returns them in that order. A child another
+    /// cancellation already holds is left to it.
+    async fn hold_subpipeline_children<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        workspace_id: &str,
+        run_id: &str,
+        step_id: Option<&str>,
+    ) -> Vec<HeldRun> {
+        let mut held: Vec<HeldRun> = Vec::new();
+        let mut seen = HashSet::from([run_id.to_owned()]);
+        let mut frontier =
+            std::collections::VecDeque::from([(run_id.to_owned(), step_id.map(str::to_owned))]);
+        while let Some((parent, step)) = frontier.pop_front() {
+            let children = {
+                let api = app.state::<OrchestrationApiState>();
+                let Ok(snapshot) = api.snapshot() else {
+                    break;
+                };
+                snapshot
+                    .workspace(workspace_id)
+                    .map(|workspace| {
+                        crate::subpipelines::running_children(workspace, &parent, step.as_deref())
+                    })
+                    .unwrap_or_default()
+            };
+            for child in children {
+                if !seen.insert(child.clone()) {
+                    continue;
+                }
+                let Ok(admission) = self.begin_cancellation(workspace_id, &child) else {
+                    continue;
+                };
+                let Ok(gate) = self.run_gate(workspace_id, &child) else {
+                    continue;
+                };
+                let guard = gate.lock_owned().await;
+                held.push(HeldRun {
+                    run_id: child.clone(),
+                    _admission: admission,
+                    _dispatch: guard,
+                });
+                frontier.push_back((child, None));
+            }
+        }
+        held
+    }
+
+    /// The cancellation of one run whose cancellation admission and dispatch
+    /// gate the caller holds.
+    async fn cancel_held_run<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        workspace_id: &str,
+        run_id: &str,
+        expected_run_revision: u64,
+        step_id: Option<&str>,
+    ) -> Result<Run, OrchestrationSchedulerError> {
+        let (cancels, pipeline_steps) = {
             let host = app.state::<HostState>();
             let _operation = host.live_runtime_operation_gate.lock().await;
             authorize_live_workspace(&host, workspace_id)?;
-            app.state::<OrchestrationApiState>()
+            let api = app.state::<OrchestrationApiState>();
+            let cancels = api
                 .plan_cancel(workspace_id, run_id, expected_run_revision)
-                .map_err(|_| OrchestrationSchedulerError::conflict())?
+                .map_err(|_| OrchestrationSchedulerError::conflict())?;
+            let pipeline_steps = api
+                .get_run(workspace_id, run_id)
+                .ok()
+                .flatten()
+                .map(|run| crate::subpipelines::pipeline_step_ids(&run))
+                .unwrap_or_default();
+            (cancels, pipeline_steps)
         };
         let cancels = cancels
             .into_iter()
@@ -674,6 +806,15 @@ impl OrchestrationScheduler {
 
         let mut evidence = Vec::with_capacity(cancels.len());
         for cancel in &cancels {
+            // A sub-pipeline's proof is its child run's end: it was
+            // cancelled above (or ended on its own) before this run.
+            if pipeline_steps.contains(&cancel.step_id) {
+                let outcome = self
+                    .child_run_outcome(app, workspace_id, &cancel.execution.id)
+                    .await;
+                evidence.push((cancel, None, outcome));
+                continue;
+            }
             // A script has no native turn: proof is its terminated tree.
             if let Some(script) = self.active_script(&cancel.execution.id) {
                 evidence.push((cancel, None, stop_script(&script).await));
@@ -792,6 +933,27 @@ impl OrchestrationScheduler {
             }
         }
         latest.ok_or_else(OrchestrationSchedulerError::uncertain)
+    }
+
+    /// How a sub-pipeline step's child run ended, as cancellation evidence:
+    /// cancelled is an interruption; a child still running or uncertain is
+    /// no proof.
+    async fn child_run_outcome<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        workspace_id: &str,
+        child_run_id: &str,
+    ) -> Option<TurnOutcome> {
+        let child = self
+            .current_run(app, workspace_id, child_run_id)
+            .await
+            .ok()?;
+        match child.status() {
+            RunStatus::Cancelled => Some(TurnOutcome::Interrupted),
+            RunStatus::Succeeded => Some(TurnOutcome::Succeeded),
+            RunStatus::Failed => Some(TurnOutcome::Failed),
+            RunStatus::Running | RunStatus::Uncertain => None,
+        }
     }
 
     async fn launch_lease<R: Runtime>(
@@ -1786,7 +1948,7 @@ impl OrchestrationScheduler {
         })
     }
 
-    fn is_run_cancelling(&self, workspace_id: &str, run_id: &str) -> bool {
+    pub(crate) fn is_run_cancelling(&self, workspace_id: &str, run_id: &str) -> bool {
         self.inner.cancelling_runs.lock().is_ok_and(|cancelling| {
             cancelling.contains(&(workspace_id.to_owned(), run_id.to_owned()))
         })
@@ -2562,6 +2724,7 @@ pub async fn run_native_prime_scheduler_two_step_dependency_dag() {
             },
         ],
         inputs: Vec::new(),
+        outputs: Vec::new(),
     };
     let store_directory = app_data.join("orchestration-v6");
     fs::create_dir_all(&store_directory).unwrap();
@@ -3173,6 +3336,7 @@ mod tests {
                     },
                 ],
                 inputs: Vec::new(),
+                outputs: Vec::new(),
             },
             launch_command: None,
         }
@@ -3488,6 +3652,9 @@ mod script_tests;
 
 #[path = "orchestration_plugin_steps.rs"]
 mod plugin_steps;
+
+#[path = "orchestration_subpipeline_steps.rs"]
+mod subpipeline_steps;
 
 #[cfg(test)]
 #[path = "orchestration_sign_in_tests.rs"]

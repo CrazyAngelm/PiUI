@@ -43,6 +43,7 @@ mod session_tools_contract_tests;
 #[cfg(test)]
 mod session_tools_test_support;
 mod state;
+mod subpipelines;
 mod teammates_api;
 mod workspace_api;
 
@@ -863,6 +864,9 @@ pub fn run() -> Result<(), tauri::Error> {
             app.manage(board_service);
             let board_run_engine = board_runs::BoardRunEngine::default();
             app.manage(board_run_engine.clone());
+            // Completes sub-pipeline steps when their child runs end (v6.7).
+            let subpipeline_engine = subpipelines::SubpipelineEngine::default();
+            app.manage(subpipeline_engine.clone());
             let plugin_host =
                 plugins::PluginsState::open(&app_data_dir, safe_mode, env!("CARGO_PKG_VERSION"))
                     .map_err(|_| std::io::Error::other("Could not open the plugin registry"))?;
@@ -906,6 +910,7 @@ pub fn run() -> Result<(), tauri::Error> {
                 orchestration_scheduler.start_timed_schedule_worker(app.handle().clone());
                 trigger_engine.start(app.handle().clone());
                 board_run_engine.start(app.handle().clone());
+                subpipeline_engine.start(app.handle().clone());
                 harness_registry_api::start_background_discovery(app.handle().clone());
             }
             if let Some(server) = agent_server {
@@ -1009,6 +1014,9 @@ pub fn run() -> Result<(), tauri::Error> {
                     engine.begin_shutdown();
                 }
                 if let Some(engine) = app.try_state::<board_runs::BoardRunEngine>() {
+                    engine.begin_shutdown();
+                }
+                if let Some(engine) = app.try_state::<subpipelines::SubpipelineEngine>() {
                     engine.begin_shutdown();
                 }
                 if let Some(plugins) = app.try_state::<plugins::PluginsState>() {

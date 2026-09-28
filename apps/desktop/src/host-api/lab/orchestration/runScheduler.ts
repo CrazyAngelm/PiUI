@@ -15,12 +15,15 @@ import {
 import { resolvePluginValues } from '../../pluginManifest';
 import { labPluginHost } from '../pluginsFake';
 import { claudeSignInRequired } from '../catalogFake';
-import { HARNESS_SIGN_IN_REQUIRED, launchPolicyIssue, oneShotPolicyIssue } from './definitionRules';
+import { commandReferences, definitionIssue, HARNESS_SIGN_IN_REQUIRED, launchPolicyIssue, oneShotPolicyIssue } from './definitionRules';
 import {
-  advanceAutomatic, cancelRun, cancelTask, completeScript, completeTask, CoordinatorFault, dispatchTask, leaseTask,
-  markUncertain, profileForStep, readyTaskIds, rejectReadyTask, runningExecutions, stepOf, taskOf, type Completion,
-  type LabRun, type ScriptCompletion,
+  advanceAutomatic, cancelRun, cancelTask, completeScript, completeSubpipeline, completeTask, CoordinatorFault, dispatchTask,
+  leaseTask, markUncertain, newRun, profileForStep, readyTaskIds, rejectReadyTask, runningExecutions, stepOf, taskOf,
+  type Completion, type LabRun, type ScriptCompletion,
 } from './runEngine';
+import {
+  MAX_SUBPIPELINE_DEPTH, reaches, resolveSubpipelineInputs, SUBPIPELINE_FAILURE_CODES, subpipelineResult,
+} from '../../subpipelines';
 import { nativeDependencyText, taskPrompt, taskResultText } from './taskContent';
 
 /** Delay between a recorded completion and the next scheduling pass. */
@@ -78,6 +81,7 @@ export class LabRunScheduler {
     const event: OrchestrationRunChangedEventV6 = { protocol: 6, type: 'runChanged', workspaceId, runId: run.id, revision: run.revision };
     this.bus.emit(ORCHESTRATION_EVENT_V6, event);
     this.onRunChanged?.(workspaceId, run);
+    this.finishParent(workspaceId, run);
   }
 
   /** `schedule_run`: launches every ready step now; returns the admission error, if any. */
@@ -99,6 +103,11 @@ export class LabRunScheduler {
       if (executorKind(step) === 'plugin') {
         const issue = this.admitPlugin(workspaceId, run, step, executionId);
         if (issue !== undefined) return issue;
+        continue;
+      }
+      if (executorKind(step) === 'pipeline') {
+        // The execution id of a sub-pipeline step is its child run's id (v6.7).
+        this.admitSubpipeline(workspaceId, run, step, executionId);
         continue;
       }
       const profile = profileForStep(run, step);
@@ -144,16 +153,7 @@ export class LabRunScheduler {
     const key = `${workspaceId}\u0000${run.id}`;
     this.cancelling.add(key);
     try {
-      for (const id of executions) {
-        // A script's tree ends with its timer; a native turn is interrupted.
-        const stopScript = this.scripts.get(id);
-        if (stopScript !== undefined) {
-          stopScript();
-          continue;
-        }
-        const record = this.runtime.record(id);
-        if (record?.live !== undefined) this.runtime.interrupt(record);
-      }
+      for (const id of executions) this.stopExecution(workspaceId, id);
       if (stepId === undefined) cancelRun(run);
       else cancelTask(run, stepId);
     } catch (error) {
@@ -163,6 +163,132 @@ export class LabRunScheduler {
       this.cancelling.delete(key);
     }
     this.emit(workspaceId, run);
+  }
+
+  /**
+   * Ends one running execution before its task is cancelled: a script's
+   * tree ends with its timer, a native turn is interrupted and the child run
+   * of a sub-pipeline (v6.7) is cancelled first, with its own children.
+   */
+  private stopExecution(workspaceId: string, id: string): void {
+    const stopScript = this.scripts.get(id);
+    if (stopScript !== undefined) {
+      stopScript();
+      return;
+    }
+    const child = this.findRun(workspaceId, id);
+    if (child !== undefined && child.trigger?.kind === 'pipeline') {
+      this.cancelChild(workspaceId, child);
+      return;
+    }
+    const record = this.runtime.record(id);
+    if (record?.live !== undefined) this.runtime.interrupt(record);
+  }
+
+  /** Cancels a child run and everything it runs; its parent is being cancelled and is not completed. */
+  private cancelChild(workspaceId: string, child: LabRun): void {
+    if (child.status !== 'running') return;
+    const key = `${workspaceId}\u0000${child.id}`;
+    this.cancelling.add(key);
+    try {
+      for (const task of child.tasks) {
+        if (task.status === 'running' && task.execution !== undefined) this.stopExecution(workspaceId, task.execution.id);
+      }
+      cancelRun(child);
+    } finally {
+      this.cancelling.delete(key);
+    }
+    this.emit(workspaceId, child);
+  }
+
+  /** The launch commands of `run` and of every run above it (child runs, v6.7). */
+  private ancestorCommands(workspaceId: string, run: LabRun): Set<string> {
+    const commands = new Set<string>();
+    let current: LabRun | undefined = run;
+    for (let hop = 0; current !== undefined && hop <= MAX_SUBPIPELINE_DEPTH + 1; hop += 1) {
+      const id = current.definition.launchCommand?.id;
+      if (id !== undefined) commands.add(id);
+      const trigger: LabRun['trigger'] = current.trigger;
+      current = trigger?.kind === 'pipeline' ? this.findRun(workspaceId, trigger.parentRunId) : undefined;
+    }
+    return commands;
+  }
+
+  /**
+   * `admit_subpipeline` (v6.7, ADR-042): checks the reference, cycle, depth
+   * and inputs again (the child may have changed since the parent was
+   * saved), then starts an ordinary child run of the launch command with
+   * trigger `pipeline`; the parent task runs with the child run id as its
+   * execution. A refusal is a certain failure of the parent task.
+   */
+  private admitSubpipeline(workspaceId: string, run: LabRun, step: PipelineStep, childRunId: string): void {
+    if (step.executor?.type !== 'pipeline') return;
+    const executor = step.executor;
+    const reject = (code: string): void => {
+      rejectReadyTask(run, step.id, code);
+      this.emit(workspaceId, run);
+    };
+    const workspace = this.runtime.state.orchestration.get(workspaceId);
+    const command = workspace?.launchCommands.find((stored) => stored.value.id === executor.launchCommandId)?.value;
+    const team = command === undefined ? undefined : workspace?.teams.find((stored) => stored.value.id === command.teamId)?.value;
+    const pipeline = command === undefined ? undefined : workspace?.pipelines.find((stored) => stored.value.id === command.pipelineId)?.value;
+    if (workspace === undefined || command === undefined || team === undefined || pipeline === undefined) {
+      reject(SUBPIPELINE_FAILURE_CODES.unavailable);
+      return;
+    }
+    const ancestors = this.ancestorCommands(workspaceId, run);
+    const references = (id: string): readonly string[] | undefined => commandReferences(workspace, id);
+    if (ancestors.has(command.id) || [...ancestors].some((ancestor) => reaches(command.id, ancestor, references))) {
+      reject(SUBPIPELINE_FAILURE_CODES.cycle);
+      return;
+    }
+    const depth = (run.trigger?.kind === 'pipeline' ? run.trigger.depth : 0) + 1;
+    if (depth > MAX_SUBPIPELINE_DEPTH) {
+      reject(SUBPIPELINE_FAILURE_CODES.depth);
+      return;
+    }
+    // The child freezes its own snapshot of the definitions current now.
+    const definition = structuredClone({
+      profiles: workspace.profiles.map((stored) => stored.value),
+      team,
+      pipeline,
+      launchCommand: command,
+    });
+    if (definitionIssue(definition) !== undefined || workspace.runs.some((candidate) => candidate.id === childRunId)) {
+      reject(SUBPIPELINE_FAILURE_CODES.unavailable);
+      return;
+    }
+    const inputs = resolveSubpipelineInputs(executor, pipeline.inputs, run, (id) => nativeDependencyText(this.runtime.state.sessions, run, id));
+    if (!inputs.ok) {
+      reject(inputs.code);
+      return;
+    }
+    leaseTask(run, step.id, childRunId);
+    this.emit(workspaceId, run);
+    // A child never uses pinned data.
+    const child = newRun(childRunId, definition, inputs.values, {
+      kind: 'pipeline', parentRunId: run.id, parentStepId: step.id, launchCommandId: command.id, depth,
+    });
+    workspace.runs.push(child);
+    dispatchTask(run, step.id, childRunId);
+    this.emit(workspaceId, run);
+    this.emit(workspaceId, child);
+    this.schedule(workspaceId, child);
+  }
+
+  /** A child run ended (v6.7): its parent step succeeds or fails with it. */
+  private finishParent(workspaceId: string, child: LabRun): void {
+    const trigger = child.trigger;
+    if (trigger?.kind !== 'pipeline' || child.status === 'running' || child.status === 'uncertain') return;
+    if (this.cancelling.has(`${workspaceId}\u0000${trigger.parentRunId}`)) return;
+    const parent = this.findRun(workspaceId, trigger.parentRunId);
+    const step = parent === undefined ? undefined : stepOf(parent, trigger.parentStepId);
+    const task = parent === undefined ? undefined : taskOf(parent, trigger.parentStepId);
+    if (parent === undefined || step === undefined || task?.status !== 'running' || task.execution?.id !== child.id) return;
+    const result = subpipelineResult(child, step.resultFields ?? [], (id) => nativeDependencyText(this.runtime.state.sessions, child, id));
+    completeSubpipeline(parent, step.id, child.id, result);
+    this.emit(workspaceId, parent);
+    this.reschedule(workspaceId, parent.id);
   }
 
   /** `authorize_live_workspace`: runtime work needs a trusted, present project outside safe mode. */

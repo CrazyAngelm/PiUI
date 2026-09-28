@@ -1,7 +1,8 @@
-import type { AgentProfile, PipelineDefinition, PipelineInput, TeamDefinition, LaunchCommandReference, RouterConfig, RouterBranch, RouterPredicate, StepExecutor } from '../../../../../contracts/orchestration-v6';
+import type { AgentProfile, PipelineDefinition, PipelineInput, PipelineOutput, TeamDefinition, LaunchCommandReference, RouterConfig, RouterBranch, RouterPredicate, StepExecutor } from '../../../../../contracts/orchestration-v6';
 import { pipelineInputIssues, reviewLimitValid, RUN_INPUT_ISSUES } from '../../host-api/runInputs';
 import { EXECUTOR_ISSUES, pluginExecutorIssue, SCRIPT_RUNTIMES, scriptSourceValid, scriptTimeoutValid } from '../../host-api/stepExecutors';
 import { MAX_PIPELINE_PINNED_BYTES, PINNED_ISSUES, pinnedOutputIssue, pinnedSize, pinningRefusal } from '../../host-api/pinnedData';
+import { pipelineOutputIssues, SUBPIPELINE_ISSUES } from '../../host-api/subpipelines';
 /**
  * `executor` (v6.2) selects a native agent (absent), a single model call
  * (`llm`) or a host-run `script`. A script node has no team member: like a
@@ -11,8 +12,12 @@ import { MAX_PIPELINE_PINNED_BYTES, PINNED_ISSUES, pinnedOutputIssue, pinnedSize
 export interface GraphNode { kind?: 'agent' | 'router'; executor?: StepExecutor; pinnedOutput?: import('../../../../../contracts/orchestration-v6').PinnedOutput; inputBindings?: import('../../../../../contracts/orchestration-v6').InputBinding[]; condition?: import('../../../../../contracts/orchestration-v6').ResultCondition; review?: import('../../../../../contracts/orchestration-v6').ReviewRule; requireApproval?: boolean; resultFields?: import('../../../../../contracts/orchestration-v6').ResultField[]; executionMode?: 'scheduled' | 'callable'; id: string; profile: AgentProfile; router?: RouterConfig; task: string; input?: string; x: number; y: number; }
 export type ConnectionKind = 'result' | 'send' | 'observe' | 'spawn' | 'route';
 export interface GraphEdge { from: string; to: string; kind: ConnectionKind; branchId?: string; }
-/** `inputs` are the pipeline's run inputs (v6.1): values requested when a run starts. */
-export interface AgentGraph { id: string; name: string; teamId: string; pipelineId: string; orchestratorId?: string; spawnedAgentsJoinTeam?: boolean; inputs?: PipelineInput[]; nodes: GraphNode[]; edges: GraphEdge[]; }
+/**
+ * `inputs` are the pipeline's run inputs (v6.1): values requested when a run
+ * starts. `outputs` (v6.7) are the results the pipeline returns when another
+ * pipeline runs it as a sub-pipeline.
+ */
+export interface AgentGraph { id: string; name: string; teamId: string; pipelineId: string; orchestratorId?: string; spawnedAgentsJoinTeam?: boolean; inputs?: PipelineInput[]; outputs?: PipelineOutput[]; nodes: GraphNode[]; edges: GraphEdge[]; }
 export function emptyGraph(): AgentGraph { return { id: crypto.randomUUID(), name: '', teamId: crypto.randomUUID(), pipelineId: crypto.randomUUID(), nodes: [], edges: [] }; }
 export function newGraphNode(index: number): GraphNode {
   return { kind: 'agent', id: crypto.randomUUID(), x: 60 + index * 280, y: 100, task: '', profile: {
@@ -51,13 +56,31 @@ export function newPluginNode(
     ...(resultFields?.length ? { resultFields: resultFields.map((field) => ({ ...field })) } : {}),
   };
 }
-/** The unsaved profile of a node without a team member (program router, script or plugin node). */
-export function placeholderProfile(name: string, model: 'router' | 'script' | 'plugin'): AgentProfile {
+/**
+ * A sub-pipeline step (v6.7): it runs a saved launch command of this project
+ * as a child run. Its placeholder profile only names the step; its result
+ * fields follow the child's declared outputs.
+ */
+export function newSubpipelineNode(
+  index: number,
+  child: { commandId: string; name: string },
+  resultFields: GraphNode['resultFields'] = undefined,
+): GraphNode {
+  const node = newGraphNode(index);
+  return {
+    ...node,
+    executor: { type: 'pipeline', launchCommandId: child.commandId, inputs: {} },
+    profile: placeholderProfile(child.name || `Sub-pipeline ${index + 1}`, 'pipeline'),
+    ...(resultFields?.length ? { resultFields: resultFields.map((field) => ({ ...field })) } : {}),
+  };
+}
+/** The unsaved profile of a node without a team member (program router, script, plugin node or sub-pipeline). */
+export function placeholderProfile(name: string, model: 'router' | 'script' | 'plugin' | 'pipeline'): AgentProfile {
   return { id: crypto.randomUUID(), name, harness: 'codex', model, permissionMode: 'read-only', instructions: '', serviceTier: 'standard', toolPolicy: { rules: [] }, allowedSpawnProfileIds: [] };
 }
-/** Program routers are coordinator work; scripts and plugin nodes are host work: none is a team member. */
+/** Program routers are coordinator work; scripts, plugin nodes and sub-pipelines are host work: none is a team member. */
 export function nodeHasNoMember(node: Pick<GraphNode, 'kind' | 'router' | 'executor'>): boolean {
-  return (node.kind === 'router' && node.router?.mode === 'program') || node.executor?.type === 'script' || node.executor?.type === 'plugin';
+  return (node.kind === 'router' && node.router?.mode === 'program') || node.executor?.type === 'script' || node.executor?.type === 'plugin' || node.executor?.type === 'pipeline';
 }
 export function permissionsSubset(parent: AgentProfile, child: AgentProfile): boolean {
   const ranks = { 'read-only': 0, 'workspace-write': 1, 'full-access': 2 };
@@ -93,7 +116,7 @@ export function compileGraph(graph: AgentGraph): { profiles: AgentProfile[]; tea
   return {
     profiles,
     team: { id: graph.teamId, name: graph.name, ...(graph.spawnedAgentsJoinTeam ? { spawnedAgentsJoinTeam: true } : {}), members: executionNodes.map(node => ({ id: node.id, profileId: node.profile.id })), orchestratorMemberId: graph.orchestratorId && executionIds.has(graph.orchestratorId) ? graph.orchestratorId : executionNodes[0]?.id ?? '', sendEdges: graph.edges.filter(edge => edge.kind === 'send' && executionIds.has(edge.from) && executionIds.has(edge.to)).map(edge => ({ fromMemberId: edge.from, toMemberId: edge.to })), observeEdges: graph.edges.filter(edge => edge.kind === 'observe' && executionIds.has(edge.from) && executionIds.has(edge.to)).map(edge => ({ fromMemberId: edge.from, toMemberId: edge.to })) },
-    pipeline: { id: graph.pipelineId, name: graph.name, steps, ...(graph.inputs?.length ? { inputs: graph.inputs.map(input => ({ ...input })) } : {}) },
+    pipeline: { id: graph.pipelineId, name: graph.name, steps, ...(graph.inputs?.length ? { inputs: graph.inputs.map(input => ({ ...input })) } : {}), ...(graph.outputs?.length ? { outputs: graph.outputs.map(output => ({ ...output })) } : {}) },
     command: { id: graph.id, name: graph.name, teamId: graph.teamId, pipelineId: graph.pipelineId },
   };
 }
@@ -159,6 +182,13 @@ export function graphIssues(graph: AgentGraph): GraphIssue[] {
     } else if (executor.type === 'plugin') {
       if (pluginExecutorIssue(executor.pluginId, executor.nodeType, executor.config) !== undefined) push(EXECUTOR_ISSUES.pluginConfig, [node.id]);
       if (node.inputBindings?.length) push(EXECUTOR_ISSUES.pluginBindings, [node.id]);
+    } else if (executor.type === 'pipeline') {
+      // v6.7: what the step shows by itself; references to other pipelines are checked in `subpipelineIssues`.
+      if (!executor.launchCommandId.trim()) push(SUBPIPELINE_ISSUES.command, [node.id]);
+      else if (executor.launchCommandId === graph.id) push(SUBPIPELINE_ISSUES.self, [node.id]);
+      if (node.inputBindings?.length) push(SUBPIPELINE_ISSUES.bindings, [node.id]);
+      const dependencies = graph.edges.filter(edge => (edge.kind === 'result' || edge.kind === 'route') && edge.to === node.id).map(edge => edge.from);
+      if (Object.values(executor.inputs).some(source => source.kind === 'step' && !dependencies.includes(source.stepId))) push(SUBPIPELINE_ISSUES.stepSource, [node.id]);
     } else {
       if (node.profile.permissionMode !== 'read-only') push(EXECUTOR_ISSUES.llmReadOnly, [node.id]);
       if (node.profile.networkAccess === true) push(EXECUTOR_ISSUES.llmNetwork, [node.id]);
@@ -175,10 +205,12 @@ export function graphIssues(graph: AgentGraph): GraphIssue[] {
     pinnedBytes += pinnedSize(node.pinnedOutput);
   }
   if (pinnedBytes > MAX_PIPELINE_PINNED_BYTES) push(PINNED_ISSUES.total, graph.nodes.filter(node => node.pinnedOutput !== undefined).map(node => node.id));
+  // Declared outputs (v6.7), the rules of `validate_pipeline_outputs`.
+  if (graph.outputs?.length && pipelineOutputIssues({ steps: compileGraph(graph).pipeline.steps, outputs: graph.outputs }).length) push(SUBPIPELINE_ISSUES.outputs, [...new Set(graph.outputs.map(output => output.sourceStepId))].filter(id => graph.nodes.some(node => node.id === id)));
   if (graph.nodes.length > 0 && graph.nodes.every(nodeHasNoMember)) push(EXECUTOR_ISSUES.needsMember);
   if (!agentNodes.some(node => node.executionMode !== 'callable')) push('Add a scheduled agent to start this system.');
   if (graph.edges.some(edge => (edge.kind === 'result' || edge.kind === 'route') && graph.nodes.some(node => node.executionMode === 'callable' && (node.id === edge.from || node.id === edge.to)))) push('Callable agents exchange results through their caller, not pipeline dependencies.');
-  const needsModel = (node: GraphNode): boolean => (node.kind !== 'router' || node.router?.mode === 'agent') && node.executor?.type !== 'script' && node.executor?.type !== 'plugin';
+  const needsModel = (node: GraphNode): boolean => (node.kind !== 'router' || node.router?.mode === 'agent') && node.executor?.type !== 'script' && node.executor?.type !== 'plugin' && node.executor?.type !== 'pipeline';
   if (!graph.name.trim() || !graph.nodes.length || agentNodes.some(node => !node.profile.name.trim() || needsModel(node) && !node.profile.model.trim())) push('Enter a name and model for every agent.', agentNodes.filter(node => !node.profile.name.trim() || needsModel(node) && !node.profile.model.trim()).map(node=>node.id));
   const definition = compileGraph(graph);
   if (definition.profiles.some(parent => parent.allowedSpawnProfileIds.some(id => { const child = definition.profiles.find(profile => profile.id === id); return !child || !permissionsSubset(parent, child); }))) push('Child permissions must be the same or lower.');

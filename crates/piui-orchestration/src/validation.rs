@@ -53,6 +53,10 @@ pub enum DefinitionError {
         step_id: String,
         reason: &'static str,
     },
+    #[error("a pipeline declares at most {limit} outputs")]
+    TooManyOutputs { limit: usize },
+    #[error("pipeline output {name} is invalid: {reason}")]
+    InvalidOutput { name: String, reason: &'static str },
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]

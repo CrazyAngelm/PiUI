@@ -278,7 +278,7 @@ export class ChatPipelinesStore {
     const { task } = found;
     if (task.output?.text) return task.output.text;
     const sessionId = task.resultReference?.sessionId ?? task.execution?.id;
-    if (sessionId && found.step.executor?.type !== 'script' && found.step.executor?.type !== 'plugin') {
+    if (sessionId && found.step.executor?.type !== 'script' && found.step.executor?.type !== 'plugin' && found.step.executor?.type !== 'pipeline') {
       try {
         const blocks = await this.readHistory(sessionId);
         const answers = blocks.filter((block) => block.kind === 'assistant' && block.text);

@@ -118,6 +118,8 @@ export function applyProposal(current: AgentGraph, file: SystemFile): AgentGraph
     id: current.id,
     teamId: current.teamId,
     pipelineId: current.pipelineId,
+    // System files have no declared outputs (v6.7): the draft keeps its own.
+    ...(current.outputs?.length ? { outputs: current.outputs.map((output) => ({ ...output })) } : {}),
     nodes: proposed.nodes.map((node) => {
       const pinned = current.nodes.find((item) => item.id === node.id)?.pinnedOutput;
       return {

@@ -1052,3 +1052,68 @@ left to plugins.
 until a CLI fallback lands; the UI says so. Whole-document board writes are
 bounded by caps and will move with ADR-031. Card text written by one agent is
 untrusted input for another.
+
+## ADR-042 — Sub-pipelines: a saved pipeline as one step of another (orchestration v6.7)
+
+**Status:** Accepted 2026-09-28 (owner delegated decisions; reviewed with a
+second model). Implements the "sub-pipelines" node of ADR-030 ahead of the v5
+document, like the executors of v6.2 and v6.5.
+
+**Context:** people build a large pipeline once (for example "testing") and
+want to reuse it as one stage of another ("development"), with the inner
+pipeline's inputs as the stage's parameters and its results as the stage's
+output. Templates only copy nodes; `run-finished` automations chain runs
+without data; board and chat each guess a run's result from its last step.
+
+**Decision:**
+
+- A new step executor `{type: 'pipeline', launchCommandId, inputs}` names a
+  saved launch command of the same project. It is host work like a script or
+  plugin node: no profile, not a team member, never callable, never a router,
+  no input bindings. `inputs` maps each child input name to a literal value, a
+  parent run input or a direct dependency's result (a field of its data, or
+  its whole text).
+- Running the step starts an ordinary **child run** of that launch command
+  through the normal run path, with `RunTrigger::Pipeline {parentRunId,
+  parentStepId, launchCommandId, depth}`. The child freezes its own snapshot
+  of the definitions current at that moment (the parent does not embed it)
+  and keeps its own team, profiles, approvals, review loops and history. The
+  parent task is running with the child run id as its execution id.
+- A pipeline declares its results with the additive
+  `PipelineDefinition.outputs` (`name`, `kind`, `sourceStepId`, optional
+  `field`). When the child succeeds its outputs become the parent task's
+  result data, checked against the step's declared result fields like a
+  script's JSON; without declared outputs the parent records the child's last
+  succeeded step text. In the editor outputs are an "Output" block, not a
+  step.
+- Failure is certain and recorded on the parent task: `subpipeline-unavailable`,
+  `subpipeline-cycle`, `subpipeline-depth`, `subpipeline-input-invalid`,
+  `subpipeline-input-unavailable` (nothing started), `subpipeline-failed`,
+  `subpipeline-cancelled`, `subpipeline-output-unavailable`. Cancelling the
+  parent (run or task) cancels the child first. A restart keeps a dispatched
+  parent task running and it completes when the child ends; a leased but not
+  yet dispatched one becomes uncertain as today, and its possible orphan child
+  run stays an ordinary visible run.
+- Saves reject a reference to a launch command of another project or one that
+  does not exist, unknown or type-incompatible child input names, missing
+  required child inputs and any reference cycle through launch commands.
+  Admission re-checks reference, cycle and depth (at most
+  `MAX_SUBPIPELINE_DEPTH` = 4 nested runs) because the child can change after
+  the parent was saved. Deleting a referenced launch command is refused.
+- A child never uses pinned data; the parent step itself can be pinned, which
+  skips the whole child during debugging.
+- Authority: the reference is a static, user-authored save in a trusted
+  project; the child runs its own saved profiles, which the person already
+  could run directly (ADR-033). Model-caused delegation rules are unchanged
+  and do not apply. Admission requires a trusted, live project outside safe
+  mode, like every step.
+- System files v4 have no sub-pipeline executor or outputs: export refuses a
+  graph that uses them with a clear message instead of dropping them; import
+  is unchanged. A portable format is left to system-file v5.
+
+**Extension test:** a plugin cannot start runs or observe their ends, and the
+cancellation cascade and cycle checks sit in the coordinator; core owns it.
+
+**Consequences:** one more observer of committed generations (like the board
+engine). A later v5 may freeze the child definition at parent launch, add
+fan-out over a list and let board/chat prefer declared outputs.

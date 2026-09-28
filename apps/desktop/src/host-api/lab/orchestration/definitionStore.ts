@@ -13,8 +13,16 @@ import { resolveRunInputs, type RunInputResolution } from '../../runInputs';
 import { calendarInitialDue, calendarValid } from '../../scheduleCalendar';
 import {
   definitionIssue, launchCommandValid, normalizePipeline, normalizeProfile, normalizeTeam, pipelineValid, profileValid,
-  spawnSubset, teamValid,
+  spawnSubset, subpipelineCycle, subpipelineSaveIssue, teamValid,
 } from './definitionRules';
+import { referencedCommands } from '../../subpipelines';
+
+/** `values` with `value` stored in place of the definition with its id (or added). */
+function replaced<T extends { readonly id: string }>(values: readonly StoredDefinition<T>[], value: T): StoredDefinition<T>[] {
+  const index = values.findIndex((stored) => stored.value.id === value.id);
+  const entry = { revision: index >= 0 ? (values[index]?.revision ?? 0) : 0, value };
+  return index >= 0 ? values.map((stored, position) => (position === index ? entry : stored)) : [...values, entry];
+}
 
 /**
  * Revision-checked definition storage (`save_definition`, `delete_definition`,
@@ -45,7 +53,9 @@ export const TEAMS: DefinitionKind<TeamDefinition> = {
 
 export const PIPELINES: DefinitionKind<PipelineDefinition> = {
   values: (workspace) => workspace.pipelines,
-  valid: pipelineValid,
+  // v6.7: sub-pipeline references resolve in this project, without a cycle.
+  valid: (value, workspace) => pipelineValid(value)
+    && subpipelineSaveIssue(value, { pipelines: replaced(workspace.pipelines, value), launchCommands: workspace.launchCommands }) === undefined,
   canDelete: (workspace, id) => !workspace.launchCommands.some((command) => command.value.pipelineId === id),
   normalize: normalizePipeline,
 };
@@ -57,10 +67,13 @@ export function eventSource(trigger: ScheduleTrigger): string | undefined {
 
 export const LAUNCH_COMMANDS: DefinitionKind<LaunchCommandReference> = {
   values: (workspace) => workspace.launchCommands,
-  valid: launchCommandValid,
-  // Automations that start this pipeline or wait for it keep it.
+  valid: (value, workspace) => launchCommandValid(value, workspace)
+    && !subpipelineCycle({ pipelines: workspace.pipelines, launchCommands: replaced(workspace.launchCommands, value) }),
+  // Automations that start this pipeline or wait for it keep it, and so do
+  // sub-pipeline steps that run it (v6.7).
   canDelete: (workspace, id) =>
-    !workspace.schedules.some((schedule) => schedule.value.launchCommandId === id || eventSource(schedule.value.trigger) === id),
+    !workspace.schedules.some((schedule) => schedule.value.launchCommandId === id || eventSource(schedule.value.trigger) === id)
+    && !workspace.pipelines.some((pipeline) => referencedCommands(pipeline.value).includes(id)),
   normalize: (value) => value,
   afterSave: (workspace, previous, saved) => {
     if (previous === undefined) return;
@@ -194,6 +207,8 @@ export function saveGraph(workspace: LabOrchestrationWorkspace, request: SaveGra
   putGraphDefinition(PIPELINES, draft, request.pipeline);
   putGraphDefinition(LAUNCH_COMMANDS, draft, request.command);
   if (profiles.some((profile) => !profileValid(normalizeProfile(profile), draft))) throw orchestrationFailure('invalid');
+  // v6.7: sub-pipeline references resolve in this project, without a cycle.
+  if (subpipelineSaveIssue(normalizePipeline(request.pipeline.value), draft) !== undefined) throw orchestrationFailure('invalid');
   workspace.profiles = draft.profiles;
   workspace.teams = draft.teams;
   workspace.pipelines = draft.pipelines;

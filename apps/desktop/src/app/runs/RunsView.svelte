@@ -154,6 +154,9 @@
               <span class="run-row__text">
                 <strong>{item.pipelineName || item.teamName || $t('Untitled pipeline')}</strong>
                 <small>{$t(RUN_LABEL[item.status])} · #{shortId(item.id)}{runs.archived.has(item.id) ? ` · ${$t('Archived')}` : ''}</small>
+                {#if runs.parents.has(item.id)}
+                  <small class="run-row__child">{$t('Sub-pipeline of #{0}', [shortId(runs.parents.get(item.id) ?? '')])}</small>
+                {/if}
               </span>
             </button>
           </li>
@@ -229,7 +232,7 @@
 
   {#if run && selected}
     {#key `${run.id}:${selected.stepId}`}
-      <TaskPanel {runs} {run} view={selected} {snapshotFor} onOpenSession={openSession} onClose={() => runs.select('')} />
+      <TaskPanel {runs} {run} view={selected} {snapshotFor} onOpenSession={openSession} {onOpenRun} onClose={() => runs.select('')} />
     {/key}
   {/if}
 </div>
@@ -394,5 +397,8 @@
     .runs {
       grid-template-columns: 220px minmax(0, 1fr);
     }
+  }
+  .run-row__child {
+    color: var(--piui-chaos-gold);
   }
 </style>

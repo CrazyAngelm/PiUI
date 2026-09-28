@@ -966,15 +966,29 @@ impl Coordinator {
         Ok(requests)
     }
 
+    /// Whether `restore` would change this run: it holds a lease or a
+    /// running execution other than a dispatched sub-pipeline step.
+    pub fn needs_restore(run: &Run) -> bool {
+        run.tasks
+            .iter()
+            .any(|task| interrupted_by_restart(run, task))
+    }
+
     /// Recovery transition for durable state loaded after host interruption.
     /// Running executions become uncertain and are never made ready again.
+    /// A dispatched sub-pipeline step (v6.7) keeps running: its child run is
+    /// durable and its end completes the step.
     pub fn restore(run: &mut Run, expected_run_revision: Revision) -> Result<(), CoordinatorError> {
         check_run_revision(run, expected_run_revision)?;
+        let interrupted: BTreeSet<String> = run
+            .tasks
+            .iter()
+            .filter(|task| interrupted_by_restart(run, task))
+            .map(|task| task.step_id.clone())
+            .collect();
         let mut changed = false;
         for task in &mut run.tasks {
-            if task.status == TaskStatus::Running
-                || (task.status == TaskStatus::Ready && task.lease_id.is_some())
-            {
+            if interrupted.contains(&task.step_id) {
                 task.status = TaskStatus::Uncertain;
                 task.lease_id = None;
                 task.revision += 1;
@@ -1203,6 +1217,24 @@ impl Coordinator {
         message.revision += 1;
         run.revision += 1;
         Ok(())
+    }
+}
+
+/// A leased task, or a running one whose execution a restart lost. A
+/// dispatched sub-pipeline step's execution is its durable child run.
+fn interrupted_by_restart(run: &Run, task: &TaskRecord) -> bool {
+    match task.status {
+        TaskStatus::Ready => task.lease_id.is_some(),
+        TaskStatus::Running => {
+            task.execution.is_none()
+                || !run
+                    .definition
+                    .pipeline
+                    .steps
+                    .iter()
+                    .any(|step| step.id == task.step_id && step.is_pipeline())
+        }
+        _ => false,
     }
 }
 

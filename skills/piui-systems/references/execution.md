@@ -92,6 +92,23 @@ remain importable. Orchestration IPC v6 is separate from portable JSON.
   2 KiB), `plugin-node-timeout` (backend stopped). A backend that stops
   mid-node leaves the step uncertain. Importing a file never installs or
   trusts a plugin.
+- `{"type": "pipeline", launchCommandId, inputs}` (orchestration v6.7,
+  ADR-042) runs a saved launch command of the same project as an ordinary
+  **child run** (trigger `pipeline` with `parentRunId`, `parentStepId` and
+  `depth`, at most 4 nested runs). `inputs` maps each child input name to a
+  literal `{kind: "value", value}`, a parent run input `{kind: "input", name}`
+  or a direct dependency's result `{kind: "step", stepId, field?}` (a field
+  of its data, or its whole text). The child freezes its own snapshot and
+  keeps its own team, approvals and history; the parent task's execution id is
+  the child run id. A pipeline's additive `outputs` (`name`, `kind`,
+  `sourceStepId`, optional `field`) become the step's checked result data;
+  without outputs the step records the child's last succeeded step text.
+  Codes: `subpipeline-unavailable`, `subpipeline-cycle`, `subpipeline-depth`,
+  `subpipeline-input-invalid`, `subpipeline-input-unavailable` (nothing
+  started), `subpipeline-failed`, `subpipeline-cancelled`,
+  `subpipeline-output-unavailable`. Cancelling the parent cancels the child
+  first. System files v4 cannot carry this executor or `outputs`: export is
+  refused rather than dropping them.
 
 Pause prevents new admissions while active native work continues. Cancel task
 interrupts that native execution and cancels dependent ready tasks; independent

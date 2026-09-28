@@ -30,13 +30,22 @@ mod pinned;
 pub use inputs::{
     MAX_CHOICE_OPTIONS, MAX_INPUT_LABEL_CHARS, MAX_INPUT_NAME_LEN, MAX_INPUT_TEXT_BYTES,
     MAX_PIPELINE_INPUTS, MAX_REVIEW_ITERATIONS, MAX_RUN_INPUT_TEXT_BYTES, MIN_REVIEW_ITERATIONS,
-    PipelineInput, PipelineInputKind, RunInputError, resolve_run_inputs,
+    PipelineInput, PipelineInputKind, RunInputError, resolve_run_inputs, validate_input_value,
     validate_pipeline_declarations, validate_pipeline_inputs,
 };
+mod subpipelines;
 pub use pinned::{
     MAX_PINNED_AT_BYTES, MAX_PINNED_DATA_BYTES, MAX_PINNED_SOURCE_RUN_ID_BYTES,
     MAX_PINNED_TEXT_BYTES, MAX_PIPELINE_PINNED_BYTES, PinnedOutput, REVIEW_RETRY_PINNED,
     RunOptions, pinned_result, pinning_refusal, validate_pinned_output, validate_pipeline_pins,
+};
+pub use subpipelines::{
+    MAX_PIPELINE_OUTPUTS, MAX_SUBPIPELINE_DEPTH, MAX_SUBPIPELINE_INPUTS, PipelineCompletion,
+    PipelineOutput, PipelineStepLease, SUBPIPELINE_CANCELLED, SUBPIPELINE_CYCLE, SUBPIPELINE_DEPTH,
+    SUBPIPELINE_FAILED, SUBPIPELINE_INPUT_INVALID, SUBPIPELINE_INPUT_UNAVAILABLE,
+    SUBPIPELINE_OUTPUT_UNAVAILABLE, SUBPIPELINE_UNAVAILABLE, SubpipelineInputSource,
+    ancestor_launch_commands, child_completion, child_output_references, child_outputs,
+    referenced_launch_commands, resolve_child_inputs, subpipeline_cycle,
 };
 mod results;
 pub use results::*;
@@ -61,5 +70,7 @@ mod input_tests;
 mod pinned_tests;
 #[cfg(test)]
 mod plugin_step_tests;
+#[cfg(test)]
+mod subpipeline_tests;
 #[cfg(test)]
 mod tests;

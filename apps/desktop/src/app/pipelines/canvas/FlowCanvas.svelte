@@ -17,7 +17,9 @@
   import RouterNodeCard, { type RouterFlowNode } from './RouterNodeCard.svelte';
   import PiuiEdge, { type PiuiFlowEdge } from './PiuiEdge.svelte';
   import StartNodeCard, { START_NODE_ID, type StartFlowNode } from './StartNodeCard.svelte';
+  import OutputNodeCard, { OUTPUT_NODE_ID, type OutputFlowNode } from './OutputNodeCard.svelte';
   import { RUN_INPUT_ISSUES } from '../../../host-api/runInputs';
+  import { SUBPIPELINE_ISSUES } from '../../../host-api/subpipelines';
 
   const INPUT_ISSUES: ReadonlySet<string> = new Set(
     [RUN_INPUT_ISSUES.count, RUN_INPUT_ISSUES.names, RUN_INPUT_ISSUES.labels, RUN_INPUT_ISSUES.options, RUN_INPUT_ISSUES.defaults],
@@ -33,8 +35,11 @@
   }
   let { editor, onAddRequest, onready }: Props = $props();
 
-  type FlowNode = AgentFlowNode | RouterFlowNode | StartFlowNode;
-  const nodeTypes = { agent: AgentNodeCard, router: RouterNodeCard, start: StartNodeCard };
+  type FlowNode = AgentFlowNode | RouterFlowNode | StartFlowNode | OutputFlowNode;
+  const nodeTypes = { agent: AgentNodeCard, router: RouterNodeCard, start: StartNodeCard, output: OutputNodeCard };
+  /** Presentation-only blocks: never deleted, moved or saved. */
+  const BLOCK_IDS: ReadonlySet<string> = new Set([START_NODE_ID, OUTPUT_NODE_ID]);
+  const blockEdge = (id: string): boolean => id.startsWith(`${START_NODE_ID}:`) || id.startsWith(`${OUTPUT_NODE_ID}:`);
   const edgeTypes = { piui: PiuiEdge };
   const COLLABORATION: ReadonlySet<ConnectionKind> = new Set(['send', 'observe', 'spawn']);
   const markerColor: Record<ConnectionKind, string> = {
@@ -68,14 +73,23 @@
     // Accessible names of nodes and connections (Svelte Flow defaults use ids).
     const names = new Map(graph.nodes.map((node) => [
       node.id,
-      node.profile.name || $t(node.kind === 'router' ? 'Router' : node.executor?.type === 'script' ? 'Untitled script' : 'Untitled agent'),
+      node.profile.name ||
+        $t(node.kind === 'router' ? 'Router' : node.executor?.type === 'script' ? 'Untitled script' : node.executor?.type === 'pipeline' ? 'Untitled sub-pipeline' : 'Untitled agent'),
     ]));
     const graphNodes = graph.nodes.map((node) => ({
       id: node.id,
       type: node.kind === 'router' ? 'router' : 'agent',
       ariaLabel: names.get(node.id),
       position: { x: node.x, y: node.y },
-      data: { node, problems: editor.nodeProblems(node.id).length, readOnly },
+      data: {
+        node,
+        problems: editor.nodeProblems(node.id).length,
+        readOnly,
+        // v6.7: a sub-pipeline card shows its child's inputs and outputs and opens it.
+        ...(node.executor?.type === 'pipeline'
+          ? { child: editor.subpipelines.get(node.executor.launchCommandId), onOpenPipeline: (id: string) => editor.open(id) }
+          : {}),
+      },
       selected: editor.selectedId === node.id,
       draggable: !readOnly,
       deletable: !readOnly,
@@ -121,9 +135,50 @@
         });
       }
     }
+    // The Output block (v6.7) shows what the pipeline returns as a sub-pipeline;
+    // like Start it is presentation only and never part of the saved graph.
+    const outputNodes: OutputFlowNode[] = [];
+    const outputEdges: PiuiFlowEdge[] = [];
+    if (graph.nodes.length) {
+      const exits = graph.nodes.filter(
+        (node) => node.executionMode !== 'callable' && !graph.edges.some((edge) => edge.from === node.id && (edge.kind === 'result' || edge.kind === 'route')),
+      );
+      const placed = exits.length ? exits : graph.nodes;
+      const x = Math.max(...placed.map((node) => node.x)) + 300;
+      const y = placed.reduce((sum, node) => sum + node.y, 0) / placed.length + 8;
+      const outputs = graph.outputs ?? [];
+      outputNodes.push({
+        id: OUTPUT_NODE_ID,
+        type: 'output',
+        ariaLabel: $t('Output'),
+        position: { x, y },
+        data: { outputs, problems: editor.issues.filter((issue) => issue.message === SUBPIPELINE_ISSUES.outputs).length },
+        selected: editor.selectedId === OUTPUT_NODE_ID,
+        draggable: false,
+        deletable: false,
+        connectable: false,
+      } as OutputFlowNode);
+      for (const source of new Set(outputs.map((output) => output.sourceStepId))) {
+        if (!names.has(source)) continue;
+        outputEdges.push({
+          id: `${OUTPUT_NODE_ID}:${source}`,
+          type: 'piui',
+          source,
+          target: OUTPUT_NODE_ID,
+          ariaLabel: connectionLabel($t, 'start', names.get(source) ?? '', $t('Output')),
+          sourceHandle: 'out',
+          targetHandle: 'in',
+          data: { kind: 'result' },
+          class: 'output-edge',
+          selectable: false,
+          deletable: false,
+          markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: 'var(--piui-chaos-gold)' },
+        });
+      }
+    }
     // Assign once: reading `nodes` here would make this effect depend on itself.
-    nodes = [...startNodes, ...graphNodes];
-    edges = [...startEdges, ...graph.edges.map((edge): PiuiFlowEdge => {
+    nodes = [...startNodes, ...graphNodes, ...outputNodes];
+    edges = [...startEdges, ...outputEdges, ...graph.edges.map((edge): PiuiFlowEdge => {
       const router = edge.kind === 'route' ? graph.nodes.find((node) => node.id === edge.from) : undefined;
       const label = edge.kind === 'route' ? router?.router?.branches.find((branch) => branch.id === edge.branchId)?.label : undefined;
       return {
@@ -188,13 +243,13 @@
     onbeforeconnect={beforeConnect}
     onbeforedelete={async ({ nodes: removedNodes, edges: removedEdges }) => {
       editor.removeSelection(
-        removedNodes.map((node) => node.id).filter((id) => id !== START_NODE_ID),
-        removedEdges.map((edge) => edge.id).filter((id) => !id.startsWith(`${START_NODE_ID}:`)),
+        removedNodes.map((node) => node.id).filter((id) => !BLOCK_IDS.has(id)),
+        removedEdges.map((edge) => edge.id).filter((id) => !blockEdge(id)),
       );
       return false;
     }}
     onnodedragstop={({ nodes: moved }) =>
-      editor.movedNodes(moved.filter((node) => node.id !== START_NODE_ID).map((node) => ({ id: node.id, x: node.position.x, y: node.position.y })))}
+      editor.movedNodes(moved.filter((node) => !BLOCK_IDS.has(node.id)).map((node) => ({ id: node.id, x: node.position.x, y: node.position.y })))}
     onnodeclick={({ node }) => {
       editor.selectedId = node.id;
       editor.selectedEdge = '';
@@ -299,6 +354,10 @@
   }
   .canvas :global(.start-edge .piui-edge) {
     stroke: color-mix(in srgb, var(--piui-success) 70%, transparent);
+    stroke-dasharray: 5 4;
+  }
+  .canvas :global(.output-edge .piui-edge) {
+    stroke: color-mix(in srgb, var(--piui-chaos-gold) 70%, transparent);
     stroke-dasharray: 5 4;
   }
   .canvas :global(.port:hover),

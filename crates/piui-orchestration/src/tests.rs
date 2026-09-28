@@ -590,6 +590,7 @@ fn snapshot() -> RunDefinitionSnapshot {
                 },
             ],
             inputs: Vec::new(),
+            outputs: Vec::new(),
         },
         launch_command: Some(LaunchCommandReference {
             id: "launch-1".to_owned(),

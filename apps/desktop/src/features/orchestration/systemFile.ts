@@ -78,7 +78,15 @@ export function graphToSystemFile(graph: AgentGraph): SystemFile {
     }), connections: graph.edges.map(edge => ({ ...edge })),
   };
 }
+/**
+ * System files v4 have no sub-pipeline executor or declared outputs
+ * (orchestration v6.7, ADR-042): export refuses such a graph instead of
+ * dropping them. A portable format is left to system-file v5.
+ */
+export const SYSTEM_FILE_SUBPIPELINES = 'System files cannot hold sub-pipeline steps or declared outputs yet. Remove them to export this pipeline or save it as a template.';
+
 export function serializeSystemFile(graph: AgentGraph): string {
+  if (graph.nodes.some(node => node.executor?.type === 'pipeline') || (graph.outputs?.length ?? 0) > 0) throw new Error(SYSTEM_FILE_SUBPIPELINES);
   const text = JSON.stringify(graphToSystemFile(graph), null, 2) + '\n';
   parseSystemFile(text);
   return text;

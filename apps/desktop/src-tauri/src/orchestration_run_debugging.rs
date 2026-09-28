@@ -479,7 +479,9 @@ pub(crate) async fn delete_run(
             }
             // Running or uncertain work may still hold a native session or
             // a process: its record is the only proof of what happened.
-            if active(run) {
+            // A sub-pipeline parent step still waiting for this child run
+            // (v6.7) records its end from this record.
+            if active(run) || crate::subpipelines::parent_waits_for(workspace, run) {
                 refusal = Some(RunDebuggingError::RunActive);
                 return Err(StoreError::Denied);
             }

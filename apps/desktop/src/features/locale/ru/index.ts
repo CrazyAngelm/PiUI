@@ -9,6 +9,7 @@ import { pluginsRu } from './plugins';
 import { releaseRu } from './release';
 import { runsRu } from './runs';
 import { sessionRu } from './session';
+import { subpipelinesRu } from './subpipelines';
 import { teamRu } from './team';
 import { triggersRu } from './triggers';
 
@@ -25,6 +26,7 @@ export const featureRu: Readonly<Record<string, string>> = {
   ...releaseRu,
   ...runsRu,
   ...sessionRu,
+  ...subpipelinesRu,
   ...teamRu,
   ...triggersRu,
 };

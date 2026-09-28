@@ -469,6 +469,28 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   Needs a real-app check: a real harness run started from a chat, and the
   packaged WebView2 app.
 
+## 2026-09-28 — sub-pipelines, frontend (unreleased)
+
+- **A saved pipeline as one step** (ADR-042, orchestration v6.7). Editor:
+  Add → *Sub-pipelines* lists this project's saved pipelines (never the open
+  one); the node card shows the child's inputs/outputs and an *Open* action;
+  the inspector's *Sub-pipeline* tab picks the pipeline and maps each child
+  input to a fixed value, a run input or a connected step's result (field or
+  whole text). An *Output* block next to the last steps edits the pipeline's
+  declared `outputs`. Check reports a missing pipeline, self-reference or
+  loop, unmapped required inputs, type mismatches and non-dependency sources.
+- **Runs:** the `pipeline` trigger reads "Sub-pipeline of run #…" with a link
+  to the parent; a sub-pipeline step shows its child run's status and *Open
+  child run*; every `subpipeline-*` failure code has readable text; the run
+  list marks known child runs.
+- **UI Lab host** runs child runs through the ordinary scheduler (outputs,
+  last text, failure, cancel cascade, cycle and depth refusals) and refuses
+  saves with a missing launch command, bad mapping or reference cycle and the
+  deletion of a referenced launch command.
+- System files v4 refuse to export sub-pipeline steps or outputs.
+- Tests written (not yet run): graph round-trip, preflight rules, lab child
+  run lifecycle, run presentation, export refusal, locale.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

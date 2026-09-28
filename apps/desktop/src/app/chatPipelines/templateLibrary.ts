@@ -22,7 +22,7 @@ export function templateSystem(graph: AgentGraph): Record<string, unknown> {
 
 /** Steps that run on a native model and have no model chosen yet. */
 export function needsModel(node: AgentGraph['nodes'][number]): boolean {
-  if (node.executor?.type === 'script' || node.executor?.type === 'plugin') return false;
+  if (node.executor?.type === 'script' || node.executor?.type === 'plugin' || node.executor?.type === 'pipeline') return false;
   if (node.kind === 'router' && node.router?.mode === 'program') return false;
   return !node.profile.model.trim();
 }

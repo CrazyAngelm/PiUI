@@ -109,7 +109,12 @@ fn scheduler_error(
     // contract keeps its established error codes.
     let code = match error.code {
         "llm-read-only-unsupported" => "unsupported-policy",
-        code if code.starts_with("script-") || code.starts_with("plugin-") => "runtime-unavailable",
+        code if code.starts_with("script-")
+            || code.starts_with("plugin-")
+            || code.starts_with("subpipeline-") =>
+        {
+            "runtime-unavailable"
+        }
         crate::orchestration_scheduler::HARNESS_SIGN_IN_REQUIRED => "runtime-unavailable",
         code => code,
     };
@@ -658,6 +663,120 @@ impl OrchestrationApiState {
                 let run = mutable_run(workspaces, workspace_id, run_id)?;
                 Coordinator::lease_next_plugin_step(run, expected_run_revision, lease_id)
                     .map_err(|error| StoreError::from_api(error.into()))
+            })
+            .map_err(Into::into)
+    }
+
+    /// Durably leases the next ready sub-pipeline step (orchestration v6.7).
+    pub fn lease_next_pipeline_step(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+        expected_run_revision: u64,
+        lease_id: String,
+    ) -> Result<Option<piui_orchestration::PipelineStepLease>, OrchestrationApiError> {
+        self.store
+            .transact(|workspaces| {
+                let run = mutable_run(workspaces, workspace_id, run_id)?;
+                Coordinator::lease_next_pipeline_step(run, expected_run_revision, lease_id)
+                    .map_err(|error| StoreError::from_api(error.into()))
+            })
+            .map_err(Into::into)
+    }
+
+    /// Starts a leased sub-pipeline step (v6.7, ADR-042) in one durable
+    /// transaction: re-checks the launch command, depth and cycles against
+    /// the current definitions, resolves and checks the child inputs,
+    /// creates the ordinary child run and dispatches the parent task under
+    /// the child run id. Nothing is written unless all of it succeeds; a
+    /// certain refusal names its `subpipeline-*` code. Native dependency
+    /// text must already be resolved into `lease.dependencies`.
+    pub(crate) fn start_pipeline_child(
+        &self,
+        workspace_id: &str,
+        lease: &piui_orchestration::PipelineStepLease,
+        child_run_id: String,
+    ) -> Result<(Run, Run), crate::subpipelines::ChildStartError> {
+        use crate::subpipelines::ChildStartError;
+        let mut refusal: Option<&'static str> = None;
+        let result = self.store.transact(|workspaces| {
+            let (start, trigger) = {
+                let workspace = workspaces
+                    .iter()
+                    .find(|workspace| workspace.workspace_id == workspace_id)
+                    .ok_or(StoreError::NotFound)?;
+                let parent = workspace
+                    .runs
+                    .iter()
+                    .find(|run| run.id() == lease.run_id)
+                    .ok_or(StoreError::NotFound)?;
+                match crate::subpipelines::plan_child_start(workspace, parent, lease, &child_run_id)
+                {
+                    Ok(plan) => plan,
+                    Err(code) => {
+                        refusal = Some(code);
+                        return Err(StoreError::Invalid);
+                    }
+                }
+            };
+            let child = create_run_in(workspaces, start, Some(trigger)).map_err(|error| {
+                // The child's saved definitions no longer form a run.
+                if matches!(error, StoreError::Invalid | StoreError::NotFound) {
+                    refusal = Some(piui_orchestration::SUBPIPELINE_UNAVAILABLE);
+                }
+                error
+            })?;
+            let parent = mutable_run(workspaces, workspace_id, &lease.run_id)?;
+            let revision = parent.revision();
+            Coordinator::dispatch_leased_script(
+                parent,
+                revision,
+                &lease.step_id,
+                lease.task_revision,
+                &lease.lease_id,
+                NativeExecutionReference {
+                    id: child.id().to_owned(),
+                },
+            )
+            .map_err(|_| StoreError::Conflict)?;
+            Ok((parent.clone(), child))
+        });
+        match result {
+            Ok(runs) => Ok(runs),
+            Err(_) => Err(refusal.map_or(ChildStartError::Conflict, ChildStartError::Refused)),
+        }
+    }
+
+    /// Records the end of a sub-pipeline step's child run (v6.7). Trusted
+    /// host observation only; there is no Tauri command for it.
+    pub(crate) fn record_pipeline_outcome(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+        step_id: &str,
+        child_run_id: &str,
+        completion: piui_orchestration::PipelineCompletion,
+    ) -> Result<Run, OrchestrationApiError> {
+        self.store
+            .transact(|workspaces| {
+                let run = mutable_run(workspaces, workspace_id, run_id)?;
+                let revision = run.revision();
+                let task_revision = run
+                    .tasks()
+                    .iter()
+                    .find(|task| task.step_id() == step_id)
+                    .map(TaskRecord::revision)
+                    .ok_or(StoreError::NotFound)?;
+                Coordinator::complete_pipeline_task(
+                    run,
+                    revision,
+                    step_id,
+                    task_revision,
+                    child_run_id,
+                    completion,
+                )
+                .map_err(|_| StoreError::Conflict)?;
+                Ok(run.clone())
             })
             .map_err(Into::into)
     }
@@ -1429,6 +1548,42 @@ impl OrchestrationApiState {
             },
         )
     }
+
+    /// A single pipeline save through the ordinary rules (sub-pipeline tests).
+    pub(crate) fn save_pipeline_for_test(
+        &self,
+        workspace_id: &str,
+        expected_revision: Option<u64>,
+        value: PipelineDefinition,
+    ) -> Result<(), OrchestrationApiError> {
+        save_definition(
+            self,
+            SaveDefinitionRequest {
+                workspace_id: workspace_id.to_owned(),
+                expected_revision,
+                value,
+            },
+        )
+        .map(|_| ())
+    }
+
+    /// A single launch command save through the ordinary rules.
+    pub(crate) fn save_launch_command_for_test(
+        &self,
+        workspace_id: &str,
+        expected_revision: Option<u64>,
+        value: LaunchCommandReference,
+    ) -> Result<(), OrchestrationApiError> {
+        save_definition(
+            self,
+            SaveDefinitionRequest {
+                workspace_id: workspace_id.to_owned(),
+                expected_revision,
+                value,
+            },
+        )
+        .map(|_| ())
+    }
 }
 
 // Helper used only to preserve typed domain errors through the atomic closure.
@@ -1759,6 +1914,14 @@ trait DefinitionValue: Clone + Sized {
     ) -> Result<(), StoreError> {
         Ok(())
     }
+    /// Project-wide reference rules checked after the value is in place
+    /// (sub-pipelines, v6.7). A refusal aborts the whole save.
+    fn check_references(
+        _workspace: &WorkspaceOrchestration,
+        _saved: &Self,
+    ) -> Result<(), StoreError> {
+        Ok(())
+    }
 }
 
 impl DefinitionValue for AgentProfile {
@@ -1882,6 +2045,12 @@ impl DefinitionValue for PipelineDefinition {
             .iter()
             .any(|command| command.value.pipeline_id == id)
     }
+    fn check_references(
+        workspace: &WorkspaceOrchestration,
+        saved: &Self,
+    ) -> Result<(), StoreError> {
+        crate::subpipelines::check_saved_pipeline(workspace, saved)
+    }
 }
 
 impl DefinitionValue for LaunchCommandReference {
@@ -1916,6 +2085,10 @@ impl DefinitionValue for LaunchCommandReference {
             .iter()
             .any(|teammate| teammate.launch_command_id == id)
         {
+            return false;
+        }
+        // A saved sub-pipeline step (v6.7) keeps the command it runs.
+        if crate::subpipelines::launch_command_referenced(workspace, id) {
             return false;
         }
         // Automations that start this pipeline or wait for it keep it.
@@ -1961,6 +2134,13 @@ impl DefinitionValue for LaunchCommandReference {
             }
         }
         Ok(())
+    }
+    fn check_references(
+        workspace: &WorkspaceOrchestration,
+        _saved: &Self,
+    ) -> Result<(), StoreError> {
+        // A command may now run a pipeline that leads back to it.
+        crate::subpipelines::check_reference_cycles(workspace)
     }
 }
 
@@ -2071,6 +2251,7 @@ fn save_definition<T: DefinitionValue>(
                 }
             }?;
             T::after_save(workspace, previous.as_ref(), &saved)?;
+            T::check_references(workspace, &saved.value)?;
             Ok(saved)
         })
         .map_err(Into::into)
@@ -3326,14 +3507,23 @@ fn history_references_for_member(run: &Run, member_id: &str) -> Vec<NativeHistor
 }
 
 /// A running run with unleased ready work and nothing that crossed the native
-/// boundary (no running, uncertain or leased task).
+/// boundary (no running, uncertain or leased task). A running sub-pipeline
+/// step (v6.7) waits for its durable child run and does not hold back the
+/// run's other ready work.
 fn resumable_after_restart(run: &Run) -> bool {
     let has_ready = run
         .tasks()
         .iter()
         .any(|task| task.status() == TaskStatus::Ready && task.lease_id().is_none());
     let crossed_native_boundary = run.tasks().iter().any(|task| {
-        matches!(task.status(), TaskStatus::Running | TaskStatus::Uncertain)
+        let waits_for_child = task.status() == TaskStatus::Running
+            && run
+                .definition()
+                .pipeline
+                .steps
+                .iter()
+                .any(|step| step.id == task.step_id() && step.is_pipeline());
+        (matches!(task.status(), TaskStatus::Running | TaskStatus::Uncertain) && !waits_for_child)
             || task.lease_id().is_some()
     });
     run.status() == RunStatus::Running && has_ready && !crossed_native_boundary
@@ -3363,6 +3553,9 @@ mod tests {
             ("script-runtime-unavailable", "runtime-unavailable"),
             ("script-input-unavailable", "runtime-unavailable"),
             ("script-start-failed", "runtime-unavailable"),
+            // Sub-pipeline refusals (v6.7) stay on the failed task record.
+            ("subpipeline-unavailable", "runtime-unavailable"),
+            ("subpipeline-cycle", "runtime-unavailable"),
             // A refused harness login is a typed task failure; commands keep their code.
             ("harness-sign-in-required", "runtime-unavailable"),
             ("unsupported-policy", "unsupported-policy"),
@@ -3618,6 +3811,7 @@ pub(crate) fn apply_graph_in(
         }
     };
     let workspace = &mut workspaces[index];
+    let pipeline = request.pipeline.value.clone();
     for profile in request.profiles {
         put_graph_definition(workspace, profile)?;
     }
@@ -3630,6 +3824,9 @@ pub(crate) fn apply_graph_in(
     {
         return Err(StoreError::Invalid);
     }
+    // Sub-pipeline references (v6.7) with every definition of the graph in
+    // place, so the graph's own launch command takes part in cycle checks.
+    crate::subpipelines::check_saved_pipeline(workspace, &pipeline)?;
     Ok(index)
 }
 

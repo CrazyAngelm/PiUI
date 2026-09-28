@@ -458,7 +458,10 @@ fn finished_firings(
                         source_run_id: run.id().to_owned(),
                     },
                     observed_at: wall,
-                    chain_depth: run.chain_depth().saturating_add(1),
+                    // A sub-pipeline child (v6.7) inherits its top-level
+                    // run's hops, so nesting never resets loop protection.
+                    chain_depth: crate::subpipelines::inherited_chain_depth(&workspace.runs, run)
+                        .saturating_add(1),
                 })
             }
             _ => None,

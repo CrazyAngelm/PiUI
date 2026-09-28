@@ -7,7 +7,9 @@
 //! is user code that the trusted host runs in the project folder under process
 //! containment; it is not a sandbox. `plugin` (v6.5) is a node type of an
 //! installed plugin that the plugin's contained backend runs; like a script
-//! it is host work outside the team (see `plugin_steps`).
+//! it is host work outside the team (see `plugin_steps`). `pipeline` (v6.7)
+//! starts an ordinary child run of a saved launch command of the same
+//! project and ends with it (see `subpipelines`).
 //!
 //! The coordinator owns the durable lease, the dependency hand-off and the
 //! result checks for every executor. It never starts a process, resolves an
@@ -97,6 +99,13 @@ pub enum StepExecutor {
         node_type: String,
         config: serde_json::Map<String, Value>,
     },
+    /// A saved launch command of the same project, run as an ordinary child
+    /// run (v6.7, ADR-042). `inputs` maps each child input name to where its
+    /// value comes from.
+    Pipeline {
+        launch_command_id: String,
+        inputs: BTreeMap<String, crate::SubpipelineInputSource>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,6 +114,7 @@ pub enum ExecutorKind {
     Llm,
     Script,
     Plugin,
+    Pipeline,
 }
 
 impl StepExecutor {
@@ -114,6 +124,7 @@ impl StepExecutor {
             Self::Llm {} => ExecutorKind::Llm,
             Self::Script { .. } => ExecutorKind::Script,
             Self::Plugin { .. } => ExecutorKind::Plugin,
+            Self::Pipeline { .. } => ExecutorKind::Pipeline,
         }
     }
 }
@@ -136,13 +147,20 @@ impl PipelineStep {
         self.executor_kind() == ExecutorKind::Plugin
     }
 
+    /// A sub-pipeline step (v6.7).
+    pub fn is_pipeline(&self) -> bool {
+        self.executor_kind() == ExecutorKind::Pipeline
+    }
+
     /// Host-executed work with no native session and no team member: a
-    /// script or a plugin node. Its result exists only when the host
-    /// observed it, and a restart leaves it uncertain.
+    /// script, a plugin node or a sub-pipeline. Its result exists only when
+    /// the host observed it. A restart leaves a started script or plugin
+    /// node uncertain; a dispatched sub-pipeline keeps running with its
+    /// durable child run.
     pub fn is_host_executed(&self) -> bool {
         matches!(
             self.executor_kind(),
-            ExecutorKind::Script | ExecutorKind::Plugin
+            ExecutorKind::Script | ExecutorKind::Plugin | ExecutorKind::Pipeline
         )
     }
 }
@@ -349,6 +367,14 @@ pub(crate) fn validate_step_executor(step: &PipelineStep) -> Result<(), Definiti
     if step.router.is_some() {
         return Err(invalid(step, "llm and script steps cannot be routers"));
     }
+    if let Some(StepExecutor::Pipeline {
+        launch_command_id,
+        inputs,
+    }) = &step.executor
+    {
+        crate::subpipelines::validate_pipeline_executor(step, launch_command_id, inputs)
+            .map_err(|reason| invalid(step, reason))?;
+    }
     if let Some(StepExecutor::Script {
         source,
         timeout_seconds,
@@ -412,6 +438,15 @@ pub(crate) fn validate_executor_authority(
                 return Err(invalid(
                     step,
                     "a plugin node runs on the host, not as a team member",
+                ));
+            }
+            Ok(())
+        }
+        ExecutorKind::Pipeline => {
+            if members.contains(step.assigned_member_id.as_str()) {
+                return Err(invalid(
+                    step,
+                    "a sub-pipeline runs as its own child run, not as a team member",
                 ));
             }
             Ok(())
@@ -668,6 +703,12 @@ impl Coordinator {
         completion: ScriptCompletion,
     ) -> Result<(), CoordinatorError> {
         let step = host_step(run, step_id)?;
+        // A sub-pipeline ends with its child run (`complete_pipeline_task`).
+        if step.is_pipeline() {
+            return Err(CoordinatorError::ExecutorMismatch {
+                step_id: step_id.to_owned(),
+            });
+        }
         let succeeded = CompletionOutcome::Succeeded {
             result_reference: None,
         };

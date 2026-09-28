@@ -7,6 +7,7 @@ import { isAcpHarness, isBuiltinHarness, type BuiltinHarness } from '../../../..
 import { pipelineInputIssues, reviewLimitValid } from '../../runInputs';
 import { executorAuthorityIssue, isHostExecutedStep, LLM_READ_ONLY_UNSUPPORTED, llmProfileIssue, stepExecutorIssue } from '../../stepExecutors';
 import { pipelinePinsIssue } from '../../pinnedData';
+import { mappingProblems, pipelineOutputIssues, reaches, referencedCommands, subpipelineStepIssue } from '../../subpipelines';
 import type { PinnedOutput } from '../labContracts';
 
 /**
@@ -130,10 +131,51 @@ export function pipelineDeclarationIssue(pipeline: PipelineDefinition): string |
   if (pipelineInputIssues(pipeline.inputs).length > 0) return 'run inputs';
   for (const step of pipeline.steps) {
     if (!reviewLimitValid(step.review)) return 'review limit';
-    const executor = stepExecutorIssue(step);
+    const executor = stepExecutorIssue(step) ?? subpipelineStepIssue(step);
     if (executor !== undefined) return executor;
   }
+  // v6.7: declared outputs of the pipeline (what a parent's sub-pipeline step receives).
+  const outputs = pipelineOutputIssues(pipeline)[0];
+  if (outputs !== undefined) return outputs;
   return pipelinePinsIssue(pipeline.steps)?.reason;
+}
+
+/** The definitions sub-pipeline references are resolved against. */
+export type SubpipelineScope = Pick<LabOrchestrationWorkspace, 'pipelines' | 'launchCommands'>;
+
+/** Launch commands the pipeline of `commandId` runs as sub-pipelines; undefined when unknown. */
+export function commandReferences(scope: SubpipelineScope, commandId: string): readonly string[] | undefined {
+  const command = scope.launchCommands.find((stored) => stored.value.id === commandId)?.value;
+  const pipeline = command === undefined ? undefined : scope.pipelines.find((stored) => stored.value.id === command.pipelineId)?.value;
+  return pipeline === undefined ? undefined : referencedCommands(pipeline);
+}
+
+/** Some launch command reaches itself through sub-pipeline steps. */
+export function subpipelineCycle(scope: SubpipelineScope): boolean {
+  return scope.launchCommands.some((stored) => (commandReferences(scope, stored.value.id) ?? [])
+    .some((child) => reaches(child, stored.value.id, (id) => commandReferences(scope, id))));
+}
+
+/**
+ * `validate_subpipeline_references` (v6.7, ADR-042) for a pipeline being
+ * saved: every sub-pipeline step names a launch command of this project,
+ * maps only declared child inputs with compatible values and every required
+ * one without a default, and no reference cycle exists. A child saved later
+ * may break its parents' mappings; admission checks those again.
+ */
+export function subpipelineSaveIssue(pipeline: PipelineDefinition, scope: SubpipelineScope): string | undefined {
+  for (const step of pipeline.steps) {
+    if (step.executor?.type !== 'pipeline') continue;
+    const executor = step.executor;
+    const command = scope.launchCommands.find((stored) => stored.value.id === executor.launchCommandId)?.value;
+    const child = command === undefined ? undefined : scope.pipelines.find((stored) => stored.value.id === command.pipelineId)?.value;
+    if (child === undefined) return 'sub-pipeline launch command';
+    const fieldsOf = (id: string): readonly ResultField[] => pipeline.steps.find((candidate) => candidate.id === id)?.resultFields ?? [];
+    if (mappingProblems(executor, { inputs: child.inputs ?? [] }, pipeline.inputs ?? [], step.dependencyStepIds, fieldsOf).length > 0) {
+      return 'sub-pipeline inputs';
+    }
+  }
+  return subpipelineCycle(scope) ? 'sub-pipeline cycle' : undefined;
 }
 
 /** `validate_definition`: the whole snapshot a run or graph save would capture. */
@@ -350,7 +392,7 @@ export function normalizeTeam(team: TeamDefinition): TeamDefinition {
 }
 
 export function normalizePipeline(pipeline: PipelineDefinition): PipelineDefinition {
-  const { inputs, ...definition } = pipeline;
+  const { inputs, outputs, ...definition } = pipeline;
   // Serde field order; `null` options are absent and empty defaults are skipped.
   const declared = dropNulls(inputs ?? []).map(({ name, label, kind, required, description, options, defaultValue }) => ({
     name,
@@ -377,6 +419,8 @@ export function normalizePipeline(pipeline: PipelineDefinition): PipelineDefinit
       };
     }),
     ...(declared.length ? { inputs: declared } : {}),
+    // v6.7: an absent source field is stored as absent, not `null`.
+    ...(outputs?.length ? { outputs: dropNulls(outputs) } : {}),
   };
 }
 

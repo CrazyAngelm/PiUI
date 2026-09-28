@@ -826,6 +826,11 @@ fn remove_managed(
             "Another teammate still uses this pipeline.",
         ));
     }
+    if crate::subpipelines::launch_command_referenced(workspace, &command.id) {
+        return Err(TeammatesError::Invalid(
+            "A pipeline still runs this teammate's pipeline as a sub-pipeline.",
+        ));
+    }
     workspace.launch_commands.remove(index);
     if !workspace
         .launch_commands
