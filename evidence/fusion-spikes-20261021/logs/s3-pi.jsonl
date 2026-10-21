@@ -1,0 +1,4 @@
+{"t":6883,"kind":"event","who":"lead","event":{"type":"status","status":"idle"}}
+{"t":6883,"kind":"event","who":"lead","event":{"type":"binding","nativeId":"01a15eca-226e-7153-b81b-5553d0dce153","nativePath":"D:\\Projects\\PIUI\\target\\fusion-spikes\\homes\\s3-pi\\sessions\\2026-10-21T14-07-47-826Z_01a15eca-226e-7153-b81b-5553d0dce153.jsonl"}}
+{"t":37911,"kind":"event","who":"lead","event":{"type":"status","status":"stopping"}}
+{"t":37960,"kind":"event","who":"lead","event":{"type":"status","status":"closed"}}

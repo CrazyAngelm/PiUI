@@ -1,0 +1,7 @@
+{"t":60060,"kind":"turn","label":"one","outcome":"succeeded","usage":[{"id":"claude-usage-2f51653f4aefa060f3e3f79d","inputTokens":2,"outputTokens":127,"cacheReadTokens":16822,"cacheWriteTokens":27916,"totalTokens":44867}]}
+{"t":60230,"kind":"gap","seconds":120}
+{"t":192263,"kind":"turn","label":"after120s","outcome":"succeeded","usage":[{"id":"claude-usage-72f51c640406eb9cbae65cc2","inputTokens":2,"outputTokens":3,"cacheReadTokens":44738,"cacheWriteTokens":164,"totalTokens":44907}]}
+{"t":192264,"kind":"gap","seconds":390}
+{"t":601584,"kind":"turn","label":"after390s","outcome":"succeeded","usage":[{"id":"claude-usage-add1c856fc52a85a616e07dd","inputTokens":2,"outputTokens":3,"cacheReadTokens":44902,"cacheWriteTokens":40,"totalTokens":44947}]}
+{"t":603388,"kind":"resume","nativeId":"c9517fae-eb51-4c64-b626-ce5cb31ca091"}
+{"t":628368,"kind":"turn","label":"resumed","outcome":"succeeded","usage":[{"id":"claude-usage-ec9fbded0d9dd831ec8d27ca","inputTokens":2,"outputTokens":8,"cacheReadTokens":44942,"cacheWriteTokens":391,"totalTokens":45343}]}
