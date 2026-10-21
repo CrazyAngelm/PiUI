@@ -236,18 +236,15 @@ impl HarnessKind {
         matches!(self, Self::ClaudeCode | Self::Hermes | Self::Acp(_))
     }
 
-    /// Whether the adapter registers the board host tool. Codex takes dynamic
-    /// tools only on a fresh thread (`thread/start`), so a resumed Codex
-    /// thread runs without it; Pi RPC has no custom tools. An ACP agent also
-    /// needs `mcpCapabilities.http`, known only after it starts: it reports a
-    /// missing capability with [`NativeNoticeCode::UnsupportedBoardTool`].
+    /// Whether the adapter can take the board host tool. Pi RPC has no custom
+    /// tools. Some answers are known only after the adapter starts: an ACP agent
+    /// needs `mcpCapabilities.http` ([`NativeNoticeCode::UnsupportedBoardTool`]),
+    /// and Codex takes dynamic tools only on `thread/start`, so a resumed Codex
+    /// thread keeps the board only if its rollout shows it was started with it
+    /// ([`NativeNoticeCode::UnsupportedBoardToolResume`] otherwise).
     #[must_use]
-    pub const fn supports_board_tool(self, resumed: bool) -> bool {
-        match self {
-            Self::ClaudeCode | Self::Hermes | Self::PrimeAgent | Self::Acp(_) => true,
-            Self::Codex => !resumed,
-            Self::Pi => false,
-        }
+    pub const fn supports_board_tool(self) -> bool {
+        !matches!(self, Self::Pi)
     }
 
     /// The ACP descriptor id of an ACP identity.
@@ -976,7 +973,8 @@ pub enum BoardToolOperation {
 pub enum NativeNoticeCode {
     /// The harness (or this agent) cannot receive the board tool.
     UnsupportedBoardTool,
-    /// A resumed Codex thread cannot re-register dynamic tools.
+    /// A resumed Codex thread was started without the board tool and cannot
+    /// gain dynamic tools after `thread/start`.
     UnsupportedBoardToolResume,
 }
 
@@ -4915,12 +4913,10 @@ mod tests {
 
     #[test]
     fn board_tool_support_per_harness() {
-        assert!(HarnessKind::ClaudeCode.supports_board_tool(false));
-        assert!(HarnessKind::ClaudeCode.supports_board_tool(true));
-        assert!(HarnessKind::Hermes.supports_board_tool(true));
-        assert!(HarnessKind::PrimeAgent.supports_board_tool(true));
-        assert!(HarnessKind::Codex.supports_board_tool(false));
-        assert!(!HarnessKind::Codex.supports_board_tool(true));
-        assert!(!HarnessKind::Pi.supports_board_tool(false));
+        assert!(HarnessKind::ClaudeCode.supports_board_tool());
+        assert!(HarnessKind::Hermes.supports_board_tool());
+        assert!(HarnessKind::PrimeAgent.supports_board_tool());
+        assert!(HarnessKind::Codex.supports_board_tool());
+        assert!(!HarnessKind::Pi.supports_board_tool());
     }
 }

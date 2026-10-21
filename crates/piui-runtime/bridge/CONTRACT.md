@@ -53,7 +53,7 @@ Strict operation union (reject unknown fields):
 
 Spawn leases a ready predefined pipeline step, resolves its exact snapshotted assigned profile, and checks the authenticated caller's allowed spawn templates. It cannot add members or override policy/model/instructions. It is not unrestricted dynamic delegation. Roster and observation are ACL-filtered; observation returns authorized history references, never native filesystem locations.
 
-Runner emits `{type:'coordinatorRequest',requestId:string,operation:CoordinatorOperation}` as a host-private NativeEvent. The host derives workspace/run/member/session from the emitting runtime binding, NEVER caller text or fields. `requestId` is an opaque origin-bound pending ID (native tool call IDs stay adapter-private); it also provides durable send/spawn deduplication. A Rust-only runtime method writes `coordinatorResponse` with `{requestId,response:{ok:true,result:JSON}|{ok:false,error:{code:string,message:safeFixedSummary}}}`. This method is NOT part of workspace WebView IPC. Reject duplicate, unknown, cross-origin or retired replies. On interrupt/EOF/dispose, settle pending tool calls as failures; do not leave a native turn waiting forever. Read/approval/interrupt/dispose must remain independently serviceable while a tool awaits its host response.
+Runner emits `{type:'coordinatorRequest',requestId:string,operation:CoordinatorOperation}` as a host-private NativeEvent. The host derives workspace/run/member/session from the emitting runtime binding, NEVER caller text or fields. `requestId` is an opaque origin-bound pending ID (native tool call IDs stay adapter-private); it also provides durable send/spawn deduplication. Its form is `piui-coordinator-<epoch>-<N>` (board: `piui-board-<epoch>-<N>`): `epoch` is 12 random hex digits per bridge process and `N` counts from 1 within it, so a restarted bridge of the same session never reissues an earlier id and its first call is not taken for a replay. Hosts treat the id as opaque. A Rust-only runtime method writes `coordinatorResponse` with `{requestId,response:{ok:true,result:JSON}|{ok:false,error:{code:string,message:safeFixedSummary}}}`. This method is NOT part of workspace WebView IPC. Reject duplicate, unknown, cross-origin or retired replies. On interrupt/EOF/dispose, settle pending tool calls as failures; do not leave a native turn waiting forever. Read/approval/interrupt/dispose must remain independently serviceable while a tool awaits its host response.
 
 Codex implementation uses negotiated experimental dynamic tools and `item/tool/call` requests bound to native thread/turn/call/namespace/tool; no MCP server or global config changes. Prime/Pi use native SDK custom tool registration when supported; retain their generic tool-call timeline projection. If a runtime cannot implement this seam, reject mandatory coordinator-tool launches, not silent prompt-only fallback.
 
@@ -62,7 +62,7 @@ A session may carry `hostTools: ["board"]` in host-private config (`NativeRuntim
 
 The runner validates `BoardToolOperationV1` (contracts/board-v1.ts) with `validateBoardOperation`: `op` is one of `context|search|list|get|create|update|move|comment|claim|release|link|roster|assign|handoff`; every other key must belong to that op (no scope, actor or workspace field exists); `card` is a positive safe integer; statuses/priorities are the contract enums (`create.status` only `backlog|todo`); caps: title 200 chars, query 500 chars, handle 64, reason 2000, labels ≤12 × 64 chars, comment body 16 KiB and description 64 KiB (UTF-8 bytes). An invalid call is refused in the bridge (`invalid-board-operation`) and never reaches the host; `board-disabled` when the session has no board.
 
-Runner emits `{type:'boardRequest',requestId:'piui-board-N',operation}`. The host derives workspace/session/run/member/teammate from the emitting runtime binding, never from the operation, and answers once through the Rust-only `NativeRuntime::board_response(request_id, result)`, which writes `boardResponse` with `{requestId,result:BoardToolResultV1}` (`result` is an object with a boolean `ok`; `{ok:false,code,message}` is a normal result the agent reads). Unknown, duplicate or retired ids fail with `stale-board-request`; a malformed result with `invalid-board-response`. Like coordinator calls, pending board calls settle as failures (`board-cancelled`) on turn completion, interrupt, EOF and dispose; there is no separate timeout. The `coordinatorResponse` wire is unchanged.
+Runner emits `{type:'boardRequest',requestId:'piui-board-<epoch>-<N>',operation}`. The host derives workspace/session/run/member/teammate from the emitting runtime binding, never from the operation, and answers once through the Rust-only `NativeRuntime::board_response(request_id, result)`, which writes `boardResponse` with `{requestId,result:BoardToolResultV1}` (`result` is an object with a boolean `ok`; `{ok:false,code,message}` is a normal result the agent reads). Unknown, duplicate or retired ids fail with `stale-board-request`; a malformed result with `invalid-board-response`. Like coordinator calls, pending board calls settle as failures (`board-cancelled`) on turn completion, interrupt, EOF and dispose; there is no separate timeout. The `coordinatorResponse` wire is unchanged.
 
 The agent sees one tool `board` with a compact JSON schema (`op` enum plus the optional fields) and a short description (call `context` before `create`; do not retry `ALREADY_CLAIMED`/`FORBIDDEN`; done/cancelled only become a proposal). The tool result is the host result as JSON text (`isError` when `ok:false`).
 
@@ -72,10 +72,10 @@ The agent sees one tool `board` with a compact JSON schema (`op` enum plus the o
 | Hermes | the same loopback HTTP MCP server in `session/new`/`session/load` `mcpServers` | `board` on server `piui-workspace` |
 | ACP | as Hermes; an agent without `mcpCapabilities.http` (or descriptor `mcpHttp:false`) gets notice `unsupported-board-tool` | `board` on server `piui-workspace` |
 | Prime Agent | second SDK custom tool (TypeBox union); an enforced allowlist gains exactly `board` | `board` |
-| Codex | dynamic tool namespace `piui`, function `board`, on `thread/start` only; a resumed thread gets notice `unsupported-board-tool-resume` | `piui` / `board` |
+| Codex | dynamic tool namespace `piui`, function `board`, registered on `thread/start` only. Codex persists it with the thread (rollout `session_meta.dynamic_tools`, verified on 0.163) and restores it on `thread/resume`, so a resumed thread whose rollout lists `piui`/`board` keeps the tool and its calls are answered; a resumed thread without it (or with an unreadable rollout) gets notice `unsupported-board-tool-resume`. A persisted `piui`/`board` call while the board is off answers `{ok:false,code:'board-disabled'}` | `piui` / `board` |
 | Pi | none; notice `unsupported-board-tool` | — |
 
-Notice codes (`NativeNoticeCode`): `unsupported-board-tool`, `unsupported-board-tool-resume`. `HarnessKind::supports_board_tool(resumed)` gives the static answer; ACP HTTP MCP support is known only after the agent starts.
+Notice codes (`NativeNoticeCode`): `unsupported-board-tool`, `unsupported-board-tool-resume`. `HarnessKind::supports_board_tool()` gives the static answer (false only for Pi); ACP HTTP MCP support and whether a resumed Codex thread was started with the board are known only after the adapter starts.
 
 With a Claude Code tool allowlist (`--tools … --strict-mcp-config`) the board keeps `mcp__*` undenied, as the coordinator does: strict MCP config already limits MCP to this session's own server. `board` in `allowedTools` names this host tool and is accepted only when the board is enabled.
 
@@ -124,8 +124,11 @@ items with a safe `error` event. A failed native prompt emits
   or id is included; the host bounds, sanitizes and drops ambiguous names.
   An adapter without discovery returns empty lists. PiUI never executes them.
 - Per harness:
-  - Pi: `images` from `get_state` `model.input` (`image`); RPC `prompt`,
-    `steer` and `follow_up` carry `images:[{type:"image",data,mimeType}]`.
+  - Pi: `images` from `get_state` `model.input` (`image`); RPC `prompt` and
+    `steer` carry `images:[{type:"image",data,mimeType}]`. Both `prompt` and
+    `follow-up` modes send RPC `prompt` with `streamingBehavior:"followUp"`:
+    Pi queues it during a run and starts a run when idle. RPC `follow_up` only
+    queues, so an idle follow-up through it would be admitted and never run.
     Commands from `get_commands` (`extension`, `prompt`, `skill` — skills are
     `/skill:<name>`); `skills` is empty.
   - Claude Code: `images:true`; the user message content is

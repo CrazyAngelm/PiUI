@@ -15,7 +15,7 @@ use crate::orchestration_store::WorkspaceOrchestration;
 use crate::state::HostState;
 use crate::workspace_api::{BoardBinding, BoardSessionHooks, BoardSessionSetup};
 use piui_orchestration::{BoardPermissions, RunTrigger};
-use piui_runtime::workspace_runtime::{HarnessKind, HostTool, NativeNoticeCode};
+use piui_runtime::workspace_runtime::{HostTool, NativeNoticeCode};
 use serde_json::Value;
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -33,23 +33,18 @@ impl<R: Runtime> BoardSessions<R> {
 /// Tool, instruction block and notice for a session of an enabled board.
 /// Only a harness that registers host tools gets the tool; an ordinary chat
 /// also gets the instruction block with its active card.
-pub(crate) fn setup_for(board: &Board, binding: &BoardBinding, resumed: bool) -> BoardSessionSetup {
+pub(crate) fn setup_for(board: &Board, binding: &BoardBinding) -> BoardSessionSetup {
     if !board.enabled {
         return BoardSessionSetup::default();
     }
-    if !binding.harness.supports_board_tool(resumed) {
-        let notice = if binding.harness == HarnessKind::Codex && resumed {
-            NativeNoticeCode::UnsupportedBoardToolResume
-        } else {
-            NativeNoticeCode::UnsupportedBoardTool
-        };
+    if !binding.harness.supports_board_tool() {
         return BoardSessionSetup {
             host_tools: Vec::new(),
             instructions: binding
                 .run_id
                 .is_none()
                 .then(|| UNAVAILABLE_INSTRUCTIONS.to_owned()),
-            notice: Some(notice),
+            notice: Some(NativeNoticeCode::UnsupportedBoardTool),
         };
     }
     let instructions = binding.run_id.is_none().then(|| {
@@ -142,7 +137,7 @@ fn error_value(error: BoardError) -> Value {
 }
 
 impl<R: Runtime> BoardSessionHooks for BoardSessions<R> {
-    fn setup(&self, binding: &BoardBinding, resumed: bool) -> BoardSessionSetup {
+    fn setup(&self, binding: &BoardBinding) -> BoardSessionSetup {
         let Some(host) = self.app.try_state::<HostState>() else {
             return BoardSessionSetup::default();
         };
@@ -156,7 +151,7 @@ impl<R: Runtime> BoardSessionHooks for BoardSessions<R> {
         };
         service.get(&binding.workspace_id).map_or_else(
             |_| BoardSessionSetup::default(),
-            |board| setup_for(&board, binding, resumed),
+            |board| setup_for(&board, binding),
         )
     }
 

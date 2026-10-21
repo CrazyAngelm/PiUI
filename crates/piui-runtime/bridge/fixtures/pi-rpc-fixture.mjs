@@ -103,7 +103,10 @@ process.stdin.on("data", (chunk) => {
         write({ type: "message_end", message: { role: "assistant", stopReason, usage: {input:10,output:4,cacheRead:2,cacheWrite:0,totalTokens:14}, ...(errorMessage ? { errorMessage } : {}) } });
         write({ type: "agent_settled" });
       }, 30);
-    } else if (request.type === "set_session_name") { sessionName = request.name; write({ id: request.id, type: "response", command: request.type, success: true }); }
+    }
+    // Like real Pi RPC, `follow_up` only queues and never starts an idle run.
+    else if (request.type === "follow_up") write({ id: request.id, type: "response", command: request.type, success: true });
+    else if (request.type === "set_session_name") { sessionName = request.name; write({ id: request.id, type: "response", command: request.type, success: true }); }
     else if (request.type === "compact") {
       // Models an older build that reports only the start of manual compaction.
       write({ type: "compaction_start", reason: "manual" });

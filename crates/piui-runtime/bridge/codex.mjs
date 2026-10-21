@@ -51,13 +51,36 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     throw fail("unsupported-managed-native-subagents", "Managed Codex runs use coordinator-only spawning and cannot also enable native subagents.");
   }
   // Board host tool: optional and independent of coordination. Codex takes
-  // dynamic tools only on `thread/start`, so a resumed thread runs without it
-  // (a notice, never a failure: unlike the coordinator, the board is optional).
+  // dynamic tools only on `thread/start` but persists them with the thread, so
+  // a resumed thread keeps the board only if it was started with it; otherwise
+  // it runs without it (a notice, never a failure: the board is optional).
   const boardRequested = Array.isArray(config.hostTools) && config.hostTools.includes("board");
-  const boardEnabled = boardRequested && typeof boardRequest === "function" && !config.nativeId;
-  if (boardRequested && !boardEnabled) {
-    emit({ type: "notice", code: config.nativeId ? "unsupported-board-tool-resume" : "unsupported-board-tool" });
-  }
+  const boardAvailable = boardRequested && typeof boardRequest === "function";
+  const registerBoard = boardAvailable && !config.nativeId;
+  if (boardRequested && !boardAvailable) emit({ type: "notice", code: "unsupported-board-tool" });
+  // The rollout's first line is `session_meta` with the thread's persisted
+  // `dynamic_tools` (verified on 0.163). Read-only and bounded; any doubt is
+  // "not registered", which only shows the resume notice.
+  const rolloutHasBoardTool = async (file) => {
+    if (typeof file !== "string" || !path.isAbsolute(file)) return false;
+    const { open } = await import("node:fs/promises");
+    let handle;
+    try {
+      handle = await open(file, "r");
+      const buffer = Buffer.alloc(1024 * 1024);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      const end = buffer.subarray(0, bytesRead).indexOf(0x0a);
+      if (end < 0) return false;
+      const meta = JSON.parse(buffer.subarray(0, end).toString("utf8"));
+      const tools = meta?.type === "session_meta" ? meta.payload?.dynamic_tools : undefined;
+      return Array.isArray(tools) && tools.some((spec) => spec?.type === "namespace" && spec.name === "piui"
+        && Array.isArray(spec.tools) && spec.tools.some((tool) => tool?.type === "function" && tool.name === "board"));
+    } catch {
+      return false;
+    } finally {
+      await handle?.close().catch(() => {});
+    }
+  };
   if (config.nativeSubagents === true) {
     throw fail("unsupported-native-subagent-policy", "Codex cannot prove that native subagents are enabled for this session.");
   }
@@ -850,9 +873,14 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     const params = message.params || {};
     const key = `board:${String(message.id)}:${String(params.callId)}`;
     const reply = (text, success) => writeNative({ id: message.id, result: { contentItems: [{ type: "inputText", text }], success } });
+    // Codex delivers `piui/board` only to a thread registered with it, so the
+    // call itself proves registration; it is refused when the board is off.
+    if (!boardAvailable) {
+      await reply(JSON.stringify({ ok: false, code: "board-disabled", message: "Board tools are not enabled for this chat." }), false);
+      return;
+    }
     if (
-      !boardEnabled
-      || params.threadId !== nativeId
+      params.threadId !== nativeId
       || typeof params.turnId !== "string"
       || typeof params.callId !== "string"
       || !params.arguments
@@ -1285,7 +1313,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     ],
   }] : undefined;
   const boardStatuses = ["backlog", "todo", "inProgress", "inReview", "blocked", "done", "cancelled"];
-  const boardTools = boardEnabled ? [{
+  const boardTools = registerBoard ? [{
     type: "namespace",
     name: "piui",
     description: "PiUI host tools for this chat.",
@@ -1368,6 +1396,9 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   }
   nativeId = thread.id;
   nativePath = typeof thread.path === "string" ? thread.path : nativePath;
+  if (boardAvailable && config.nativeId && !await rolloutHasBoardTool(nativePath)) {
+    emit({ type: "notice", code: "unsupported-board-tool-resume" });
+  }
   for (const message of deferredNativeMessages.splice(0)) handleNotification(message);
   if (typeof opened.modelProvider === "string") currentProvider = opened.modelProvider;
   if (typeof opened.model === "string") {

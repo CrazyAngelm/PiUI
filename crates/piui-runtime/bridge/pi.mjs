@@ -612,10 +612,11 @@ export async function createPiAdapter(config, emit) {
         if (!["prompt", "follow-up"].includes(mode)) throw fail("invalid-request", "The prompt mode is invalid.");
         // Admission must precede native events, which may arrive before ACK.
         admittedTurns += 1;
-        try {
-          if (mode === "follow-up") await request("follow_up", { message: text, ...extra });
-          else await request("prompt", { message: text, streamingBehavior: "followUp", ...extra });
-        } catch (error) { admittedTurns = Math.max(0, admittedTurns - 1); throw error; }
+        // Both modes use `prompt`: Pi queues it as a follow-up while a run is
+        // streaming and starts a run when idle. RPC `follow_up` only queues, so
+        // an idle follow-up would be admitted without ever running.
+        try { await request("prompt", { message: text, streamingBehavior: "followUp", ...extra }); }
+        catch (error) { admittedTurns = Math.max(0, admittedTurns - 1); throw error; }
       }
       return { accepted: true };
     },

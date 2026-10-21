@@ -163,6 +163,42 @@ test("interrupt settles a waiting coordinator tool", async () => {
   bridge.input.end();
 });
 
+test("request ids carry a per-process epoch so a restarted bridge never reuses one", async () => {
+  // One bridge process of a session: its first coordinator and board calls.
+  const start = async () => {
+    const bridge = harness(async (_config, _emit, coordinatorRequest, boardRequest) => ({
+      prompt() {
+        void coordinatorRequest({ type: "send", recipientMemberId: "member-b", body: "hello" }, { toolCallId: "call-1" }).catch(() => {});
+        void boardRequest({ op: "roster" }).catch(() => {});
+        return { accepted: true };
+      },
+      dispose() {},
+    }));
+    bridge.send({ ...config, params: { ...config.params, coordination: true, hostTools: ["board"] } });
+    await bridge.wait(1);
+    bridge.send({ id: "prompt", method: "prompt", params: { text: "go", mode: "prompt" } });
+    await bridge.wait(4);
+    const id = (type) => bridge.frames.find((frame) => frame.event?.type === type).event.requestId;
+    return { bridge, coordinator: id("coordinatorRequest"), board: id("boardRequest") };
+  };
+  const before = await start();
+  before.bridge.input.end();
+  const after = await start();
+  for (const { coordinator, board } of [before, after]) {
+    assert.match(coordinator, /^piui-coordinator-[0-9a-f]{12}-1$/);
+    assert.match(board, /^piui-board-[0-9a-f]{12}-1$/);
+    assert.equal(coordinator.split("-")[2], board.split("-")[2], "one epoch per bridge process");
+  }
+  // The host keys durable send/spawn deduplication on `{session}-{requestId}`:
+  // the first call after a restart must not look like a replay of the old one.
+  assert.notEqual(after.coordinator, before.coordinator);
+  assert.notEqual(after.board, before.board);
+  after.bridge.send({ id: "old", method: "coordinatorResponse", params: { requestId: before.coordinator, response: { ok: true, result: null } } });
+  await after.bridge.wait(5);
+  assert.equal(after.bridge.frames.find((frame) => frame.id === "old").error.code, "stale-coordinator-request");
+  after.bridge.input.end();
+});
+
 test("failure frames carry only bounded adapter-built safe details", async () => {
   const signIn = Object.assign(new Error("raw native text"), {
     bridgeCode: "acp-sign-in-required",
