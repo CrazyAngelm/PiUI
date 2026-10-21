@@ -119,14 +119,14 @@ impl VerifiedRange {
 }
 
 /// Codex app-server versions verified against `bridge/codex.mjs`. The
-/// protocols of 0.147.0, 0.153.4 and 0.157.1 were audited (`bridge/CONTRACT.md`,
-/// Codex section); patch releases keep the protocol, so the ceiling admits the
-/// 0.157.x line and nothing from 0.158.0 on. The bridge mirrors this constant
+/// protocols of 0.147.0, 0.153.4, 0.157.1 and 0.163.0 were audited
+/// (`bridge/CONTRACT.md`, Codex section); patch releases keep the protocol, so
+/// the ceiling admits the 0.163.x line and nothing from 0.164.0 on. The bridge mirrors this constant
 /// as `VERIFIED_CODEX_VERSIONS` and checks the running app-server's
 /// `initialize` user agent against it.
 pub(crate) const CODEX_APP_SERVER: VerifiedRange = VerifiedRange {
     minimum: (0, 147, 0),
-    ceiling: (0, 158, 0),
+    ceiling: (0, 164, 0),
 };
 
 #[cfg(test)]
@@ -179,14 +179,18 @@ mod tests {
             "0.157.0",
             "0.157.1",
             "0.157.1-alpha",
-            "0.157.9",
+            "0.158.0",
+            "0.162.1",
+            "0.163.0",
+            "0.163.0-alpha.11",
+            "0.163.9",
         ] {
             assert_eq!(check(version), VersionCheck::Verified, "{version}");
         }
         for version in ["0.146.9", "0.147.0-alpha.1", "0.100.0"] {
             assert_eq!(check(version), VersionCheck::Older, "{version}");
         }
-        for version in ["0.158.0", "0.158.0-alpha.2", "0.159.0-alpha.4", "1.0.0"] {
+        for version in ["0.164.0", "0.164.0-alpha.9", "0.165.0-alpha.1", "1.0.0"] {
             assert_eq!(check(version), VersionCheck::Newer, "{version}");
         }
         assert_eq!(CODEX_APP_SERVER.check(None), VersionCheck::Unrecognized);

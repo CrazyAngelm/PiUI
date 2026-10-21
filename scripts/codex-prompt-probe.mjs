@@ -27,7 +27,13 @@ try {
  await adapter.prompt({text:'Synthetic local request. No tools.',mode:'prompt'});
  const payload=await received;
  const skillVisible = JSON.stringify(payload.input).includes('PIUI_SYNTHETIC_SKILL_MARKER');
- const report={...(skillSetting !== undefined ? {skillEnabled:skillSetting,skillVisible} : {}),...(verifySettings ? {reasoning:payload.reasoning?.effort,serviceTier:payload.service_tier ?? 'default'} : {}),baseReplaced:(payload.instructions ?? '')===baseText, instructionsCharacters:(payload.instructions ?? '').length,inputRoles:payload.input?.map(x=>x.role??x.type),toolNames:payload.tools?.map(x=>x.name??x.type)};
+ // Codex before 0.162 sends the base instructions as the Responses `instructions`;
+ // 0.162+ (openai/codex#51156) sends them as the first developer input message
+ // and leaves `instructions` empty. Either way nothing of Codex's default prompt remains.
+ const first=payload.input?.[0];
+ const firstDeveloperText=first?.role==='developer' && first.content?.length===1 ? first.content[0].text : undefined;
+ const baseChannel=(payload.instructions ?? '')===baseText && baseText ? 'instructions' : !payload.instructions && baseText && firstDeveloperText===baseText ? 'developer-message' : !payload.instructions && !baseText ? 'none' : undefined;
+ const report={...(skillSetting !== undefined ? {skillEnabled:skillSetting,skillVisible} : {}),...(verifySettings ? {reasoning:payload.reasoning?.effort,serviceTier:payload.service_tier ?? 'default'} : {}),baseReplaced:baseChannel!==undefined, baseChannel, instructionsCharacters:(payload.instructions ?? '').length,inputRoles:payload.input?.map(x=>x.role??x.type),toolNames:payload.tools?.map(x=>x.name??x.type)};
  writeFileSync(join(root,'report.json'), JSON.stringify(report,null,2));
  console.log(JSON.stringify(report));
  if (skillSetting !== undefined && skillVisible !== skillSetting) throw new Error('Native skill setting did not affect skill visibility');

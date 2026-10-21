@@ -426,8 +426,8 @@ test("fails closed for unsupported mandatory policy", async () => {
 });
 
 test("admits app-server versions only inside the verified range", async () => {
-  // Audited protocols (0.147.0, 0.153.4, 0.157.1) and releases between them.
-  for (const version of ["0.147.0", "0.148.0", "0.153.4", "0.157.1", "0.157.1-alpha", "0.157.9"]) {
+  // Audited protocols (0.147.0, 0.153.4, 0.157.1, 0.163.0) and releases between them.
+  for (const version of ["0.147.0", "0.148.0", "0.153.4", "0.157.1", "0.158.0", "0.162.1", "0.163.0", "0.163.0-alpha.11", "0.163.9"]) {
     const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, `--codex-version=${version}`] }, () => {});
     try { assert.equal(adapter.snapshot().status, "idle", version); }
     finally { await adapter.dispose(); }
@@ -437,9 +437,9 @@ test("admits app-server versions only inside the verified range", async () => {
     ["0.146.9", /requires a verified Codex/],
     ["0.147.0-alpha.1", /requires a verified Codex/],
     // Newer than tested, including previews of the untested release line.
-    ["0.158.0", /newer than the versions tested/],
-    ["0.158.0-alpha.2", /newer than the versions tested/],
-    ["0.159.0-alpha.4", /newer than the versions tested/],
+    ["0.164.0", /newer than the versions tested/],
+    ["0.164.0-alpha.9", /newer than the versions tested/],
+    ["0.165.0-alpha.1", /newer than the versions tested/],
     ["1.0.0", /newer than the versions tested/],
     // Only the leading product token names Codex: the trailing client version
     // `(piui; 0.2.0)` never stands in for an unrecognized Codex version.
@@ -545,7 +545,7 @@ test('account quota updates stay out of the transcript without hiding unknown co
   } finally { await adapter.dispose(); }
 });
 
-for (const version of ["0.147.0", "0.153.4", "0.157.1"]) {
+for (const version of ["0.147.0", "0.153.4", "0.157.1", "0.163.0"]) {
   test(`keeps the session flow and settings in sync on the ${version} protocol`, async () => {
     const events = [];
     const adapter = await createCodexAdapter({
@@ -626,17 +626,20 @@ test("answers the current-time request for the thread and its descendants", asyn
   } finally { await adapter.dispose(); }
 });
 
-test("maps the 0.153+ rate-limit and policy turn errors to fixed summaries", async () => {
-  for (const [text, message] of [
-    ["rate limit fixture", "A Codex usage limit prevents this turn."],
-    ["policy fixture", "Codex blocked this turn under provider policy."],
+test("maps the 0.153+ and 0.163+ turn errors to fixed summaries", async () => {
+  for (const [text, message, outcome] of [
+    ["rate limit fixture", "A Codex usage limit prevents this turn.", "failed"],
+    ["policy fixture", "Codex blocked this turn under provider policy.", "failed"],
+    ["flex fixture", "The selected Codex service tier is unavailable.", "failed"],
+    // Guardian's strict circuit breaker interrupts the turn with an error.
+    ["denials fixture", "Codex stopped this turn after too many denied actions.", "interrupted"],
   ]) {
     const events = [];
     const adapter = await createCodexAdapter(config, (event) => events.push(event));
     try {
       await adapter.prompt({ text, mode: "prompt" });
       await waitFor(() => events.some((event) => event.type === "turnCompleted"));
-      assert.deepEqual(events.filter((event) => event.type === "turnCompleted"), [{ type: "turnCompleted", outcome: "failed" }]);
+      assert.deepEqual(events.filter((event) => event.type === "turnCompleted"), [{ type: "turnCompleted", outcome }]);
       assert.ok(events.some((event) => event.type === "error" && event.message === message), text);
       assert.equal(JSON.stringify(events).includes("raw fixture"), false);
     } finally { await adapter.dispose(); }
@@ -839,7 +842,7 @@ test("a finished turn dismisses an MCP request that is still open", async () => 
   }
 });
 
-for (const version of ["0.147.0", "0.153.4", "0.157.1"]) {
+for (const version of ["0.147.0", "0.153.4", "0.157.1", "0.163.0"]) {
   test(`answers MCP form requests on the ${version} protocol`, async () => {
     const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, `--codex-version=${version}`, "--mcp-elicitation"] }, () => {});
     try {

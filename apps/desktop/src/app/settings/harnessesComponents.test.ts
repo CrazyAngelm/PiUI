@@ -43,7 +43,7 @@ describe('Settings → Harnesses components', () => {
     const { body } = render(HarnessesSettings, { props: { store: storeWith(await registryOf('demo')) } });
     expect(body).toContain('aria-label="Built-in harnesses"');
     for (const name of ['Pi', 'Prime Agent', 'Codex', 'Hermes', 'Claude Code', 'Gemini CLI', 'Qwen Code', 'Lab Agent']) expect(body).toContain(`>${name}</strong>`);
-    expect(body).toContain('0.147.0 – 0.157.x');
+    expect(body).toContain('0.147.0 – 0.163.x');
     expect(body).toContain('C:/Users/example/AppData/Roaming/npm/node_modules/@openai/codex/bin/codex.js');
     expect(body).toContain('Claude Code runs only on your Claude subscription: run `claude` in a terminal and use /login.');
     // ACP agents: the exact command line, the identity, readiness and the next decision.

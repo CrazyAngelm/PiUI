@@ -1179,7 +1179,7 @@ pub struct NativeHarnessSummary {
 #[must_use]
 pub const fn builtin_verified_versions(kind: HarnessKind) -> Option<&'static str> {
     match kind {
-        HarnessKind::Codex => Some("0.147.0 – 0.157.x"),
+        HarnessKind::Codex => Some("0.147.0 – 0.163.x"),
         HarnessKind::ClaudeCode => Some("2.1.0 – 2.x"),
         HarnessKind::PrimeAgent => Some("0.9.2, 0.9.3"),
         HarnessKind::Hermes => Some("0.21.0"),
@@ -4386,11 +4386,11 @@ mod tests {
         // Codex uses its verified range; other adapters keep exact versions.
         assert!(harness_version_supported(
             HarnessKind::Codex,
-            Some("0.157.1")
+            Some("0.163.0")
         ));
         assert!(!harness_version_supported(
             HarnessKind::Codex,
-            Some("0.158.0")
+            Some("0.164.0")
         ));
         assert!(!harness_version_supported(
             HarnessKind::PrimeAgent,

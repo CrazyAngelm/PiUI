@@ -469,6 +469,24 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   Needs a real-app check: a real harness run started from a chat, and the
   packaged WebView2 app.
 
+## 2026-10-21 — Codex 0.163 verified
+
+- Codex verified range raised to 0.147.0–0.164.0 (admits 0.163.x). Audit in
+  `crates/piui-runtime/bridge/CONTRACT.md` (0.157.1 -> 0.163.0 table).
+- Fixed: `thread/readState/changed` (new in 0.163, sent after every visible
+  turn result) was rendered as an "Unsupported Codex event" block; now ignored.
+  Added summaries for `flexUnavailable` and `tooManyDenials`; an interrupted
+  turn that carries an error reports it.
+- `codex-prompt-probe.mjs` accepts 0.162+ base instructions sent as the first
+  developer message (openai/codex#51156).
+- Synthetic evidence (real 0.163.0 binary, local deterministic provider, no
+  paid turns): prompt probe 5/5 variants, native settings matrix Pi -> Codex
+  legs passed (Prime leg not reached: installed Prime 0.9.5 is outside its
+  verified pins), protocol audit with no findings against 0.163.0 and 0.157.1
+  schemas, live initialize-only handshake `piui/0.163.0`. Bridge tests 53/53,
+  `native_version` tests 3/3 (standalone `rustc --test`; the full
+  `cargo test` was not run: both disks were full). No real-provider turn.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

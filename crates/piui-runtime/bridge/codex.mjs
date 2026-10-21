@@ -67,7 +67,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   // equal): minimum <= version < ceiling on MAJOR.MINOR.PATCH. A pre-release
   // precedes its release; one at or above the ceiling previews an untested
   // release line and is newer than tested. See CONTRACT.md (Codex section).
-  const VERIFIED_CODEX_VERSIONS = { minimum: "0.147.0", ceiling: "0.158.0" };
+  const VERIFIED_CODEX_VERSIONS = { minimum: "0.147.0", ceiling: "0.164.0" };
   const parseVersion = (text) => {
     const match = /^v?(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(text);
     if (!match) return undefined;
@@ -192,6 +192,8 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     const httpStatus = Number.isInteger(detail?.httpStatusCode) ? detail.httpStatusCode : undefined;
     if (tag === "unauthorized" || httpStatus === 401 || httpStatus === 403) return "Codex authentication is unavailable.";
     if (["usageLimitExceeded", "sessionBudgetExceeded", "rateLimitExceeded"].includes(tag) || httpStatus === 429) return "A Codex usage limit prevents this turn.";
+    if (tag === "flexUnavailable") return "The selected Codex service tier is unavailable.";
+    if (tag === "tooManyDenials") return "Codex stopped this turn after too many denied actions.";
     if (tag === "contextWindowExceeded") return "This Codex thread exceeds the model context window.";
     if (["httpConnectionFailed", "responseStreamConnectionFailed", "responseStreamDisconnected", "responseTooManyFailedAttempts"].includes(tag)) {
       return httpStatus && httpStatus >= 500 ? "The Codex model provider is unavailable." : "Codex could not reach the model provider.";
@@ -938,6 +940,9 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     // control-plane state, not conversation items. Actual turn failures
     // (including usage limits and authentication) still surface below.
     if (method === "account/rateLimits/updated" || method === "account/gatewayOAuth/changed") return;
+    // Codex's own read receipts (0.163 sends one with every visible turn result
+    // of a durable thread). PiUI keeps its own unread state; never shown.
+    if (method === "thread/readState/changed") return;
     // Configuration and deprecation warnings describe the user's native Codex
     // configuration (0.157.1 sends startup warnings right after initialize).
     // They become fixed resource warnings; native text and config paths are
@@ -952,13 +957,13 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       const name = typeof params.name === "string" && params.name.trim()
         ? params.name.trim().replace(/\s+/g, " ")
         : "Codex MCP";
-      // McpServerStartupState is starting|ready|failed|cancelled (0.147.0-0.157.1).
+      // McpServerStartupState is starting|ready|failed|cancelled (0.147.0-0.163.0).
       if (params.status === "failed") mcpStartupFailures.add(name);
       else if (["starting", "ready", "cancelled"].includes(params.status)) mcpStartupFailures.delete(name);
       return;
     }
     if (method === "thread/settings/updated") {
-      // Every verified version (0.147.0-0.157.1) sends the effective settings
+      // Every verified version (0.147.0-0.163.0) sends the effective settings
       // nested as `threadSettings`, with the reasoning level as `effort`.
       const settings = params.threadSettings;
       if (!settings || typeof settings !== "object") return;
@@ -998,7 +1003,8 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       const finalStatus = params.turn?.status;
       if (typeof completedTurnId === "string" && !completedTurnOutcomes.has(completedTurnId)) {
         completedTurnOutcomes.add(completedTurnId);
-        if (finalStatus === "failed" && !reportedTurnErrors.has(completedTurnId)) {
+        // 0.163 can interrupt a turn with an error (`tooManyDenials`).
+        if ((finalStatus === "failed" || (finalStatus === "interrupted" && params.turn?.error)) && !reportedTurnErrors.has(completedTurnId)) {
           reportedTurnErrors.add(completedTurnId);
           emit({ type: "error", message: safeCodexErrorMessage(params.turn?.error) });
         }
