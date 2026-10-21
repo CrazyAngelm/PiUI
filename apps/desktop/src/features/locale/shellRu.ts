@@ -180,6 +180,7 @@ export const shellRu: Readonly<Record<string, string>> = {
   "The chat is removed from PiUI. The harness keeps its own history.": "Чат будет удалён из PiUI. Харнес сохранит свою историю.",
   "The draft has unsaved changes.": "В черновике есть несохранённые изменения.",
   "Theme": "Тема",
+  "This agent is part of a pipeline run and follows its saved settings. You can stop it or answer its requests here.": "Этот агент — часть запуска пайплайна и работает по его сохранённым настройкам. Здесь можно остановить его или ответить на его запросы.",
   "This chat is no longer available": "Этот чат больше недоступен",
   "This folder is restricted": "Папка ограничена",
   "This folder is restricted. Trust it to let agents work on its files.": "Папка ограничена. Доверьте её, чтобы агенты могли работать с файлами.",

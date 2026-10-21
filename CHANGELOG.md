@@ -6,6 +6,10 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+### Fixed
+
+- Agents of a running pipeline follow the run's saved settings (ADR-044): the host refuses messages, model, settings and mode changes and "allow for this chat" approvals for them. Stopping a turn, renaming and answering a request once still work, and the chat view links to the run instead of showing a composer.
+
 ## [0.2.6] - 2026-09-28
 
 ### Added

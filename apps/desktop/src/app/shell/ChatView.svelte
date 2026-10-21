@@ -221,6 +221,12 @@
                 {$t('The agent process is stopped. The transcript stays readable.')}
                 <Button size="sm" variant="ghost" onclick={() => void store.openSession(session.id)}>{$t('Resume')}</Button>
               </p>
+            {:else if session.runId}
+              <!-- Run members follow their run's saved settings (ADR-044). -->
+              <p class="notice">
+                {$t('This agent is part of a pipeline run and follows its saved settings. You can stop it or answer its requests here.')}
+                <Button size="sm" variant="ghost" onclick={() => store.openRun(session.workspaceId, session.runId)}>{$t('Part of a pipeline run')}</Button>
+              </p>
             {:else if !snapshot.capabilities.prompt.supported}
               <p class="notice">{snapshot.capabilities.prompt.reason ?? $t('{0} is read-only in this mode.', [harnessMeta(session.harness).label])}</p>
             {:else}

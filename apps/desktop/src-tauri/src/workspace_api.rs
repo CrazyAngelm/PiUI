@@ -2656,15 +2656,29 @@ pub async fn workspace_settings_v16(
     state: State<'_, HostState>,
     command: RuntimeSettingsCommand,
 ) -> Result<RuntimeSettings, WorkspaceError> {
-    let host = state.inner();
+    runtime_settings(state.inner(), command).await
+}
+
+/// Body of `workspace_settings_v16`, independent of the Tauri state handle.
+async fn runtime_settings(
+    host: &HostState,
+    command: RuntimeSettingsCommand,
+) -> Result<RuntimeSettings, WorkspaceError> {
     if host.safe_mode {
         return Err(WorkspaceError::safe_mode());
     }
+    let _operation = match &command {
+        RuntimeSettingsCommand::Get { session_id } => {
+            authorize_live_session(host, session_id).await?
+        }
+        RuntimeSettingsCommand::Set { session_id, .. } => {
+            authorize_ordinary_live_session(host, session_id).await?
+        }
+    };
     let session_id = match &command {
         RuntimeSettingsCommand::Get { session_id }
         | RuntimeSettingsCommand::Set { session_id, .. } => session_id,
     };
-    let _operation = authorize_live_session(host, session_id).await?;
     let (runtime, _) = host
         .workspace
         .live_runtime(session_id)?
@@ -2749,13 +2763,20 @@ pub async fn workspace_session_mode_v1(
     state: State<'_, HostState>,
     request: SessionModeRequestV1,
 ) -> Result<SessionModeResultV1, WorkspaceError> {
-    let host = state.inner();
+    select_session_mode(state.inner(), request).await
+}
+
+/// Body of `workspace_session_mode_v1`, independent of the Tauri state handle.
+async fn select_session_mode(
+    host: &HostState,
+    request: SessionModeRequestV1,
+) -> Result<SessionModeResultV1, WorkspaceError> {
     if host.safe_mode {
         return Err(WorkspaceError::safe_mode());
     }
     validate_session_id(&request.session_id)?;
     validate_token(&request.mode_id)?;
-    let _operation = authorize_live_session(host, &request.session_id).await?;
+    let _operation = authorize_ordinary_live_session(host, &request.session_id).await?;
     let (runtime, _) = host
         .workspace
         .live_runtime(&request.session_id)?
@@ -3104,7 +3125,7 @@ pub(crate) async fn dispatch_workspace_command(
             text,
             mode,
         } => {
-            let _operation = authorize_live_session(host, &session_id).await?;
+            let _operation = authorize_ordinary_live_session(host, &session_id).await?;
             host.workspace.send(&session_id, text, mode).await?;
             Ok(WorkspaceResult::Accepted { session_id })
         }
@@ -3124,7 +3145,7 @@ pub(crate) async fn dispatch_workspace_command(
             model,
             thinking_level,
         } => {
-            let _operation = authorize_live_session(host, &session_id).await?;
+            let _operation = authorize_ordinary_live_session(host, &session_id).await?;
             host.workspace
                 .set_model(&session_id, model, thinking_level, &publisher)
                 .await?;
@@ -3143,7 +3164,11 @@ pub(crate) async fn dispatch_workspace_command(
             decision,
             text,
         } => {
-            let _operation = authorize_live_session(host, &session_id).await?;
+            let _operation = if decision == ApprovalDecision::ApproveSession {
+                authorize_ordinary_live_session(host, &session_id).await?
+            } else {
+                authorize_live_session(host, &session_id).await?
+            };
             host.workspace
                 .respond(&session_id, request_id, decision, text)
                 .await?;
@@ -3162,6 +3187,21 @@ async fn authorize_live_session<'a>(
     let guard = state.live_runtime_operation_gate.lock().await;
     let record = state.workspace.record(session_id)?;
     verified_project_directory(state, &record.workspace_id, true)?;
+    Ok(guard)
+}
+
+/// A live-session action that would change what a managed run member does.
+/// Run members follow their frozen run snapshot (ADR-044): a person may stop
+/// a turn, rename it and answer its approvals once, but cannot message it,
+/// change its model, settings or mode, or approve for the rest of the session.
+pub(crate) async fn authorize_ordinary_live_session<'a>(
+    state: &'a HostState,
+    session_id: &str,
+) -> Result<tokio::sync::MutexGuard<'a, ()>, WorkspaceError> {
+    let guard = authorize_live_session(state, session_id).await?;
+    if state.workspace.record(session_id)?.run_id.is_some() {
+        return Err(WorkspaceError::not_supported());
+    }
     Ok(guard)
 }
 
@@ -4945,11 +4985,14 @@ Board."
 #[cfg(test)]
 mod native_host_tests {
     use super::{
-        HarnessKind, NativeSpawnResult, PermissionMode, PromptMode, SessionSnapshot, SessionStatus,
-        WorkspaceCommand, WorkspaceError, WorkspaceEvent, WorkspaceEventPayload,
+        ApprovalDecision, HarnessKind, NativeSpawnResult, PermissionMode, PromptMode,
+        RuntimeSettings, RuntimeSettingsCommand, SessionModeRequestV1, SessionSnapshot,
+        SessionStatus, WorkspaceCommand, WorkspaceError, WorkspaceEvent, WorkspaceEventPayload,
         WorkspaceEventPublisher, WorkspaceExtensionUiEvent, WorkspaceHost, WorkspaceLaunchRequest,
-        WorkspaceResult, coalesce_text_deltas, dispatch_workspace_command,
+        WorkspaceModel, WorkspaceResult, coalesce_text_deltas, dispatch_workspace_command,
+        runtime_settings, select_session_mode,
     };
+    use crate::api::verified_project_directory;
     use crate::state::HostState;
     use piui_index::TrustState;
     use piui_platform::ProjectDirectory;
@@ -5643,6 +5686,223 @@ mod native_host_tests {
         .expect("close is accepted");
         assert_eq!(finish(slow).await.expect_err("withdrawn").code, "CONFLICT");
         assert!(no_live_or_starting_runtime(&host));
+        cleanup(host, root);
+    }
+
+    /// Offers two models, two modes and one pending approval, and applies
+    /// whatever the host forwards, so a refused command is visible as an
+    /// unchanged native snapshot.
+    const MEMBER_ADAPTER: &str = r#"
+        let status = 'idle';
+        const native = {supported:true,enforcement:'native'};
+        const unsupported = {supported:false,enforcement:'unsupported'};
+        const models = [{id:'frozen',name:'Frozen'},{id:'wider',name:'Wider'}];
+        let model = models[0];
+        let mode = 'ask';
+        let approvals = [{id:'approval-1',kind:'command',title:'Run tests',description:'npm test',decisions:['approve-once','approve-session','deny']}];
+        const setStatus = (next) => { status = next; emit({type:'status',status:next}); };
+        return {
+          snapshot() {
+            return {nativeId:'native-member',materialized:false,title:config.title ?? 'Member',status,model,blocks:[],approvals,
+              capabilities:{prompt:native,resume:native,models:native,approvals:native,instructions:unsupported,toolPolicy:native,nativeSubagents:unsupported},
+              models,modes:{current:mode,available:[{id:'ask',name:'Ask'},{id:'auto',name:'Auto'}]}};
+          },
+          models() { return models; },
+          setModel({ model: next }) { model = models.find((item) => item.id === next.id) ?? model; return null; },
+          setMode({ modeId }) { mode = modeId; return null; },
+          respond({ requestId }) { approvals = approvals.filter((item) => item.id !== requestId); return null; },
+          rename() { return null; },
+          prompt() {
+            setStatus('running');
+            emit({type:'turnCompleted',outcome:'succeeded'});
+            setStatus('idle');
+            return {accepted:true};
+          },
+          interrupt() { return null; },
+          dispose() { return null; },
+        };
+    "#;
+
+    fn refused<T: std::fmt::Debug>(result: Result<T, WorkspaceError>) {
+        assert_eq!(
+            result.expect_err("a run member refuses the command").code,
+            "NOT_SUPPORTED"
+        );
+    }
+
+    async fn native_settings(host: &HostState, session_id: &str) -> RuntimeSettings {
+        runtime_settings(
+            host,
+            RuntimeSettingsCommand::Get {
+                session_id: session_id.into(),
+            },
+        )
+        .await
+        .expect("settings stay readable")
+    }
+
+    fn set_model(session_id: &str, model: &WorkspaceModel) -> WorkspaceCommand {
+        WorkspaceCommand::SetModel {
+            session_id: session_id.into(),
+            model: model.clone(),
+            thinking_level: None,
+        }
+    }
+
+    fn set_settings(session_id: &str, model: &WorkspaceModel) -> RuntimeSettingsCommand {
+        RuntimeSettingsCommand::Set {
+            session_id: session_id.into(),
+            model: model.clone(),
+            thinking_level: None,
+            service_tier: None,
+        }
+    }
+
+    fn set_mode(session_id: &str) -> SessionModeRequestV1 {
+        SessionModeRequestV1 {
+            session_id: session_id.into(),
+            mode_id: "auto".into(),
+        }
+    }
+
+    fn respond(session_id: &str, decision: ApprovalDecision) -> WorkspaceCommand {
+        WorkspaceCommand::Respond {
+            session_id: session_id.into(),
+            request_id: "approval-1".into(),
+            decision,
+            text: None,
+        }
+    }
+
+    fn send(session_id: &str, mode: PromptMode) -> WorkspaceCommand {
+        WorkspaceCommand::Send {
+            session_id: session_id.into(),
+            text: "change course".into(),
+            mode,
+        }
+    }
+
+    /// Run members follow their frozen run snapshot (ADR-044): the WebView
+    /// cannot message one or change its model, settings, mode or standing
+    /// approvals, but can stop it, rename it and answer an approval once. An
+    /// ordinary chat keeps every verb.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn webview_commands_cannot_steer_or_reconfigure_a_live_run_member() {
+        let root = test_root("run-member-guard");
+        let host = Arc::new(HostState::open(&root, false).expect("host state"));
+        install_test_spawner(&host.workspace, |config| {
+            NativeRuntime::spawn_test_adapter(config, MEMBER_ADAPTER)
+        });
+        let workspace_id = host.personal_workspace.project_id.clone();
+        let Ok(directory) = verified_project_directory(&host, &workspace_id, true) else {
+            panic!("the personal workspace is trusted");
+        };
+        let frozen = WorkspaceModel {
+            id: "frozen".into(),
+            provider: None,
+            name: "Frozen".into(),
+            thinking_levels: None,
+        };
+        let wider = WorkspaceModel {
+            id: "wider".into(),
+            provider: None,
+            name: "Wider".into(),
+            thinking_levels: None,
+        };
+        let publisher: WorkspaceEventPublisher = Arc::new(|_| {});
+        let mut request = chat_request(&workspace_id, "Run member");
+        request.profile_id = Some("profile-1".into());
+        request.run_id = Some("run-1".into());
+        request.member_id = Some("member-1".into());
+        request.task_id = Some("task-1".into());
+        request.model = Some(frozen.clone());
+        let member = host
+            .workspace
+            .launch_session(&directory, request, Arc::clone(&publisher))
+            .await
+            .expect("the run member starts")
+            .session
+            .id;
+        let chat = host
+            .workspace
+            .launch_session(&directory, chat_request(&workspace_id, "Chat"), publisher)
+            .await
+            .expect("the chat starts")
+            .session
+            .id;
+
+        refused(dispatch(&host, send(&member, PromptMode::Prompt)).await);
+        refused(dispatch(&host, send(&member, PromptMode::Steer)).await);
+        refused(dispatch(&host, set_model(&member, &wider)).await);
+        refused(runtime_settings(&host, set_settings(&member, &wider)).await);
+        refused(select_session_mode(&host, set_mode(&member)).await);
+        refused(dispatch(&host, respond(&member, ApprovalDecision::ApproveSession)).await);
+        let settings = native_settings(&host, &member).await;
+        assert_eq!(
+            settings.model.map(|model| model.id).as_deref(),
+            Some("frozen")
+        );
+        let record = host.workspace.record(&member).expect("member record");
+        assert_eq!(
+            record.model.map(|model| model.id).as_deref(),
+            Some("frozen")
+        );
+        let (runtime, _) = host
+            .workspace
+            .live_runtime(&member)
+            .expect("lookup")
+            .expect("live member");
+        let native = runtime.snapshot().await.expect("native snapshot");
+        assert_eq!(
+            native.modes.map(|modes| modes.current).as_deref(),
+            Some("ask")
+        );
+        assert_eq!(
+            native.approvals.len(),
+            1,
+            "no standing approval was granted"
+        );
+
+        // A person keeps control over the member's turns and requests.
+        for command in [
+            respond(&member, ApprovalDecision::ApproveOnce),
+            WorkspaceCommand::Interrupt {
+                session_id: member.clone(),
+            },
+            WorkspaceCommand::RenameSession {
+                session_id: member.clone(),
+                title: "Reviewer".into(),
+            },
+            WorkspaceCommand::Snapshot {
+                session_id: member.clone(),
+            },
+        ] {
+            let result = dispatch(&host, command).await;
+            assert!(result.is_ok(), "{result:?}");
+        }
+
+        // The same verbs reach an ordinary chat.
+        for command in [
+            set_model(&chat, &wider),
+            respond(&chat, ApprovalDecision::ApproveSession),
+            send(&chat, PromptMode::Prompt),
+        ] {
+            let result = dispatch(&host, command).await;
+            assert!(result.is_ok(), "{result:?}");
+        }
+        select_session_mode(&host, set_mode(&chat))
+            .await
+            .expect("an ordinary chat changes mode");
+        runtime_settings(&host, set_settings(&chat, &frozen))
+            .await
+            .expect("an ordinary chat changes settings");
+        let settings = native_settings(&host, &chat).await;
+        assert_eq!(
+            settings.model.map(|model| model.id).as_deref(),
+            Some("frozen")
+        );
+
+        host.workspace.shutdown_all().await;
         cleanup(host, root);
     }
 }
