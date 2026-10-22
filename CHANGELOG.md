@@ -6,6 +6,8 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-10-22
+
 ### Added
 
 - Fusion (ADR-043, docs/FUSION.md): a new-chat mode that pairs a lead (Claude Code or Codex) with one persistent sidekick (Claude Code, Codex or Pi) in the same folder. The lead gets a `sidekick` tool to brief, wait for, correct, steer, stop and review the sidekick; reports arrive once, as the tool result or as one follow-up when the lead is idle, with PiUI facts (changed files, approvals) kept apart from the sidekick's own text. Pairs never give the sidekick more authority than the lead; a stopped or interrupted round is proven finished before anything else starts, and a restart never replays work.
