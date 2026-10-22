@@ -1,0 +1,27 @@
+{
+  "timestamp": "2026-10-22T20:25:00+07:00",
+  "commit": "c6464b9",
+  "branch": "feat/fusion (PR #21); 7ed7abe after it changes only a Windows test",
+  "changes": "0.2.8: Fusion Ф1 (ADR-043): sidekick host tool for the lead, broker-owned persistent sidekick session, rounds with a stop barrier, durable delivery records, call identity with tombstones, restart recovery; fixes from two read-only Codex reviews (gpt-6.1-sol and gpt-6-astra)",
+  "release": {
+    "portable": { "path": "artifacts/PiUI_0.2.8_windows_x86_64.exe", "bytes": 36310016, "sha256": "60459255f9a2ba6565a2d5b6602fdc06c4f46b9edd2d287b7bd9e1bd1d91feb9" },
+    "installer": { "path": "artifacts/PiUI_0.2.8_x64-setup.exe", "bytes": 9689482, "sha256": "7b68ae1b04f2e5b673e5d828ee5e6451174302025929201acd9dc4be1884f4b5" },
+    "authenticode": "NotSigned (no certificate configured)",
+    "updater": "not configured; the app makes no update checks",
+    "installed": "desktop shortcut PiUI.lnk now points to the 0.2.8 portable executable (was 0.2.7)",
+    "launch": "not performed: launching would load the owner's real projects and enabled schedules"
+  },
+  "supersedes": "0.2.7; its artifacts were replaced by this build",
+  "downgrade": "fusion-v1/ journal and sidekick session records are unknown to 0.2.7, which ignores them; Fusion chats are not usable there",
+  "verification": {
+    "local": "before the second review fixes: desktop cargo test 419 passed; workspace tests passed; clippy -D warnings and fmt clean; pnpm check 0 errors; pnpm test 944 passed; contract:test 205 passed; repo:check passed; perf:smoke 159285 bytes gzip; UI Lab E2E 142/142; bridge node --test 197 passed; Tauri WebView2 E2E passed",
+    "ci": "PR #21 at 7ed7abe: Frontend quality, UI Lab E2E and Rust windows passed; Rust ubuntu was still running when this record was written",
+    "artifactHashes": "artifacts equal target/release outputs and SHA256SUMS.txt; copies in D:/Projects/PIUI/artifacts verified"
+  },
+  "notVerified": "packaged WebView2 app; a real paid lead/sidekick Fusion run (Ф1.5, left to the owner)",
+  "cleanup": {
+    "removed": ["worktree target/ (26558714733 bytes)", "worktree artifacts/ (copied to the main checkout)", "artifacts of 0.2.7"],
+    "freeBytesBeforeCleanup": 181899694080,
+    "freeBytesAfter": 205592268800
+  }
+}
