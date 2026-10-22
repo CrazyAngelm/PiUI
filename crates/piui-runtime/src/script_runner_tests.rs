@@ -502,23 +502,31 @@ mod powershell {
     /// alongside the rest of the suite have stalled past the step timeout.
     static ONE_AT_A_TIME: tokio::sync::Mutex<bool> = tokio::sync::Mutex::const_new(false);
 
-    /// Takes the test lock and, once per process, starts Windows PowerShell
-    /// outside any step timeout: its first start on a fresh CI runner has
-    /// taken over a minute, which is runner warm-up, not the runner's
-    /// behaviour under test.
+    /// Takes the test lock and, once per process, runs one JSON script
+    /// through the real runner (same interpreter arguments and allowlisted
+    /// environment) outside any test timeout. On a fresh CI runner the first
+    /// such script has taken over a minute while PowerShell starts and loads
+    /// its JSON cmdlets: runner warm-up, not the behaviour under test.
     async fn serial() -> tokio::sync::MutexGuard<'static, bool> {
         let mut warmed = ONE_AT_A_TIME.lock().await;
         if !*warmed {
-            if let Some(program) = windows_powershell() {
-                let warm_up = tokio::process::Command::new(program)
-                    .args(["-NoProfile", "-NonInteractive", "-Command", "exit 0"])
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .kill_on_drop(true)
-                    .status();
-                let _ = tokio::time::timeout(Duration::from_secs(300), warm_up).await;
-            }
+            let fixture = Fixture::new("ps-warm-up");
+            let started = std::time::Instant::now();
+            let (_keep, cancel) = watch::channel(false);
+            let warm_up = launch(
+                &fixture,
+                "[Console]::In.ReadToEnd() | ConvertFrom-Json | ConvertTo-Json -Compress | Out-Null
+",
+                "ps-warm-up",
+                300,
+            )
+            .run(cancel)
+            .await;
+            eprintln!(
+                "PowerShell warm-up took {:?}: {:?}",
+                started.elapsed(),
+                warm_up.map(|run| run.outcome)
+            );
             *warmed = true;
         }
         warmed
