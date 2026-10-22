@@ -143,6 +143,15 @@ const step = object({
     script: { runtime: enumOf(['node', 'python', 'powershell']), source: string, timeoutSeconds: u32 },
     // v6.5 plugin nodes; the configuration is a flat JSON object.
     plugin: { pluginId: string, nodeType: string, config: json },
+    // v6.7 sub-pipelines: child input name -> value, parent run input or dependency result.
+    pipeline: {
+      launchCommandId: string,
+      inputs: mapOf(tagged('kind', {
+        value: { value: json },
+        input: { name: string },
+        step: { stepId: string, field: option(string) },
+      })),
+    },
   })),
   // v6.4 pinned data; the host checks its bounds and where it may be used.
   pinnedOutput: option(object({
@@ -173,7 +182,15 @@ const pipelineInput = object({
 /** Run input values are `BTreeMap<String, serde_json::Value>`; the coordinator checks their kinds. */
 const runInputValues = withDefault(mapOf(json));
 
-export const pipelineSchema = object({ id: string, name: string, steps: arrayOf(step), inputs: withDefault(arrayOf(pipelineInput)) });
+/** v6.7: a declared result of a whole pipeline. */
+const pipelineOutput = object({
+  name: string,
+  kind: enumOf(['text', 'number', 'boolean', 'text-list', 'artifact']),
+  sourceStepId: string,
+  field: option(string),
+});
+
+export const pipelineSchema = object({ id: string, name: string, steps: arrayOf(step), inputs: withDefault(arrayOf(pipelineInput)), outputs: withDefault(arrayOf(pipelineOutput)) });
 export const launchCommandSchema = object({ id: string, name: string, teamId: string, pipelineId: string });
 
 /** Host v7.2 event rules (`EventTrigger`, kebab-case kinds). */

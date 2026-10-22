@@ -1,0 +1,143 @@
+{
+  "format": "piui-system",
+  "version": 5,
+  "name": "Development with testing",
+  "orchestrator": "developer",
+  "inputs": [
+    {
+      "name": "task",
+      "label": "Task",
+      "kind": "long-text",
+      "required": true
+    }
+  ],
+  "outputs": [
+    {
+      "name": "passed",
+      "kind": "boolean",
+      "agent": "testing",
+      "field": "passed"
+    },
+    {
+      "name": "summary",
+      "kind": "text",
+      "agent": "report"
+    }
+  ],
+  "agents": [
+    {
+      "id": "developer",
+      "profile": {
+        "name": "Developer",
+        "harness": "codex",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "workspace-write",
+        "instructions": "Implement the requested change in this repository with the smallest correct edit. Keep unrelated files unchanged.",
+        "toolPolicy": {
+          "rules": []
+        },
+        "serviceTier": "standard"
+      },
+      "task": "{{input.task}}\n\nReturn a JSON object with summary: the files you changed and what each change does.",
+      "resultFields": [
+        {
+          "name": "summary",
+          "kind": "text"
+        }
+      ],
+      "position": {
+        "x": 60,
+        "y": 100
+      }
+    },
+    {
+      "id": "testing",
+      "executor": {
+        "type": "pipeline",
+        "pipeline": "Testing",
+        "inputs": {
+          "changes": {
+            "kind": "step",
+            "agent": "developer",
+            "field": "summary"
+          },
+          "focus": {
+            "kind": "value",
+            "value": "regressions in the changed files"
+          }
+        }
+      },
+      "profile": {
+        "name": "Testing",
+        "harness": "codex",
+        "model": "pipeline",
+        "permissionMode": "read-only",
+        "instructions": "",
+        "toolPolicy": {
+          "rules": []
+        }
+      },
+      "task": "",
+      "resultFields": [
+        {
+          "name": "passed",
+          "kind": "boolean"
+        },
+        {
+          "name": "report",
+          "kind": "text"
+        }
+      ],
+      "position": {
+        "x": 340,
+        "y": 100
+      }
+    },
+    {
+      "id": "report",
+      "executor": {
+        "type": "llm"
+      },
+      "profile": {
+        "name": "Report",
+        "harness": "codex",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "read-only",
+        "instructions": "Write for the person who asked for the change. State only what the results show.",
+        "toolPolicy": {
+          "rules": []
+        },
+        "serviceTier": "standard"
+      },
+      "task": "Summarize in three sentences what was changed and whether the tests passed. If they did not, name the first failure from the test report.",
+      "inputBindings": [
+        {
+          "sourceStepId": "testing",
+          "field": "passed",
+          "name": "passed"
+        },
+        {
+          "sourceStepId": "testing",
+          "field": "report",
+          "name": "testReport"
+        }
+      ],
+      "position": {
+        "x": 620,
+        "y": 100
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "developer",
+      "to": "testing",
+      "kind": "result"
+    },
+    {
+      "from": "testing",
+      "to": "report",
+      "kind": "result"
+    }
+  ]
+}

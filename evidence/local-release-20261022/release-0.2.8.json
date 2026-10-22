@@ -1,0 +1,43 @@
+{
+  "timestamp": "2026-10-22T22:14:00+07:00",
+  "commit": "30c70dd",
+  "branch": "feat/fusion (PR #21)",
+  "changes": "0.2.8: Fusion Ф1 (ADR-043): sidekick host tool for the lead, broker-owned persistent sidekick session, rounds with a stop barrier, durable delivery records, call identity with tombstones, restart recovery; fixes from two read-only Codex reviews (gpt-6.1-sol and gpt-6-astra)",
+  "release": {
+    "portable": {
+      "path": "artifacts/PiUI_0.2.8_windows_x86_64.exe",
+      "bytes": 36310016,
+      "sha256": "e88f98991e3081617d40dd929d197e108bb12d903721098c78e1c33aa6ddcbaf"
+    },
+    "installer": {
+      "path": "artifacts/PiUI_0.2.8_x64-setup.exe",
+      "bytes": 9687203,
+      "sha256": "c299567633963a716b89ce87a157cbc3c23e6729f151b0ba70ee7a501aa771e4"
+    },
+    "authenticode": "NotSigned (no certificate configured)",
+    "updater": "not configured; the app makes no update checks",
+    "installed": "desktop shortcut PiUI.lnk now points to the 0.2.8 portable executable (was 0.2.7)",
+    "launch": "not performed: launching would load the owner's real projects and enabled schedules"
+  },
+  "supersedes": "0.2.7; its artifacts were replaced by this build",
+  "downgrade": "fusion-v1/ journal and sidekick session records are unknown to 0.2.7, which ignores them; Fusion chats are not usable there",
+  "verification": {
+    "local": "before the second review fixes: desktop cargo test 419 passed; workspace tests passed; clippy -D warnings and fmt clean; pnpm check 0 errors; pnpm test 944 passed; contract:test 205 passed; repo:check passed; perf:smoke 159285 bytes gzip; UI Lab E2E 142/142; bridge node --test 197 passed; Tauri WebView2 E2E passed; after bec9ad8: pnpm check 0 errors, desktop vitest 948 passed",
+    "ci": "PR #21 at 30c70dd: Frontend quality, Rust ubuntu, Rust windows, UI Lab E2E and Tauri WebView2 E2E passed",
+    "artifactHashes": "artifacts equal target/release outputs and SHA256SUMS.txt; copies in D:/Projects/PIUI/artifacts verified"
+  },
+  "notVerified": "packaged WebView2 app; a real paid lead/sidekick Fusion run (Ф1.5, left to the owner)",
+  "cleanup": {
+    "removed": [
+      "worktree target/ (26558714733 bytes)",
+      "worktree artifacts/ (copied to the main checkout)",
+      "artifacts of 0.2.7",
+      "worktree target/ of the rebuild (2241663233 bytes) and its artifacts/ copy"
+    ],
+    "freeBytesBeforeCleanup": 181899694080,
+    "freeBytesAfter": 205592268800,
+    "rebuildFreeBytesBefore": 194728706048,
+    "rebuildFreeBytesAfter": 196824739840
+  },
+  "rebuild": "first built from c6464b9 (portable 6045925…, installer 7b68ae1…); rebuilt the same version from 30c70dd to ship bec9ad8 (a late preference answer no longer undoes a newer theme choice)"
+}

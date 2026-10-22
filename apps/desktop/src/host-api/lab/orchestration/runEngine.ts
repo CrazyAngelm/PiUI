@@ -6,6 +6,7 @@ import type {
 import { runInputSection, substituteInputTokens } from '../../runInputs';
 import { executorKind, isHostExecutedStep, scriptResult } from '../../stepExecutors';
 import { pinnedResult, REVIEW_RETRY_PINNED } from '../../pinnedData';
+import type { SubpipelineResult } from '../../subpipelines';
 
 /**
  * Pure run transitions ported from `piui-orchestration` (coordinator.rs and
@@ -519,6 +520,38 @@ export function completeScript(run: LabRun, stepId: string, executionId: string,
 }
 
 /**
+ * `complete_subpipeline_task` (v6.7): the parent step of a child run ends
+ * with it. Declared outputs are result data, otherwise the child's last text
+ * is the recorded output; review and approval then apply.
+ */
+export function completeSubpipeline(run: LabRun, stepId: string, executionId: string, result: SubpipelineResult): void {
+  const step = stepOf(run, stepId);
+  if (step === undefined) throw new CoordinatorFault('unknown-task', `unknown task: ${stepId}`);
+  if (step.executor?.type !== 'pipeline') throw new CoordinatorFault('invalid', `step ${stepId} is not run by this executor`);
+  const task = requireTask(run, stepId);
+  if (task.status !== 'running') throw new CoordinatorFault('invalid', `task ${stepId} is ${task.status}`);
+  if (task.execution?.id !== executionId) throw new CoordinatorFault('invalid', `stale child run for task ${stepId}`);
+  if (result.status === 'succeeded') task.status = 'succeeded';
+  else {
+    task.status = 'failed';
+    task.failure = result.failure;
+  }
+  task.revision += 1;
+  if (result.status === 'failed') cancelReady(run);
+  run.revision += 1;
+  refreshStatus(run);
+  const data = result.status === 'succeeded' ? result.data : undefined;
+  const text = result.status === 'succeeded' ? result.text : undefined;
+  if (data === undefined) delete task.resultData;
+  else task.resultData = data;
+  if (text === undefined) delete task.output;
+  else task.output = { text };
+  if (task.status === 'succeeded') applyReviewAndApproval(run, step, task);
+  advanceConditions(run);
+  refreshStatus(run);
+}
+
+/**
  * `review_limit_reached`: rounds are this reviewer's archived attempts that
  * returned a result, plus the one completing now.
  */
@@ -724,6 +757,8 @@ export function retryUncertain(run: LabRun, expectedRevision: number, stepId: st
 export function restoreInterrupted(run: LabRun): void {
   let changed = false;
   for (const task of run.tasks) {
+    // A dispatched sub-pipeline (v6.7) keeps running with its durable child run.
+    if (task.status === 'running' && stepOf(run, task.stepId)?.executor?.type === 'pipeline') continue;
     if (task.status === 'running' || (task.status === 'ready' && task.leaseId !== undefined)) {
       task.status = 'uncertain';
       delete task.leaseId;

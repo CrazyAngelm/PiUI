@@ -35,6 +35,17 @@ Scale:
 | R-19 | Generic file references are not sufficiently understandable to models/tools | Medium | Medium | G3 |
 | R-20 | Scope creep turns PiUI into an IDE/dashboard | High | High | All gates |
 | R-21 | Prime Agent 0.8.1 shared-daemon lifecycle cannot be isolated or contained safely | High | Critical | G0/G2/G3 |
+| R-22 | Fusion: a long host-tool wait is cut by the lead's transport (Claude Code MCP ~64 s) while the host keeps waiting | High | High | Fusion Ф1 |
+| R-23 | Fusion: a sidekick round is matched to the wrong turn or answer (late steer, empty turn, merged follow-up) | Medium | High | Fusion Ф1 |
+| R-24 | Fusion: two writers in one folder after Stop, reset or replacement | Medium | Critical | Fusion Ф1 |
+| R-25 | Fusion: pair quality loss on judgment-heavy work | Medium | High | Fusion Ф1.5 |
+| R-26 | Fusion: hidden cost of auto-delivery turns, waits and retries | Medium | Medium | Fusion Ф1.5 |
+| R-27 | Fusion: prompt injection or forged host facts through sidekick reports | Medium | High | Fusion Ф1 |
+| R-28 | Fusion: two subscription sessions per chat hit plan limits | High | Medium | Fusion Ф2 |
+| R-29 | Fusion: adapters cannot enforce the full role policy (Hermes, ACP, Prime; Claude workspace-write shell) | High | High | Fusion Ф1/Ф2 |
+| R-30 | Fusion: a sidekick reopened by an ordinary path loses its frozen policy | Medium | Critical | Fusion Ф1 |
+| R-31 | Fusion: an ambiguous delivery or round after a crash is replayed or lost | Medium | High | Fusion Ф1 |
+| R-32 | Fusion: per-round usage is miscounted (cumulative Codex receipts) | High | Medium | Fusion Ф2 |
 
 ## 3. Details and Exit Criteria
 
@@ -219,6 +230,88 @@ Scale:
 **Current mitigation:** production Prime start/continue/prompt/stop fails closed as `NOT_SUPPORTED`; the UI retains read-only history and explains that the shared daemon is the blocker. PiUI never connects to, adopts, creates, or terminates the user's Prime supervisor.
 
 **Exit:** authenticate acquisition/provenance for the actual executable bundle, own a non-default daemon endpoint and complete lifecycle, and prove first-launch plus pre-existing-daemon containment on Windows and Linux without affecting another client. Until then, keep Prime live control disabled.
+
+### R-22 — Fusion host-tool wait vs. lead transport
+
+**Signal (measured, `docs/FUSION_EVIDENCE.md` S1):** Claude Code 2.1.302 returns "The operation timed out." to the model about 64 s into an MCP tool call, while the host request keeps running and gets no cancellation signal. Codex dynamic tools waited 660 s.
+
+**Mitigation:** the Claude adapter sets `MCP_TOOL_TIMEOUT` for sessions with the `sidekick` tool; each wait is bounded by the verified transport deadline; a report answered after that deadline is not counted as delivered through the tool.
+
+**Exit:** adapter test per supported Claude Code version proves the configured deadline; host test proves a late tool answer falls back to auto-delivery.
+
+### R-23 — Fusion round correlation
+
+**Signal (measured, S2):** an empty turn succeeds and leaves the previous round's answer as the latest; Pi merges a follow-up into the running turn and does not start a follow-up while idle; Claude runs an unconsumed steer as a second native run in the same admitted turn.
+
+**Mitigation:** round = admitted PiUI turn; host-side round queue; rounds sent with `prompt` while idle; "no answer" when a round produced no new final answer; `roundId` on round operations.
+
+**Exit:** fixture tests for each case on Claude Code, Codex and Pi.
+
+### R-24 — Fusion second writer
+
+**Signal:** Stop, reset or replacement starts a new writer before the old one is proven stopped.
+
+**Mitigation:** pair-level stopping barrier; uncertain stays uncertain; one writer by default.
+
+**Exit:** host test where a late sidekick event after Stop neither wakes the lead nor overlaps a replacement.
+
+### R-25 — Fusion quality on judgment-heavy work
+
+**Signal:** Cognition's React/Redux case; smaller sidekicks underperform solo leads in independent clones.
+
+**Mitigation:** lead keeps judgment; pair profiles; early solo-vs-pair evaluation gates further work.
+
+**Exit:** Ф1.5 exploratory evaluation recorded under `evidence/fusion-eval/`.
+
+### R-26 — Fusion hidden cost
+
+**Mitigation:** full pair cost in statistics and evaluation; auto-delivery switch.
+
+**Exit:** evaluation reports total pair cost against solo.
+
+### R-27 — Fusion report injection and forged facts
+
+**Mitigation:** report body and host facts are separate typed fields; reserved delimiters escaped; reports never change lead authority; people approve sidekick actions.
+
+**Exit:** fixtures with forged closing markers, fake facts and embedded instructions.
+
+### R-28 — Fusion subscription limits
+
+**Signal:** during Ф0 Claude Code reported the weekly limit close after a handful of small turns.
+
+**Mitigation:** only unmodified CLIs on the user's sign-in (ADR-029); visible limits; optional fallback sidekick named by the person.
+
+**Exit:** limit notices from both roles reach the Fusion UI.
+
+### R-29 — Fusion role policy enforcement
+
+**Signal (measured, S5):** Claude Code `workspace-write` offers only deny/cancel for shell commands, so a sidekick cannot run verification; Codex `workspace-write` without a Windows sandbox setting rejects every command; Hermes and ACP reject explicit subagent and permission settings; Prime has no headless approvals.
+
+**Mitigation:** v1 admits Claude Code and fresh Codex leads, Claude Code (full access), Codex (verified Windows sandbox) and Pi (full access) sidekicks; everything else fails before start with a reason.
+
+**Exit:** admission tests per harness and mode; a separate ADR before any workspace-write-with-commands mode.
+
+### R-30 — Fusion sidekick reopened without its policy
+
+**Signal (static, S11):** every create/reopen path attaches `board` and plugin MCP; ordinary reopen carries no instructions or restrictions.
+
+**Mitigation:** host-private sidekick store, broker-only reopen, explicit board/plugin suppression, sidekick ids rejected by WebView session commands.
+
+**Exit:** host test reopening a sidekick after restart without board, plugins or native subagents.
+
+### R-31 — Fusion delivery and round uncertainty after a crash
+
+**Mitigation:** durable delivery records on the composer outbox model; uncertain plus reconciliation; no automatic replay; identity tombstones survive compaction.
+
+**Exit:** crash-window tests between native admission and journal write.
+
+### R-32 — Fusion usage accounting
+
+**Signal (measured, S4):** Codex emits several cumulative `codex-session-total` receipts per turn.
+
+**Mitigation:** adapter-aware normalisation with round baselines and unknown values.
+
+**Exit:** accounting tests per adapter.
 
 ## 4. Secondary Risks
 

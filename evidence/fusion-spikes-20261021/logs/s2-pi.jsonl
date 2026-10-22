@@ -1,0 +1,95 @@
+{"t":41658,"kind":"event","who":"sidekick","event":{"type":"status","status":"idle"}}
+{"t":41661,"kind":"event","who":"sidekick","event":{"type":"binding","nativeId":"01a15eb8-2480-75d4-8a30-9498f4b8c9c8","nativePath":"D:\\Projects\\PIUI\\target\\fusion-spikes\\homes\\s2-pi\\sessions\\2026-10-21T13-48-08-706Z_01a15eb8-2480-75d4-8a30-9498f4b8c9c8.jsonl"}}
+{"t":41661,"kind":"started","harness":"pi"}
+{"t":41661,"kind":"scenario","name":"R1 normal"}
+{"t":41667,"kind":"event","who":"sidekick","event":{"type":"status","status":"running"}}
+{"t":41673,"kind":"block","who":"sidekick","id":"pi-message-c6c289e49e9c05b214586038","blockKind":"user","status":"complete","text":"S2-R1 normal round"}
+{"t":45502,"kind":"provider-request","index":0,"inputItems":2,"userTexts":["S2-R1 normal round"]}
+{"t":45503,"kind":"provider-sees","index":0,"tag":"S2-R1","texts":["S2-R1 normal round"],"hasToolOutput":false}
+{"t":45542,"kind":"block","who":"sidekick","id":"pi-stream-2","blockKind":"assistant","status":"streaming","text":""}
+{"t":45543,"kind":"block","who":"sidekick","id":"pi-stream-2","blockKind":"assistant","status":"complete","text":"ANSWER S2-R1"}
+{"t":45558,"kind":"event","who":"sidekick","event":{"type":"usage","usage":{"id":"b8952d67e438684b8e814a81c549f58fb52478073c1613d396646760b4b667a3","inputTokens":10,"outputTokens":2,"cacheReadTokens":0,"cacheWriteTokens":0,"totalTokens":12}}}
+{"t":45559,"kind":"block","who":"sidekick","id":"pi-stream-2","blockKind":"assistant","status":"complete","text":"ANSWER S2-R1"}
+{"t":45559,"kind":"event","who":"sidekick","event":{"type":"turnCompleted","outcome":"succeeded"}}
+{"t":45560,"kind":"event","who":"sidekick","event":{"type":"status","status":"idle"}}
+{"t":47064,"kind":"scenario-result","name":"R1 normal","completions":["succeeded"],"lastAssistant":"ANSWER S2-R1","note":{"outcome":"succeeded"}}
+{"t":47065,"kind":"scenario","name":"R2 steer during sampling"}
+{"t":47066,"kind":"event","who":"sidekick","event":{"type":"status","status":"running"}}
+{"t":47067,"kind":"block","who":"sidekick","id":"pi-message-92303aa084836e18e31fc316","blockKind":"user","status":"complete","text":"S2-R2 slow answer"}
+{"t":47072,"kind":"provider-request","index":1,"inputItems":4,"userTexts":["S2-R1 normal round","S2-R2 slow answer"]}
+{"t":47073,"kind":"provider-sees","index":1,"tag":"S2-R2","texts":["S2-R1 normal round","S2-R2 slow answer"],"hasToolOutput":false}
+{"t":51186,"kind":"block","who":"sidekick","id":"pi-stream-4","blockKind":"assistant","status":"streaming","text":""}
+{"t":51187,"kind":"block","who":"sidekick","id":"pi-stream-4","blockKind":"assistant","status":"complete","text":"ANSWER S2-R2"}
+{"t":51187,"kind":"event","who":"sidekick","event":{"type":"usage","usage":{"id":"1c5fbf4be5f3b0e313a8fe8721cf47703d50c17af3576756bdf249abebeb63f8","inputTokens":10,"outputTokens":2,"cacheReadTokens":0,"cacheWriteTokens":0,"totalTokens":12}}}
+{"t":51187,"kind":"block","who":"sidekick","id":"pi-stream-4","blockKind":"assistant","status":"complete","text":"ANSWER S2-R2"}
+{"t":51188,"kind":"block","who":"sidekick","id":"pi-message-5d652c98a791ef10a9153b4d","blockKind":"user","status":"complete","text":"S2-R2-STEER extra input"}
+{"t":51383,"kind":"provider-request","index":2,"inputItems":6,"userTexts":["S2-R1 normal round","S2-R2 slow answer","S2-R2-STEER extra input"]}
+{"t":51383,"kind":"provider-sees","index":2,"tag":"S2-R2-STEER","texts":["S2-R1 normal round","S2-R2 slow answer","S2-R2-STEER extra input"],"hasToolOutput":false}
+{"t":51389,"kind":"block","who":"sidekick","id":"pi-stream-6","blockKind":"assistant","status":"streaming","text":""}
+{"t":51390,"kind":"block","who":"sidekick","id":"pi-stream-6","blockKind":"assistant","status":"complete","text":"ANSWER S2-R2-STEER"}
+{"t":51390,"kind":"event","who":"sidekick","event":{"type":"usage","usage":{"id":"569a18038a36f00a31bbe3fbf1b90e8fb405930c16aef997d9f7fd092b78d59e","inputTokens":10,"outputTokens":2,"cacheReadTokens":0,"cacheWriteTokens":0,"totalTokens":12}}}
+{"t":51390,"kind":"block","who":"sidekick","id":"pi-stream-6","blockKind":"assistant","status":"complete","text":"ANSWER S2-R2-STEER"}
+{"t":51391,"kind":"event","who":"sidekick","event":{"type":"turnCompleted","outcome":"succeeded"}}
+{"t":51391,"kind":"event","who":"sidekick","event":{"type":"status","status":"idle"}}
+{"t":60906,"kind":"scenario-result","name":"R2 steer during sampling","completions":["succeeded"],"lastAssistant":"ANSWER S2-R2-STEER","note":{"steer":"accepted","first":"succeeded","second":"none"}}
+{"t":60907,"kind":"scenario","name":"R4 steer after completion"}
+{"t":62411,"kind":"scenario-result","name":"R4 steer after completion","completions":[],"lastAssistant":"ANSWER S2-R2-STEER","note":"no-active-turn"}
+{"t":62412,"kind":"scenario","name":"R5 no final answer"}
+{"t":62414,"kind":"event","who":"sidekick","event":{"type":"status","status":"running"}}
+{"t":62414,"kind":"block","who":"sidekick","id":"pi-message-092081140b677b45dbe983b2","blockKind":"user","status":"complete","text":"S2-R5 empty output"}
+{"t":62422,"kind":"provider-request","index":3,"inputItems":8,"userTexts":["S2-R1 normal round","S2-R2 slow answer","S2-R2-STEER extra input","S2-R5 empty output"]}
+{"t":62422,"kind":"provider-sees","index":3,"tag":"S2-R5","texts":["S2-R1 normal round","S2-R2 slow answer","S2-R2-STEER extra input","S2-R5 empty output"],"hasToolOutput":false}
+{"t":62426,"kind":"event","who":"sidekick","event":{"type":"usage","usage":{"id":"5ddf45d89a54f090da3cf5e75291899b54b9ae630377f70133de536d681c5640","inputTokens":10,"outputTokens":2,"cacheReadTokens":0,"cacheWriteTokens":0,"totalTokens":12}}}
+{"t":62426,"kind":"event","who":"sidekick","event":{"type":"turnCompleted","outcome":"succeeded"}}
+{"t":62426,"kind":"event","who":"sidekick","event":{"type":"status","status":"idle"}}
+{"t":63940,"kind":"scenario-result","name":"R5 no final answer","completions":["succeeded"],"lastAssistant":"ANSWER S2-R2-STEER","note":{"outcome":"succeeded"}}
+{"t":63940,"kind":"scenario","name":"R6 provider failure"}
+{"t":63942,"kind":"event","who":"sidekick","event":{"type":"status","status":"running"}}
+{"t":63942,"kind":"block","who":"sidekick","id":"pi-message-4c485bf58487304aa08ffe56","blockKind":"user","status":"complete","text":"S2-R6 failing"}
+{"t":63946,"kind":"provider-request","index":4,"inputItems":9,"userTexts":["S2-R1 normal round","S2-R2 slow answer","S2-R2-STEER extra input","S2-R5 empty output","S2-R6 failing"]}
+{"t":63947,"kind":"provider-sees","index":4,"tag":"S2-R6","texts":["S2-R1 normal round","S2-R2 slow answer","S2-R2-STEER extra input","S2-R5 empty output","S2-R6 failing"],"hasToolOutput":false}
+{"t":63952,"kind":"event","who":"sidekick","event":{"type":"usage","usage":{"id":"a2cfb125c5a4deafd12e6ce9e73a706a4360b657596d66d7d0d398c1f16e1e38","inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheWriteTokens":0,"totalTokens":0}}}
+{"t":63953,"kind":"event","who":"sidekick","event":{"type":"error","message":"The Pi turn failed."}}
+{"t":63953,"kind":"event","who":"sidekick","event":{"type":"turnCompleted","outcome":"failed"}}
+{"t":63953,"kind":"event","who":"sidekick","event":{"type":"status","status":"idle"}}
+{"t":65459,"kind":"scenario-result","name":"R6 provider failure","completions":["failed"],"lastAssistant":"ANSWER S2-R2-STEER","note":{"outcome":"failed"}}
+{"t":65460,"kind":"scenario","name":"R7 follow-up while running"}
+{"t":65461,"kind":"event","who":"sidekick","event":{"type":"status","status":"running"}}
+{"t":65462,"kind":"block","who":"sidekick","id":"pi-message-14817f52178f6bc3d9bde29d","blockKind":"user","status":"complete","text":"S2-R7 slow"}
+{"t":65470,"kind":"provider-request","index":5,"inputItems":10,"userTexts":["S2-R1 normal round","S2-R2 slow answer","S2-R2-STEER extra input","S2-R5 empty output","S2-R6 failing","S2-R7 slow"]}
+{"t":65471,"kind":"provider-sees","index":5,"tag":"S2-R7","texts":["S2-R1 normal round","S2-R2 slow answer","S2-R2-STEER extra input","S2-R5 empty output","S2-R6 failing","S2-R7 slow"],"hasToolOutput":false}
+{"t":68486,"kind":"block","who":"sidekick","id":"pi-stream-10","blockKind":"assistant","status":"streaming","text":""}
+{"t":68486,"kind":"block","who":"sidekick","id":"pi-stream-10","blockKind":"assistant","status":"complete","text":"ANSWER S2-R7"}
+{"t":68486,"kind":"event","who":"sidekick","event":{"type":"usage","usage":{"id":"31b48019e3ee58ff08343e90b4a7348c8b73332e57af9ee05328c70409013a0d","inputTokens":10,"outputTokens":2,"cacheReadTokens":0,"cacheWriteTokens":0,"totalTokens":12}}}
+{"t":68486,"kind":"block","who":"sidekick","id":"pi-stream-10","blockKind":"assistant","status":"complete","text":"ANSWER S2-R7"}
+{"t":68487,"kind":"block","who":"sidekick","id":"pi-message-7c40c44966823b3aaadf56ae","blockKind":"user","status":"complete","text":"S2-R7-FOLLOW queued"}
+{"t":68494,"kind":"provider-request","index":6,"inputItems":12,"userTexts":["S2-R1 normal round","S2-R2 slow answer","S2-R2-STEER extra input","S2-R5 empty output","S2-R6 failing","S2-R7 slow","S2-R7-FOLLOW queued"]}
+{"t":68494,"kind":"provider-sees","index":6,"tag":"S2-R7-FOLLOW","texts":["S2-R1 normal round","S2-R2 slow answer","S2-R2-STEER extra input","S2-R5 empty output","S2-R6 failing","S2-R7 slow","S2-R7-FOLLOW queued"],"hasToolOutput":false}
+{"t":68496,"kind":"block","who":"sidekick","id":"pi-stream-12","blockKind":"assistant","status":"streaming","text":""}
+{"t":68497,"kind":"block","who":"sidekick","id":"pi-stream-12","blockKind":"assistant","status":"complete","text":"ANSWER S2-R7-FOLLOW"}
+{"t":68497,"kind":"event","who":"sidekick","event":{"type":"usage","usage":{"id":"9fa59f3dd0c137c96ae60636b907bc9fcaf198de5405653ba7261a1ebab4f43a","inputTokens":10,"outputTokens":2,"cacheReadTokens":0,"cacheWriteTokens":0,"totalTokens":12}}}
+{"t":68497,"kind":"block","who":"sidekick","id":"pi-stream-12","blockKind":"assistant","status":"complete","text":"ANSWER S2-R7-FOLLOW"}
+{"t":68497,"kind":"event","who":"sidekick","event":{"type":"turnCompleted","outcome":"succeeded"}}
+{"t":68498,"kind":"event","who":"sidekick","event":{"type":"status","status":"idle"}}
+{"t":78001,"kind":"scenario-result","name":"R7 follow-up while running","completions":["succeeded"],"lastAssistant":"ANSWER S2-R7-FOLLOW","note":{"followUp":"accepted","first":"succeeded","second":"none"}}
+{"t":78018,"kind":"scenario","name":"R8 interrupt then prompt"}
+{"t":78031,"kind":"event","who":"sidekick","event":{"type":"status","status":"running"}}
+{"t":78031,"kind":"block","who":"sidekick","id":"pi-message-7dbf3115760dec349f5e9d29","blockKind":"user","status":"complete","text":"S2-R8 to interrupt"}
+{"t":78051,"kind":"provider-request","index":7,"inputItems":14,"userTexts":["S2-R1 normal round","S2-R2 slow answer","S2-R2-STEER extra input","S2-R5 empty output","S2-R6 failing","S2-R7 slow","S2-R7-FOLLOW queued","S2-R8 to interrupt"]}
+{"t":78052,"kind":"provider-sees","index":7,"tag":"S2-R8","texts":["S2-R1 normal round","S2-R2 slow answer","S2-R2-STEER extra input","S2-R5 empty output","S2-R6 failing","S2-R7 slow","S2-R7-FOLLOW queued","S2-R8 to interrupt"],"hasToolOutput":false}
+{"t":79055,"kind":"event","who":"sidekick","event":{"type":"usage","usage":{"id":"60d1764187b1b9ff9fc223fd58ecfaf7365a3fbeff7ddfdc93d5f45957a858df","inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheWriteTokens":0,"totalTokens":0}}}
+{"t":79056,"kind":"event","who":"sidekick","event":{"type":"turnCompleted","outcome":"interrupted"}}
+{"t":79057,"kind":"event","who":"sidekick","event":{"type":"status","status":"idle"}}
+{"t":79058,"kind":"event","who":"sidekick","event":{"type":"status","status":"running"}}
+{"t":79059,"kind":"block","who":"sidekick","id":"pi-message-14a5778faadeef870eb10998","blockKind":"user","status":"complete","text":"S2-R9 after interrupt"}
+{"t":79067,"kind":"provider-request","index":8,"inputItems":15,"userTexts":["S2-R1 normal round","S2-R2 slow answer","S2-R2-STEER extra input","S2-R5 empty output","S2-R6 failing","S2-R7 slow","S2-R7-FOLLOW queued","S2-R8 to interrupt","S2-R9 after interrupt"]}
+{"t":79068,"kind":"provider-sees","index":8,"tag":"S2-R9","texts":["S2-R1 normal round","S2-R2 slow answer","S2-R2-STEER extra input","S2-R5 empty output","S2-R6 failing","S2-R7 slow","S2-R7-FOLLOW queued","S2-R8 to interrupt","S2-R9 after interrupt"],"hasToolOutput":false}
+{"t":79071,"kind":"block","who":"sidekick","id":"pi-stream-15","blockKind":"assistant","status":"streaming","text":""}
+{"t":79071,"kind":"block","who":"sidekick","id":"pi-stream-15","blockKind":"assistant","status":"complete","text":"ANSWER S2-R9"}
+{"t":79071,"kind":"event","who":"sidekick","event":{"type":"usage","usage":{"id":"3f343caeed24c2c8cf27859cc60681ecd078942b8f5679a8af0d4d2f5369812c","inputTokens":10,"outputTokens":2,"cacheReadTokens":0,"cacheWriteTokens":0,"totalTokens":12}}}
+{"t":79072,"kind":"block","who":"sidekick","id":"pi-stream-15","blockKind":"assistant","status":"complete","text":"ANSWER S2-R9"}
+{"t":79072,"kind":"event","who":"sidekick","event":{"type":"turnCompleted","outcome":"succeeded"}}
+{"t":79072,"kind":"event","who":"sidekick","event":{"type":"status","status":"idle"}}
+{"t":80579,"kind":"scenario-result","name":"R8 interrupt then prompt","completions":["interrupted","succeeded"],"lastAssistant":"ANSWER S2-R9","note":{"first":"interrupted","next":"succeeded"}}
+{"t":80581,"kind":"event","who":"sidekick","event":{"type":"status","status":"stopping"}}
+{"t":80635,"kind":"event","who":"sidekick","event":{"type":"status","status":"closed"}}

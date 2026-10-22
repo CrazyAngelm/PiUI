@@ -160,7 +160,7 @@ A second host tool beside the coordinator `workspace` tool, enabled by
 | Claude Code | same local HTTP MCP server as coordination (bearer token), tool `board`, `--allowed-tools` gains `mcp__piui__board` (exact name follows the existing server name) |
 | Hermes / ACP | same HTTP MCP in `session/new`/`session/load` `mcpServers`; ACP needs `mcpCapabilities.http`, otherwise `unsupported-board-tool` |
 | Prime | second SDK custom tool |
-| Codex | second dynamic tool on fresh threads; resumed threads get none |
+| Codex | second dynamic tool on fresh threads; Codex persists it, so a resumed thread started with it keeps it and one started without it gets none |
 | Pi | none (no custom tools) |
 
 `runner.mjs` validates `BoardToolOperationV1` with exact key sets and emits
@@ -171,13 +171,14 @@ instruction block tells the agent to ask the person to update the card.
 
 The host offers the tool only when the project board is enabled, the
 project is not the personal chats pseudo-project, safe mode is off and
-`HarnessKind::supports_board_tool(resumed)` holds. Otherwise, with the board
-enabled, the session carries the notice `unsupported-board-tool` (or
-`unsupported-board-tool-resume` for a resumed Codex thread) and an ordinary
+`HarnessKind::supports_board_tool()` holds. Otherwise, with the board
+enabled, the session carries the notice `unsupported-board-tool` and an ordinary
 chat gets the short "ask the person to update the card" block: additive
 `SessionSnapshot.notices` and workspace event `{type:'notice', code}`
-(contracts/workspace-v15.ts). An adapter that finds out at start (ACP without
-HTTP MCP) emits the same notice. The write budget
+(contracts/workspace-v15.ts). An adapter that finds out at start emits the notice
+itself: ACP without HTTP MCP `unsupported-board-tool`, a resumed Codex thread
+whose rollout shows it was started without the board
+`unsupported-board-tool-resume`. The write budget
 (`MAX_AGENT_WRITES_PER_TURN`) is keyed by session and turn: every `prompt` or
 `follow-up` send starts a new turn; a `steer` joins the running one.
 

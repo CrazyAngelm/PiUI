@@ -30,6 +30,8 @@
   import { harnessConfiguration } from '../../harness-adapters';
   import RunInputsDialog from './inputs/RunInputsDialog.svelte';
   import { START_NODE_ID } from './canvas/StartNodeCard.svelte';
+  import { OUTPUT_NODE_ID } from './canvas/OutputNodeCard.svelte';
+  import OutputInspector from './OutputInspector.svelte';
   import { PipelineEditorStore } from './editorStore.svelte';
   import { TEMPLATES, buildTemplate, type TemplateId } from './templates';
   import Blocks from '@lucide/svelte/icons/blocks';
@@ -172,6 +174,15 @@
   /** Node types of active plugins for the Add menu (v6.5). */
   const pluginNodes = $derived(pluginNodeMenu(pluginRegistry.nodeTypes()));
 
+  /** Saved pipelines of this project a sub-pipeline step can run (v6.7): never this one. */
+  const subpipelineItems = $derived(editor.systems.filter((item) => item.id !== editor.graph.id));
+
+  function addSubpipeline(commandId: string): void {
+    if (editor.readOnly) return;
+    const point = api?.viewportCenter() ?? { x: 80, y: 80 };
+    editor.addSubpipelineNode(commandId, { x: point.x - 124, y: point.y - 50 });
+  }
+
   function addPluginNode(index: number): void {
     const entry = pluginNodes[index];
     if (editor.readOnly || entry === undefined) return;
@@ -222,7 +233,7 @@
 
   async function useUserTemplate(template: PipelineTemplateV1): Promise<void> {
     try {
-      await openTemplateDraft(graphFromTemplate(template));
+      await openTemplateDraft(graphFromTemplate(template, editor.systems));
     } catch (error) {
       toasts.error($t('This template could not be opened'), error instanceof Error ? error.message : undefined);
     }
@@ -239,7 +250,7 @@
       setTimeout(() => URL.revokeObjectURL(url), 5000);
       if (pinnedSteps.length) toasts.show({ title: $t('Pinned data is not exported'), description: $t('System files never include pinned data; the pins stay in PiUI.') });
     } catch (error) {
-      toasts.error($t('Could not export'), error instanceof Error ? error.message : undefined);
+      toasts.error($t('Could not export'), error instanceof Error ? $t(error.message) : undefined);
     }
   }
 
@@ -393,6 +404,13 @@
             ...(pluginNodes.length
               ? [{ type: 'separator' as const }, { type: 'label' as const, label: $t('Plugin nodes') }, ...pluginNodes.map((entry, index) => ({ label: entry.label, icon: Blocks, onSelect: () => addPluginNode(index) }))]
               : []),
+            ...(subpipelineItems.length
+              ? [
+                  { type: 'separator' as const },
+                  { type: 'label' as const, label: $t('Sub-pipelines') },
+                  ...subpipelineItems.slice(0, 12).map((item) => ({ label: item.name || $t('Untitled pipeline'), icon: Workflow, onSelect: () => addSubpipeline(item.id) })),
+                ]
+              : []),
             ...(profileItems.length
               ? [{ type: 'separator' as const }, { type: 'label' as const, label: $t('From library') }, ...profileItems.slice(0, 8).map((item) => ({ label: item.label, icon: Library, onSelect: () => void addFromLibrary(item.value) }))]
               : []),
@@ -462,6 +480,8 @@
       {/key}
     {:else if editor.selectedId === START_NODE_ID}
       <StartInspector {editor} onClose={() => (editor.selectedId = '')} />
+    {:else if editor.selectedId === OUTPUT_NODE_ID}
+      <OutputInspector {editor} onClose={() => (editor.selectedId = '')} />
     {/if}
     {#if assistantOpen && assistantModule}
       {#await assistantModule then module}
@@ -473,7 +493,7 @@
   </div>
 </section>
 
-<SaveTemplateDialog bind:open={saveTemplateOpen} graph={editor.graph} {workspaceId} {projectName} onSaved={() => void chatPipelines.loadLibrary(workspaceId)} />
+<SaveTemplateDialog bind:open={saveTemplateOpen} graph={editor.graph} {workspaceId} {projectName} pipelines={editor.systems} onSaved={() => void chatPipelines.loadLibrary(workspaceId)} />
 
 <RunInputsDialog
   bind:open={inputsOpen}

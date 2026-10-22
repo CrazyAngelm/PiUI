@@ -222,7 +222,7 @@
     try {
       const envelope = builderEnvelope({
         first: !sessionId,
-        draftJson: JSON.stringify(graphToSystemFile(editor.graph), null, 1),
+        draftJson: JSON.stringify(graphToSystemFile(editor.graph, editor.systems), null, 1),
         problems: [...editor.issues.map((issue) => issue.message), ...editor.preflight.map((issue) => issue.message)],
         harnesses: await choices(),
         text: message,
@@ -249,7 +249,7 @@
   function apply(messageId: string, answer: string): void {
     const proposal = readProposal(answer);
     if (!proposal?.ok) return;
-    const next = applyProposal(editor.graph, proposal.file);
+    const next = applyProposal(editor.graph, proposal.file, editor.systems);
     editor.replaceGraph(next);
     applied = { ...applied, [messageId]: true };
     toasts.success($t('Proposal applied to the draft'), $t('Undo with Ctrl+Z. Save to keep it.'));
@@ -330,7 +330,7 @@
           <MarkdownContent source={proposal ? proposal.prose : message.text} compact={true} />
           {#if message.streaming}<span class="caret" aria-hidden="true"></span>{/if}
           {#if proposal?.ok}
-            {@const summary = summarizeChange(editor.graph, applyProposal(editor.graph, proposal.file))}
+            {@const summary = summarizeChange(editor.graph, applyProposal(editor.graph, proposal.file, editor.systems))}
             <div class="proposal">
               <strong>{$t('Proposed pipeline')}: {proposal.file.name}</strong>
               {#if isEmptyChange(summary) || applied[message.id]}

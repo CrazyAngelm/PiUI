@@ -17,13 +17,18 @@
   import { Badge, Button, Checkbox, Dialog, EmptyState, IconButton, Spinner, Tabs } from '../../lib/ui';
   import Transcript from '../chat/transcript/Transcript.svelte';
   import Blocks from '@lucide/svelte/icons/blocks';
+  import Workflow from '@lucide/svelte/icons/workflow';
+  import SquareArrowOutUpRight from '@lucide/svelte/icons/square-arrow-out-up-right';
   import HarnessMark from '../shell/HarnessMark.svelte';
   import { harnessMeta } from '../harnessMeta';
   import { failureText } from './runGraph';
   import {
+    RUN_LABEL,
+    RUN_TONE,
     STEP_LABEL,
     STEP_TONE,
     canCancelTask,
+    childRunId,
     canRecordSucceeded,
     canRepeat,
     formatValue,
@@ -45,9 +50,11 @@
     /** Snapshot for a PiUI session id; loads it on demand. */
     snapshotFor: (sessionId: string) => SessionSnapshot | undefined;
     onOpenSession: (sessionId: string) => void;
+    /** Opens another run of this project, e.g. a sub-pipeline's child run (v6.7). */
+    onOpenRun?: (runId: string) => void;
     onClose: () => void;
   }
-  let { runs, run, view, snapshotFor, onOpenSession, onClose }: Props = $props();
+  let { runs, run, view, snapshotFor, onOpenSession, onOpenRun, onClose }: Props = $props();
 
   type Tab = 'result' | 'conversation' | 'input';
   let tab = $state<Tab>('result');
@@ -68,7 +75,12 @@
   // A plugin node (v6.5) is host work too: its backend answers, no native session.
   const pluginNode = $derived(view.step.executor?.type === 'plugin' ? view.step.executor : undefined);
   const llm = $derived(view.step.executor?.type === 'llm');
-  const sessionId = $derived(script || pluginNode ? undefined : record?.execution?.id);
+  // A sub-pipeline step (v6.7) runs a saved pipeline as a child run: its execution id is that run.
+  const subpipeline = $derived(view.step.executor?.type === 'pipeline' ? view.step.executor : undefined);
+  const childRun = $derived(childRunId(view.step, record));
+  const childSummary = $derived(childRun ? runs.summaries.find((item) => item.id === childRun) : undefined);
+  const mappings = $derived(subpipeline ? Object.entries(subpipeline.inputs) : []);
+  const sessionId = $derived(script || pluginNode || subpipeline ? undefined : record?.execution?.id);
   const snapshot = $derived(sessionId ? snapshotFor(sessionId) : undefined);
   const entries = $derived(resultEntries(view.step, record?.resultData));
   const answer = $derived.by(() => {
@@ -130,13 +142,15 @@
 <aside class="panel" aria-labelledby="task-title">
   <header class="head">
     <div class="head__main">
-      {#if script}<span class="mark" aria-hidden="true"><Code size={14} /></span>{:else if pluginNode}<span class="mark" aria-hidden="true"><Blocks size={14} /></span>{:else if profile}<HarnessMark kind={profile.harness} size={22} />{/if}
+      {#if script}<span class="mark" aria-hidden="true"><Code size={14} /></span>{:else if pluginNode}<span class="mark" aria-hidden="true"><Blocks size={14} /></span>{:else if subpipeline}<span class="mark" aria-hidden="true"><Workflow size={14} /></span>{:else if profile}<HarnessMark kind={profile.harness} size={22} />{/if}
       <div class="head__text">
         <h2 id="task-title" title={view.name}>{view.name}</h2>
         {#if script}
           <span class="muted">{$t('Script')} · {RUNTIME_LABEL[script.runtime]} · {$t('{0} s limit', [script.timeoutSeconds])}</span>
         {:else if pluginNode}
           <span class="muted">{$t('Plugin node')} · {pluginNode.pluginId} · {pluginNode.nodeType}</span>
+        {:else if subpipeline}
+          <span class="muted">{$t('Sub-pipeline')}{childSummary?.pipelineName ? ` · ${childSummary.pipelineName}` : ''}</span>
         {:else if profile}
           <span class="muted">{[llm ? $t('Model call') : profile.name, harnessMeta(profile.harness).label, profile.model, profile.reasoning].filter(Boolean).join(' · ')}</span>
         {:else if view.step.router}
@@ -159,6 +173,16 @@
         {/each}
         <button type="button" class:active={attempt < 0} aria-pressed={attempt < 0} onclick={() => (attempt = -1)} title={$t('Latest attempt')}>{view.attempts.length + 1}</button>
       </div>
+    {/if}
+    {#if childRun}
+      <span class="child" title={$t('Status of the child run')}>
+        <Workflow size={12} aria-hidden="true" />
+        {#if childSummary}
+          <Badge tone={RUN_TONE[childSummary.status]}>{$t('Child run: {0}', [$t(RUN_LABEL[childSummary.status])])}</Badge>
+        {:else}
+          <span class="muted small">{$t('Child run')}</span>
+        {/if}
+      </span>
     {/if}
     <span class="spacer"></span>
     {#if review}
@@ -202,7 +226,7 @@
           {$t('Retry step')}
         </Button>
       {/if}
-      {#if view.state === 'uncertain' && (view.sessionId || script || pluginNode)}
+      {#if view.state === 'uncertain' && (view.sessionId || script || pluginNode || subpipeline)}
         <Button size="sm" disabled={!!busyKey || runs.safeMode} onclick={() => (reconcileOpen = true)}>
           {#snippet leading()}<ClipboardCheck />{/snippet}
           {$t('Record outcome…')}
@@ -226,14 +250,30 @@
           {$t('Open chat')}
         </Button>
       {/if}
+      {#if childRun && onOpenRun}
+        {@const target = childRun}
+        <Button size="sm" variant="ghost" onclick={() => onOpenRun?.(target)}>
+          {#snippet leading()}<SquareArrowOutUpRight />{/snippet}
+          {$t('Open child run')}
+        </Button>
+      {/if}
       <PinOutputButton {runs} {run} {view} />
     </div>
-  {:else if sessionId}
+  {:else if sessionId || (childRun && onOpenRun)}
     <div class="actions">
-      <Button size="sm" variant="ghost" onclick={() => onOpenSession(sessionId)}>
-        {#snippet leading()}<MessageSquare />{/snippet}
-        {$t('Open chat')}
-      </Button>
+      {#if sessionId}
+        <Button size="sm" variant="ghost" onclick={() => onOpenSession(sessionId)}>
+          {#snippet leading()}<MessageSquare />{/snippet}
+          {$t('Open chat')}
+        </Button>
+      {/if}
+      {#if childRun && onOpenRun}
+        {@const target = childRun}
+        <Button size="sm" variant="ghost" onclick={() => onOpenRun?.(target)}>
+          {#snippet leading()}<SquareArrowOutUpRight />{/snippet}
+          {$t('Open child run')}
+        </Button>
+      {/if}
     </div>
   {/if}
 
@@ -320,6 +360,30 @@
               <h3>{$t('Code')}</h3>
               <ScriptEditor id="run-script-{view.stepId}" value={script.source} runtime={script.runtime} label={$t('Code')} size="viewer" readOnly={true} />
             </section>
+          {:else if subpipeline}
+            <section>
+              <h3>{$t('Inputs of the sub-pipeline')}</h3>
+              {#if mappings.length === 0}
+                <p class="muted">{$t('No inputs are mapped; the sub-pipeline uses its defaults.')}</p>
+              {:else}
+                <dl class="fields">
+                  {#each mappings as [name, source] (name)}
+                    <div>
+                      <dt>{name}</dt>
+                      <dd>
+                        {#if source.kind === 'value'}
+                          {$t('Fixed value')}: {formatValue(source.value)}
+                        {:else if source.kind === 'input'}
+                          {$t('Run input {0}', [source.name])}
+                        {:else}
+                          {$t('Result of {0}', [run.definition.pipeline.steps.find((step) => step.id === source.stepId)?.name || source.stepId])}{source.field ? ` · ${source.field}` : ''}
+                        {/if}
+                      </dd>
+                    </div>
+                  {/each}
+                </dl>
+              {/if}
+            </section>
           {:else}
           <section>
             <h3>{llm ? $t('Prompt') : $t('Task')}</h3>
@@ -393,7 +457,9 @@
 <Dialog
   bind:open={reconcileOpen}
   title={$t('Record what happened')}
-  description={pluginNode
+  description={subpipeline
+    ? $t('PiUI could not confirm how the sub-pipeline ended. Check its child run, then record an operator assertion. It reconciles the journal only.')
+    : pluginNode
     ? $t('PiUI could not confirm how the plugin node ended. Check what it changed, then record an operator assertion. It reconciles the journal only.')
     : script
     ? $t('PiUI could not confirm how the script ended. Check its effects in the project folder, then record an operator assertion. It reconciles the journal only.')
@@ -674,6 +740,12 @@
     gap: 2px;
   }
   .choice small {
+    color: var(--piui-text-muted);
+  }
+  .child {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     color: var(--piui-text-muted);
   }
 </style>

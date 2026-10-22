@@ -6,6 +6,29 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-10-22
+
+### Added
+
+- Fusion (ADR-043, docs/FUSION.md): a new-chat mode that pairs a lead (Claude Code or Codex) with one persistent sidekick (Claude Code, Codex or Pi) in the same folder. The lead gets a `sidekick` tool to brief, wait for, correct, steer, stop and review the sidekick; reports arrive once, as the tool result or as one follow-up when the lead is idle, with PiUI facts (changed files, approvals) kept apart from the sidekick's own text. Pairs never give the sidekick more authority than the lead; a stopped or interrupted round is proven finished before anything else starts, and a restart never replays work.
+
+### Fixed
+
+- Agents of a running pipeline follow the run's saved settings (ADR-044): the host refuses messages, model, settings and mode changes and "allow for this chat" approvals for them. Stopping a turn, renaming and answering a request once still work, and the chat view links to the run instead of showing a composer.
+
+## [0.2.7] - 2026-09-29
+
+### Added
+
+- Sub-pipelines (ADR-042, orchestration v6.7): a saved pipeline can run as one step of another. The step maps the child's inputs (fixed value, run input or an upstream result), starts an ordinary child run and returns the child's declared outputs; an Output block on the canvas declares what a pipeline returns. Runs link parent and child; cancelling the parent cancels the child; cycles and nesting deeper than 4 are refused.
+- System file version 5: exports carry sub-pipeline steps (by pipeline name) and outputs; versions 1-4 still import.
+- Project board and teammates (ADR-041).
+
+### Changed
+
+- Saving a pipeline that would break another pipeline using it as a sub-pipeline is refused with the affected pipelines named; referenced pipelines cannot be deleted.
+- Board and chat pipeline answers use a pipeline's declared outputs when it has them.
+
 ## [0.2.6] - 2026-09-28
 
 ### Added

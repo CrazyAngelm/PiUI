@@ -125,7 +125,19 @@ export type OrchestrationHostErrorCode =
   | 'runtime-unavailable'
   | 'unsupported-policy'
   | 'native-outcome-uncertain'
-  | 'denied';
+  | 'denied'
+  // Additive (v6.7, ADR-042): specific refusals of definition saves and
+  // deletions; nothing was written.
+  /** A sub-pipeline step names a launch command (or pipeline) not saved in this project. */
+  | 'subpipeline-unknown-pipeline'
+  /** A sub-pipeline step maps an undeclared or incompatible child input, or leaves a required one unmapped. */
+  | 'subpipeline-input-mismatch'
+  /** A launch command would run itself through sub-pipelines. */
+  | 'subpipeline-cycle'
+  /** A saved pipeline still runs this launch command (or its pipeline or team) as a sub-pipeline. */
+  | 'subpipeline-in-use'
+  /** A saved parent's sub-pipeline step would no longer fit the changed child (inputs or result fields). */
+  | 'subpipeline-breaks-parent';
 
 export interface SaveGraphRequest extends WorkspaceRequest {
   readonly profiles: readonly SaveDefinitionRequest<AgentProfile>[];

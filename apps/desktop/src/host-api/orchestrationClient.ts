@@ -7,6 +7,7 @@ import {
   type OrchestrationRunChangedEventV6,
   type OrchestrationScheduleChangedEventV7,
 } from '../../../../contracts/orchestration-host-v7';
+import type { SubpipelineSaveErrorCode } from './subpipelines';
 
 export type * from '../../../../contracts/orchestration-host-v7';
 export type * from '../../../../contracts/orchestration-v6';
@@ -19,7 +20,12 @@ export type OrchestrationCommandName = keyof OrchestrationHostCommandsV7;
 export type OrchestrationRequest = Parameters<OrchestrationHostCommandsV7[OrchestrationCommandName]>[0];
 export type OrchestrationInvoke = <T>(route: OrchestrationCommandName, args: { request: OrchestrationRequest }) => Promise<T>;
 export type OrchestrationSubscribe = (handler: (payload: unknown) => void) => Promise<() => void>;
-export type OrchestrationErrorCode = OrchestrationHostErrorCode | 'desktop-unavailable' | 'unknown';
+/**
+ * `SubpipelineSaveErrorCode` (v6.7): specific save/delete refusals for
+ * sub-pipelines. Listed here too so the copy below stays exhaustive whether
+ * or not the host contract union already names them.
+ */
+export type OrchestrationErrorCode = OrchestrationHostErrorCode | SubpipelineSaveErrorCode | 'desktop-unavailable' | 'unknown';
 
 const ERROR_COPY: Readonly<Record<OrchestrationErrorCode, string>> = {
   invalid: 'Check the definition, references and requested native policy before trying again.',
@@ -31,6 +37,11 @@ const ERROR_COPY: Readonly<Record<OrchestrationErrorCode, string>> = {
   denied: 'This action was refused by project trust, safe mode or the requested policy.',
   'unsupported-policy': 'The requested native policy is unsupported. Keep the requirement or choose a runtime that can enforce it.',
   'native-outcome-uncertain': 'The native outcome is uncertain. Inspect the recorded run and linked session before retrying.',
+  'subpipeline-unknown-pipeline': 'A sub-pipeline step runs a pipeline that is not saved in this project. Pick a saved pipeline for it, then save again.',
+  'subpipeline-input-mismatch': 'A sub-pipeline step’s inputs do not match what its pipeline asks for. Check the step’s input mapping, then save again.',
+  'subpipeline-cycle': 'These pipelines would run each other as sub-pipelines in a loop. Remove one of the sub-pipeline steps, then save again.',
+  'subpipeline-in-use': 'Another saved pipeline runs this one as a sub-pipeline. Remove or change that step first, then delete this pipeline.',
+  'subpipeline-breaks-parent': 'Saved pipelines that run this one as a sub-pipeline would stop working with this change. Keep the inputs and outputs they use, or change them first.',
   'desktop-unavailable': 'Open the PiUI desktop app to use orchestration. Browser preview does not save definitions or execute agents.',
   unknown: 'The workspace operation could not be completed. Your draft is unchanged.',
 };

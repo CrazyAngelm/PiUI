@@ -22,6 +22,8 @@
  * an installed, enabled plugin (ADR-032) that the plugin's backend runs.
  * v6.6 (additive, ADR-041) adds the `board` run trigger and
  * `LaunchCommandReference.managedByTeammateId`.
+ * v6.7 (additive, ADR-042) adds sub-pipelines: the `pipeline` step executor,
+ * `PipelineDefinition.outputs` and the `pipeline` run trigger.
  */
 
 import type { HarnessId } from './harness-identity-v2';
@@ -205,7 +207,43 @@ export type StepExecutor =
   | { readonly type: 'agent' }
   | { readonly type: 'llm' }
   | { readonly type: 'script'; readonly runtime: ScriptRuntime; readonly source: string; readonly timeoutSeconds: number }
-  | { readonly type: 'plugin'; readonly pluginId: string; readonly nodeType: string; readonly config: Readonly<Record<string, string | number | boolean>> };
+  | { readonly type: 'plugin'; readonly pluginId: string; readonly nodeType: string; readonly config: Readonly<Record<string, string | number | boolean>> }
+  | {
+      readonly type: 'pipeline';
+      /** A saved launch command of the same project. */
+      readonly launchCommandId: OrchestrationId;
+      /** Child input name -> where its value comes from (at most 64 entries). */
+      readonly inputs: Readonly<Record<string, SubpipelineInputSource>>;
+    };
+
+/**
+ * Where one input of a sub-pipeline's child run comes from (v6.7, ADR-042).
+ * - `value`: a literal, checked against the child input's kind.
+ * - `input`: an input of the parent run.
+ * - `step`: a direct dependency of the pipeline step. With `field`, that
+ *   field of its result data; without, its whole result text (a native final
+ *   answer is read from native history and hash-verified).
+ */
+export type SubpipelineInputSource =
+  | { readonly kind: 'value'; readonly value: RunInputValue }
+  | { readonly kind: 'input'; readonly name: string }
+  | { readonly kind: 'step'; readonly stepId: OrchestrationId; readonly field?: string };
+
+/**
+ * `pipeline` (v6.7, additive, ADR-042): the step starts an ordinary child run
+ * of a saved launch command of the same project (trigger `pipeline`) and
+ * succeeds or fails with it. The child freezes its own snapshot when it
+ * starts, keeps its own team, approvals and history and never uses pinned
+ * data. Its declared `outputs` become this step's result data (checked
+ * against `resultFields`); a child without outputs gives its last succeeded
+ * step's text. Like a script it is host work, not a team member, has no
+ * profile or input bindings and is never callable or a router. Cancelling the
+ * parent cancels the child first. Failure codes: `subpipeline-unavailable`,
+ * `subpipeline-cycle`, `subpipeline-depth`, `subpipeline-input-invalid`,
+ * `subpipeline-input-unavailable` (nothing started), `subpipeline-failed`,
+ * `subpipeline-cancelled`, `subpipeline-output-unavailable`.
+ */
+export const MAX_SUBPIPELINE_DEPTH = 4;
 
 /**
  * Output a person pinned on a step (v6.4, additive), usually copied from a
@@ -277,12 +315,28 @@ export interface PipelineInput {
   readonly defaultValue?: RunInputValue;
 }
 
+/**
+ * A declared result of a whole pipeline (v6.7, additive, ADR-042): what a
+ * parent's sub-pipeline step receives when this pipeline runs as a child.
+ */
+export interface PipelineOutput {
+  /** Result data key: [a-z][A-Za-z0-9_]{0,63}, unique in the pipeline. */
+  readonly name: string;
+  readonly kind: ResultField['kind'];
+  /** A step of this pipeline that is not a callable role. */
+  readonly sourceStepId: OrchestrationId;
+  /** A field of the source step's result data; absent is its whole result text (`kind: 'text'`). */
+  readonly field?: string;
+}
+
 export interface PipelineDefinition {
   readonly id: OrchestrationId;
   readonly name: string;
   readonly steps: readonly PipelineStep[];
   /** Additive (v6.1): values requested when a run starts. */
   readonly inputs?: readonly PipelineInput[];
+  /** Additive (v6.7): results the pipeline returns as a sub-pipeline (at most 32). */
+  readonly outputs?: readonly PipelineOutput[];
 }
 
 /** Reusable definition references only. This is never a shell command. */
@@ -369,7 +423,7 @@ export interface TaskRecord {
   readonly status: TaskStatus;
   readonly revision: Revision;
   readonly leaseId?: OrchestrationId;
-  /** For a script step this is an opaque host execution id, not a workspace session. */
+  /** For a script step this is an opaque host execution id, not a workspace session; for a pipeline step (v6.7) the child run id. */
   readonly execution?: NativeExecutionReference;
   readonly resultReference?: NativeHistoryReference;
   readonly failure?: FailureRecord;
@@ -446,6 +500,17 @@ export type RunTrigger =
       readonly teammateId: OrchestrationId;
       readonly cause: 'assigned' | 'movedToTodo' | 'unblocked' | 'mention' | 'manual';
       readonly chainDepth: number;
+    }
+  /**
+   * v6.7 (additive, ADR-042): the child run of a sub-pipeline step. `depth`
+   * is 1 for a child of a top-level run (1..MAX_SUBPIPELINE_DEPTH).
+   */
+  | {
+      readonly kind: 'pipeline';
+      readonly parentRunId: OrchestrationId;
+      readonly parentStepId: OrchestrationId;
+      readonly launchCommandId: OrchestrationId;
+      readonly depth: number;
     };
 
 export interface OrchestrationRunV6 {

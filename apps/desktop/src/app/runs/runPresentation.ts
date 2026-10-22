@@ -80,7 +80,8 @@ export function stepViews(run: OrchestrationRunV6): StepView[] {
       state: stepState(step, task),
       task,
       attempts: (run.attempts ?? []).filter((attempt) => attempt.stepId === step.id),
-      sessionId: step.executor?.type === 'script' || step.executor?.type === 'plugin' ? undefined : task?.execution?.id,
+      // Host work has no session: a script, a plugin node or a sub-pipeline, whose execution is its child run.
+      sessionId: step.executor?.type === 'script' || step.executor?.type === 'plugin' || step.executor?.type === 'pipeline' ? undefined : task?.execution?.id,
       spawned: !initial.has(step.id),
     };
   });
@@ -168,6 +169,26 @@ export function formatValue(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+/** The child run a sub-pipeline step (v6.7) started for `task`: its execution id. */
+export function childRunId(step: Pick<PipelineStep, 'executor'>, task: TaskRecord | undefined): string | undefined {
+  return step.executor?.type === 'pipeline' ? task?.execution?.id : undefined;
+}
+
+/**
+ * Parent run of every run this run is known to relate to (v6.7): its own
+ * `pipeline` trigger and the child runs its sub-pipeline steps started.
+ */
+export function knownParents(run: Pick<OrchestrationRunV6, 'id' | 'trigger' | 'tasks' | 'attempts' | 'definition'>): [child: string, parent: string][] {
+  const pairs: [string, string][] = [];
+  if (run.trigger?.kind === 'pipeline') pairs.push([run.id, run.trigger.parentRunId]);
+  for (const task of [...run.tasks, ...(run.attempts ?? [])]) {
+    const step = run.definition.pipeline.steps.find((candidate) => candidate.id === task.stepId);
+    const child = step === undefined ? undefined : childRunId(step, task);
+    if (child !== undefined) pairs.push([child, run.id]);
+  }
+  return pairs;
 }
 
 export function shortId(id: string): string {

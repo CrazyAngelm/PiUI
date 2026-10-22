@@ -3,6 +3,7 @@ import { render } from 'svelte/server';
 import type { WorkspaceApproval, WorkspaceSession } from '../../../../../contracts/workspace-v15';
 import type { WorkspaceStore } from '../workspaceStore.svelte';
 import ApprovalCard from './ApprovalCard.svelte';
+import { fusionMembership } from '../fusion/fusionMembership.svelte';
 import { WORKSPACE_CONTEXT } from './context';
 
 const session: WorkspaceSession = {
@@ -15,8 +16,8 @@ const store = {
   respond: async () => true,
 } as unknown as WorkspaceStore;
 
-function html(approval: WorkspaceApproval): string {
-  return render(ApprovalCard, { props: { approval, session }, context: new Map([[WORKSPACE_CONTEXT, store]]) }).body;
+function html(approval: WorkspaceApproval, owner: WorkspaceSession = session): string {
+  return render(ApprovalCard, { props: { approval, session: owner }, context: new Map([[WORKSPACE_CONTEXT, store]]) }).body;
 }
 
 const form: WorkspaceApproval = {
@@ -74,5 +75,39 @@ describe('ApprovalCard MCP form requests', () => {
     expect(body).toMatch(/>\s*Allow once\s*</);
     expect(body).toMatch(/>\s*Deny\s*</);
     expect(body).not.toContain('Requested values');
+  });
+});
+
+describe('ApprovalCard for a pipeline run agent', () => {
+  const command: WorkspaceApproval = {
+    id: 'approval-2', sessionId: 'session-1', kind: 'command', title: 'Run tests', description: 'Command: npm test',
+    decisions: ['approve-once', 'approve-session', 'deny'],
+  };
+
+  it('answers a run agent once at a time, never for the rest of the session', () => {
+    const member = html(command, { ...session, runId: 'run-1' });
+    expect(member).toMatch(/>\s*Allow once\s*</);
+    expect(member).toMatch(/>\s*Deny\s*</);
+    expect(member).not.toContain('Allow for this chat');
+    expect(html(command)).toContain('Allow for this chat');
+  });
+
+  it('answers a Fusion sidekick once at a time too, in the chat and in the Inbox', () => {
+    fusionMembership.rememberSidekick('session-1', 'lead-1');
+    try {
+      const inChat = html(command);
+      expect(inChat).toMatch(/>\s*Allow once\s*</);
+      expect(inChat).toMatch(/>\s*Deny\s*</);
+      expect(inChat).not.toContain('Allow for this chat');
+      const inInbox = render(ApprovalCard, {
+        props: { approval: command, session, showOrigin: true, originLabel: 'Chat' },
+        context: new Map([[WORKSPACE_CONTEXT, store]]),
+      }).body;
+      expect(inInbox).not.toContain('Allow for this chat');
+      // A lead and an ordinary chat keep the standing approval.
+      expect(html(command, { ...session, id: 'other' })).toContain('Allow for this chat');
+    } finally {
+      fusionMembership.remember('session-1');
+    }
   });
 });

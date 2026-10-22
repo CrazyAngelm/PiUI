@@ -245,8 +245,25 @@ fn api_error(error: OrchestrationApiError) -> TeammatesError {
         "not-found" => TeammatesError::NotFound,
         "denied" | "unsupported-policy" => TeammatesError::Unsupported,
         "invalid" => INVALID_SETTINGS,
+        code if code.starts_with("subpipeline-") => subpipeline_refusal(code),
         _ => TeammatesError::Io,
     }
+}
+
+/// A sub-pipeline refusal (v6.7) in the teammates contract's words.
+fn subpipeline_refusal(code: &str) -> TeammatesError {
+    TeammatesError::Invalid(match code {
+        crate::subpipelines::SUBPIPELINE_IN_USE => {
+            "A pipeline still runs this teammate's pipeline as a sub-pipeline."
+        }
+        crate::subpipelines::SUBPIPELINE_BREAKS_PARENT => {
+            "Another pipeline runs this pipeline as a sub-pipeline and would no longer fit it."
+        }
+        piui_orchestration::SUBPIPELINE_CYCLE => {
+            "This pipeline would run itself through sub-pipelines."
+        }
+        _ => "The pipeline's sub-pipeline steps are not valid.",
+    })
 }
 
 fn store_error(error: StoreError) -> TeammatesError {
@@ -255,6 +272,7 @@ fn store_error(error: StoreError) -> TeammatesError {
         StoreError::NotFound => TeammatesError::NotFound,
         StoreError::Invalid => INVALID_SETTINGS,
         StoreError::Denied => TeammatesError::Unsupported,
+        StoreError::Refused(code) => subpipeline_refusal(code),
         StoreError::Io(_) => TeammatesError::Io,
     }
 }
@@ -825,6 +843,9 @@ fn remove_managed(
         return Err(TeammatesError::Invalid(
             "Another teammate still uses this pipeline.",
         ));
+    }
+    if crate::subpipelines::launch_command_referenced(workspace, &command.id) {
+        return Err(subpipeline_refusal(crate::subpipelines::SUBPIPELINE_IN_USE));
     }
     workspace.launch_commands.remove(index);
     if !workspace

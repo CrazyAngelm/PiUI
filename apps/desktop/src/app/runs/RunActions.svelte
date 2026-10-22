@@ -35,7 +35,9 @@
   const blocked = $derived(runs.safeMode || !!runs.busy);
   const recorded = $derived([...run.tasks, ...(run.attempts ?? [])]);
   const scriptSteps = $derived(new Set(run.definition.pipeline.steps.filter((step) => step.executor?.type === 'script').map((step) => step.id)));
-  const sessions = $derived(new Set(recorded.filter((task) => task.execution && !scriptSteps.has(task.stepId)).map((task) => task.execution?.id)).size);
+  // A sub-pipeline step's execution is its child run (v6.7): not a session; the child run stays.
+  const childSteps = $derived(new Set(run.definition.pipeline.steps.filter((step) => step.executor?.type === 'pipeline').map((step) => step.id)));
+  const sessions = $derived(new Set(recorded.filter((task) => task.execution && !scriptSteps.has(task.stepId) && !childSteps.has(task.stepId)).map((task) => task.execution?.id)).size);
   const scripts = $derived(recorded.filter((task) => task.execution && scriptSteps.has(task.stepId)).length);
 
   const items = $derived<MenuEntry[]>([

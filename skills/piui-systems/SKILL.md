@@ -5,7 +5,7 @@ description: Create, review, or edit PiUI agent systems as validated JSON files 
 
 # PiUI systems
 
-Turn the user's task into an importable `.piui.json` system. Work in the PiUI repository supplied by the user; on this installation it is `D:/Projects/PIUI`. Locate another checkout if that path is absent. Read its `AGENTS.md`, `contracts/system-file-v4.schema.json`, and [format and workflow](references/configuration.md). The repository schema and adapter manifests override stale examples in this skill.
+Turn the user's task into an importable `.piui.json` system. Work in the PiUI repository supplied by the user; on this installation it is `D:/Projects/PIUI`. Locate another checkout if that path is absent. Read its `AGENTS.md`, `contracts/system-file-v5.schema.json`, and [format and workflow](references/configuration.md). The repository schema and adapter manifests override stale examples in this skill.
 
 ## Design from the outcome
 
@@ -93,6 +93,25 @@ prove the step's outcome.
   `plugin-input-unavailable`, `plugin-start-failed`, `plugin-node-failed` (the
   plugin's message is the detail) and `plugin-node-timeout`.
 
+Sub-pipelines (version 5, orchestration v6.7): a node with
+`"executor": {"type": "pipeline", "pipeline": "<name>", "inputs": {…}}` runs a
+**saved pipeline of the target project** as one step, as its own child run with
+its own team, approvals and history. Write the pipeline's exact NAME (ids are
+local to a project); PiUI resolves it when the file is imported, and a name the
+project does not have stays on the node for the person to pick — import never
+creates that pipeline. Use only names the user gave or confirmed exist; to ship
+both, write the child as its own file and say it must be imported first. Map
+each child input with `{"kind": "value", "value": …}`, `{"kind": "input",
+"name": "<run input of this file>"}` or `{"kind": "step", "agent": "<direct
+upstream agent id>", "field"?: "…"}`. The node's `profile` only names the step
+(like a script: `"model": "pipeline"`); give it `resultFields` matching the
+child's outputs. Top-level `outputs: [{"name", "kind", "agent", "field"?}]`
+declare what a pipeline returns when another runs it. See
+[execution semantics](references/execution.md) and
+`examples/systems/development-with-testing.piui.json` (runs
+`examples/systems/testing.piui.json`). `pnpm system:check` reports the names as
+resolved at import; it cannot check that the project has them.
+
 Downstream agents and model calls receive a script's or plugin node's result
 where a native result would be (with `inputBindings` applied); downstream
 scripts and plugin nodes receive native results as their verified final text.
@@ -116,7 +135,7 @@ format and prerequisites the recipient needs, separately from its `task`.
 Upstream result and message senders receive these requirements from the frozen
 run snapshot; the recipient also receives them. Missing input should be reported,
 not fabricated. This is instruction delivery, not automatic semantic validation
-of every returned artifact. Version 1 files still import; export writes version 4.
+of every returned artifact. Version 1 files still import; export writes version 5.
 
 For dynamically callable profiles, fill `profile.whenToCall`,
 `profile.inputInstructions` (the reusable input default) and
@@ -220,7 +239,7 @@ untrusted id fails at launch with a visible reason.
 - See `examples/systems/codex-gemini-acp-review.piui.json` for a Codex -> Gemini
   CLI (ACP) -> Pi result pipeline.
 
-## Execution contracts (portable v4)
+## Execution contracts (portable v4 and v5)
 
 Read [execution semantics](references/execution.md) when configuring conditional work,
 callable agents, selected inputs, artifacts, result acceptance or revision loops.

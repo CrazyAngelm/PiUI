@@ -29,6 +29,7 @@
   import Code from '@lucide/svelte/icons/code';
   import Pin from '@lucide/svelte/icons/pin';
   import Blocks from '@lucide/svelte/icons/blocks';
+  import Workflow from '@lucide/svelte/icons/workflow';
   import { RUNTIME_LABEL } from '../pipelines/executors';
   import { t } from '../../features/locale/language';
   import { Spinner } from '../../lib/ui';
@@ -43,6 +44,8 @@
   const script = $derived(view.step.executor?.type === 'script' ? view.step.executor : undefined);
   const pluginNode = $derived(view.step.executor?.type === 'plugin' ? view.step.executor : undefined);
   const llm = $derived(view.step.executor?.type === 'llm');
+  // v6.7: a sub-pipeline step's execution is its child run.
+  const subpipeline = $derived(view.step.executor?.type === 'pipeline');
 </script>
 
 <div
@@ -60,6 +63,8 @@
       <span class="router-mark" aria-hidden="true"><Code size={14} /></span>
     {:else if pluginNode}
       <span class="router-mark" aria-hidden="true"><Blocks size={14} /></span>
+    {:else if subpipeline}
+      <span class="router-mark" aria-hidden="true"><Workflow size={14} /></span>
     {:else if data.profile}
       <HarnessMark kind={data.profile.harness} size={20} />
     {/if}
@@ -71,6 +76,8 @@
         <span class="sub">{$t('Script')} · {RUNTIME_LABEL[script.runtime]}</span>
       {:else if pluginNode}
         <span class="sub" title={pluginNode.pluginId}>{$t('Plugin node')} · {pluginNode.nodeType}</span>
+      {:else if subpipeline}
+        <span class="sub">{$t('Sub-pipeline')}{view.task?.execution ? ` · ${$t('child run')}` : ''}</span>
       {:else if data.profile}
         <span class="sub" title={data.profile.model}>{[llm ? $t('Model call') : data.profile.name, harnessMeta(data.profile.harness).short, data.profile.model].filter(Boolean).join(' · ')}</span>
       {/if}

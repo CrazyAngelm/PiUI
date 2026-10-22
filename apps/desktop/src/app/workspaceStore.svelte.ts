@@ -15,6 +15,9 @@ import { runtimeSettings } from '../host-api/runtimeSettings';
 import { workspaceModel } from '../host-api/harnessModels';
 import { deleteWorkspaceSession } from '../host-api/workspaceLifecycle';
 import { harnessRegistryHost } from '../host-api/harnessRegistry';
+import { fusionHost } from '../host-api/fusionClient';
+import { fusionMembership } from './fusion/fusionMembership.svelte';
+import { fusionErrorText } from './fusion/fusionPair';
 import {
   workspaceHost,
   WorkspaceOperationError,
@@ -195,6 +198,7 @@ export class WorkspaceStore {
   private stopSurfaces: (() => void) | undefined;
   private unlistenRegistry: (() => void) | undefined;
   private disposed = false;
+  private preferencesRequest = 0;
 
   // ---- derived views -------------------------------------------------------
 
@@ -426,10 +430,12 @@ export class WorkspaceStore {
   }
 
   async loadPreferences(): Promise<void> {
+    const request = this.preferencesRequest;
     try {
       const bootstrap = await host.bootstrap();
       if (!this.disposed) {
-        this.applyPreferences(bootstrap.preferences);
+        // A save made while bootstrap was in flight is newer than its answer.
+        if (request === this.preferencesRequest) this.applyPreferences(bootstrap.preferences);
         this.projectSummaries = bootstrap.projects;
       }
     } catch (error) {
@@ -438,17 +444,23 @@ export class WorkspaceStore {
   }
 
   async savePreferences(next: Preferences): Promise<void> {
+    // Only the latest save settles the shown preferences: an earlier answer
+    // arriving late must not undo a choice made after it.
+    const request = ++this.preferencesRequest;
     const previous = this.preferences;
     this.applyPreferences(next);
     this.preferencesBusy = true;
     this.preferencesError = undefined;
     try {
-      this.applyPreferences(await host.updatePreferences(next));
+      const saved = await host.updatePreferences(next);
+      if (request === this.preferencesRequest) this.applyPreferences(saved);
     } catch (error) {
-      this.applyPreferences(previous);
-      this.preferencesError = errorMessage(error);
+      if (request === this.preferencesRequest) {
+        this.applyPreferences(previous);
+        this.preferencesError = errorMessage(error);
+      }
     } finally {
-      this.preferencesBusy = false;
+      if (request === this.preferencesRequest) this.preferencesBusy = false;
     }
   }
 
@@ -465,6 +477,8 @@ export class WorkspaceStore {
       next.sessions = next.sessions.filter((session) => !this.deleted.has(session.id));
       rememberHarnessNames(next.harnesses);
       this.catalog = next;
+      // Chats whose lead is gone (deleted from another window or a restart) lose their cached Fusion role.
+      fusionMembership.prune(new Set(next.sessions.map((session) => session.id)));
       const candidate = preferredWorkspaceId ?? this.selectedWorkspaceId;
       const workspaceId = next.workspaces.some((workspace) => workspace.id === candidate)
         ? candidate
@@ -721,12 +735,33 @@ export class WorkspaceStore {
     if (!sessionId || this.interruptBusy) return false;
     this.interruptBusy = true;
     try {
+      // A Fusion pair stops through the broker (ADR-043, decision D9). The
+      // lead's Stop is `stopPair`: the lead's turn is interrupted and the
+      // sidekick's open round is stopped with its report withdrawn, so a late
+      // report cannot start the lead again. A sidekick's Stop is
+      // `stopSidekick`; the host refuses an ordinary interrupt for it.
+      await fusionMembership.load(sessionId);
+      const member = fusionMembership.peek(sessionId);
+      if (member?.role === 'lead') {
+        await fusionHost.request({ type: 'stopPair', leadSessionId: sessionId });
+        void this.reconcileSession(sessionId);
+        return true;
+      }
+      if (member?.role === 'sidekick') {
+        if (!member.leadSessionId) {
+          this.sessionError = 'This action is not available here.';
+          return false;
+        }
+        await fusionHost.request({ type: 'stopSidekick', leadSessionId: member.leadSessionId });
+        void this.reconcileSession(sessionId);
+        return true;
+      }
       const result = await workspaceHost.request({ type: 'interrupt', sessionId });
       if (result.type === 'session') this.storeSnapshot(result.snapshot);
       else if (result.type === 'accepted') void this.reconcileSession(sessionId);
       return true;
     } catch (error) {
-      this.sessionError = errorMessage(error);
+      this.sessionError = fusionMembership.isSidekick(sessionId) || fusionMembership.isLead(sessionId) ? fusionErrorText(error) : errorMessage(error);
       return false;
     } finally {
       this.interruptBusy = false;
@@ -755,12 +790,16 @@ export class WorkspaceStore {
     const closing = this.catalog.sessions.find((session) => session.id === sessionId);
     if (!closing) return;
     this.sessionActionBusy = true;
+    // The host routes the close of the sidekick in use through the broker (its open round
+    // stops and its report is withdrawn); there is no second path from here. A refusal is
+    // shown, in Fusion's own words.
+    const brokered = fusionMembership.isCurrentSidekick(sessionId);
     try {
       const result = await workspaceHost.request({ type: 'closeSession', sessionId });
       if (result.type === 'session') this.storeSnapshot(result.snapshot);
       else if (result.type === 'accepted') await this.resolveClose(closing, undefined);
     } catch (error) {
-      await this.resolveClose(closing, errorMessage(error));
+      await this.resolveClose(closing, brokered ? fusionErrorText(error) : errorMessage(error));
     } finally {
       this.sessionActionBusy = false;
     }
@@ -784,6 +823,8 @@ export class WorkspaceStore {
   async deleteChat(sessionId: string): Promise<void> {
     await deleteWorkspaceSession(sessionId);
     this.deleted.add(sessionId);
+    // A deleted lead takes its pair with it: its sidekick chats are asked about again.
+    fusionMembership.forgetLead(sessionId);
     const { [sessionId]: _snapshot, ...snapshots } = this.snapshots;
     this.snapshots = snapshots;
     const { [sessionId]: _draft, ...drafts } = this.drafts;

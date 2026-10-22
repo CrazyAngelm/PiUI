@@ -65,3 +65,5 @@ winreg = "=0.10.1"
 tauri = { version = "=2.11.5", features = ["test"] }
 # Test-only adapter constructor that runs the real bridge runner and transport.
 piui-runtime = { path = "../../../crates/piui-runtime", features = ["test-support"] }
+# Paused clocks for the Fusion broker tests.
+tokio = { workspace = true, features = ["test-util"] }

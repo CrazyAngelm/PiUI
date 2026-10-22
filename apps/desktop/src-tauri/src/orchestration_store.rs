@@ -101,6 +101,10 @@ pub(crate) enum StoreError {
     Invalid,
     #[error("orchestration operation is denied")]
     Denied,
+    /// A certain refusal with a specific, stable command code (for example
+    /// `subpipeline-in-use`, v6.7): nothing was written.
+    #[error("orchestration change refused ({0})")]
+    Refused(&'static str),
     #[error("orchestration storage failed")]
     Io(#[source] io::Error),
 }
@@ -265,16 +269,14 @@ impl OrchestrationStore {
 
     /// Marks only work that had crossed the native boundary uncertain. Ready
     /// work is safe to schedule later because it has no native side effect.
+    /// A dispatched sub-pipeline step keeps running with its durable child
+    /// run (v6.7).
     pub fn recover_interrupted_runs(&self) -> Result<(), StoreError> {
-        let needs_recovery = self.snapshot()?.workspaces().iter().any(|workspace| {
-            workspace.runs.iter().any(|run| {
-                run.tasks().iter().any(|task| {
-                    task.status() == piui_orchestration::TaskStatus::Running
-                        || (task.status() == piui_orchestration::TaskStatus::Ready
-                            && task.lease_id().is_some())
-                })
-            })
-        });
+        let needs_recovery = self
+            .snapshot()?
+            .workspaces()
+            .iter()
+            .any(|workspace| workspace.runs.iter().any(Coordinator::needs_restore));
         if !needs_recovery {
             return Ok(());
         }

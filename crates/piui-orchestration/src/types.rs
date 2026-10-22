@@ -263,6 +263,10 @@ pub struct PipelineDefinition {
     /// Values requested when a run starts (v6.1, additive).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<crate::PipelineInput>,
+    /// Results the pipeline returns when it runs as a sub-pipeline (v6.7,
+    /// additive, ADR-042).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<crate::PipelineOutput>,
 }
 
 /// A reusable reference to definitions. It is not an executable shell string.
@@ -570,14 +574,25 @@ pub enum RunTrigger {
         cause: BoardRunCause,
         chain_depth: u8,
     },
+    /// The child run of a sub-pipeline step (v6.7, additive, ADR-042).
+    /// `depth` is 1 for a child of a top-level run, at most
+    /// [`crate::MAX_SUBPIPELINE_DEPTH`].
+    Pipeline {
+        parent_run_id: String,
+        parent_step_id: String,
+        launch_command_id: String,
+        depth: u8,
+    },
 }
 
 impl RunTrigger {
     /// Event hops behind this run; runs started by a person or a clock are 0.
+    /// A sub-pipeline child records no hops of its own: the host inherits
+    /// its root run's hops where loop protection needs them.
     pub fn chain_depth(&self) -> u8 {
         match self {
             Self::Event { chain_depth, .. } | Self::Board { chain_depth, .. } => *chain_depth,
-            Self::Schedule { .. } | Self::Chat { .. } => 0,
+            Self::Schedule { .. } | Self::Chat { .. } | Self::Pipeline { .. } => 0,
         }
     }
 
@@ -587,7 +602,7 @@ impl RunTrigger {
             Self::Schedule { schedule_id, .. } | Self::Event { schedule_id, .. } => {
                 Some(schedule_id)
             }
-            Self::Chat { .. } | Self::Board { .. } => None,
+            Self::Chat { .. } | Self::Board { .. } | Self::Pipeline { .. } => None,
         }
     }
 
@@ -595,7 +610,10 @@ impl RunTrigger {
     pub fn board_teammate_id(&self) -> Option<&str> {
         match self {
             Self::Board { teammate_id, .. } => Some(teammate_id),
-            Self::Schedule { .. } | Self::Event { .. } | Self::Chat { .. } => None,
+            Self::Schedule { .. }
+            | Self::Event { .. }
+            | Self::Chat { .. }
+            | Self::Pipeline { .. } => None,
         }
     }
 
@@ -603,7 +621,34 @@ impl RunTrigger {
     pub fn board_card_id(&self) -> Option<&str> {
         match self {
             Self::Board { card_id, .. } => Some(card_id),
-            Self::Schedule { .. } | Self::Event { .. } | Self::Chat { .. } => None,
+            Self::Schedule { .. }
+            | Self::Event { .. }
+            | Self::Chat { .. }
+            | Self::Pipeline { .. } => None,
+        }
+    }
+
+    /// The parent run and step of a sub-pipeline child run (v6.7).
+    pub fn pipeline_parent(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::Pipeline {
+                parent_run_id,
+                parent_step_id,
+                ..
+            } => Some((parent_run_id, parent_step_id)),
+            Self::Schedule { .. } | Self::Event { .. } | Self::Chat { .. } | Self::Board { .. } => {
+                None
+            }
+        }
+    }
+
+    /// Nested sub-pipeline runs behind this run: 0 for a top-level run.
+    pub fn subpipeline_depth(&self) -> u8 {
+        match self {
+            Self::Pipeline { depth, .. } => *depth,
+            Self::Schedule { .. } | Self::Event { .. } | Self::Chat { .. } | Self::Board { .. } => {
+                0
+            }
         }
     }
 
@@ -641,6 +686,17 @@ impl RunTrigger {
                 chain_depth,
                 ..
             } => text(card_id) && text(teammate_id) && *chain_depth <= MAX_TRIGGER_CHAIN_DEPTH,
+            Self::Pipeline {
+                parent_run_id,
+                parent_step_id,
+                launch_command_id,
+                depth,
+            } => {
+                text(parent_run_id)
+                    && text(parent_step_id)
+                    && text(launch_command_id)
+                    && (1..=crate::MAX_SUBPIPELINE_DEPTH).contains(depth)
+            }
         }
     }
 }
@@ -793,6 +849,12 @@ impl Run {
     /// Event hops behind this run (0 unless an event automation started it).
     pub fn chain_depth(&self) -> u8 {
         self.trigger.as_ref().map_or(0, RunTrigger::chain_depth)
+    }
+    /// Nested sub-pipeline runs behind this run (v6.7): 0 for a top-level run.
+    pub fn subpipeline_depth(&self) -> u8 {
+        self.trigger
+            .as_ref()
+            .map_or(0, RunTrigger::subpipeline_depth)
     }
     pub fn paused(&self) -> bool {
         self.paused

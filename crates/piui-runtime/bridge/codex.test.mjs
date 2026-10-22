@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { isAbsolute, toNamespacedPath } from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, toNamespacedPath } from "node:path";
 import test from "node:test";
 import { createCodexAdapter } from "./codex.mjs";
 
@@ -285,6 +288,52 @@ test("the board tool is optional: a resumed thread starts without it and a notic
   }
 });
 
+test("a resumed thread started with the board keeps it; a thread without it gets the notice", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "piui-codex-rollout-"));
+  // Codex 0.163 rollouts start with `session_meta` carrying the persisted dynamic tools.
+  const rollout = async (name, tools) => {
+    const file = join(directory, name);
+    const meta = { type: "session_meta", payload: { id: "resume-fixture", base_instructions: { text: "x".repeat(30000) }, dynamic_tools: tools } };
+    await writeFile(file, `${JSON.stringify(meta)}
+{"type":"turn_context","payload":{}}
+`);
+    return file;
+  };
+  const piui = (...names) => [{ type: "namespace", name: "piui", description: "PiUI host tools for this chat.", tools: names.map((name) => ({ type: "function", name, inputSchema: { type: "object" } })) }];
+  const withBoard = await rollout("board.jsonl", piui("board"));
+  const resume = async (file, hostTools, calls) => {
+    const events = [];
+    const adapter = await createCodexAdapter({ ...config, nativeId: "resume-fixture", runtimeArgs: [fixture, `--rollout=${file}`, "--board-call"], ...(hostTools ? { hostTools } : {}) },
+      (event) => events.push(event), undefined, undefined, async (operation) => { calls.push(operation); return { ok: true, op: operation.op }; });
+    try {
+      const title = await waitFor(() => adapter.snapshot().title.startsWith("board:") && adapter.snapshot().title);
+      return { title, notices: events.filter((event) => event.type === "notice").map((event) => event.code) };
+    } finally { await adapter.dispose(); }
+  };
+  try {
+    const accepted = [];
+    assert.deepEqual(await resume(withBoard, ["board"], accepted), { title: "board:true:roster", notices: [] });
+    assert.deepEqual(accepted, [{ op: "roster" }]);
+
+    // The board is off for this chat now: the persisted tool gets a clean refusal.
+    const disabled = [];
+    assert.deepEqual(await resume(withBoard, undefined, disabled), { title: "board:false:board-disabled", notices: [] });
+    assert.deepEqual(disabled, []);
+
+    // Started without the board (another piui tool, no tools, unreadable meta): notice.
+    for (const file of [await rollout("sidekick.jsonl", piui("sidekick")), await rollout("none.jsonl", []), join(directory, "missing.jsonl")]) {
+      const events = [];
+      const adapter = await createCodexAdapter({ ...config, nativeId: "resume-fixture", runtimeArgs: [fixture, `--rollout=${file}`], hostTools: ["board"] },
+        (event) => events.push(event), undefined, undefined, async () => ({ ok: true }));
+      try {
+        assert.deepEqual(events.filter((event) => event.type === "notice").map((event) => event.code), ["unsupported-board-tool-resume"]);
+      } finally { await adapter.dispose(); }
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("maps each explicit permission mode and resumes without start-only fields", async () => {
   for (const permissionMode of ["native", "read-only", "workspace-write", "full-access"]) {
     const adapter = await createCodexAdapter({
@@ -426,8 +475,8 @@ test("fails closed for unsupported mandatory policy", async () => {
 });
 
 test("admits app-server versions only inside the verified range", async () => {
-  // Audited protocols (0.147.0, 0.153.4, 0.157.1) and releases between them.
-  for (const version of ["0.147.0", "0.148.0", "0.153.4", "0.157.1", "0.157.1-alpha", "0.157.9"]) {
+  // Audited protocols (0.147.0, 0.153.4, 0.157.1, 0.163.0) and releases between them.
+  for (const version of ["0.147.0", "0.148.0", "0.153.4", "0.157.1", "0.158.0", "0.162.1", "0.163.0", "0.163.0-alpha.11", "0.163.9"]) {
     const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, `--codex-version=${version}`] }, () => {});
     try { assert.equal(adapter.snapshot().status, "idle", version); }
     finally { await adapter.dispose(); }
@@ -437,9 +486,9 @@ test("admits app-server versions only inside the verified range", async () => {
     ["0.146.9", /requires a verified Codex/],
     ["0.147.0-alpha.1", /requires a verified Codex/],
     // Newer than tested, including previews of the untested release line.
-    ["0.158.0", /newer than the versions tested/],
-    ["0.158.0-alpha.2", /newer than the versions tested/],
-    ["0.159.0-alpha.4", /newer than the versions tested/],
+    ["0.164.0", /newer than the versions tested/],
+    ["0.164.0-alpha.9", /newer than the versions tested/],
+    ["0.165.0-alpha.1", /newer than the versions tested/],
     ["1.0.0", /newer than the versions tested/],
     // Only the leading product token names Codex: the trailing client version
     // `(piui; 0.2.0)` never stands in for an unrecognized Codex version.
@@ -545,7 +594,7 @@ test('account quota updates stay out of the transcript without hiding unknown co
   } finally { await adapter.dispose(); }
 });
 
-for (const version of ["0.147.0", "0.153.4", "0.157.1"]) {
+for (const version of ["0.147.0", "0.153.4", "0.157.1", "0.163.0"]) {
   test(`keeps the session flow and settings in sync on the ${version} protocol`, async () => {
     const events = [];
     const adapter = await createCodexAdapter({
@@ -626,17 +675,20 @@ test("answers the current-time request for the thread and its descendants", asyn
   } finally { await adapter.dispose(); }
 });
 
-test("maps the 0.153+ rate-limit and policy turn errors to fixed summaries", async () => {
-  for (const [text, message] of [
-    ["rate limit fixture", "A Codex usage limit prevents this turn."],
-    ["policy fixture", "Codex blocked this turn under provider policy."],
+test("maps the 0.153+ and 0.163+ turn errors to fixed summaries", async () => {
+  for (const [text, message, outcome] of [
+    ["rate limit fixture", "A Codex usage limit prevents this turn.", "failed"],
+    ["policy fixture", "Codex blocked this turn under provider policy.", "failed"],
+    ["flex fixture", "The selected Codex service tier is unavailable.", "failed"],
+    // Guardian's strict circuit breaker interrupts the turn with an error.
+    ["denials fixture", "Codex stopped this turn after too many denied actions.", "interrupted"],
   ]) {
     const events = [];
     const adapter = await createCodexAdapter(config, (event) => events.push(event));
     try {
       await adapter.prompt({ text, mode: "prompt" });
       await waitFor(() => events.some((event) => event.type === "turnCompleted"));
-      assert.deepEqual(events.filter((event) => event.type === "turnCompleted"), [{ type: "turnCompleted", outcome: "failed" }]);
+      assert.deepEqual(events.filter((event) => event.type === "turnCompleted"), [{ type: "turnCompleted", outcome }]);
       assert.ok(events.some((event) => event.type === "error" && event.message === message), text);
       assert.equal(JSON.stringify(events).includes("raw fixture"), false);
     } finally { await adapter.dispose(); }
@@ -839,7 +891,7 @@ test("a finished turn dismisses an MCP request that is still open", async () => 
   }
 });
 
-for (const version of ["0.147.0", "0.153.4", "0.157.1"]) {
+for (const version of ["0.147.0", "0.153.4", "0.157.1", "0.163.0"]) {
   test(`answers MCP form requests on the ${version} protocol`, async () => {
     const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, `--codex-version=${version}`, "--mcp-elicitation"] }, () => {});
     try {
@@ -968,4 +1020,263 @@ test("$ mentions of an enabled skill carry the native skill input item", async (
     // The ambiguous `twin` and the unknown `test-runner-extra` stay plain text.
     assert.equal(adapter.snapshot().title, "turn/start:text:Please $test-runner, then $twin and $test-runner-extra|skill:test-runner@/skills/test-runner/SKILL.md");
   } finally { await adapter.dispose(); }
+});
+
+// The shared fixture cannot show what a thread was registered with or inject a
+// `piui/sidekick` call, so these tests run it behind a small proxy. The proxy
+// forwards every line unchanged in both directions; it logs the dynamic tools
+// of `thread/start` / `thread/resume`, injects the `--wrapper-inject=<json>`
+// tool calls once the thread is open and logs the adapter's replies to them.
+function proxyScript() {
+  return [
+    'import { spawn } from "node:child_process";',
+    'import { appendFileSync } from "node:fs";',
+    'import readline from "node:readline";',
+    "const options = process.argv.slice(2);",
+    'const logPath = options.find((argument) => argument.startsWith("--wrapper-log=")).slice("--wrapper-log=".length);',
+    'const injectArgument = options.find((argument) => argument.startsWith("--wrapper-inject="));',
+    'const injections = injectArgument ? JSON.parse(injectArgument.slice("--wrapper-inject=".length)) : [];',
+    'const passthrough = options.filter((argument) => !argument.startsWith("--wrapper-"));',
+    'const log = (value) => appendFileSync(logPath, JSON.stringify(value) + String.fromCharCode(10));',
+    `const child = spawn(process.execPath, [${JSON.stringify(fixture)}, ...passthrough], { stdio: ["pipe", "pipe", "inherit"] });`,
+    'process.on("exit", () => child.kill());',
+    "const starts = new Set();",
+    "const injectedIds = new Set(injections.map((call) => call.id));",
+    "readline.createInterface({ input: process.stdin, crlfDelay: Infinity })",
+    '  .on("line", (line) => {',
+    "    const message = JSON.parse(line);",
+    '    if (message.method === "thread/start" || message.method === "thread/resume") {',
+    "      starts.add(message.id);",
+    '      log({ kind: "thread", method: message.method, dynamicTools: message.params?.dynamicTools ?? null });',
+    "    }",
+    "    if (message.method === undefined && injectedIds.has(message.id)) {",
+    '      log({ kind: "reply", id: message.id, result: message.result ?? null, error: message.error ?? null });',
+    "      return;",
+    "    }",
+    "    child.stdin.write(line + String.fromCharCode(10));",
+    "  })",
+    '  .on("close", () => child.stdin.end());',
+    "readline.createInterface({ input: child.stdout, crlfDelay: Infinity })",
+    '  .on("line", (line) => {',
+    "    process.stdout.write(line + String.fromCharCode(10));",
+    "    let message;",
+    "    try { message = JSON.parse(line); } catch { return; }",
+    "    if (message && starts.has(message.id) && message.result?.thread?.id) {",
+    "      starts.delete(message.id);",
+    "      for (const call of injections) {",
+    '        process.stdout.write(JSON.stringify({ method: "item/tool/call", id: call.id, params: { threadId: message.result.thread.id, turnId: "turn-sidekick", callId: call.callId, namespace: call.namespace, tool: call.tool, arguments: call.arguments } }) + String.fromCharCode(10));',
+    "      }",
+    "    }",
+    "  })",
+    '  .on("close", () => process.exit(0));',
+  ].join("\n");
+}
+
+async function openProxied(directory, overrides, { args = [], inject = [], callbacks = [] } = {}) {
+  const script = join(directory, "codex-proxy.mjs");
+  const logPath = join(directory, `proxy-${Math.random().toString(16).slice(2)}.jsonl`);
+  writeFileSync(script, proxyScript());
+  const events = [];
+  const adapter = await createCodexAdapter({
+    ...config,
+    runtimeArgs: [script, `--wrapper-log=${logPath}`, ...(inject.length ? [`--wrapper-inject=${JSON.stringify(inject)}`] : []), ...args],
+    ...overrides,
+  }, (event) => events.push(event), undefined, undefined, ...callbacks);
+  const entries = () => (existsSync(logPath)
+    ? readFileSync(logPath, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line))
+    : []);
+  const thread = () => waitFor(() => entries().find((entry) => entry.kind === "thread"));
+  const replies = (count) => waitFor(() => {
+    const found = entries().filter((entry) => entry.kind === "reply");
+    return found.length >= count ? found : undefined;
+  });
+  return { adapter, events, thread, replies, notices: () => events.filter((event) => event.type === "notice").map((event) => event.code) };
+}
+
+const toolNames = (dynamicTools) => dynamicTools.flatMap((spec) => spec.tools.map((tool) => `${spec.name}/${tool.name}`)).sort();
+
+test("a fresh thread registers the sidekick tool in the piui namespace, beside the board when both are on", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "piui-codex-sidekick-"));
+  const board = async () => ({ ok: true, op: "roster" });
+  const sidekick = async () => ({ ok: true, text: "ok" });
+  try {
+    const only = await openProxied(directory, { hostTools: ["sidekick"] }, { callbacks: [undefined, sidekick] });
+    try {
+      const start = await only.thread();
+      assert.equal(start.method, "thread/start");
+      assert.equal(start.dynamicTools.length, 1);
+      assert.equal(start.dynamicTools[0].type, "namespace");
+      assert.equal(start.dynamicTools[0].name, "piui");
+      assert.deepEqual(toolNames(start.dynamicTools), ["piui/sidekick"]);
+      const tool = start.dynamicTools[0].tools[0];
+      assert.equal(tool.type, "function");
+      assert.deepEqual(tool.inputSchema.required, ["op"]);
+      assert.equal(tool.inputSchema.additionalProperties, false);
+      assert.equal(tool.inputSchema.properties.waitSeconds.maximum, 540);
+      assert.deepEqual(tool.inputSchema.properties.outcome.enum, ["accepted", "rejected", "superseded"]);
+      assert.deepEqual(only.notices(), []);
+      assert.equal(only.adapter.snapshot().capabilities.nativeSubagents.enforcement, "native", "the sidekick never disables native subagents");
+    } finally { await only.adapter.dispose(); }
+
+    const both = await openProxied(directory, { hostTools: ["board", "sidekick"] }, { callbacks: [board, sidekick] });
+    try {
+      const start = await both.thread();
+      assert.equal(start.dynamicTools.length, 1, "one piui namespace carries both tools");
+      assert.deepEqual(toolNames(start.dynamicTools), ["piui/board", "piui/sidekick"]);
+      assert.deepEqual(both.notices(), []);
+    } finally { await both.adapter.dispose(); }
+
+    const boardOnly = await openProxied(directory, { hostTools: ["board"] }, { callbacks: [board, sidekick] });
+    try {
+      assert.deepEqual(toolNames((await boardOnly.thread()).dynamicTools), ["piui/board"], "a callback alone does not register the tool");
+    } finally { await boardOnly.adapter.dispose(); }
+
+    // Requested without a host callback: the chat starts without it, with a notice.
+    const missing = await openProxied(directory, { hostTools: ["sidekick"] });
+    try {
+      assert.equal((await missing.thread()).dynamicTools, null);
+      assert.deepEqual(missing.notices(), ["unsupported-sidekick-tool"]);
+    } finally { await missing.adapter.dispose(); }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a piui/sidekick tool call is answered with the host's text and bound to its call id", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "piui-codex-sidekick-"));
+  const calls = [];
+  const sidekick = async (operation, context) => {
+    calls.push({ operation, toolCallId: context.toolCallId, hasSignal: context.signal instanceof AbortSignal });
+    if (operation.op === "stop") return { ok: false, text: "Round r1 is not running." };
+    if (operation.op === "reset") throw Object.assign(new Error("raw native detail"), { bridgeCode: "sidekick-cancelled", safeMessage: "The sidekick request was cancelled. Collect the result with wait." });
+    return { ok: true, text: "Round r1 is working on the login fix." };
+  };
+  const call = (id, callId, argumentsValue, tool = "sidekick") => ({ id, callId, namespace: "piui", tool, arguments: argumentsValue });
+  try {
+    const proxied = await openProxied(directory, { hostTools: ["sidekick"] }, {
+      callbacks: [undefined, sidekick],
+      inject: [
+        call(995, "call-status", { op: "status" }),
+        call(996, "call-stop", { op: "stop", roundId: "r1" }),
+        call(997, "call-reset", { op: "reset" }),
+        call(998, "call-invalid", []),
+      ],
+    });
+    try {
+      const replies = await proxied.replies(4);
+      const byId = Object.fromEntries(replies.map((reply) => [reply.id, reply.result]));
+      assert.deepEqual(byId[995], { contentItems: [{ type: "inputText", text: "Round r1 is working on the login fix." }], success: true }, "the reply is the host's text, not JSON");
+      assert.deepEqual(byId[996], { contentItems: [{ type: "inputText", text: "Round r1 is not running." }], success: false });
+      assert.equal(byId[997].success, false);
+      assert.deepEqual(JSON.parse(byId[997].contentItems[0].text), { ok: false, code: "sidekick-cancelled", message: "The sidekick request was cancelled. Collect the result with wait." });
+      assert.doesNotMatch(JSON.stringify(byId[997]), /raw native detail/);
+      assert.equal(byId[998].success, false);
+      assert.equal(JSON.parse(byId[998].contentItems[0].text).code, "invalid-sidekick-call");
+      assert.deepEqual(
+        calls.map((entry) => [entry.operation.op, entry.toolCallId, entry.hasSignal]).sort(),
+        [["reset", "call-reset", true], ["status", "call-status", true], ["stop", "call-stop", true]],
+      );
+      assert.deepEqual(calls.find((entry) => entry.operation.op === "stop").operation, { op: "stop", roundId: "r1" });
+      assert.deepEqual(proxied.notices(), []);
+    } finally { await proxied.adapter.dispose(); }
+
+    // The tool is off for this chat: the persisted/registered tool gets a clean refusal.
+    calls.length = 0;
+    const off = await openProxied(directory, { hostTools: ["board"] }, {
+      callbacks: [async () => ({ ok: true }), sidekick],
+      inject: [call(995, "call-off", { op: "status" })],
+    });
+    try {
+      const [reply] = await off.replies(1);
+      assert.equal(reply.result.success, false);
+      assert.equal(JSON.parse(reply.result.contentItems[0].text).code, "sidekick-disabled");
+      assert.deepEqual(calls, [], "a disabled sidekick never reaches the host");
+    } finally { await off.adapter.dispose(); }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a resumed thread keeps the sidekick only if it was started with it; otherwise a notice", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "piui-codex-sidekick-"));
+  // Codex 0.163 rollouts start with `session_meta` carrying the persisted dynamic tools.
+  const rollout = async (name, tools) => {
+    const file = join(directory, name);
+    const meta = { type: "session_meta", payload: { id: "resume-fixture", base_instructions: { text: "x".repeat(30000) }, dynamic_tools: tools } };
+    await writeFile(file, `${JSON.stringify(meta)}\n{"type":"turn_context","payload":{}}\n`);
+    return file;
+  };
+  const piui = (...names) => [{ type: "namespace", name: "piui", description: "PiUI host tools for this chat.", tools: names.map((name) => ({ type: "function", name, inputSchema: { type: "object" } })) }];
+  const calls = [];
+  const sidekick = async (operation, context) => { calls.push({ operation, toolCallId: context.toolCallId }); return { ok: true, text: "Round r1 is working." }; };
+  try {
+    const withSidekick = await rollout("sidekick.jsonl", piui("board", "sidekick"));
+    const kept = await openProxied(directory, { nativeId: "resume-fixture", hostTools: ["sidekick"] }, {
+      args: [`--rollout=${withSidekick}`],
+      callbacks: [undefined, sidekick],
+      inject: [{ id: 995, callId: "call-resumed", namespace: "piui", tool: "sidekick", arguments: { op: "status" } }],
+    });
+    try {
+      const start = await kept.thread();
+      assert.equal(start.method, "thread/resume");
+      assert.equal(start.dynamicTools, null, "a resumed thread is never registered with new tools");
+      assert.deepEqual(kept.notices(), []);
+      const [reply] = await kept.replies(1);
+      assert.deepEqual(reply.result, { contentItems: [{ type: "inputText", text: "Round r1 is working." }], success: true });
+      assert.deepEqual(calls, [{ operation: { op: "status" }, toolCallId: "call-resumed" }]);
+    } finally { await kept.adapter.dispose(); }
+
+    // Started without the sidekick (only the board, no tools, no metadata, unreadable file): notice.
+    for (const file of [await rollout("board-only.jsonl", piui("board")), await rollout("none.jsonl", []), join(directory, "missing.jsonl")]) {
+      const resumed = await openProxied(directory, { nativeId: "resume-fixture", hostTools: ["sidekick"] }, { args: [`--rollout=${file}`], callbacks: [undefined, sidekick] });
+      try {
+        assert.equal((await resumed.thread()).dynamicTools, null);
+        assert.deepEqual(resumed.notices(), ["unsupported-sidekick-tool-resume"], file);
+        assert.equal(resumed.adapter.snapshot().nativeId, "resume-fixture");
+      } finally { await resumed.adapter.dispose(); }
+    }
+
+    // Both tools asked for on a thread that has only the board: one notice, for the sidekick.
+    const board = await rollout("board-both.jsonl", piui("board"));
+    const mixed = await openProxied(directory, { nativeId: "resume-fixture", hostTools: ["board", "sidekick"] }, {
+      args: [`--rollout=${board}`],
+      callbacks: [async () => ({ ok: true }), sidekick],
+    });
+    try {
+      await mixed.thread();
+      assert.deepEqual(mixed.notices(), ["unsupported-sidekick-tool-resume"]);
+    } finally { await mixed.adapter.dispose(); }
+
+    // A resume without a host callback reports the missing callback, not a missing rollout tool.
+    const noCallback = await openProxied(directory, { nativeId: "resume-fixture", hostTools: ["sidekick"] }, { args: [`--rollout=${withSidekick}`] });
+    try {
+      await noCallback.thread();
+      assert.deepEqual(noCallback.notices(), ["unsupported-sidekick-tool"]);
+    } finally { await noCallback.adapter.dispose(); }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a piui/sidekick result is written through deliver exactly once", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "piui-codex-sidekick-"));
+  const sidekick = async (operation, context) => {
+    await context.deliver({ ok: true, text: "Round r1 is working." });
+    return { ok: true, text: "Round r1 is working." };
+  };
+  try {
+    const proxied = await openProxied(directory, { hostTools: ["sidekick"] }, {
+      callbacks: [undefined, sidekick],
+      inject: [{ id: 995, callId: "call-status", namespace: "piui", tool: "sidekick", arguments: { op: "status" } }],
+    });
+    try {
+      await proxied.replies(1);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const replies = await proxied.replies(1);
+      assert.equal(replies.length, 1, "the result is not written again after deliver");
+      assert.deepEqual(replies[0].result, { contentItems: [{ type: "inputText", text: "Round r1 is working." }], success: true });
+    } finally { await proxied.adapter.dispose(); }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

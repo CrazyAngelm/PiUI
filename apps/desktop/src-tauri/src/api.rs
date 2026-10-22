@@ -1895,7 +1895,9 @@ mod tests {
             .expect("sets trust");
         assert!(verified_project_directory(&state, &project.id, true).is_ok());
 
-        fs::remove_dir_all(&project_path).expect("removes original directory");
+        // Move the original aside instead of deleting it: a deleted directory's
+        // inode can be reused at once (ext4), which would keep the identity.
+        fs::rename(&project_path, root.join("project-original")).expect("moves original directory");
         fs::create_dir_all(&project_path).expect("recreates replacement directory");
 
         let error = verified_project_directory(&state, &project.id, true)

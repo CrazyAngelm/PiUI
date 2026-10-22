@@ -309,13 +309,19 @@ pub(crate) fn failure_reason(run: &Run) -> String {
     }
 }
 
-/// The final text of a succeeded run: the last succeeded step's recorded
-/// output, or its verified native final answer.
+/// The final text of a succeeded run: its pipeline's declared outputs
+/// (ADR-042) when it has them and they can be read, otherwise the last
+/// succeeded step's recorded output or its verified native final answer.
 async fn final_result_text<R: Runtime>(
     app: &AppHandle<R>,
     workspace_id: &str,
     run: &Run,
 ) -> Option<String> {
+    if !run.definition().pipeline.outputs.is_empty()
+        && let Some(text) = declared_outputs_text(app, workspace_id, run).await
+    {
+        return Some(text);
+    }
     let task = run
         .tasks()
         .iter()
@@ -333,6 +339,65 @@ async fn final_result_text<R: Runtime>(
         .dependency_text(&whole, workspace_id, directory.canonical_path())
         .await
         .ok()
+}
+
+/// The run's declared pipeline outputs as text, with whole native result
+/// texts hash-verified like a sub-pipeline's; `None` when they are
+/// unavailable.
+async fn declared_outputs_text<R: Runtime>(
+    app: &AppHandle<R>,
+    workspace_id: &str,
+    run: &Run,
+) -> Option<String> {
+    let references = piui_orchestration::child_output_references(run);
+    let mut texts = BTreeMap::new();
+    if !references.is_empty() {
+        let host = app.try_state::<HostState>()?;
+        let directory = verified_project_directory(&host, workspace_id, false).ok()?;
+        for (step_id, reference) in references {
+            if let Ok(text) = host
+                .workspace
+                .dependency_text(&reference, workspace_id, directory.canonical_path())
+                .await
+            {
+                texts.insert(step_id, text);
+            }
+        }
+    }
+    let (data, _) = piui_orchestration::child_outputs(run, &texts).ok()?;
+    format_outputs(&run.definition().pipeline.outputs, &data?)
+}
+
+/// Readable text of declared output values: a single declared output is
+/// its value; several are `name: value` lines in declared order. Text is
+/// written as is, other values as JSON. Outputs without a value (their
+/// source step was skipped) are left out; `None` when no value is present.
+pub(crate) fn format_outputs(
+    outputs: &[piui_orchestration::PipelineOutput],
+    data: &serde_json::Map<String, serde_json::Value>,
+) -> Option<String> {
+    let text = |value: &serde_json::Value| match value {
+        serde_json::Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    let present: Vec<(&str, String)> = outputs
+        .iter()
+        .filter_map(|output| {
+            data.get(&output.name)
+                .map(|value| (output.name.as_str(), text(value)))
+        })
+        .collect();
+    match present.as_slice() {
+        [] => None,
+        [(_, value)] if outputs.len() == 1 => Some(value.clone()),
+        values => Some(
+            values
+                .iter()
+                .map(|(name, value)| format!("{name}: {value}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+    }
 }
 
 #[derive(Default)]

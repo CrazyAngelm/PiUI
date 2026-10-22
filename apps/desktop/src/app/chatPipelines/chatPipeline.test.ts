@@ -8,6 +8,7 @@ import {
   extraInputs,
   finalSteps,
   missingInputs,
+  outputsAnswer,
   replyStep,
   splitPipelineContext,
   withChatInput,
@@ -109,5 +110,39 @@ describe('pipeline context', () => {
     const text = withPipelineContext([{ pipelineName: 'P', runId: 'r', request: 'q', result: 'x'.repeat(30_000) }], 'next');
     expect(text.length).toBeLessThan(25_000);
     expect(text).toContain('(truncated)');
+  });
+});
+
+describe('answers from declared pipeline outputs (v6.7)', () => {
+  const steps = [step('plan'), step('check', ['plan'])];
+  const withOutputs = (outputs: unknown[], tasks: TaskRecord[]) =>
+    ({ definition: { pipeline: { id: 'p', name: 'P', steps, outputs } }, tasks }) as unknown as Pick<OrchestrationRunV6, 'definition' | 'tasks'>;
+  const done = (stepId: string, patch: Partial<TaskRecord> = {}): TaskRecord => ({ ...task(stepId, 'succeeded'), ...patch });
+  const text = async (item: PipelineStep, record: TaskRecord) => record.output?.text ?? `${item.id} text`;
+  const format = (value: unknown) => (typeof value === 'string' ? value : JSON.stringify(value));
+
+  it('answers with the value of a single output', async () => {
+    const finished = withOutputs([{ name: 'passed', kind: 'boolean', sourceStepId: 'check', field: 'passed' }], [done('plan'), done('check', { resultData: { passed: true } })]);
+    expect(await outputsAnswer(finished, text, format)).toBe('true');
+    const whole = withOutputs([{ name: 'plan', kind: 'text', sourceStepId: 'plan' }], [done('plan', { output: { text: 'The plan.' } }), done('check')]);
+    expect(await outputsAnswer(whole, text, format)).toBe('The plan.');
+  });
+
+  it('answers with name: value lines for several outputs, in declared order', async () => {
+    const finished = withOutputs(
+      [{ name: 'summary', kind: 'text', sourceStepId: 'plan' }, { name: 'passed', kind: 'boolean', sourceStepId: 'check', field: 'passed' }],
+      [done('plan'), done('check', { resultData: { passed: false } })],
+    );
+    expect(await outputsAnswer(finished, text, format)).toBe('summary: plan text\npassed: false');
+  });
+
+  it('falls back when the pipeline declares no outputs or one has no value', async () => {
+    expect(await outputsAnswer(withOutputs([], [done('plan'), done('check')]), text, format)).toBeUndefined();
+    const missingField = withOutputs([{ name: 'passed', kind: 'boolean', sourceStepId: 'check', field: 'passed' }], [done('plan'), done('check', { resultData: {} })]);
+    expect(await outputsAnswer(missingField, text, format)).toBeUndefined();
+    const failed = withOutputs([{ name: 'plan', kind: 'text', sourceStepId: 'plan' }], [task('plan', 'failed')]);
+    expect(await outputsAnswer(failed, text, format)).toBeUndefined();
+    const noText = withOutputs([{ name: 'plan', kind: 'text', sourceStepId: 'plan' }], [done('plan')]);
+    expect(await outputsAnswer(noText, async () => undefined, format)).toBeUndefined();
   });
 });

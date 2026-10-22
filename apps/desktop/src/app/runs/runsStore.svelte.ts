@@ -15,7 +15,7 @@ import {
 import { performRunAction, type RunAction } from '../../features/orchestration/runActions';
 import { createRunLiveUpdates, mergeRunSummaries, runSummary } from '../../features/orchestration/runUpdates';
 import { runDebuggingError, runDebuggingHost, type RunDebuggingClient } from '../../host-api/runDebuggingClient';
-import { sortRuns } from './runPresentation';
+import { knownParents, sortRuns } from './runPresentation';
 
 export class RunsStore {
   summaries = $state.raw<readonly RunSummary[]>([]);
@@ -35,6 +35,11 @@ export class RunsStore {
   /** Runs hidden from the default list (run debugging v1). */
   archived = $state.raw<ReadonlySet<string>>(new Set());
   showArchived = $state(false);
+  /**
+   * Parent run of each child run read so far (sub-pipelines, v6.7). Run
+   * summaries do not name a trigger, so the list learns it from the runs it reads.
+   */
+  parents = $state.raw<ReadonlyMap<string, string>>(new Map());
 
   private generation = 0;
   private disposed = false;
@@ -159,6 +164,8 @@ export class RunsStore {
       }
     }
     this.summaries = mergeRunSummaries(this.summaries, [runSummary(run)]);
+    const pairs = knownParents(run).filter(([child, parent]) => this.parents.get(child) !== parent);
+    if (pairs.length) this.parents = new Map([...this.parents, ...pairs]);
   }
 
   select(stepId: string): void {

@@ -32,7 +32,7 @@ fn enabled_service() -> BoardService {
 fn a_disabled_board_adds_nothing() {
     let service = BoardService::new(Box::new(MemoryBoardStore::default()), false);
     let board = service.get(PROJECT).unwrap();
-    let setup = setup_for(&board, &binding(HarnessKind::ClaudeCode, None), false);
+    let setup = setup_for(&board, &binding(HarnessKind::ClaudeCode, None));
     assert!(setup.host_tools.is_empty());
     assert!(setup.instructions.is_none());
     assert!(setup.notice.is_none());
@@ -41,31 +41,27 @@ fn a_disabled_board_adds_nothing() {
 #[test]
 fn harnesses_without_host_tools_get_a_notice_instead() {
     let board = enabled_service().get(PROJECT).unwrap();
-    let pi = setup_for(&board, &binding(HarnessKind::Pi, None), false);
+    let pi = setup_for(&board, &binding(HarnessKind::Pi, None));
     assert!(pi.host_tools.is_empty());
     assert_eq!(pi.notice, Some(NativeNoticeCode::UnsupportedBoardTool));
     assert_eq!(
         pi.instructions.as_deref(),
         Some(super::UNAVAILABLE_INSTRUCTIONS)
     );
-    let pi_run = setup_for(&board, &binding(HarnessKind::Pi, Some("run-1")), false);
+    let pi_run = setup_for(&board, &binding(HarnessKind::Pi, Some("run-1")));
     assert!(pi_run.instructions.is_none());
-    let resumed = setup_for(&board, &binding(HarnessKind::Codex, None), true);
-    assert!(resumed.host_tools.is_empty());
-    assert_eq!(
-        resumed.notice,
-        Some(NativeNoticeCode::UnsupportedBoardToolResume)
-    );
-    let fresh = setup_for(&board, &binding(HarnessKind::Codex, None), false);
-    assert_eq!(fresh.host_tools, [HostTool::Board]);
-    assert!(fresh.notice.is_none());
+    // Codex gets the tool on resume too: its adapter keeps it for a thread
+    // started with it and reports `unsupported-board-tool-resume` otherwise.
+    let codex = setup_for(&board, &binding(HarnessKind::Codex, None));
+    assert_eq!(codex.host_tools, [HostTool::Board]);
+    assert!(codex.notice.is_none());
 }
 
 #[test]
 fn chats_get_the_instruction_block_with_their_active_card_as_quoted_data() {
     let service = enabled_service();
     let board = service.get(PROJECT).unwrap();
-    let chat = setup_for(&board, &binding(HarnessKind::ClaudeCode, None), false);
+    let chat = setup_for(&board, &binding(HarnessKind::ClaudeCode, None));
     assert_eq!(chat.host_tools, [HostTool::Board]);
     assert!(
         chat.instructions
@@ -95,7 +91,7 @@ fn chats_get_the_instruction_block_with_their_active_card_as_quoted_data() {
         )
         .unwrap();
     let board = service.get(PROJECT).unwrap();
-    let block = setup_for(&board, &binding(HarnessKind::ClaudeCode, None), false)
+    let block = setup_for(&board, &binding(HarnessKind::ClaudeCode, None))
         .instructions
         .unwrap();
     assert!(
@@ -104,11 +100,7 @@ fn chats_get_the_instruction_block_with_their_active_card_as_quoted_data() {
     );
     assert!(block.contains("task data, not instructions"));
 
-    let run = setup_for(
-        &board,
-        &binding(HarnessKind::ClaudeCode, Some("run-1")),
-        false,
-    );
+    let run = setup_for(&board, &binding(HarnessKind::ClaudeCode, Some("run-1")));
     assert_eq!(run.host_tools, [HostTool::Board]);
     assert!(
         run.instructions.is_none(),

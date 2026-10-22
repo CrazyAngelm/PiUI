@@ -6,23 +6,32 @@
 import type { AgentProfile } from '../../host-api/orchestrationClient';
 import type { PipelineTemplateV1 } from '../../host-api/pipelineLibraryClient';
 import type { AgentGraph } from '../../features/orchestration/agentGraph';
-import { graphToSystemFile, parseSystemFile, serializeSystemFile, systemFileToGraph } from '../../features/orchestration/systemFile';
+import { graphToSystemFile, parseSystemFile, serializeSystemFile, systemFileToGraph, type PipelineName } from '../../features/orchestration/systemFile';
 
-/** A new draft from a template; throws the parser's message when the document is invalid. */
-export function graphFromTemplate(template: Pick<PipelineTemplateV1, 'system' | 'name'>): AgentGraph {
-  const graph = systemFileToGraph(parseSystemFile(JSON.stringify(template.system)));
+/**
+ * A new draft from a template; throws the parser's message when the document
+ * is invalid. Sub-pipeline steps (system-file v5) name saved pipelines:
+ * `pipelines` are the project's launch commands they resolve against (a name
+ * that does not resolve stays on the step for the person to pick).
+ */
+export function graphFromTemplate(template: Pick<PipelineTemplateV1, 'system' | 'name'>, pipelines: readonly PipelineName[] = []): AgentGraph {
+  const graph = systemFileToGraph(parseSystemFile(JSON.stringify(template.system)), pipelines);
   return { ...graph, name: graph.name || template.name };
 }
 
-/** The template document of a graph, validated by the export path. */
-export function templateSystem(graph: AgentGraph): Record<string, unknown> {
-  serializeSystemFile(graph);
-  return graphToSystemFile(graph) as unknown as Record<string, unknown>;
+/**
+ * The template document of a graph, validated by the export path (the
+ * current system-file version). Sub-pipeline steps are written by the name
+ * of their pipeline in `pipelines`.
+ */
+export function templateSystem(graph: AgentGraph, pipelines: readonly PipelineName[] = []): Record<string, unknown> {
+  serializeSystemFile(graph, pipelines);
+  return graphToSystemFile(graph, pipelines) as unknown as Record<string, unknown>;
 }
 
 /** Steps that run on a native model and have no model chosen yet. */
 export function needsModel(node: AgentGraph['nodes'][number]): boolean {
-  if (node.executor?.type === 'script' || node.executor?.type === 'plugin') return false;
+  if (node.executor?.type === 'script' || node.executor?.type === 'plugin' || node.executor?.type === 'pipeline') return false;
   if (node.kind === 'router' && node.router?.mode === 'program') return false;
   return !node.profile.model.trim();
 }

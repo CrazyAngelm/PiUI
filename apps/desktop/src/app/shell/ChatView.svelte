@@ -29,7 +29,11 @@
   import { chatPipelines } from '../chatPipelines/chatPipelines.svelte';
   import ActiveCardChip from '../board/ActiveCardChip.svelte';
   import ChatBoardActivity from '../board/ChatBoardActivity.svelte';
-  import { sessionNotices } from '../../features/workspace/sessionNotices';
+  import { sessionNotices, sidekickToolNotice } from '../../features/workspace/sessionNotices';
+  import FusionBadge from '../fusion/FusionBadge.svelte';
+  import FusionNotice from '../fusion/FusionNotice.svelte';
+  import SidekickOfBadge from '../fusion/SidekickOfBadge.svelte';
+  import { fusionMembership } from '../fusion/fusionMembership.svelte';
 
   // Loaded on first use; a script-level import lets the dev server see its dependencies.
   const loadReviewPanel = () => import('../review/ReviewPanel.svelte');
@@ -48,6 +52,15 @@
   // Project chats (not pipeline members) can have an active board card (ADR-041).
   const boardProject = $derived(workspace !== undefined && !workspace.personal && !workspace.missing && !session?.runId ? workspace.id : undefined);
   const notices = $derived(sessionNotices(snapshot));
+  // Fusion (ADR-043): a lead chat shows the pair badge, a sidekick chat is read-only.
+  const fusion = $derived(fusionMembership.peek(sessionId));
+  $effect(() => {
+    void fusionMembership.load(sessionId);
+  });
+  const isSidekick = $derived(fusion?.role === 'sidekick');
+  const isLead = $derived(fusion?.role === 'lead');
+  // Only the sidekick in use is the broker's: a retired one's chat may be deleted.
+  const currentSidekick = $derived(fusionMembership.isCurrentSidekick(sessionId));
   // Pipeline runs started from this chat, shown among its messages by time.
   const chatPipeline = $derived(chatPipelines.chats[sessionId]);
   const runInserts = $derived((chatPipeline?.runs ?? []).map((entry) => ({ id: entry.runId, at: entry.startedAt })));
@@ -146,9 +159,22 @@
         {#if boardProject}
           <ActiveCardChip workspaceId={boardProject} sessionId={session.id} harness={session.harness} {notices} />
         {/if}
+        {#if fusion?.role === 'lead'}
+          {#key session.id}<FusionBadge leadSessionId={session.id} />{/key}
+        {:else if fusion?.role === 'sidekick'}
+          <SidekickOfBadge leadSessionId={fusion.leadSessionId} />
+        {/if}
         <div class="chat__actions">
           {#if running}
-            <Button size="sm" variant="ghost" onclick={() => void store.interrupt(session.id)} loading={store.interruptBusy}>
+            <!-- Fusion stops through the broker: a lead stops the pair, a sidekick stops its round (the store routes it). -->
+            <Button
+              size="sm"
+              variant="ghost"
+              onclick={() => void store.interrupt(session.id)}
+              loading={store.interruptBusy}
+              disabled={isSidekick && !fusion?.leadSessionId}
+              aria-label={isSidekick ? $t('Stop sidekick') : isLead ? $t('Stop lead and sidekick') : undefined}
+            >
               {#snippet leading()}<Square />{/snippet}
               {$t('Stop')}
             </Button>
@@ -165,10 +191,10 @@
                 ? [{ label: $t('Continue in another harness…'), icon: ArrowRightLeft, disabled: store.safeMode, onSelect: () => void startHandoff(store, snapshot, $t) }]
                 : []),
               ...(session.status !== 'closed'
-                ? [{ label: $t('Stop agent process'), icon: Power, onSelect: () => void store.close(session.id) }]
+                ? [{ label: currentSidekick ? $t('Stop sidekick process and its round') : $t('Stop agent process'), icon: Power, onSelect: () => void store.close(session.id) }]
                 : []),
               { type: 'separator' as const },
-              ...(!session.runId
+              ...(!session.runId && !currentSidekick
                 ? [{ label: $t('Delete chat…'), icon: Trash, danger: true, disabled: running || store.safeMode, onSelect: () => onDelete(session.id) }]
                 : []),
             ]}
@@ -196,6 +222,7 @@
             agentLabel={harnessMeta(snapshot.session.harness).label}
             bind:searchOpen
             inserts={runInserts}
+            emptyText={fusion?.role === 'sidekick' ? $t('No briefs yet. The lead sends one when it delegates work.') : undefined}
           >
             {#snippet insert(runId)}
               {@const entry = chatPipeline?.runs.find((item) => item.runId === runId)}
@@ -208,18 +235,34 @@
             {#each snapshot.approvals as approval (approval.id)}
               <ApprovalCard {approval} session={snapshot.session} />
             {/each}
+            <FusionNotice code={sidekickToolNotice(notices)} />
             {#if boardProject}
               <ChatBoardActivity workspaceId={boardProject} sessionId={snapshot.session.id} blocks={snapshot.blocks} />
             {/if}
             <ExtensionSurface sessionId={snapshot.session.id} status={snapshot.session.status} placement="above" agentLabel={harnessMeta(snapshot.session.harness).label} />
             {#if store.safeMode}
               <p class="notice">{$t('Runtime actions are disabled in safe mode. Your draft is preserved.')}</p>
+            {:else if fusion?.role === 'sidekick'}
+              <!-- The broker owns the sidekick's turns; the host refuses Send for it (NOT_SUPPORTED). -->
+              <p class="notice">
+                {$t('This is the sidekick of a Fusion chat. Its lead gives it work through briefs, so you cannot message it here. Talk to the lead chat instead.')}
+                {#if fusion.leadSessionId}
+                  {@const leadId = fusion.leadSessionId}
+                  <Button size="sm" variant="ghost" onclick={() => void store.openSession(leadId)}>{$t('Open lead chat')}</Button>
+                {/if}
+              </p>
             {:else if snapshot.session.status === 'closed' && placements.get(session.id)?.worktree?.state === 'removed'}
               <p class="notice">{$t("This chat's worktree was removed. Its history stays readable; start a new chat to keep working.")}</p>
             {:else if snapshot.session.status === 'closed'}
               <p class="notice">
                 {$t('The agent process is stopped. The transcript stays readable.')}
                 <Button size="sm" variant="ghost" onclick={() => void store.openSession(session.id)}>{$t('Resume')}</Button>
+              </p>
+            {:else if session.runId}
+              <!-- Run members follow their run's saved settings (ADR-044). -->
+              <p class="notice">
+                {$t('This agent is part of a pipeline run and follows its saved settings. You can stop it or answer its requests here.')}
+                <Button size="sm" variant="ghost" onclick={() => store.openRun(session.workspaceId, session.runId)}>{$t('Part of a pipeline run')}</Button>
               </p>
             {:else if !snapshot.capabilities.prompt.supported}
               <p class="notice">{snapshot.capabilities.prompt.reason ?? $t('{0} is read-only in this mode.', [harnessMeta(session.harness).label])}</p>
@@ -261,7 +304,7 @@
         {/key}
       {/await}
     {:else if detailsOpen && snapshot}
-      <ChatDetails {snapshot} onClose={toggleDetails} onDelete={() => onDelete(session.id)} onReview={toggleReview} />
+      <ChatDetails {snapshot} onClose={toggleDetails} onDelete={currentSidekick ? undefined : () => onDelete(session.id)} onReview={toggleReview} />
     {/if}
   </div>
 {:else}

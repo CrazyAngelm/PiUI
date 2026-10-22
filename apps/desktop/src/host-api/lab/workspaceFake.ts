@@ -12,7 +12,7 @@ import type {
 import { answerMatchesForm } from '../approvalForms';
 import { NativeRejection, workspaceFailure } from './labErrors';
 import {
-  authorizeLive, hasControl, normalizedTitle, requireLive, requireRecord, validateModel, validText, validToken,
+  authorizeLive, authorizeOrdinaryLive, hasControl, refuseFusionDelete, refuseFusionSidekick, normalizedTitle, requireLive, requireRecord, validateModel, validText, validToken,
 } from './labGuards';
 import type { LabHandlers } from './labHandlers';
 import { isUuid } from './labRandom';
@@ -145,6 +145,8 @@ function openSession(runtime: LabSessions, sessionId: string): WorkspaceResult {
 function closeSession(runtime: LabSessions, sessionId: string): void {
   if (!isUuid(sessionId)) throw workspaceFailure('INVALID_ARGUMENT');
   const record = requireRecord(runtime.state, sessionId);
+  // The current sidekick closes through the broker: its open round stops and its report is withdrawn.
+  runtime.state.fusionLifecycle?.closeSidekick(sessionId);
   if (record.live === undefined) return;
   runtime.close(record);
 }
@@ -164,7 +166,7 @@ function workspaceCommand(runtime: LabSessions, command: WorkspaceCommand): Work
       return openSession(runtime, command.sessionId);
     case 'send': {
       assertNotSafe(state);
-      const record = authorizeLive(state, command.sessionId);
+      const record = authorizeOrdinaryLive(state, command.sessionId);
       requireLive(record);
       if (!validText(command.text)) throw workspaceFailure('INVALID_ARGUMENT');
       native(() => runtime.prompt(record, command.text, command.mode));
@@ -174,6 +176,8 @@ function workspaceCommand(runtime: LabSessions, command: WorkspaceCommand): Work
     case 'interrupt': {
       assertNotSafe(state);
       const record = authorizeLive(state, command.sessionId);
+      // A sidekick stops through `fusion_command_v1.stopSidekick`, which withdraws the round's delivery.
+      refuseFusionSidekick(state, command.sessionId);
       runtime.pauseQueue(record);
       requireLive(record);
       native(() => runtime.interrupt(record));
@@ -185,7 +189,7 @@ function workspaceCommand(runtime: LabSessions, command: WorkspaceCommand): Work
       return { type: 'accepted', sessionId: command.sessionId };
     case 'setModel': {
       assertNotSafe(state);
-      const record = authorizeLive(state, command.sessionId);
+      const record = authorizeOrdinaryLive(state, command.sessionId);
       validateModel(command.model, command.thinkingLevel);
       const live = requireLive(record);
       if (live.status === 'failed') throw workspaceFailure('RUNTIME_FAILED');
@@ -211,7 +215,8 @@ function workspaceCommand(runtime: LabSessions, command: WorkspaceCommand): Work
     }
     case 'respond': {
       assertNotSafe(state);
-      const record = authorizeLive(state, command.sessionId);
+      // Only the standing approval is refused; a sidekick's request is answered once at a time.
+      const record = command.decision === 'approve-session' ? authorizeOrdinaryLive(state, command.sessionId) : authorizeLive(state, command.sessionId);
       if (!validToken(command.requestId)) throw workspaceFailure('INVALID_ARGUMENT');
       const live = requireLive(record);
       const approval = live.approvals.find((candidate) => candidate.id === command.requestId);
@@ -237,7 +242,8 @@ function workspaceCommand(runtime: LabSessions, command: WorkspaceCommand): Work
 function runtimeSettings(runtime: LabSessions, command: RuntimeSettingsCommand): RuntimeSettings {
   const { state } = runtime;
   assertNotSafe(state);
-  const record = authorizeLive(state, command.sessionId);
+  // Reading the settings of a sidekick is allowed; changing them is not.
+  const record = command.type === 'set' ? authorizeOrdinaryLive(state, command.sessionId) : authorizeLive(state, command.sessionId);
   const live = requireLive(record);
   // Claude Code runs only at standard speed: fast mode can use paid extra usage.
   if (command.type === 'set' && record.harness === 'claude-code' && command.serviceTier != null && command.serviceTier !== 'standard') {
@@ -279,10 +285,15 @@ function deleteSession(runtime: LabSessions, command: WorkspaceLifecycleCommand)
   if (!isUuid(command.sessionId)) throw workspaceFailure('INVALID_ARGUMENT');
   const record = requireRecord(state, command.sessionId);
   if (record.runId !== undefined) throw workspaceFailure('NOT_SUPPORTED');
+  // The current sidekick stays (the broker owns it); a retired one may go. A lead
+  // with an open or uncertain sidekick round stays too.
+  refuseFusionDelete(state, command.sessionId);
   const status = record.live?.status;
   if (status !== undefined && status !== 'idle' && status !== 'failed') throw workspaceFailure('CONFLICT');
   if (record.live !== undefined) runtime.close(record);
   state.sessions.delete(command.sessionId);
+  // A deleted lead takes its pair, membership and scheduled round steps with it.
+  state.fusionLifecycle?.forgetLead(command.sessionId);
   return { protocol: 17, sessionId: command.sessionId };
 }
 

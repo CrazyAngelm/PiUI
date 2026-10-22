@@ -144,6 +144,14 @@ export async function runShellWebview2Proof({
   if (mode === 'safe') {
     const phase = performance.now();
     await waitForShell();
+    // The normal run switches back to English just before the harness ends its
+    // process, and WebView2 writes localStorage to disk lazily, so that last
+    // write can be lost. Language is not under test here.
+    if (await evaluate(`document.documentElement.lang !== 'en'`)) {
+      await evaluate(`localStorage.setItem('piui.language', 'en')`);
+      await reload();
+      await waitFor(`document.documentElement.lang === 'en'`, 'English for the safe-mode proof');
+    }
     await click('New chat', sidebar);
     await waitFor(`document.querySelector('#home-title')`, 'Home in safe mode');
     const safe = await evaluate(`(() => ({
@@ -276,6 +284,12 @@ export async function runShellWebview2Proof({
   await waitFor(`document.documentElement.lang === 'ru' && document.querySelector('nav[aria-label="Навигация рабочей области"]')`, 'Russian navigation');
   await reload();
   await waitFor(`document.documentElement.lang === 'ru'`, 'Russian persisted after reload', startupBoundMs);
+  // The project list loads after the language; give it the startup bound.
+  await waitFor(
+    `[...(document.querySelector('nav[aria-label="Навигация рабочей области"]')?.querySelectorAll('button[aria-expanded]') ?? [])].some((button) => button.textContent?.includes(${JSON.stringify(added.name)}))`,
+    'project listed after the Russian reload',
+    startupBoundMs,
+  ).catch(() => {});
   const russian = await evaluate(`(() => {
     const nav = document.querySelector('nav[aria-label="Навигация рабочей области"]');
     return {

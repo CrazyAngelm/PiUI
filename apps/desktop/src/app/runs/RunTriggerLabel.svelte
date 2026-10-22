@@ -4,9 +4,10 @@
   import MessageSquare from '@lucide/svelte/icons/message-square';
   import Zap from '@lucide/svelte/icons/zap';
   import KanbanSquare from '@lucide/svelte/icons/square-kanban';
+  import Workflow from '@lucide/svelte/icons/workflow';
   import { t } from '../../features/locale/language';
   import type { RunTrigger } from '../../host-api/orchestrationClient';
-  import { MAX_TRIGGER_CHAIN_DEPTH } from '../../../../../contracts/orchestration-v6';
+  import { MAX_SUBPIPELINE_DEPTH, MAX_TRIGGER_CHAIN_DEPTH } from '../../../../../contracts/orchestration-v6';
   import { shortId } from './runPresentation';
 
   interface Props {
@@ -40,6 +41,14 @@
     {:else if trigger.kind === 'board'}
       <KanbanSquare size={13} aria-hidden="true" />
       <span>{$t('Started from a board card')}</span>
+    {:else if trigger.kind === 'pipeline'}
+      {@const parent = trigger.parentRunId}
+      <Workflow size={13} aria-hidden="true" />
+      <span>{$t('Sub-pipeline of run')}</span>
+      <button type="button" class="link" aria-label={$t('Open parent run {0}', [shortId(parent)])} onclick={() => onOpenRun(parent)}>#{shortId(parent)}</button>
+      {#if trigger.depth > 1}
+        <span class="depth">· {$t('level {0} of {1}', [trigger.depth, MAX_SUBPIPELINE_DEPTH])}</span>
+      {/if}
     {:else}
       <MessageSquare size={13} aria-hidden="true" />
       <span>{$t('Started from a chat')}</span>

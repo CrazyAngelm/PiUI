@@ -498,6 +498,40 @@ async fn an_existing_work_folder_is_never_reused() {
 mod powershell {
     use super::*;
 
+    /// Windows PowerShell cold starts are slow on CI runners; several at once
+    /// alongside the rest of the suite have stalled past the step timeout.
+    static ONE_AT_A_TIME: tokio::sync::Mutex<bool> = tokio::sync::Mutex::const_new(false);
+
+    /// Takes the test lock and, once per process, runs one JSON script
+    /// through the real runner (same interpreter arguments and allowlisted
+    /// environment) outside any test timeout. On a fresh CI runner the first
+    /// such script has taken over a minute while PowerShell starts and loads
+    /// its JSON cmdlets: runner warm-up, not the behaviour under test.
+    async fn serial() -> tokio::sync::MutexGuard<'static, bool> {
+        let mut warmed = ONE_AT_A_TIME.lock().await;
+        if !*warmed {
+            let fixture = Fixture::new("ps-warm-up");
+            let started = std::time::Instant::now();
+            let (_keep, cancel) = watch::channel(false);
+            let warm_up = launch(
+                &fixture,
+                "[Console]::In.ReadToEnd() | ConvertFrom-Json | ConvertTo-Json -Compress | Out-Null
+",
+                "ps-warm-up",
+                300,
+            )
+            .run(cancel)
+            .await;
+            eprintln!(
+                "PowerShell warm-up took {:?}: {:?}",
+                started.elapsed(),
+                warm_up.map(|run| run.outcome)
+            );
+            *warmed = true;
+        }
+        warmed
+    }
+
     fn launch<'a>(
         fixture: &'a Fixture,
         source: &'a str,
@@ -516,6 +550,7 @@ mod powershell {
 
     #[tokio::test]
     async fn json_result_round_trips_utf8_stdin() {
+        let _serial = serial().await;
         let fixture = Fixture::new("ps-json");
         let source = "param()\r\n\
             $doc = [Console]::In.ReadToEnd() | ConvertFrom-Json\r\n\
@@ -534,6 +569,7 @@ mod powershell {
 
     #[tokio::test]
     async fn plain_text_and_explicit_exit_codes_are_observed() {
+        let _serial = serial().await;
         let fixture = Fixture::new("ps-exit");
         let run = launch(
             &fixture,
@@ -558,6 +594,7 @@ mod powershell {
 
     #[tokio::test]
     async fn timeout_terminates_powershell() {
+        let _serial = serial().await;
         let fixture = Fixture::new("ps-timeout");
         let run = launch(&fixture, "Start-Sleep -Seconds 60\r\n", "ps-timeout", 2)
             .finish()

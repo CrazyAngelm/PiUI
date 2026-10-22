@@ -1,0 +1,62 @@
+{
+  "state": {
+    "type": "state",
+    "state": {
+      "protocol": 1,
+      "leadSessionId": "lead-1",
+      "workspaceId": "workspace-1",
+      "pair": {
+        "lead": { "harness": "claude-code", "permissionMode": "full-access" },
+        "sidekick": { "harness": "codex", "permissionMode": "workspace-write" },
+        "options": { "briefPolicy": "prescriptive", "pushback": false, "autoDeliver": true, "leadNativeSubagents": false }
+      },
+      "sidekick": "idle",
+      "sessions": [
+        { "sessionId": "side-1", "harness": "codex", "retired": false, "createdAt": "2026-10-22T10:00:00.000Z" }
+      ],
+      "briefs": [
+        {
+          "briefId": "b1",
+          "title": "Parser",
+          "goal": "Fix the parser",
+          "doneWhen": ["tests pass"],
+          "state": "reported",
+          "sidekickSessionId": "side-1",
+          "rounds": [
+            {
+              "roundId": "r1",
+              "kind": "brief",
+              "state": "finished",
+              "outcome": "completed",
+              "status": "done",
+              "startedAt": "2026-10-22T10:00:01.000Z",
+              "finishedAt": "2026-10-22T10:01:02.000Z",
+              "answerBlockId": "block-1",
+              "answerHash": "abc",
+              "preview": "Fix the parser",
+              "delivery": { "via": "tool", "state": "sent", "updatedAt": "2026-10-22T10:01:02.000Z" }
+            }
+          ],
+          "createdAt": "2026-10-22T10:00:01.000Z"
+        }
+      ],
+      "stats": { "briefs": 1, "accepted": 0, "rejected": 0, "takenOver": 0, "rounds": 1 },
+      "revision": 4
+    }
+  },
+  "pairRefused": { "type": "pairCheck", "ok": false, "refusal": "codex-sandbox-unverified", "role": "sidekick" },
+  "pairAccepted": { "type": "pairCheck", "ok": true },
+  "notMember": { "type": "membership", "role": null },
+  "sidekickMember": { "type": "membership", "role": "sidekick", "leadSessionId": "lead-1" },
+  "changed": { "protocol": 1, "leadSessionId": "lead-1", "revision": 4 },
+  "createChat": {
+    "type": "createChat",
+    "workspaceId": "workspace-1",
+    "pair": {
+      "lead": { "harness": "claude-code", "permissionMode": "full-access" },
+      "sidekick": { "harness": "codex", "permissionMode": "workspace-write" },
+      "options": { "briefPolicy": "outline", "pushback": true, "autoDeliver": true, "leadNativeSubagents": false }
+    },
+    "title": "Parser work"
+  }
+}

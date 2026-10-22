@@ -2,6 +2,13 @@ let pending = Buffer.alloc(0);
 const toolFlag = process.argv.indexOf("--tools");
 const textOnly = process.argv.includes("--text-only-model");
 let sessionName = process.argv.includes("--no-tools") ? "no-tools" : toolFlag >= 0 ? process.argv[toolFlag + 1] : "Fixture";
+// A scenario step `{ busyProbes: n }` makes the next n `get_state` replies
+// report a streaming run, like a runtime still busy after `agent_end`.
+let busyProbes = 0;
+const busyNow = () => { if (busyProbes <= 0) return false; busyProbes -= 1; return true; };
+// The default turn's assistant message and the history entry of the same answer
+// share this timestamp, the way Pi persists the message it streamed.
+const ANSWER_TIMESTAMP = 1790000000123;
 const write = (value, fragmented = false) => {
   const bytes = Buffer.from(`${JSON.stringify(value)}\n`);
   if (!fragmented) process.stdout.write(bytes);
@@ -15,6 +22,20 @@ const longOutput = `${"head line\n".repeat(1200)}${"tail line\n".repeat(1200)}`;
 const emojiOutput = `${"a".repeat(8191)}\u{1F600}${"b".repeat(100)}\u{1F600}${"c".repeat(8191)}`;
 const tool = (type, toolCallId, toolName, fields) => ({ type, toolCallId, toolName, ...fields });
 const textResult = (text) => ({ content: [{ type: "text", text }], details: { fullOutputPath: `/private/${secret}.log` } });
+const assistantText = (text) => ({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text } });
+// error -> agent_end(willRetry) -> retry succeeds -> final agent_end.
+function retryRuns() {
+  return [
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "529 overloaded" } },
+    { type: "agent_end", willRetry: true },
+    { type: "auto_retry_start", attempt: 1 },
+    { type: "agent_start" },
+    assistantText("recovered answer"),
+    { type: "message_end", message: { role: "assistant", stopReason: "stop" } },
+    { type: "agent_end", willRetry: false },
+  ];
+}
 const scenarios = {
   tools: [
     { type: "agent_start" },
@@ -59,6 +80,84 @@ const scenarios = {
     { type: "extension_ui_request", id: "native-custom", method: "custom", payload: secret },
     { type: "agent_settled" },
   ],
+  // Pi auto-retry: the failed run ends with agent_end(willRetry:true) and a
+  // second run answers. Only agent_settled (Pi >= 0.80.4) closes the turn.
+  retry: [
+    ...retryRuns(),
+    { type: "agent_settled" },
+  ],
+  // The same sequence from a Pi build that predates agent_settled.
+  "retry-legacy": retryRuns(),
+  // A queued follow-up continues the turn after an agent_end(willRetry:false).
+  continued: [
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "stop" } },
+    { type: "agent_end", willRetry: false },
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "stop" } },
+    { type: "agent_end", willRetry: false },
+    { type: "agent_settled" },
+  ],
+  // Without agent_settled a runtime keeps working after agent_end(willRetry:false):
+  // a queued continuation starts a new run a moment later.
+  "late-continuation": [
+    { type: "agent_start" },
+    assistantText("first"),
+    { type: "message_end", message: { role: "assistant", stopReason: "stop" } },
+    { type: "agent_end", willRetry: false },
+    { pause: 100 },
+    { type: "agent_start" },
+    assistantText("second"),
+    { type: "message_end", message: { role: "assistant", stopReason: "stop" } },
+    { type: "agent_end", willRetry: false },
+  ],
+  // Compaction recovery after agent_end, then the continued run.
+  "compaction-recovery": [
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "stop" } },
+    { type: "agent_end", willRetry: false },
+    { pause: 80 },
+    { type: "compaction_start", reason: "overflow" },
+    { pause: 80 },
+    { type: "compaction_end", reason: "overflow", result: { summary: "x" }, aborted: false, willRetry: true },
+    { pause: 80 },
+    { type: "agent_start" },
+    assistantText("after compaction"),
+    { type: "message_end", message: { role: "assistant", stopReason: "stop" } },
+    { type: "agent_end", willRetry: false },
+  ],
+  // No further event after agent_end, but get_state still reports a busy run
+  // for two probes (no agent_settled, as on an unidentified build).
+  "quiet-busy": [
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "stop" } },
+    { type: "agent_end", willRetry: false },
+    { busyProbes: 2 },
+  ],
+  // A transient error that Pi retries after a delay and then answers.
+  "retry-slow": [
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "529 overloaded" } },
+    { type: "agent_end", willRetry: true },
+    { pause: 200 },
+    { type: "auto_retry_start", attempt: 1 },
+    { type: "agent_start" },
+    assistantText("recovered answer"),
+    { type: "message_end", message: { role: "assistant", stopReason: "stop" } },
+    { type: "agent_end", willRetry: false },
+    { type: "agent_settled" },
+  ],
+  // Retries exhausted: the last attempt fails too.
+  "retry-exhausted": [
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "529 overloaded" } },
+    { type: "agent_end", willRetry: true },
+    { type: "auto_retry_start", attempt: 1 },
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "529 overloaded" } },
+    { type: "agent_end", willRetry: false },
+    { type: "agent_settled" },
+  ],
   select: [
     { type: "agent_start" },
     { type: "extension_ui_request", id: "native-select-one", method: "select", title: "Allow dangerous command?", options: ["Allow", "Block", "Line one\nline two"], timeout: 10000 },
@@ -78,7 +177,7 @@ process.stdin.on("data", (chunk) => {
       sessionName = `images:${request.type}:${request.images.map((image) => `${image.type}/${image.mimeType}/${image.data}`).join(",")}`;
       write({ type: "message_start", message: { id: `user-${request.id}`, role: "user", content: [{ type: "text", text: request.message }, ...request.images] } });
     }
-    if (request.type === "get_state") write({ id: request.id, type: "response", command: request.type, success: true, data: { sessionId: "native-fixture", sessionFile: "host/private.jsonl", sessionName, isStreaming: false, thinkingLevel: "medium", model: { provider: "fixture", id: "model", name: "Fixture Model", input: textOnly ? ["text"] : ["text", "image"] } } }, true);
+    if (request.type === "get_state") write({ id: request.id, type: "response", command: request.type, success: true, data: { sessionId: "native-fixture", sessionFile: "host/private.jsonl", sessionName, isStreaming: busyNow(), isCompacting: false, pendingMessageCount: 0, thinkingLevel: "medium", model: { provider: "fixture", id: "model", name: "Fixture Model", input: textOnly ? ["text"] : ["text", "image"] } } }, true);
     else if (request.type === "get_commands") write({ id: request.id, type: "response", command: request.type, success: true, data: { commands: [
       { name: "skill:review", description: "Review a diff", source: "skill", location: "user", path: "/home/SECRET-MUST-NOT-LEAK/skills/review/SKILL.md" },
       { name: "fix-tests", description: "Fix failing tests", source: "prompt", location: "project", path: "/home/SECRET-MUST-NOT-LEAK/prompts/fix-tests.md" },
@@ -86,24 +185,36 @@ process.stdin.on("data", (chunk) => {
       { name: "settings", source: "builtin" },
     ] } });
     else if (request.type === "get_available_models") write({ id: request.id, type: "response", command: request.type, success: true, data: { models: [{ provider: "fixture", id: "model", name: "Fixture Model" }] } });
-    else if (request.type === "get_entries") write({ id: request.id, type: "response", command: request.type, success: true, data: { entries: [{ id: "entry-private", type: "message", message: { role: "user", content: "hello" } }] } });
+    else if (request.type === "get_entries") write({ id: request.id, type: "response", command: request.type, success: true, data: { entries: [
+      { id: "entry-private", type: "message", message: { role: "user", content: "hello" } },
+      ...(process.argv.includes("--history-answer") ? [{ id: "entry-answer-private", type: "message", message: { role: "assistant", timestamp: ANSWER_TIMESTAMP, stopReason: "stop", content: [{ type: "text", text: "answer" }] } }] : []),
+    ] } });
     else if (request.type === "prompt" && scenarios[request.message]) {
       write({ id: request.id, type: "response", command: request.type, success: true });
-      setTimeout(() => { for (const event of scenarios[request.message]) write(event); }, 30);
+      setTimeout(async () => {
+        for (const event of scenarios[request.message]) {
+          if (event.pause) await new Promise((resolve) => setTimeout(resolve, event.pause));
+          else if (event.busyProbes !== undefined) busyProbes = event.busyProbes;
+          else write(event);
+        }
+      }, 30);
     } else if (request.type === "prompt") {
       write({ id: request.id, type: "response", command: request.type, success: true });
       setTimeout(() => {
         write({ type: "agent_start" });
-        write({ type: "message_start", message: { role: "assistant" } });
-        write({ type: "message_update", assistantMessageEvent: { type: "text_start", contentIndex: 0 } });
-        write({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "answer" } });
+        write({ type: "message_start", message: { role: "assistant", timestamp: ANSWER_TIMESTAMP } });
+        write({ type: "message_update", message: { role: "assistant", timestamp: ANSWER_TIMESTAMP }, assistantMessageEvent: { type: "text_start", contentIndex: 0 } });
+        write({ type: "message_update", message: { role: "assistant", timestamp: ANSWER_TIMESTAMP }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "answer" } });
         write({ type: "extension_ui_request", id: "native-approval-secret", method: "confirm", title: "Allow?", message: "Continue?" });
         const stopReason = request.message === "fail" || request.message === "authfail" ? "error" : request.message === "abort" ? "aborted" : "stop";
         const errorMessage = request.message === "authfail" ? "401 missing API key SECRET-MUST-NOT-LEAK" : undefined;
         write({ type: "message_end", message: { role: "assistant", stopReason, usage: {input:10,output:4,cacheRead:2,cacheWrite:0,totalTokens:14}, ...(errorMessage ? { errorMessage } : {}) } });
         write({ type: "agent_settled" });
       }, 30);
-    } else if (request.type === "set_session_name") { sessionName = request.name; write({ id: request.id, type: "response", command: request.type, success: true }); }
+    }
+    // Like real Pi RPC, `follow_up` only queues and never starts an idle run.
+    else if (request.type === "follow_up") write({ id: request.id, type: "response", command: request.type, success: true });
+    else if (request.type === "set_session_name") { sessionName = request.name; write({ id: request.id, type: "response", command: request.type, success: true }); }
     else if (request.type === "compact") {
       // Models an older build that reports only the start of manual compaction.
       write({ type: "compaction_start", reason: "manual" });

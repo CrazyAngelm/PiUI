@@ -24,6 +24,9 @@ const unknownItemsFixture = process.argv.includes("--unknown-items");
 const toolItemsFixture = process.argv.includes("--tool-items");
 const textOnlyModel = process.argv.includes("--text-only-model");
 const skillsFixture = process.argv.includes("--skills");
+// Rollout path the thread reports, and a `piui/board` call after it opens.
+const rolloutPath = process.argv.find((argument) => argument.startsWith("--rollout="))?.slice("--rollout=".length) ?? "/fixture/thread.jsonl";
+const boardCallFixture = process.argv.includes("--board-call");
 // Rich input (images, skill items) is echoed as the native user message and
 // summarized in the thread name so tests can read what reached turn/start.
 const echoRichInput = (method, input) => {
@@ -63,7 +66,7 @@ const issueForm = {
 };
 // Emulated app-server version (default: the newest verified protocol). Shapes
 // that changed between versions follow it; see CONTRACT.md (Codex section).
-const codexVersion = process.argv.find((argument) => argument.startsWith("--codex-version="))?.slice("--codex-version=".length) ?? "0.157.1";
+const codexVersion = process.argv.find((argument) => argument.startsWith("--codex-version="))?.slice("--codex-version=".length) ?? "0.163.0";
 const [versionMajor, versionMinor] = codexVersion.split(".").map((part) => Number.parseInt(part, 10));
 const protocolAtLeast = (minor) => versionMajor > 0 || versionMinor >= minor;
 const timeReplies = {};
@@ -161,7 +164,7 @@ input.on("line", (line) => {
       ? [{ id: "active-resumed-turn", status: "inProgress", items: [] }]
       : [];
     const threadStatus = systemErrorFixture ? { type: "systemError" } : turns.length ? { type: "active", activeFlags: [] } : { type: "idle" };
-    send({ method: "thread/started", params: { thread: { id: threadId, path: "/fixture/thread.jsonl", status: threadStatus } } });
+    send({ method: "thread/started", params: { thread: { id: threadId, path: rolloutPath, status: threadStatus } } });
     const effectiveSandbox = effectivePermissionMismatch
       ? { type: "readOnly", networkAccess: false }
       : expectedPermission === "read-only"
@@ -172,7 +175,7 @@ input.on("line", (line) => {
             ? { type: "dangerFullAccess" }
             : { type: "readOnly", networkAccess: false };
     send({ id: message.id, result: {
-      thread: { id: threadId, path: "/fixture/thread.jsonl", status: threadStatus, turns: message.method === "thread/resume" ? [] : turns },
+      thread: { id: threadId, path: rolloutPath, status: threadStatus, turns: message.method === "thread/resume" ? [] : turns },
       initialTurnsPage: message.method === "thread/resume" ? { data: turns, nextCursor: null, backwardsCursor: null } : null,
       model: "fixture-model",
       modelProvider: "openai",
@@ -289,6 +292,9 @@ input.on("line", (line) => {
         contentItems: [{ type: "inputText", text: "{\"ok\":false}" }],
       });
     }
+    if (boardCallFixture) {
+      send({ method: "item/tool/call", id: 990, params: { threadId, turnId: "turn-board", callId: "call-board", namespace: "piui", tool: "board", arguments: { op: "roster" } } });
+    }
     if (coordinatorFixture) {
       const tools = message.params.dynamicTools?.[0]?.tools?.map((tool) => tool.name).sort();
       if (
@@ -303,6 +309,9 @@ input.on("line", (line) => {
         send({ method: "item/tool/call", id: 911, params: { threadId, turnId: "turn-coordinator", callId: "call-invalid", namespace: "workspace", tool: "send", arguments: { recipientMemberId: "member", body: "hi", extra: true } } });
       }
     }
+  } else if (message.id === 990) {
+    const reply = JSON.parse(message.result?.contentItems?.[0]?.text ?? "{}");
+    send({ method: "thread/name/updated", params: { threadId, threadName: `board:${message.result?.success}:${reply.code ?? reply.op}` } });
   } else if (message.id === 900 && message.result?.decision === "accept") {
     send({ method: "serverRequest/resolved", params: { threadId, requestId: 900 } });
     send({ method: "thread/name/updated", params: { threadId, threadName: "command:accept" } });
@@ -359,13 +368,21 @@ input.on("line", (line) => {
     }
     if (!holdTurnFixture) {
       const requestedText = message.params.input?.[0]?.text;
-      // `rateLimitExceeded` and `misalignmentPolicyViolation` are 0.153+ error infos.
-      const failureInfo = { "fail fixture": "unauthorized", "rate limit fixture": "rateLimitExceeded", "policy fixture": "misalignmentPolicyViolation" }[requestedText];
-      const finalStatus = failureInfo ? "failed" : "completed";
+      // `rateLimitExceeded` and `misalignmentPolicyViolation` are 0.153+ error
+      // infos, `flexUnavailable` and `tooManyDenials` 0.163+. Guardian's
+      // `tooManyDenials` (strict circuit breaker) interrupts instead of failing.
+      const failureInfo = { "fail fixture": "unauthorized", "rate limit fixture": "rateLimitExceeded", "policy fixture": "misalignmentPolicyViolation",
+        "flex fixture": "flexUnavailable", "denials fixture": "tooManyDenials" }[requestedText];
+      const finalStatus = failureInfo === "tooManyDenials" ? "interrupted" : failureInfo ? "failed" : "completed";
       send({ method: "thread/tokenUsage/updated", params: { threadId, tokenUsage: { total: {inputTokens:10,outputTokens:4,cachedInputTokens:2,totalTokens:14} } } });
       if (process.argv.includes("--external-settings")) {
         // Settings changed by another client of the same thread.
         send({ method: "thread/settings/updated", params: settingsUpdated({ model: "fixture-model-2", effort: "high", serviceTier: "fast" }) });
+      }
+      // 0.163 publishes Codex's read receipt for a visible result of a durable
+      // thread before `turn/completed`.
+      if (protocolAtLeast(163)) {
+        send({ method: "thread/readState/changed", params: { threadId, readState: { firstUnread: { type: "turn", turnId: "turn-fixture" }, revision: "fixture-revision" } } });
       }
       send({ method: "turn/completed", params: { threadId, turn: { id: "turn-fixture", status: finalStatus, items: [], ...(failureInfo ? { error: { message: "raw fixture secret", codexErrorInfo: failureInfo, additionalDetails: "raw fixture detail" } } : {}) } } });
     }

@@ -88,7 +88,8 @@ try {
           const file = files.find((item) => item.path === template.file);
           if (!file) continue;
           try {
-            parseSystemFile(file.bytes.toString('utf8'));
+            // Plugin packages ship system file v4 templates (the host checks the v4 schema).
+            if (parseSystemFile(file.bytes.toString('utf8')).version !== 4) throw new Error('Plugin templates must be PiUI system files version 4.');
           } catch (error) {
             problems.push(`Template ${template.id}: ${error.message}`);
           }

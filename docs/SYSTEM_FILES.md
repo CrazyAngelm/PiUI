@@ -1,10 +1,13 @@
 # Agent systems as files
 
-Current export: **version 4**. Versions 1–3 remain importable. See
+Current export: **version 5** ([schema](../contracts/system-file-v5.schema.json)).
+Versions 1–4 remain importable unchanged and are exported as version 5. See
 [execution contracts](../skills/piui-systems/references/execution.md) for callable
 nodes, mappings, typed results, artifacts, conditions, approvals, review cycles
 (including the optional `maxIterations` bound) and top-level run `inputs`.
 Both additions are optional v4 fields; files without them are unchanged.
+Version 5 adds sub-pipelines (below); a file without them differs from
+version 4 only in its `version` number.
 The active orchestration IPC is v6; native history formats are unchanged.
 
 Optional `agents[].executor` (orchestration v6.2) makes a node a single
@@ -25,6 +28,40 @@ launch. Plugins can also ship pipeline templates, which are version 4 files
 opened through this same import; the example
 [collect-and-reshape](../examples/plugins/pipeline-pack/templates/collect-and-reshape.piui.json)
 uses the pipeline pack's JSON transform node. See [PLUGINS.md](PLUGINS.md).
+Plugin templates stay version 4 (the plugin package check and the host
+validate the v4 schema), so a plugin cannot ship sub-pipeline templates yet.
+
+## Sub-pipelines (version 5, orchestration v6.7, ADR-042)
+
+A node with `{"type": "pipeline", "pipeline": "<name>", "inputs": {…}}` runs a
+saved pipeline of the project the file is imported into as one step: an
+ordinary child run with its own team, approvals and history. Launch command
+ids are local to a project, so the file names the pipeline by its **name**:
+
+- `inputs` maps each input name of the child pipeline to `{"kind": "value",
+  "value": …}` (a fixed string, number or boolean), `{"kind": "input", "name":
+  "<run input of this file>"}` or `{"kind": "step", "agent": "<local id of a
+  direct upstream agent>", "field": "<its result field>"}` (without `field`,
+  that agent's whole result text). At most 64 entries.
+- Like a script, the node's `profile` only names the step; it has no model,
+  input mappings, collaboration edges or callable mode, and it cannot be the
+  orchestrator. Its `resultFields` usually repeat the child's outputs.
+- Top-level `outputs: [{"name", "kind", "agent", "field"?}]` (at most 32)
+  declare what this pipeline returns when another pipeline runs it; `agent` is
+  a scheduled agent of this file and an output without `field` is its whole
+  result text (`kind: "text"`).
+
+Import resolves each name against the project's saved pipelines: the exact
+name, else a unique case-insensitive match. A missing or ambiguous name stays
+on the node, unresolved; the editor shows “Pipeline “X” is not in this project”
+on it and refuses to save until the person picks a saved pipeline. Import
+never creates, saves or runs a pipeline. `pnpm system:check` cannot know the
+target project: it reports such names as resolved at import. The agent API
+`prepare` command refuses a file with sub-pipelines for the same reason.
+Export writes the chosen pipeline's current name (or the unresolved name it
+was imported with). Examples: [Testing](../examples/systems/testing.piui.json)
+declares outputs, and [development with testing](../examples/systems/development-with-testing.piui.json)
+runs it as a sub-pipeline — import Testing first.
 
 
 Pinned data (orchestration v6.4, [RUN_DEBUGGING.md](RUN_DEBUGGING.md)) is never
@@ -33,7 +70,7 @@ like native history. Export omits them and says so; import creates no pins; the
 format is unchanged. The assistant keeps the pins of nodes that survive a
 proposal.
 
-Use UTF-8 `*.piui.json`. JSON Schema is in [system-file-v1.schema.json](../contracts/system-file-v1.schema.json); [examples](../examples/systems) cover a single agent, Codex → Prime review, and parallel work followed by synthesis. Replace example model placeholders with actual available native model IDs before execution.
+Use UTF-8 `*.piui.json`. JSON Schemas are in `contracts/system-file-v1…v5.schema.json` (current: [v5](../contracts/system-file-v5.schema.json)); [examples](../examples/systems) cover a single agent, Codex → Prime review, and parallel work followed by synthesis. Replace example model placeholders with actual available native model IDs before execution.
 
 ```powershell
 pnpm system:check examples/systems/mixed-review.piui.json

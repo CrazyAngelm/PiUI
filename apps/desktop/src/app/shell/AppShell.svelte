@@ -15,6 +15,8 @@
   import { syncTrayLabels } from '../settings/trayLabels';
   import { scheduleUpdateNotices } from '../settings/updateNoticeLoader';
   import { placements } from '../worktrees/placements.svelte';
+  import { WorkspaceOperationError } from '../../host-api/workspaceClient';
+  import { fusionMembership } from '../fusion/fusionMembership.svelte';
 
   const store = provideWorkspace(new WorkspaceStore());
   // The tray menu (background mode) speaks the interface language.
@@ -105,14 +107,28 @@
     }
   }
 
+  /** The host refuses to delete a Fusion chat in the middle of a round; say why instead of its generic text. */
+  function deleteFailure(sessionId: string, error: unknown): string {
+    if (error instanceof WorkspaceOperationError) {
+      if (error.code === 'CONFLICT' && fusionMembership.isLead(sessionId)) {
+        return $t('A sidekick round of this Fusion chat is still open or unconfirmed. Stop the pair or settle the round in the Fusion panel, then delete the chat.');
+      }
+      if (error.code === 'NOT_SUPPORTED' && fusionMembership.isCurrentSidekick(sessionId)) {
+        return $t('The sidekick in use belongs to its Fusion chat and cannot be deleted. Reset the sidekick first; its retired conversation can then be deleted.');
+      }
+    }
+    return errorMessage(error);
+  }
+
   async function confirmDelete(): Promise<void> {
     if (!deleteTarget || deleteBusy) return;
+    const target = deleteTarget;
     deleteBusy = true;
     try {
-      await store.deleteChat(deleteTarget);
+      await store.deleteChat(target);
       deleteTarget = undefined;
     } catch (error) {
-      toasts.error($t('Could not delete the chat'), errorMessage(error));
+      toasts.error($t('Could not delete the chat'), deleteFailure(target, error));
     } finally {
       deleteBusy = false;
     }

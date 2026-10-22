@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createPiAdapter } from "./pi.mjs";
 
 const fixture = fileURLToPath(new URL("./fixtures/pi-rpc-fixture.mjs", import.meta.url));
@@ -85,6 +88,53 @@ test("emits explicit native terminal outcome before idle", async () => {
     assert.ok(idle > terminal);
     await adapter.dispose();
   }
+});
+
+// One admitted turn must yield exactly one completion, after the retried run
+// answered, and Pi must not read as idle before then.
+async function assertSingleRetryCompletion(adapter, events, scenario) {
+  const start = events.length;
+  await runScenario(adapter, events, scenario);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const turn = events.slice(start);
+  const completions = turn.filter((event) => event.type === "turnCompleted");
+  assert.equal(completions.length, 1, "the retried run is part of the same turn");
+  assert.equal(completions[0].outcome, "succeeded");
+  const statuses = turn.filter((event) => event.type === "status").map((event) => event.status);
+  assert.deepEqual(statuses, ["running", "idle"]);
+  assert.ok(turn.findIndex((event) => event.type === "turnCompleted") < turn.findIndex((event) => event.type === "status" && event.status === "idle"));
+  assert.ok(turn.some((event) => event.type === "textDelta" && event.text === "recovered answer"));
+}
+
+test("Pi completes a retried turn once, on agent_settled, with the successful answer", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    // The first agent_settled teaches an unversioned runtime to wait for it.
+    await runScenario(adapter, events, "ok");
+    await assertSingleRetryCompletion(adapter, events, "retry");
+  } finally { await adapter.dispose(); }
+});
+
+test("Pi waits for agent_settled across queued continuations once it is known", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    await runScenario(adapter, events, "ok");
+    const start = events.length;
+    await runScenario(adapter, events, "continued");
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const turn = events.slice(start);
+    assert.equal(turn.filter((event) => event.type === "turnCompleted").length, 1);
+    assert.deepEqual(turn.filter((event) => event.type === "status").map((event) => event.status), ["running", "idle"]);
+  } finally { await adapter.dispose(); }
+});
+
+test("Pi without agent_settled still defers a willRetry agent_end and completes on the final one", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try { await assertSingleRetryCompletion(adapter, events, "retry-legacy"); }
+  finally { await adapter.dispose(); }
 });
 
 test("interrupt retires pending approvals", async () => {
@@ -322,6 +372,20 @@ test("Pi sends images as native ImageContent and lists them in the user block", 
   } finally { await adapter.dispose(); }
 });
 
+test("Pi starts a native run for an idle follow-up instead of only queueing it", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    assert.equal((await adapter.snapshot()).status, "idle");
+    await adapter.prompt({ text: "later", mode: "follow-up", images: [PNG] });
+    const outcome = await waitFor(() => events.find((event) => event.type === "turnCompleted")?.outcome);
+    assert.equal(outcome, "succeeded");
+    assert.ok(events.some((event) => event.type === "textDelta" && event.text === "answer"));
+    // The fixture records the native command that carried the images.
+    assert.equal((await adapter.snapshot()).title, "images:prompt:image/image/png/iVBORw0KGgo=");
+  } finally { await adapter.dispose(); }
+});
+
 test("Pi refuses images a text-only model cannot take and malformed images", async () => {
   const adapter = await createPiAdapter(config({ runtimeArgs: [fixture, "--text-only-model"] }), () => {});
   try {
@@ -350,5 +414,161 @@ test("Pi lists its own slash commands without native paths", async () => {
       skills: [],
     });
     assert.ok(!JSON.stringify(catalog).includes("SECRET"));
+  } finally { await adapter.dispose(); }
+});
+
+// A Pi entry script inside a package of the given version, which the adapter
+// reads to learn whether the runtime reports `agent_settled` (Pi >= 0.80.4).
+async function versionedConfig(version) {
+  const directory = await mkdtemp(join(tmpdir(), "piui-pi-version-"));
+  await writeFile(join(directory, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent", version }));
+  const entry = join(directory, "cli.js");
+  await writeFile(entry, `import(${JSON.stringify(pathToFileURL(fixture).href)});\n`);
+  return { directory, config: (overrides = {}) => config({ runtimeArgs: [entry], ...overrides }) };
+}
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const turnStatuses = (events) => events.filter((event) => event.type === "status").map((event) => event.status);
+
+test("the same Pi answer has the same block id live and in resumed history", async () => {
+  const events = [];
+  const live = await createPiAdapter(config(), (event) => events.push(event));
+  let liveAnswer;
+  try {
+    await runScenario(live, events, "ok");
+    liveAnswer = (await live.snapshot()).blocks.find((block) => block.kind === "assistant");
+    assert.match(liveAnswer.id, /^pi-assistant-[0-9a-f]{24}$/, "derived from the message identity, not a live counter");
+    assert.ok(events.some((event) => event.type === "textDelta" && event.blockId === liveAnswer.id && event.text === "answer"));
+  } finally { await live.dispose(); }
+
+  // A later process reads the same answer back from the session entries of Pi.
+  const resumed = await createPiAdapter(config({ runtimeArgs: [fixture, "--history-answer"] }), () => {});
+  try {
+    const blocks = (await resumed.snapshot()).blocks;
+    const answer = blocks.find((block) => block.kind === "assistant");
+    assert.equal(answer.id, liveAnswer.id, "same answer, same id after a restart");
+    assert.equal(answer.text, "answer");
+    assert.equal(new Set(blocks.map((block) => block.id)).size, blocks.length, "ids stay unique");
+    assert.doesNotMatch(JSON.stringify(blocks), /entry-answer-private/);
+  } finally { await resumed.dispose(); }
+});
+
+test("a Pi assistant block without a message timestamp keeps a unique live id", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    await runScenario(adapter, events, "retry");
+    const answers = (await adapter.snapshot()).blocks.filter((block) => block.kind === "assistant");
+    assert.equal(answers.length, 1);
+    assert.match(answers[0].id, /^pi-stream-\d+$/);
+  } finally { await adapter.dispose(); }
+});
+
+test("an unidentified Pi build waits for a quiet runtime before the first turn completes", async () => {
+  for (const scenario of ["late-continuation", "compaction-recovery"]) {
+    const events = [];
+    const adapter = await createPiAdapter(config(), (event) => events.push(event));
+    try {
+      // The very first turn: no warm-up turn has taught the adapter anything.
+      const start = events.length;
+      await runScenario(adapter, events, scenario);
+      await pause(60);
+      const turn = events.slice(start);
+      const completions = turn.filter((event) => event.type === "turnCompleted");
+      assert.equal(completions.length, 1, `${scenario}: the continued run is part of the same turn`);
+      assert.equal(completions[0].outcome, "succeeded");
+      assert.deepEqual(turnStatuses(turn), ["running", "idle"], scenario);
+      const lastDelta = turn.findLastIndex((event) => event.type === "textDelta");
+      assert.ok(lastDelta >= 0 && lastDelta < turn.findIndex((event) => event.type === "turnCompleted"), `${scenario}: completion follows the continuation`);
+    } finally { await adapter.dispose(); }
+  }
+});
+
+test("an unidentified Pi build stays running while get_state reports a busy run", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    const started = Date.now();
+    await runScenario(adapter, events, "quiet-busy");
+    assert.ok(Date.now() - started >= 600, "two busy probes each postponed the completion by a grace period");
+    assert.equal(events.filter((event) => event.type === "turnCompleted").length, 1);
+  } finally { await adapter.dispose(); }
+});
+
+test("a Pi runtime positively older than 0.80.4 completes on the first quiet agent_end", async () => {
+  const legacy = await versionedConfig("0.80.3");
+  const events = [];
+  const adapter = await createPiAdapter(legacy.config(), (event) => events.push(event));
+  try {
+    await runScenario(adapter, events, "late-continuation");
+    await pause(200);
+    const completed = events.findIndex((event) => event.type === "turnCompleted");
+    const secondAnswer = events.findIndex((event) => event.type === "textDelta" && event.text === "second");
+    assert.ok(completed >= 0 && completed < secondAnswer, "the legacy fallback ends the turn at agent_end");
+  } finally { await adapter.dispose(); await rm(legacy.directory, { recursive: true, force: true }); }
+});
+
+test("Pi 0.80.4 and newer complete only on agent_settled, from the very first turn", async () => {
+  const cases = [
+    ["0.80.3", ["running", "idle", "running", "idle"]],
+    ["0.80.4", ["running", "idle"]],
+    ["0.85.1", ["running", "idle"]],
+    ["1.0.0", ["running", "idle"]],
+  ];
+  for (const [version, expected] of cases) {
+    const versioned = await versionedConfig(version);
+    const events = [];
+    const adapter = await createPiAdapter(versioned.config(), (event) => events.push(event));
+    try {
+      const start = events.length;
+      await runScenario(adapter, events, "continued");
+      await pause(150);
+      const turn = events.slice(start);
+      assert.deepEqual(turnStatuses(turn), expected, version);
+      assert.equal(turn.filter((event) => event.type === "turnCompleted").length, 1, version);
+    } finally { await adapter.dispose(); await rm(versioned.directory, { recursive: true, force: true }); }
+  }
+});
+
+test("a transient Pi error that a retry recovers never pauses the host with an error event", async () => {
+  const versioned = await versionedConfig("0.85.1");
+  const legacy = await versionedConfig("0.79.0");
+  try {
+    for (const adapterConfig of [config(), versioned.config()]) {
+      const events = [];
+      const adapter = await createPiAdapter(adapterConfig, (event) => events.push(event));
+      try {
+        await adapter.prompt({ text: "retry-slow", mode: "prompt" });
+        await pause(120);
+        assert.equal(events.filter((event) => event.type === "error").length, 0, "no error while Pi is about to retry");
+        assert.equal(events.filter((event) => event.type === "turnCompleted").length, 0);
+        // The adapter already reported idle at start, so wait for the completion itself.
+        await waitFor(() => events.some((event) => event.type === "turnCompleted"));
+        assert.deepEqual(events.filter((event) => event.type === "error"), []);
+        assert.deepEqual(events.filter((event) => event.type === "turnCompleted"), [{ type: "turnCompleted", outcome: "succeeded" }]);
+      } finally { await adapter.dispose(); }
+    }
+    // The legacy path defers the same way.
+    const events = [];
+    const adapter = await createPiAdapter(legacy.config(), (event) => events.push(event));
+    try {
+      await runScenario(adapter, events, "retry-legacy");
+      assert.deepEqual(events.filter((event) => event.type === "error"), []);
+    } finally { await adapter.dispose(); }
+  } finally {
+    await rm(versioned.directory, { recursive: true, force: true });
+    await rm(legacy.directory, { recursive: true, force: true });
+  }
+});
+
+test("when the retries of Pi fail, one error is reported with the failed turn", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    await runScenario(adapter, events, "retry-exhausted");
+    const errors = events.filter((event) => event.type === "error");
+    assert.deepEqual(errors, [{ type: "error", message: "The Pi model provider is temporarily unavailable." }]);
+    const completed = events.findIndex((event) => event.type === "turnCompleted");
+    assert.equal(events[completed].outcome, "failed");
+    assert.equal(events.indexOf(errors[0]), completed - 1, "the error comes with the terminal outcome, not at the first attempt");
   } finally { await adapter.dispose(); }
 });

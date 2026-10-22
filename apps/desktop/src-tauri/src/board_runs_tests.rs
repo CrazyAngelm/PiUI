@@ -1,7 +1,7 @@
 //! Board run engine rules: capacity, queue order, cooldown, chain-depth
 //! stop, run-end mapping and idempotent run-end recording.
 
-use super::{capacity_available, needs_run_end};
+use super::{capacity_available, format_outputs, needs_run_end};
 use crate::board::BoardService;
 use crate::board::model::{
     BoardActor, BoardError, CardChange, CardDraft, CardPriority, CardStartMode, CardStatus,
@@ -652,4 +652,43 @@ fn sweep_releases_claims_of_ended_runs() {
     );
     let board = service.get(PROJECT).unwrap();
     assert!(board.card(&run_card).unwrap().claim.is_none());
+}
+
+#[test]
+fn declared_outputs_become_readable_result_text() {
+    let outputs: Vec<piui_orchestration::PipelineOutput> =
+        serde_json::from_value(serde_json::json!([
+            {"name": "summary", "kind": "text", "sourceStepId": "write"},
+            {"name": "count", "kind": "number", "sourceStepId": "count", "field": "count"},
+            {"name": "passed", "kind": "boolean", "sourceStepId": "test", "field": "passed"}
+        ]))
+        .expect("outputs");
+    let data = |value: serde_json::Value| value.as_object().cloned().expect("object");
+
+    // One declared output is its value as text.
+    assert_eq!(
+        format_outputs(
+            &outputs[..1],
+            &data(serde_json::json!({"summary": "All done."}))
+        ),
+        Some("All done.".to_owned())
+    );
+    assert_eq!(
+        format_outputs(&outputs[1..2], &data(serde_json::json!({"count": 3}))),
+        Some("3".to_owned())
+    );
+    // Several are `name: value` lines in declared order; non-text is JSON.
+    assert_eq!(
+        format_outputs(
+            &outputs,
+            &data(serde_json::json!({"passed": true, "count": 3, "summary": "Line"}))
+        ),
+        Some("summary: Line\ncount: 3\npassed: true".to_owned())
+    );
+    // A skipped source leaves its output out; nothing present falls back.
+    assert_eq!(
+        format_outputs(&outputs, &data(serde_json::json!({"count": 2}))),
+        Some("count: 2".to_owned())
+    );
+    assert_eq!(format_outputs(&outputs, &serde_json::Map::new()), None);
 }

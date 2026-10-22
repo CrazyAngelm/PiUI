@@ -34,8 +34,8 @@ Pi tool blocks and Codex MCP/dynamic tool blocks are built from arbitrary native
 - `{type:'approvalResolved',requestId}`
 - `{type:'binding',nativeId,nativePath?}` (host-private only)
 - `{type:'error',message:safeFixedSummary}`
-- `{type:'notice',code:'unsupported-board-tool'|'unsupported-board-tool-resume'}` (non-fatal; see hostTools)
-- `{type:'boardRequest',requestId,operation}` / `{type:'coordinatorRequest',requestId,operation}` (runner-emitted, host-private)
+- `{type:'notice',code:'unsupported-board-tool'|'unsupported-board-tool-resume'|'unsupported-sidekick-tool'|'unsupported-sidekick-tool-resume'}` (non-fatal; see hostTools)
+- `{type:'boardRequest',requestId,operation}` / `{type:'sidekickRequest',requestId,operation,identity}` / `{type:'coordinatorRequest',requestId,operation}` (runner-emitted, host-private)
 
 Runner request LF JSON: `{id:string,method:'initialize'|'snapshot'|'prompt'|'interrupt'|'models'|'setModel'|'setMode'|'respond'|'rename'|'dispose',params:object}`. Initialize params add `harness:'pi'|'prime-agent'|'codex'|'hermes'|'claude-code'|'acp:<descriptor id>'` to config; exactly once. Return `{id,ok:true,result}` or `{id,ok:false,error:{code,message,details?}}` (`details`: optional bounded plain data an adapter sets as `safeDetails`, today only an ACP sign-in refusal's method names); event `{event:NativeEvent}`. Buffer raw bytes, split only LF. Pending native operations must not serialize interruption/approval behind an active turn. EOF closes admission, calls dispose, then exits; Rust handles hung descendants. No generic evaluate/exec/file method.
 
@@ -53,7 +53,7 @@ Strict operation union (reject unknown fields):
 
 Spawn leases a ready predefined pipeline step, resolves its exact snapshotted assigned profile, and checks the authenticated caller's allowed spawn templates. It cannot add members or override policy/model/instructions. It is not unrestricted dynamic delegation. Roster and observation are ACL-filtered; observation returns authorized history references, never native filesystem locations.
 
-Runner emits `{type:'coordinatorRequest',requestId:string,operation:CoordinatorOperation}` as a host-private NativeEvent. The host derives workspace/run/member/session from the emitting runtime binding, NEVER caller text or fields. `requestId` is an opaque origin-bound pending ID (native tool call IDs stay adapter-private); it also provides durable send/spawn deduplication. A Rust-only runtime method writes `coordinatorResponse` with `{requestId,response:{ok:true,result:JSON}|{ok:false,error:{code:string,message:safeFixedSummary}}}`. This method is NOT part of workspace WebView IPC. Reject duplicate, unknown, cross-origin or retired replies. On interrupt/EOF/dispose, settle pending tool calls as failures; do not leave a native turn waiting forever. Read/approval/interrupt/dispose must remain independently serviceable while a tool awaits its host response.
+Runner emits `{type:'coordinatorRequest',requestId:string,operation:CoordinatorOperation}` as a host-private NativeEvent. The host derives workspace/run/member/session from the emitting runtime binding, NEVER caller text or fields. `requestId` is an opaque origin-bound pending ID (native tool call IDs stay adapter-private); it also provides durable send/spawn deduplication. Its form is `piui-coordinator-<epoch>-<N>` (board: `piui-board-<epoch>-<N>`): `epoch` is 12 random hex digits per bridge process and `N` counts from 1 within it, so a restarted bridge of the same session never reissues an earlier id and its first call is not taken for a replay. Hosts treat the id as opaque. A Rust-only runtime method writes `coordinatorResponse` with `{requestId,response:{ok:true,result:JSON}|{ok:false,error:{code:string,message:safeFixedSummary}}}`. This method is NOT part of workspace WebView IPC. Reject duplicate, unknown, cross-origin or retired replies. On interrupt/EOF/dispose, settle pending tool calls as failures; do not leave a native turn waiting forever. Read/approval/interrupt/dispose must remain independently serviceable while a tool awaits its host response.
 
 Codex implementation uses negotiated experimental dynamic tools and `item/tool/call` requests bound to native thread/turn/call/namespace/tool; no MCP server or global config changes. Prime/Pi use native SDK custom tool registration when supported; retain their generic tool-call timeline projection. If a runtime cannot implement this seam, reject mandatory coordinator-tool launches, not silent prompt-only fallback.
 
@@ -62,7 +62,7 @@ A session may carry `hostTools: ["board"]` in host-private config (`NativeRuntim
 
 The runner validates `BoardToolOperationV1` (contracts/board-v1.ts) with `validateBoardOperation`: `op` is one of `context|search|list|get|create|update|move|comment|claim|release|link|roster|assign|handoff`; every other key must belong to that op (no scope, actor or workspace field exists); `card` is a positive safe integer; statuses/priorities are the contract enums (`create.status` only `backlog|todo`); caps: title 200 chars, query 500 chars, handle 64, reason 2000, labels ≤12 × 64 chars, comment body 16 KiB and description 64 KiB (UTF-8 bytes). An invalid call is refused in the bridge (`invalid-board-operation`) and never reaches the host; `board-disabled` when the session has no board.
 
-Runner emits `{type:'boardRequest',requestId:'piui-board-N',operation}`. The host derives workspace/session/run/member/teammate from the emitting runtime binding, never from the operation, and answers once through the Rust-only `NativeRuntime::board_response(request_id, result)`, which writes `boardResponse` with `{requestId,result:BoardToolResultV1}` (`result` is an object with a boolean `ok`; `{ok:false,code,message}` is a normal result the agent reads). Unknown, duplicate or retired ids fail with `stale-board-request`; a malformed result with `invalid-board-response`. Like coordinator calls, pending board calls settle as failures (`board-cancelled`) on turn completion, interrupt, EOF and dispose; there is no separate timeout. The `coordinatorResponse` wire is unchanged.
+Runner emits `{type:'boardRequest',requestId:'piui-board-<epoch>-<N>',operation}`. The host derives workspace/session/run/member/teammate from the emitting runtime binding, never from the operation, and answers once through the Rust-only `NativeRuntime::board_response(request_id, result)`, which writes `boardResponse` with `{requestId,result:BoardToolResultV1}` (`result` is an object with a boolean `ok`; `{ok:false,code,message}` is a normal result the agent reads). Unknown, duplicate or retired ids fail with `stale-board-request`; a malformed result with `invalid-board-response`. Like coordinator calls, pending board calls settle as failures (`board-cancelled`) on turn completion, interrupt, EOF and dispose; there is no separate timeout. The `coordinatorResponse` wire is unchanged.
 
 The agent sees one tool `board` with a compact JSON schema (`op` enum plus the optional fields) and a short description (call `context` before `create`; do not retry `ALREADY_CLAIMED`/`FORBIDDEN`; done/cancelled only become a proposal). The tool result is the host result as JSON text (`isError` when `ok:false`).
 
@@ -72,15 +72,39 @@ The agent sees one tool `board` with a compact JSON schema (`op` enum plus the o
 | Hermes | the same loopback HTTP MCP server in `session/new`/`session/load` `mcpServers` | `board` on server `piui-workspace` |
 | ACP | as Hermes; an agent without `mcpCapabilities.http` (or descriptor `mcpHttp:false`) gets notice `unsupported-board-tool` | `board` on server `piui-workspace` |
 | Prime Agent | second SDK custom tool (TypeBox union); an enforced allowlist gains exactly `board` | `board` |
-| Codex | dynamic tool namespace `piui`, function `board`, on `thread/start` only; a resumed thread gets notice `unsupported-board-tool-resume` | `piui` / `board` |
+| Codex | dynamic tool namespace `piui`, function `board`, registered on `thread/start` only. Codex persists it with the thread (rollout `session_meta.dynamic_tools`, verified on 0.163) and restores it on `thread/resume`, so a resumed thread whose rollout lists `piui`/`board` keeps the tool and its calls are answered; a resumed thread without it (or with an unreadable rollout) gets notice `unsupported-board-tool-resume`. A persisted `piui`/`board` call while the board is off answers `{ok:false,code:'board-disabled'}` | `piui` / `board` |
 | Pi | none; notice `unsupported-board-tool` | — |
 
-Notice codes (`NativeNoticeCode`): `unsupported-board-tool`, `unsupported-board-tool-resume`. `HarnessKind::supports_board_tool(resumed)` gives the static answer; ACP HTTP MCP support is known only after the agent starts.
+Notice codes (`NativeNoticeCode`): `unsupported-board-tool`, `unsupported-board-tool-resume`. `HarnessKind::supports_board_tool()` gives the static answer (false only for Pi); ACP HTTP MCP support and whether a resumed Codex thread was started with the board are known only after the adapter starts.
 
 With a Claude Code tool allowlist (`--tools … --strict-mcp-config`) the board keeps `mcp__*` undenied, as the coordinator does: strict MCP config already limits MCP to this session's own server. `board` in `allowedTools` names this host tool and is accepted only when the board is enabled.
 
+## hostTools / sidekick tool (Fusion lead, ADR-043)
+A Fusion lead carries `hostTools: ["sidekick"]` (with or without `board`). Only Claude Code and Codex register it (`HarnessKind::supports_sidekick_tool()`); every other adapter ignores the entry. Factories receive an optional fifth callback `sidekickRequest(operation, {toolCallId?, signal?})` (Codex: sixth, after `boardRequest`). Like the board it is optional: an adapter that cannot register it starts anyway and emits `unsupported-sidekick-tool` (Codex resume of a thread whose rollout lacks `piui`/`sidekick`: `unsupported-sidekick-tool-resume`).
+
+The runner validates `SidekickToolOperationV1` (contracts/fusion-v1.ts) with `validateSidekickOperation`: `op` is one of `brief|wait|status|message|steer|stop|diff|report|close|reset`; every other key must belong to that op; `brief` needs `title`, `goal` and a non-empty `doneWhen`; ids are short tokens, texts and lists are capped (`SIDEKICK_LIMITS`). An invalid call is refused in the bridge (`invalid-sidekick-operation`) and never reaches the host.
+
+Runner emits `{type:'sidekickRequest',requestId:'piui-sidekick-<epoch>-<N>',operation,identity:{epoch,seq,callRef?,opHash}}`. `callRef` is the native tool call id (Claude Code `_meta["claudecode/toolUseId"]`, Codex `callId`; ≤128 chars) and is omitted when the native call carries none (the adapter never derives one from a JSON-RPC id, which repeats across MCP connections and bridge restarts), so the host falls back to the unique `{epoch,seq}` and `opHash` the SHA-256 of the canonical operation JSON, so the host answers a retried call once and refuses a reused id with another operation (`identity-conflict`). The host derives the lead, pair and sidekick from the emitting runtime binding, never from the operation, and answers once through the Rust-only `NativeRuntime::sidekick_response(request_id, result)`, which writes `sidekickResponse` with `{requestId,result:SidekickToolResultV1}`. The adapter returns `result.text` as the tool result text (`isError` when `ok:false`). Pending sidekick calls settle as failures (`sidekick-cancelled`) on turn completion, interrupt, EOF and dispose, like board calls, and when `metadata.signal` aborts (an already-aborted signal is refused before anything is emitted). The Claude Code adapter aborts that signal when the MCP HTTP connection closes before its reply is written (client timeout, interrupt, restart): the pending request is retired, so a late `sidekickResponse` fails with `stale-sidekick-request` instead of being acknowledged and the host can requeue the report (`delivery_failed`). The host is acknowledged only after the native reply is written: the adapter passes `metadata.deliver(result)`, which performs and confirms the write (Claude Code: the HTTP reply is flushed to the still-open MCP connection; Codex: the JSON-RPC response reached the app server's stdin), and the runner answers `sidekickResponse` after it settles. A rejected or unconfirmed (30 s) write fails the response with the distinct code `sidekick-delivery-failed` (the result was NOT handed to the agent; the host keeps the report for redelivery) and rejects the adapter's call with the same code, and the adapter then sends nothing further. `stale-sidekick-request` keeps meaning a retired or unknown request. A caller that passes no `deliver` (an adapter written before this rule) is acknowledged as soon as the result is handed over. A wait portion may take up to 540 s: when the sidekick tool is enabled the Claude Code adapter sets `MCP_TOOL_TIMEOUT=600000` for its child (an inherited value is replaced), since Claude Code otherwise abandons an MCP call after about 64 s (spike S1).
+
+| Harness | Mechanism | Native tool name |
+|---|---|---|
+| Claude Code | the session HTTP MCP server `piui-workspace`, pre-approved with `--allowed-tools` | `mcp__piui-workspace__sidekick` |
+| Codex | dynamic tool namespace `piui`, function `sidekick`, registered on `thread/start` only (a Fusion lead starts a fresh thread) | `piui` / `sidekick` |
+| others | none; notice `unsupported-sidekick-tool` | — |
+
 ## Terminal turn outcome
-`idle` is a session readiness state, NOT proof of task success. Native providers may end failed/interrupted turns by returning to idle. Each adapter MUST emit `{type:'turnCompleted',outcome:'succeeded'|'failed'|'interrupted'}` exactly once after an admitted turn reaches its native terminal outcome, before final idle. Native stop reasons/turn status determine outcome, not absence of transport errors. A failed command that was never admitted rejects normally; a transport loss with no terminal proof stays uncertain. Host tracks outcome with turn generation; initial idle or later idle cannot overwrite it. Scheduler success requires explicit succeeded, never status-only idle. This is host-private metadata, not a persisted replacement transcript.
+`idle` is a session readiness state, NOT proof of task success. Native providers may end failed/interrupted turns by returning to idle. Each adapter MUST emit `{type:'turnCompleted',outcome:'succeeded'|'failed'|'interrupted'}` exactly once after an admitted turn reaches its native terminal outcome, before final idle. Native stop reasons/turn status determine outcome, not absence of transport errors. A failed command that was never admitted rejects normally; a transport loss with no terminal proof stays uncertain. Host tracks outcome with turn generation; initial idle or later idle cannot overwrite it. Scheduler success requires explicit succeeded, never status-only idle. Pi: `agent_end` fires once per low-level run and may be followed by an automatic retry (`willRetry:true`), a compaction retry or a queued follow-up run, so the turn completes on `agent_settled` (Pi >= 0.80.4); the last assistant `stopReason` of the whole turn decides the outcome. Settlement support is decided when the adapter starts, before any work is admitted, from the `@earendil-works/pi-coding-agent` package of the entry script (walking up from it) or of a launcher's global install (`node_modules` beside it, or `../lib/node_modules`), and is otherwise learned from the first `agent_settled`. There are three modes. Version known and >= 0.80.4: only `agent_settled` completes a turn. Version known and < 0.80.4 (a positively identified legacy runtime): the first `agent_end` whose `willRetry` is not `true` completes it. Version unknown (a launcher or wrapper with no discoverable package): a bare `agent_end(willRetry:false)` never completes the turn, because compaction recovery or a queued continuation may follow it. The adapter waits for `agent_settled`, and otherwise arms a 250 ms quiet timer that any `agent_start`, `auto_retry_start` or compaction event cancels; when it fires the adapter reads `get_state`, and only a runtime that is not streaming, not compacting and holds no queued messages completes the turn (a busy answer re-arms the timer; a failed probe counts as quiet). The first `agent_settled` seen switches the adapter to the settled mode. A failed assistant message does not emit its `error` event when it ends: Pi may retry it, and the host pauses its composer queue on an `error`. The adapter holds the safe summary and emits it, immediately before `turnCompleted:"failed"`, only if the settled turn's last assistant message still failed; a retried failure that succeeds emits no `error`. This is host-private metadata, not a persisted replacement transcript.
+
+### Assistant block identity
+An assistant answer must have the same block `id` while it streams and when the conversation is read back after a restart, so a host that persisted the id of a finished answer can find it again. Ids are opaque and derived from the native message identity, never from a live counter, and unique within a session.
+
+| Harness | Id | Live source | Resumed source |
+|---|---|---|---|
+| Claude Code | `claude-assistant-<hash>` / `claude-thinking-<hash>` of `<message id>:<rank>` | `stream_event` `message_start` `message.id`; `rank` = order of the text (or thinking) `content_block_start` within that message; the whole `assistant` message repeats the id | transcript `message.id` of each entry; `rank` = order of the text (or thinking) parts of that message id along the active branch (Claude Code writes one entry per content block, so entry uuids and content indexes cannot name a block) |
+| Pi | `pi-assistant-<hash>` / `pi-thinking-<hash>` of `<message timestamp>:<rank>` | `message_start` / `message_update` `message.timestamp`; `rank` = order of the text (or thinking) content block within that message | session entry `message.timestamp` (the same value, persisted unchanged); history shows one joined block per message, with rank 0 |
+| Codex | the native `ThreadItem.id` | `item/agentMessage/delta` `itemId`, `item/started`, `item/completed` | `thread/resume` turn items |
+
+Pi cannot use the session entry id: Pi allocates it in `appendMessage` after it has notified listeners of `message_end`, so no RPC event carries it. The assistant message `timestamp` is set once when streaming starts and is stored unchanged. A message that lacks a usable id or timestamp, or whose derived id is already taken, falls back to a unique live id (`claude-<kind>-<instance>-<n>`, `pi-stream-<n>`) or, in history, to the previous uuid/entry-derived id (`claude-history-*`, `pi-entry-*`). User and tool blocks keep their existing ids. A Pi assistant message that carries several text blocks streams one block per content block but is shown in history as one block, whose id is that of rank 0; the id of a later rank has no history counterpart.
 
 
 ## Composer operations
@@ -124,8 +148,11 @@ items with a safe `error` event. A failed native prompt emits
   or id is included; the host bounds, sanitizes and drops ambiguous names.
   An adapter without discovery returns empty lists. PiUI never executes them.
 - Per harness:
-  - Pi: `images` from `get_state` `model.input` (`image`); RPC `prompt`,
-    `steer` and `follow_up` carry `images:[{type:"image",data,mimeType}]`.
+  - Pi: `images` from `get_state` `model.input` (`image`); RPC `prompt` and
+    `steer` carry `images:[{type:"image",data,mimeType}]`. Both `prompt` and
+    `follow-up` modes send RPC `prompt` with `streamingBehavior:"followUp"`:
+    Pi queues it during a run and starts a run when idle. RPC `follow_up` only
+    queues, so an idle follow-up through it would be admitted and never run.
     Commands from `get_commands` (`extension`, `prompt`, `skill` — skills are
     `/skill:<name>`); `skills` is empty.
   - Claude Code: `images:true`; the user message content is
@@ -156,14 +183,14 @@ negotiates `experimentalApi:true, requestAttestation:false`.
 
 ### Verified version range
 
-- One range, `minimum <= version < ceiling`, currently `0.147.0 <= v < 0.158.0`:
+- One range, `minimum <= version < ceiling`, currently `0.147.0 <= v < 0.164.0`:
   `CODEX_APP_SERVER` in `crates/piui-runtime/src/native_version.rs`, mirrored by
   `VERIFIED_CODEX_VERSIONS` in `codex.mjs`; the Rust test
   `bridge_mirrors_the_codex_range` keeps the two equal.
 - Grammar: `MAJOR.MINOR.PATCH[-pre][+build]` (leading `v` tolerated). A pre-release
   precedes its release (`0.147.0-alpha.1` is older than the minimum); a
   pre-release at or above the ceiling previews an untested line
-  (`0.158.0-alpha.2` is newer than tested). Anything else is unrecognized.
+  (`0.164.0-alpha.9` is newer than tested). Anything else is unrecognized.
 - Host discovery reads `@openai/codex/package.json` and reports the found
   `version`. Inside the range it is `available` (on verified platforms); above it
   `unverified` with "Unverified: newer than the versions tested with PiUI.";
@@ -176,11 +203,14 @@ negotiates `experimentalApi:true, requestAttestation:false`.
   (<client name>; <client version>)`, originator = our `clientInfo.name`) must be
   in range, else `unsupported-native-version` before `initialized`. The trailing
   client version is never read.
-- Why 0.158.0: 0.147.0, 0.153.4 and 0.157.1 were audited (table below). Patch
-  releases do not change the protocol: `codex-rs/app-server` and
+- Why 0.164.0: 0.147.0, 0.153.4, 0.157.1 and 0.163.0 were audited (tables
+  below). Patch releases do not change the protocol: `codex-rs/app-server` and
   `codex-rs/app-server-protocol` are identical at 0.157.0 and 0.157.1 (and at
-  0.156.0 and 0.156.1), so the ceiling admits the 0.157.x line and nothing after
-  it. On 2026-09-26 0.158.0 and 0.159.0 exist only as unaudited alphas.
+  0.156.0 and 0.156.1), so the ceiling admits the 0.163.x line and nothing after
+  it. 0.158.0-0.162.1 were not run one by one: the 0.157.1 -> 0.163.0 schema
+  diff is additive for every surface the bridge uses, and the one behavior
+  change between them that the schema cannot show (base instructions, 0.162)
+  is covered below. On 2026-10-21 0.164.0 exists only as unaudited alphas.
 - Raising the ceiling: generate the new version's bindings
   (`codex app-server generate-ts --experimental --out <dir>` and
   `codex app-server generate-json-schema --experimental --out <schema-dir>`),
@@ -193,6 +223,34 @@ negotiates `experimentalApi:true, requestAttestation:false`.
   (`PIUI_CODEX_LIVE_HANDSHAKE=<abs path to bin/codex.js> node --test
   --test-name-pattern live: crates/piui-runtime/bridge/codex.test.mjs`; it
   forwards only `initialize`), then raise both constants.
+
+### Protocol compatibility 0.157.1 -> 0.163.0
+
+Evidence (2026-10-21): bindings generated by the installed 0.163.0 CLI and by
+0.157.1 (official npm package in a scratch directory), diffed structurally
+(methods, definitions, properties, required flags, enums, union variants);
+`codex-protocol-audit.mjs` against both schema sets (no findings); the live
+initialize-only handshake against the installed 0.163.0 (`piui/0.163.0`); the
+synthetic `scripts/codex-prompt-probe.mjs` (all five variants) and the Codex leg
+of `scripts/native-settings-matrix.mjs` against the real 0.163.0 binary and a
+local deterministic Responses provider (no paid model turn); upstream source and
+release notes at `rust-v0.163.0` for behavior the schema does not show.
+Requests 167 -> 172, notifications 83 -> 85, server requests unchanged (11).
+
+| Surface the bridge uses | Change 0.157.1 -> 0.163.0 | Bridge |
+|---|---|---|
+| `initialize`, `userAgent`, `--disable` flags | Unchanged; all seven flags registered with the same stage/default | Unchanged |
+| `thread/start`, `thread/resume`, thread responses, `thread/settings/*`, `turn/start` / `steer` / `interrupt`, `model/list`, `skills/list`, `config/read`, `mcpServerStatus/list` | Additive only (`TurnStartParams.parentTurnId/rootTurnId`, `Turn.rootTurnId`, `ListMcpServerStatusParams.serverName`; `SkillMetadata.path` is now a `LegacyAppPathString`, still a string); `thread/resume` still has no `dynamicTools` (tools registered at `thread/start` persist into the resumed thread) | Unchanged; managed resume stays `unsupported-coordinator-resume` |
+| Approvals, `item/tool/call` (with `namespace`), `currentTime/read`, `mcpServer/elicitation/request` | Unchanged | Unchanged |
+| `write_stdin_approval` feature | Stable and on by default since 0.158 (terminal input to an elevated command asks first) | Already handled as "Send input to a running command" |
+| `thread/readState/changed` | New in 0.163: Codex's read receipt, sent to experimental clients with every visible turn result of a durable user thread, before `turn/completed` | **Fixed**: ignored as control plane; it showed an "Unsupported Codex event" block after every turn |
+| `thread/prediction/updated` | New; only after `thread/prediction/request` | Never triggered (generic fallback) |
+| `CodexErrorInfo` | Open since 0.161 (any string or object); 0.163 adds `flexUnavailable` and `tooManyDenials` (Guardian strict circuit breaker: the turn is *interrupted* with this error) | **Added**: fixed summaries for both; an interrupted turn with an error reports it |
+| `MessagePhase` | Adds `partial_answer` | Phase is not read |
+| `ThreadItem` | `subAgentActivity` adds `model`, `reasoningEffort` | Generic fallback, unchanged |
+| Base instructions (behavior) | 0.162 (openai/codex#51156) sends `baseInstructions` as the first developer input message and leaves the Responses `instructions` empty | Unchanged: Codex's default prompt is still replaced; `codex-prompt-probe.mjs` accepts either channel and reports `baseChannel` |
+| Resume (behavior) | 0.163 restores a saved thread's permissions and network approvals unless overridden | Unchanged: the bridge sends explicit permissions and still verifies the effective ones |
+| Windows `workspace-write` (behavior) | Every command is rejected unless the user's `config.toml` sets `[windows] sandbox`; with `"unelevated"` commands run and writes outside the project fail | Not changed by PiUI (global config is the user's); a known limitation |
 
 ### Protocol compatibility (0.147.0 / 0.153.4 / 0.157.1)
 

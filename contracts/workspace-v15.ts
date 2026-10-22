@@ -93,7 +93,12 @@ export interface SessionSnapshot {
  * tools (Pi, an ACP agent without HTTP MCP) or a resumed Codex thread cannot
  * re-register dynamic tools. Unknown codes must be ignored.
  */
-export type WorkspaceNoticeCode = 'unsupported-board-tool' | 'unsupported-board-tool-resume';
+export type WorkspaceNoticeCode =
+  | 'unsupported-board-tool'
+  | 'unsupported-board-tool-resume'
+  /** Additive (ADR-043): the Fusion lead's `sidekick` tool is missing. */
+  | 'unsupported-sidekick-tool'
+  | 'unsupported-sidekick-tool-resume';
 export interface WorkspaceCatalog {
   protocol: 15; safeMode: boolean; workspaces: WorkspaceSummary[];
   sessions: WorkspaceSession[]; harnesses: HarnessSummary[];

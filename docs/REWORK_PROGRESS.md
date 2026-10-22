@@ -469,6 +469,66 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   Needs a real-app check: a real harness run started from a chat, and the
   packaged WebView2 app.
 
+## 2026-09-28 — sub-pipelines, frontend (unreleased)
+
+- **A saved pipeline as one step** (ADR-042, orchestration v6.7). Editor:
+  Add → *Sub-pipelines* lists this project's saved pipelines (never the open
+  one); the node card shows the child's inputs/outputs and an *Open* action;
+  the inspector's *Sub-pipeline* tab picks the pipeline and maps each child
+  input to a fixed value, a run input or a connected step's result (field or
+  whole text). An *Output* block next to the last steps edits the pipeline's
+  declared `outputs`. Check reports a missing pipeline, self-reference or
+  loop, unmapped required inputs, type mismatches and non-dependency sources.
+- **Runs:** the `pipeline` trigger reads "Sub-pipeline of run #…" with a link
+  to the parent; a sub-pipeline step shows its child run's status and *Open
+  child run*; every `subpipeline-*` failure code has readable text; the run
+  list marks known child runs.
+- **UI Lab host** runs child runs through the ordinary scheduler (outputs,
+  last text, failure, cancel cascade, cycle and depth refusals) and refuses
+  saves with a missing launch command, bad mapping or reference cycle and the
+  deletion of a referenced launch command.
+- System files v4 refuse to export sub-pipeline steps or outputs.
+- Tests written (not yet run): graph round-trip, preflight rules, lab child
+  run lifecycle, run presentation, export refusal, locale.
+
+## 2026-10-21 — Codex 0.163 verified
+
+- Codex verified range raised to 0.147.0–0.164.0 (admits 0.163.x). Audit in
+  `crates/piui-runtime/bridge/CONTRACT.md` (0.157.1 -> 0.163.0 table).
+- Fixed: `thread/readState/changed` (new in 0.163, sent after every visible
+  turn result) was rendered as an "Unsupported Codex event" block; now ignored.
+  Added summaries for `flexUnavailable` and `tooManyDenials`; an interrupted
+  turn that carries an error reports it.
+- `codex-prompt-probe.mjs` accepts 0.162+ base instructions sent as the first
+  developer message (openai/codex#51156).
+- Synthetic evidence (real 0.163.0 binary, local deterministic provider, no
+  paid turns): prompt probe 5/5 variants, native settings matrix Pi -> Codex
+  legs passed (Prime leg not reached: installed Prime 0.9.5 is outside its
+  verified pins), protocol audit with no findings against 0.163.0 and 0.157.1
+  schemas, live initialize-only handshake `piui/0.163.0`. Bridge tests 53/53,
+  `native_version` tests 3/3 (standalone `rustc --test`; the full
+  `cargo test` was not run: both disks were full). No real-provider turn.
+
+## 2026-10-22 — Fusion Ф1 (ADR-043)
+
+- Host broker `src-tauri/src/fusion/` (model, rules, store, broker, service):
+  pair admission, frozen lead/sidekick session policy, rounds as admitted
+  turns with `no-answer`, report envelope with escaped body and separate
+  facts, one writer, stop barrier and `uncertain`, durable follow-up
+  delivery, call identity replay/conflict, restart without replay, reconcile
+  and abandon. `fusion_command_v1` and `piui://fusion-changed-v1`.
+- Bridge: `sidekickRequest`/`sidekickResponse` with identity
+  `{epoch, seq, callRef, opHash}`; Claude Code MCP tool with
+  `MCP_TOOL_TIMEOUT=600000`; Codex dynamic tool `piui`/`sidekick` on fresh
+  threads; notices `unsupported-sidekick-tool[-resume]`.
+- Workspace: Fusion hooks in session start (no board/plugin MCP for the
+  sidekick), `SidekickRequest` handling, the ADR-044 guard covers sidekicks.
+- UI: composer Fusion mode, lead badge and panel, sidekick tool cards,
+  English/Russian strings; UI Lab fake.
+- Two committed workspace tests that call catalog-resource functions not on
+  this branch are parked with `#[cfg(any())]`.
+- No real-provider pair ran (phase Ф1.5 is started by the person).
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

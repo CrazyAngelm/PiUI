@@ -90,8 +90,10 @@ coordinator send/observe/spawn tools and their frozen authority checks.
 2. `call models` with `{ "workspaceId": "...", "harness": "codex" }` returns the
    native catalog/resources. Use its actual model IDs, reasoning levels and
    resources. Prime's query uses the host's isolated supervisor.
-3. Author portable v4 JSON following `skills/piui-systems/` and the schema at
-   `contracts/system-file-v4.schema.json`. All graph topology is data; no visual
+3. Author portable v5 JSON following `skills/piui-systems/` and the schema at
+   `contracts/system-file-v5.schema.json` (v1-v4 files still import).
+   `prepare` refuses a file with sub-pipeline steps: their pipeline names
+   resolve against a project only when the file is imported in PiUI. All graph topology is data; no visual
    node positioning is necessary. Result, send, observe and spawn are distinct
    edges. Teams, arbitrary DAG pipelines, callable profiles, conditions, structured
    result fields, explicit reviews and approvals retain their existing semantics.

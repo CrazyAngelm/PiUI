@@ -4,7 +4,7 @@
  * JSON import, so a proposal is only ever a new draft for the person to apply.
  */
 import type { AgentGraph, GraphEdge } from '../../../features/orchestration/agentGraph';
-import { parseSystemFile, systemFileToGraph, type SystemFile } from '../../../features/orchestration/systemFile';
+import { parseSystemFile, systemFileToGraph, type PipelineName, type SystemFile } from '../../../features/orchestration/systemFile';
 
 export const CONTEXT_OPEN = '<piui-builder-context>';
 export const CONTEXT_CLOSE = '</piui-builder-context>';
@@ -27,11 +27,11 @@ const BRIEF = `You are the PiUI pipeline assistant. PiUI runs graphs of native c
 
 How to answer:
 - Reply in the person's language. Be brief: say what you changed and why in at most 6 bullets.
-- When you propose a pipeline, end your reply with the COMPLETE updated system as exactly one \`\`\`json fenced block (format "piui-system", version 4). Never send partial JSON or several JSON blocks.
+- When you propose a pipeline, end your reply with the COMPLETE updated system as exactly one \`\`\`json fenced block (format "piui-system", version 5). Never send partial JSON or several JSON blocks.
 - If something essential is unclear, ask one short question instead of guessing and do not output JSON.
 
-Format (portable PiUI system v4):
-{"format":"piui-system","version":4,"name":"…","agents":[…],"connections":[…]}
+Format (portable PiUI system v5):
+{"format":"piui-system","version":5,"name":"…","agents":[…],"connections":[…], optional "inputs", "outputs"}
 - agents[]: {"id","profile","task", optional "kind":"router", "input", "executionMode":"callable", "resultFields", "review", "requireApproval", "router", "position":{"x","y"}}
 - profile: {"name","harness","model","permissionMode","instructions","toolPolicy":{"rules":[]}, optional "reasoning" (off|minimal|low|medium|high|xhigh|max), "serviceTier" (standard|fast), "whenToCall","inputInstructions","expectedResult"}
 - permissionMode: read-only | workspace-write | full-access | native. Use the least authority that can do the job.
@@ -40,6 +40,8 @@ Format (portable PiUI system v4):
 - review loop: on the reviewer {"review":{"field":"approved","retryFromStepId":"<upstream agent id>","maxIterations":3}} plus a boolean result field "approved". Always bound loops with maxIterations.
 - An orchestrator that decides how many workers/testers to start: callable roles ("executionMode":"callable", profile.whenToCall/inputInstructions/expectedResult) plus spawn connections from the orchestrator to each role.
 - Routers: {"kind":"router","router":{"mode":"program"|"agent","inputStepId":"<the single upstream agent>","branches":[{"id","label","predicate"?}]}}; agent-mode routers pick branches themselves.
+- Sub-pipelines: an agent with "executor":{"type":"pipeline","pipeline":"<exact name of a saved pipeline of this project>","inputs":{"<child input>":{"kind":"value","value":…}|{"kind":"input","name":"<run input>"}|{"kind":"step","agent":"<direct upstream agent id>","field"?:"…"}}} runs that saved pipeline as one step; its profile only names the step. Use only pipeline names the person mentioned or the draft already runs.
+- outputs: [{"name","kind","agent","field"?}] is what this pipeline returns when another pipeline runs it as a sub-pipeline.
 
 Design rules:
 - Start from the smallest graph that can produce and verify the outcome. Add a node only for a different executor (harness, model, rights), an independent check, a change of control flow, or a result several nodes need. Otherwise put the step inside one agent's task.
@@ -105,8 +107,8 @@ export function readProposal(answer: string): Proposal | undefined {
  * agents that survive, so their saved definitions are updated in place.
  * System files never carry pinned data: surviving nodes keep theirs.
  */
-export function applyProposal(current: AgentGraph, file: SystemFile): AgentGraph {
-  const proposed = systemFileToGraph(file);
+export function applyProposal(current: AgentGraph, file: SystemFile, pipelines: readonly PipelineName[] = []): AgentGraph {
+  const proposed = systemFileToGraph(file, pipelines);
   const keptProfile = new Map<string, string>();
   for (const node of proposed.nodes) {
     const existing = current.nodes.find((item) => item.id === node.id);
@@ -118,6 +120,8 @@ export function applyProposal(current: AgentGraph, file: SystemFile): AgentGraph
     id: current.id,
     teamId: current.teamId,
     pipelineId: current.pipelineId,
+    // Version 5 files carry declared outputs (v6.7); an older proposal keeps the draft's own.
+    ...(file.version < 5 && current.outputs?.length ? { outputs: current.outputs.map((output) => ({ ...output })) } : {}),
     nodes: proposed.nodes.map((node) => {
       const pinned = current.nodes.find((item) => item.id === node.id)?.pinnedOutput;
       return {

@@ -16,14 +16,16 @@ import {
   type OrchestrationClient,
   type OrchestrationRunV6,
   type PipelineInput,
+  type PipelineStep,
   type RunInputValue,
+  type TaskRecord,
 } from '../../host-api/orchestrationClient';
 import { pipelineLibraryHost, type ChatPipelineV1, type PipelineLibraryCommandV1, type PipelineLibraryResultV1, type PipelineTemplateV1 } from '../../host-api/pipelineLibraryClient';
 import { resolveRunInputs } from '../../host-api/runInputs';
 import { readWorkspaceHistory } from '../../host-api/workspaceHistory';
 import { performRunAction } from '../../features/orchestration/runActions';
 import { formatValue } from '../runs/runPresentation';
-import { acceptsChat, answerTask, chatInput, extraInputs, replyStep, runMessage, withPipelineContext, type PipelineContext } from './chatPipeline';
+import { acceptsChat, answerTask, chatInput, extraInputs, outputsAnswer, replyStep, runMessage, withPipelineContext, type PipelineContext } from './chatPipeline';
 
 export interface PipelineLibraryClient {
   request(command: PipelineLibraryCommandV1): Promise<PipelineLibraryResultV1>;
@@ -273,12 +275,19 @@ export class ChatPipelinesStore {
   }
 
   private async fetchAnswer(run: OrchestrationRunV6): Promise<string> {
+    // v6.7: a pipeline that declares outputs answers with them.
+    const declared = await outputsAnswer(run, (step, task) => this.stepText(step, task), formatValue);
+    if (declared !== undefined) return declared;
     const found = answerTask(run);
     if (!found) return '';
-    const { task } = found;
+    return (await this.stepText(found.step, found.task)) ?? '';
+  }
+
+  /** A step's whole result text: its recorded output, else the agent's final native answer. */
+  private async stepText(step: PipelineStep, task: TaskRecord): Promise<string | undefined> {
     if (task.output?.text) return task.output.text;
     const sessionId = task.resultReference?.sessionId ?? task.execution?.id;
-    if (sessionId && found.step.executor?.type !== 'script' && found.step.executor?.type !== 'plugin') {
+    if (sessionId && step.executor?.type !== 'script' && step.executor?.type !== 'plugin' && step.executor?.type !== 'pipeline') {
       try {
         const blocks = await this.readHistory(sessionId);
         const answers = blocks.filter((block) => block.kind === 'assistant' && block.text);
@@ -286,10 +295,10 @@ export class ChatPipelinesStore {
         const text = (exact ?? answers.at(-1))?.text;
         if (text) return text;
       } catch {
-        // Fall back to the recorded result fields below.
+        // Fall back to the recorded result fields.
       }
     }
-    return task.resultData ? formatValue(task.resultData) : '';
+    return task.resultData ? formatValue(task.resultData) : undefined;
   }
 
   // ---- sending --------------------------------------------------------

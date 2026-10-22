@@ -52,6 +52,32 @@ export function authorizeLive(state: LabState, sessionId: string): LabSessionRec
   return record;
 }
 
+/**
+ * `authorize_ordinary_live_session` (Fusion part): an action that would change
+ * what a sidekick does (message, steer, interrupt, settings, mode, standing
+ * approval, deletion) is `NOT_SUPPORTED`; the broker owns its turns (ADR-043).
+ */
+export function refuseFusionSidekick(state: LabState, sessionId: string): void {
+  if (state.isFusionSidekick?.(sessionId) === true) throw workspaceFailure('NOT_SUPPORTED');
+}
+
+/**
+ * Deletion of a Fusion chat (docs/FUSION.md): the current sidekick stays (the
+ * broker owns it), a retired sidekick's chat may be deleted, and a lead with an
+ * open or uncertain sidekick round stays until the round is settled.
+ */
+export function refuseFusionDelete(state: LabState, sessionId: string): void {
+  if (state.fusionLifecycle?.isCurrentSidekick(sessionId) === true) throw workspaceFailure('NOT_SUPPORTED');
+  state.fusionLifecycle?.guardLeadDelete(sessionId);
+}
+
+/** `authorize_ordinary_live_session` for sidekicks: `authorizeLive`, then the sidekick refusal. */
+export function authorizeOrdinaryLive(state: LabState, sessionId: string): LabSessionRecord {
+  const record = authorizeLive(state, sessionId);
+  refuseFusionSidekick(state, sessionId);
+  return record;
+}
+
 /** `live_runtime(..).ok_or_else(closed)`: a UUID address with an open runtime. */
 export function requireLive(record: LabSessionRecord): LabLiveState {
   if (!isUuid(record.id)) throw workspaceFailure('INVALID_ARGUMENT');

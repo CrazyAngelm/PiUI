@@ -148,6 +148,19 @@ impl ComposerCommand {
             | Self::Compact { session_id } => session_id,
         }
     }
+
+    /// True for every command except the read-only snapshot.
+    fn alters_session(&self) -> bool {
+        match self {
+            Self::Snapshot { .. } => false,
+            Self::Send { .. }
+            | Self::Edit { .. }
+            | Self::Promote { .. }
+            | Self::Remove { .. }
+            | Self::Resume { .. }
+            | Self::Compact { .. } => true,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -442,6 +455,11 @@ impl WorkspaceHost {
     }
 
     async fn drain(&self, id: &str) -> Result<(), WorkspaceError> {
+        // The broker alone admits turns into a Fusion sidekick (ADR-043): a
+        // queue that somehow exists on one is never delivered.
+        if self.is_fusion_sidekick(id) {
+            return Ok(());
+        }
         let Some((runtime, state)) = self.live_runtime(id)? else {
             return Ok(());
         };
@@ -543,6 +561,13 @@ pub(crate) async fn run_composer(
     validate_session_id(&id)?;
     let _operation = authorize_live_session(host, &id).await?;
     if host.workspace.record(&id)?.run_id.is_some() {
+        return Err(WorkspaceError::not_supported());
+    }
+    // A Fusion sidekick's turns belong to the broker (ADR-043): the same
+    // ownership rule as `authorize_ordinary_live_session`. Reading the outbox
+    // stays possible; anything that would prompt, steer, compact or change
+    // the queue is refused, so nothing is ever queued for a later drain.
+    if command.alters_session() && host.workspace.is_fusion_sidekick(&id) {
         return Err(WorkspaceError::not_supported());
     }
     let (runtime, live) = host

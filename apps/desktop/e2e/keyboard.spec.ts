@@ -39,6 +39,11 @@ test.describe('keyboard-only operation', () => {
     await page.keyboard.press('Tab');
     await page.keyboard.press('Enter');
     await expect(lab.main).toBeFocused();
+    // The Chat | Fusion switch (ADR-043) is one tab stop before the text box;
+    // it appears once the harness list has loaded.
+    await expect(page.getByLabel('Chat type')).toBeVisible();
+    await page.keyboard.press('Tab');
+    await expect(page.getByLabel('Chat type').locator(':focus')).toHaveCount(1);
     await page.keyboard.press('Tab');
     await expect(page.getByRole('region', { name: 'What should we work on?' }).getByRole('textbox', { name: 'Message' })).toBeFocused();
   });

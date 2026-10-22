@@ -37,6 +37,8 @@
   import PinnedDataSection from './PinnedDataSection.svelte';
   import Blocks from '@lucide/svelte/icons/blocks';
   import PluginNodeSettings from '../plugins/PluginNodeSettings.svelte';
+  import Workflow from '@lucide/svelte/icons/workflow';
+  import SubpipelineSettings from './SubpipelineSettings.svelte';
 
   interface Props {
     editor: PipelineEditorStore;
@@ -47,7 +49,7 @@
   let { editor, node, onClose, onFocusNode }: Props = $props();
   const workspace = useWorkspace();
 
-  type TabId = 'basics' | 'io' | 'access' | 'flow' | 'routes' | 'script' | 'plugin';
+  type TabId = 'basics' | 'io' | 'access' | 'flow' | 'routes' | 'script' | 'plugin' | 'pipeline';
   let tab = $state<TabId>('basics');
   const isRouter = $derived(node.kind === 'router');
   // v6.2 executors: a script runs on the host; a model call is one read-only turn.
@@ -55,6 +57,8 @@
   const llm = $derived(node.executor?.type === 'llm');
   // v6.5: a plugin node's backend runs it; its form comes from the node type.
   const plugin = $derived(node.executor?.type === 'plugin');
+  // v6.7: a sub-pipeline step runs a saved pipeline as its own child run.
+  const subpipeline = $derived(node.executor?.type === 'pipeline');
   const scriptBytes = $derived(script ? sourceBytes(script.source) : 0);
   let timeoutText = $state('');
   $effect(() => {
@@ -74,7 +78,7 @@
 
   // Load the native catalog of the selected harness when the agent is shown.
   $effect(() => {
-    if ((!isRouter || agentRouter) && !script && !plugin && !editor.catalogs[profile.harness] && !editor.catalogErrors[profile.harness]) {
+    if ((!isRouter || agentRouter) && !script && !plugin && !subpipeline && !editor.catalogs[profile.harness] && !editor.catalogErrors[profile.harness]) {
       void editor.loadCatalog(profile.harness);
     }
   });
@@ -83,6 +87,8 @@
     if (isRouter && tab !== 'routes' && tab !== 'basics') tab = 'routes';
     else if (plugin && tab !== 'plugin' && tab !== 'io' && tab !== 'flow') tab = 'plugin';
     else if (!plugin && tab === 'plugin') tab = 'basics';
+    else if (subpipeline && tab !== 'pipeline' && tab !== 'io' && tab !== 'flow') tab = 'pipeline';
+    else if (!subpipeline && tab === 'pipeline') tab = 'basics';
     else if (script && tab !== 'script' && tab !== 'io' && tab !== 'flow') tab = 'script';
     else if (!script && tab === 'script') tab = 'basics';
     else if (llm && tab === 'access') tab = 'basics';
@@ -97,6 +103,12 @@
       : plugin
         ? [
             { value: 'plugin' as const, label: $t('Plugin node') },
+            { value: 'io' as const, label: $t('Output') },
+            { value: 'flow' as const, label: $t('Flow') },
+          ]
+      : subpipeline
+        ? [
+            { value: 'pipeline' as const, label: $t('Sub-pipeline') },
             { value: 'io' as const, label: $t('Output') },
             { value: 'flow' as const, label: $t('Flow') },
           ]
@@ -201,6 +213,8 @@
       <span class="router-mark" aria-hidden="true"><Code size={14} /></span>
     {:else if plugin}
       <span class="router-mark" aria-hidden="true"><Blocks size={14} /></span>
+    {:else if subpipeline}
+      <span class="router-mark" aria-hidden="true"><Workflow size={14} /></span>
     {:else}
       <HarnessMark kind={profile.harness} size={22} />
     {/if}
@@ -208,7 +222,7 @@
       class="name"
       value={profile.name}
       aria-label={$t('Name')}
-      placeholder={isRouter ? $t('Router') : script ? $t('Script name') : llm ? $t('Model call name') : $t('Agent name')}
+      placeholder={isRouter ? $t('Router') : script ? $t('Script name') : llm ? $t('Model call name') : subpipeline ? $t('Step name') : $t('Agent name')}
       disabled={readOnly}
       oninput={(event) => patch({ name: event.currentTarget.value }, true)}
       onblur={() => editor.settle()}
@@ -253,6 +267,8 @@
           />
         {:else if current === 'plugin' && plugin}
           <PluginNodeSettings {editor} {node} />
+        {:else if current === 'pipeline' && subpipeline}
+          <SubpipelineSettings {editor} {node} />
         {:else if current === 'script' && script}
           <p class="warning" role="note">
             <TriangleAlert size={14} />
@@ -392,10 +408,16 @@
               />
             </Field>
           {/if}
-        {:else if current === 'io' && (script || plugin)}
+        {:else if current === 'io' && (script || plugin || subpipeline)}
           <div class="section">
             <h3>{$t('Structured result fields')}</h3>
-            <p class="hint">{plugin ? $t('Named fields the node returns as one JSON object. Without fields, its output is passed on as text.') : $t('Named fields the script prints as one JSON object. Without fields, its output is passed on as text.')}</p>
+            <p class="hint">
+              {subpipeline
+                ? $t('The sub-pipeline’s declared outputs, checked when its run finishes. Without fields, the text of its last finished step is passed on.')
+                : plugin
+                  ? $t('Named fields the node returns as one JSON object. Without fields, its output is passed on as text.')
+                  : $t('Named fields the script prints as one JSON object. Without fields, its output is passed on as text.')}
+            </p>
             <ResultFields fields={node.resultFields ?? []} disabled={readOnly} onchange={(fields) => editor.updateNode(node.id, { resultFields: fields.length ? fields : undefined })} />
           </div>
         {:else if current === 'io'}
@@ -463,7 +485,7 @@
             {/if}
           </div>
         {:else if current === 'flow'}
-          {#if !script && !llm}
+          {#if !script && !llm && !subpipeline}
           <Field label={$t('When it runs')}>
             <Segmented
               size="sm"

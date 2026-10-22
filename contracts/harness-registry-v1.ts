@@ -53,7 +53,7 @@ export interface HarnessStatusV1 {
   /** Detected executable or entry script (display only). */
   location?: string;
   version?: string;
-  /** Tested versions, for display (`0.147.0 – 0.157.x`). */
+  /** Tested versions, for display (`0.147.0 – 0.163.x`). */
   verifiedVersions?: string;
   /** Fixed English locale key; never native output. */
   reason?: string;

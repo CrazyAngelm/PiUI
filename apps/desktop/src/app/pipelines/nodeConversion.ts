@@ -34,11 +34,12 @@ export const NODE_TYPE_LABEL: Readonly<Record<NodeType, string>> = { agent: 'Age
 export const NEW_SCRIPT_TIMEOUT_SECONDS = 60;
 
 /**
- * The node's type; routers keep their own kind and are never converted, and
- * a plugin node (v6.5) belongs to its plugin's node type.
+ * The node's type; routers keep their own kind and are never converted, a
+ * plugin node (v6.5) belongs to its plugin's node type and a sub-pipeline
+ * step (v6.7) to the pipeline it runs.
  */
 export function nodeType(node: Pick<GraphNode, 'kind' | 'executor'>): NodeType | undefined {
-  if (node.kind === 'router' || node.executor?.type === 'plugin') return undefined;
+  if (node.kind === 'router' || node.executor?.type === 'plugin' || node.executor?.type === 'pipeline') return undefined;
   return node.executor?.type ?? 'agent';
 }
 

@@ -1,0 +1,14 @@
+{"t":21559,"kind":"event","who":"lead","event":{"type":"binding","nativeId":"20336c6b-b044-468e-917e-b9194902cf20","nativePath":"<home>\\.claude\\projects\\D--Projects-PIUI-target-fusion-spikes-homes-s1-claude-3-read-only-project\\20336c6b-b044-468e-917e-b9194902cf20.jsonl"}}
+{"t":21560,"kind":"event","who":"lead","event":{"type":"status","status":"idle"}}
+{"t":21560,"kind":"started"}
+{"t":21566,"kind":"event","who":"lead","event":{"type":"status","status":"running"}}
+{"t":31912,"kind":"block","who":"lead","id":"claude-tool-c9139f84da799019edac26d1","blockKind":"tool","status":"streaming","title":"ToolSearch"}
+{"t":32279,"kind":"block","who":"lead","id":"claude-tool-c9139f84da799019edac26d1","blockKind":"tool","status":"streaming","title":"ToolSearch"}
+{"t":33156,"kind":"block","who":"lead","id":"claude-limit-455f5507-1","blockKind":"custom","status":"complete","title":"Claude usage limit","text":"Your Claude subscription usage is close to its limit. It resets at 2026-10-24T04:00:00.000Z."}
+{"t":56752,"kind":"block","who":"lead","id":"claude-tool-c9139f84da799019edac26d1","blockKind":"tool","status":"complete","title":"ToolSearch","text":"[unsupported content]"}
+{"t":64819,"kind":"block","who":"lead","id":"claude-tool-d02d3affae86ca5ac9ed85e3","blockKind":"tool","status":"streaming","title":"mcp__piui-workspace__board"}
+{"t":65089,"kind":"block","who":"lead","id":"claude-tool-d02d3affae86ca5ac9ed85e3","blockKind":"tool","status":"streaming","title":"mcp__piui-workspace__board"}
+{"t":65232,"kind":"event","who":"lead","event":{"type":"approval","approval":{"id":"claude-approval-455f5507-1","kind":"permission","title":"Allow Board"}}}
+{"t":299324,"kind":"event","who":"lead","event":{"type":"approvalResolved","requestId":"claude-approval-455f5507-1"}}
+{"t":299325,"kind":"event","who":"lead","event":{"type":"status","status":"failed"}}
+{"t":299326,"kind":"event","who":"lead","event":{"type":"error","message":"Claude Code exited unexpectedly."}}

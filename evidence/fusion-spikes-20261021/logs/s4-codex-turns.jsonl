@@ -1,0 +1,4 @@
+{"t":35072,"kind":"turn","label":"one","outcome":"succeeded","usage":[{"id":"codex-session-total","inputTokens":26059,"outputTokens":5,"cacheReadTokens":7168,"totalTokens":26064}]}
+{"t":35074,"kind":"gap","seconds":120}
+{"t":286070,"kind":"turn","label":"after120s","outcome":"succeeded","usage":[{"id":"codex-session-total","inputTokens":52137,"outputTokens":24,"cacheReadTokens":33024,"totalTokens":52161},{"id":"codex-session-total","inputTokens":78257,"outputTokens":31,"cacheReadTokens":58880,"totalTokens":78288}]}
+{"t":286071,"kind":"gap","seconds":390}

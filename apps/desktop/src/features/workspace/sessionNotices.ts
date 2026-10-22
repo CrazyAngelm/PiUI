@@ -5,7 +5,12 @@
  */
 import type { HarnessKind, SessionSnapshot } from '../../../../../contracts/workspace-v15';
 
-export const SESSION_NOTICE_CODES = ['unsupported-board-tool', 'unsupported-board-tool-resume'] as const;
+export const SESSION_NOTICE_CODES = [
+  'unsupported-board-tool',
+  'unsupported-board-tool-resume',
+  'unsupported-sidekick-tool',
+  'unsupported-sidekick-tool-resume',
+] as const;
 export type SessionNoticeCode = (typeof SESSION_NOTICE_CODES)[number];
 
 export interface SessionNoticeEvent {
@@ -41,5 +46,12 @@ export function withNotice(snapshot: SessionSnapshot, code: string): SessionSnap
 export function boardToolNotice(harness: HarnessKind, notices: readonly SessionNoticeCode[]): SessionNoticeCode | undefined {
   if (notices.includes('unsupported-board-tool-resume')) return 'unsupported-board-tool-resume';
   if (notices.includes('unsupported-board-tool') || harness === 'pi') return 'unsupported-board-tool';
+  return undefined;
+}
+
+/** The sidekick-tool notice of a Fusion lead (ADR-043), if any. */
+export function sidekickToolNotice(notices: readonly SessionNoticeCode[]): SessionNoticeCode | undefined {
+  if (notices.includes('unsupported-sidekick-tool-resume')) return 'unsupported-sidekick-tool-resume';
+  if (notices.includes('unsupported-sidekick-tool')) return 'unsupported-sidekick-tool';
   return undefined;
 }

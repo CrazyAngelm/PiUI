@@ -15,8 +15,10 @@ import {
   type OrchestrationClient,
   type OrchestrationRunV6,
   type PipelineInput,
+  type PipelineOutput,
   type RunInputValue,
 } from '../../host-api/orchestrationClient';
+import { outputFields, parseIssue, referencedCommands, resolvePipelineName, type SubpipelineInfo } from '../../host-api/subpipelines';
 import type { HarnessModelsResult } from '../../../../../contracts/harness-models-v18';
 import {
   emptyGraph,
@@ -26,13 +28,14 @@ import {
   newRouterNode,
   newScriptNode,
   newPluginNode,
+  newSubpipelineNode,
   type AgentGraph,
   type ConnectionKind,
   type GraphIssue,
   type GraphNode,
 } from '../../features/orchestration/agentGraph';
 import { connectAgents, connectRoute } from '../../features/orchestration/graphConnections';
-import { preflightGraph, type PreflightIssue } from '../../features/orchestration/graphPreflight';
+import { parentIssues, preflightGraph, subpipelineIssues, type PreflightIssue } from '../../features/orchestration/graphPreflight';
 import { pluginNodeIssues } from '../plugins/pluginNodes';
 import { pluginRegistry } from '../plugins/pluginRegistry.svelte';
 import { GraphHistory, duplicateNode } from '../../features/orchestration/graphHistory';
@@ -110,6 +113,10 @@ export class PipelineEditorStore {
   /** A navigation that waits for "save / discard / keep editing". */
   pending = $state<(() => void | Promise<void>) | undefined>();
   lastRun = $state.raw<OrchestrationRunV6 | undefined>();
+  /** Saved pipelines of this project a sub-pipeline step can run (v6.7), by launch command id. */
+  subpipelines = $state.raw<ReadonlyMap<string, SubpipelineInfo>>(new Map());
+  /** The project's launch commands were read at least once. */
+  systemsLoaded = $state(false);
 
   private revisions: Revisions = new Map();
   private history = new GraphHistory(this.graph);
@@ -151,9 +158,59 @@ export class PipelineEditorStore {
       const catalog = await this.client.orchestration_catalog_v6({ workspaceId: this.workspaceId });
       this.systems = catalog.launchCommands;
       this.profiles = catalog.profiles;
+      this.systemsLoaded = true;
+      await this.loadSubpipelines();
     } catch (error) {
       this.errors = [message(error)];
     }
+  }
+
+  /**
+   * Reads the inputs, outputs and references of every saved pipeline, so a
+   * sub-pipeline step can map its child's inputs (v6.7). A pipeline that
+   * cannot be read is left out; the host checks references again.
+   */
+  private async loadSubpipelines(): Promise<void> {
+    const entries = await Promise.all(
+      this.systems.map(async (summary): Promise<[string, SubpipelineInfo] | undefined> => {
+        try {
+          const command = await this.client.orchestration_get_launch_command_v6({ workspaceId: this.workspaceId, id: summary.id });
+          if (!command) return undefined;
+          const pipeline = await this.client.orchestration_get_pipeline_v6({ workspaceId: this.workspaceId, id: command.value.pipelineId });
+          if (!pipeline) return undefined;
+          return [
+            summary.id,
+            {
+              commandId: summary.id,
+              name: command.value.name,
+              pipelineId: pipeline.value.id,
+              inputs: pipeline.value.inputs ?? [],
+              outputs: pipeline.value.outputs ?? [],
+              references: referencedCommands(pipeline.value),
+              pipeline: { steps: pipeline.value.steps, inputs: pipeline.value.inputs ?? [] },
+            },
+          ];
+        } catch {
+          return undefined;
+        }
+      }),
+    );
+    this.subpipelines = new Map(entries.filter((entry): entry is [string, SubpipelineInfo] => entry !== undefined));
+    if (this.validationShown) this.issues = this.structuralIssues();
+  }
+
+  /**
+   * Structural issues of the draft, with the sub-pipeline checks against
+   * saved pipelines (v6.7): the children it runs, and the saved parents that
+   * run it and would break (`subpipeline-breaks-parent`).
+   */
+  structuralIssues(): GraphIssue[] {
+    const issues = graphIssues(this.graph);
+    const saved = this.systemsLoaded ? new Set(this.systems.map((item) => item.id)) : undefined;
+    for (const issue of [...subpipelineIssues(this.graph, this.subpipelines, saved), ...parentIssues(this.graph, this.subpipelines)]) {
+      if (!issues.some((known) => known.message === issue.message && known.nodeIds[0] === issue.nodeIds[0])) issues.push(issue);
+    }
+    return issues;
   }
 
   /** Runs `action` now, or asks first when the draft has unsaved changes. */
@@ -195,13 +252,41 @@ export class PipelineEditorStore {
     this.guard(() => this.load(emptyGraph(), new Map()));
   }
 
-  /** Starts an unsaved draft from a template graph. */
+  /**
+   * Starts an unsaved draft from a template graph. Sub-pipeline names the
+   * template carries (system-file v5) resolve against this project's saved
+   * pipelines once they are known; nothing is saved.
+   */
   startFrom(graph: AgentGraph): void {
-    this.guard(() => {
-      this.load(graph, new Map());
+    this.guard(async () => {
+      this.load(this.withResolvedPipelines(graph), new Map());
       // A template is a draft until saved.
       this.baseline = '';
+      if (!this.hasUnresolvedPipelines(this.graph) || this.systemsLoaded) return;
+      await this.refresh();
+      if (this.graph.id !== graph.id) return;
+      this.fillIn(this.withResolvedPipelines(this.graph));
     });
+  }
+
+  private hasUnresolvedPipelines(graph: AgentGraph): boolean {
+    return graph.nodes.some((node) => node.executor?.type === 'pipeline' && !node.executor.launchCommandId && Boolean(node.pipelineName));
+  }
+
+  /** Sub-pipeline steps imported by name (system-file v5) pointed at this project's saved pipeline of that name. */
+  private withResolvedPipelines(graph: AgentGraph): AgentGraph {
+    if (!this.hasUnresolvedPipelines(graph)) return graph;
+    return {
+      ...graph,
+      nodes: graph.nodes.map((node) => {
+        const executor = node.executor;
+        if (executor?.type !== 'pipeline' || executor.launchCommandId || !node.pipelineName) return node;
+        const id = resolvePipelineName(node.pipelineName, this.systems);
+        if (id === undefined || id === graph.id) return node;
+        const { pipelineName: _name, ...rest } = node;
+        return { ...rest, executor: { ...executor, launchCommandId: id } };
+      }),
+    };
   }
 
   open(id: string): void {
@@ -227,9 +312,18 @@ export class PipelineEditorStore {
       this.busy = true;
       this.operation = 'import';
       try {
-        const { parseSystemFile, systemFileToGraph } = await import('../../features/orchestration/systemFile');
-        this.load(systemFileToGraph(parseSystemFile(text)), new Map());
+        const { parseSystemFile, systemFileToGraph, unresolvedPipelines } = await import('../../features/orchestration/systemFile');
+        const file = parseSystemFile(text);
+        // Sub-pipelines (system-file v5) name saved pipelines of this project: resolve them now.
+        if (file.agents.some((agent) => agent.executor?.type === 'pipeline') && !this.systemsLoaded) await this.refresh();
+        const graph = systemFileToGraph(file, this.systems);
+        this.load(graph, new Map());
         this.checkedNotice = 'Imported as a new system. Save to keep it.';
+        if (unresolvedPipelines(graph).length) {
+          // Show at once which sub-pipeline steps need a pipeline picked.
+          this.validationShown = true;
+          this.issues = this.structuralIssues();
+        }
       } catch (error) {
         this.errors = [error instanceof Error ? error.message : 'Could not import the system.'];
       } finally {
@@ -241,7 +335,8 @@ export class PipelineEditorStore {
 
   async exportText(): Promise<string> {
     const { serializeSystemFile } = await import('../../features/orchestration/systemFile');
-    return serializeSystemFile(this.graph);
+    // Sub-pipelines are written by name (system-file v5): ids are local to this project.
+    return serializeSystemFile(this.graph, this.systems);
   }
 
   // ---- editing -------------------------------------------------------------
@@ -252,7 +347,7 @@ export class PipelineEditorStore {
     this.history.record(this.graph);
     this.canUndo = this.history.canUndo;
     this.canRedo = this.history.canRedo;
-    if (this.validationShown) this.issues = graphIssues(this.graph);
+    if (this.validationShown) this.issues = this.structuralIssues();
   }
 
   /** Adopt a whole new version of the draft (e.g. the assistant's) as one undo step. */
@@ -342,6 +437,47 @@ export class PipelineEditorStore {
     return node.id;
   }
 
+  /**
+   * A sub-pipeline step (v6.7) that runs the saved pipeline `commandId`; its
+   * result fields follow the child's declared outputs.
+   */
+  addSubpipelineNode(commandId: string, position: { x: number; y: number }): string | undefined {
+    if (this.readOnly || commandId === this.graph.id) return undefined;
+    const child = this.subpipelines.get(commandId);
+    const name = child?.name ?? this.systems.find((item) => item.id === commandId)?.name ?? '';
+    const node = newSubpipelineNode(this.graph.nodes.length, { commandId, name }, child ? outputFields(child.outputs) : undefined);
+    node.x = Math.round(position.x);
+    node.y = Math.round(position.y);
+    this.commit({ ...this.graph, nodes: [...this.graph.nodes, node] });
+    this.selectedId = node.id;
+    return node.id;
+  }
+
+  /**
+   * Points a sub-pipeline step at another saved pipeline as one undo step:
+   * mappings of inputs the new child also declares are kept, the result
+   * fields follow its outputs and a name that was the old child's follows.
+   */
+  setSubpipeline(id: string, commandId: string): void {
+    const node = this.graph.nodes.find((item) => item.id === id);
+    const previous = node?.executor?.type === 'pipeline' ? node.executor : undefined;
+    if (this.readOnly || node === undefined || previous === undefined || commandId === this.graph.id) return;
+    const child = this.subpipelines.get(commandId);
+    const oldName = this.subpipelines.get(previous.launchCommandId)?.name;
+    const inputs = Object.fromEntries(
+      Object.entries(previous.inputs).filter(([name]) => child === undefined || child.inputs.some((input) => input.name === name)),
+    );
+    const fields = child ? outputFields(child.outputs) : [];
+    const rename = child !== undefined && (!node.profile.name.trim() || node.profile.name === oldName);
+    this.updateNode(id, {
+      executor: { type: 'pipeline', launchCommandId: commandId, inputs },
+      // A name imported from a file is resolved by this choice.
+      pipelineName: undefined,
+      resultFields: fields.length ? fields : undefined,
+      ...(rename ? { profile: { ...node.profile, name: child?.name ?? node.profile.name } } : {}),
+    });
+  }
+
   addFromProfile(profile: AgentProfile, position: { x: number; y: number }): string {
     const node = newGraphNode(this.graph.nodes.length);
     node.profile = { ...structuredClone(profile), id: crypto.randomUUID(), allowedSpawnProfileIds: [] };
@@ -371,7 +507,7 @@ export class PipelineEditorStore {
     // Native preflight described the old type; the structural checks run again now.
     this.preflight = this.preflight.filter((issue) => issue.nodeId !== id);
     this.validationShown = true;
-    this.issues = graphIssues(this.graph);
+    this.issues = this.structuralIssues();
     return true;
   }
 
@@ -469,6 +605,13 @@ export class PipelineEditorStore {
     this.commit(autoLayout(this.graph, heights));
   }
 
+  /** Declared outputs (v6.7): what the pipeline returns when it runs as a sub-pipeline. */
+  setOutputs(outputs: PipelineOutput[], live = false): void {
+    const next = { ...this.graph, outputs: outputs.length ? outputs : undefined };
+    if (live) this.setLive(next);
+    else this.commit(next);
+  }
+
   /** Declared run inputs (asked for when the pipeline starts). */
   setInputs(inputs: PipelineInput[], live = false): void {
     const next = { ...this.graph, inputs: inputs.length ? inputs : undefined };
@@ -504,7 +647,7 @@ export class PipelineEditorStore {
     this.errors = [];
     this.checkedNotice = '';
     this.checkedStamp = JSON.stringify(this.graph);
-    this.issues = graphIssues(this.graph);
+    this.issues = this.structuralIssues();
     this.preflight = [];
     if (this.issues.length) return false;
     this.preflight = [
@@ -532,7 +675,7 @@ export class PipelineEditorStore {
     if (this.readOnly) return false;
     this.validationShown = true;
     this.errors = [];
-    this.issues = graphIssues(this.graph);
+    this.issues = this.structuralIssues();
     if (this.issues.length) return false;
     this.busy = true;
     this.operation = run ? 'run' : 'save';
@@ -585,6 +728,9 @@ export class PipelineEditorStore {
    * means nothing on screen. Localizes first, then shows agent names instead.
    */
   describeIssue(message: string, translate: (value: string) => string = (value) => value): string {
+    // Issues with a parameter (v6.7) translate their template, then fill it in.
+    const templated = parseIssue(message);
+    if (templated) return translate(templated.template).replace('{0}', templated.parameter);
     const colon = message.indexOf(': ');
     const head = colon > 0 ? message.slice(0, colon) : '';
     const node = head ? this.graph.nodes.find((item) => item.id === head) : undefined;

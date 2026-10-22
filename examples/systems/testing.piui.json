@@ -1,0 +1,65 @@
+{
+  "format": "piui-system",
+  "version": 5,
+  "name": "Testing",
+  "orchestrator": "tester",
+  "inputs": [
+    {
+      "name": "changes",
+      "label": "Changes to test",
+      "kind": "long-text",
+      "required": true
+    },
+    {
+      "name": "focus",
+      "label": "Focus",
+      "kind": "text"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "passed",
+      "kind": "boolean",
+      "agent": "tester",
+      "field": "passed"
+    },
+    {
+      "name": "report",
+      "kind": "text",
+      "agent": "tester",
+      "field": "report"
+    }
+  ],
+  "agents": [
+    {
+      "id": "tester",
+      "profile": {
+        "name": "Tester",
+        "harness": "codex",
+        "model": "REPLACE_WITH_AVAILABLE_MODEL",
+        "permissionMode": "workspace-write",
+        "instructions": "Run the project's existing test commands and add focused tests for the described changes. Report failures with the exact command and output. Do not change production code.",
+        "toolPolicy": {
+          "rules": []
+        },
+        "serviceTier": "standard"
+      },
+      "task": "Test these changes:\n{{input.changes}}\n\nFocus: {{input.focus}}\n\nReturn a JSON object with passed (true only when every relevant test passes) and report (the commands you ran and what failed).",
+      "resultFields": [
+        {
+          "name": "passed",
+          "kind": "boolean"
+        },
+        {
+          "name": "report",
+          "kind": "text"
+        }
+      ],
+      "position": {
+        "x": 60,
+        "y": 100
+      }
+    }
+  ],
+  "connections": []
+}

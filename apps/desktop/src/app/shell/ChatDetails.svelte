@@ -14,11 +14,13 @@
   import ChatOrigin from '../worktrees/ChatOrigin.svelte';
   import PluginChatPanels from '../plugins/PluginChatPanels.svelte';
   import { useWorkspace } from './context';
+  import { fusionMembership } from '../fusion/fusionMembership.svelte';
 
   interface Props {
     snapshot: SessionSnapshot;
     onClose: () => void;
-    onDelete: () => void;
+    /** Absent when the chat cannot be deleted from the ordinary list (the Fusion sidekick in use; a retired one can). */
+    onDelete: (() => void) | undefined;
     /** Opens the review panel of this chat. */
     onReview?: () => void;
   }
@@ -28,6 +30,8 @@
   const session = $derived(snapshot.session);
   const workspace = $derived(store.catalog.workspaces.find((item) => item.id === session.workspaceId));
   const harness = $derived(store.catalog.harnesses.find((item) => item.kind === session.harness));
+  // Closing the sidekick in use goes through the broker and ends its round.
+  const currentSidekick = $derived(fusionMembership.isCurrentSidekick(session.id));
 
   const CAPABILITY_LABELS: Record<keyof HarnessCapabilities, string> = {
     prompt: 'Accepts messages',
@@ -96,12 +100,12 @@
 
     <section class="danger">
       {#if session.status !== 'closed'}
-        <Button size="sm" variant="ghost" onclick={() => void store.close(session.id)} disabled={store.sessionActionBusy}>{$t('Stop agent process')}</Button>
+        <Button size="sm" variant="ghost" onclick={() => void store.close(session.id)} disabled={store.sessionActionBusy}>{currentSidekick ? $t('Stop sidekick process and its round') : $t('Stop agent process')}</Button>
       {/if}
-      {#if !session.runId}
+      {#if !session.runId && onDelete}
         <Button size="sm" variant="danger" onclick={onDelete} disabled={store.safeMode || !['idle', 'closed', 'failed'].includes(session.status)}>{$t('Delete chat…')}</Button>
+        <p class="muted small">{$t('Deleting removes the chat from PiUI. The harness keeps its own history.')}</p>
       {/if}
-      <p class="muted small">{$t('Deleting removes the chat from PiUI. The harness keeps its own history.')}</p>
     </section>
   </div>
 </aside>

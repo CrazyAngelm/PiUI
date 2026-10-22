@@ -1052,3 +1052,239 @@ left to plugins.
 until a CLI fallback lands; the UI says so. Whole-document board writes are
 bounded by caps and will move with ADR-031. Card text written by one agent is
 untrusted input for another.
+
+## ADR-042 — Sub-pipelines: a saved pipeline as one step of another (orchestration v6.7)
+
+**Status:** Accepted 2026-09-28 (owner delegated decisions; reviewed with a
+second model). Implements the "sub-pipelines" node of ADR-030 ahead of the v5
+document, like the executors of v6.2 and v6.5.
+
+**Context:** people build a large pipeline once (for example "testing") and
+want to reuse it as one stage of another ("development"), with the inner
+pipeline's inputs as the stage's parameters and its results as the stage's
+output. Templates only copy nodes; `run-finished` automations chain runs
+without data; board and chat each guess a run's result from its last step.
+
+**Decision:**
+
+- A new step executor `{type: 'pipeline', launchCommandId, inputs}` names a
+  saved launch command of the same project. It is host work like a script or
+  plugin node: no profile, not a team member, never callable, never a router,
+  no input bindings. `inputs` maps each child input name to a literal value, a
+  parent run input or a direct dependency's result (a field of its data, or
+  its whole text).
+- Running the step starts an ordinary **child run** of that launch command
+  through the normal run path, with `RunTrigger::Pipeline {parentRunId,
+  parentStepId, launchCommandId, depth}`. The child freezes its own snapshot
+  of the definitions current at that moment (the parent does not embed it)
+  and keeps its own team, profiles, approvals, review loops and history. The
+  parent task is running with the child run id as its execution id.
+- A pipeline declares its results with the additive
+  `PipelineDefinition.outputs` (`name`, `kind`, `sourceStepId`, optional
+  `field`). When the child succeeds its outputs become the parent task's
+  result data, checked against the step's declared result fields like a
+  script's JSON; without declared outputs the parent records the child's last
+  succeeded step text. In the editor outputs are an "Output" block, not a
+  step.
+- Failure is certain and recorded on the parent task: `subpipeline-unavailable`,
+  `subpipeline-cycle`, `subpipeline-depth`, `subpipeline-input-invalid`,
+  `subpipeline-input-unavailable` (nothing started), `subpipeline-failed`,
+  `subpipeline-cancelled`, `subpipeline-output-unavailable`. Cancelling the
+  parent (run or task) cancels the child first. A restart keeps a dispatched
+  parent task running and it completes when the child ends; a leased but not
+  yet dispatched one becomes uncertain as today, and its possible orphan child
+  run stays an ordinary visible run.
+- Saves reject a reference to a launch command of another project or one that
+  does not exist, unknown or type-incompatible child input names, missing
+  required child inputs and any reference cycle through launch commands.
+  Admission re-checks reference, cycle and depth (at most
+  `MAX_SUBPIPELINE_DEPTH` = 4 nested runs) because the child can change after
+  the parent was saved. Deleting a referenced launch command is refused.
+- A child never uses pinned data; the parent step itself can be pinned, which
+  skips the whole child during debugging.
+- Authority: the reference is a static, user-authored save in a trusted
+  project; the child runs its own saved profiles, which the person already
+  could run directly (ADR-033). Model-caused delegation rules are unchanged
+  and do not apply. Admission requires a trusted, live project outside safe
+  mode, like every step.
+- System files v4 have no sub-pipeline executor or outputs: export refuses a
+  graph that uses them with a clear message instead of dropping them; import
+  is unchanged. A portable format is left to system-file v5.
+
+**Extension test:** a plugin cannot start runs or observe their ends, and the
+cancellation cascade and cycle checks sit in the coordinator; core owns it.
+
+**Consequences:** one more observer of committed generations (like the board
+engine). A later v5 may freeze the child definition at parent launch, add
+fan-out over a list and let board/chat prefer declared outputs.
+
+**Update (2026-09-28, save rules and board results):** save and delete
+refusals now return specific, additive command codes instead of `invalid` /
+`conflict`: `subpipeline-unknown-pipeline`, `subpipeline-input-mismatch`,
+`subpipeline-cycle`, `subpipeline-in-use` (deleting a referenced launch
+command, or its pipeline or team) and `subpipeline-breaks-parent`. Parents are
+protected when a child changes: saving a pipeline (also through a graph
+save) or retargeting a launch command is refused atomically when another
+saved pipeline's sub-pipeline step that fitted the old child would no longer
+fit the new one — its input mapping (same rules as a save) or a declared
+result field the child no longer outputs by name and kind (checked when the
+child declares outputs). A board run of a pipeline with declared outputs
+reports them as its result text (one output: its value; several:
+`name: value` lines), falling back to the last succeeded step.
+
+**Update (2026-09-29, system-file v5):** portable system files gain version 5
+(`contracts/system-file-v5.schema.json`); versions 1–4 import unchanged and
+every export writes version 5, so the export refusal above is gone. A
+sub-pipeline node is `{"type": "pipeline", "pipeline": "<launch command
+name>", "inputs": {…}}` with `step` sources naming a direct upstream agent by
+its local id, and top-level `outputs` use `agent` instead of `sourceStepId`.
+Names, not ids, cross projects: import resolves the name against the
+project's saved pipelines (exact, else a unique case-insensitive match) into
+the new draft; a missing or ambiguous name stays on the node as an unresolved
+reference that the editor reports and that blocks saving until the person
+picks a pipeline. Import never creates, saves or runs a pipeline.
+`pnpm system:check` reports names as resolved at import; the agent API
+`prepare` refuses such files. Pipeline-library templates may use v5;
+plugin-shipped templates stay v4 (the plugin package validator checks the v4
+schema). The editor warns before a save that `subpipeline-breaks-parent`
+would refuse, naming the affected saved pipelines, and a chat pipeline with
+declared outputs answers with them like a board run.
+
+## ADR-043 — Fusion: a lead session delegates to a persistent sidekick session
+
+**Status:** Accepted 2026-10-22 (phase Ф1 of `docs/PLAN_FUSION_2026-10-21_RU.md`;
+spike results in `docs/FUSION_EVIDENCE.md`). Specification: `docs/FUSION.md`.
+
+**Context:** Cognition's Fusion pairs a frontier lead with a cheaper sidekick
+that keeps its own persistent, cached context; they exchange only briefs,
+results and feedback, and the lead reviews and can take work back. The owner
+wants this in PiUI on the harnesses and subscriptions the person already uses.
+Open implementations show the mechanism (some block on every brief, some
+deliver reports asynchronously), but none provides PiUI's native-adapter
+integration, durable delivery, delegation authority checks and desktop
+approvals.
+
+**Decision:** a Fusion chat is an ordinary chat of the lead's harness plus a
+host tool `sidekick` (`brief`, `wait`, `status`, `message`, `steer`, `stop`,
+`diff`, `report`, `close`, `reset`). The host owns a sidekick broker
+(`src-tauri/src/fusion/`):
+
+- It creates and reopens one persistent sidekick session under a frozen,
+  host-private membership policy decided from the session id alone: no board,
+  no plugin MCP servers, no native subagents, fixed sidekick instructions.
+  The lead gets fixed lead instructions that never name the sidekick's
+  harness or model; the briefing policy travels in tool results instead.
+- Admission (`check_pair`) keeps the sidekick's authority at or below the
+  lead's: permission ranks read-only < workspace-write < full-access; native
+  modes of different harnesses are incomparable, so a cross-harness pair
+  needs explicit modes; a read-only lead is refused (its sidekick could not
+  write either). v1 roles: lead Claude Code or a fresh Codex thread; sidekick
+  Claude Code (full access or native), Codex (workspace-write only with the
+  Windows sandbox configured) or Pi (both roles full access).
+- A round is one admitted sidekick turn. Its report is the sidekick's last
+  assistant answer after the round's baseline (none: `no-answer`) as escaped,
+  untrusted text with a strict `STATUS:` first line, plus host facts in a
+  separate field: working-tree files from the session review (git), approvals
+  the host saw. Command and token receipts stay `unknown` until adapters
+  report typed receipts; nothing unknown is shown as measured.
+- One writer: a brief or message is refused while another round is open or
+  uncertain. Stop marks `stopping`, interrupts and waits for the turn's end;
+  without that proof the round becomes `uncertain` and blocks new work until
+  the person reconciles (reads the native history) or abandons it; abandon
+  releases admission only when the turn is proven over or the session was
+  closed (runtime gone) and retired, and a repeated stop of an uncertain
+  round is refused unless the turn's end is now proven. Prompt
+  admission and stop share a gate: a stop before the send cancels the round
+  unrun. A send that the harness accepted holds admission even if PiUI's
+  catalog update fails afterwards. An admitted round starts in a
+  broker-owned task, so a cancelled tool call never strands it. Reset passes
+  the same barrier and holds admission until the retired session is closed;
+  abandon and reconcile hold it too.
+- A tool call waits a bounded portion (default 240 s, at most 540 s; the
+  Claude Code adapter raises `MCP_TOOL_TIMEOUT` for the lead). A report that
+  no call collected gets one durable delivery record
+  (`queued → sending → sent | uncertain | withdrawn`) and reaches the idle
+  lead as one follow-up. A tool handoff is `tool/sending` until the answer
+  was written back, then `sent`; one the bridge rejected before consuming it
+  puts the report back in the queue, and a replay of that call takes it back;
+  an acknowledgement timeout or transport failure leaves the delivery
+  `uncertain` (never handed over twice). A
+  withdrawn report is never handed to a tool call, and no later write (a
+  reconcile included) replaces a withdrawal. A finished report's pending
+  record (`tool/queued` while a call waits, else `followUp/queued`) is part
+  of the write that finishes the round; folding keeps briefs with pending
+  deliveries; a deleted pair's journal is never written again.
+- Calls carry a bridge identity `{epoch, seq, callRef, opHash}`: a retry gets
+  the same answer, a reused call id with another operation is refused, and a
+  call recorded before a restart is never run again; evicted call records
+  leave compact tombstones for the pair's lifetime.
+- A restart marks every open round and every `sending` delivery `uncertain`;
+  they are reconciled, never replayed. Reconcile compares against the
+  baseline (block id and text hash, since reloaded histories may renumber
+  blocks) journaled before the send (a round without one stays unprovable);
+  a queued report is read back by its answer block and hash, or the newest
+  answer with that hash, or its delivery becomes `uncertain`. The journal is PiUI application data
+  under `fusion-v1/` (create-only generations, newest three kept), never in
+  the project folder; native histories stay the source of truth.
+- People approve the sidekick's actions in its own chat; the lead model never
+  does. The WebView cannot message or reconfigure a sidekick (ADR-044 guard);
+  it can stop, reset, reconcile and abandon through `fusion_command_v1`.
+
+PiUI adds no provider client and no agent loop and translates no history.
+
+**Extension test:** a plugin cannot create, drive or contain native sessions,
+route their approvals or check delegation authority; core owns the broker and
+the tool.
+
+**Consequences:** additive host-private bridge events (`sidekickRequest`,
+`sidekickResponse`, notices `unsupported-sidekick-tool[-resume]`); workspace
+v15 gains two notice codes (old UIs ignore them); `contracts/fusion-v1.ts` is
+the new, independently versioned WebView command. Hermes, ACP and Prime join
+only when their adapters enforce the whole role policy. Pipelines get
+sidekicks later (orchestration v6.8, system files v6) with a step completion
+rule that waits for outstanding rounds. A Codex lead resumed from a thread
+that was not started as a Fusion lead has no `sidekick` tool and shows a
+notice. Known v1 gap: if Codex cancels a pending dynamic tool call after the
+host already handed it a report, the host counts the report as delivered; the
+person sees it in the sidekick's chat and the lead can `wait` again.
+
+## ADR-044 — Run members follow their frozen snapshot; the WebView cannot steer them
+
+**Status:** Accepted 2026-10-21. ADR-043 is reserved for Fusion.
+
+**Context:** a live session started by a managed run carries its run, member
+and task ids. ADR-040 already says run sessions "stay closed to user
+messages", ADR-025 snapshots model, reasoning and permissions per profile and
+forbids widening delegated authority, and ADR-023 keeps the approval and
+recovery UI in the person's hands. The composer, composer inputs, delete and
+ordinary reopen refused run sessions, but `workspace_command_v15` `Send` and
+`SetModel`, `workspace_settings_v16` `Set` and `workspace_session_mode_v1`
+checked only workspace trust, so a WebView command could message a run member
+or change its model, reasoning, speed or mode mid-run. Manual intervention in
+run members is not an intended feature: a person changes a run by cancelling,
+retrying or reconciling it, or by editing the pipeline and starting another.
+
+**Decision:** one host guard (`authorize_ordinary_live_session`) refuses, with
+`NOT_SUPPORTED`, every WebView verb that would change what a run member does:
+
+- `Send` in every prompt mode (prompt, steer, follow-up);
+- `SetModel`, `workspace_settings_v16` `Set` and `workspace_session_mode_v1`;
+- `Respond` with `approve-session`, which would grant standing permission
+  beyond the frozen profile.
+
+A person keeps control that only narrows or observes: `Interrupt`, `Respond`
+with approve-once, deny or cancel (a run member's approvals stay answerable),
+`CloseSession`, `RenameSession` (a display title, not policy), settings `Get`
+and every read path. The chat view shows a notice and a link to the run
+instead of a composer for a run member, and its approval card hides "Allow for
+this chat". The scheduler's own delivery (`deliver_managed_message`) calls the
+host directly and is not affected.
+
+Any future session family with a frozen policy (for example a Fusion sidekick)
+uses the same rule: the WebView may stop it and answer its requests once, and
+everything that would steer or reconfigure it goes through its owner.
+
+**Consequences:** no contract or IPC version changes; a refused command
+returns the existing `NOT_SUPPORTED` error. Host tests prove the refusals,
+that the member's native model, mode and pending approval are unchanged, and
+that an ordinary chat keeps every verb.

@@ -4,10 +4,13 @@
 const MAX_FRAME_BYTES = 32 * 1024 * 1024;
 const METHODS = new Set([
   "initialize", "snapshot", "prompt", "interrupt", "models", "resources", "catalogModels",
-  "setModel", "respond", "rename", "dispose", "coordinatorResponse", "boardResponse",
+  "setModel", "respond", "rename", "dispose", "coordinatorResponse", "boardResponse", "sidekickResponse",
   "openSession", "sessionRequest", "composerCapabilities", "compact", "setMode", "composerCatalog",
 ]);
 const MAX_DETAILS_BYTES = 4 * 1024;
+// Upper bound for an adapter to confirm the native write of a sidekick result.
+const SIDEKICK_DELIVERY_TIMEOUT_MS = 30_000;
+const SIDEKICK_DELIVERY_MESSAGE = "The sidekick result could not be written to the agent.";
 
 const BOARD_STATUSES = new Set(["backlog", "todo", "inProgress", "inReview", "blocked", "done", "cancelled"]);
 const BOARD_PRIORITIES = new Set(["urgent", "high", "normal", "low"]);
@@ -62,6 +65,72 @@ export function validateBoardOperation(operation) {
   return Object.keys(required).every((key) => Object.hasOwn(operation, key));
 }
 
+const SIDEKICK_LIMITS = Object.freeze({
+  title: 200, fieldBytes: 32 * 1024, items: 40, itemBytes: 4 * 1024, messageBytes: 32 * 1024,
+  noteBytes: 4 * 1024, reason: 2000, path: 1024, page: 1000, waitSeconds: 540,
+});
+const BRIEF_OUTCOMES = new Set(["accepted", "rejected", "superseded"]);
+
+// Strict `SidekickToolOperationV1` check (contracts/fusion-v1.ts): exact key
+// sets, types, enum values and size caps. The host parses it again.
+export function validateSidekickOperation(operation) {
+  if (!operation || typeof operation !== "object" || Array.isArray(operation) || typeof operation.op !== "string") return false;
+  const bytes = (value) => Buffer.byteLength(value, "utf8");
+  const filled = (value, maxBytes) => typeof value === "string" && value.trim().length > 0 && bytes(value) <= maxBytes;
+  const id = (value) => typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value);
+  const list = (value, min = 0) => Array.isArray(value) && value.length >= min && value.length <= SIDEKICK_LIMITS.items
+    && value.every((item) => filled(item, SIDEKICK_LIMITS.itemBytes));
+  const field = (value) => filled(value, SIDEKICK_LIMITS.fieldBytes);
+  const flag = (value) => typeof value === "boolean";
+  const waitSeconds = (value) => Number.isSafeInteger(value) && value >= 0 && value <= SIDEKICK_LIMITS.waitSeconds;
+  const page = (value) => Number.isSafeInteger(value) && value >= 1 && value <= SIDEKICK_LIMITS.page;
+  const shapes = {
+    brief: {
+      required: { title: (value) => filled(value, SIDEKICK_LIMITS.title * 4) && value.length <= SIDEKICK_LIMITS.title, goal: field, doneWhen: (value) => list(value, 1) },
+      optional: { context: field, scope: list, leaveAlone: list, constraints: list, verify: list, stopIf: list, wait: flag, waitSeconds },
+    },
+    wait: { optional: { roundId: id, waitSeconds } },
+    status: {},
+    message: { required: { briefId: id, text: (value) => filled(value, SIDEKICK_LIMITS.messageBytes) }, optional: { wait: flag, waitSeconds } },
+    steer: { required: { roundId: id, text: (value) => filled(value, SIDEKICK_LIMITS.messageBytes) } },
+    stop: { required: { roundId: id }, optional: { takeOver: flag } },
+    diff: {
+      optional: {
+        paths: (value) => Array.isArray(value) && value.length <= SIDEKICK_LIMITS.items && value.every((item) => filled(item, SIDEKICK_LIMITS.path)),
+        page,
+        fingerprint: (value) => typeof value === "string" && /^[A-Za-z0-9]{1,128}$/.test(value),
+      },
+    },
+    report: { required: { roundId: id }, optional: { page } },
+    close: { required: { briefId: id, outcome: (value) => BRIEF_OUTCOMES.has(value) }, optional: { note: (value) => typeof value === "string" && bytes(value) <= SIDEKICK_LIMITS.noteBytes } },
+    reset: { optional: { reason: (value) => typeof value === "string" && value.length <= SIDEKICK_LIMITS.reason } },
+  };
+  if (!Object.hasOwn(shapes, operation.op)) return false;
+  const required = shapes[operation.op].required ?? {};
+  const optional = shapes[operation.op].optional ?? {};
+  for (const key of Object.keys(operation)) {
+    if (key === "op") continue;
+    const check = Object.hasOwn(required, key) ? required[key] : Object.hasOwn(optional, key) ? optional[key] : undefined;
+    if (!check || !check(operation[key])) return false;
+  }
+  return Object.keys(required).every((key) => Object.hasOwn(operation, key));
+}
+
+// Canonical JSON (sorted keys) so equal operations hash equally.
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+// Bridge sources are concatenated with an adapter, so builtins load lazily.
+export async function sidekickOperationHash(operation) {
+  const { createHash } = await import("node:crypto");
+  return createHash("sha256").update(canonicalJson(operation)).digest("hex");
+}
+
 function safeFailure(id, code, message, details) {
   return { id, ok: false, error: { code, message, ...(details ? { details } : {}) } };
 }
@@ -97,11 +166,18 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
   let accepting = true;
   let disposing;
   const inFlight = new Set();
+  // Request ids are `<kind>-<epoch>-<sequence>`. The epoch is random per bridge
+  // process: the host derives durable deduplication keys from the id, and a
+  // bare sequence restarts at 1 after a bridge restart of the same session.
+  const epoch = globalThis.crypto.randomUUID().replaceAll("-", "").slice(0, 12);
   const coordinatorPending = new Map();
   let coordinatorSequence = 0;
 
   const boardPending = new Map();
   let boardSequence = 0;
+
+  const sidekickPending = new Map();
+  let sidekickSequence = 0;
 
   const rejectPending = (pendingMap, code, message) => {
     const current = [...pendingMap.values()];
@@ -116,6 +192,7 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
   const rejectCoordinatorPending = (code = "coordinator-cancelled", message = "The coordinator request was cancelled.") => {
     rejectPending(coordinatorPending, code, message);
     rejectPending(boardPending, "board-cancelled", "The board request was cancelled.");
+    rejectPending(sidekickPending, "sidekick-cancelled", "The sidekick request was cancelled. Collect the result with wait.");
   };
 
   const validateCoordinatorOperation = (operation) => {
@@ -132,7 +209,7 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
   const coordinatorRequest = (operation, metadata = {}) => {
     if (!initializeConfig?.coordination) return Promise.reject(Object.assign(new Error("unsupported"), { bridgeCode: "coordinator-disabled", safeMessage: "Coordinator tools are not enabled for this session." }));
     if (!validateCoordinatorOperation(operation)) return Promise.reject(Object.assign(new Error("invalid"), { bridgeCode: "invalid-coordinator-operation", safeMessage: "The coordinator operation is invalid." }));
-    const requestId = `piui-coordinator-${++coordinatorSequence}`;
+    const requestId = `piui-coordinator-${epoch}-${++coordinatorSequence}`;
     return new Promise((resolve, reject) => {
       const slot = { resolve, reject, toolCallId: metadata?.toolCallId };
       coordinatorPending.set(requestId, slot);
@@ -150,7 +227,7 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
     const enabled = Array.isArray(initializeConfig?.hostTools) && initializeConfig.hostTools.includes("board");
     if (!enabled) return Promise.reject(Object.assign(new Error("unsupported"), { bridgeCode: "board-disabled", safeMessage: "Board tools are not enabled for this chat." }));
     if (!validateBoardOperation(operation)) return Promise.reject(Object.assign(new Error("invalid"), { bridgeCode: "invalid-board-operation", safeMessage: "The board operation is invalid. Check `op` and its fields." }));
-    const requestId = `piui-board-${++boardSequence}`;
+    const requestId = `piui-board-${epoch}-${++boardSequence}`;
     return new Promise((resolve, reject) => {
       boardPending.set(requestId, { resolve, reject });
       if (metadata?.signal && typeof metadata.signal.addEventListener === "function") {
@@ -162,7 +239,43 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
     });
   };
 
+  // Fusion lead tool (`hostTools: ["sidekick"]`, ADR-043). The host keys
+  // retries by `identity`; a cancelled call never cancels the sidekick's work.
+  const sidekickRequest = (operation, metadata = {}) => {
+    const enabled = Array.isArray(initializeConfig?.hostTools) && initializeConfig.hostTools.includes("sidekick");
+    if (!enabled) return Promise.reject(Object.assign(new Error("unsupported"), { bridgeCode: "sidekick-disabled", safeMessage: "The sidekick tool is not enabled for this chat." }));
+    if (!validateSidekickOperation(operation)) return Promise.reject(Object.assign(new Error("invalid"), { bridgeCode: "invalid-sidekick-operation", safeMessage: "The sidekick operation is invalid. Check `op` and its fields." }));
+    const seq = ++sidekickSequence;
+    const requestId = `piui-sidekick-${epoch}-${seq}`;
+    const callRef = typeof metadata?.toolCallId === "string" && metadata.toolCallId.length > 0 && metadata.toolCallId.length <= 128
+      ? metadata.toolCallId : undefined;
+    const hashed = sidekickOperationHash(operation);
+    return new Promise((resolve, reject) => {
+      const cancelled = () => Object.assign(new Error("cancelled"), { bridgeCode: "sidekick-cancelled", safeMessage: "The sidekick request was cancelled. Collect the result with wait." });
+      // A caller that is already gone never reaches the host.
+      if (metadata?.signal?.aborted === true) { reject(cancelled()); return; }
+      sidekickPending.set(requestId, { resolve, reject, deliver: typeof metadata?.deliver === "function" ? metadata.deliver : undefined });
+      if (metadata?.signal && typeof metadata.signal.addEventListener === "function") {
+        metadata.signal.addEventListener("abort", () => {
+          if (sidekickPending.delete(requestId)) reject(cancelled());
+        }, { once: true });
+      }
+      hashed.then((opHash) => {
+        if (!sidekickPending.has(requestId)) return;
+        emit({ type: "sidekickRequest", requestId, operation, identity: { epoch, seq, ...(callRef ? { callRef } : {}), opHash } });
+      }, () => {
+        if (sidekickPending.delete(requestId)) reject(Object.assign(new Error("hash"), { bridgeCode: "sidekick-failed", safeMessage: "The sidekick tool could not complete this operation." }));
+      });
+    });
+  };
+
   let initializeConfig;
+
+  // A reply after the output closed (dispose, EOF) must not become an
+  // unhandled rejection of the request task.
+  const writeFrameQuietly = (value) => {
+    try { writeFrame(output, value); } catch { /* the host is gone */ }
+  };
 
   const emit = (event) => {
     if (event && typeof event === "object") {
@@ -207,7 +320,7 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
       }
       initialized = true;
       initializeConfig = params;
-      initializePromise = Promise.resolve().then(() => factory(params, emit, coordinatorRequest, boardRequest));
+      initializePromise = Promise.resolve().then(() => factory(params, emit, coordinatorRequest, boardRequest, sidekickRequest));
       try {
         adapter = await initializePromise;
         if (!adapter || typeof adapter !== "object") throw new TypeError("invalid adapter");
@@ -268,6 +381,44 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
       // A board refusal (`ok:false`) is still a result the agent reads.
       slot.resolve(result);
       writeFrame(output, { id, ok: true, result: null });
+      return;
+    }
+
+    if (request.method === "sidekickResponse") {
+      const requestId = typeof params.requestId === "string" ? params.requestId : "";
+      const slot = sidekickPending.get(requestId);
+      if (!slot) {
+        writeFrame(output, safeFailure(id, "stale-sidekick-request", "The sidekick request is invalid or no longer pending."));
+        return;
+      }
+      const result = params.result;
+      const parameterKeys = Object.keys(params).sort().join(",");
+      if (parameterKeys !== "requestId,result" || !result || typeof result !== "object" || Array.isArray(result) || typeof result.ok !== "boolean") {
+        writeFrame(output, safeFailure(id, "invalid-sidekick-response", "The sidekick response is invalid."));
+        return;
+      }
+      sidekickPending.delete(requestId);
+      // An adapter that supplies `deliver` writes the result to its native
+      // channel there; the host is acknowledged only after that write is
+      // confirmed. A failed or unconfirmed write is a distinct error, so the
+      // host keeps the report for redelivery instead of marking it sent.
+      if (slot.deliver) {
+        let timer;
+        try {
+          await Promise.race([
+            Promise.resolve().then(() => slot.deliver(result)),
+            new Promise((_, expire) => { timer = setTimeout(() => expire(new Error("unconfirmed")), SIDEKICK_DELIVERY_TIMEOUT_MS); timer.unref?.(); }),
+          ]);
+        } catch {
+          clearTimeout(timer);
+          slot.reject(Object.assign(new Error("sidekick-delivery-failed"), { bridgeCode: "sidekick-delivery-failed", safeMessage: SIDEKICK_DELIVERY_MESSAGE }));
+          writeFrameQuietly(safeFailure(id, "sidekick-delivery-failed", SIDEKICK_DELIVERY_MESSAGE));
+          return;
+        }
+        clearTimeout(timer);
+      }
+      slot.resolve(result);
+      writeFrameQuietly({ id, ok: true, result: null });
       return;
     }
 

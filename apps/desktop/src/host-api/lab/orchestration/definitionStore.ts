@@ -13,8 +13,16 @@ import { resolveRunInputs, type RunInputResolution } from '../../runInputs';
 import { calendarInitialDue, calendarValid } from '../../scheduleCalendar';
 import {
   definitionIssue, launchCommandValid, normalizePipeline, normalizeProfile, normalizeTeam, pipelineValid, profileValid,
-  spawnSubset, teamValid,
+  spawnSubset, subpipelineCycle, subpipelineParentIssue, subpipelineParents, subpipelineSaveIssue, teamValid,
 } from './definitionRules';
+import { parentBreakage, referencedCommands, type SubpipelineSaveErrorCode } from '../../subpipelines';
+
+/** `values` with `value` stored in place of the definition with its id (or added). */
+function replaced<T extends { readonly id: string }>(values: readonly StoredDefinition<T>[], value: T): StoredDefinition<T>[] {
+  const index = values.findIndex((stored) => stored.value.id === value.id);
+  const entry = { revision: index >= 0 ? (values[index]?.revision ?? 0) : 0, value };
+  return index >= 0 ? values.map((stored, position) => (position === index ? entry : stored)) : [...values, entry];
+}
 
 /**
  * Revision-checked definition storage (`save_definition`, `delete_definition`,
@@ -23,9 +31,22 @@ import {
 export interface DefinitionKind<T extends { readonly id: string; readonly name: string }> {
   values(workspace: LabOrchestrationWorkspace): StoredDefinition<T>[];
   valid(value: T, workspace: LabOrchestrationWorkspace): boolean;
+  /** A specific refusal of a valid value (v6.7 sub-pipeline codes), checked after `valid`. */
+  refusal?(value: T, workspace: LabOrchestrationWorkspace): SubpipelineSaveErrorCode | undefined;
   canDelete(workspace: LabOrchestrationWorkspace, id: string): boolean;
+  /** A specific refusal of a delete (v6.7 `subpipeline-in-use`), checked before `canDelete`. */
+  deleteRefusal?(workspace: LabOrchestrationWorkspace, id: string): SubpipelineSaveErrorCode | undefined;
   normalize(value: T): T;
   afterSave?(workspace: LabOrchestrationWorkspace, previous: StoredDefinition<T> | undefined, saved: StoredDefinition<T>): void;
+}
+
+/**
+ * `check_delete` (v6.7): a launch command a saved sub-pipeline step runs, or
+ * the pipeline or team of one, is `subpipeline-in-use`.
+ */
+function inUse(workspace: LabOrchestrationWorkspace, runsIt: (command: LaunchCommandReference) => boolean): SubpipelineSaveErrorCode | undefined {
+  const referenced = new Set(workspace.pipelines.flatMap((pipeline) => referencedCommands(pipeline.value)));
+  return workspace.launchCommands.some((command) => runsIt(command.value) && referenced.has(command.value.id)) ? 'subpipeline-in-use' : undefined;
 }
 
 export const PROFILES: DefinitionKind<AgentProfile> = {
@@ -40,13 +61,20 @@ export const TEAMS: DefinitionKind<TeamDefinition> = {
   values: (workspace) => workspace.teams,
   valid: teamValid,
   canDelete: (workspace, id) => !workspace.launchCommands.some((command) => command.value.teamId === id),
+  deleteRefusal: (workspace, id) => inUse(workspace, (command) => command.teamId === id),
   normalize: normalizeTeam,
 };
 
 export const PIPELINES: DefinitionKind<PipelineDefinition> = {
   values: (workspace) => workspace.pipelines,
-  valid: pipelineValid,
+  valid: (value) => pipelineValid(value),
+  // v6.7: sub-pipeline references resolve in this project without a cycle,
+  // and saved pipelines that run this one keep working.
+  refusal: (value, workspace) =>
+    subpipelineSaveIssue(value, { pipelines: replaced(workspace.pipelines, value), launchCommands: workspace.launchCommands })
+    ?? subpipelineParentIssue(value, workspace),
   canDelete: (workspace, id) => !workspace.launchCommands.some((command) => command.value.pipelineId === id),
+  deleteRefusal: (workspace, id) => inUse(workspace, (command) => command.pipelineId === id),
   normalize: normalizePipeline,
 };
 
@@ -57,10 +85,27 @@ export function eventSource(trigger: ScheduleTrigger): string | undefined {
 
 export const LAUNCH_COMMANDS: DefinitionKind<LaunchCommandReference> = {
   values: (workspace) => workspace.launchCommands,
-  valid: launchCommandValid,
+  valid: (value, workspace) => launchCommandValid(value, workspace),
+  // v6.7: no sub-pipeline loop, and parents that run this command keep
+  // working when it starts a different pipeline.
+  refusal: (value, workspace) => {
+    const launchCommands = replaced(workspace.launchCommands, value);
+    if (subpipelineCycle({ pipelines: workspace.pipelines, launchCommands })) return 'subpipeline-cycle';
+    const before = workspace.launchCommands.find((stored) => stored.value.id === value.id)?.value;
+    if (before === undefined || before.pipelineId === value.pipelineId) return undefined;
+    const shape = (id: string) => {
+      const pipeline = workspace.pipelines.find((stored) => stored.value.id === id)?.value;
+      return pipeline === undefined ? undefined : { inputs: pipeline.inputs ?? [], outputs: pipeline.outputs ?? [] };
+    };
+    const next = shape(value.pipelineId);
+    if (next === undefined) return undefined;
+    return parentBreakage([value.id], next, subpipelineParents(workspace), shape(before.pipelineId)).length > 0 ? 'subpipeline-breaks-parent' : undefined;
+  },
   // Automations that start this pipeline or wait for it keep it.
   canDelete: (workspace, id) =>
     !workspace.schedules.some((schedule) => schedule.value.launchCommandId === id || eventSource(schedule.value.trigger) === id),
+  // Sub-pipeline steps that run it keep it too (v6.7).
+  deleteRefusal: (workspace, id) => inUse(workspace, (command) => command.id === id),
   normalize: (value) => value,
   afterSave: (workspace, previous, saved) => {
     if (previous === undefined) return;
@@ -109,6 +154,8 @@ export function saveDefinition<T extends { readonly id: string; readonly name: s
 ): StoredDefinition<T> {
   const value = kind.normalize(request.value);
   if (!kind.valid(value, workspace)) throw orchestrationFailure('invalid');
+  const refused = kind.refusal?.(value, workspace);
+  if (refused !== undefined) throw orchestrationFailure(refused);
   const values = kind.values(workspace);
   const index = values.findIndex((stored) => stored.value.id === value.id);
   const previous = index >= 0 ? values[index] : undefined;
@@ -134,6 +181,8 @@ export function deleteDefinition<T extends { readonly id: string; readonly name:
   request: DeleteDefinitionRequest,
 ): void {
   if (workspace === undefined) throw orchestrationFailure('not-found');
+  const refused = kind.deleteRefusal?.(workspace, request.id);
+  if (refused !== undefined) throw orchestrationFailure(refused);
   if (!kind.canDelete(workspace, request.id)) throw orchestrationFailure('conflict');
   const values = kind.values(workspace);
   const index = values.findIndex((stored) => stored.value.id === request.id);
@@ -194,6 +243,12 @@ export function saveGraph(workspace: LabOrchestrationWorkspace, request: SaveGra
   putGraphDefinition(PIPELINES, draft, request.pipeline);
   putGraphDefinition(LAUNCH_COMMANDS, draft, request.command);
   if (profiles.some((profile) => !profileValid(normalizeProfile(profile), draft))) throw orchestrationFailure('invalid');
+  // v6.7: sub-pipeline references resolve in this project without a cycle,
+  // and saved pipelines that run this one keep working.
+  const pipeline = normalizePipeline(request.pipeline.value);
+  const refused = subpipelineSaveIssue(pipeline, draft)
+    ?? subpipelineParentIssue(pipeline, { pipelines: workspace.pipelines, launchCommands: draft.launchCommands });
+  if (refused !== undefined) throw orchestrationFailure(refused);
   workspace.profiles = draft.profiles;
   workspace.teams = draft.teams;
   workspace.pipelines = draft.pipelines;
