@@ -15,8 +15,8 @@ const store = {
   respond: async () => true,
 } as unknown as WorkspaceStore;
 
-function html(approval: WorkspaceApproval): string {
-  return render(ApprovalCard, { props: { approval, session }, context: new Map([[WORKSPACE_CONTEXT, store]]) }).body;
+function html(approval: WorkspaceApproval, owner: WorkspaceSession = session): string {
+  return render(ApprovalCard, { props: { approval, session: owner }, context: new Map([[WORKSPACE_CONTEXT, store]]) }).body;
 }
 
 const form: WorkspaceApproval = {
@@ -74,5 +74,20 @@ describe('ApprovalCard MCP form requests', () => {
     expect(body).toMatch(/>\s*Allow once\s*</);
     expect(body).toMatch(/>\s*Deny\s*</);
     expect(body).not.toContain('Requested values');
+  });
+});
+
+describe('ApprovalCard for a pipeline run agent', () => {
+  const command: WorkspaceApproval = {
+    id: 'approval-2', sessionId: 'session-1', kind: 'command', title: 'Run tests', description: 'Command: npm test',
+    decisions: ['approve-once', 'approve-session', 'deny'],
+  };
+
+  it('answers a run agent once at a time, never for the rest of the session', () => {
+    const member = html(command, { ...session, runId: 'run-1' });
+    expect(member).toMatch(/>\s*Allow once\s*</);
+    expect(member).toMatch(/>\s*Deny\s*</);
+    expect(member).not.toContain('Allow for this chat');
+    expect(html(command)).toContain('Allow for this chat');
   });
 });

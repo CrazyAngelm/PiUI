@@ -1149,3 +1149,44 @@ plugin-shipped templates stay v4 (the plugin package validator checks the v4
 schema). The editor warns before a save that `subpipeline-breaks-parent`
 would refuse, naming the affected saved pipelines, and a chat pipeline with
 declared outputs answers with them like a board run.
+
+## ADR-044 — Run members follow their frozen snapshot; the WebView cannot steer them
+
+**Status:** Accepted 2026-10-21. ADR-043 is reserved for Fusion.
+
+**Context:** a live session started by a managed run carries its run, member
+and task ids. ADR-040 already says run sessions "stay closed to user
+messages", ADR-025 snapshots model, reasoning and permissions per profile and
+forbids widening delegated authority, and ADR-023 keeps the approval and
+recovery UI in the person's hands. The composer, composer inputs, delete and
+ordinary reopen refused run sessions, but `workspace_command_v15` `Send` and
+`SetModel`, `workspace_settings_v16` `Set` and `workspace_session_mode_v1`
+checked only workspace trust, so a WebView command could message a run member
+or change its model, reasoning, speed or mode mid-run. Manual intervention in
+run members is not an intended feature: a person changes a run by cancelling,
+retrying or reconciling it, or by editing the pipeline and starting another.
+
+**Decision:** one host guard (`authorize_ordinary_live_session`) refuses, with
+`NOT_SUPPORTED`, every WebView verb that would change what a run member does:
+
+- `Send` in every prompt mode (prompt, steer, follow-up);
+- `SetModel`, `workspace_settings_v16` `Set` and `workspace_session_mode_v1`;
+- `Respond` with `approve-session`, which would grant standing permission
+  beyond the frozen profile.
+
+A person keeps control that only narrows or observes: `Interrupt`, `Respond`
+with approve-once, deny or cancel (a run member's approvals stay answerable),
+`CloseSession`, `RenameSession` (a display title, not policy), settings `Get`
+and every read path. The chat view shows a notice and a link to the run
+instead of a composer for a run member, and its approval card hides "Allow for
+this chat". The scheduler's own delivery (`deliver_managed_message`) calls the
+host directly and is not affected.
+
+Any future session family with a frozen policy (for example a Fusion sidekick)
+uses the same rule: the WebView may stop it and answer its requests once, and
+everything that would steer or reconfigure it goes through its owner.
+
+**Consequences:** no contract or IPC version changes; a refused command
+returns the existing `NOT_SUPPORTED` error. Host tests prove the refusals,
+that the member's native model, mode and pending approval are unchanged, and
+that an ordinary chat keeps every verb.

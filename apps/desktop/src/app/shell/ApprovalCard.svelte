@@ -34,6 +34,9 @@
   const error = $derived(store.approvalErrors[key] ?? '');
   // Native choice list (e.g. Pi `select` dialogs); absent for other requests.
   const options = $derived(approval.options ?? []);
+  // A run member keeps its run's frozen permissions: it is answered once at a
+  // time, never approved for the rest of the session (ADR-044).
+  const decisions = $derived(session.runId ? approval.decisions.filter((decision) => decision !== 'approve-session') : approval.decisions);
   // An editor dialog may arrive with prepared text (additive v15 `prefill`).
   let input = $state(untrack(() => approval.prefill ?? ''));
   // Native form request (a Codex MCP elicitation); absent for other requests.
@@ -134,7 +137,7 @@
   {#if error}<p class="approval__error" role="alert">{error}</p>{/if}
 
   <footer>
-    {#each approval.decisions as decision (decision)}
+    {#each decisions as decision (decision)}
       {#if !(options.length && !form && decision === 'approve-once')}
         <Button
           size="sm"
