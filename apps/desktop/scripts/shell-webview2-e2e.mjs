@@ -144,6 +144,14 @@ export async function runShellWebview2Proof({
   if (mode === 'safe') {
     const phase = performance.now();
     await waitForShell();
+    // The normal run switches back to English just before the harness ends its
+    // process, and WebView2 writes localStorage to disk lazily, so that last
+    // write can be lost. Language is not under test here.
+    if (await evaluate(`document.documentElement.lang !== 'en'`)) {
+      await evaluate(`localStorage.setItem('piui.language', 'en')`);
+      await reload();
+      await waitFor(`document.documentElement.lang === 'en'`, 'English for the safe-mode proof');
+    }
     await click('New chat', sidebar);
     await waitFor(`document.querySelector('#home-title')`, 'Home in safe mode');
     const safe = await evaluate(`(() => ({
