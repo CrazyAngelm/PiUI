@@ -1320,6 +1320,12 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
   const handleMcp = async (request, response) => {
     if (request.headers.authorization !== `Bearer ${mcpToken}`) { response.writeHead(403).end(); return; }
     if (request.method !== "POST") { response.writeHead(405, { allow: "POST" }).end(); return; }
+    // A connection that closes before the reply is written (client timeout,
+    // interrupt, restart) can never receive the host's answer. Aborting
+    // retires the pending host request so a late response fails and the host
+    // keeps the result for redelivery instead of marking it sent.
+    const disconnected = new AbortController();
+    response.once("close", () => { if (!response.writableFinished) disconnected.abort(); });
     let message;
     try {
       const chunks = [];
@@ -1350,9 +1356,15 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
     else if (message.method === "tools/list") reply({ result: { tools: [...(coordination ? [WORKSPACE_TOOL] : []), ...(boardEnabled ? [BOARD_MCP_TOOL] : []), ...(sidekickEnabled ? [SIDEKICK_MCP_TOOL] : [])] } });
     else if (message.method === "tools/call" && message.params?.name === "sidekick" && sidekickEnabled) {
       // The host keys retries by the native tool use id (Fusion spike S10).
+      // Without it no call reference is made up: a JSON-RPC id repeats across
+      // MCP connections and restarts, so the host falls back to the request's
+      // own {epoch, seq} identity, which is unique per bridge process.
       const toolUseId = message.params?._meta?.["claudecode/toolUseId"];
       try {
-        const result = await sidekickRequest(message.params.arguments, { toolCallId: typeof toolUseId === "string" ? toolUseId : `mcp-${String(message.id)}` });
+        const result = await sidekickRequest(message.params.arguments, {
+          ...(typeof toolUseId === "string" && toolUseId ? { toolCallId: toolUseId } : {}),
+          signal: disconnected.signal,
+        });
         const text = typeof result?.text === "string" ? result.text : JSON.stringify(result);
         reply({ result: { ...(result?.ok === false ? { isError: true } : {}), content: [{ type: "text", text }] } });
       } catch (error) {

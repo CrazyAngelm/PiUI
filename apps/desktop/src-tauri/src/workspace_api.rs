@@ -590,6 +590,33 @@ pub(crate) trait FusionSessionHooks: Send + Sync {
         lead_session_id: String,
         round_id: String,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+    /// The answer handing over a report reached the lead.
+    fn delivery_sent(
+        &self,
+        _lead_session_id: String,
+        _round_id: String,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        Box::pin(async {})
+    }
+    /// A sidekick the broker still uses; a retired one may be deleted.
+    fn is_current_sidekick(&self, session_id: &str) -> bool {
+        self.is_sidekick(session_id)
+    }
+    /// Whether the person may delete this chat now (a lead: no sidekick
+    /// round of its pair is open or uncertain).
+    fn deletable(
+        &self,
+        _session_id: String,
+    ) -> Pin<Box<dyn Future<Output = bool> + Send + 'static>> {
+        Box::pin(async { true })
+    }
+    /// The chat was deleted: a lead takes its Fusion pair with it.
+    fn session_deleted(
+        &self,
+        _session_id: String,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        Box::pin(async {})
+    }
 }
 
 /// Board state of one live session.
@@ -2010,11 +2037,23 @@ impl WorkspaceHost {
             .prompt(text, mode)
             .await
             .map_err(|_| WorkspaceError::runtime())?;
-        *lock(&state.materialized)? = Some(true);
-        self.update_record(session_id, |record| {
-            record.materialized = Some(true);
-            record.updated_at = now_string();
-        })
+        // The harness accepted the prompt: the send happened. The catalog
+        // flag below is rebuildable metadata, so failing to write it must not
+        // report the accepted prompt as unsent (a caller would send it again,
+        // or the Fusion broker would admit a second writer).
+        if let Ok(mut materialized) = state.materialized.lock() {
+            *materialized = Some(true);
+        }
+        if self
+            .update_record(session_id, |record| {
+                record.materialized = Some(true);
+                record.updated_at = now_string();
+            })
+            .is_err()
+        {
+            eprintln!("event=workspace_send_metadata_failed");
+        }
+        Ok(())
     }
 
     pub(crate) async fn interrupt(&self, session_id: &str) -> Result<(), WorkspaceError> {
@@ -3026,7 +3065,7 @@ pub async fn harness_models_v18(
     })
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceLifecycleResult {
     protocol: u8,
@@ -3036,6 +3075,14 @@ pub struct WorkspaceLifecycleResult {
 #[tauri::command]
 pub async fn workspace_lifecycle_v17(
     state: State<'_, HostState>,
+    command: WorkspaceLifecycleCommand,
+) -> Result<WorkspaceLifecycleResult, WorkspaceError> {
+    delete_session_command(state.inner(), command).await
+}
+
+/// Body of `workspace_lifecycle_v17`, independent of the Tauri state handle.
+async fn delete_session_command(
+    state: &HostState,
     command: WorkspaceLifecycleCommand,
 ) -> Result<WorkspaceLifecycleResult, WorkspaceError> {
     if state.safe_mode {
@@ -3048,6 +3095,17 @@ pub async fn workspace_lifecycle_v17(
     // Run history remains owned by the coordinator, not the ordinary chat list.
     if record.run_id.is_some() {
         return Err(WorkspaceError::not_supported());
+    }
+    // The Fusion broker keeps a sidekick as its current session until it
+    // retires it; deleting the catalog entry behind its back would leave the
+    // broker bound to a missing session. A retired sidekick may go. A lead
+    // goes only while no sidekick round of its pair is open or uncertain,
+    // and takes its pair with it (ADR-043).
+    let fusion = state.workspace.fusion_hooks();
+    if let Some(hooks) = &fusion
+        && (hooks.is_current_sidekick(&session_id) || !hooks.deletable(session_id.clone()).await)
+    {
+        return Err(WorkspaceError::conflict());
     }
     // A session that is still starting outside the gate is not idle.
     if state.workspace.pending_start(&session_id).is_some() {
@@ -3072,6 +3130,9 @@ pub async fn workspace_lifecycle_v17(
             Ok(())
         })
         .map_err(|_| WorkspaceError::io())?;
+    if let Some(hooks) = fusion {
+        hooks.session_deleted(session_id.clone()).await;
+    }
     Ok(WorkspaceLifecycleResult {
         protocol: 17,
         session_id,
@@ -3230,6 +3291,13 @@ pub(crate) async fn dispatch_workspace_command(
         }
         WorkspaceCommand::Interrupt { session_id } => {
             let _operation = authorize_live_session(host, &session_id).await?;
+            // A Fusion sidekick stops through the broker (`stopSidekick`),
+            // which marks the round stopping, withdraws its delivery and
+            // confirms termination (ADR-043). The broker's own stops call
+            // `interrupt` directly and never pass this entry point.
+            if host.workspace.is_fusion_sidekick(&session_id) {
+                return Err(WorkspaceError::not_supported());
+            }
             host.workspace.interrupt(&session_id).await?;
             Ok(WorkspaceResult::Accepted { session_id })
         }
@@ -3629,12 +3697,21 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                         // The lead is this session; the call names no chat.
                         let (result, claimed) =
                             hooks.handle(lead.clone(), identity, operation).await;
-                        let sent = runtime.sidekick_response(request_id, result).await;
-                        if sent.is_err()
-                            && let Some(round_id) = claimed
-                        {
-                            hooks.delivery_failed(lead, round_id).await;
-                        }
+                        // The handoff runs to its end even when closing the
+                        // lead aborts this task: a claimed report is marked
+                        // sent only after the response was written, and put
+                        // back in the queue when it was not.
+                        let handoff = tokio::spawn(async move {
+                            let sent = runtime.sidekick_response(request_id, result).await;
+                            if let Some(round_id) = claimed {
+                                if sent.is_ok() {
+                                    hooks.delivery_sent(lead, round_id).await;
+                                } else {
+                                    hooks.delivery_failed(lead, round_id).await;
+                                }
+                            }
+                        });
+                        let _ = handoff.await;
                     });
                     if let Ok(mut tasks) = state.coordinator_tasks.lock() {
                         tasks.retain(|task| !task.is_finished());
@@ -6052,6 +6129,164 @@ mod native_host_tests {
             settings.model.map(|model| model.id).as_deref(),
             Some("frozen")
         );
+
+        host.workspace.shutdown_all().await;
+        cleanup(host, root);
+    }
+
+    /// Fusion hooks that mark exactly one session as a sidekick.
+    struct SidekickOnly(String);
+
+    impl super::FusionSessionHooks for SidekickOnly {
+        fn setup(&self, _session_id: &str) -> Option<super::FusionSessionSetup> {
+            None
+        }
+
+        fn is_sidekick(&self, session_id: &str) -> bool {
+            session_id == self.0
+        }
+
+        fn handle(
+            &self,
+            _lead_session_id: String,
+            _identity: super::SidekickCallIdentity,
+            _operation: serde_json::Map<String, serde_json::Value>,
+        ) -> super::FusionAnswerFuture {
+            Box::pin(async { (serde_json::Value::Null, None) })
+        }
+
+        fn delivery_failed(
+            &self,
+            _lead_session_id: String,
+            _round_id: String,
+        ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+            Box::pin(async {})
+        }
+    }
+
+    /// Fusion sidekick turns belong to the broker (ADR-043): the WebView
+    /// cannot message it through the composer, interrupt it behind the
+    /// broker's stop barrier, or delete it from under the broker. Ordinary
+    /// chats keep every verb.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn webview_cannot_prompt_interrupt_or_delete_a_fusion_sidekick() {
+        use super::WorkspaceLifecycleCommand;
+        use super::composer::{ComposerCommand, run_composer};
+
+        let root = test_root("sidekick-guard");
+        let host = Arc::new(HostState::open(&root, false).expect("host state"));
+        install_test_spawner(&host.workspace, |config| {
+            NativeRuntime::spawn_test_adapter(config, MEMBER_ADAPTER)
+        });
+        let workspace_id = host.personal_workspace.project_id.clone();
+        let Ok(directory) = verified_project_directory(&host, &workspace_id, true) else {
+            panic!("the personal workspace is trusted");
+        };
+        let publisher: WorkspaceEventPublisher = Arc::new(|_| {});
+        let sidekick = host
+            .workspace
+            .launch_session(
+                &directory,
+                chat_request(&workspace_id, "Sidekick"),
+                Arc::clone(&publisher),
+            )
+            .await
+            .expect("the sidekick starts")
+            .session
+            .id;
+        let chat = host
+            .workspace
+            .launch_session(&directory, chat_request(&workspace_id, "Chat"), publisher)
+            .await
+            .expect("the chat starts")
+            .session
+            .id;
+        host.workspace
+            .set_fusion_hooks(Arc::new(SidekickOnly(sidekick.clone())));
+        assert!(host.workspace.is_fusion_sidekick(&sidekick));
+        assert!(!host.workspace.is_fusion_sidekick(&chat));
+
+        let composer = |session_id: &str| {
+            let session_id = session_id.to_owned();
+            [
+                ComposerCommand::Send {
+                    session_id: session_id.clone(),
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    text: "change course".into(),
+                    mode: PromptMode::Prompt,
+                    attachments: Vec::new(),
+                },
+                ComposerCommand::Send {
+                    session_id: session_id.clone(),
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    text: "steer".into(),
+                    mode: PromptMode::Steer,
+                    attachments: Vec::new(),
+                },
+                ComposerCommand::Edit {
+                    session_id: session_id.clone(),
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    text: "edited".into(),
+                },
+                ComposerCommand::Promote {
+                    session_id: session_id.clone(),
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                },
+                ComposerCommand::Remove {
+                    session_id: session_id.clone(),
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                },
+                ComposerCommand::Resume {
+                    session_id: session_id.clone(),
+                },
+                ComposerCommand::Compact { session_id },
+            ]
+        };
+        for command in composer(&sidekick) {
+            refused(run_composer(&host, command, |_| {}).await);
+        }
+        assert!(
+            host.workspace
+                .record(&sidekick)
+                .expect("sidekick record")
+                .composer
+                .items
+                .is_empty(),
+            "nothing is queued for a later drain"
+        );
+
+        // The broker alone stops it; the WebView's interrupt is refused.
+        refused(
+            dispatch(
+                &host,
+                WorkspaceCommand::Interrupt {
+                    session_id: sidekick.clone(),
+                },
+            )
+            .await,
+        );
+        let result = dispatch(
+            &host,
+            WorkspaceCommand::Interrupt {
+                session_id: chat.clone(),
+            },
+        )
+        .await;
+        assert!(result.is_ok(), "{result:?}");
+
+        // Deleting the catalog entry would strand the broker's session.
+        let delete = |session_id: &str| WorkspaceLifecycleCommand::DeleteSession {
+            session_id: session_id.into(),
+        };
+        let error = super::delete_session_command(&host, delete(&sidekick))
+            .await
+            .expect_err("a sidekick is not deleted from the chat list");
+        assert_eq!(error.code, "CONFLICT");
+        assert!(host.workspace.record(&sidekick).is_ok());
+        super::delete_session_command(&host, delete(&chat))
+            .await
+            .expect("an ordinary chat is deleted");
+        assert!(host.workspace.record(&chat).is_err());
 
         host.workspace.shutdown_all().await;
         cleanup(host, root);

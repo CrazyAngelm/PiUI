@@ -2,9 +2,9 @@
 //! envelope the lead reads. No I/O here.
 
 use super::model::{
-    BriefFields, BriefPolicy, FactChange, FactFile, FactFiles, FactSource, FusionPair,
-    FusionRefusal, FusionRole, FusionRoleName, REPORT_BODY_BYTES, ReportStatus, SidekickFacts,
-    SidekickProgress, SidekickReport,
+    BriefFields, BriefPolicy, FactApprovals, FactChange, FactCommands, FactFile, FactFiles,
+    FactSource, FactTokens, FusionPair, FusionRefusal, FusionRole, FusionRoleName,
+    REPORT_BODY_BYTES, ReportStatus, RoundOutcome, SidekickFacts, SidekickProgress, SidekickReport,
 };
 use crate::review_api::{ReviewArea, ReviewChange, ReviewFileV1};
 use piui_runtime::workspace_runtime::{HarnessKind, PermissionMode};
@@ -464,10 +464,13 @@ pub(crate) fn report_envelope(report: &SidekickReport, already_delivered: bool) 
         };
         out.push_str(&format!("  command: {} -> {result}\n", command.command));
     }
-    out.push_str(&format!(
-        "  approvals requested: {}\n",
-        facts.approvals.requested
-    ));
+    match facts.approvals.source {
+        FactSource::Unknown => out.push_str("  approvals requested: unknown\n"),
+        _ => out.push_str(&format!(
+            "  approvals requested: {}\n",
+            facts.approvals.requested
+        )),
+    }
     out.push_str(&format!("  tokens: {}\n", tokens_line(facts)));
     out.push_str(&format!("[/PiUI sidekick report {brief_id} {round_id}]"));
     out
@@ -536,6 +539,46 @@ pub(crate) fn file_facts(changes: Option<(Vec<ReviewFileV1>, bool)>) -> FactFile
         source: FactSource::Git,
         items,
         truncated,
+    }
+}
+
+/// The report of one finished round from the sidekick's final answer text
+/// (empty when the round produced none) and PiUI's facts.
+pub(crate) fn build_report(
+    brief_id: &str,
+    round_id: &str,
+    text: &str,
+    outcome: RoundOutcome,
+    duration_ms: u64,
+    files: FactFiles,
+    approvals: FactApprovals,
+) -> SidekickReport {
+    let parsed = parse_report(text);
+    let (body, truncated) = truncate_utf8(text, REPORT_BODY_BYTES);
+    SidekickReport {
+        brief_id: brief_id.to_owned(),
+        round_id: round_id.to_owned(),
+        status: parsed.status,
+        open: parsed.open,
+        deviations: parsed.deviations,
+        body,
+        truncated,
+        facts: SidekickFacts {
+            outcome,
+            duration_ms,
+            files,
+            commands: FactCommands {
+                source: FactSource::Unknown,
+                items: Vec::new(),
+            },
+            approvals,
+            tokens: FactTokens {
+                source: FactSource::Unknown,
+                input: None,
+                output: None,
+                cache_read: None,
+            },
+        },
     }
 }
 

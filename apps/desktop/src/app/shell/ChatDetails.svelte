@@ -18,7 +18,8 @@
   interface Props {
     snapshot: SessionSnapshot;
     onClose: () => void;
-    onDelete: () => void;
+    /** Absent when the chat cannot be deleted from the ordinary list (a Fusion sidekick). */
+    onDelete: (() => void) | undefined;
     /** Opens the review panel of this chat. */
     onReview?: () => void;
   }
@@ -98,10 +99,10 @@
       {#if session.status !== 'closed'}
         <Button size="sm" variant="ghost" onclick={() => void store.close(session.id)} disabled={store.sessionActionBusy}>{$t('Stop agent process')}</Button>
       {/if}
-      {#if !session.runId}
+      {#if !session.runId && onDelete}
         <Button size="sm" variant="danger" onclick={onDelete} disabled={store.safeMode || !['idle', 'closed', 'failed'].includes(session.status)}>{$t('Delete chat…')}</Button>
+        <p class="muted small">{$t('Deleting removes the chat from PiUI. The harness keeps its own history.')}</p>
       {/if}
-      <p class="muted small">{$t('Deleting removes the chat from PiUI. The harness keeps its own history.')}</p>
     </section>
   </div>
 </aside>

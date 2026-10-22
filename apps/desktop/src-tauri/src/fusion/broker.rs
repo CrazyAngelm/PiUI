@@ -9,22 +9,21 @@
 //! without native processes.
 
 use super::logic::{
-    brief_prompt, check_brief, file_facts, message_prompt, parse_report, policy_text, preview,
+    brief_prompt, build_report, check_brief, file_facts, message_prompt, policy_text, preview,
     progress_text, report_envelope, report_page, truncate_utf8,
 };
 use super::model::{
     BriefFields, BriefOutcome, BriefState, CORRECTION_HINT_ROUNDS, CallRecord,
-    DEFAULT_WAIT_SECONDS, DeliveryState, DeliveryVia, FUSION_PROTOCOL, FactApprovals, FactCommands,
-    FactSource, FactTokens, FusionBrief, FusionDelivery, FusionDocument, FusionPair,
-    FusionRoleName, FusionRound, FusionSidekickSession, FusionStateV1, FusionStats,
-    MAX_LIVE_BRIEFS, MAX_WAIT_SECONDS, REPORT_BODY_BYTES, RoundKind, RoundOutcome, RoundState,
-    SidekickErrorCode, SidekickFacts, SidekickOperation, SidekickProgress, SidekickReport,
+    DEFAULT_WAIT_SECONDS, DeliveryState, DeliveryVia, FUSION_PROTOCOL, FactApprovals, FactSource,
+    FusionBrief, FusionDelivery, FusionDocument, FusionPair, FusionRoleName, FusionRound,
+    FusionSidekickSession, FusionStateV1, FusionStats, MAX_LIVE_BRIEFS, MAX_WAIT_SECONDS,
+    RoundKind, RoundOutcome, RoundState, SidekickErrorCode, SidekickOperation, SidekickProgress,
     SidekickState,
 };
 use super::store::FusionStore;
 use crate::review_api::{ReviewArea, ReviewContentV1, ReviewFileV1};
 use crate::workspace_api::TurnState;
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use piui_runtime::workspace_runtime::{
     PromptMode, SessionStatus, SidekickCallIdentity, TurnOutcome,
 };
@@ -32,6 +31,7 @@ use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::watch;
@@ -82,6 +82,13 @@ pub(crate) trait FusionHost: Send + Sync + 'static {
         &self,
         session_id: String,
     ) -> HostFuture<Result<Option<(String, String)>, HostFailure>>;
+    /// The text of one assistant block of a live session (`None`: the
+    /// session has no such block).
+    fn answer(
+        &self,
+        session_id: String,
+        block_id: String,
+    ) -> HostFuture<Result<Option<String>, HostFailure>>;
     fn activity(&self, session_id: String) -> HostFuture<SessionActivity>;
     /// Working-tree changes of the chat's folder (`None`: not a repository).
     fn changes(&self, lead_session_id: String) -> HostFuture<Option<(Vec<ReviewFileV1>, bool)>>;
@@ -104,8 +111,16 @@ const MAX_CALL_RECORDS: usize = 4000;
 const DELIVERY_ATTEMPTS: u32 = 3;
 const DIFF_PAGE_BYTES: usize = 16 * 1024;
 
-/// Answers by call key (operation hash, answer) and their insertion order.
-type AnswerCache = (HashMap<String, (String, Value)>, VecDeque<String>);
+/// One answered call: its operation hash, the answer, and the round whose
+/// report the answer handed over.
+struct CachedAnswer {
+    op_hash: String,
+    answer: Value,
+    claimed: Option<String>,
+}
+
+/// Answers by call key and their insertion order.
+type AnswerCache = (HashMap<String, CachedAnswer>, VecDeque<String>);
 
 struct LeadSlot {
     lead_session_id: String,
@@ -117,6 +132,12 @@ struct LeadSlot {
     /// Retry answers by call key (memory only).
     answers: Mutex<AnswerCache>,
     activity: Mutex<HashMap<String, String>>,
+    /// Send admission of a round's prompt: a stop takes it after marking the
+    /// round `stopping`, so either the prompt was already accepted (and the
+    /// stop interrupts it) or the start sees the stop and never sends.
+    send_gate: tokio::sync::Mutex<()>,
+    /// The lead chat was deleted: deliveries and waiters end.
+    forgotten: AtomicBool,
 }
 
 struct BrokerInner {
@@ -126,7 +147,96 @@ struct BrokerInner {
     leads: Mutex<HashMap<String, Arc<LeadSlot>>>,
     /// Session id → (role, lead session id).
     members: Mutex<HashMap<String, (FusionRoleName, String)>>,
+    /// Sidekick sessions the broker no longer uses.
+    retired: Mutex<HashSet<String>>,
     notifier: Mutex<Option<Notifier>>,
+}
+
+/// One tool call waiting for a round's report. Dropping it (the call
+/// returned, or its task was aborted when the lead closed) hands a finished
+/// report that no tool result took to the follow-up queue.
+struct Waiter {
+    broker: FusionBroker,
+    slot: Arc<LeadSlot>,
+    round_id: String,
+}
+
+impl Waiter {
+    fn new(broker: &FusionBroker, slot: &Arc<LeadSlot>, round_id: &str) -> Self {
+        if let Ok(mut waiting) = slot.waiting.lock() {
+            *waiting.entry(round_id.to_owned()).or_default() += 1;
+        }
+        Self {
+            broker: broker.clone(),
+            slot: Arc::clone(slot),
+            round_id: round_id.to_owned(),
+        }
+    }
+}
+
+impl Drop for Waiter {
+    fn drop(&mut self) {
+        let last = self.slot.waiting.lock().is_ok_and(|mut waiting| {
+            let Some(count) = waiting.get_mut(&self.round_id) else {
+                return false;
+            };
+            *count = count.saturating_sub(1);
+            let last = *count == 0;
+            if last {
+                waiting.remove(&self.round_id);
+            }
+            last
+        });
+        if last && let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let broker = self.broker.clone();
+            let slot = Arc::clone(&self.slot);
+            let round_id = std::mem::take(&mut self.round_id);
+            runtime.spawn(async move { broker.queue_unclaimed(&slot, &round_id).await });
+        }
+    }
+}
+
+/// Why a round's turn did not start.
+enum TurnStart {
+    Refused(HostFailure),
+    /// A stop reached the round before its prompt was sent.
+    Cancelled,
+}
+
+fn set_delivery(document: &mut FusionDocument, round_id: &str, delivery: Option<FusionDelivery>) {
+    if let Some((brief, index)) = find_round(document, round_id) {
+        brief.rounds[index].delivery = delivery;
+    }
+}
+
+fn delivery(via: DeliveryVia, state: DeliveryState) -> Option<FusionDelivery> {
+    Some(FusionDelivery {
+        via,
+        state,
+        updated_at: now(),
+    })
+}
+
+fn withdrawn(round: &FusionRound) -> bool {
+    round
+        .delivery
+        .as_ref()
+        .is_some_and(|delivery| delivery.state == DeliveryState::Withdrawn)
+}
+
+fn stopped_error() -> ToolError {
+    error(
+        SidekickErrorCode::PairStopping,
+        "The person stopped this round; its report is not handed over.",
+    )
+}
+
+fn duration_between(started_at: &str, finished_at: Option<&str>) -> u64 {
+    let parse = |text: &str| DateTime::parse_from_rfc3339(text).ok();
+    match (parse(started_at), finished_at.and_then(parse)) {
+        (Some(start), Some(end)) => u64::try_from((end - start).num_milliseconds()).unwrap_or(0),
+        _ => 0,
+    }
 }
 
 #[derive(Clone)]
@@ -234,6 +344,7 @@ impl FusionBroker {
                 codex_sandbox,
                 leads: Mutex::new(HashMap::new()),
                 members: Mutex::new(HashMap::new()),
+                retired: Mutex::new(HashSet::new()),
                 notifier: Mutex::new(None),
             }),
         };
@@ -248,6 +359,8 @@ impl FusionBroker {
                     round.state = RoundState::Uncertain;
                     changed = true;
                 }
+                // A handoff in flight (a tool result or a follow-up) may or
+                // may not have reached the lead: never sent again.
                 if let Some(delivery) = round.delivery.as_mut()
                     && delivery.state == DeliveryState::Sending
                 {
@@ -285,6 +398,15 @@ impl FusionBroker {
                 );
             }
         }
+        if let Ok(mut retired) = self.inner.retired.lock() {
+            retired.extend(
+                document
+                    .sessions
+                    .iter()
+                    .filter(|session| session.retired)
+                    .map(|session| session.session_id.clone()),
+            );
+        }
         let slot = Arc::new(LeadSlot {
             lead_session_id: lead.clone(),
             pair: document.pair.clone(),
@@ -293,6 +415,8 @@ impl FusionBroker {
             waiting: Mutex::new(HashMap::new()),
             answers: Mutex::new((HashMap::new(), VecDeque::new())),
             activity: Mutex::new(HashMap::new()),
+            send_gate: tokio::sync::Mutex::new(()),
+            forgotten: AtomicBool::new(false),
         });
         if let Ok(mut leads) = self.inner.leads.lock() {
             leads.insert(lead, Arc::clone(&slot));
@@ -348,6 +472,90 @@ impl FusionBroker {
         Some((role, lead, pair))
     }
 
+    /// A sidekick session the broker may still use (not retired).
+    pub(crate) fn is_current_sidekick(&self, session_id: &str) -> bool {
+        self.membership(session_id)
+            .is_some_and(|(role, ..)| role == FusionRoleName::Sidekick)
+            && self
+                .inner
+                .retired
+                .lock()
+                .is_ok_and(|retired| !retired.contains(session_id))
+    }
+
+    fn mark_retired(&self, session_id: &str) {
+        if let Ok(mut retired) = self.inner.retired.lock() {
+            retired.insert(session_id.to_owned());
+        }
+    }
+
+    /// Whether the person may delete this session's chat: a lead only while
+    /// no sidekick round of its pair is open or uncertain.
+    pub(crate) async fn deletable(&self, session_id: &str) -> bool {
+        let Some((role, lead, _)) = self.membership(session_id) else {
+            return true;
+        };
+        if role != FusionRoleName::Lead {
+            return !self.is_current_sidekick(session_id);
+        }
+        let Some(slot) = self.slot(&lead) else {
+            return true;
+        };
+        let document = slot.document.lock().await;
+        open_round(&document).is_none()
+            && !document
+                .briefs
+                .iter()
+                .flat_map(|brief| &brief.rounds)
+                .any(|round| round.state == RoundState::Uncertain)
+    }
+
+    /// A chat was deleted. A deleted lead takes its pair with it: the broker
+    /// forgets the chat, removes its journal, ends queued deliveries and
+    /// closes the idle sidekick (its catalog entry and history stay). A
+    /// deleted retired sidekick is forgotten.
+    pub(crate) async fn session_deleted(&self, session_id: &str) {
+        let Some((role, lead, _)) = self.membership(session_id) else {
+            return;
+        };
+        if role == FusionRoleName::Sidekick {
+            if let Ok(mut members) = self.inner.members.lock() {
+                members.remove(session_id);
+            }
+            if let Ok(mut retired) = self.inner.retired.lock() {
+                retired.remove(session_id);
+            }
+            return;
+        }
+        let Some(slot) = self.slot(&lead) else {
+            return;
+        };
+        slot.forgotten.store(true, Ordering::Release);
+        let (sessions, current) = {
+            let document = slot.document.lock().await;
+            (
+                document
+                    .sessions
+                    .iter()
+                    .map(|session| session.session_id.clone())
+                    .collect::<Vec<_>>(),
+                current_session(&document).map(|session| session.session_id.clone()),
+            )
+        };
+        self.forget_lead(&lead);
+        if let Ok(mut retired) = self.inner.retired.lock() {
+            retired.retain(|session| !sessions.contains(session));
+        }
+        if self.inner.store.forget(&lead).is_err() {
+            eprintln!("event=fusion_forget_failed");
+        }
+        // Wake waiters so they see the chat is gone.
+        slot.revision.send_modify(|revision| *revision += 1);
+        if let Some(current) = current {
+            self.inner.host.close(current).await;
+        }
+    }
+
     /// Records a new Fusion chat before its lead session starts, so the start
     /// already gets the `sidekick` tool and the lead instructions.
     pub(crate) fn register_lead(
@@ -369,6 +577,7 @@ impl FusionBroker {
             next_round: 0,
             calls: Vec::new(),
             folded_briefs: 0,
+            round_hosts: Vec::new(),
         };
         self.inner.store.save(&document).map_err(|_| ())?;
         self.install(document);
@@ -378,8 +587,10 @@ impl FusionBroker {
     /// Forgets a chat whose lead never started (the stored document stays as
     /// a harmless orphan: no session refers to it).
     pub(crate) fn forget_lead(&self, lead_session_id: &str) {
-        if let Ok(mut leads) = self.inner.leads.lock() {
-            leads.remove(lead_session_id);
+        if let Ok(mut leads) = self.inner.leads.lock()
+            && let Some(slot) = leads.remove(lead_session_id)
+        {
+            slot.forgotten.store(true, Ordering::Release);
         }
         if let Ok(mut members) = self.inner.members.lock() {
             members.retain(|_, (_, lead)| lead != lead_session_id);
@@ -454,11 +665,11 @@ impl FusionBroker {
             || format!("seq:{}:{}", identity.epoch, identity.seq),
             |call_ref| format!("ref:{call_ref}"),
         );
-        if let Some(answer) = self
+        if let Some(replayed) = self
             .replayed(&slot, &key, &identity.op_hash, &op_name)
             .await
         {
-            return (answer, None);
+            return replayed;
         }
         let parsed: Result<SidekickOperation, _> = serde_json::from_value(Value::Object(operation));
         let (answer, claimed) = match parsed {
@@ -484,7 +695,14 @@ impl FusionBroker {
         };
         if let Ok(mut answers) = slot.answers.lock() {
             let (map, order) = &mut *answers;
-            map.insert(key.clone(), (identity.op_hash.clone(), answer.clone()));
+            map.insert(
+                key.clone(),
+                CachedAnswer {
+                    op_hash: identity.op_hash.clone(),
+                    answer: answer.clone(),
+                    claimed: claimed.clone(),
+                },
+            );
             order.push_back(key);
             while order.len() > MAX_CACHED_ANSWERS {
                 if let Some(old) = order.pop_front() {
@@ -496,45 +714,61 @@ impl FusionBroker {
     }
 
     /// The same call again: the same answer, or a refusal when its operation
-    /// differs. A call handled before a restart is never run again.
+    /// differs. A call handled before a restart is never run again. When the
+    /// first answer handed over a report that went back to the follow-up
+    /// queue (its write-back failed), the replay takes the report back from
+    /// the queue, so the lead never gets it twice.
     async fn replayed(
         &self,
         slot: &LeadSlot,
         key: &str,
         op_hash: &str,
         op_name: &str,
-    ) -> Option<Value> {
-        let cached = slot
-            .answers
-            .lock()
-            .ok()
-            .and_then(|answers| answers.0.get(key).cloned());
-        if let Some((hash, answer)) = cached {
-            return Some(if hash == op_hash {
-                answer
-            } else {
-                error_result(
-                    op_name,
-                    SidekickErrorCode::IdentityConflict,
-                    "This tool call id was already used for another operation.",
+    ) -> Option<(Value, Option<String>)> {
+        let cached = slot.answers.lock().ok().and_then(|answers| {
+            answers.0.get(key).map(|cached| {
+                (
+                    cached.op_hash.clone(),
+                    cached.answer.clone(),
+                    cached.claimed.clone(),
                 )
-            });
+            })
+        });
+        if let Some((hash, answer, claimed)) = cached {
+            if hash != op_hash {
+                return Some((
+                    error_result(
+                        op_name,
+                        SidekickErrorCode::IdentityConflict,
+                        "This tool call id was already used for another operation.",
+                    ),
+                    None,
+                ));
+            }
+            let reclaimed = match claimed {
+                Some(round_id) => self.reclaim(slot, &round_id).await,
+                None => None,
+            };
+            return Some((answer, reclaimed));
         }
         let mut document = slot.document.lock().await;
         if let Some(record) = document.calls.iter().find(|record| record.key == key) {
-            return Some(if record.op_hash == op_hash {
-                error_result(
-                    op_name,
-                    SidekickErrorCode::Uncertain,
-                    "This call was handled before PiUI restarted. Use status or wait.",
-                )
-            } else {
-                error_result(
-                    op_name,
-                    SidekickErrorCode::IdentityConflict,
-                    "This tool call id was already used for another operation.",
-                )
-            });
+            return Some((
+                if record.op_hash == op_hash {
+                    error_result(
+                        op_name,
+                        SidekickErrorCode::Uncertain,
+                        "This call was handled before PiUI restarted. Use status or wait.",
+                    )
+                } else {
+                    error_result(
+                        op_name,
+                        SidekickErrorCode::IdentityConflict,
+                        "This tool call id was already used for another operation.",
+                    )
+                },
+                None,
+            ));
         }
         document.calls.push(CallRecord {
             key: key.to_owned(),
@@ -543,6 +777,28 @@ impl FusionBroker {
         let excess = document.calls.len().saturating_sub(MAX_CALL_RECORDS);
         document.calls.drain(..excess);
         None
+    }
+
+    /// Takes a report queued as a follow-up back for a replayed tool answer
+    /// (`queued → tool/sending`). Anything else (the first handoff still in
+    /// flight or done, a follow-up already sending or sent) stays as it is.
+    async fn reclaim(&self, slot: &LeadSlot, round_id: &str) -> Option<String> {
+        let mut document = slot.document.lock().await;
+        let (brief, index) = find_round(&mut document, round_id)?;
+        let round = &mut brief.rounds[index];
+        let previous = round.delivery.clone();
+        if !previous.as_ref().is_some_and(|delivery| {
+            delivery.via == DeliveryVia::FollowUp && delivery.state == DeliveryState::Queued
+        }) {
+            return None;
+        }
+        round.delivery = delivery(DeliveryVia::Tool, DeliveryState::Sending);
+        if !self.persist(slot, &mut document).await {
+            // Not durably taken: it stays with the follow-up queue.
+            set_delivery(&mut document, round_id, previous);
+            return None;
+        }
+        Some(round_id.to_owned())
     }
 
     async fn dispatch(
@@ -745,6 +1001,7 @@ impl FusionBroker {
             delivery: None,
             take_over: false,
             baseline_block_id: None,
+            baseline_known: false,
             started_ms: epoch_ms(),
             report: None,
             full_body: None,
@@ -828,19 +1085,17 @@ impl FusionBroker {
         session_id: &str,
         prompt: String,
     ) -> Result<(), ToolError> {
-        let started = self.start_turn(slot, session_id, prompt).await;
+        let started = self.start_turn(slot, round_id, session_id, prompt).await;
         let mut document = slot.document.lock().await;
         let Some((brief, index)) = find_round(&mut document, round_id) else {
             return Err(error(SidekickErrorCode::UnknownRound, "The round is gone."));
         };
         match started {
-            Ok((receiver, generation, baseline)) => {
+            Ok((receiver, generation)) => {
                 let round = &mut brief.rounds[index];
                 if round.state == RoundState::Queued {
                     round.state = RoundState::Running;
                 }
-                round.baseline_block_id = baseline;
-                round.started_ms = epoch_ms();
                 self.persist(slot, &mut document).await;
                 drop(document);
                 self.spawn_watcher(
@@ -852,7 +1107,35 @@ impl FusionBroker {
                 );
                 Ok(())
             }
-            Err(failure) => {
+            Err(TurnStart::Cancelled) => {
+                // Stopped before its prompt was sent: nothing ran, and the
+                // stop barrier sees the round finish.
+                let round = &mut brief.rounds[index];
+                if round.state.open() {
+                    round.state = RoundState::Finished;
+                    round.outcome = Some(RoundOutcome::Interrupted);
+                    round.finished_at = Some(now());
+                    round.report = Some(build_report(
+                        brief_id,
+                        round_id,
+                        "",
+                        RoundOutcome::Interrupted,
+                        0,
+                        file_facts(None),
+                        FactApprovals {
+                            source: FactSource::Host,
+                            requested: 0,
+                        },
+                    ));
+                    round.full_body = Some(String::new());
+                }
+                self.persist(slot, &mut document).await;
+                Err(error(
+                    SidekickErrorCode::PairStopping,
+                    "The round was stopped before the sidekick started it.",
+                ))
+            }
+            Err(TurnStart::Refused(failure)) => {
                 let round = &mut brief.rounds[index];
                 round.state = RoundState::Finished;
                 round.outcome = Some(RoundOutcome::Failed);
@@ -871,6 +1154,7 @@ impl FusionBroker {
                 {
                     session.retired = true;
                     session.retired_reason = Some("could not start".into());
+                    self.mark_retired(session_id);
                 }
                 self.persist(slot, &mut document).await;
                 Err(match failure {
@@ -887,12 +1171,28 @@ impl FusionBroker {
         }
     }
 
+    /// A stop that reached the round while it was not yet sent cancels it.
+    async fn still_queued(&self, slot: &LeadSlot, round_id: &str) -> Result<(), TurnStart> {
+        let document = slot.document.lock().await;
+        let queued = document
+            .briefs
+            .iter()
+            .flat_map(|brief| &brief.rounds)
+            .any(|round| round.round_id == round_id && round.state == RoundState::Queued);
+        if queued {
+            Ok(())
+        } else {
+            Err(TurnStart::Cancelled)
+        }
+    }
+
     async fn start_turn(
         &self,
         slot: &LeadSlot,
+        round_id: &str,
         session_id: &str,
         prompt: String,
-    ) -> Result<(watch::Receiver<TurnState>, u64, Option<String>), HostFailure> {
+    ) -> Result<(watch::Receiver<TurnState>, u64), TurnStart> {
         let host = &self.inner.host;
         if host.turns(session_id).is_err() {
             let launched = {
@@ -922,17 +1222,39 @@ impl FusionBroker {
                     }
                 }
             };
-            opened?;
+            opened.map_err(TurnStart::Refused)?;
+            self.still_queued(slot, round_id).await?;
         }
-        let receiver = host.turns(session_id)?;
-        let generation = receiver.borrow().generation;
         let baseline = host
             .last_answer(session_id.to_owned())
-            .await?
+            .await
+            .map_err(TurnStart::Refused)?
             .map(|(id, _)| id);
+        let _admission = slot.send_gate.lock().await;
+        let receiver = host.turns(session_id).map_err(TurnStart::Refused)?;
+        let generation = receiver.borrow().generation;
+        {
+            let mut document = slot.document.lock().await;
+            let Some((brief, index)) = find_round(&mut document, round_id) else {
+                return Err(TurnStart::Cancelled);
+            };
+            let round = &mut brief.rounds[index];
+            if round.state != RoundState::Queued {
+                return Err(TurnStart::Cancelled);
+            }
+            // The baseline reaches the journal before the turn starts, so a
+            // restart can tell this round's answer from an earlier one. A
+            // failed write leaves the round without one: after a restart it
+            // is unprovable (`uncertain`), never completed by mistake.
+            round.baseline_block_id = baseline;
+            round.baseline_known = true;
+            round.started_ms = epoch_ms();
+            self.persist(slot, &mut document).await;
+        }
         host.send(session_id.to_owned(), prompt, PromptMode::Prompt)
-            .await?;
-        Ok((receiver, generation, baseline))
+            .await
+            .map_err(TurnStart::Refused)?;
+        Ok((receiver, generation))
     }
 
     fn spawn_watcher(
@@ -1029,40 +1351,22 @@ impl FusionBroker {
             (_, false, Some(TurnOutcome::Succeeded)) => RoundOutcome::NoAnswer,
             (_, true, Some(TurnOutcome::Succeeded)) => RoundOutcome::Completed,
         };
-        let parsed = parse_report(&text);
-        let (body, truncated) = truncate_utf8(&text, REPORT_BODY_BYTES);
         let elapsed = epoch_ms().saturating_sub(round.started_ms);
-        let report = SidekickReport {
-            brief_id: brief_id.clone(),
-            round_id: round_id.to_owned(),
-            status: parsed.status,
-            open: parsed.open,
-            deviations: parsed.deviations,
-            body,
-            truncated,
-            facts: SidekickFacts {
-                outcome: round_outcome,
-                duration_ms: elapsed,
-                files: file_facts(changes),
-                commands: FactCommands {
-                    source: FactSource::Unknown,
-                    items: Vec::new(),
-                },
-                approvals: FactApprovals {
-                    source: FactSource::Host,
-                    requested: approvals as u64,
-                },
-                tokens: FactTokens {
-                    source: FactSource::Unknown,
-                    input: None,
-                    output: None,
-                    cache_read: None,
-                },
+        let report = build_report(
+            &brief_id,
+            round_id,
+            &text,
+            round_outcome,
+            elapsed,
+            file_facts(changes),
+            FactApprovals {
+                source: FactSource::Host,
+                requested: approvals as u64,
             },
-        };
+        );
         round.state = RoundState::Finished;
         round.outcome = Some(round_outcome);
-        round.status = Some(parsed.status);
+        round.status = Some(report.status);
         round.finished_at = Some(now());
         round.answer_hash = block
             .as_ref()
@@ -1078,7 +1382,11 @@ impl FusionBroker {
         let mut deliver = false;
         if stopping && round.delivery.is_some() {
             // A stop of the pair withdrew the delivery in advance.
-        } else if waiting == 0 && auto_deliver && !stopping {
+        } else if waiting == 0
+            && auto_deliver
+            && !stopping
+            && !slot.forgotten.load(Ordering::Acquire)
+        {
             round.delivery = Some(FusionDelivery {
                 via: DeliveryVia::FollowUp,
                 state: DeliveryState::Queued,
@@ -1100,32 +1408,16 @@ impl FusionBroker {
         }
     }
 
-    /// Waits up to `seconds` for a round and hands its report over.
+    /// Waits up to `seconds` for a round and hands its report over. The
+    /// waiter registration ends on every path, cancellation included.
     async fn collect(
         &self,
         slot: &Arc<LeadSlot>,
         round_id: &str,
         seconds: u64,
     ) -> Result<(Value, Option<String>), ToolError> {
-        if let Ok(mut waiting) = slot.waiting.lock() {
-            *waiting.entry(round_id.to_owned()).or_default() += 1;
-        }
-        let result = self.collect_inner(slot, round_id, seconds).await;
-        let last = slot.waiting.lock().is_ok_and(|mut waiting| {
-            let Some(count) = waiting.get_mut(round_id) else {
-                return false;
-            };
-            *count = count.saturating_sub(1);
-            let last = *count == 0;
-            if last {
-                waiting.remove(round_id);
-            }
-            last
-        });
-        if last {
-            self.queue_unclaimed(slot, round_id).await;
-        }
-        result
+        let _waiter = Waiter::new(self, slot, round_id);
+        self.collect_inner(slot, round_id, seconds).await
     }
 
     /// A report that finished while a waiter was present but that no tool
@@ -1138,14 +1430,14 @@ impl FusionBroker {
                 return;
             };
             let round = &mut brief.rounds[index];
-            if !auto || round.state != RoundState::Finished || round.delivery.is_some() {
+            if !auto
+                || round.state != RoundState::Finished
+                || round.delivery.is_some()
+                || slot.forgotten.load(Ordering::Acquire)
+            {
                 return;
             }
-            round.delivery = Some(FusionDelivery {
-                via: DeliveryVia::FollowUp,
-                state: DeliveryState::Queued,
-                updated_at: now(),
-            });
+            round.delivery = delivery(DeliveryVia::FollowUp, DeliveryState::Queued);
             self.persist(slot, &mut document).await;
             true
         };
@@ -1164,6 +1456,13 @@ impl FusionBroker {
         let mut revisions = slot.revision.subscribe();
         let mut expired = false;
         loop {
+            if slot.forgotten.load(Ordering::Acquire) {
+                return Err(error(
+                    SidekickErrorCode::SidekickUnavailable,
+                    "The Fusion chat was deleted.",
+                ));
+            }
+            let mut restore = false;
             {
                 let mut document = slot.document.lock().await;
                 let Some((brief, index)) = find_round(&mut document, round_id) else {
@@ -1179,7 +1478,13 @@ impl FusionBroker {
                         "This round is uncertain after a restart; the person reconciles it.",
                     ));
                 }
-                if round.state == RoundState::Finished {
+                if round.state == RoundState::Finished && withdrawn(round) {
+                    return Err(stopped_error());
+                }
+                if round.state == RoundState::Finished && round.report.is_none() {
+                    // After a restart: read the report back first.
+                    restore = true;
+                } else if round.state == RoundState::Finished {
                     let claimed = Self::claim(round);
                     let value = Self::report_result("wait", round, !claimed);
                     let rejected = brief
@@ -1200,6 +1505,10 @@ impl FusionBroker {
                     return Ok((value, claimed.then(|| round_id.to_owned())));
                 }
             }
+            if restore {
+                self.restore_report(slot, round_id).await?;
+                continue;
+            }
             // The state is checked once more after the deadline, so a round
             // that finished at that moment is still handed over here.
             if expired {
@@ -1217,24 +1526,97 @@ impl FusionBroker {
     }
 
     /// Takes a finished round's report for a tool result: true when this
-    /// call delivers it (it was not delivered or queued as a follow-up that
-    /// has not been sent yet).
+    /// call delivers it (it was not delivered, or is queued as a follow-up
+    /// that has not been sent yet). A withdrawn delivery is never taken. The
+    /// record is `tool/sending` until the workspace confirms the answer
+    /// reached the lead ([`Self::delivery_sent`]).
     fn claim(round: &mut FusionRound) -> bool {
         let unclaimed = match &round.delivery {
             None => true,
-            Some(delivery) => matches!(
-                delivery.state,
-                DeliveryState::Queued | DeliveryState::Withdrawn
-            ),
+            Some(delivery) => {
+                delivery.via == DeliveryVia::FollowUp && delivery.state == DeliveryState::Queued
+            }
         };
         if unclaimed {
-            round.delivery = Some(FusionDelivery {
-                via: DeliveryVia::Tool,
-                state: DeliveryState::Sent,
-                updated_at: now(),
-            });
+            round.delivery = delivery(DeliveryVia::Tool, DeliveryState::Sending);
         }
         unclaimed
+    }
+
+    /// Reads a finished round's report back from the sidekick's native
+    /// history after a restart: the saved answer block, verified against its
+    /// hash. A round without an answer gets its report from the journal
+    /// alone. When the answer cannot be read back, the delivery becomes
+    /// `uncertain` (never a placeholder marked sent).
+    async fn restore_report(&self, slot: &LeadSlot, round_id: &str) -> Result<(), ToolError> {
+        let found = {
+            let mut document = slot.document.lock().await;
+            let (brief, index) = find_round(&mut document, round_id)
+                .ok_or_else(|| error(SidekickErrorCode::UnknownRound, "There is no such round."))?;
+            let round = &brief.rounds[index];
+            if round.report.is_some() || round.state != RoundState::Finished {
+                return Ok(());
+            }
+            (
+                brief.brief_id.clone(),
+                brief.sidekick_session_id.clone(),
+                round.answer_block_id.clone(),
+                round.answer_hash.clone(),
+                round.outcome.unwrap_or(RoundOutcome::Uncertain),
+                duration_between(&round.started_at, round.finished_at.as_deref()),
+            )
+        };
+        let (brief_id, session_id, block, hash, outcome, duration) = found;
+        let text = match (block, hash) {
+            (None, _) => Some(String::new()),
+            (Some(block), Some(hash)) => {
+                let host = &self.inner.host;
+                match host.ensure_live(session_id.clone()).await {
+                    Ok(()) => host
+                        .answer(session_id, block)
+                        .await
+                        .ok()
+                        .flatten()
+                        .filter(|text| piui_runtime::git::sha256_hex(text.as_bytes()) == hash),
+                    Err(_) => None,
+                }
+            }
+            (Some(_), None) => None,
+        };
+        let mut document = slot.document.lock().await;
+        let Some((brief, index)) = find_round(&mut document, round_id) else {
+            return Err(error(SidekickErrorCode::UnknownRound, "The round is gone."));
+        };
+        let round = &mut brief.rounds[index];
+        let Some(text) = text else {
+            let pending = round.delivery.as_ref().is_none_or(|delivery| {
+                delivery.via == DeliveryVia::FollowUp && delivery.state == DeliveryState::Queued
+            });
+            if pending {
+                round.delivery = delivery(DeliveryVia::FollowUp, DeliveryState::Uncertain);
+                self.persist(slot, &mut document).await;
+            }
+            return Err(error(
+                SidekickErrorCode::Uncertain,
+                "PiUI could not read this report back from the sidekick's history; open the sidekick's chat to read it.",
+            ));
+        };
+        if round.report.is_none() {
+            round.report = Some(build_report(
+                &brief_id,
+                round_id,
+                &text,
+                outcome,
+                duration,
+                file_facts(None),
+                FactApprovals {
+                    source: FactSource::Unknown,
+                    requested: 0,
+                },
+            ));
+            round.full_body = Some(text);
+        }
+        Ok(())
     }
 
     fn report_result(op: &str, round: &FusionRound, already_delivered: bool) -> Value {
@@ -1405,6 +1787,7 @@ impl FusionBroker {
                     (code, message)
                 }
             })?;
+            let before = document.clone();
             let current = current_session(&document).map(|session| session.session_id.clone());
             document.next_round += 1;
             let round_id = format!("r{}", document.next_round);
@@ -1439,7 +1822,17 @@ impl FusionBroker {
             brief.state = BriefState::Active;
             let session_id = brief.sidekick_session_id.clone();
             let prompt = message_prompt(brief_id, &round_id, text);
-            self.persist(slot, &mut document).await;
+            if !self.persist(slot, &mut document).await {
+                // No correction runs without its durable round and call
+                // record; the revision stays monotonic.
+                let revision = document.revision;
+                *document = before;
+                document.revision = revision;
+                return Err(error(
+                    SidekickErrorCode::SidekickUnavailable,
+                    "PiUI could not record the correction.",
+                ));
+            }
             (round_id, session_id, prompt)
         };
         self.run_round(slot, brief_id, &round_id, &session_id, prompt)
@@ -1538,16 +1931,15 @@ impl FusionBroker {
             round.state = RoundState::Stopping;
             round.take_over = take_over;
             if withdraw_delivery {
-                round.delivery = Some(FusionDelivery {
-                    via: DeliveryVia::FollowUp,
-                    state: DeliveryState::Withdrawn,
-                    updated_at: now(),
-                });
+                round.delivery = delivery(DeliveryVia::FollowUp, DeliveryState::Withdrawn);
             }
             let session_id = brief.sidekick_session_id.clone();
             self.persist(slot, &mut document).await;
             session_id
         };
+        // A start in progress either sent its prompt already (the interrupt
+        // below reaches it) or sees `stopping` and never sends.
+        drop(slot.send_gate.lock().await);
         let _ = self.inner.host.interrupt(session_id).await;
         let proven = self.wait_finished(slot, round_id, STOP_PROOF).await;
         let mut document = slot.document.lock().await;
@@ -1575,6 +1967,11 @@ impl FusionBroker {
             .find(|brief| brief.rounds.iter().any(|round| round.round_id == round_id))
             .ok_or_else(|| error(SidekickErrorCode::UnknownRound, "The round is gone."))?;
         let round = &mut brief.rounds[index];
+        if !withdraw_delivery && withdrawn(round) {
+            // The person withdrew this report while the lead's stop waited.
+            self.persist(slot, &mut document).await;
+            return Err(stopped_error());
+        }
         let claimed = !withdraw_delivery && Self::claim(round);
         let value = Self::report_result("stop", round, !claimed);
         self.persist(slot, &mut document).await;
@@ -1618,23 +2015,6 @@ impl FusionBroker {
                 "This folder is not a git repository, so PiUI cannot show a diff.",
             ));
         };
-        let listing = files
-            .iter()
-            .map(|file| {
-                format!(
-                    "{}\u{0}{:?}\u{0}{:?}\u{0}{:?}",
-                    file.path, file.area, file.added, file.removed
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let current = piui_runtime::git::sha256_hex(listing.as_bytes());
-        if fingerprint.as_ref().is_some_and(|given| given != &current) {
-            return Err(error(
-                SidekickErrorCode::DiffStale,
-                "The working tree changed since that page; start again from page 1.",
-            ));
-        }
         let selected: Vec<&ReviewFileV1> = files
             .iter()
             .filter(|file| {
@@ -1647,14 +2027,45 @@ impl FusionBroker {
                     })
             })
             .collect();
-        let mut pages: Vec<String> = vec![String::new()];
+        // The fingerprint binds the page to the file list and to each shown
+        // file's content fingerprint, so an edit that keeps the line counts
+        // still makes later pages stale.
+        let mut listing = files
+            .iter()
+            .map(|file| {
+                format!(
+                    "{}\u{0}{:?}\u{0}{:?}\u{0}{:?}",
+                    file.path, file.area, file.added, file.removed
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut views = Vec::with_capacity(selected.len());
         for file in selected {
-            let content = match self
+            let view = self
                 .inner
                 .host
                 .file_view(lead.clone(), file.path.clone(), file.area)
-                .await
-            {
+                .await;
+            listing.push_str(&format!(
+                "\n{}\u{0}{:?}\u{0}{}",
+                file.path,
+                file.area,
+                view.as_ref()
+                    .map_or("(unreadable)", |(_, content)| content.as_str())
+            ));
+            views.push((file, view));
+        }
+        let current = piui_runtime::git::sha256_hex(listing.as_bytes());
+        if fingerprint.as_ref().is_some_and(|given| given != &current) {
+            return Err(error(
+                SidekickErrorCode::DiffStale,
+                "The working tree changed since that page; start again from page 1.",
+            ));
+        }
+        let mut pages: Vec<String> = vec![String::new()];
+        for (file, view) in views {
+            let content = match view {
                 Ok((ReviewContentV1::Text { text, .. }, _)) => text,
                 Ok((ReviewContentV1::Binary { .. }, _)) => "(binary file)".into(),
                 Ok((ReviewContentV1::TooLarge { .. }, _)) => "(too large to show)".into(),
@@ -1694,6 +2105,23 @@ impl FusionBroker {
     }
 
     async fn report(&self, slot: &LeadSlot, round_id: &str, page: u32) -> Result<Value, ToolError> {
+        let restore = {
+            let mut document = slot.document.lock().await;
+            let Some((brief, index)) = find_round(&mut document, round_id) else {
+                return Err(error(
+                    SidekickErrorCode::UnknownRound,
+                    "There is no such round.",
+                ));
+            };
+            let round = &brief.rounds[index];
+            if withdrawn(round) {
+                return Err(stopped_error());
+            }
+            round.state == RoundState::Finished && round.full_body.is_none()
+        };
+        if restore {
+            self.restore_report(slot, round_id).await?;
+        }
         let mut document = slot.document.lock().await;
         let Some((brief, index)) = find_round(&mut document, round_id) else {
             return Err(error(
@@ -1705,7 +2133,7 @@ impl FusionBroker {
         let Some(full) = round.full_body.as_deref() else {
             return Err(error(
                 SidekickErrorCode::SidekickUnavailable,
-                "The full report is no longer held by PiUI; it stays in the sidekick's own history.",
+                "The round has no report yet; use wait.",
             ));
         };
         let (text, total) = report_page(full, page);
@@ -1797,6 +2225,7 @@ impl FusionBroker {
             session.retired = true;
             session.retired_reason = Some(truncate_utf8(reason, 200).0);
             let session_id = session.session_id.clone();
+            self.mark_retired(&session_id);
             self.persist(slot, &mut document).await;
             session_id
         };
@@ -1804,6 +2233,26 @@ impl FusionBroker {
         Ok(
             json!({ "ok": true, "op": "reset", "text": "The sidekick was reset. The next brief starts a fresh sidekick session; give it the context it needs." }),
         )
+    }
+
+    /// The tool answer handing over a round's report reached the lead
+    /// (`tool/sending → tool/sent`).
+    pub(crate) async fn delivery_sent(&self, lead: &str, round_id: &str) {
+        let Some(slot) = self.slot(lead) else {
+            return;
+        };
+        let mut document = slot.document.lock().await;
+        let Some((brief, index)) = find_round(&mut document, round_id) else {
+            return;
+        };
+        let round = &mut brief.rounds[index];
+        if !round.delivery.as_ref().is_some_and(|delivery| {
+            delivery.via == DeliveryVia::Tool && delivery.state == DeliveryState::Sending
+        }) {
+            return;
+        }
+        round.delivery = delivery(DeliveryVia::Tool, DeliveryState::Sent);
+        self.persist(&slot, &mut document).await;
     }
 
     /// An answer that could not reach the lead goes back to the queue.
@@ -1819,15 +2268,15 @@ impl FusionBroker {
             };
             let round = &mut brief.rounds[index];
             if !round.delivery.as_ref().is_some_and(|delivery| {
-                delivery.via == DeliveryVia::Tool && delivery.state == DeliveryState::Sent
+                delivery.via == DeliveryVia::Tool && delivery.state == DeliveryState::Sending
             }) {
                 return;
             }
-            round.delivery = auto.then(|| FusionDelivery {
-                via: DeliveryVia::FollowUp,
-                state: DeliveryState::Queued,
-                updated_at: now(),
-            });
+            round.delivery = if auto {
+                delivery(DeliveryVia::FollowUp, DeliveryState::Queued)
+            } else {
+                None
+            };
             self.persist(&slot, &mut document).await;
             auto
         };
@@ -1845,6 +2294,7 @@ impl FusionBroker {
         tokio::spawn(async move {
             let lead = slot.lead_session_id.clone();
             let mut attempts = 0;
+            let mut store_failures = 0;
             loop {
                 // Wait for an idle, live lead.
                 loop {
@@ -1864,6 +2314,11 @@ impl FusionBroker {
                         Err(_) => tokio::time::sleep(Duration::from_secs(3)).await,
                     }
                 }
+                // After a restart the report is read back from the native
+                // history first; if that fails the delivery is `uncertain`.
+                if broker.restore_report(&slot, &round_id).await.is_err() {
+                    return;
+                }
                 let text = {
                     let mut document = slot.document.lock().await;
                     let Some((brief, index)) = find_round(&mut document, &round_id) else {
@@ -1877,19 +2332,29 @@ impl FusionBroker {
                     {
                         return;
                     }
-                    round.delivery = Some(FusionDelivery {
-                        via: DeliveryVia::FollowUp,
-                        state: DeliveryState::Sending,
-                        updated_at: now(),
-                    });
-                    let text = match &round.report {
-                        Some(report) => format!(
-                            "{}\nThe sidekick finished while you were idle. Review the report and continue.",
-                            report_envelope(report, false)
-                        ),
-                        None => format!("[PiUI sidekick round {round_id} finished.]"),
+                    let Some(report) = round.report.as_ref() else {
+                        return;
                     };
-                    broker.persist(&slot, &mut document).await;
+                    let text = format!(
+                        "{}\nThe sidekick finished while you were idle. Review the report and continue.",
+                        report_envelope(report, false)
+                    );
+                    let previous = round.delivery.clone();
+                    round.delivery = delivery(DeliveryVia::FollowUp, DeliveryState::Sending);
+                    // `sending` is durable before the prompt leaves, so a
+                    // restart never sends it a second time.
+                    if !broker.persist(&slot, &mut document).await {
+                        set_delivery(&mut document, &round_id, previous);
+                        drop(document);
+                        store_failures += 1;
+                        if store_failures >= DELIVERY_ATTEMPTS {
+                            // It stays queued: a tool call can take it, and
+                            // the next start resumes it.
+                            return;
+                        }
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        continue;
+                    }
                     text
                 };
                 let sent = broker
@@ -1924,6 +2389,9 @@ impl FusionBroker {
     }
 
     async fn delivery_queued(&self, slot: &LeadSlot, round_id: &str) -> bool {
+        if slot.forgotten.load(Ordering::Acquire) {
+            return false;
+        }
         let document = slot.document.lock().await;
         document
             .briefs
@@ -1980,8 +2448,15 @@ impl FusionBroker {
             let mut document = slot.document.lock().await;
             let (brief, index) =
                 find_round(&mut document, round_id).ok_or(SidekickErrorCode::UnknownRound)?;
-            if brief.rounds[index].state != RoundState::Uncertain {
+            let round = &brief.rounds[index];
+            if round.state != RoundState::Uncertain {
                 return Err(SidekickErrorCode::RoundFinished);
+            }
+            // Without a recorded baseline (an older journal, or a round that
+            // never reached its send) no answer can be proven to be this
+            // round's: it stays uncertain for the person to abandon.
+            if !round.baseline_known {
+                return Ok(false);
             }
             brief.sidekick_session_id.clone()
         };

@@ -1190,19 +1190,27 @@ host tool `sidekick` (`brief`, `wait`, `status`, `message`, `steer`, `stop`,
 - One writer: a brief or message is refused while another round is open or
   uncertain. Stop marks `stopping`, interrupts and waits for the turn's end;
   without that proof the round becomes `uncertain` and blocks new work until
-  the person reconciles (reads the native history) or abandons it. Reset
-  passes the same barrier and retires the session.
+  the person reconciles (reads the native history) or abandons it. Prompt
+  admission and stop share a gate: a stop before the send cancels the round
+  unrun. A send that the harness accepted holds admission even if PiUI's
+  catalog update fails afterwards. Reset passes the same barrier and retires
+  the session.
 - A tool call waits a bounded portion (default 240 s, at most 540 s; the
   Claude Code adapter raises `MCP_TOOL_TIMEOUT` for the lead). A report that
   no call collected gets one durable delivery record
   (`queued → sending → sent | uncertain | withdrawn`) and reaches the idle
-  lead as one follow-up. A tool answer that could not be written back puts
-  the report back in the queue.
+  lead as one follow-up. A tool handoff is `tool/sending` until the answer
+  was written back, then `sent`; one that could not be written back puts the
+  report back in the queue, and a replay of that call takes it back. A
+  withdrawn report is never handed to a tool call.
 - Calls carry a bridge identity `{epoch, seq, callRef, opHash}`: a retry gets
   the same answer, a reused call id with another operation is refused, and a
   call recorded before a restart is never run again.
 - A restart marks every open round and every `sending` delivery `uncertain`;
-  they are reconciled, never replayed. The journal is PiUI application data
+  they are reconciled, never replayed. Reconcile compares against the
+  baseline journaled before the send (a round without one stays unprovable);
+  a queued report is read back by its answer block and hash, or its delivery
+  becomes `uncertain`. The journal is PiUI application data
   under `fusion-v1/` (create-only generations, newest three kept), never in
   the project folder; native histories stay the source of truth.
 - People approve the sidekick's actions in its own chat; the lead model never

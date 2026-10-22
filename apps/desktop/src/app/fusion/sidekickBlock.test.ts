@@ -71,6 +71,25 @@ describe('sidekick block parsing', () => {
     });
   });
 
+  it('accepts the single Arguments line the Codex bridge puts before the host header', () => {
+    const codex = `Arguments: op: brief, goal: fix the build, wait: false\n${REPORT}`;
+    const view = parseSidekickBlock({ toolName: 'piui.sidekick', text: codex });
+    expect(view).toMatchObject({ kind: 'report', briefId: 'b1', roundId: 'r1', status: 'done' });
+    expect(view?.rest).not.toContain('Arguments:');
+    const refused = 'Arguments: op: brief\n[PiUI sidekick brief refused: invalid-brief] doneWhen is required';
+    expect(parseSidekickBlock({ toolName: 'sidekick', text: refused })).toMatchObject({ kind: 'refused', code: 'invalid-brief' });
+    const accepted = 'Arguments: op: brief, wait: false\nbrief b4 · round r1\nQueued behind r0.';
+    expect(parseSidekickBlock({ toolName: 'sidekick', text: accepted })).toMatchObject({ kind: 'text', briefId: 'b4', rest: 'Queued behind r0.' });
+  });
+
+  it('does not loosen the prefix into arbitrary leading text', () => {
+    const header = '[PiUI sidekick report b9 · r9 · STATUS done · completed · 1s · truncated: no]';
+    expect(parseSidekickBlock({ toolName: 'sidekick', text: `Arguments: op: brief\nsome other line\n${header}` })).toBeUndefined();
+    expect(parseSidekickBlock({ toolName: 'sidekick', text: `Arguments: a\nArguments: b\n${header}` })).toBeUndefined();
+    expect(parseSidekickBlock({ toolName: 'sidekick', text: `Note: x\n${header}` })).toBeUndefined();
+    expect(parseSidekickBlock({ toolName: 'sidekick', text: `Arguments: ${'x'.repeat(700)}\n${header}` })).toBeUndefined();
+  });
+
   it('shows an unrecognized body after the ids line as plain text', () => {
     expect(parseSidekickBlock({ toolName: 'sidekick', text: 'brief b4 · round r1\nQueued behind r0.' })).toMatchObject({ kind: 'text', briefId: 'b4', roundId: 'r1', rest: 'Queued behind r0.' });
   });

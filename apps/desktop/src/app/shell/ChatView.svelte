@@ -57,6 +57,7 @@
   $effect(() => {
     void fusionMembership.load(sessionId);
   });
+  const isSidekick = $derived(fusion?.role === 'sidekick');
   // Pipeline runs started from this chat, shown among its messages by time.
   const chatPipeline = $derived(chatPipelines.chats[sessionId]);
   const runInserts = $derived((chatPipeline?.runs ?? []).map((entry) => ({ id: entry.runId, at: entry.startedAt })));
@@ -162,7 +163,15 @@
         {/if}
         <div class="chat__actions">
           {#if running}
-            <Button size="sm" variant="ghost" onclick={() => void store.interrupt(session.id)} loading={store.interruptBusy}>
+            <!-- A sidekick stops through the broker (the store routes it to stopSidekick). -->
+            <Button
+              size="sm"
+              variant="ghost"
+              onclick={() => void store.interrupt(session.id)}
+              loading={store.interruptBusy}
+              disabled={isSidekick && !fusion?.leadSessionId}
+              aria-label={isSidekick ? $t('Stop sidekick') : undefined}
+            >
               {#snippet leading()}<Square />{/snippet}
               {$t('Stop')}
             </Button>
@@ -182,7 +191,7 @@
                 ? [{ label: $t('Stop agent process'), icon: Power, onSelect: () => void store.close(session.id) }]
                 : []),
               { type: 'separator' as const },
-              ...(!session.runId
+              ...(!session.runId && !isSidekick
                 ? [{ label: $t('Delete chat…'), icon: Trash, danger: true, disabled: running || store.safeMode, onSelect: () => onDelete(session.id) }]
                 : []),
             ]}
@@ -292,7 +301,7 @@
         {/key}
       {/await}
     {:else if detailsOpen && snapshot}
-      <ChatDetails {snapshot} onClose={toggleDetails} onDelete={() => onDelete(session.id)} onReview={toggleReview} />
+      <ChatDetails {snapshot} onClose={toggleDetails} onDelete={isSidekick ? undefined : () => onDelete(session.id)} onReview={toggleReview} />
     {/if}
   </div>
 {:else}

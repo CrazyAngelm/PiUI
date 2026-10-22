@@ -25,6 +25,8 @@ pub(crate) trait FusionStore: Send + Sync {
     fn load_all(&self) -> Vec<FusionDocument>;
     /// Durably stores `document` as its chat's newest generation.
     fn save(&self, document: &FusionDocument) -> Result<(), StoreError>;
+    /// Removes every generation of a deleted chat (PiUI's own metadata).
+    fn forget(&self, lead_session_id: &str) -> Result<(), StoreError>;
 }
 
 #[derive(Serialize, Deserialize)]
@@ -75,7 +77,9 @@ fn newest(directory: &Path) -> Option<(u64, FusionDocument)> {
         if envelope.version != FUSION_PROTOCOL || envelope.generation != generation {
             continue;
         }
-        best = Some((generation, envelope.document));
+        let mut document = envelope.document;
+        document.restore_round_hosts();
+        best = Some((generation, document));
     }
     best
 }
@@ -120,7 +124,7 @@ impl FusionStore for FileFusionStore {
         let bytes = serde_json::to_vec(&Envelope {
             version: FUSION_PROTOCOL,
             generation,
-            document: document.clone(),
+            document: document.for_journal(),
         })
         .map_err(|_| StoreError)?;
         let path = directory.join(format!("{PREFIX}{generation:020}{SUFFIX}"));
@@ -148,9 +152,34 @@ impl FusionStore for FileFusionStore {
         }
         Ok(())
     }
+
+    fn forget(&self, lead_session_id: &str) -> Result<(), StoreError> {
+        let directory = self
+            .root
+            .join(workspace_directory_name(lead_session_id).map_err(|_| StoreError)?);
+        // Only a real directory directly under the store root; a reparse
+        // point is never followed.
+        let Ok(metadata) = fs::symlink_metadata(&directory) else {
+            return Ok(());
+        };
+        if !metadata.is_dir() {
+            return Err(StoreError);
+        }
+        for entry in fs::read_dir(&directory).map_err(|_| StoreError)?.flatten() {
+            let path = entry.path();
+            let is_file = fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file());
+            if is_file && generation_of(&path).is_some() {
+                fs::remove_file(&path).map_err(|_| StoreError)?;
+            }
+        }
+        // A folder that still holds something else stays.
+        let _ = fs::remove_dir(&directory);
+        Ok(())
+    }
 }
 
-/// In-memory store for tests.
+/// In-memory store for tests. Each save goes through the journal's JSON
+/// form, so host-private fields survive exactly as they would on disk.
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct MemoryFusionStore {
@@ -163,7 +192,16 @@ impl FusionStore for MemoryFusionStore {
     fn load_all(&self) -> Vec<FusionDocument> {
         self.documents
             .lock()
-            .map(|documents| documents.values().cloned().collect())
+            .map(|documents| {
+                documents
+                    .values()
+                    .cloned()
+                    .map(|mut document| {
+                        document.restore_round_hosts();
+                        document
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -171,10 +209,21 @@ impl FusionStore for MemoryFusionStore {
         if self.fail_writes.load(std::sync::atomic::Ordering::Acquire) {
             return Err(StoreError);
         }
+        let stored: FusionDocument = serde_json::to_value(document.for_journal())
+            .and_then(serde_json::from_value)
+            .map_err(|_| StoreError)?;
         self.documents
             .lock()
             .map_err(|_| StoreError)?
-            .insert(document.lead_session_id.clone(), document.clone());
+            .insert(document.lead_session_id.clone(), stored);
+        Ok(())
+    }
+
+    fn forget(&self, lead_session_id: &str) -> Result<(), StoreError> {
+        self.documents
+            .lock()
+            .map_err(|_| StoreError)?
+            .remove(lead_session_id);
         Ok(())
     }
 }

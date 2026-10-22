@@ -74,7 +74,7 @@ limits before the host sees them):
 | `message` | A correction round for a brief (same sidekick session only). |
 | `steer` | Text into the running round (native steer). |
 | `stop` | Stop barrier for a round; `takeOver:true` marks the brief stopped and counts a take-over. |
-| `diff` | Working-tree diff of the chat folder in pages of about 16 KiB, with a fingerprint; a changed tree answers `diff-stale`. |
+| `diff` | Working-tree diff of the chat folder in pages of about 16 KiB, with a fingerprint of the file list and each shown file's content; a changed tree answers `diff-stale`. |
 | `report` | The full report body in 8 KiB pages (while PiUI holds it). |
 | `close` | Closes a brief as accepted, rejected or superseded. |
 | `reset` | Stops any open round and retires the sidekick session. |
@@ -89,9 +89,14 @@ the text the model reads). Codes: `invalid-brief`, `brief-active`,
 ### Rounds
 
 A round is one admitted sidekick turn. Before sending, the broker records the
-round, subscribes to the session's turn completions and remembers the last
-assistant block (the baseline). The round ends when the turn generation
-advances (or the session closes or fails):
+round, subscribes to the session's turn completions and writes the last
+assistant block (the baseline) to the journal. A stop that reaches a round
+before its prompt is sent cancels it (`interrupted`, nothing runs); prompt
+admission and the stop share one gate, so a stop either interrupts an
+accepted prompt or prevents it. A send error before the harness accepted the
+prompt fails the round; once accepted, the round holds admission until its
+turn is observed to end. The round ends when the turn generation advances
+(or the session closes or fails):
 
 - outcome `completed` with the new final answer; `no-answer` when the turn
   succeeded without a new final assistant block; `interrupted`, `failed`;
@@ -130,8 +135,12 @@ facts (PiUI, not from the sidekick):
 A finished report reaches the lead once:
 
 1. As the result of a `brief`, `message`, `wait` or `stop` call that is
-   waiting for it (delivery `tool`/`sent`). A repeated `wait` gets it again
-   marked "already delivered".
+   waiting for it (delivery `tool`/`sending`, then `tool`/`sent` once the
+   answer was written back to the lead). A repeated `wait` gets it again
+   marked "already delivered". A retried call whose first answer went back
+   to the queue takes the queued report back instead of leaving a duplicate.
+   A waiting call that is cancelled (the lead closed) hands an unclaimed
+   report to the queue.
 2. Otherwise, with auto-delivery on, a durable record `queued` is created and
    the report is sent as one follow-up when the lead is idle
    (`queued → sending → sent`; three failed attempts: `uncertain`). A tool
@@ -139,7 +148,9 @@ A finished report reaches the lead once:
 3. A tool answer that could not be written back to the lead puts the report
    back in the queue.
 
-A stop by the person withdraws the delivery of the stopped round.
+A stop by the person withdraws the delivery of the stopped round: a waiting
+call ends with `pair-stopping` and no report, and neither `wait` nor
+`report` hands it over later.
 
 ### Identity and restarts
 
@@ -148,18 +159,26 @@ the same call id and operation gets the same answer; the same id with another
 operation is refused (`identity-conflict`). Call records survive restarts; a
 call recorded before a restart answers `uncertain` instead of running again.
 
-On start, every open round and every `sending` delivery becomes `uncertain`.
-Nothing is replayed. The person reconciles a round (PiUI reads the sidekick's
-native history; an answer after the baseline finishes the round) or abandons
-it; until then no new round starts.
+On start, every open round and every `sending` delivery (tool or follow-up)
+becomes `uncertain`. Nothing is replayed. The person reconciles a round (PiUI
+reads the sidekick's native history; an answer after the journaled baseline
+finishes the round; a round without a journaled baseline, e.g. from an older
+journal, stays unprovable) or abandons it; until then no new round starts.
+A report still `queued` is read back by its saved answer block and hash
+before it is sent; when that fails, the delivery becomes `uncertain` instead
+of sending a placeholder. `wait` and `report` read it back the same way.
 
 ## Person's commands (`fusion_command_v1`)
 
 `createChat`, `checkPair`, `state`, `find` (lead, sidekick or neither),
-`stopPair` (stop the sidekick and interrupt the lead), `stopSidekick`,
+`stopPair` (interrupt a running lead, then stop the sidekick; either
+failure is returned, never acknowledged), `stopSidekick`,
 `resetSidekick`, `reconcileRound`, `abandonRound`. Reads work in safe mode;
 changes are refused there. The event `piui://fusion-changed-v1` carries the
-lead id and the journal revision.
+lead id and the journal revision. Deleting a lead chat is refused while a
+sidekick round of its pair is open or uncertain; otherwise the pair goes with
+it (journal removed, idle sidekick closed; the sidekick's chat stays). A
+retired sidekick's chat may be deleted, the current one may not.
 
 ## Storage
 
@@ -167,7 +186,8 @@ lead id and the journal revision.
 complete create-only generations, the newest three kept; a damaged generation
 is skipped. The journal holds briefs, rounds (state, outcome, status, native
 answer reference and hash, a short input preview, delivery), sidekick
-sessions, stats and call records. Report bodies live only in memory; after a
+sessions, stats, call records and host-private round facts (baseline block,
+start time) that never reach the WebView. Report bodies live only in memory; after a
 restart the sidekick's native history is authoritative. Nothing is written to
 the project folder.
 
@@ -201,7 +221,11 @@ Host: `src-tauri/src/fusion/tests.rs` (pair matrix, sandbox check, report
 parsing and envelope escaping, brief checks, pages; broker with a fake
 workspace: tool delivery once, idle follow-up once, one writer, identity
 replay and conflict, no-answer, stop proof and uncertain, restart without
-replay plus reconcile, journal write failure, sign-in failure, failed write
-back, steer/status/diff, close/reset). Bridge: `runner.test.mjs`,
+replay plus reconcile, journaled baseline across rounds and older journals,
+stop before send, refused correction on a journal failure, tool handoff
+`sending` across a restart, queued report read back or uncertain, cancelled
+waiter, withdrawn report, replay reclaim, content-bound diff fingerprint,
+lead deletion, journal write failure, sign-in failure, failed write back,
+steer/status/diff, close/reset). Bridge: `runner.test.mjs`,
 `claude.test.mjs`, `codex.test.mjs`. UI Lab: `host-api/lab/fusionFake.test.ts`.
 Real paid pairs (phase Ф1.5) are started by the person; none ran here.

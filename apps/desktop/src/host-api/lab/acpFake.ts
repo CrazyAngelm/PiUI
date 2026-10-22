@@ -25,7 +25,7 @@ import type { LabEventBus } from './labBus';
 import type { LabClock } from './labClock';
 import type { HarnessKind, HarnessSummary, WorkspaceModel } from './labContracts';
 import { workspaceFailure, type HostErrorPayload } from './labErrors';
-import { authorizeLive, requireLive, validToken } from './labGuards';
+import { authorizeOrdinaryLive, requireLive, validToken } from './labGuards';
 import type { LabHandlers } from './labHandlers';
 import { arrayOf, custom, decodeArgument, json, object, option, string, tagged, u64, type Schema } from './labSchema';
 import { harnessIdentitySchema } from './labSchemas';
@@ -694,7 +694,7 @@ function setSessionMode(runtime: LabSessions, request: SessionModeRequestV1): Se
   const { state } = runtime;
   if (state.safeMode) throw workspaceFailure('SAFE_MODE');
   if (!validToken(request.modeId)) throw workspaceFailure('INVALID_ARGUMENT');
-  const record = authorizeLive(state, request.sessionId);
+  const record = authorizeOrdinaryLive(state, request.sessionId);
   const live = requireLive(record);
   if (!isAcpHarness(record.harness) || !ACP_LAB_MODES.some((mode) => mode.id === request.modeId)) throw workspaceFailure('NOT_SUPPORTED');
   if (live.status === 'failed') throw workspaceFailure('RUNTIME_FAILED');

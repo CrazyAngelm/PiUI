@@ -645,6 +645,7 @@
         {permissionMode}
         permissions={permissionItems}
         worktree={!pipelineId && !fusionMode}
+        permissionsApply={!fusionMode}
         disabled={store.safeMode}
         onWorkspace={(value) => (workspaceId = value)}
         onPermission={(value) => (permissionMode = value)}

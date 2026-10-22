@@ -87,6 +87,53 @@ test("emits explicit native terminal outcome before idle", async () => {
   }
 });
 
+// One admitted turn must yield exactly one completion, after the retried run
+// answered, and Pi must not read as idle before then.
+async function assertSingleRetryCompletion(adapter, events, scenario) {
+  const start = events.length;
+  await runScenario(adapter, events, scenario);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const turn = events.slice(start);
+  const completions = turn.filter((event) => event.type === "turnCompleted");
+  assert.equal(completions.length, 1, "the retried run is part of the same turn");
+  assert.equal(completions[0].outcome, "succeeded");
+  const statuses = turn.filter((event) => event.type === "status").map((event) => event.status);
+  assert.deepEqual(statuses, ["running", "idle"]);
+  assert.ok(turn.findIndex((event) => event.type === "turnCompleted") < turn.findIndex((event) => event.type === "status" && event.status === "idle"));
+  assert.ok(turn.some((event) => event.type === "textDelta" && event.text === "recovered answer"));
+}
+
+test("Pi completes a retried turn once, on agent_settled, with the successful answer", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    // The first agent_settled teaches an unversioned runtime to wait for it.
+    await runScenario(adapter, events, "ok");
+    await assertSingleRetryCompletion(adapter, events, "retry");
+  } finally { await adapter.dispose(); }
+});
+
+test("Pi waits for agent_settled across queued continuations once it is known", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    await runScenario(adapter, events, "ok");
+    const start = events.length;
+    await runScenario(adapter, events, "continued");
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const turn = events.slice(start);
+    assert.equal(turn.filter((event) => event.type === "turnCompleted").length, 1);
+    assert.deepEqual(turn.filter((event) => event.type === "status").map((event) => event.status), ["running", "idle"]);
+  } finally { await adapter.dispose(); }
+});
+
+test("Pi without agent_settled still defers a willRetry agent_end and completes on the final one", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try { await assertSingleRetryCompletion(adapter, events, "retry-legacy"); }
+  finally { await adapter.dispose(); }
+});
+
 test("interrupt retires pending approvals", async () => {
   const events = [];
   const adapter = await createPiAdapter(config(), (event) => events.push(event));

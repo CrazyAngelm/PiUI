@@ -15,6 +15,20 @@ const longOutput = `${"head line\n".repeat(1200)}${"tail line\n".repeat(1200)}`;
 const emojiOutput = `${"a".repeat(8191)}\u{1F600}${"b".repeat(100)}\u{1F600}${"c".repeat(8191)}`;
 const tool = (type, toolCallId, toolName, fields) => ({ type, toolCallId, toolName, ...fields });
 const textResult = (text) => ({ content: [{ type: "text", text }], details: { fullOutputPath: `/private/${secret}.log` } });
+const assistantText = (text) => ({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text } });
+// error -> agent_end(willRetry) -> retry succeeds -> final agent_end.
+function retryRuns() {
+  return [
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "529 overloaded" } },
+    { type: "agent_end", willRetry: true },
+    { type: "auto_retry_start", attempt: 1 },
+    { type: "agent_start" },
+    assistantText("recovered answer"),
+    { type: "message_end", message: { role: "assistant", stopReason: "stop" } },
+    { type: "agent_end", willRetry: false },
+  ];
+}
 const scenarios = {
   tools: [
     { type: "agent_start" },
@@ -57,6 +71,24 @@ const scenarios = {
   unknownui: [
     { type: "agent_start" },
     { type: "extension_ui_request", id: "native-custom", method: "custom", payload: secret },
+    { type: "agent_settled" },
+  ],
+  // Pi auto-retry: the failed run ends with agent_end(willRetry:true) and a
+  // second run answers. Only agent_settled (Pi >= 0.80.4) closes the turn.
+  retry: [
+    ...retryRuns(),
+    { type: "agent_settled" },
+  ],
+  // The same sequence from a Pi build that predates agent_settled.
+  "retry-legacy": retryRuns(),
+  // A queued follow-up continues the turn after an agent_end(willRetry:false).
+  continued: [
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "stop" } },
+    { type: "agent_end", willRetry: false },
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "stop" } },
+    { type: "agent_end", willRetry: false },
     { type: "agent_settled" },
   ],
   select: [

@@ -611,3 +611,36 @@ test("interrupt, turn end and abort settle a waiting sidekick tool", async () =>
   assert.equal(sidekickFrames(bridge).filter((frame) => frame.event.operation.op === "status").length, 0, "an aborted call is never sent to the host");
   bridge.input.end();
 });
+
+test("a retired sidekick request fails its late host response so the host can redeliver", async () => {
+  const outcomes = {};
+  const controllers = { gone: new AbortController(), early: new AbortController() };
+  controllers.early.abort();
+  const bridge = harness(async (_config, _emit, _coordinatorRequest, _boardRequest, sidekickRequest) => ({
+    prompt() {
+      void sidekickRequest({ op: "wait" }, { signal: controllers.gone.signal }).then(() => { outcomes.gone = "resolved"; }, (error) => { outcomes.gone = error.bridgeCode; });
+      // The caller was already gone: nothing is sent to the host.
+      void sidekickRequest({ op: "status" }, { signal: controllers.early.signal }).then(() => { outcomes.early = "resolved"; }, (error) => { outcomes.early = error.bridgeCode; });
+      return { accepted: true };
+    },
+    dispose() {},
+  }));
+  bridge.send({ ...config, params: { ...config.params, hostTools: ["sidekick"] } });
+  await bridge.wait(1);
+  bridge.send({ id: "prompt", method: "prompt", params: { text: "go", mode: "prompt" } });
+  await settled(() => sidekickFrames(bridge).length === 1);
+  const [request] = sidekickFrames(bridge).map((frame) => frame.event);
+  assert.equal(request.operation.op, "wait");
+  assert.equal(outcomes.early, "sidekick-cancelled");
+  // The MCP client disconnected while the host was still working.
+  controllers.gone.abort();
+  await settled(() => outcomes.gone !== undefined);
+  assert.equal(outcomes.gone, "sidekick-cancelled");
+  const late = await exchange(bridge, "late", "sidekickResponse", { requestId: request.requestId, result: { ok: true, text: "report" } });
+  assert.equal(late.ok, false, "a retired request is not acknowledged");
+  assert.equal(late.error.code, "stale-sidekick-request");
+  await sidekickOperationHash({ op: "status" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sidekickFrames(bridge).length, 1, "the already-cancelled call never reached the host");
+  bridge.input.end();
+});

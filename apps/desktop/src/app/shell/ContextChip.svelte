@@ -21,11 +21,16 @@
     permissions: readonly { value: PermissionMode; label: string; description?: string }[];
     /** A pipeline's agents run in the project folder; the worktree choice is hidden then. */
     worktree?: boolean;
+    /**
+     * False in Fusion mode: the pair's roles carry their own permissions (set in
+     * the pair picker), so this ordinary choice must not suggest it affects them.
+     */
+    permissionsApply?: boolean;
     disabled?: boolean;
     onWorkspace: (id: string) => void;
     onPermission: (mode: PermissionMode) => void;
   }
-  let { workspaces, workspaceId, permissionMode, permissions, worktree = true, disabled = false, onWorkspace, onPermission }: Props = $props();
+  let { workspaces, workspaceId, permissionMode, permissions, worktree = true, permissionsApply = true, disabled = false, onWorkspace, onPermission }: Props = $props();
 
   let open = $state(false);
   let query = $state('');
@@ -41,7 +46,7 @@
   const handoff = $derived(worktrees && workspace && newChatPlacement.handoff?.workspaceId === workspace.id ? newChatPlacement.handoff : undefined);
   const shared = $derived(chosen === undefined && handoff?.shareWorktree === true && handoff.worktreeBranch !== undefined);
   const place = $derived(chosen ? $t('Worktree · {0}', [chosen.branch]) : shared ? $t('Same worktree · {0}', [handoff?.worktreeBranch ?? '']) : '');
-  const summary = $derived([projectName(workspace), permission?.label, place].filter(Boolean).join(' · '));
+  const summary = $derived([projectName(workspace), permissionsApply ? permission?.label : undefined, place].filter(Boolean).join(' · '));
   const shown = $derived(
     query.trim() ? workspaces.filter((item) => projectName(item).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) : workspaces,
   );
@@ -60,18 +65,18 @@
   }
 </script>
 
-<Popover bind:open width={340} align="end" side="top" label={$t('Project and permissions')}>
+<Popover bind:open width={340} align="end" side="top" label={permissionsApply ? $t('Project and permissions') : $t('Project')}>
   {#snippet trigger(props)}
     <button
       type="button"
       class="chip"
-      class:chip--warn={permissionMode === 'full-access'}
+      class:chip--warn={permissionsApply && permissionMode === 'full-access'}
       class:chip--on={Boolean(place)}
       {...props}
       {disabled}
-      aria-label={$t('Project and permissions: {0}', [summary])}
+      aria-label={permissionsApply ? $t('Project and permissions: {0}', [summary]) : $t('Project: {0}', [summary])}
     >
-      {#if permissionMode === 'full-access'}<ShieldAlert size={14} />{:else if place}<GitBranch size={14} />{:else if workspace?.personal}<MessagesSquare size={14} />{:else}<Folder size={14} />{/if}
+      {#if permissionsApply && permissionMode === 'full-access'}<ShieldAlert size={14} />{:else if place}<GitBranch size={14} />{:else if workspace?.personal}<MessagesSquare size={14} />{:else}<Folder size={14} />{/if}
       <span>{summary}</span>
       <ChevronDown size={12} />
     </button>
@@ -96,6 +101,7 @@
         {/each}
       </div>
     </fieldset>
+    {#if permissionsApply}
     <fieldset>
       <legend>{$t('Permissions')}</legend>
       <div class="options">
@@ -110,6 +116,9 @@
         {/each}
       </div>
     </fieldset>
+    {:else}
+      <p class="fusion-note">{$t('Fusion roles take their permissions from the pair picker, not from this menu.')}</p>
+    {/if}
     {#if worktrees}
       <fieldset>
         <legend>{$t('Where the chat works')}</legend>
@@ -186,6 +195,11 @@
     margin: 0;
     padding: 0;
     border: 0;
+  }
+  .fusion-note {
+    margin: 0;
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-xs);
   }
   legend {
     margin-bottom: 4px;

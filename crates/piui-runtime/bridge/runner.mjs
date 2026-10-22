@@ -248,10 +248,13 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
       ? metadata.toolCallId : undefined;
     const hashed = sidekickOperationHash(operation);
     return new Promise((resolve, reject) => {
+      const cancelled = () => Object.assign(new Error("cancelled"), { bridgeCode: "sidekick-cancelled", safeMessage: "The sidekick request was cancelled. Collect the result with wait." });
+      // A caller that is already gone never reaches the host.
+      if (metadata?.signal?.aborted === true) { reject(cancelled()); return; }
       sidekickPending.set(requestId, { resolve, reject });
       if (metadata?.signal && typeof metadata.signal.addEventListener === "function") {
         metadata.signal.addEventListener("abort", () => {
-          if (sidekickPending.delete(requestId)) reject(Object.assign(new Error("cancelled"), { bridgeCode: "sidekick-cancelled", safeMessage: "The sidekick request was cancelled. Collect the result with wait." }));
+          if (sidekickPending.delete(requestId)) reject(cancelled());
         }, { once: true });
       }
       hashed.then((opHash) => {

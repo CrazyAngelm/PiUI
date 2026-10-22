@@ -21,7 +21,7 @@ use piui_runtime::workspace_runtime::{
 };
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::watch;
@@ -287,6 +287,13 @@ struct FakeHost {
     /// An interrupt ends the running turn (the stop proof).
     interrupt_completes: AtomicBool,
     approvals: Mutex<Vec<String>>,
+    /// `last_answer` waits for `release` while set.
+    hold_answers: AtomicBool,
+    release: Arc<tokio::sync::Notify>,
+    answer_calls: AtomicUsize,
+    /// The content fingerprint `file_view` reports.
+    view_fingerprint: Mutex<String>,
+    closed: Mutex<Vec<String>>,
 }
 
 impl FakeHost {
@@ -412,6 +419,7 @@ impl FusionHost for Arc<FakeHost> {
         if let Some(session) = self.sessions.lock().unwrap().get_mut(&session_id) {
             session.turns = None;
         }
+        self.closed.lock().unwrap().push(session_id);
         ready(())
     }
 
@@ -419,12 +427,37 @@ impl FusionHost for Arc<FakeHost> {
         &self,
         session_id: String,
     ) -> HostFuture<Result<Option<(String, String)>, HostFailure>> {
-        ready(Ok(self
+        self.answer_calls.fetch_add(1, Ordering::AcqRel);
+        let value = self
             .sessions
             .lock()
             .unwrap()
             .get(&session_id)
-            .and_then(|session| session.answers.last().cloned())))
+            .and_then(|session| session.answers.last().cloned());
+        if self.hold_answers.load(Ordering::Acquire) {
+            let release = Arc::clone(&self.release);
+            return Box::pin(async move {
+                release.notified().await;
+                Ok(value)
+            });
+        }
+        ready(Ok(value))
+    }
+
+    fn answer(
+        &self,
+        session_id: String,
+        block_id: String,
+    ) -> HostFuture<Result<Option<String>, HostFailure>> {
+        ready(Ok(self.sessions.lock().unwrap().get(&session_id).and_then(
+            |session| {
+                session
+                    .answers
+                    .iter()
+                    .find(|(id, _)| *id == block_id)
+                    .map(|(_, text)| text.clone())
+            },
+        )))
     }
 
     fn activity(&self, _session_id: String) -> HostFuture<SessionActivity> {
@@ -461,7 +494,7 @@ impl FusionHost for Arc<FakeHost> {
                 hunks: 1,
                 hunk_actions: false,
             },
-            "fp".into(),
+            self.view_fingerprint.lock().unwrap().clone(),
         )))
     }
 }
@@ -567,6 +600,16 @@ async fn a_brief_that_finishes_inside_the_wait_hands_its_report_to_the_tool_once
     assert_eq!(round.state, RoundState::Finished);
     assert_eq!(round.outcome, Some(RoundOutcome::Completed));
     let delivery = round.delivery.as_ref().unwrap();
+    assert_eq!(
+        (delivery.via, delivery.state),
+        (DeliveryVia::Tool, DeliveryState::Sending),
+        "sent only once the workspace confirms the write-back"
+    );
+    fixture.broker.delivery_sent(LEAD, "r1").await;
+    let delivery = fixture.document().await.briefs[0].rounds[0]
+        .delivery
+        .clone()
+        .unwrap();
     assert_eq!(
         (delivery.via, delivery.state),
         (DeliveryVia::Tool, DeliveryState::Sent)
@@ -894,6 +937,412 @@ fn membership_names_the_lead_and_its_sidekicks() {
     assert!(broker.membership(LEAD).is_none());
 }
 
+// ---------------------------------------------------------------------------
+// Review fixes: restarts, send admission, delivery records
+// ---------------------------------------------------------------------------
+
+fn wait_op(round_id: &str, seconds: u64) -> Map<String, Value> {
+    op(json!({"op": "wait", "roundId": round_id, "waitSeconds": seconds}))
+}
+
+fn message_op(text: &str) -> Map<String, Value> {
+    op(json!({"op": "message", "briefId": "b1", "text": text, "wait": false}))
+}
+
+fn push_answer(host: &FakeHost, session_id: &str, block_id: &str, text: &str) {
+    host.sessions
+        .lock()
+        .unwrap()
+        .get_mut(session_id)
+        .unwrap()
+        .answers
+        .push((block_id.into(), text.into()));
+}
+
+fn stored_round(store: &MemoryFusionStore, index: usize) -> Option<super::model::FusionRound> {
+    store
+        .load_all()
+        .first()
+        .and_then(|document| document.briefs.first()?.rounds.get(index).cloned())
+}
+
+fn stored_delivery(store: &MemoryFusionStore) -> Option<(DeliveryVia, DeliveryState)> {
+    stored_round(store, 0)
+        .and_then(|round| round.delivery)
+        .map(|delivery| (delivery.via, delivery.state))
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_restart_never_attributes_an_earlier_answer_to_a_new_round() {
+    let fixture = fixture();
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    fixture
+        .host
+        .complete(&sidekick, Some("STATUS: partial"), TurnOutcome::Succeeded);
+    let _ = fixture.call("call-2", wait_op("r1", 30)).await;
+    // Round r2 starts; PiUI stops before r2 answers.
+    let (started, _) = fixture.call("call-3", message_op("also y")).await;
+    assert_eq!(started["ok"], json!(true), "{started}");
+    let host = Arc::new(FakeHost::default());
+    let restarted = FusionBroker::new(Arc::new(Arc::clone(&host)), fixture.store.clone(), true);
+    host.live(&sidekick, SessionStatus::Idle);
+    push_answer(&host, &sidekick, "block-1", "STATUS: partial");
+    assert!(
+        !restarted.reconcile(LEAD, "r2").await.unwrap(),
+        "r1's answer is not r2's"
+    );
+    let state = restarted.state(LEAD).await.unwrap();
+    assert_eq!(state.briefs[0].rounds[1].state, RoundState::Uncertain);
+    push_answer(&host, &sidekick, "block-2", "STATUS: done");
+    assert!(restarted.reconcile(LEAD, "r2").await.unwrap());
+    let state = restarted.state(LEAD).await.unwrap();
+    assert_eq!(state.briefs[0].rounds[1].status, Some(ReportStatus::Done));
+    // The baseline stays host-private.
+    let public = serde_json::to_value(&state).unwrap();
+    assert!(
+        public["briefs"][0]["rounds"][1]
+            .get("baselineBlockId")
+            .is_none()
+    );
+    assert!(public.get("roundHosts").is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_round_from_a_journal_without_its_baseline_stays_uncertain() {
+    let fixture = fixture();
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    // A journal written before the host records existed has none.
+    for document in fixture.store.documents.lock().unwrap().values_mut() {
+        document.round_hosts.clear();
+    }
+    let host = Arc::new(FakeHost::default());
+    let restarted = FusionBroker::new(Arc::new(Arc::clone(&host)), fixture.store.clone(), true);
+    host.live(&sidekick, SessionStatus::Idle);
+    push_answer(&host, &sidekick, "block-1", "STATUS: done");
+    assert!(!restarted.reconcile(LEAD, "r1").await.unwrap());
+    let state = restarted.state(LEAD).await.unwrap();
+    assert_eq!(state.briefs[0].rounds[0].state, RoundState::Uncertain);
+    restarted.abandon(LEAD, "r1").await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stop_while_the_round_is_starting_cancels_it_before_its_prompt() {
+    let fixture = fixture();
+    fixture.host.hold_answers.store(true, Ordering::Release);
+    let broker = fixture.broker.clone();
+    let briefing = tokio::spawn(async move {
+        broker
+            .handle(LEAD, &identity("call-1", "h1"), brief(false, 0))
+            .await
+    });
+    let host = Arc::clone(&fixture.host);
+    until(|| host.answer_calls.load(Ordering::Acquire) == 1).await;
+    let broker = fixture.broker.clone();
+    let stopping = tokio::spawn(async move { broker.stop_sidekick(LEAD).await });
+    let store = fixture.store.clone();
+    until(|| stored_round(&store, 0).is_some_and(|round| round.state == RoundState::Stopping))
+        .await;
+    fixture.host.release.notify_one();
+    let (answer, _) = briefing.await.unwrap();
+    assert_eq!(answer["code"], json!("pair-stopping"), "{answer}");
+    assert_eq!(stopping.await.unwrap(), Ok(()));
+    let sidekick = fixture.host.sidekick_id();
+    assert!(
+        fixture.host.sent_to(&sidekick).is_empty(),
+        "the stopped round never ran"
+    );
+    let round = stored_round(&fixture.store, 0).unwrap();
+    assert_eq!(
+        (round.state, round.outcome),
+        (RoundState::Finished, Some(RoundOutcome::Interrupted))
+    );
+    fixture.host.hold_answers.store(false, Ordering::Release);
+    let (admitted, _) = fixture.call("call-2", brief(false, 0)).await;
+    assert_eq!(admitted["ok"], json!(true), "{admitted}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_correction_whose_admission_was_not_recorded_never_runs() {
+    let fixture = fixture();
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    fixture
+        .host
+        .complete(&sidekick, Some("STATUS: partial"), TurnOutcome::Succeeded);
+    let _ = fixture.call("call-2", wait_op("r1", 30)).await;
+    fixture.store.fail_writes.store(true, Ordering::Release);
+    let (refused, _) = fixture.call("call-3", message_op("fix y")).await;
+    assert_eq!(refused["code"], json!("sidekick-unavailable"), "{refused}");
+    assert_eq!(
+        fixture.host.sent_to(&sidekick).len(),
+        1,
+        "only the brief ran"
+    );
+    let state = fixture.broker.state(LEAD).await.unwrap();
+    assert_eq!(state.briefs[0].rounds.len(), 1);
+    fixture.store.fail_writes.store(false, Ordering::Release);
+    let (admitted, _) = fixture.call("call-4", message_op("fix y")).await;
+    assert_eq!(admitted["roundId"], json!("r2"), "{admitted}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_tool_handoff_in_flight_at_a_restart_is_uncertain_not_sent() {
+    let fixture = fixture();
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    fixture
+        .host
+        .complete(&sidekick, Some("STATUS: done"), TurnOutcome::Succeeded);
+    let (_, claimed) = fixture.call("call-2", wait_op("r1", 30)).await;
+    assert_eq!(claimed.as_deref(), Some("r1"));
+    assert_eq!(
+        stored_delivery(&fixture.store),
+        Some((DeliveryVia::Tool, DeliveryState::Sending))
+    );
+    // PiUI stops before the response reaches the lead.
+    let host = Arc::new(FakeHost::default());
+    host.live(LEAD, SessionStatus::Idle);
+    let restarted = FusionBroker::new(Arc::new(Arc::clone(&host)), fixture.store.clone(), true);
+    restarted.resume_deliveries().await;
+    assert_eq!(
+        stored_delivery(&fixture.store),
+        Some((DeliveryVia::Tool, DeliveryState::Uncertain))
+    );
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert!(host.sent_to(LEAD).is_empty());
+}
+
+/// A finished report queued for a running lead, then a restart with the
+/// sidekick's history holding `history` as block-1.
+async fn restart_with_a_queued_report(history: &str) -> (Fixture, Arc<FakeHost>, FusionBroker) {
+    let fixture = fixture();
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    fixture.host.complete(
+        &sidekick,
+        Some("STATUS: done\nSUMMARY: parser fixed"),
+        TurnOutcome::Succeeded,
+    );
+    let store = fixture.store.clone();
+    until(|| stored_delivery(&store) == Some((DeliveryVia::FollowUp, DeliveryState::Queued))).await;
+    let host = Arc::new(FakeHost::default());
+    host.live(&sidekick, SessionStatus::Idle);
+    push_answer(&host, &sidekick, "block-1", history);
+    host.live(LEAD, SessionStatus::Idle);
+    let restarted = FusionBroker::new(Arc::new(Arc::clone(&host)), fixture.store.clone(), true);
+    restarted.resume_deliveries().await;
+    (fixture, host, restarted)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_report_queued_at_a_restart_is_read_back_from_native_history() {
+    let (fixture, host, restarted) =
+        restart_with_a_queued_report("STATUS: done\nSUMMARY: parser fixed").await;
+    until(|| host.sent_to(LEAD).len() == 1).await;
+    let text = host.sent_to(LEAD)[0].0.clone();
+    assert!(
+        text.contains("STATUS done") && text.contains("parser fixed"),
+        "{text}"
+    );
+    let store = fixture.store.clone();
+    until(|| stored_delivery(&store) == Some((DeliveryVia::FollowUp, DeliveryState::Sent))).await;
+    let (report, _) = restarted
+        .handle(
+            LEAD,
+            &identity("call-9", "h9"),
+            op(json!({"op": "report", "roundId": "r1"})),
+        )
+        .await;
+    assert!(
+        report["text"].as_str().unwrap().contains("parser fixed"),
+        "{report}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_queued_report_that_cannot_be_read_back_is_uncertain_not_a_placeholder() {
+    let (fixture, host, restarted) =
+        restart_with_a_queued_report("STATUS: blocked\nSUMMARY: something else").await;
+    let store = fixture.store.clone();
+    until(|| stored_delivery(&store) == Some((DeliveryVia::FollowUp, DeliveryState::Uncertain)))
+        .await;
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert!(host.sent_to(LEAD).is_empty(), "no placeholder was sent");
+    let (wait, claimed) = restarted
+        .handle(LEAD, &identity("call-9", "h9"), wait_op("r1", 1))
+        .await;
+    assert_eq!(wait["code"], json!("uncertain"), "{wait}");
+    assert!(claimed.is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn closing_the_lead_while_a_brief_waits_still_queues_the_report() {
+    let fixture = fixture();
+    let broker = fixture.broker.clone();
+    let waiting = tokio::spawn(async move {
+        broker
+            .handle(LEAD, &identity("call-1", "h1"), brief(true, 120))
+            .await
+    });
+    let host = Arc::clone(&fixture.host);
+    until(|| !host.sent.lock().unwrap().is_empty()).await;
+    // Closing the lead aborts its pending tool call.
+    waiting.abort();
+    let _ = waiting.await;
+    host.complete(
+        &host.sidekick_id(),
+        Some("STATUS: done"),
+        TurnOutcome::Succeeded,
+    );
+    host.set_status(LEAD, SessionStatus::Idle);
+    until(|| host.sent_to(LEAD).len() == 1).await;
+    assert!(host.sent_to(LEAD)[0].0.contains("STATUS done"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_report_the_person_withdrew_never_reaches_a_waiting_call() {
+    let fixture = fixture();
+    fixture
+        .host
+        .interrupt_completes
+        .store(true, Ordering::Release);
+    let broker = fixture.broker.clone();
+    let waiting = tokio::spawn(async move {
+        broker
+            .handle(LEAD, &identity("call-1", "h1"), brief(true, 120))
+            .await
+    });
+    let host = Arc::clone(&fixture.host);
+    until(|| !host.sent.lock().unwrap().is_empty()).await;
+    fixture.broker.stop_sidekick(LEAD).await.unwrap();
+    let (answer, claimed) = waiting.await.unwrap();
+    assert_eq!(answer["code"], json!("pair-stopping"), "{answer}");
+    assert!(claimed.is_none() && answer.get("report").is_none());
+    assert_eq!(
+        stored_delivery(&fixture.store),
+        Some((DeliveryVia::FollowUp, DeliveryState::Withdrawn))
+    );
+    let (report, _) = fixture
+        .call("call-2", op(json!({"op": "report", "roundId": "r1"})))
+        .await;
+    assert_eq!(report["code"], json!("pair-stopping"));
+    host.set_status(LEAD, SessionStatus::Idle);
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert!(host.sent_to(LEAD).is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_replayed_answer_takes_its_report_back_from_the_follow_up_queue() {
+    let fixture = fixture();
+    let broker = fixture.broker.clone();
+    let task = tokio::spawn(async move {
+        broker
+            .handle(LEAD, &identity("call-1", "h1"), brief(true, 120))
+            .await
+    });
+    let host = Arc::clone(&fixture.host);
+    until(|| !host.sent.lock().unwrap().is_empty()).await;
+    host.complete(
+        &host.sidekick_id(),
+        Some("STATUS: done"),
+        TurnOutcome::Succeeded,
+    );
+    let (first, claimed) = task.await.unwrap();
+    assert_eq!(claimed.as_deref(), Some("r1"));
+    // The write-back failed: the report waits for the idle lead.
+    fixture.broker.delivery_failed(LEAD, "r1").await;
+    // The harness retries the same call before the lead is idle.
+    let (retry, reclaimed) = fixture
+        .broker
+        .handle(LEAD, &identity("call-1", "h1"), brief(true, 120))
+        .await;
+    assert_eq!(retry, first);
+    assert_eq!(reclaimed.as_deref(), Some("r1"));
+    fixture.broker.delivery_sent(LEAD, "r1").await;
+    host.set_status(LEAD, SessionStatus::Idle);
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert!(host.sent_to(LEAD).is_empty(), "never delivered twice");
+    assert_eq!(
+        stored_delivery(&fixture.store),
+        Some((DeliveryVia::Tool, DeliveryState::Sent))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_diff_page_is_stale_when_a_file_changes_with_the_same_line_counts() {
+    let fixture = fixture();
+    *fixture.host.view_fingerprint.lock().unwrap() = "content-1".into();
+    let (first, _) = fixture.call("call-1", op(json!({"op": "diff"}))).await;
+    let fingerprint = first["fingerprint"].as_str().unwrap().to_owned();
+    let (same, _) = fixture
+        .call(
+            "call-2",
+            op(json!({"op": "diff", "page": 1, "fingerprint": fingerprint.clone()})),
+        )
+        .await;
+    assert_eq!(same["ok"], json!(true), "{same}");
+    *fixture.host.view_fingerprint.lock().unwrap() = "content-2".into();
+    let (stale, _) = fixture
+        .call(
+            "call-3",
+            op(json!({"op": "diff", "page": 1, "fingerprint": fingerprint})),
+        )
+        .await;
+    assert_eq!(stale["code"], json!("diff-stale"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lead_is_deletable_only_without_an_open_round_and_takes_its_pair_along() {
+    let fixture = fixture();
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    assert!(!fixture.broker.deletable(LEAD).await, "a round is open");
+    assert!(fixture.broker.is_current_sidekick(&sidekick));
+    assert!(!fixture.broker.deletable(&sidekick).await);
+    fixture
+        .host
+        .complete(&sidekick, Some("STATUS: done"), TurnOutcome::Succeeded);
+    let store = fixture.store.clone();
+    until(|| stored_delivery(&store) == Some((DeliveryVia::FollowUp, DeliveryState::Queued))).await;
+    assert!(fixture.broker.deletable(LEAD).await);
+    fixture.broker.session_deleted(LEAD).await;
+    assert!(fixture.broker.membership(LEAD).is_none());
+    assert!(fixture.broker.membership(&sidekick).is_none());
+    assert!(
+        fixture.store.load_all().is_empty(),
+        "the journal went with the chat"
+    );
+    assert_eq!(*fixture.host.closed.lock().unwrap(), vec![sidekick.clone()]);
+    fixture.host.set_status(LEAD, SessionStatus::Idle);
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert!(
+        fixture.host.sent_to(LEAD).is_empty(),
+        "no delivery to a deleted lead"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_retired_sidekick_may_be_deleted() {
+    let fixture = fixture();
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    fixture
+        .host
+        .complete(&sidekick, Some("STATUS: done"), TurnOutcome::Succeeded);
+    let store = fixture.store.clone();
+    until(|| stored_round(&store, 0).is_some_and(|round| round.state == RoundState::Finished))
+        .await;
+    let (reset, _) = fixture.call("call-2", op(json!({"op": "reset"}))).await;
+    assert_eq!(reset["ok"], json!(true), "{reset}");
+    assert!(!fixture.broker.is_current_sidekick(&sidekick));
+    assert!(fixture.broker.deletable(&sidekick).await);
+    fixture.broker.session_deleted(&sidekick).await;
+    assert!(fixture.broker.membership(&sidekick).is_none());
+    assert!(fixture.broker.membership(LEAD).is_some());
+}
+
 #[test]
 fn contract_shapes_match_the_public_fixture() {
     use super::model::{
@@ -949,6 +1398,7 @@ fn contract_shapes_match_the_public_fixture() {
                 take_over: false,
                 // Host-private fields never reach the WebView.
                 baseline_block_id: Some("block-0".into()),
+                baseline_known: true,
                 started_ms: 7,
                 report: None,
                 full_body: Some("STATUS: done".into()),

@@ -29,6 +29,16 @@ class FusionMembership {
     this.entries.set(leadSessionId, { role: 'lead', leadSessionId });
   }
 
+  /** A sidekick whose lead is known (a pair created or observed by this window). */
+  rememberSidekick(sessionId: string, leadSessionId: string): void {
+    this.entries.set(sessionId, { role: 'sidekick', leadSessionId });
+  }
+
+  /** Whether the chat is known to be a Fusion sidekick (its turns belong to the broker). */
+  isSidekick(sessionId: string): boolean {
+    return this.entries.get(sessionId)?.role === 'sidekick';
+  }
+
   load(sessionId: string): Promise<void> {
     if (this.entries.has(sessionId)) return Promise.resolve();
     const running = this.pending.get(sessionId);

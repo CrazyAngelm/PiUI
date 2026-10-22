@@ -15,6 +15,7 @@
     type ApprovalFormDraft,
   } from '../../host-api/approvalForms';
   import { Button, Textarea, toasts } from '../../lib/ui';
+  import { fusionMembership } from '../fusion/fusionMembership.svelte';
   import ApprovalForm from './ApprovalForm.svelte';
   import HarnessMark from './HarnessMark.svelte';
   import { useWorkspace } from './context';
@@ -34,9 +35,16 @@
   const error = $derived(store.approvalErrors[key] ?? '');
   // Native choice list (e.g. Pi `select` dialogs); absent for other requests.
   const options = $derived(approval.options ?? []);
-  // A run member keeps its run's frozen permissions: it is answered once at a
-  // time, never approved for the rest of the session (ADR-044).
-  const decisions = $derived(session.runId ? approval.decisions.filter((decision) => decision !== 'approve-session') : approval.decisions);
+  // Shared by the chat and the Inbox: the card asks the host once whether the
+  // chat is a Fusion sidekick (cached per chat).
+  $effect(() => {
+    void fusionMembership.load(session.id);
+  });
+  // A run member keeps its run's frozen permissions, and a Fusion sidekick's
+  // turns belong to the broker: both are answered once at a time, never approved
+  // for the rest of the session (ADR-043, ADR-044). The host refuses it anyway.
+  const standingApprovalRefused = $derived(Boolean(session.runId) || fusionMembership.isSidekick(session.id));
+  const decisions = $derived(standingApprovalRefused ? approval.decisions.filter((decision) => decision !== 'approve-session') : approval.decisions);
   // An editor dialog may arrive with prepared text (additive v15 `prefill`).
   let input = $state(untrack(() => approval.prefill ?? ''));
   // Native form request (a Codex MCP elicitation); absent for other requests.

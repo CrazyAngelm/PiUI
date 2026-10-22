@@ -453,9 +453,14 @@ pub(crate) struct FusionRound {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub take_over: bool,
     /// Host-private: the sidekick's last assistant block before this round
-    /// (an answer equal to it is "no answer"), and its turn generation.
+    /// (an answer equal to it is "no answer"). Never sent to the WebView; the
+    /// journal keeps it in [`FusionDocument::round_hosts`].
     #[serde(default, skip_serializing)]
     pub baseline_block_id: Option<String>,
+    /// Host-private: the baseline was read before the turn was sent. A
+    /// round without it (an older journal) cannot be reconciled.
+    #[serde(skip)]
+    pub baseline_known: bool,
     #[serde(default, skip_serializing)]
     pub started_ms: u64,
     /// Host-private: the report the lead receives (kept while this process
@@ -545,6 +550,66 @@ pub(crate) struct FusionDocument {
     pub calls: Vec<CallRecord>,
     #[serde(default)]
     pub folded_briefs: u64,
+    /// Journal only: the host-private facts of each round. Filled when a
+    /// generation is written ([`Self::for_journal`]) and moved back into the
+    /// rounds when it is read ([`Self::restore_round_hosts`]); empty in memory.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub round_hosts: Vec<RoundHostRecord>,
+}
+
+/// Host-private facts of one round that a restart needs; never part of
+/// `FusionStateV1`. A journal written before this record existed has none,
+/// and its rounds stay unprovable (`uncertain`) instead of being completed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RoundHostRecord {
+    pub round_id: String,
+    #[serde(default)]
+    pub baseline_known: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_block_id: Option<String>,
+    #[serde(default)]
+    pub started_ms: u64,
+}
+
+impl FusionDocument {
+    /// The generation written to the journal: the document with each round's
+    /// host-private facts in `round_hosts`.
+    pub(crate) fn for_journal(&self) -> Self {
+        let mut stored = self.clone();
+        stored.round_hosts = self
+            .briefs
+            .iter()
+            .flat_map(|brief| &brief.rounds)
+            .map(|round| RoundHostRecord {
+                round_id: round.round_id.clone(),
+                baseline_known: round.baseline_known,
+                baseline_block_id: round.baseline_block_id.clone(),
+                started_ms: round.started_ms,
+            })
+            .collect();
+        stored
+    }
+
+    /// Moves the journal's host-private round facts back into the rounds.
+    pub(crate) fn restore_round_hosts(&mut self) {
+        let records = std::mem::take(&mut self.round_hosts);
+        for round in self.briefs.iter_mut().flat_map(|brief| &mut brief.rounds) {
+            if let Some(record) = records
+                .iter()
+                .find(|record| record.round_id == round.round_id)
+            {
+                round.baseline_known = record.baseline_known;
+                round
+                    .baseline_block_id
+                    .clone_from(&record.baseline_block_id);
+                round.started_ms = record.started_ms;
+            } else {
+                round.baseline_known = false;
+                round.baseline_block_id = None;
+            }
+        }
+    }
 }
 
 /// `FusionStateV1`: what the WebView reads.

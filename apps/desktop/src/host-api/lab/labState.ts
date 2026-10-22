@@ -115,6 +115,12 @@ export interface LabState {
   sessions: Map<string, LabSessionRecord>;
   orchestration: Map<string, LabOrchestrationWorkspace>;
   ids: LabIdSource;
+  /**
+   * Fusion membership (ADR-043), set by the Fusion fake: a sidekick's turns
+   * belong to the broker, so the ordinary workspace guards refuse it like
+   * `HostWorkspace::is_fusion_sidekick` does.
+   */
+  isFusionSidekick?: (sessionId: string) => boolean;
 }
 
 /** IPC boundary: JSON round-trip drops `undefined` exactly like serde `skip_serializing_if`. */

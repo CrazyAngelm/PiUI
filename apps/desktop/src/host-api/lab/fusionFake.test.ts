@@ -185,6 +185,35 @@ describe('fusion lab fake', () => {
     expect(await fusion(host, { type: 'find', sessionId: sidekickId })).toMatchObject({ role: 'sidekick', leadSessionId: lead });
   });
 
+  it('refuses ordinary workspace commands on a sidekick like the native host', async () => {
+    const lead = (await create(host)).leadSessionId;
+    await vi.advanceTimersByTimeAsync(LAB_FUSION_BRIEF_DELAY_MS + LAB_FUSION_QUEUE_MS + LAB_FUSION_ROUND_MS);
+    const sidekick = (await stateOf(host, lead)).sessions[0]?.sessionId ?? '';
+    const refused = async (channel: string, command: Record<string, unknown>) =>
+      rejection(host.invoke(channel, { command }));
+    const model = { id: 'lab-sonnet', provider: 'anthropic', name: 'Claude Lab Sonnet' };
+
+    expect(await refused('workspace_command_v15', { type: 'send', sessionId: sidekick, text: 'hello', mode: 'prompt' })).toMatchObject({ code: 'NOT_SUPPORTED' });
+    expect(await refused('workspace_command_v15', { type: 'send', sessionId: sidekick, text: 'hello', mode: 'steer' })).toMatchObject({ code: 'NOT_SUPPORTED' });
+    expect(await refused('workspace_command_v15', { type: 'interrupt', sessionId: sidekick })).toMatchObject({ code: 'NOT_SUPPORTED' });
+    expect(await refused('workspace_command_v15', { type: 'setModel', sessionId: sidekick, model })).toMatchObject({ code: 'NOT_SUPPORTED' });
+    expect(await refused('workspace_command_v15', { type: 'respond', sessionId: sidekick, requestId: 'r1', decision: 'approve-session' })).toMatchObject({ code: 'NOT_SUPPORTED' });
+    expect(await refused('workspace_settings_v16', { type: 'set', sessionId: sidekick, model, thinkingLevel: null, serviceTier: null })).toMatchObject({ code: 'NOT_SUPPORTED' });
+    expect(await refused('workspace_lifecycle_v17', { type: 'deleteSession', sessionId: sidekick })).toMatchObject({ code: 'NOT_SUPPORTED' });
+    expect(await refused('workspace_composer_v19', { type: 'send', sessionId: sidekick, requestId: 'q1', text: 'hello', mode: 'prompt' })).toMatchObject({ code: 'NOT_SUPPORTED' });
+    expect(host.state.sessions.has(sidekick)).toBe(true);
+
+    // Reading, renaming, closing and answering a request once stay available.
+    await expect(host.invoke('workspace_settings_v16', { command: { type: 'get', sessionId: sidekick } })).resolves.toMatchObject({ sessionId: sidekick });
+    await expect(host.invoke('workspace_composer_v19', { command: { type: 'snapshot', sessionId: sidekick } })).resolves.toMatchObject({ sessionId: sidekick });
+    expect(await refused('workspace_command_v15', { type: 'respond', sessionId: sidekick, requestId: 'r1', decision: 'approve-once' })).toMatchObject({ code: 'APPROVAL_EXPIRED' });
+    await expect(host.invoke('workspace_command_v15', { command: { type: 'renameSession', sessionId: sidekick, title: 'Sidekick notes' } })).resolves.toMatchObject({ type: 'accepted' });
+
+    // The lead is an ordinary chat; stopping the sidekick goes through the broker.
+    await expect(host.invoke('workspace_command_v15', { command: { type: 'send', sessionId: lead, text: 'hello', mode: 'prompt' } })).resolves.toMatchObject({ type: 'accepted' });
+    expect(await fusion(host, { type: 'stopSidekick', leadSessionId: lead })).toEqual({ type: 'accepted' });
+  });
+
   it('reconciles or abandons an uncertain round and refuses a reset meanwhile', async () => {
     host.fusion.autoDemo = false;
     const lead = (await create(host)).leadSessionId;

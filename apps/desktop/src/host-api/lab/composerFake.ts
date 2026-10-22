@@ -2,7 +2,7 @@ import { composerCapabilities } from './catalogFake';
 import { claimLabImages, labImageSupport, releaseLabImages } from './composerInputsFake';
 import type { ComposerCommand, ComposerSnapshot, Delivery, QueuedAttachment } from './labContracts';
 import { NativeRejection, workspaceFailure, type NativeRejectionCode } from './labErrors';
-import { authorizeLive, requireLive, validText } from './labGuards';
+import { authorizeLive, refuseFusionSidekick, requireLive, validText } from './labGuards';
 import type { LabHandlers } from './labHandlers';
 import { isUuid } from './labRandom';
 import { decodeArgument } from './labSchema';
@@ -180,6 +180,8 @@ function composer(runtime: LabSessions, command: ComposerCommand): ComposerSnaps
   if (!isUuid(command.sessionId)) throw workspaceFailure('INVALID_ARGUMENT');
   const record = authorizeLive(state, command.sessionId);
   if (record.runId !== undefined) throw workspaceFailure('NOT_SUPPORTED');
+  // Reading a sidekick's outbox stays possible; anything that prompts, steers or changes the queue is refused.
+  if (command.type !== 'snapshot') refuseFusionSidekick(state, command.sessionId);
   const live = requireLive(record);
   live.composerNotify = true;
   if (live.status === 'failed') throw workspaceFailure('RUNTIME_FAILED');

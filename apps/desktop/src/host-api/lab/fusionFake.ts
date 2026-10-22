@@ -235,6 +235,8 @@ export function createLabFusion(runtime: LabSessions, bus: LabEventBus, options:
   /** The not yet started demo brief of a lead. */
   const demoTimers = new Map<string, () => void>();
   const now = (): string => runtime.clock.iso();
+  // Connects membership to the ordinary workspace guards (`labGuards`).
+  state.isFusionSidekick = (sessionId) => [...states.values()].some((doc) => doc.sessions.some((session) => session.sessionId === sessionId));
 
   const fusion: LabFusion = {
     codexSandbox: options.codexSandbox ?? true,

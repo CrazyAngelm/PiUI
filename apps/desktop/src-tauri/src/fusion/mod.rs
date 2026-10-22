@@ -24,7 +24,7 @@ use model::{
     FusionResultV1, FusionRoleName,
 };
 use piui_runtime::workspace_runtime::{
-    BlockKind, HarnessKind, HostTool, PromptMode, SidekickCallIdentity,
+    BlockKind, HarnessKind, HostTool, PromptMode, SessionStatus, SidekickCallIdentity,
 };
 use std::future::Future;
 use std::path::Path;
@@ -147,6 +147,35 @@ impl FusionSessionHooks for FusionSessions {
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let broker = self.broker.clone();
         Box::pin(async move { broker.delivery_failed(&lead_session_id, &round_id).await })
+    }
+
+    fn delivery_sent(
+        &self,
+        lead_session_id: String,
+        round_id: String,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        let broker = self.broker.clone();
+        Box::pin(async move { broker.delivery_sent(&lead_session_id, &round_id).await })
+    }
+
+    fn is_current_sidekick(&self, session_id: &str) -> bool {
+        self.broker.is_current_sidekick(session_id)
+    }
+
+    fn deletable(
+        &self,
+        session_id: String,
+    ) -> Pin<Box<dyn Future<Output = bool> + Send + 'static>> {
+        let broker = self.broker.clone();
+        Box::pin(async move { broker.deletable(&session_id).await })
+    }
+
+    fn session_deleted(
+        &self,
+        session_id: String,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        let broker = self.broker.clone();
+        Box::pin(async move { broker.session_deleted(&session_id).await })
     }
 }
 
@@ -339,6 +368,27 @@ impl FusionHost for TauriFusionHost {
         })
     }
 
+    fn answer(
+        &self,
+        session_id: String,
+        block_id: String,
+    ) -> HostFuture<Result<Option<String>, HostFailure>> {
+        let app = self.app.clone();
+        Box::pin(async move {
+            let host = app.state::<HostState>();
+            let snapshot = host
+                .workspace
+                .snapshot(&session_id)
+                .await
+                .map_err(|error| failure(&error))?;
+            Ok(snapshot
+                .blocks
+                .into_iter()
+                .find(|block| block.id == block_id && block.kind == BlockKind::Assistant)
+                .and_then(|block| block.text))
+        })
+    }
+
     fn activity(&self, session_id: String) -> HostFuture<SessionActivity> {
         let app = self.app.clone();
         Box::pin(async move {
@@ -523,17 +573,28 @@ async fn dispatch(
             },
         }),
         FusionCommandV1::StopPair { lead_session_id } => {
-            broker
-                .stop_sidekick(&lead_session_id)
-                .await
-                .map_err(refused)?;
-            if host
+            // The lead is interrupted first and whatever the sidekick's stop
+            // barrier proves, so it cannot brief again meanwhile; each failure
+            // is reported, never acknowledged as a stop.
+            let lead_running = host
                 .workspace
                 .subscribe_turns(&lead_session_id)
-                .is_ok_and(|turns| turns.is_some())
-            {
-                let _ = host.workspace.interrupt(&lead_session_id).await;
-            }
+                .ok()
+                .flatten()
+                .is_some_and(|turns| {
+                    matches!(
+                        turns.borrow().status,
+                        SessionStatus::Running | SessionStatus::Starting
+                    )
+                });
+            let lead = if lead_running {
+                host.workspace.interrupt(&lead_session_id).await
+            } else {
+                Ok(())
+            };
+            let sidekick = broker.stop_sidekick(&lead_session_id).await;
+            sidekick.map_err(refused)?;
+            lead?;
             Ok(FusionResultV1::Accepted {})
         }
         FusionCommandV1::StopSidekick { lead_session_id } => {

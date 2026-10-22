@@ -138,6 +138,10 @@ export const fusionRu: Readonly<Record<string, string>> = {
     'Текущая беседа напарника закрывается, но остаётся доступной для чтения. Следующее поручение запустит нового напарника с пустым контекстом, он не будет помнить прежние поручения.',
   'Reset sidekick': 'Сбросить напарника',
 
+  'Project: {0}': 'Проект: {0}',
+  'Fusion roles take their permissions from the pair picker, not from this menu.':
+    'Права ролей Fusion задаются в выборе пары, а не в этом меню.',
+
   // Sidekick chat and lead notices
   'the lead chat': 'чат ведущего',
   'Read-only: the lead gives the sidekick its work through briefs.': 'Только чтение: ведущий даёт напарнику работу через поручения.',

@@ -34,6 +34,30 @@ export async function createPiAdapter(config, emit) {
     }
   } catch { /* Older Pi builds may only report reasoning for the current model through RPC. */ }
 
+  // Pi 0.80.4 added `agent_settled`: the only event that says no automatic
+  // retry, compaction retry or queued continuation remains. `agent_end` fires
+  // once per low-level run and may be followed by another run. The barrier is
+  // known from the installed Pi version, or learned from the first
+  // `agent_settled`. Runtimes with neither fall back to `agent_end` (below).
+  let settledBarrier = false;
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const { isAbsolute, dirname } = await import("node:path");
+    const entry = config.runtimeArgs.find(value => typeof value === "string" && isAbsolute(value) && value.endsWith(".js"));
+    for (let directory = entry ? dirname(entry) : undefined; directory;) {
+      let manifest;
+      try { manifest = JSON.parse(await readFile(join(directory, "package.json"), "utf8")); } catch { manifest = undefined; }
+      if (manifest?.name === "@earendil-works/pi-coding-agent") {
+        const [major, minor, patch] = String(manifest.version).split(/[.+-]/).map(Number);
+        settledBarrier = [major, minor, patch].every(Number.isSafeInteger)
+          && (major > 0 || minor > 80 || (minor === 80 && patch >= 4));
+        break;
+      }
+      const parent = dirname(directory);
+      directory = parent === directory ? undefined : parent;
+    }
+  } catch { /* An unknown Pi build uses the agent_end fallback until it reports agent_settled. */ }
+
   if (config.nativeSubagents === true) throw fail("unsupported-policy", "This Pi adapter cannot enforce native subagent policy.");
   if (config.coordination === true) throw fail("unsupported-policy", "This Pi RPC adapter cannot register the coordinator tool.");
   // Pi RPC has no custom host tools. The board is optional, so the chat
@@ -361,7 +385,17 @@ export async function createPiAdapter(config, emit) {
   const handleNativeEvent = (frame) => {
     switch (frame.type) {
       case "agent_start": lastTurnOutcome = undefined; setStatus("running"); break;
-      case "agent_settled": case "agent_end":
+      case "agent_end":
+        // A run that Pi will retry is not the end of the turn; its outcome
+        // stays pending until a later run ends. With the settle barrier,
+        // agent_settled alone completes the turn.
+        if (settledBarrier || frame.willRetry === true) break;
+        finishCompaction("complete", "Context compaction ended.");
+        settleTurn();
+        setStatus("idle");
+        break;
+      case "agent_settled":
+        settledBarrier = true;
         finishCompaction("complete", "Context compaction ended.");
         settleTurn();
         setStatus("idle");

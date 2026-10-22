@@ -1120,7 +1120,8 @@ test("an ordinary chat gets the sidekick tool with its own MCP timeout and a dur
     const stopped = await rpc({ method: "tools/call", params: { name: "sidekick", arguments: { op: "stop", roundId: "r1" }, _meta: { "claudecode/toolUseId": "toolu_native_2" } } });
     assert.equal(stopped.result.isError, true, "an ok:false result is an error the agent can read");
     assert.equal(stopped.result.content[0].text, "Round r1 is not running.");
-    // No native tool use id: the id is derived from the JSON-RPC request id.
+    // No native tool use id: no call reference is invented from the JSON-RPC
+    // request id, which repeats across connections and bridge restarts.
     await rpc({ id: 7, method: "tools/call", params: { name: "sidekick", arguments: { op: "diff" } } });
     const cancelled = await rpc({ method: "tools/call", params: { name: "sidekick", arguments: { op: "reset" }, _meta: { "claudecode/toolUseId": "toolu_native_3" } } });
     assert.equal(cancelled.result.isError, true);
@@ -1135,7 +1136,7 @@ test("an ordinary chat gets the sidekick tool with its own MCP timeout and a dur
     const workspace = await rpc({ method: "tools/call", params: { name: "workspace", arguments: { type: "roster" } } });
     assert.equal(workspace.error.code, -32601, "the coordinator tool does not exist without coordination");
     assert.deepEqual(calls.map((call) => [call.operation.op, call.toolCallId]), [
-      ["status", "toolu_native_1"], ["stop", "toolu_native_2"], ["diff", "mcp-7"], ["reset", "toolu_native_3"], ["wait", "mcp-1"],
+      ["status", "toolu_native_1"], ["stop", "toolu_native_2"], ["diff", undefined], ["reset", "toolu_native_3"], ["wait", undefined],
     ]);
     assert.deepEqual(calls[1].operation, { op: "stop", roundId: "r1" });
   } finally { await adapter.dispose(); }
@@ -1168,6 +1169,39 @@ test("an ordinary chat gets the sidekick tool with its own MCP timeout and a dur
     assert.equal(argValue(args, "--allowed-tools"), "mcp__piui-workspace__workspace,mcp__piui-workspace__sidekick");
     assert.equal(argValue(args, "--disallowed-tools"), "Agent");
   } finally { await fourth.dispose(); }
+});
+
+test("a sidekick MCP request that disconnects before the reply retires its pending host request", async () => {
+  const seen = [];
+  let release;
+  const { config, records } = setup({ hostTools: ["sidekick"] });
+  const adapter = await createClaudeAdapter(config, recorder().emit, undefined, undefined, async (operation, metadata) => {
+    seen.push({ op: operation.op, signal: metadata.signal });
+    if (operation.op === "wait") await new Promise((resolve) => { release = resolve; });
+    return { ok: true, text: "ok" };
+  });
+  try {
+    const { args } = startRecord(records);
+    const server = JSON.parse(readFileSync(argValue(args, "--mcp-config"), "utf8")).mcpServers["piui-workspace"];
+    const call = (body, signal) => fetch(server.url, { method: "POST", signal, headers: { ...server.headers, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "sidekick", ...body } }) });
+
+    // A reply that reached the client leaves its signal alone.
+    assert.equal((await (await call({ arguments: { op: "status" } })).json()).result.content[0].text, "ok");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(seen[0].signal.aborted, false);
+
+    // The client gives up while the host is still working.
+    const client = new AbortController();
+    const waiting = call({ arguments: { op: "wait" } }, client.signal).catch(() => "aborted");
+    for (let attempt = 0; attempt < 200 && seen.length < 2; attempt++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(seen.length, 2, "the host request was issued");
+    assert.equal(seen[1].signal.aborted, false, "still connected while waiting");
+    client.abort();
+    assert.equal(await waiting, "aborted");
+    for (let attempt = 0; attempt < 200 && !seen[1].signal.aborted; attempt++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(seen[1].signal.aborted, true, "the closed connection cancels the pending host request");
+    release();
+  } finally { await adapter.dispose(); }
 });
 
 test("the sidekick tool raises the child MCP tool timeout and replaces an inherited value", async () => {

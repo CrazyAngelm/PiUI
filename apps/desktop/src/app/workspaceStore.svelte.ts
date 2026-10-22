@@ -15,6 +15,9 @@ import { runtimeSettings } from '../host-api/runtimeSettings';
 import { workspaceModel } from '../host-api/harnessModels';
 import { deleteWorkspaceSession } from '../host-api/workspaceLifecycle';
 import { harnessRegistryHost } from '../host-api/harnessRegistry';
+import { fusionHost } from '../host-api/fusionClient';
+import { fusionMembership } from './fusion/fusionMembership.svelte';
+import { fusionErrorText } from './fusion/fusionPair';
 import {
   workspaceHost,
   WorkspaceOperationError,
@@ -721,12 +724,25 @@ export class WorkspaceStore {
     if (!sessionId || this.interruptBusy) return false;
     this.interruptBusy = true;
     try {
+      // The broker owns a Fusion sidekick's turns: it stops through
+      // `stopSidekick` (round marked stopping, delivery withdrawn), and the
+      // host refuses an ordinary interrupt for it (ADR-043).
+      const member = fusionMembership.peek(sessionId);
+      if (member?.role === 'sidekick') {
+        if (!member.leadSessionId) {
+          this.sessionError = 'This action is not available here.';
+          return false;
+        }
+        await fusionHost.request({ type: 'stopSidekick', leadSessionId: member.leadSessionId });
+        void this.reconcileSession(sessionId);
+        return true;
+      }
       const result = await workspaceHost.request({ type: 'interrupt', sessionId });
       if (result.type === 'session') this.storeSnapshot(result.snapshot);
       else if (result.type === 'accepted') void this.reconcileSession(sessionId);
       return true;
     } catch (error) {
-      this.sessionError = errorMessage(error);
+      this.sessionError = fusionMembership.isSidekick(sessionId) ? fusionErrorText(error) : errorMessage(error);
       return false;
     } finally {
       this.interruptBusy = false;

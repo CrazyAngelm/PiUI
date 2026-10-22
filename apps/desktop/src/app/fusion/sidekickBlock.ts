@@ -32,6 +32,12 @@ const REPORT_PAGE = new RegExp(`^\\[PiUI sidekick report (${ID}) page (\\d{1,4})
 const PROGRESS = new RegExp(`^\\[PiUI sidekick (${ID}) · (${ID}) · ([^·\\]\\n]{1,120}) · ([0-9ms]{1,16})\\]$`);
 const STATUS = /^\[PiUI sidekick status: ([^\]\n]{1,160})\]$/;
 const REFUSED = /^\[PiUI sidekick ([a-z]{3,12}|unknown) refused: ([a-z-]{3,40})\](?: (.*))?$/;
+/**
+ * Codex's bridge prepends one `Arguments: key: value, …` line (the lead's own
+ * call arguments, already one line and bounded) to every tool result. Only that
+ * single leading line is skipped, and only before the host header.
+ */
+const CODEX_ARGUMENTS_LINE = /^Arguments: [^\n]{0,600}$/;
 const FINISHED = new RegExp(`^\\[PiUI sidekick round (${ID}) finished(?::[^\\]\\n]{0,240})?\\.?\\]$`);
 
 const REPORT_STATUSES: readonly ReportStatusV1[] = ['done', 'partial', 'blocked', 'needs-decision', 'unknown'];
@@ -89,6 +95,10 @@ export function parseSidekickBlock(block: SidekickBlockInput): SidekickBlockView
     while (index < lines.length && lines[index]?.trim() === '') index += 1;
   };
   skipBlank();
+  if (CODEX_ARGUMENTS_LINE.test(lines[index] ?? '')) {
+    index += 1;
+    skipBlank();
+  }
   let briefId: string | undefined;
   let roundId: string | undefined;
   const ids = IDS_LINE.exec(lines[index] ?? '');
