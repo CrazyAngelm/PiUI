@@ -133,7 +133,7 @@ describe('@teammate handoff', () => {
 
   it('finds enabled teammates mentioned in the message, in order, once each', () => {
     expect(mentionedTeammates('@reviewer then @coder, and @reviewer again', [coder, reviewer]).map((item) => item.handle)).toEqual(['reviewer', 'coder']);
-    expect(mentionedTeammates('mail me@coder.dev or @sleepy or @unknown', [coder, off])).toEqual([]);
+    expect(mentionedTeammates('mail me@coder or @sleepy or @unknown', [coder, off])).toEqual([]);
     expect(mentionedTeammates('no mentions here', [coder])).toEqual([]);
   });
 

@@ -5881,7 +5881,20 @@ mod native_host_tests {
         let second = spawn_dispatch(&host, open());
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(!second.is_finished(), "the second open waits for the first");
-        assert!(host.live_runtime_operation_gate.try_lock().is_ok());
+        // The gate may be held for a moment by the second open's own short
+        // section; it must come free while the first start is still blocked.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while host.live_runtime_operation_gate.try_lock().is_err() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the slow start does not hold the operation gate"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            !second.is_finished(),
+            "the second open still waits for the first"
+        );
         starts.release.notify_one();
         let first = session_of(finish(first).await);
         let second = session_of(finish(second).await);
