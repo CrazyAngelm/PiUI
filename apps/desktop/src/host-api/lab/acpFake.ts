@@ -84,7 +84,7 @@ const BUILTIN_LOCATIONS: Readonly<Record<BuiltinHarness, string>> = {
 
 /** `builtin_verified_versions` */
 const BUILTIN_VERIFIED: Readonly<Partial<Record<BuiltinHarness, string>>> = {
-  codex: '0.147.0 – 0.157.x',
+  codex: '0.147.0 – 0.163.x',
   'claude-code': '2.1.0 – 2.x',
   'prime-agent': '0.9.2, 0.9.3',
   hermes: '0.21.0',

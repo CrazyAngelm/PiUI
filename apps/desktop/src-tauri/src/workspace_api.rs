@@ -2867,6 +2867,7 @@ pub async fn harness_models_v18(
             &state.workspace.inner.native_root,
             &id,
         ),
+        host_tools: Vec::new(),
         package_root: None,
         agent_dir: None,
         kernel_python: None,

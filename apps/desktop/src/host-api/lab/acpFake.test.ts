@@ -55,7 +55,7 @@ describe('UI Lab ACP agent registry', () => {
       ['acp:gemini-cli', 'ready'], ['acp:qwen-code', 'not-installed'], ['acp:lab-agent', 'untrusted'],
     ]);
     expect(view.harnesses.find((harness) => harness.harness === 'codex')).toMatchObject({
-      verifiedVersions: '0.147.0 – 0.157.x', signInHint: "Sign in with Codex's own flow: run `codex login` in a terminal.",
+      verifiedVersions: '0.147.0 – 0.163.x', signInHint: "Sign in with Codex's own flow: run `codex login` in a terminal.",
     });
     expect(view.harnesses.find((harness) => harness.harness === 'claude-code')?.signInHint).toContain('Claude subscription');
     const gemini = agent(view, 'gemini-cli');

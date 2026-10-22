@@ -63,7 +63,7 @@ const issueForm = {
 };
 // Emulated app-server version (default: the newest verified protocol). Shapes
 // that changed between versions follow it; see CONTRACT.md (Codex section).
-const codexVersion = process.argv.find((argument) => argument.startsWith("--codex-version="))?.slice("--codex-version=".length) ?? "0.157.1";
+const codexVersion = process.argv.find((argument) => argument.startsWith("--codex-version="))?.slice("--codex-version=".length) ?? "0.163.0";
 const [versionMajor, versionMinor] = codexVersion.split(".").map((part) => Number.parseInt(part, 10));
 const protocolAtLeast = (minor) => versionMajor > 0 || versionMinor >= minor;
 const timeReplies = {};
@@ -359,13 +359,21 @@ input.on("line", (line) => {
     }
     if (!holdTurnFixture) {
       const requestedText = message.params.input?.[0]?.text;
-      // `rateLimitExceeded` and `misalignmentPolicyViolation` are 0.153+ error infos.
-      const failureInfo = { "fail fixture": "unauthorized", "rate limit fixture": "rateLimitExceeded", "policy fixture": "misalignmentPolicyViolation" }[requestedText];
-      const finalStatus = failureInfo ? "failed" : "completed";
+      // `rateLimitExceeded` and `misalignmentPolicyViolation` are 0.153+ error
+      // infos, `flexUnavailable` and `tooManyDenials` 0.163+. Guardian's
+      // `tooManyDenials` (strict circuit breaker) interrupts instead of failing.
+      const failureInfo = { "fail fixture": "unauthorized", "rate limit fixture": "rateLimitExceeded", "policy fixture": "misalignmentPolicyViolation",
+        "flex fixture": "flexUnavailable", "denials fixture": "tooManyDenials" }[requestedText];
+      const finalStatus = failureInfo === "tooManyDenials" ? "interrupted" : failureInfo ? "failed" : "completed";
       send({ method: "thread/tokenUsage/updated", params: { threadId, tokenUsage: { total: {inputTokens:10,outputTokens:4,cachedInputTokens:2,totalTokens:14} } } });
       if (process.argv.includes("--external-settings")) {
         // Settings changed by another client of the same thread.
         send({ method: "thread/settings/updated", params: settingsUpdated({ model: "fixture-model-2", effort: "high", serviceTier: "fast" }) });
+      }
+      // 0.163 publishes Codex's read receipt for a visible result of a durable
+      // thread before `turn/completed`.
+      if (protocolAtLeast(163)) {
+        send({ method: "thread/readState/changed", params: { threadId, readState: { firstUnread: { type: "turn", turnId: "turn-fixture" }, revision: "fixture-revision" } } });
       }
       send({ method: "turn/completed", params: { threadId, turn: { id: "turn-fixture", status: finalStatus, items: [], ...(failureInfo ? { error: { message: "raw fixture secret", codexErrorInfo: failureInfo, additionalDetails: "raw fixture detail" } } : {}) } } });
     }
