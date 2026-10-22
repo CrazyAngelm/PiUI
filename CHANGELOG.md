@@ -6,6 +6,21 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-10-23
+
+### Added
+
+- Fast mode for Fusion roles (lead and sidekick separately) and the pipeline assistant on models that support it. `FusionRoleV1.serviceTier` is optional; pairs saved by 0.2.8 load unchanged.
+- The sidebar nests a Fusion sidekick chat under its lead (collapsible, with a count and the hidden chats' status on the lead).
+
+### Changed
+
+- Calmer transcript: activity groups stay closed until clicked, align with the answer text, list actions in one phrase without "Thought", show `+N −M` edit totals and use the answer's font size; prose line height and inline code are tighter.
+
+### Fixed
+
+- Codex `turn/moderationMetadata` notifications no longer appear as "Unsupported Codex event" rows.
+
 ## [0.2.8] - 2026-10-22
 
 ### Added
