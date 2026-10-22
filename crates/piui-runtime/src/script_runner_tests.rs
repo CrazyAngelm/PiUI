@@ -498,6 +498,10 @@ async fn an_existing_work_folder_is_never_reused() {
 mod powershell {
     use super::*;
 
+    /// Windows PowerShell cold starts are slow on CI runners; several at once
+    /// alongside the rest of the suite have stalled past the step timeout.
+    static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     fn launch<'a>(
         fixture: &'a Fixture,
         source: &'a str,
@@ -516,6 +520,7 @@ mod powershell {
 
     #[tokio::test]
     async fn json_result_round_trips_utf8_stdin() {
+        let _serial = ONE_AT_A_TIME.lock().await;
         let fixture = Fixture::new("ps-json");
         let source = "param()\r\n\
             $doc = [Console]::In.ReadToEnd() | ConvertFrom-Json\r\n\
@@ -534,6 +539,7 @@ mod powershell {
 
     #[tokio::test]
     async fn plain_text_and_explicit_exit_codes_are_observed() {
+        let _serial = ONE_AT_A_TIME.lock().await;
         let fixture = Fixture::new("ps-exit");
         let run = launch(
             &fixture,
@@ -558,6 +564,7 @@ mod powershell {
 
     #[tokio::test]
     async fn timeout_terminates_powershell() {
+        let _serial = ONE_AT_A_TIME.lock().await;
         let fixture = Fixture::new("ps-timeout");
         let run = launch(&fixture, "Start-Sleep -Seconds 60\r\n", "ps-timeout", 2)
             .finish()
