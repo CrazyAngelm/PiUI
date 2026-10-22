@@ -509,6 +509,26 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   `native_version` tests 3/3 (standalone `rustc --test`; the full
   `cargo test` was not run: both disks were full). No real-provider turn.
 
+## 2026-10-22 — Fusion Ф1 (ADR-043)
+
+- Host broker `src-tauri/src/fusion/` (model, rules, store, broker, service):
+  pair admission, frozen lead/sidekick session policy, rounds as admitted
+  turns with `no-answer`, report envelope with escaped body and separate
+  facts, one writer, stop barrier and `uncertain`, durable follow-up
+  delivery, call identity replay/conflict, restart without replay, reconcile
+  and abandon. `fusion_command_v1` and `piui://fusion-changed-v1`.
+- Bridge: `sidekickRequest`/`sidekickResponse` with identity
+  `{epoch, seq, callRef, opHash}`; Claude Code MCP tool with
+  `MCP_TOOL_TIMEOUT=600000`; Codex dynamic tool `piui`/`sidekick` on fresh
+  threads; notices `unsupported-sidekick-tool[-resume]`.
+- Workspace: Fusion hooks in session start (no board/plugin MCP for the
+  sidekick), `SidekickRequest` handling, the ADR-044 guard covers sidekicks.
+- UI: composer Fusion mode, lead badge and panel, sidekick tool cards,
+  English/Russian strings; UI Lab fake.
+- Two committed workspace tests that call catalog-resource functions not on
+  this branch are parked with `#[cfg(any())]`.
+- No real-provider pair ran (phase Ф1.5 is started by the person).
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

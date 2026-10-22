@@ -1150,6 +1150,83 @@ schema). The editor warns before a save that `subpipeline-breaks-parent`
 would refuse, naming the affected saved pipelines, and a chat pipeline with
 declared outputs answers with them like a board run.
 
+## ADR-043 — Fusion: a lead session delegates to a persistent sidekick session
+
+**Status:** Accepted 2026-10-22 (phase Ф1 of `docs/PLAN_FUSION_2026-10-21_RU.md`;
+spike results in `docs/FUSION_EVIDENCE.md`). Specification: `docs/FUSION.md`.
+
+**Context:** Cognition's Fusion pairs a frontier lead with a cheaper sidekick
+that keeps its own persistent, cached context; they exchange only briefs,
+results and feedback, and the lead reviews and can take work back. The owner
+wants this in PiUI on the harnesses and subscriptions the person already uses.
+Open implementations show the mechanism (some block on every brief, some
+deliver reports asynchronously), but none provides PiUI's native-adapter
+integration, durable delivery, delegation authority checks and desktop
+approvals.
+
+**Decision:** a Fusion chat is an ordinary chat of the lead's harness plus a
+host tool `sidekick` (`brief`, `wait`, `status`, `message`, `steer`, `stop`,
+`diff`, `report`, `close`, `reset`). The host owns a sidekick broker
+(`src-tauri/src/fusion/`):
+
+- It creates and reopens one persistent sidekick session under a frozen,
+  host-private membership policy decided from the session id alone: no board,
+  no plugin MCP servers, no native subagents, fixed sidekick instructions.
+  The lead gets fixed lead instructions that never name the sidekick's
+  harness or model; the briefing policy travels in tool results instead.
+- Admission (`check_pair`) keeps the sidekick's authority at or below the
+  lead's: permission ranks read-only < workspace-write < full-access; native
+  modes of different harnesses are incomparable, so a cross-harness pair
+  needs explicit modes; a read-only lead is refused (its sidekick could not
+  write either). v1 roles: lead Claude Code or a fresh Codex thread; sidekick
+  Claude Code (full access or native), Codex (workspace-write only with the
+  Windows sandbox configured) or Pi (both roles full access).
+- A round is one admitted sidekick turn. Its report is the sidekick's last
+  assistant answer after the round's baseline (none: `no-answer`) as escaped,
+  untrusted text with a strict `STATUS:` first line, plus host facts in a
+  separate field: working-tree files from the session review (git), approvals
+  the host saw. Command and token receipts stay `unknown` until adapters
+  report typed receipts; nothing unknown is shown as measured.
+- One writer: a brief or message is refused while another round is open or
+  uncertain. Stop marks `stopping`, interrupts and waits for the turn's end;
+  without that proof the round becomes `uncertain` and blocks new work until
+  the person reconciles (reads the native history) or abandons it. Reset
+  passes the same barrier and retires the session.
+- A tool call waits a bounded portion (default 240 s, at most 540 s; the
+  Claude Code adapter raises `MCP_TOOL_TIMEOUT` for the lead). A report that
+  no call collected gets one durable delivery record
+  (`queued → sending → sent | uncertain | withdrawn`) and reaches the idle
+  lead as one follow-up. A tool answer that could not be written back puts
+  the report back in the queue.
+- Calls carry a bridge identity `{epoch, seq, callRef, opHash}`: a retry gets
+  the same answer, a reused call id with another operation is refused, and a
+  call recorded before a restart is never run again.
+- A restart marks every open round and every `sending` delivery `uncertain`;
+  they are reconciled, never replayed. The journal is PiUI application data
+  under `fusion-v1/` (create-only generations, newest three kept), never in
+  the project folder; native histories stay the source of truth.
+- People approve the sidekick's actions in its own chat; the lead model never
+  does. The WebView cannot message or reconfigure a sidekick (ADR-044 guard);
+  it can stop, reset, reconcile and abandon through `fusion_command_v1`.
+
+PiUI adds no provider client and no agent loop and translates no history.
+
+**Extension test:** a plugin cannot create, drive or contain native sessions,
+route their approvals or check delegation authority; core owns the broker and
+the tool.
+
+**Consequences:** additive host-private bridge events (`sidekickRequest`,
+`sidekickResponse`, notices `unsupported-sidekick-tool[-resume]`); workspace
+v15 gains two notice codes (old UIs ignore them); `contracts/fusion-v1.ts` is
+the new, independently versioned WebView command. Hermes, ACP and Prime join
+only when their adapters enforce the whole role policy. Pipelines get
+sidekicks later (orchestration v6.8, system files v6) with a step completion
+rule that waits for outstanding rounds. A Codex lead resumed from a thread
+that was not started as a Fusion lead has no `sidekick` tool and shows a
+notice. Known v1 gap: if Codex cancels a pending dynamic tool call after the
+host already handed it a report, the host counts the report as delivered; the
+person sees it in the sidekick's chat and the lead can `wait` again.
+
 ## ADR-044 — Run members follow their frozen snapshot; the WebView cannot steer them
 
 **Status:** Accepted 2026-10-21. ADR-043 is reserved for Fusion.

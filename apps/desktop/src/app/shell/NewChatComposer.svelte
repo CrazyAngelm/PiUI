@@ -31,6 +31,10 @@
   import type { AgentGraph } from '../../features/orchestration/agentGraph';
   import { useWorkspace } from './context';
   import { reconcileSelection, restoredSelection, type NewChatChoice, type NewChatSelection } from './newChatChoice';
+  import FusionModeBar from '../fusion/FusionModeBar.svelte';
+  import { fusionErrorText, refusalCopy, roleLabel } from '../fusion/fusionPair';
+  import { startFusionChat } from '../fusion/startFusionChat';
+  import type { FusionPairV1 } from '../../host-api/fusionClient';
 
   interface Props {
     onTrust: (workspace: WorkspaceSummary) => void;
@@ -59,6 +63,10 @@
   let permissionMode = $state<PermissionMode>('native');
   /** A saved pipeline the first message goes through; empty talks to the harness directly. */
   let pipelineId = $state('');
+  // Fusion (ADR-043): while on, the pair picker replaces the single-agent choices.
+  let fusionMode = $state(false);
+  let fusionPair = $state.raw<FusionPairV1 | undefined>();
+  let fusionReady = $state(false);
   let pipelineDetail = $state.raw<ChatPipelineDetail | undefined>();
   let pipelineLoading = $state(false);
   let pipelineError = $state('');
@@ -81,7 +89,7 @@
   const model = $derived(models.find((item) => JSON.stringify([item.provider, item.id]) === modelKey));
   const levels = $derived(model?.thinkingLevels ?? []);
   // Before a session exists only the manifest is known; the host decides at send.
-  const imageState = $derived(imageSupport(harness, undefined));
+  const imageState = $derived(imageSupport(fusionMode && fusionPair ? fusionPair.lead.harness : harness, undefined));
   const trusted = $derived(Boolean(workspace && (workspace.personal || workspace.trust === 'trusted')));
   const catalogBlocked = $derived(Boolean(workspace) && !trusted);
   // Harness-native `$` mentions from the harness catalog (Codex skills).
@@ -326,7 +334,7 @@
       Boolean(workspaceId) &&
       !busy &&
       !store.safeMode &&
-      (pipelineId ? Boolean(pipelineDetail?.accepts) && available.length > 0 : Boolean(harness)),
+      (fusionMode ? fusionReady : pipelineId ? Boolean(pipelineDetail?.accepts) && available.length > 0 : Boolean(harness)),
   );
 
   function setText(value: string): void {
@@ -387,10 +395,36 @@
     }
   }
 
+  async function sendFusion(): Promise<void> {
+    const pair = fusionPair;
+    if (!pair) return;
+    busy = true;
+    const images = attachments.images;
+    try {
+      const outcome = await startFusionChat(store, { workspaceId, pair, text, images });
+      if (outcome.kind === 'refused') {
+        toasts.error($t('The pair cannot start'), `${$t(roleLabel(outcome.role))}: ${$t(refusalCopy(outcome.refusal).title)}`);
+        return;
+      }
+      attachments.handOver();
+      text = '';
+      store.updateDraft(DRAFT_KEY, '');
+      if (outcome.error) toasts.error($t('The Fusion chat started, but the first message was not sent'), $t(outcome.error));
+    } catch (error) {
+      toasts.error($t('Could not start the chat'), $t(fusionErrorText(error)));
+    } finally {
+      busy = false;
+    }
+  }
+
   async function send(): Promise<void> {
     if (!canSend) return;
     if (workspace && !workspace.personal && workspace.trust !== 'trusted') {
       onTrust(workspace);
+      return;
+    }
+    if (fusionMode) {
+      await sendFusion();
       return;
     }
     if (pipelineId) {
@@ -482,6 +516,15 @@
   }
 </script>
 
+<FusionModeBar
+  {workspaceId}
+  {trusted}
+  harnesses={executorHarnesses}
+  disabled={busy || store.safeMode}
+  bind:active={fusionMode}
+  bind:pair={fusionPair}
+  bind:ready={fusionReady}
+/>
 <!-- svelte-ignore a11y_no_static_element_interactions (Drop target for files; the paperclip is the keyboard path.) -->
 <div
   class="composer"
@@ -522,7 +565,7 @@
       <view.default notices={attachments.notices} onDismiss={() => attachments.dismissNotices()} />
     {/await}
   {/if}
-  {#if pipelineId}
+  {#if pipelineId && !fusionMode}
     <PipelineInputsBar bind:this={inputsBar} detail={pipelineDetail} loading={pipelineLoading} error={pipelineError} disabled={busy} />
   {/if}
   <Textarea
@@ -552,7 +595,8 @@
   />
   <div class="composer__bar">
     <div class="chips">
-      <AttachButton images={imageState} busy={attachments.busy} disabled={busy || store.safeMode || !workspaceId || Boolean(pipelineId)} onPick={pick} />
+      <AttachButton images={imageState} busy={attachments.busy} disabled={busy || store.safeMode || !workspaceId || (Boolean(pipelineId) && !fusionMode)} onPick={pick} />
+      {#if !fusionMode}
       <ExecutorPicker
         {workspaceId}
         value={executor}
@@ -592,6 +636,7 @@
           {/snippet}
         </ModelPicker>
       {/if}
+      {/if}
 
       <span class="chips__gap"></span>
       <ContextChip
@@ -599,7 +644,7 @@
         {workspaceId}
         {permissionMode}
         permissions={permissionItems}
-        worktree={!pipelineId}
+        worktree={!pipelineId && !fusionMode}
         disabled={store.safeMode}
         onWorkspace={(value) => (workspaceId = value)}
         onPermission={(value) => (permissionMode = value)}

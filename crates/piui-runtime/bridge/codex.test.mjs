@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -1019,4 +1020,240 @@ test("$ mentions of an enabled skill carry the native skill input item", async (
     // The ambiguous `twin` and the unknown `test-runner-extra` stay plain text.
     assert.equal(adapter.snapshot().title, "turn/start:text:Please $test-runner, then $twin and $test-runner-extra|skill:test-runner@/skills/test-runner/SKILL.md");
   } finally { await adapter.dispose(); }
+});
+
+// The shared fixture cannot show what a thread was registered with or inject a
+// `piui/sidekick` call, so these tests run it behind a small proxy. The proxy
+// forwards every line unchanged in both directions; it logs the dynamic tools
+// of `thread/start` / `thread/resume`, injects the `--wrapper-inject=<json>`
+// tool calls once the thread is open and logs the adapter's replies to them.
+function proxyScript() {
+  return [
+    'import { spawn } from "node:child_process";',
+    'import { appendFileSync } from "node:fs";',
+    'import readline from "node:readline";',
+    "const options = process.argv.slice(2);",
+    'const logPath = options.find((argument) => argument.startsWith("--wrapper-log=")).slice("--wrapper-log=".length);',
+    'const injectArgument = options.find((argument) => argument.startsWith("--wrapper-inject="));',
+    'const injections = injectArgument ? JSON.parse(injectArgument.slice("--wrapper-inject=".length)) : [];',
+    'const passthrough = options.filter((argument) => !argument.startsWith("--wrapper-"));',
+    'const log = (value) => appendFileSync(logPath, JSON.stringify(value) + String.fromCharCode(10));',
+    `const child = spawn(process.execPath, [${JSON.stringify(fixture)}, ...passthrough], { stdio: ["pipe", "pipe", "inherit"] });`,
+    'process.on("exit", () => child.kill());',
+    "const starts = new Set();",
+    "const injectedIds = new Set(injections.map((call) => call.id));",
+    "readline.createInterface({ input: process.stdin, crlfDelay: Infinity })",
+    '  .on("line", (line) => {',
+    "    const message = JSON.parse(line);",
+    '    if (message.method === "thread/start" || message.method === "thread/resume") {',
+    "      starts.add(message.id);",
+    '      log({ kind: "thread", method: message.method, dynamicTools: message.params?.dynamicTools ?? null });',
+    "    }",
+    "    if (message.method === undefined && injectedIds.has(message.id)) {",
+    '      log({ kind: "reply", id: message.id, result: message.result ?? null, error: message.error ?? null });',
+    "      return;",
+    "    }",
+    "    child.stdin.write(line + String.fromCharCode(10));",
+    "  })",
+    '  .on("close", () => child.stdin.end());',
+    "readline.createInterface({ input: child.stdout, crlfDelay: Infinity })",
+    '  .on("line", (line) => {',
+    "    process.stdout.write(line + String.fromCharCode(10));",
+    "    let message;",
+    "    try { message = JSON.parse(line); } catch { return; }",
+    "    if (message && starts.has(message.id) && message.result?.thread?.id) {",
+    "      starts.delete(message.id);",
+    "      for (const call of injections) {",
+    '        process.stdout.write(JSON.stringify({ method: "item/tool/call", id: call.id, params: { threadId: message.result.thread.id, turnId: "turn-sidekick", callId: call.callId, namespace: call.namespace, tool: call.tool, arguments: call.arguments } }) + String.fromCharCode(10));',
+    "      }",
+    "    }",
+    "  })",
+    '  .on("close", () => process.exit(0));',
+  ].join("\n");
+}
+
+async function openProxied(directory, overrides, { args = [], inject = [], callbacks = [] } = {}) {
+  const script = join(directory, "codex-proxy.mjs");
+  const logPath = join(directory, `proxy-${Math.random().toString(16).slice(2)}.jsonl`);
+  writeFileSync(script, proxyScript());
+  const events = [];
+  const adapter = await createCodexAdapter({
+    ...config,
+    runtimeArgs: [script, `--wrapper-log=${logPath}`, ...(inject.length ? [`--wrapper-inject=${JSON.stringify(inject)}`] : []), ...args],
+    ...overrides,
+  }, (event) => events.push(event), undefined, undefined, ...callbacks);
+  const entries = () => (existsSync(logPath)
+    ? readFileSync(logPath, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line))
+    : []);
+  const thread = () => waitFor(() => entries().find((entry) => entry.kind === "thread"));
+  const replies = (count) => waitFor(() => {
+    const found = entries().filter((entry) => entry.kind === "reply");
+    return found.length >= count ? found : undefined;
+  });
+  return { adapter, events, thread, replies, notices: () => events.filter((event) => event.type === "notice").map((event) => event.code) };
+}
+
+const toolNames = (dynamicTools) => dynamicTools.flatMap((spec) => spec.tools.map((tool) => `${spec.name}/${tool.name}`)).sort();
+
+test("a fresh thread registers the sidekick tool in the piui namespace, beside the board when both are on", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "piui-codex-sidekick-"));
+  const board = async () => ({ ok: true, op: "roster" });
+  const sidekick = async () => ({ ok: true, text: "ok" });
+  try {
+    const only = await openProxied(directory, { hostTools: ["sidekick"] }, { callbacks: [undefined, sidekick] });
+    try {
+      const start = await only.thread();
+      assert.equal(start.method, "thread/start");
+      assert.equal(start.dynamicTools.length, 1);
+      assert.equal(start.dynamicTools[0].type, "namespace");
+      assert.equal(start.dynamicTools[0].name, "piui");
+      assert.deepEqual(toolNames(start.dynamicTools), ["piui/sidekick"]);
+      const tool = start.dynamicTools[0].tools[0];
+      assert.equal(tool.type, "function");
+      assert.deepEqual(tool.inputSchema.required, ["op"]);
+      assert.equal(tool.inputSchema.additionalProperties, false);
+      assert.equal(tool.inputSchema.properties.waitSeconds.maximum, 540);
+      assert.deepEqual(tool.inputSchema.properties.outcome.enum, ["accepted", "rejected", "superseded"]);
+      assert.deepEqual(only.notices(), []);
+      assert.equal(only.adapter.snapshot().capabilities.nativeSubagents.enforcement, "native", "the sidekick never disables native subagents");
+    } finally { await only.adapter.dispose(); }
+
+    const both = await openProxied(directory, { hostTools: ["board", "sidekick"] }, { callbacks: [board, sidekick] });
+    try {
+      const start = await both.thread();
+      assert.equal(start.dynamicTools.length, 1, "one piui namespace carries both tools");
+      assert.deepEqual(toolNames(start.dynamicTools), ["piui/board", "piui/sidekick"]);
+      assert.deepEqual(both.notices(), []);
+    } finally { await both.adapter.dispose(); }
+
+    const boardOnly = await openProxied(directory, { hostTools: ["board"] }, { callbacks: [board, sidekick] });
+    try {
+      assert.deepEqual(toolNames((await boardOnly.thread()).dynamicTools), ["piui/board"], "a callback alone does not register the tool");
+    } finally { await boardOnly.adapter.dispose(); }
+
+    // Requested without a host callback: the chat starts without it, with a notice.
+    const missing = await openProxied(directory, { hostTools: ["sidekick"] });
+    try {
+      assert.equal((await missing.thread()).dynamicTools, null);
+      assert.deepEqual(missing.notices(), ["unsupported-sidekick-tool"]);
+    } finally { await missing.adapter.dispose(); }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a piui/sidekick tool call is answered with the host's text and bound to its call id", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "piui-codex-sidekick-"));
+  const calls = [];
+  const sidekick = async (operation, context) => {
+    calls.push({ operation, toolCallId: context.toolCallId, hasSignal: context.signal instanceof AbortSignal });
+    if (operation.op === "stop") return { ok: false, text: "Round r1 is not running." };
+    if (operation.op === "reset") throw Object.assign(new Error("raw native detail"), { bridgeCode: "sidekick-cancelled", safeMessage: "The sidekick request was cancelled. Collect the result with wait." });
+    return { ok: true, text: "Round r1 is working on the login fix." };
+  };
+  const call = (id, callId, argumentsValue, tool = "sidekick") => ({ id, callId, namespace: "piui", tool, arguments: argumentsValue });
+  try {
+    const proxied = await openProxied(directory, { hostTools: ["sidekick"] }, {
+      callbacks: [undefined, sidekick],
+      inject: [
+        call(995, "call-status", { op: "status" }),
+        call(996, "call-stop", { op: "stop", roundId: "r1" }),
+        call(997, "call-reset", { op: "reset" }),
+        call(998, "call-invalid", []),
+      ],
+    });
+    try {
+      const replies = await proxied.replies(4);
+      const byId = Object.fromEntries(replies.map((reply) => [reply.id, reply.result]));
+      assert.deepEqual(byId[995], { contentItems: [{ type: "inputText", text: "Round r1 is working on the login fix." }], success: true }, "the reply is the host's text, not JSON");
+      assert.deepEqual(byId[996], { contentItems: [{ type: "inputText", text: "Round r1 is not running." }], success: false });
+      assert.equal(byId[997].success, false);
+      assert.deepEqual(JSON.parse(byId[997].contentItems[0].text), { ok: false, code: "sidekick-cancelled", message: "The sidekick request was cancelled. Collect the result with wait." });
+      assert.doesNotMatch(JSON.stringify(byId[997]), /raw native detail/);
+      assert.equal(byId[998].success, false);
+      assert.equal(JSON.parse(byId[998].contentItems[0].text).code, "invalid-sidekick-call");
+      assert.deepEqual(
+        calls.map((entry) => [entry.operation.op, entry.toolCallId, entry.hasSignal]).sort(),
+        [["reset", "call-reset", true], ["status", "call-status", true], ["stop", "call-stop", true]],
+      );
+      assert.deepEqual(calls.find((entry) => entry.operation.op === "stop").operation, { op: "stop", roundId: "r1" });
+      assert.deepEqual(proxied.notices(), []);
+    } finally { await proxied.adapter.dispose(); }
+
+    // The tool is off for this chat: the persisted/registered tool gets a clean refusal.
+    calls.length = 0;
+    const off = await openProxied(directory, { hostTools: ["board"] }, {
+      callbacks: [async () => ({ ok: true }), sidekick],
+      inject: [call(995, "call-off", { op: "status" })],
+    });
+    try {
+      const [reply] = await off.replies(1);
+      assert.equal(reply.result.success, false);
+      assert.equal(JSON.parse(reply.result.contentItems[0].text).code, "sidekick-disabled");
+      assert.deepEqual(calls, [], "a disabled sidekick never reaches the host");
+    } finally { await off.adapter.dispose(); }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a resumed thread keeps the sidekick only if it was started with it; otherwise a notice", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "piui-codex-sidekick-"));
+  // Codex 0.163 rollouts start with `session_meta` carrying the persisted dynamic tools.
+  const rollout = async (name, tools) => {
+    const file = join(directory, name);
+    const meta = { type: "session_meta", payload: { id: "resume-fixture", base_instructions: { text: "x".repeat(30000) }, dynamic_tools: tools } };
+    await writeFile(file, `${JSON.stringify(meta)}\n{"type":"turn_context","payload":{}}\n`);
+    return file;
+  };
+  const piui = (...names) => [{ type: "namespace", name: "piui", description: "PiUI host tools for this chat.", tools: names.map((name) => ({ type: "function", name, inputSchema: { type: "object" } })) }];
+  const calls = [];
+  const sidekick = async (operation, context) => { calls.push({ operation, toolCallId: context.toolCallId }); return { ok: true, text: "Round r1 is working." }; };
+  try {
+    const withSidekick = await rollout("sidekick.jsonl", piui("board", "sidekick"));
+    const kept = await openProxied(directory, { nativeId: "resume-fixture", hostTools: ["sidekick"] }, {
+      args: [`--rollout=${withSidekick}`],
+      callbacks: [undefined, sidekick],
+      inject: [{ id: 995, callId: "call-resumed", namespace: "piui", tool: "sidekick", arguments: { op: "status" } }],
+    });
+    try {
+      const start = await kept.thread();
+      assert.equal(start.method, "thread/resume");
+      assert.equal(start.dynamicTools, null, "a resumed thread is never registered with new tools");
+      assert.deepEqual(kept.notices(), []);
+      const [reply] = await kept.replies(1);
+      assert.deepEqual(reply.result, { contentItems: [{ type: "inputText", text: "Round r1 is working." }], success: true });
+      assert.deepEqual(calls, [{ operation: { op: "status" }, toolCallId: "call-resumed" }]);
+    } finally { await kept.adapter.dispose(); }
+
+    // Started without the sidekick (only the board, no tools, no metadata, unreadable file): notice.
+    for (const file of [await rollout("board-only.jsonl", piui("board")), await rollout("none.jsonl", []), join(directory, "missing.jsonl")]) {
+      const resumed = await openProxied(directory, { nativeId: "resume-fixture", hostTools: ["sidekick"] }, { args: [`--rollout=${file}`], callbacks: [undefined, sidekick] });
+      try {
+        assert.equal((await resumed.thread()).dynamicTools, null);
+        assert.deepEqual(resumed.notices(), ["unsupported-sidekick-tool-resume"], file);
+        assert.equal(resumed.adapter.snapshot().nativeId, "resume-fixture");
+      } finally { await resumed.adapter.dispose(); }
+    }
+
+    // Both tools asked for on a thread that has only the board: one notice, for the sidekick.
+    const board = await rollout("board-both.jsonl", piui("board"));
+    const mixed = await openProxied(directory, { nativeId: "resume-fixture", hostTools: ["board", "sidekick"] }, {
+      args: [`--rollout=${board}`],
+      callbacks: [async () => ({ ok: true }), sidekick],
+    });
+    try {
+      await mixed.thread();
+      assert.deepEqual(mixed.notices(), ["unsupported-sidekick-tool-resume"]);
+    } finally { await mixed.adapter.dispose(); }
+
+    // A resume without a host callback reports the missing callback, not a missing rollout tool.
+    const noCallback = await openProxied(directory, { nativeId: "resume-fixture", hostTools: ["sidekick"] }, { args: [`--rollout=${withSidekick}`] });
+    try {
+      await noCallback.thread();
+      assert.deepEqual(noCallback.notices(), ["unsupported-sidekick-tool"]);
+    } finally { await noCallback.adapter.dispose(); }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

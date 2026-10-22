@@ -11,12 +11,14 @@
   import Copy from '@lucide/svelte/icons/copy';
   import { t } from '../../../features/locale/language';
   import type { TimelineBlock } from '../../../host-api/types';
-  import { IconButton, Spinner, toasts } from '../../../lib/ui';
+  import { Badge, IconButton, Spinner, toasts } from '../../../lib/ui';
   import MarkdownContent from '../../../components/MarkdownContent.svelte';
   import DiffView from './DiffView.svelte';
   import { looksLikeDiff, toolKind, toolTitle, type ToolKind } from './toolKinds';
   import { rendererActivity } from '../../../host-api/pluginBridge';
   import { pluginRegistry } from '../../plugins/pluginRegistry.svelte';
+  import SidekickBriefCard from '../../fusion/SidekickBriefCard.svelte';
+  import { parseSidekickBlock, sidekickChip } from '../../fusion/sidekickBlock';
 
   interface Props {
     block: TimelineBlock;
@@ -37,7 +39,17 @@
   };
   const kind = $derived(toolKind(block));
   const Icon = $derived(icons[kind]);
-  const title = $derived(kind === 'thinking' ? $t('Reasoning') : toolTitle(block));
+  // A Fusion lead's `sidekick` call (ADR-043) is a brief card; anything the parser
+  // does not recognize keeps the generic row.
+  const sidekick = $derived(kind === 'thinking' ? undefined : parseSidekickBlock(block));
+  const sidekickState = $derived(sidekick ? sidekickChip(sidekick) : undefined);
+  const title = $derived(
+    kind === 'thinking'
+      ? $t('Reasoning')
+      : sidekick
+        ? [$t('Sidekick'), sidekick.briefId, sidekick.roundId].filter(Boolean).join(' · ')
+        : toolTitle(block),
+  );
   const body = $derived(block.text ?? block.safeSummary ?? '');
   const isDiff = $derived(kind === 'edit' && looksLikeDiff(block.text));
   // A plugin's own view of this tool (plugins v2). The plain view is always
@@ -72,6 +84,7 @@
       {#if block.status === 'streaming'}<Spinner size={12} />{:else}<Icon size={14} />{/if}
     </span>
     <span class="row__title" class:row__title--mono={kind === 'command'} title={title}>{title}</span>
+    {#if sidekickState}<Badge tone={sidekickState.tone}>{$t(sidekickState.label)}</Badge>{/if}
     {#if block.status === 'failed'}<span class="row__state row__state--failed">{$t('Failed')}</span>{/if}
     {#if block.status === 'interrupted'}<span class="row__state">{$t('Stopped')}</span>{/if}
     {#if body}<span class="chevron" class:chevron--open={open}><ChevronRight size={12} /></span>{/if}
@@ -104,6 +117,8 @@
             }}
           />
         {/if}
+      {:else if sidekick}
+        <SidekickBriefCard view={sidekick} />
       {:else if isDiff}
         <DiffView text={body} />
       {:else if kind === 'thinking'}

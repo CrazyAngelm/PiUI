@@ -7,6 +7,7 @@ import { classicHandlers } from './classicFake';
 import { composerHandlers } from './composerFake';
 import { composerInputsHandlers } from './composerInputsFake';
 import { demoExtensions, extensionHandlers } from './extensionsFake';
+import { codexSandboxFromSearch, createLabFusion, fusionHandlers, type LabFusion } from './fusionFake';
 import { LabEventBus } from './labBus';
 import { browserTimers, LabClock, type LabTimers } from './labClock';
 import { LabDecodeFailure, tauriArgumentError } from './labErrors';
@@ -52,6 +53,8 @@ export interface LabHost extends HostTransport {
   readonly scenario: LabScenarioName;
   /** Live lab state, exposed for tests and debugging only. */
   readonly state: LabState;
+  /** Fusion lab store: toggles and the scripted demo brief (`simulateBrief`). */
+  readonly fusion: LabFusion;
 }
 
 export function scenarioFromSearch(search: string): LabScenarioName {
@@ -137,6 +140,9 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
   const team = createLabTeam();
   const boards = createLabBoards();
   seedBoards(runtime, team, boards);
+  const fusion = createLabFusion(runtime, bus, {
+    codexSandbox: typeof window === 'undefined' ? true : codexSandboxFromSearch(window.location.search),
+  });
   const handlers: LabHandlers = {
     ...workspaceHandlers(runtime),
     ...composerHandlers(runtime),
@@ -158,6 +164,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     ...pipelineLibraryHandlers(runtime),
     ...teammatesHandlers(runtime, bus, team),
     ...boardHandlers(runtime, bus, team, boards),
+    ...fusionHandlers(fusion),
     // After the ACP registry: plugin ACP agents join it.
     ...pluginHandlers(runtime, bus),
   };
@@ -166,6 +173,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
   return {
     scenario,
     state,
+    fusion,
     async invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
       const handler = handlers[command];
       // Tauri rejects unregistered commands with a plain message string.

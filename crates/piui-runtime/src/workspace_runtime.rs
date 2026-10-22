@@ -216,7 +216,7 @@ impl HarnessKind {
         ("claude-code", Self::ClaudeCode),
     ];
 
-    const fn display_name(self) -> &'static str {
+    pub const fn display_name(self) -> &'static str {
         match self {
             Self::Pi => "Pi",
             Self::PrimeAgent => "Prime Agent",
@@ -245,6 +245,15 @@ impl HarnessKind {
     #[must_use]
     pub const fn supports_board_tool(self) -> bool {
         !matches!(self, Self::Pi)
+    }
+
+    /// Whether the adapter can take the Fusion `sidekick` host tool (ADR-043):
+    /// Claude Code through its session MCP server, and Codex through a dynamic
+    /// tool registered on `thread/start` (a resumed thread keeps it only when
+    /// it was started with it). Other adapters cannot lead a Fusion chat in v1.
+    #[must_use]
+    pub const fn supports_sidekick_tool(self) -> bool {
+        matches!(self, Self::ClaudeCode | Self::Codex)
     }
 
     /// The ACP descriptor id of an ACP identity.
@@ -847,6 +856,21 @@ pub enum CoordinatorResponse {
 pub enum HostTool {
     /// The project board tool (`BoardToolOperationV1`, contracts/board-v1.ts).
     Board,
+    /// The Fusion lead's tool (`SidekickToolOperationV1`, contracts/fusion-v1.ts).
+    Sidekick,
+}
+
+/// Who asked for one `sidekick` call, added by the bridge
+/// (`SidekickCallIdentityV1`): the bridge generation, its call counter, the
+/// native call id when the harness gives one, and the operation hash.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SidekickCallIdentity {
+    pub epoch: String,
+    pub seq: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_ref: Option<String>,
+    pub op_hash: String,
 }
 
 /// Board card status (`CardStatusV1`).
@@ -976,6 +1000,10 @@ pub enum NativeNoticeCode {
     /// A resumed Codex thread was started without the board tool and cannot
     /// gain dynamic tools after `thread/start`.
     UnsupportedBoardToolResume,
+    /// The harness (or this agent) cannot receive the Fusion `sidekick` tool.
+    UnsupportedSidekickTool,
+    /// A resumed Codex thread was started without the `sidekick` tool.
+    UnsupportedSidekickToolResume,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1031,6 +1059,15 @@ pub enum NativeEvent {
     BoardRequest {
         request_id: String,
         operation: BoardToolOperation,
+    },
+    /// A Fusion lead's `sidekick` tool call (shape-checked by the bridge;
+    /// the host parses it again). Answer exactly once with
+    /// [`NativeRuntime::sidekick_response`]; the lead comes from the emitting
+    /// runtime's session binding, never from `operation`.
+    SidekickRequest {
+        request_id: String,
+        operation: Map<String, Value>,
+        identity: SidekickCallIdentity,
     },
     /// A non-fatal notice; the session keeps running.
     Notice {
@@ -1114,7 +1151,7 @@ pub struct NativeRuntimeConfig {
     /// [`HarnessKind::accepts_session_mcp`]; empty everywhere else.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugin_mcp_servers: Vec<SessionMcpServer>,
-    /// Host tools for this session (today only the board), independent of
+    /// Host tools for this session (the board, the Fusion sidekick), independent of
     /// `coordination`: they never disable native subagents. A harness that
     /// cannot take one starts without it and emits [`NativeEvent::Notice`]
     /// (see [`HarnessKind::supports_board_tool`]).
@@ -1904,6 +1941,27 @@ impl NativeRuntime {
         .map(|_| ())
     }
 
+    /// Resolves one origin-bound `sidekick` tool request with the host's
+    /// `SidekickToolResultV1` JSON (an object with a boolean `ok`; a refusal
+    /// still reaches the lead as its result). Host-private.
+    pub async fn sidekick_response(
+        &self,
+        request_id: String,
+        result: Value,
+    ) -> Result<(), NativeRuntimeError> {
+        if !result.get("ok").is_some_and(Value::is_boolean) {
+            return Err(NativeRuntimeError::InvalidConfiguration);
+        }
+        self.request(
+            "sidekickResponse",
+            json!({ "requestId": request_id, "result": result }),
+            REQUEST_TIMEOUT,
+            false,
+        )
+        .await
+        .map(|_| ())
+    }
+
     pub async fn rename(&self, title: String) -> Result<(), NativeRuntimeError> {
         self.request("rename", json!({ "title": title }), REQUEST_TIMEOUT, false)
             .await
@@ -2587,7 +2645,7 @@ fn is_isolated_daemon(socket: Option<&str>) -> bool {
 
 fn bridge_source(kind: HarnessKind) -> Result<Vec<u8>, NativeRuntimeError> {
     if kind == HarnessKind::Codex {
-        return Ok(format!("{CODEX_SOURCE}\n{CODEX_POOL_SOURCE}\nglobalThis.__PIUI_BRIDGE_FACTORY__=(config,emit,coordinator,board)=>config.poolHost?createCodexPool(config,emit):createCodexAdapter(config,emit,coordinator,undefined,board);\n{RUNNER_SOURCE}").into_bytes());
+        return Ok(format!("{CODEX_SOURCE}\n{CODEX_POOL_SOURCE}\nglobalThis.__PIUI_BRIDGE_FACTORY__=(config,emit,coordinator,board,sidekick)=>config.poolHost?createCodexPool(config,emit):createCodexAdapter(config,emit,coordinator,undefined,board,sidekick);\n{RUNNER_SOURCE}").into_bytes());
     }
     let (factory, name) = match kind {
         HarnessKind::Pi => (PI_SOURCE, "createPiAdapter"),
@@ -4865,6 +4923,14 @@ mod tests {
                 "unsupported-board-tool-resume",
                 NativeNoticeCode::UnsupportedBoardToolResume,
             ),
+            (
+                "unsupported-sidekick-tool",
+                NativeNoticeCode::UnsupportedSidekickTool,
+            ),
+            (
+                "unsupported-sidekick-tool-resume",
+                NativeNoticeCode::UnsupportedSidekickToolResume,
+            ),
         ] {
             let notice: NativeEvent =
                 serde_json::from_value(json!({"type": "notice", "code": code})).expect("notice");
@@ -4885,6 +4951,40 @@ mod tests {
             .is_err(),
             "scope never comes from the operation"
         );
+    }
+
+    #[test]
+    fn sidekick_request_events_carry_the_bridge_identity() {
+        let event: NativeEvent = serde_json::from_value(json!({
+            "type": "sidekickRequest",
+            "requestId": "piui-sidekick-e1-1",
+            "operation": {"op": "status"},
+            "identity": {"epoch": "e1", "seq": 1, "callRef": "toolu_1", "opHash": "ab"}
+        }))
+        .expect("sidekick request");
+        let NativeEvent::SidekickRequest {
+            request_id,
+            operation,
+            identity,
+        } = event
+        else {
+            panic!("not a sidekick request");
+        };
+        assert_eq!(request_id, "piui-sidekick-e1-1");
+        assert_eq!(operation.get("op"), Some(&json!("status")));
+        assert_eq!(identity.call_ref.as_deref(), Some("toolu_1"));
+        for missing in [
+            json!({"type": "sidekickRequest", "requestId": "r", "operation": {"op": "status"}}),
+            json!({"type": "sidekickRequest", "requestId": "r", "operation": {"op": "status"},
+                "identity": {"epoch": "e", "seq": 1, "opHash": "h", "leadSessionId": "other"}}),
+        ] {
+            assert!(serde_json::from_value::<NativeEvent>(missing).is_err());
+        }
+        assert!(HarnessKind::ClaudeCode.supports_sidekick_tool());
+        assert!(HarnessKind::Codex.supports_sidekick_tool());
+        assert!(!HarnessKind::Pi.supports_sidekick_tool());
+        assert!(!HarnessKind::Hermes.supports_sidekick_tool());
+        assert!(!HarnessKind::PrimeAgent.supports_sidekick_tool());
     }
 
     #[test]

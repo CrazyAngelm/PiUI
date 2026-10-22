@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionSnapshot, WorkspaceEvent } from '../../../../../contracts/workspace-v15';
-import { boardToolNotice, sessionNotices, withNotice } from './sessionNotices';
+import { boardToolNotice, sessionNotices, sidekickToolNotice, withNotice } from './sessionNotices';
 import { applyWorkspaceEvent } from './workspaceState';
 
 function snapshot(extra: Record<string, unknown> = {}): SessionSnapshot {
@@ -49,5 +49,8 @@ describe('session notices', () => {
     expect(boardToolNotice('claude-code', ['unsupported-board-tool'])).toBe('unsupported-board-tool');
     expect(boardToolNotice('codex', ['unsupported-board-tool', 'unsupported-board-tool-resume'])).toBe('unsupported-board-tool-resume');
     expect(boardToolNotice('pi', [])).toBe('unsupported-board-tool');
+    expect(boardToolNotice('codex', ['unsupported-sidekick-tool'])).toBeUndefined();
+    expect(sidekickToolNotice(['unsupported-sidekick-tool', 'unsupported-sidekick-tool-resume'])).toBe('unsupported-sidekick-tool-resume');
+    expect(sidekickToolNotice(['unsupported-board-tool'])).toBeUndefined();
   });
 });

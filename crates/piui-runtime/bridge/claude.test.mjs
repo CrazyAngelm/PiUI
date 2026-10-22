@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createClaudeAdapter } from "./claude.mjs";
 
 const fixture = fileURLToPath(new URL("./claude.test-fixture.mjs", import.meta.url));
@@ -43,7 +43,7 @@ const USAGE_KEYS = new Set(["id", "inputTokens", "outputTokens", "cacheReadToken
 const EVENT_KEYS = {
   usage: ["usage"], block: ["block"], textDelta: ["blockId", "text"], status: ["status"], approval: ["approval"],
   approvalResolved: ["requestId"], binding: ["nativeId", "nativePath"], turnCompleted: ["outcome"],
-  coordinatorRequest: ["requestId", "operation"], boardRequest: ["requestId", "operation"], notice: ["code"], error: ["message"],
+  coordinatorRequest: ["requestId", "operation"], boardRequest: ["requestId", "operation"], sidekickRequest: ["requestId", "operation", "identity"], notice: ["code"], error: ["message"],
 };
 const BLOCK_KINDS = new Set(["user", "assistant", "thinking", "tool", "custom", "error", "compaction", "unknown"]);
 const BLOCK_STATUSES = new Set(["complete", "streaming", "failed", "interrupted"]);
@@ -1086,4 +1086,155 @@ test("resumed user messages list their images as markers", async () => {
     assert.deepEqual(snapshot.blocks.map((block) => block.text), ["Why is this red?\n\n[image]", "[image]"]);
     assert.doesNotMatch(JSON.stringify(snapshot), /SECRET-MUST-NOT-LEAK/);
   } finally { await adapter.dispose(); }
+});
+
+test("an ordinary chat gets the sidekick tool with its own MCP timeout and a durable tool call id", async () => {
+  const calls = [];
+  const { config, records } = setup({ hostTools: ["sidekick"] });
+  const log = recorder();
+  const adapter = await createClaudeAdapter(config, log.emit, undefined, undefined, async (operation, metadata) => {
+    calls.push({ operation, toolCallId: metadata.toolCallId });
+    if (operation.op === "stop") return { ok: false, text: "Round r1 is not running." };
+    if (operation.op === "reset") throw Object.assign(new Error("cancelled"), { bridgeCode: "sidekick-cancelled", safeMessage: "The sidekick request was cancelled. Collect the result with wait." });
+    if (operation.op === "wait") throw new Error("raw internal detail");
+    return { ok: true, text: "Round r1 is working on the login fix." };
+  });
+  try {
+    assert.deepEqual(log.problems, []);
+    assert.deepEqual(log.of("notice"), [], "a host that answers sidekick calls gets no unsupported notice");
+    const { args } = startRecord(records);
+    assert.equal(argValue(args, "--allowed-tools"), "mcp__piui-workspace__sidekick", "only the sidekick tool is pre-approved");
+    assert.ok(!args.includes("--disallowed-tools"), "coordination stays off: the native Agent tool is kept");
+    assert.ok(!args.some((value) => /Bearer|127\.0\.0\.1/.test(value)), "the token stays off the command line");
+    assert.deepEqual((await adapter.snapshot()).capabilities.nativeSubagents, { supported: true, enforcement: "native" });
+    const server = JSON.parse(readFileSync(argValue(args, "--mcp-config"), "utf8")).mcpServers["piui-workspace"];
+    const rpc = async (body) => (await fetch(server.url, { method: "POST", headers: { ...server.headers, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...body }) })).json();
+    const listed = (await rpc({ method: "tools/list" })).result.tools;
+    assert.deepEqual(listed.map((tool) => tool.name), ["sidekick"]);
+    assert.deepEqual(listed[0].inputSchema.required, ["op"]);
+    assert.equal(listed[0].inputSchema.properties.waitSeconds.maximum, 540);
+
+    const status = await rpc({ method: "tools/call", params: { name: "sidekick", arguments: { op: "status" }, _meta: { "claudecode/toolUseId": "toolu_native_1" } } });
+    assert.equal(status.result.content[0].text, "Round r1 is working on the login fix.", "the reply is the host's text, not JSON");
+    assert.equal(status.result.isError, undefined);
+    const stopped = await rpc({ method: "tools/call", params: { name: "sidekick", arguments: { op: "stop", roundId: "r1" }, _meta: { "claudecode/toolUseId": "toolu_native_2" } } });
+    assert.equal(stopped.result.isError, true, "an ok:false result is an error the agent can read");
+    assert.equal(stopped.result.content[0].text, "Round r1 is not running.");
+    // No native tool use id: the id is derived from the JSON-RPC request id.
+    await rpc({ id: 7, method: "tools/call", params: { name: "sidekick", arguments: { op: "diff" } } });
+    const cancelled = await rpc({ method: "tools/call", params: { name: "sidekick", arguments: { op: "reset" }, _meta: { "claudecode/toolUseId": "toolu_native_3" } } });
+    assert.equal(cancelled.result.isError, true);
+    assert.deepEqual(JSON.parse(cancelled.result.content[0].text), { ok: false, code: "sidekick-cancelled", message: "The sidekick request was cancelled. Collect the result with wait." });
+    const failed = await rpc({ method: "tools/call", params: { name: "sidekick", arguments: { op: "wait" } } });
+    assert.equal(failed.result.isError, true);
+    assert.doesNotMatch(failed.result.content[0].text, /raw internal detail/);
+    assert.equal(JSON.parse(failed.result.content[0].text).code, "sidekick-failed");
+
+    const board = await rpc({ method: "tools/call", params: { name: "board", arguments: { op: "context" } } });
+    assert.equal(board.error.code, -32601, "the board tool does not exist without the board host tool");
+    const workspace = await rpc({ method: "tools/call", params: { name: "workspace", arguments: { type: "roster" } } });
+    assert.equal(workspace.error.code, -32601, "the coordinator tool does not exist without coordination");
+    assert.deepEqual(calls.map((call) => [call.operation.op, call.toolCallId]), [
+      ["status", "toolu_native_1"], ["stop", "toolu_native_2"], ["diff", "mcp-7"], ["reset", "toolu_native_3"], ["wait", "mcp-1"],
+    ]);
+    assert.deepEqual(calls[1].operation, { op: "stop", roundId: "r1" });
+  } finally { await adapter.dispose(); }
+
+  // With a tool allowlist the session's own server stays reachable.
+  const restricted = setup({ hostTools: ["sidekick"], allowedTools: ["Read", "sidekick"] });
+  const second = await createClaudeAdapter(restricted.config, recorder().emit, undefined, undefined, async () => ({ ok: true, text: "ok" }));
+  try {
+    const { args } = startRecord(restricted.records);
+    assert.equal(argValue(args, "--tools"), "Read");
+    assert.ok(args.includes("--strict-mcp-config"));
+    assert.ok(!args.includes("--disallowed-tools"), "mcp__* is not denied while a host tool uses the server");
+    assert.equal(argValue(args, "--allowed-tools"), "mcp__piui-workspace__sidekick");
+  } finally { await second.dispose(); }
+
+  // Board and sidekick together, and sidekick with coordination, list and pre-approve exactly their tools.
+  const both = setup({ hostTools: ["board", "sidekick"] });
+  const third = await createClaudeAdapter(both.config, recorder().emit, undefined, async () => ({ ok: true }), async () => ({ ok: true, text: "ok" }));
+  try {
+    const { args } = startRecord(both.records);
+    assert.equal(argValue(args, "--allowed-tools"), "mcp__piui-workspace__board,mcp__piui-workspace__sidekick");
+    const server = JSON.parse(readFileSync(argValue(args, "--mcp-config"), "utf8")).mcpServers["piui-workspace"];
+    const listed = await (await fetch(server.url, { method: "POST", headers: { ...server.headers, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) })).json();
+    assert.deepEqual(listed.result.tools.map((tool) => tool.name), ["board", "sidekick"]);
+  } finally { await third.dispose(); }
+  const managed = setup({ coordination: true, hostTools: ["sidekick"] });
+  const fourth = await createClaudeAdapter(managed.config, recorder().emit, async () => ({}), undefined, async () => ({ ok: true, text: "ok" }));
+  try {
+    const { args } = startRecord(managed.records);
+    assert.equal(argValue(args, "--allowed-tools"), "mcp__piui-workspace__workspace,mcp__piui-workspace__sidekick");
+    assert.equal(argValue(args, "--disallowed-tools"), "Agent");
+  } finally { await fourth.dispose(); }
+});
+
+test("the sidekick tool raises the child MCP tool timeout and replaces an inherited value", async () => {
+  const previous = process.env.MCP_TOOL_TIMEOUT;
+  process.env.MCP_TOOL_TIMEOUT = "1000";
+  try {
+    // The fixture does not record this variable, so a wrapper reads it first
+    // and then runs the fixture unchanged.
+    const observed = async (overrides, ...handlers) => {
+      const { config, dir } = setup(overrides);
+      const envPath = join(dir, "mcp-timeout.txt");
+      const wrapper = join(dir, "env-wrapper.mjs");
+      writeFileSync(wrapper, [
+        'import { appendFileSync } from "node:fs";',
+        `appendFileSync(${JSON.stringify(envPath)}, String(process.env.MCP_TOOL_TIMEOUT) + "\\n");`,
+        `await import(${JSON.stringify(pathToFileURL(fixture).href)});`,
+      ].join("\n"));
+      config.runtimeArgs = [wrapper, ...config.runtimeArgs.slice(1)];
+      const adapter = await createClaudeAdapter(config, recorder().emit, ...handlers);
+      try {
+        await waitFor(() => existsSync(envPath), "the wrapper did not start");
+        return readFileSync(envPath, "utf8").split("\n").filter(Boolean);
+      } finally { await adapter.dispose(); }
+    };
+    const enabled = await observed({ hostTools: ["sidekick"] }, undefined, undefined, async () => ({ ok: true, text: "ok" }));
+    assert.ok(enabled.length > 0);
+    assert.deepEqual([...new Set(enabled)], ["600000"], "the parent's value is replaced by the sidekick wait budget");
+    // Without the sidekick tool (or its host callback) the user's value is left alone.
+    assert.deepEqual([...new Set(await observed({ hostTools: ["board"] }, undefined, async () => ({ ok: true })))], ["1000"]);
+    assert.deepEqual([...new Set(await observed({ hostTools: ["sidekick"] }))], ["1000"]);
+    delete process.env.MCP_TOOL_TIMEOUT;
+    assert.deepEqual([...new Set(await observed({ hostTools: ["sidekick"] }, undefined, undefined, async () => ({ ok: true, text: "ok" })))], ["600000"], "set even when the parent had none");
+    assert.deepEqual([...new Set(await observed({}))], ["undefined"], "nothing is invented for chats without the tool");
+  } finally {
+    if (previous === undefined) delete process.env.MCP_TOOL_TIMEOUT;
+    else process.env.MCP_TOOL_TIMEOUT = previous;
+  }
+});
+
+test("a sidekick request without a host callback starts the chat with a notice and no tool", async () => {
+  // The sidekick alone: no MCP server at all.
+  const plain = setup({ hostTools: ["sidekick"] });
+  const events = [];
+  const first = await createClaudeAdapter(plain.config, (event) => events.push(event));
+  try {
+    assert.deepEqual(events.filter((event) => event.type === "notice"), [{ type: "notice", code: "unsupported-sidekick-tool" }]);
+    const { args } = startRecord(plain.records);
+    assert.ok(!args.includes("--mcp-config"));
+    assert.ok(!args.includes("--allowed-tools"));
+  } finally { await first.dispose(); }
+
+  // Next to a working board tool the server stays, with the board tool only.
+  const withBoard = setup({ hostTools: ["board", "sidekick"] });
+  const log = recorder();
+  const second = await createClaudeAdapter(withBoard.config, log.emit, undefined, async () => ({ ok: true }));
+  try {
+    assert.deepEqual(log.problems, []);
+    assert.deepEqual(log.of("notice"), [{ type: "notice", code: "unsupported-sidekick-tool" }]);
+    const { args } = startRecord(withBoard.records);
+    assert.equal(argValue(args, "--allowed-tools"), "mcp__piui-workspace__board");
+    const server = JSON.parse(readFileSync(argValue(args, "--mcp-config"), "utf8")).mcpServers["piui-workspace"];
+    const rpc = async (body) => (await fetch(server.url, { method: "POST", headers: { ...server.headers, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...body }) })).json();
+    assert.deepEqual((await rpc({ method: "tools/list" })).result.tools.map((tool) => tool.name), ["board"]);
+    assert.equal((await rpc({ method: "tools/call", params: { name: "sidekick", arguments: { op: "status" } } })).error.code, -32601);
+  } finally { await second.dispose(); }
+
+  // `sidekick` in a tool allowlist needs the host tool and its callback.
+  await assert.rejects(createClaudeAdapter(setup({ allowedTools: ["sidekick"], runtimeProgram: "must-not-launch" }).config, () => {}), { bridgeCode: "unsupported-policy" });
+  await assert.rejects(createClaudeAdapter(setup({ hostTools: ["sidekick"], allowedTools: ["Read", "sidekick"], runtimeProgram: "must-not-launch" }).config, () => {}), { bridgeCode: "unsupported-policy" });
 });

@@ -391,6 +391,42 @@ fn files_of(
     files
 }
 
+/// The changed files of a chat's folder with the same status, counts and
+/// limits as `status` (Fusion facts and `diff`, ADR-043); `None` outside a
+/// repository. The second value says the list was truncated.
+pub(crate) async fn changed_files(
+    host: &HostState,
+    session_id: &str,
+) -> Result<Option<(Vec<ReviewFileV1>, bool)>, WorkspaceError> {
+    match status(host, session_id.to_owned()).await? {
+        ReviewResultV1::Status {
+            repository: ReviewRepositoryV1::NotRepository {},
+            ..
+        } => Ok(None),
+        ReviewResultV1::Status {
+            files, truncated, ..
+        } => Ok(Some((files, truncated))),
+        _ => Err(invalid()),
+    }
+}
+
+/// One changed file's reviewed content and fingerprint (Fusion `diff`).
+pub(crate) async fn file_view(
+    host: &HostState,
+    session_id: &str,
+    path: &str,
+    area: ReviewArea,
+) -> Result<(ReviewContentV1, String), WorkspaceError> {
+    match diff(host, session_id.to_owned(), path.to_owned(), area).await? {
+        ReviewResultV1::Diff {
+            content,
+            fingerprint,
+            ..
+        } => Ok((content, fingerprint)),
+        _ => Err(invalid()),
+    }
+}
+
 async fn status(host: &HostState, session_id: String) -> Result<ReviewResultV1, WorkspaceError> {
     let Some(folder) = review_folder(host, &session_id).await? else {
         return Ok(ReviewResultV1::Status {

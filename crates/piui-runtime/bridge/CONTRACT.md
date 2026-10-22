@@ -34,8 +34,8 @@ Pi tool blocks and Codex MCP/dynamic tool blocks are built from arbitrary native
 - `{type:'approvalResolved',requestId}`
 - `{type:'binding',nativeId,nativePath?}` (host-private only)
 - `{type:'error',message:safeFixedSummary}`
-- `{type:'notice',code:'unsupported-board-tool'|'unsupported-board-tool-resume'}` (non-fatal; see hostTools)
-- `{type:'boardRequest',requestId,operation}` / `{type:'coordinatorRequest',requestId,operation}` (runner-emitted, host-private)
+- `{type:'notice',code:'unsupported-board-tool'|'unsupported-board-tool-resume'|'unsupported-sidekick-tool'|'unsupported-sidekick-tool-resume'}` (non-fatal; see hostTools)
+- `{type:'boardRequest',requestId,operation}` / `{type:'sidekickRequest',requestId,operation,identity}` / `{type:'coordinatorRequest',requestId,operation}` (runner-emitted, host-private)
 
 Runner request LF JSON: `{id:string,method:'initialize'|'snapshot'|'prompt'|'interrupt'|'models'|'setModel'|'setMode'|'respond'|'rename'|'dispose',params:object}`. Initialize params add `harness:'pi'|'prime-agent'|'codex'|'hermes'|'claude-code'|'acp:<descriptor id>'` to config; exactly once. Return `{id,ok:true,result}` or `{id,ok:false,error:{code,message,details?}}` (`details`: optional bounded plain data an adapter sets as `safeDetails`, today only an ACP sign-in refusal's method names); event `{event:NativeEvent}`. Buffer raw bytes, split only LF. Pending native operations must not serialize interruption/approval behind an active turn. EOF closes admission, calls dispose, then exits; Rust handles hung descendants. No generic evaluate/exec/file method.
 
@@ -78,6 +78,19 @@ The agent sees one tool `board` with a compact JSON schema (`op` enum plus the o
 Notice codes (`NativeNoticeCode`): `unsupported-board-tool`, `unsupported-board-tool-resume`. `HarnessKind::supports_board_tool()` gives the static answer (false only for Pi); ACP HTTP MCP support and whether a resumed Codex thread was started with the board are known only after the adapter starts.
 
 With a Claude Code tool allowlist (`--tools … --strict-mcp-config`) the board keeps `mcp__*` undenied, as the coordinator does: strict MCP config already limits MCP to this session's own server. `board` in `allowedTools` names this host tool and is accepted only when the board is enabled.
+
+## hostTools / sidekick tool (Fusion lead, ADR-043)
+A Fusion lead carries `hostTools: ["sidekick"]` (with or without `board`). Only Claude Code and Codex register it (`HarnessKind::supports_sidekick_tool()`); every other adapter ignores the entry. Factories receive an optional fifth callback `sidekickRequest(operation, {toolCallId?, signal?})` (Codex: sixth, after `boardRequest`). Like the board it is optional: an adapter that cannot register it starts anyway and emits `unsupported-sidekick-tool` (Codex resume of a thread whose rollout lacks `piui`/`sidekick`: `unsupported-sidekick-tool-resume`).
+
+The runner validates `SidekickToolOperationV1` (contracts/fusion-v1.ts) with `validateSidekickOperation`: `op` is one of `brief|wait|status|message|steer|stop|diff|report|close|reset`; every other key must belong to that op; `brief` needs `title`, `goal` and a non-empty `doneWhen`; ids are short tokens, texts and lists are capped (`SIDEKICK_LIMITS`). An invalid call is refused in the bridge (`invalid-sidekick-operation`) and never reaches the host.
+
+Runner emits `{type:'sidekickRequest',requestId:'piui-sidekick-<epoch>-<N>',operation,identity:{epoch,seq,callRef?,opHash}}`. `callRef` is the native tool call id (Claude Code `_meta["claudecode/toolUseId"]`, Codex `callId`; ≤128 chars) and `opHash` the SHA-256 of the canonical operation JSON, so the host answers a retried call once and refuses a reused id with another operation (`identity-conflict`). The host derives the lead, pair and sidekick from the emitting runtime binding, never from the operation, and answers once through the Rust-only `NativeRuntime::sidekick_response(request_id, result)`, which writes `sidekickResponse` with `{requestId,result:SidekickToolResultV1}`. The adapter returns `result.text` as the tool result text (`isError` when `ok:false`). Pending sidekick calls settle as failures (`sidekick-cancelled`) on turn completion, interrupt, EOF and dispose, like board calls. A wait portion may take up to 540 s: when the sidekick tool is enabled the Claude Code adapter sets `MCP_TOOL_TIMEOUT=600000` for its child (an inherited value is replaced), since Claude Code otherwise abandons an MCP call after about 64 s (spike S1).
+
+| Harness | Mechanism | Native tool name |
+|---|---|---|
+| Claude Code | the session HTTP MCP server `piui-workspace`, pre-approved with `--allowed-tools` | `mcp__piui-workspace__sidekick` |
+| Codex | dynamic tool namespace `piui`, function `sidekick`, registered on `thread/start` only (a Fusion lead starts a fresh thread) | `piui` / `sidekick` |
+| others | none; notice `unsupported-sidekick-tool` | — |
 
 ## Terminal turn outcome
 `idle` is a session readiness state, NOT proof of task success. Native providers may end failed/interrupted turns by returning to idle. Each adapter MUST emit `{type:'turnCompleted',outcome:'succeeded'|'failed'|'interrupted'}` exactly once after an admitted turn reaches its native terminal outcome, before final idle. Native stop reasons/turn status determine outcome, not absence of transport errors. A failed command that was never admitted rejects normally; a transport loss with no terminal proof stays uncertain. Host tracks outcome with turn generation; initial idle or later idle cannot overwrite it. Scheduler success requires explicit succeeded, never status-only idle. This is host-private metadata, not a persisted replacement transcript.
