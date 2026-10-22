@@ -590,6 +590,7 @@ test('account quota updates stay out of the transcript without hiding unknown co
     await adapter.models();
     assert.ok(!JSON.stringify(events).includes('account/rateLimits/updated'));
     assert.ok(!JSON.stringify(adapter.snapshot().blocks).includes('account/rateLimits/updated'));
+    assert.ok(!JSON.stringify(adapter.snapshot().blocks).includes('turn/moderationMetadata'));
     assert.ok(adapter.snapshot().blocks.some(block => block.safeSummary === 'Unsupported Codex event: future/conversation/event'));
   } finally { await adapter.dispose(); }
 });

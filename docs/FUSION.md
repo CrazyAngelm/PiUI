@@ -36,6 +36,10 @@ one harness, so a cross-harness pair needs explicit modes on both roles.
 `checkPair` answers with the refusal code and the role it concerns; a refused
 `createChat` starts nothing.
 
+Each role may also include `serviceTier: "fast"` when its selected native model
+advertises fast-mode support. An absent tier uses the harness default. This is
+an additive Fusion v1 field, so existing saved pairs without it still load.
+
 Options (`FusionOptionsV1`): briefing policy (`prescriptive` default, or
 `outline` for a strong sidekick; reported to the lead in every brief result
 and `status`, never in its instructions), pushback (the sidekick may argue in

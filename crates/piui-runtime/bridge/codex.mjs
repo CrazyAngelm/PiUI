@@ -1031,6 +1031,9 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     // Codex's own read receipts (0.163 sends one with every visible turn result
     // of a durable thread). PiUI keeps its own unread state; never shown.
     if (method === "thread/readState/changed") return;
+    // Moderation metadata of a turn is service data, not a conversation item;
+    // a turn the provider actually refuses still fails through `turn/completed`.
+    if (method === "turn/moderationMetadata") return;
     // Configuration and deprecation warnings describe the user's native Codex
     // configuration (0.157.1 sends startup warnings right after initialize).
     // They become fixed resource warnings; native text and config paths are
@@ -1326,7 +1329,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   };
 
   const initialize = await callDuringStartup("initialize", {
-    clientInfo: { name: "piui", title: "PiUI", version: "0.2.8" },
+    clientInfo: { name: "piui", title: "PiUI", version: "0.2.9" },
     capabilities: { experimentalApi: true, requestAttestation: false },
   });
   if (!initialize || typeof initialize.codexHome !== "string") {

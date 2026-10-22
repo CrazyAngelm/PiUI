@@ -12,6 +12,7 @@
 
 <script lang="ts">
   import Brain from '@lucide/svelte/icons/brain';
+  import Zap from '@lucide/svelte/icons/zap';
   import { t } from '../../features/locale/language';
   import { cachedHarnessModels, workspaceModel } from '../../host-api/harnessModels';
   import type { HarnessCatalogModel } from '../../../../../contracts/harness-models-v18';
@@ -21,7 +22,7 @@
   import { harnessMeta } from '../harnessMeta';
   import ModelPicker, { type ModelOption } from '../shell/ModelPicker.svelte';
   import { errorMessage } from '../workspaceStore.svelte';
-  import { FUSION_LEADS, FUSION_PERMISSION_CHOICES, FUSION_SIDEKICKS, roleLabel, withHarness, withModel, withPermission, withThinkingLevel, type RefusalCopy } from './fusionPair';
+  import { FUSION_LEADS, FUSION_PERMISSION_CHOICES, FUSION_SIDEKICKS, roleLabel, withHarness, withModel, withPermission, withServiceTier, withThinkingLevel, type RefusalCopy } from './fusionPair';
 
   /**
    * One column of the pair picker: harness, model and permission mode of the
@@ -50,6 +51,7 @@
 
   let models = $state.raw<HarnessCatalogModel[]>([]);
   let loading = $state(false);
+  let catalogReady = $state(false);
   let loadError = $state('');
 
   $effect(() => {
@@ -59,24 +61,37 @@
     models = [];
     loadError = '';
     loading = false;
-    if (!id || !enabled) return;
+    catalogReady = false;
+    if (!id || !enabled) {
+      catalogReady = true;
+      return;
+    }
     let cancelled = false;
     loading = true;
     const show = (result: { models: HarnessCatalogModel[] }): void => {
-      if (!cancelled) models = result.models;
+      if (!cancelled) {
+        models = result.models;
+        catalogReady = true;
+      }
     };
     cachedHarnessModels(
       { workspaceId: id, harness: kind },
       {
         onFresh: show,
         onError: (error) => {
-          if (!cancelled) loadError = errorMessage(error);
+          if (!cancelled) {
+            loadError = errorMessage(error);
+            catalogReady = true;
+          }
         },
       },
     )
       .then(show)
       .catch((error: unknown) => {
-        if (!cancelled) loadError = errorMessage(error);
+        if (!cancelled) {
+          loadError = errorMessage(error);
+          catalogReady = true;
+        }
       })
       .finally(() => {
         if (!cancelled) loading = false;
@@ -98,12 +113,19 @@
     })),
   );
   const modelKey = $derived(value.model ? keyOf(value.model) : '');
-  const levels = $derived(models.find((item) => keyOf(item) === modelKey)?.thinkingLevels ?? value.model?.thinkingLevels ?? []);
+  const selectedModel = $derived(models.find((item) => keyOf(item) === modelKey));
+  const levels = $derived(selectedModel?.thinkingLevels ?? value.model?.thinkingLevels ?? []);
+  const fastAvailable = $derived(Boolean(selectedModel?.supportsFast));
+  const fast = $derived(value.serviceTier === 'fast');
+
+  $effect(() => {
+    if (catalogReady && value.serviceTier === 'fast' && !fastAvailable) onChange(withServiceTier(value, false));
+  });
 
   function chooseModel(key: string): void {
-    if (key === '') return onChange(withModel(value, undefined));
+    if (key === '') return onChange(withModel(value, undefined, false));
     const found = models.find((item) => keyOf(item) === key);
-    if (found) onChange(withModel(value, workspaceModel(found)));
+    if (found) onChange(withModel(value, workspaceModel(found), Boolean(found.supportsFast)));
   }
 </script>
 
@@ -140,16 +162,21 @@
       {levels}
       level={value.thinkingLevel ?? ''}
       levelDefault={true}
+      {fastAvailable}
+      {fast}
+      busy={disabled || loading}
       hint={value.model ? $t('This model has no reasoning options.') : $t('Pick a model to tune reasoning.')}
       width={340}
       onModel={chooseModel}
       onLevel={(level) => onChange(withThinkingLevel(value, level))}
+      onFast={(enabled) => onChange(withServiceTier(value, enabled))}
     >
       {#snippet trigger(props)}
         <button type="button" class="model" {...props} {disabled} aria-labelledby="{uid}-model-label {uid}-model">
           {#if loading}<Spinner size={12} />{:else}<Brain size={14} />{/if}
           <span id="{uid}-model">{value.model?.name ?? $t('Default model')}</span>
           {#if value.thinkingLevel}<span class="model__sub">{value.thinkingLevel}</span>{/if}
+          {#if fast}<Zap size={12} />{/if}
         </button>
       {/snippet}
     </ModelPicker>

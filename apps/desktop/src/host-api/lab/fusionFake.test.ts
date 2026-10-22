@@ -79,6 +79,8 @@ describe('fusion lab fake', () => {
   it('answers checkPair through the host and simulates an unverified Codex sandbox', async () => {
     const sandboxed = pairOf(role('claude-code', 'full-access'), role('codex', 'workspace-write'));
     expect(await fusion(host, { type: 'checkPair', workspaceId: WS, pair: sandboxed })).toEqual({ type: 'pairCheck', ok: true });
+    const fastPair = pairOf({ ...role('codex', 'native'), serviceTier: 'fast' }, role('codex', 'native'));
+    expect(await fusion(host, { type: 'checkPair', workspaceId: WS, pair: fastPair })).toEqual({ type: 'pairCheck', ok: true });
     host.fusion.codexSandbox = false;
     expect(await fusion(host, { type: 'checkPair', workspaceId: WS, pair: sandboxed })).toEqual({
       type: 'pairCheck', ok: false, refusal: 'codex-sandbox-unverified', role: 'sidekick',

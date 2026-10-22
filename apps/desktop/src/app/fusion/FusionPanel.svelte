@@ -47,7 +47,8 @@
 
   const permissionLabel = (role: FusionRoleV1): string =>
     $t(FUSION_PERMISSION_CHOICES.find((choice) => choice.value === role.permissionMode)?.label ?? role.permissionMode);
-  const roleLine = (role: FusionRoleV1): string => [role.model?.name ?? $t('Default model'), role.thinkingLevel, permissionLabel(role)].filter(Boolean).join(' · ');
+  const roleLine = (role: FusionRoleV1): string =>
+    [role.model?.name ?? $t('Default model'), role.thinkingLevel, role.serviceTier === 'fast' ? $t('Fast mode') : '', permissionLabel(role)].filter(Boolean).join(' · ');
   const briefTone = (brief: FusionBriefV1): 'neutral' | 'accent' | 'success' | 'warning' | 'danger' => {
     if (brief.state === 'active') return 'accent';
     if (brief.outcome === 'accepted') return 'success';

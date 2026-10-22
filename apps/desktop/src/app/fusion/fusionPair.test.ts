@@ -17,6 +17,7 @@ import {
   withOptions,
   withPermission,
   withRole,
+  withServiceTier,
   withThinkingLevel,
 } from './fusionPair';
 import {
@@ -79,18 +80,27 @@ describe('role edits', () => {
   const model = { id: 'm1', name: 'M1', thinkingLevels: ['low', 'high'] };
 
   it('drops the model and reasoning of another harness', () => {
-    const role = withThinkingLevel(withModel({ harness: 'codex', permissionMode: 'read-only' }, model), 'high');
+    const role = withThinkingLevel(withModel({ harness: 'codex', permissionMode: 'read-only' }, model, false), 'high');
     expect(role).toEqual({ harness: 'codex', permissionMode: 'read-only', model, thinkingLevel: 'high' });
     expect(withHarness(role, 'codex')).toBe(role);
     expect(withHarness(role, 'pi')).toEqual({ harness: 'pi', permissionMode: 'read-only' });
   });
 
   it('keeps a reasoning level only when the new model offers it', () => {
-    const role = withThinkingLevel(withModel({ harness: 'codex', permissionMode: 'native' }, model), 'high');
-    expect(withModel(role, { id: 'm2', name: 'M2', thinkingLevels: ['high'] }).thinkingLevel).toBe('high');
-    expect(withModel(role, { id: 'm3', name: 'M3' }).thinkingLevel).toBeUndefined();
-    expect(withModel(role, undefined)).toEqual({ harness: 'codex', permissionMode: 'native' });
+    const role = withThinkingLevel(withModel({ harness: 'codex', permissionMode: 'native' }, model, false), 'high');
+    expect(withModel(role, { id: 'm2', name: 'M2', thinkingLevels: ['high'] }, false).thinkingLevel).toBe('high');
+    expect(withModel(role, { id: 'm3', name: 'M3' }, false).thinkingLevel).toBeUndefined();
+    expect(withModel(role, undefined, false)).toEqual({ harness: 'codex', permissionMode: 'native' });
     expect(withThinkingLevel(role, '').thinkingLevel).toBeUndefined();
+  });
+
+  it('keeps fast only for fast-capable models and drops it on harness changes', () => {
+    const fastRole = withServiceTier(withModel({ harness: 'codex', permissionMode: 'native' }, { id: 'm1', name: 'M1' }, true), true);
+    expect(fastRole.serviceTier).toBe('fast');
+    expect(withModel(fastRole, { id: 'm2', name: 'M2' }, false).serviceTier).toBeUndefined();
+    expect(withHarness(fastRole, 'pi').serviceTier).toBeUndefined();
+    expect(withModel(fastRole, { id: 'm3', name: 'M3' }, true).serviceTier).toBe('fast');
+    expect(withThinkingLevel(fastRole, 'high').serviceTier).toBe('fast');
   });
 
   it('changes one role or the options without touching the rest', () => {
@@ -101,6 +111,8 @@ describe('role edits', () => {
     expect(withOptions(pair, { pushback: true }).options).toEqual({ ...DEFAULT_FUSION_OPTIONS, pushback: true });
     expect(pairKey(next)).not.toBe(pairKey(pair));
     expect(pairKey(withRole(pair, 'lead', { ...pair.lead }))).toBe(pairKey(pair));
+    const fastLead = withServiceTier(withModel(pair.lead, { id: 'm', name: 'Model' }, true), true);
+    expect(pairKey(withRole(pair, 'lead', fastLead))).not.toBe(pairKey(pair));
   });
 });
 
@@ -109,7 +121,7 @@ describe('remembered pair', () => {
 
   it('round-trips roles and options but not models', () => {
     const pair = defaultPair(available)!;
-    const withModelPair = withRole(withOptions(pair, { pushback: true, briefPolicy: 'outline' }), 'lead', withModel(pair.lead, { id: 'm', name: 'M' }));
+    const withModelPair = withRole(withOptions(pair, { pushback: true, briefPolicy: 'outline' }), 'lead', withModel(pair.lead, { id: 'm', name: 'M' }, false));
     const restored = restorePair(rememberablePair(withModelPair), available);
     expect(restored).toEqual({ ...withModelPair, lead: { harness: pair.lead.harness, permissionMode: pair.lead.permissionMode } });
   });

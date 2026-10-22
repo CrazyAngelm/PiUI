@@ -12,8 +12,8 @@ use super::logic::{
 use super::model::{
     BriefFields, DeliveryState, DeliveryVia, FactApprovals, FactCommands, FactFiles, FactSource,
     FactTokens, FusionDelivery, FusionDocument, FusionOptions, FusionPair, FusionRefusal,
-    FusionRole, FusionRoleName, ReportStatus, RoundOutcome, RoundState, SidekickErrorCode,
-    SidekickFacts, SidekickReport,
+    FusionRole, FusionRoleName, FusionServiceTier, ReportStatus, RoundOutcome, RoundState,
+    SidekickErrorCode, SidekickFacts, SidekickReport,
 };
 use super::store::{FusionStore, MemoryFusionStore};
 use crate::review_api::{ReviewArea, ReviewContentV1, ReviewFileV1};
@@ -33,8 +33,33 @@ fn role(harness: HarnessKind, permission_mode: PermissionMode) -> FusionRole {
         harness,
         model: None,
         thinking_level: None,
+        service_tier: None,
         permission_mode,
     }
+}
+
+#[test]
+fn fusion_role_fast_tier_is_optional_and_typed() {
+    let old_role = json!({"harness":"codex", "permissionMode":"full-access"});
+    let parsed_old = serde_json::from_value::<FusionRole>(old_role.clone()).expect("old role");
+    assert_eq!(parsed_old.service_tier, None);
+    assert_eq!(
+        serde_json::to_value(parsed_old).expect("serialize old role"),
+        old_role
+    );
+
+    let fast_role =
+        json!({"harness":"codex", "permissionMode":"full-access", "serviceTier":"fast"});
+    let parsed_fast = serde_json::from_value::<FusionRole>(fast_role.clone()).expect("fast role");
+    assert_eq!(parsed_fast.service_tier, Some(FusionServiceTier::Fast));
+    assert_eq!(
+        serde_json::to_value(parsed_fast).expect("serialize fast role"),
+        fast_role
+    );
+
+    let invalid_tier =
+        json!({"harness":"codex", "permissionMode":"full-access", "serviceTier":"turbo"});
+    assert!(serde_json::from_value::<FusionRole>(invalid_tier).is_err());
 }
 
 fn pair(lead: FusionRole, sidekick: FusionRole) -> FusionPair {
