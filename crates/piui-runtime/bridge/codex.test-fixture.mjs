@@ -121,6 +121,7 @@ input.on("line", (line) => {
     if (process.argv.includes("--rate-limits")) {
       send({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 20 } } } });
       send({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 21 } } } });
+      send({ method: "turn/moderationMetadata", params: { threadId, turnId: "fixture-turn", metadata: {} } });
       send({ method: "future/conversation/event", params: {} });
     }
     // MCP startup is scoped to the thread runtime (`threadId`, all verified

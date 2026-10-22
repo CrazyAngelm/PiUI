@@ -31,6 +31,8 @@
   import { relativeTime } from '../format';
   import { isPinned, type ProjectDialogRequest } from '../projects/projectActions';
   import { useWorkspace } from './context';
+  import { fusionMembership } from '../fusion/fusionMembership.svelte';
+  import { chatTree } from './chatTree';
 
   interface Props {
     onSearch: () => void;
@@ -55,6 +57,23 @@
   });
   // Worktree markers: placement v1 is loaded whenever the chat list changes.
   $effect(() => placements.sync(store.catalog.sessions.map((session) => session.id)));
+  // Fusion sidekick chats nest under their lead; every chat asks once (cached).
+  $effect(() => {
+    for (const session of store.catalog.sessions) void fusionMembership.load(session.id);
+  });
+  const parentOf = (sessionId: string): string | undefined => {
+    const member = fusionMembership.peek(sessionId);
+    return member?.role === 'sidekick' ? member.leadSessionId : undefined;
+  };
+  /** Leads whose sidekick chats are shown; a lead opens itself when one of them is current. */
+  let expandedLeads = $state<string[]>([]);
+  $effect(() => {
+    const lead = store.selectedSessionId ? parentOf(store.selectedSessionId) : undefined;
+    if (lead && !untrack(() => expandedLeads).includes(lead)) expandedLeads = [...untrack(() => expandedLeads), lead];
+  });
+  function toggleLead(leadId: string): void {
+    expandedLeads = expandedLeads.includes(leadId) ? expandedLeads.filter((id) => id !== leadId) : [...expandedLeads, leadId];
+  }
 
   function sessionStatus(session: WorkspaceSession): Status | undefined {
     if (approvalsBySession.has(session.id)) return 'waiting';
@@ -229,6 +248,30 @@
   </div>
 </nav>
 
+{#snippet chat(session: WorkspaceSession, hidden: WorkspaceSession[])}
+  {@const status = sessionStatus(session) ?? hidden.map(sessionStatus).find((value) => value !== undefined)}
+  {@const worktree = placements.get(session.id)?.worktree}
+  <button
+    type="button"
+    class="chat"
+    class:chat--current={store.selectedSessionId === session.id}
+    aria-current={store.selectedSessionId === session.id ? 'page' : undefined}
+    onclick={() => go(() => void store.openSession(session.id))}
+    title={worktree ? `${session.title} · ${worktree.branch}` : session.title}
+  >
+    {#if worktree}
+      <span class="chat__worktree" class:chat__worktree--gone={worktree.state !== 'ready'}><GitBranch size={12} /></span>
+    {/if}
+    <span class="chat__title">{session.title}</span>
+    {#if worktree}<span class="visually-hidden">{$t('in worktree {0}', [worktree.branch])}</span>{/if}
+    {#if status}
+      <StatusDot {status} label={status === 'waiting' ? $t('Needs your decision') : status === 'running' ? $t('Running') : $t('Failed')} />
+    {:else}
+      <span class="chat__time">{relativeTime(session.updatedAt, $language, now)}</span>
+    {/if}
+  </button>
+{/snippet}
+
 {#snippet project(workspace: WorkspaceSummary, Icon: typeof Folder, name: string)}
   {@const collapsed = store.collapsedProjects.includes(workspace.id)}
   {@const sessions = store.sessionsFor(workspace.id)}
@@ -300,28 +343,30 @@
     </div>
     {#if !collapsed}
       <ul class="chats">
-        {#each sessions as session (session.id)}
-          {@const status = sessionStatus(session)}
-          {@const worktree = placements.get(session.id)?.worktree}
-          <li><button
-            type="button"
-            class="chat"
-            class:chat--current={store.selectedSessionId === session.id}
-            aria-current={store.selectedSessionId === session.id ? 'page' : undefined}
-            onclick={() => go(() => void store.openSession(session.id))}
-            title={worktree ? `${session.title} · ${worktree.branch}` : session.title}
-          >
-            {#if worktree}
-              <span class="chat__worktree" class:chat__worktree--gone={worktree.state !== 'ready'}><GitBranch size={12} /></span>
+        {#each chatTree(sessions, parentOf) as item (item.session.id)}
+          {@const open = item.children.length > 0 && expandedLeads.includes(item.session.id)}
+          <li>
+            {@render chat(item.session, item.children.length > 0 && !open ? item.children : [])}
+            {#if item.children.length > 0}
+              <button
+                type="button"
+                class="chat__toggle"
+                aria-expanded={open}
+                aria-label={open ? $t('Hide sidekick chats') : $t('Show sidekick chats')}
+                onclick={() => toggleLead(item.session.id)}
+              >
+                <span class="chevron" class:chevron--open={open}><ChevronRight size={12} /></span>
+                {#if item.children.length > 1}<span class="chat__count">{item.children.length}</span>{/if}
+              </button>
             {/if}
-            <span class="chat__title">{session.title}</span>
-            {#if worktree}<span class="visually-hidden">{$t('in worktree {0}', [worktree.branch])}</span>{/if}
-            {#if status}
-              <StatusDot {status} label={status === 'waiting' ? $t('Needs your decision') : status === 'running' ? $t('Running') : $t('Failed')} />
-            {:else}
-              <span class="chat__time">{relativeTime(session.updatedAt, $language, now)}</span>
+            {#if open}
+              <ul class="chats chats--nested">
+                {#each item.children as child (child.id)}
+                  <li>{@render chat(child, [])}</li>
+                {/each}
+              </ul>
             {/if}
-          </button></li>
+          </li>
         {/each}
         {#if sessions.length === 0}
           <li class="chats__empty">{$t('No chats yet')}</li>
@@ -588,6 +633,40 @@
   }
   .chat__worktree--gone {
     color: var(--piui-text-faint);
+  }
+  .chats > li {
+    position: relative;
+  }
+  .chats > li:has(> .chat__toggle) > .chat {
+    padding-right: 52px;
+  }
+  .chat__toggle {
+    position: absolute;
+    top: 3px;
+    right: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    height: 22px;
+    padding: 0 4px;
+    border: 0;
+    border-radius: var(--piui-radius-xs);
+    background: transparent;
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-xs);
+  }
+  .chat__toggle:hover {
+    background: var(--piui-hover);
+    color: var(--piui-text);
+  }
+  .chat__count {
+    font-variant-numeric: tabular-nums;
+  }
+  .chats--nested {
+    margin-left: var(--piui-space-2);
+    padding: 1px 0 2px var(--piui-space-2);
+    border-left: 1px solid var(--piui-border);
+    border-bottom-left-radius: var(--piui-radius-sm);
   }
   .chats__empty {
     margin: 2px 0 6px;

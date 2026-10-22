@@ -11,6 +11,8 @@ export const fusionRu: Readonly<Record<string, string>> = {
     'Ведущий общается с вами и передаёт работу напарнику, который сохраняет свой контекст между поручениями.',
   Lead: 'Ведущий',
   Sidekick: 'Напарник',
+  'Show sidekick chats': 'Показать чаты напарника',
+  'Hide sidekick chats': 'Скрыть чаты напарника',
   'Fusion needs Claude Code or Codex as the lead. Install and sign in to one of them.':
     'Для Fusion ведущим должен быть Claude Code или Codex. Установите один из них и войдите в аккаунт.',
   'Checking the pair…': 'Проверяем пару…',
