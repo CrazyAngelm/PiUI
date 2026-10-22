@@ -24,6 +24,9 @@ const unknownItemsFixture = process.argv.includes("--unknown-items");
 const toolItemsFixture = process.argv.includes("--tool-items");
 const textOnlyModel = process.argv.includes("--text-only-model");
 const skillsFixture = process.argv.includes("--skills");
+// Rollout path the thread reports, and a `piui/board` call after it opens.
+const rolloutPath = process.argv.find((argument) => argument.startsWith("--rollout="))?.slice("--rollout=".length) ?? "/fixture/thread.jsonl";
+const boardCallFixture = process.argv.includes("--board-call");
 // Rich input (images, skill items) is echoed as the native user message and
 // summarized in the thread name so tests can read what reached turn/start.
 const echoRichInput = (method, input) => {
@@ -161,7 +164,7 @@ input.on("line", (line) => {
       ? [{ id: "active-resumed-turn", status: "inProgress", items: [] }]
       : [];
     const threadStatus = systemErrorFixture ? { type: "systemError" } : turns.length ? { type: "active", activeFlags: [] } : { type: "idle" };
-    send({ method: "thread/started", params: { thread: { id: threadId, path: "/fixture/thread.jsonl", status: threadStatus } } });
+    send({ method: "thread/started", params: { thread: { id: threadId, path: rolloutPath, status: threadStatus } } });
     const effectiveSandbox = effectivePermissionMismatch
       ? { type: "readOnly", networkAccess: false }
       : expectedPermission === "read-only"
@@ -172,7 +175,7 @@ input.on("line", (line) => {
             ? { type: "dangerFullAccess" }
             : { type: "readOnly", networkAccess: false };
     send({ id: message.id, result: {
-      thread: { id: threadId, path: "/fixture/thread.jsonl", status: threadStatus, turns: message.method === "thread/resume" ? [] : turns },
+      thread: { id: threadId, path: rolloutPath, status: threadStatus, turns: message.method === "thread/resume" ? [] : turns },
       initialTurnsPage: message.method === "thread/resume" ? { data: turns, nextCursor: null, backwardsCursor: null } : null,
       model: "fixture-model",
       modelProvider: "openai",
@@ -289,6 +292,9 @@ input.on("line", (line) => {
         contentItems: [{ type: "inputText", text: "{\"ok\":false}" }],
       });
     }
+    if (boardCallFixture) {
+      send({ method: "item/tool/call", id: 990, params: { threadId, turnId: "turn-board", callId: "call-board", namespace: "piui", tool: "board", arguments: { op: "roster" } } });
+    }
     if (coordinatorFixture) {
       const tools = message.params.dynamicTools?.[0]?.tools?.map((tool) => tool.name).sort();
       if (
@@ -303,6 +309,9 @@ input.on("line", (line) => {
         send({ method: "item/tool/call", id: 911, params: { threadId, turnId: "turn-coordinator", callId: "call-invalid", namespace: "workspace", tool: "send", arguments: { recipientMemberId: "member", body: "hi", extra: true } } });
       }
     }
+  } else if (message.id === 990) {
+    const reply = JSON.parse(message.result?.contentItems?.[0]?.text ?? "{}");
+    send({ method: "thread/name/updated", params: { threadId, threadName: `board:${message.result?.success}:${reply.code ?? reply.op}` } });
   } else if (message.id === 900 && message.result?.decision === "accept") {
     send({ method: "serverRequest/resolved", params: { threadId, requestId: 900 } });
     send({ method: "thread/name/updated", params: { threadId, threadName: "command:accept" } });

@@ -543,7 +543,7 @@ pub(crate) struct BoardSessionSetup {
 /// Every method may block and is called off the async runtime threads.
 pub(crate) trait BoardSessionHooks: Send + Sync {
     /// Decides the board tool, instruction block and notice of one start.
-    fn setup(&self, binding: &BoardBinding, resumed: bool) -> BoardSessionSetup;
+    fn setup(&self, binding: &BoardBinding) -> BoardSessionSetup;
     /// Resets the write budget of a new agent turn.
     fn begin_turn(&self, turn_key: &str);
     /// Answers one board tool call with a `BoardToolResultV1` JSON object.
@@ -1048,7 +1048,6 @@ impl WorkspaceHost {
     async fn board_setup(
         &self,
         record: &PersistedSession,
-        resumed: bool,
     ) -> Option<(BoardBinding, Arc<dyn BoardSessionHooks>, BoardSessionSetup)> {
         let hooks = self.inner.board.lock().ok().and_then(|slot| slot.clone())?;
         let binding = BoardBinding {
@@ -1061,11 +1060,10 @@ impl WorkspaceHost {
         };
         let blocking_hooks = Arc::clone(&hooks);
         let blocking_binding = binding.clone();
-        let setup = tauri::async_runtime::spawn_blocking(move || {
-            blocking_hooks.setup(&blocking_binding, resumed)
-        })
-        .await
-        .ok()?;
+        let setup =
+            tauri::async_runtime::spawn_blocking(move || blocking_hooks.setup(&blocking_binding))
+                .await
+                .ok()?;
         Some((binding, hooks, setup))
     }
 
@@ -1542,7 +1540,7 @@ impl WorkspaceHost {
                 .is_some_and(|rules| !rules.as_array().is_some_and(Vec::is_empty));
         let plugin_mcp_servers = self.plugin_mcp_servers(&record, &cwd, managed).await;
         let board = match resume_binding(&record) {
-            Ok((native_id, _)) => self.board_setup(&record, native_id.is_some()).await,
+            Ok(_) => self.board_setup(&record).await,
             Err(_) => None,
         };
         let (host_tools, instructions) = match &board {

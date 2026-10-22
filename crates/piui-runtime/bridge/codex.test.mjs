@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
-import { isAbsolute, toNamespacedPath } from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, toNamespacedPath } from "node:path";
 import test from "node:test";
 import { createCodexAdapter } from "./codex.mjs";
 
@@ -282,6 +284,52 @@ test("the board tool is optional: a resumed thread starts without it and a notic
     assert.equal(fresh.snapshot().capabilities.nativeSubagents.enforcement, "native", "the board never disables native subagents");
   } finally {
     await fresh.dispose();
+  }
+});
+
+test("a resumed thread started with the board keeps it; a thread without it gets the notice", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "piui-codex-rollout-"));
+  // Codex 0.163 rollouts start with `session_meta` carrying the persisted dynamic tools.
+  const rollout = async (name, tools) => {
+    const file = join(directory, name);
+    const meta = { type: "session_meta", payload: { id: "resume-fixture", base_instructions: { text: "x".repeat(30000) }, dynamic_tools: tools } };
+    await writeFile(file, `${JSON.stringify(meta)}
+{"type":"turn_context","payload":{}}
+`);
+    return file;
+  };
+  const piui = (...names) => [{ type: "namespace", name: "piui", description: "PiUI host tools for this chat.", tools: names.map((name) => ({ type: "function", name, inputSchema: { type: "object" } })) }];
+  const withBoard = await rollout("board.jsonl", piui("board"));
+  const resume = async (file, hostTools, calls) => {
+    const events = [];
+    const adapter = await createCodexAdapter({ ...config, nativeId: "resume-fixture", runtimeArgs: [fixture, `--rollout=${file}`, "--board-call"], ...(hostTools ? { hostTools } : {}) },
+      (event) => events.push(event), undefined, undefined, async (operation) => { calls.push(operation); return { ok: true, op: operation.op }; });
+    try {
+      const title = await waitFor(() => adapter.snapshot().title.startsWith("board:") && adapter.snapshot().title);
+      return { title, notices: events.filter((event) => event.type === "notice").map((event) => event.code) };
+    } finally { await adapter.dispose(); }
+  };
+  try {
+    const accepted = [];
+    assert.deepEqual(await resume(withBoard, ["board"], accepted), { title: "board:true:roster", notices: [] });
+    assert.deepEqual(accepted, [{ op: "roster" }]);
+
+    // The board is off for this chat now: the persisted tool gets a clean refusal.
+    const disabled = [];
+    assert.deepEqual(await resume(withBoard, undefined, disabled), { title: "board:false:board-disabled", notices: [] });
+    assert.deepEqual(disabled, []);
+
+    // Started without the board (another piui tool, no tools, unreadable meta): notice.
+    for (const file of [await rollout("sidekick.jsonl", piui("sidekick")), await rollout("none.jsonl", []), join(directory, "missing.jsonl")]) {
+      const events = [];
+      const adapter = await createCodexAdapter({ ...config, nativeId: "resume-fixture", runtimeArgs: [fixture, `--rollout=${file}`], hostTools: ["board"] },
+        (event) => events.push(event), undefined, undefined, async () => ({ ok: true }));
+      try {
+        assert.deepEqual(events.filter((event) => event.type === "notice").map((event) => event.code), ["unsupported-board-tool-resume"]);
+      } finally { await adapter.dispose(); }
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 });
 

@@ -97,6 +97,10 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
   let accepting = true;
   let disposing;
   const inFlight = new Set();
+  // Request ids are `<kind>-<epoch>-<sequence>`. The epoch is random per bridge
+  // process: the host derives durable deduplication keys from the id, and a
+  // bare sequence restarts at 1 after a bridge restart of the same session.
+  const epoch = globalThis.crypto.randomUUID().replaceAll("-", "").slice(0, 12);
   const coordinatorPending = new Map();
   let coordinatorSequence = 0;
 
@@ -132,7 +136,7 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
   const coordinatorRequest = (operation, metadata = {}) => {
     if (!initializeConfig?.coordination) return Promise.reject(Object.assign(new Error("unsupported"), { bridgeCode: "coordinator-disabled", safeMessage: "Coordinator tools are not enabled for this session." }));
     if (!validateCoordinatorOperation(operation)) return Promise.reject(Object.assign(new Error("invalid"), { bridgeCode: "invalid-coordinator-operation", safeMessage: "The coordinator operation is invalid." }));
-    const requestId = `piui-coordinator-${++coordinatorSequence}`;
+    const requestId = `piui-coordinator-${epoch}-${++coordinatorSequence}`;
     return new Promise((resolve, reject) => {
       const slot = { resolve, reject, toolCallId: metadata?.toolCallId };
       coordinatorPending.set(requestId, slot);
@@ -150,7 +154,7 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
     const enabled = Array.isArray(initializeConfig?.hostTools) && initializeConfig.hostTools.includes("board");
     if (!enabled) return Promise.reject(Object.assign(new Error("unsupported"), { bridgeCode: "board-disabled", safeMessage: "Board tools are not enabled for this chat." }));
     if (!validateBoardOperation(operation)) return Promise.reject(Object.assign(new Error("invalid"), { bridgeCode: "invalid-board-operation", safeMessage: "The board operation is invalid. Check `op` and its fields." }));
-    const requestId = `piui-board-${++boardSequence}`;
+    const requestId = `piui-board-${epoch}-${++boardSequence}`;
     return new Promise((resolve, reject) => {
       boardPending.set(requestId, { resolve, reject });
       if (metadata?.signal && typeof metadata.signal.addEventListener === "function") {

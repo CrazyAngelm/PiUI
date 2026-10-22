@@ -322,6 +322,20 @@ test("Pi sends images as native ImageContent and lists them in the user block", 
   } finally { await adapter.dispose(); }
 });
 
+test("Pi starts a native run for an idle follow-up instead of only queueing it", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    assert.equal((await adapter.snapshot()).status, "idle");
+    await adapter.prompt({ text: "later", mode: "follow-up", images: [PNG] });
+    const outcome = await waitFor(() => events.find((event) => event.type === "turnCompleted")?.outcome);
+    assert.equal(outcome, "succeeded");
+    assert.ok(events.some((event) => event.type === "textDelta" && event.text === "answer"));
+    // The fixture records the native command that carried the images.
+    assert.equal((await adapter.snapshot()).title, "images:prompt:image/image/png/iVBORw0KGgo=");
+  } finally { await adapter.dispose(); }
+});
+
 test("Pi refuses images a text-only model cannot take and malformed images", async () => {
   const adapter = await createPiAdapter(config({ runtimeArgs: [fixture, "--text-only-model"] }), () => {});
   try {
