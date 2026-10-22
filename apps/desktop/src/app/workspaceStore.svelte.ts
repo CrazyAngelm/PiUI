@@ -198,6 +198,7 @@ export class WorkspaceStore {
   private stopSurfaces: (() => void) | undefined;
   private unlistenRegistry: (() => void) | undefined;
   private disposed = false;
+  private preferencesRequest = 0;
 
   // ---- derived views -------------------------------------------------------
 
@@ -429,10 +430,12 @@ export class WorkspaceStore {
   }
 
   async loadPreferences(): Promise<void> {
+    const request = this.preferencesRequest;
     try {
       const bootstrap = await host.bootstrap();
       if (!this.disposed) {
-        this.applyPreferences(bootstrap.preferences);
+        // A save made while bootstrap was in flight is newer than its answer.
+        if (request === this.preferencesRequest) this.applyPreferences(bootstrap.preferences);
         this.projectSummaries = bootstrap.projects;
       }
     } catch (error) {
@@ -441,17 +444,23 @@ export class WorkspaceStore {
   }
 
   async savePreferences(next: Preferences): Promise<void> {
+    // Only the latest save settles the shown preferences: an earlier answer
+    // arriving late must not undo a choice made after it.
+    const request = ++this.preferencesRequest;
     const previous = this.preferences;
     this.applyPreferences(next);
     this.preferencesBusy = true;
     this.preferencesError = undefined;
     try {
-      this.applyPreferences(await host.updatePreferences(next));
+      const saved = await host.updatePreferences(next);
+      if (request === this.preferencesRequest) this.applyPreferences(saved);
     } catch (error) {
-      this.applyPreferences(previous);
-      this.preferencesError = errorMessage(error);
+      if (request === this.preferencesRequest) {
+        this.applyPreferences(previous);
+        this.preferencesError = errorMessage(error);
+      }
     } finally {
-      this.preferencesBusy = false;
+      if (request === this.preferencesRequest) this.preferencesBusy = false;
     }
   }
 
