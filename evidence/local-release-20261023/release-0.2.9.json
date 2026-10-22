@@ -1,0 +1,35 @@
+{
+  "timestamp": "2026-10-23T00:29:00+07:00",
+  "commit": "f9a9322",
+  "branch": "feat/fusion-fast (PR #23, merged as 166261b; identical tree)",
+  "changes": "0.2.9: Fast mode for Fusion roles and the pipeline assistant; sidebar nests Fusion sidekick chats under their lead; calmer transcript activity groups (closed until clicked, comma summaries, +N/-M edit totals); Codex turn/moderationMetadata no longer shown as an unsupported event",
+  "release": {
+    "portable": {
+      "path": "artifacts/PiUI_0.2.9_windows_x86_64.exe",
+      "bytes": 36318208,
+      "sha256": "aec388c1d16e4d3daf7f48bed40a0076367b6e88b094971c104fe1d03833ce2c"
+    },
+    "installer": {
+      "path": "artifacts/PiUI_0.2.9_x64-setup.exe",
+      "bytes": 9693113,
+      "sha256": "45c9fd54995d9cc53991716da3ad2f9d4697b85050cead1c9bbe6467772b31f7"
+    },
+    "authenticode": "NotSigned (no certificate configured)",
+    "updater": "not configured; the app makes no update checks",
+    "installed": "desktop shortcut PiUI.lnk now points to the 0.2.9 portable executable (was 0.2.8)",
+    "launch": "not performed: launching would load the owner's real projects and enabled schedules"
+  },
+  "supersedes": "0.2.8; its artifacts stay in the main checkout's artifacts/ as the rollback copy (SHA256SUMS-0.2.8.txt)",
+  "downgrade": "0.2.8 ignores the optional Fusion role serviceTier and refuses pairs that carry it (strict role keys); pairs without Fast load in both",
+  "verification": {
+    "local": "vitest fusion/shell/chat/locale passed; pnpm check 0 errors; cargo test fusion and clippy -D warnings (piui-desktop) passed; bridge codex.test.mjs 58 passed; UI Lab screenshots of demo chats",
+    "ci": "PR #23 at f9a9322: Frontend quality, Rust ubuntu, Rust windows, UI Lab E2E and Tauri WebView2 E2E passed",
+    "artifactHashes": "copies in D:/Projects/PIUI/artifacts verified against SHA256SUMS.txt"
+  },
+  "notVerified": "packaged WebView2 app; a real paid Fusion run with Fast on; sidebar nesting with a real sidekick chat",
+  "cleanup": {
+    "removed": ["worktree target/ (13315487281 bytes)", "worktree artifacts/ (copied to the main checkout)"],
+    "freeBytesBeforeCleanup": 156909858816,
+    "freeBytesAfter": 184435806208
+  }
+}
