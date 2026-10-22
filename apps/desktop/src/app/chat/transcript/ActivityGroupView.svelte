@@ -68,7 +68,7 @@
     border-radius: var(--piui-radius-sm);
     background: transparent;
     color: var(--piui-text-muted);
-    font-size: var(--piui-text-sm);
+    font-size: var(--piui-chat-font-size);
     text-align: left;
   }
   .group__head:hover {

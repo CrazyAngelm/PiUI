@@ -388,7 +388,7 @@
               <details class="fallback">
                 <summary class="fallback__head">
                   <span class="fallback__label">{block.label || $t('Extension message')}</span>
-                  {#if block.fallback}<span class="fallback__tag"> · {$t('Compatibility view')}</span>{/if}
+                  {#if block.fallback}<span class="fallback__tag">· {$t('Compatibility view')}</span>{/if}
                   <span class="fallback__chevron"><ChevronRight size={12} /></span>
                 </summary>
                 {#if block.text}<MarkdownContent source={block.text} compact={true} />{:else}<p class="muted">{block.safeSummary ?? $t('This session event is not supported by a richer renderer yet.')}</p>{/if}
@@ -620,13 +620,13 @@
     list-style: none;
     cursor: pointer;
     color: var(--piui-text-muted);
-    font-size: var(--piui-text-sm);
+    font-size: var(--piui-chat-font-size);
   }
   .fallback__head::-webkit-details-marker { display: none; }
   .fallback__head:hover { background: var(--piui-hover); color: var(--piui-text); }
   .fallback__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .fallback__tag {
-    margin-left: -8px;
+    margin-left: -4px;
     color: var(--piui-text-faint);
     white-space: nowrap;
   }
