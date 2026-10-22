@@ -18,6 +18,12 @@ pub(crate) enum FusionRoleName {
     Sidekick,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum FusionServiceTier {
+    Fast,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct FusionRole {
@@ -26,6 +32,8 @@ pub(crate) struct FusionRole {
     pub model: Option<WorkspaceModel>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<FusionServiceTier>,
     pub permission_mode: PermissionMode,
 }
 

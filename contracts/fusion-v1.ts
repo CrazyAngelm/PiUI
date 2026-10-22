@@ -47,6 +47,8 @@ export interface FusionRoleV1 {
   harness: HarnessKind;
   model?: WorkspaceModel;
   thinkingLevel?: string;
+  /** Native fast service tier; absent uses the harness default speed. */
+  serviceTier?: 'fast';
   permissionMode: PermissionMode;
 }
 

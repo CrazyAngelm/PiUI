@@ -119,6 +119,7 @@ const roleSchema = object({
   harness: harnessIdentitySchema,
   model: option(workspaceModelSchema),
   thinkingLevel: option(string),
+  serviceTier: option(enumOf(['fast'])),
   permissionMode: permissionModeSchema,
 });
 const pairSchema = object({

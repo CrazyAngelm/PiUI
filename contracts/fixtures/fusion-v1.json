@@ -54,7 +54,12 @@
     "workspaceId": "workspace-1",
     "pair": {
       "lead": { "harness": "claude-code", "permissionMode": "full-access" },
-      "sidekick": { "harness": "codex", "permissionMode": "workspace-write" },
+      "sidekick": {
+        "harness": "codex",
+        "model": { "id": "gpt-fixture", "provider": "openai", "name": "Codex fixture" },
+        "serviceTier": "fast",
+        "permissionMode": "workspace-write"
+      },
       "options": { "briefPolicy": "outline", "pushback": true, "autoDeliver": true, "leadNativeSubagents": false }
     },
     "title": "Parser work"

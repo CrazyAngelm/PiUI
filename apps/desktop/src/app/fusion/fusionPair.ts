@@ -78,20 +78,36 @@ export function withHarness(role: FusionRoleV1, harness: HarnessKind): FusionRol
   return { harness, permissionMode: role.permissionMode };
 }
 
-/** A role with another model; the reasoning level stays only when the model offers it. */
-export function withModel(role: FusionRoleV1, model: WorkspaceModel | undefined): FusionRoleV1 {
+/** A role with another model; tuning stays only when the new model offers it. */
+export function withModel(role: FusionRoleV1, model: WorkspaceModel | undefined, supportsFast: boolean): FusionRoleV1 {
   const level = role.thinkingLevel !== undefined && model?.thinkingLevels?.includes(role.thinkingLevel) ? role.thinkingLevel : undefined;
   return {
     harness: role.harness,
     permissionMode: role.permissionMode,
     ...(model ? { model } : {}),
     ...(level !== undefined ? { thinkingLevel: level } : {}),
+    ...(supportsFast && role.serviceTier === 'fast' ? { serviceTier: 'fast' } : {}),
   };
 }
 
 export function withThinkingLevel(role: FusionRoleV1, level: string): FusionRoleV1 {
-  const next: FusionRoleV1 = { harness: role.harness, permissionMode: role.permissionMode, ...(role.model ? { model: role.model } : {}) };
+  const next: FusionRoleV1 = {
+    harness: role.harness,
+    permissionMode: role.permissionMode,
+    ...(role.model ? { model: role.model } : {}),
+    ...(role.serviceTier === 'fast' ? { serviceTier: 'fast' } : {}),
+  };
   return level ? { ...next, thinkingLevel: level } : next;
+}
+
+export function withServiceTier(role: FusionRoleV1, fast: boolean): FusionRoleV1 {
+  const next: FusionRoleV1 = {
+    harness: role.harness,
+    permissionMode: role.permissionMode,
+    ...(role.model ? { model: role.model } : {}),
+    ...(role.thinkingLevel ? { thinkingLevel: role.thinkingLevel } : {}),
+  };
+  return fast ? { ...next, serviceTier: 'fast' } : next;
 }
 
 export function withPermission(role: FusionRoleV1, permissionMode: PermissionMode): FusionRoleV1 {
@@ -115,6 +131,7 @@ export function pairKey(pair: FusionPairV1): string {
     value.model?.provider ?? null,
     value.model?.id ?? null,
     value.thinkingLevel ?? null,
+    value.serviceTier ?? null,
   ];
   const { briefPolicy, pushback, autoDeliver, leadNativeSubagents } = pair.options;
   return JSON.stringify([role(pair.lead), role(pair.sidekick), briefPolicy, pushback, autoDeliver, leadNativeSubagents]);

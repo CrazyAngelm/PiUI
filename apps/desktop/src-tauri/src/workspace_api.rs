@@ -4110,6 +4110,14 @@ fn coordinator_binding(
 fn validate_launch_request(request: &WorkspaceLaunchRequest) -> Result<(), WorkspaceError> {
     validate_token(&request.workspace_id)?;
     if request
+        .service_tier
+        .as_deref()
+        .is_some_and(|tier| !matches!(tier, "standard" | "fast"))
+    {
+        return Err(WorkspaceError::invalid());
+    }
+    reject_unsupported_speed(request.harness, request.service_tier.as_deref())?;
+    if request
         .title
         .as_deref()
         .is_some_and(|title| normalized_title(Some(title)).is_none())
@@ -4769,6 +4777,32 @@ Board."
         assert!(super::reject_unsupported_speed(HarnessKind::ClaudeCode, Some("standard")).is_ok());
         assert!(super::reject_unsupported_speed(HarnessKind::ClaudeCode, None).is_ok());
         assert!(super::reject_unsupported_speed(HarnessKind::Codex, Some("fast")).is_ok());
+    }
+
+    #[test]
+    fn fusion_launch_requests_reuse_harness_speed_validation() {
+        let mut request =
+            crate::workspace_api::native_host_tests::chat_request("workspace", "Fast session");
+        request.harness = HarnessKind::ClaudeCode;
+        request.service_tier = Some("fast".into());
+        assert_eq!(
+            super::validate_launch_request(&request)
+                .expect_err("Claude fast")
+                .code,
+            "NOT_SUPPORTED"
+        );
+
+        request.harness = HarnessKind::Codex;
+        request.service_tier = Some("fast".into());
+        assert!(super::validate_launch_request(&request).is_ok());
+
+        request.service_tier = Some("turbo".into());
+        assert_eq!(
+            super::validate_launch_request(&request)
+                .expect_err("unknown tier")
+                .code,
+            "INVALID_ARGUMENT"
+        );
     }
 
     #[test]

@@ -8,6 +8,7 @@
   import Check from '@lucide/svelte/icons/check';
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
   import Brain from '@lucide/svelte/icons/brain';
+  import Zap from '@lucide/svelte/icons/zap';
   import { tick } from 'svelte';
   import { t } from '../../../features/locale/language';
   import MarkdownContent from '../../../components/MarkdownContent.svelte';
@@ -51,6 +52,7 @@
   let modelKey = $state('');
   let modelBusy = $state(false);
   let level = $state('');
+  let fast = $state(false);
 
   const available = $derived(store.catalog.harnesses.filter((item) => item.status === 'available'));
   const harnessItems = $derived<PickerItem<HarnessKind>[]>(
@@ -62,6 +64,7 @@
   const modelsLoading = $derived(Boolean(harness) && !editor.safeMode && !modelsError && !(harness && editor.catalogs[harness]));
   const model = $derived(modelKey ? models.find((item) => keyOf(item) === modelKey) : undefined);
   const levels = $derived(model?.thinkingLevels ?? []);
+  const fastAvailable = $derived(Boolean(model?.supportsFast));
   const modelOptions = $derived<ModelOption[]>(
     models.map((item) => ({
       key: keyOf(item),
@@ -74,6 +77,10 @@
   );
   const snapshot = $derived(sessionId ? store.snapshots[sessionId] : undefined);
   const running = $derived(snapshot ? ['starting', 'running', 'stopping'].includes(snapshot.session.status) : false);
+
+  $effect(() => {
+    if (fast && !fastAvailable) fast = false;
+  });
 
   interface Message {
     id: string;
@@ -152,12 +159,20 @@
     if (value === modelKey || !harness) return;
     const next = value ? models.find((item) => keyOf(item) === value) : undefined;
     if (value && !next) return;
+    const nextFast = Boolean(next?.supportsFast && fast);
     if (sessionId && next) {
       // A live conversation switches model natively and keeps its history.
       modelBusy = true;
       error = '';
       try {
-        await runtimeSettings({ type: 'set', sessionId, model: workspaceModel(next) });
+        if (fast && !nextFast && model?.supportsFast) {
+          // Clear Fast on the old capable model before switching to one that cannot use it.
+          await runtimeSettings({ type: 'set', sessionId, model: workspaceModel(model), serviceTier: 'standard' });
+          fast = false;
+          await runtimeSettings({ type: 'set', sessionId, model: workspaceModel(next) });
+        } else {
+          await runtimeSettings({ type: 'set', sessionId, model: workspaceModel(next), ...(nextFast ? { serviceTier: 'fast' } : {}) });
+        }
       } catch (cause) {
         error = errorMessage(cause);
         return;
@@ -170,6 +185,7 @@
     }
     modelKey = value;
     level = '';
+    fast = nextFast;
     try {
       localStorage.setItem(MODEL_KEY, JSON.stringify({ ...readModels(), [harness]: value }));
     } catch {
@@ -183,7 +199,7 @@
       modelBusy = true;
       error = '';
       try {
-        await runtimeSettings({ type: 'set', sessionId, model: workspaceModel(model), thinkingLevel: value });
+        await runtimeSettings({ type: 'set', sessionId, model: workspaceModel(model), thinkingLevel: value, ...(fast ? { serviceTier: 'fast' } : {}) });
       } catch (cause) {
         error = errorMessage(cause);
         return;
@@ -192,6 +208,23 @@
       }
     }
     level = value;
+  }
+
+  async function selectFast(value: boolean): Promise<void> {
+    if (value === fast || !model?.supportsFast) return;
+    if (sessionId) {
+      modelBusy = true;
+      error = '';
+      try {
+        await runtimeSettings({ type: 'set', sessionId, model: workspaceModel(model), serviceTier: value ? 'fast' : 'standard' });
+      } catch (cause) {
+        error = errorMessage(cause);
+        return;
+      } finally {
+        modelBusy = false;
+      }
+    }
+    fast = value;
   }
 
   function reset(): void {
@@ -229,7 +262,14 @@
       });
       if (!sessionId) {
         const outcome = await store.createChat(
-          { workspaceId, harness, ...(model ? { model, ...(level ? { thinkingLevel: level } : {}) } : {}), permissionMode: 'read-only', text: envelope },
+          {
+            workspaceId,
+            harness,
+            ...(model ? { model, ...(level ? { thinkingLevel: level } : {}) } : {}),
+            ...(model?.supportsFast && fast ? { serviceTier: 'fast' } : {}),
+            permissionMode: 'read-only',
+            text: envelope,
+          },
           { open: false, title: $t('Pipeline assistant: {0}', [editor.graph.name || $t('Untitled pipeline')]) },
         );
         remember(outcome.sessionId);
@@ -267,7 +307,7 @@
   <header class="head">
     <Sparkles size={15} />
     <h2>{$t('Assistant')}</h2>
-    <Picker items={harnessItems} value={harness || undefined} label={$t('Harness')} onSelect={(value) => { if (value !== harness) { harness = value; reset(); } }}>
+    <Picker items={harnessItems} value={harness || undefined} label={$t('Harness')} onSelect={(value) => { if (value !== harness) { harness = value; reset(); level = ''; fast = false; } }}>
       {#snippet trigger(props)}
         <button type="button" class="chip" {...props} disabled={sending}>
           {#if harness}<HarnessMark kind={harness} size={16} />{/if}
@@ -286,17 +326,21 @@
         {levels}
         {level}
         levelDefault={true}
-        busy={modelBusy}
+        {fastAvailable}
+        {fast}
+        busy={modelBusy || sending || running}
         width={340}
         hint={model ? $t('This model has no reasoning options.') : $t('Pick a model to tune reasoning.')}
         onModel={(value) => void selectModel(value)}
         onLevel={(value) => void selectLevel(value)}
+        onFast={(value) => void selectFast(value)}
       >
         {#snippet trigger(props)}
           <button type="button" class="chip chip--model" {...props} disabled={sending || running || modelBusy}>
             {#if modelBusy || modelsLoading}<Spinner size={12} />{:else}<Brain size={13} />{/if}
             <span>{model?.name ?? $t('Default model')}</span>
             {#if level}<span class="chip__sub">{level}</span>{/if}
+            {#if fast}<Zap size={12} />{/if}
             <ChevronDown size={12} />
           </button>
         {/snippet}
