@@ -13,7 +13,7 @@
   import { Picker, Spinner, type PickerItem } from '../../lib/ui';
   import { harnessMeta } from '../harnessMeta';
   import HarnessMark from '../shell/HarnessMark.svelte';
-  import { TEMPLATES, type TemplateId } from '../pipelines/templates';
+  import { TEMPLATES, type TemplateId } from '../pipelines/templateCatalog';
   import type { PipelineTemplateV1 } from '../../host-api/pipelineLibraryClient';
   import { chatPipelines } from './chatPipelines.svelte';
   import { untrack } from 'svelte';

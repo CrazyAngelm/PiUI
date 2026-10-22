@@ -4,7 +4,6 @@
   import { t } from '../../features/locale/language';
   import type { FusionPairV1 } from '../../host-api/fusionClient';
   import { Segmented } from '../../lib/ui';
-  import FusionPairPicker from './FusionPairPicker.svelte';
   import type { FusionHarnessOption } from './FusionRolePicker.svelte';
   import { isFusionLead } from './fusionPair';
 
@@ -27,6 +26,8 @@
   // Without a harness that can lead there is nothing to switch to.
   const canLead = $derived(harnesses.some((item) => item.available && isFusionLead(item.kind)));
   const mode = $derived(active ? 'fusion' : 'chat');
+  // The pair picker loads on first use, outside the first-paint bundle.
+  const loadPicker = () => import('./FusionPairPicker.svelte');
 </script>
 
 {#if canLead || active}
@@ -43,7 +44,9 @@
     />
   </div>
   {#if active}
-    <FusionPairPicker {workspaceId} {trusted} {harnesses} {disabled} bind:pair bind:ready />
+    {#await loadPicker() then { default: FusionPairPicker }}
+      <FusionPairPicker {workspaceId} {trusted} {harnesses} {disabled} bind:pair bind:ready />
+    {/await}
   {/if}
 {/if}
 

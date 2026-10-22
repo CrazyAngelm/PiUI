@@ -24,16 +24,14 @@
   import ExecutorPicker, { type Executor } from '../chatPipelines/ExecutorPicker.svelte';
   import PipelineInputsBar from '../chatPipelines/PipelineInputsBar.svelte';
   import { chatPipelines, type ChatPipelineDetail } from '../chatPipelines/chatPipelines.svelte';
-  import { graphFromTemplate } from '../chatPipelines/templateLibrary';
   import { pendingDrafts } from '../pipelines/pendingDraft.svelte';
-  import { buildTemplate, type TemplateId } from '../pipelines/templates';
+  import type { TemplateId } from '../pipelines/templates';
   import type { PipelineTemplateV1 } from '../../host-api/pipelineLibraryClient';
   import type { AgentGraph } from '../../features/orchestration/agentGraph';
   import { useWorkspace } from './context';
   import { reconcileSelection, restoredSelection, type NewChatChoice, type NewChatSelection } from './newChatChoice';
   import FusionModeBar from '../fusion/FusionModeBar.svelte';
   import { fusionErrorText, refusalCopy, roleLabel } from '../fusion/fusionPair';
-  import { startFusionChat } from '../fusion/startFusionChat';
   import type { FusionPairV1 } from '../../host-api/fusionClient';
 
   interface Props {
@@ -291,12 +289,16 @@
   }
 
   /** A template becomes a new draft in the editor; saving it there is the person's decision. */
-  function openTemplate(choice: { kind: 'builtin'; id: TemplateId } | { kind: 'saved'; template: PipelineTemplateV1 }): void {
+  async function openTemplate(choice: { kind: 'builtin'; id: TemplateId } | { kind: 'saved'; template: PipelineTemplateV1 }): Promise<void> {
     if (!workspaceId) return;
     let graph: AgentGraph;
     try {
       const base = (harness || available[0]?.kind || 'codex') as AgentGraph['nodes'][number]['profile']['harness'];
-      graph = choice.kind === 'builtin' ? buildTemplate(choice.id, base, (value) => $t(value)) : graphFromTemplate(choice.template);
+      // Graph building and the system-file validators stay out of the first-paint bundle.
+      graph =
+        choice.kind === 'builtin'
+          ? (await import('../pipelines/templates')).buildTemplate(choice.id, base, (value) => $t(value))
+          : (await import('../chatPipelines/templateLibrary')).graphFromTemplate(choice.template);
     } catch (error) {
       toasts.error($t('This template could not be opened'), errorMessage(error));
       return;
@@ -401,6 +403,7 @@
     busy = true;
     const images = attachments.images;
     try {
+      const { startFusionChat } = await import('../fusion/startFusionChat');
       const outcome = await startFusionChat(store, { workspaceId, pair, text, images });
       if (outcome.kind === 'refused') {
         toasts.error($t('The pair cannot start'), `${$t(roleLabel(outcome.role))}: ${$t(refusalCopy(outcome.refusal).title)}`);
