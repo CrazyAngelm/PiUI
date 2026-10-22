@@ -1,5 +1,6 @@
 import type { TimelineBlock } from '../../../host-api/types';
 import type { Language } from '../../../features/locale/language';
+import { diffTotals, parseDiff } from './diff';
 
 /**
  * Presentation-only classification of native tool activity. It never changes
@@ -69,25 +70,50 @@ const SINGLE: Record<Language, { thinking: string; web: string; working: string 
 
 const ORDER: ToolKind[] = ['edit', 'command', 'agent', 'read', 'search', 'web', 'tool', 'thinking'];
 
-/** "Edited 2 files · Ran 3 commands · Read 4 files" in the chosen language. */
-export function activitySummary(blocks: readonly TimelineBlock[], language: Language): string {
+const MORE_ACTIONS: Record<Language, [string, string, string]> = {
+  en: [', and {n} more action', ', and {n} more actions', ', and {n} more actions'],
+  ru: [', и ещё {n} действие', ', и ещё {n} действия', ', и ещё {n} действий'],
+};
+
+/** Comma-joined activity categories with localized overflow text. */
+export function activitySummary(
+  blocks: readonly TimelineBlock[],
+  language: Language,
+): string {
   const counts = new Map<ToolKind, number>();
   for (const block of blocks) {
     const kind = toolKind(block);
     counts.set(kind, (counts.get(kind) ?? 0) + 1);
   }
-  const parts: string[] = [];
+  if (counts.size > 1) counts.delete('thinking');
+  const parts: Array<{ text: string; actions: number }> = [];
   for (const kind of ORDER) {
     const count = counts.get(kind);
     if (!count) continue;
-    if (kind === 'thinking') parts.push(SINGLE[language].thinking);
-    else if (kind === 'web') parts.push(SINGLE[language].web);
-    else parts.push(PHRASES[language][kind][pluralIndex(count, language)].replace('{n}', String(count)));
+    if (kind === 'thinking') parts.push({ text: SINGLE[language].thinking, actions: count });
+    else if (kind === 'web') parts.push({ text: SINGLE[language].web, actions: count });
+    else parts.push({ text: PHRASES[language][kind][pluralIndex(count, language)].replace('{n}', String(count)), actions: count });
   }
-  return parts.slice(0, 3).join(' · ') || SINGLE[language].working;
+  const shown = parts.slice(0, 3);
+  const summary = shown
+    .map(({ text }, index) => index === 0 ? text : text.charAt(0).toLocaleLowerCase(language) + text.slice(1))
+    .join(', ');
+  const remaining = parts.slice(3).reduce((total, part) => total + part.actions, 0);
+  if (remaining === 0) return summary || SINGLE[language].working;
+  return summary + MORE_ACTIONS[language][pluralIndex(remaining, language)].replace('{n}', String(remaining));
 }
 
 export function looksLikeDiff(text: string | undefined): boolean {
   if (!text) return false;
   return /^diff --git /m.test(text) || /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/m.test(text) || (/^--- /m.test(text) && /^\+\+\+ /m.test(text));
+}
+
+/** Totals for actual edit diffs in an activity group; other tool output is ignored. */
+export function activityDiffTotals(blocks: readonly TimelineBlock[]): { added: number; removed: number } | undefined {
+  const totals = diffTotals(
+    blocks
+      .filter((block) => toolKind(block) === 'edit' && looksLikeDiff(block.text))
+      .flatMap((block) => parseDiff(block.text ?? '')),
+  );
+  return totals.added === 0 && totals.removed === 0 ? undefined : totals;
 }

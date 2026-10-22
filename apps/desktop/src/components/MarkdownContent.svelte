@@ -87,8 +87,8 @@
 </div>
 
 <style>
-  .markdown-content { min-width: 0; max-width: var(--piui-chat-reading-width); color: var(--piui-text); font-size: var(--piui-chat-font-size); line-height: 1.66; overflow-wrap: anywhere; text-wrap: pretty; }
-  .markdown-content p { margin: 0 0 .82em; white-space: pre-line; }.markdown-content p:last-child { margin-bottom: 0; }
+  .markdown-content { min-width: 0; max-width: var(--piui-chat-reading-width); color: var(--piui-text); font-size: var(--piui-chat-font-size); line-height: 1.55; overflow-wrap: anywhere; text-wrap: pretty; }
+  .markdown-content p { margin: 0 0 .65em; white-space: pre-line; }.markdown-content p:last-child { margin-bottom: 0; }
   .markdown-content h1, .markdown-content h2, .markdown-content h3, .markdown-content h4 { margin: 1.35em 0 .55em; color: var(--piui-text); font-weight: 720; line-height: 1.22; letter-spacing: -.025em; text-wrap: balance; }
   .markdown-content h1:first-child, .markdown-content h2:first-child, .markdown-content h3:first-child, .markdown-content h4:first-child { margin-top: 0; }
   .markdown-content h1 { font-size: 1.5em; }.markdown-content h2 { font-size: 1.28em; }.markdown-content h3 { font-size: 1.1em; }.markdown-content h4 { font-size: 1em; }
@@ -103,7 +103,7 @@
   .table-wrap th { background: var(--piui-surface-1); color: var(--piui-text-muted); font-weight: 650; white-space: nowrap; }
   .table-wrap tbody tr:last-child td { border-bottom: 0; }
   .table-wrap tbody tr:hover td { background: var(--piui-hover); }
-  .inline-code { padding: .1em .35em; border: 1px solid var(--piui-border-subtle); border-radius: 5px; background: var(--piui-surface-1); color: color-mix(in srgb, var(--piui-text) 92%, var(--piui-accent)); font-family: var(--piui-font-mono); font-size: .88em; white-space: break-spaces; }
+  .inline-code { padding: .08em .3em; border: 0; border-radius: 5px; background: color-mix(in srgb, var(--piui-surface-1) 70%, transparent); color: var(--piui-text); font-family: var(--piui-font-mono); font-size: .86em; white-space: break-spaces; }
   .safe-link { color: var(--piui-accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--piui-accent) 45%, transparent); text-underline-offset: .18em; cursor: help; }
   .code-block { width: min(100%, 78ch); margin: 1em 0; overflow: hidden; border: 1px solid var(--piui-border-subtle); border-radius: var(--piui-radius-md); background: color-mix(in srgb, var(--piui-bg) 72%, var(--piui-surface-1)); }
   .code-block figcaption { display: flex; min-height: 32px; align-items: center; justify-content: space-between; gap: var(--piui-space-3); padding: 0 10px 0 12px; border-bottom: 1px solid var(--piui-border-subtle); color: var(--piui-text-faint); font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }

@@ -386,7 +386,11 @@
             {:else}
               <!-- Generic fallback: unknown or extension content stays readable. -->
               <details class="fallback">
-                <summary><ChevronRight size={12} /> {block.label || $t('Extension message')}{#if block.fallback}<span class="fallback__tag">{$t('Compatibility view')}</span>{/if}</summary>
+                <summary class="fallback__head">
+                  <span class="fallback__label">{block.label || $t('Extension message')}</span>
+                  {#if block.fallback}<span class="fallback__tag"> · {$t('Compatibility view')}</span>{/if}
+                  <span class="fallback__chevron"><ChevronRight size={12} /></span>
+                </summary>
                 {#if block.text}<MarkdownContent source={block.text} compact={true} />{:else}<p class="muted">{block.safeSummary ?? $t('This session event is not supported by a richer renderer yet.')}</p>{/if}
               </details>
             {/if}
@@ -512,7 +516,7 @@
   }
   .assistant {
     position: relative;
-    margin: 0 0 var(--piui-space-4);
+    margin: 0 0 var(--piui-space-3);
   }
   .assistant--end {
     margin-bottom: var(--piui-space-6);
@@ -600,21 +604,40 @@
     background: var(--piui-border-subtle);
   }
   .fallback {
-    margin: 0 0 var(--piui-space-4);
+    margin: 0 0 var(--piui-space-3);
     color: var(--piui-text-muted);
   }
-  .fallback summary {
+  .fallback__head {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
+    margin-left: -6px;
+    max-width: 100%;
+    min-height: 28px;
+    padding: 2px 6px;
+    border-radius: var(--piui-radius-sm);
+    background: transparent;
+    list-style: none;
     cursor: pointer;
+    color: var(--piui-text-muted);
     font-size: var(--piui-text-sm);
   }
+  .fallback__head::-webkit-details-marker { display: none; }
+  .fallback__head:hover { background: var(--piui-hover); color: var(--piui-text); }
+  .fallback__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .fallback__tag {
-    padding: 0 5px;
-    border-radius: var(--piui-radius-xs);
-    background: var(--piui-surface-2);
-    font-size: var(--piui-text-xs);
+    margin-left: -8px;
+    color: var(--piui-text-faint);
+    white-space: nowrap;
+  }
+  .fallback__chevron {
+    display: inline-flex;
+    flex: none;
+    color: var(--piui-text-disabled);
+    transition: transform var(--piui-duration-fast) var(--piui-ease-out);
+  }
+  .fallback[open] .fallback__chevron {
+    transform: rotate(90deg);
   }
   .muted {
     color: var(--piui-text-muted);

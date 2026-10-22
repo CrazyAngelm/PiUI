@@ -1,5 +1,7 @@
 /** Russian UI copy for chat attachments, mentions and review. Keys are the English source strings. */
 export const chatRu: Readonly<Record<string, string>> = {
+  // Transcript activity summaries and diff statistics.
+  '{0} lines added, {1} removed': 'Добавлено строк: {0}, удалено: {1}',
   // Attachments: paperclip, paste and drag and drop.
   'Attach images or files': 'Прикрепить изображения или файлы',
   'Attached images': 'Прикреплённые изображения',
