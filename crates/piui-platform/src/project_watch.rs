@@ -271,6 +271,11 @@ mod tests {
     #[test]
     fn a_burst_of_changes_arrives_as_one_filtered_batch() {
         let root = fixture("burst");
+        // Folders exist before the watch starts: on Linux a folder created
+        // after it is watched only once its own event arrives, and files
+        // written in between are not reported.
+        std::fs::create_dir_all(root.join("src")).expect("creates src");
+        std::fs::create_dir_all(root.join("node_modules/pkg")).expect("creates ignored folder");
         let batches = Arc::new(Mutex::new(Vec::<ChangeBatch>::new()));
         let sink = Arc::clone(&batches);
         let watch = watch_project(
@@ -282,8 +287,6 @@ mod tests {
             },
         )
         .expect("watches the fixture");
-        std::fs::create_dir_all(root.join("src")).expect("creates src");
-        std::fs::create_dir_all(root.join("node_modules/pkg")).expect("creates ignored folder");
         for index in 0..5 {
             std::fs::write(root.join("src").join(format!("file{index}.ts")), "x").expect("writes");
             std::fs::write(root.join("node_modules/pkg/index.js"), "x").expect("writes ignored");
