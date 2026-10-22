@@ -154,6 +154,13 @@ export async function runShellWebview2Proof({
     }
     await click('New chat', sidebar);
     await waitFor(`document.querySelector('#home-title')`, 'Home in safe mode');
+    // The banner and the disabled composer follow the host catalog, which
+    // can land after Home renders.
+    await waitFor(
+      `[...document.querySelectorAll('[role="status"]')].some((node) => node.textContent?.includes('Safe mode: history is read-only and agents are not started.')) && document.querySelector('textarea[aria-label="Message"]')?.disabled === true`,
+      'safe-mode banner and disabled composer',
+      startupBoundMs,
+    ).catch(() => {});
     const safe = await evaluate(`(() => ({
       banner: [...document.querySelectorAll('[role="status"]')].some((node) => node.textContent?.includes('Safe mode: history is read-only and agents are not started.')),
       message: document.querySelector('textarea[aria-label="Message"]')?.disabled ?? null,

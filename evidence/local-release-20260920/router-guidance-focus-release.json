@@ -11,7 +11,7 @@
   "rollbackPortableSha256": "8f8c4f951d27857800a3b489fa19585725d8ef7ac74523f529baf4c91e0cf32e",
   "rollbackInstaller": "D:\\Projects\\PIUI\\artifacts\\PiUI.before-router-guidance-f79fdf7-setup.exe",
   "rollbackInstallerSha256": "2e46ec76e3d25287c0baa9fa18d0921d768cd32c938a06d624befb5534fe7567",
-  "installedPath": "C:\\Users\\redmi\\AppData\\Local\\PiUI\\piui-desktop.exe",
+  "installedPath": "%USERPROFILE%\\AppData\\Local\\PiUI\\piui-desktop.exe",
   "installedSha256": "743838e24cfdeee7f99bc04b4ed0e1bb325e610af162dbf08d3b8be4f6534d09",
   "processId": 5504,
   "responding": true,
