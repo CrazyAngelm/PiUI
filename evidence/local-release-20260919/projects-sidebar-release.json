@@ -5,7 +5,7 @@
   "portableSha256": "0e1ae5916c8c4b071bec6b41657574f3a1efb82ffeb4d4c7b54f68d7eaeca99e",
   "installerArtifact": "D:\\Projects\\PIUI\\artifacts\\PiUI_0.1.1_x64-setup.exe",
   "installerSha256": "c05395672da85425c8888b3f89f297f60ad108977c33de870107a5ae63232401",
-  "installedPath": "C:\\Users\\redmi\\AppData\\Local\\PiUI\\piui-desktop.exe",
+  "installedPath": "%USERPROFILE%\\AppData\\Local\\PiUI\\piui-desktop.exe",
   "installedSha256": "0e1ae5916c8c4b071bec6b41657574f3a1efb82ffeb4d4c7b54f68d7eaeca99e",
   "processId": 33816,
   "targetRemoved": true,

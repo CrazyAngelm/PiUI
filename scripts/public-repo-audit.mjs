@@ -20,7 +20,11 @@ const sensitiveContentPatterns = [
   ['OpenAI API key', /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/],
   ['Slack token', /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/],
   ['AWS access key', /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/],
-  ['Windows user home path', /[A-Za-z]:\\(?:Users|Documents and Settings)\\(?!(?:example|test-user|fixture)(?:\\|\/|$))/i],
+  ['Google API key', /\bAIza[0-9A-Za-z_-]{35}\b/],
+  ['Hugging Face token', /\bhf_[A-Za-z0-9]{30,}\b/],
+  // One or two backslashes: JSON and source strings escape them.
+  // Redaction tests use the fixture names below on purpose.
+  ['Windows user home path', /[A-Za-z]:(?:\\{1,2}|\/)(?:Users|Documents and Settings)(?:\\{1,2}|\/)(?![\\/])(?!(?:example|test-user|fixture|me|secret|ada(?: lovelace)?)(?:\\|\/|$))/i],
   ['macOS user home path', /\/Users\/(?!(?:example|test-user|fixture)(?:\/|$))[^/\s]+/],
   ['private email address', /\b[A-Z0-9._%+-]+@(?!(?:example\.(?:com|org|net|test)|localhost)\b)[A-Z0-9.-]+\.[A-Z]{2,}\b/i],
 ];

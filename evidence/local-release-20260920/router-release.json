@@ -11,7 +11,7 @@
   "rollbackPortableSha256": "9babfa79a4897b88fa425af0dff447055664a118f357266d2cee620a7b021964",
   "rollbackInstaller": "D:\\Projects\\PIUI\\artifacts\\PiUI.before-router-bbaafbb-setup.exe",
   "rollbackInstallerSha256": "19c1f3c49280217feb7667cea636b787c2a1ee2e7f8a015d0df6d32d01c951fd",
-  "installedPath": "C:\\Users\\redmi\\AppData\\Local\\PiUI\\piui-desktop.exe",
+  "installedPath": "%USERPROFILE%\\AppData\\Local\\PiUI\\piui-desktop.exe",
   "installedSha256": "89b843584960be328b694c87079861498d5391ccdf8c8035ee91a78c34ffd5a3",
   "processId": 42288,
   "responding": true,
