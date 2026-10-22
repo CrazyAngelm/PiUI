@@ -209,6 +209,11 @@ function findRound(doc: FusionStateV1, roundId: string): Located | undefined {
   return undefined;
 }
 
+/** A round is open, or uncertain and waiting for the person (docs/FUSION.md: such a lead cannot be deleted). */
+function hasUnsettledRound(doc: FusionStateV1): boolean {
+  return openRound(doc) !== undefined || doc.briefs.some((brief) => brief.rounds.some((round) => round.state === 'uncertain'));
+}
+
 function sidekickStateOf(doc: FusionStateV1): SidekickStateV1 {
   const open = openRound(doc)?.round;
   if (open !== undefined) {
@@ -222,7 +227,7 @@ function sidekickStateOf(doc: FusionStateV1): SidekickStateV1 {
     }
   }
   // Like the host: an uncertain round blocks new work until it is settled.
-  if (doc.briefs.some((brief) => brief.rounds.some((round) => round.state === 'uncertain'))) return 'unavailable';
+  if (hasUnsettledRound(doc)) return 'unavailable';
   return doc.sessions.some((session) => !session.retired) ? 'idle' : 'none';
 }
 
@@ -236,7 +241,20 @@ export function createLabFusion(runtime: LabSessions, bus: LabEventBus, options:
   const demoTimers = new Map<string, () => void>();
   const now = (): string => runtime.clock.iso();
   // Connects membership to the ordinary workspace guards (`labGuards`).
+  // Retired sidekicks keep their membership: they stay read-only like the host's registry.
   state.isFusionSidekick = (sessionId) => [...states.values()].some((doc) => doc.sessions.some((session) => session.sessionId === sessionId));
+  state.fusionLifecycle = {
+    isCurrentSidekick: (sessionId) => [...states.values()].some((doc) => doc.sessions.some((session) => session.sessionId === sessionId && !session.retired)),
+    guardLeadDelete: (leadSessionId) => {
+      const doc = states.get(leadSessionId);
+      if (doc !== undefined && hasUnsettledRound(doc)) throw workspaceFailure('CONFLICT');
+    },
+    forgetLead,
+    closeSidekick: (sessionId) => {
+      const doc = [...states.values()].find((item) => item.sessions.some((session) => session.sessionId === sessionId && !session.retired));
+      if (doc !== undefined && stopOpenRound(doc)) commit(doc);
+    },
+  };
 
   const fusion: LabFusion = {
     codexSandbox: options.codexSandbox ?? true,
@@ -383,6 +401,24 @@ export function createLabFusion(runtime: LabSessions, bus: LabEventBus, options:
     open.round.finishedAt = at;
     open.round.delivery = { via: 'followUp', state: 'withdrawn', updatedAt: at };
     return true;
+  }
+
+  /**
+   * The lead chat was deleted: its pair is forgotten (journal, membership,
+   * scheduled steps and the pending demo brief) and an idle sidekick process
+   * is closed. The sidekick's chat stays.
+   */
+  function forgetLead(leadSessionId: string): void {
+    const doc = states.get(leadSessionId);
+    cancelRoundTimers(leadSessionId);
+    demoTimers.get(leadSessionId)?.();
+    demoTimers.delete(leadSessionId);
+    if (doc === undefined) return;
+    states.delete(leadSessionId);
+    for (const session of doc.sessions) {
+      const record = runtime.record(session.sessionId);
+      if (record?.live !== undefined) runtime.close(record);
+    }
   }
 
   function stopSidekick(leadSessionId: string): FusionStateV1 {

@@ -8,6 +8,9 @@ const METHODS = new Set([
   "openSession", "sessionRequest", "composerCapabilities", "compact", "setMode", "composerCatalog",
 ]);
 const MAX_DETAILS_BYTES = 4 * 1024;
+// Upper bound for an adapter to confirm the native write of a sidekick result.
+const SIDEKICK_DELIVERY_TIMEOUT_MS = 30_000;
+const SIDEKICK_DELIVERY_MESSAGE = "The sidekick result could not be written to the agent.";
 
 const BOARD_STATUSES = new Set(["backlog", "todo", "inProgress", "inReview", "blocked", "done", "cancelled"]);
 const BOARD_PRIORITIES = new Set(["urgent", "high", "normal", "low"]);
@@ -251,7 +254,7 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
       const cancelled = () => Object.assign(new Error("cancelled"), { bridgeCode: "sidekick-cancelled", safeMessage: "The sidekick request was cancelled. Collect the result with wait." });
       // A caller that is already gone never reaches the host.
       if (metadata?.signal?.aborted === true) { reject(cancelled()); return; }
-      sidekickPending.set(requestId, { resolve, reject });
+      sidekickPending.set(requestId, { resolve, reject, deliver: typeof metadata?.deliver === "function" ? metadata.deliver : undefined });
       if (metadata?.signal && typeof metadata.signal.addEventListener === "function") {
         metadata.signal.addEventListener("abort", () => {
           if (sidekickPending.delete(requestId)) reject(cancelled());
@@ -267,6 +270,12 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
   };
 
   let initializeConfig;
+
+  // A reply after the output closed (dispose, EOF) must not become an
+  // unhandled rejection of the request task.
+  const writeFrameQuietly = (value) => {
+    try { writeFrame(output, value); } catch { /* the host is gone */ }
+  };
 
   const emit = (event) => {
     if (event && typeof event === "object") {
@@ -389,8 +398,27 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
         return;
       }
       sidekickPending.delete(requestId);
+      // An adapter that supplies `deliver` writes the result to its native
+      // channel there; the host is acknowledged only after that write is
+      // confirmed. A failed or unconfirmed write is a distinct error, so the
+      // host keeps the report for redelivery instead of marking it sent.
+      if (slot.deliver) {
+        let timer;
+        try {
+          await Promise.race([
+            Promise.resolve().then(() => slot.deliver(result)),
+            new Promise((_, expire) => { timer = setTimeout(() => expire(new Error("unconfirmed")), SIDEKICK_DELIVERY_TIMEOUT_MS); timer.unref?.(); }),
+          ]);
+        } catch {
+          clearTimeout(timer);
+          slot.reject(Object.assign(new Error("sidekick-delivery-failed"), { bridgeCode: "sidekick-delivery-failed", safeMessage: SIDEKICK_DELIVERY_MESSAGE }));
+          writeFrameQuietly(safeFailure(id, "sidekick-delivery-failed", SIDEKICK_DELIVERY_MESSAGE));
+          return;
+        }
+        clearTimeout(timer);
+      }
       slot.resolve(result);
-      writeFrame(output, { id, ok: true, result: null });
+      writeFrameQuietly({ id, ok: true, result: null });
       return;
     }
 

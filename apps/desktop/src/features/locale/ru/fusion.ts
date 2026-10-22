@@ -107,6 +107,12 @@ export const fusionRu: Readonly<Record<string, string>> = {
   'Pair actions': 'Действия с парой',
   'Stop sidekick': 'Остановить напарника',
   'Stop pair': 'Остановить пару',
+  'Stop lead and sidekick': 'Остановить ведущего и напарника',
+  'Stop sidekick process and its round': 'Остановить процесс напарника и его раунд',
+  'A sidekick round of this Fusion chat is still open or unconfirmed. Stop the pair or settle the round in the Fusion panel, then delete the chat.':
+    'Раунд напарника в этом чате Fusion ещё открыт или не подтверждён. Остановите пару или завершите раунд в панели Fusion, затем удалите чат.',
+  'The sidekick in use belongs to its Fusion chat and cannot be deleted. Reset the sidekick first; its retired conversation can then be deleted.':
+    'Действующий напарник принадлежит своему чату Fusion, и удалить его нельзя. Сначала сбросьте напарника: закрытую беседу потом можно удалить.',
   'Reset sidekick…': 'Сбросить напарника…',
   'Stop sidekick interrupts its current round. Stop pair also stops the lead. Reset retires the sidekick context; the next brief starts a fresh one.':
     'Остановка напарника прерывает его текущий раунд. Остановка пары останавливает и ведущего. Сброс закрывает контекст напарника; следующее поручение начнёт новый.',

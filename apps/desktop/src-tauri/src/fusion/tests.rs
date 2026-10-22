@@ -3,15 +3,17 @@
 
 use super::broker::{
     FusionBroker, FusionHost, HostFailure, HostFuture, SessionActivity, SidekickLaunch,
+    fold_old_briefs,
 };
 use super::logic::{
-    brief_prompt, check_brief, check_pair, codex_windows_sandbox_configured, escape_body,
-    parse_report, report_envelope, report_page, truncate_utf8,
+    brief_prompt, check_brief, check_pair, codex_windows_sandbox_configured, diff_pages,
+    escape_body, parse_report, report_envelope, report_page, truncate_utf8,
 };
 use super::model::{
     BriefFields, DeliveryState, DeliveryVia, FactApprovals, FactCommands, FactFiles, FactSource,
-    FactTokens, FusionDocument, FusionOptions, FusionPair, FusionRefusal, FusionRole,
-    FusionRoleName, ReportStatus, RoundOutcome, RoundState, SidekickFacts, SidekickReport,
+    FactTokens, FusionDelivery, FusionDocument, FusionOptions, FusionPair, FusionRefusal,
+    FusionRole, FusionRoleName, ReportStatus, RoundOutcome, RoundState, SidekickErrorCode,
+    SidekickFacts, SidekickReport,
 };
 use super::store::{FusionStore, MemoryFusionStore};
 use crate::review_api::{ReviewArea, ReviewContentV1, ReviewFileV1};
@@ -293,7 +295,19 @@ struct FakeHost {
     answer_calls: AtomicUsize,
     /// The content fingerprint `file_view` reports.
     view_fingerprint: Mutex<String>,
+    /// The diff text `file_view` reports (default: `diff of <path>`).
+    view_text: Mutex<Option<String>>,
+    /// `file_view` reports every file as too large to show.
+    view_too_large: AtomicBool,
     closed: Mutex<Vec<String>>,
+    /// `close` leaves the session's runtime live (cleanup not confirmed).
+    close_keeps_live: AtomicBool,
+    /// `interrupt` waits for `release_interrupt` while set.
+    hold_interrupts: AtomicBool,
+    release_interrupt: Arc<tokio::sync::Notify>,
+    /// `send` waits for `release_send` while set.
+    hold_sends: AtomicBool,
+    release_send: Arc<tokio::sync::Notify>,
 }
 
 impl FakeHost {
@@ -345,6 +359,36 @@ impl FakeHost {
     fn sidekick_id(&self) -> String {
         self.launches.lock().unwrap()[0].session_id.clone()
     }
+
+    fn deliver(
+        &self,
+        session_id: String,
+        text: String,
+        mode: PromptMode,
+    ) -> Result<(), HostFailure> {
+        if self.fail_send.load(Ordering::Acquire) {
+            return Err(HostFailure::Unavailable);
+        }
+        if mode == PromptMode::Prompt
+            && let Some(sender) = self
+                .sessions
+                .lock()
+                .unwrap()
+                .get(&session_id)
+                .and_then(|session| session.turns.clone())
+        {
+            sender.send_modify(|state| state.status = SessionStatus::Running);
+        }
+        self.sent.lock().unwrap().push((session_id, text, mode));
+        Ok(())
+    }
+
+    fn interrupted(&self, session_id: &str) -> Result<(), HostFailure> {
+        if self.interrupt_completes.load(Ordering::Acquire) {
+            self.complete(session_id, None, TurnOutcome::Interrupted);
+        }
+        Ok(())
+    }
 }
 
 fn ready<T: Send + 'static>(value: T) -> HostFuture<T> {
@@ -390,33 +434,34 @@ impl FusionHost for Arc<FakeHost> {
         text: String,
         mode: PromptMode,
     ) -> HostFuture<Result<(), HostFailure>> {
-        if self.fail_send.load(Ordering::Acquire) {
-            return ready(Err(HostFailure::Unavailable));
+        if self.hold_sends.load(Ordering::Acquire) {
+            let host = Arc::clone(self);
+            let release = Arc::clone(&self.release_send);
+            return Box::pin(async move {
+                release.notified().await;
+                host.deliver(session_id, text, mode)
+            });
         }
-        if mode == PromptMode::Prompt
-            && let Some(sender) = self
-                .sessions
-                .lock()
-                .unwrap()
-                .get(&session_id)
-                .and_then(|session| session.turns.clone())
-        {
-            sender.send_modify(|state| state.status = SessionStatus::Running);
-        }
-        self.sent.lock().unwrap().push((session_id, text, mode));
-        ready(Ok(()))
+        ready(self.deliver(session_id, text, mode))
     }
 
     fn interrupt(&self, session_id: String) -> HostFuture<Result<(), HostFailure>> {
         self.interrupts.lock().unwrap().push(session_id.clone());
-        if self.interrupt_completes.load(Ordering::Acquire) {
-            self.complete(&session_id, None, TurnOutcome::Interrupted);
+        if self.hold_interrupts.load(Ordering::Acquire) {
+            let host = Arc::clone(self);
+            let release = Arc::clone(&self.release_interrupt);
+            return Box::pin(async move {
+                release.notified().await;
+                host.interrupted(&session_id)
+            });
         }
-        ready(Ok(()))
+        ready(self.interrupted(&session_id))
     }
 
     fn close(&self, session_id: String) -> HostFuture<()> {
-        if let Some(session) = self.sessions.lock().unwrap().get_mut(&session_id) {
+        if !self.close_keeps_live.load(Ordering::Acquire)
+            && let Some(session) = self.sessions.lock().unwrap().get_mut(&session_id)
+        {
             session.turns = None;
         }
         self.closed.lock().unwrap().push(session_id);
@@ -488,14 +533,23 @@ impl FusionHost for Arc<FakeHost> {
         path: String,
         _area: ReviewArea,
     ) -> HostFuture<Result<(ReviewContentV1, String), HostFailure>> {
-        ready(Ok((
+        let content = if self.view_too_large.load(Ordering::Acquire) {
+            ReviewContentV1::TooLarge {
+                size: Some(1 << 30),
+            }
+        } else {
             ReviewContentV1::Text {
-                text: format!("diff of {path}"),
+                text: self
+                    .view_text
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .unwrap_or_else(|| format!("diff of {path}")),
                 hunks: 1,
                 hunk_actions: false,
-            },
-            self.view_fingerprint.lock().unwrap().clone(),
-        )))
+            }
+        };
+        ready(Ok((content, self.view_fingerprint.lock().unwrap().clone())))
     }
 }
 
@@ -1117,6 +1171,17 @@ async fn a_tool_handoff_in_flight_at_a_restart_is_uncertain_not_sent() {
 /// A finished report queued for a running lead, then a restart with the
 /// sidekick's history holding `history` as block-1.
 async fn restart_with_a_queued_report(history: &str) -> (Fixture, Arc<FakeHost>, FusionBroker) {
+    restart_with_a_finished_report("block-1", history, |_| {}).await
+}
+
+/// A finished report queued for a running lead; `prepare` edits the journal
+/// (what a crash left behind), then a restart with the sidekick's history
+/// holding `history` as `history_id` (a reloaded history may renumber).
+async fn restart_with_a_finished_report(
+    history_id: &str,
+    history: &str,
+    prepare: impl FnOnce(&mut FusionDocument),
+) -> (Fixture, Arc<FakeHost>, FusionBroker) {
     let fixture = fixture();
     let _ = fixture.call("call-1", brief(false, 0)).await;
     let sidekick = fixture.host.sidekick_id();
@@ -1127,9 +1192,12 @@ async fn restart_with_a_queued_report(history: &str) -> (Fixture, Arc<FakeHost>,
     );
     let store = fixture.store.clone();
     until(|| stored_delivery(&store) == Some((DeliveryVia::FollowUp, DeliveryState::Queued))).await;
+    if let Some(document) = fixture.store.documents.lock().unwrap().get_mut(LEAD) {
+        prepare(document);
+    }
     let host = Arc::new(FakeHost::default());
     host.live(&sidekick, SessionStatus::Idle);
-    push_answer(&host, &sidekick, "block-1", history);
+    push_answer(&host, &sidekick, history_id, history);
     host.live(LEAD, SessionStatus::Idle);
     let restarted = FusionBroker::new(Arc::new(Arc::clone(&host)), fixture.store.clone(), true);
     restarted.resume_deliveries().await;
@@ -1399,6 +1467,7 @@ fn contract_shapes_match_the_public_fixture() {
                 // Host-private fields never reach the WebView.
                 baseline_block_id: Some("block-0".into()),
                 baseline_known: true,
+                baseline_hash: Some("hash-0".into()),
                 started_ms: 7,
                 report: None,
                 full_body: Some("STATUS: done".into()),
@@ -1467,4 +1536,525 @@ fn contract_shapes_match_the_public_fixture() {
     let mut unknown = fixture["createChat"].clone();
     unknown["extra"] = json!(true);
     assert!(serde_json::from_value::<FusionCommandV1>(unknown).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// Review round 2: admission, withdrawal, deletion, pending deliveries,
+// folding, call identities, diff pages, reloaded histories
+// ---------------------------------------------------------------------------
+
+fn stop_op(round_id: &str) -> Map<String, Value> {
+    op(json!({"op": "stop", "roundId": round_id}))
+}
+
+#[tokio::test(start_paused = true)]
+async fn abandoning_a_round_that_may_still_run_closes_and_retires_its_session() {
+    let fixture = fixture();
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    let (unproven, _) = fixture.call("call-2", stop_op("r1")).await;
+    assert_eq!(unproven["code"], json!("uncertain"), "{unproven}");
+    // The sidekick still runs and closing it is not confirmed: the round
+    // keeps blocking new work.
+    fixture.host.close_keeps_live.store(true, Ordering::Release);
+    assert_eq!(
+        fixture.broker.abandon(LEAD, "r1").await,
+        Err(SidekickErrorCode::Uncertain)
+    );
+    let (blocked, _) = fixture.call("call-3", brief(false, 0)).await;
+    assert_eq!(blocked["code"], json!("uncertain"), "{blocked}");
+    // A confirmed close releases admission and retires the session.
+    fixture
+        .host
+        .close_keeps_live
+        .store(false, Ordering::Release);
+    fixture.broker.abandon(LEAD, "r1").await.unwrap();
+    let document = fixture.document().await;
+    assert!(document.sessions[0].retired);
+    assert!(fixture.host.closed.lock().unwrap().contains(&sidekick));
+    assert!(!fixture.broker.is_current_sidekick(&sidekick));
+    let (admitted, _) = fixture.call("call-4", brief(false, 0)).await;
+    assert_eq!(admitted["ok"], json!(true), "{admitted}");
+    assert_eq!(
+        fixture.host.launches.lock().unwrap().len(),
+        2,
+        "a fresh sidekick"
+    );
+    assert_eq!(
+        fixture.host.sent_to(&sidekick).len(),
+        1,
+        "nothing more reached the old session"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn closing_the_lead_while_a_round_starts_still_runs_and_reports_it() {
+    let fixture = fixture();
+    fixture.host.hold_answers.store(true, Ordering::Release);
+    let broker = fixture.broker.clone();
+    let briefing = tokio::spawn(async move {
+        broker
+            .handle(LEAD, &identity("call-1", "h1"), brief(true, 120))
+            .await
+    });
+    let host = Arc::clone(&fixture.host);
+    until(|| host.answer_calls.load(Ordering::Acquire) == 1).await;
+    // Closing the lead aborts its tool call while the round starts.
+    briefing.abort();
+    let _ = briefing.await;
+    host.hold_answers.store(false, Ordering::Release);
+    host.release.notify_one();
+    let sidekick = host.sidekick_id();
+    until(|| !host.sent_to(&sidekick).is_empty()).await;
+    let store = fixture.store.clone();
+    until(|| stored_round(&store, 0).is_some_and(|round| round.state == RoundState::Running)).await;
+    host.complete(&sidekick, Some("STATUS: done"), TurnOutcome::Succeeded);
+    host.set_status(LEAD, SessionStatus::Idle);
+    until(|| host.sent_to(LEAD).len() == 1).await;
+    assert!(host.sent_to(LEAD)[0].0.contains("STATUS done"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_reset_holds_admission_until_the_old_session_is_closed() {
+    let fixture = fixture();
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    fixture.host.hold_interrupts.store(true, Ordering::Release);
+    let broker = fixture.broker.clone();
+    let resetting = tokio::spawn(async move {
+        broker
+            .handle(LEAD, &identity("call-2", "h2"), op(json!({"op": "reset"})))
+            .await
+    });
+    let host = Arc::clone(&fixture.host);
+    until(|| !host.interrupts.lock().unwrap().is_empty()).await;
+    // r1 ends on its own while the reset still waits for its interrupt.
+    host.complete(&sidekick, Some("STATUS: done"), TurnOutcome::Succeeded);
+    let store = fixture.store.clone();
+    until(|| stored_round(&store, 0).is_some_and(|round| round.state == RoundState::Finished))
+        .await;
+    let (refused, _) = fixture.call("call-3", brief(false, 0)).await;
+    assert_eq!(refused["code"], json!("pair-stopping"), "{refused}");
+    host.release_interrupt.notify_one();
+    let (reset, _) = resetting.await.unwrap();
+    assert_eq!(reset["ok"], json!(true), "{reset}");
+    assert_eq!(*host.closed.lock().unwrap(), vec![sidekick.clone()]);
+    assert_eq!(host.sent_to(&sidekick).len(), 1, "no round reached it");
+    let (admitted, _) = fixture.call("call-4", brief(false, 0)).await;
+    assert_eq!(admitted["ok"], json!(true), "{admitted}");
+    assert_eq!(host.launches.lock().unwrap().len(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_persons_stop_stays_withdrawn_and_an_unproven_stop_is_never_acknowledged() {
+    let fixture = fixture();
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    assert_eq!(
+        fixture.broker.stop_sidekick(LEAD).await,
+        Err(SidekickErrorCode::Uncertain)
+    );
+    let round = stored_round(&fixture.store, 0).unwrap();
+    assert_eq!(round.state, RoundState::Uncertain);
+    assert_eq!(
+        stored_delivery(&fixture.store),
+        Some((DeliveryVia::FollowUp, DeliveryState::Withdrawn))
+    );
+    // Still running: another stop interrupts again and still has no proof.
+    assert_eq!(
+        fixture.broker.stop_sidekick(LEAD).await,
+        Err(SidekickErrorCode::Uncertain)
+    );
+    assert_eq!(fixture.host.interrupts.lock().unwrap().len(), 2);
+    // The turn ends: the next stop proves it.
+    fixture
+        .host
+        .complete(&sidekick, Some("STATUS: done"), TurnOutcome::Succeeded);
+    assert_eq!(fixture.broker.stop_sidekick(LEAD).await, Ok(()));
+    // Reconcile finishes the round from history; the withdrawal stands.
+    assert!(fixture.broker.reconcile(LEAD, "r1").await.unwrap());
+    let round = stored_round(&fixture.store, 0).unwrap();
+    assert_eq!(round.state, RoundState::Finished);
+    assert_eq!(
+        stored_delivery(&fixture.store),
+        Some((DeliveryVia::FollowUp, DeliveryState::Withdrawn))
+    );
+    fixture.host.set_status(LEAD, SessionStatus::Idle);
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert!(fixture.host.sent_to(LEAD).is_empty());
+    let (wait, claimed) = fixture.call("call-2", wait_op("r1", 1)).await;
+    assert_eq!(wait["code"], json!("pair-stopping"), "{wait}");
+    assert!(claimed.is_none());
+    // The settled pair takes new work on the same session.
+    let (admitted, _) = fixture.call("call-3", message_op("next")).await;
+    assert_eq!(admitted["ok"], json!(true), "{admitted}");
+    assert!(fixture.host.closed.lock().unwrap().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_delivery_worker_never_writes_back_a_deleted_pairs_journal() {
+    let fixture = fixture();
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    fixture
+        .host
+        .complete(&sidekick, Some("STATUS: done"), TurnOutcome::Succeeded);
+    let store = fixture.store.clone();
+    until(|| stored_delivery(&store) == Some((DeliveryVia::FollowUp, DeliveryState::Queued))).await;
+    fixture.host.hold_sends.store(true, Ordering::Release);
+    fixture.host.set_status(LEAD, SessionStatus::Idle);
+    until(|| stored_delivery(&store) == Some((DeliveryVia::FollowUp, DeliveryState::Sending)))
+        .await;
+    // The worker waits in its send; the lead chat is deleted meanwhile.
+    fixture.broker.session_deleted(LEAD).await;
+    assert!(store.load_all().is_empty());
+    fixture.host.fail_send.store(true, Ordering::Release);
+    fixture.host.release_send.notify_one();
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert!(
+        store.load_all().is_empty(),
+        "the deleted journal stays gone"
+    );
+    assert!(fixture.broker.membership(LEAD).is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_report_no_call_collected_before_a_restart_is_queued_on_start() {
+    // A crash left it reserved for a waiting call (`tool/queued`), or an
+    // older journal has an answer without any delivery record.
+    for reserved in [true, false] {
+        let (fixture, host, _restarted) = restart_with_a_finished_report(
+            "block-1",
+            "STATUS: done\nSUMMARY: parser fixed",
+            |document| {
+                document.briefs[0].rounds[0].delivery = if reserved {
+                    Some(FusionDelivery {
+                        via: DeliveryVia::Tool,
+                        state: DeliveryState::Queued,
+                        updated_at: "2026-10-22T10:00:00.000Z".into(),
+                    })
+                } else {
+                    None
+                };
+            },
+        )
+        .await;
+        until(|| host.sent_to(LEAD).len() == 1).await;
+        assert!(host.sent_to(LEAD)[0].0.contains("parser fixed"));
+        let store = fixture.store.clone();
+        until(|| stored_delivery(&store) == Some((DeliveryVia::FollowUp, DeliveryState::Sent)))
+            .await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn without_auto_delivery_a_finished_report_waits_for_the_next_call() {
+    let mut manual = claude_pair();
+    manual.options.auto_deliver = false;
+    let fixture = fixture_with(manual);
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    fixture
+        .host
+        .complete(&sidekick, Some("STATUS: done"), TurnOutcome::Succeeded);
+    let store = fixture.store.clone();
+    until(|| stored_delivery(&store) == Some((DeliveryVia::Tool, DeliveryState::Queued))).await;
+    fixture.host.set_status(LEAD, SessionStatus::Idle);
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert!(fixture.host.sent_to(LEAD).is_empty(), "no follow-up");
+    let (wait, claimed) = fixture
+        .call("call-2", op(json!({"op": "wait", "waitSeconds": 1})))
+        .await;
+    assert_eq!(wait["roundId"], json!("r1"), "{wait}");
+    assert_eq!(claimed.as_deref(), Some("r1"));
+    assert_eq!(
+        stored_delivery(&fixture.store),
+        Some((DeliveryVia::Tool, DeliveryState::Sending))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cancelled_stop_call_hands_its_report_to_the_queue() {
+    let fixture = fixture();
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    fixture.host.hold_interrupts.store(true, Ordering::Release);
+    let broker = fixture.broker.clone();
+    let stopping = tokio::spawn(async move {
+        broker
+            .handle(LEAD, &identity("call-2", "h2"), stop_op("r1"))
+            .await
+    });
+    let host = Arc::clone(&fixture.host);
+    until(|| !host.interrupts.lock().unwrap().is_empty()).await;
+    // The lead closes while its stop waits for the interrupt.
+    stopping.abort();
+    let _ = stopping.await;
+    host.complete(&sidekick, Some("STATUS: partial"), TurnOutcome::Interrupted);
+    let store = fixture.store.clone();
+    until(|| stored_delivery(&store) == Some((DeliveryVia::FollowUp, DeliveryState::Queued))).await;
+    host.set_status(LEAD, SessionStatus::Idle);
+    until(|| host.sent_to(LEAD).len() == 1).await;
+    assert!(host.sent_to(LEAD)[0].0.contains("STATUS partial"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn folding_keeps_briefs_whose_reports_still_wait_for_delivery() {
+    let fixture = fixture();
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    fixture.host.complete(
+        &fixture.host.sidekick_id(),
+        Some("STATUS: done"),
+        TurnOutcome::Succeeded,
+    );
+    let store = fixture.store.clone();
+    until(|| stored_delivery(&store) == Some((DeliveryVia::FollowUp, DeliveryState::Queued))).await;
+    let mut document = fixture.document().await;
+    let pending = document.briefs[0].clone();
+    let mut settled = pending.clone();
+    settled.rounds[0].delivery = Some(FusionDelivery {
+        via: DeliveryVia::Tool,
+        state: DeliveryState::Sent,
+        updated_at: "2026-10-22T10:00:00.000Z".into(),
+    });
+    let numbered = |template: &super::model::FusionBrief, number: usize| {
+        let mut brief = template.clone();
+        brief.brief_id = format!("b{number}");
+        brief.rounds[0].round_id = format!("r{number}");
+        brief
+    };
+    document.briefs = vec![numbered(&pending, 1)];
+    document
+        .briefs
+        .extend((2..=201).map(|number| numbered(&settled, number)));
+    fold_old_briefs(&mut document);
+    assert_eq!(document.briefs.len(), 200);
+    assert_eq!(
+        document.briefs[0].brief_id, "b1",
+        "the pending report stays"
+    );
+    assert_eq!(document.folded_briefs, 1);
+    // Nothing settled: nothing folds.
+    document.briefs = (1..=201).map(|number| numbered(&pending, number)).collect();
+    document.folded_briefs = 0;
+    fold_old_briefs(&mut document);
+    assert_eq!(document.briefs.len(), 201);
+    assert_eq!(document.folded_briefs, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_evicted_call_identity_is_never_admitted_again() {
+    let fixture = fixture();
+    let _ = fixture.call("call-0", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    fixture
+        .host
+        .complete(&sidekick, Some("STATUS: done"), TurnOutcome::Succeeded);
+    // Enough later calls to evict call-0's answer and its full record.
+    for index in 0..4001 {
+        let _ = fixture
+            .call(&format!("status-{index}"), op(json!({"op": "status"})))
+            .await;
+    }
+    let (replay, _) = fixture.call("call-0", brief(false, 0)).await;
+    assert_eq!(replay["code"], json!("uncertain"), "{replay}");
+    let (conflict, _) = fixture
+        .broker
+        .handle(
+            LEAD,
+            &identity("call-0", "another"),
+            op(json!({"op": "status"})),
+        )
+        .await;
+    assert_eq!(conflict["code"], json!("identity-conflict"), "{conflict}");
+    assert_eq!(fixture.broker.state(LEAD).await.unwrap().briefs.len(), 1);
+    assert_eq!(fixture.host.sent_to(&sidekick).len(), 1, "never run again");
+    // The tombstone survives a restart.
+    let (closed, _) = fixture
+        .call(
+            "call-close",
+            op(json!({"op": "close", "briefId": "b1", "outcome": "accepted"})),
+        )
+        .await;
+    assert_eq!(closed["ok"], json!(true), "{closed}");
+    let host = Arc::new(FakeHost::default());
+    let restarted = FusionBroker::new(Arc::new(Arc::clone(&host)), fixture.store.clone(), true);
+    let (replay, _) = restarted
+        .handle(LEAD, &identity("call-0", "hash-call-0"), brief(false, 0))
+        .await;
+    assert_eq!(replay["code"], json!("uncertain"), "{replay}");
+    assert!(host.sent.lock().unwrap().is_empty());
+}
+
+#[test]
+fn diff_pages_split_a_large_file_without_losing_text() {
+    let big = "line ж\n".repeat(5000);
+    let sections = vec![
+        ("a.rs (Unstaged)".to_owned(), "small".to_owned()),
+        ("b.rs (Unstaged)".to_owned(), big.clone()),
+        ("c.rs (Unstaged)".to_owned(), "tail".to_owned()),
+    ];
+    let pages = diff_pages(&sections, 16 * 1024);
+    assert!(pages.len() >= 4, "{}", pages.len());
+    assert!(pages.iter().all(|page| page.len() <= 16 * 1024));
+    let joined = pages
+        .concat()
+        .replace("=== b.rs (Unstaged) (continued)\n", "");
+    assert_eq!(
+        joined,
+        format!(
+            "=== a.rs (Unstaged)\nsmall\n=== b.rs (Unstaged)\n{big}\n=== c.rs (Unstaged)\ntail\n"
+        )
+    );
+    // Without line ends a section is cut on character boundaries.
+    let wide = "ж".repeat(20_000);
+    let pages = diff_pages(&[("w (Unstaged)".to_owned(), wide.clone())], 16 * 1024);
+    assert!(pages.iter().all(|page| page.len() <= 16 * 1024));
+    let joined = pages.concat().replace("=== w (Unstaged) (continued)\n", "");
+    assert_eq!(joined, format!("=== w (Unstaged)\n{wide}\n"));
+    assert_eq!(diff_pages(&[], 16 * 1024), vec![String::new()]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn diff_pages_reach_the_end_of_a_large_file_and_name_upstream_truncation() {
+    let fixture = fixture();
+    let big: String = (0..4000).map(|line| format!("+line {line}\n")).collect();
+    *fixture.host.view_text.lock().unwrap() = Some(big);
+    let (first, _) = fixture.call("call-1", op(json!({"op": "diff"}))).await;
+    let total = first["pages"].as_u64().unwrap();
+    assert!(total >= 3, "{first}");
+    let fingerprint = first["fingerprint"].as_str().unwrap().to_owned();
+    let (last, _) = fixture
+        .call(
+            "call-2",
+            op(json!({"op": "diff", "page": total, "fingerprint": fingerprint.clone()})),
+        )
+        .await;
+    assert!(
+        last["text"].as_str().unwrap().contains("+line 3999"),
+        "{last}"
+    );
+    let (beyond, _) = fixture
+        .call(
+            "call-3",
+            op(json!({"op": "diff", "page": total + 1, "fingerprint": fingerprint})),
+        )
+        .await;
+    assert!(
+        beyond["text"].as_str().unwrap().contains("no page"),
+        "{beyond}"
+    );
+    fixture.host.view_too_large.store(true, Ordering::Release);
+    let (large, _) = fixture.call("call-4", op(json!({"op": "diff"}))).await;
+    assert!(
+        large["text"]
+            .as_str()
+            .unwrap()
+            .contains("1 file diff(s) too large to show"),
+        "{large}"
+    );
+    assert_eq!(large["truncated"], json!(true));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_reloaded_history_with_new_block_ids_is_not_taken_for_a_new_answer() {
+    let fixture = fixture();
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    fixture
+        .host
+        .complete(&sidekick, Some("STATUS: partial"), TurnOutcome::Succeeded);
+    let _ = fixture.call("call-2", wait_op("r1", 30)).await;
+    let (started, _) = fixture.call("call-3", message_op("also y")).await;
+    assert_eq!(started["ok"], json!(true), "{started}");
+    // After the restart the history gives r1's answer another id.
+    let host = Arc::new(FakeHost::default());
+    let restarted = FusionBroker::new(Arc::new(Arc::clone(&host)), fixture.store.clone(), true);
+    host.live(&sidekick, SessionStatus::Idle);
+    push_answer(&host, &sidekick, "claude-history-aaa", "STATUS: partial");
+    assert!(
+        !restarted.reconcile(LEAD, "r2").await.unwrap(),
+        "r1's answer under a new id is not r2's"
+    );
+    push_answer(&host, &sidekick, "claude-history-bbb", "STATUS: done");
+    assert!(restarted.reconcile(LEAD, "r2").await.unwrap());
+    let state = restarted.state(LEAD).await.unwrap();
+    assert_eq!(state.briefs[0].rounds[1].status, Some(ReportStatus::Done));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_baseline_journaled_without_its_hash_stays_unprovable() {
+    let fixture = fixture();
+    let _ = fixture.call("call-1", brief(false, 0)).await;
+    let sidekick = fixture.host.sidekick_id();
+    for document in fixture.store.documents.lock().unwrap().values_mut() {
+        for record in &mut document.round_hosts {
+            record.baseline_hashed = false;
+            record.baseline_hash = None;
+        }
+    }
+    let host = Arc::new(FakeHost::default());
+    let restarted = FusionBroker::new(Arc::new(Arc::clone(&host)), fixture.store.clone(), true);
+    host.live(&sidekick, SessionStatus::Idle);
+    push_answer(&host, &sidekick, "block-7", "STATUS: done");
+    assert!(!restarted.reconcile(LEAD, "r1").await.unwrap());
+    let state = restarted.state(LEAD).await.unwrap();
+    assert_eq!(state.briefs[0].rounds[0].state, RoundState::Uncertain);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_queued_report_is_read_back_by_its_hash_when_its_block_id_changed() {
+    let (fixture, host, _restarted) = restart_with_a_finished_report(
+        "pi-entry-0f3a",
+        "STATUS: done\nSUMMARY: parser fixed",
+        |_| {},
+    )
+    .await;
+    until(|| host.sent_to(LEAD).len() == 1).await;
+    assert!(host.sent_to(LEAD)[0].0.contains("parser fixed"));
+    let store = fixture.store.clone();
+    until(|| stored_delivery(&store) == Some((DeliveryVia::FollowUp, DeliveryState::Sent))).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_ambiguous_tool_handoff_is_uncertain_and_never_queued_again() {
+    let fixture = fixture();
+    let broker = fixture.broker.clone();
+    let task = tokio::spawn(async move {
+        broker
+            .handle(LEAD, &identity("call-1", "h1"), brief(true, 120))
+            .await
+    });
+    let host = Arc::clone(&fixture.host);
+    until(|| !host.sent.lock().unwrap().is_empty()).await;
+    host.complete(
+        &host.sidekick_id(),
+        Some("STATUS: done"),
+        TurnOutcome::Succeeded,
+    );
+    let (first, claimed) = task.await.unwrap();
+    assert_eq!(claimed.as_deref(), Some("r1"));
+    fixture.broker.delivery_uncertain(LEAD, "r1").await;
+    assert_eq!(
+        stored_delivery(&fixture.store),
+        Some((DeliveryVia::Tool, DeliveryState::Uncertain))
+    );
+    // Only a `tool/sending` record moves; a repeat or an unknown round
+    // changes nothing, and a failed write-back no longer requeues it.
+    fixture.broker.delivery_uncertain(LEAD, "r1").await;
+    fixture.broker.delivery_uncertain(LEAD, "r9").await;
+    fixture.broker.delivery_failed(LEAD, "r1").await;
+    assert_eq!(
+        stored_delivery(&fixture.store),
+        Some((DeliveryVia::Tool, DeliveryState::Uncertain))
+    );
+    let (retry, reclaimed) = fixture
+        .broker
+        .handle(LEAD, &identity("call-1", "h1"), brief(true, 120))
+        .await;
+    assert_eq!(retry, first);
+    assert!(reclaimed.is_none());
+    host.set_status(LEAD, SessionStatus::Idle);
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert!(host.sent_to(LEAD).is_empty());
 }

@@ -58,6 +58,9 @@
     void fusionMembership.load(sessionId);
   });
   const isSidekick = $derived(fusion?.role === 'sidekick');
+  const isLead = $derived(fusion?.role === 'lead');
+  // Only the sidekick in use is the broker's: a retired one's chat may be deleted.
+  const currentSidekick = $derived(fusionMembership.isCurrentSidekick(sessionId));
   // Pipeline runs started from this chat, shown among its messages by time.
   const chatPipeline = $derived(chatPipelines.chats[sessionId]);
   const runInserts = $derived((chatPipeline?.runs ?? []).map((entry) => ({ id: entry.runId, at: entry.startedAt })));
@@ -163,14 +166,14 @@
         {/if}
         <div class="chat__actions">
           {#if running}
-            <!-- A sidekick stops through the broker (the store routes it to stopSidekick). -->
+            <!-- Fusion stops through the broker: a lead stops the pair, a sidekick stops its round (the store routes it). -->
             <Button
               size="sm"
               variant="ghost"
               onclick={() => void store.interrupt(session.id)}
               loading={store.interruptBusy}
               disabled={isSidekick && !fusion?.leadSessionId}
-              aria-label={isSidekick ? $t('Stop sidekick') : undefined}
+              aria-label={isSidekick ? $t('Stop sidekick') : isLead ? $t('Stop lead and sidekick') : undefined}
             >
               {#snippet leading()}<Square />{/snippet}
               {$t('Stop')}
@@ -188,10 +191,10 @@
                 ? [{ label: $t('Continue in another harness…'), icon: ArrowRightLeft, disabled: store.safeMode, onSelect: () => void startHandoff(store, snapshot, $t) }]
                 : []),
               ...(session.status !== 'closed'
-                ? [{ label: $t('Stop agent process'), icon: Power, onSelect: () => void store.close(session.id) }]
+                ? [{ label: currentSidekick ? $t('Stop sidekick process and its round') : $t('Stop agent process'), icon: Power, onSelect: () => void store.close(session.id) }]
                 : []),
               { type: 'separator' as const },
-              ...(!session.runId && !isSidekick
+              ...(!session.runId && !currentSidekick
                 ? [{ label: $t('Delete chat…'), icon: Trash, danger: true, disabled: running || store.safeMode, onSelect: () => onDelete(session.id) }]
                 : []),
             ]}
@@ -301,7 +304,7 @@
         {/key}
       {/await}
     {:else if detailsOpen && snapshot}
-      <ChatDetails {snapshot} onClose={toggleDetails} onDelete={isSidekick ? undefined : () => onDelete(session.id)} onReview={toggleReview} />
+      <ChatDetails {snapshot} onClose={toggleDetails} onDelete={currentSidekick ? undefined : () => onDelete(session.id)} onReview={toggleReview} />
     {/if}
   </div>
 {:else}

@@ -36,27 +36,45 @@ export async function createPiAdapter(config, emit) {
 
   // Pi 0.80.4 added `agent_settled`: the only event that says no automatic
   // retry, compaction retry or queued continuation remains. `agent_end` fires
-  // once per low-level run and may be followed by another run. The barrier is
-  // known from the installed Pi version, or learned from the first
-  // `agent_settled`. Runtimes with neither fall back to `agent_end` (below).
-  let settledBarrier = false;
+  // once per low-level run and may be followed by another run, so it can end a
+  // turn only on a runtime positively identified as older than 0.80.4.
+  // settleMode: "settled" (version >= 0.80.4, or the first `agent_settled` was
+  // seen), "legacy" (version known and older) or "unknown" (no package found,
+  // for example a launcher or wrapper). An unknown runtime never completes on a
+  // bare `agent_end`: it waits for `agent_settled` and otherwise for a quiet
+  // runtime (see armSettleProbe). Detected here, before any work is admitted.
+  let settleMode = "unknown";
   try {
     const { readFile } = await import("node:fs/promises");
-    const { isAbsolute, dirname } = await import("node:path");
+    const { isAbsolute, dirname, resolve } = await import("node:path");
     const entry = config.runtimeArgs.find(value => typeof value === "string" && isAbsolute(value) && value.endsWith(".js"));
+    const PACKAGE = "@earendil-works/pi-coding-agent";
+    const candidates = [];
+    // The script's own package, found by walking up from the entry script.
     for (let directory = entry ? dirname(entry) : undefined; directory;) {
-      let manifest;
-      try { manifest = JSON.parse(await readFile(join(directory, "package.json"), "utf8")); } catch { manifest = undefined; }
-      if (manifest?.name === "@earendil-works/pi-coding-agent") {
-        const [major, minor, patch] = String(manifest.version).split(/[.+-]/).map(Number);
-        settledBarrier = [major, minor, patch].every(Number.isSafeInteger)
-          && (major > 0 || minor > 80 || (minor === 80 && patch >= 4));
-        break;
-      }
+      candidates.push(join(directory, "package.json"));
       const parent = dirname(directory);
       directory = parent === directory ? undefined : parent;
     }
-  } catch { /* An unknown Pi build uses the agent_end fallback until it reports agent_settled. */ }
+    // A launcher (`pi`, `pi.cmd`) next to a global install: npm keeps the
+    // package in `node_modules` beside it (Windows) or in `../lib/node_modules`.
+    if (isAbsolute(config.runtimeProgram)) {
+      const bin = dirname(config.runtimeProgram);
+      candidates.push(
+        join(bin, "node_modules", PACKAGE, "package.json"),
+        resolve(bin, "..", "lib", "node_modules", PACKAGE, "package.json"),
+      );
+    }
+    for (const candidate of candidates) {
+      let manifest;
+      try { manifest = JSON.parse(await readFile(candidate, "utf8")); } catch { continue; }
+      if (manifest?.name !== PACKAGE) continue;
+      const [major, minor, patch] = String(manifest.version).split(/[.+-]/).map(Number);
+      if (![major, minor, patch].every(Number.isSafeInteger)) break;
+      settleMode = (major > 0 || minor > 80 || (minor === 80 && patch >= 4)) ? "settled" : "legacy";
+      break;
+    }
+  } catch { /* An unidentified Pi build uses the quiet-runtime fallback until it reports agent_settled. */ }
 
   if (config.nativeSubagents === true) throw fail("unsupported-policy", "This Pi adapter cannot enforce native subagent policy.");
   if (config.coordination === true) throw fail("unsupported-policy", "This Pi RPC adapter cannot register the coordinator tool.");
@@ -114,6 +132,12 @@ export async function createPiAdapter(config, emit) {
   let stdoutBytes = Buffer.alloc(0);
   let admittedTurns = 0;
   let lastTurnOutcome;
+  // The error of a failed assistant message is held until the turn settles:
+  // Pi may still retry it, and the host pauses its composer queue on an error.
+  let pendingTurnError;
+  let settleTimer;
+  let settleEpoch = 0;
+  let streamTimestamp;
   let compactionId;
   const pending = new Map();
   const blocks = new Map();
@@ -121,6 +145,10 @@ export async function createPiAdapter(config, emit) {
   const contentBlocks = new Map();
 
   const opaque = (prefix, value) => `${prefix}-${createHash("sha256").update(String(value)).digest("hex").slice(0, 24)}`;
+  // Stable identity of an assistant answer (`pi-assistant-*`) or thinking block
+  // (`pi-thinking-*`): the message timestamp plus the block's rank among blocks
+  // of that kind in the message. Undefined when Pi gave no usable timestamp.
+  const assistantBlockId = (kind, timestamp, rank) => (Number.isSafeInteger(timestamp) && timestamp > 0 ? opaque(`pi-${kind}`, `${timestamp}:${rank}`) : undefined);
   const setStatus = (next) => {
     if (status === next) return;
     status = next;
@@ -238,11 +266,16 @@ export async function createPiAdapter(config, emit) {
     name: typeof candidate.name === "string" ? candidate.name : candidate.id,
     ...(nativeModelFeatures?.getSupportedThinkingLevels ? { thinkingLevels: nativeModelFeatures.getSupportedThinkingLevels(candidate) } : Array.isArray(candidate.thinkingLevels) ? { thinkingLevels: candidate.thinkingLevels.filter((x) => typeof x === "string") } : {}),
   } : undefined;
-  const historyBlock = (entry) => {
+  const historyBlock = (entry, useEntryId) => {
     if (entry?.type !== "message" || !entry.message) return undefined;
     const role = entry.message.role;
     if (role !== "user" && role !== "assistant") return undefined;
-    const id = opaque("pi-entry", entry.id ?? `${role}-${++blockSequence}`);
+    // Pi allocates the entry id after `message_end`, so live RPC events never
+    // carry it. An assistant message's `timestamp` is fixed when streaming
+    // starts and persisted unchanged, so it names the same answer live and in
+    // history. `useEntryId` is the fallback for a repeated timestamp.
+    const stamped = role === "assistant" && !useEntryId ? assistantBlockId("assistant", entry.message.timestamp, 0) : undefined;
+    const id = stamped ?? opaque("pi-entry", entry.id ?? `${role}-${++blockSequence}`);
     const isError = role === "assistant" && ["error", "aborted"].includes(entry.message.stopReason);
     return {
       id,
@@ -375,36 +408,80 @@ export async function createPiAdapter(config, emit) {
   };
 
   const settleTurn = () => {
+    const outcome = lastTurnOutcome;
+    const failure = pendingTurnError;
+    lastTurnOutcome = undefined;
+    pendingTurnError = undefined;
+    // A failure Pi retried successfully never reaches the host as an error.
+    if (outcome === "failed" && failure) emit({ type: "error", message: failure });
     if (admittedTurns > 0) {
       admittedTurns -= 1;
-      if (lastTurnOutcome) emit({ type: "turnCompleted", outcome: lastTurnOutcome });
+      if (outcome) emit({ type: "turnCompleted", outcome });
     }
-    lastTurnOutcome = undefined;
+  };
+
+  // Fallback for a runtime of unknown version, which may never send
+  // `agent_settled`: after `agent_end(willRetry:false)` the turn completes only
+  // once the runtime stays quiet for SETTLE_GRACE_MS (no `agent_start`,
+  // compaction or retry event) and `get_state` reports it neither streaming,
+  // compacting nor holding queued messages. A busy probe re-arms the timer.
+  const SETTLE_GRACE_MS = 250;
+  const clearSettleTimer = () => {
+    settleEpoch += 1;
+    if (settleTimer) clearTimeout(settleTimer);
+    settleTimer = undefined;
+  };
+  const completeSettled = () => {
+    clearSettleTimer();
+    finishCompaction("complete", "Context compaction ended.");
+    settleTurn();
+    setStatus("idle");
+  };
+  const armSettleProbe = () => {
+    clearSettleTimer();
+    const epoch = settleEpoch;
+    settleTimer = setTimeout(async () => {
+      settleTimer = undefined;
+      if (closed || settleMode !== "unknown") return;
+      let busy = false;
+      try {
+        const latest = await request("get_state");
+        busy = latest?.isStreaming === true || latest?.isCompacting === true
+          || (Number.isSafeInteger(latest?.pendingMessageCount) && latest.pendingMessageCount > 0);
+      } catch { busy = false; }
+      if (closed || epoch !== settleEpoch || settleMode !== "unknown") return;
+      if (busy) armSettleProbe();
+      else completeSettled();
+    }, SETTLE_GRACE_MS);
+    settleTimer.unref?.();
   };
 
   const handleNativeEvent = (frame) => {
     switch (frame.type) {
-      case "agent_start": lastTurnOutcome = undefined; setStatus("running"); break;
+      case "agent_start":
+        clearSettleTimer();
+        lastTurnOutcome = undefined;
+        pendingTurnError = undefined;
+        setStatus("running");
+        break;
+      case "auto_retry_start": clearSettleTimer(); break;
       case "agent_end":
         // A run that Pi will retry is not the end of the turn; its outcome
         // stays pending until a later run ends. With the settle barrier,
         // agent_settled alone completes the turn.
-        if (settledBarrier || frame.willRetry === true) break;
-        finishCompaction("complete", "Context compaction ended.");
-        settleTurn();
-        setStatus("idle");
+        if (settleMode === "settled" || frame.willRetry === true) break;
+        if (settleMode === "legacy") completeSettled();
+        else armSettleProbe();
         break;
       case "agent_settled":
-        settledBarrier = true;
-        finishCompaction("complete", "Context compaction ended.");
-        settleTurn();
-        setStatus("idle");
+        settleMode = "settled";
+        completeSettled();
         break;
       case "message_start": {
         if (frame.message?.role === "user") {
           const id = opaque("pi-message", frame.message.id ?? `user-${++blockSequence}`);
           putBlock({ id, kind: "user", label: "You", status: "complete", text: userText(frame.message) });
-        }
+        } else if (frame.message?.role === "assistant") streamTimestamp = frame.message.timestamp;
         break;
       }
       case "message_update": {
@@ -415,7 +492,10 @@ export async function createPiAdapter(config, emit) {
         const key = `${kind}:${index}`;
         let id = contentBlocks.get(key);
         if (!id) {
-          id = `pi-stream-${++blockSequence}`;
+          const rank = [...contentBlocks.keys()].filter((existing) => existing.startsWith(`${kind}:`)).length;
+          const stamp = Number.isSafeInteger(frame.message?.timestamp) ? frame.message.timestamp : streamTimestamp;
+          id = assistantBlockId(kind, stamp, rank);
+          if (!id || blocks.has(id)) id = `pi-stream-${++blockSequence}`;
           contentBlocks.set(key, id);
           putBlock({ id, kind, label: kind === "thinking" ? "Thinking" : "Pi", status: "streaming", text: "" });
         }
@@ -441,9 +521,11 @@ export async function createPiAdapter(config, emit) {
           const interrupted = frame.message.stopReason === "aborted";
           const failed = frame.message.stopReason === "error";
           lastTurnOutcome = interrupted ? "interrupted" : failed ? "failed" : "succeeded";
-          if (failed) emit({ type: "error", message: classifyTurnError(frame.message) });
+          // Held until settlement: Pi may retry a transient failure.
+          pendingTurnError = failed ? classifyTurnError(frame.message) : undefined;
           for (const id of contentBlocks.values()) updateBlock(id, { status: interrupted ? "interrupted" : failed ? "failed" : "complete" });
           contentBlocks.clear();
+          streamTimestamp = undefined;
         }
         break;
       }
@@ -467,6 +549,7 @@ export async function createPiAdapter(config, emit) {
       }
       // Older Pi builds report automatic compaction with the auto_ prefix.
       case "compaction_start": case "auto_compaction_start":
+        clearSettleTimer();
         finishCompaction("complete", "Context compaction ended.");
         compactionId = `pi-compaction-${++blockSequence}`;
         putBlock({
@@ -495,6 +578,7 @@ export async function createPiAdapter(config, emit) {
   const failNative = () => {
     if (closed) return;
     closed = true;
+    clearSettleTimer();
     for (const slot of pending.values()) slot.reject(fail("runtime-exited", "The Pi runtime exited before responding."));
     pending.clear();
     if (!disposing) {
@@ -539,7 +623,9 @@ export async function createPiAdapter(config, emit) {
   availableModels = (modelResult?.models ?? []).map(mapModel).filter(Boolean);
   const entriesResult = await request("get_entries").catch(() => ({ entries: [] }));
   for (const entry of entriesResult?.entries ?? []) {
-    const block = historyBlock(entry);
+    let block = historyBlock(entry);
+    // Two entries must never share an id: fall back to the entry id.
+    if (block && blocks.has(block.id)) block = historyBlock(entry, true);
     if (block) blocks.set(block.id, block);
   }
   setStatus(state.isStreaming ? "running" : "idle");
@@ -684,6 +770,7 @@ export async function createPiAdapter(config, emit) {
     async dispose() {
       if (disposing) return;
       disposing = true;
+      clearSettleTimer();
       setStatus("stopping");
       cancelApprovals();
       if (!closed && state.isStreaming) await request("abort").catch(() => undefined);

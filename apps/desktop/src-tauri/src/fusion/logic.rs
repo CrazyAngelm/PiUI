@@ -600,6 +600,78 @@ pub(crate) fn report_page(full: &str, page: u32) -> (String, u32) {
     (pages.get(index).cloned().unwrap_or_default(), total)
 }
 
+/// Where to cut `text` for at most `budget` bytes: after the last line end
+/// in the second half of the budget, else on a character boundary; at least
+/// one character, so splitting always makes progress.
+fn split_point(text: &str, budget: usize) -> usize {
+    if text.len() <= budget {
+        return text.len();
+    }
+    let mut end = budget;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    if end == 0 {
+        return text
+            .char_indices()
+            .nth(1)
+            .map_or(text.len(), |(index, _)| index);
+    }
+    match text[..end].rfind('\n') {
+        Some(newline) if newline + 1 >= end / 2 => newline + 1,
+        _ => end,
+    }
+}
+
+/// Lays `(title, content)` diff sections out on pages of at most
+/// `page_bytes`. Small sections share pages; a section larger than a page
+/// starts on its own page and continues on the next ones, each headed
+/// `=== <title> (continued)`, so no part of the returned diff is lost.
+/// Always at least one (possibly empty) page.
+pub(crate) fn diff_pages(sections: &[(String, String)], page_bytes: usize) -> Vec<String> {
+    let mut pages = vec![String::new()];
+    for (title, content) in sections {
+        let whole = format!("=== {title}\n{content}\n");
+        let used = pages.last().map_or(0, String::len);
+        if used + whole.len() <= page_bytes {
+            if let Some(last) = pages.last_mut() {
+                last.push_str(&whole);
+            }
+            continue;
+        }
+        if used > 0 {
+            pages.push(String::new());
+        }
+        if whole.len() <= page_bytes {
+            if let Some(last) = pages.last_mut() {
+                last.push_str(&whole);
+            }
+            continue;
+        }
+        let mut rest = content.as_str();
+        let mut head = format!("=== {title}\n");
+        loop {
+            let budget = page_bytes.saturating_sub(head.len() + 1).max(1);
+            let (chunk, tail) = rest.split_at(split_point(rest, budget));
+            let mut page = format!("{head}{chunk}");
+            if tail.is_empty() {
+                page.push('\n');
+            }
+            if let Some(last) = pages.last_mut().filter(|last| last.is_empty()) {
+                *last = page;
+            } else {
+                pages.push(page);
+            }
+            if tail.is_empty() {
+                break;
+            }
+            rest = tail;
+            head = format!("=== {title} (continued)\n");
+        }
+    }
+    pages
+}
+
 /// A short, single-line preview of a round input for the journal.
 pub(crate) fn preview(text: &str) -> String {
     let line = text.split_whitespace().collect::<Vec<_>>().join(" ");

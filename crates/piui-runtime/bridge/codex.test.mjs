@@ -1257,3 +1257,26 @@ test("a resumed thread keeps the sidekick only if it was started with it; otherw
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("a piui/sidekick result is written through deliver exactly once", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "piui-codex-sidekick-"));
+  const sidekick = async (operation, context) => {
+    await context.deliver({ ok: true, text: "Round r1 is working." });
+    return { ok: true, text: "Round r1 is working." };
+  };
+  try {
+    const proxied = await openProxied(directory, { hostTools: ["sidekick"] }, {
+      callbacks: [undefined, sidekick],
+      inject: [{ id: 995, callId: "call-status", namespace: "piui", tool: "sidekick", arguments: { op: "status" } }],
+    });
+    try {
+      await proxied.replies(1);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const replies = await proxied.replies(1);
+      assert.equal(replies.length, 1, "the result is not written again after deliver");
+      assert.deepEqual(replies[0].result, { contentItems: [{ type: "inputText", text: "Round r1 is working." }], success: true });
+    } finally { await proxied.adapter.dispose(); }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

@@ -241,6 +241,104 @@ describe('fusion lab fake', () => {
     expect(reconciled.state.briefs[1]?.state).toBe('reported');
   });
 
+  describe('lifecycle of Fusion chats', () => {
+    const lifecycle = (id: string) => host.invoke('workspace_lifecycle_v17', { command: { type: 'deleteSession', sessionId: id } });
+
+    it('refuses deleting a lead while a sidekick round is open and deletes it once the round is stopped', async () => {
+      const lead = (await create(host)).leadSessionId;
+      await vi.advanceTimersByTimeAsync(LAB_FUSION_BRIEF_DELAY_MS + LAB_FUSION_QUEUE_MS);
+      expect((await stateOf(host, lead)).sidekick).toBe('working');
+      expect(await rejection(lifecycle(lead))).toMatchObject({ code: 'CONFLICT' });
+      expect(host.state.sessions.has(lead)).toBe(true);
+      expect(host.fusion.states.has(lead)).toBe(true);
+
+      await fusion(host, { type: 'stopPair', leadSessionId: lead });
+      await expect(lifecycle(lead)).resolves.toMatchObject({ sessionId: lead });
+      expect(host.state.sessions.has(lead)).toBe(false);
+    });
+
+    it('refuses deleting a lead whose round is uncertain until the person settles it', async () => {
+      host.fusion.autoDemo = false;
+      const lead = (await create(host)).leadSessionId;
+      const round = simulateFusionBrief(host.fusion, lead, { ending: 'uncertain' });
+      await vi.advanceTimersByTimeAsync(LAB_FUSION_QUEUE_MS + LAB_FUSION_ROUND_MS);
+      expect((await stateOf(host, lead)).briefs[0]?.rounds[0]?.state).toBe('uncertain');
+      expect(await rejection(lifecycle(lead))).toMatchObject({ code: 'CONFLICT' });
+      await fusion(host, { type: 'abandonRound', leadSessionId: lead, roundId: round?.roundId });
+      await expect(lifecycle(lead)).resolves.toMatchObject({ sessionId: lead });
+    });
+
+    it('forgets the pair and its membership when the lead is deleted; the sidekick chat stays', async () => {
+      const lead = (await create(host)).leadSessionId;
+      await vi.advanceTimersByTimeAsync(LAB_FUSION_BRIEF_DELAY_MS + LAB_FUSION_QUEUE_MS + LAB_FUSION_ROUND_MS);
+      const sidekick = (await stateOf(host, lead)).sessions[0]?.sessionId ?? '';
+      expect(host.state.sessions.get(sidekick)?.live).toBeDefined();
+
+      await lifecycle(lead);
+      expect(host.fusion.states.has(lead)).toBe(false);
+      expect(await fusion(host, { type: 'find', sessionId: lead })).toEqual({ type: 'membership', role: null });
+      expect(await rejection(host.invoke('fusion_command_v1', { command: { type: 'state', leadSessionId: lead } }))).toMatchObject({ code: 'NOT_FOUND' });
+      // The sidekick chat stays as an ordinary chat that is no longer a member; its idle process is closed.
+      expect(host.state.sessions.has(sidekick)).toBe(true);
+      expect(host.state.sessions.get(sidekick)?.live).toBeUndefined();
+      expect(await fusion(host, { type: 'find', sessionId: sidekick })).toEqual({ type: 'membership', role: null });
+      await expect(lifecycle(sidekick)).resolves.toMatchObject({ sessionId: sidekick });
+    });
+
+    it('cancels the scheduled demo brief of a deleted lead', async () => {
+      const events = await record<FusionChangedEventV1>(host, FUSION_CHANGED_EVENT_V1);
+      const lead = (await create(host)).leadSessionId;
+      await lifecycle(lead);
+      await vi.advanceTimersByTimeAsync(10);
+      const seen = events.items.length;
+      const sessions = host.state.sessions.size;
+
+      await vi.advanceTimersByTimeAsync(LAB_FUSION_BRIEF_DELAY_MS + LAB_FUSION_QUEUE_MS + LAB_FUSION_ROUND_MS * 2);
+      // No brief starts, no sidekick chat appears, no event is emitted.
+      expect(events.items.length).toBe(seen);
+      expect(host.state.sessions.size).toBe(sessions);
+      expect(host.fusion.states.size).toBe(0);
+      events.stop();
+    });
+
+    it('deletes only a retired sidekick chat and refuses the one in use', async () => {
+      const lead = (await create(host)).leadSessionId;
+      await vi.advanceTimersByTimeAsync(LAB_FUSION_BRIEF_DELAY_MS + LAB_FUSION_QUEUE_MS + LAB_FUSION_ROUND_MS);
+      const first = (await stateOf(host, lead)).sessions[0]?.sessionId ?? '';
+      expect(await rejection(lifecycle(first))).toMatchObject({ code: 'NOT_SUPPORTED' });
+
+      await fusion(host, { type: 'resetSidekick', leadSessionId: lead });
+      // The retired chat keeps its membership (read-only) yet may be deleted.
+      expect(await fusion(host, { type: 'find', sessionId: first })).toMatchObject({ role: 'sidekick', leadSessionId: lead });
+      expect(await rejection(host.invoke('workspace_command_v15', { command: { type: 'send', sessionId: first, text: 'hi', mode: 'prompt' } }))).toMatchObject({ code: 'NOT_SUPPORTED' });
+
+      expect(simulateFusionBrief(host.fusion, lead)).toBeDefined();
+      const current = (await stateOf(host, lead)).sessions.find((session) => !session.retired)?.sessionId ?? '';
+      expect(current).not.toBe(first);
+      expect(await rejection(lifecycle(current))).toMatchObject({ code: 'NOT_SUPPORTED' });
+      await expect(lifecycle(first)).resolves.toMatchObject({ sessionId: first });
+      expect(host.state.sessions.has(first)).toBe(false);
+      expect(host.state.sessions.has(current)).toBe(true);
+    });
+
+    it('closes the sidekick in use through the broker: the round stops and its report is withdrawn', async () => {
+      const lead = (await create(host)).leadSessionId;
+      await vi.advanceTimersByTimeAsync(LAB_FUSION_BRIEF_DELAY_MS + LAB_FUSION_QUEUE_MS);
+      const state = await stateOf(host, lead);
+      const sidekick = state.sessions[0]?.sessionId ?? '';
+      expect(state.sidekick).toBe('working');
+
+      await expect(host.invoke('workspace_command_v15', { command: { type: 'closeSession', sessionId: sidekick } })).resolves.toMatchObject({ type: 'accepted' });
+      const closed = await stateOf(host, lead);
+      expect(closed.sidekick).toBe('idle');
+      expect(closed.briefs[0]?.rounds[0]).toMatchObject({ state: 'finished', outcome: 'interrupted', delivery: { state: 'withdrawn' } });
+      expect(host.state.sessions.get(sidekick)?.live).toBeUndefined();
+      // The scripted report never arrives afterwards.
+      await vi.advanceTimersByTimeAsync(LAB_FUSION_ROUND_MS * 2);
+      expect(await stateOf(host, lead)).toEqual(closed);
+    });
+  });
+
   it('refuses every change in safe mode but still reads', async () => {
     const safe = labHost('safe');
     expect(await rejection(safe.invoke('fusion_command_v1', { command: { type: 'createChat', workspaceId: WS, pair: CODEX_PAIR } }))).toMatchObject({ code: 'SAFE_MODE' });

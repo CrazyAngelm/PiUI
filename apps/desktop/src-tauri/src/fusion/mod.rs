@@ -16,7 +16,7 @@ use crate::review_api::{self, ReviewArea, ReviewContentV1, ReviewFileV1};
 use crate::state::HostState;
 use crate::workspace_api::{
     FusionAnswerFuture, FusionSessionHooks, FusionSessionSetup, TurnState, WorkspaceError,
-    WorkspaceLaunchRequest, event_publisher,
+    WorkspaceLaunchRequest, authorize_live_session, event_publisher,
 };
 use broker::{FusionBroker, FusionHost, HostFailure, HostFuture, SessionActivity, SidekickLaunch};
 use model::{
@@ -24,7 +24,7 @@ use model::{
     FusionResultV1, FusionRoleName,
 };
 use piui_runtime::workspace_runtime::{
-    BlockKind, HarnessKind, HostTool, PromptMode, SessionStatus, SidekickCallIdentity,
+    BlockKind, HarnessKind, HostTool, PromptMode, SidekickCallIdentity,
 };
 use std::future::Future;
 use std::path::Path;
@@ -147,6 +147,32 @@ impl FusionSessionHooks for FusionSessions {
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let broker = self.broker.clone();
         Box::pin(async move { broker.delivery_failed(&lead_session_id, &round_id).await })
+    }
+
+    fn delivery_uncertain(
+        &self,
+        lead_session_id: String,
+        round_id: String,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        let broker = self.broker.clone();
+        Box::pin(async move {
+            broker.delivery_uncertain(&lead_session_id, &round_id).await;
+        })
+    }
+
+    fn stop_current_sidekick(
+        &self,
+        session_id: String,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        let broker = self.broker.clone();
+        Box::pin(async move {
+            let Some((FusionRoleName::Sidekick, lead, _)) = broker.membership(&session_id) else {
+                return;
+            };
+            // The caller disposes the process whatever the barrier proves; a
+            // refusal (an uncertain round) is the person's to reconcile.
+            let _ = broker.stop_sidekick(&lead).await;
+        })
     }
 
     fn delivery_sent(
@@ -389,6 +415,29 @@ impl FusionHost for TauriFusionHost {
         })
     }
 
+    fn answer_with_hash(
+        &self,
+        session_id: String,
+        hash: String,
+    ) -> HostFuture<Result<Option<String>, HostFailure>> {
+        let app = self.app.clone();
+        Box::pin(async move {
+            let host = app.state::<HostState>();
+            let snapshot = host
+                .workspace
+                .snapshot(&session_id)
+                .await
+                .map_err(|error| failure(&error))?;
+            Ok(snapshot
+                .blocks
+                .into_iter()
+                .rev()
+                .filter(|block| block.kind == BlockKind::Assistant)
+                .filter_map(|block| block.text)
+                .find(|text| piui_runtime::git::sha256_hex(text.as_bytes()) == hash))
+        })
+    }
+
     fn activity(&self, session_id: String) -> HostFuture<SessionActivity> {
         let app = self.app.clone();
         Box::pin(async move {
@@ -576,22 +625,26 @@ async fn dispatch(
             // The lead is interrupted first and whatever the sidekick's stop
             // barrier proves, so it cannot brief again meanwhile; each failure
             // is reported, never acknowledged as a stop.
-            let lead_running = host
-                .workspace
-                .subscribe_turns(&lead_session_id)
-                .ok()
-                .flatten()
-                .is_some_and(|turns| {
-                    matches!(
-                        turns.borrow().status,
-                        SessionStatus::Running | SessionStatus::Starting
-                    )
-                });
-            let lead = if lead_running {
-                host.workspace.interrupt(&lead_session_id).await
-            } else {
-                Ok(())
-            };
+            // Only a Fusion lead is stopped: any other session id is refused
+            // before the first side effect (a sidekick is never interrupted
+            // behind the broker's stop barrier).
+            validate_id(&lead_session_id)?;
+            if !matches!(
+                broker.membership(&lead_session_id),
+                Some((FusionRoleName::Lead, ..))
+            ) {
+                return Err(WorkspaceError::not_found());
+            }
+            // The lead's start and any prompt still being admitted finish
+            // first (operation gate); queued input is paused and the composer
+            // gate is held before the status decides whether to interrupt. The
+            // gates are released before the broker's own stop, which takes the
+            // operation gate again.
+            let lead = async {
+                let _operation = authorize_live_session(host, &lead_session_id).await?;
+                host.workspace.interrupt_lead_turn(&lead_session_id).await
+            }
+            .await;
             let sidekick = broker.stop_sidekick(&lead_session_id).await;
             sidekick.map_err(refused)?;
             lead?;

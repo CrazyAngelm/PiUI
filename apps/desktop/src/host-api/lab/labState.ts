@@ -121,6 +121,22 @@ export interface LabState {
    * `HostWorkspace::is_fusion_sidekick` does.
    */
   isFusionSidekick?: (sessionId: string) => boolean;
+  /**
+   * Fusion lifecycle hooks (ADR-043, docs/FUSION.md), set by the Fusion fake:
+   * the same rules the host applies when a Fusion chat is closed or deleted.
+   */
+  fusionLifecycle?: LabFusionLifecycle;
+}
+
+export interface LabFusionLifecycle {
+  /** The chat is the sidekick being used now (not a retired one): the broker owns its lifecycle. */
+  isCurrentSidekick(sessionId: string): boolean;
+  /** Throws `CONFLICT` while a sidekick round of this lead's pair is open or uncertain. */
+  guardLeadDelete(leadSessionId: string): void;
+  /** The lead was deleted: its pair, membership and scheduled steps go with it. */
+  forgetLead(leadSessionId: string): void;
+  /** Closing a current sidekick stops its open round and withdraws the delivery first. */
+  closeSidekick(sessionId: string): void;
 }
 
 /** IPC boundary: JSON round-trip drops `undefined` exactly like serde `skip_serializing_if`. */

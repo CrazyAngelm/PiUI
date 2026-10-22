@@ -436,6 +436,18 @@ fn runtime_failure(error: &NativeRuntimeError) -> WorkspaceError {
     }
 }
 
+/// Whether a failed `sidekick_response` proves the bridge did not consume the
+/// answer: the bridge itself rejected it (`stale-sidekick-request`,
+/// `invalid-sidekick-response`; both answer before the pending call is
+/// resolved) or the host refused to send it. A timeout, a closed channel or a
+/// dead runtime may follow a consumed answer, so those stay ambiguous.
+fn sidekick_response_unconsumed(error: &NativeRuntimeError) -> bool {
+    matches!(
+        error,
+        NativeRuntimeError::Bridge(_) | NativeRuntimeError::InvalidConfiguration
+    )
+}
+
 /// Speed settings are refused before any native request when the adapter
 /// cannot honour them. Claude Code runs only at standard speed.
 fn reject_unsupported_speed(
@@ -584,12 +596,32 @@ pub(crate) trait FusionSessionHooks: Send + Sync {
         identity: SidekickCallIdentity,
         operation: serde_json::Map<String, serde_json::Value>,
     ) -> FusionAnswerFuture;
-    /// The answer handing over a report never reached the lead.
+    /// The answer handing over a report provably never reached the lead: the
+    /// bridge rejected it before consuming it.
     fn delivery_failed(
         &self,
         lead_session_id: String,
         round_id: String,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+    /// Whether the answer handing over a report reached the lead is unknown
+    /// (acknowledgement timeout, transport failure): the bridge may have
+    /// consumed it, so the report is never handed over a second time.
+    fn delivery_uncertain(
+        &self,
+        _lead_session_id: String,
+        _round_id: String,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        Box::pin(async {})
+    }
+    /// The person closes a sidekick session: the broker stops its open round
+    /// and withdraws that round's delivery first (ADR-043). Only a current
+    /// sidekick is stopped; the caller disposes the process afterwards.
+    fn stop_current_sidekick(
+        &self,
+        _session_id: String,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        Box::pin(async {})
+    }
     /// The answer handing over a report reached the lead.
     fn delivery_sent(
         &self,
@@ -1128,6 +1160,47 @@ impl WorkspaceHost {
     pub(crate) fn is_fusion_sidekick(&self, session_id: &str) -> bool {
         self.fusion_hooks()
             .is_some_and(|hooks| hooks.is_sidekick(session_id))
+    }
+
+    /// Lets the broker stop and withdraw the open round of a current Fusion
+    /// sidekick before the person's close disposes its process, so the stopped
+    /// round's report is never handed to the lead (ADR-043). Other sessions
+    /// are untouched. No operation gate may be held: the broker's stop takes it.
+    pub(crate) async fn stop_fusion_sidekick_before_close(&self, session_id: &str) {
+        if let Some(hooks) = self.fusion_hooks()
+            && hooks.is_current_sidekick(session_id)
+        {
+            hooks.stop_current_sidekick(session_id.to_owned()).await;
+        }
+    }
+
+    /// Stops the active turn of a Fusion lead. The caller holds the operation
+    /// gate, so no ordinary send is mid-admission. Queued composer input is
+    /// paused first; the composer gate then waits for a queued prompt that is
+    /// still reaching the harness, and the need to interrupt is decided only
+    /// after that, from the native status.
+    pub(crate) async fn interrupt_lead_turn(&self, session_id: &str) -> Result<(), WorkspaceError> {
+        self.pause_queue(session_id);
+        let Some((runtime, state)) = self.live_runtime(session_id)? else {
+            return Ok(());
+        };
+        let _admission = state.composer_gate.lock().await;
+        let published = state.turns.borrow().status;
+        let native = runtime
+            .snapshot()
+            .await
+            .map_err(|_| WorkspaceError::runtime())?
+            .status;
+        let active = |status: SessionStatus| {
+            matches!(status, SessionStatus::Running | SessionStatus::Starting)
+        };
+        if !active(published) && !active(native) {
+            return Ok(());
+        }
+        runtime
+            .interrupt()
+            .await
+            .map_err(|_| WorkspaceError::runtime())
     }
 
     /// Turn completions of a live session (Fusion rounds).
@@ -3304,6 +3377,12 @@ pub(crate) async fn dispatch_workspace_command(
         WorkspaceCommand::CloseSession { session_id } => {
             // Runtime disposal remains available as a safety action. Safe mode
             // cannot reach here and trust revocation uses shutdown_workspace.
+            // A current Fusion sidekick first passes the broker's stop barrier,
+            // which withdraws its round's delivery (ADR-043); the broker's own
+            // closes call `close_session` directly and never pass this entry.
+            host.workspace
+                .stop_fusion_sidekick_before_close(&session_id)
+                .await;
             host.workspace.close_session(&session_id).await?;
             Ok(WorkspaceResult::Accepted { session_id })
         }
@@ -3344,7 +3423,7 @@ pub(crate) async fn dispatch_workspace_command(
     }
 }
 
-async fn authorize_live_session<'a>(
+pub(crate) async fn authorize_live_session<'a>(
     state: &'a HostState,
     session_id: &str,
 ) -> Result<tokio::sync::MutexGuard<'a, ()>, WorkspaceError> {
@@ -3704,10 +3783,16 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                         let handoff = tokio::spawn(async move {
                             let sent = runtime.sidekick_response(request_id, result).await;
                             if let Some(round_id) = claimed {
-                                if sent.is_ok() {
-                                    hooks.delivery_sent(lead, round_id).await;
-                                } else {
-                                    hooks.delivery_failed(lead, round_id).await;
+                                match sent {
+                                    Ok(()) => hooks.delivery_sent(lead, round_id).await,
+                                    // Only a rejection that proves the bridge did
+                                    // not consume the answer puts the report back
+                                    // in the queue; a timeout or a transport
+                                    // failure may follow a consumed answer.
+                                    Err(error) if sidekick_response_unconsumed(&error) => {
+                                        hooks.delivery_failed(lead, round_id).await;
+                                    }
+                                    Err(_) => hooks.delivery_uncertain(lead, round_id).await,
                                 }
                             }
                         });
@@ -4625,6 +4710,36 @@ Board."
         assert_eq!(super::default_title(harness), "New agent session");
         // ACP history lives behind the protocol, never in a host-read file.
         assert_eq!(super::history_format(harness), None);
+    }
+
+    #[test]
+    fn only_a_rejection_proves_a_sidekick_answer_was_not_consumed() {
+        use piui_runtime::workspace_runtime::{BridgeFailureCode, NativeRuntimeError};
+        // The bridge answered `stale-sidekick-request` or
+        // `invalid-sidekick-response` before it resolved the pending call.
+        for rejected in [
+            NativeRuntimeError::Bridge(BridgeFailureCode::OperationFailed),
+            NativeRuntimeError::Bridge(BridgeFailureCode::InvalidRequest),
+            NativeRuntimeError::InvalidConfiguration,
+        ] {
+            assert!(
+                super::sidekick_response_unconsumed(&rejected),
+                "{rejected:?}"
+            );
+        }
+        // An unacknowledged write may follow a consumed answer.
+        for ambiguous in [
+            NativeRuntimeError::Timeout,
+            NativeRuntimeError::Channel,
+            NativeRuntimeError::NotRunning,
+            NativeRuntimeError::UnexpectedExit,
+            NativeRuntimeError::Protocol,
+        ] {
+            assert!(
+                !super::sidekick_response_unconsumed(&ambiguous),
+                "{ambiguous:?}"
+            );
+        }
     }
 
     #[test]
@@ -6300,6 +6415,184 @@ mod native_host_tests {
             .await
             .expect("an ordinary chat is deleted");
         assert!(host.workspace.record(&chat).is_err());
+
+        host.workspace.shutdown_all().await;
+        cleanup(host, root);
+    }
+
+    /// Fusion hooks that record the sessions the broker was asked to stop
+    /// before the person's close disposed them.
+    struct ClosingSidekicks {
+        sidekick: String,
+        stopped: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl super::FusionSessionHooks for ClosingSidekicks {
+        fn setup(&self, _session_id: &str) -> Option<super::FusionSessionSetup> {
+            None
+        }
+
+        fn is_sidekick(&self, session_id: &str) -> bool {
+            session_id == self.sidekick
+        }
+
+        fn handle(
+            &self,
+            _lead_session_id: String,
+            _identity: super::SidekickCallIdentity,
+            _operation: serde_json::Map<String, serde_json::Value>,
+        ) -> super::FusionAnswerFuture {
+            Box::pin(async { (serde_json::Value::Null, None) })
+        }
+
+        fn delivery_failed(
+            &self,
+            _lead_session_id: String,
+            _round_id: String,
+        ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+            Box::pin(async {})
+        }
+
+        fn stop_current_sidekick(
+            &self,
+            session_id: String,
+        ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+            if let Ok(mut stopped) = self.stopped.lock() {
+                stopped.push(session_id);
+            }
+            Box::pin(async {})
+        }
+    }
+
+    /// The WebView's close of a current sidekick passes the broker's stop
+    /// barrier before the process is disposed; an ordinary chat closes alone.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn closing_a_current_sidekick_goes_through_the_broker_first() {
+        let root = test_root("sidekick-close");
+        let host = Arc::new(HostState::open(&root, false).expect("host state"));
+        install_test_spawner(&host.workspace, |config| {
+            NativeRuntime::spawn_test_adapter(config, MEMBER_ADAPTER)
+        });
+        let workspace_id = host.personal_workspace.project_id.clone();
+        let Ok(directory) = verified_project_directory(&host, &workspace_id, true) else {
+            panic!("the personal workspace is trusted");
+        };
+        let publisher: WorkspaceEventPublisher = Arc::new(|_| {});
+        let sidekick = host
+            .workspace
+            .launch_session(
+                &directory,
+                chat_request(&workspace_id, "Sidekick"),
+                Arc::clone(&publisher),
+            )
+            .await
+            .expect("the sidekick starts")
+            .session
+            .id;
+        let chat = host
+            .workspace
+            .launch_session(&directory, chat_request(&workspace_id, "Chat"), publisher)
+            .await
+            .expect("the chat starts")
+            .session
+            .id;
+        let stopped = Arc::new(Mutex::new(Vec::new()));
+        host.workspace.set_fusion_hooks(Arc::new(ClosingSidekicks {
+            sidekick: sidekick.clone(),
+            stopped: Arc::clone(&stopped),
+        }));
+
+        let result = dispatch(
+            &host,
+            WorkspaceCommand::CloseSession {
+                session_id: chat.clone(),
+            },
+        )
+        .await;
+        assert!(result.is_ok(), "{result:?}");
+        assert!(
+            stopped.lock().expect("stopped").is_empty(),
+            "an ordinary chat is not a broker stop"
+        );
+
+        let result = dispatch(
+            &host,
+            WorkspaceCommand::CloseSession {
+                session_id: sidekick.clone(),
+            },
+        )
+        .await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(*stopped.lock().expect("stopped"), vec![sidekick.clone()]);
+        assert!(
+            host.workspace
+                .live_runtime(&sidekick)
+                .expect("lookup")
+                .is_none(),
+            "the process is still disposed as the safety fallback"
+        );
+
+        host.workspace.shutdown_all().await;
+        cleanup(host, root);
+    }
+
+    /// Stopping a Fusion lead pauses its queued input at once and then waits
+    /// for a prompt that is still being admitted before it decides whether
+    /// to interrupt.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stopping_a_lead_pauses_the_queue_and_waits_for_prompt_admission() {
+        let root = test_root("lead-stop");
+        let host = Arc::new(HostState::open(&root, false).expect("host state"));
+        install_test_spawner(&host.workspace, |config| {
+            NativeRuntime::spawn_test_adapter(config, MEMBER_ADAPTER)
+        });
+        let workspace_id = host.personal_workspace.project_id.clone();
+        let Ok(directory) = verified_project_directory(&host, &workspace_id, true) else {
+            panic!("the personal workspace is trusted");
+        };
+        let lead = host
+            .workspace
+            .launch_session(
+                &directory,
+                chat_request(&workspace_id, "Lead"),
+                Arc::new(|_| {}),
+            )
+            .await
+            .expect("the lead starts")
+            .session
+            .id;
+        let (_, live) = host
+            .workspace
+            .live_runtime(&lead)
+            .expect("lookup")
+            .expect("live lead");
+        assert!(!live.composer_paused.load(AtomicOrdering::Acquire));
+
+        // A queued prompt is on its way to the harness: it holds the gate.
+        let admission = live.composer_gate.lock().await;
+        let stopping = tokio::spawn({
+            let workspace = host.workspace.clone();
+            let lead = lead.clone();
+            async move { workspace.interrupt_lead_turn(&lead).await }
+        });
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !live.composer_paused.load(AtomicOrdering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("queued input is paused before the stop waits");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !stopping.is_finished(),
+            "the stop waits for the prompt admission"
+        );
+        drop(admission);
+        let stopped = tokio::time::timeout(Duration::from_secs(10), stopping)
+            .await
+            .expect("the stop finishes once admission ends")
+            .expect("the stop task completes");
+        assert!(stopped.is_ok(), "{stopped:?}");
 
         host.workspace.shutdown_all().await;
         cleanup(host, root);

@@ -461,6 +461,11 @@ pub(crate) struct FusionRound {
     /// round without it (an older journal) cannot be reconciled.
     #[serde(skip)]
     pub baseline_known: bool,
+    /// Host-private: the SHA-256 of the baseline answer's text. Block ids
+    /// may change when a history is reloaded, so an answer with this text
+    /// is never taken for a new one after a restart.
+    #[serde(skip)]
+    pub baseline_hash: Option<String>,
     #[serde(default, skip_serializing)]
     pub started_ms: u64,
     /// Host-private: the report the lead receives (kept while this process
@@ -550,6 +555,11 @@ pub(crate) struct FusionDocument {
     pub calls: Vec<CallRecord>,
     #[serde(default)]
     pub folded_briefs: u64,
+    /// Compact identities of call records evicted from [`Self::calls`]
+    /// (`<key digest>:<operation digest>`), kept for the pair's lifetime so
+    /// an old call is never admitted again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub call_tombstones: Vec<String>,
     /// Journal only: the host-private facts of each round. Filled when a
     /// generation is written ([`Self::for_journal`]) and moved back into the
     /// rounds when it is read ([`Self::restore_round_hosts`]); empty in memory.
@@ -568,6 +578,12 @@ pub(crate) struct RoundHostRecord {
     pub baseline_known: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline_block_id: Option<String>,
+    /// The record carries `baseline_hash` (absent in older journals, whose
+    /// rounds then stay unprovable).
+    #[serde(default)]
+    pub baseline_hashed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_hash: Option<String>,
     #[serde(default)]
     pub started_ms: u64,
 }
@@ -585,6 +601,8 @@ impl FusionDocument {
                 round_id: round.round_id.clone(),
                 baseline_known: round.baseline_known,
                 baseline_block_id: round.baseline_block_id.clone(),
+                baseline_hashed: round.baseline_known,
+                baseline_hash: round.baseline_hash.clone(),
                 started_ms: round.started_ms,
             })
             .collect();
@@ -599,14 +617,19 @@ impl FusionDocument {
                 .iter()
                 .find(|record| record.round_id == round.round_id)
             {
-                round.baseline_known = record.baseline_known;
+                // A baseline recorded without its answer hash (an older
+                // journal) cannot tell a reloaded earlier answer from a new
+                // one: the round stays unprovable.
+                round.baseline_known = record.baseline_known && record.baseline_hashed;
                 round
                     .baseline_block_id
                     .clone_from(&record.baseline_block_id);
+                round.baseline_hash.clone_from(&record.baseline_hash);
                 round.started_ms = record.started_ms;
             } else {
                 round.baseline_known = false;
                 round.baseline_block_id = None;
+                round.baseline_hash = None;
             }
         }
     }

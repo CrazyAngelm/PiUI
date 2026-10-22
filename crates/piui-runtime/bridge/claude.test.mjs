@@ -770,6 +770,56 @@ test("a conversation written by the CLI reopens with stable block ids", async ()
   } finally { await reopened.dispose(); }
 });
 
+test("the same Claude answer has the same block id live and after the transcript is reopened", async () => {
+  const first = setup();
+  const log = recorder();
+  const adapter = await createClaudeAdapter(first.config, log.emit);
+  let nativeId;
+  let live;
+  try {
+    await runTurn(adapter, log, "think");
+    await runTurn(adapter, log, "hello");
+    ({ nativeId } = await adapter.snapshot());
+    live = (await adapter.snapshot()).blocks;
+  } finally { await adapter.dispose(); }
+  const liveThinking = live.find((block) => block.kind === "thinking");
+  const liveAnswers = live.filter((block) => block.kind === "assistant");
+  assert.equal(liveAnswers.length, 2);
+  for (const block of [liveThinking, ...liveAnswers]) {
+    assert.match(block.id, /^claude-(assistant|thinking)-[0-9a-f]{24}$/, "named by the native message, not by an adapter instance counter");
+  }
+  assert.equal(new Set(live.map((block) => block.id)).size, live.length);
+
+  const reopened = await createClaudeAdapter(setup({ nativeId }).config, () => {});
+  try {
+    const blocks = (await reopened.snapshot()).blocks;
+    assert.deepEqual(blocks.map((block) => block.id), live.map((block) => block.id), "every block keeps its identity across the restart");
+    assert.deepEqual(blocks.filter((block) => block.kind === "assistant").map((block) => block.text), ["Hello world", "ack hello"]);
+  } finally { await reopened.dispose(); }
+});
+
+test("one Claude message with several text blocks gets one distinct stable id per block in history", async () => {
+  const nativeId = "33333333-2222-4333-8444-555555555555";
+  mkdirSync(projectDir, { recursive: true });
+  const line = (value) => JSON.stringify({ sessionId: nativeId, timestamp: "2026-09-26T10:00:00.000Z", ...value });
+  writeFileSync(join(projectDir, `${nativeId}.jsonl`), [
+    line({ type: "user", uuid: "u1", parentUuid: null, message: { role: "user", content: "go" } }),
+    line({ type: "assistant", uuid: "a1", parentUuid: "u1", message: { id: "msg_A", role: "assistant", content: [{ type: "text", text: "one" }] } }),
+    line({ type: "assistant", uuid: "a2", parentUuid: "a1", message: { id: "msg_A", role: "assistant", content: [{ type: "text", text: "two" }] } }),
+    line({ type: "assistant", uuid: "a3", parentUuid: "a2", message: { id: "msg_B", role: "assistant", content: [{ type: "text", text: "three" }] } }),
+    // A transcript entry without a message id keeps a uuid-derived id.
+    line({ type: "assistant", uuid: "a4", parentUuid: "a3", message: { role: "assistant", content: [{ type: "text", text: "four" }] } }),
+  ].join("\n"));
+  const adapter = await createClaudeAdapter(setup({ nativeId, nativePath: join(projectDir, `${nativeId}.jsonl`) }).config, () => {});
+  try {
+    const answers = (await adapter.snapshot()).blocks.filter((block) => block.kind === "assistant");
+    assert.deepEqual(answers.map((block) => block.text), ["one", "two", "three", "four"]);
+    assert.equal(new Set(answers.map((block) => block.id)).size, 4);
+    assert.match(answers[0].id, /^claude-assistant-[0-9a-f]{24}$/);
+    assert.match(answers[3].id, /^claude-history-[0-9a-f]{24}$/);
+  } finally { await adapter.dispose(); }
+});
+
 test("a plugin MCP server joins only this chat's --mcp-config, under Claude Code's own prompts (plugins v2)", async () => {
   const server = { name: "example-tool-cards-issues", command: process.execPath, args: ["--permission", "server.mjs", "--stdio"] };
   const { config, records } = setup({ pluginMcpServers: [server] });
@@ -1271,4 +1321,39 @@ test("a sidekick request without a host callback starts the chat with a notice a
   // `sidekick` in a tool allowlist needs the host tool and its callback.
   await assert.rejects(createClaudeAdapter(setup({ allowedTools: ["sidekick"], runtimeProgram: "must-not-launch" }).config, () => {}), { bridgeCode: "unsupported-policy" });
   await assert.rejects(createClaudeAdapter(setup({ hostTools: ["sidekick"], allowedTools: ["Read", "sidekick"], runtimeProgram: "must-not-launch" }).config, () => {}), { bridgeCode: "unsupported-policy" });
+});
+
+test("a sidekick reply is confirmed to the runner only after it reached the MCP client, and a closed connection fails it", async () => {
+  const outcomes = {};
+  let release;
+  const { config, records } = setup({ hostTools: ["sidekick"] });
+  const adapter = await createClaudeAdapter(config, recorder().emit, undefined, undefined, async (operation, metadata) => {
+    if (operation.op === "wait") await new Promise((resolve) => { release = resolve; });
+    try {
+      await metadata.deliver({ ok: true, text: `report ${operation.op}` });
+      outcomes[operation.op] = "delivered";
+    } catch (error) {
+      outcomes[operation.op] = "failed";
+      throw error;
+    }
+    return { ok: true, text: "unused: the reply was already written" };
+  });
+  try {
+    const { args } = startRecord(records);
+    const server = JSON.parse(readFileSync(argValue(args, "--mcp-config"), "utf8")).mcpServers["piui-workspace"];
+    const call = (body, signal) => fetch(server.url, { method: "POST", signal, headers: { ...server.headers, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "sidekick", ...body } }) });
+    const status = await (await call({ arguments: { op: "status" } })).json();
+    assert.equal(status.result.content[0].text, "report status", "the reply is written exactly once, from deliver");
+    assert.equal(outcomes.status, "delivered");
+
+    const client = new AbortController();
+    const waiting = call({ arguments: { op: "wait" } }, client.signal).catch(() => "aborted");
+    await waitFor(() => typeof release === "function");
+    client.abort();
+    assert.equal(await waiting, "aborted");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    release();
+    await waitFor(() => outcomes.wait !== undefined);
+    assert.equal(outcomes.wait, "failed", "a reply to a closed connection is not delivered");
+  } finally { await adapter.dispose(); }
 });

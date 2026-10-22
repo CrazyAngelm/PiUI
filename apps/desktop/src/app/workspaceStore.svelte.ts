@@ -468,6 +468,8 @@ export class WorkspaceStore {
       next.sessions = next.sessions.filter((session) => !this.deleted.has(session.id));
       rememberHarnessNames(next.harnesses);
       this.catalog = next;
+      // Chats whose lead is gone (deleted from another window or a restart) lose their cached Fusion role.
+      fusionMembership.prune(new Set(next.sessions.map((session) => session.id)));
       const candidate = preferredWorkspaceId ?? this.selectedWorkspaceId;
       const workspaceId = next.workspaces.some((workspace) => workspace.id === candidate)
         ? candidate
@@ -724,10 +726,18 @@ export class WorkspaceStore {
     if (!sessionId || this.interruptBusy) return false;
     this.interruptBusy = true;
     try {
-      // The broker owns a Fusion sidekick's turns: it stops through
-      // `stopSidekick` (round marked stopping, delivery withdrawn), and the
-      // host refuses an ordinary interrupt for it (ADR-043).
+      // A Fusion pair stops through the broker (ADR-043, decision D9). The
+      // lead's Stop is `stopPair`: the lead's turn is interrupted and the
+      // sidekick's open round is stopped with its report withdrawn, so a late
+      // report cannot start the lead again. A sidekick's Stop is
+      // `stopSidekick`; the host refuses an ordinary interrupt for it.
+      await fusionMembership.load(sessionId);
       const member = fusionMembership.peek(sessionId);
+      if (member?.role === 'lead') {
+        await fusionHost.request({ type: 'stopPair', leadSessionId: sessionId });
+        void this.reconcileSession(sessionId);
+        return true;
+      }
       if (member?.role === 'sidekick') {
         if (!member.leadSessionId) {
           this.sessionError = 'This action is not available here.';
@@ -742,7 +752,7 @@ export class WorkspaceStore {
       else if (result.type === 'accepted') void this.reconcileSession(sessionId);
       return true;
     } catch (error) {
-      this.sessionError = fusionMembership.isSidekick(sessionId) ? fusionErrorText(error) : errorMessage(error);
+      this.sessionError = fusionMembership.isSidekick(sessionId) || fusionMembership.isLead(sessionId) ? fusionErrorText(error) : errorMessage(error);
       return false;
     } finally {
       this.interruptBusy = false;
@@ -771,12 +781,16 @@ export class WorkspaceStore {
     const closing = this.catalog.sessions.find((session) => session.id === sessionId);
     if (!closing) return;
     this.sessionActionBusy = true;
+    // The host routes the close of the sidekick in use through the broker (its open round
+    // stops and its report is withdrawn); there is no second path from here. A refusal is
+    // shown, in Fusion's own words.
+    const brokered = fusionMembership.isCurrentSidekick(sessionId);
     try {
       const result = await workspaceHost.request({ type: 'closeSession', sessionId });
       if (result.type === 'session') this.storeSnapshot(result.snapshot);
       else if (result.type === 'accepted') await this.resolveClose(closing, undefined);
     } catch (error) {
-      await this.resolveClose(closing, errorMessage(error));
+      await this.resolveClose(closing, brokered ? fusionErrorText(error) : errorMessage(error));
     } finally {
       this.sessionActionBusy = false;
     }
@@ -800,6 +814,8 @@ export class WorkspaceStore {
   async deleteChat(sessionId: string): Promise<void> {
     await deleteWorkspaceSession(sessionId);
     this.deleted.add(sessionId);
+    // A deleted lead takes its pair with it: its sidekick chats are asked about again.
+    fusionMembership.forgetLead(sessionId);
     const { [sessionId]: _snapshot, ...snapshots } = this.snapshots;
     this.snapshots = snapshots;
     const { [sessionId]: _draft, ...drafts } = this.drafts;

@@ -12,7 +12,7 @@ import type {
 import { answerMatchesForm } from '../approvalForms';
 import { NativeRejection, workspaceFailure } from './labErrors';
 import {
-  authorizeLive, authorizeOrdinaryLive, hasControl, refuseFusionSidekick, normalizedTitle, requireLive, requireRecord, validateModel, validText, validToken,
+  authorizeLive, authorizeOrdinaryLive, hasControl, refuseFusionDelete, refuseFusionSidekick, normalizedTitle, requireLive, requireRecord, validateModel, validText, validToken,
 } from './labGuards';
 import type { LabHandlers } from './labHandlers';
 import { isUuid } from './labRandom';
@@ -145,6 +145,8 @@ function openSession(runtime: LabSessions, sessionId: string): WorkspaceResult {
 function closeSession(runtime: LabSessions, sessionId: string): void {
   if (!isUuid(sessionId)) throw workspaceFailure('INVALID_ARGUMENT');
   const record = requireRecord(runtime.state, sessionId);
+  // The current sidekick closes through the broker: its open round stops and its report is withdrawn.
+  runtime.state.fusionLifecycle?.closeSidekick(sessionId);
   if (record.live === undefined) return;
   runtime.close(record);
 }
@@ -283,12 +285,15 @@ function deleteSession(runtime: LabSessions, command: WorkspaceLifecycleCommand)
   if (!isUuid(command.sessionId)) throw workspaceFailure('INVALID_ARGUMENT');
   const record = requireRecord(state, command.sessionId);
   if (record.runId !== undefined) throw workspaceFailure('NOT_SUPPORTED');
-  // A current Fusion member stays; the broker owns its lifecycle.
-  refuseFusionSidekick(state, command.sessionId);
+  // The current sidekick stays (the broker owns it); a retired one may go. A lead
+  // with an open or uncertain sidekick round stays too.
+  refuseFusionDelete(state, command.sessionId);
   const status = record.live?.status;
   if (status !== undefined && status !== 'idle' && status !== 'failed') throw workspaceFailure('CONFLICT');
   if (record.live !== undefined) runtime.close(record);
   state.sessions.delete(command.sessionId);
+  // A deleted lead takes its pair, membership and scheduled round steps with it.
+  state.fusionLifecycle?.forgetLead(command.sessionId);
   return { protocol: 17, sessionId: command.sessionId };
 }
 

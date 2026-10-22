@@ -938,10 +938,27 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     const controller = new AbortController();
     pendingCoordinatorCalls.set(key, { controller, turnId: params.turnId });
     try {
-      const result = await sidekickRequest(params.arguments, { toolCallId: params.callId, signal: controller.signal });
-      if (controller.signal.aborted) throw fail("sidekick-cancelled", "The sidekick request was cancelled. Collect the result with wait.");
-      await reply(typeof result?.text === "string" ? result.text : JSON.stringify(result), result?.ok === true);
+      // The runner acknowledges the host only after `deliver` confirmed the
+      // native write; a failed write reaches the host as a distinct error.
+      // A callback that resolves without calling `deliver` is answered directly.
+      const answer = (result) => reply(typeof result?.text === "string" ? result.text : JSON.stringify(result), result?.ok === true);
+      let delivered = false;
+      const result = await sidekickRequest(params.arguments, {
+        toolCallId: params.callId,
+        signal: controller.signal,
+        deliver: async (value) => {
+          delivered = true;
+          if (controller.signal.aborted) throw fail("sidekick-cancelled", "The sidekick request was cancelled. Collect the result with wait.");
+          await answer(value);
+        },
+      });
+      if (!delivered) {
+        if (controller.signal.aborted) throw fail("sidekick-cancelled", "The sidekick request was cancelled. Collect the result with wait.");
+        await answer(result);
+      }
     } catch (error) {
+      // The result write failed and the host was told; do not answer twice.
+      if (error?.bridgeCode === "sidekick-delivery-failed") return;
       const code = typeof error?.bridgeCode === "string" ? error.bridgeCode : "sidekick-failed";
       const messageText = typeof error?.safeMessage === "string" ? error.safeMessage : "The sidekick request failed.";
       await reply(JSON.stringify({ ok: false, code, message: messageText }), false).catch(() => {});

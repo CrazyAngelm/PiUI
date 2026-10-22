@@ -644,3 +644,86 @@ test("a retired sidekick request fails its late host response so the host can re
   assert.equal(sidekickFrames(bridge).length, 1, "the already-cancelled call never reached the host");
   bridge.input.end();
 });
+
+test("the host is acknowledged only after the adapter confirms the native sidekick write", async () => {
+  let confirmWrite;
+  let delivered;
+  let answered;
+  const bridge = harness(async (_config, _emit, _coordinatorRequest, _boardRequest, sidekickRequest) => ({
+    prompt() {
+      void sidekickRequest({ op: "wait" }, {
+        toolCallId: "call-1",
+        deliver: async (result) => {
+          delivered = result;
+          await new Promise((resolve) => { confirmWrite = resolve; });
+        },
+      }).then((value) => { answered = value; });
+      return { accepted: true };
+    },
+    dispose() {},
+  }));
+  bridge.send({ ...config, params: { ...config.params, hostTools: ["sidekick"] } });
+  await bridge.wait(1);
+  bridge.send({ id: "prompt", method: "prompt", params: { text: "go", mode: "prompt" } });
+  await settled(() => sidekickFrames(bridge).length === 1);
+  const [request] = sidekickFrames(bridge).map((frame) => frame.event);
+  const result = { ok: true, text: "report" };
+  bridge.send({ id: "answer", method: "sidekickResponse", params: { requestId: request.requestId, result } });
+  await settled(() => delivered !== undefined && typeof confirmWrite === "function");
+  assert.deepEqual(delivered, result);
+  for (let turn = 0; turn < 20; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(bridge.frames.some((frame) => frame.id === "answer"), false, "no acknowledgement while the native write is unconfirmed");
+  assert.equal(answered, undefined);
+  confirmWrite();
+  await settled(() => bridge.frames.some((frame) => frame.id === "answer"));
+  assert.deepEqual(bridge.frames.find((frame) => frame.id === "answer"), { id: "answer", ok: true, result: null });
+  await settled(() => answered !== undefined);
+  assert.deepEqual(answered, result);
+  // The request is retired once answered.
+  const duplicate = await exchange(bridge, "duplicate", "sidekickResponse", { requestId: request.requestId, result });
+  assert.equal(duplicate.error.code, "stale-sidekick-request");
+  bridge.input.end();
+});
+
+test("a failed native sidekick write is a distinct error the host can see, not an acknowledgement", async () => {
+  let outcome;
+  const bridge = harness(async (_config, _emit, _coordinatorRequest, _boardRequest, sidekickRequest) => ({
+    prompt() {
+      void sidekickRequest({ op: "wait" }, {
+        deliver: async () => { throw new Error("EPIPE write after end SECRET-MUST-NOT-LEAK"); },
+      }).then(() => { outcome = "resolved"; }, (error) => { outcome = error.bridgeCode; });
+      return { accepted: true };
+    },
+    dispose() {},
+  }));
+  bridge.send({ ...config, params: { ...config.params, hostTools: ["sidekick"] } });
+  await bridge.wait(1);
+  bridge.send({ id: "prompt", method: "prompt", params: { text: "go", mode: "prompt" } });
+  await settled(() => sidekickFrames(bridge).length === 1);
+  const [request] = sidekickFrames(bridge).map((frame) => frame.event);
+  const failed = await exchange(bridge, "answer", "sidekickResponse", { requestId: request.requestId, result: { ok: true, text: "report" } });
+  assert.equal(failed.ok, false, "a failed write is never acknowledged");
+  assert.equal(failed.error.code, "sidekick-delivery-failed");
+  assert.notEqual(failed.error.code, "stale-sidekick-request", "a retired request keeps its own code");
+  assert.doesNotMatch(JSON.stringify(failed), /SECRET-MUST-NOT-LEAK|EPIPE/);
+  await settled(() => outcome !== undefined);
+  assert.equal(outcome, "sidekick-delivery-failed");
+  bridge.input.end();
+});
+
+test("an adapter that does not use deliver keeps the direct acknowledgement", async () => {
+  let answered;
+  const bridge = harness(async (_config, _emit, _coordinatorRequest, _boardRequest, sidekickRequest) => ({
+    prompt() { void sidekickRequest({ op: "status" }).then((value) => { answered = value; }); return { accepted: true }; },
+    dispose() {},
+  }));
+  bridge.send({ ...config, params: { ...config.params, hostTools: ["sidekick"] } });
+  await bridge.wait(1);
+  bridge.send({ id: "prompt", method: "prompt", params: { text: "go", mode: "prompt" } });
+  await settled(() => sidekickFrames(bridge).length === 1);
+  const [request] = sidekickFrames(bridge).map((frame) => frame.event);
+  const accepted = await exchange(bridge, "answer", "sidekickResponse", { requestId: request.requestId, result: { ok: true, text: "t" } });
+  assert.equal(accepted.ok, true);
+  await settled(() => answered !== undefined);
+  bridge.input.end();
+});

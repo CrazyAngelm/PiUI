@@ -74,7 +74,7 @@ limits before the host sees them):
 | `message` | A correction round for a brief (same sidekick session only). |
 | `steer` | Text into the running round (native steer). |
 | `stop` | Stop barrier for a round; `takeOver:true` marks the brief stopped and counts a take-over. |
-| `diff` | Working-tree diff of the chat folder in pages of about 16 KiB, with a fingerprint of the file list and each shown file's content; a changed tree answers `diff-stale`. |
+| `diff` | Working-tree diff of the chat folder in pages of about 16 KiB, with a fingerprint of the file list and each shown file's content; a changed tree answers `diff-stale`. A file larger than a page continues on the next pages (cut at line ends, always on character boundaries); a file list or file diff cut upstream is named in the page header. |
 | `report` | The full report body in 8 KiB pages (while PiUI holds it). |
 | `close` | Closes a brief as accepted, rejected or superseded. |
 | `reset` | Stops any open round and retires the sidekick session. |
@@ -102,7 +102,11 @@ turn is observed to end. The round ends when the turn generation advances
   succeeded without a new final assistant block; `interrupted`, `failed`;
 - `waitingApproval` while the sidekick waits for the person.
 
-One writer: no brief or message starts while a round is open or uncertain.
+One writer: no brief or message starts while a round is open or uncertain,
+or while a reset, abandon or reconcile runs (they hold admission until they
+end; a reset until the old session is closed). An admitted round starts in a
+task the broker owns, so closing the lead while the round starts cancels only
+the tool call's wait: the round still gets its watcher and its report.
 
 ### Reports
 
@@ -145,12 +149,25 @@ A finished report reaches the lead once:
    the report is sent as one follow-up when the lead is idle
    (`queued → sending → sent`; three failed attempts: `uncertain`). A tool
    call can still take a `queued` report, never a `sending` one.
-3. A tool answer that could not be written back to the lead puts the report
-   back in the queue.
+
+Every finished report gets its pending record in the same journal write that
+finishes the round: `tool/queued` while a call (including the lead's `stop`)
+waits for it or when auto-delivery is off, else `followUp/queued`. A waiting
+call that ends without taking it moves it to the follow-up queue; on start,
+a `tool/queued` report (and, from an older journal, a finished answer without
+any record) is queued as a follow-up. Old briefs are folded out of the
+journal only when none of their deliveries is still `queued` or `sending`.
+3. A tool answer that the bridge rejected before consuming it (a stale or
+   invalid request) puts the report back in the queue. An acknowledgement
+   timeout or a transport failure may follow a consumed answer: the delivery
+   becomes `uncertain` and the report is never handed over a second time.
 
 A stop by the person withdraws the delivery of the stopped round: a waiting
 call ends with `pair-stopping` and no report, and neither `wait` nor
-`report` hands it over later.
+`report` hands it over later. The withdrawal is final: a reconcile that
+later finishes the round from history does not queue it. `stopSidekick` on
+an uncertain round interrupts again and is refused (`uncertain`) unless the
+turn's end is now proven.
 
 ### Identity and restarts
 
@@ -158,27 +175,44 @@ The bridge adds `{epoch, seq, callRef, opHash}` to every call. A retry with
 the same call id and operation gets the same answer; the same id with another
 operation is refused (`identity-conflict`). Call records survive restarts; a
 call recorded before a restart answers `uncertain` instead of running again.
+The newest 4000 calls keep full records; older ones keep a compact tombstone
+(digests of the call key and operation hash) for the pair's lifetime, so an
+evicted call is still refused (`uncertain` or `identity-conflict`), never run
+again.
 
 On start, every open round and every `sending` delivery (tool or follow-up)
 becomes `uncertain`. Nothing is replayed. The person reconciles a round (PiUI
 reads the sidekick's native history; an answer after the journaled baseline
 finishes the round; a round without a journaled baseline, e.g. from an older
 journal, stays unprovable) or abandons it; until then no new round starts.
-A report still `queued` is read back by its saved answer block and hash
-before it is sent; when that fails, the delivery becomes `uncertain` instead
-of sending a placeholder. `wait` and `report` read it back the same way.
+The baseline is journaled as its block id and the SHA-256 of its text: a
+reloaded history may give the same answer another id, so an answer whose
+text equals the baseline's is not new (a baseline journaled without its hash
+is unprovable). Abandoning releases admission only when the turn is proven
+over: the session runs no turn, or PiUI closed it (its runtime is gone) and
+retires it, so the next brief starts a fresh sidekick; otherwise the round
+stays `uncertain`.
+A report still `queued` is read back by its saved answer block and hash, or
+by the newest answer with that hash when the id changed, before it is sent;
+when that fails, the delivery becomes `uncertain` instead of sending a
+placeholder. `wait` and `report` read it back the same way.
 
 ## Person's commands (`fusion_command_v1`)
 
 `createChat`, `checkPair`, `state`, `find` (lead, sidekick or neither),
-`stopPair` (interrupt a running lead, then stop the sidekick; either
-failure is returned, never acknowledged), `stopSidekick`,
+`stopPair` (refused unless the id is a Fusion lead; waits for the lead's
+pending start and prompt admission, pauses its queued input, interrupts it
+if a turn is active, then stops the sidekick; either failure is returned,
+never acknowledged), `stopSidekick`,
 `resetSidekick`, `reconcileRound`, `abandonRound`. Reads work in safe mode;
 changes are refused there. The event `piui://fusion-changed-v1` carries the
 lead id and the journal revision. Deleting a lead chat is refused while a
 sidekick round of its pair is open or uncertain; otherwise the pair goes with
 it (journal removed, idle sidekick closed; the sidekick's chat stays). A
-retired sidekick's chat may be deleted, the current one may not.
+retired sidekick's chat may be deleted, the current one may not. The
+WebView's "close session" on a current sidekick first runs the same broker
+stop (withdrawing the round's delivery) and then disposes the process as the
+safety fallback.
 
 ## Storage
 
@@ -186,8 +220,8 @@ retired sidekick's chat may be deleted, the current one may not.
 complete create-only generations, the newest three kept; a damaged generation
 is skipped. The journal holds briefs, rounds (state, outcome, status, native
 answer reference and hash, a short input preview, delivery), sidekick
-sessions, stats, call records and host-private round facts (baseline block,
-start time) that never reach the WebView. Report bodies live only in memory; after a
+sessions, stats, call records and tombstones, and host-private round facts
+(baseline block and text hash, start time) that never reach the WebView. Report bodies live only in memory; after a
 restart the sidekick's native history is authoritative. Nothing is written to
 the project folder.
 
@@ -226,6 +260,12 @@ stop before send, refused correction on a journal failure, tool handoff
 `sending` across a restart, queued report read back or uncertain, cancelled
 waiter, withdrawn report, replay reclaim, content-bound diff fingerprint,
 lead deletion, journal write failure, sign-in failure, failed write back,
-steer/status/diff, close/reset). Bridge: `runner.test.mjs`,
+steer/status/diff, close/reset; review round 2: abandon closes and retires
+a session whose turn may still run, round start survives a cancelled call,
+reset holds admission, a withdrawal survives reconcile, a repeated stop of an
+uncertain round, no write-back after deletion, pending records on start and
+without auto-delivery, cancelled lead stop, folding keeps pending reports,
+evicted call identities, large-file diff pages, reloaded block ids for
+reconcile and queued reports, ambiguous tool handoff). Bridge: `runner.test.mjs`,
 `claude.test.mjs`, `codex.test.mjs`. UI Lab: `host-api/lab/fusionFake.test.ts`.
 Real paid pairs (phase Ф1.5) are started by the person; none ran here.

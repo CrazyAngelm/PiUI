@@ -1190,27 +1190,40 @@ host tool `sidekick` (`brief`, `wait`, `status`, `message`, `steer`, `stop`,
 - One writer: a brief or message is refused while another round is open or
   uncertain. Stop marks `stopping`, interrupts and waits for the turn's end;
   without that proof the round becomes `uncertain` and blocks new work until
-  the person reconciles (reads the native history) or abandons it. Prompt
+  the person reconciles (reads the native history) or abandons it; abandon
+  releases admission only when the turn is proven over or the session was
+  closed (runtime gone) and retired, and a repeated stop of an uncertain
+  round is refused unless the turn's end is now proven. Prompt
   admission and stop share a gate: a stop before the send cancels the round
   unrun. A send that the harness accepted holds admission even if PiUI's
-  catalog update fails afterwards. Reset passes the same barrier and retires
-  the session.
+  catalog update fails afterwards. An admitted round starts in a
+  broker-owned task, so a cancelled tool call never strands it. Reset passes
+  the same barrier and holds admission until the retired session is closed;
+  abandon and reconcile hold it too.
 - A tool call waits a bounded portion (default 240 s, at most 540 s; the
   Claude Code adapter raises `MCP_TOOL_TIMEOUT` for the lead). A report that
   no call collected gets one durable delivery record
   (`queued → sending → sent | uncertain | withdrawn`) and reaches the idle
   lead as one follow-up. A tool handoff is `tool/sending` until the answer
-  was written back, then `sent`; one that could not be written back puts the
-  report back in the queue, and a replay of that call takes it back. A
-  withdrawn report is never handed to a tool call.
+  was written back, then `sent`; one the bridge rejected before consuming it
+  puts the report back in the queue, and a replay of that call takes it back;
+  an acknowledgement timeout or transport failure leaves the delivery
+  `uncertain` (never handed over twice). A
+  withdrawn report is never handed to a tool call, and no later write (a
+  reconcile included) replaces a withdrawal. A finished report's pending
+  record (`tool/queued` while a call waits, else `followUp/queued`) is part
+  of the write that finishes the round; folding keeps briefs with pending
+  deliveries; a deleted pair's journal is never written again.
 - Calls carry a bridge identity `{epoch, seq, callRef, opHash}`: a retry gets
   the same answer, a reused call id with another operation is refused, and a
-  call recorded before a restart is never run again.
+  call recorded before a restart is never run again; evicted call records
+  leave compact tombstones for the pair's lifetime.
 - A restart marks every open round and every `sending` delivery `uncertain`;
   they are reconciled, never replayed. Reconcile compares against the
-  baseline journaled before the send (a round without one stays unprovable);
-  a queued report is read back by its answer block and hash, or its delivery
-  becomes `uncertain`. The journal is PiUI application data
+  baseline (block id and text hash, since reloaded histories may renumber
+  blocks) journaled before the send (a round without one stays unprovable);
+  a queued report is read back by its answer block and hash, or the newest
+  answer with that hash, or its delivery becomes `uncertain`. The journal is PiUI application data
   under `fusion-v1/` (create-only generations, newest three kept), never in
   the project folder; native histories stay the source of truth.
 - People approve the sidekick's actions in its own chat; the lead model never
