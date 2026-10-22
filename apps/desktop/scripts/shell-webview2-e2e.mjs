@@ -276,6 +276,12 @@ export async function runShellWebview2Proof({
   await waitFor(`document.documentElement.lang === 'ru' && document.querySelector('nav[aria-label="Навигация рабочей области"]')`, 'Russian navigation');
   await reload();
   await waitFor(`document.documentElement.lang === 'ru'`, 'Russian persisted after reload', startupBoundMs);
+  // The project list loads after the language; give it the startup bound.
+  await waitFor(
+    `[...(document.querySelector('nav[aria-label="Навигация рабочей области"]')?.querySelectorAll('button[aria-expanded]') ?? [])].some((button) => button.textContent?.includes(${JSON.stringify(added.name)}))`,
+    'project listed after the Russian reload',
+    startupBoundMs,
+  ).catch(() => {});
   const russian = await evaluate(`(() => {
     const nav = document.querySelector('nav[aria-label="Навигация рабочей области"]');
     return {
