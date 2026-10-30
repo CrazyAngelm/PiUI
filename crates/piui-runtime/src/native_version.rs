@@ -1,8 +1,10 @@
 //! Verified version ranges for native harnesses.
 //!
-//! PiUI admits a native harness version only inside a range whose protocol
-//! surface was audited against the bridge and exercised with fixtures. A range
-//! is `minimum <= version < ceiling`, compared on `MAJOR.MINOR.PATCH`:
+//! PiUI refuses a native harness older than the oldest audited release and
+//! admits every newer one. A range is `minimum <= version < ceiling`, compared
+//! on `MAJOR.MINOR.PATCH`; the ceiling only marks the newest audited release
+//! line, so a version at or above it is reported as "newer than tested" (a
+//! non-blocking note) and is never refused:
 //!
 //! - A pre-release precedes its release (semver), so `0.147.0-alpha.1` is older
 //!   than a `0.147.0` minimum.
@@ -12,11 +14,10 @@
 //! - A leading `v` and build metadata (`+...`) are ignored; anything that is
 //!   not `MAJOR.MINOR.PATCH` with optional suffixes is unrecognized.
 //!
-//! A version above the ceiling is reported as unverified instead of being
-//! accepted silently. Raising a ceiling is a verification step: audit the new
-//! protocol (`bridge/CONTRACT.md`, Codex section), extend the fixtures, then
-//! change the single constant here together with its bridge mirror; the unit
-//! test below keeps both copies equal.
+//! Raising a ceiling is a verification step: audit the new protocol
+//! (`bridge/CONTRACT.md`, Codex section), extend the fixtures, then change the
+//! single constant here together with its bridge mirror; the unit test below
+//! keeps both copies equal.
 
 /// Parsed `MAJOR.MINOR.PATCH[-PRERELEASE][+BUILD]` version.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,15 +80,17 @@ pub(crate) enum VersionCheck {
 }
 
 impl VersionCheck {
-    pub(crate) const fn is_verified(self) -> bool {
-        matches!(self, Self::Verified)
+    /// May the harness launch? Only versions older than the audited minimum
+    /// (or unreadable ones) are refused; newer releases are admitted.
+    pub(crate) const fn is_admitted(self) -> bool {
+        matches!(self, Self::Verified | Self::Newer)
     }
 
     /// Fixed discovery reason (a locale-catalog key, never native text).
     pub(crate) const fn unverified_reason(self) -> Option<&'static str> {
         match self {
             Self::Verified => None,
-            Self::Newer => Some("Unverified: newer than the versions tested with PiUI."),
+            Self::Newer => Some("Newer than the versions tested with PiUI; it still launches."),
             Self::Older => Some("Older than the oldest version supported by PiUI."),
             Self::Unrecognized => Some("The installed version could not be recognized."),
         }
@@ -118,15 +121,15 @@ impl VerifiedRange {
     }
 }
 
-/// Codex app-server versions verified against `bridge/codex.mjs`. The
-/// protocols of 0.147.0, 0.153.4, 0.157.1 and 0.163.0 were audited
-/// (`bridge/CONTRACT.md`, Codex section); patch releases keep the protocol, so
-/// the ceiling admits the 0.163.x line and nothing from 0.164.0 on. The bridge mirrors this constant
-/// as `VERIFIED_CODEX_VERSIONS` and checks the running app-server's
-/// `initialize` user agent against it.
+/// Codex app-server versions audited against `bridge/codex.mjs`. The protocols
+/// of 0.147.0, 0.153.4, 0.157.1, 0.163.0 and 0.165.0 were audited
+/// (`bridge/CONTRACT.md`, Codex section). The ceiling is informational: later
+/// releases launch too and are reported as newer than tested. The bridge
+/// mirrors this constant as `VERIFIED_CODEX_VERSIONS` and checks the running
+/// app-server's `initialize` user agent against the minimum only.
 pub(crate) const CODEX_APP_SERVER: VerifiedRange = VerifiedRange {
     minimum: (0, 147, 0),
-    ceiling: (0, 164, 0),
+    ceiling: (0, 166, 0),
 };
 
 #[cfg(test)]
@@ -184,20 +187,25 @@ mod tests {
             "0.163.0",
             "0.163.0-alpha.11",
             "0.163.9",
+            "0.165.0",
         ] {
             assert_eq!(check(version), VersionCheck::Verified, "{version}");
         }
         for version in ["0.146.9", "0.147.0-alpha.1", "0.100.0"] {
             assert_eq!(check(version), VersionCheck::Older, "{version}");
         }
-        for version in ["0.164.0", "0.164.0-alpha.9", "0.165.0-alpha.1", "1.0.0"] {
+        for version in ["0.166.0", "0.166.0-alpha.2", "0.167.0-alpha.4", "1.0.0"] {
             assert_eq!(check(version), VersionCheck::Newer, "{version}");
+            assert!(check(version).is_admitted(), "{version}");
+        }
+        for version in ["0.146.9", "0.147.0-alpha.1"] {
+            assert!(!check(version).is_admitted(), "{version}");
         }
         assert_eq!(CODEX_APP_SERVER.check(None), VersionCheck::Unrecognized);
         assert_eq!(check("unknown"), VersionCheck::Unrecognized);
         assert_eq!(
             VersionCheck::Newer.unverified_reason(),
-            Some("Unverified: newer than the versions tested with PiUI.")
+            Some("Newer than the versions tested with PiUI; it still launches.")
         );
         assert_eq!(VersionCheck::Verified.unverified_reason(), None);
     }

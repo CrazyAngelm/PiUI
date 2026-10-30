@@ -474,25 +474,21 @@ test("fails closed for unsupported mandatory policy", async () => {
   );
 });
 
-test("admits app-server versions only inside the verified range", async () => {
+test("refuses app-server versions older than the minimum and admits every newer one", async () => {
   // Audited protocols (0.147.0, 0.153.4, 0.157.1, 0.163.0) and releases between them.
-  for (const version of ["0.147.0", "0.148.0", "0.153.4", "0.157.1", "0.158.0", "0.162.1", "0.163.0", "0.163.0-alpha.11", "0.163.9"]) {
+  for (const version of ["0.147.0", "0.148.0", "0.153.4", "0.157.1", "0.158.0", "0.162.1", "0.163.0", "0.163.0-alpha.11", "0.163.9", "0.165.0", "0.166.0", "0.164.0-alpha.9", "1.0.0"]) {
     const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, `--codex-version=${version}`] }, () => {});
     try { assert.equal(adapter.snapshot().status, "idle", version); }
     finally { await adapter.dispose(); }
   }
   const rejected = [
     // Older than the minimum; a pre-release precedes its release.
-    ["0.146.9", /requires a verified Codex/],
-    ["0.147.0-alpha.1", /requires a verified Codex/],
+    ["0.146.9", /0\.147\.0 or newer/],
+    ["0.147.0-alpha.1", /0\.147\.0 or newer/],
     // Newer than tested, including previews of the untested release line.
-    ["0.164.0", /newer than the versions tested/],
-    ["0.164.0-alpha.9", /newer than the versions tested/],
-    ["0.165.0-alpha.1", /newer than the versions tested/],
-    ["1.0.0", /newer than the versions tested/],
     // Only the leading product token names Codex: the trailing client version
     // `(piui; 0.2.0)` never stands in for an unrecognized Codex version.
-    ["latest", /requires a verified Codex/],
+    ["latest", /0\.147\.0 or newer/],
   ];
   for (const [version, message] of rejected) {
     const events = [];
@@ -595,7 +591,7 @@ test('account quota updates stay out of the transcript without hiding unknown co
   } finally { await adapter.dispose(); }
 });
 
-for (const version of ["0.147.0", "0.153.4", "0.157.1", "0.163.0"]) {
+for (const version of ["0.147.0", "0.153.4", "0.157.1", "0.163.0", "0.165.0"]) {
   test(`keeps the session flow and settings in sync on the ${version} protocol`, async () => {
     const events = [];
     const adapter = await createCodexAdapter({
@@ -892,7 +888,7 @@ test("a finished turn dismisses an MCP request that is still open", async () => 
   }
 });
 
-for (const version of ["0.147.0", "0.153.4", "0.157.1", "0.163.0"]) {
+for (const version of ["0.147.0", "0.153.4", "0.157.1", "0.163.0", "0.165.0"]) {
   test(`answers MCP form requests on the ${version} protocol`, async () => {
     const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, `--codex-version=${version}`, "--mcp-elicitation"] }, () => {});
     try {
@@ -976,6 +972,16 @@ test("live: the installed Codex app-server passes the bridge handshake (initiali
 });
 
 const PNG = { mimeType: "image/png", data: "iVBORw0KGgo=" };
+
+test("0.165 control-plane notifications stay out of the transcript and the priority tier is Fast", async () => {
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--codex-version=0.165.0", "--priority-tier"] }, () => {});
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(adapter.snapshot().serviceTier, "fast");
+    // Only the fixture's generic `warning` stays on the fallback path.
+    assert.deepEqual(adapter.snapshot().blocks.filter((block) => block.fallback).map((block) => block.safeSummary), ["Unsupported Codex event: warning"]);
+  } finally { await adapter.dispose(); }
+});
 
 test("images reach Codex as data URL input items and show as markers", async () => {
   const events = [];

@@ -84,10 +84,10 @@ const BUILTIN_LOCATIONS: Readonly<Record<BuiltinHarness, string>> = {
 
 /** `builtin_verified_versions` */
 const BUILTIN_VERIFIED: Readonly<Partial<Record<BuiltinHarness, string>>> = {
-  codex: '0.147.0 – 0.163.x',
-  'claude-code': '2.1.0 – 2.x',
-  'prime-agent': '0.9.2, 0.9.3',
-  hermes: '0.21.0',
+  codex: '0.147.0 and newer',
+  'claude-code': '2.1.0 and newer',
+  'prime-agent': '0.9.2 and newer',
+  hermes: '0.21.0 and newer',
 };
 
 /** `builtin_sign_in_hint`: PiUI never signs in. */
@@ -355,11 +355,11 @@ export class LabAcpRegistry {
   /** `version_gate` */
   private versionRefusal(descriptor: AcpAgentDescriptorV1, report: VersionReport): Refusal | undefined {
     switch (report.status) {
-      case 'verified': return undefined;
+      case 'verified':
+      case 'newer': return undefined;
       case 'older': return 'unsupported-version';
       case 'probe-failed':
       case 'unrecognized': return 'version-unknown';
-      case 'newer':
       case 'no-verified-range': {
         const confirmed = this.decision(descriptor)?.confirmedVersion;
         return confirmed !== undefined && confirmed === report.version ? undefined : 'version-unconfirmed';
@@ -573,7 +573,7 @@ export class LabAcpRegistry {
         if (found === undefined) throw new RegistryFailure('NOT_FOUND', REGISTRY_MESSAGES.NOT_FOUND);
         const [descriptor] = found;
         const report = this.discovery.get(descriptor.id)?.report;
-        const confirmable = report !== undefined && (report.status === 'newer' || report.status === 'no-verified-range')
+        const confirmable = report !== undefined && report.status === 'no-verified-range'
           && report.version === command.version;
         if (!confirmable) throw new RegistryFailure('NOTHING_TO_CONFIRM', REGISTRY_MESSAGES.NOTHING_TO_CONFIRM);
         this.transact(command.expectedRevision, () => {

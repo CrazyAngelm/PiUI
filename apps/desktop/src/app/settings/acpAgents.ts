@@ -44,11 +44,11 @@ export function versionNote(agent: AcpAgentEntryV1): [string, string[]] | undefi
   switch (agent.versionStatus) {
     case undefined: return undefined;
     case 'verified': return ['{0}, tested with PiUI', [version]];
+    case 'newer': return ['{0}, newer than the versions tested with PiUI', [version]];
     case 'no-verified-range':
-    case 'newer':
       return agent.confirmedVersion === agent.version
         ? ['{0}, not verified by PiUI; you confirmed this version', [version]]
-        : [agent.versionStatus === 'newer' ? '{0}, newer than the versions tested with PiUI' : '{0}, not verified by PiUI', [version]];
+        : ['{0}, not verified by PiUI', [version]];
     case 'older': return ['{0}, older than the versions tested with PiUI', [version]];
     case 'unrecognized': return ['The version output was not recognized', []];
     case 'probe-failed': return ['The version check did not finish', []];

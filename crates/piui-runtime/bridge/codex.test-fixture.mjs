@@ -185,7 +185,14 @@ input.on("line", (line) => {
       sandbox: effectiveSandbox,
       activePermissionProfile: expectedPermission === "native" ? null : { id: expectedPermission === "read-only" ? ":read-only" : expectedPermission === "workspace-write" ? ":workspace" : ":danger-full-access" },
       approvalPolicy: expectedPermission === "native" ? "on-request" : "never",
+      // 0.165 reports the Fast tier by its id; earlier versions said "fast".
+      ...(process.argv.includes("--priority-tier") ? { serviceTier: "priority" } : {}),
     } });
+    if (protocolAtLeast(165)) {
+      // Control-plane notifications observed from the real 0.165.0 app-server.
+      send({ method: "account/updated", params: { authMode: "chatgpt", planType: "pro" } });
+      send({ method: "thread/queue/changed", params: { threadId } });
+    }
     send({ method: "item/started", params: { threadId, turnId: "turn-approval", startedAtMs: 1, item: { type: "fileChange", id: "file-item", changes: [{ path: "/workspace/file.txt", kind: { type: "update", move_path: null }, diff: "+fixture" }], status: "inProgress" } } });
     send({ method: "item/fileChange/patchUpdated", params: { threadId, turnId: "turn-approval", itemId: "file-item", changes: [{ path: "/workspace/file.txt", kind: { type: "update", move_path: null }, diff: "+updated" }] } });
     // 0.153 added `kind` ("command" | "writeStdin") to command approvals.
