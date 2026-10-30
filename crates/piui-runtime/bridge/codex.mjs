@@ -91,12 +91,13 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     throw fail("unsupported-native-subagent-policy", "Codex cannot prove that native subagents are enabled for this session.");
   }
 
-  // Verified Codex app-server range, mirrored from CODEX_APP_SERVER in
+  // Audited Codex app-server range, mirrored from CODEX_APP_SERVER in
   // crates/piui-runtime/src/native_version.rs (a Rust unit test keeps both
   // equal): minimum <= version < ceiling on MAJOR.MINOR.PATCH. A pre-release
-  // precedes its release; one at or above the ceiling previews an untested
-  // release line and is newer than tested. See CONTRACT.md (Codex section).
-  const VERIFIED_CODEX_VERSIONS = { minimum: "0.147.0", ceiling: "0.164.0" };
+  // precedes its release. Only versions older than the minimum are refused; a
+  // version at or above the ceiling is newer than tested and still launches.
+  // See CONTRACT.md (Codex section).
+  const VERIFIED_CODEX_VERSIONS = { minimum: "0.147.0", ceiling: "0.166.0" };
   const parseVersion = (text) => {
     const match = /^v?(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(text);
     if (!match) return undefined;
@@ -118,6 +119,30 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     if (compareCore(version.core, parseVersion(VERIFIED_CODEX_VERSIONS.ceiling).core) >= 0) return "newer";
     return "verified";
   };
+
+  // Codex 0.165 reports the Fast service tier by its id "priority" (model
+  // `serviceTiers`); earlier versions said "fast". PiUI still sends "fast",
+  // which 0.165 accepts as the alias of "priority" (checked on the real server).
+  const isFastTier = (tier) => tier === "fast" || tier === "priority";
+
+  // Control-plane notifications that describe account, project, queue, hook or
+  // UI-state changes, not conversation content. They are dropped instead of
+  // becoming "Unsupported Codex event" blocks. Anything not listed (`warning`,
+  // `guardianWarning`, `model/rerouted`) still shows the generic fallback.
+  const QUIET_NOTIFICATIONS = new Set([
+    "remoteControl/status/changed", "thread/goal/cleared", "thread/goal/updated",
+    "account/updated", "account/login/completed", "thread/queue/changed",
+    "thread/project/updated", "thread/prediction/updated", "thread/attachment/updated",
+    "thread/archived", "thread/unarchived", "thread/deleted", "thread/closed",
+    "thread/reverted", "thread/compacted", "thread/environment/connected",
+    "thread/environment/disconnected", "skills/changed", "app/list/updated",
+    "hook/started", "hook/completed", "project/changed",
+    "modelProvider/authRecoveryStarted", "modelProvider/authRecoveryCompleted",
+    "model/verification", "mcpServer/oauthLogin/completed", "fs/changed",
+    "windows/worldWritableWarning", "windowsSandbox/setupCompleted",
+    "externalAgentConfig/import/progress", "externalAgentConfig/import/completed",
+    "autoApprovalReview/strictReviewRequired",
+  ]);
 
   const MAX_FRAME_BYTES = 32 * 1024 * 1024;
   const pending = new Map();
@@ -1064,7 +1089,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
         currentModel = { id: settings.model, name, ...(currentProvider ? { provider: currentProvider } : {}) };
       }
       if (typeof settings.effort === "string") thinkingLevel = settings.effort;
-      if ("serviceTier" in settings) serviceTier = settings.serviceTier === "fast" ? "fast" : "standard";
+      if ("serviceTier" in settings) serviceTier = isFastTier(settings.serviceTier) ? "fast" : "standard";
       return;
     }
     if (method === "thread/name/updated") {
@@ -1202,7 +1227,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       }
       return;
     }
-    if ([ "remoteControl/status/changed", "thread/goal/cleared"].includes(method)) return;
+    if (QUIET_NOTIFICATIONS.has(method)) return;
     emitUnknown(method);
   };
   const acceptNativeFrame = (raw) => {
@@ -1336,12 +1361,10 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     throw cleanupStartupFailure(fail("native-handshake-failed", "The Codex app server handshake failed."));
   }
   const versionCheck = checkCodexVersion(typeof initialize.userAgent === "string" ? userAgentVersion(initialize.userAgent) : undefined);
-  if (versionCheck !== "verified") {
+  if (versionCheck !== "verified" && versionCheck !== "newer") {
     throw cleanupStartupFailure(fail(
       "unsupported-native-version",
-      versionCheck === "newer"
-        ? "Unverified: this Codex app-server is newer than the versions tested with PiUI."
-        : "PiUI requires a verified Codex app-server version.",
+      "PiUI requires a Codex app-server version of 0.147.0 or newer.",
     ));
   }
   try {
@@ -1453,7 +1476,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       })
     : await callDuringStartup("thread/start", { ...startThreadParams, ephemeral: false, ...(dynamicTools.length ? { dynamicTools } : {}) });
   thinkingLevel ??= opened.reasoningEffort ?? undefined;
-  serviceTier ??= opened.serviceTier === "fast" ? "fast" : "standard";
+  serviceTier ??= isFastTier(opened.serviceTier) ? "fast" : "standard";
   const thread = opened?.thread;
   if (!thread || typeof thread.id !== "string") {
     throw cleanupStartupFailure(fail("native-thread-failed", "Codex could not open the native thread."));

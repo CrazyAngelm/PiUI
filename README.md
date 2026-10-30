@@ -31,11 +31,11 @@
 
 | Harness | Tested versions | Notes |
 | --- | --- | --- |
-| Codex (app-server) | 0.147.x – 0.157.x | Newer versions are reported as unverified and do not start. MCP form requests appear as approval cards. |
-| Claude Code | 2.1 or a later 2.x release | Claude subscription login only: run `claude` in a terminal and use `/login`. |
+| Codex (app-server) | 0.147.x – 0.165.x | Newer versions start normally and show a "newer than tested" note in Settings → Harnesses; older ones are refused. MCP form requests appear as approval cards. |
+| Claude Code | 2.1 and newer | Claude subscription login only: run `claude` in a terminal and use `/login`. |
 | Pi | the installed `pi` CLI | Pi JSONL stays the source of truth for Pi history. |
-| Hermes | 0.21.0 | Through its ACP interface. |
-| Prime Agent | 0.9.2, 0.9.3 | |
+| Hermes | 0.21.0 and newer | Through its ACP interface. |
+| Prime Agent | 0.9.2 and newer | |
 
 Settings → Harnesses shows what PiUI found on this computer, the versions and what still needs setup.
 

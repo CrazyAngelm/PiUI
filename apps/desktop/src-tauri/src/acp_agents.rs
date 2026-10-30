@@ -577,10 +577,8 @@ impl AcpAgents {
                 .get(&id)
                 .and_then(|discovery| discovery.version.as_ref());
             let confirmable = reported.is_some_and(|report| {
-                matches!(
-                    report.status,
-                    AcpVersionStatus::Newer | AcpVersionStatus::NoVerifiedRange
-                ) && report.version.as_deref() == Some(version)
+                matches!(report.status, AcpVersionStatus::NoVerifiedRange)
+                    && report.version.as_deref() == Some(version)
             });
             if !confirmable {
                 return Err(RegistryError::NothingToConfirm);
@@ -923,12 +921,13 @@ fn may_execute(
 
 fn version_gate(report: &AcpVersionReport, decision: Option<&Decision>) -> Result<(), AcpRefusal> {
     match report.status {
-        AcpVersionStatus::Verified => Ok(()),
+        // Newer than the declared range is a non-blocking note, not a gate.
+        AcpVersionStatus::Verified | AcpVersionStatus::Newer => Ok(()),
         AcpVersionStatus::Older => Err(AcpRefusal::UnsupportedVersion),
         AcpVersionStatus::ProbeFailed | AcpVersionStatus::Unrecognized => {
             Err(AcpRefusal::VersionUnknown)
         }
-        AcpVersionStatus::Newer | AcpVersionStatus::NoVerifiedRange => {
+        AcpVersionStatus::NoVerifiedRange => {
             let confirmed = decision.and_then(|decision| decision.confirmed_version.as_deref());
             if confirmed.is_some() && confirmed == report.version.as_deref() {
                 Ok(())

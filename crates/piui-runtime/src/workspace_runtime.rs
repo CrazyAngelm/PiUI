@@ -160,11 +160,10 @@ const OPERATOR_ENVIRONMENT: &[&str] = &[
     "PIUI_AGENT_API_CONNECTION",
 ];
 
-/// Claude Code releases this adapter accepts: `>=2.1.0 <3.0.0`. The protocol
-/// was verified against 2.1.232; newer 2.x releases keep the same headless
-/// stream-json and control protocol, and the adapter fails closed on drift.
+/// Claude Code releases this adapter accepts: `>=2.1.0`. The protocol
+/// was verified against 2.1.232; newer releases are admitted too, the headless
+/// stream-json and control protocol is expected to hold and the adapter fails closed on drift.
 const CLAUDE_MINIMUM_VERSION: (u64, u64, u64) = (2, 1, 0);
-const CLAUDE_MAXIMUM_MAJOR_EXCLUSIVE: u64 = 3;
 const CLAUDE_VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 /// A failed version probe is repeated after this delay; a success is kept
 /// until the executable changes.
@@ -1214,10 +1213,10 @@ pub struct NativeHarnessSummary {
 #[must_use]
 pub const fn builtin_verified_versions(kind: HarnessKind) -> Option<&'static str> {
     match kind {
-        HarnessKind::Codex => Some("0.147.0 – 0.163.x"),
-        HarnessKind::ClaudeCode => Some("2.1.0 – 2.x"),
-        HarnessKind::PrimeAgent => Some("0.9.2, 0.9.3"),
-        HarnessKind::Hermes => Some("0.21.0"),
+        HarnessKind::Codex => Some("0.147.0 and newer"),
+        HarnessKind::ClaudeCode => Some("2.1.0 and newer"),
+        HarnessKind::PrimeAgent => Some("0.9.2 and newer"),
+        HarnessKind::Hermes => Some("0.21.0 and newer"),
         HarnessKind::Pi | HarnessKind::Acp(_) => None,
     }
 }
@@ -2619,10 +2618,11 @@ fn verified_prime_package_root(root: &Path) -> bool {
         return false;
     };
     package.get("name").and_then(Value::as_str) == Some("prime-agent")
-        && matches!(
-            package.get("version").and_then(Value::as_str),
-            Some("0.9.2" | "0.9.3")
-        )
+        && package
+            .get("version")
+            .and_then(Value::as_str)
+            .and_then(parse_version_core)
+            .is_some_and(prime_version_supported)
 }
 
 fn is_isolated_daemon(socket: Option<&str>) -> bool {
@@ -2679,7 +2679,7 @@ fn resolve_harness_launch_for_config(
         let launch = resolve_harness_launch(HarnessKind::Codex)?;
         if !CODEX_APP_SERVER
             .check(launch.version.as_deref())
-            .is_verified()
+            .is_admitted()
         {
             return Err(NativeRuntimeError::HarnessUnavailable);
         }
@@ -2826,6 +2826,19 @@ fn parse_claude_version(output: &str) -> Option<String> {
     Some(version.to_owned())
 }
 
+/// Oldest Prime Agent / Hermes releases whose protocol was audited; later
+/// releases are admitted (the bridge fails closed on real protocol drift).
+const PRIME_MINIMUM_VERSION: (u64, u64, u64) = (0, 9, 2);
+const HERMES_MINIMUM_VERSION: (u64, u64, u64) = (0, 21, 0);
+
+fn prime_version_supported(version: (u64, u64, u64)) -> bool {
+    version >= PRIME_MINIMUM_VERSION
+}
+
+fn hermes_version_supported(version: (u64, u64, u64)) -> bool {
+    version >= HERMES_MINIMUM_VERSION
+}
+
 fn parse_version_core(version: &str) -> Option<(u64, u64, u64)> {
     let core = version.split(['-', '+']).next()?;
     let mut parts = core.split('.');
@@ -2837,11 +2850,11 @@ fn parse_version_core(version: &str) -> Option<(u64, u64, u64)> {
     parts.next().is_none().then_some(parsed)
 }
 
-/// Accepts the tested release range `>=2.1.0 <3.0.0`, never an exact pin.
+/// Accepts every release from the oldest tested one (2.1.0) on, never an exact pin.
 fn claude_version_supported(version: Option<&str>) -> bool {
-    version.and_then(parse_version_core).is_some_and(|version| {
-        version >= CLAUDE_MINIMUM_VERSION && version.0 < CLAUDE_MAXIMUM_MAJOR_EXCLUSIVE
-    })
+    version
+        .and_then(parse_version_core)
+        .is_some_and(|version| version >= CLAUDE_MINIMUM_VERSION)
 }
 
 struct ClaudeVersionProbe {
@@ -3349,9 +3362,13 @@ pub fn acp_harness_capabilities() -> HarnessCapabilities {
 fn harness_version_supported(kind: HarnessKind, version: Option<&str>) -> bool {
     match kind {
         HarnessKind::Pi => true,
-        HarnessKind::PrimeAgent => matches!(version, Some("0.9.2" | "0.9.3")),
-        HarnessKind::Codex => CODEX_APP_SERVER.check(version).is_verified(),
-        HarnessKind::Hermes => version == Some("0.21.0"),
+        HarnessKind::PrimeAgent => version
+            .and_then(parse_version_core)
+            .is_some_and(prime_version_supported),
+        HarnessKind::Codex => CODEX_APP_SERVER.check(version).is_admitted(),
+        HarnessKind::Hermes => version
+            .and_then(parse_version_core)
+            .is_some_and(hermes_version_supported),
         HarnessKind::ClaudeCode => claude_version_supported(version),
         // Each ACP descriptor declares its own verified range (host registry).
         HarnessKind::Acp(_) => false,
@@ -3366,8 +3383,11 @@ pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
     .into_iter()
     .map(|kind| match resolve_harness_launch(kind) {
         Ok(launch) => {
-            let codex_version_reason = (kind == HarnessKind::Codex)
-                .then(|| CODEX_APP_SERVER.check(launch.version.as_deref()))
+            let codex_check = (kind == HarnessKind::Codex)
+                .then(|| CODEX_APP_SERVER.check(launch.version.as_deref()));
+            let codex_newer = codex_check == Some(VersionCheck::Newer);
+            let codex_version_reason = codex_check
+                .filter(|check| !check.is_admitted())
                 .and_then(VersionCheck::unverified_reason);
             let version_supported = harness_version_supported(kind, launch.version.as_deref());
             let platform_verified = cfg!(windows);
@@ -3380,7 +3400,7 @@ pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
                         "The installed native harness version is not supported by this adapter."
                             .into()
                     } else if launch.version.is_some() {
-                        "The installed Claude Code version is outside the tested range (2.1 or a later 2.x release)."
+                        "The installed Claude Code version is older than the oldest tested release (2.1)."
                             .into()
                     } else {
                         "Claude Code could not be verified with `claude --version`.".into()
@@ -3398,6 +3418,12 @@ pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
                 (
                     HarnessAvailability::Available,
                     Some(CLAUDE_SIGN_IN_MESSAGE.into()),
+                )
+            } else if codex_newer {
+                // Launches normally; Settings shows the note.
+                (
+                    HarnessAvailability::Available,
+                    VersionCheck::Newer.unverified_reason().map(Into::into),
                 )
             } else {
                 (HarnessAvailability::Available, None)
@@ -4424,8 +4450,8 @@ mod tests {
             ("2.1.232-beta.1", true),
             ("2.0.99", false),
             ("1.0.128", false),
-            ("3.0.0", false),
-            ("10.1.0", false),
+            ("3.0.0", true),
+            ("10.1.0", true),
             ("garbage", false),
         ] {
             assert_eq!(
@@ -4444,13 +4470,29 @@ mod tests {
             HarnessKind::Codex,
             Some("0.163.0")
         ));
+        assert!(harness_version_supported(
+            HarnessKind::Codex,
+            Some("0.165.0")
+        ));
         assert!(!harness_version_supported(
             HarnessKind::Codex,
-            Some("0.164.0")
+            Some("0.146.0")
+        ));
+        assert!(harness_version_supported(
+            HarnessKind::PrimeAgent,
+            Some("0.9.4")
         ));
         assert!(!harness_version_supported(
             HarnessKind::PrimeAgent,
-            Some("0.9.4")
+            Some("0.9.1")
+        ));
+        assert!(harness_version_supported(
+            HarnessKind::Hermes,
+            Some("0.22.0")
+        ));
+        assert!(!harness_version_supported(
+            HarnessKind::Hermes,
+            Some("0.20.9")
         ));
         assert!(harness_version_supported(HarnessKind::Pi, None));
     }
