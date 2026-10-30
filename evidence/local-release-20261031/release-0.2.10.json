@@ -1,0 +1,34 @@
+{
+  "timestamp": "2026-10-31T04:28:00+07:00",
+  "commit": "887044f",
+  "branch": "main (local; fix/native-version-floor merged as 8a1c665, not pushed)",
+  "changes": "0.2.10: native harnesses newer than the tested range start (only a version below the audited minimum is refused; a non-blocking 'newer than tested' note for Codex and ACP); Codex 0.165 Fast tier reported as priority shows as Fast; Codex account/queue/hook notifications no longer render as unsupported events; audited Codex ceiling 0.166",
+  "release": {
+    "portable": {
+      "path": "artifacts/PiUI_0.2.10_windows_x86_64.exe",
+      "bytes": 36317184,
+      "sha256": "f0a5b133e9561b8827910dddc5318c1303166c336d9085057ae380b1bf8d9696"
+    },
+    "installer": {
+      "path": "artifacts/PiUI_0.2.10_x64-setup.exe",
+      "bytes": 9694906,
+      "sha256": "05db03d60db820148db55a9a8398b6dbb70015b98dc79538f2fc4c270601df5e"
+    },
+    "authenticode": "NotSigned (no certificate configured)",
+    "updater": "not configured; the app makes no update checks",
+    "installed": "desktop shortcut PiUI.lnk now points to the 0.2.10 portable executable (was the 0.2.9-native-floor test build)",
+    "launch": "not performed: launching would load the owner's real projects and enabled schedules; the portable executable reports ProductVersion 0.2.10"
+  },
+  "supersedes": "0.2.9 and the 0.2.9-native-floor test build; 0.2.9 stays in the main checkout's artifacts/ as the rollback copy (SHA256SUMS-0.2.9.txt); the native-floor test build was removed",
+  "verification": {
+    "local": "pnpm repo:check passed (public audit, version check 0.2.10, 20 script tests); bridge codex.test.mjs 61 passed, 1 skipped; vitest harnessesComponents + acpFake 14 passed; release build 'node scripts/release-build.mjs windows' exit 0",
+    "ci": "not run: the merge is local and not pushed",
+    "artifactHashes": "copies in D:/Projects/PIUI/artifacts verified against SHA256SUMS.txt"
+  },
+  "notVerified": "packaged WebView2 app launch; a real Codex 0.165+ session in the packaged build",
+  "cleanup": {
+    "removed": ["worktree target/ (2046114475 bytes)", "worktree artifacts/ (copied to the main checkout)", "artifacts/PiUI_0.2.9-native-floor_windows_x86_64.exe and SHA256SUMS-native-floor.txt"],
+    "freeBytesBeforeCleanup": 165697814528,
+    "freeBytesAfter": 167744729088
+  }
+}
