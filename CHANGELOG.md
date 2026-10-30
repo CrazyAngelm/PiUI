@@ -6,6 +6,17 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+## [0.2.10] - 2026-10-31
+
+### Changed
+
+- Native harnesses newer than the tested range now start: only a version older than the audited minimum is refused. Settings -> Harnesses shows a non-blocking "newer than tested" note for Codex and ACP agents. The audited Codex ceiling is 0.166.
+
+### Fixed
+
+- Codex 0.165 reports the Fast tier as `priority`; a default thread no longer shows Standard while running Fast.
+- Codex account, queue and hook notifications no longer appear as "Unsupported Codex event" rows.
+
 ## [0.2.9] - 2026-10-23
 
 ### Added
