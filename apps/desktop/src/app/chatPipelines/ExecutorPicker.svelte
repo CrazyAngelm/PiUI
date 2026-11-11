@@ -82,7 +82,7 @@
         description: item.version ? `v${item.version}` : undefined,
         group: direct,
         disabled: !item.available,
-        disabledReason: item.reason ?? $t('Not available'),
+        disabledReason: $t(item.reason ?? 'Not available'),
       });
     }
     const saved = $t('More pipelines…');

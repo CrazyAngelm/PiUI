@@ -161,7 +161,7 @@
     const items: PickerItem[] = [{ value: 'none', label: $t('Unassigned'), description: $t('Nobody works on it') }];
     for (const teammate of team) {
       const status = teammates.status(workspaceId, teammate.id);
-      const reason = !teammate.enabled ? $t('Turned off') : status?.notAssignableReason;
+      const reason = !teammate.enabled ? $t('Turned off') : status?.notAssignableReason === undefined ? undefined : $t(status.notAssignableReason);
       items.push({
         value: `teammate:${teammate.id}`,
         label: `@${teammate.handle} · ${teammate.name}`,

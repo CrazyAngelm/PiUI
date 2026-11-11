@@ -166,6 +166,11 @@
     background: transparent;
     color: var(--piui-text);
   }
+  /* The open popover always focuses its search: the global ring would be noise, and
+     `overflow: hidden` clips its offset. */
+  :global(.piui-picker__input:focus-visible) {
+    outline: none;
+  }
   :global(.piui-picker__input::placeholder) {
     color: var(--piui-text-disabled);
   }

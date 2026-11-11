@@ -77,7 +77,7 @@ export const triggersRu: Readonly<Record<string, string>> = {
   seconds: 'секунд',
   'If PiUI was closed or paused at that time': 'Если PiUI был закрыт или на паузе в это время',
   'Automations run only while PiUI is open or in the tray; they do not wake the computer. Each run uses your harness subscriptions like a manual run.':
-    'Автоматизации работают, только пока PiUI открыт или в трее; компьютер они не будят. Каждый запуск расходует подписки харнесов, как ручной запуск.',
+    'Автоматизации работают, только пока PiUI открыт или в трее; компьютер они не будят. Каждый запуск расходует подписки агентов, как ручной запуск.',
   'the pipeline': 'пайплайн',
 
   // Run trigger label

@@ -30,13 +30,13 @@ export const fusionRu: Readonly<Record<string, string>> = {
   'Not available': 'Недоступно',
 
   // Refusals of a pair
-  'This harness cannot lead a Fusion chat.': 'Этот харнес не может вести чат Fusion.',
+  'This harness cannot lead a Fusion chat.': 'Этот агент не может вести чат Fusion.',
   'Choose Claude Code or Codex as the lead.': 'Выберите ведущим Claude Code или Codex.',
-  'This harness cannot be the sidekick.': 'Этот харнес не может быть напарником.',
+  'This harness cannot be the sidekick.': 'Этот агент не может быть напарником.',
   'Choose Claude Code, Codex or Pi as the sidekick.': 'Выберите напарником Claude Code, Codex или Pi.',
   'Both roles need a concrete permission mode.': 'Обеим ролям нужен конкретный режим прав.',
   'A pair cannot rely on "Harness settings": pick Read only, Edit project or Full access for the lead and the sidekick.':
-    'Пара не может опираться на «Настройки харнеса»: выберите для ведущего и напарника «Только чтение», «Правка проекта» или «Полный доступ».',
+    'Пара не может опираться на «Настройки агента»: выберите для ведущего и напарника «Только чтение», «Правка проекта» или «Полный доступ».',
   'The sidekick would be allowed more than the lead.': 'Напарнику разрешено больше, чем ведущему.',
   'Lower the sidekick permissions or raise the lead permissions.': 'Снизьте права напарника или повысьте права ведущего.',
   'This sidekick can only run with full access.': 'Этот напарник работает только с полным доступом.',
@@ -44,7 +44,7 @@ export const fusionRu: Readonly<Record<string, string>> = {
     'Claude Code в режиме «Правка проекта» не может отвечать на запросы одобрения команд, а у Pi нет режима только правки. Выберите «Полный доступ» (или «Нативный» при ведущем Claude Code) либо другого напарника.',
   'The Codex sandbox could not be verified on this computer.': 'Не удалось проверить песочницу Codex на этом компьютере.',
   'Choose another harness for this role, or use Full access if you accept that.':
-    'Выберите для этой роли другой харнес или «Полный доступ», если вы с этим согласны.',
+    'Выберите для этой роли другого агента или «Полный доступ», если вы с этим согласны.',
   'A read-only lead cannot review or take over the sidekick work.': 'Ведущий только для чтения не может проверять работу напарника или забирать её себе.',
   'Give the lead at least the Edit project permission.': 'Дайте ведущему хотя бы право «Правка проекта».',
 
@@ -56,7 +56,7 @@ export const fusionRu: Readonly<Record<string, string>> = {
   'The state changed meanwhile. Try again.': 'Состояние изменилось. Повторите попытку.',
   'This action is not available here.': 'Это действие здесь недоступно.',
   'The host could not save the Fusion state.': 'Хост не смог сохранить состояние Fusion.',
-  'Sign in to the harness first, then try again.': 'Сначала войдите в харнес, затем повторите попытку.',
+  'Sign in to the harness first, then try again.': 'Сначала войдите в программу агента, затем повторите попытку.',
   'The Fusion action could not be completed.': 'Не удалось выполнить действие Fusion.',
   'The Fusion action failed': 'Действие Fusion не выполнено',
 
@@ -159,7 +159,7 @@ export const fusionRu: Readonly<Record<string, string>> = {
   'This is the sidekick of a Fusion chat. Its lead gives it work through briefs, so you cannot message it here. Talk to the lead chat instead.':
     'Это напарник чата Fusion. Ведущий даёт ему работу через поручения, поэтому писать ему здесь нельзя. Общайтесь с чатом ведущего.',
   'This harness could not take the sidekick tool, so the lead cannot delegate to its sidekick in this chat.':
-    'Этот харнес не смог принять инструмент напарника, поэтому ведущий не может делегировать работу напарнику в этом чате.',
+    'Этот агент не смог принять инструмент напарника, поэтому ведущий не может делегировать работу напарнику в этом чате.',
   'This resumed chat was started without the sidekick tool, so the lead cannot delegate. Start a new Fusion chat to work as a pair.':
     'Этот возобновлённый чат был начат без инструмента напарника, поэтому ведущий не может делегировать. Начните новый чат Fusion, чтобы работать в паре.',
 

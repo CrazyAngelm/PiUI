@@ -49,6 +49,17 @@ composer shows that warning with Retry and keeps the models and any skills it
 already listed. The UI Lab simulates both cases with `?catalog=slow` and
 `?catalog=no-resources`.
 
+Pickers (`cachedHarnessModels`) never wait for a catalog they have seen. A
+project's last catalog (localStorage, seven days) shows at once while the probe
+runs. A project without one gets the models the same harness listed for any
+project as a provisional list (no resources; the spinner stays and this
+project's answer replaces it). A completed in-memory catalog older than five
+minutes, or answered before the harness's native version changed (a CLI update),
+is shown at once and asked again in the background. A coded refusal
+(`SIGN_IN_REQUIRED`, trust, safe mode) forgets the snapshots; a transient
+failure (`RUNTIME_FAILED`, unknown) keeps them. Sign-in checks and preflight
+never read a snapshot.
+
 Catalog v14 carries `supportsFast` per model from the adapter. Prime uses its
 native `supportsFastMode` resolver. Pi exposes no Fast service tier; Codex uses
 its native service-tier override. Choosing another model clears incompatible Fast.

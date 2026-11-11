@@ -21,10 +21,10 @@ export const executorsRu: Readonly<Record<string, string>> = {
   'Runs only when another agent calls it; it will run in order instead': 'Запускается только по вызову другого агента; станет запускаться по порядку',
   'Script code ({0} lines)': 'Код скрипта (строк: {0})',
   'Input mappings ({0})': 'Сопоставления входа ({0})',
-  'Harness and model: {0}': 'Харнес и модель: {0}',
+  'Harness and model: {0}': 'Агент и модель: {0}',
   'Permissions, tools, skills and MCP settings': 'Права, инструменты, навыки и настройки MCP',
   'Harness {0} cannot answer read-only; it becomes {1} and the model is chosen again':
-    'Харнес {0} не умеет отвечать в режиме только чтения; он сменится на {1}, модель будет выбрана заново',
+    'Агент {0} не умеет отвечать в режиме только чтения; он сменится на {1}, модель будет выбрана заново',
   'File access becomes read-only': 'Доступ к файлам станет только для чтения',
   'Network access is turned off': 'Доступ к сети будет выключен',
   'Tool rules ({0})': 'Правила инструментов ({0})',
