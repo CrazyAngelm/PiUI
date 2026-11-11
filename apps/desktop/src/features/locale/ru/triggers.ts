@@ -77,7 +77,7 @@ export const triggersRu: Readonly<Record<string, string>> = {
   seconds: 'секунд',
   'If Nano Desktop was closed or paused at that time': 'Если Nano Desktop был закрыт или на паузе в это время',
   'Automations run only while Nano Desktop is open or in the tray; they do not wake the computer. Each run uses your harness subscriptions like a manual run.':
-    'Автоматизации работают, только пока Nano Desktop открыт или в трее; компьютер они не будят. Каждый запуск расходует подписки харнесов, как ручной запуск.',
+    'Автоматизации работают, только пока Nano Desktop открыт или в трее; компьютер они не будят. Каждый запуск расходует подписки агентов, как ручной запуск.',
   'the pipeline': 'пайплайн',
 
   // Run trigger label

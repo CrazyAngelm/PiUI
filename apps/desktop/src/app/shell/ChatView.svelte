@@ -279,7 +279,7 @@
                 <Button size="sm" variant="ghost" onclick={() => store.openRun(session.workspaceId, session.runId)}>{$t('Part of a pipeline run')}</Button>
               </p>
             {:else if !snapshot.capabilities.prompt.supported}
-              <p class="notice">{snapshot.capabilities.prompt.reason ?? $t('{0} is read-only in this mode.', [harnessMeta(session.harness).label])}</p>
+              <p class="notice">{snapshot.capabilities.prompt.reason ? $t(snapshot.capabilities.prompt.reason) : $t('{0} is read-only in this mode.', [harnessMeta(session.harness).label])}</p>
             {:else}
               <PluginComposerActions sessionId={snapshot.session.id} harness={snapshot.session.harness} />
               <!-- Extension-prepared text remounts the composer with the new draft. -->

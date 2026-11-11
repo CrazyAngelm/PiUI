@@ -83,6 +83,8 @@
   let models = $state.raw<HarnessCatalogModel[]>([]);
   let skills = $state.raw<HarnessResource[]>([]);
   let modelsLoading = $state(false);
+  /** The list is another project's catalog of this harness, shown until this project's own answers. */
+  let modelsProvisional = $state(false);
   let modelsError = $state('');
   /** Set when resource discovery failed: the models stay, skills can be retried. */
   let resourcesWarning = $state('');
@@ -101,6 +103,8 @@
   const workspaces = $derived(store.catalog.workspaces.filter((workspace) => !workspace.missing));
   const workspace = $derived(workspaces.find((item) => item.id === workspaceId));
   const available = $derived(store.catalog.harnesses.filter((item) => item.status === 'available'));
+  // A string, not the entry: every session event replaces the catalog, only a new version asks again.
+  const harnessVersion = $derived(store.catalog.harnesses.find((item) => item.kind === harness)?.version ?? '');
   const model = $derived(models.find((item) => JSON.stringify([item.provider, item.id]) === modelKey));
   const levels = $derived(model?.thinkingLevels ?? []);
   // Before a session exists only the manifest is known; the host decides at send.
@@ -177,6 +181,7 @@
   $effect(() => {
     const id = workspaceId;
     const kind = harness;
+    const version = harnessVersion;
     // A retry asks again for the same project and harness: what is shown stays.
     void catalogAttempt;
     // The Nano catalog is account state: a sign-in, a plan or a credit change loads it again.
@@ -185,6 +190,7 @@
     if (untrack(() => catalogFor) !== forKey) {
       models = [];
       skills = [];
+      modelsProvisional = false;
     }
     catalogFor = forKey;
     modelsError = '';
@@ -200,6 +206,7 @@
     const show = (result: HarnessModelsResult): void => {
       if (cancelled) return;
       models = result.models;
+      modelsProvisional = false;
       const degraded = catalogDegraded(result);
       // A failed discovery keeps the skills this picker already showed.
       if (!degraded || result.resources.items.length) skills = result.resources.items;
@@ -219,8 +226,23 @@
         }
         modelsError = errorMessage(error);
         modelsLoading = false;
+        // Another project's models are not this project's answer.
+        if (modelsProvisional) {
+          models = [];
+          modelsProvisional = false;
+        }
       };
-      cachedHarnessModels({ workspaceId: id, harness: kind }, { onFresh: show, onError: failed })
+      // Another project's list of this harness shows while this one loads; the spinner stays.
+      const provisional = (result: HarnessModelsResult): void => {
+        // Called synchronously inside this effect: reading `models` must not make it a dependency.
+        if (cancelled || untrack(() => models.length > 0)) return;
+        models = result.models;
+        modelsProvisional = true;
+      };
+      cachedHarnessModels(
+        { workspaceId: id, harness: kind },
+        { onFresh: show, onError: failed, onProvisional: provisional, ...(version ? { version } : {}) },
+      )
         .then((result) => {
           show(result);
           if (!cancelled) modelsLoading = false;
@@ -383,7 +405,8 @@
       Boolean(workspaceId) &&
       !busy &&
       !store.safeMode &&
-      (fusionMode ? fusionReady : pipelineId ? Boolean(pipelineDetail?.accepts) && available.length > 0 : Boolean(harness)),
+      // A model picked from another project's list waits for this project's own catalog.
+      (fusionMode ? fusionReady : pipelineId ? Boolean(pipelineDetail?.accepts) && available.length > 0 : Boolean(harness) && !(modelsProvisional && modelKey)),
   );
 
   function setText(value: string): void {

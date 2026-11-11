@@ -8,7 +8,7 @@ export const sessionRu: Readonly<Record<string, string>> = {
   'Its worktree folder and branch stay on disk. Remove the worktree from the chat details first if you no longer need it.':
     'Папка worktree и ветка останутся на диске. Если они больше не нужны, сначала удалите worktree в деталях чата.',
   'Review changes': 'Ревью изменений',
-  'Continue in another harness…': 'Продолжить в другом харнесе…',
+  'Continue in another harness…': 'Продолжить в другом агенте…',
   'in worktree {0}': 'в worktree {0}',
 
   // Review panel.
@@ -150,7 +150,7 @@ export const sessionRu: Readonly<Record<string, string>> = {
 
   // Continue in another harness.
   'Continuing "{0}" from {1}. Pick a harness and model, edit the message, then send it. The new chat links back; the original stays as it is.':
-    'Продолжение «{0}» из {1}. Выберите харнес и модель, отредактируйте сообщение и отправьте его. Новый чат будет ссылаться на исходный, а исходный не изменится.',
+    'Продолжение «{0}» из {1}. Выберите агента и модель, отредактируйте сообщение и отправьте его. Новый чат будет ссылаться на исходный, а исходный не изменится.',
   'I am continuing work from a {0} chat, "{1}".': 'Я продолжаю работу из чата {0} «{1}».',
   'The last request there was:': 'Последний запрос там был таким:',
   'The last answer began:': 'Последний ответ начинался так:',
@@ -205,7 +205,7 @@ export const sessionRu: Readonly<Record<string, string>> = {
     'В эту сессию писали только что, и она может быть ещё открыта в терминальном Pi. Закройте её там и попробуйте снова.',
   'Nano Desktop could not save this change. Nothing was lost.': 'Nano Desktop не смог сохранить это изменение. Ничего не потеряно.',
   'The harness could not start. Its saved history has not been removed.':
-    'Харнес не запустился. Его сохранённая история не удалена.',
+    'Агент не запустился. Его сохранённая история не удалена.',
   'The operation could not be completed.': 'Операцию не удалось выполнить.',
   'Resolve this conflict with your tools or the agent first.':
     'Сначала разрешите этот конфликт своими инструментами или с помощью агента.',

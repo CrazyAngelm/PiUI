@@ -282,6 +282,9 @@
     color: var(--piui-text);
     font-size: var(--piui-text-xl);
   }
+  :global(.palette__input:focus-visible) {
+    outline: none;
+  }
   :global(.palette__input::placeholder) {
     color: var(--piui-text-disabled);
   }

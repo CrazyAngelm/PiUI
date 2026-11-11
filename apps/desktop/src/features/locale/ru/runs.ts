@@ -89,8 +89,8 @@ export const runsRu: Readonly<Record<string, string>> = {
   'Script working copies Nano Desktop may still hold for it': 'Рабочие копии скриптов, которые Nano Desktop ещё может хранить для него',
   'Not touched': 'Не затрагивается',
   'The agents’ conversations in their harnesses ({0} sessions and their native history)':
-    'Разговоры агентов в их харнесах (сессий: {0}, вместе с нативной историей)',
-  'Agent conversations in their harnesses (native sessions and history)': 'Разговоры агентов в их харнесах (нативные сессии и история)',
+    'Разговоры агентов в их собственных программах (сессий: {0}, вместе с нативной историей)',
+  'Agent conversations in their harnesses (native sessions and history)': 'Разговоры агентов в их собственных программах (нативные сессии и история)',
   'Files in the project folder': 'Файлы в папке проекта',
   'The saved pipeline, its pinned data and automations': 'Сохранённый пайплайн, его закреплённые данные и автоматизации',
   'This cannot be undone.': 'Это нельзя отменить.',

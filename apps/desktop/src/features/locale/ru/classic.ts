@@ -42,7 +42,7 @@ export const classicRu: Readonly<Record<string, string>> = {
   Entries: 'Записи',
   Loaded: 'Загружено',
   '{0} of {1} messages and actions': '{0} из {1} сообщений и действий',
-  'Nano Desktop reads this history from the harness’s own files and never changes them.': 'Nano Desktop читает эту историю из собственных файлов харнеса и никогда их не изменяет.',
+  'Nano Desktop reads this history from the harness’s own files and never changes them.': 'Nano Desktop читает эту историю из собственных файлов программы агента и никогда их не изменяет.',
 
   // Session tree
   Branches: 'Ветки',
@@ -66,7 +66,7 @@ export const classicRu: Readonly<Record<string, string>> = {
   'Not shown': 'Не показано',
 
   // Settings → Extensions
-  'Global extensions run with your full user permissions. A change applies the next time that harness starts.': 'Глобальные расширения работают со всеми правами вашего пользователя. Изменение вступит в силу при следующем запуске харнеса.',
+  'Global extensions run with your full user permissions. A change applies the next time that harness starts.': 'Глобальные расширения работают со всеми правами вашего пользователя. Изменение вступит в силу при следующем запуске агента.',
   'Pi and Prime Agent keep separate extension folders. Turning an extension on here does not enable it for Prime Agent.': 'У Pi и Prime Agent отдельные папки расширений. Включение расширения здесь не включает его для Prime Agent.',
   'Some extension APIs share names with Pi, but compatibility is not assumed. Install and test each extension for Prime Agent separately.': 'Часть API расширений совпадает по названиям с Pi, но совместимость не гарантируется. Устанавливайте и проверяйте каждое расширение для Prime Agent отдельно.',
   'Safe mode: extensions are not loaded now. You can still turn one off before the next normal start.': 'Безопасный режим: расширения сейчас не загружаются. Их всё равно можно выключить до следующего обычного запуска.',
@@ -75,7 +75,7 @@ export const classicRu: Readonly<Record<string, string>> = {
   'Global extension': 'Глобальное расширение',
   'Turn off {0} for {1}': 'Выключить {0} для {1}',
   'Turn on {0} for {1}': 'Включить {0} для {1}',
-  'Project extensions are not managed here. A harness loads a folder’s own extensions only after you trust that folder.': 'Расширения проектов здесь не настраиваются. Харнес загружает собственные расширения папки только после того, как вы доверите эту папку.',
+  'Project extensions are not managed here. A harness loads a folder’s own extensions only after you trust that folder.': 'Расширения проектов здесь не настраиваются. Агент загружает собственные расширения папки только после того, как вы доверите эту папку.',
   'Could not read the installed extensions. Try again.': 'Не удалось прочитать установленные расширения. Попробуйте ещё раз.',
   'Could not change the extension. Its previous state is kept.': 'Не удалось изменить расширение. Прежнее состояние сохранено.',
 
@@ -93,7 +93,7 @@ export const classicRu: Readonly<Record<string, string>> = {
   'Remove {0} from Nano Desktop?': 'Убрать {0} из Nano Desktop?',
   'Nano Desktop forgets this folder. Its chats, pipelines and automations disappear from Nano Desktop, and automations stop running.': 'Nano Desktop забудет эту папку. Её чаты, пайплайны и автоматизации исчезнут из Nano Desktop, а автоматизации перестанут запускаться.',
   'Nothing is deleted from disk.': 'С диска ничего не удаляется.',
-  'The folder, its files and each harness’s own history stay where they are. Adding the folder again starts a new entry.': 'Папка, её файлы и собственная история каждого харнеса остаются на месте. Если добавить папку снова, появится новая запись.',
+  'The folder, its files and each harness’s own history stay where they are. Adding the folder again starts a new entry.': 'Папка, её файлы и собственная история каждого агента остаются на месте. Если добавить папку снова, появится новая запись.',
   'Stop the agents running in this folder first ({0}).': 'Сначала остановите агентов, работающих в этой папке ({0}).',
   '{0} chats will be hidden.': 'Будут скрыты чаты: {0}.',
   'Folder removed from Nano Desktop': 'Папка убрана из Nano Desktop',

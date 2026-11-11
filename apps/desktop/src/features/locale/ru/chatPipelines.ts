@@ -5,7 +5,7 @@ export const chatPipelinesRu: Readonly<Record<string, string>> = {
   'Talk directly': 'Напрямую',
   'Pipelines of this project': 'Пайплайны проекта',
   'Start from a template': 'Из шаблона',
-  'Search harnesses and pipelines': 'Поиск харнессов и пайплайнов',
+  'Search harnesses and pipelines': 'Поиск агентов и пайплайнов',
   'Loading pipelines…': 'Загрузка пайплайнов…',
   'Manage pipelines': 'Управление пайплайнами',
   'Answers: {0} · {1}': 'Отвечает: {0} · {1}',
@@ -27,7 +27,7 @@ export const chatPipelinesRu: Readonly<Record<string, string>> = {
   'Inputs ({0})': 'Входы ({0})',
   'Describe the task for the pipeline…': 'Опишите задачу для пайплайна…',
   'Pipelines take text only': 'Пайплайн принимает только текст',
-  'Remove the images, or talk to the harness directly.': 'Уберите изображения или отправьте напрямую харнессу.',
+  'Remove the images, or talk to the harness directly.': 'Уберите изображения или отправьте напрямую агенту.',
   'Pipelines take text only. Remove the images, or talk to the agent directly.':
     'Пайплайн принимает только текст. Уберите изображения или отправьте напрямую агенту.',
   'The next message hands the pipeline result to {0}.': 'Следующее сообщение передаст результат пайплайна агенту {0}.',

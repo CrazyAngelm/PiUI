@@ -281,7 +281,7 @@ export const russianUi: Readonly<Record<string, string>> = {
   "Extensions": "Расширения",
   "Failed": "Ошибка",
   "Folder": "Папка",
-  "Harness": "Агент", "Interface": "Интерфейс",
+  "Harness": "Программа агента", "Interface": "Интерфейс",
   "Invalid dependency:": "Некорректная зависимость:",
   "Loading classic view…": "Загрузка классического интерфейса…", "Loading local": "Загружаем локальные",
   "Loading session timeline": "Загрузка истории беседы", "Local project": "Локальный проект",

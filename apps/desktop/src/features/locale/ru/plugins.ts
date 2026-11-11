@@ -47,12 +47,12 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'MCP tool servers': 'MCP-серверы инструментов',
   'MCP tool server': 'MCP-сервер инструментов',
   'An offered server joins each new Claude Code, Hermes or ACP agent chat for that chat only; your harness settings are not changed. Codex, Pi, Prime Agent and pipeline runs never get it. It runs under the same Node.js limits as the backend.':
-    'Предложенный сервер подключается к каждому новому чату Claude Code, Hermes или ACP-агента только для этого чата; настройки харнеса не меняются. Codex, Pi, Prime Agent и запуски пайплайнов его никогда не получают. Он работает с теми же ограничениями Node.js, что и бэкенд.',
+    'Предложенный сервер подключается к каждому новому чату Claude Code, Hermes или ACP-агента только для этого чата; настройки агента не меняются. Codex, Pi, Prime Agent и запуски пайплайнов его никогда не получают. Он работает с теми же ограничениями Node.js, что и бэкенд.',
   'Offer {0} to new chats': 'Предлагать {0} новым чатам',
   'New chats that can take it get this tool server': 'Новые чаты, которые это поддерживают, получат этот сервер инструментов',
   'New chats no longer get this tool server': 'Новые чаты больше не получают этот сервер инструментов',
   'No MCP tool server runs until you offer it to new chats in Settings → Plugins. Only Claude Code, Hermes and ACP agent chats can take one, and your harness settings are not changed.':
-    'Ни один MCP-сервер не запустится, пока вы не предложите его новым чатам в «Настройки → Плагины». Подключить его могут только чаты Claude Code, Hermes и ACP-агентов, а настройки харнеса не меняются.',
+    'Ни один MCP-сервер не запустится, пока вы не предложите его новым чатам в «Настройки → Плагины». Подключить его могут только чаты Claude Code, Hermes и ACP-агентов, а настройки агента не меняются.',
   'Chat renderers: {0}': 'Отображения в чате: {0}',
   'Keyboard shortcuts': 'Сочетания клавиш',
   'Nano Desktop uses this shortcut, so it does nothing.': 'Это сочетание занято Nano Desktop, поэтому оно ничего не делает.',
@@ -79,7 +79,7 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Run its own pipeline nodes': 'Выполнять собственные ноды пайплайнов',
   "Nodes run in the plugin's backend when a pipeline in a trusted project reaches them.":
     'Ноды выполняются в бэкенде плагина, когда до них доходит пайплайн в доверенном проекте.',
-  'Add ACP agents to Settings → Harnesses': 'Добавлять ACP-агентов в «Настройки → Харнесы»',
+  'Add ACP agents to Settings → Harnesses': 'Добавлять ACP-агентов в «Настройки → Агенты»',
   'Each agent runs only after you trust its exact command line there.': 'Каждый агент запустится только после того, как вы там доверите его точную командную строку.',
   'See the title of the open chat': 'Видеть название открытого чата',
   'Never the messages.': 'Но не сообщения.',
@@ -88,7 +88,7 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Show items in the status bar': 'Показывать элементы в строке состояния',
   'Offer MCP tools to chats': 'Предлагать чатам MCP-инструменты',
   'Only after you turn a tool server on in Settings → Plugins, and only in new Claude Code, Hermes and ACP agent chats. Your harness settings are not changed.':
-    'Только после того, как вы включите сервер инструментов в «Настройки → Плагины», и только в новых чатах Claude Code, Hermes и ACP-агентов. Настройки харнеса не меняются.',
+    'Только после того, как вы включите сервер инструментов в «Настройки → Плагины», и только в новых чатах Claude Code, Hermes и ACP-агентов. Настройки агента не меняются.',
   'Short text Nano Desktop shows at the bottom of the window; clicking an item runs its command.':
     'Короткий текст, который Nano Desktop показывает внизу окна; щелчок по элементу запускает его команду.',
   'Show its own view of chat tool activity': 'Показывать собственное отображение работы инструментов в чате',
@@ -144,7 +144,7 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Pipeline node': 'Нода пайплайна',
   'Fields: {0}': 'Поля: {0}',
   'Each ACP agent still needs its own command-line trust in Settings → Harnesses before it runs.':
-    'Каждому ACP-агенту перед запуском всё равно нужно отдельное доверие к его командной строке в «Настройки → Харнесы».',
+    'Каждому ACP-агенту перед запуском всё равно нужно отдельное доверие к его командной строке в «Настройки → Агенты».',
   "Plugins are not a sandbox. Nano Desktop limits a backend's files and programs with Node's permission model, stops its whole process tree and gives it no API keys, but deliberately malicious code can get around those limits. Panels run isolated. Install only plugins you trust.":
     'Плагины — не песочница. Nano Desktop ограничивает файлы и программы бэкенда моделью разрешений Node, останавливает всё его дерево процессов и не передаёт ему API-ключи, но намеренно вредоносный код может обойти эти ограничения. Панели работают изолированно. Устанавливайте только плагины, которым доверяете.',
   'Nano Desktop checks what Node.js can limit before the backend first starts.': 'Nano Desktop проверит, что может ограничить Node.js, перед первым запуском бэкенда.',

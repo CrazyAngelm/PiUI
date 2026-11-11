@@ -292,15 +292,14 @@
     flex-direction: column;
     min-height: 0;
   }
-  /* A crimson speed streak along the top edge. */
+  /* A crimson speed streak along the whole top edge; the rounded corners clip its ends. */
   .piui-models__streak {
     position: absolute;
     top: 0;
+    right: 0;
     left: 0;
-    width: 62%;
     height: 2px;
-    background: linear-gradient(90deg, var(--piui-chaos), var(--piui-chaos-gold) 55%, transparent);
-    clip-path: polygon(0 0, 100% 0, 96% 100%, 0 100%);
+    background: linear-gradient(90deg, var(--piui-chaos), var(--piui-chaos-gold) 55%, var(--piui-chaos));
     pointer-events: none;
   }
   .piui-models__search {
@@ -319,6 +318,10 @@
     outline: none;
     background: transparent;
     color: var(--piui-text);
+  }
+  /* The search always holds focus while open; the global ring would be clipped. */
+  :global(.piui-models__input:focus-visible) {
+    outline: none;
   }
   :global(.piui-models__input::placeholder) {
     color: var(--piui-text-disabled);

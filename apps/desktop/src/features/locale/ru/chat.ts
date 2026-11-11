@@ -10,7 +10,7 @@ export const chatRu: Readonly<Record<string, string>> = {
   'Image': 'Изображение',
   'Drop images or files to attach': 'Перетащите изображения или файлы, чтобы прикрепить',
   'Remove the images to send this message.': 'Уберите изображения, чтобы отправить сообщение.',
-  'This harness does not accept images in Nano Desktop.': 'Этот харнес не принимает изображения в Nano Desktop.',
+  'This harness does not accept images in Nano Desktop.': 'Этот агент не принимает изображения в Nano Desktop.',
   'The current model does not accept images.': 'Текущая модель не принимает изображения.',
   'Codex sends images to models that accept image input.': 'Codex передаёт изображения моделям, которые их принимают.',
   'Claude Code receives images as image content.': 'Claude Code получает изображения как изображения.',
@@ -50,12 +50,12 @@ export const chatRu: Readonly<Record<string, string>> = {
   'skill': 'навык',
   // Host refusals and outbox notes.
   'This harness or its current model does not accept images. Remove the images or switch models.':
-    'Этот харнес или его текущая модель не принимает изображения. Уберите изображения или смените модель.',
+    'Этот агент или его текущая модель не принимает изображения. Уберите изображения или смените модель.',
   'An attached image is no longer available. Attach it again.': 'Прикреплённое изображение больше недоступно. Прикрепите его снова.',
   'The project files could not be listed.': 'Не удалось получить список файлов проекта.',
   'The dropped files are no longer available. Drop them again.': 'Перетащенные файлы больше недоступны. Перетащите их снова.',
   'The harness or its current model does not accept images. Your message is still queued; remove it or switch to a model that accepts images.':
-    'Харнес или его текущая модель не принимает изображения. Сообщение осталось в очереди: уберите его или выберите модель с поддержкой изображений.',
+    'Агент или его текущая модель не принимает изображения. Сообщение осталось в очереди: уберите его или выберите модель с поддержкой изображений.',
   'An attached image is no longer available. Remove this message and attach the image again.':
     'Прикреплённое изображение больше недоступно. Уберите это сообщение и прикрепите изображение снова.',
 };

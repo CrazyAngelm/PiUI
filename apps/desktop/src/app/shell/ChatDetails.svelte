@@ -38,7 +38,7 @@
     nativeSubagents: 'Own subagents',
   };
   function enforcementNote(capability: Capability): string {
-    if (!capability.supported) return capability.reason ?? $t('Not available');
+    if (!capability.supported) return $t(capability.reason ?? 'Not available');
     switch (capability.enforcement) {
       case 'native':
         return $t('Enforced by the harness');
