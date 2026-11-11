@@ -1,0 +1,35 @@
+{
+  "timestamp": "2026-11-11T17:10:00+07:00",
+  "commit": "60c7c8e",
+  "branch": "main (local; feat/subpipelines merged as 58c5551, not pushed)",
+  "changes": "0.2.11: forward-compatible native versions with typed versionStatus (ADR-045; Codex, Claude Code, Prime Agent, Hermes enforce only the minimum), built-in ACP catalog (Gemini CLI, OpenCode, Qwen Code, GitHub Copilot, Goose, Kimi Code, Cursor), ACP per-version confirmation retired, guarded native bridge handlers, systems UI pass (pipelines editor/canvas, shell), queued catalog resource handoffs",
+  "release": {
+    "portable": {
+      "path": "artifacts/PiUI_0.2.11_windows_x86_64.exe",
+      "bytes": 36454400,
+      "sha256": "77560dba286f7e523dfbbb3e7184b3161f59ede1daadd8c3f0679e9a61a7c0e5"
+    },
+    "installer": {
+      "path": "artifacts/PiUI_0.2.11_x64-setup.exe",
+      "bytes": 9728994,
+      "sha256": "7352c382ee6c1fabe6d2f67ef904548a38864333f66dacca74770738f3763e03"
+    },
+    "authenticode": "NotSigned (no certificate configured)",
+    "updater": "not configured; the app makes no update checks",
+    "installed": "desktop shortcut PiUI.lnk points to the 0.2.11 portable executable (was 0.2.10)",
+    "launch": "not performed: launching would load the owner's real projects and enabled schedules; the portable executable reports ProductVersion 0.2.11"
+  },
+  "supersedes": "0.2.10",
+  "rollbackLost": "prepare-windows-release.ps1 replaces artifacts/ wholesale; running the release build in the main checkout deleted the 0.2.8, 0.2.9 and 0.2.10 copies kept there. They are reproducible from 887044f (0.2.10) and f9a9322 (0.2.9); their hashes stay in the earlier release records.",
+  "verification": {
+    "local": "cargo clippy --workspace --all-targets -D warnings and cargo fmt --check clean; cargo test --workspace passed (3 PowerShell timeout tests failed under parallel load and passed when rerun alone); bridge codex/hermes/runner node tests 117 passed, 1 skipped; pnpm check 0 errors; vitest 1017 tests passed (2 flaky under load passed alone); pnpm contract:test 207 passed; pnpm repo:check passed (version 0.2.11)",
+    "ci": "not run: the merge is local and not pushed",
+    "artifactHashes": "artifacts/ verified against SHA256SUMS.txt"
+  },
+  "notVerified": "packaged WebView2 app launch; e2e Playwright suite",
+  "cleanup": {
+    "removed": ["target/ (25393393069 bytes)"],
+    "freeBytesBeforeCleanup": 82027753472,
+    "freeBytesAfter": 107471695872
+  }
+}
