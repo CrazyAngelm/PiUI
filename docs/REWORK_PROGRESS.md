@@ -675,7 +675,9 @@ four read-only GPT 6.1 Sol passes.
   catalog reload, lazy loading of the system-file validators in the pipeline
   editor, pausing the relative-time clocks in a hidden window, the SQLite
   journal mode, and skipping a catalog refresh that changes nothing.
-- **Checks.** clippy and `cargo fmt` clean; `cargo test --workspace` 456 of 457 passed (the one-second script-timeout test failed once under load and passes alone);
+- **Checks.** clippy and `cargo fmt` clean; `cargo test --workspace` 456 of 457 passed, but that run stopped at the first failing test binary
+  and covered only the contracts and desktop crates (the one-second script-timeout
+  test failed under load and passes alone; the next entry has every crate);
   unit 1048/1048; svelte-check 0 errors; contract tests 207/207; repository
   check with 31 script tests. UI Lab in the built-in browser: a chat streams,
   the reading position is saved after wheel scrolling on the 3,000-block
@@ -683,6 +685,49 @@ four read-only GPT 6.1 Sol passes.
   shows its three steps, no console errors. The Playwright and WebView2 E2E
   suites were not run (they start a browser with a fresh profile); no
   real-provider turn.
+
+## 2026-11-12 — fast builds merged into Nano Desktop 0.3.0 (unreleased)
+
+- **Merge.** `perf/fast-build` is merged into `feat/nano-desktop`; the only
+  conflicts were `CHANGELOG.md` and this log. Both branches are the same commit.
+- **CI fixes for the previous head of the pull request.** Three jobs failed.
+  The first-paint bundle was 168,549 B gzip against a budget of 163,840: the
+  Home composer now loads `DictateButton.svelte` and `PipelineInputsBar.svelte`
+  on first use, which gives 163,181 B gzip and 553,342 B raw (budget 573,440).
+  The Home tab-order scenario expected the message box first; it now expects
+  the Chat | Fusion switch and then the message box (ADR-043), as
+  `keyboard.spec.ts` already did. The Lab extension demo text follows the
+  rename.
+- **Correction of the Rust test figure above.** `cargo test --workspace` stops
+  at the first failing test binary, so that run covered only the contracts and
+  desktop crates. With `--no-fail-fast` on the merged tree: 1065 passed,
+  18 ignored, 2 failed. Both failures are timing tests in a full parallel run
+  on a busy machine: `failing_and_timed_out_scripts_fail_with_typed_codes`
+  (Node needs longer than the one-second script timeout to start) and
+  `timeout_terminates_the_whole_process_tree` (the grandchild has not written
+  its heartbeat when the check reads it). Each passes alone twice, and
+  `piui-runtime` passes 252 of 252 on a rerun. Neither test was changed here.
+- **Checks on the merged tree.** `cargo fmt` and clippy clean; svelte-check
+  0 errors; vitest 167 files and 1186 tests; contract tests 226; repository
+  check with 31 script tests; bridge tests 251 passed and 1 skipped (the Codex
+  live handshake); Nano dev server tests 35 of 35; `pnpm system:check` on the
+  12 examples; the `perf:smoke` first-paint budget. UI Lab in the built-in
+  browser: the Home tab order, a pipeline started from Home through the
+  lazily loaded inputs bar (3 of 3 steps), the dictation button in the
+  signed-in scenario with a stubbed recorder. Playwright and WebView2 E2E were
+  not run locally; CI runs them. No real-provider turn.
+- **Release build.** `node scripts/release-build.mjs windows` on the merged
+  tree: 7 min 33 s with a warm cache (Rust 5 min 42 s), while the server test build ran alongside. `artifacts/` holds `NanoDesktop_0.3.0_x64-setup.exe`
+  (10.2 MB), `NanoDesktop_0.3.0_windows_x86_64.exe` (41.6 MB) and
+  `SHA256SUMS.txt`; the checksums match. The executable started in safe mode, showed its window within a second and closed with exit code 0. `target/` after the
+  prune: 12 GB (debug 10 GB, release 2.2 GB); the prune left the debug tree because it was in use.
+- **Nano server.** The server side of `nano-server-v1` is under review in the
+  NanoAgent server repository (branch `claude/nano-desktop-server`) and is not
+  deployed, so a real sign-in cannot work yet and all account and relay
+  evidence stays synthetic. The golden file is byte-identical on both sides.
+  The client sends no `Accept-Language`, so the server names modes in Russian;
+  the UI language lives only in the WebView, and passing it to the host is an
+  IPC contract change left for a separate task.
 
 ## Next
 
