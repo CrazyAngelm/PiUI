@@ -6,6 +6,8 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-11-11
+
 ### Added
 
 - Built-in ACP agents (ADR-045): Gemini CLI (`--acp`), OpenCode, Qwen Code, GitHub Copilot CLI, Goose, Kimi Code and Cursor, next to the descriptors users and plugins add. They are trusted by shipping; sign-in and secret environment names still need your own action and consent.
@@ -21,6 +23,12 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 - Native bridges tolerate additions: an unknown well-formed notification, item or content becomes one fallback block per type, documented housekeeping notifications (Codex `configWarning`, `remoteControl/status/changed`, `account/updated`) are ignored, and an unknown server request gets an error reply and is never approved.
 - Gemini CLI starts with `--acp` instead of the deprecated `--experimental-acp`.
 - The example ACP plugin (`examples/plugins/acp-agent`) adds Auggie, because OpenCode is built in now.
+- Pipelines: the editor reopens the last pipeline and the start screen lists saved ones; Save and Mod+S need changes; canvas inputs are colored dots with stable wire colors and per-branch router wiring.
+- Shell: Home is a heading and the composer; the palette adds Open automations and Refresh projects; Retry reconnects the event stream; repeated secondary text is gone.
+
+### Fixed
+
+- Harness catalog: a second model picker no longer waits for resource discovery; parallel requests queue their discoveries instead of overwriting each other, and a degraded discovery shows a warning with Retry while keeping the listed models and skills.
 
 ## [0.2.10] - 2026-10-31
 

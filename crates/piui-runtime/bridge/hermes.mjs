@@ -356,7 +356,7 @@ main()
   child.once('error', exited); child.once('exit', exited);
   try {
     let initialized;
-    try { initialized = await request('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'piui', version: '0.2.10' } }); }
+    try { initialized = await request('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'piui', version: '0.2.11' } }); }
     // An error answer, or an exit before any answer, means this agent does not
     // speak the handshake PiUI patches and drives: typed drift, not a crash.
     catch (error) { throw ['native-request-failed', 'native-exited'].includes(error?.bridgeCode) ? protocolMismatch() : error; }
