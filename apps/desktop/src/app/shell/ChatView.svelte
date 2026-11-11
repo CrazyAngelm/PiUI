@@ -109,6 +109,14 @@
     }
   }
 
+  // Mirrors the composer-zone branches below: the composer is drawn only for a live,
+  // promptable session outside safe mode. While it shows its own "Stop turn" the header
+  // stays quiet, so a running turn has exactly one stop control.
+  const composerShown = $derived(
+    snapshot !== undefined && !store.safeMode && snapshot.session.status !== 'closed' && snapshot.capabilities.prompt.supported,
+  );
+  const composerStops = $derived(composerShown && (session?.status === 'running' || session?.status === 'stopping'));
+
   const statusTone = $derived(
     session?.status === 'failed' ? 'danger' : running ? 'accent' : session?.status === 'closed' ? 'neutral' : undefined,
   );
@@ -142,12 +150,14 @@
             {$t(statusLabel(session.status))}
           </Badge>
         {/if}
-        <span class="chat__meta">{harnessMeta(session.harness).label}{workspace ? ` · ${workspace.personal ? $t('Personal chats') : workspace.name}` : ''}</span>
+        {#if workspace}
+          <span class="chat__meta">{workspace.personal ? $t('Personal chats') : workspace.name}</span>
+        {/if}
         {#if boardProject}
           <ActiveCardChip workspaceId={boardProject} sessionId={session.id} harness={session.harness} {notices} />
         {/if}
         <div class="chat__actions">
-          {#if running}
+          {#if running && !composerStops}
             <Button size="sm" variant="ghost" onclick={() => void store.interrupt(session.id)} loading={store.interruptBusy}>
               {#snippet leading()}<Square />{/snippet}
               {$t('Stop')}
@@ -165,7 +175,7 @@
                 ? [{ label: $t('Continue in another harness…'), icon: ArrowRightLeft, disabled: store.safeMode, onSelect: () => void startHandoff(store, snapshot, $t) }]
                 : []),
               ...(session.status !== 'closed'
-                ? [{ label: $t('Stop agent process'), icon: Power, onSelect: () => void store.close(session.id) }]
+                ? [{ label: $t('Stop agent process'), icon: Power, disabled: store.sessionActionBusy, onSelect: () => void store.close(session.id) }]
                 : []),
               { type: 'separator' as const },
               ...(!session.runId
@@ -261,7 +271,7 @@
         {/key}
       {/await}
     {:else if detailsOpen && snapshot}
-      <ChatDetails {snapshot} onClose={toggleDetails} onDelete={() => onDelete(session.id)} onReview={toggleReview} />
+      <ChatDetails {snapshot} onClose={toggleDetails} onReview={toggleReview} />
     {/if}
   </div>
 {:else}

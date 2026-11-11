@@ -1,5 +1,6 @@
 <script lang="ts">
   import '@xyflow/svelte/dist/style.css';
+  import './nodeCard.css';
   import { Background, BackgroundVariant, MarkerType, MiniMap, Panel, SvelteFlow, type Connection } from '@xyflow/svelte';
   import Minus from '@lucide/svelte/icons/minus';
   import Plus from '@lucide/svelte/icons/plus';
@@ -26,6 +27,8 @@
   );
   import FlowBridge, { type FlowApi } from './FlowBridge.svelte';
   import { connectionLabel } from './connectionLabel';
+  import SparkConnectionLine from './SparkConnectionLine.svelte';
+  import { createWireAssigner } from './wireHue';
 
   interface Props {
     editor: PipelineEditorStore;
@@ -55,6 +58,13 @@
   let nodes = $state.raw<FlowNode[]>([]);
   let edges = $state.raw<PiuiFlowEdge[]>([]);
   let colorMode = $state<'dark' | 'light' | 'system'>('system');
+  /** The connection the user has just made: plays the strike animation once. */
+  let fresh = $state.raw<{ edges: ReadonlySet<string>; target: string; source: string } | undefined>();
+  let freshTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => () => clearTimeout(freshTimer));
+  const WIRED: ReadonlySet<ConnectionKind> = new Set(['result', 'route']);
+  // A step keeps its wire hue while it exists: deleting another step never recolors it.
+  const assignWires = createWireAssigner();
 
   $effect(() => {
     const read = () => {
@@ -76,6 +86,9 @@
       node.profile.name ||
         $t(node.kind === 'router' ? 'Router' : node.executor?.type === 'script' ? 'Untitled script' : node.executor?.type === 'pipeline' ? 'Untitled sub-pipeline' : 'Untitled agent'),
     ]));
+    // New steps take the least used hue; existing steps keep theirs.
+    const wires = assignWires(graph.nodes.map((node) => node.id));
+    const wireOf = (id: string): string => wires.get(id) ?? 'var(--piui-wire-idle)';
     const graphNodes = graph.nodes.map((node) => ({
       id: node.id,
       type: node.kind === 'router' ? 'router' : 'agent',
@@ -85,6 +98,15 @@
         node,
         problems: editor.nodeProblems(node.id).length,
         readOnly,
+        wire: wireOf(node.id),
+        wiredOut: graph.edges.some((edge) => edge.from === node.id && WIRED.has(edge.kind)),
+        wiredBranches: graph.edges.filter((edge) => edge.from === node.id && edge.kind === 'route').map((edge) => edge.branchId ?? ''),
+        inputs: [...new Set(graph.edges.filter((edge) => edge.to === node.id && WIRED.has(edge.kind)).map((edge) => edge.from))].map((from) => ({
+          id: from,
+          name: names.get(from) ?? '',
+          wire: wireOf(from),
+        })),
+        flash: fresh?.target === node.id ? { from: fresh.source, wire: wireOf(fresh.source) } : undefined,
         // v6.7: a sub-pipeline card shows its child's inputs and outputs and opens it.
         ...(node.executor?.type === 'pipeline'
           ? { child: editor.subpipelines.get(node.executor.launchCommandId), onOpenPipeline: (id: string) => editor.open(id) }
@@ -181,6 +203,7 @@
     edges = [...startEdges, ...outputEdges, ...graph.edges.map((edge): PiuiFlowEdge => {
       const router = edge.kind === 'route' ? graph.nodes.find((node) => node.id === edge.from) : undefined;
       const label = edge.kind === 'route' ? router?.router?.branches.find((branch) => branch.id === edge.branchId)?.label : undefined;
+      const wire = WIRED.has(edge.kind) ? wireOf(edge.from) : undefined;
       return {
         id: edgeKey(edge),
         type: 'piui',
@@ -189,8 +212,8 @@
         ariaLabel: connectionLabel($t, edge.kind, names.get(edge.from) ?? '', names.get(edge.to) ?? ''),
         sourceHandle: edge.kind === 'route' ? `branch:${edge.branchId ?? ''}` : 'out',
         targetHandle: 'in',
-        data: { kind: edge.kind, label },
-        markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: markerColor[edge.kind] },
+        data: { kind: edge.kind, label, wire, fresh: fresh?.edges.has(edgeKey(edge)) ?? false },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: wire ?? markerColor[edge.kind] },
         hidden: COLLABORATION.has(edge.kind) && !editor.showCollaboration,
         selected: editor.selectedEdge === edgeKey(edge),
         deletable: !readOnly,
@@ -207,13 +230,32 @@
     void editor.preflight;
     void editor.showCollaboration;
     void editor.busy;
+    void fresh;
     sync();
   });
 
+  /** Rendered card heights (flow units) so Arrange never lets a taller card run into the next. */
+  function cardHeights(): Map<string, number> {
+    const heights = new Map<string, number>();
+    for (const element of container?.querySelectorAll<HTMLElement>('.svelte-flow__node[data-id]') ?? []) {
+      const id = element.dataset.id;
+      if (id && !BLOCK_IDS.has(id) && element.offsetHeight > 0) heights.set(id, element.offsetHeight);
+    }
+    return heights;
+  }
+
   function beforeConnect(connection: Connection): false {
+    const before = new Set(editor.graph.edges.map(edgeKey));
     const error = editor.connect(connection.source, connection.target, connection.sourceHandle);
     if (error) toasts.error($t('Cannot connect'), $t(error));
-    sync();
+    const added = editor.graph.edges.filter((edge) => !before.has(edgeKey(edge)));
+    if (added.length) {
+      clearTimeout(freshTimer);
+      fresh = { edges: new Set(added.map(edgeKey)), target: added[0].to, source: added[0].from };
+      freshTimer = setTimeout(() => (fresh = undefined), 1400);
+    } else {
+      sync();
+    }
     return false;
   }
 
@@ -238,6 +280,8 @@
     maxZoom={1.8}
     deleteKey={['Delete', 'Backspace']}
     snapGrid={[8, 8]}
+    connectionRadius={36}
+    connectionLineComponent={SparkConnectionLine}
     proOptions={{ hideAttribution: true }}
     class="piui-flow"
     onbeforeconnect={beforeConnect}
@@ -308,7 +352,7 @@
           label={$t('Arrange automatically')}
           disabled={editor.readOnly || editor.graph.nodes.length === 0}
           onclick={() => {
-            editor.arrange();
+            editor.arrange(cardHeights());
             setTimeout(() => api?.fitView(), 30);
           }}><LayoutGrid /></IconButton
         >
@@ -325,11 +369,10 @@
   }
   .canvas :global(.piui-flow) {
     --xy-background-color: var(--piui-bg);
-    --xy-background-pattern-dots-color-default: color-mix(in srgb, var(--piui-text-muted) 28%, transparent);
+    --xy-background-pattern-dots-color-default: color-mix(in srgb, var(--piui-text-muted) 20%, transparent);
     --xy-minimap-background-color-default: var(--piui-bg-raised);
     --xy-minimap-mask-background-color-default: color-mix(in srgb, var(--piui-bg) 72%, transparent);
     --xy-edge-stroke-default: var(--piui-text-disabled);
-    --xy-connectionline-stroke-default: var(--piui-accent);
     --xy-selection-background-color-default: color-mix(in srgb, var(--piui-accent) 10%, transparent);
     --xy-selection-border-default: 1px dashed var(--piui-accent);
     --xy-node-border-radius-default: 12px;
@@ -347,10 +390,18 @@
     border-radius: var(--piui-radius-md);
   }
   .canvas :global(.port) {
-    width: 10px;
-    height: 10px;
-    border: 2px solid var(--piui-surface-1);
-    background: var(--piui-text-muted);
+    width: 11px;
+    height: 11px;
+    border: 2.5px solid var(--piui-bg);
+    background: var(--piui-wire-idle);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--piui-wire-idle) 18%, transparent);
+    transition:
+      background var(--piui-duration-fast) var(--piui-ease-out),
+      box-shadow var(--piui-duration-fast) var(--piui-ease-out);
+  }
+  .canvas :global(.port.port--wired) {
+    background: var(--port);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--port) 55%, transparent);
   }
   .canvas :global(.start-edge .piui-edge) {
     stroke: color-mix(in srgb, var(--piui-success) 70%, transparent);
@@ -361,9 +412,8 @@
     stroke-dasharray: 5 4;
   }
   .canvas :global(.port:hover),
-  .canvas :global(.svelte-flow__handle.connectingfrom),
-  .canvas :global(.svelte-flow__handle.valid) {
-    background: var(--piui-accent);
+  .canvas :global(.svelte-flow__handle.connectingfrom) {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--port, var(--piui-wire-idle)) 24%, transparent);
   }
   .floating {
     display: flex;

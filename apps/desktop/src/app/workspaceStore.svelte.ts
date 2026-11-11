@@ -148,6 +148,11 @@ function isRoute(value: unknown): value is Route {
   }
 }
 
+/** The folder a route is about, for the routes that name one. */
+function routeWorkspaceId(route: Route): string | undefined {
+  return route.name === 'history' || route.name === 'board' || route.name === 'team' ? route.workspaceId : undefined;
+}
+
 const nextFrame: (callback: () => void) => void =
   typeof requestAnimationFrame === 'function'
     ? (callback) => requestAnimationFrame(() => callback())
@@ -261,24 +266,57 @@ export class WorkspaceStore {
       if (this.disposed) stop();
       else this.unlistenRegistry = stop;
     }, () => undefined);
+    await this.connect();
+  }
+
+  /**
+   * Subscribes to host events, then loads the catalog and checks the restored
+   * route against it. Idempotent: Retry after a failure resumes from the step
+   * that failed, so a lost subscription is never hidden by a loaded catalog.
+   */
+  private async connect(): Promise<void> {
     try {
-      this.unlisten = await workspaceHost.listen((event) => this.enqueueEvent(event));
-      if (this.disposed) {
-        this.unlisten();
-        return;
+      if (!this.unlisten) {
+        const stop = await workspaceHost.listen((event) => this.enqueueEvent(event));
+        if (this.disposed) {
+          stop();
+          return;
+        }
+        this.unlisten = stop;
       }
-      const restored = this.selectedSessionId;
+      const restored = this.routeToRestore ? this.selectedSessionId : '';
+      const restoredWorkspaceId = this.routeToRestore ? routeWorkspaceId(this.route) : undefined;
       const next = await this.loadCatalog();
-      if (this.disposed) return;
-      if (restored && next?.sessions.some((session) => session.id === restored)) {
+      if (this.disposed || !next) return;
+      this.routeToRestore = false;
+      if (restored && next.sessions.some((session) => session.id === restored)) {
         await this.openSession(restored, { navigate: false });
       } else if (restored) {
         this.route = { name: 'home' };
+      } else if (
+        restoredWorkspaceId !== undefined &&
+        routeWorkspaceId(this.route) === restoredWorkspaceId &&
+        !next.workspaces.some((workspace) => workspace.id === restoredWorkspaceId)
+      ) {
+        // History, board or team of a folder PiUI no longer lists: start at home.
+        this.route = { name: 'home' };
+        writeJson(ROUTE_KEY, this.route);
       }
     } catch (error) {
-      if (!this.disposed) this.catalogError = errorMessage(error);
+      if (this.disposed) return;
+      // Without the event stream the catalog never loads here; do not leave the sidebar loading.
+      this.catalogError = errorMessage(error);
+      this.catalogLoading = false;
     }
   }
+
+  /** Retry after a failed start or catalog load: reconnects what is missing. */
+  retryCatalog(): Promise<void> {
+    return this.connect();
+  }
+
+  /** The route read at start is checked once, against the first catalog that loads. */
+  private routeToRestore = true;
 
   dispose(): void {
     this.persistDraftsNow();

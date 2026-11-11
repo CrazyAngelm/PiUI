@@ -18,11 +18,10 @@
   interface Props {
     snapshot: SessionSnapshot;
     onClose: () => void;
-    onDelete: () => void;
     /** Opens the review panel of this chat. */
     onReview?: () => void;
   }
-  let { snapshot, onClose, onDelete, onReview }: Props = $props();
+  let { snapshot, onClose, onReview }: Props = $props();
   const store = useWorkspace();
 
   const session = $derived(snapshot.session);
@@ -58,7 +57,8 @@
     <h2>{$t('Details')}</h2>
     <IconButton label={$t('Close details')} size="sm" onclick={onClose}><X /></IconButton>
   </header>
-  <div class="body">
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex (The scroll region must support keyboard scrolling.) -->
+  <div class="body" tabindex="0" role="region" aria-label={$t('Details')}>
     <dl>
       <div><dt>{$t('Agent')}</dt><dd>{harnessMeta(session.harness).label}{#if harness?.version} <span class="muted">v{harness.version}</span>{/if}</dd></div>
       <div><dt>{$t('Model')}</dt><dd>{session.model?.name ?? $t('Harness default')}{#if session.model?.provider} <span class="muted">· {session.model.provider}</span>{/if}</dd></div>
@@ -93,16 +93,6 @@
     </section>
 
     <PluginChatPanels sessionId={session.id} title={session.title} />
-
-    <section class="danger">
-      {#if session.status !== 'closed'}
-        <Button size="sm" variant="ghost" onclick={() => void store.close(session.id)} disabled={store.sessionActionBusy}>{$t('Stop agent process')}</Button>
-      {/if}
-      {#if !session.runId}
-        <Button size="sm" variant="danger" onclick={onDelete} disabled={store.safeMode || !['idle', 'closed', 'failed'].includes(session.status)}>{$t('Delete chat…')}</Button>
-      {/if}
-      <p class="muted small">{$t('Deleting removes the chat from PiUI. The harness keeps its own history.')}</p>
-    </section>
   </div>
 </aside>
 
@@ -189,18 +179,7 @@
   .off .caps__text > span {
     color: var(--piui-text-muted);
   }
-  .danger {
-    display: grid;
-    justify-items: start;
-    gap: var(--piui-space-2);
-    padding-top: var(--piui-space-4);
-    border-top: 1px solid var(--piui-border-subtle);
-  }
   .muted {
     color: var(--piui-text-muted);
-  }
-  .small {
-    margin: 0;
-    font-size: var(--piui-text-sm);
   }
 </style>

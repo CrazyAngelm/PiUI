@@ -21,6 +21,8 @@ export class AutomationsStore {
   error = $state('');
   busy = $state('');
   actionError = $state('');
+  /** Set when a live event stream could not start: the list then refreshes only on request. */
+  liveError = $state('');
 
   private generation = 0;
   private stops: (() => void)[] = [];
@@ -36,6 +38,10 @@ export class AutomationsStore {
   start(): () => void {
     this.disposed = false;
     const generation = ++this.generation;
+    this.liveError = '';
+    const offline = (): void => {
+      if (!this.disposed && generation === this.generation) this.liveError = 'Live updates are unavailable. Use Refresh to load recorded state.';
+    };
     const keep = (stop: () => void): void => {
       if (this.disposed || generation !== this.generation) stop();
       else this.stops.push(stop);
@@ -45,18 +51,16 @@ export class AutomationsStore {
         if (event.workspaceId === this.workspaceId) void this.refresh();
       })
       .then(keep)
-      .catch(() => {
-        // Without live events the list still refreshes after each action.
-      });
+      // Without live events the list still refreshes after each action and on Refresh.
+      .catch(offline);
     void this.automations
       .listen((event) => {
         this.paused = event.paused;
         void this.refresh();
       })
       .then(keep)
-      .catch(() => {
-        // The pause state is also read on every refresh.
-      });
+      // The pause state is also read on every refresh.
+      .catch(offline);
     void this.refresh();
     return () => this.dispose();
   }

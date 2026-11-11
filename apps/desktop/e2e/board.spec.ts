@@ -42,6 +42,17 @@ test.describe('project board', () => {
     expect(lab.errors).toEqual([]);
   });
 
+  test('the key hints are a hidden description of the columns', async ({ lab, page }) => {
+    await openBoard(lab, page);
+    const columns = page.locator('.columns');
+    await expect(columns).toHaveAccessibleDescription(/Arrows move between cards.*Enter opens it.*N adds a card and \/ filters\./);
+    // Assistive technology reads the hint; sighted users find the keys in Settings → Shortcuts.
+    const box = await page.locator('#board-keys').boundingBox();
+    expect(box?.width ?? 0).toBeLessThanOrEqual(1);
+    expect(box?.height ?? 0).toBeLessThanOrEqual(1);
+    expect(lab.errors).toEqual([]);
+  });
+
   test('creates a simple teammate through the dialog', async ({ lab, page }) => {
     await openBoard(lab, page);
     await page.getByRole('button', { name: 'Team', exact: true }).click();

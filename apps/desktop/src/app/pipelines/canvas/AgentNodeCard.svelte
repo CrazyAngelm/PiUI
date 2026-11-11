@@ -2,11 +2,19 @@
   import type { Node } from '@xyflow/svelte';
   import type { GraphNode } from '../../../features/orchestration/agentGraph';
   import type { SubpipelineInfo } from '../../../host-api/subpipelines';
+  import type { NodeInput } from './wireHue';
 
   export interface AgentNodeData extends Record<string, unknown> {
     node: GraphNode;
     problems: number;
     readOnly: boolean;
+    /** This step's wire color. */
+    wire: string;
+    /** Whether a result or route connection leaves this step. */
+    wiredOut: boolean;
+    inputs: readonly NodeInput[];
+    /** A connection has just landed here from `from`. */
+    flash?: { from: string; wire: string };
     /** A sub-pipeline step's child as last read (v6.7); absent while unknown. */
     child?: SubpipelineInfo;
     /** Opens the child pipeline in the editor. */
@@ -26,6 +34,7 @@
   import Pin from '@lucide/svelte/icons/pin';
   import Workflow from '@lucide/svelte/icons/workflow';
   import SquareArrowOutUpRight from '@lucide/svelte/icons/square-arrow-out-up-right';
+  import NodeInputs from './NodeInputs.svelte';
   import { firstCodeLine, RUNTIME_LABEL } from '../executors';
   import { t } from '../../../features/locale/language';
   import HarnessMark from '../../shell/HarnessMark.svelte';
@@ -50,8 +59,22 @@
   }
 </script>
 
-<div class="card" class:card--selected={selected} class:card--callable={callable} class:card--problem={data.problems > 0}>
-  <Handle type="target" position={Position.Left} id="in" class="port port--in" isConnectable={!data.readOnly} />
+<div
+  class="card piui-node"
+  class:piui-node--flash={data.flash !== undefined}
+  class:card--selected={selected}
+  class:card--callable={callable}
+  class:card--problem={data.problems > 0}
+  style:--flash={data.flash?.wire}
+>
+  <Handle
+    type="target"
+    position={Position.Left}
+    id="in"
+    class={data.inputs.length ? 'port port--in port--wired' : 'port port--in'}
+    style={data.inputs.length ? `--port: ${data.inputs[0].wire}` : undefined}
+    isConnectable={!data.readOnly}
+  />
   <header>
     {#if script}
       <span class="mark" aria-hidden="true"><Code size={14} /></span>
@@ -96,6 +119,7 @@
   {:else}
     <p class="task task--empty">{llm ? $t('No prompt yet') : $t('No task yet')}</p>
   {/if}
+  <NodeInputs inputs={data.inputs} fresh={data.flash?.from} />
   {#if callable || node.requireApproval || data.problems > 0 || llm || script || subpipeline || node.pinnedOutput}
     <footer>
       {#if node.pinnedOutput}<span class="chip chip--pinned" title={$t('Pinned data: a run with pinned data skips this step')}><Pin size={11} /> {$t('Pinned')}</span>{/if}
@@ -121,24 +145,28 @@
       {/if}
     </footer>
   {/if}
-  <Handle type="source" position={Position.Right} id="out" class="port port--out" isConnectable={!data.readOnly} />
+  <Handle
+    type="source"
+    position={Position.Right}
+    id="out"
+    class={data.wiredOut ? 'port port--out port--wired' : 'port port--out'}
+    style={`--port: ${data.wire}`}
+    isConnectable={!data.readOnly}
+  />
 </div>
 
 <style>
   .card {
     width: 248px;
     padding: 10px 12px 10px;
-    border: 1px solid var(--piui-border);
     border-radius: 12px;
-    background: var(--piui-surface-1);
-    box-shadow: var(--piui-shadow-1);
     color: var(--piui-text);
     transition:
       border-color var(--piui-duration-fast) var(--piui-ease-out),
       box-shadow var(--piui-duration-fast) var(--piui-ease-out);
   }
   .card:hover {
-    border-color: var(--piui-border-strong);
+    border-color: color-mix(in srgb, var(--piui-text) 16%, transparent);
   }
   .card--selected {
     border-color: var(--piui-accent);

@@ -14,14 +14,15 @@ test.describe('shell navigation', () => {
 
     await lab.openPipelines();
     await expect(lab.nav('Pipelines')).toHaveAttribute('aria-current', 'page');
-    await expect(page.getByRole('radio', { name: 'Editor' })).toBeChecked();
+    await expect(lab.nav('Inbox')).not.toHaveAttribute('aria-current', 'page');
 
     await lab.openRuns();
     await expect(lab.nav('Runs')).toHaveAttribute('aria-current', 'page');
-    await expect(page.getByRole('radio', { name: 'Runs' })).toBeChecked();
+    await expect(lab.nav('Pipelines')).not.toHaveAttribute('aria-current', 'page');
 
     await lab.openAutomations();
     await expect(lab.nav('Automations')).toHaveAttribute('aria-current', 'page');
+    await expect(lab.nav('Runs')).not.toHaveAttribute('aria-current', 'page');
 
     await lab.openSettings();
     await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible();
@@ -93,6 +94,28 @@ test.describe('shell navigation', () => {
     await expect(page.getByRole('navigation', { name: 'Runs' })).toBeVisible();
     await lab.nav('Pipelines').click();
     await expect(page.getByRole('heading', { name: 'Build a pipeline' })).toBeVisible();
+  });
+
+  test('the sidebar drops a run that was opened for debugging when it leaves the editor', async ({ lab, page }) => {
+    await lab.open();
+    const runs = await lab.openRuns();
+    await runs.getByRole('button', { name: /^Succeeded Code review/ }).click();
+    const run = page.getByRole('region', { name: 'Run' });
+    await run.getByRole('button', { name: 'Debug in editor' }).click();
+    await page.getByRole('dialog', { name: 'Debug this run in the editor' }).getByRole('button', { name: 'Open draft' }).click();
+    const editor = page.getByRole('region', { name: 'Pipeline editor' });
+    const name = editor.getByRole('textbox', { name: 'Pipeline name' });
+    await expect(name).toHaveValue(/^Code review \(run #/);
+    await expect(lab.nav('Pipelines')).toHaveAttribute('aria-current', 'page');
+
+    // The sidebar goes to Runs and back; the debug draft was discarded, it does not come back.
+    await lab.nav('Runs').click();
+    await page.getByRole('dialog', { name: 'Leave the pipeline editor?' }).getByRole('button', { name: 'Discard changes' }).click();
+    await expect(page.getByRole('navigation', { name: 'Runs' })).toBeVisible();
+    await expect(lab.nav('Runs')).toHaveAttribute('aria-current', 'page');
+    await lab.nav('Pipelines').click();
+    await expect(editor.getByRole('heading', { name: 'Build a pipeline' })).toBeVisible();
+    await expect(name).toHaveValue('');
   });
 });
 

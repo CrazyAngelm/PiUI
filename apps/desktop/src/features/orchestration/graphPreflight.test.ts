@@ -9,6 +9,16 @@ it('checks actual reasoning and Fast rather than manifest examples', async () =>
   expect((await preflightGraph(graph,async () => ({...catalog,models:[{id:'native',name:'Native',thinkingLevels:['low']}]}))).map(issue => issue.message)).toContain('Fast is unavailable for this model.');
   expect(await preflightGraph(graph,async () => {throw Error('offline');})).toHaveLength(1);
 });
+it('reports an unverifiable catalog once instead of every selected resource when discovery degraded', async () => {
+  const graph = emptyGraph(); graph.nodes = [newGraphNode(0)];
+  graph.nodes[0]!.profile = { ...graph.nodes[0]!.profile, model: 'native', reasoning: undefined, serviceTier: undefined,
+    resourceRules: [{ kind: 'skill', id: 'review', enabled: true }, { kind: 'mcp', id: 'docs', enabled: false }] };
+  const degraded = { protocol: 18 as const, harness: 'codex' as const, models: [{ id: 'native', name: 'Native' }],
+    resources: { items: [], warnings: ['Skills, MCP servers and tools could not be loaded from the harness.'] } };
+  const messages = (await preflightGraph(graph, async () => degraded)).map(issue => issue.message);
+  expect(messages.filter(message => message === 'Could not verify the native catalog. Check the harness connection.')).toHaveLength(1);
+  expect(messages).not.toContain('A selected resource is unavailable or cannot be configured per agent.');
+});
 it('does not require a native model catalog for program routers', async () => {
   const graph = emptyGraph(); graph.nodes = [newRouterNode(0)];
   expect(await preflightGraph(graph, async () => { throw Error('program routers have no native profile'); })).toEqual([]);

@@ -35,7 +35,8 @@
 
   const workspace = $derived(workspaces.find((item) => item.id === workspaceId));
   const projectName = (item: WorkspaceSummary | undefined): string => (item ? (item.personal ? $t('Personal chats') : item.name) : $t('Choose project'));
-  const permission = $derived(permissions.find((item) => item.value === permissionMode));
+  // The chip names a permission only when the person changed it: the harness default is the unmarked case.
+  const permission = $derived(permissionMode === 'native' ? undefined : permissions.find((item) => item.value === permissionMode));
   const worktrees = $derived(worktree && workspace !== undefined && !workspace.personal && !workspace.missing && workspace.trust === 'trusted');
   const chosen = $derived(worktrees && workspace && newChatPlacement.worktree?.workspaceId === workspace.id ? newChatPlacement.worktree : undefined);
   const handoff = $derived(worktrees && workspace && newChatPlacement.handoff?.workspaceId === workspace.id ? newChatPlacement.handoff : undefined);

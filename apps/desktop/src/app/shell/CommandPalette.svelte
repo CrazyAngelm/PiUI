@@ -5,6 +5,8 @@
   import InboxIcon from '@lucide/svelte/icons/inbox';
   import Workflow from '@lucide/svelte/icons/workflow';
   import History from '@lucide/svelte/icons/history';
+  import Clock from '@lucide/svelte/icons/clock-3';
+  import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import Settings from '@lucide/svelte/icons/settings';
   import Folder from '@lucide/svelte/icons/folder';
   import Search from '@lucide/svelte/icons/search';
@@ -78,6 +80,11 @@
     store.navigate({ name: 'team', workspaceId });
   }
 
+  /** Re-reads the native catalog and the project registry rows (pins, agent kinds). */
+  function refreshProjects(): void {
+    void Promise.all([store.loadCatalog(), store.loadProjects()]);
+  }
+
   function run(action: () => void): void {
     open = false;
     action();
@@ -120,8 +127,11 @@
                 <Command.Item class="palette__item" value="action:runs" keywords={[$t('Open runs'), 'runs', 'history']} onSelect={() => run(() => store.navigate({ name: 'pipelines', section: 'runs' }))}>
                   <History size={15} /><span>{$t('Open runs')}</span>
                 </Command.Item>
+                <Command.Item class="palette__item" value="action:automations" keywords={[$t('Open automations'), 'automations', 'automation', 'schedules', 'triggers']} onSelect={() => run(() => store.navigate({ name: 'pipelines', section: 'schedules' }))}>
+                  <Clock size={15} /><span>{$t('Open automations')}</span>
+                </Command.Item>
                 {#if historyWorkspaceId}
-                  <Command.Item class="palette__item" value="action:history" keywords={['history', 'sessions', 'branches', 'pi']} onSelect={() => run(() => store.navigate({ name: 'history', workspaceId: historyWorkspaceId }))}>
+                  <Command.Item class="palette__item" value="action:history" keywords={[$t('Open session history'), 'history', 'sessions', 'branches', 'pi']} onSelect={() => run(() => store.navigate({ name: 'history', workspaceId: historyWorkspaceId }))}>
                     <ScrollText size={15} /><span>{$t('Open session history')}</span>
                   </Command.Item>
                 {/if}
@@ -167,6 +177,9 @@
                 <Command.Item class="palette__item" value="action:worktrees" keywords={[$t('Manage worktrees'), 'worktree', 'branch', 'orphan']} onSelect={() => run(() => store.navigate({ name: 'settings', section: 'worktrees' }))}>
                   <GitBranch size={15} /><span>{$t('Manage worktrees')}</span>
                 </Command.Item>
+                <Command.Item class="palette__item" value="action:refresh-projects" keywords={[$t('Refresh projects'), 'refresh', 'reload', 'projects', 'folders']} onSelect={() => run(refreshProjects)}>
+                  <RefreshCw size={15} /><span>{$t('Refresh projects')}</span>
+                </Command.Item>
                 <Command.Item class="palette__item" value="action:settings" keywords={[$t('Settings'), 'settings', 'preferences']} onSelect={() => run(() => store.navigate({ name: 'settings', section: 'general' }))}>
                   <Settings size={15} /><span>{$t('Settings')}</span>
                 </Command.Item>
@@ -200,7 +213,7 @@
                   <Command.Item
                     class="palette__item"
                     value={`project:${workspace.id}`}
-                    keywords={[workspace.name]}
+                    keywords={workspace.personal ? [$t('Personal chats'), workspace.name] : [workspace.name]}
                     onSelect={() => run(() => store.goHome(workspace.id))}
                   >
                     <Folder size={15} /><span class="palette__label">{workspace.personal ? $t('Personal chats') : workspace.name}</span>

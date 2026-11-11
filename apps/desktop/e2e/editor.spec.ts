@@ -175,4 +175,47 @@ test.describe('pipeline editor', () => {
     await expect(inspector.getByRole('button', { name: 'Node type: Agent' })).toBeVisible();
     await expect(inspector.getByRole('textbox', { name: 'Task' })).toHaveValue(/Implement the change/);
   });
+
+  test('a card lists its inputs as one row of colored dots and Arrange keeps cards apart', async ({ lab }) => {
+    await lab.open();
+    const editor = await lab.openPipelines();
+    await editor.getByRole('button', { name: /^Parallel research/ }).click();
+    const canvas = editor.getByRole('application');
+    const card = (name: string): Locator => canvas.getByRole('group', { name, exact: true });
+
+    // One dot per upstream step; the source is named for hover and for screen readers.
+    const inputs = card('Synthesis').getByRole('list', { name: 'Inputs' });
+    const sources = inputs.getByRole('listitem');
+    await expect(sources).toHaveText(['Researcher A', 'Researcher B']);
+    await expect(sources.first()).toHaveAttribute('title', 'Researcher A');
+    await expect(sources.last()).toHaveAttribute('title', 'Researcher B');
+    const dots = await inputs.locator('.piui-node-inputs__dot').evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node).backgroundColor));
+    expect(new Set(dots).size).toBe(2);
+    // Steps without an incoming connection have no inputs row at all.
+    await expect(card('Researcher A').getByRole('list', { name: 'Inputs' })).toHaveCount(0);
+
+    const box = async (name: string): Promise<{ x: number; y: number; width: number; height: number }> => {
+      const found = await card(name).boundingBox();
+      if (!found) throw new Error(`${name} is not on the canvas`);
+      return found;
+    };
+    const overlapping = async (): Promise<boolean> => {
+      const boxes = await Promise.all(['Researcher A', 'Researcher B', 'Synthesis'].map(box));
+      return boxes.some((a, index) =>
+        boxes.slice(index + 1).some((b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height),
+      );
+    };
+    // Drag Researcher B onto Researcher A, so Arrange has an overlap to undo.
+    const page = lab.page;
+    const from = await box('Researcher B');
+    const onto = await box('Researcher A');
+    await page.mouse.move(from.x + from.width / 2, from.y + 14);
+    await page.mouse.down();
+    await page.mouse.move(onto.x + onto.width / 2, onto.y + 30, { steps: 10 });
+    await page.mouse.up();
+    await expect.poll(overlapping).toBe(true);
+
+    await editor.getByRole('toolbar', { name: 'Canvas controls' }).getByRole('button', { name: 'Arrange automatically' }).click();
+    await expect.poll(overlapping).toBe(false);
+  });
 });

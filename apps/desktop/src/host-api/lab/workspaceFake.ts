@@ -306,8 +306,8 @@ async function harnessModels(runtime: LabSessions, request: HarnessModelsRequest
   return {
     protocol: 18,
     harness: request.harness,
-    models: catalogModels(request.harness),
-    resources: harnessResources(request.harness),
+    models: request.part === 'resources' ? [] : catalogModels(request.harness),
+    resources: request.part === 'models' ? { items: [], warnings: [] } : harnessResources(request.harness),
   };
 }
 

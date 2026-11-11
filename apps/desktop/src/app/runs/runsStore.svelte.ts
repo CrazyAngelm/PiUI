@@ -46,6 +46,8 @@ export class RunsStore {
   private stopLive: (() => void) | undefined;
   private live: ReturnType<typeof createRunLiveUpdates> | undefined;
   private usageRequest = 0;
+  /** Token of the newest open(): an older read that answers later is dropped. */
+  private openRequest = 0;
   /** Deleted here: never merged back from an older in-flight read. */
   private readonly deleted = new Set<string>();
 
@@ -124,7 +126,11 @@ export class RunsStore {
 
   async open(runId: string): Promise<void> {
     const generation = this.generation;
+    const request = ++this.openRequest;
     if (this.run?.id !== runId) {
+      // The previous run leaves at once: its actions must not act on it while
+      // another loads, and a failed open must not stay hidden behind it.
+      this.run = undefined;
       this.selectedStepId = '';
       this.attemptIndex = -1;
       this.usage = {};
@@ -135,16 +141,16 @@ export class RunsStore {
     this.runError = '';
     try {
       const run = await this.client.orchestration_get_run_v6({ workspaceId: this.workspaceId, runId });
-      if (generation !== this.generation) return;
+      if (generation !== this.generation || request !== this.openRequest) return;
       if (run === null) {
         this.runError = 'This run is no longer available. Refresh the list.';
         return;
       }
       this.accept(run, true);
     } catch (error) {
-      if (generation === this.generation) this.runError = orchestrationError(error).message;
+      if (generation === this.generation && request === this.openRequest) this.runError = orchestrationError(error).message;
     } finally {
-      if (generation === this.generation) this.runLoading = false;
+      if (generation === this.generation && request === this.openRequest) this.runLoading = false;
     }
   }
 

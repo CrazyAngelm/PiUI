@@ -243,7 +243,7 @@ export const russianUi: Readonly<Record<string, string>> = {
   "Pin it to keep it at the top of your local list.": "Закрепите проект в начале списка.",
   "Prime Agent resources": "Ресурсы Prime Agent",
   "Ready when the run starts": "Готова к началу запуска", "Receive": "Получать", "Reconcile uncertain task {0}": "Проверить результат задачи {0}",
-  "Recording assertion...": "Сохраняем подтверждение…", "Refresh {0}": "Обновить {0}", "Project options": "Параметры проектов", "Refresh projects": "Обновить проекты",
+  "Recording assertion...": "Сохраняем подтверждение…", "Refresh {0}": "Обновить {0}", "Refresh projects": "Обновить проекты",
   "Remove member {0}": "Убрать участника {0}", "Remove task {0}": "Убрать задачу {0}",
   "Requesting launch…": "Запрашиваем запуск…", "Retry same launch request": "Повторить тот же запрос запуска",
   "Retry uncertain task {0}": "Повторить задачу {0} с неизвестным результатом", "Retrying task...": "Повторяем задачу…",

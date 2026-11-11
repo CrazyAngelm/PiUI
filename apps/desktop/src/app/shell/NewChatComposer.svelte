@@ -13,7 +13,7 @@
   import { Spinner, Textarea, toasts } from '../../lib/ui';
   import { harnessMeta } from '../harnessMeta';
   import { errorMessage } from '../workspaceStore.svelte';
-  import { workspaceError } from '../../host-api/workspaceClient';
+  import { WorkspaceOperationError, workspaceError } from '../../host-api/workspaceClient';
   import AttachButton from '../chat/composer/AttachButton.svelte';
   import { ComposerAttachments } from '../chat/composer/composerAttachments.svelte';
   import { FileMentions } from '../chat/composer/composerLookups.svelte';
@@ -31,6 +31,13 @@
   import type { AgentGraph } from '../../features/orchestration/agentGraph';
   import { useWorkspace } from './context';
   import { reconcileSelection, restoredSelection, type NewChatChoice, type NewChatSelection } from './newChatChoice';
+
+  const CATALOG_RETRY_DELAY_MS = 1500;
+
+  /** A coded refusal (sign-in, trust, safe mode…) is the host's answer: waiting and asking again cannot change it. */
+  function isVerdict(error: unknown): boolean {
+    return error instanceof WorkspaceOperationError && error.code !== 'UNKNOWN';
+  }
 
   interface Props {
     onTrust: (workspace: WorkspaceSummary) => void;
@@ -157,35 +164,45 @@
     models = [];
     skills = [];
     modelsError = '';
+    // The load this effect cancelled may never settle: no early exit below keeps its spinner.
+    modelsLoading = false;
     if (!id || !kind) return;
     // A boolean, not the workspace: every session event replaces the catalog.
     if (catalogBlocked) return;
     let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     modelsLoading = true;
     const show = (result: HarnessModelsResult): void => {
       if (cancelled) return;
       models = result.models;
       skills = result.resources.items;
+      modelsError = '';
       if (modelKey && !result.models.some((item) => JSON.stringify([item.provider, item.id]) === modelKey)) modelKey = '';
     };
-    cachedHarnessModels(
-      { workspaceId: id, harness: kind },
-      {
-        onFresh: show,
-        onError: (error) => {
-          if (!cancelled) modelsError = errorMessage(error);
-        },
-      },
-    )
-      .then(show)
-      .catch((error: unknown) => {
-        if (!cancelled) modelsError = errorMessage(error);
-      })
-      .finally(() => {
-        if (!cancelled) modelsLoading = false;
-      });
+    // A native probe can fail transiently (slow harness start); retry once
+    // before reporting, unless the host refused with a code. A remembered
+    // catalog stays selectable meanwhile.
+    const load = (attempt: number): void => {
+      const failed = (error: unknown): void => {
+        if (cancelled) return;
+        if (attempt === 0 && !isVerdict(error)) {
+          retry = setTimeout(() => load(1), CATALOG_RETRY_DELAY_MS);
+          return;
+        }
+        modelsError = errorMessage(error);
+        modelsLoading = false;
+      };
+      cachedHarnessModels({ workspaceId: id, harness: kind }, { onFresh: show, onError: failed })
+        .then((result) => {
+          show(result);
+          if (!cancelled) modelsLoading = false;
+        })
+        .catch(failed);
+    };
+    load(0);
     return () => {
       cancelled = true;
+      if (retry) clearTimeout(retry);
     };
   });
 
@@ -315,7 +332,7 @@
     })),
   );
   const permissionItems = $derived<{ value: PermissionMode; label: string; description: string }[]>([
-    { value: 'native', label: $t('Harness settings'), description: $t('Use the permissions configured in the harness') },
+    { value: 'native', label: $t('Harness default'), description: $t('Use the permissions configured in the harness') },
     { value: 'read-only', label: $t('Read only'), description: $t('The agent can read but not change files') },
     { value: 'workspace-write', label: $t('Edit project'), description: $t('Changes limited to the project folder') },
     { value: 'full-access', label: $t('Full access'), description: $t('No native restrictions — use with care') },
@@ -582,7 +599,7 @@
           onFast={(value) => (fast = value)}
         >
           {#snippet trigger(props)}
-            <button type="button" class="chip" {...props}>
+            <button type="button" class="chip" {...props} aria-busy={modelsLoading || undefined}>
               {#if modelsLoading}<Spinner size={12} />{:else}<Brain size={14} />{/if}
               <span>{model?.name ?? $t('Default model')}</span>
               {#if thinkingLevel}<span class="chip__sub">{thinkingLevel}</span>{/if}

@@ -313,8 +313,8 @@
       </EmptyState>
     </div>
   {:else}
-    <p class="hint">{$t('Arrows move between cards, Shift+Left or Right moves a card, Enter opens it, N adds a card and / filters.')}</p>
-    <div class="columns" bind:this={columnsElement}>
+    <p id="board-keys" class="visually-hidden">{$t('Arrows move between cards, Shift+Left or Right moves a card, Enter opens it, N adds a card and / filters.')}</p>
+    <div class="columns" role="group" aria-labelledby="board-title" aria-describedby="board-keys" bind:this={columnsElement}>
       {#each columns as column (column.status)}
         {@const collapsible = COLLAPSIBLE.has(column.status)}
         {@const collapsed = collapsible && !expanded.includes(column.status)}
@@ -495,12 +495,6 @@
   .select option {
     background: var(--piui-bg-raised);
     color: var(--piui-text);
-  }
-  .hint {
-    margin: 0;
-    padding: 0 var(--piui-space-6) var(--piui-space-2);
-    color: var(--piui-text-faint);
-    font-size: var(--piui-text-xs);
   }
   .loading,
   .disabled {

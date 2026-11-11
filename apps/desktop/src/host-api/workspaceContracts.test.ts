@@ -140,3 +140,30 @@ it('keeps the explicit history read independently versioned without changing wor
   expect(request).toEqual({sessionId:'opaque-session'});
   expect(result).toEqual({protocol:1,sessionId:'opaque-session',blocks:[]});
 });
+
+describe('harness models v18 request part', () => {
+  type HarnessModelsRequest = import('../../../../contracts/harness-models-v18').HarnessModelsRequest;
+  type HarnessCatalogPart = import('../../../../contracts/harness-models-v18').HarnessCatalogPart;
+  // The Rust host decodes the same document in its `workspace_api` tests.
+  const fixture = JSON.parse(readFileSync(new URL('../../../../contracts/fixtures/harness-models-v18.json', import.meta.url), 'utf8')) as {
+    accepted: { request: HarnessModelsRequest; expectedPart: HarnessCatalogPart | null }[];
+    rejected: { reason: string; request: unknown }[];
+  };
+  it('keeps a request without `part` valid and adds `models` and `resources` without a version bump', async () => {
+    const { decode } = await import('./lab/labSchema');
+    const { harnessModelsRequestSchema } = await import('./lab/labSchemas');
+    expect(fixture.accepted.map(({ expectedPart }) => expectedPart)).toEqual([null, 'models', 'resources']);
+    expect(Object.keys(fixture.accepted[0].request).sort(), 'the earlier v18 request shape').toEqual(['harness', 'workspaceId']);
+    for (const { request, expectedPart } of fixture.accepted) {
+      expect(decode<HarnessModelsRequest>(harnessModelsRequestSchema, request).part ?? null, JSON.stringify(request)).toBe(expectedPart);
+    }
+  });
+  it('rejects an unknown part and unknown request fields', async () => {
+    const { decode } = await import('./lab/labSchema');
+    const { harnessModelsRequestSchema } = await import('./lab/labSchemas');
+    expect(fixture.rejected.length).toBeGreaterThanOrEqual(3);
+    for (const { reason, request } of fixture.rejected) {
+      expect(() => decode(harnessModelsRequestSchema, request), reason).toThrow();
+    }
+  });
+});

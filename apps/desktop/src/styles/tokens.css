@@ -386,3 +386,39 @@
     --piui-chaos-streak: linear-gradient(100deg, rgba(184, 36, 58, 0.12), rgba(184, 36, 58, 0) 70%);
   }
 }
+
+/*
+ * Graph wires: one hue per step on the pipeline canvas, so a connection keeps
+ * the color of the step it comes from (spark, wire, port and input tick).
+ */
+:root {
+  --piui-wire-1: #f2cf4a;
+  --piui-wire-2: #f0609e;
+  --piui-wire-3: #b07cf5;
+  --piui-wire-4: #f28a52;
+  --piui-wire-5: #5fd0e0;
+  --piui-wire-6: #7fd88f;
+  --piui-wire-idle: #e9e7ea;
+}
+
+:root[data-theme="light"] {
+  --piui-wire-1: #a87b00;
+  --piui-wire-2: #c2306f;
+  --piui-wire-3: #7343c4;
+  --piui-wire-4: #c0531c;
+  --piui-wire-5: #137f91;
+  --piui-wire-6: #2f8a43;
+  --piui-wire-idle: #4a464c;
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] {
+    --piui-wire-1: #a87b00;
+    --piui-wire-2: #c2306f;
+    --piui-wire-3: #7343c4;
+    --piui-wire-4: #c0531c;
+    --piui-wire-5: #137f91;
+    --piui-wire-6: #2f8a43;
+    --piui-wire-idle: #4a464c;
+  }
+}

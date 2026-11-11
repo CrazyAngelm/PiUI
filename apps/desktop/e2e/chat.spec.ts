@@ -27,10 +27,9 @@ test.describe('new chat', () => {
     await lab.option(/^Codex/).click();
     await composer.getByRole('button', { name: 'Default model' }).click();
     await lab.option(/^GPT Lab 5 Codex/).click();
-    // Reasoning is tuned in the model popover, from the model's native levels.
-    await composer.getByRole('button', { name: 'GPT Lab 5 Codex' }).click();
-    const reasoning = page.getByRole('group', { name: 'Reasoning' });
-    await expect(reasoning.getByRole('radio')).toHaveText(['Default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+    // The popover stays open on a model with levels: reasoning is tuned there, from the model's native levels.
+    const reasoning = page.getByRole('radiogroup', { name: 'Reasoning' });
+    await expect(reasoning.getByRole('radio')).toHaveText(['Auto', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
     await reasoning.getByRole('radio', { name: 'high', exact: true }).click();
     await page.keyboard.press('Escape');
     await expect(composer.getByRole('button', { name: 'GPT Lab 5 Codex high' })).toBeVisible();
@@ -46,7 +45,7 @@ test.describe('new chat', () => {
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
     // The chosen model and reasoning reached the native session settings.
     await page.getByRole('button', { name: 'GPT Lab 5 Codex', exact: true }).click();
-    await expect(page.getByRole('group', { name: 'Reasoning' }).getByRole('radio', { name: 'high', exact: true })).toBeChecked();
+    await expect(page.getByRole('radiogroup', { name: 'Reasoning' }).getByRole('radio', { name: 'high', exact: true })).toBeChecked();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('button', { name: 'GPT Lab 5 Codex high' })).toBeVisible();
     await page.getByRole('button', { name: 'Details' }).click();
@@ -91,6 +90,39 @@ test.describe('new chat', () => {
     await composer.getByRole('button', { name: 'Start chat' }).click();
     await expect(lab.toast('Could not start the chat')).toContainText('Sign in to Claude Code');
     await expect(composer.getByRole('textbox', { name: 'Message' })).toHaveValue('Map the editor shortcuts');
+  });
+});
+
+test.describe('chat header', () => {
+  test('a running turn has exactly one stop control', async ({ lab, page }) => {
+    test.slow(); // The native turn is simulated with real timers.
+    await lab.open();
+    // "Install" makes the lab pause the turn on an approval, so the turn stays active.
+    await startChat(lab, 'Install the lab dependencies and run the checks');
+    await expect(page.getByRole('article', { name: 'Permission request' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('textbox', { name: 'Message' })).toHaveAttribute('placeholder', 'Queue a follow-up…');
+    // The composer owns it; the header does not repeat it.
+    const stops = page.getByRole('button', { name: /^Stop/ });
+    await expect(stops).toHaveCount(1);
+    await expect(stops).toHaveAccessibleName(/^Stop turn/);
+  });
+
+  test('deleting a chat is offered in the chat menu, not in the details panel', async ({ lab, page }) => {
+    await lab.open();
+    await lab.chat(/Plan a weekend in Lisbon/).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Plan a weekend in Lisbon' })).toBeVisible();
+    await page.getByRole('button', { name: 'Details' }).click();
+    const details = page.getByRole('complementary', { name: 'Chat details' });
+    await expect(details).toBeVisible();
+    await expect(details.getByRole('button', { name: /^(Delete chat|Stop agent process)/ })).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Chat actions' }).click();
+    await page.getByRole('menuitem', { name: 'Delete chat…' }).click();
+    const confirm = page.getByRole('dialog', { name: 'Delete chat?' });
+    await expect(confirm).toContainText('The harness keeps its own history.');
+    await confirm.getByRole('button', { name: 'Cancel' }).click();
+    await expect(confirm).toBeHidden();
+    await expect(page.getByRole('heading', { level: 1, name: 'Plan a weekend in Lisbon' })).toBeVisible();
   });
 });
 

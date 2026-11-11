@@ -28,6 +28,22 @@ The host owns and disposes discovery processes. Prime receives an explicit
 isolated supervisor address. Catalog discovery does not create a PiUI chat,
 write native history, or submit a model prompt.
 
+Resource discovery waits on native MCP startup (about ten seconds for Codex)
+and never discards an answered model catalog: a failed or timed-out discovery
+returns the models with an empty resource list and a visible warning. The
+optional request field `part` splits one probe: `models` answers as soon as the
+native catalog does and leaves discovery running in the same probe; the next
+`resources` request for that workspace and harness collects it (unclaimed
+discoveries expire after two minutes; without one the host starts a new probe).
+Model pickers use the split, so they never wait for MCP servers. A request
+without `part` still answers both from one probe.
+
+The workbench never remembers a degraded answer (resources replaced by the
+warning): the next picker asks for the resources again and reuses the answered
+models, the stored snapshot keeps the resources it had, and preflight reports
+one "Could not verify the native catalog" instead of a missing resource per
+rule. An explicit refresh never joins a split load in flight.
+
 Catalog v14 carries `supportsFast` per model from the adapter. Prime uses its
 native `supportsFastMode` resolver. Pi exposes no Fast service tier; Codex uses
 its native service-tier override. Choosing another model clears incompatible Fast.

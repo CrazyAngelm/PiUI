@@ -7,6 +7,36 @@ import { expect, test } from './fixtures';
  */
 const LOGIN = /^Start PiUI when I sign in( to Windows)?$/;
 
+test.describe('Settings → General and Shortcuts', () => {
+  test('language and density rows carry no extra descriptions', async ({ lab, page }) => {
+    await lab.open();
+    await lab.openSettings();
+    await expect(page.getByRole('heading', { level: 2, name: 'General' })).toBeVisible();
+    await expect(page.getByText('Chats and prompts are never translated.', { exact: true })).toBeVisible();
+    await expect(page.getByText('Compact fits more rows in lists and panels.')).toHaveCount(0);
+    await expect(page.getByText('Interface language.')).toHaveCount(0);
+  });
+
+  test('shortcuts list chat search, review and the board keys', async ({ lab, page }) => {
+    await lab.open();
+    const sections = await lab.openSettings();
+    await sections.getByRole('button', { name: 'Shortcuts' }).click();
+    await expect(page.getByRole('heading', { level: 2, name: 'Shortcuts' })).toBeVisible();
+    for (const label of ['Search this chat', 'Review changes', 'Toggle chat details']) {
+      await expect(page.getByText(label, { exact: true })).toBeVisible();
+    }
+    const search = page.locator('.row', { hasText: 'Search this chat' });
+    await expect(search.locator('kbd')).toHaveText([/^(Ctrl|⌘)$/, 'F']);
+    const review = page.locator('.row', { hasText: 'Review changes' });
+    await expect(review.locator('kbd').last()).toHaveText('G');
+
+    await expect(page.getByRole('heading', { level: 3, name: 'Board' })).toBeVisible();
+    for (const label of ['Move between cards', 'Move a card to another status', 'Open a card', 'New card', 'Filter cards']) {
+      await expect(page.getByText(label, { exact: true })).toBeVisible();
+    }
+  });
+});
+
 test.describe('Settings → Background', () => {
   test('tray and sign-in options turn on, stay on and turn off', async ({ lab, page }) => {
     await lab.open();

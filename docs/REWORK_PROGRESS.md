@@ -520,6 +520,41 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   provider turn is claimed.
 - Docs only in this entry; builds and tests are run by the lead at the end.
 
+## 2026-11-11 — systems pass and quieter screens
+
+Led by a Fable audit (plan, then review of the implementation), reviewed by
+four read-only GPT 6.1 Sol passes.
+
+- **Harness catalog:** a second picker no longer waits for resource discovery;
+  a degraded answer (host warning instead of resources) is never cached, its
+  snapshot keeps the earlier resources and preflight reports one unverifiable
+  catalog; an explicit refresh never joins a split load; the inspector keeps
+  remembered resources visible and shows discovery warnings. `part` has a
+  shared Rust/TS compat fixture (`contracts/fixtures/harness-models-v18.json`);
+  pending discoveries expire on insert too.
+- **Pipelines:** the Editor/Runs/Automations switch is gone (the sidebar owns
+  sections, with `aria-current` on the open one); the editor reopens the last
+  pipeline of the project, ignores slower older opens, keeps the remembered id
+  when the list cannot be read; a failed save closes the unsaved-changes dialog
+  and shows the errors; Save and Mod+S wait for something to save; the start
+  screen lists saved pipelines above templates.
+- **Canvas:** inputs are one row of colored dots (names in title and for screen
+  readers, hidden ones named in `+N`), wire colors are stable across deletes,
+  no persistent edge blur, tokens instead of literal colors, per-branch router
+  wiring, Arrange uses real card heights.
+- **Shell:** Home is the heading and the composer; the project options menu
+  moved to the palette (Open automations, Refresh projects); Retry reconnects
+  the event stream and rechecks a restored board/team/history route; lazy views
+  and pipeline sections offer Retry; Runs drops the shown run while another
+  opens, so errors are visible and A→B→A reopens A; Automations reports a dead
+  event stream with Refresh; Inbox, Automations, Chat details and Settings lose
+  repeated secondary text; Board key hints became the columns' description and
+  a Settings → Shortcuts group.
+- **Tests:** unit 940/940; UI Lab Playwright 158/158 before the review fixes,
+  then the 84 touched specs again, all green; `cargo test -p piui-desktop workspace_api`
+  71 passed. The Tauri WebView2 E2E run did not finish (its build exceeded the
+  bounded run while another session was compiling); no real-provider turn.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

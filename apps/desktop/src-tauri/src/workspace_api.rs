@@ -2819,6 +2819,18 @@ pub enum WorkspaceLifecycleCommand {
 pub struct HarnessModelsRequest {
     workspace_id: String,
     harness: HarnessKind,
+    /// Absent: models and resources from one probe. `models` answers as soon
+    /// as the native catalog does and leaves resource discovery running in
+    /// the same probe for the following `resources` request.
+    #[serde(default)]
+    part: Option<HarnessCatalogPart>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum HarnessCatalogPart {
+    Models,
+    Resources,
 }
 
 #[derive(Serialize)]
@@ -2828,6 +2840,22 @@ pub struct HarnessModelsResult {
     harness: HarnessKind,
     models: Vec<piui_runtime::workspace_runtime::NativeCatalogModel>,
     resources: piui_runtime::workspace_runtime::NativeResourceCatalog,
+}
+
+impl HarnessModelsResult {
+    /// The answer to a `resources` request: no models, only what discovery
+    /// found (or its degraded warning).
+    fn resources_only(
+        harness: HarnessKind,
+        resources: piui_runtime::workspace_runtime::NativeResourceCatalog,
+    ) -> Self {
+        Self {
+            protocol: 18,
+            harness,
+            models: Vec::new(),
+            resources,
+        }
+    }
 }
 
 /// Query the native adapter without adding a conversation to the catalog or
@@ -2855,6 +2883,129 @@ pub async fn harness_models_v18(
             },
         });
     }
+    let key = (
+        request.workspace_id.clone(),
+        format!("{:?}", request.harness),
+    );
+    if request.part == Some(HarnessCatalogPart::Resources)
+        && let Some(resources) = take_catalog_resources(&key).await
+    {
+        return Ok(HarnessModelsResult::resources_only(
+            request.harness,
+            resources,
+        ));
+    }
+    let (runtime, drain) = spawn_catalog_probe(state.inner(), &directory, request.harness).await?;
+    let harness = request.harness;
+    if request.part == Some(HarnessCatalogPart::Resources) {
+        // No handed-off discovery (expired, claimed, or its task failed):
+        // probe again for the resources alone. A degraded discovery comes
+        // back as a warning, which the UI treats as retryable.
+        let resources = catalog_resources(runtime.resources().await, harness);
+        retire_catalog_probe(&runtime, drain, harness).await;
+        return Ok(HarnessModelsResult::resources_only(harness, resources));
+    }
+    let models = match runtime.catalog_models().await {
+        Ok(models) => models,
+        Err(error) => {
+            retire_catalog_probe(&runtime, drain, harness).await;
+            eprintln!(
+                "event=harness_catalog_failed phase=models harness={harness:?} code={error:?}"
+            );
+            return Err(WorkspaceError::runtime());
+        }
+    };
+    if request.part == Some(HarnessCatalogPart::Models) {
+        // Resource discovery waits on native MCP startup (about ten seconds
+        // for Codex). Answer the models now; the same probe finishes the
+        // resources for the `resources` request and then retires.
+        let (sender, receiver) = watch::channel(None);
+        let now = std::time::Instant::now();
+        {
+            let mut pending = pending_catalog_resources()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            insert_pending_catalog_resources(&mut pending, key, receiver, now);
+        }
+        tokio::spawn(async move {
+            let resources = catalog_resources(runtime.resources().await, harness);
+            retire_catalog_probe(&runtime, drain, harness).await;
+            let _ = sender.send(Some(resources));
+        });
+        return Ok(HarnessModelsResult {
+            protocol: 18,
+            harness,
+            models,
+            resources: empty_resource_catalog(),
+        });
+    }
+    // A failed discovery degrades to a visible warning; it never discards
+    // the answered model catalog.
+    let resources = catalog_resources(runtime.resources().await, harness);
+    retire_catalog_probe(&runtime, drain, harness).await;
+    Ok(HarnessModelsResult {
+        protocol: 18,
+        harness,
+        models,
+        resources,
+    })
+}
+
+type CatalogKey = (String, String);
+type CatalogDiscovery =
+    watch::Receiver<Option<piui_runtime::workspace_runtime::NativeResourceCatalog>>;
+type PendingCatalogResources = HashMap<CatalogKey, (std::time::Instant, CatalogDiscovery)>;
+
+/// Resource discovery left running by a `models` request. Unclaimed entries
+/// expire so a later request never reads an old project state.
+const PENDING_CATALOG_RESOURCES_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+
+fn pending_catalog_resources() -> &'static Mutex<PendingCatalogResources> {
+    static PENDING: std::sync::OnceLock<Mutex<PendingCatalogResources>> =
+        std::sync::OnceLock::new();
+    PENDING.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Drops every discovery that was not claimed within the TTL.
+fn retain_unexpired(pending: &mut PendingCatalogResources, now: std::time::Instant) {
+    pending.retain(|_, (since, _)| {
+        now.saturating_duration_since(*since) < PENDING_CATALOG_RESOURCES_TTL
+    });
+}
+
+/// Hands a discovery to the `resources` request that follows. Expired entries
+/// leave here too, so a project that never asks for its resources does not
+/// keep an old discovery alive until some other project takes its own.
+fn insert_pending_catalog_resources(
+    pending: &mut PendingCatalogResources,
+    key: CatalogKey,
+    receiver: CatalogDiscovery,
+    now: std::time::Instant,
+) {
+    retain_unexpired(pending, now);
+    pending.insert(key, (now, receiver));
+}
+
+async fn take_catalog_resources(
+    key: &CatalogKey,
+) -> Option<piui_runtime::workspace_runtime::NativeResourceCatalog> {
+    let mut receiver = {
+        let mut pending = pending_catalog_resources()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        retain_unexpired(&mut pending, std::time::Instant::now());
+        pending.remove(key)?.1
+    };
+    // The discovery task always sends; a dropped sender means it failed and
+    // the caller starts its own probe.
+    receiver.wait_for(Option::is_some).await.ok()?.clone()
+}
+
+async fn spawn_catalog_probe(
+    state: &HostState,
+    directory: &ProjectDirectory,
+    harness: HarnessKind,
+) -> Result<(NativeRuntime, JoinHandle<()>), WorkspaceError> {
     let id = Uuid::new_v4().to_string();
     let session_dir = state
         .workspace
@@ -2863,7 +3014,7 @@ pub async fn harness_models_v18(
         .join(format!("catalog-{id}"));
     fs::create_dir_all(&session_dir).map_err(|_| WorkspaceError::io())?;
     let config = NativeRuntimeConfig {
-        harness: request.harness,
+        harness,
         cwd: directory.canonical_path().to_path_buf(),
         session_dir,
         native_id: None,
@@ -2881,46 +3032,65 @@ pub async fn harness_models_v18(
         native_subagents: None,
         coordination: false,
         plugin_mcp_servers: Vec::new(),
-        daemon_socket: isolated_daemon_socket(
-            request.harness,
-            &state.workspace.inner.native_root,
-            &id,
-        ),
+        daemon_socket: isolated_daemon_socket(harness, &state.workspace.inner.native_root, &id),
         package_root: None,
         agent_dir: None,
         kernel_python: None,
+        host_tools: Vec::new(),
     };
     let (runtime, mut events) = NativeRuntime::spawn_catalog(config)
         .await
         .map_err(|error| {
             eprintln!(
-                "event=harness_catalog_failed phase=start harness={:?} code={error:?}",
-                request.harness
+                "event=harness_catalog_failed phase=start harness={harness:?} code={error:?}"
             );
             runtime_failure(&error)
         })?;
     let drain = tokio::spawn(async move { while events.recv().await.is_some() {} });
-    let models = runtime
-        .catalog_models()
-        .await
-        .map_err(|_| WorkspaceError::runtime());
-    let resources = runtime
-        .resources()
-        .await
-        .map_err(|_| WorkspaceError::runtime());
-    // Catalog probes admit no turns and own no saved session. Retire their
-    // process tree directly; native session shutdown can wait on unrelated hooks.
-    let disposed = runtime
-        .terminate()
-        .await
-        .map_err(|_| WorkspaceError::runtime());
+    Ok((runtime, drain))
+}
+
+/// Catalog probes admit no turns and own no saved session. Retire their
+/// process tree directly; native session shutdown can wait on unrelated hooks.
+/// A cleanup failure is logged but does not discard an answered catalog.
+async fn retire_catalog_probe(
+    runtime: &NativeRuntime,
+    drain: JoinHandle<()>,
+    harness: HarnessKind,
+) {
+    if let Err(error) = runtime.terminate().await {
+        eprintln!(
+            "event=harness_catalog_failed phase=terminate harness={harness:?} code={error:?}"
+        );
+    }
     drain.abort();
-    disposed?;
-    Ok(HarnessModelsResult {
-        protocol: 18,
-        harness: request.harness,
-        models: models?,
-        resources: resources?,
+}
+
+const CATALOG_RESOURCES_UNAVAILABLE: &str =
+    "Skills, MCP servers and tools could not be loaded from the harness.";
+
+fn empty_resource_catalog() -> piui_runtime::workspace_runtime::NativeResourceCatalog {
+    piui_runtime::workspace_runtime::NativeResourceCatalog {
+        items: Vec::new(),
+        warnings: Vec::new(),
+    }
+}
+
+fn catalog_resources(
+    resources: Result<
+        piui_runtime::workspace_runtime::NativeResourceCatalog,
+        piui_runtime::workspace_runtime::NativeRuntimeError,
+    >,
+    harness: HarnessKind,
+) -> piui_runtime::workspace_runtime::NativeResourceCatalog {
+    resources.unwrap_or_else(|error| {
+        eprintln!(
+            "event=harness_catalog_failed phase=resources harness={harness:?} code={error:?}"
+        );
+        piui_runtime::workspace_runtime::NativeResourceCatalog {
+            items: Vec::new(),
+            warnings: vec![CATALOG_RESOURCES_UNAVAILABLE.to_owned()],
+        }
     })
 }
 
@@ -4031,6 +4201,97 @@ Board."
             super::take_catalog_resources(&key).await.is_none(),
             "a failed discovery task makes the caller probe again"
         );
+    }
+
+    #[test]
+    fn the_catalog_request_part_is_absent_models_resources_or_rejected() {
+        use super::HarnessCatalogPart::{Models, Resources};
+        // The same document is decoded by the TypeScript contract test.
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/fixtures/harness-models-v18.json"
+        ))
+        .expect("harness models fixture");
+        let mut seen = Vec::new();
+        for case in fixture["accepted"].as_array().expect("accepted requests") {
+            let request: super::HarnessModelsRequest =
+                serde_json::from_value(case["request"].clone()).expect("accepted request");
+            let expected = match case["expectedPart"].as_str() {
+                None => None,
+                Some("models") => Some(Models),
+                Some("resources") => Some(Resources),
+                Some(other) => panic!("fixture names an unknown part `{other}`"),
+            };
+            assert_eq!(request.part, expected, "{case}");
+            seen.push(request.part);
+        }
+        assert_eq!(
+            seen,
+            [None, Some(Models), Some(Resources)],
+            "the fixture covers an absent part, `models` and `resources`"
+        );
+        for case in fixture["rejected"].as_array().expect("rejected requests") {
+            let decoded =
+                serde_json::from_value::<super::HarnessModelsRequest>(case["request"].clone());
+            assert!(decoded.is_err(), "{case}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_resources_request_without_a_handoff_probes_for_the_resources_alone() {
+        use super::{HarnessKind, HarnessModelsResult};
+        // Nothing handed off (never requested, claimed or expired): the command
+        // falls through to its own probe instead of waiting for a discovery.
+        let key = ("no-handoff-project".to_owned(), "Codex".to_owned());
+        assert!(super::take_catalog_resources(&key).await.is_none());
+
+        // That probe answers with resources only: no models, protocol 18, and
+        // a degraded discovery stays a visible warning.
+        let degraded = super::catalog_resources(
+            Err(piui_runtime::workspace_runtime::NativeRuntimeError::Timeout),
+            HarnessKind::Codex,
+        );
+        let result = HarnessModelsResult::resources_only(HarnessKind::Codex, degraded);
+        let answer = serde_json::to_value(result).expect("serializes");
+        assert_eq!(answer["protocol"], serde_json::json!(18));
+        assert_eq!(answer["harness"], serde_json::json!("codex"));
+        assert_eq!(answer["models"], serde_json::json!([]));
+        assert_eq!(answer["resources"]["items"], serde_json::json!([]));
+        assert_eq!(
+            answer["resources"]["warnings"],
+            serde_json::json!([super::CATALOG_RESOURCES_UNAVAILABLE])
+        );
+    }
+
+    #[test]
+    fn unclaimed_discoveries_expire_when_the_next_one_is_handed_off() {
+        use super::{PendingCatalogResources, insert_pending_catalog_resources};
+        let start = std::time::Instant::now();
+        let ttl = super::PENDING_CATALOG_RESOURCES_TTL;
+        let second = std::time::Duration::from_secs(1);
+        let mut pending = PendingCatalogResources::new();
+        let key = |name: &str| (name.to_owned(), "Codex".to_owned());
+
+        let (_sender, receiver) = tokio::sync::watch::channel(None);
+        insert_pending_catalog_resources(&mut pending, key("old"), receiver, start);
+        let (_sender, receiver) = tokio::sync::watch::channel(None);
+        let almost = start + ttl - second;
+        insert_pending_catalog_resources(&mut pending, key("recent"), receiver, almost);
+        assert!(
+            pending.contains_key(&key("old")) && pending.contains_key(&key("recent")),
+            "nothing expires before the TTL"
+        );
+
+        let (_sender, receiver) = tokio::sync::watch::channel(None);
+        insert_pending_catalog_resources(&mut pending, key("next"), receiver, start + ttl);
+        assert!(
+            !pending.contains_key(&key("old")),
+            "an entry as old as the TTL leaves on the next insert"
+        );
+        assert!(pending.contains_key(&key("recent")) && pending.contains_key(&key("next")));
+
+        let late = start + ttl + ttl + second;
+        super::retain_unexpired(&mut pending, late);
+        assert!(pending.is_empty(), "every unclaimed entry expires");
     }
 
     #[test]

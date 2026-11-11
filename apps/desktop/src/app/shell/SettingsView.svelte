@@ -48,16 +48,40 @@
     void store.savePreferences({ ...store.preferences, [key]: value });
   }
 
-  const shortcuts: { keys: string; label: string }[] = [
-    { keys: 'Mod+N', label: 'New chat' },
-    { keys: 'Mod+K', label: 'Search and commands' },
-    { keys: 'Mod+,', label: 'Settings' },
-    { keys: 'Mod+Shift+I', label: 'Inbox' },
-    { keys: 'Mod+Alt+B', label: 'Toggle chat details' },
-    { keys: 'Mod+.', label: 'Stop the running turn' },
-    { keys: 'Enter', label: 'Send message' },
-    { keys: 'Shift+Enter', label: 'New line in a message' },
-    { keys: 'Escape', label: 'Close menus and dialogs' },
+  interface Shortcut {
+    /** One or more alternatives, each rendered as its own key cap. */
+    keys: string[];
+    label: string;
+  }
+  // Board keys mirror boardKeyboard.ts; its Escape is the general one above.
+  const shortcutGroups: { title: string | undefined; items: Shortcut[] }[] = [
+    {
+      title: undefined,
+      items: [
+        { keys: ['Mod+N'], label: 'New chat' },
+        { keys: ['Mod+K'], label: 'Search and commands' },
+        { keys: ['Mod+,'], label: 'Settings' },
+        { keys: ['Mod+Shift+I'], label: 'Inbox' },
+        { keys: ['Mod+F'], label: 'Search this chat' },
+        { keys: ['Mod+Shift+G'], label: 'Review changes' },
+        { keys: ['Mod+Alt+B'], label: 'Toggle chat details' },
+        { keys: ['Mod+.'], label: 'Stop the running turn' },
+        { keys: ['Enter'], label: 'Send message' },
+        { keys: ['Shift+Enter'], label: 'New line in a message' },
+        { keys: ['Escape'], label: 'Close menus and dialogs' },
+      ],
+    },
+    {
+      title: 'Board',
+      items: [
+        { keys: ['↑', '↓', '←', '→'], label: 'Move between cards' },
+        { keys: ['Shift+←', 'Shift+→'], label: 'Move a card to another status' },
+        { keys: ['Home', 'End'], label: 'First or last card in a column' },
+        { keys: ['Enter'], label: 'Open a card' },
+        { keys: ['N'], label: 'New card' },
+        { keys: ['/'], label: 'Filter cards' },
+      ],
+    },
   ];
 </script>
 
@@ -82,7 +106,7 @@
       {#if store.preferencesError}<p class="error" role="alert">{$t(store.preferencesError)}</p>{/if}
       <div class="rows">
         <div class="row">
-          <div><strong>{$t('Language')}</strong><small>{$t('Interface language. Chats and prompts are never translated.')}</small></div>
+          <div><strong>{$t('Language')}</strong><small>{$t('Chats and prompts are never translated.')}</small></div>
           <Segmented
             label={$t('Language')}
             value={$language}
@@ -105,7 +129,7 @@
         </div>
         <PluginThemeRow />
         <div class="row">
-          <div><strong>{$t('Density')}</strong><small>{$t('Compact fits more rows in lists and panels.')}</small></div>
+          <div><strong>{$t('Density')}</strong></div>
           <Segmented
             label={$t('Density')}
             value={store.preferences.density}
@@ -195,11 +219,17 @@
       <BackgroundSettings />
     {:else if section === 'shortcuts'}
       <h2>{$t('Shortcuts')}</h2>
-      <div class="rows">
-        {#each shortcuts as shortcut (shortcut.keys)}
-          <div class="row row--tight"><span>{$t(shortcut.label)}</span><Kbd keys={shortcut.keys} /></div>
-        {/each}
-      </div>
+      {#each shortcutGroups as group (group.title ?? '')}
+        {#if group.title}<h3>{$t(group.title)}</h3>{/if}
+        <div class="rows">
+          {#each group.items as shortcut (shortcut.label)}
+            <div class="row row--tight">
+              <span>{$t(shortcut.label)}</span>
+              <span class="keys">{#each shortcut.keys as keys (keys)}<Kbd {keys} />{/each}</span>
+            </div>
+          {/each}
+        </div>
+      {/each}
     {:else}
       <AboutSettings safeMode={store.safeMode} />
     {/if}
@@ -297,6 +327,18 @@
   }
   .row--tight {
     padding-block: var(--piui-space-2);
+  }
+  .keys {
+    display: inline-flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--piui-space-1);
+  }
+  h3 {
+    margin: var(--piui-space-6) 0 var(--piui-space-2);
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
+    font-weight: var(--piui-weight-semibold);
   }
   .cards {
     display: grid;

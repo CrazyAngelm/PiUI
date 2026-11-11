@@ -1,0 +1,14 @@
+{
+  "contract": "harness-models-v18",
+  "accepted": [
+    { "request": { "workspaceId": "workspace-1", "harness": "codex" }, "expectedPart": null },
+    { "request": { "workspaceId": "workspace-1", "harness": "codex", "part": "models" }, "expectedPart": "models" },
+    { "request": { "workspaceId": "workspace-1", "harness": "claude-code", "part": "resources" }, "expectedPart": "resources" }
+  ],
+  "rejected": [
+    { "reason": "unknown part", "request": { "workspaceId": "workspace-1", "harness": "codex", "part": "everything" } },
+    { "reason": "parts are case-sensitive", "request": { "workspaceId": "workspace-1", "harness": "codex", "part": "Models" } },
+    { "reason": "part is a single string", "request": { "workspaceId": "workspace-1", "harness": "codex", "part": ["models"] } },
+    { "reason": "unknown field", "request": { "workspaceId": "workspace-1", "harness": "codex", "parts": "models" } }
+  ]
+}

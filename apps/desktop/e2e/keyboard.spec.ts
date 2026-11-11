@@ -14,8 +14,6 @@ test.describe('keyboard-only operation', () => {
     await expect(page.getByRole('region', { name: 'Automations' })).toBeVisible();
 
     await page.keyboard.press('Tab');
-    await expect(lab.sidebar.getByRole('button', { name: 'Project options' })).toBeFocused();
-    await page.keyboard.press('Tab');
     await expect(lab.sidebar.getByRole('button', { name: 'Add project' })).toBeFocused();
     await page.keyboard.press('Tab');
     const project = lab.sidebar.getByRole('button', { name: 'piui', exact: true });
@@ -62,6 +60,20 @@ test.describe('keyboard-only operation', () => {
     await page.keyboard.press('Escape');
     await expect(palette).toBeHidden();
     await expect(search).toBeFocused();
+  });
+
+  test('typing automations in the palette finds the command and Enter opens the section', async ({ lab, page }) => {
+    await lab.open();
+    await page.keyboard.press('Control+k');
+    const palette = page.getByRole('dialog', { name: 'Search and commands' });
+    await expect(palette.getByPlaceholder('Search chats, projects and commands…')).toBeFocused();
+    await page.keyboard.type('automations');
+    await expect(palette.getByRole('option', { name: 'Open automations' })).toHaveAttribute('data-selected', /.*/);
+    await page.keyboard.press('Enter');
+    await expect(palette).toBeHidden();
+    await expect(page.getByRole('region', { name: 'Automations' })).toBeVisible();
+    await expect(lab.nav('Automations')).toHaveAttribute('aria-current', 'page');
+    await expect(lab.nav('Pipelines')).not.toHaveAttribute('aria-current', 'page');
   });
 
   test('dialogs trap focus, close with Escape and return focus to their trigger', async ({ lab, page }) => {

@@ -4,7 +4,7 @@
   import Library from '@lucide/svelte/icons/library';
   import { t } from '../../features/locale/language';
   import { orchestrationHost, type OrchestrationRunV6 } from '../../host-api/orchestrationClient';
-  import { EmptyState, Menu, Picker, Segmented, Skeleton, type PickerItem } from '../../lib/ui';
+  import { Button, EmptyState, Menu, Picker, Skeleton, type PickerItem } from '../../lib/ui';
   import type { PipelineSection } from '../workspaceStore.svelte';
   import type { AgentGraph } from '../../features/orchestration/agentGraph';
   import { pendingDrafts, type DraftSource } from '../pipelines/pendingDraft.svelte';
@@ -18,11 +18,18 @@
   const store = useWorkspace();
 
   // The graph editor is rebuilt on Svelte Flow; runs, schedules and the
-  // library still use the existing orchestration contribution.
-  const editor = import('../pipelines/PipelineEditor.svelte');
-  const runsView = import('../runs/RunsView.svelte');
-  const automationsView = import('../automations/AutomationsView.svelte');
-  const panel = import('../../features/orchestration/OrchestrationPanel.svelte');
+  // library still use the existing orchestration contribution. Each part is
+  // its own chunk, started now and started again from "Retry" after a failure.
+  const chunks = {
+    editor: () => import('../pipelines/PipelineEditor.svelte'),
+    runs: () => import('../runs/RunsView.svelte'),
+    automations: () => import('../automations/AutomationsView.svelte'),
+    library: () => import('../../features/orchestration/OrchestrationPanel.svelte'),
+  };
+  let editor = $state.raw(chunks.editor());
+  let runsView = $state.raw(chunks.runs());
+  let automationsView = $state.raw(chunks.automations());
+  let panel = $state.raw(chunks.library());
   let epoch = $state(0);
   let startedRun = $state.raw<OrchestrationRunV6 | undefined>();
 
@@ -31,15 +38,21 @@
   const projectItems = $derived<PickerItem[]>(
     projects.map((item) => ({ value: item.id, label: item.personal ? $t('Personal chats') : item.name })),
   );
-  type MainSection = 'systems' | 'runs' | 'schedules';
-  const mainSection = $derived<MainSection>(section === 'runs' || section === 'schedules' ? section : 'systems');
   const librarySection = $derived(section === 'agents' || section === 'teams' || section === 'pipelines');
+  // The Library menu belongs to the editor and the library lists; Runs and Automations have no use for it.
+  const showLibrary = $derived(section !== 'runs' && section !== 'schedules');
 
   // "Edit pipeline" from a run opens that run's saved pipeline in the editor.
   let editCommand = $state<string | undefined>();
   // "Debug in editor" opens a past run as a new unsaved draft instead.
   let editDraft = $state.raw<AgentGraph | undefined>();
   let draftSource = $state<DraftSource>('run');
+  // The sidebar navigates without this view: leaving the editor by any route drops what it was asked to open.
+  $effect(() => {
+    if (section === 'systems') return;
+    editCommand = undefined;
+    editDraft = undefined;
+  });
   // A draft offered by another screen (a template chosen in a chat) opens once.
   $effect(() => {
     const id = workspace?.id;
@@ -51,12 +64,15 @@
     epoch += 1;
   });
   function setSection(next: PipelineSection): void {
-    if (next !== 'systems') {
-      editCommand = undefined;
-      editDraft = undefined;
-    }
     if (next === section) return;
     store.navigate({ name: 'pipelines', section: next });
+  }
+  /** The chunk of the open section failed to load: try it again. */
+  function retryChunk(): void {
+    if (section === 'runs') runsView = chunks.runs();
+    else if (section === 'schedules') automationsView = chunks.automations();
+    else if (section === 'systems') editor = chunks.editor();
+    else panel = chunks.library();
   }
   function editPipeline(commandId: string | undefined): void {
     editCommand = commandId;
@@ -84,6 +100,14 @@
   }
 </script>
 
+{#snippet unavailable()}
+  <EmptyState title={$t('Pipelines are unavailable')} description={$t('Chats and history still work.')}>
+    {#snippet actions()}
+      <Button size="sm" onclick={retryChunk}>{$t('Retry')}</Button>
+    {/snippet}
+  </EmptyState>
+{/snippet}
+
 <section class="pipelines" aria-labelledby="pipelines-title">
   <header class="head">
     <h1 id="pipelines-title" class="visually-hidden">{$t('Pipelines')}</h1>
@@ -96,33 +120,25 @@
         </button>
       {/snippet}
     </Picker>
-    <Segmented
-      label={$t('Pipeline sections')}
-      value={librarySection ? 'systems' : mainSection}
-      options={[
-        { value: 'systems', label: $t('Editor') },
-        { value: 'runs', label: $t('Runs') },
-        { value: 'schedules', label: $t('Automations') },
-      ]}
-      onValueChange={(value) => setSection(value)}
-    />
     <div class="spacer"></div>
-    <Menu
-      align="end"
-      items={[
-        { label: $t('Agents'), checked: section === 'agents', onSelect: () => setSection('agents') },
-        { label: $t('Teams'), checked: section === 'teams', onSelect: () => setSection('teams') },
-        { label: $t('Step lists'), checked: section === 'pipelines', onSelect: () => setSection('pipelines') },
-      ]}
-    >
-      {#snippet trigger(props)}
-        <button type="button" class="library" class:library--active={librarySection} {...props}>
-          <Library size={15} />
-          <span>{$t('Library')}</span>
-          <ChevronDown size={12} />
-        </button>
-      {/snippet}
-    </Menu>
+    {#if showLibrary}
+      <Menu
+        align="end"
+        items={[
+          { label: $t('Agents'), checked: section === 'agents', onSelect: () => setSection('agents') },
+          { label: $t('Teams'), checked: section === 'teams', onSelect: () => setSection('teams') },
+          { label: $t('Step lists'), checked: section === 'pipelines', onSelect: () => setSection('pipelines') },
+        ]}
+      >
+        {#snippet trigger(props)}
+          <button type="button" class="library" class:library--active={librarySection} {...props}>
+            <Library size={15} />
+            <span>{$t('Library')}</span>
+            <ChevronDown size={12} />
+          </button>
+        {/snippet}
+      </Menu>
+    {/if}
   </header>
 
   <div class="body">
@@ -147,7 +163,7 @@
           />
         {/key}
       {:catch}
-        <EmptyState title={$t('Pipelines are unavailable')} description={$t('Chats and history still work.')} />
+        {@render unavailable()}
       {/await}
     {:else if section === 'schedules'}
       {#await automationsView}
@@ -163,7 +179,7 @@
           />
         {/key}
       {:catch}
-        <EmptyState title={$t('Pipelines are unavailable')} description={$t('Chats and history still work.')} />
+        {@render unavailable()}
       {/await}
     {:else if section === 'systems'}
       {#await editor}
@@ -178,11 +194,10 @@
             {draftSource}
             onDirtyChange={(dirty) => (store.pipelineDirty = dirty)}
             onRun={opened}
-            onLibrary={() => setSection('agents')}
           />
         {/key}
       {:catch}
-        <EmptyState title={$t('Pipelines are unavailable')} description={$t('Chats and history still work.')} />
+        {@render unavailable()}
       {/await}
     {:else}
       {#await panel}
@@ -201,7 +216,7 @@
           />
         {/key}
       {:catch}
-        <EmptyState title={$t('Pipelines are unavailable')} description={$t('Chats and history still work.')} />
+        {@render unavailable()}
       {/await}
     {/if}
   </div>

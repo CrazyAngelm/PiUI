@@ -42,6 +42,18 @@
   $effect(() => {
     if (paletteOpen) void lazyViews.load('palette');
   });
+  // A chunk that failed to load (a stale or interrupted fetch) is requested again on demand.
+  let retryingView = $state(false);
+  async function retryView(): Promise<void> {
+    const view = routeView;
+    if (!view || retryingView) return;
+    retryingView = true;
+    try {
+      await lazyViews.load(view);
+    } finally {
+      retryingView = false;
+    }
+  }
 
   onMount(() => {
     void store.start();
@@ -147,14 +159,18 @@
         {#if store.catalogError}
           <div class="top-error" role="alert">
             <span>{$t(store.catalogError)}</span>
-            <Button size="sm" variant="ghost" onclick={() => void store.loadCatalog()}>{$t('Retry')}</Button>
+            <Button size="sm" variant="ghost" onclick={() => void store.retryCatalog()}>{$t('Retry')}</Button>
           </div>
         {/if}
         <div class="view">
           {#if store.route.name === 'home'}
             <HomeView onTrust={openTrust} />
           {:else if routeView && lazyViews.failed[routeView]}
-            <EmptyState title={$t('This view could not be loaded')} description={lazyViews.failed[routeView]} />
+            <EmptyState title={$t('This view could not be loaded')} description={lazyViews.failed[routeView]}>
+              {#snippet actions()}
+                <Button size="sm" onclick={() => void retryView()} loading={retryingView}>{$t('Retry')}</Button>
+              {/snippet}
+            </EmptyState>
           {:else if store.route.name === 'chat' && lazyViews.loaded.chat}
             {@const ChatView = lazyViews.loaded.chat}
             {#key store.route.sessionId}

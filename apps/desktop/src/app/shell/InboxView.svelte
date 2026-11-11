@@ -2,8 +2,6 @@
   import InboxIcon from '@lucide/svelte/icons/inbox';
   import { t } from '../../features/locale/language';
   import { EmptyState, StatusDot } from '../../lib/ui';
-  import { statusLabel } from '../../features/workspace/workspaceState';
-  import { harnessMeta } from '../harnessMeta';
   import ApprovalCard from './ApprovalCard.svelte';
   import HarnessMark from './HarnessMark.svelte';
   import { useWorkspace } from './context';
@@ -34,7 +32,6 @@
 <section class="inbox" aria-labelledby="inbox-title">
   <header class="page-head">
     <h1 id="inbox-title">{$t('Inbox')}</h1>
-    <p>{$t('Decisions and questions from all agents, pipelines and projects.')}</p>
   </header>
 
   <div class="content">
@@ -63,8 +60,7 @@
               <button type="button" onclick={() => void store.openSession(session.id)}>
                 <HarnessMark kind={session.harness} />
                 <span class="rows__title">{session.title}</span>
-                <StatusDot status="failed" />
-                <span class="muted">{$t(statusLabel(session.status))}</span>
+                <StatusDot status="failed" label={$t('Failed')} />
               </button>
             </li>
           {/each}
@@ -82,8 +78,7 @@
             <button type="button" onclick={() => store.openRun(session.workspaceId, session.runId)}>
               <HarnessMark kind={session.harness} />
               <span class="rows__title">{roleName(session.title)}</span>
-              <StatusDot status="running" />
-              <span class="muted">{$t('Pipeline run')}</span>
+              <StatusDot status="running" label={$t('Running')} />
             </button>
           </li>
         {/each}
@@ -96,10 +91,9 @@
         {#each running as session (session.id)}
           <li>
             <button type="button" onclick={() => void store.openSession(session.id)}>
-              <HarnessMark kind={session.harness} />
+              <HarnessMark kind={session.harness} decorative={false} />
               <span class="rows__title">{session.title}</span>
-              <StatusDot status="running" />
-              <span class="muted">{harnessMeta(session.harness).label}</span>
+              <StatusDot status="running" label={$t('Running')} />
             </button>
           </li>
         {/each}
@@ -125,10 +119,6 @@
     margin: 0;
     font-size: var(--piui-text-2xl);
     font-weight: var(--piui-weight-semibold);
-  }
-  .page-head p {
-    margin: 4px 0 0;
-    color: var(--piui-text-muted);
   }
   h2 {
     display: flex;
@@ -182,9 +172,5 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .muted {
-    color: var(--piui-text-muted);
-    font-size: var(--piui-text-sm);
   }
 </style>

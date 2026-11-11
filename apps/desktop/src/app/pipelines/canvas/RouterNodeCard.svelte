@@ -1,11 +1,18 @@
 <script lang="ts" module>
   import type { Node } from '@xyflow/svelte';
   import type { GraphNode } from '../../../features/orchestration/agentGraph';
+  import type { NodeInput } from './wireHue';
 
   export interface RouterNodeData extends Record<string, unknown> {
     node: GraphNode;
     problems: number;
     readOnly: boolean;
+    wire: string;
+    wiredOut: boolean;
+    /** Branch ids that already have a route wire. */
+    wiredBranches: readonly string[];
+    inputs: readonly NodeInput[];
+    flash?: { from: string; wire: string };
   }
   export type RouterFlowNode = Node<RouterNodeData, 'router'>;
 </script>
@@ -16,6 +23,7 @@
   import CircleAlert from '@lucide/svelte/icons/circle-alert';
   import Pin from '@lucide/svelte/icons/pin';
   import { t } from '../../../features/locale/language';
+  import NodeInputs from './NodeInputs.svelte';
 
   let { data, selected }: NodeProps<RouterFlowNode> = $props();
   const node = $derived(data.node);
@@ -23,8 +31,21 @@
   const agentMode = $derived(node.router?.mode === 'agent');
 </script>
 
-<div class="card" class:card--selected={selected} class:card--problem={data.problems > 0}>
-  <Handle type="target" position={Position.Left} id="in" class="port port--in" isConnectable={!data.readOnly} />
+<div
+  class="card piui-node"
+  class:piui-node--flash={data.flash !== undefined}
+  class:card--selected={selected}
+  class:card--problem={data.problems > 0}
+  style:--flash={data.flash?.wire}
+>
+  <Handle
+    type="target"
+    position={Position.Left}
+    id="in"
+    class={data.inputs.length ? 'port port--in port--wired' : 'port port--in'}
+    style={data.inputs.length ? `--port: ${data.inputs[0].wire}` : undefined}
+    isConnectable={!data.readOnly}
+  />
   <header>
     <span class="icon"><Split size={14} /></span>
     <div class="title">
@@ -34,11 +55,19 @@
     {#if node.pinnedOutput}<span class="pinned" title={$t('Pinned data: a run with pinned data skips this step')}><Pin size={12} /><span class="visually-hidden">{$t('Pinned')}</span></span>{/if}
     {#if data.problems > 0}<span class="problem"><CircleAlert size={13} /> {data.problems}</span>{/if}
   </header>
+  <div class="inputs"><NodeInputs inputs={data.inputs} fresh={data.flash?.from} /></div>
   <ul class="branches">
     {#each branches as branch (branch.id)}
       <li>
         <span class="branch__label" title={branch.label}>{branch.label || $t('Route')}</span>
-        <Handle type="source" position={Position.Right} id={`branch:${branch.id}`} class="port port--branch" isConnectable={!data.readOnly} />
+        <Handle
+          type="source"
+          position={Position.Right}
+          id={`branch:${branch.id}`}
+          class={data.wiredBranches.includes(branch.id) ? 'port port--branch port--wired' : 'port port--branch'}
+          style={`--port: ${data.wire}`}
+          isConnectable={!data.readOnly}
+        />
       </li>
     {/each}
   </ul>
@@ -48,14 +77,14 @@
   .card {
     width: 248px;
     padding: 10px 0 6px 12px;
-    border: 1px solid var(--piui-border);
     border-radius: 12px;
-    background: var(--piui-surface-1);
-    box-shadow: var(--piui-shadow-1);
     color: var(--piui-text);
   }
   .card:hover {
-    border-color: var(--piui-border-strong);
+    border-color: color-mix(in srgb, var(--piui-text) 16%, transparent);
+  }
+  .inputs {
+    padding-right: 12px;
   }
   .card--selected {
     border-color: var(--piui-accent);

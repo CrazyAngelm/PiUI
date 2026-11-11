@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createOrchestrationClient, ORCHESTRATION_EVENT_V6, type OrchestrationClient } from '../../host-api/orchestrationClient';
+import { createOrchestrationClient, ORCHESTRATION_EVENT_V6, type OrchestrationClient, type OrchestrationRunV6 } from '../../host-api/orchestrationClient';
 import type { LabHost } from '../../host-api/lab/labHost';
 import { labHost } from '../../host-api/lab/labTestKit';
 import { RunsStore } from './runsStore.svelte';
@@ -95,5 +95,110 @@ describe('RunsStore over the lab host', () => {
     // Recovery read shows the recorded outcome rather than our intent.
     expect(runs.run?.revision).toBeGreaterThan(current.revision);
     stop();
+  });
+});
+
+function recordedRun(id: string): OrchestrationRunV6 {
+  return {
+    schemaVersion: 6,
+    id,
+    revision: 1,
+    status: 'running',
+    tasks: [],
+    messages: [],
+    agentRequests: [],
+    definition: {
+      profiles: [],
+      team: { id: 'team', name: 'Team', members: [], sendEdges: [], observeEdges: [] },
+      pipeline: { id: 'pipeline', name: `Pipeline ${id}`, steps: [] },
+    },
+  } as unknown as OrchestrationRunV6;
+}
+
+/** A client whose run reads answer only when the test says so, in any order. */
+function gatedClient(): { client: OrchestrationClient; answer: (runId: string, run: OrchestrationRunV6 | null) => void } {
+  const pending = new Map<string, (run: OrchestrationRunV6 | null) => void>();
+  const client = {
+    orchestration_get_run_v6: ({ runId }: { runId: string }) =>
+      new Promise<OrchestrationRunV6 | null>((resolve) => {
+        pending.set(runId, resolve);
+      }),
+    orchestration_run_usage_v6: async () => ({}),
+  } as unknown as OrchestrationClient;
+  return { client, answer: (runId, run) => pending.get(runId)?.(run) };
+}
+
+describe('RunsStore open requests', () => {
+  it('keeps the newest run when an older read answers last', async () => {
+    const { client, answer } = gatedClient();
+    const runs = new RunsStore('workspace', false, client);
+    const older = runs.open('older');
+    const newer = runs.open('newer');
+    answer('newer', recordedRun('newer'));
+    await newer;
+    answer('older', recordedRun('older'));
+    await older;
+    expect(runs.run?.id).toBe('newer');
+    expect(runs.summaries.map((item) => item.id)).toEqual(['newer']);
+    expect(runs.runLoading).toBe(false);
+    expect(runs.runError).toBe('');
+  });
+
+  it('stays loading until the newest read answers', async () => {
+    const { client, answer } = gatedClient();
+    const runs = new RunsStore('workspace', false, client);
+    const older = runs.open('older');
+    const newer = runs.open('newer');
+    answer('older', recordedRun('older'));
+    await older;
+    expect(runs.run).toBeUndefined();
+    expect(runs.runLoading).toBe(true);
+    answer('newer', recordedRun('newer'));
+    await newer;
+    expect(runs.run?.id).toBe('newer');
+    expect(runs.runLoading).toBe(false);
+  });
+
+  it('going back to the shown run while another loads opens it again', async () => {
+    const { client, answer } = gatedClient();
+    const runs = new RunsStore('workspace', false, client);
+    const first = runs.open('a');
+    answer('a', recordedRun('a'));
+    await first;
+    const away = runs.open('b');
+    expect(runs.selectedRunId, 'the shown run leaves at once').toBe('');
+    const back = runs.open('a');
+    answer('b', recordedRun('b'));
+    await away;
+    expect(runs.run).toBeUndefined();
+    answer('a', recordedRun('a'));
+    await back;
+    expect(runs.run?.id).toBe('a');
+  });
+
+  it('shows a failed open instead of the run that was shown before', async () => {
+    const { client, answer } = gatedClient();
+    const runs = new RunsStore('workspace', false, client);
+    const first = runs.open('a');
+    answer('a', recordedRun('a'));
+    await first;
+    const missing = runs.open('b');
+    answer('b', null);
+    await missing;
+    expect(runs.run).toBeUndefined();
+    expect(runs.runError).toBe('This run is no longer available. Refresh the list.');
+  });
+
+  it('does not report a missing run for an answer that is no longer wanted', async () => {
+    const { client, answer } = gatedClient();
+    const runs = new RunsStore('workspace', false, client);
+    const gone = runs.open('gone');
+    const newer = runs.open('newer');
+    answer('newer', recordedRun('newer'));
+    await newer;
+    answer('gone', null);
+    await gone;
+    expect(runs.run?.id).toBe('newer');
+    expect(runs.runError).toBe('');
   });
 });
