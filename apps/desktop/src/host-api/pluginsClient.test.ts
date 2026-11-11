@@ -67,10 +67,10 @@ describe('plugins v1 client', () => {
       const mapped = pluginsError(cause);
       expect(mapped).toBeInstanceOf(PluginsError);
       expect(mapped.code).toBe('UNAVAILABLE');
-      expect(mapped.message).toBe('PiUI could not read the plugin list.');
+      expect(mapped.message).toBe('Nano Desktop could not read the plugin list.');
     }
     // A known code with native text keeps the code but never the text.
-    expect(pluginsError({ code: 'CONFLICT', message: 'line\nbreak' })).toMatchObject({ code: 'CONFLICT', message: 'PiUI could not read the plugin list.' });
+    expect(pluginsError({ code: 'CONFLICT', message: 'line\nbreak' })).toMatchObject({ code: 'CONFLICT', message: 'Nano Desktop could not read the plugin list.' });
 
     const invalid = createPluginsClient((async () => ({ registry: { protocol: 2 } })) as never, vi.fn() as never);
     await expect(invalid.run({ type: 'list' })).rejects.toMatchObject({ code: 'UNAVAILABLE' });

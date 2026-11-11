@@ -3,7 +3,7 @@ import type {
   ResultField, RouterPredicate, RunDefinitionSnapshot, TeamDefinition,
 } from '../labContracts';
 import type { LabOrchestrationWorkspace } from '../labState';
-import { isAcpHarness, isBuiltinHarness, type BuiltinHarness } from '../../../../../../contracts/harness-identity-v2';
+import { isAcpHarness, isBuiltinHarness, type BuiltinHarness } from '../../../../../../contracts/harness-identity-v3';
 import { pipelineInputIssues, reviewLimitValid } from '../../runInputs';
 import { executorAuthorityIssue, isHostExecutedStep, LLM_READ_ONLY_UNSUPPORTED, llmProfileIssue, stepExecutorIssue } from '../../stepExecutors';
 import { pipelinePinsIssue } from '../../pinnedData';
@@ -304,6 +304,8 @@ const NATIVE_TOOLS: Readonly<Record<BuiltinHarness, readonly string[]>> = {
   'prime-agent': ['ipython', 'workspace'],
   codex: [],
   hermes: [],
+  // Nano restricts no tool per agent; its host-set read-only list is not a profile rule.
+  nano: [],
   // `Agent` is never allowable: managed Claude Code runs delegate through the coordinator.
   'claude-code': [
     'AskUserQuestion', 'Bash', 'Edit', 'ExitPlanMode', 'Glob', 'Grep', 'NotebookEdit', 'PowerShell', 'Read', 'Skill',
@@ -317,6 +319,7 @@ const PERMISSION_MODES: Readonly<Record<BuiltinHarness, readonly AgentProfile['p
   codex: ['native', 'read-only', 'workspace-write', 'full-access'],
   hermes: ['native'],
   'claude-code': ['native', 'read-only', 'workspace-write', 'full-access'],
+  nano: ['native', 'read-only', 'full-access'],
 };
 
 /** An ACP agent restricts no tool and keeps its own (native) permissions. */
@@ -348,6 +351,7 @@ function resourceRuleUnsupported(profile: AgentProfile, rule: NonNullable<AgentP
     case 'pi':
     case 'hermes':
     case 'claude-code':
+    case 'nano':
       return true;
     case 'prime-agent':
       return rule.kind !== 'skill';
@@ -374,8 +378,12 @@ export function launchPolicyIssue(profile: AgentProfile, summary: HarnessSummary
   const networkUnsupported = profile.networkAccess === true && (profile.harness !== 'codex'
     || (profile.permissionMode !== 'read-only' && profile.permissionMode !== 'workspace-write'));
   const claude = profile.harness === 'claude-code';
+  const nano = profile.harness === 'nano';
   const unsupported = (profile.baseInstructions !== undefined && profile.harness !== 'codex')
-    || (profile.serviceTier !== undefined && (profile.harness === 'pi' || profile.harness === 'hermes' || claude || isAcpHarness(profile.harness)))
+    || (profile.serviceTier !== undefined && (profile.harness === 'pi' || profile.harness === 'hermes' || claude || nano || isAcpHarness(profile.harness)))
+    // Nano has no thinking levels and runs only its own provider.
+    || (nano && profile.reasoning !== undefined)
+    || (nano && profile.modelProvider !== undefined && profile.modelProvider !== 'nano')
     || (claude && profile.reasoning !== undefined && !CLAUDE_EFFORT_LEVELS.includes(profile.reasoning))
     || (claude && profile.modelProvider !== undefined && profile.modelProvider !== 'anthropic')
     || networkUnsupported

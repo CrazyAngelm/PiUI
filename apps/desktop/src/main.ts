@@ -10,7 +10,7 @@ import './styles/motion.css';
 const target = document.getElementById('app');
 
 if (target === null) {
-  throw new Error('PiUI could not find the application root.');
+  throw new Error('Nano Desktop could not find the application root.');
 }
 
 // Russian copy is a separate chunk; load it first so the first paint is already

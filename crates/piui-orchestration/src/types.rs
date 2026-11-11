@@ -8,9 +8,10 @@ pub const ORCHESTRATION_SCHEMA_VERSION: u32 = 6;
 
 pub type Revision = u64;
 
-/// Harness identity (grammar v2): built-in names in kebab-case or
-/// `acp:<descriptor id>`. Both extensions are additive within schema v6:
-/// stored definitions without them read back unchanged.
+/// Harness identity (grammar v3): built-in names in kebab-case or
+/// `acp:<descriptor id>`. Every extension (`acp:` in v2, `nano` in v3) is
+/// additive within schema v6: stored definitions without them read back
+/// unchanged, and an older reader rejects the new value explicitly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Harness {
     Pi,
@@ -19,21 +20,26 @@ pub enum Harness {
     Hermes,
     /// The user's own Claude Code CLI, on the user's Claude subscription only.
     ClaudeCode,
+    /// Nano Desktop's own harness (identity v3): upstream Pi behind the host
+    /// relay. Its nodes are ordinary native tasks: it is never a coordinator
+    /// and its native defaults compare only with Nano itself.
+    Nano,
     /// An Agent Client Protocol agent from the host descriptor registry
     /// (v6.3). Its native defaults are comparable only with the same agent.
     Acp(AcpAgentId),
 }
 
 impl Harness {
-    const BUILTIN: [(&'static str, Self); 5] = [
+    const BUILTIN: [(&'static str, Self); 6] = [
         ("pi", Self::Pi),
         ("prime-agent", Self::PrimeAgent),
         ("codex", Self::Codex),
         ("hermes", Self::Hermes),
         ("claude-code", Self::ClaudeCode),
+        ("nano", Self::Nano),
     ];
 
-    /// Parses a v2 harness identity.
+    /// Parses a v3 harness identity.
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         parse_harness_identity(value, &Self::BUILTIN, Self::Acp)

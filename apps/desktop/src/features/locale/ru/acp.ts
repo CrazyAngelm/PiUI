@@ -2,27 +2,27 @@
 export const acpRu: Readonly<Record<string, string>> = {
   // Generic ACP adapter manifest (src/harness-adapters/acp.ts).
   'ACP agent': 'ACP-агент',
-  'The agent keeps its own permission, tool and MCP settings. PiUI answers its permission requests but cannot restrict its tools or files.':
-    'Агент сам управляет своими разрешениями, инструментами и MCP. PiUI отвечает на его запросы разрешений, но не может ограничить его инструменты или файлы.',
+  'The agent keeps its own permission, tool and MCP settings. Nano Desktop answers its permission requests but cannot restrict its tools or files.':
+    'Агент сам управляет своими разрешениями, инструментами и MCP. Nano Desktop отвечает на его запросы разрешений, но не может ограничить его инструменты или файлы.',
   'Instructions are sent with the first message; the agent keeps its own system prompt.':
     'Инструкции отправляются с первым сообщением; агент сохраняет свой системный промпт.',
 
   // Settings → Harnesses (src/app/settings).
-  'Safe mode: PiUI starts no agent program, so harness checks and changes are off.':
-    'Безопасный режим: PiUI не запускает программы агентов, поэтому проверки и изменения харнесов отключены.',
+  'Safe mode: Nano Desktop starts no agent program, so harness checks and changes are off.':
+    'Безопасный режим: Nano Desktop не запускает программы агентов, поэтому проверки и изменения харнесов отключены.',
   'Loading harnesses…': 'Загрузка харнесов…',
   'Built-in harnesses': 'Встроенные харнесы',
   Location: 'Расположение',
-  'Tested with PiUI': 'Проверено с PiUI',
+  'Tested with Nano Desktop': 'Проверено с Nano Desktop',
   'Sign-in': 'Вход',
   'ACP agents': 'ACP-агенты',
   'Add ACP agent…': 'Добавить ACP-агента…',
-  'Agents that speak the Agent Client Protocol. PiUI starts only the exact command line you trust, never through a shell. Trust is not a sandbox: an agent runs with your permissions.':
-    'Агенты, работающие по Agent Client Protocol. PiUI запускает только ту командную строку, которой вы доверили, и никогда через оболочку. Доверие — не песочница: агент работает с вашими правами.',
+  'Agents that speak the Agent Client Protocol. Nano Desktop starts only the exact command line you trust, never through a shell. Trust is not a sandbox: an agent runs with your permissions.':
+    'Агенты, работающие по Agent Client Protocol. Nano Desktop запускает только ту командную строку, которой вы доверили, и никогда через оболочку. Доверие — не песочница: агент работает с вашими правами.',
   'Remove {0}?': 'Удалить {0}?',
   'Remove agent': 'Удалить агента',
-  'PiUI forgets this descriptor and your decisions about it. Chats with this agent keep their history but cannot start until you add it again.':
-    'PiUI забудет это описание и ваши решения о нём. Чаты с этим агентом сохранят историю, но не запустятся, пока вы не добавите его снова.',
+  'Nano Desktop forgets this descriptor and your decisions about it. Chats with this agent keep their history but cannot start until you add it again.':
+    'Nano Desktop забудет это описание и ваши решения о нём. Чаты с этим агентом сохранят историю, но не запустятся, пока вы не добавите его снова.',
   'Not checked': 'Не проверено',
   'Not installed': 'Не установлен',
   'Unsupported version': 'Неподдерживаемая версия',
@@ -32,13 +32,13 @@ export const acpRu: Readonly<Record<string, string>> = {
   'Version unknown': 'Версия не определена',
   'Sign-in required': 'Нужен вход',
   'Needs review': 'Нужна проверка',
-  '{0}, tested with PiUI': '{0}, проверена с PiUI',
-  '{0}, newer than the versions tested with PiUI': '{0}, новее версий, проверенных с PiUI',
-  '{0}, not verified by PiUI': '{0}, не проверена PiUI',
-  '{0}, older than the versions tested with PiUI': '{0}, старше версий, проверенных с PiUI',
+  '{0}, tested with Nano Desktop': '{0}, проверена с Nano Desktop',
+  '{0}, newer than the versions tested with Nano Desktop': '{0}, новее версий, проверенных с Nano Desktop',
+  '{0}, not verified by Nano Desktop': '{0}, не проверена Nano Desktop',
+  '{0}, older than the versions tested with Nano Desktop': '{0}, старше версий, проверенных с Nano Desktop',
   'The version output was not recognized': 'Вывод версии не распознан',
   'The version check did not finish': 'Проверка версии не завершилась',
-  'Ships with PiUI': 'Поставляется с PiUI',
+  'Ships with Nano Desktop': 'Поставляется с Nano Desktop',
   'Added by you': 'Добавлен вами',
   Identity: 'Идентификатор',
   Command: 'Команда',
@@ -53,7 +53,7 @@ export const acpRu: Readonly<Record<string, string>> = {
   'Reopening chats': 'Повторное открытие чатов',
   'Model choice': 'Выбор модели',
   'Session modes': 'Режимы сессии',
-  'PiUI coordination tool': 'Инструмент координации PiUI',
+  'Nano Desktop coordination tool': 'Инструмент координации Nano Desktop',
   Documentation: 'Документация',
   'Review and trust…': 'Проверить и доверить…',
   'Secret variables…': 'Секретные переменные…',
@@ -62,13 +62,13 @@ export const acpRu: Readonly<Record<string, string>> = {
   'Checking this agent…': 'Проверка агента…',
   "The agent's program was not found on PATH.": 'Программа агента не найдена в PATH.',
   "The agent's program path does not exist.": 'Путь к программе агента не существует.',
-  'This launcher needs a shell, which PiUI never uses. Point the descriptor at the executable or the Node script.':
-    'Этому загрузчику нужна оболочка, а PiUI никогда её не использует. Укажите в описании исполняемый файл или скрипт Node.',
+  'This launcher needs a shell, which Nano Desktop never uses. Point the descriptor at the executable or the Node script.':
+    'Этому загрузчику нужна оболочка, а Nano Desktop никогда её не использует. Укажите в описании исполняемый файл или скрипт Node.',
   'Node.js is needed to start this agent but was not found.': 'Для запуска этого агента нужен Node.js, но он не найден.',
   "Review and trust this agent's command line in Settings → Harnesses.":
     'Проверьте командную строку этого агента и доверьте её в «Настройки → Харнесы».',
-  'The installed version is older than the versions tested with PiUI.': 'Установленная версия старше версий, проверенных с PiUI.',
-  'The agent did not report a version PiUI can recognize.': 'Агент не сообщил версию, которую PiUI может распознать.',
+  'The installed version is older than the versions tested with Nano Desktop.': 'Установленная версия старше версий, проверенных с Nano Desktop.',
+  'The agent did not report a version Nano Desktop can recognize.': 'Агент не сообщил версию, которую Nano Desktop может распознать.',
   "Sign in with the agent's own app, then try again. Settings → Harnesses shows how.":
     'Войдите через приложение самого агента и попробуйте снова. Как это сделать — в «Настройки → Харнесы».',
   'This agent is no longer registered in Settings → Harnesses.': 'Этот агент больше не зарегистрирован в «Настройки → Харнесы».',
@@ -76,40 +76,40 @@ export const acpRu: Readonly<Record<string, string>> = {
     'Claude Code работает только по вашей подписке Claude: запустите `claude` в терминале и выполните /login.',
   "Sign in with Codex's own flow: run `codex login` in a terminal.": 'Войдите средствами Codex: выполните `codex login` в терминале.',
   "Sign in with Gemini CLI's own flow: run `gemini` in a terminal and choose a sign-in method. To use an API key instead, allow PiUI to pass GEMINI_API_KEY below.":
-    'Войдите средствами Gemini CLI: запустите `gemini` в терминале и выберите способ входа. Чтобы вместо этого использовать API-ключ, разрешите PiUI передавать GEMINI_API_KEY ниже.',
+    'Войдите средствами Gemini CLI: запустите `gemini` в терминале и выберите способ входа. Чтобы вместо этого использовать API-ключ, разрешите Nano Desktop передавать GEMINI_API_KEY ниже.',
   "Sign in with OpenCode's own flow: run `opencode auth login` in a terminal. To use a provider API key instead, allow PiUI to pass it below.":
-    'Войдите средствами OpenCode: выполните `opencode auth login` в терминале. Чтобы вместо этого использовать API-ключ провайдера, разрешите PiUI передать его ниже.',
+    'Войдите средствами OpenCode: выполните `opencode auth login` в терминале. Чтобы вместо этого использовать API-ключ провайдера, разрешите Nano Desktop передать его ниже.',
   "Sign in with Qwen Code's own flow: run `qwen` in a terminal and use /auth. To use an API key instead, allow PiUI to pass DASHSCOPE_API_KEY or OPENAI_API_KEY below.":
-    'Войдите средствами Qwen Code: запустите `qwen` в терминале и выполните /auth. Чтобы вместо этого использовать API-ключ, разрешите PiUI передавать DASHSCOPE_API_KEY или OPENAI_API_KEY ниже.',
+    'Войдите средствами Qwen Code: запустите `qwen` в терминале и выполните /auth. Чтобы вместо этого использовать API-ключ, разрешите Nano Desktop передавать DASHSCOPE_API_KEY или OPENAI_API_KEY ниже.',
   "Sign in with Copilot's own flow: run `copilot` in a terminal and use /login. To use a token instead, allow PiUI to pass COPILOT_GITHUB_TOKEN below.":
-    'Войдите средствами Copilot: запустите `copilot` в терминале и выполните /login. Чтобы вместо этого использовать токен, разрешите PiUI передавать COPILOT_GITHUB_TOKEN ниже.',
+    'Войдите средствами Copilot: запустите `copilot` в терминале и выполните /login. Чтобы вместо этого использовать токен, разрешите Nano Desktop передавать COPILOT_GITHUB_TOKEN ниже.',
   "Set up Goose's own provider: run `goose configure` in a terminal and choose a provider and model.":
     'Настройте провайдера средствами Goose: выполните `goose configure` в терминале и выберите провайдера и модель.',
   "Sign in with Kimi Code's own flow: run `kimi` in a terminal and use /login.":
     'Войдите средствами Kimi Code: запустите `kimi` в терминале и выполните /login.',
   "Sign in with Cursor's own flow: run `cursor-agent login` in a terminal. To use an API key instead, allow PiUI to pass CURSOR_API_KEY below.":
-    'Войдите средствами Cursor: выполните `cursor-agent login` в терминале. Чтобы вместо этого использовать API-ключ, разрешите PiUI передавать CURSOR_API_KEY ниже.',
+    'Войдите средствами Cursor: выполните `cursor-agent login` в терминале. Чтобы вместо этого использовать API-ключ, разрешите Nano Desktop передавать CURSOR_API_KEY ниже.',
 
   // Native harness refusals (host fixed texts).
   'The installed native harness version is not supported by this adapter.': 'Установленная версия агента не поддерживается этим адаптером.',
   'Native lifecycle containment is not yet verified on this platform.':
     'Завершение процессов агента на этой платформе ещё не проверено.',
-  'The installed harness speaks a protocol this PiUI version does not support. Update PiUI or the harness.':
-    'Установленный harness использует протокол, который эта версия PiUI не поддерживает. Обновите PiUI или harness.',
+  'The installed harness speaks a protocol this Nano Desktop version does not support. Update Nano Desktop or the harness.':
+    'Установленный harness использует протокол, который эта версия Nano Desktop не поддерживает. Обновите Nano Desktop или harness.',
 
   // Registry errors (harness_registry_v1).
   'Harness checks and changes are disabled in safe mode.': 'В безопасном режиме проверки и изменения харнесов отключены.',
   'The harness list changed. Review it and try again.': 'Список харнесов изменился. Проверьте его и попробуйте снова.',
   'An agent with this ID already exists.': 'Агент с таким ID уже существует.',
   'This agent is no longer registered.': 'Этот агент больше не зарегистрирован.',
-  'Agents that ship with PiUI cannot be removed or re-trusted.': 'Агентов, поставляемых с PiUI, нельзя удалить или доверить заново.',
+  'Agents that ship with Nano Desktop cannot be removed or re-trusted.': 'Агентов, поставляемых с Nano Desktop, нельзя удалить или доверить заново.',
   'The agent or its command line changed since you reviewed it. Review it again.':
     'Агент или его командная строка изменились после вашей проверки. Проверьте ещё раз.',
   'The program was not found, so there is nothing to trust yet.': 'Программа не найдена, доверять пока нечему.',
   'There is nothing to confirm for this agent right now. Check it again.': 'Сейчас для этого агента нечего подтверждать. Проверьте его снова.',
   'Remove an agent before adding another (32 at most).': 'Удалите агента, прежде чем добавить нового (не больше 32).',
-  'PiUI could not save the harness list.': 'PiUI не удалось сохранить список харнесов.',
-  'PiUI could not read the harness list.': 'PiUI не удалось прочитать список харнесов.',
+  'Nano Desktop could not save the harness list.': 'Nano Desktop не удалось сохранить список харнесов.',
+  'Nano Desktop could not read the harness list.': 'Nano Desktop не удалось прочитать список харнесов.',
   'Wait for the current harness change to finish.': 'Дождитесь завершения текущего изменения харнесов.',
 
   // Descriptor validation (host AcpDescriptorError and the form).
@@ -140,40 +140,40 @@ export const acpRu: Readonly<Record<string, string>> = {
 
   // Trust, secrets and add dialogs.
   'Trust {0}?': 'Доверить {0}?',
-  'PiUI will start exactly this command, without a shell. Review it before you trust it.':
-    'PiUI запустит именно эту команду, без оболочки. Проверьте её, прежде чем доверить.',
+  'Nano Desktop will start exactly this command, without a shell. Review it before you trust it.':
+    'Nano Desktop запустит именно эту команду, без оболочки. Проверьте её, прежде чем доверить.',
   'Command line': 'Командная строка',
   Arguments: 'Аргументы',
   None: 'Нет',
   'Environment variables': 'Переменные окружения',
-  'PiUI passes these names from your environment. It never reads, shows or stores their values.':
-    'PiUI передаёт эти имена из вашего окружения. Их значения PiUI никогда не читает, не показывает и не хранит.',
+  'Nano Desktop passes these names from your environment. It never reads, shows or stores their values.':
+    'Nano Desktop передаёт эти имена из вашего окружения. Их значения Nano Desktop никогда не читает, не показывает и не хранит.',
   'Secret-like names ({0}) pass only after you allow them separately.':
     'Имена, похожие на секреты ({0}), передаются только после отдельного разрешения.',
   'Only the basic environment (locations, locale and PATH). No keys or tokens.':
     'Только базовое окружение (расположения, язык и PATH). Никаких ключей и токенов.',
-  'Trust is not a sandbox. The agent runs with your user account’s permissions and keeps its own tools, network access and credentials. PiUI runs this command now to read its version, and later to start chats.':
-    'Доверие — не песочница. Агент работает с правами вашей учётной записи и сохраняет свои инструменты, доступ к сети и учётные данные. PiUI запустит эту команду сейчас, чтобы узнать версию, а позже — чтобы начинать чаты.',
+  'Trust is not a sandbox. The agent runs with your user account’s permissions and keeps its own tools, network access and credentials. Nano Desktop runs this command now to read its version, and later to start chats.':
+    'Доверие — не песочница. Агент работает с правами вашей учётной записи и сохраняет свои инструменты, доступ к сети и учётные данные. Nano Desktop запустит эту команду сейчас, чтобы узнать версию, а позже — чтобы начинать чаты.',
   'Trust covers this command line; newer versions start without asking again.':
     'Доверие относится к этой командной строке; более новые версии запускаются без повторного вопроса.',
   'Descriptor fingerprint: {0}': 'Отпечаток описания: {0}',
   'Review the current command': 'Проверить текущую команду',
   'Trust this command': 'Доверить эту команду',
   'Secret variables for {0}': 'Секретные переменные для {0}',
-  'When the agent starts, PiUI passes the value of each selected variable from your environment. PiUI never reads, shows or stores the values. Leave a variable unselected to keep it from the agent.':
-    'При запуске агента PiUI передаёт значение каждой выбранной переменной из вашего окружения. Значения PiUI никогда не читает, не показывает и не хранит. Не отмечайте переменную, чтобы не передавать её агенту.',
+  'When the agent starts, Nano Desktop passes the value of each selected variable from your environment. Nano Desktop never reads, shows or stores the values. Leave a variable unselected to keep it from the agent.':
+    'При запуске агента Nano Desktop передаёт значение каждой выбранной переменной из вашего окружения. Значения Nano Desktop никогда не читает, не показывает и не хранит. Не отмечайте переменную, чтобы не передавать её агенту.',
   'Pass to the agent': 'Передавать агенту',
   'Add ACP agent': 'Добавить ACP-агента',
-  'Describe how to start an agent that speaks the Agent Client Protocol. PiUI runs nothing until you review and trust its command line.':
-    'Опишите, как запускать агента, работающего по Agent Client Protocol. PiUI ничего не запустит, пока вы не проверите и не доверите его командную строку.',
+  'Describe how to start an agent that speaks the Agent Client Protocol. Nano Desktop runs nothing until you review and trust its command line.':
+    'Опишите, как запускать агента, работающего по Agent Client Protocol. Nano Desktop ничего не запустит, пока вы не проверите и не доверите его командную строку.',
   'Descriptor input': 'Способ ввода описания',
   Form: 'Форма',
   JSON: 'JSON',
   'Agent ID': 'ID агента',
   'Lowercase letters, digits and hyphens, for example qwen-code. Chats and pipelines use it as acp:<ID>.':
     'Строчные латинские буквы, цифры и дефисы, например qwen-code. Чаты и пайплайны используют его как acp:<ID>.',
-  'A program name found on PATH or an absolute path. PiUI never uses a shell.':
-    'Имя программы из PATH или абсолютный путь. PiUI никогда не использует оболочку.',
+  'A program name found on PATH or an absolute path. Nano Desktop never uses a shell.':
+    'Имя программы из PATH или абсолютный путь. Nano Desktop никогда не использует оболочку.',
   'One argument per line, for example --experimental-acp.': 'По одному аргументу в строке, например --experimental-acp.',
   'Version arguments': 'Аргументы версии',
   'One per line; the program prints its version with them.': 'По одному в строке; с ними программа печатает свою версию.',
@@ -194,7 +194,7 @@ export const acpRu: Readonly<Record<string, string>> = {
   'Never reload a conversation with session/load.': 'Никогда не загружать разговор заново через session/load.',
   'Ignore the models the agent advertises.': 'Игнорировать модели, которые объявляет агент.',
   'Ignore the modes the agent advertises.': 'Игнорировать режимы, которые объявляет агент.',
-  'Never offer PiUI’s workspace tool as an HTTP MCP server.': 'Никогда не предлагать инструмент рабочей области PiUI как HTTP MCP-сервер.',
+  'Never offer Nano Desktop’s workspace tool as an HTTP MCP server.': 'Никогда не предлагать инструмент рабочей области Nano Desktop как HTTP MCP-сервер.',
   'Descriptor JSON': 'JSON описания',
   'ACP agent descriptor v1. Unknown fields are rejected, never dropped.':
     'Описание ACP-агента v1. Неизвестные поля отклоняются, а не отбрасываются.',

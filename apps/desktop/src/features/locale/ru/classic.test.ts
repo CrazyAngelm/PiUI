@@ -25,7 +25,7 @@ const SHARED_KEYS = [
   'Rename…',
   'Pin to top',
   'Unpin',
-  'Remove from PiUI…',
+  'Remove from Nano Desktop…',
   'Could not update the project',
   'This request closes automatically if you do not answer.',
 ];

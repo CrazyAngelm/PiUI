@@ -27,12 +27,12 @@ const ERROR_COPY: Readonly<Record<ScriptTestErrorCode, string>> = {
   'safe-mode': 'Scripts do not run in safe mode.',
   'not-trusted': 'Trust this project folder to test scripts.',
   'project-unavailable': 'The project folder is unavailable.',
-  'shutting-down': 'PiUI is closing.',
+  'shutting-down': 'Nano Desktop is closing.',
   conflict: 'This test is already running.',
   busy: 'Too many script tests are running. Wait for one to finish.',
   'script-runtime-unavailable': 'The script runtime (Node.js, Python or PowerShell) was not found on this computer.',
   'script-start-failed': 'The script could not be started. Nothing ran.',
-  'script-outcome-unknown': 'The script started, but PiUI could not observe how it ended.',
+  'script-outcome-unknown': 'The script started, but Nano Desktop could not observe how it ended.',
   unknown: 'The script test could not be completed.',
 };
 

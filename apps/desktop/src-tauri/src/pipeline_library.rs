@@ -241,7 +241,10 @@ impl From<LibraryError> for WorkspaceError {
                 "LIMIT",
                 "The pipeline library is full. Delete a template, then try again.",
             ),
-            LibraryError::Io => tool_error("IO_ERROR", "PiUI could not save the pipeline library."),
+            LibraryError::Io => tool_error(
+                "IO_ERROR",
+                "Nano Desktop could not save the pipeline library.",
+            ),
         }
     }
 }

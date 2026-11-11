@@ -1,6 +1,6 @@
 {
   "name": "piui",
-  "version": "0.2.11",
+  "version": "0.3.0",
   "private": true,
   "description": "A desktop workbench for native agent harnesses and multi-agent pipelines",
   "license": "MIT",
@@ -25,6 +25,8 @@
     "release:windows": "node scripts/release-build.mjs windows",
     "release:linux": "node scripts/release-build.mjs linux",
     "release:macos": "node scripts/release-build.mjs macos",
+    "nano:dev-server": "node tools/nano-dev-server/server.mjs",
+    "nano:dev-server:test": "node --test tools/nano-dev-server/server.test.mjs",
     "system:check": "node scripts/system-config.mjs",
     "system:schema": "node scripts/system-schema.mjs",
     "create-plugin": "node packages/plugin-sdk/bin/create-plugin.mjs",

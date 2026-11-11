@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible PiUI defect without including private session data.
+description: Report a reproducible Nano Desktop defect without including private session data.
 title: "bug: "
 labels: ["bug"]
 body:
@@ -20,7 +20,7 @@ body:
       label: Minimal redacted reproduction
       description: List the smallest safe steps to reproduce the issue.
       placeholder: |
-        1. Start PiUI with a synthetic or empty test project.
+        1. Start Nano Desktop with a synthetic or empty test project.
         2. …
     validations:
       required: true
@@ -29,7 +29,7 @@ body:
     attributes:
       label: Environment
       description: Provide only non-sensitive versions and platform details.
-      placeholder: "PiUI version, OS version, Pi version (if relevant), and whether safe mode was active."
+      placeholder: "Nano Desktop version, OS version, Pi version (if relevant), and whether safe mode was active."
     validations:
       required: true
   - type: checkboxes

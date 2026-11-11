@@ -87,9 +87,9 @@
       {$t('Check again')}
     </Button>
   </div>
-  <p class="lead">{$t('PiUI drives the agent tools installed on this computer. Each harness keeps its own sign-in, models and history.')}</p>
+  <p class="lead">{$t('Nano Desktop drives the agent tools installed on this computer. Each harness keeps its own sign-in, models and history.')}</p>
   {#if store.safeMode}
-    <p class="note" role="status">{$t('Safe mode: PiUI starts no agent program, so harness checks and changes are off.')}</p>
+    <p class="note" role="status">{$t('Safe mode: Nano Desktop starts no agent program, so harness checks and changes are off.')}</p>
   {/if}
   {#if store.error}<p class="error" role="alert">{$t(store.error)}</p>{/if}
 
@@ -115,7 +115,7 @@
             {#if harness.location || harness.verifiedVersions || harness.signInHint}
               <dl class="facts">
                 {#if harness.location}<div><dt>{$t('Location')}</dt><dd><code>{harness.location}</code></dd></div>{/if}
-                {#if harness.verifiedVersions}<div><dt>{$t('Tested with PiUI')}</dt><dd>{harness.verifiedVersions}</dd></div>{/if}
+                {#if harness.verifiedVersions}<div><dt>{$t('Tested with Nano Desktop')}</dt><dd>{harness.verifiedVersions}</dd></div>{/if}
                 {#if harness.signInHint}<div><dt>{$t('Sign-in')}</dt><dd>{$t(harness.signInHint)}</dd></div>{/if}
               </dl>
             {/if}
@@ -131,7 +131,7 @@
         {$t('Add ACP agent…')}
       </Button>
     </div>
-    <p class="lead">{$t('Agents that speak the Agent Client Protocol. PiUI starts only the exact command line you trust, never through a shell. Trust is not a sandbox: an agent runs with your permissions.')}</p>
+    <p class="lead">{$t('Agents that speak the Agent Client Protocol. Nano Desktop starts only the exact command line you trust, never through a shell. Trust is not a sandbox: an agent runs with your permissions.')}</p>
     <ul class="cards" aria-labelledby="acp-agents-title">
       {#each store.agents as row (row.agent.descriptor.id)}
         <AcpAgentCard
@@ -144,7 +144,7 @@
       {/each}
     </ul>
   {/if}
-  <p class="muted small">{$t('Sign in inside each harness (for example in its terminal app). PiUI never reads or stores credentials.')}</p>
+  <p class="muted small">{$t('Sign in inside each harness (for example in its terminal app). Nano Desktop never reads harness credentials. The optional Nano account keeps its sign-in in the system credential store (in memory only if that is unavailable), out of reach of the interface.')}</p>
 </div>
 
 <AddAcpAgentDialog bind:open={adding} {store} onAdded={added} />
@@ -177,7 +177,7 @@
     error={dialogError}
     onConfirm={() => void decide(() => store.remove(target.agent))}
   >
-    <p>{$t('PiUI forgets this descriptor and your decisions about it. Chats with this agent keep their history but cannot start until you add it again.')}</p>
+    <p>{$t('Nano Desktop forgets this descriptor and your decisions about it. Chats with this agent keep their history but cannot start until you add it again.')}</p>
   </AcpConfirmDialog>
 {/if}
 

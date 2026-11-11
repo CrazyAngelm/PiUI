@@ -24,7 +24,7 @@ export async function watchUpdateNotices(open: () => void, client: AppUpdateClie
     notified.add(version);
     const translate = get(t);
     toasts.show({
-      title: translate('PiUI {0} is available', [version]),
+      title: translate('Nano Desktop {0} is available', [version]),
       description: translate('Read what changed and install it from Settings → About.'),
       action: { label: translate('View update'), run: open },
       duration: 0,

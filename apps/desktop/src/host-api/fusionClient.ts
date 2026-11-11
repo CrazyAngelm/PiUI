@@ -32,6 +32,7 @@ export const FUSION_ERROR_CODES = [
   'NOT_SUPPORTED',
   'IO_ERROR',
   'SIGN_IN_REQUIRED',
+  'NANO_SIGN_IN_REQUIRED',
   'unknown',
 ] as const;
 

@@ -64,8 +64,8 @@ const COMMAND_LATENCY_MS = 150;
 const MESSAGES: Readonly<Record<PluginsErrorCode, string>> = {
   SAFE_MODE: 'Plugins cannot be changed or run in safe mode.',
   CONFLICT: 'The plugin list changed. Review it and try again.',
-  INVALID_PACKAGE: 'This is not a valid PiUI plugin package.',
-  INCOMPATIBLE: 'This plugin does not support this PiUI version.',
+  INVALID_PACKAGE: 'This is not a valid Nano Desktop plugin package.',
+  INCOMPATIBLE: 'This plugin does not support this Nano Desktop version.',
   DUPLICATE: 'A plugin with this ID is already installed another way. Remove it first.',
   NOT_FOUND: 'This plugin or its contribution no longer exists.',
   REVIEW_EXPIRED: 'This review expired. Choose the package again.',
@@ -77,7 +77,7 @@ const MESSAGES: Readonly<Record<PluginsErrorCode, string>> = {
   BACKEND_FAILED: 'The plugin reported an error.',
   BACKEND_TIMEOUT: 'The plugin did not answer in time. Its backend was stopped.',
   LIMIT: 'Remove a plugin before adding another (64 at most).',
-  IO_ERROR: 'PiUI could not save the plugin list.',
+  IO_ERROR: 'Nano Desktop could not save the plugin list.',
 };
 
 function failure(code: PluginsErrorCode, extra: { message?: string; problems?: PluginProblemV1[]; detail?: string } = {}): HostErrorPayload & { problems?: PluginProblemV1[]; detail?: string } {
@@ -132,7 +132,7 @@ const BROKEN = manifest({
   name: 'Broken sample',
   version: '2.0.1',
   publisher: 'Lab Tools',
-  description: 'Its backend exits right after it starts, to show how PiUI contains a crashing plugin.',
+  description: 'Its backend exits right after it starts, to show how Nano Desktop contains a crashing plugin.',
   engines: { piui: '>=0.1.0 <1.0.0' },
   permissions: ['commands', 'network'],
   backend: { entry: 'dist/server.mjs' },

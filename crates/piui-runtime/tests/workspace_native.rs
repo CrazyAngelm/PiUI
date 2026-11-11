@@ -78,6 +78,9 @@ fn native_config(kind: HarnessKind, label: &str) -> NativeRuntimeConfig {
         // Codex 0.147.0 does not expose a restrictive built-in tool allowlist.
         // The prompt asks for no tools and the proof rejects any observed use.
         HarnessKind::Codex | HarnessKind::Hermes | HarnessKind::Acp(_) => (None, None),
+        // Nano needs the host's relay and agent directory; the transport probe
+        // never starts it (`NanoNotReady`), so no policy is prepared here.
+        HarnessKind::Nano => (None, None),
     };
     NativeRuntimeConfig {
         harness: kind,
@@ -114,6 +117,7 @@ fn native_config(kind: HarnessKind, label: &str) -> NativeRuntimeConfig {
         coordination: false,
         plugin_mcp_servers: Vec::new(),
         host_tools: Vec::new(),
+        nano: None,
     }
 }
 

@@ -1,6 +1,6 @@
 import { SvelteMap } from 'svelte/reactivity';
 import type { HarnessKind } from '../../../../contracts/workspace-v15';
-import { acpAgentId, isAcpHarness } from '../../../../contracts/harness-identity-v2';
+import { acpAgentId, isAcpHarness } from '../../../../contracts/harness-identity-v3';
 
 /**
  * Presentation metadata for native harnesses. Labels and monograms only —
@@ -20,6 +20,7 @@ const META: Record<string, HarnessMeta> = {
   'prime-agent': { label: 'Prime Agent', short: 'Prime', monogram: 'P', hue: '#b59be6' },
   hermes: { label: 'Hermes', short: 'Hermes', monogram: 'H', hue: '#7fc4b4' },
   'claude-code': { label: 'Claude Code', short: 'Claude', monogram: '✳', hue: '#e0957a' },
+  nano: { label: 'Nano', short: 'Nano', monogram: 'N', hue: '#d9566b' },
 };
 
 /** Muted hues for ACP agents, picked by a stable hash of the descriptor id. */

@@ -41,11 +41,11 @@ describe('automation cadence text', () => {
 
   it('previews what an event rule promises, including loop protection', () => {
     expect(eventPreview({ kind: 'run-finished', launchCommandId: 'build', outcomes: ['succeeded'] }, 'Deploy', english, names)).toEqual([
-      'When Build succeeds, PiUI starts Deploy.',
+      'When Build succeeds, Nano Desktop starts Deploy.',
       'At most one run every 30 s. A chain of automations stops after 3 automatic runs.',
     ]);
     const files = eventPreview({ kind: 'files-changed', include: ['src/**'], exclude: ['src/gen/**'], debounceSeconds: 5 }, 'Tests', english, names);
-    expect(files[0]).toBe('PiUI starts Tests 5 s after matching files stop changing.');
+    expect(files[0]).toBe('Nano Desktop starts Tests 5 s after matching files stop changing.');
     expect(files[1]).toBe('Ignored: src/gen/**');
     expect(files).toHaveLength(4);
   });

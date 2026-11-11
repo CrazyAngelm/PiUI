@@ -23,7 +23,7 @@ test.describe('Pi extension UI in a chat', () => {
     await expect(chat.getByRole('status').filter({ hasText: 'Extension demo: notices, statuses and panels appear next to the message box.' })).toContainText('Pi extension');
     await expect(chat.getByRole('list', { name: 'Extension status' }).getByRole('listitem')).toHaveText(['Checks: running', 'Branch: feat/classic-port']);
     await expect(chat.getByRole('complementary', { name: 'Extension panel' }).first()).toContainText('Release checklist');
-    await expect(page).toHaveTitle('Extension demo — PiUI');
+    await expect(page).toHaveTitle('Extension demo — Nano Desktop');
 
     // 1. confirm → permission card.
     const confirm = card(page, 'Build a preview?');
@@ -42,7 +42,7 @@ test.describe('Pi extension UI in a chat', () => {
     await expect(chat.getByRole('status').filter({ hasText: 'Preview named.' })).toBeVisible();
     // 4. editor → prepared text that closes by itself if unanswered.
     const editor = card(page, 'Edit the release note');
-    await expect(editor.getByRole('textbox', { name: 'Release note' })).toHaveValue('feat(history): read Pi sessions and their branches in PiUI');
+    await expect(editor.getByRole('textbox', { name: 'Release note' })).toHaveValue('feat(history): read Pi sessions and their branches in Nano Desktop');
     await expect(editor).toContainText('This request closes automatically if you do not answer.');
     await editor.getByRole('button', { name: 'Send answer' }).click();
     await expect(chat.getByRole('status').filter({ hasText: 'Release note saved.' })).toBeVisible();

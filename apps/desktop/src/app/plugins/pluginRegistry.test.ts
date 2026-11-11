@@ -88,7 +88,7 @@ describe('plugin registry', () => {
 
   it('keeps a translatable message when the host cannot list plugins', async () => {
     const failing: PluginsClient = {
-      run: vi.fn(async () => { throw { code: 'IO_ERROR', message: 'PiUI could not save the plugin list.' }; }),
+      run: vi.fn(async () => { throw { code: 'IO_ERROR', message: 'Nano Desktop could not save the plugin list.' }; }),
       runCommand: vi.fn(),
       template: vi.fn(),
       listen: vi.fn(async () => () => undefined),
@@ -96,13 +96,13 @@ describe('plugin registry', () => {
     const registry = new PluginRegistry(createPluginsClient(failing.run as never, failing.listen as never), async () => { throw new Error('no Pi'); });
     await registry.start();
     await registry.loadContributions();
-    expect(registry.error).toBe('PiUI could not save the plugin list.');
+    expect(registry.error).toBe('Nano Desktop could not save the plugin list.');
     expect(registry.plugins).toEqual([]);
     expect(registry.piContributions).toEqual({ commands: [], composerActions: [] });
     // Anything that is not a host error becomes the generic message.
     const broken = new PluginRegistry(createPluginsClient((async () => { throw new Error('native text'); }) as never, failing.listen as never));
     await broken.refresh();
-    expect(broken.error).toBe('PiUI could not read the plugin list.');
+    expect(broken.error).toBe('Nano Desktop could not read the plugin list.');
   });
 });
 

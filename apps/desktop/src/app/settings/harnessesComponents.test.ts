@@ -49,15 +49,15 @@ describe('Settings → Harnesses components', () => {
     // ACP agents: the exact command line, the identity, readiness and the next decision.
     expect(body).toContain('acp:gemini-cli');
     expect(body).toContain('"C:/Program Files/nodejs/node.exe" C:/Users/example/AppData/Roaming/npm/node_modules/@google/gemini-cli/dist/index.js --acp');
-    expect(body).toContain('Ships with PiUI');
+    expect(body).toContain('Ships with Nano Desktop');
     expect(body).toContain('Added by you');
     expect(body).toContain("The agent's program was not found on PATH.");
     expect(body).toContain('Needs review');
     expect(body).toContain('Review and trust…');
     expect(body).toContain('Secrets not passed: GEMINI_API_KEY, GOOGLE_API_KEY, GOOGLE_APPLICATION_CREDENTIALS');
     // Untested and newer versions are notices, not decisions: no confirmation is offered anywhere.
-    expect(body).toContain('0.39.1, not verified by PiUI');
-    expect(body).toContain('1.19.4, not verified by PiUI');
+    expect(body).toContain('0.39.1, not verified by Nano Desktop');
+    expect(body).toContain('1.19.4, not verified by Nano Desktop');
     expect(body).not.toContain('you confirmed this version');
     expect(body).not.toContain('Confirm version…');
     expect(body).toContain('Add ACP agent…');
@@ -66,7 +66,7 @@ describe('Settings → Harnesses components', () => {
     expect(body).not.toContain('Safe mode:');
   });
 
-  it('marks versions PiUI has not tested next to the readiness, never instead of it', async () => {
+  it('marks versions Nano Desktop has not tested next to the readiness, never instead of it', async () => {
     const registry = await registryOf('demo');
     const { body } = render(HarnessesSettings, { props: { store: storeWith(registry) } });
     // Codex (native, newer) and the shipped agents without a tested range are ready and launchable.
@@ -79,7 +79,7 @@ describe('Settings → Harnesses components', () => {
     };
     const agentNewer = render(HarnessesSettings, { props: { store: storeWith(newer) } }).body;
     expect(agentNewer.match(/Newer than tested/g)).toHaveLength(2);
-    expect(agentNewer).toContain('0.40.0, newer than the versions tested with PiUI');
+    expect(agentNewer).toContain('0.40.0, newer than the versions tested with Nano Desktop');
     const unknown: HarnessRegistryV1 = {
       ...registry,
       agents: registry.agents.map((agent) => (agent.descriptor.id === 'gemini-cli' ? { ...agent, versionStatus: 'unrecognized' as const } : agent)),
@@ -103,15 +103,15 @@ describe('Settings → Harnesses components', () => {
     store.loading = true;
     expect(render(HarnessesSettings, { props: { store } }).body).toMatch(/role="status"[^>]*><span class="visually-hidden[^"]*">Loading harnesses…<\/span>/);
     store.loading = false;
-    store.error = 'PiUI could not read the harness list.';
+    store.error = 'Nano Desktop could not read the harness list.';
     const { body } = render(HarnessesSettings, { props: { store } });
-    expect(body).toMatch(/role="alert"[^>]*>PiUI could not read the harness list\.<\/p>/);
+    expect(body).toMatch(/role="alert"[^>]*>Nano Desktop could not read the harness list\.<\/p>/);
     expect(body).not.toContain('ACP agents');
   });
 
   it('shows safe mode as a notice with every change disabled and nothing reported as checking', async () => {
     const { body } = render(HarnessesSettings, { props: { store: storeWith(await registryOf('safe')) } });
-    expect(body).toContain('Safe mode: PiUI starts no agent program, so harness checks and changes are off.');
+    expect(body).toContain('Safe mode: Nano Desktop starts no agent program, so harness checks and changes are off.');
     expect(body).toContain('Not checked');
     expect(body).not.toContain('Checking this agent…');
     expect(body).toMatch(/<button[^>]*disabled[^>]*>[\s\S]*?Add ACP agent…/);

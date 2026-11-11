@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 use crate::{
-    AgentProfile, DirectedEdge, NativeBridgeCapabilities, NativeHistoryReference,
+    AgentProfile, DirectedEdge, Harness, NativeBridgeCapabilities, NativeHistoryReference,
     PolicyEnforcement, ResultField, RouteGate, RouterMode, RouterPredicate, RunDefinitionSnapshot,
     TeamDefinition, ToolDecision,
 };
@@ -31,6 +31,8 @@ pub enum DefinitionError {
     },
     #[error("launch command {field} does not match its snapshot definition")]
     LaunchReferenceMismatch { field: &'static str },
+    #[error("profile {profile_id} runs on a harness without a coordinator and cannot spawn")]
+    CoordinatorUnavailable { profile_id: String },
     #[error("native bridge does not support permission mode {mode:?}")]
     UnsupportedPermissionMode { mode: crate::PermissionMode },
     #[error("mandatory tool rule is not enforceable by this bridge: {tool}")]
@@ -96,6 +98,19 @@ pub fn validate_definition(snapshot: &RunDefinitionSnapshot) -> Result<(), Defin
     for profile in &snapshot.profiles {
         require_nonempty("profile name", &profile.name)?;
         require_nonempty("model", &profile.model)?;
+        // Nano nodes are ordinary native tasks: the harness has no coordinator,
+        // so a profile may neither hold spawn templates nor be granted a
+        // coordinator operation.
+        if profile.harness == Harness::Nano
+            && (!profile.allowed_spawn_profile_ids.is_empty()
+                || profile.tool_policy.rules.iter().any(|rule| {
+                    rule.decision == ToolDecision::Allow && rule.tool.starts_with("orchestration.")
+                }))
+        {
+            return Err(DefinitionError::CoordinatorUnavailable {
+                profile_id: profile.id.clone(),
+            });
+        }
         let mut tools = BTreeSet::new();
         for rule in &profile.tool_policy.rules {
             require_nonempty("tool", &rule.tool)?;
@@ -647,6 +662,10 @@ pub fn authorize_spawn<'a>(
 /// only inside the same adapter. Every generation is checked at admission.
 pub fn spawn_permissions_subset(parent: &AgentProfile, child: &AgentProfile) -> bool {
     use crate::PermissionMode::*;
+    // Nano has no coordinator, so it never delegates, even to another Nano.
+    if parent.harness == Harness::Nano {
+        return false;
+    }
     let files = match (parent.permission_mode, child.permission_mode) {
         (Native, Native) => parent.harness == child.harness,
         (FullAccess, ReadOnly | WorkspaceWrite | FullAccess) => true,

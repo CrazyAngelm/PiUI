@@ -45,7 +45,7 @@
   }
 </script>
 
-<Dialog bind:open title={$t('{0} settings', [plugin.name])} description={$t('PiUI stores these values and passes them to the plugin. Do not put passwords or API keys here.')} closeLabel={$t('Close')}>
+<Dialog bind:open title={$t('{0} settings', [plugin.name])} description={$t('Nano Desktop stores these values and passes them to the plugin. Do not put passwords or API keys here.')} closeLabel={$t('Close')}>
   <form
     class="form"
     onsubmit={(event) => {

@@ -7,6 +7,8 @@ vi.stubGlobal('localStorage', {
   setItem: (key: string, value: string) => void memory.set(key, value),
   removeItem: (key: string) => void memory.delete(key),
   clear: () => memory.clear(),
+  get length() { return memory.size; },
+  key: (index: number) => [...memory.keys()][index] ?? null,
 });
 let harnessModels: typeof import('./harnessModels').harnessModels;
 let workspaceModel: typeof import('./harnessModels').workspaceModel;
@@ -19,8 +21,8 @@ describe('native harness catalog v18', () => {
     expect(await harnessModels({ workspaceId: 'project', harness: 'pi' })).toEqual(result);
     expect(invoke).toHaveBeenLastCalledWith('harness_models_v18', { request: { workspaceId: 'project', harness: 'pi' } });
   });
-  it('shares concurrent loads, reuses all five catalogs and refreshes explicitly', async () => {
-    for (const harness of ['pi', 'codex', 'prime-agent', 'hermes', 'claude-code'] as const) {
+  it('shares concurrent loads, reuses all six catalogs and refreshes explicitly', async () => {
+    for (const harness of ['pi', 'codex', 'prime-agent', 'hermes', 'claude-code', 'nano'] as const) {
       const request = { workspaceId: 'project', harness };
       const result = { protocol: 18, harness, models: [], resources: { items: [], warnings: [] } };
       let complete!: (value: typeof result) => void;
@@ -302,6 +304,69 @@ describe('native harness catalog v18', () => {
     fresh = await import('./harnessModels');
     invoke.mockRejectedValueOnce({ code: 'SIGN_IN_REQUIRED', recoverable: true });
     await expect(fresh.cachedHarnessModels(request), 'no snapshot after a failure').rejects.toMatchObject({ code: 'SIGN_IN_REQUIRED' });
+  });
+  it('forgets the answers and remembered snapshots of one harness and keeps the others', async () => {
+    localStorage.clear();
+    const snapshotKey = (workspaceId: string, harness: string): string => `piui.harness.catalog.v1:${JSON.stringify([workspaceId, harness])}`;
+    const answer = (harness: string, id: string) => ({ protocol: 18, harness, models: [{ id, name: id }], resources: { items: [], warnings: [] } });
+    const { forgetHarnessCatalogs } = await import('./harnessModels');
+    const nano = { workspaceId: 'project', harness: 'nano' as const };
+    const otherNano = { workspaceId: 'other-project', harness: 'nano' as const };
+    const codex = { workspaceId: 'project', harness: 'codex' as const };
+    invoke.mockResolvedValueOnce(answer('nano', 'auto'));
+    invoke.mockResolvedValueOnce(answer('nano', 'auto'));
+    invoke.mockResolvedValueOnce(answer('codex', 'gpt'));
+    await Promise.all([harnessModels(nano), harnessModels(otherNano), harnessModels(codex)]);
+    expect(invoke).toHaveBeenCalledTimes(3);
+    // Snapshots of older sessions: a part key never appears in storage, a full key does.
+    for (const key of [snapshotKey('project', 'nano'), snapshotKey('other-project', 'nano'), snapshotKey('project', 'codex')]) {
+      localStorage.setItem(key, JSON.stringify({ at: Date.now(), result: answer(JSON.parse(key.slice('piui.harness.catalog.v1:'.length))[1], 'old') }));
+    }
+    localStorage.setItem('unrelated', 'kept');
+
+    forgetHarnessCatalogs('nano');
+    expect([...memory.keys()].sort()).toEqual([snapshotKey('project', 'codex'), 'unrelated'].sort());
+    expect(await harnessModels(codex), 'another harness is reused').toEqual(answer('codex', 'gpt'));
+    expect(invoke).toHaveBeenCalledTimes(3);
+    invoke.mockResolvedValueOnce(answer('nano', 'free'));
+    expect(await harnessModels(nano), 'a forgotten catalog is asked for again').toEqual(answer('nano', 'free'));
+    expect(invoke).toHaveBeenCalledTimes(4);
+  });
+  it('forgets the part entries of a split load too', async () => {
+    localStorage.clear();
+    const request = { workspaceId: 'project', harness: 'nano' as const };
+    const listed = { protocol: 18, harness: 'nano', models: [{ id: 'auto', name: 'Auto' }], resources: { items: [], warnings: [] } };
+    invoke.mockResolvedValueOnce(listed);
+    invoke.mockResolvedValueOnce(listed);
+    const { cachedHarnessModels, catalogSettled, forgetHarnessCatalogs } = await import('./harnessModels');
+    await cachedHarnessModels(request);
+    await vi.waitFor(() => expect(catalogSettled(request)).toBe(true));
+    expect(invoke).toHaveBeenCalledTimes(2);
+    forgetHarnessCatalogs('nano');
+    const next = { ...listed, models: [{ id: 'free', name: 'Free' }] };
+    invoke.mockResolvedValueOnce(next);
+    invoke.mockResolvedValueOnce(next);
+    expect((await cachedHarnessModels(request)).models, 'neither the full entry nor the models part is reused').toEqual(next.models);
+    expect(invoke).toHaveBeenNthCalledWith(3, 'harness_models_v18', { request: { ...request, part: 'models' } });
+  });
+  it('never remembers a Nano catalog in storage and never shows one from an earlier session', async () => {
+    localStorage.clear();
+    const request = { workspaceId: 'project', harness: 'nano' as const };
+    const snapshotKey = `piui.harness.catalog.v1:${JSON.stringify([request.workspaceId, request.harness])}`;
+    const earlier = { protocol: 18, harness: 'nano', models: [{ id: 'smart', name: 'Smart' }], resources: { items: [], warnings: [] } };
+    localStorage.setItem(snapshotKey, JSON.stringify({ at: Date.now(), result: earlier }));
+    const listed = { ...earlier, models: [{ id: 'free', name: 'Free' }] };
+    invoke.mockResolvedValueOnce(listed);
+    invoke.mockResolvedValueOnce(listed);
+    const { cachedHarnessModels, catalogSettled } = await import('./harnessModels');
+    expect((await cachedHarnessModels(request)).models, 'the remembered modes are not shown').toEqual(listed.models);
+    await vi.waitFor(() => expect(catalogSettled(request)).toBe(true));
+    expect(JSON.parse(memory.get(snapshotKey) ?? 'null').result.models, 'the old snapshot is untouched, not rewritten').toEqual(earlier.models);
+    // The full (non-split) load stores nothing either.
+    localStorage.clear();
+    invoke.mockResolvedValueOnce(listed);
+    await harnessModels({ ...request, workspaceId: 'other-project' });
+    expect([...memory.keys()].filter((key) => key.includes('nano'))).toEqual([]);
   });
   it('forwards only session model fields: the host rejects catalog-only fields', () => {
     const catalogEntry = { id: 'gpt-5.5', provider: null as unknown as string, name: 'GPT-5.5', thinkingLevels: ['low', 'high'], supportsFast: true };

@@ -2,7 +2,7 @@ import {
   arrayOf, boolean, custom, datetime, enumOf, json, lazy, mapOf, object, option, string, tagged, u32, u64, withDefault,
   type Schema,
 } from './labSchema';
-import { BUILTIN_HARNESSES, isHarnessId } from '../../../../../contracts/harness-identity-v2';
+import { BUILTIN_HARNESSES, isHarnessId } from '../../../../../contracts/harness-identity-v3';
 
 /** Request schemas transcribed from the Rust DTOs (`deny_unknown_fields` everywhere). */
 // Harness identity v2 (`parse_harness_identity`): a built-in name or `acp:<agent id>`.

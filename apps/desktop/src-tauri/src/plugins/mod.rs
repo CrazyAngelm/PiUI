@@ -273,7 +273,7 @@ impl PluginsState {
                 if !package.manifest.compatible {
                     problems.push(Problem::about(
                         ProblemCode::EngineMismatch,
-                        "This plugin needs PiUI {0}.",
+                        "This plugin needs Nano Desktop {0}.",
                         manifest.engines.piui.clone(),
                     ));
                 }

@@ -13,15 +13,15 @@ export const PERMISSION_TEXT: Readonly<Record<PluginPermission, { label: string;
   },
   'ui.panel': {
     label: 'Show panels in chat details',
-    detail: 'Panels run in an isolated frame without access to PiUI, your files or the network.',
+    detail: 'Panels run in an isolated frame without access to Nano Desktop, your files or the network.',
   },
   'ui.settings': {
-    label: 'Keep its own settings in PiUI',
-    detail: 'PiUI shows the settings form and stores the values.',
+    label: 'Keep its own settings in Nano Desktop',
+    detail: 'Nano Desktop shows the settings form and stores the values.',
   },
   'ui.status': {
     label: 'Show items in the status bar',
-    detail: 'Short text PiUI shows at the bottom of the window; clicking an item runs its command.',
+    detail: 'Short text Nano Desktop shows at the bottom of the window; clicking an item runs its command.',
   },
   'ui.renderer': {
     label: 'Show its own view of chat tool activity',
@@ -45,7 +45,7 @@ export const PERMISSION_TEXT: Readonly<Record<PluginPermission, { label: string;
   },
   notifications: {
     label: 'Show notices',
-    detail: 'Short messages in PiUI.',
+    detail: 'Short messages in Nano Desktop.',
   },
   'project.read': {
     label: 'Read files in your project folder',
@@ -57,7 +57,7 @@ export const PERMISSION_TEXT: Readonly<Record<PluginPermission, { label: string;
   },
   network: {
     label: 'Use the network',
-    detail: 'Without this permission PiUI blocks network access when the Node.js in use can.',
+    detail: 'Without this permission Nano Desktop blocks network access when the Node.js in use can.',
   },
 };
 
@@ -82,7 +82,7 @@ export const LOG_TEXT: Readonly<Record<PluginLogEvent, string>> = {
   'backend-stopped': 'Backend stopped',
   'backend-crashed': 'Backend stopped unexpectedly',
   'backend-timeout': 'Backend did not answer in time and was stopped',
-  'backend-protocol': 'Backend sent something PiUI does not accept and was stopped',
+  'backend-protocol': 'Backend sent something Nano Desktop does not accept and was stopped',
   'backend-start-failed': 'Backend could not start',
   'crash-loop': 'Backend kept stopping; automatic restarts paused',
 };

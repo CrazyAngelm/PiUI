@@ -10,10 +10,10 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Safe mode: plugins are listed, but none is active and changes are off.': 'Безопасный режим: плагины показаны, но ни один не активен, а изменения отключены.',
   'Checking installed plugins…': 'Проверка установленных плагинов…',
   'No plugins yet': 'Плагинов пока нет',
-  'Install a plugin from a folder or a .zip package, or load a folder you are developing. The PiUI repository has examples in examples/plugins.':
-    'Установите плагин из папки или .zip-пакета либо загрузите папку, которую разрабатываете. Примеры есть в репозитории PiUI в examples/plugins.',
-  'PiUI forgets this plugin and its settings. Your folder is not touched.': 'PiUI забудет этот плагин и его настройки. Ваша папка не изменится.',
-  'PiUI stops the plugin, deletes its installed copy and its settings.': 'PiUI остановит плагин и удалит его установленную копию и настройки.',
+  'Install a plugin from a folder or a .zip package, or load a folder you are developing. The Nano Desktop repository has examples in examples/plugins.':
+    'Установите плагин из папки или .zip-пакета либо загрузите папку, которую разрабатываете. Примеры есть в репозитории Nano Desktop в examples/plugins.',
+  'Nano Desktop forgets this plugin and its settings. Your folder is not touched.': 'Nano Desktop забудет этот плагин и его настройки. Ваша папка не изменится.',
+  'Nano Desktop stops the plugin, deletes its installed copy and its settings.': 'Nano Desktop остановит плагин и удалит его установленную копию и настройки.',
   'The plugin change did not go through': 'Не удалось изменить плагин',
   'Plugin loaded for development': 'Плагин загружен для разработки',
   'Plugin updated': 'Плагин обновлён',
@@ -55,7 +55,7 @@ export const pluginsRu: Readonly<Record<string, string>> = {
     'Ни один MCP-сервер не запустится, пока вы не предложите его новым чатам в «Настройки → Плагины». Подключить его могут только чаты Claude Code, Hermes и ACP-агентов, а настройки харнеса не меняются.',
   'Chat renderers: {0}': 'Отображения в чате: {0}',
   'Keyboard shortcuts': 'Сочетания клавиш',
-  'PiUI uses this shortcut, so it does nothing.': 'Это сочетание занято PiUI, поэтому оно ничего не делает.',
+  'Nano Desktop uses this shortcut, so it does nothing.': 'Это сочетание занято Nano Desktop, поэтому оно ничего не делает.',
   'Also used by {0}, so it does nothing until one of them is disabled.': 'Его также использует {0}, поэтому оно ничего не делает, пока один из плагинов не выключен.',
   'Status item': 'Элемент строки состояния',
   'Keyboard shortcut': 'Сочетание клавиш',
@@ -64,8 +64,8 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   '{0} (plugin {1})': '{0} (плагин {1})',
   '{0} (plugin view)': '{0} (отображение плагина)',
   '{0} settings': 'Настройки: {0}',
-  'PiUI stores these values and passes them to the plugin. Do not put passwords or API keys here.':
-    'PiUI хранит эти значения и передаёт их плагину. Не вводите здесь пароли и API-ключи.',
+  'Nano Desktop stores these values and passes them to the plugin. Do not put passwords or API keys here.':
+    'Nano Desktop хранит эти значения и передаёт их плагину. Не вводите здесь пароли и API-ключи.',
   'Not set': 'Не задано',
 
   // Permissions in plain words.
@@ -73,9 +73,9 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Commands run only when you choose them. Text they prepare waits for you to send it.':
     'Команды выполняются, только когда вы их выбираете. Подготовленный ими текст ждёт, пока вы сами его отправите.',
   'Show panels in chat details': 'Показывать панели в деталях чата',
-  'Panels run in an isolated frame without access to PiUI, your files or the network.': 'Панели работают в изолированном фрейме без доступа к PiUI, вашим файлам и сети.',
-  'Keep its own settings in PiUI': 'Хранить собственные настройки в PiUI',
-  'PiUI shows the settings form and stores the values.': 'PiUI показывает форму настроек и хранит значения.',
+  'Panels run in an isolated frame without access to Nano Desktop, your files or the network.': 'Панели работают в изолированном фрейме без доступа к Nano Desktop, вашим файлам и сети.',
+  'Keep its own settings in Nano Desktop': 'Хранить собственные настройки в Nano Desktop',
+  'Nano Desktop shows the settings form and stores the values.': 'Nano Desktop показывает форму настроек и хранит значения.',
   'Run its own pipeline nodes': 'Выполнять собственные ноды пайплайнов',
   "Nodes run in the plugin's backend when a pipeline in a trusted project reaches them.":
     'Ноды выполняются в бэкенде плагина, когда до них доходит пайплайн в доверенном проекте.',
@@ -84,13 +84,13 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'See the title of the open chat': 'Видеть название открытого чата',
   'Never the messages.': 'Но не сообщения.',
   'Show notices': 'Показывать уведомления',
-  'Short messages in PiUI.': 'Короткие сообщения в PiUI.',
+  'Short messages in Nano Desktop.': 'Короткие сообщения в Nano Desktop.',
   'Show items in the status bar': 'Показывать элементы в строке состояния',
   'Offer MCP tools to chats': 'Предлагать чатам MCP-инструменты',
   'Only after you turn a tool server on in Settings → Plugins, and only in new Claude Code, Hermes and ACP agent chats. Your harness settings are not changed.':
     'Только после того, как вы включите сервер инструментов в «Настройки → Плагины», и только в новых чатах Claude Code, Hermes и ACP-агентов. Настройки харнеса не меняются.',
-  'Short text PiUI shows at the bottom of the window; clicking an item runs its command.':
-    'Короткий текст, который PiUI показывает внизу окна; щелчок по элементу запускает его команду.',
+  'Short text Nano Desktop shows at the bottom of the window; clicking an item runs its command.':
+    'Короткий текст, который Nano Desktop показывает внизу окна; щелчок по элементу запускает его команду.',
   'Show its own view of chat tool activity': 'Показывать собственное отображение работы инструментов в чате',
   'The view runs in an isolated frame and sees the output of the tools it names. The plain view stays one click away.':
     'Отображение работает в изолированном фрейме и видит вывод названных им инструментов. Обычный вид всегда доступен одним щелчком.',
@@ -100,8 +100,8 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Change files in your project folder': 'Изменять файлы в папке проекта',
   'The backend receives the project path and may change files in that folder.': 'Бэкенд получает путь к проекту и может изменять файлы в этой папке.',
   'Use the network': 'Использовать сеть',
-  'Without this permission PiUI blocks network access when the Node.js in use can.':
-    'Без этого разрешения PiUI блокирует доступ к сети, если используемый Node.js это умеет.',
+  'Without this permission Nano Desktop blocks network access when the Node.js in use can.':
+    'Без этого разрешения Nano Desktop блокирует доступ к сети, если используемый Node.js это умеет.',
 
   // Backend states and the activity log.
   'Starts when needed': 'Запускается при необходимости',
@@ -116,7 +116,7 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Backend stopped': 'Бэкенд остановлен',
   'Backend stopped unexpectedly': 'Бэкенд неожиданно остановился',
   'Backend did not answer in time and was stopped': 'Бэкенд не ответил вовремя и был остановлен',
-  'Backend sent something PiUI does not accept and was stopped': 'Бэкенд отправил данные, которые PiUI не принимает, и был остановлен',
+  'Backend sent something Nano Desktop does not accept and was stopped': 'Бэкенд отправил данные, которые Nano Desktop не принимает, и был остановлен',
   'Backend could not start': 'Бэкенд не смог запуститься',
   'Backend kept stopping; automatic restarts paused': 'Бэкенд постоянно останавливался; автоматические перезапуски приостановлены',
 
@@ -145,11 +145,11 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Fields: {0}': 'Поля: {0}',
   'Each ACP agent still needs its own command-line trust in Settings → Harnesses before it runs.':
     'Каждому ACP-агенту перед запуском всё равно нужно отдельное доверие к его командной строке в «Настройки → Харнесы».',
-  "Plugins are not a sandbox. PiUI limits a backend's files and programs with Node's permission model, stops its whole process tree and gives it no API keys, but deliberately malicious code can get around those limits. Panels run isolated. Install only plugins you trust.":
-    'Плагины — не песочница. PiUI ограничивает файлы и программы бэкенда моделью разрешений Node, останавливает всё его дерево процессов и не передаёт ему API-ключи, но намеренно вредоносный код может обойти эти ограничения. Панели работают изолированно. Устанавливайте только плагины, которым доверяете.',
-  'PiUI checks what Node.js can limit before the backend first starts.': 'PiUI проверит, что может ограничить Node.js, перед первым запуском бэкенда.',
-  'Node.js {0} cannot limit plugin backends, so PiUI will not start this one. Install Node.js 22.13 or later.':
-    'Node.js {0} не умеет ограничивать бэкенды плагинов, поэтому PiUI не запустит этот бэкенд. Установите Node.js 22.13 или новее.',
+  "Plugins are not a sandbox. Nano Desktop limits a backend's files and programs with Node's permission model, stops its whole process tree and gives it no API keys, but deliberately malicious code can get around those limits. Panels run isolated. Install only plugins you trust.":
+    'Плагины — не песочница. Nano Desktop ограничивает файлы и программы бэкенда моделью разрешений Node, останавливает всё его дерево процессов и не передаёт ему API-ключи, но намеренно вредоносный код может обойти эти ограничения. Панели работают изолированно. Устанавливайте только плагины, которым доверяете.',
+  'Nano Desktop checks what Node.js can limit before the backend first starts.': 'Nano Desktop проверит, что может ограничить Node.js, перед первым запуском бэкенда.',
+  'Node.js {0} cannot limit plugin backends, so Nano Desktop will not start this one. Install Node.js 22.13 or later.':
+    'Node.js {0} не умеет ограничивать бэкенды плагинов, поэтому Nano Desktop не запустит этот бэкенд. Установите Node.js 22.13 или новее.',
   'Limited by Node.js {0}: the backend reads its own files, keeps data in its own folder and cannot start other programs or worker threads.':
     'Ограничен Node.js {0}: бэкенд читает свои файлы, хранит данные в своей папке и не может запускать другие программы или рабочие потоки.',
   'It can read and change the folder of each project it works in.': 'Он может читать и изменять папку каждого проекта, в котором работает.',
@@ -178,12 +178,12 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   '{0} could not run the command': '{0}: не удалось выполнить команду',
   'Open a chat to use the prepared text': 'Откройте чат, чтобы использовать подготовленный текст',
   '{0} prepared text for a message box.': '{0}: подготовлен текст для поля сообщения.',
-  'The panel “{0}” did not load. PiUI and your chat are not affected.': 'Панель «{0}» не загрузилась. На PiUI и ваш чат это не влияет.',
+  'The panel “{0}” did not load. Nano Desktop and your chat are not affected.': 'Панель «{0}» не загрузилась. На Nano Desktop и ваш чат это не влияет.',
   'Reload panel': 'Перезагрузить панель',
   '{0} (plugin panel)': '{0} (панель плагина)',
   'Plugin theme': 'Тема плагина',
-  'Colors from an installed plugin. They apply while PiUI shows their appearance.':
-    'Цвета из установленного плагина. Они действуют, пока PiUI использует их вариант оформления (светлый или тёмный).',
+  'Colors from an installed plugin. They apply while Nano Desktop shows their appearance.':
+    'Цвета из установленного плагина. Они действуют, пока Nano Desktop использует их вариант оформления (светлый или тёмный).',
   'The theme did not change': 'Тема не изменилась',
   'The template could not be opened': 'Не удалось открыть шаблон',
 
@@ -212,8 +212,8 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'The plugin reported an error for this node.': 'Плагин сообщил об ошибке в этой ноде.',
   'The plugin node ran past its time limit and its backend was stopped.': 'Нода плагина превысила лимит времени, и её бэкенд был остановлен.',
   "The node's answer has no output text or object.": 'В ответе ноды нет ни текста, ни объекта.',
-  'PiUI could not confirm how the plugin node ended. Check what it changed, then record an operator assertion. It reconciles the journal only.':
-    'PiUI не смог подтвердить, чем закончилась нода плагина. Проверьте, что она изменила, и запишите утверждение оператора. Это меняет только журнал.',
+  'Nano Desktop could not confirm how the plugin node ended. Check what it changed, then record an operator assertion. It reconciles the journal only.':
+    'Nano Desktop не смог подтвердить, чем закончилась нода плагина. Проверьте, что она изменила, и запишите утверждение оператора. Это меняет только журнал.',
   'I checked what the plugin node did and understand this is an operator assertion.': 'Я проверил, что сделала нода плагина, и понимаю, что это утверждение оператора.',
 
   // ACP agents from plugins (Settings → Harnesses).
@@ -248,7 +248,7 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'The plugin contributes renderers but has no ui.entry page.': 'Плагин добавляет отображения, но у него нет страницы ui.entry.',
   'The manifest does not match the plugin schema at {0}.': 'Манифест не соответствует схеме плагина в {0}.',
   'The plugin schema is unavailable in this build.': 'Схема плагинов недоступна в этой сборке.',
-  'The PiUI version range “{0}” is not valid.': 'Диапазон версий PiUI «{0}» некорректен.',
+  'The Nano Desktop version range “{0}” is not valid.': 'Диапазон версий Nano Desktop «{0}» некорректен.',
   'The plugin contributes {0} but does not ask for the matching permission.': 'Плагин добавляет {0}, но не запрашивает соответствующее разрешение.',
   'Add the permission “commands”.': 'Добавьте разрешение «commands».',
   'Add the permission “ui.panel”.': 'Добавьте разрешение «ui.panel».',
@@ -265,7 +265,7 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Two contributions of the same kind use the id “{0}”.': 'Два элемента одного вида используют id «{0}».',
   'A node type repeats the result field “{0}”.': 'Тип ноды повторяет поле результата «{0}».',
   'The text of command “{0}” is empty or contains control characters.': 'Текст команды «{0}» пуст или содержит управляющие символы.',
-  'Theme “{0}” has a color PiUI cannot use.': 'В теме «{0}» есть цвет, который PiUI не может использовать.',
+  'Theme “{0}” has a color Nano Desktop cannot use.': 'В теме «{0}» есть цвет, который Nano Desktop не может использовать.',
   'Theme text is hard to read: {0} needs a contrast of at least 4.5:1.': 'Текст темы плохо читается: для {0} нужен контраст не ниже 4,5:1.',
   'ACP agent “{0}” is not a valid descriptor.': 'ACP-агент «{0}» — некорректный дескриптор.',
   'The folder could not be read.': 'Не удалось прочитать папку.',
@@ -280,22 +280,22 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'The manifest names a file the package does not contain: {0}.': 'Манифест ссылается на файл, которого нет в пакете: {0}.',
   'Template “{0}” is larger than 1 MiB.': 'Шаблон «{0}» больше 1 МиБ.',
   'Template “{0}” is not valid JSON.': 'Шаблон «{0}» — некорректный JSON.',
-  'Template “{0}” is not a PiUI system file (version 4).': 'Шаблон «{0}» не является системным файлом PiUI (версии 4).',
+  'Template “{0}” is not a Nano Desktop system file (version 4).': 'Шаблон «{0}» не является системным файлом Nano Desktop (версии 4).',
   'Template “{0}” could not be checked in this build.': 'Шаблон «{0}» не удалось проверить в этой сборке.',
   'Template “{0}” does not match the system file v4 schema.': 'Шаблон «{0}» не соответствует схеме системного файла v4.',
-  'The archive uses a .zip feature PiUI does not accept (ZIP64, split archives or a compression method other than deflate).':
-    'В архиве используется возможность .zip, которую PiUI не принимает (ZIP64, разбитые архивы или метод сжатия, отличный от deflate).',
+  'The archive uses a .zip feature Nano Desktop does not accept (ZIP64, split archives or a compression method other than deflate).':
+    'В архиве используется возможность .zip, которую Nano Desktop не принимает (ZIP64, разбитые архивы или метод сжатия, отличный от deflate).',
   'The archive is encrypted.': 'Архив зашифрован.',
   'The archive contains a symbolic link.': 'Архив содержит символическую ссылку.',
   'A file in the archive is damaged (its checksum does not match).': 'Файл в архиве повреждён (контрольная сумма не совпадает).',
 
   // Host errors (plugins_v1, plugin_command_v1, plugin_template_v1).
-  'PiUI could not read the plugin list.': 'PiUI не удалось прочитать список плагинов.',
+  'Nano Desktop could not read the plugin list.': 'Nano Desktop не удалось прочитать список плагинов.',
   'Plugins cannot be changed or run in safe mode.': 'В безопасном режиме плагины нельзя изменять или запускать.',
   'The plugin list changed. Review it and try again.': 'Список плагинов изменился. Проверьте его и попробуйте снова.',
-  'This is not a valid PiUI plugin package.': 'Это некорректный пакет плагина PiUI.',
-  'This plugin needs PiUI {0}.': 'Этому плагину нужен PiUI {0}.',
-  'This plugin does not support this PiUI version.': 'Этот плагин не поддерживает эту версию PiUI.',
+  'This is not a valid Nano Desktop plugin package.': 'Это некорректный пакет плагина Nano Desktop.',
+  'This plugin needs Nano Desktop {0}.': 'Этому плагину нужен Nano Desktop {0}.',
+  'This plugin does not support this Nano Desktop version.': 'Этот плагин не поддерживает эту версию Nano Desktop.',
   'A plugin with this ID is already installed another way. Remove it first.': 'Плагин с этим ID уже установлен другим способом. Сначала удалите его.',
   'This plugin or its contribution no longer exists.': 'Этого плагина или его элемента больше нет.',
   'This review expired. Choose the package again.': 'Срок этой проверки истёк. Выберите пакет ещё раз.',
@@ -304,7 +304,7 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'The plugin does not have permission for this.': 'У плагина нет разрешения на это.',
   'These settings are not valid.': 'Эти настройки некорректны.',
   'Remove a plugin before adding another (64 at most).': 'Удалите плагин, прежде чем добавлять другой (не больше 64).',
-  'PiUI could not save the plugin list.': 'PiUI не удалось сохранить список плагинов.',
+  'Nano Desktop could not save the plugin list.': 'Nano Desktop не удалось сохранить список плагинов.',
   "Node.js is needed to run this plugin's backend but was not found.": 'Для запуска бэкенда этого плагина нужен Node.js, но он не найден.',
   "The plugin's backend stopped unexpectedly and restarts in a moment. Try again.": 'Бэкенд плагина неожиданно остановился и скоро перезапустится. Попробуйте ещё раз.',
   "The plugin's backend keeps stopping. Restart it in Settings → Plugins.": 'Бэкенд плагина постоянно останавливается. Перезапустите его в «Настройки → Плагины».',
@@ -312,7 +312,7 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'The plugin reported an error.': 'Плагин сообщил об ошибке.',
   "The plugin's backend stopped before it answered.": 'Бэкенд плагина остановился, не успев ответить.',
   'The plugin did not answer in time. Its backend was stopped.': 'Плагин не ответил вовремя. Его бэкенд остановлен.',
-  'The plugin returned an answer PiUI cannot use.': 'Плагин вернул ответ, который PiUI не может использовать.',
+  'The plugin returned an answer Nano Desktop cannot use.': 'Плагин вернул ответ, который Nano Desktop не может использовать.',
   "The plugin's files no longer match what you trusted. Install it again.": 'Файлы плагина больше не совпадают с проверенными вами. Установите его заново.',
   'The installed files changed since you trusted them. Install the plugin again.': 'Установленные файлы изменились после того, как вы им доверились. Установите плагин заново.',
   "The plugin's permissions or backend changed since you trusted it. Reload it to review the change.":

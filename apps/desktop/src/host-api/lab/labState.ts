@@ -4,6 +4,7 @@ import type {
   ScheduleDefinition, ScheduleOccurrence, ScriptRuntime, SessionStatus, StoredDefinition, TeamDefinition, TrayLabelsV1,
   UsageReceipt, WorkspaceApproval, WorkspaceModel, WorkspaceSession, WorkspaceSummary,
 } from './labContracts';
+import type { NanoAccountStatusV1 } from '../../../../../contracts/nano-account-v1';
 import type { LabRun } from './orchestration/runEngine';
 import { apiFailure } from './labErrors';
 import type { LabIdSource } from './labRandom';
@@ -129,6 +130,12 @@ export interface LabState {
    */
   fusionLifecycle?: LabFusionLifecycle;
   catalog?: LabCatalogBehavior;
+  /**
+   * The Nano account fake (see `nanoAccountFake.ts`), set by the lab host: the
+   * model catalog and Nano session starts follow its entitlements like the
+   * desktop host does. Absent means no account: nothing for Nano is offered.
+   */
+  nanoAccount?: { status(): NanoAccountStatusV1 };
 }
 
 export interface LabFusionLifecycle {

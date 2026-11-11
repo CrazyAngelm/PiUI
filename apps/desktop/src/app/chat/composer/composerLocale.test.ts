@@ -21,7 +21,7 @@ it('translates the composer inputs copy, keeping placeholders', () => {
     'Only PNG, JPEG, GIF and WebP images can be attached.',
     'Too many files at once. Attach at most 10 at a time.',
     'Reference this file by its path?',
-    'The agent reads referenced files with its own tools. PiUI does not upload, copy or attach them.',
+    'The agent reads referenced files with its own tools. Nano Desktop does not upload, copy or attach them.',
     'File references',
     'Outside the project folder',
     'Insert references',

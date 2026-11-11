@@ -16,7 +16,7 @@ import {
   isAcpHarness,
   isBuiltinHarness,
   type BuiltinHarness,
-} from '../../../../../contracts/harness-identity-v2';
+} from '../../../../../contracts/harness-identity-v3';
 import type { SessionModeRequestV1, SessionModeResultV1 } from '../../../../../contracts/workspace-session-mode-v1';
 import { ACP_DEFAULT_MODEL } from '../../harness-adapters/acp';
 import { ACP_AGENT_ID, checkAcpDescriptor, secretEnvironment } from '../acpDescriptor';
@@ -83,6 +83,8 @@ const BUILTIN_LOCATIONS: Readonly<Record<BuiltinHarness, string>> = {
   codex: 'C:/Users/example/AppData/Roaming/npm/node_modules/@openai/codex/bin/codex.js',
   hermes: 'C:/Users/example/.local/bin/hermes.exe',
   'claude-code': 'C:/Users/example/.local/bin/claude.exe',
+  // Nano drives the user's installed upstream Pi.
+  nano: 'C:/Users/example/AppData/Roaming/npm/node_modules/@earendil-works/pi-coding-agent/dist/cli.js',
 };
 
 /** `builtin_verified_versions` */
@@ -91,12 +93,14 @@ const BUILTIN_VERIFIED: Readonly<Partial<Record<BuiltinHarness, string>>> = {
   'claude-code': '2.1.0 and newer',
   'prime-agent': '0.9.2 and newer',
   hermes: '0.21.0 and newer',
+  nano: '1.4.0 and newer',
 };
 
 /** `builtin_sign_in_hint`: PiUI never signs in. */
 const BUILTIN_SIGN_IN: Readonly<Partial<Record<BuiltinHarness, string>>> = {
   'claude-code': 'Claude Code runs only on your Claude subscription: run `claude` in a terminal and use /login.',
   codex: "Sign in with Codex's own flow: run `codex login` in a terminal.",
+  nano: 'Sign in to your Nano account to use Nano.',
 };
 
 /** The descriptor the host ships (`contracts/fixtures/acp-descriptors/valid-builtin-gemini-cli.json`). */
@@ -188,12 +192,12 @@ const REGISTRY_MESSAGES: Readonly<Record<Exclude<HarnessRegistryErrorCode, 'INVA
   CONFLICT: 'The harness list changed. Review it and try again.',
   DUPLICATE: 'An agent with this ID already exists.',
   NOT_FOUND: 'This agent is no longer registered.',
-  BUILT_IN: 'Agents that ship with PiUI cannot be removed or re-trusted.',
+  BUILT_IN: 'Agents that ship with Nano Desktop cannot be removed or re-trusted.',
   TRUST_CHANGED: 'The agent or its command line changed since you reviewed it. Review it again.',
   NOT_INSTALLED: 'The program was not found, so there is nothing to trust yet.',
   NOTHING_TO_CONFIRM: 'There is nothing to confirm for this agent right now. Check it again.',
   LIMIT: 'Remove an agent before adding another (32 at most).',
-  IO_ERROR: 'PiUI could not save the harness list.',
+  IO_ERROR: 'Nano Desktop could not save the harness list.',
   PLUGIN_OWNED: 'This agent comes from a plugin. Disable or remove the plugin in Settings → Plugins.',
 };
 
@@ -345,7 +349,7 @@ export class LabAcpRegistry {
     const entry = absolute ? program : this.path[program]?.entry;
     if (entry === undefined) return { ok: false, reason: "The agent's program was not found on PATH." };
     if (/\.(?:cmd|bat|ps1)$/i.test(entry)) {
-      return { ok: false, reason: 'This launcher needs a shell, which PiUI never uses. Point the descriptor at the executable or the Node script.' };
+      return { ok: false, reason: 'This launcher needs a shell, which Nano Desktop never uses. Point the descriptor at the executable or the Node script.' };
     }
     const versionOutput = absolute ? '1.0.0\n' : this.path[program]?.versionOutput ?? '';
     const line = /\.(?:js|mjs|cjs)$/i.test(entry) ? { program: NODE, args: [entry, ...args] } : { program: entry, args: [...args] };
@@ -387,7 +391,7 @@ export class LabAcpRegistry {
     if (!found.resolution.ok) return ['not-installed', found.resolution.reason];
     if (!trusted) return ['untrusted', "Review and trust this agent's command line in Settings → Harnesses."];
     if (found.report === undefined) return ['checking', CHECKING];
-    if (this.versionRefused(found.report)) return ['unsupported-version', 'The installed version is older than the versions tested with PiUI.'];
+    if (this.versionRefused(found.report)) return ['unsupported-version', 'The installed version is older than the versions tested with Nano Desktop.'];
     return this.signIn.has(descriptor.id) ? ['sign-in-required', SIGN_IN_REASON] : ['ready', undefined];
   }
 

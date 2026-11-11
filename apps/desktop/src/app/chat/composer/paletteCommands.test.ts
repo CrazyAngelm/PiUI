@@ -15,7 +15,7 @@ describe('palette native commands', () => {
     expect(COMMAND_SOURCE_LABELS.command).toBeUndefined();
   });
 
-  it('hides names PiUI runs itself, commands listed elsewhere and duplicates', () => {
+  it('hides names Nano Desktop runs itself, commands listed elsewhere and duplicates', () => {
     const listed = paletteNativeCommands(
       [command('compact', 'command'), command('stop'), command('run'), command('deploy'), command('deploy', 'prompt'), command('review')],
       ['review'],

@@ -62,7 +62,7 @@
 
 <h2>{$t('About')}</h2>
 <div class="rows">
-  <div class="row"><span>PiUI</span><span class="muted">{status?.currentVersion ?? '…'}</span></div>
+  <div class="row"><span>Nano Desktop</span><span class="muted">{status?.currentVersion ?? '…'}</span></div>
   <div class="row"><span>{$t('Safe mode')}</span><span class="muted">{safeMode ? $t('On') : $t('Off')}</span></div>
 </div>
 
@@ -80,17 +80,17 @@
       {#if status.phase === 'checking'}
         {$t('Checking for updates…')}
       {:else if status.phase === 'downloading' && offer}
-        {$t('Downloading PiUI {0}…', [offer.version])}
+        {$t('Downloading Nano Desktop {0}…', [offer.version])}
       {:else if status.phase === 'installing' && offer}
-        {$t('Installing PiUI {0}. PiUI will restart.', [offer.version])}
+        {$t('Installing Nano Desktop {0}. Nano Desktop will restart.', [offer.version])}
       {:else if status.phase === 'restarting'}
-        {$t('PiUI is restarting to finish the update.')}
+        {$t('Nano Desktop is restarting to finish the update.')}
       {:else if status.phase === 'restart-required'}
-        {$t('The update did not start. PiUI stopped its agents, so restart it to continue.')}
+        {$t('The update did not start. Nano Desktop stopped its agents, so restart it to continue.')}
       {:else if offer}
-        {$t('PiUI {0} is available.', [offer.version])}
+        {$t('Nano Desktop {0} is available.', [offer.version])}
       {:else if lastCheck?.outcome === 'up-to-date'}
-        {$t('PiUI is up to date. Last checked {0}.', [formatDate(lastCheck.at, true)])}
+        {$t('Nano Desktop is up to date. Last checked {0}.', [formatDate(lastCheck.at, true)])}
       {:else if lastCheck?.outcome === 'failed'}
         {$t('The last check did not finish ({0}).', [formatDate(lastCheck.at, true)])}
       {:else}
@@ -108,14 +108,14 @@
       <div class="actions">
         <Button onclick={() => void updates.restart()} loading={updates.action === 'restart'}>
           {#snippet leading()}<RotateCcw />{/snippet}
-          {$t('Restart PiUI')}
+          {$t('Restart Nano Desktop')}
         </Button>
       </div>
     {:else if offer}
       <article class="offer" aria-labelledby="about-offer-title">
         <div class="offer__head">
           <div class="offer__title">
-            <strong id="about-offer-title">PiUI {offer.version}</strong>
+            <strong id="about-offer-title">Nano Desktop {offer.version}</strong>
             {#if offer.date}<span class="muted">{formatDate(offer.date, false)}</span>{/if}
           </div>
           <Button variant="primary" onclick={() => (confirming = true)} loading={updates.action === 'install'} disabled={updates.busy}>
@@ -141,7 +141,7 @@
       <div class="row">
         <div class="row__text">
           <strong>{$t('Check for updates automatically')}</strong>
-          <small>{$t('When PiUI starts and once a day. Nothing installs without your confirmation.')}</small>
+          <small>{$t('When Nano Desktop starts and once a day. Nothing installs without your confirmation.')}</small>
         </div>
         <Switch
           label={$t('Check for updates automatically')}
@@ -154,18 +154,18 @@
     </div>
     <p class="muted small note">
       <ShieldCheck size={14} />
-      <span>{$t('PiUI installs an update only after its signature matches the key built into this version. Checks contact {0}.', [status.feedHost ?? ''])}</span>
+      <span>{$t('Nano Desktop installs an update only after its signature matches the key built into this version. Checks contact {0}.', [status.feedHost ?? ''])}</span>
     </p>
   </section>
 {/if}
 
-<p class="muted small">{$t('Local-first: no account, cloud backend or telemetry. Harnesses talk to their own providers.')}</p>
+<p class="muted small">{$t('Local-first: no telemetry. Harnesses talk to their own providers with their own credentials. The optional Nano account is used only once you sign in.')}</p>
 
 <Dialog
   bind:open={confirming}
   size="sm"
-  title={$t('Install PiUI {0}?', [offer?.version ?? ''])}
-  description={$t('PiUI downloads the update and checks its signature. Then it stops running chats and pipeline steps as it does when you quit, installs the update and starts again.')}
+  title={$t('Install Nano Desktop {0}?', [offer?.version ?? ''])}
+  description={$t('Nano Desktop downloads the update and checks its signature. Then it stops running chats and pipeline steps as it does when you quit, installs the update and starts again.')}
   closeLabel={$t('Close')}
 >
   <p class="muted">{$t('Finish or copy any message you are writing first. Interrupted pipeline steps can be reviewed in Runs after the restart.')}</p>

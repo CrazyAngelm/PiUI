@@ -6,10 +6,11 @@ describe('composer support manifests', () => {
   it('declares every harness composer inputs, never claiming more than its bridge', () => {
     expect(Object.fromEntries(Object.entries(harnessConfigurations).map(([harness, configuration]) => [harness, configuration.composer]))).toEqual({
       codex: { images: 'native', imagesNote: expect.any(String), nativeCommands: false, skillMentions: true },
-      'prime-agent': { images: 'none', imagesNote: 'Prime Agent accepts text only in PiUI.', nativeCommands: false, skillMentions: false },
+      'prime-agent': { images: 'none', imagesNote: 'Prime Agent accepts text only in Nano Desktop.', nativeCommands: false, skillMentions: false },
       pi: { images: 'native', imagesNote: expect.any(String), nativeCommands: true, skillMentions: false },
       hermes: { images: 'native', imagesNote: expect.any(String), nativeCommands: true, skillMentions: false },
       'claude-code': { images: 'native', imagesNote: expect.any(String), nativeCommands: true, skillMentions: false },
+      nano: { images: 'native', imagesNote: expect.any(String), nativeCommands: true, skillMentions: false },
     });
     // Each manifest declares exactly the entry the composer looks up.
     for (const [harness, configuration] of Object.entries(harnessConfigurations)) {
@@ -28,6 +29,6 @@ describe('composer support manifests', () => {
     expect(imageSupport('codex', true)).toEqual({ supported: true });
     expect(imageSupport('pi', false)).toEqual({ supported: false, reason: MODEL_WITHOUT_IMAGES });
     // A live report never widens a harness that takes no images.
-    expect(imageSupport('prime-agent', true)).toEqual({ supported: false, reason: 'Prime Agent accepts text only in PiUI.' });
+    expect(imageSupport('prime-agent', true)).toEqual({ supported: false, reason: 'Prime Agent accepts text only in Nano Desktop.' });
   });
 });

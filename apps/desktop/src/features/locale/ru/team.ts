@@ -28,8 +28,8 @@ export const teamRu: Readonly<Record<string, string>> = {
   'No board runs yet.': 'Запусков с доски пока не было.',
   'Run {0} for #{1}': 'Запуск {0} по #{1}',
   'Delete @{0}?': 'Удалить @{0}?',
-  'The agent, team, pipeline and launch command PiUI created for it are deleted too. Cards keep their history and become unassigned.':
-    'Агент, команда, пайплайн и команда запуска, созданные для него PiUI, тоже удаляются. Карточки сохраняют историю и остаются без исполнителя.',
+  'The agent, team, pipeline and launch command Nano Desktop created for it are deleted too. Cards keep their history and become unassigned.':
+    'Агент, команда, пайплайн и команда запуска, созданные для него Nano Desktop, тоже удаляются. Карточки сохраняют историю и остаются без исполнителя.',
   'The pipeline it wraps stays. Cards keep their history and become unassigned.':
     'Пайплайн, который он использует, остаётся. Карточки сохраняют историю и остаются без исполнителя.',
   'Delete teammate': 'Удалить участника',
@@ -54,7 +54,7 @@ export const teamRu: Readonly<Record<string, string>> = {
   Role: 'Роль',
   'What it is good at and when to hand it work. Agents read this in the roster.':
     'В чём он силён и когда передавать ему работу. Агенты видят это в списке команды.',
-  'PiUI saves a one-step pipeline for it, marked as managed by @{0}.': 'PiUI сохранит для него одношаговый пайплайн с пометкой «управляется @{0}».',
+  'Nano Desktop saves a one-step pipeline for it, marked as managed by @{0}.': 'Nano Desktop сохранит для него одношаговый пайплайн с пометкой «управляется @{0}».',
   'Pick a harness': 'Выберите харнесс',
   Instructions: 'Инструкции',
   'How it should work on a card. The card text arrives as its input.': 'Как работать над карточкой. Текст карточки придёт на вход.',
@@ -80,13 +80,13 @@ export const teamRu: Readonly<Record<string, string>> = {
   'More pipelines…': 'Другие пайплайны…',
   'Search teammates, harnesses and pipelines': 'Поиск участников, харнессов и пайплайнов',
   // Errors (fixed copy per host code)
-  'Safe mode is on: PiUI does not change teammates.': 'Включён безопасный режим: PiUI не меняет участников.',
+  'Safe mode is on: Nano Desktop does not change teammates.': 'Включён безопасный режим: Nano Desktop не меняет участников.',
   'Check the teammate details and try again.': 'Проверьте данные участника и повторите попытку.',
   'This teammate or its pipeline is no longer available.': 'Этот участник или его пайплайн больше недоступен.',
   'Another teammate of this project already uses this handle.': 'Другой участник проекта уже использует это имя.',
   'The teammate changed meanwhile. Reopen it and try again.': 'Участник тем временем изменился. Откройте его заново и повторите.',
   'This harness cannot run a teammate with these settings.': 'Этот харнесс не может запустить участника с такими настройками.',
   'This project has the most teammates allowed.': 'В проекте уже максимальное число участников.',
-  'PiUI could not save the teammate. Nothing was lost.': 'PiUI не удалось сохранить участника. Ничего не потеряно.',
+  'Nano Desktop could not save the teammate. Nothing was lost.': 'Nano Desktop не удалось сохранить участника. Ничего не потеряно.',
   'The teammate operation could not be completed.': 'Не удалось выполнить операцию с участником.',
 };

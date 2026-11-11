@@ -15,7 +15,7 @@
   const reasonId = `attach-reason-${Math.random().toString(36).slice(2)}`;
   // Unsupported stays focusable (aria-disabled) so its reason can be read.
   const unavailable = $derived(!images.supported);
-  const hint = $derived(unavailable ? $t(images.reason ?? 'This harness does not accept images in PiUI.') : $t('Attach images or files'));
+  const hint = $derived(unavailable ? $t(images.reason ?? 'This harness does not accept images in Nano Desktop.') : $t('Attach images or files'));
 </script>
 
 <Tooltip content={hint}>

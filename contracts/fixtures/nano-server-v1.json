@@ -1,0 +1,102 @@
+{
+  "$comment": "Golden fixtures of nano-server-v1.ts. Every value is synthetic; no real account, token or host data.",
+  "oauthMetadata": {
+    "issuer": "https://nanoagents.ru",
+    "authorization_endpoint": "https://nanoagents.ru/connect/authorize",
+    "token_endpoint": "https://nanoagents.ru/connect/token",
+    "revocation_endpoint": "https://nanoagents.ru/connect/revoke",
+    "device_authorization_endpoint": "https://nanoagents.ru/connect/device",
+    "code_challenge_methods_supported": ["S256"],
+    "grant_types_supported": ["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:device_code"],
+    "scopes_supported": ["openid", "profile", "offline_access", "nano.desktop"]
+  },
+  "meta": {
+    "apiVersion": 1,
+    "serverVersion": "2026.11.0",
+    "minClientVersion": "0.3.0",
+    "clientId": "nano-desktop",
+    "capabilities": {
+      "gateway": true,
+      "cloudLaunch": false,
+      "deviceCode": false,
+      "dictation": true,
+      "voice": false,
+      "imageGeneration": false,
+      "avatars": true
+    },
+    "links": {
+      "billing": "https://nanoagents.ru/billing",
+      "devices": "https://nanoagents.ru/account/devices",
+      "signup": "https://nanoagents.ru/signup",
+      "cloud": "https://hermes.nanoagents.ru/"
+    }
+  },
+  "token": {
+    "access_token": "synthetic-access-token",
+    "token_type": "Bearer",
+    "expires_in": 600,
+    "refresh_token": "synthetic-refresh-token",
+    "scope": "openid profile offline_access nano.desktop"
+  },
+  "tokenError": {
+    "error": "invalid_grant",
+    "error_description": "The refresh token is no longer valid."
+  },
+  "me": {
+    "user": { "id": "usr_synthetic01", "displayName": "Synthetic Person", "email": "person@example.com" },
+    "device": { "id": "dev_synthetic01", "name": "Nano Desktop on Windows", "createdAt": "2026-11-01T09:00:00Z", "lastSeenAt": "2026-11-11T08:30:00Z" },
+    "workspaces": [
+      { "id": "ws_synthetic01", "name": "Personal", "role": "owner" },
+      { "id": "ws_synthetic02", "name": "Team", "role": "member" }
+    ]
+  },
+  "entitlementsFree": {
+    "workspaceId": "ws_synthetic01",
+    "plan": { "id": "free", "name": "Free", "kind": "free", "renewsAt": null },
+    "credits": { "balance": 0, "included": null, "periodEndsAt": null },
+    "modes": [
+      { "id": "auto", "name": "Auto", "tier": "mixed", "available": false, "lockedReason": "plan", "costHint": null, "contextWindow": null, "maxOutputTokens": null, "input": ["text"], "reasoning": false },
+      { "id": "free", "name": "Free", "tier": "free", "available": true, "lockedReason": null, "costHint": "Free", "contextWindow": 131072, "maxOutputTokens": 8192, "input": ["text"], "reasoning": false },
+      { "id": "fast", "name": "Fast", "tier": "cheap", "available": false, "lockedReason": "plan", "costHint": null, "contextWindow": null, "maxOutputTokens": null, "input": ["text"], "reasoning": false },
+      { "id": "smart", "name": "Smart", "tier": "paid", "available": false, "lockedReason": "plan", "costHint": null, "contextWindow": null, "maxOutputTokens": null, "input": ["text", "image"], "reasoning": true }
+    ],
+    "features": { "localAgent": true, "cloud": true, "dictation": false, "imageGeneration": false, "voice": false, "avatars": true },
+    "limits": { "maxConcurrentRequests": 2, "maxRequestBytes": 4194304, "dictationMaxBytes": 0 }
+  },
+  "entitlementsPaid": {
+    "workspaceId": "ws_synthetic01",
+    "plan": { "id": "pro", "name": "Pro", "kind": "paid", "renewsAt": "2026-12-01T00:00:00Z" },
+    "credits": { "balance": 18250, "included": 25000, "periodEndsAt": "2026-12-01T00:00:00Z" },
+    "modes": [
+      { "id": "auto", "name": "Auto", "tier": "mixed", "available": true, "lockedReason": null, "costHint": "Picks a model per request", "contextWindow": 200000, "maxOutputTokens": 32000, "input": ["text", "image"], "reasoning": true },
+      { "id": "free", "name": "Free", "tier": "free", "available": true, "lockedReason": null, "costHint": "Free", "contextWindow": 131072, "maxOutputTokens": 8192, "input": ["text"], "reasoning": false },
+      { "id": "fast", "name": "Fast", "tier": "cheap", "available": true, "lockedReason": null, "costHint": "About 1 credit per 1K tokens", "contextWindow": 200000, "maxOutputTokens": 16384, "input": ["text", "image"], "reasoning": false },
+      { "id": "smart", "name": "Smart", "tier": "paid", "available": true, "lockedReason": null, "costHint": "About 8 credits per 1K tokens", "contextWindow": 400000, "maxOutputTokens": 64000, "input": ["text", "image"], "reasoning": true }
+    ],
+    "features": { "localAgent": true, "cloud": true, "dictation": true, "imageGeneration": false, "voice": true, "avatars": true },
+    "limits": { "maxConcurrentRequests": 4, "maxRequestBytes": 8388608, "dictationMaxBytes": 20971520 }
+  },
+  "usage": {
+    "workspaceId": "ws_synthetic01",
+    "periodStart": "2026-11-01T00:00:00Z",
+    "periodEnd": "2026-12-01T00:00:00Z",
+    "creditsUsed": 6750,
+    "creditsRemaining": 18250,
+    "byMode": [
+      { "mode": "auto", "credits": 4200, "requests": 310 },
+      { "mode": "free", "credits": 0, "requests": 95 },
+      { "mode": "fast", "credits": 550, "requests": 120 },
+      { "mode": "smart", "credits": 2000, "requests": 41 }
+    ]
+  },
+  "dictation": { "text": "Synthetic dictated text.", "language": "en", "durationMs": 2400 },
+  "cloudLaunch": { "url": "https://hermes.nanoagents.ru/launch?code=synthetic-one-time-code", "expiresAt": "2026-11-11T09:05:00Z" },
+  "errors": {
+    "credits_exhausted": { "status": 402, "body": { "error": { "code": "credits_exhausted", "message": "No credits left.", "retryable": false } } },
+    "mode_not_in_plan": { "status": 403, "body": { "error": { "code": "mode_not_in_plan", "message": "This mode is not in your plan.", "retryable": false } } },
+    "device_revoked": { "status": 401, "body": { "error": { "code": "device_revoked", "message": "This device was signed out.", "retryable": false } } },
+    "token_expired": { "status": 401, "body": { "error": { "code": "token_expired", "message": "Access token expired.", "retryable": true } } },
+    "client_too_old": { "status": 426, "body": { "error": { "code": "client_too_old", "message": "Update Nano Desktop.", "retryable": false } } },
+    "rate_limited": { "status": 429, "body": { "error": { "code": "rate_limited", "message": "Too many requests.", "retryable": true } } }
+  }
+}

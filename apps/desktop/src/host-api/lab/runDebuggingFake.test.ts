@@ -140,7 +140,7 @@ describe('UI Lab run debugging', () => {
     await expect(start(host, system, labUuid('test:no-pins'), true).catch(caught)).resolves.toEqual({ code: 'conflict' });
   });
 
-  it('archives finished runs and deletes only their PiUI record', async () => {
+  it('archives finished runs and deletes only their Nano Desktop record', async () => {
     const host = labHost();
     const system = await release(host);
     const running = labUuid('test:active');

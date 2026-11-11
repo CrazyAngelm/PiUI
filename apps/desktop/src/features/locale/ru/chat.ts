@@ -10,14 +10,15 @@ export const chatRu: Readonly<Record<string, string>> = {
   'Image': 'Изображение',
   'Drop images or files to attach': 'Перетащите изображения или файлы, чтобы прикрепить',
   'Remove the images to send this message.': 'Уберите изображения, чтобы отправить сообщение.',
-  'This harness does not accept images in PiUI.': 'Этот харнес не принимает изображения в PiUI.',
+  'This harness does not accept images in Nano Desktop.': 'Этот харнес не принимает изображения в Nano Desktop.',
   'The current model does not accept images.': 'Текущая модель не принимает изображения.',
   'Codex sends images to models that accept image input.': 'Codex передаёт изображения моделям, которые их принимают.',
   'Claude Code receives images as image content.': 'Claude Code получает изображения как изображения.',
   'Pi sends images to models that declare image input.': 'Pi передаёт изображения моделям, которые заявляют их поддержку.',
+  'Nano sends images to modes that accept image input.': 'Nano передаёт изображения режимам, которые принимают изображения.',
   'Hermes receives images when its ACP agent declares image input.':
     'Hermes получает изображения, если его ACP-агент заявляет их поддержку.',
-  'Prime Agent accepts text only in PiUI.': 'Prime Agent принимает в PiUI только текст.',
+  'Prime Agent accepts text only in Nano Desktop.': 'Prime Agent принимает в Nano Desktop только текст.',
   // What happened to files that were not attached.
   '{0} was not attached. {1}': '{0}: не прикреплено. {1}',
   '{0} was not attached. A message can carry at most {1} images.':
@@ -32,8 +33,8 @@ export const chatRu: Readonly<Record<string, string>> = {
   // Path references (non-image files) need a visible confirmation.
   'Reference this file by its path?': 'Указать этот файл по пути?',
   'Reference {0} files by their paths?': 'Указать файлы по путям ({0})?',
-  'The agent reads referenced files with its own tools. PiUI does not upload, copy or attach them.':
-    'Агент прочитает эти файлы своими инструментами. PiUI их не загружает, не копирует и не прикрепляет.',
+  'The agent reads referenced files with its own tools. Nano Desktop does not upload, copy or attach them.':
+    'Агент прочитает эти файлы своими инструментами. Nano Desktop их не загружает, не копирует и не прикрепляет.',
   'File references': 'Ссылки на файлы',
   'Outside the project folder': 'Вне папки проекта',
   'Insert references': 'Вставить ссылки',

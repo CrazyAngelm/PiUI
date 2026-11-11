@@ -19,7 +19,7 @@
 <Dialog
   bind:open
   title={references.length === 1 ? $t('Reference this file by its path?') : $t('Reference {0} files by their paths?', [references.length])}
-  description={$t('The agent reads referenced files with its own tools. PiUI does not upload, copy or attach them.')}
+  description={$t('The agent reads referenced files with its own tools. Nano Desktop does not upload, copy or attach them.')}
   closeLabel={$t('Cancel')}
   onOpenChange={(next) => {
     if (!next) onCancel();

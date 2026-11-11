@@ -78,10 +78,10 @@ export const executorsRu: Readonly<Record<string, string>> = {
   'Scripts do not run in safe mode.': 'В безопасном режиме скрипты не запускаются.',
   'Trust this project folder to test scripts.': 'Чтобы проверять скрипты, отметьте папку проекта как доверенную.',
   'The project folder is unavailable.': 'Папка проекта недоступна.',
-  'PiUI is closing.': 'PiUI закрывается.',
+  'Nano Desktop is closing.': 'Nano Desktop закрывается.',
   'This test is already running.': 'Эта проверка уже выполняется.',
   'Too many script tests are running. Wait for one to finish.': 'Выполняется слишком много проверок скриптов. Дождитесь завершения одной из них.',
   'The script could not be started. Nothing ran.': 'Скрипт не удалось запустить. Ничего не выполнялось.',
-  'The script started, but PiUI could not observe how it ended.': 'Скрипт запустился, но PiUI не смог узнать, чем он завершился.',
+  'The script started, but Nano Desktop could not observe how it ended.': 'Скрипт запустился, но Nano Desktop не смог узнать, чем он завершился.',
   'The script test could not be completed.': 'Не удалось выполнить проверку скрипта.',
 };

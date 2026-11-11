@@ -169,7 +169,7 @@
         {#if narrow}
           <div class="narrow-bar">
             <IconButton label={$t('Open navigation')} onclick={() => (drawerOpen = true)}><Menu /></IconButton>
-            <strong>PiUI</strong>
+            <strong>Nano Desktop</strong>
           </div>
         {/if}
         {#if store.catalogError}
@@ -262,7 +262,7 @@
       if (!open && !deleteBusy) deleteTarget = undefined;
     }}
   >
-    <p class="dialog-text">{$t('The chat is removed from PiUI. The harness keeps its own history.')}</p>
+    <p class="dialog-text">{$t('The chat is removed from Nano Desktop. The harness keeps its own history.')}</p>
     {#if deleteTarget && placements.get(deleteTarget)?.worktree?.state === 'ready'}
       <p class="dialog-text">{$t('Its worktree folder and branch stay on disk. Remove the worktree from the chat details first if you no longer need it.')}</p>
     {/if}

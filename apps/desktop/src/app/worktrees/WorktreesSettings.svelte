@@ -65,7 +65,7 @@
   </Button>
 </div>
 <p class="lead">
-  {$t('Folders PiUI created for worktree chats. Deleting a chat keeps its worktree; remove one here when no chat uses it any more. Branches are never deleted.')}
+  {$t('Folders Nano Desktop created for worktree chats. Deleting a chat keeps its worktree; remove one here when no chat uses it any more. Branches are never deleted.')}
 </p>
 {#if store.safeMode}<p class="note" role="status">{$t('Safe mode: worktrees are listed, but none can be removed.')}</p>{/if}
 {#if error}<p class="error" role="alert">{$t(error)}</p>{/if}
@@ -89,7 +89,7 @@
               {#if row.orphan}<Badge tone="warning">{$t('No chat')}</Badge>{/if}
               {#if row.worktree.state === 'missing'}<Badge tone="danger">{$t('Folder missing')}</Badge>{/if}
             </div>
-            <small>{row.projectName || $t('Project no longer in PiUI')} · {$t('from commit {0}', [row.worktree.base])}</small>
+            <small>{row.projectName || $t('Project no longer in Nano Desktop')} · {$t('from commit {0}', [row.worktree.base])}</small>
             <small class="mono path" title={row.worktree.path}>{row.worktree.path}</small>
             {#if row.chats.length}
               <div class="chats">
@@ -101,7 +101,7 @@
                 {/each}
               </div>
             {:else if !row.orphan}
-              <small>{$t('Used by a chat PiUI does not list.')}</small>
+              <small>{$t('Used by a chat Nano Desktop does not list.')}</small>
             {/if}
           </div>
           {#if row.orphan}

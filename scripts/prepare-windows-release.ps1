@@ -37,13 +37,21 @@ if ($installers.Count -ne 1) {
     throw "Expected exactly one NSIS installer for version $version in $bundleDirectory; found $($installers.Count)."
 }
 
-$portableSource = Join-Path $targetDirectory "release/piui-desktop.exe"
+# tauri.conf.json `mainBinaryName` renames the cargo binary (piui-desktop) to
+# nano-desktop.exe during `tauri build`; accept the cargo name for a bare build.
+$portableSource = Join-Path $targetDirectory "release/nano-desktop.exe"
 if (-not (Test-Path -LiteralPath $portableSource -PathType Leaf)) {
-    throw "Release executable is missing: $portableSource"
+    $portableSource = Join-Path $targetDirectory "release/piui-desktop.exe"
+}
+if (-not (Test-Path -LiteralPath $portableSource -PathType Leaf)) {
+    throw "Release executable is missing: $(Join-Path $targetDirectory 'release/nano-desktop.exe')"
 }
 
-$installerDestination = Join-Path $output $installers[0].Name
-$portableDestination = Join-Path $output "PiUI_${version}_windows_x86_64.exe"
+# Tauri derives the installer name from productName ("Nano Desktop_X.Y.Z_x64-setup.exe");
+# release files carry no spaces, which GitHub would rewrite and break checksum lines.
+$installerName = $installers[0].Name.Replace(" ", "")
+$installerDestination = Join-Path $output $installerName
+$portableDestination = Join-Path $output "NanoDesktop_${version}_windows_x86_64.exe"
 Copy-Item -LiteralPath $installers[0].FullName -Destination $installerDestination
 Copy-Item -LiteralPath $portableSource -Destination $portableDestination
 
@@ -51,7 +59,7 @@ Copy-Item -LiteralPath $portableSource -Destination $portableDestination
 $updaterSignature = "$($installers[0].FullName).sig"
 if (Test-Path -LiteralPath $updaterSignature -PathType Leaf) {
     Copy-Item -LiteralPath $updaterSignature -Destination "$installerDestination.sig"
-    Write-Host "Update signature: $($installers[0].Name).sig"
+    Write-Host "Update signature: $installerName.sig"
 } else {
     Write-Host "Update signature: none (updater artifacts were not enabled for this build)."
 }
@@ -87,7 +95,7 @@ $checksumPath = Join-Path $output "SHA256SUMS.txt"
 # LF line endings, so `sha256sum --check` works on every platform.
 [System.IO.File]::WriteAllText($checksumPath, (($checksumLines -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
 
-Write-Host "Prepared PiUI $version Windows release artifacts:"
+Write-Host "Prepared Nano Desktop $version Windows release artifacts:"
 Get-ChildItem -LiteralPath $output -File | Sort-Object Name | ForEach-Object {
     Write-Host "  $($_.Name) ($($_.Length) bytes)"
 }

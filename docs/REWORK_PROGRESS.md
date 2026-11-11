@@ -599,6 +599,39 @@ four read-only GPT 6.1 Sol passes.
   catalog (`?catalog=slow`) and checks the spinner before switching. Unit
   940/940, `workspace_api` 73 passed, clippy clean, composer lab spec 14/14.
 
+## 2026-11-11 — Nano Desktop (0.3.0, unreleased)
+
+- **ADR-046 to ADR-049:** PiUI becomes Nano Desktop, the desktop client of the
+  NanoAgent product. Visible names change; every persisted or external
+  identifier stays (`dev.piui.desktop`, `piui-system`, `PIUI_*`, `--piui-*`,
+  `.piui/`, `piui-workspace`, crate and npm names), so no migration exists.
+  An optional Nano account (ADR-047, OAuth authorization code + PKCE S256 in the
+  system browser with a loopback redirect, tokens only in the Rust host, refresh
+  token in the OS credential store, no Nano call while signed out or in safe
+  mode); the `nano` harness (ADR-048, identity grammar v3: the user's upstream
+  Pi >= 1.4.0 in a Nano lane with a private agent directory, a cleared
+  environment, a per-session host relay on `127.0.0.1` and Pi JSONL history;
+  modes `auto|free|fast|smart` from account entitlements; Fusion sidekick only);
+  the Nano Cloud window (ADR-049, no IPC, own profile, navigation allowlist).
+- **Contracts:** `nano-account-v1.ts` (WebView and host), `nano-server-v1.ts`
+  (host and server) with fixtures, `harness-identity-v3.ts`; `nano` added
+  additively to workspace v15, orchestration v6, the Rust identity crate and
+  the portable system-file v5 schema.
+- **Docs and tools:** `docs/NANO_DESKTOP.md` (architecture, sign-in, token
+  lifecycle, relay, privacy list, threat model, follow-ups),
+  `docs/NANO_DESKTOP_API.md` (the server contract for the NanoAgent team),
+  `tools/nano-dev-server/` (zero-dependency synthetic server with tests,
+  `pnpm nano:dev-server`), a Nano section in AGENTS.md and the piui-systems
+  skill, the example `examples/systems/codex-nano-pi-review.piui.json`,
+  `docs/HARNESS_CATALOGS.md` (host-served Nano catalog).
+- **Evidence:** synthetic only (fixtures and the dev server); the production
+  server has none of `/connect/*` or `/api/desktop/v1` yet, and no real
+  provider turn through Nano is claimed. Builds and tests are run by the lead at
+  the end of the work, not by this entry.
+- **Deferred:** bundled Node and Pi, Nano as Fusion lead and coordinator (host
+  tools in the Pi lane), image generation, a native cloud chat client,
+  device-code sign-in, local realtime voice, signed installers.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

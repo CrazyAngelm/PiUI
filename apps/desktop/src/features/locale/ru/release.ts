@@ -4,29 +4,29 @@ export const releaseRu: Readonly<Record<string, string>> = {
   'Updates': 'Обновления',
   'Check for updates': 'Проверить обновления',
   'Checking for updates…': 'Проверка обновлений…',
-  'Downloading PiUI {0}…': 'Загрузка PiUI {0}…',
-  'Installing PiUI {0}. PiUI will restart.': 'Установка PiUI {0}. PiUI перезапустится.',
-  'PiUI is restarting to finish the update.': 'PiUI перезапускается, чтобы завершить обновление.',
-  'The update did not start. PiUI stopped its agents, so restart it to continue.':
-    'Обновление не запустилось. PiUI уже остановил агентов — перезапустите его, чтобы продолжить.',
-  'PiUI {0} is available.': 'Доступна версия PiUI {0}.',
-  'PiUI is up to date. Last checked {0}.': 'Установлена последняя версия PiUI. Последняя проверка: {0}.',
+  'Downloading Nano Desktop {0}…': 'Загрузка Nano Desktop {0}…',
+  'Installing Nano Desktop {0}. Nano Desktop will restart.': 'Установка Nano Desktop {0}. Nano Desktop перезапустится.',
+  'Nano Desktop is restarting to finish the update.': 'Nano Desktop перезапускается, чтобы завершить обновление.',
+  'The update did not start. Nano Desktop stopped its agents, so restart it to continue.':
+    'Обновление не запустилось. Nano Desktop уже остановил агентов — перезапустите его, чтобы продолжить.',
+  'Nano Desktop {0} is available.': 'Доступна версия Nano Desktop {0}.',
+  'Nano Desktop is up to date. Last checked {0}.': 'Установлена последняя версия Nano Desktop. Последняя проверка: {0}.',
   'The last check did not finish ({0}).': 'Последняя проверка не завершилась ({0}).',
   'Not checked yet.': 'Проверки ещё не было.',
-  'Restart PiUI': 'Перезапустить PiUI',
+  'Restart Nano Desktop': 'Перезапустить Nano Desktop',
   'This release has no notes.': 'У этого выпуска нет описания изменений.',
   'Download progress': 'Ход загрузки',
   '{0} MB downloaded': 'Загружено {0} МБ',
   '{0} of {1} MB': '{0} из {1} МБ',
   'Download and restart': 'Загрузить и перезапустить',
   'Check for updates automatically': 'Проверять обновления автоматически',
-  'When PiUI starts and once a day. Nothing installs without your confirmation.':
-    'При запуске PiUI и раз в день. Без вашего подтверждения ничего не устанавливается.',
-  'PiUI installs an update only after its signature matches the key built into this version. Checks contact {0}.':
-    'PiUI устанавливает обновление, только если его подпись совпадает с ключом, встроенным в эту версию. Для проверки PiUI обращается к {0}.',
-  'Install PiUI {0}?': 'Установить PiUI {0}?',
-  'PiUI downloads the update and checks its signature. Then it stops running chats and pipeline steps as it does when you quit, installs the update and starts again.':
-    'PiUI загрузит обновление и проверит его подпись. Затем остановит идущие чаты и шаги пайплайнов, как при выходе, установит обновление и запустится снова.',
+  'When Nano Desktop starts and once a day. Nothing installs without your confirmation.':
+    'При запуске Nano Desktop и раз в день. Без вашего подтверждения ничего не устанавливается.',
+  'Nano Desktop installs an update only after its signature matches the key built into this version. Checks contact {0}.':
+    'Nano Desktop устанавливает обновление, только если его подпись совпадает с ключом, встроенным в эту версию. Для проверки Nano Desktop обращается к {0}.',
+  'Install Nano Desktop {0}?': 'Установить Nano Desktop {0}?',
+  'Nano Desktop downloads the update and checks its signature. Then it stops running chats and pipeline steps as it does when you quit, installs the update and starts again.':
+    'Nano Desktop загрузит обновление и проверит его подпись. Затем остановит идущие чаты и шаги пайплайнов, как при выходе, установит обновление и запустится снова.',
   'Finish or copy any message you are writing first. Interrupted pipeline steps can be reviewed in Runs after the restart.':
     'Сначала допишите или скопируйте сообщение, которое набираете. Прерванные шаги пайплайнов можно будет проверить в разделе «Запуски» после перезапуска.',
   // Update failures (host codes)
@@ -40,13 +40,13 @@ export const releaseRu: Readonly<Record<string, string>> = {
   'This update has no package for this system.': 'Для этой системы в обновлении нет пакета.',
   'Could not check for updates. Try again later.': 'Не удалось проверить обновления. Попробуйте позже.',
   'The update could not be downloaded. Nothing was installed.': 'Не удалось загрузить обновление. Ничего не установлено.',
-  'The update’s signature did not match PiUI’s signing key, so it was not installed.':
-    'Подпись обновления не совпала с ключом подписи PiUI, поэтому оно не установлено.',
+  'The update’s signature did not match Nano Desktop’s signing key, so it was not installed.':
+    'Подпись обновления не совпала с ключом подписи Nano Desktop, поэтому оно не установлено.',
   'The update could not be installed.': 'Не удалось установить обновление.',
   'Could not save this preference. The previous choice is kept.': 'Не удалось сохранить настройку. Оставлен прежний выбор.',
   'The update action could not be completed.': 'Не удалось выполнить действие с обновлением.',
   // Notice after an automatic check
-  'PiUI {0} is available': 'Доступна версия PiUI {0}',
+  'Nano Desktop {0} is available': 'Доступна версия Nano Desktop {0}',
   'Read what changed and install it from Settings → About.': 'Что изменилось и как установить — в разделе «Настройки → О программе».',
   'View update': 'Посмотреть',
 };

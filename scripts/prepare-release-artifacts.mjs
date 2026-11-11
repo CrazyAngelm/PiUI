@@ -34,7 +34,9 @@ function single(directory, pattern, description) {
 export function releaseFiles(bundleDirectory, platform, version) {
   const escaped = version.replaceAll('.', '\\.');
   const files = [];
-  const withSignature = (source, name = basename(source)) => {
+  // Tauri derives names from productName ("Nano Desktop_X.Y.Z_..."); release
+  // files carry no spaces, which GitHub would rewrite and break checksum lines.
+  const withSignature = (source, name = basename(source).replaceAll(' ', '')) => {
     files.push({ source, name });
     if (existsSync(`${source}.sig`)) files.push({ source: `${source}.sig`, name: `${name}.sig` });
   };
@@ -45,8 +47,8 @@ export function releaseFiles(bundleDirectory, platform, version) {
     withSignature(single(join(bundleDirectory, 'dmg'), new RegExp(`_${escaped}_[^_]+\\.dmg$`), `.dmg for ${version}`));
     // The update archive exists only when updater artifacts were enabled; it
     // carries no version in its name, so the release name adds one.
-    const archive = join(bundleDirectory, 'macos', 'PiUI.app.tar.gz');
-    if (existsSync(archive)) withSignature(archive, `PiUI_${version}_universal.app.tar.gz`);
+    const archive = join(bundleDirectory, 'macos', 'Nano Desktop.app.tar.gz');
+    if (existsSync(archive)) withSignature(archive, `NanoDesktop_${version}_universal.app.tar.gz`);
   } else {
     throw new Error(`Unsupported platform "${platform}".`);
   }
@@ -78,7 +80,7 @@ function main(argv) {
   mkdirSync(output);
   for (const file of files) copyFileSync(file.source, join(output, file.name));
   writeFileSync(join(output, 'SHA256SUMS.txt'), `${checksumLines(output).join('\n')}\n`);
-  console.log(`Prepared PiUI ${version} ${platform} release artifacts:`);
+  console.log(`Prepared Nano Desktop ${version} ${platform} release artifacts:`);
   for (const name of readdirSync(output).sort()) {
     console.log(`  ${name} (${lstatSync(join(output, name)).size} bytes)`);
   }

@@ -18,7 +18,7 @@ import {
 /** Harnesses that can lead a Fusion chat (they register the host tool `sidekick`). */
 export const FUSION_LEADS = ['claude-code', 'codex'] as const satisfies readonly HarnessKind[];
 /** Harnesses that can be the persistent sidekick. */
-export const FUSION_SIDEKICKS = ['claude-code', 'codex', 'pi'] as const satisfies readonly HarnessKind[];
+export const FUSION_SIDEKICKS = ['claude-code', 'codex', 'pi', 'nano'] as const satisfies readonly HarnessKind[];
 
 export const FUSION_PERMISSION_MODES = ['native', 'read-only', 'workspace-write', 'full-access'] as const satisfies readonly PermissionMode[];
 
@@ -43,13 +43,13 @@ export const isFusionSidekick = (harness: HarnessKind | string): harness is (typ
   (FUSION_SIDEKICKS as readonly string[]).includes(harness);
 
 /**
- * Harnesses without a native sandbox (Pi) can only run with full access, and a
- * sidekick may never exceed its lead, so a Pi sidekick starts with both roles
+ * Harnesses without a native sandbox (Pi, Nano) can only run with full access, and a
+ * sidekick may never exceed its lead, so a Pi or Nano sidekick starts with both roles
  * at full access. Everything else starts with an explicit "Edit project" so a
  * cross-harness pair is accepted without a native-defaults refusal.
  */
 export function defaultPermissionModes(sidekick: HarnessKind): { lead: PermissionMode; sidekick: PermissionMode } {
-  return sidekick === 'pi' ? { lead: 'full-access', sidekick: 'full-access' } : { lead: 'workspace-write', sidekick: 'workspace-write' };
+  return sidekick === 'pi' || sidekick === 'nano' ? { lead: 'full-access', sidekick: 'full-access' } : { lead: 'workspace-write', sidekick: 'workspace-write' };
 }
 
 /**
@@ -248,7 +248,7 @@ export function fusionErrorText(error: unknown): string {
   const code = fusionError(error).code;
   switch (code) {
     case 'SAFE_MODE':
-      return 'Safe mode is on, so Fusion cannot change anything. Restart PiUI without safe mode.';
+      return 'Safe mode is on, so Fusion cannot change anything. Restart Nano Desktop without safe mode.';
     case 'INVALID_ARGUMENT':
       return 'The host did not accept this request.';
     case 'NOT_FOUND':
@@ -261,6 +261,8 @@ export function fusionErrorText(error: unknown): string {
       return 'The host could not save the Fusion state.';
     case 'SIGN_IN_REQUIRED':
       return 'Sign in to the harness first, then try again.';
+    case 'NANO_SIGN_IN_REQUIRED':
+      return 'Sign in to your Nano account to use Nano.';
     case 'unknown':
       return 'The Fusion action could not be completed.';
     default:

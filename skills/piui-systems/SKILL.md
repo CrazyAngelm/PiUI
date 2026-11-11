@@ -48,7 +48,8 @@ prove the step's outcome.
   Use it to classify, extract `resultFields`, summarize or judge text that
   dependencies already produced. "No tools" depends on the harness; state what
   applies and never claim more: Pi starts the call with `--no-tools
-  --no-extensions`, so no tool exists; Codex cannot turn its tools off, so only
+  --no-extensions`, so no tool exists (Nano uses the same `--no-tools` lane, but
+  the account must be signed in when the run starts); Codex cannot turn its tools off, so only
   its read-only sandbox without network bounds them (the model can still read
   files and run read-only commands); Prime Agent and Hermes have no read-only
   mode and cannot run such a step (the host refuses it with
@@ -150,7 +151,7 @@ caller. They describe purpose; they never grant permission to spawn a profile.
   model levels from adapter examples. Missing imported IDs remain visible until
   explicitly corrected. A catalog is not proof of authentication or isolation.
 
-- Standard/Fast is supported by Codex and by Prime models advertised as Fast-capable by its native SDK; Pi RPC does not expose it and Claude Code refuses it (fast mode can use paid extra usage). Base-prompt replacement is a Codex capability. Omitted `baseInstructions` keeps the native base; `""` replaces only that base with empty text, not all native context.
+- Standard/Fast is supported by Codex and by Prime models advertised as Fast-capable by its native SDK; Pi RPC does not expose it, Nano refuses it and Claude Code refuses it (fast mode can use paid extra usage). Base-prompt replacement is a Codex capability. Omitted `baseInstructions` keeps the native base; `""` replaces only that base with empty text, not all native context.
 - Pi profiles can append native instructions and participate in result pipelines. Its current RPC adapter does not expose workspace messaging/delegation tools; do not promise Pi send/observe/spawn links.
 - Codex skill IDs are absolute paths; MCP IDs are existing configured server names. Codex `networkAccess` is native sandbox egress permission, not a domain allowlist or secret grant, and child profiles cannot enable it unless the parent also has it. Prime skill IDs are names. Per-agent Prime MCP disabling is unsupported; skills depend on its ipython tool and native RLM cannot be treated as an independent workspace spawn switch.
 - Disabling a skill controls discovery, not file access. No file contains API keys, credentials, native session IDs, shell commands for startup or executable plugins.
@@ -204,6 +205,48 @@ a terminal and use /login." Do not set `serviceTier`; it is refused.
   accordingly; a run stops a session that starts using paid extra usage.
 - See `examples/systems/codex-claude-pi-review.piui.json` for a Codex -> Claude
   Code -> Pi result pipeline.
+
+## Nano
+
+Portable version 5 accepts `harness: "nano"` (harness identity v3, additive;
+versions 1-4 never contain it and an older reader rejects it explicitly). Nano
+runs the user's installed upstream Pi against the Nano models through a
+host-owned agent directory; its history is Pi JSONL. It needs an optional Nano
+account: signed out, a step fails before any turn with "Sign in to your Nano
+account to use Nano." and nothing else in a pipeline is affected.
+
+- Verified configuration: `model` is one of `auto`, `free`, `fast`, `smart`
+  (`modelProvider`, when set, is `nano`; the account decides which modes are
+  available, so check the native catalog), appended `instructions`, and the
+  permission presets `native` (the Nano guard asks before shell commands and
+  file changes), `read-only` (a read/grep/find/ls tool list, not a sandbox) and
+  `full-access`.
+- Unsupported, refused at preflight: `workspace-write`, `reasoning`,
+  `serviceTier`, `baseInstructions`, `networkAccess`, `resourceRules` and any
+  tool rule (native or coordinator: Nano has no coordinator tool). It cannot
+  lead a Fusion chat; it may be a Fusion sidekick under the same rules as Pi
+  (both roles at full access).
+- Native defaults of different harnesses are incomparable, so Nano cannot be
+  authorized for cross-harness spawning; use result edges.
+- Verified configuration is what the host enforces before a native start (the
+  list above); it is an approval prompt and a tool list, never a sandbox: the
+  agent runs as the user. What **depends on the person's plan** and is not in
+  the file: which modes the signed-in workspace has (`available`, or locked by
+  plan, credits or the operator), their context windows and cost, whether the
+  account allows the local agent at all, and the credit balance. Never claim
+  that a mode works, and never name or promise the provider model behind a mode.
+  A file carries only `harness`, `modelProvider` and the mode id, never an
+  account, workspace, token or limit; importing it never signs anyone in.
+- Signed out, offline or a locked mode (including a paid mode locked because
+  the balance is used up; `free` keeps working at zero credits when the plan
+  offers it) fail the step before it starts with a typed reason and no fallback
+  to another harness. A scheduled system with a Nano step spends the account's
+  credits unattended, and Nano Desktop has no per-schedule or per-session
+  spending cap (only the account's plan limits apply): say so. Safe mode
+  refuses the harness. Use `auto` when the person has not named a mode; the
+  validator accepts only the four mode ids.
+- See `examples/systems/codex-nano-pi-review.piui.json` for a Codex -> Nano
+  (read-only) -> Pi result pipeline and `docs/NANO_DESKTOP.md` for the design.
 
 ## ACP agents
 

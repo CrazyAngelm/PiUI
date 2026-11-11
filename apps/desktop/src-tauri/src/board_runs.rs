@@ -203,7 +203,7 @@ impl<R: Runtime> BoardRunStarter for OrchestrationRunStarter<R> {
         }
         let run = api
             .create_board_run(start, trigger)
-            .map_err(|_| BoardError::Invalid("PiUI could not create the run."))?;
+            .map_err(|_| BoardError::Invalid("Nano Desktop could not create the run."))?;
         emit_run_changed(&self.app, &request.workspace_id, &run);
         let scheduler = scheduler.inner().clone();
         let app = self.app.clone();

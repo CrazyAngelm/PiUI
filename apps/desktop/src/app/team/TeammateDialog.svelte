@@ -21,6 +21,7 @@
   import type { BoardPermissionsV1 } from '../../host-api/boardClient';
   import { chatPipelines } from '../chatPipelines/chatPipelines.svelte';
   import { harnessMeta } from '../harnessMeta';
+  import { nanoAccount } from '../nano/nanoAccount.svelte';
   import ModelPicker, { type ModelOption } from '../shell/ModelPicker.svelte';
   import HarnessMark from '../shell/HarnessMark.svelte';
   import { useWorkspace } from '../shell/context';
@@ -145,6 +146,8 @@
   // Native model catalog of the chosen harness (reused from the new-chat composer).
   $effect(() => {
     const kindNow = harness;
+    // The Nano catalog is account state: a sign-in, a plan or a credit change loads it again.
+    if (kindNow === 'nano') void nanoAccount.catalogRevision;
     models = [];
     modelsError = '';
     if (!kindNow || kind !== 'simple') return;
@@ -401,7 +404,7 @@
       onValueChange={(value: 'simple' | 'pipeline') => (kind = value)}
     />
     {#if kind === 'simple'}
-      <p class="note">{$t('PiUI saves a one-step pipeline for it, marked as managed by @{0}.', [handle])}</p>
+      <p class="note">{$t('Nano Desktop saves a one-step pipeline for it, marked as managed by @{0}.', [handle])}</p>
       <div class="chips">
         <Picker items={harnessItems} value={harness} label={$t('Harness')} searchPlaceholder={$t('Search harnesses')} onSelect={(value) => { harness = value as HarnessKind; modelKey = ''; reasoning = ''; }}>
           {#snippet trigger(props)}

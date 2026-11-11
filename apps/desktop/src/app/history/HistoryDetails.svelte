@@ -39,7 +39,7 @@
       {#if fileState}<div><dt>{$t('File')}</dt><dd class="warn">{$t(fileState)}</dd></div>{/if}
     </dl>
     <SessionBranches tree={reader?.tree} {agentLabel} />
-    <p class="muted small">{$t('PiUI reads this history from the harness’s own files and never changes them.')}</p>
+    <p class="muted small">{$t('Nano Desktop reads this history from the harness’s own files and never changes them.')}</p>
   </div>
 </aside>
 

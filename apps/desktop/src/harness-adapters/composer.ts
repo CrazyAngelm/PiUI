@@ -25,6 +25,12 @@ export const COMPOSER_SUPPORT: Readonly<Record<Harness, ComposerSupport>> = {
     nativeCommands: true,
     skillMentions: false,
   },
+  nano: {
+    images: 'native',
+    imagesNote: 'Nano sends images to modes that accept image input.',
+    nativeCommands: true,
+    skillMentions: false,
+  },
   hermes: {
     images: 'native',
     imagesNote: 'Hermes receives images when its ACP agent declares image input.',
@@ -33,7 +39,7 @@ export const COMPOSER_SUPPORT: Readonly<Record<Harness, ComposerSupport>> = {
   },
   'prime-agent': {
     images: 'none',
-    imagesNote: 'Prime Agent accepts text only in PiUI.',
+    imagesNote: 'Prime Agent accepts text only in Nano Desktop.',
     nativeCommands: false,
     skillMentions: false,
   },
@@ -42,7 +48,7 @@ export const COMPOSER_SUPPORT: Readonly<Record<Harness, ComposerSupport>> = {
 /** A harness without a composer declaration takes text only. */
 export const TEXT_ONLY_COMPOSER: ComposerSupport = {
   images: 'none',
-  imagesNote: 'This harness does not accept images in PiUI.',
+  imagesNote: 'This harness does not accept images in Nano Desktop.',
   nativeCommands: false,
   skillMentions: false,
 };

@@ -7,7 +7,7 @@ import type {
   WorkspaceEvent,
   WorkspaceSession,
 } from '../../../../../contracts/workspace-v15';
-import { acpAgentId } from '../../../../../contracts/harness-identity-v2';
+import { acpAgentId } from '../../../../../contracts/harness-identity-v3';
 import { isNoticeEvent, withNotice } from './sessionNotices';
 
 export type EventApplication =
@@ -129,6 +129,7 @@ export function protectClosedCatalogSessions(catalog: WorkspaceCatalog, snapshot
 export function harnessLabel(kind: HarnessKind): string {
   switch (kind) {
     case 'pi': return 'Pi';
+    case 'nano': return 'Nano';
     case 'prime-agent': return 'Prime Agent';
     case 'codex': return 'Codex';
     case 'hermes': return 'Hermes';

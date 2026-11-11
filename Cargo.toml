@@ -8,16 +8,17 @@ members = [
   "crates/piui-runtime",
   "crates/piui-orchestration",
   "crates/piui-plugins",
+  "crates/piui-nano",
 ]
 exclude = ["spikes/webview-baseline/src-tauri"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.11"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
-authors = ["PiUI contributors"]
+authors = ["Nano Desktop contributors"]
 description = "A desktop workbench for native agent harnesses and multi-agent pipelines"
 keywords = ["pi", "tauri", "desktop", "agent"]
 categories = ["development-tools", "gui"]

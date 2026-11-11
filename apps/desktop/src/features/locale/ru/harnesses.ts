@@ -9,8 +9,8 @@ export const harnessesRu: Readonly<Record<string, string>> = {
   'From {0} to {1}.': 'От {0} до {1}.',
   '{0} or more.': 'Не меньше {0}.',
   '{0} or less.': 'Не больше {0}.',
-  'This request needs a value PiUI cannot show, so it can only be declined.':
-    'Запрос требует значение, которое PiUI не умеет показать, поэтому его можно только отклонить.',
+  'This request needs a value Nano Desktop cannot show, so it can only be declined.':
+    'Запрос требует значение, которое Nano Desktop не умеет показать, поэтому его можно только отклонить.',
   'Some optional values cannot be entered here and are left empty.':
     'Некоторые необязательные значения здесь ввести нельзя, они останутся пустыми.',
   'Fill in this field.': 'Заполните это поле.',
@@ -45,9 +45,28 @@ export const harnessesRu: Readonly<Record<string, string>> = {
     '«Только чтение» разрешает лишь read, grep, find и ls: это список инструментов, а не песочница.',
   'No workspace-write mode: choose read-only or full access.': 'Нет режима «запись в проект»: выберите «только чтение» или «полный доступ».',
   'Network access cannot be restricted.': 'Доступ к сети ограничить нельзя.',
-  'Uses its own permission settings; PiUI cannot make it read-only.':
-    'Использует свои настройки прав; PiUI не может сделать его «только для чтения».',
-  'Its approval prompts are not shown in PiUI.': 'Его запросы одобрения не показываются в PiUI.',
+
+  // Nano harness (adapter limitations, start refusal, static profile checks).
+  'Needs a Nano account: without a sign-in a step fails before it starts.':
+    'Нужен аккаунт Nano: без входа шаг завершается ошибкой до запуска.',
+  'Native permissions ask before shell commands and file changes. This is an approval prompt, not a sandbox.':
+    'Обычные права спрашивают перед командами оболочки и изменением файлов. Это запрос одобрения, а не песочница.',
+  'No workspace-write mode: choose native, read-only or full access.':
+    'Нет режима «запись в проект»: выберите обычные права, «только чтение» или «полный доступ».',
+  'Tools, skills, MCP servers, reasoning and speed cannot be set per agent.':
+    'Инструменты, навыки, MCP-серверы, рассуждение и скорость для агента не настраиваются.',
+  'Nano starts a model call with no tools (--no-tools).': 'Nano запускает вызов модели без инструментов (--no-tools).',
+  'Sign in to your Nano account to use Nano.': 'Войдите в аккаунт Nano, чтобы пользоваться Nano.',
+  // The static profile checks of harness-adapters/validation.ts (shown without their "<id>: " prefix).
+  'Nano has no workspace-write mode; use native, read-only or full access.':
+    'У Nano нет режима «запись в проект»: выберите обычные права, «только чтение» или «полный доступ».',
+  'Nano does not support tool rules.': 'Nano не поддерживает правила инструментов.',
+  'Nano model must be one of auto, free, fast, smart.': 'Модель Nano должна быть одной из: auto, free, fast, smart.',
+  'Nano runs only Nano models.': 'Nano запускает только модели Nano.',
+  'Nano has no reasoning levels.': 'У Nano нет уровней рассуждения.',
+  'Uses its own permission settings; Nano Desktop cannot make it read-only.':
+    'Использует свои настройки прав; Nano Desktop не может сделать его «только для чтения».',
+  'Its approval prompts are not shown in Nano Desktop.': 'Его запросы одобрения не показываются в Nano Desktop.',
   'Only skills can be switched per agent, not MCP servers.': 'Для агента переключаются только навыки, не MCP-серверы.',
   'Cannot run a single model call read-only.': 'Не может выполнить разовый вызов модели только для чтения.',
   'Tools and delegation cannot be limited per agent.': 'Инструменты и делегирование нельзя ограничить для агента.',

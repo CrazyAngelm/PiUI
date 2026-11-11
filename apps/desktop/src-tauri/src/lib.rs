@@ -24,6 +24,7 @@ mod dto;
 mod fusion;
 mod harness_configuration;
 mod harness_registry_api;
+mod nano;
 mod navigation_guard;
 mod orchestration_api;
 mod orchestration_run_debugging;
@@ -403,18 +404,24 @@ fn resolved_e2e_data_directories() -> Result<Option<E2eDataDirectories>, std::io
     )
 }
 
-/// App commands refuse a webview that shows the plugin origin
-/// (`navigation_guard`): only PiUI's own pages may call them.
+/// App commands are an allowlist (`navigation_guard`): only the main window
+/// on an app origin may call them. The plugin origin and the Nano Cloud
+/// window (`nano-cloud`, a remote origin with no IPC) are refused here.
 fn guarded_commands<R: tauri::Runtime>(
     commands: impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static,
 ) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
     move |invoke| {
-        let url = invoke.message.webview_ref().url().ok();
-        if navigation_guard::refuses_invoke(url.as_ref()) {
-            eprintln!("event=plugin_origin_invoke_refused");
+        let webview = invoke.message.webview_ref();
+        let url = webview.url().ok();
+        if navigation_guard::refuses_command_source(webview.label(), url.as_ref()) {
+            if navigation_guard::refuses_invoke(url.as_ref()) {
+                eprintln!("event=plugin_origin_invoke_refused");
+            } else {
+                eprintln!("event=invoke_source_refused");
+            }
             invoke
                 .resolver
-                .reject("PiUI commands are not available to this page.");
+                .reject("Nano Desktop commands are not available to this page.");
             return true;
         }
         commands(invoke)
@@ -730,7 +737,11 @@ pub fn run() -> Result<(), tauri::Error> {
     } else {
         None
     };
-    let context = tauri::generate_context!();
+    let mut context = tauri::generate_context!();
+    // Windows, the taskbar and the tray show small sizes: use the simplified
+    // mark that the icon file carries at 32-64 px instead of letting the OS
+    // shrink the full 256 px logo (the default pick from icons/icon.ico).
+    context.set_default_window_icon(Some(tauri::include_image!("icons/window.png")));
     // E2E hosts never touch the person's real sign-in registration, and run
     // side by side in isolated data folders outside the single-instance guard.
     #[cfg(debug_assertions)]
@@ -904,6 +915,11 @@ pub fn run() -> Result<(), tauri::Error> {
                 state.all_session_roots(),
             );
             state.set_catalog_watcher(watcher);
+            // The Nano account, relay and cloud window (ADR-047 to ADR-049):
+            // nothing contacts a Nano server here; a stored session is
+            // restored after first paint, and never in safe mode.
+            let nano_host = nano::install(app, &app_data_dir, safe_mode, e2e_isolated);
+            state.workspace.set_nano_host(nano_host);
             app.manage(state);
             let trigger_engine = orchestration_triggers::TriggerEngine::default();
             app.manage(trigger_engine.clone());
@@ -947,6 +963,15 @@ pub fn run() -> Result<(), tauri::Error> {
             app_update::app_update_install_v1,
             app_update::app_update_set_auto_check_v1,
             app_update::app_update_restart_v1,
+            nano::commands::nano_account_status_v1,
+            nano::commands::nano_account_sign_in_v1,
+            nano::commands::nano_account_cancel_sign_in_v1,
+            nano::commands::nano_account_sign_out_v1,
+            nano::commands::nano_account_select_workspace_v1,
+            nano::commands::nano_account_refresh_v1,
+            nano::commands::nano_account_open_link_v1,
+            nano::commands::nano_cloud_open_v1,
+            nano::commands::nano_dictation_v1,
             workspace_api::composer_inputs::workspace_composer_inputs_v1,
             plugins::api::plugins_v1,
             plugins::api::plugin_command_v1,

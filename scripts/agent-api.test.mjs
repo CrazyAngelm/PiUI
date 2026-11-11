@@ -13,10 +13,10 @@ test('Windows starter accepts both executable names and refuses either existing 
   const starter = fileURLToPath(new URL('./start-agent-api.ps1', import.meta.url));
   const quote = value => "'" + value.replaceAll("'", "''") + "'";
   try {
-    for (const filename of ['PiUI.exe', 'piui-desktop.exe']) {
+    for (const filename of ['PiUI.exe', 'piui-desktop.exe', 'nano-desktop.exe']) {
       const executable = join(directory, filename);
       await writeFile(executable, '');
-      for (const running of ['PiUI', 'piui-desktop']) {
+      for (const running of ['PiUI', 'piui-desktop', 'nano-desktop']) {
         const command = `function Get-Process { param($Name, $ErrorAction) if (${quote(running)} -in $Name) { [pscustomobject]@{ Id = 1 } } }
 try { & ${quote(starter)} -Executable ${quote(executable)} -ConnectionDirectory ${quote(join(directory, 'connection'))}; exit 1 }
 catch { if ($_.Exception.Message -notlike 'PiUI is already open.*') { throw }; if (Test-Path -LiteralPath ${quote(join(directory, 'connection'))}) { throw 'Wrote connection before detecting host' }; Write-Output 'blocked-existing-host' }`;

@@ -1,10 +1,17 @@
 # Changelog
 
-All notable changes to PiUI are documented here.
+All notable changes to Nano Desktop (formerly PiUI) are documented here.
 
-PiUI is currently a developer preview. Versions before 1.0 may change without a stable migration promise; changes to typed host contracts remain versioned under `contracts/`.
+Nano Desktop is currently a developer preview. Versions before 1.0 may change without a stable migration promise; changes to typed host contracts remain versioned under `contracts/`.
 
 ## [Unreleased]
+
+## [0.3.0]
+
+### Changed
+
+- PiUI is now Nano Desktop (ADR-046): the product name, window title, tray, installer and executable (`nano-desktop.exe`) change. Saved data, settings, systems, plugins and native histories keep their names and keep working; nothing is migrated.
+- Windows autostart registers the value "Nano Desktop" and removes a stale "PiUI" value when you toggle it.
 
 ## [0.2.11] - 2026-11-11
 

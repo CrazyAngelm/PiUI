@@ -28,7 +28,7 @@ describe('Settings → About', () => {
     const body = html(await loaded(undefined), true);
     expect(body).toContain('0.2.0');
     expect(body).toMatch(/Safe mode<\/span><span class="muted[^"]*">On</);
-    expect(body).toContain('Local-first: no account, cloud backend or telemetry.');
+    expect(body).toContain('Local-first: no telemetry. Harnesses talk to their own providers with their own credentials.');
     for (const text of ['Updates', 'Check for updates', 'Download and restart', 'Check for updates automatically', 'github.com']) {
       expect(body).not.toContain(text);
     }
@@ -47,13 +47,13 @@ describe('Settings → About', () => {
 
   it('shows the release notes as plain text and the install action for an offer', async () => {
     const body = html(await loaded('available'));
-    expect(body).toContain('PiUI 0.2.1 is available.');
+    expect(body).toContain('Nano Desktop 0.2.1 is available.');
     expect(body).toContain('aria-labelledby="about-offer-title"');
     expect(body).toContain('- Runs: the step panel keeps its width after a restart.');
     expect(body).toContain('Download and restart');
     expect(body).toContain('aria-checked="true"');
     // The confirmation opens only after the person asks for it.
-    expect(body).not.toContain('Install PiUI 0.2.1?');
+    expect(body).not.toContain('Install Nano Desktop 0.2.1?');
   });
 
   it('shows download progress with sizes in the interface language', async () => {
@@ -63,7 +63,7 @@ describe('Settings → About', () => {
     updates.apply({ type: 'status', status: { ...status, phase: 'downloading' } });
     updates.apply({ type: 'progress', downloadedBytes: 3 * 1024 * 1024, totalBytes: 12 * 1024 * 1024 });
     const body = html(updates);
-    expect(body).toContain('Downloading PiUI 0.2.1…');
+    expect(body).toContain('Downloading Nano Desktop 0.2.1…');
     expect(body).toMatch(/<progress[^>]*max="100"[^>]*value="25"[^>]*aria-label="Download progress"[^>]*aria-valuetext="3\.0 of 12\.0 MB"/);
     expect(body).toContain('3.0 of 12.0 MB</p>');
     setLanguage('ru');
@@ -96,10 +96,10 @@ describe('Settings → About', () => {
     await vi.advanceTimersByTimeAsync(3_000);
     await installing;
     const body = html(updates);
-    expect(body).toContain('The update did not start. PiUI stopped its agents, so restart it to continue.');
+    expect(body).toContain('The update did not start. Nano Desktop stopped its agents, so restart it to continue.');
     expect(body).toContain('role="alert"');
     expect(body).toContain('The update could not be installed.');
-    expect(body).toContain('Restart PiUI');
+    expect(body).toContain('Restart Nano Desktop');
     expect(body).not.toContain('Download and restart');
   });
 
@@ -108,7 +108,7 @@ describe('Settings → About', () => {
     const body = html(await loaded('available'));
     expect(body).toContain('Обновления');
     expect(body).toContain('Проверить обновления');
-    expect(body).toContain('Доступна версия PiUI 0.2.1.');
+    expect(body).toContain('Доступна версия Nano Desktop 0.2.1.');
     expect(body).toContain('Загрузить и перезапустить');
     expect(body).toContain('- Runs: the step panel keeps its width after a restart.');
   });

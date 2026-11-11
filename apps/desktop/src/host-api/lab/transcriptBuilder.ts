@@ -1,7 +1,7 @@
 import { liveLabel } from './catalogFake';
 import { labIso, SECOND } from './labClock';
 import type { DesktopTimelineBlock, HarnessKind } from './labContracts';
-import { isAcpHarness } from '../../../../../contracts/harness-identity-v2';
+import { isAcpHarness } from '../../../../../contracts/harness-identity-v3';
 
 type BlockStatus = DesktopTimelineBlock['status'];
 export type ToolRole = 'command' | 'edit' | 'search' | 'read';
@@ -9,6 +9,8 @@ export type ToolRole = 'command' | 'edit' | 'search' | 'read';
 /** How each bridge names shell commands and file edits in its tool blocks. */
 const TOOL_NAMES: Readonly<Record<HarnessKind, Readonly<Record<ToolRole, string>>>> = {
   pi: { command: 'bash', edit: 'edit', search: 'grep', read: 'read' },
+  // The Nano lane is Pi: the same tool blocks and Pi JSONL history.
+  nano: { command: 'bash', edit: 'edit', search: 'grep', read: 'read' },
   'prime-agent': { command: 'bash', edit: 'workspace', search: 'workspace', read: 'ipython' },
   codex: { command: 'commandExecution', edit: 'fileChange', search: 'commandExecution', read: 'commandExecution' },
   hermes: { command: 'Run terminal command', edit: 'Edit file', search: 'Search files', read: 'Read file' },
@@ -82,7 +84,7 @@ export class TranscriptBuilder {
   private tool(tool: ToolRole, text: string, status: BlockStatus, gapSeconds: number): this {
     const { id: _id, ...base } = toolBlock(this.harness, tool, 'pending');
     const summary = status === 'failed' ? 'The tool failed.' : 'The tool completed.';
-    return this.push({ ...base, text, status, ...(this.harness === 'pi' ? { safeSummary: summary } : {}) }, gapSeconds);
+    return this.push({ ...base, text, status, ...(this.harness === 'pi' || this.harness === 'nano' ? { safeSummary: summary } : {}) }, gapSeconds);
   }
 
   command(command: string, output: string, status: BlockStatus = 'complete', gapSeconds = 8): this {

@@ -50,7 +50,7 @@ impl ZipError {
         match self {
             Self::Unreadable => "The file is not a readable .zip archive.",
             Self::Unsupported => {
-                "The archive uses a .zip feature PiUI does not accept (ZIP64, split archives or a compression method other than deflate)."
+                "The archive uses a .zip feature Nano Desktop does not accept (ZIP64, split archives or a compression method other than deflate)."
             }
             Self::Encrypted => "The archive is encrypted.",
             Self::Link => "The archive contains a symbolic link.",

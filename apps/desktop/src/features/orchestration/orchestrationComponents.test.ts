@@ -67,7 +67,7 @@ describe('orchestration component integration', () => {
       onCancel: noAction,
     } });
     expect(body).toContain('Once at a date and time');
-    expect(body).toContain('After PiUI was closed');
+    expect(body).toContain('After Nano Desktop was closed');
     expect(body).toContain('While a previous run is active');
     expect(body).toContain('Saving does not enable execution');
     expect(body).not.toContain('Enable schedule');

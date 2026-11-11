@@ -51,26 +51,26 @@
   }}
 >
   {#snippet leading()}<Play />{/snippet}
-  {$t('Continue in PiUI')}
+  {$t('Continue in Nano Desktop')}
 </Button>
 
 {#if open}
   <Dialog
     open={true}
-    title={$t('Continue this session in PiUI?')}
+    title={$t('Continue this session in Nano Desktop?')}
     description={title}
     onOpenChange={(next) => {
       if (!next && !busy) open = false;
     }}
   >
     <div class="body">
-      <p>{$t('PiUI opens the same session file with Pi and adds this chat to the sidebar. It never rewrites the file; Pi appends new turns to it.')}</p>
-      <p><strong>{$t('Close it in the Pi terminal app first.')}</strong> {$t('The terminal and PiUI must not write to one session at the same time.')}</p>
+      <p>{$t('Nano Desktop opens the same session file with Pi and adds this chat to the sidebar. It never rewrites the file; Pi appends new turns to it.')}</p>
+      <p><strong>{$t('Close it in the Pi terminal app first.')}</strong> {$t('The terminal and Nano Desktop must not write to one session at the same time.')}</p>
       {#if error}<p class="error" role="alert">{$t(error)}</p>{/if}
     </div>
     {#snippet footer()}
       <Button variant="ghost" onclick={() => (open = false)} disabled={busy}>{$t('Cancel')}</Button>
-      <Button variant="primary" onclick={() => void adopt()} loading={busy}>{$t('Continue in PiUI')}</Button>
+      <Button variant="primary" onclick={() => void adopt()} loading={busy}>{$t('Continue in Nano Desktop')}</Button>
     {/snippet}
   </Dialog>
 {/if}

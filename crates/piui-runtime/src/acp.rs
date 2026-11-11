@@ -570,7 +570,7 @@ pub enum AcpResolveError {
     #[error("The program path does not name an existing file.")]
     Missing,
     #[error(
-        "This launcher needs a shell, which PiUI never uses. Point the descriptor at the executable or the Node script."
+        "This launcher needs a shell, which Nano Desktop never uses. Point the descriptor at the executable or the Node script."
     )]
     UnsupportedLauncher,
     #[error("Node.js is needed to start this agent but was not found.")]

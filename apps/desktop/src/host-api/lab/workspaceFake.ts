@@ -1,9 +1,9 @@
 import {
-  catalogModel, catalogModels, claudeSignInRequired, defaultModel, defaultSessionTitle, harnessResources,
-  permissionModes, reportsServiceTier, runtimeModels,
+  accountCatalogModel, accountDefaultModel, accountModels, accountRuntimeModels, catalogModels, claudeSignInRequired,
+  defaultSessionTitle, harnessResources, permissionModes, reportsServiceTier,
 } from './catalogFake';
 import { assertAcpStartable, isAgentDefault } from './acpFake';
-import { isAcpHarness } from '../../../../../contracts/harness-identity-v2';
+import { isAcpHarness } from '../../../../../contracts/harness-identity-v3';
 import type {
   HarnessModelsRequest, HarnessModelsResult, HarnessKind, RuntimeSettings, RuntimeSettingsCommand, SessionSnapshot,
   WorkspaceCatalog, WorkspaceCommand, WorkspaceHistoryRequestV1, WorkspaceHistoryResultV1, WorkspaceLifecycleCommand,
@@ -11,6 +11,7 @@ import type {
 } from './labContracts';
 import { answerMatchesForm } from '../approvalForms';
 import { NativeRejection, workspaceFailure } from './labErrors';
+import { labNanoLaunchReady } from './nanoAccountFake';
 import {
   authorizeLive, authorizeOrdinaryLive, hasControl, refuseFusionDelete, refuseFusionSidekick, normalizedTitle, requireLive, requireRecord, validateModel, validText, validToken,
 } from './labGuards';
@@ -42,6 +43,17 @@ function assertHarnessAvailable(state: LabState, harness: HarnessKind): void {
 /** Mirrors the host: every Claude Code start verifies the Claude subscription login. */
 function assertSignedIn(state: LabState, harness: HarnessKind): void {
   if (harness === 'claude-code' && claudeSignInRequired(state.harnesses)) throw workspaceFailure('SIGN_IN_REQUIRED');
+}
+
+/**
+ * Mirrors the host's Nano launch gate: a Nano start needs a signed-in account that
+ * can use the gateway and the local agent with a mode open; otherwise it is refused
+ * before anything starts. The catalog never refuses: it is empty while signed out.
+ */
+function assertNanoReady(state: LabState, harness: HarnessKind): void {
+  if (harness !== 'nano') return;
+  const status = state.nanoAccount?.status();
+  if (status === undefined || !labNanoLaunchReady(status)) throw workspaceFailure('NANO_SIGN_IN_REQUIRED');
 }
 
 /** The runtime refused: the plain workspace route reports every native rejection as RUNTIME_FAILED. */
@@ -98,10 +110,12 @@ function createSession(runtime: LabSessions, command: Extract<WorkspaceCommand, 
   assertHarnessAvailable(state, command.harness);
   if (!permissionModes(command.harness).includes(command.permissionMode)) throw workspaceFailure('RUNTIME_FAILED');
   assertSignedIn(state, command.harness);
-  if (command.model && catalogModel(command.harness, command.model.id, command.model.provider) === undefined) {
+  assertNanoReady(state, command.harness);
+  // A mode the account cannot use (locked by plan or credits) is not in its catalog: refused like an unknown model.
+  if (command.model && accountCatalogModel(state, command.harness, command.model.id, command.model.provider) === undefined) {
     throw workspaceFailure('RUNTIME_FAILED');
   }
-  const model = command.model && !isAgentDefault(command.harness, command.model) ? { ...command.model } : defaultModel(command.harness);
+  const model = command.model && !isAgentDefault(command.harness, command.model) ? { ...command.model } : accountDefaultModel(state, command.harness);
   const record: LabSessionRecord = {
     id: state.ids.next('session'),
     workspaceId: command.workspaceId,
@@ -137,6 +151,7 @@ function openSession(runtime: LabSessions, sessionId: string): WorkspaceResult {
   if (record.runId !== undefined) throw workspaceFailure('NOT_SUPPORTED');
   assertAcpStartable(state, record.harness);
   assertHarnessAvailable(state, record.harness);
+  assertNanoReady(state, record.harness);
   runtime.open(record);
   const result: SessionSnapshotResult = { type: 'session', snapshot: liveSnapshot(state, record) };
   runtime.publishSession(record);
@@ -194,8 +209,8 @@ function workspaceCommand(runtime: LabSessions, command: WorkspaceCommand): Work
       validateModel(command.model, command.thinkingLevel);
       const live = requireLive(record);
       if (live.status === 'failed') throw workspaceFailure('RUNTIME_FAILED');
-      if (record.harness === 'pi' && !command.model.provider) throw workspaceFailure('RUNTIME_FAILED');
-      if (catalogModel(record.harness, command.model.id, command.model.provider) === undefined) throw workspaceFailure('RUNTIME_FAILED');
+      if ((record.harness === 'pi' || record.harness === 'nano') && !command.model.provider) throw workspaceFailure('RUNTIME_FAILED');
+      if (accountCatalogModel(state, record.harness, command.model.id, command.model.provider) === undefined) throw workspaceFailure('RUNTIME_FAILED');
       record.model = { ...command.model };
       record.thinkingLevel = command.thinkingLevel ?? carriedThinkingLevel(command.model, record.thinkingLevel);
       runtime.touch(record);
@@ -251,7 +266,7 @@ function runtimeSettings(runtime: LabSessions, command: RuntimeSettingsCommand):
     throw workspaceFailure('NOT_SUPPORTED');
   }
   if (live.status === 'failed') throw workspaceFailure('RUNTIME_FAILED');
-  const models = runtimeModels(record.harness);
+  const models = accountRuntimeModels(state, record.harness);
   if (command.type === 'set') {
     if (live.status !== 'idle') throw workspaceFailure('INVALID_ARGUMENT');
     const candidate = models.find((model) => model.id === command.model.id && model.provider === command.model.provider);
@@ -259,10 +274,10 @@ function runtimeSettings(runtime: LabSessions, command: RuntimeSettingsCommand):
     const thinkingLevel = command.thinkingLevel ?? undefined;
     validateModel(candidate, thinkingLevel);
     const tier = command.serviceTier ?? undefined;
-    if (tier !== undefined && (record.harness === 'pi' || (tier !== 'standard' && tier !== 'fast'))) {
+    if (tier !== undefined && (record.harness === 'pi' || record.harness === 'nano' || (tier !== 'standard' && tier !== 'fast'))) {
       throw workspaceFailure('INVALID_ARGUMENT');
     }
-    const fastCapable = catalogModel(record.harness, candidate.id, candidate.provider)?.supportsFast === true;
+    const fastCapable = accountCatalogModel(state, record.harness, candidate.id, candidate.provider)?.supportsFast === true;
     if (tier !== undefined && (record.harness === 'hermes' || (tier === 'fast' && !fastCapable))) throw workspaceFailure('RUNTIME_FAILED');
     record.model = candidate;
     record.thinkingLevel = thinkingLevel ?? carriedThinkingLevel(candidate, record.thinkingLevel);
@@ -320,7 +335,8 @@ async function harnessModels(runtime: LabSessions, request: HarnessModelsRequest
   return {
     protocol: 18,
     harness: request.harness,
-    models: request.part === 'resources' ? [] : catalogModels(request.harness),
+    // Nano lists only the modes the account may use: none while signed out.
+    models: request.part === 'resources' ? [] : accountModels(state, request.harness),
     resources: request.part === 'models'
       ? { items: [], warnings: [] }
       : state.catalog === 'no-resources' ? degraded : harnessResources(request.harness),

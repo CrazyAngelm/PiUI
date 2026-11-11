@@ -1,5 +1,6 @@
 import type { AgentProfile, StepExecutor } from '../../../../contracts/orchestration-v6';
 import { CLAUDE_CODE_EFFORT_LEVELS } from './claude-code';
+import { NANO_MODE_IDS, NANO_MODEL_PROVIDER } from './nano';
 import { harnessConfiguration } from './index';
 
 /** Claude Code asks before running these; read-only and workspace-write can only deny. */
@@ -10,7 +11,11 @@ const CLAUDE_FILE_WRITE_TOOLS = ['Edit', 'Write', 'NotebookEdit'];
 export function profileConfigurationErrors(id: string, profile: Omit<AgentProfile, 'id' | 'allowedSpawnProfileIds'>): string[] {
   const errors: string[] = [];
     const configuration = harnessConfiguration(profile.harness);
-    if (!configuration.permissionModes.includes(profile.permissionMode)) errors.push(`${id}: unsupported file permissions.`);
+    if (!configuration.permissionModes.includes(profile.permissionMode)) {
+      errors.push(profile.harness === 'nano' && profile.permissionMode === 'workspace-write'
+        ? `${id}: Nano has no workspace-write mode; use native, read-only or full access.`
+        : `${id}: unsupported file permissions.`);
+    }
     if (profile.serviceTier !== undefined && !configuration.speed) errors.push(`${id}: speed is not supported.`);
     if (profile.baseInstructions !== undefined && !configuration.basePrompt) errors.push(`${id}: base prompt replacement is not supported.`);
     if (profile.networkAccess && (!configuration.networkAccess || !['read-only', 'workspace-write'].includes(profile.permissionMode))) errors.push(`${id}: network access is not supported with these permissions.`);
@@ -23,7 +28,10 @@ export function profileConfigurationErrors(id: string, profile: Omit<AgentProfil
       if (resources.has(key)) errors.push(`${id}: duplicate resource rule.`);
       resources.add(key);
     }
+    // Nano restricts no tool per agent and has no coordinator tool: any rule, native or coordinator, is refused.
+    if (profile.harness === 'nano' && profile.toolPolicy.rules.length > 0) errors.push(`${id}: Nano does not support tool rules.`);
     for (const rule of profile.toolPolicy.rules) {
+      if (profile.harness === 'nano') continue;
       if (rule.enforcement === 'native' && !configuration.nativeTools.includes(rule.tool)) errors.push(`${id}: unknown native tool.`);
       if (rule.mandatory && ['advisory', 'unsupported'].includes(rule.enforcement)) errors.push(`${id}: mandatory policy cannot be advisory or unsupported.`);
       if (profile.harness === 'claude-code' && rule.enforcement === 'native' && rule.decision === 'allow'
@@ -38,6 +46,12 @@ export function profileConfigurationErrors(id: string, profile: Omit<AgentProfil
     }
     if (profile.harness === 'claude-code' && profile.modelProvider !== undefined && profile.modelProvider !== 'anthropic') {
       errors.push(`${id}: Claude Code runs only Anthropic models.`);
+    }
+    // Nano: the model is one of the account's modes (the host catalog narrows it to the entitled ones).
+    if (profile.harness === 'nano') {
+      if (profile.model.trim() !== '' && !(NANO_MODE_IDS as readonly string[]).includes(profile.model)) errors.push(`${id}: Nano model must be one of ${NANO_MODE_IDS.join(', ')}.`);
+      if (profile.modelProvider !== undefined && profile.modelProvider !== NANO_MODEL_PROVIDER) errors.push(`${id}: Nano runs only Nano models.`);
+      if (profile.reasoning !== undefined) errors.push(`${id}: Nano has no reasoning levels.`);
     }
   return errors;
 }

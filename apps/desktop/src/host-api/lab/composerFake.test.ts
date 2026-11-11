@@ -133,6 +133,22 @@ describe('UI Lab composer outbox', () => {
     expect(await rejection(composer(host, { type: 'compact', sessionId: hermesId }))).toMatchObject({ code: 'NOT_SUPPORTED' });
   });
 
+  it('reports Nano composer capabilities like Pi: steer and compact, images only for modes that take them', async () => {
+    const host = labHost('demo', { nano: 'signed-in' });
+    const projectId = host.state.projects[1]?.id;
+    const start = async (model: Record<string, string>) => {
+      const created = await host.invoke<WorkspaceResult>('workspace_command_v15', {
+        command: { type: 'createSession', workspaceId: projectId, harness: 'nano', permissionMode: 'native', model },
+      });
+      if (created.type !== 'session') throw new Error('Expected a Nano session.');
+      return created.snapshot.session.id;
+    };
+    const auto = await start({ id: 'auto', provider: 'nano', name: 'Auto' });
+    expect((await composer(host, { type: 'snapshot', sessionId: auto })).capabilities).toEqual({ steer: true, compact: true, images: true });
+    const free = await start({ id: 'free', provider: 'nano', name: 'Free' });
+    expect((await composer(host, { type: 'snapshot', sessionId: free })).capabilities).toMatchObject({ images: false });
+  });
+
   it('keeps managed run sessions and closed sessions out of the outbox', async () => {
     const host = labHost();
     const run = [...host.state.sessions.values()].find((session) => session.runId !== undefined);

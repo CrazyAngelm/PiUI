@@ -22,7 +22,7 @@ const SAFE_ERRORS: Record<string, string> = {
   QUEUE_PENDING: 'Resolve queued messages before compacting.',
   DELIVERY_UNCERTAIN: 'Check native history before dismissing the uncertain message.',
   RUNTIME_FAILED: 'The harness could not complete the operation. Its saved history has not been removed.',
-  HARNESS_INCOMPATIBLE: 'The installed harness speaks a protocol this PiUI version does not support. Update PiUI or the harness.',
+  HARNESS_INCOMPATIBLE: 'The installed harness speaks a protocol this Nano Desktop version does not support. Update Nano Desktop or the harness.',
   SESSION_ALREADY_ACTIVE: 'This session is already active in another client. Stop it there before reopening it.',
   SAFE_MODE: 'Runtime actions are disabled in safe mode.',
   APPROVAL_EXPIRED: 'This approval is no longer pending. Refresh the session.',
@@ -30,6 +30,7 @@ const SAFE_ERRORS: Record<string, string> = {
   ACP_TRUST_REQUIRED: 'Review and trust this agent in Settings → Harnesses before starting it.',
   ACP_VERSION_UNCONFIRMED: "Confirm this agent's version in Settings → Harnesses before starting it.",
   ACP_SIGN_IN_REQUIRED: 'Sign in to this agent with its own app, then try again. Settings → Harnesses shows how.',
+  NANO_SIGN_IN_REQUIRED: 'Sign in to your Nano account to use Nano.',
   // Composer inputs v1 and composer v19 attachments.
   IMAGES_UNSUPPORTED: 'This harness or its current model does not accept images. Remove the images or switch models.',
   ATTACHMENT_UNAVAILABLE: 'An attached image is no longer available. Attach it again.',

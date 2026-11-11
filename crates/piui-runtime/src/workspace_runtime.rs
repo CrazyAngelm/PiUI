@@ -5,8 +5,11 @@
 
 use crate::acp::{AcpLaunch, acp_environment};
 use crate::codec::{RpcCodec, RpcCodecConfig};
+pub use crate::nano::{NANO_GUARD_EXTENSION_SOURCE, NanoRelayKey, NanoRuntimeLaunch};
 pub use crate::native_version::NativeVersionStatus;
-use crate::native_version::{CLAUDE_CODE, CODEX_APP_SERVER, HERMES, PRIME_AGENT, VerifiedRange};
+use crate::native_version::{
+    CLAUDE_CODE, CODEX_APP_SERVER, HERMES, NANO_PI, PRIME_AGENT, VerifiedRange,
+};
 use crate::real_rpc::resolve_pi_launch;
 pub use piui_contracts::harness_identity::AcpAgentId;
 use piui_contracts::harness_identity::{
@@ -60,7 +63,7 @@ pub const CLAUDE_SIGN_IN_MESSAGE: &str = "Sign in to Claude Code with your Claud
 /// Fixed, user-facing text of [`BridgeFailureCode::Incompatible`]: the
 /// installed harness answered a startup request with a protocol or version PiUI
 /// does not implement. Native error text is never shown.
-pub const INCOMPATIBLE_HARNESS_MESSAGE: &str = "The installed harness speaks a protocol this PiUI version does not support. Update PiUI or the harness.";
+pub const INCOMPATIBLE_HARNESS_MESSAGE: &str = "The installed harness speaks a protocol this Nano Desktop version does not support. Update Nano Desktop or the harness.";
 
 /// Environment removed before the Claude Code bridge starts. Only the user's
 /// Claude subscription login may reach the CLI: API keys, bearer, identity and
@@ -185,7 +188,7 @@ const ACP_STARTUP_ALLOWANCE: Duration = Duration::from_secs(40);
 // trusted length-prefixed source bytes, leaving subsequent LF JSON untouched.
 const NODE_BOOTSTRAP: &str = r#"const fs=await import('node:fs');const h=Buffer.alloc(4);let o=0;while(o<4){const n=fs.readSync(0,h,o,4-o,null);if(n===0)throw new Error('bridge source EOF');o+=n}const z=h.readUInt32LE(0),b=Buffer.alloc(z);o=0;while(o<z){const n=fs.readSync(0,b,o,z-o,null);if(n===0)throw new Error('bridge source EOF');o+=n}await import('data:text/javascript;base64,'+b.toString('base64'));"#;
 
-/// Harness identity (grammar v2, see `piui_contracts::harness_identity`):
+/// Harness identity (grammar v3, see `piui_contracts::harness_identity`):
 /// the built-in names, serialized in kebab-case, or `acp:<descriptor id>`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HarnessKind {
@@ -194,6 +197,10 @@ pub enum HarnessKind {
     Codex,
     Hermes,
     ClaudeCode,
+    /// Nano Desktop's own harness (identity v3, ADR-048): the user's installed
+    /// upstream Pi driven through a host-owned agent directory and relay. Its
+    /// history is Pi JSONL.
+    Nano,
     /// An Agent Client Protocol agent from the host descriptor registry.
     Acp(AcpAgentId),
 }
@@ -201,20 +208,22 @@ pub enum HarnessKind {
 impl HarnessKind {
     /// Every built-in harness in presentation order. ACP agents come from
     /// the host descriptor registry.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Pi,
         Self::PrimeAgent,
         Self::Codex,
         Self::Hermes,
         Self::ClaudeCode,
+        Self::Nano,
     ];
 
-    const BUILTIN: [(&'static str, Self); 5] = [
+    const BUILTIN: [(&'static str, Self); 6] = [
         ("pi", Self::Pi),
         ("prime-agent", Self::PrimeAgent),
         ("codex", Self::Codex),
         ("hermes", Self::Hermes),
         ("claude-code", Self::ClaudeCode),
+        ("nano", Self::Nano),
     ];
 
     pub const fn display_name(self) -> &'static str {
@@ -224,6 +233,7 @@ impl HarnessKind {
             Self::Codex => "Codex",
             Self::Hermes => "Hermes",
             Self::ClaudeCode => "Claude Code",
+            Self::Nano => "Nano",
             Self::Acp(_) => "ACP agent",
         }
     }
@@ -231,27 +241,28 @@ impl HarnessKind {
     /// The harness takes an MCP server for one session without touching the
     /// user's own configuration: Claude Code (`--mcp-config`), and Hermes and
     /// ACP agents (`mcpServers` of `session/new` and `session/load`). Codex,
-    /// Pi and Prime Agent do not, so plugin MCP servers never reach them.
+    /// Pi, Nano and Prime Agent do not, so plugin MCP servers never reach them.
     #[must_use]
     pub const fn accepts_session_mcp(self) -> bool {
         matches!(self, Self::ClaudeCode | Self::Hermes | Self::Acp(_))
     }
 
     /// Whether the adapter can take the board host tool. Pi RPC has no custom
-    /// tools. Some answers are known only after the adapter starts: an ACP agent
+    /// tools, and Nano is Pi underneath. Some answers are known only after the adapter starts: an ACP agent
     /// needs `mcpCapabilities.http` ([`NativeNoticeCode::UnsupportedBoardTool`]),
     /// and Codex takes dynamic tools only on `thread/start`, so a resumed Codex
     /// thread keeps the board only if its rollout shows it was started with it
     /// ([`NativeNoticeCode::UnsupportedBoardToolResume`] otherwise).
     #[must_use]
     pub const fn supports_board_tool(self) -> bool {
-        !matches!(self, Self::Pi)
+        !matches!(self, Self::Pi | Self::Nano)
     }
 
     /// Whether the adapter can take the Fusion `sidekick` host tool (ADR-043):
     /// Claude Code through its session MCP server, and Codex through a dynamic
     /// tool registered on `thread/start` (a resumed thread keeps it only when
-    /// it was started with it). Other adapters cannot lead a Fusion chat in v1.
+    /// it was started with it). Other adapters, Nano included, cannot lead a
+    /// Fusion chat in v1; Nano may still be a sidekick.
     #[must_use]
     pub const fn supports_sidekick_tool(self) -> bool {
         matches!(self, Self::ClaudeCode | Self::Codex)
@@ -266,7 +277,7 @@ impl HarnessKind {
         }
     }
 
-    /// Parses a v2 harness identity.
+    /// Parses a v3 harness identity.
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         parse_harness_identity(value, &Self::BUILTIN, Self::Acp)
@@ -1158,6 +1169,14 @@ pub struct NativeRuntimeConfig {
     /// (see [`HarnessKind::supports_board_tool`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_tools: Vec<HostTool>,
+    /// Launch data of a `nano` session (agent directory, guard extension and
+    /// relay key), filled by the host before a start. A Nano start without it
+    /// is refused with [`NativeRuntimeError::NanoNotReady`]; any other harness
+    /// with it set is an invalid configuration, so the key reaches only the
+    /// Nano lane of the bridge. The relay key is a secret: it serializes into
+    /// the bridge `initialize` frame only and is redacted from `Debug`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nano: Option<NanoRuntimeLaunch>,
 }
 
 impl fmt::Debug for NativeRuntimeConfig {
@@ -1182,6 +1201,7 @@ impl fmt::Debug for NativeRuntimeConfig {
             .field("coordination", &self.coordination)
             .field("plugin_mcp_servers", &self.plugin_mcp_servers.len())
             .field("host_tools", &self.host_tools)
+            .field("has_nano", &self.nano.is_some())
             .finish()
     }
 }
@@ -1226,6 +1246,7 @@ pub const fn builtin_verified_versions(kind: HarnessKind) -> Option<&'static str
         HarnessKind::ClaudeCode => Some("2.1.0 and newer"),
         HarnessKind::PrimeAgent => Some("0.9.2 and newer"),
         HarnessKind::Hermes => Some("0.21.0 and newer"),
+        HarnessKind::Nano => Some("1.4.0 and newer"),
         HarnessKind::Pi | HarnessKind::Acp(_) => None,
     }
 }
@@ -1288,6 +1309,16 @@ pub enum NativeRuntimeError {
     /// sign-in method names (bounded plain text); PiUI never authenticates.
     #[error("The agent requires sign-in")]
     AgentSignInRequired { methods: Vec<String> },
+    /// A Nano start without host launch data (no signed-in Nano account, no
+    /// relay): refused before anything is spawned. The host maps it to the
+    /// workspace error code `NANO_SIGN_IN_REQUIRED`.
+    #[error("Nano is not ready: sign in to your Nano account")]
+    NanoNotReady,
+    /// Catalog-only spawns are never used for Nano: the host serves the Nano
+    /// model catalog itself from the account's entitled modes, so no Pi
+    /// process is started to discover models.
+    #[error("The Nano catalog is served by the host")]
+    NanoCatalogHostServed,
 }
 
 #[derive(Serialize)]
@@ -1409,6 +1440,34 @@ struct RuntimeShared {
     next_id: AtomicU64,
     accepting: Arc<AtomicBool>,
     shutting_down: AtomicBool,
+    /// Host-owned value of this runtime ([`NativeRuntime::attach_lease`]).
+    lease: StdMutex<LeaseSlot>,
+}
+
+/// The lease of one runtime: released (dropped) once, when the native side
+/// ended terminally or the runtime is dropped, whichever comes first.
+enum LeaseSlot {
+    Empty,
+    /// Kept only for its `Drop`.
+    Held {
+        _lease: Box<dyn std::any::Any + Send + Sync>,
+    },
+    /// The runtime already ended: a lease attached now is dropped at once.
+    Released,
+}
+
+impl RuntimeShared {
+    /// Drops the lease (outside the lock) and refuses any later one.
+    fn release_lease(&self) {
+        let released = {
+            let mut slot = self
+                .lease
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            std::mem::replace(&mut *slot, LeaseSlot::Released)
+        };
+        drop(released);
+    }
 }
 
 struct RuntimeContainment {
@@ -1469,6 +1528,27 @@ pub struct NativeRuntime {
 }
 
 impl NativeRuntime {
+    /// Ties a host-owned value to this runtime. It is dropped when the
+    /// runtime is dropped (after the process tree was terminated) or earlier,
+    /// as soon as the native side ends terminally: the bridge reports a
+    /// `failed` runtime status or the bridge process exits unexpectedly. The
+    /// host uses it to release per-session resources (the Nano relay key)
+    /// without tracking every close path. A second call keeps the first
+    /// lease; a call after the runtime ended drops the new lease at once.
+    pub fn attach_lease(&self, lease: Box<dyn std::any::Any + Send + Sync>) {
+        let mut slot = self
+            .shared
+            .lease
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if matches!(*slot, LeaseSlot::Empty) {
+            *slot = LeaseSlot::Held { _lease: lease };
+            return;
+        }
+        drop(slot);
+        drop(lease);
+    }
+
     async fn spawn_pooled(
         config: NativeRuntimeConfig,
         node: PathBuf,
@@ -1553,6 +1633,7 @@ impl NativeRuntime {
                     next_id: AtomicU64::new(1),
                     accepting,
                     shutting_down: AtomicBool::new(false),
+                    lease: StdMutex::new(LeaseSlot::Empty),
                 }),
                 child: Mutex::new(None),
                 reader: Mutex::new(None),
@@ -1615,6 +1696,11 @@ impl NativeRuntime {
     pub async fn spawn_catalog(
         config: NativeRuntimeConfig,
     ) -> Result<(Self, NativeEventReceiver), NativeRuntimeError> {
+        // The host serves the Nano catalog from the account's entitled modes;
+        // a catalog probe never starts Pi (and never carries a relay key).
+        if config.harness == HarnessKind::Nano {
+            return Err(NativeRuntimeError::NanoCatalogHostServed);
+        }
         let config = resolve_native_runtime_config(config)?;
         validate_config(&config)?;
         let node = resolve_node()?;
@@ -1695,6 +1781,7 @@ impl NativeRuntime {
             next_id: AtomicU64::new(1),
             accepting: Arc::new(AtomicBool::new(true)),
             shutting_down: AtomicBool::new(false),
+            lease: StdMutex::new(LeaseSlot::Empty),
         });
         let containment = Arc::new(RuntimeContainment {
             #[cfg(unix)]
@@ -1748,7 +1835,9 @@ impl NativeRuntime {
             HarnessKind::Hermes => REQUEST_TIMEOUT + Duration::from_secs(30),
             HarnessKind::ClaudeCode => REQUEST_TIMEOUT + CLAUDE_STARTUP_ALLOWANCE,
             HarnessKind::Acp(_) => REQUEST_TIMEOUT + ACP_STARTUP_ALLOWANCE,
-            HarnessKind::Pi | HarnessKind::PrimeAgent | HarnessKind::Codex => REQUEST_TIMEOUT,
+            HarnessKind::Pi | HarnessKind::Nano | HarnessKind::PrimeAgent | HarnessKind::Codex => {
+                REQUEST_TIMEOUT
+            }
         };
         // An adapter may replay native history while it initializes (a Hermes
         // `session/load` or a resumed Codex page). Those events are retained
@@ -2127,6 +2216,8 @@ impl Drop for NativeRuntime {
             let _ = pool.terminate_containment();
         }
         let _ = self.terminate_containment();
+        // The reader task may still hold the shared state; the lease goes now.
+        self.shared.release_lease();
     }
 }
 
@@ -2315,6 +2406,7 @@ async fn read_bridge_stdout<R: tokio::io::AsyncRead + Unpin>(
         if let Some(containment) = containment {
             let _ = containment.terminate();
         }
+        shared.release_lease();
         *shared.stdin.lock().await = None;
         let routes = shared
             .session_events
@@ -2391,7 +2483,19 @@ async fn route_bridge_frame(
         return Ok(());
     }
     match (frame.id, frame.ok, frame.event) {
-        (None, None, Some(event)) => deliver_event(events, &shared.accepting, event).await,
+        (None, None, Some(event)) => {
+            // A failed runtime status is terminal for the native side (the Pi
+            // bridge reports it only once its child exited): its lease ends.
+            if matches!(
+                event,
+                NativeEvent::Status {
+                    status: SessionStatus::Failed
+                }
+            ) {
+                shared.release_lease();
+            }
+            deliver_event(events, &shared.accepting, event).await
+        }
         (Some(id), Some(ok), None) => {
             let slot = shared.pending.lock().await.remove(&id);
             let Some(slot) = slot else {
@@ -2541,7 +2645,44 @@ fn native_home_dir() -> Result<PathBuf, NativeRuntimeError> {
         .ok_or(NativeRuntimeError::InvalidConfiguration)
 }
 
+/// The `nano` lane's launch rules. A Nano start without host launch data is a
+/// typed refusal before any process exists; every other malformed or
+/// over-broad request fails closed as an invalid configuration. Nano is Pi
+/// without workspace-write, the coordinator, host tools and plugin MCP, and
+/// its approval guard must be present wherever the native mode relies on it.
+fn validate_nano_config(config: &NativeRuntimeConfig) -> Result<(), NativeRuntimeError> {
+    if config.harness != HarnessKind::Nano {
+        // The relay key belongs to the Nano lane only; no other bridge may
+        // receive it.
+        return Err(NativeRuntimeError::InvalidConfiguration);
+    }
+    let Some(nano) = config.nano.as_ref() else {
+        return Err(NativeRuntimeError::NanoNotReady);
+    };
+    if config.permission_mode == PermissionMode::WorkspaceWrite
+        || config.coordination
+        || config.native_subagents == Some(true)
+        // No speed setting exists for Nano; it is never silently ignored.
+        || config.service_tier.is_some()
+        || !nano.agent_dir.is_absolute()
+        || nano
+            .guard_extension
+            .as_deref()
+            .is_some_and(|path| !path.is_absolute())
+        || !nano.relay_key.is_well_formed()
+        // `native` asks through the guard; without it Pi would run bash,
+        // write and edit unasked.
+        || (config.permission_mode == PermissionMode::Native && nano.guard_extension.is_none())
+    {
+        return Err(NativeRuntimeError::InvalidConfiguration);
+    }
+    Ok(())
+}
+
 fn validate_config(config: &NativeRuntimeConfig) -> Result<(), NativeRuntimeError> {
+    if config.harness == HarnessKind::Nano || config.nano.is_some() {
+        validate_nano_config(config)?;
+    }
     if !config.cwd.is_absolute() || !config.cwd.is_dir() || !config.session_dir.is_absolute() {
         return Err(NativeRuntimeError::InvalidConfiguration);
     }
@@ -2666,7 +2807,9 @@ fn bridge_source(kind: HarnessKind) -> Result<Vec<u8>, NativeRuntimeError> {
         return Ok(format!("{CODEX_SOURCE}\n{CODEX_POOL_SOURCE}\nglobalThis.__PIUI_BRIDGE_FACTORY__=(config,emit,coordinator,board,sidekick)=>config.poolHost?createCodexPool(config,emit):createCodexAdapter(config,emit,coordinator,undefined,board,sidekick);\n{RUNNER_SOURCE}").into_bytes());
     }
     let (factory, name) = match kind {
-        HarnessKind::Pi => (PI_SOURCE, "createPiAdapter"),
+        // The Pi bridge serves both: it selects the nano lane from
+        // `config.harness`.
+        HarnessKind::Pi | HarnessKind::Nano => (PI_SOURCE, "createPiAdapter"),
         HarnessKind::PrimeAgent => (PRIME_SOURCE, "createPrimeAdapter"),
         HarnessKind::Codex => (CODEX_SOURCE, "createCodexAdapter"),
         HarnessKind::Hermes => (HERMES_SOURCE, "createHermesAdapter"),
@@ -2698,7 +2841,7 @@ fn resolve_harness_launch_for_config(
     // version does (the bridge handshake is the compatibility gate).
     if matches!(
         config.harness,
-        HarnessKind::Codex | HarnessKind::ClaudeCode | HarnessKind::Hermes
+        HarnessKind::Codex | HarnessKind::ClaudeCode | HarnessKind::Hermes | HarnessKind::Nano
     ) {
         let launch = resolve_harness_launch(config.harness)?;
         if !harness_version_supported(config.harness, launch.version.as_deref()) {
@@ -2729,7 +2872,9 @@ fn resolve_harness_launch_for_config(
 
 fn resolve_harness_launch(kind: HarnessKind) -> Result<ResolvedHarnessLaunch, NativeRuntimeError> {
     match kind {
-        HarnessKind::Pi => {
+        // Nano is upstream Pi: the same launcher resolution; only the version
+        // gate differs (`harness_version_supported`).
+        HarnessKind::Pi | HarnessKind::Nano => {
             let launch = resolve_pi_launch().map_err(|_| NativeRuntimeError::HarnessUnavailable)?;
             if !launch.program.is_file() || launch.leading_args.is_empty() {
                 return Err(NativeRuntimeError::HarnessUnavailable);
@@ -2912,6 +3057,20 @@ fn bridge_command(
     if let Some(names) = acp_names {
         let host = std::env::vars_os().collect::<Vec<_>>();
         standard.env_clear().envs(acp_environment(&host, names));
+    }
+    if config.harness == HarnessKind::Nano {
+        // A Nano bridge inherits only the OS allowlist; its relay key comes
+        // through this process environment, never the initialize frame.
+        let host = std::env::vars_os().collect::<Vec<_>>();
+        standard
+            .env_clear()
+            .envs(crate::nano::nano_bridge_environment(&host, cfg!(windows)));
+        if let Some(nano) = config.nano.as_ref() {
+            standard.env(
+                crate::nano::NANO_RELAY_KEY_BRIDGE_ENV,
+                nano.relay_key.expose(),
+            );
+        }
     }
     standard
         .args(["--input-type=module", "-e", NODE_BOOTSTRAP])
@@ -3229,6 +3388,37 @@ pub fn offline_harness_capabilities(kind: HarnessKind) -> HarnessCapabilities {
 /// Capabilities of a verified, available adapter.
 fn verified_harness_capabilities(kind: HarnessKind) -> HarnessCapabilities {
     match kind {
+        // Nano is Pi minus workspace-write, the coordinator, host tools and
+        // native subagents. Permission modes are the only tool-side setting:
+        // `read-only` restricts Pi to its read tools natively and an empty
+        // set runs no tool; per-tool allowlists are not exposed.
+        HarnessKind::Nano => HarnessCapabilities {
+            prompt: capability(true, Enforcement::Native, None),
+            resume: capability(true, Enforcement::Native, None),
+            models: capability(
+                true,
+                Enforcement::Native,
+                Some("Models are the entitled Nano modes served by the host."),
+            ),
+            approvals: capability(
+                true,
+                Enforcement::Native,
+                Some("The approval guard asks before bash, write and edit in native mode."),
+            ),
+            instructions: capability(true, Enforcement::Native, None),
+            tool_policy: capability(
+                true,
+                Enforcement::Native,
+                Some(
+                    "Nano supports the native read-only policy or no tools; per-tool allowlists are not exposed.",
+                ),
+            ),
+            native_subagents: capability(
+                false,
+                Enforcement::Unsupported,
+                Some("Nano has no native subagents."),
+            ),
+        },
         HarnessKind::Pi => HarnessCapabilities {
             prompt: capability(true, Enforcement::Native, None),
             resume: capability(true, Enforcement::Native, None),
@@ -3322,7 +3512,7 @@ fn verified_harness_capabilities(kind: HarnessKind) -> HarnessCapabilities {
                 true,
                 Enforcement::Coordinator,
                 Some(
-                    "Managed runs disable the native Agent tool and delegate through the PiUI coordinator.",
+                    "Managed runs disable the native Agent tool and delegate through the Nano Desktop coordinator.",
                 ),
             ),
         },
@@ -3366,15 +3556,16 @@ pub fn acp_harness_capabilities() -> HarnessCapabilities {
     }
 }
 
-/// Tested version range of each built-in adapter. Pi is resolved from its own
-/// verified CLI launcher and has none; each ACP descriptor declares its own
-/// (host registry).
+/// Tested version range of each built-in adapter. Plain Pi is resolved from its
+/// own verified CLI launcher and has none; Nano requires upstream Pi 1.4.0 or
+/// newer; each ACP descriptor declares its own (host registry).
 fn harness_version_range(kind: HarnessKind) -> Option<VerifiedRange> {
     match kind {
         HarnessKind::Codex => Some(CODEX_APP_SERVER),
         HarnessKind::ClaudeCode => Some(CLAUDE_CODE),
         HarnessKind::PrimeAgent => Some(PRIME_AGENT),
         HarnessKind::Hermes => Some(HERMES),
+        HarnessKind::Nano => Some(NANO_PI),
         HarnessKind::Pi | HarnessKind::Acp(_) => None,
     }
 }
@@ -3526,7 +3717,24 @@ mod tests {
             coordination: false,
             plugin_mcp_servers: Vec::new(),
             host_tools: Vec::new(),
+            nano: None,
         }
+    }
+
+    fn nano_launch(guard: bool) -> NanoRuntimeLaunch {
+        let root = std::env::current_dir().expect("cwd");
+        NanoRuntimeLaunch {
+            agent_dir: root.join("nano-agent"),
+            guard_extension: guard.then(|| root.join("nano-agent").join("nano-guard.ts")),
+            relay_key: NanoRelayKey::new("rk-test-secret"),
+        }
+    }
+
+    fn nano_config() -> NativeRuntimeConfig {
+        let mut config = test_config();
+        config.harness = HarnessKind::Nano;
+        config.nano = Some(nano_launch(true));
+        config
     }
 
     #[tokio::test]
@@ -3578,6 +3786,7 @@ mod tests {
             next_id: AtomicU64::new(1),
             accepting: Arc::new(AtomicBool::new(true)),
             shutting_down: AtomicBool::new(shutting_down),
+            lease: StdMutex::new(LeaseSlot::Empty),
         })
     }
 
@@ -3921,6 +4130,7 @@ mod tests {
             next_id: AtomicU64::new(1),
             accepting: Arc::new(AtomicBool::new(true)),
             shutting_down: AtomicBool::new(false),
+            lease: StdMutex::new(LeaseSlot::Empty),
         });
         let (tx1, rx1) = oneshot::channel();
         let (tx2, rx2) = oneshot::channel();
@@ -3947,6 +4157,7 @@ mod tests {
             next_id: AtomicU64::new(1),
             accepting: Arc::new(AtomicBool::new(true)),
             shutting_down: AtomicBool::new(false),
+            lease: StdMutex::new(LeaseSlot::Empty),
         });
         let (events, _) = mpsc::channel(1);
         route_bridge_frame(
@@ -3977,6 +4188,7 @@ mod tests {
             next_id: AtomicU64::new(1),
             accepting: Arc::new(AtomicBool::new(true)),
             shutting_down: AtomicBool::new(false),
+            lease: StdMutex::new(LeaseSlot::Empty),
         });
         let (events, mut receiver) = mpsc::channel(4);
         let bytes = b"{\"event\":{\"type\":\"status\",\"status\":\"idle\"}}\xe2\x80\xa8{\"event\":{\"type\":\"status\",\"status\":\"idle\"}}\n";
@@ -4121,6 +4333,7 @@ mod tests {
             next_id: AtomicU64::new(1),
             accepting: Arc::new(AtomicBool::new(true)),
             shutting_down: AtomicBool::new(true),
+            lease: StdMutex::new(LeaseSlot::Empty),
         });
         let (events, mut receiver) = mpsc::channel(2);
         let (mut writer, reader) = tokio::io::duplex(128);
@@ -4234,6 +4447,7 @@ mod tests {
             (HarnessKind::PrimeAgent, "prime-agent"),
             (HarnessKind::Codex, "codex"),
             (HarnessKind::Hermes, "hermes"),
+            (HarnessKind::Nano, "nano"),
         ] {
             assert_eq!(serde_json::to_value(kind).ok(), Some(json!(name)));
             assert_eq!(
@@ -4244,7 +4458,18 @@ mod tests {
         for alias in ["claude", "claude_code", "ClaudeCode"] {
             assert!(serde_json::from_value::<HarnessKind>(json!(alias)).is_err());
         }
-        assert_eq!(HarnessKind::ALL.len(), 5);
+        assert_eq!(HarnessKind::ALL.len(), 6);
+        // Identity grammar v3: `nano` is built in, `acp:nano` stays an ACP agent.
+        assert_eq!(HarnessKind::Nano.display_name(), "Nano");
+        assert_eq!(HarnessKind::Nano.to_string(), "nano");
+        assert_eq!(HarnessKind::parse("nano"), Some(HarnessKind::Nano));
+        assert_eq!(
+            HarnessKind::parse("acp:nano"),
+            Some(HarnessKind::Acp(AcpAgentId::new("nano").expect("slug")))
+        );
+        for alias in ["Nano", "NANO", "nano-agent", "nano "] {
+            assert_eq!(HarnessKind::parse(alias), None, "{alias:?}");
+        }
     }
 
     async fn completed_turn(events: &mut NativeEventReceiver) -> TurnOutcome {
@@ -4523,6 +4748,32 @@ mod tests {
         }
         assert!(harness_version_supported(HarnessKind::Pi, None));
         assert!(harness_version_supported(HarnessKind::Pi, Some("1.4.0")));
+        // Nano needs upstream Pi 1.4.0 or newer; a missing or older version
+        // never launches.
+        for (version, supported) in [
+            (Some("1.4.0"), true),
+            (Some("1.4.7"), true),
+            (Some("1.5.0"), true),
+            (Some("2.0.0"), true),
+            (Some("1.3.9"), false),
+            (Some("1.4.0-rc.1"), false),
+            (Some("garbage"), false),
+            (None, false),
+        ] {
+            assert_eq!(
+                harness_version_supported(HarnessKind::Nano, version),
+                supported,
+                "{version:?}"
+            );
+        }
+        assert_eq!(
+            version_refusal_reason(HarnessKind::Nano, Some("1.3.0")),
+            Some("Older than the oldest version supported by Nano Desktop.")
+        );
+        assert_eq!(
+            version_refusal_reason(HarnessKind::Nano, Some("1.4.0")),
+            None
+        );
     }
 
     #[test]
@@ -4545,7 +4796,7 @@ mod tests {
         ] {
             assert_eq!(
                 version_refusal_reason(kind, Some("0.1.0")),
-                Some("Older than the oldest version supported by PiUI."),
+                Some("Older than the oldest version supported by Nano Desktop."),
                 "{kind}"
             );
             assert_eq!(
@@ -4565,7 +4816,7 @@ mod tests {
         );
         assert_eq!(
             version_refusal_reason(HarnessKind::ClaudeCode, Some("2.0.99")),
-            Some("Older than the oldest version supported by PiUI.")
+            Some("Older than the oldest version supported by Nano Desktop.")
         );
     }
 
@@ -4605,6 +4856,7 @@ mod tests {
             (HarnessKind::ClaudeCode, CLAUDE_CODE),
             (HarnessKind::PrimeAgent, PRIME_AGENT),
             (HarnessKind::Hermes, HERMES),
+            (HarnessKind::Nano, NANO_PI),
         ] {
             let (major, minor, patch) = range.minimum;
             let minimum = format!("{major}.{minor}.{patch}");
@@ -4701,7 +4953,7 @@ mod tests {
         );
         assert_eq!(
             INCOMPATIBLE_HARNESS_MESSAGE,
-            "The installed harness speaks a protocol this PiUI version does not support. Update PiUI or the harness."
+            "The installed harness speaks a protocol this Nano Desktop version does not support. Update Nano Desktop or the harness."
         );
     }
 
@@ -5268,5 +5520,222 @@ mod tests {
         assert!(HarnessKind::PrimeAgent.supports_board_tool());
         assert!(HarnessKind::Codex.supports_board_tool());
         assert!(!HarnessKind::Pi.supports_board_tool());
+        assert!(!HarnessKind::Nano.supports_board_tool());
+    }
+
+    #[test]
+    fn nano_is_pi_without_host_tools_mcp_subagents_and_the_lead_role() {
+        assert!(!HarnessKind::Nano.supports_sidekick_tool());
+        assert!(!HarnessKind::Nano.accepts_session_mcp());
+        let verified = verified_harness_capabilities(HarnessKind::Nano);
+        assert!(verified.prompt.supported && verified.resume.supported);
+        assert!(verified.approvals.supported && verified.tool_policy.supported);
+        assert!(!verified.native_subagents.supported);
+        assert_eq!(
+            bridge_source(HarnessKind::Nano).expect("source"),
+            bridge_source(HarnessKind::Pi).expect("source"),
+            "the Pi bridge serves the nano lane"
+        );
+        let source =
+            String::from_utf8(bridge_source(HarnessKind::Nano).expect("source")).expect("utf-8");
+        assert!(source.contains("globalThis.__PIUI_BRIDGE_FACTORY__=createPiAdapter;"));
+    }
+
+    #[test]
+    fn nano_start_without_host_launch_data_is_refused_before_spawning() {
+        let mut config = test_config();
+        config.harness = HarnessKind::Nano;
+        assert_eq!(
+            validate_config(&config),
+            Err(NativeRuntimeError::NanoNotReady)
+        );
+        // Even a path that does not exist never gets as far as a process.
+        config.cwd = std::path::PathBuf::from("missing");
+        assert_eq!(
+            validate_config(&config),
+            Err(NativeRuntimeError::NanoNotReady)
+        );
+        config = nano_config();
+        assert_eq!(validate_config(&config), Ok(()));
+    }
+
+    #[tokio::test]
+    async fn nano_spawn_and_catalog_never_start_pi_without_the_host() {
+        let mut config = test_config();
+        config.harness = HarnessKind::Nano;
+        assert!(matches!(
+            NativeRuntime::spawn(config.clone()).await,
+            Err(NativeRuntimeError::NanoNotReady)
+        ));
+        // The catalog is served by the host, with or without launch data.
+        assert!(matches!(
+            NativeRuntime::spawn_catalog(config).await,
+            Err(NativeRuntimeError::NanoCatalogHostServed)
+        ));
+        assert!(matches!(
+            NativeRuntime::spawn_catalog(nano_config()).await,
+            Err(NativeRuntimeError::NanoCatalogHostServed)
+        ));
+    }
+
+    #[test]
+    fn nano_refuses_workspace_write_coordination_and_unguarded_native_mode() {
+        let mut config = nano_config();
+        for mode in [PermissionMode::Native, PermissionMode::ReadOnly] {
+            config.permission_mode = mode;
+            assert_eq!(validate_config(&config), Ok(()), "{mode:?}");
+        }
+        config.permission_mode = PermissionMode::WorkspaceWrite;
+        assert_eq!(
+            validate_config(&config),
+            Err(NativeRuntimeError::InvalidConfiguration)
+        );
+        config.permission_mode = PermissionMode::Native;
+        config.coordination = true;
+        assert!(validate_config(&config).is_err(), "no coordinator");
+        config.coordination = false;
+        config.native_subagents = Some(true);
+        assert!(validate_config(&config).is_err(), "no native subagents");
+        config.native_subagents = None;
+        config.service_tier = Some("fast".into());
+        assert!(validate_config(&config).is_err(), "no speed setting");
+        config.service_tier = None;
+        // The guard asks before bash, write and edit: native mode needs it,
+        // full access runs without it.
+        config.nano = Some(nano_launch(false));
+        assert!(validate_config(&config).is_err(), "native without a guard");
+        config.permission_mode = PermissionMode::FullAccess;
+        assert_eq!(validate_config(&config), Ok(()));
+        // No plugin MCP servers reach Nano.
+        config.plugin_mcp_servers = vec![SessionMcpServer {
+            name: "example-tool".into(),
+            command: std::env::current_exe().expect("exe"),
+            args: Vec::new(),
+        }];
+        assert!(validate_config(&config).is_err());
+    }
+
+    #[test]
+    fn nano_launch_data_is_validated_and_never_reaches_another_harness() {
+        let mut config = nano_config();
+        let mut launch = nano_launch(true);
+        launch.agent_dir = std::path::PathBuf::from("relative");
+        config.nano = Some(launch);
+        assert!(validate_config(&config).is_err(), "agent dir is absolute");
+        let mut launch = nano_launch(true);
+        launch.guard_extension = Some(std::path::PathBuf::from("guard.ts"));
+        config.nano = Some(launch);
+        assert!(validate_config(&config).is_err(), "guard path is absolute");
+        for bad in ["", "has space", "line\nbreak"] {
+            let mut launch = nano_launch(true);
+            launch.relay_key = NanoRelayKey::new(bad);
+            config.nano = Some(launch);
+            assert!(validate_config(&config).is_err(), "{bad:?}");
+        }
+        // The key is for the Nano lane only.
+        for harness in [
+            HarnessKind::Pi,
+            HarnessKind::Codex,
+            HarnessKind::ClaudeCode,
+            HarnessKind::Hermes,
+            HarnessKind::PrimeAgent,
+        ] {
+            let mut other = test_config();
+            other.harness = harness;
+            other.nano = Some(nano_launch(true));
+            assert_eq!(
+                validate_config(&other),
+                Err(NativeRuntimeError::InvalidConfiguration),
+                "{harness:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_nano_bridge_starts_from_the_allowlist_with_its_key_and_others_are_unchanged() {
+        let config = nano_config();
+        let command = bridge_command(Path::new("node"), &config, None);
+        let set = command
+            .get_envs()
+            .filter_map(|(key, value)| Some((key.to_string_lossy().into_owned(), value?)))
+            .collect::<Vec<_>>();
+        let key = set
+            .iter()
+            .find(|(name, _)| name == crate::nano::NANO_RELAY_KEY_BRIDGE_ENV)
+            .map(|(_, value)| value.to_string_lossy().into_owned());
+        assert_eq!(key.as_deref(), Some("rk-test-secret"));
+        let allowed = if cfg!(windows) {
+            crate::nano::NANO_WINDOWS_ENVIRONMENT
+        } else {
+            crate::nano::NANO_POSIX_ENVIRONMENT
+        };
+        for (name, _) in &set {
+            let canonical = if cfg!(windows) {
+                name.to_ascii_uppercase()
+            } else {
+                name.clone()
+            };
+            assert!(
+                canonical == crate::nano::NANO_RELAY_KEY_BRIDGE_ENV
+                    || canonical.starts_with("LC_")
+                    || allowed.contains(&canonical.as_str()),
+                "unexpected bridge variable {name}"
+            );
+        }
+        // `env_clear` drops the operator removals recorded before it: a
+        // removal entry left over would mean the environment was inherited.
+        assert!(
+            command.get_envs().all(|(_, value)| value.is_some()),
+            "the nano bridge starts from a cleared environment"
+        );
+
+        // Every other harness keeps the old launcher and never gets the key.
+        for harness in [HarnessKind::Pi, HarnessKind::Codex, HarnessKind::Hermes] {
+            let mut other = test_config();
+            other.harness = harness;
+            let command = bridge_command(Path::new("node"), &other, None);
+            assert!(
+                command.get_envs().all(|(name, value)| value.is_none()
+                    && name != crate::nano::NANO_RELAY_KEY_BRIDGE_ENV),
+                "{harness:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn nano_relay_key_never_reaches_the_bridge_frame_or_debug_output() {
+        let config = nano_config();
+        let value = serde_json::to_value(InitializeConfig {
+            config: &config,
+            runtime_program: "node".into(),
+            runtime_args: Vec::new(),
+            pool_host: false,
+            catalog_only: false,
+            acp: None,
+        })
+        .expect("initialize");
+        assert_eq!(value["harness"], json!("nano"));
+        assert!(value["nano"].get("relayKey").is_none());
+        assert!(!value.to_string().contains("rk-test-secret"));
+        assert!(value["nano"]["agentDir"].is_string());
+        assert!(value["nano"]["guardExtension"].is_string());
+        let full = nano_launch(false);
+        let value = serde_json::to_value(&full).expect("launch");
+        assert_eq!(value["guardExtension"], Value::Null, "null in full access");
+        // Debug and pretty Debug of the config, the launch and the key.
+        for text in [
+            format!("{config:?}"),
+            format!("{config:#?}"),
+            format!("{:?}", config.nano),
+            format!("{:#?}", config.nano),
+        ] {
+            assert!(!text.contains("rk-test-secret"), "{text}");
+            assert!(!text.contains("nano-agent"), "{text}");
+        }
+        assert!(format!("{config:?}").contains("has_nano: true"));
+        // Another harness serializes no `nano` object at all.
+        let plain = serde_json::to_value(test_config()).expect("config");
+        assert!(plain.get("nano").is_none());
+        assert!(!NativeRuntimeError::NanoNotReady.to_string().contains("rk-"));
     }
 }

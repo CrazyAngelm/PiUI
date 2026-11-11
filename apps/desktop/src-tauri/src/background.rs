@@ -69,12 +69,12 @@ pub struct TrayLabels {
 impl Default for TrayLabels {
     fn default() -> Self {
         Self {
-            open: "Open PiUI".to_owned(),
+            open: "Open Nano Desktop".to_owned(),
             pause: "Pause all automations".to_owned(),
             resume: "Resume automations".to_owned(),
-            quit: "Quit PiUI".to_owned(),
-            tooltip: "PiUI".to_owned(),
-            paused_tooltip: "PiUI (automations paused)".to_owned(),
+            quit: "Quit Nano Desktop".to_owned(),
+            tooltip: "Nano Desktop".to_owned(),
+            paused_tooltip: "Nano Desktop (automations paused)".to_owned(),
         }
     }
 }
@@ -875,11 +875,11 @@ mod tests {
     #[test]
     fn tray_labels_are_bounded_and_literal() {
         let labels = sanitized_labels(TrayLabels {
-            open: "  Открыть PiUI ".into(),
+            open: "  Открыть Nano Desktop ".into(),
             ..TrayLabels::default()
         })
         .expect("valid");
-        assert_eq!(labels.open, "Открыть PiUI");
+        assert_eq!(labels.open, "Открыть Nano Desktop");
         assert_eq!(menu_text("Save & quit"), "Save && quit");
         for invalid in [
             String::new(),

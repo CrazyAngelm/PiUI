@@ -20,6 +20,8 @@
   import PipelineInputsBar from '../chatPipelines/PipelineInputsBar.svelte';
   import { chatPipelines, type ChatPipelineDetail } from '../chatPipelines/chatPipelines.svelte';
   import AttachButton from './composer/AttachButton.svelte';
+  import DictateButton from '../nano/DictateButton.svelte';
+  import { insertAtCaret } from '../nano/dictation';
   import AttachmentChips from './composer/AttachmentChips.svelte';
   import AttachmentNotices from './composer/AttachmentNotices.svelte';
   import MentionMenu from './composer/MentionMenu.svelte';
@@ -122,7 +124,7 @@
           key: `piui:${command.name}`,
           title: `/${command.name}`,
           detail: $t(command.description),
-          badge: 'PiUI',
+          badge: 'Nano',
           disabled: !command.enabled,
           ...(command.enabled ? {} : { note: $t('Unavailable now') }),
         }));
@@ -344,6 +346,12 @@
 
   function syncCaret(): void {
     caret = input?.selectionStart ?? text.length;
+  }
+
+  /** Dictated words go in at the caret. */
+  function dictated(words: string): void {
+    const next = insertAtCaret(text, input?.selectionStart ?? caret, words);
+    void place(next.text, next.caret);
   }
 
   async function runCommand(name: string): Promise<void> {
@@ -633,6 +641,7 @@
     <div class="composer__bar">
       <div class="composer__left">
         <AttachButton images={imageState} busy={attachments.busy} disabled={busy || Boolean(pipelineId)} onPick={() => void attachments.pick(workspaceId, imageState)} />
+        <DictateButton onText={dictated} disabled={busy || safeMode} />
         <ExecutorPicker
           {workspaceId}
           value={executor}

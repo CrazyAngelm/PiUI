@@ -34,7 +34,7 @@ test.describe('Pi session history', () => {
     await expect(branches).toContainText('3 branches · 14 entries');
     await expect(branches.getByRole('list', { name: 'Branches of this session' }).getByRole('listitem')).toHaveCount(3);
     await expect(branches.getByRole('listitem').first()).toContainText('Current branch');
-    await expect(branches).toContainText('Switch branches in the Pi terminal app; PiUI never rewrites session files.');
+    await expect(branches).toContainText('Switch branches in the Pi terminal app; Nano Desktop never rewrites session files.');
     // Every entry in tree order, the current path marked for screen readers.
     await branches.getByText('All entries (14)').click();
     const entries = branches.getByRole('list', { name: 'Entries in tree order' }).getByRole('listitem');

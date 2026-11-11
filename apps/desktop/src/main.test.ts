@@ -35,6 +35,6 @@ describe('desktop entrypoint', () => {
       getElementById: vi.fn(() => null),
     });
 
-    await expect(import('./main')).rejects.toThrow('PiUI could not find the application root.');
+    await expect(import('./main')).rejects.toThrow('Nano Desktop could not find the application root.');
   });
 });

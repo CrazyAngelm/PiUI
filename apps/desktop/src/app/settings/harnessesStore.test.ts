@@ -27,7 +27,7 @@ describe('Settings → Harnesses store against the UI Lab host', () => {
     const store = new HarnessesStore(client(labHost('demo')));
     await settle(store.start());
     expect(store.error).toBeUndefined();
-    expect(store.builtins.map((harness) => harness.harness)).toEqual(['pi', 'prime-agent', 'codex', 'hermes', 'claude-code']);
+    expect(store.builtins.map((harness) => harness.harness)).toEqual(['pi', 'prime-agent', 'codex', 'hermes', 'claude-code', 'nano']);
     expect(store.agents.map((row) => [row.agent.descriptor.id, row.agent.state, row.status?.harness])).toEqual([
       ['gemini-cli', 'ready', 'acp:gemini-cli'], ['opencode', 'ready', 'acp:opencode'], ['qwen-code', 'not-installed', 'acp:qwen-code'],
       ['lab-agent', 'untrusted', 'acp:lab-agent'],
@@ -113,7 +113,7 @@ describe('Settings → Harnesses store against the UI Lab host', () => {
     const failing = createHarnessRegistryClient((async () => { throw 'Command harness_registry_v1 not found'; }) as never, listen as never);
     const store = new HarnessesStore(failing);
     await store.start();
-    expect(store.error).toBe('PiUI could not read the harness list.');
+    expect(store.error).toBe('Nano Desktop could not read the harness list.');
     expect(store.registry).toBeUndefined();
     const stop = vi.fn();
     const late = new HarnessesStore(createHarnessRegistryClient(vi.fn() as never, (async () => stop) as never));

@@ -42,7 +42,7 @@
         </li>
       {/each}
     </ol>
-    <p class="note">{$t('Read only. The transcript shows the current branch. Switch branches in the {0} terminal app; PiUI never rewrites session files.', [agentLabel])}</p>
+    <p class="note">{$t('Read only. The transcript shows the current branch. Switch branches in the {0} terminal app; Nano Desktop never rewrites session files.', [agentLabel])}</p>
     {#if summary.issues > 0 || summary.diagnostics > 0}
       <p class="warn" role="note"><TriangleAlert size={13} /> {$t('Some entries could not be linked. The index kept them without changing the file.')}</p>
     {/if}

@@ -152,6 +152,53 @@ fn pair_admission_follows_the_v1_matrix() {
 }
 
 #[test]
+fn nano_is_a_sidekick_under_the_pi_rule_and_never_the_lead() {
+    use HarnessKind::{ClaudeCode, Codex, Nano, Pi};
+    use PermissionMode::{FullAccess, Native, ReadOnly, WorkspaceWrite};
+    let refusal = |lead, sidekick| check_pair(&pair(lead, sidekick), true).err();
+    // Nano cannot take the sidekick host tool, so it never leads.
+    assert_eq!(
+        refusal(role(Nano, FullAccess), role(Nano, FullAccess)),
+        Some((FusionRefusal::LeadHarnessUnsupported, FusionRoleName::Lead))
+    );
+    assert_eq!(
+        refusal(role(Nano, FullAccess), role(Codex, FullAccess)),
+        Some((FusionRefusal::LeadHarnessUnsupported, FusionRoleName::Lead))
+    );
+    // As a sidekick it follows Pi: both roles must allow full access.
+    for lead in [ClaudeCode, Codex] {
+        assert_eq!(
+            refusal(role(lead, FullAccess), role(Nano, FullAccess)),
+            None
+        );
+        assert_eq!(
+            refusal(role(lead, FullAccess), role(Nano, Native)),
+            Some((
+                FusionRefusal::ExplicitModesRequired,
+                FusionRoleName::Sidekick
+            ))
+        );
+        assert_eq!(
+            refusal(role(lead, WorkspaceWrite), role(Nano, WorkspaceWrite)),
+            Some((
+                FusionRefusal::SidekickNeedsFullAccess,
+                FusionRoleName::Sidekick
+            ))
+        );
+        assert_eq!(
+            refusal(role(lead, WorkspaceWrite), role(Nano, FullAccess)),
+            Some((FusionRefusal::SidekickExceedsLead, FusionRoleName::Sidekick))
+        );
+        assert_eq!(
+            refusal(role(lead, ReadOnly), role(Nano, ReadOnly)),
+            Some((FusionRefusal::ReadOnlyLead, FusionRoleName::Lead))
+        );
+    }
+    // The Pi rule itself is unchanged.
+    assert_eq!(refusal(role(Codex, FullAccess), role(Pi, FullAccess)), None);
+}
+
+#[test]
 fn the_codex_sandbox_check_reads_only_the_windows_table() {
     assert!(codex_windows_sandbox_configured(
         "[windows]\nsandbox = \"unelevated\"\n"

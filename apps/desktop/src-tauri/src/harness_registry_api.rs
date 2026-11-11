@@ -187,7 +187,7 @@ impl From<RegistryError> for HarnessRegistryError {
             }
             RegistryError::BuiltIn => Self::new(
                 "BUILT_IN",
-                "Agents that ship with PiUI cannot be removed or re-trusted.",
+                "Agents that ship with Nano Desktop cannot be removed or re-trusted.",
             ),
             RegistryError::TrustChanged => Self::new(
                 "TRUST_CHANGED",
@@ -209,7 +209,9 @@ impl From<RegistryError> for HarnessRegistryError {
                 "PLUGIN_OWNED",
                 "This agent comes from a plugin. Disable or remove the plugin in Settings → Plugins.",
             ),
-            RegistryError::Io => Self::new("IO_ERROR", "PiUI could not save the harness list."),
+            RegistryError::Io => {
+                Self::new("IO_ERROR", "Nano Desktop could not save the harness list.")
+            }
         }
     }
 }
@@ -230,6 +232,7 @@ fn builtin_sign_in_hint(kind: HarnessKind) -> Option<&'static str> {
         HarnessKind::Codex => {
             Some("Sign in with Codex's own flow: run `codex login` in a terminal.")
         }
+        HarnessKind::Nano => Some("Sign in to your Nano account to use Nano."),
         _ => None,
     }
 }
@@ -248,6 +251,16 @@ fn builtin_state(
         HarnessAvailability::Available => HarnessState::Ready,
         HarnessAvailability::Unverified => HarnessState::UnsupportedVersion,
         HarnessAvailability::Unavailable => HarnessState::NotInstalled,
+    }
+}
+
+/// A built-in harness that is installed and verified is `Ready`, except Nano
+/// while its account cannot start a session.
+fn nano_state(kind: HarnessKind, nano_ready: bool, state: HarnessState) -> HarnessState {
+    if kind == HarnessKind::Nano && state == HarnessState::Ready && !nano_ready {
+        HarnessState::SignInRequired
+    } else {
+        state
     }
 }
 
@@ -310,10 +323,20 @@ async fn registry_view(host: &HostState) -> Result<HarnessRegistryV1, HarnessReg
         .await
         .map_err(|_| RegistryError::Io)?;
     let agents = acp.views();
+    // Nano needs an account that can start a session on top of the installed
+    // Pi: without one it is listed as "sign in required", never as ready.
+    let nano_ready = host
+        .workspace
+        .nano_host()
+        .is_some_and(|nano| nano.can_launch());
     let harnesses = builtin
         .into_iter()
         .map(|summary| HarnessStatusV1 {
-            state: builtin_state(summary.kind, summary.status, summary.reason.as_deref()),
+            state: nano_state(
+                summary.kind,
+                nano_ready,
+                builtin_state(summary.kind, summary.status, summary.reason.as_deref()),
+            ),
             harness: summary.kind,
             name: summary.name,
             source: "built-in",
@@ -648,5 +671,32 @@ mod tests {
             builtin_sign_in_hint(HarnessKind::ClaudeCode)
                 .is_some_and(|hint| hint.contains("/login"))
         );
+    }
+
+    #[test]
+    fn nano_is_ready_only_with_an_account_that_can_start_a_session() {
+        assert_eq!(
+            nano_state(HarnessKind::Nano, false, HarnessState::Ready),
+            HarnessState::SignInRequired
+        );
+        assert_eq!(
+            nano_state(HarnessKind::Nano, true, HarnessState::Ready),
+            HarnessState::Ready
+        );
+        // A missing or unsupported Pi is reported as such, account or not.
+        assert_eq!(
+            nano_state(HarnessKind::Nano, false, HarnessState::NotInstalled),
+            HarnessState::NotInstalled
+        );
+        assert_eq!(
+            nano_state(HarnessKind::Nano, false, HarnessState::UnsupportedVersion),
+            HarnessState::UnsupportedVersion
+        );
+        // Other harnesses are untouched.
+        assert_eq!(
+            nano_state(HarnessKind::Pi, false, HarnessState::Ready),
+            HarnessState::Ready
+        );
+        assert!(builtin_sign_in_hint(HarnessKind::Nano).is_some_and(|hint| hint.contains("Nano")));
     }
 }

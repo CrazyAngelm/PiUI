@@ -48,7 +48,7 @@
       await store.removeProject(request.workspace.id);
       busy = false;
       onClose();
-      toasts.success($t('Folder removed from PiUI'), label);
+      toasts.success($t('Folder removed from Nano Desktop'), label);
     } catch (cause) {
       error = errorMessage(cause);
       busy = false;
@@ -60,7 +60,7 @@
   <Dialog
     open
     title={$t('Rename project')}
-    description={$t('Changes the name shown in PiUI. The folder on disk keeps its name.')}
+    description={$t('Changes the name shown in Nano Desktop. The folder on disk keeps its name.')}
     size="sm"
     closeLabel={$t('Close')}
     onOpenChange={(open) => {
@@ -85,14 +85,14 @@
 {:else if request?.kind === 'remove'}
   <Dialog
     open
-    title={$t('Remove {0} from PiUI?', [request.workspace.name])}
+    title={$t('Remove {0} from Nano Desktop?', [request.workspace.name])}
     size="sm"
     closeLabel={$t('Close')}
     onOpenChange={(open) => {
       if (!open) close();
     }}
   >
-    <p class="text">{$t('PiUI forgets this folder. Its chats, pipelines and automations disappear from PiUI, and automations stop running.')}</p>
+    <p class="text">{$t('Nano Desktop forgets this folder. Its chats, pipelines and automations disappear from Nano Desktop, and automations stop running.')}</p>
     <p class="text"><strong>{$t('Nothing is deleted from disk.')}</strong> {$t('The folder, its files and each harness’s own history stay where they are. Adding the folder again starts a new entry.')}</p>
     {#if removal?.blocked}
       <p class="error" role="alert">{$t('Stop the agents running in this folder first ({0}).', [removal.running])}</p>
@@ -102,7 +102,7 @@
     {#if error}<p class="error" role="alert">{$t(error)}</p>{/if}
     {#snippet footer()}
       <Button variant="ghost" onclick={close} disabled={busy}>{$t('Cancel')}</Button>
-      <Button variant="danger" loading={busy} disabled={removal?.blocked} onclick={() => void remove()}>{$t('Remove from PiUI')}</Button>
+      <Button variant="danger" loading={busy} disabled={removal?.blocked} onclick={() => void remove()}>{$t('Remove from Nano Desktop')}</Button>
     {/snippet}
   </Dialog>
 {/if}

@@ -37,7 +37,7 @@ Pi tool blocks and Codex MCP/dynamic tool blocks are built from arbitrary native
 - `{type:'notice',code:'unsupported-board-tool'|'unsupported-board-tool-resume'|'unsupported-sidekick-tool'|'unsupported-sidekick-tool-resume'}` (non-fatal; see hostTools)
 - `{type:'boardRequest',requestId,operation}` / `{type:'sidekickRequest',requestId,operation,identity}` / `{type:'coordinatorRequest',requestId,operation}` (runner-emitted, host-private)
 
-Runner request LF JSON: `{id:string,method:'initialize'|'snapshot'|'prompt'|'interrupt'|'models'|'setModel'|'setMode'|'respond'|'rename'|'dispose',params:object}`. Initialize params add `harness:'pi'|'prime-agent'|'codex'|'hermes'|'claude-code'|'acp:<descriptor id>'` to config; exactly once. Return `{id,ok:true,result}` or `{id,ok:false,error:{code,message,details?}}` (`details`: optional bounded plain data an adapter sets as `safeDetails`, today only an ACP sign-in refusal's method names); event `{event:NativeEvent}`. Buffer raw bytes, split only LF. Pending native operations must not serialize interruption/approval behind an active turn. EOF closes admission, calls dispose, then exits; Rust handles hung descendants. No generic evaluate/exec/file method.
+Runner request LF JSON: `{id:string,method:'initialize'|'snapshot'|'prompt'|'interrupt'|'models'|'setModel'|'setMode'|'respond'|'rename'|'dispose',params:object}`. Initialize params add `harness:'pi'|'nano'|'prime-agent'|'codex'|'hermes'|'claude-code'|'acp:<descriptor id>'` to config; exactly once. Return `{id,ok:true,result}` or `{id,ok:false,error:{code,message,details?}}` (`details`: optional bounded plain data an adapter sets as `safeDetails`, today only an ACP sign-in refusal's method names); event `{event:NativeEvent}`. Buffer raw bytes, split only LF. Pending native operations must not serialize interruption/approval behind an active turn. EOF closes admission, calls dispose, then exits; Rust handles hung descendants. No generic evaluate/exec/file method.
 
 Fixtures may inject fake adapters/transport only via separate test module imports; never production env switches. Runtime proofs use native installed harness with synthetic provider where supported, not a replacement agent loop. Missing package/auth/platform behavior is explicit.
 
@@ -73,7 +73,7 @@ The agent sees one tool `board` with a compact JSON schema (`op` enum plus the o
 | ACP | as Hermes; an agent without `mcpCapabilities.http` (or descriptor `mcpHttp:false`) gets notice `unsupported-board-tool` | `board` on server `piui-workspace` |
 | Prime Agent | second SDK custom tool (TypeBox union); an enforced allowlist gains exactly `board` | `board` |
 | Codex | dynamic tool namespace `piui`, function `board`, registered on `thread/start` only. Codex persists it with the thread (rollout `session_meta.dynamic_tools`, verified on 0.163) and restores it on `thread/resume`, so a resumed thread whose rollout lists `piui`/`board` keeps the tool and its calls are answered; a resumed thread without it (or with an unreadable rollout) gets notice `unsupported-board-tool-resume`. A persisted `piui`/`board` call while the board is off answers `{ok:false,code:'board-disabled'}` | `piui` / `board` |
-| Pi | none; notice `unsupported-board-tool` | — |
+| Pi, Nano | none; notice `unsupported-board-tool` | — |
 
 Notice codes (`NativeNoticeCode`): `unsupported-board-tool`, `unsupported-board-tool-resume`. `HarnessKind::supports_board_tool()` gives the static answer (false only for Pi); ACP HTTP MCP support and whether a resumed Codex thread was started with the board are known only after the adapter starts.
 
@@ -180,7 +180,7 @@ Claude Code `2.1.0`-`3.0.0`, Prime Agent `0.9.2`-`0.9.4`, Hermes `0.21.0`-`0.22.
 Pi has no version gate and an ACP descriptor has a range only when it declares one.
 
 - The **minimum is enforced**: an older release fails with `unsupported-native-version`
-  (host discovery: "Older than the oldest version supported by PiUI.").
+  (host discovery: "Older than the oldest version supported by Nano Desktop.").
 - The **ceiling is advisory**: a newer release is admitted. Discovery reports it
   `available` with `versionStatus: "newer"` (`HarnessSummary.versionStatus`,
   `"verified" | "newer"`, optional; Settings shows "Newer than tested") and it
@@ -255,7 +255,7 @@ succeed, and a failed start is never retried with a different set of switches.
   executable, the identity the CLI reports) and the found `version`. Inside the
   range it is `available` with `versionStatus: "verified"`; above it `available`
   with `versionStatus: "newer"` ("Newer than tested", launch enabled); below it
-  "Older than the oldest version supported by PiUI." (`HarnessUnavailable`);
+  "Older than the oldest version supported by Nano Desktop." (`HarnessUnavailable`);
   unparseable "The installed version could not be recognized." (also refused: the
   version line is part of the identity proof).
 - The bridge checks the running app-server itself: the first token of the
@@ -638,6 +638,116 @@ Both follow the Version policy above; the exact pins are gone.
   `native-protocol-mismatch`; `agentInfo.version` is no longer compared for
   equality. The history and provenance checks are unchanged: resume still
   rejects a missing or wrong-workspace session.
-- Pi has no version gate. The bridge validates the RPC answers it relies on and the
+- Pi has no version gate (the Nano lane refuses a positively identified Pi older than 1.4.0). The bridge validates the RPC answers it relies on and the
   requested tools and settings; optional feature discovery never becomes a version
   allow-list.
+
+## Nano lane (`pi.mjs`, harness `nano`, ADR-048)
+
+`createPiAdapter` also serves `harness: "nano"`: the user's installed upstream Pi
+(`@earendil-works/pi-coding-agent`, at least 1.4.0) driven through the same RPC
+code against a host-owned agent directory and a local relay. Everything below is
+gated on the harness; the `pi` lane's command line, environment and behaviour are
+unchanged. Any other harness is refused with `wrong-harness`.
+
+`initialize` params add `nano: {agentDir: string, guardExtension: string | null}`
+(host-private, never shown to the WebView, logs or events):
+
+- `agentDir`: absolute path of the Pi agent directory the host wrote
+  (`models.json` with the one provider `nano`); becomes `PI_CODING_AGENT_DIR`.
+- `guardExtension`: absolute path of the approval-guard extension
+  (`bridge/nano-guard.ts`, embedded by the host and written next to `models.json`),
+  or `null`. The `native` permission mode refuses `null` with `unsupported-policy`
+  (it would run `bash`, `write` and `edit` unasked); `read-only` and `full-access`
+  accept it.
+The per-session relay key is **not** part of the frame (a `nano.relayKey` field is
+refused with `invalid-request`). The host runs one bridge process per Nano
+session and starts it from a cleared environment: the OS allowlist below plus
+`PIUI_NANO_RELAY_KEY`. The adapter reads that variable once at startup, deletes it
+from its own `process.env` at once (also when the start is refused) and passes the
+key only to the Pi child's environment as `NANO_RELAY_KEY`: never an argument,
+event, error or log line. `models.json` refers to it as `$NANO_RELAY_KEY`. The
+`pi` lane neither reads nor removes the variable.
+
+A missing or mistyped `nano` object, a relative path, an empty value or a missing
+or empty `PIUI_NANO_RELAY_KEY` fails before any process starts with
+`invalid-request`. `model` is either absent/`null` or `{provider:"nano", id}`, and
+`thinkingLevel` must be absent (`unsupported-settings` otherwise; models carry no
+thinking levels in v1, `setModel` applies the same rules and the model lists show
+only provider `nano`). Without a model (a reopened or resumed session) neither
+`--provider` nor `--model` is passed (Pi 1.4.0 exits on `--provider` without
+`--model`): Pi restores the session's recorded model, or the private
+directory's default (`settings.json`). After start the adapter checks
+`get_state.model.provider`; anything but `nano` ends the child and fails the start
+with `unsupported-settings` (no `failed` status is emitted for it). Resource rules, plugin MCP
+servers, native subagents, coordination and `workspace-write` are refused exactly
+as for Pi; a requested board tool starts without it and emits
+`unsupported-board-tool`. A runtime positively identified as older than Pi 1.4.0
+fails with `unsupported-native-version`; an unidentified launcher is admitted.
+
+Command line, in this order:
+
+```
+<runtimeArgs> --mode rpc --no-approve --offline --session-dir <sessionDir>
+  [--session <path> | --session-id <id>] [--name <title>]
+  [--provider nano --model <model.id>]
+  [--tools <list> | --no-tools] --no-extensions [-e <guardExtension>]
+```
+
+`--approve` is never passed, so project `.pi` resources stay untrusted. The tool
+list follows the Pi lane (`read-only` gives `read,grep,find,ls`; an allowlist is
+intersected with it). `--no-extensions` turns off discovered, configured and
+built-in extensions, and an explicit `-e` path still loads (Pi `cli.md`);
+`--tools`/`--no-tools` pick tools by name and do not unload extensions, so the
+guard stays loaded in every mode that supplies it, including `read-only`.
+
+The child starts from a **cleared environment**: only the allowlist plus
+`PI_CODING_AGENT_DIR`, `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1`, `PI_TELEMETRY=0`
+and `NANO_RELAY_KEY` (they override anything inherited). The allowlist is what a
+program the agent starts through `bash` needs and holds no secrets. Names match
+case-insensitively on Windows. The host starts the Nano bridge itself from the
+same allowlist (`crates/piui-runtime/src/nano.rs`, kept identical by a test), so
+the bridge process inherits nothing else of the user's environment either.
+
+- Windows: `SystemRoot`, `SystemDrive`, `windir`, `ComSpec`, `PATHEXT`, `PATH`,
+  `TEMP`, `TMP`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`,
+  `ProgramData`, `ProgramFiles`, `ProgramFiles(x86)`, `ProgramW6432`,
+  `CommonProgramFiles`, `CommonProgramFiles(x86)`, `CommonProgramW6432`,
+  `ALLUSERSPROFILE`, `NUMBER_OF_PROCESSORS`, `PROCESSOR_ARCHITECTURE`, `OS`,
+  `USERNAME`, `USERDOMAIN`, `COMPUTERNAME`, `PSModulePath`, `LANG`, `LC_*`, `TZ`,
+  `TERM`. Windows may itself add a few non-secret names (for example
+  `LOGONSERVER`) to any child.
+- POSIX: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`, `LC_*`, `TZ`,
+  `TERM`, `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`,
+  `XDG_STATE_HOME`.
+- Left out on purpose: every provider key and token (`OPENAI_API_KEY`,
+  `ANTHROPIC_API_KEY`, ...), `PI_*`, `NANO_*` of the user, `NODE_*` and the proxy
+  variables (they can embed credentials, and the relay is on loopback). A command
+  that needs one must be given it by the user inside the command.
+
+Approvals: the guard asks through `ctx.ui.select`, which Pi RPC sends as an
+`extension_ui_request` (`select`); the bridge shows it as an approval card
+(`kind:"input"`, options "Allow once" and "Deny", decisions `approve-once` and
+`cancel`). The answer "Allow once" runs the call; "Deny", a cancel, an
+interrupt, a timeout or a closed session block it. See `nano-guard.ts`: an
+approval prompt, not a sandbox.
+
+Turn errors: a failed assistant message whose Pi `errorMessage` contains a relay
+code is reported as one fixed summary (the `error` event has only `message`, so
+there is no code field; the native text stays private). Other failures keep the
+Pi lane's classification.
+
+| Relay code | Summary |
+|---|---|
+| `nano_sign_in_required` | Sign in to Nano to continue. |
+| `nano_credits_exhausted` | Your Nano credits are used up. |
+| `nano_mode_locked` | This Nano mode is not available on your plan. |
+| `nano_rate_limited` | Nano is receiving too many requests. Try again shortly. |
+| `nano_offline` | Nano cannot be reached. Check your connection. |
+| `nano_client_too_old` | This version of Nano Desktop is too old. Update to continue. |
+| `nano_request_too_large` | The request is too large for Nano. Shorten the conversation or attachments. |
+| `nano_upstream_error` | The Nano model provider is unavailable. Try again shortly. |
+
+Pi (1.4.0) turns a relay error into `<status>: <error object as JSON>`, for example
+`402: {"message":"...","type":"nano","code":"nano_credits_exhausted"}`, so the code
+is visible to the bridge whenever the relay sends its OpenAI-shaped body.

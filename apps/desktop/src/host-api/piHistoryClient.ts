@@ -23,7 +23,7 @@ export const PI_HISTORY_MESSAGES: Readonly<Record<string, string>> = {
   NOT_FOUND: 'This history is no longer in the local index. Refresh the list.',
   PROJECT_UNAVAILABLE: 'The folder is unavailable. Reconnect it, then refresh.',
   CONFLICT: 'This folder changed on disk. Add it again and confirm trust before continuing.',
-  INVALID_ARGUMENT: 'PiUI could not read this part of the history. Refresh and try again.',
+  INVALID_ARGUMENT: 'Nano Desktop could not read this part of the history. Refresh and try again.',
 };
 export const FALLBACK_MESSAGE = 'Local session history could not be read. Try again.';
 

@@ -33,7 +33,7 @@
         <Input id={id('name')} bind:value={form.displayName} autocomplete="off" required />
       </Field>
     </div>
-    <Field label={$t('Program')} for={id('program')} description={$t('A program name found on PATH or an absolute path. PiUI never uses a shell.')}>
+    <Field label={$t('Program')} for={id('program')} description={$t('A program name found on PATH or an absolute path. Nano Desktop never uses a shell.')}>
       <Input id={id('program')} bind:value={form.program} autocomplete="off" spellcheck="false" required />
     </Field>
     <Field label={$t('Arguments')} for={id('args')} optionalLabel={optional} description={$t('One argument per line, for example --experimental-acp.')}>
@@ -69,7 +69,7 @@
       <Checkbox label={$t('Reopening chats')} description={$t('Never reload a conversation with session/load.')} bind:checked={form.noLoadSession} />
       <Checkbox label={$t('Model choice')} description={$t('Ignore the models the agent advertises.')} bind:checked={form.noModels} />
       <Checkbox label={$t('Session modes')} description={$t('Ignore the modes the agent advertises.')} bind:checked={form.noModes} />
-      <Checkbox label={$t('PiUI coordination tool')} description={$t('Never offer PiUI’s workspace tool as an HTTP MCP server.')} bind:checked={form.noMcpHttp} />
+      <Checkbox label={$t('Nano Desktop coordination tool')} description={$t('Never offer Nano Desktop’s workspace tool as an HTTP MCP server.')} bind:checked={form.noMcpHttp} />
     </fieldset>
   {:else}
     <Field label={$t('Descriptor JSON')} for={id('json')} description={$t('ACP agent descriptor v1. Unknown fields are rejected, never dropped.')}>

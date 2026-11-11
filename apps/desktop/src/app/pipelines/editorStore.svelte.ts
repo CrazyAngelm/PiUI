@@ -7,6 +7,7 @@
  */
 import dagre from '@dagrejs/dagre';
 import { cachedHarnessModels, catalogSettled, harnessModels } from '../../host-api/harnessModels';
+import { nanoAccount } from '../nano/nanoAccount.svelte';
 import {
   orchestrationError,
   orchestrationHost,
@@ -109,7 +110,9 @@ export class PipelineEditorStore {
   canRedo = $state(false);
   connectKind = $state<ConnectionKind>('result');
   showCollaboration = $state(true);
-  catalogs = $state.raw<Partial<Record<AgentProfile['harness'], HarnessModelsResult>>>({});
+  private loadedCatalogs = $state.raw<Partial<Record<AgentProfile['harness'], HarnessModelsResult>>>({});
+  /** The `nanoAccount.catalogRevision` the loaded Nano catalog answered for. */
+  private nanoCatalogRevision = -1;
   catalogErrors = $state.raw<Partial<Record<AgentProfile['harness'], string>>>({});
   /**
    * The harness's models are known but its skills, MCP servers and tools are
@@ -658,15 +661,29 @@ export class PipelineEditorStore {
 
   // ---- catalogs ------------------------------------------------------------
 
+  /**
+   * The native catalog of each harness that was loaded. The Nano one is account
+   * state: once the account changed (sign-in, workspace, a mode locked) it is
+   * hidden, so the pickers that load a missing catalog ask the host again.
+   */
+  get catalogs(): Partial<Record<AgentProfile['harness'], HarnessModelsResult>> {
+    if (this.loadedCatalogs.nano === undefined || this.nanoCatalogRevision === nanoAccount.catalogRevision) return this.loadedCatalogs;
+    const { nano: _outOfDate, ...rest } = this.loadedCatalogs;
+    return rest;
+  }
+
   async loadCatalog(harness: AgentProfile['harness'], refresh = false): Promise<void> {
     if (this.safeMode) return;
     const request = { workspaceId: this.workspaceId, harness };
+    // The account state this answer is for; a change while it loads leaves it out of date.
+    const accountRevision = nanoAccount.catalogRevision;
     const waitForResources = (waiting: boolean): void => {
       if ((this.resourcesLoading[harness] ?? false) !== waiting) this.resourcesLoading = { ...this.resourcesLoading, [harness]: waiting };
     };
     // An answer carries the models; the resources follow while the probe is unsettled.
     const loaded = (result: HarnessModelsResult, settled: boolean): void => {
-      this.catalogs = { ...this.catalogs, [harness]: result };
+      if (harness === 'nano') this.nanoCatalogRevision = accountRevision;
+      this.loadedCatalogs = { ...this.loadedCatalogs, [harness]: result };
       const { [harness]: _error, ...rest } = this.catalogErrors;
       this.catalogErrors = rest;
       // Remembered resources stay visible while the probe confirms them.

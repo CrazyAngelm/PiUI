@@ -283,7 +283,7 @@
 >
   <p class="dialog-text">
     {deleteTarget?.kind.type === 'simple'
-      ? $t('The agent, team, pipeline and launch command PiUI created for it are deleted too. Cards keep their history and become unassigned.')
+      ? $t('The agent, team, pipeline and launch command Nano Desktop created for it are deleted too. Cards keep their history and become unassigned.')
       : $t('The pipeline it wraps stays. Cards keep their history and become unassigned.')}
   </p>
   {#snippet footer()}

@@ -43,7 +43,7 @@
   <section aria-labelledby="{uid}-environment">
     <h3 id="{uid}-environment">{$t('Environment variables')}</h3>
     {#if names.length > 0}
-      <p>{$t('PiUI passes these names from your environment. It never reads, shows or stores their values.')}</p>
+      <p>{$t('Nano Desktop passes these names from your environment. It never reads, shows or stores their values.')}</p>
       <p><code>{names.join(', ')}</code></p>
       {#if secrets.length > 0}
         <p class="muted">{$t('Secret-like names ({0}) pass only after you allow them separately.', [secrets.join(', ')])}</p>
@@ -54,7 +54,7 @@
   </section>
   <p class="warning">
     <ShieldAlert size={16} aria-hidden="true" />
-    <span>{$t('Trust is not a sandbox. The agent runs with your user account’s permissions and keeps its own tools, network access and credentials. PiUI runs this command now to read its version, and later to start chats.')}</span>
+    <span>{$t('Trust is not a sandbox. The agent runs with your user account’s permissions and keeps its own tools, network access and credentials. Nano Desktop runs this command now to read its version, and later to start chats.')}</span>
   </p>
   <p>{$t('Trust covers this command line; newer versions start without asking again.')}</p>
   <p class="muted small">{$t('Descriptor fingerprint: {0}', [agent.fingerprint.slice(0, 16)])}</p>

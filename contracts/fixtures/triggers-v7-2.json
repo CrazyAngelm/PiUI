@@ -46,5 +46,5 @@
   "automationsEvent": { "protocol": 7, "type": "automationsChanged", "paused": true },
   "backgroundSettings": { "protocol": 1, "keepInTray": true, "launchAtLogin": false, "trayAvailable": true, "launchAtLoginAvailable": true, "readOnly": false },
   "backgroundUpdate": { "keepInTray": true },
-  "trayLabels": { "open": "Open PiUI", "pause": "Pause all automations", "resume": "Resume automations", "quit": "Quit PiUI", "tooltip": "PiUI", "pausedTooltip": "PiUI (automations paused)" }
+  "trayLabels": { "open": "Open Nano Desktop", "pause": "Pause all automations", "resume": "Resume automations", "quit": "Quit Nano Desktop", "tooltip": "Nano Desktop", "pausedTooltip": "Nano Desktop (automations paused)" }
 }

@@ -12,16 +12,24 @@
 
 <script lang="ts">
   import { Command, Popover } from 'bits-ui';
-  import type { Snippet } from 'svelte';
+  import { getContext, type Snippet } from 'svelte';
   import Brain from '@lucide/svelte/icons/brain';
+  import Lock from '@lucide/svelte/icons/lock';
+  import LogIn from '@lucide/svelte/icons/log-in';
   import Search from '@lucide/svelte/icons/search';
   import Sparkles from '@lucide/svelte/icons/sparkles';
   import Zap from '@lucide/svelte/icons/zap';
   import { t } from '../../features/locale/language';
   import { Spinner, Switch } from '../../lib/ui';
+  import { nanoAccount } from '../nano/nanoAccount.svelte';
+  import { lockCopy } from '../nano/nanoView';
+  import type { WorkspaceStore } from '../workspaceStore.svelte';
+  import { WORKSPACE_CONTEXT } from './context';
 
   interface Props {
     models: readonly ModelOption[];
+    /** Harness of the list: for `nano` the account's locked modes and a sign-in row follow the catalog rows. */
+    harness?: string;
     /** Selected model key; '' is the harness default when `defaultOption` is set. */
     value: string;
     open?: boolean;
@@ -51,6 +59,7 @@
 
   let {
     models,
+    harness = '',
     value,
     open = $bindable(false),
     defaultOption = false,
@@ -80,6 +89,20 @@
     }
     return [...byGroup.entries()];
   });
+  // Nano: what the account does not allow, listed after the harness's own rows.
+  const nano = $derived(harness === 'nano');
+  const lockedModes = $derived(nano ? nanoAccount.lockedModes : []);
+  const signInRow = $derived(nano && nanoAccount.needsSignIn);
+  const workspace = getContext<WorkspaceStore | undefined>(WORKSPACE_CONTEXT);
+  $effect(() => {
+    if (nano) void nanoAccount.start();
+  });
+
+  function openAccount(): void {
+    open = false;
+    workspace?.navigate({ name: 'settings', section: 'nano' });
+  }
+
   const steps = $derived<{ value: string; label: string }[]>([
     ...(levelDefault ? [{ value: '', label: $t('Auto') }] : []),
     ...levels.map((item) => ({ value: item, label: item })),
@@ -181,6 +204,23 @@
                   {/each}
                 </Command.GroupItems>
               </Command.Group>
+            {/each}
+            {#if signInRow}
+              <Command.Item class="piui-models__item" value={'\u0000nano-sign-in'} keywords={[$t('Sign in to use Nano'), 'nano', 'account']} onSelect={openAccount}>
+                <span class="piui-models__mark" aria-hidden="true"><LogIn size={13} /></span>
+                <span class="piui-models__main">
+                  <span class="piui-models__name">{$t('Sign in to use Nano')}</span>
+                </span>
+              </Command.Item>
+            {/if}
+            {#each lockedModes as mode (mode.id)}
+              <Command.Item class="piui-models__item" value={`nano-locked\u0000${mode.id}`} keywords={[mode.name, mode.id]} disabled>
+                <span class="piui-models__mark" aria-hidden="true"><Lock size={12} /></span>
+                <span class="piui-models__main">
+                  <span class="piui-models__name">{mode.name}</span>
+                  <span class="piui-models__id piui-models__id--plain">{$t(lockCopy(mode) ?? 'Disabled')}</span>
+                </span>
+              </Command.Item>
             {/each}
           </Command.Viewport>
         </Command.List>
@@ -326,6 +366,10 @@
   }
   :global(.piui-models__item[data-selected]) {
     background: var(--piui-hover);
+  }
+  /* Locked Nano modes stay visible but cannot be picked. */
+  :global(.piui-models__item[data-disabled]) {
+    opacity: 0.6;
   }
   :global(.piui-models__item[data-current]) {
     background: var(--piui-chaos-streak);

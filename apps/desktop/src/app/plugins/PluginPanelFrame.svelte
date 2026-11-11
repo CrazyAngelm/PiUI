@@ -207,7 +207,7 @@
     <!-- The parent shows the generic view instead. -->
   {:else if status === 'failed'}
     <div class="fallback" role="alert">
-      <p>{$t('The panel “{0}” did not load. PiUI and your chat are not affected.', [panel.title])}</p>
+      <p>{$t('The panel “{0}” did not load. Nano Desktop and your chat are not affected.', [panel.title])}</p>
       <Button size="sm" variant="ghost" onclick={reload}>
         {#snippet leading()}<RefreshCw />{/snippet}
         {$t('Reload panel')}

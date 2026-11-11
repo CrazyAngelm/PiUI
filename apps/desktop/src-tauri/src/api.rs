@@ -1602,7 +1602,7 @@ impl ApiError {
     const fn session_conflict() -> Self {
         Self {
             code: "CONFLICT",
-            message: "This Pi session changed outside PiUI. Reload it before continuing; PiUI will not merge session JSONL.",
+            message: "This Pi session changed outside Nano Desktop. Reload it before continuing; Nano Desktop will not merge session JSONL.",
             recoverable: true,
         }
     }

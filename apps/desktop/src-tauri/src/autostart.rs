@@ -1,10 +1,10 @@
-//! "Start PiUI when I sign in" on Windows (background-v1): one value in
+//! "Start Nano Desktop when I sign in" on Windows (background-v1): one value in
 //! `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` whose command is the
 //! executable path in double quotes, then `--autostart`.
 //!
 //! `tauri-plugin-autostart` writes the path unquoted. For a path with spaces
 //! (`C:\Users\example\My Apps\...`) Windows then tries `C:\Users\example\My.exe` first,
-//! a known hijack risk, so PiUI writes the value itself on Windows. Every
+//! a known hijack risk, so Nano Desktop writes the value itself on Windows. Every
 //! decision here is pure and tested against a fake store; only
 //! `WindowsRunKey` touches the registry, and tests never use it.
 
@@ -21,6 +21,9 @@ pub(crate) const APPROVED_KEY: &str =
     r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
 /// What Task Manager stores for an enabled entry.
 pub(crate) const APPROVED_ENABLED: [u8; 12] = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+/// The Run value name builds before Nano Desktop (ADR-046) used. Toggling the
+/// setting removes it so the old name does not start another copy.
+pub(crate) const LEGACY_RUN_VALUE: &str = "PiUI";
 
 /// Why a sign-in command cannot be written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,8 +111,8 @@ pub(crate) trait RunKeyStore {
     fn approve(&self, name: &str) -> Result<(), BackgroundError>;
 }
 
-/// Sign-in registration as one quoted Run value named after the app, the
-/// same name earlier builds used, so turning it off also removes theirs.
+/// Sign-in registration as one quoted Run value named after the app. Turning
+/// the setting on or off also removes the stale `LEGACY_RUN_VALUE` entry.
 pub(crate) struct RunKeyAutostart<S> {
     store: S,
     name: String,
@@ -141,6 +144,15 @@ impl<S: RunKeyStore> RunKeyAutostart<S> {
         &self.command
     }
 
+    /// Removes the value an earlier product name registered; nothing else is
+    /// touched.
+    fn remove_legacy_value(&self) -> Result<(), BackgroundError> {
+        if self.name.eq_ignore_ascii_case(LEGACY_RUN_VALUE) {
+            return Ok(());
+        }
+        self.store.delete(LEGACY_RUN_VALUE)
+    }
+
     /// Rewrites an unquoted value an earlier build wrote for this executable
     /// in the quoted form. Values for another executable stay untouched.
     /// Returns whether it rewrote the value.
@@ -168,10 +180,11 @@ impl<S: RunKeyStore> AutostartBackend for RunKeyAutostart<S> {
     fn set_enabled(&self, enabled: bool) -> Result<(), BackgroundError> {
         if enabled {
             self.store.write(&self.name, &self.command)?;
-            self.store.approve(&self.name)
+            self.store.approve(&self.name)?;
         } else {
-            self.store.delete(&self.name)
+            self.store.delete(&self.name)?;
         }
+        self.remove_legacy_value()
     }
 }
 
@@ -253,7 +266,8 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::BTreeMap;
 
-    const EXE: &str = r"C:\Users\example\My Apps\PiUI\PiUI.exe";
+    const EXE: &str = r"C:\Users\example\My Apps\Nano Desktop\nano-desktop.exe";
+    const NAME: &str = "Nano Desktop";
     const ARGS: &[&str] = &["--autostart"];
 
     /// An in-memory Run key and StartupApproved key.
@@ -304,7 +318,7 @@ mod tests {
     fn the_run_value_quotes_the_executable_path() {
         assert_eq!(
             run_command(EXE, ARGS).as_deref(),
-            Ok(r#""C:\Users\example\My Apps\PiUI\PiUI.exe" --autostart"#)
+            Ok(r#""C:\Users\example\My Apps\Nano Desktop\nano-desktop.exe" --autostart"#)
         );
         assert_eq!(
             run_command(r"C:\PiUI\piui-desktop.exe", &[]).as_deref(),
@@ -345,19 +359,19 @@ mod tests {
     #[test]
     fn turning_it_on_writes_exactly_the_quoted_value_and_approves_it() {
         let store = FakeRunKey::with_task_manager();
-        let autostart = RunKeyAutostart::new(&store, "PiUI", EXE, ARGS).expect("valid");
+        let autostart = RunKeyAutostart::new(&store, NAME, EXE, ARGS).expect("valid");
         assert!(!autostart.is_enabled().expect("reads"));
         autostart.set_enabled(true).expect("turns on");
         assert_eq!(
-            store.run.borrow().get("PiUI").map(String::as_str),
-            Some(r#""C:\Users\example\My Apps\PiUI\PiUI.exe" --autostart"#)
+            store.run.borrow().get(NAME).map(String::as_str),
+            Some(r#""C:\Users\example\My Apps\Nano Desktop\nano-desktop.exe" --autostart"#)
         );
         assert_eq!(
             store
                 .approved
                 .borrow()
                 .as_ref()
-                .and_then(|records| records.get("PiUI").cloned()),
+                .and_then(|records| records.get(NAME).cloned()),
             Some(APPROVED_ENABLED.to_vec())
         );
         assert!(autostart.is_enabled().expect("reads"));
@@ -366,24 +380,52 @@ mod tests {
         assert!(!autostart.is_enabled().expect("reads"));
         // Without Task Manager's key nothing else is created.
         let bare = FakeRunKey::default();
-        let autostart = RunKeyAutostart::new(&bare, "PiUI", EXE, ARGS).expect("valid");
+        let autostart = RunKeyAutostart::new(&bare, NAME, EXE, ARGS).expect("valid");
         autostart.set_enabled(true).expect("turns on");
         assert!(bare.approved.borrow().is_none());
         assert!(autostart.is_enabled().expect("reads"));
     }
 
     #[test]
+    fn toggling_removes_only_the_stale_value_of_the_old_name() {
+        let store = FakeRunKey::with_task_manager();
+        store.run.borrow_mut().insert(
+            LEGACY_RUN_VALUE.into(),
+            r"C:\Old\PiUI.exe --autostart".into(),
+        );
+        store
+            .run
+            .borrow_mut()
+            .insert("Other App".into(), r"C:\Other\app.exe".into());
+        let autostart = RunKeyAutostart::new(&store, NAME, EXE, ARGS).expect("valid");
+        // The stale value alone does not count as this build being registered.
+        assert!(!autostart.is_enabled().expect("reads"));
+        autostart.set_enabled(true).expect("turns on");
+        assert!(!store.run.borrow().contains_key(LEGACY_RUN_VALUE));
+        assert!(store.run.borrow().contains_key(NAME));
+        assert!(store.run.borrow().contains_key("Other App"));
+        store
+            .run
+            .borrow_mut()
+            .insert(LEGACY_RUN_VALUE.into(), r"C:\Old\PiUI.exe".into());
+        autostart.set_enabled(false).expect("turns off");
+        assert!(!store.run.borrow().contains_key(LEGACY_RUN_VALUE));
+        assert!(!store.run.borrow().contains_key(NAME));
+        assert_eq!(store.run.borrow().len(), 1, "other apps keep their values");
+    }
+
+    #[test]
     fn task_manager_can_turn_the_entry_off() {
         let store = FakeRunKey::with_task_manager();
-        let autostart = RunKeyAutostart::new(&store, "PiUI", EXE, ARGS).expect("valid");
+        let autostart = RunKeyAutostart::new(&store, NAME, EXE, ARGS).expect("valid");
         autostart.set_enabled(true).expect("turns on");
         // Task Manager: 3, then the time it was turned off.
         let disabled = vec![3, 0, 0, 0, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x01];
         if let Some(records) = store.approved.borrow_mut().as_mut() {
-            records.insert("PiUI".into(), disabled);
+            records.insert(NAME.into(), disabled);
         }
         assert!(!autostart.is_enabled().expect("reads"));
-        // Turning it on in PiUI is an explicit choice and re-approves it.
+        // Turning it on in Nano Desktop is an explicit choice and re-approves it.
         autostart.set_enabled(true).expect("turns on again");
         assert!(autostart.is_enabled().expect("reads"));
         assert!(approval_enabled(None));
@@ -399,11 +441,11 @@ mod tests {
         store
             .run
             .borrow_mut()
-            .insert("PiUI".into(), format!("{EXE} --autostart"));
-        let autostart = RunKeyAutostart::new(&store, "PiUI", EXE, ARGS).expect("valid");
+            .insert(NAME.into(), format!("{EXE} --autostart"));
+        let autostart = RunKeyAutostart::new(&store, NAME, EXE, ARGS).expect("valid");
         assert!(autostart.repair().expect("repairs"));
         assert_eq!(
-            store.run.borrow().get("PiUI").map(String::as_str),
+            store.run.borrow().get(NAME).map(String::as_str),
             Some(autostart.command())
         );
         // Already quoted: nothing to do, nothing written.
@@ -411,14 +453,14 @@ mod tests {
         assert!(!autostart.repair().expect("repairs"));
         assert_eq!(*store.writes.borrow(), writes);
         // Another installation's entry stays untouched.
-        store
-            .run
-            .borrow_mut()
-            .insert("PiUI".into(), r"D:\Other PiUI\PiUI.exe --autostart".into());
+        store.run.borrow_mut().insert(
+            NAME.into(),
+            r"D:\Other Nano Desktop\nano-desktop.exe --autostart".into(),
+        );
         assert!(!autostart.repair().expect("repairs"));
         assert_eq!(
-            store.run.borrow().get("PiUI").map(String::as_str),
-            Some(r"D:\Other PiUI\PiUI.exe --autostart")
+            store.run.borrow().get(NAME).map(String::as_str),
+            Some(r"D:\Other Nano Desktop\nano-desktop.exe --autostart")
         );
         // Nothing registered: nothing written.
         store.run.borrow_mut().clear();

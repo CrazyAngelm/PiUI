@@ -77,3 +77,29 @@ An open chat needs no status: its CLI passed the same check when it started. A
 cached verdict never blocks a start: every start checks the login again, and a
 managed pipeline step refused this way fails with `harness-sign-in-required`
 before any task text is written.
+
+## Nano (host-served, no native discovery)
+
+Nano is an additive `harness_models_v18` value (ADR-048, identity grammar v3).
+Unlike every harness above it has no native catalog to probe: the models are the
+server's four modes (`auto`, `free`, `fast`, `smart`) and the host serves them
+from the signed-in account's entitlements (`GET .../entitlements` of the selected
+workspace, cached by the account manager; no inference and no paid turn).
+
+- Each **available** mode becomes `WorkspaceModel { id: <mode id>, provider:
+  "nano", name: <mode name> }`. There are no thinking levels (`reasoning`
+  options stay empty), no Fast (`supportsFast` is `false`) and no resources.
+  A locked mode is not in the list; the picker shows tier, cost hint and lock
+  reason from the account status (`nano-account-v1`), joined by mode id, so the
+  v18 contract carries nothing Nano-specific.
+- Signed out, offline without a cached snapshot, in safe mode, or when
+  `features.localAgent` is false, the list is empty with the reason
+  (`NANO_SIGN_IN_REQUIRED`, `SAFE_MODE` or a typed refusal) and no process is
+  started. The catalog never touches the network on its own: it reads what the
+  host already learned, and refreshing entitlements is an account action.
+- A catalog row is not a guarantee of a successful turn: credits can run out and
+  a plan can change between the catalog and the call, in which case the relay
+  answers with a typed error (`nano_credits_exhausted`, `nano_mode_locked`).
+  Imported settings naming a mode the account does not offer stay visible and
+  are not silently removed, as for other harnesses. Concrete provider models
+  behind a mode are never named.

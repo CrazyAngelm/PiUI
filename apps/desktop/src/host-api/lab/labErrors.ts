@@ -29,6 +29,7 @@ export type WorkspaceErrorCode =
   | 'QUEUE_PENDING'
   | 'DELIVERY_UNCERTAIN'
   | 'SIGN_IN_REQUIRED'
+  | 'NANO_SIGN_IN_REQUIRED'
   | 'IMAGES_UNSUPPORTED'
   | 'ATTACHMENT_UNAVAILABLE'
   | 'FILES_UNAVAILABLE'
@@ -41,7 +42,7 @@ const WORKSPACE_ERRORS: Readonly<Record<WorkspaceErrorCode, readonly [string, st
   NOT_FOUND: ['NOT_FOUND', 'The workspace session was not found.'],
   SESSION_CLOSED: ['NOT_FOUND', 'Open the workspace session before using it.'],
   CONFLICT: ['CONFLICT', 'The workspace session changed during this operation.'],
-  IO_ERROR: ['IO_ERROR', 'PiUI could not update the local workspace catalog.'],
+  IO_ERROR: ['IO_ERROR', 'Nano Desktop could not update the local workspace catalog.'],
   NOT_SUPPORTED: ['NOT_SUPPORTED', 'The selected native harness does not support this operation.'],
   RUNTIME_FAILED: ['RUNTIME_FAILED', 'The native harness could not complete the request.'],
   APPROVAL_EXPIRED: ['APPROVAL_EXPIRED', 'That approval is no longer pending for this session.'],
@@ -52,6 +53,7 @@ const WORKSPACE_ERRORS: Readonly<Record<WorkspaceErrorCode, readonly [string, st
   QUEUE_PENDING: ['QUEUE_PENDING', 'Resolve queued messages before compacting.'],
   DELIVERY_UNCERTAIN: ['DELIVERY_UNCERTAIN', 'Check native history before dismissing the uncertain message.'],
   SIGN_IN_REQUIRED: ['SIGN_IN_REQUIRED', 'Sign in to Claude Code with your Claude subscription: run `claude` in a terminal and use /login.'],
+  NANO_SIGN_IN_REQUIRED: ['NANO_SIGN_IN_REQUIRED', 'Sign in to your Nano account to use Nano.'],
   // Composer inputs v1 and composer v19 attachments.
   IMAGES_UNSUPPORTED: ['IMAGES_UNSUPPORTED', 'This harness or its current model does not accept images.'],
   ATTACHMENT_UNAVAILABLE: ['ATTACHMENT_UNAVAILABLE', 'An attached image is no longer available. Attach it again.'],

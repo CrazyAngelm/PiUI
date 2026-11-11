@@ -44,11 +44,12 @@ describe('session notices', () => {
     expect(withNotice(result.snapshot, 'unsupported-board-tool')).toBe(result.snapshot);
   });
 
-  it('shows the board-tool notice for reported codes and for Pi chats', () => {
+  it('shows the board-tool notice for reported codes and for Pi and Nano chats', () => {
     expect(boardToolNotice('codex', [])).toBeUndefined();
     expect(boardToolNotice('claude-code', ['unsupported-board-tool'])).toBe('unsupported-board-tool');
     expect(boardToolNotice('codex', ['unsupported-board-tool', 'unsupported-board-tool-resume'])).toBe('unsupported-board-tool-resume');
     expect(boardToolNotice('pi', [])).toBe('unsupported-board-tool');
+    expect(boardToolNotice('nano', [])).toBe('unsupported-board-tool');
     expect(boardToolNotice('codex', ['unsupported-sidekick-tool'])).toBeUndefined();
     expect(sidekickToolNotice(['unsupported-sidekick-tool', 'unsupported-sidekick-tool-resume'])).toBe('unsupported-sidekick-tool-resume');
     expect(sidekickToolNotice(['unsupported-board-tool'])).toBeUndefined();

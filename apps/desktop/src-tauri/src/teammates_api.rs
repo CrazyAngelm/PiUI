@@ -229,7 +229,7 @@ impl From<TeammatesError> for WorkspaceError {
             ),
             TeammatesError::Io => WorkspaceError {
                 code: "IO_ERROR",
-                message: "PiUI could not save the teammate.",
+                message: "Nano Desktop could not save the teammate.",
                 recoverable: false,
             },
         }

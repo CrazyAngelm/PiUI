@@ -816,7 +816,7 @@ async fn revert(
             if !view.regular {
                 return Err(tool_error(
                     "NOT_SUPPORTED",
-                    "PiUI moves only regular files to the trash. Remove this link yourself.",
+                    "Nano Desktop moves only regular files to the trash. Remove this link yourself.",
                 ));
             }
             if view.fingerprint != fingerprint {
@@ -831,12 +831,12 @@ async fn revert(
                 .map_err(|error| match error {
                     piui_platform::TrashError::Unsupported => tool_error(
                         "TRASH_UNAVAILABLE",
-                        "This system has no trash PiUI can use. The file was not changed.",
+                        "This system has no trash Nano Desktop can use. The file was not changed.",
                     ),
                     piui_platform::TrashError::NotFound => stale_error(),
                     piui_platform::TrashError::NotARegularFile => tool_error(
                         "NOT_SUPPORTED",
-                        "PiUI moves only regular files to the trash. Remove this link yourself.",
+                        "Nano Desktop moves only regular files to the trash. Remove this link yourself.",
                     ),
                     piui_platform::TrashError::Declined | piui_platform::TrashError::Io(_) => {
                         tool_error(
@@ -857,7 +857,7 @@ async fn revert(
             if patch.display_text(DISPLAY_LIMIT).is_none() && !patch.binary() {
                 return Err(tool_error(
                     "NOT_SUPPORTED",
-                    "This change is too large to show, so PiUI does not revert it.",
+                    "This change is too large to show, so Nano Desktop does not revert it.",
                 ));
             }
             let bytes = hunk_bytes(&patch, hunk, part)?;

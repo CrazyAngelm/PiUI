@@ -172,7 +172,7 @@ export function commandApproval(context: TurnContext, command: string): PendingA
     };
   }
   return {
-    kind: context.harness === 'pi' ? 'permission' : 'command',
+    kind: context.harness === 'pi' || context.harness === 'nano' ? 'permission' : 'command',
     title: context.harness === 'codex' ? 'Run command' : 'Allow this command?',
     description: `Command: ${command}\nWorking directory: ${context.cwd}\nReason: The agent wants to verify its change before answering.`,
     decisions: decisionsFor(context),
@@ -207,7 +207,7 @@ export function commandOutputSteps(
   random: LabRandom,
 ): TurnStep[] {
   const lines = output.split('\n').map((line, index) => (index === 0 ? line : `\n${line}`));
-  const summary = context.harness === 'pi' ? { safeSummary: 'The tool completed.' } : {};
+  const summary = context.harness === 'pi' || context.harness === 'nano' ? { safeSummary: 'The tool completed.' } : {};
   const text = commandText(context.harness, command, output, context.cwd);
   const complete: DesktopTimelineBlock = { ...opened, ...summary, status: 'complete', text };
   return [

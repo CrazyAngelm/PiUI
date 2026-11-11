@@ -11,7 +11,7 @@
  */
 import type { AgentProfile } from '../../host-api/orchestrationClient';
 import { harnessConfiguration, harnessConfigurations } from '../../harness-adapters';
-import { isBuiltinHarness } from '../../../../../contracts/harness-identity-v2';
+import { isBuiltinHarness } from '../../../../../contracts/harness-identity-v3';
 import { profileForHarness } from '../../harness-adapters/normalize';
 import {
   newGraphNode,

@@ -64,7 +64,7 @@
 <Dialog
   bind:open
   title={$t('Add ACP agent')}
-  description={$t('Describe how to start an agent that speaks the Agent Client Protocol. PiUI runs nothing until you review and trust its command line.')}
+  description={$t('Describe how to start an agent that speaks the Agent Client Protocol. Nano Desktop runs nothing until you review and trust its command line.')}
   size="lg"
   closeLabel={$t('Close')}
 >

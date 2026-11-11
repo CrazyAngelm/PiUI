@@ -2,15 +2,18 @@ import type {
   Capability, DesktopTimelineBlock, HarnessCapabilities, HarnessCatalogModel, HarnessKind, HarnessModelsResult,
   HarnessSummary, PermissionMode, WorkspaceModel,
 } from './labContracts';
-import { isAcpHarness } from '../../../../../contracts/harness-identity-v2';
+import { isAcpHarness } from '../../../../../contracts/harness-identity-v3';
+import { NANO_MODEL_PROVIDER } from '../../../../../contracts/nano-account-v1';
 import { ACP_DEFAULT_MODEL } from '../../harness-adapters/acp';
+import type { LabState } from './labState';
+import { labNanoOpenModes } from './nanoAccountFake';
 
 /**
  * Native harness inventory for the lab. Model and resource names are clearly
  * fake ("lab") while keeping the shapes and per-adapter rules of the real
  * bridges: which harness reports reasoning levels, Fast, skills and MCP.
  */
-export const HARNESS_ORDER: readonly HarnessKind[] = ['pi', 'prime-agent', 'codex', 'hermes', 'claude-code'];
+export const HARNESS_ORDER: readonly HarnessKind[] = ['pi', 'prime-agent', 'codex', 'hermes', 'claude-code', 'nano'];
 
 export const HARNESS_NAMES: Readonly<Record<HarnessKind, string>> = {
   pi: 'Pi',
@@ -18,6 +21,7 @@ export const HARNESS_NAMES: Readonly<Record<HarnessKind, string>> = {
   codex: 'Codex',
   hermes: 'Hermes',
   'claude-code': 'Claude Code',
+  nano: 'Nano',
 };
 
 const VERSIONS: Readonly<Record<HarnessKind, string>> = {
@@ -26,6 +30,8 @@ const VERSIONS: Readonly<Record<HarnessKind, string>> = {
   codex: '0.167.0',
   hermes: '0.21.0',
   'claude-code': '2.1.232',
+  // The installed upstream Pi that the Nano lane drives.
+  nano: '1.4.0',
 };
 
 /** The host's fixed status for a Claude Code login that is not a Claude subscription. */
@@ -39,7 +45,7 @@ export function claudeSignInRequired(summaries: readonly HarnessSummary[]): bool
 /** Versions above the tested ceiling: admitted with the host's advisory status (ADR-045). */
 const NEWER_THAN_TESTED: ReadonlySet<HarnessKind> = new Set(['codex']);
 
-/** Every adapter ready: the demo can create sessions on all five harnesses. */
+/** Every adapter ready: the demo can create sessions on all six harnesses. */
 export function readyHarnesses(): HarnessSummary[] {
   return HARNESS_ORDER.map((kind) => ({
     kind,
@@ -62,7 +68,7 @@ export function firstRunHarnesses(): HarnessSummary[] {
         ...summary,
         version: '0.8.1',
         status: 'unverified',
-        reason: 'Older than the oldest version supported by PiUI.',
+        reason: 'Older than the oldest version supported by Nano Desktop.',
       };
     }
     if (summary.kind === 'hermes') {
@@ -112,6 +118,15 @@ export function harnessCapabilities(kind: HarnessKind, summary: HarnessSummary |
         },
         nativeSubagents: unsupported('Native subagent policy is not exposed by Pi RPC.'),
       };
+    case 'nano':
+      return {
+        prompt: supported(), resume: supported(),
+        models: { ...supported(), reason: 'The Nano modes your account can use; there are no thinking levels.' },
+        approvals: { ...supported(), reason: 'The Nano approval guard asks before shell commands and file changes in native mode.' },
+        instructions: supported(),
+        toolPolicy: unsupported('Nano restricts no tool per agent; read-only is a host-set tool list.'),
+        nativeSubagents: unsupported('Native subagent policy is not exposed by Pi RPC.'),
+      };
     case 'prime-agent':
       return {
         prompt: supported(), resume: supported(), models: supported(),
@@ -140,7 +155,7 @@ export function harnessCapabilities(kind: HarnessKind, summary: HarnessSummary |
         toolPolicy: { ...supported(), reason: 'Claude Code built-in tool allowlist; user MCP servers are excluded under a policy.' },
         nativeSubagents: {
           ...supported('coordinator'),
-          reason: 'Managed runs disable the native Agent tool and delegate through the PiUI coordinator.',
+          reason: 'Managed runs disable the native Agent tool and delegate through the Nano Desktop coordinator.',
         },
       };
     default: {
@@ -189,6 +204,14 @@ export const HARNESS_MODELS: Readonly<Record<HarnessKind, readonly HarnessCatalo
     model('anthropic', 'lab-sonnet', 'Claude Lab Sonnet', CLAUDE_EFFORT.slice(0, 3), false),
     model('anthropic', 'lab-opus', 'Claude Lab Opus', CLAUDE_EFFORT, false),
     model('anthropic', 'lab-haiku', 'Claude Lab Haiku', [], false),
+  ],
+  // Every mode the server defines. The host lists only the modes the account may use
+  // (`accountModels`): none while signed out, no locked mode.
+  nano: [
+    model('nano', 'auto', 'Auto', undefined, false),
+    model('nano', 'free', 'Free', undefined, false),
+    model('nano', 'fast', 'Fast', undefined, false),
+    model('nano', 'smart', 'Smart', undefined, false),
   ],
 };
 
@@ -261,6 +284,8 @@ export const HARNESS_RESOURCES: Readonly<Record<HarnessKind, HarnessModelsResult
     ],
     warnings: [],
   },
+  // A host-owned agent directory: no tools, skills or MCP servers to switch.
+  nano: { items: [], warnings: [] },
 };
 
 /** Native adapters that implement each permission preset (see the bridge factories). */
@@ -270,6 +295,7 @@ export const NATIVE_PERMISSION_MODES: Readonly<Record<HarnessKind, readonly Perm
   codex: ['native', 'read-only', 'workspace-write', 'full-access'],
   hermes: ['native'],
   'claude-code': ['native', 'read-only', 'workspace-write', 'full-access'],
+  nano: ['native', 'read-only', 'full-access'],
 };
 
 /** Claude Code steers natively; compaction is only a literal `/compact` prompt headlessly. */
@@ -292,6 +318,7 @@ export function liveLabel(harness: HarnessKind, kind: BlockKind): string {
   if (isAcpHarness(harness)) return acpLabel(harness, kind);
   const labels: Readonly<Record<HarnessKind, Partial<Record<BlockKind, string>>>> = {
     pi: { user: 'You', assistant: 'Pi', thinking: 'Thinking', compaction: 'Compaction', error: 'Error' },
+    nano: { user: 'You', assistant: 'Nano', thinking: 'Thinking', compaction: 'Compaction', error: 'Error' },
     'prime-agent': {
       user: 'You', assistant: 'Prime', thinking: 'Thinking', compaction: 'Compaction', custom: 'Prime subagent', error: 'Error',
     },
@@ -366,6 +393,42 @@ export function catalogModels(kind: HarnessKind): HarnessCatalogModel[] {
     { id: ACP_DEFAULT_MODEL, name: 'Agent default', supportsFast: false },
     ...ACP_LAB_MODELS.map((model) => ({ ...model, supportsFast: false })),
   ];
+}
+
+/**
+ * The models the host lists for `kind` given the lab's Nano account
+ * (`nano/catalog.rs`): Nano offers one row per mode the entitlements open, in
+ * server order, and nothing while signed out; every other harness lists its
+ * native catalog.
+ */
+export function accountModels(state: Pick<LabState, 'nanoAccount'>, kind: HarnessKind): HarnessCatalogModel[] {
+  if (kind !== 'nano') return catalogModels(kind);
+  const status = state.nanoAccount?.status();
+  if (status === undefined) return [];
+  return labNanoOpenModes(status).map((mode) => model(NANO_MODEL_PROVIDER, mode.id, mode.name.trim() === '' ? mode.id : mode.name, undefined, false));
+}
+
+/** `runtimeModels` for the account: what a live session of `kind` can switch between. */
+export function accountRuntimeModels(state: Pick<LabState, 'nanoAccount'>, kind: HarnessKind): WorkspaceModel[] {
+  if (kind !== 'nano') return runtimeModels(kind);
+  return accountModels(state, kind).map(({ supportsFast: _fast, ...rest }) => ({ ...rest }));
+}
+
+/** `catalogModel` for the account: a locked or unknown mode is not found. */
+export function accountCatalogModel(
+  state: Pick<LabState, 'nanoAccount'>,
+  kind: HarnessKind,
+  id: string,
+  provider: string | undefined,
+): HarnessCatalogModel | undefined {
+  return accountModels(state, kind).find((model) => model.id === id && model.provider === provider);
+}
+
+/** `defaultModel` for the account: the first mode it may use. */
+export function accountDefaultModel(state: Pick<LabState, 'nanoAccount'>, kind: HarnessKind): WorkspaceModel {
+  const [first] = accountRuntimeModels(state, kind);
+  if (first === undefined) throw new Error(`No lab model for ${kind}.`);
+  return first;
 }
 
 /** ACP exposes no per-session skill, MCP or tool inventory. */

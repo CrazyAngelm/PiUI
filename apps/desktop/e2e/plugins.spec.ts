@@ -134,7 +134,7 @@ test.describe('plugins', () => {
   });
 
   test.describe('isolation', () => {
-    test('the panel frame has an opaque origin, no PiUI document, no Tauri bridge and no network', async ({ lab, page }) => {
+    test('the panel frame has an opaque origin, no Nano Desktop document, no Tauri bridge and no network', async ({ lab, page }) => {
       // The browser reports the blocked connection below; the lab fixture
       // treats plugin-frame policy reports as expected, so collect them here.
       const reports: string[] = [];

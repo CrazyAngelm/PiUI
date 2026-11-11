@@ -32,7 +32,7 @@
     const title = view.title;
     if (!title) return;
     const previous = document.title;
-    document.title = `${title} — PiUI`;
+    document.title = `${title} — Nano Desktop`;
     return () => {
       document.title = previous;
     };

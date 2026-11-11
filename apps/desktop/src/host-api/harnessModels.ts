@@ -134,7 +134,46 @@ function splitCatalog(request: HarnessModelsRequest): { models: Promise<HarnessM
 const SNAPSHOT_KEY = 'piui.harness.catalog.v1:';
 const SNAPSHOT_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * The Nano catalog is account state (sign-in, workspace, entitled modes) that the
+ * host serves at once, not a slow native probe: it is never remembered across
+ * sessions, so a picker cannot show modes an earlier account could use.
+ */
+const NO_SNAPSHOT_HARNESS = 'nano';
+
+/** The harness of a catalog key (`[workspaceId, harness]` or `[workspaceId, harness, part]`). */
+function harnessOfKey(key: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(key);
+    return Array.isArray(parsed) && typeof parsed[1] === 'string' ? parsed[1] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Drops every catalog of `harness`: the answers this session reuses (full and
+ * part entries) and the remembered snapshots. A load in flight still answers
+ * its own callers but is not reused. For catalogs that follow account state.
+ */
+export function forgetHarnessCatalogs(harness: string): void {
+  for (const key of [...catalogs.keys()]) {
+    if (harnessOfKey(key) === harness) catalogs.delete(key);
+  }
+  try {
+    const remembered: string[] = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const name = localStorage.key(index);
+      if (name !== null && name.startsWith(SNAPSHOT_KEY) && harnessOfKey(name.slice(SNAPSHOT_KEY.length)) === harness) remembered.push(name);
+    }
+    for (const name of remembered) localStorage.removeItem(name);
+  } catch {
+    // Storage is a convenience; the session entries are already gone.
+  }
+}
+
 function storeSnapshot(key: string, result: HarnessModelsResult): void {
+  if (result.harness === NO_SNAPSHOT_HARNESS) return;
   try {
     localStorage.setItem(SNAPSHOT_KEY + key, JSON.stringify({ at: Date.now(), result }));
   } catch {
@@ -151,6 +190,7 @@ function forgetSnapshot(key: string): void {
 }
 
 function readSnapshot(key: string, request: HarnessModelsRequest): HarnessModelsResult | undefined {
+  if (request.harness === NO_SNAPSHOT_HARNESS) return undefined;
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(SNAPSHOT_KEY + key) ?? 'null');
     if (!parsed || typeof parsed !== 'object') return undefined;

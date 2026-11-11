@@ -89,7 +89,7 @@
   <DebugRunDialog bind:open={debugOpen} {run} workspaceId={runs.workspaceId} debugging={runs.debugging} onOpenDraft={onDebug} />
 {/if}
 
-<Dialog bind:open={deleteOpen} title={$t('Delete this run?')} description={$t('Only PiUI’s own records of this run are deleted.')} size="md">
+<Dialog bind:open={deleteOpen} title={$t('Delete this run?')} description={$t('Only Nano Desktop’s own records of this run are deleted.')} size="md">
   <RunDeletionSummary {sessions} {scripts} />
   {#if runs.actionError && deleteOpen}<p class="error" role="alert">{$t(runs.actionError)}</p>{/if}
   {#snippet footer()}

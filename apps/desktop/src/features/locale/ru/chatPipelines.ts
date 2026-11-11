@@ -89,10 +89,10 @@ export const chatPipelinesRu: Readonly<Record<string, string>> = {
   'Opened a template as a new pipeline': 'Шаблон открыт как новый пайплайн',
   'Save it to use it in chats and runs.': 'Сохраните его, чтобы использовать в чатах и прогонах.',
   // Pipeline library host errors
-  'Safe mode is on: PiUI does not change pipelines or chats.': 'Включён безопасный режим: PiUI не меняет пайплайны и чаты.',
+  'Safe mode is on: Nano Desktop does not change pipelines or chats.': 'Включён безопасный режим: Nano Desktop не меняет пайплайны и чаты.',
   'Check the template or chat details and try again.': 'Проверьте данные шаблона или чата и попробуйте снова.',
   'This template or chat is no longer available. Refresh and try again.': 'Этот шаблон или чат больше недоступен. Обновите и попробуйте снова.',
   'The pipeline library is full. Delete a template, then try again.': 'Библиотека пайплайнов заполнена. Удалите шаблон и попробуйте снова.',
-  'PiUI could not save the pipeline library. Nothing was lost.': 'PiUI не удалось сохранить библиотеку пайплайнов. Ничего не потеряно.',
+  'Nano Desktop could not save the pipeline library. Nothing was lost.': 'Nano Desktop не удалось сохранить библиотеку пайплайнов. Ничего не потеряно.',
   'The operation could not be completed.': 'Не удалось выполнить операцию.',
 };

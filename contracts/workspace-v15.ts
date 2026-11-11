@@ -2,7 +2,7 @@
  * Native ids, session paths, process handles and credentials never cross this boundary.
  */
 import type { DesktopTimelineBlock } from './runtime-protocol';
-import type { HarnessId } from './harness-identity-v2';
+import type { HarnessId } from './harness-identity-v3';
 export const WORKSPACE_PROTOCOL = 15 as const;
 /**
  * `claude-code` and `acp:<descriptor id>` (harness identity grammar v2) are

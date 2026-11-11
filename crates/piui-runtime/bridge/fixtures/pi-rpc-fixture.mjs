@@ -1,6 +1,8 @@
 let pending = Buffer.alloc(0);
 const toolFlag = process.argv.indexOf("--tools");
 const textOnly = process.argv.includes("--text-only-model");
+// A Nano session reopened without a model: Pi restored the recorded Nano model.
+const restoredNano = process.argv.includes("--restored-nano-model");
 let sessionName = process.argv.includes("--no-tools") ? "no-tools" : toolFlag >= 0 ? process.argv[toolFlag + 1] : "Fixture";
 // A scenario step `{ busyProbes: n }` makes the next n `get_state` replies
 // report a streaming run, like a runtime still busy after `agent_end`.
@@ -170,6 +172,19 @@ const scenarios = {
     { type: "agent_end", willRetry: false },
     { type: "agent_settled" },
   ],
+  // The local Nano relay answers in OpenAI shape; Pi surfaces its text.
+  "nano-credits": [
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: `402: {"message":"SECRET-MUST-NOT-LEAK","type":"nano","code":"nano_credits_exhausted"}` } },
+    { type: "agent_end", willRetry: false },
+    { type: "agent_settled" },
+  ],
+  "nano-plain": [
+    { type: "agent_start" },
+    { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "402 SECRET-MUST-NOT-LEAK" } },
+    { type: "agent_end", willRetry: false },
+    { type: "agent_settled" },
+  ],
   select: [
     { type: "agent_start" },
     { type: "extension_ui_request", id: "native-select-one", method: "select", title: "Allow dangerous command?", options: ["Allow", "Block", "Line one\nline two"], timeout: 10000 },
@@ -189,7 +204,7 @@ process.stdin.on("data", (chunk) => {
       sessionName = `images:${request.type}:${request.images.map((image) => `${image.type}/${image.mimeType}/${image.data}`).join(",")}`;
       write({ type: "message_start", message: { id: `user-${request.id}`, role: "user", content: [{ type: "text", text: request.message }, ...request.images] } });
     }
-    if (request.type === "get_state") write({ id: request.id, type: "response", command: request.type, success: true, data: { sessionId: "native-fixture", sessionFile: "host/private.jsonl", sessionName, isStreaming: busyNow(), isCompacting: false, pendingMessageCount: 0, thinkingLevel: "medium", model: { provider: "fixture", id: "model", name: "Fixture Model", input: textOnly ? ["text"] : ["text", "image"] } } }, true);
+    if (request.type === "get_state") write({ id: request.id, type: "response", command: request.type, success: true, data: { sessionId: "native-fixture", sessionFile: "host/private.jsonl", sessionName, isStreaming: busyNow(), isCompacting: false, pendingMessageCount: 0, thinkingLevel: "medium", model: restoredNano ? { provider: "nano", id: "smart", name: "Smart", input: ["text"] } : { provider: "fixture", id: "model", name: "Fixture Model", input: textOnly ? ["text"] : ["text", "image"] } } }, true);
     else if (request.type === "get_commands") write({ id: request.id, type: "response", command: request.type, success: true, data: { commands: [
       { name: "skill:review", description: "Review a diff", source: "skill", location: "user", path: "/home/SECRET-MUST-NOT-LEAK/skills/review/SKILL.md" },
       { name: "fix-tests", description: "Fix failing tests", source: "prompt", location: "project", path: "/home/SECRET-MUST-NOT-LEAK/prompts/fix-tests.md" },
@@ -205,8 +220,9 @@ process.stdin.on("data", (chunk) => {
       write({ id: request.id, type: "response", command: request.type, success: true });
       setTimeout(async () => {
         for (const event of scenarios[request.message]) {
-          if (event.pause) await new Promise((resolve) => setTimeout(resolve, event.pause));
-          else if (event.busyProbes !== undefined) busyProbes = event.busyProbes;
+          // `null` is a frame the bridge cannot process; the fixture writes it as is.
+          if (event?.pause) await new Promise((resolve) => setTimeout(resolve, event.pause));
+          else if (event?.busyProbes !== undefined) busyProbes = event.busyProbes;
           else write(event);
         }
       }, 30);

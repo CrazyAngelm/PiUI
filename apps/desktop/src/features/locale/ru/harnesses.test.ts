@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import { SIGNED_OUT_COPY } from '../../../app/chat/claudeSignIn.svelte';
 import { harnessConfigurations } from '../../../harness-adapters';
+import { profileConfigurationErrors } from '../../../harness-adapters/validation';
 import { failureText } from '../../../app/runs/runGraph';
 import { APPROVAL_FIELD_ISSUES } from '../../../host-api/approvalForms';
 import { translate } from '../language';
@@ -44,9 +45,25 @@ it('translates the MCP form request copy, including every field problem', () => 
     'No answer',
     '{0} or more.',
     '{0} or less.',
-    'This request needs a value PiUI cannot show, so it can only be declined.',
+    'This request needs a value Nano Desktop cannot show, so it can only be declined.',
     'Some optional values cannot be entered here and are left empty.',
   ]) {
     expect(translate(message, 'ru'), message).not.toBe(message);
   }
+});
+
+it('translates every static Nano profile problem the editor can show', () => {
+  // Each message the validator builds for a Nano profile, with the node's "<id>: " prefix the editor strips.
+  const problems = profileConfigurationErrors('node', {
+    name: 'Nano',
+    harness: 'nano',
+    modelProvider: 'anthropic',
+    model: 'not-a-mode',
+    permissionMode: 'workspace-write',
+    instructions: '',
+    reasoning: 'high',
+    toolPolicy: { rules: [{ tool: 'shell', decision: 'allow', enforcement: 'native', mandatory: false }] },
+  }).map((message) => message.replace(/^node: /, ''));
+  expect(problems).toHaveLength(5);
+  for (const message of problems) expect(translate(message, 'ru'), message).not.toBe(message);
 });

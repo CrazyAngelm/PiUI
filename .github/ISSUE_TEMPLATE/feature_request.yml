@@ -1,5 +1,5 @@
 name: Feature request
-description: Propose a focused improvement to PiUI.
+description: Propose a focused improvement to Nano Desktop.
 title: "feature: "
 labels: ["enhancement"]
 body:
@@ -21,7 +21,7 @@ body:
     id: extension
     attributes:
       label: Extension-first check
-      description: Could this be delivered as a PiUI/Pi extension contribution instead of a core feature? Explain why or why not.
+      description: Could this be delivered as a Nano Desktop/Pi extension contribution instead of a core feature? Explain why or why not.
     validations:
       required: true
   - type: checkboxes

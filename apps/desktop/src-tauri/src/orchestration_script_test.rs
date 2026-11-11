@@ -62,7 +62,7 @@ pub enum ScriptTestError {
     NotTrusted,
     #[error("the project folder is unavailable")]
     ProjectUnavailable,
-    #[error("PiUI is shutting down")]
+    #[error("Nano Desktop is shutting down")]
     ShuttingDown,
     #[error("a test with this id is already running")]
     Conflict,

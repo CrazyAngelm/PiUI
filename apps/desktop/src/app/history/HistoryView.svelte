@@ -125,7 +125,7 @@
   {#if !known && store.catalogLoading}
     <div class="loading"><Skeleton lines={4} /></div>
   {:else if !known}
-    <EmptyState title={$t('This folder is no longer in PiUI')} description={$t('Choose another project above.')} />
+    <EmptyState title={$t('This folder is no longer in Nano Desktop')} description={$t('Choose another project above.')} />
   {:else}
     <div class="body" class:body--details={detailsOpen && selected} class:body--selected={selected !== undefined}>
       <aside class="list" aria-label={$t('Sessions')}>
@@ -218,7 +218,7 @@
       <section class="reader" aria-label={$t('Transcript')}>
         {#if selected === undefined}
           {#if history.notice}<p class="inline-note" role="status">{$t(history.notice)}</p>{/if}
-          <EmptyState icon={ScrollText} title={$t('Choose a session')} description={$t('Read-only history from the {0} session files of this folder. PiUI never changes them.', [agentLabel])} />
+          <EmptyState icon={ScrollText} title={$t('Choose a session')} description={$t('Read-only history from the {0} session files of this folder. Nano Desktop never changes them.', [agentLabel])} />
         {:else}
           <header class="reader__head">
             <IconButton class="back" label={$t('Back to sessions')} size="sm" onclick={backToList}><ChevronLeft /></IconButton>

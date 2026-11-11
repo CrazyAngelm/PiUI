@@ -130,7 +130,7 @@
     <p class="note" role="note">
       <ShieldAlert size={15} aria-hidden="true" />
       <span>
-        {$t("Plugins are not a sandbox. PiUI limits a backend's files and programs with Node's permission model, stops its whole process tree and gives it no API keys, but deliberately malicious code can get around those limits. Panels run isolated. Install only plugins you trust.")}
+        {$t("Plugins are not a sandbox. Nano Desktop limits a backend's files and programs with Node's permission model, stops its whole process tree and gives it no API keys, but deliberately malicious code can get around those limits. Panels run isolated. Install only plugins you trust.")}
         {#if development}{' '}{$t('Development mode runs the plugin from its folder: code changes load without a new review, permission changes need one.')}{/if}
       </span>
     </p>

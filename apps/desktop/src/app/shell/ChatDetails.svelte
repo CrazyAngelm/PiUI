@@ -43,7 +43,7 @@
       case 'native':
         return $t('Enforced by the harness');
       case 'coordinator':
-        return $t('Enforced by PiUI');
+        return $t('Enforced by Nano Desktop');
       case 'advisory':
         return $t('Advisory only');
       default:

@@ -4,6 +4,7 @@ import { boardHandlers, createLabBoards, seedLabBoard } from './boardFake';
 import { acpHandlers } from './acpFake';
 import { appUpdateHandlers, updateScenarioFromSearch, type LabUpdateScenario } from './appUpdateFake';
 import { classicHandlers } from './classicFake';
+import { createLabNanoAccount, nanoScenarioFromSearch, type LabNanoScenario } from './nanoAccountFake';
 import { composerHandlers } from './composerFake';
 import { composerInputsHandlers } from './composerInputsFake';
 import { demoExtensions, extensionHandlers } from './extensionsFake';
@@ -47,6 +48,8 @@ export interface LabHostOptions {
   readonly claudeSignedOut?: boolean;
   /** App update state (see `appUpdateFake.ts`). Defaults to `?updates=`, then `off`. */
   readonly updates?: LabUpdateScenario;
+  /** Nano account state (see `nanoAccountFake.ts`). Defaults to `?nano=`, then `signed-out`. */
+  readonly nano?: LabNanoScenario;
   /** Native catalog probe behavior. Defaults to `?catalog=`, then `normal`. */
   readonly catalog?: LabCatalogBehavior;
 }
@@ -152,6 +155,14 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
   const fusion = createLabFusion(runtime, bus, {
     codexSandbox: typeof window === 'undefined' ? true : codexSandboxFromSearch(window.location.search),
   });
+  // The catalog and session fakes gate Nano on this account, as the desktop host does.
+  const nanoAccount = createLabNanoAccount(
+    options.nano ?? (typeof window === 'undefined' ? 'signed-out' : nanoScenarioFromSearch(window.location.search)),
+    bus,
+    clock,
+    state.safeMode,
+  );
+  state.nanoAccount = nanoAccount;
   const handlers: LabHandlers = {
     ...workspaceHandlers(runtime),
     ...composerHandlers(runtime),
@@ -169,6 +180,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
       bus,
       clock,
     ),
+    ...nanoAccount.handlers,
     ...sessionToolsHandlers(runtime, seed.nativeHistory ?? EMPTY_NATIVE_HISTORY),
     ...pipelineLibraryHandlers(runtime),
     ...teammatesHandlers(runtime, bus, team),

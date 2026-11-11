@@ -2,7 +2,7 @@ export async function createPiAdapter(config, emit) {
   const { spawn } = await import("node:child_process");
   const { createHash } = await import("node:crypto");
   const { stat, mkdtemp, writeFile, rm } = await import("node:fs/promises");
-  const { join } = await import("node:path");
+  const { join, isAbsolute: isAbsolutePath } = await import("node:path");
 
   const fail = (code, safeMessage) => Object.assign(new Error(code), { bridgeCode: code, safeMessage });
   const isMaterialized = async (nativePath) => {
@@ -10,7 +10,40 @@ export async function createPiAdapter(config, emit) {
     try { return (await stat(nativePath)).isFile(); }
     catch { return false; }
   };
-  if (config.harness !== "pi") throw fail("wrong-harness", "The Pi adapter received an invalid harness configuration.");
+  // The Nano lane (harness "nano") drives the same upstream Pi against a
+  // host-owned agent directory and a local relay. Everything it adds is gated
+  // on `nano`; the Pi lane below is unchanged.
+  const nano = config.harness === "nano";
+  if (config.harness !== "pi" && !nano) throw fail("wrong-harness", "The Pi adapter received an invalid harness configuration.");
+  // The per-session relay key reaches this bridge only through its own
+  // process environment (`PIUI_NANO_RELAY_KEY`, set by the host for this one
+  // bridge), never through the initialize frame. It is read once and removed
+  // at once, so nothing else in this process inherits it; it goes on only to
+  // the Pi child, as `NANO_RELAY_KEY`.
+  let nanoRelayKey;
+  if (nano) {
+    nanoRelayKey = process.env.PIUI_NANO_RELAY_KEY;
+    delete process.env.PIUI_NANO_RELAY_KEY;
+    const lane = config.nano;
+    const text = (value) => typeof value === "string" && value.length > 0 && !value.includes("\0");
+    if (!lane || typeof lane !== "object" || Array.isArray(lane) || !text(lane.agentDir) || !text(nanoRelayKey)
+      || Object.hasOwn(lane, "relayKey")
+      || !(lane.guardExtension === null || (text(lane.guardExtension) && isAbsolutePath(lane.guardExtension)))
+      || !isAbsolutePath(lane.agentDir)) {
+      throw fail("invalid-request", "The Nano runtime configuration is incomplete.");
+    }
+    // A reopened or resumed session may come without a model: Pi then keeps
+    // the one the session recorded (checked to be a Nano model after start).
+    if (config.model != null && (config.model.provider !== "nano" || !text(config.model.id))) {
+      throw fail("unsupported-settings", "Nano sessions can only use a Nano model.");
+    }
+    if (config.thinkingLevel) throw fail("unsupported-settings", "Nano models have no thinking levels.");
+    // Without the guard the native permission mode would run bash, write and
+    // edit unasked; refuse instead of starting open.
+    if (lane.guardExtension === null && config.permissionMode === "native") {
+      throw fail("unsupported-policy", "The Nano approval guard is missing.");
+    }
+  }
   if (config.resourceRules?.length) throw fail("unsupported-resource-policy", "Pi RPC does not expose per-session skill or MCP filtering.");
   if (config.pluginMcpServers?.length) throw fail("unsupported-settings", "Pi cannot take a plugin's MCP server for one chat.");
   if (typeof config.runtimeProgram !== "string" || !Array.isArray(config.runtimeArgs)) {
@@ -44,6 +77,7 @@ export async function createPiAdapter(config, emit) {
   // bare `agent_end`: it waits for `agent_settled` and otherwise for a quiet
   // runtime (see armSettleProbe). Detected here, before any work is admitted.
   let settleMode = "unknown";
+  let piVersion;
   try {
     const { readFile } = await import("node:fs/promises");
     const { isAbsolute, dirname, resolve } = await import("node:path");
@@ -71,11 +105,18 @@ export async function createPiAdapter(config, emit) {
       if (manifest?.name !== PACKAGE) continue;
       const [major, minor, patch] = String(manifest.version).split(/[.+-]/).map(Number);
       if (![major, minor, patch].every(Number.isSafeInteger)) break;
+      piVersion = [major, minor, patch];
       settleMode = (major > 0 || minor > 80 || (minor === 80 && patch >= 4)) ? "settled" : "legacy";
       break;
     }
   } catch { /* An unidentified Pi build uses the quiet-runtime fallback until it reports agent_settled. */ }
 
+  // The private agent directory, the `nano` provider and `-e` after
+  // `--no-extensions` were verified on Pi 1.4.0. A runtime positively older than
+  // that is refused; an unidentified launcher is let through.
+  if (nano && piVersion && (piVersion[0] < 1 || (piVersion[0] === 1 && piVersion[1] < 4))) {
+    throw fail("unsupported-native-version", "Nano sessions need Pi 1.4.0 or newer.");
+  }
   if (config.nativeSubagents === true) throw fail("unsupported-policy", "This Pi adapter cannot enforce native subagent policy.");
   if (config.coordination === true) throw fail("unsupported-policy", "This Pi RPC adapter cannot register the coordinator tool.");
   // Pi RPC has no custom host tools. The board is optional, so the chat
@@ -94,16 +135,69 @@ export async function createPiAdapter(config, emit) {
     ? config.allowedTools.filter((name) => config.permissionMode !== "read-only" || readOnlyTools.has(name))
     : config.permissionMode === "read-only" ? [...readOnlyTools] : undefined;
 
-  const commandArgs = [...config.runtimeArgs, "--mode", "rpc", "--approve", "--session-dir", config.sessionDir];
+  // Nano never passes `--approve`: project `.pi` resources stay untrusted.
+  const commandArgs = [...config.runtimeArgs, "--mode", "rpc", ...(nano ? ["--no-approve", "--offline"] : ["--approve"]), "--session-dir", config.sessionDir];
   if (config.nativePath) commandArgs.push("--session", config.nativePath);
   else if (config.nativeId) commandArgs.push("--session-id", config.nativeId);
   if (config.title) commandArgs.push("--name", config.title);
-  if (config.model?.provider) commandArgs.push("--provider", config.model.provider);
-  if (config.model?.id) commandArgs.push("--model", config.model.id);
-  if (config.thinkingLevel) commandArgs.push("--thinking", config.thinkingLevel);
-  if (Array.isArray(effectiveAllowedTools)) {
+  // Pi 1.4.0 exits when `--provider` comes without `--model`, so a Nano start
+  // without a model passes neither and lets Pi restore the session's model.
+  if (nano) { if (config.model) commandArgs.push("--provider", "nano", "--model", config.model.id); }
+  else {
+    if (config.model?.provider) commandArgs.push("--provider", config.model.provider);
+    if (config.model?.id) commandArgs.push("--model", config.model.id);
+    if (config.thinkingLevel) commandArgs.push("--thinking", config.thinkingLevel);
+  }
+  if (nano) {
+    // `--no-extensions` turns off discovered, configured and built-in
+    // extensions (cli.md) but an explicit `-e` path still loads, so the guard
+    // is the only extension. `--tools` and `--no-tools` select tools by name and
+    // do not unload an extension, so they never conflict with `-e`.
+    if (Array.isArray(effectiveAllowedTools)) {
+      if (effectiveAllowedTools.length === 0) commandArgs.push("--no-tools");
+      else commandArgs.push("--tools", effectiveAllowedTools.join(","));
+    }
+    commandArgs.push("--no-extensions");
+    if (config.nano.guardExtension) commandArgs.push("-e", config.nano.guardExtension);
+  } else if (Array.isArray(effectiveAllowedTools)) {
     if (effectiveAllowedTools.length === 0) commandArgs.push("--no-tools", "--no-extensions");
     else commandArgs.push("--tools", effectiveAllowedTools.join(","), "--no-extensions");
+  }
+
+  // Nano starts Pi from a cleared environment: an OS allowlist plus the Nano
+  // variables. Nothing else is inherited, so no provider API key, token or
+  // proxy credential of the user reaches the agent or its shell tools. The
+  // allowlist is what a program started by `bash` needs to run at all (system
+  // directories, executable lookup, temp and profile locations, locale); it
+  // holds no secrets. Proxy variables are left out on purpose: they can embed
+  // credentials and the relay is on loopback.
+  function nanoChildEnvironment(lane) {
+    const windows = process.platform === "win32";
+    const exact = new Set(windows ? [
+      "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "PATH", "TEMP", "TMP", "USERPROFILE",
+      "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
+      "PROGRAMW6432", "COMMONPROGRAMFILES", "COMMONPROGRAMFILES(X86)", "COMMONPROGRAMW6432", "ALLUSERSPROFILE",
+      "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS", "USERNAME", "USERDOMAIN", "COMPUTERNAME",
+      "PSMODULEPATH", "LANG", "TZ", "TERM",
+    ] : [
+      "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TZ", "TERM", "XDG_RUNTIME_DIR",
+      "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME",
+    ]);
+    const environment = {};
+    for (const [name, value] of Object.entries(process.env)) {
+      if (typeof value !== "string" || value.includes("\0")) continue;
+      // Windows names are case-insensitive: `Path`, `PATH` and `SystemRoot` all match.
+      const key = windows ? name.toUpperCase() : name;
+      if (exact.has(key) || key.startsWith("LC_")) environment[name] = value;
+    }
+    return {
+      ...environment,
+      PI_CODING_AGENT_DIR: lane.agentDir,
+      PI_OFFLINE: "1",
+      PI_SKIP_VERSION_CHECK: "1",
+      PI_TELEMETRY: "0",
+      NANO_RELAY_KEY: nanoRelayKey,
+    };
   }
 
   let instructionDirectory;
@@ -118,6 +212,7 @@ export async function createPiAdapter(config, emit) {
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
     shell: false,
+    ...(nano ? { env: nanoChildEnvironment(config.nano) } : {}),
   });
   child.stderr.on("data", () => {});
 
@@ -264,8 +359,11 @@ export async function createPiAdapter(config, emit) {
     id: candidate.id,
     ...(typeof candidate.provider === "string" ? { provider: candidate.provider } : {}),
     name: typeof candidate.name === "string" ? candidate.name : candidate.id,
-    ...(nativeModelFeatures?.getSupportedThinkingLevels ? { thinkingLevels: nativeModelFeatures.getSupportedThinkingLevels(candidate) } : Array.isArray(candidate.thinkingLevels) ? { thinkingLevels: candidate.thinkingLevels.filter((x) => typeof x === "string") } : {}),
+    // Nano models have no thinking levels in v1, whatever Pi infers for them.
+    ...(nano ? {} : nativeModelFeatures?.getSupportedThinkingLevels ? { thinkingLevels: nativeModelFeatures.getSupportedThinkingLevels(candidate) } : Array.isArray(candidate.thinkingLevels) ? { thinkingLevels: candidate.thinkingLevels.filter((x) => typeof x === "string") } : {}),
   } : undefined;
+  // A Nano session lists only Nano models, never another provider's.
+  const mapModels = (list) => (Array.isArray(list) ? list : []).map(mapModel).filter((entry) => entry && (!nano || entry.provider === "nano"));
   const historyBlock = (entry, useEntryId) => {
     if (entry?.type !== "message" || !entry.message) return undefined;
     const role = entry.message.role;
@@ -390,8 +488,26 @@ export async function createPiAdapter(config, emit) {
     throw fail("invalid-response", "This approval response requires text.");
   };
 
+  // The local Nano relay answers Pi in OpenAI shape with a `nano_*` code, and
+  // Pi puts that text into the assistant message's `errorMessage`. The host
+  // event has no code field (`error` carries only a message), so each code
+  // becomes one fixed, localizable summary and the native text stays private.
+  const NANO_RELAY_ERRORS = [
+    ["nano_sign_in_required", "Sign in to Nano to continue."],
+    ["nano_credits_exhausted", "Your Nano credits are used up."],
+    ["nano_mode_locked", "This Nano mode is not available on your plan."],
+    ["nano_rate_limited", "Nano is receiving too many requests. Try again shortly."],
+    ["nano_offline", "Nano cannot be reached. Check your connection."],
+    ["nano_client_too_old", "This version of Nano Desktop is too old. Update to continue."],
+    ["nano_request_too_large", "The request is too large for Nano. Shorten the conversation or attachments."],
+    ["nano_upstream_error", "The Nano model provider is unavailable. Try again shortly."],
+  ];
   const classifyTurnError = (message) => {
     const detail = typeof message?.errorMessage === "string" ? message.errorMessage.toLowerCase() : "";
+    if (nano) {
+      const relay = NANO_RELAY_ERRORS.find(([code]) => detail.includes(code));
+      if (relay) return relay[1];
+    }
     if (/api[ _-]?key|authenticat|unauthori[sz]ed|forbidden|credential|log[ -]?in|\b401\b|\b403\b/.test(detail)) {
       return "The Pi runtime could not authenticate the selected model.";
     }
@@ -642,9 +758,16 @@ export async function createPiAdapter(config, emit) {
   child.on("error", cleanupInstructions);
 
   state = await request("get_state");
+  // Without a requested model Pi restored the session's own (or the private
+  // directory's default); anything but a Nano model is refused, never used.
+  if (nano && !config.model && state?.model?.provider !== "nano") {
+    disposing = true;
+    try { child.kill(); } catch {}
+    throw fail("unsupported-settings", "This session does not use a Nano model.");
+  }
   model = mapModel(state.model);
   const modelResult = await request("get_available_models");
-  availableModels = (modelResult?.models ?? []).map(mapModel).filter(Boolean);
+  availableModels = mapModels(modelResult?.models);
   const entriesResult = await request("get_entries").catch(() => ({ entries: [] }));
   for (const entry of entriesResult?.entries ?? []) {
     let block = historyBlock(entry);
@@ -689,7 +812,7 @@ export async function createPiAdapter(config, emit) {
       const latest = await request("get_state");
       state = latest;
       model = mapModel(latest.model);
-      const reasoning = await request("get_available_thinking_levels").catch(() => null);
+      const reasoning = nano ? null : await request("get_available_thinking_levels").catch(() => null);
       if (model && Array.isArray(reasoning?.levels)) {
         model.thinkingLevels = reasoning.levels;
         availableModels = availableModels.map((entry) => entry.id === model.id && entry.provider === model.provider ? { ...entry, thinkingLevels: reasoning.levels } : entry);
@@ -768,12 +891,13 @@ export async function createPiAdapter(config, emit) {
     async catalogModels() { return (await this.models()).map(model => ({ ...model, supportsFast: false })); },
     async models() {
       const result = await request("get_available_models");
-      availableModels = (result?.models ?? []).map(mapModel).filter(Boolean);
+      availableModels = mapModels(result?.models);
       return availableModels;
     },
     async setModel({ model: requested, thinkingLevel, serviceTier }) {
       if (serviceTier != null) throw fail("unsupported-settings", "This harness does not support service tiers.");
       if (!requested?.id || !requested?.provider) throw fail("invalid-request", "Pi model selection requires a provider and model id.");
+      if (nano && (requested.provider !== "nano" || thinkingLevel)) throw fail("unsupported-settings", "Nano sessions can only use a Nano model without a thinking level.");
       model = mapModel(await request("set_model", { provider: requested.provider, modelId: requested.id }));
       if (thinkingLevel) await request("set_thinking_level", { level: thinkingLevel });
     },

@@ -297,6 +297,89 @@ describe('UI Lab workspace host', () => {
     expect(transport.blocks.some((block) => block.kind === 'tool' && block.truncated === true)).toBe(true);
   });
 
+  it('runs Nano like Pi with the four account modes, no workspace-write and no tuning', async () => {
+    const host = labHost('demo', { nano: 'signed-in' });
+    const created = await create(host, 'nano');
+    expect(created.session).toMatchObject({ harness: 'nano', title: 'New Nano session', model: { id: 'auto', provider: 'nano', name: 'Auto' } });
+    expect(created.capabilities).toMatchObject({ prompt: { supported: true }, approvals: { supported: true }, toolPolicy: { supported: false }, nativeSubagents: { supported: false } });
+    expect(created.models.map((model) => [model.provider, model.id])).toEqual([['nano', 'auto'], ['nano', 'free'], ['nano', 'fast'], ['nano', 'smart']]);
+    expect(created.models.every((model) => model.thinkingLevels === undefined)).toBe(true);
+    // Permission presets: native, read-only and full-access; workspace-write is refused before launch.
+    expect((await create(host, 'nano', { permissionMode: 'read-only' })).session.harness).toBe('nano');
+    expect((await create(host, 'nano', { permissionMode: 'full-access' })).session.harness).toBe('nano');
+    expect(await rejection(create(host, 'nano', { permissionMode: 'workspace-write' }))).toMatchObject({ code: 'RUNTIME_FAILED' });
+    expect(await rejection(create(host, 'nano', { model: { id: 'ghost', provider: 'nano', name: 'Ghost' } }))).toMatchObject({ code: 'RUNTIME_FAILED' });
+    const smart = await create(host, 'nano', { model: { id: 'smart', provider: 'nano', name: 'Smart' } });
+    expect(smart.session.model).toMatchObject({ id: 'smart', provider: 'nano' });
+    // The host catalog lists only the Nano modes: no tools, skills or MCP servers to switch.
+    const pending = host.invoke<HarnessModelsResult>('harness_models_v18', { request: { workspaceId: projectId(host, 'piui'), harness: 'nano' } });
+    await vi.advanceTimersByTimeAsync(400);
+    const catalog = await pending;
+    expect(catalog.models.map((model) => model.id)).toEqual(['auto', 'free', 'fast', 'smart']);
+    expect(catalog.models.every((model) => model.provider === 'nano' && model.supportsFast === false)).toBe(true);
+    expect(catalog.resources.items).toEqual([]);
+  });
+
+  it('lists and starts Nano only as far as the account allows, like the desktop host', async () => {
+    const catalogOf = async (host: LabHost): Promise<string[]> => {
+      const pending = host.invoke<HarnessModelsResult>('harness_models_v18', { request: { workspaceId: projectId(host, 'piui'), harness: 'nano' } });
+      await vi.advanceTimersByTimeAsync(400);
+      return (await pending).models.map((model) => model.id);
+    };
+    const nanoModel = (id: string) => ({ id, provider: 'nano', name: id });
+
+    // Signed out (the lab default): an empty catalog, not an error, and no session.
+    const out = labHost();
+    expect(await catalogOf(out)).toEqual([]);
+    expect(await rejection(create(out, 'nano'))).toMatchObject({ code: 'NANO_SIGN_IN_REQUIRED' });
+    expect(await rejection(create(out, 'nano', { model: nanoModel('auto') }))).toMatchObject({ code: 'NANO_SIGN_IN_REQUIRED' });
+    expect((await create(out, 'pi')).session.harness, 'other harnesses do not need an account').toBe('pi');
+    for (const name of ['expired', 'unsupported', 'offline'] as const) {
+      const host = labHost('demo', { nano: name });
+      expect(await catalogOf(host), name).toEqual([]);
+      expect(await rejection(create(host, 'nano')), name).toMatchObject({ code: 'NANO_SIGN_IN_REQUIRED' });
+    }
+
+    // Exhausted credits lock Auto, Fast and Smart: only Free is listed and startable.
+    const exhausted = labHost('demo', { nano: 'exhausted' });
+    expect(await catalogOf(exhausted)).toEqual(['free']);
+    expect(await rejection(create(exhausted, 'nano', { model: nanoModel('smart') }))).toMatchObject({ code: 'RUNTIME_FAILED' });
+    expect((await create(exhausted, 'nano')).session.model).toMatchObject({ id: 'free', provider: 'nano' });
+    expect((await create(exhausted, 'nano', { model: nanoModel('free') })).models.map((model) => model.id)).toEqual(['free']);
+
+    // The free plan keeps Fast and Smart out of its catalog.
+    const free = labHost('demo', { nano: 'free' });
+    expect(await catalogOf(free)).toEqual(['auto', 'free']);
+    expect(await rejection(create(free, 'nano', { model: nanoModel('fast') }))).toMatchObject({ code: 'RUNTIME_FAILED' });
+
+    // A live session cannot switch to a locked mode either.
+    const live = await create(free, 'nano');
+    expect(await rejection(command(free, { type: 'setModel', sessionId: live.session.id, model: nanoModel('smart') }))).toMatchObject({ code: 'RUNTIME_FAILED' });
+    expect(await command(free, { type: 'setModel', sessionId: live.session.id, model: nanoModel('free') })).toEqual({ type: 'accepted', sessionId: live.session.id });
+
+    // The catalog follows the account: signing in opens every mode, signing out closes them.
+    const account = labHost();
+    expect(await catalogOf(account)).toEqual([]);
+    await account.invoke('nano_account_sign_in_v1');
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(await catalogOf(account)).toEqual(['auto', 'free', 'fast', 'smart']);
+    expect((await create(account, 'nano', { model: nanoModel('smart') })).session.model).toMatchObject({ id: 'smart' });
+    await account.invoke('nano_account_sign_out_v1');
+    expect(await catalogOf(account)).toEqual([]);
+    expect(await rejection(create(account, 'nano'))).toMatchObject({ code: 'NANO_SIGN_IN_REQUIRED' });
+  });
+
+  it('refuses to reopen a Nano chat while the account cannot launch it', async () => {
+    const host = labHost('demo', { nano: 'signed-in' });
+    const created = await create(host, 'nano');
+    const id = created.session.id;
+    await command(host, { type: 'closeSession', sessionId: id });
+    await host.invoke('nano_account_sign_out_v1');
+    expect(await rejection(command(host, { type: 'openSession', sessionId: id }))).toMatchObject({ code: 'NANO_SIGN_IN_REQUIRED' });
+    // The saved history stays readable without a process.
+    expect((await snapshot(host, id)).session.status).toBe('closed');
+  });
+
   it('enforces trust, lifecycle and creation rules with host error codes', async () => {
     const host = labHost();
     const legacy = sessionId(host, 'Audit legacy auth module');

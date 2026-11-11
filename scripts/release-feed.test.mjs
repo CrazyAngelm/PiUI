@@ -17,11 +17,11 @@ function bundle(files) {
 }
 
 test('collects Linux packages with their update signatures', () => {
-  const root = bundle(['deb/PiUI_0.2.0_amd64.deb', 'appimage/PiUI_0.2.0_amd64.AppImage', 'appimage/PiUI_0.2.0_amd64.AppImage.sig', 'appimage/PiUI_0.1.1_amd64.AppImage']);
+  const root = bundle(['deb/Nano Desktop_0.2.0_amd64.deb', 'appimage/Nano Desktop_0.2.0_amd64.AppImage', 'appimage/Nano Desktop_0.2.0_amd64.AppImage.sig', 'appimage/Nano Desktop_0.1.1_amd64.AppImage']);
   try {
     assert.deepEqual(
       releaseFiles(root, 'linux', '0.2.0').map((file) => file.name),
-      ['PiUI_0.2.0_amd64.deb', 'PiUI_0.2.0_amd64.AppImage', 'PiUI_0.2.0_amd64.AppImage.sig'],
+      ['NanoDesktop_0.2.0_amd64.deb', 'NanoDesktop_0.2.0_amd64.AppImage', 'NanoDesktop_0.2.0_amd64.AppImage.sig'],
     );
     assert.throws(() => releaseFiles(root, 'linux', '0.3.0'), /Expected exactly one \.deb for 0\.3\.0/);
   } finally {
@@ -30,14 +30,14 @@ test('collects Linux packages with their update signatures', () => {
 });
 
 test('names the macOS update archive with its version and writes sorted checksums', () => {
-  const root = bundle(['dmg/PiUI_0.2.0_universal.dmg', 'macos/PiUI.app.tar.gz', 'macos/PiUI.app.tar.gz.sig']);
+  const root = bundle(['dmg/Nano Desktop_0.2.0_universal.dmg', 'macos/Nano Desktop.app.tar.gz', 'macos/Nano Desktop.app.tar.gz.sig']);
   try {
     const files = releaseFiles(root, 'macos', '0.2.0');
-    assert.deepEqual(files.map((file) => file.name), ['PiUI_0.2.0_universal.dmg', 'PiUI_0.2.0_universal.app.tar.gz', 'PiUI_0.2.0_universal.app.tar.gz.sig']);
-    assert.equal(files[1].source, join(root, 'macos', 'PiUI.app.tar.gz'));
+    assert.deepEqual(files.map((file) => file.name), ['NanoDesktop_0.2.0_universal.dmg', 'NanoDesktop_0.2.0_universal.app.tar.gz', 'NanoDesktop_0.2.0_universal.app.tar.gz.sig']);
+    assert.equal(files[1].source, join(root, 'macos', 'Nano Desktop.app.tar.gz'));
     writeFileSync(join(root, 'dmg', 'SHA256SUMS.txt'), 'ignored');
-    const digest = createHash('sha256').update('dmg/PiUI_0.2.0_universal.dmg').digest('hex');
-    assert.deepEqual(checksumLines(join(root, 'dmg')), [`${digest}  PiUI_0.2.0_universal.dmg`]);
+    const digest = createHash('sha256').update('dmg/Nano Desktop_0.2.0_universal.dmg').digest('hex');
+    assert.deepEqual(checksumLines(join(root, 'dmg')), [`${digest}  Nano Desktop_0.2.0_universal.dmg`]);
     assert.throws(() => releaseFiles(root, 'windows', '0.2.0'), /Unsupported platform/);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -75,23 +75,23 @@ test('in-app notes drop Markdown decoration but keep bullets', () => {
 });
 
 test('maps release files to updater platforms', () => {
-  assert.deepEqual(platformKeys('PiUI_0.2.0_x64-setup.exe'), ['windows-x86_64', 'windows-x86_64-nsis']);
-  assert.deepEqual(platformKeys('PiUI_0.2.0_amd64.AppImage'), ['linux-x86_64-appimage']);
-  assert.deepEqual(platformKeys('PiUI_0.2.0_amd64.deb'), ['linux-x86_64-deb']);
-  assert.equal(platformKeys('PiUI_0.2.0_universal.app.tar.gz').length, 4);
-  for (const name of ['PiUI_0.2.0_windows_x86_64.exe', 'PiUI_0.2.0_universal.dmg', 'SHA256SUMS.txt']) {
+  assert.deepEqual(platformKeys('NanoDesktop_0.2.0_x64-setup.exe'), ['windows-x86_64', 'windows-x86_64-nsis']);
+  assert.deepEqual(platformKeys('NanoDesktop_0.2.0_amd64.AppImage'), ['linux-x86_64-appimage']);
+  assert.deepEqual(platformKeys('NanoDesktop_0.2.0_amd64.deb'), ['linux-x86_64-deb']);
+  assert.equal(platformKeys('NanoDesktop_0.2.0_universal.app.tar.gz').length, 4);
+  for (const name of ['NanoDesktop_0.2.0_windows_x86_64.exe', 'NanoDesktop_0.2.0_universal.dmg', 'SHA256SUMS.txt']) {
     assert.deepEqual(platformKeys(name), [], name);
   }
 });
 
 const RELEASE_FILES = [
-  'PiUI_0.2.0_amd64.AppImage',
-  'PiUI_0.2.0_amd64.AppImage.sig',
-  'PiUI_0.2.0_amd64.deb',
-  'PiUI_0.2.0_universal.dmg',
-  'PiUI_0.2.0_windows_x86_64.exe',
-  'PiUI_0.2.0_x64-setup.exe',
-  'PiUI_0.2.0_x64-setup.exe.sig',
+  'NanoDesktop_0.2.0_amd64.AppImage',
+  'NanoDesktop_0.2.0_amd64.AppImage.sig',
+  'NanoDesktop_0.2.0_amd64.deb',
+  'NanoDesktop_0.2.0_universal.dmg',
+  'NanoDesktop_0.2.0_windows_x86_64.exe',
+  'NanoDesktop_0.2.0_x64-setup.exe',
+  'NanoDesktop_0.2.0_x64-setup.exe.sig',
   'SHA256SUMS.txt',
 ];
 
@@ -111,16 +111,16 @@ test('the update feed lists only signed artifacts with release URLs', () => {
     pub_date: '2026-09-27T12:00:00Z',
     platforms: {
       'linux-x86_64-appimage': {
-        signature: 'signature of PiUI_0.2.0_amd64.AppImage',
-        url: 'https://github.com/example/piui/releases/download/v0.2.0/PiUI_0.2.0_amd64.AppImage',
+        signature: 'signature of NanoDesktop_0.2.0_amd64.AppImage',
+        url: 'https://github.com/example/piui/releases/download/v0.2.0/NanoDesktop_0.2.0_amd64.AppImage',
       },
       'windows-x86_64': {
-        signature: 'signature of PiUI_0.2.0_x64-setup.exe',
-        url: 'https://github.com/example/piui/releases/download/v0.2.0/PiUI_0.2.0_x64-setup.exe',
+        signature: 'signature of NanoDesktop_0.2.0_x64-setup.exe',
+        url: 'https://github.com/example/piui/releases/download/v0.2.0/NanoDesktop_0.2.0_x64-setup.exe',
       },
       'windows-x86_64-nsis': {
-        signature: 'signature of PiUI_0.2.0_x64-setup.exe',
-        url: 'https://github.com/example/piui/releases/download/v0.2.0/PiUI_0.2.0_x64-setup.exe',
+        signature: 'signature of NanoDesktop_0.2.0_x64-setup.exe',
+        url: 'https://github.com/example/piui/releases/download/v0.2.0/NanoDesktop_0.2.0_x64-setup.exe',
       },
     },
   });
@@ -144,7 +144,7 @@ test('the update feed lists only signed artifacts with release URLs', () => {
 test('release notes describe every platform, signing and the update feed honestly', () => {
   const unsigned = releaseNotes({ files: RELEASE_FILES, tag: 'v0.2.0', version: '0.2.0', windowsSigning: 'unsigned', feed: false, changelog: '- Change.' });
   assert.match(unsigned, /Not code-signed yet/);
-  assert.match(unsigned, /`PiUI_0\.2\.0_x64-setup\.exe`<br>`PiUI_0\.2\.0_windows_x86_64\.exe`/);
+  assert.match(unsigned, /`NanoDesktop_0\.2\.0_x64-setup\.exe`<br>`NanoDesktop_0\.2\.0_windows_x86_64\.exe`/);
   assert.match(unsigned, /Experimental: ad-hoc signed and not notarized/);
   assert.match(unsigned, /This release has no update feed/);
   assert.match(unsigned, /Claude subscription login/);

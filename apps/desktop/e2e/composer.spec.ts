@@ -50,7 +50,7 @@ test.describe('attachments', () => {
     await composer.getByRole('button', { name: 'Attach images or files' }).click();
     const dialog = page.getByRole('dialog', { name: 'Reference this file by its path?' });
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText('PiUI does not upload, copy or attach them.');
+    await expect(dialog).toContainText('Nano Desktop does not upload, copy or attach them.');
     await expect(dialog.getByRole('list', { name: 'File references' })).toContainText('@docs/lab-spec.pdf');
     await dialog.getByRole('button', { name: 'Insert references' }).click();
     await expect(dialog).toBeHidden();
@@ -76,14 +76,14 @@ test.describe('attachments', () => {
     await lab.option(/^Prime Agent/).click();
     const attach = composer.getByRole('button', { name: 'Attach images or files' });
     await expect(attach).toHaveAttribute('aria-disabled', 'true');
-    await expect(attach).toHaveAccessibleDescription('Prime Agent accepts text only in PiUI.');
+    await expect(attach).toHaveAccessibleDescription('Prime Agent accepts text only in Nano Desktop.');
     // Still focusable, so the reason can be read; activating it opens nothing.
     await attach.focus();
     await page.keyboard.press('Enter');
     await expect(page.getByRole('dialog')).toHaveCount(0);
     // A dropped image is refused with the reason instead of being dropped silently.
     await deliverImage(page, 'drop', 'dropped.png');
-    await expect(composer.getByRole('alert')).toContainText('dropped.png was not attached. Prime Agent accepts text only in PiUI.');
+    await expect(composer.getByRole('alert')).toContainText('dropped.png was not attached. Prime Agent accepts text only in Nano Desktop.');
     await expect(composer.getByRole('list', { name: 'Attached images' })).toHaveCount(0);
   });
 
@@ -134,7 +134,7 @@ test.describe('mentions', () => {
     await expect(commands).toBeHidden();
     // PiUI's own commands keep their badge beside the native ones.
     await message.fill('/');
-    await expect(page.getByRole('listbox', { name: 'Available commands' }).getByRole('option', { name: /\/run/ })).toContainText('PiUI');
+    await expect(page.getByRole('listbox', { name: 'Available commands' }).getByRole('option', { name: /\/run/ })).toContainText('Nano');
   });
 
   test('$ inserts a Codex skill mention', async ({ lab, page }) => {

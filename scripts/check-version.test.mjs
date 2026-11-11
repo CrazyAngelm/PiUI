@@ -13,7 +13,7 @@ function fixture(version = '1.4.0') {
   const files = {
     'package.json': JSON.stringify({ name: 'piui', version }),
     'apps/desktop/package.json': JSON.stringify({ name: '@piui/desktop', version }),
-    'apps/desktop/src-tauri/tauri.conf.json': JSON.stringify({ productName: 'PiUI', version }),
+    'apps/desktop/src-tauri/tauri.conf.json': JSON.stringify({ productName: 'Nano Desktop', version }),
     'Cargo.toml': `[workspace]\nmembers = [\n  "apps/desktop/src-tauri",\n  "crates/core",\n]\n\n[workspace.package]\nversion = "${version}"\nedition = "2024"\n`,
     'apps/desktop/src-tauri/Cargo.toml': '[package]\nname = "piui-desktop"\nversion.workspace = true\n',
     'crates/core/Cargo.toml': '[package]\nname = "piui-core"\nversion.workspace = true\n\n[dependencies]\nserde = { version = "1.0.0" }\n',

@@ -26,6 +26,7 @@ mod extension_manager;
 pub mod extension_ui;
 pub mod fake;
 pub mod git;
+pub mod nano;
 mod native_version;
 pub mod plugin_backend;
 pub mod provenance;

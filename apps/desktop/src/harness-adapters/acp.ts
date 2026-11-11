@@ -17,7 +17,7 @@ export const acpConfiguration: HarnessConfiguration = {
   resourceKinds: [], skillIdentifier: 'name', nativeTools: [],
   filesystemSandbox: false, networkAccess: false,
   limitations: [
-    'The agent keeps its own permission, tool and MCP settings. PiUI answers its permission requests but cannot restrict its tools or files.',
+    'The agent keeps its own permission, tool and MCP settings. Nano Desktop answers its permission requests but cannot restrict its tools or files.',
     'Instructions are sent with the first message; the agent keeps its own system prompt.',
   ],
 };

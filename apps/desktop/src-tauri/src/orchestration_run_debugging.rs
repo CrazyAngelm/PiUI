@@ -51,7 +51,7 @@ pub enum RunDebuggingError {
     Conflict,
     #[error("safe mode keeps runs and pipelines read-only")]
     SafeMode,
-    #[error("PiUI is shutting down")]
+    #[error("Nano Desktop is shutting down")]
     ShuttingDown,
     #[error("the run is running or uncertain")]
     RunActive,
@@ -65,7 +65,7 @@ pub enum RunDebuggingError {
     TooLarge,
     #[error("the output's native history could not be read")]
     OutputUnavailable,
-    #[error("PiUI's data could not be saved")]
+    #[error("Nano Desktop's data could not be saved")]
     Io,
 }
 

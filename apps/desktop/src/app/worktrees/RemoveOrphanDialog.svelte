@@ -78,9 +78,9 @@
   <div class="body">
     {#if stage === 'confirm'}
       {#if worktree.state === 'missing'}
-        <p>{$t('The worktree folder is already gone. PiUI forgets it:')}</p>
+        <p>{$t('The worktree folder is already gone. Nano Desktop forgets it:')}</p>
       {:else}
-        <p>{$t('PiUI deletes the worktree folder:')}</p>
+        <p>{$t('Nano Desktop deletes the worktree folder:')}</p>
       {/if}
       <p class="mono">{worktree.path}</p>
       <p>{$t('The branch {0} stays with its commits. No chat works in this worktree any more.', [worktree.branch])}</p>

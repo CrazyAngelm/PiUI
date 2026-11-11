@@ -142,8 +142,8 @@ describe('run debugging markup', () => {
   it('says exactly what deleting a run removes and keeps', () => {
     const markup = render(RunDeletionSummary, { props: { sessions: 2, scripts: 1 } }).body;
     expect(markup).toMatch(/<section[^>]*aria-labelledby="run-delete-removed"/);
-    expect(markup).toContain('This run in PiUI’s run journal');
-    expect(markup).toContain('Script working copies PiUI may still hold for it');
+    expect(markup).toContain('This run in Nano Desktop’s run journal');
+    expect(markup).toContain('Script working copies Nano Desktop may still hold for it');
     expect(markup).toContain('2 sessions and their native history');
     expect(markup).toContain('Files in the project folder');
     expect(markup).toContain('This cannot be undone.');
@@ -202,7 +202,7 @@ describe('run debugging copy', () => {
         'Opened from a run as a new draft',
         'Saving creates a new pipeline; the saved one is not changed.',
         'Pinned data is not exported',
-        'System files never include pinned data; the pins stay in PiUI.',
+        'System files never include pinned data; the pins stay in Nano Desktop.',
         'This run’s pipeline cannot be opened in the editor.',
       ]),
     ].filter((text) => text.trim() !== '' && text !== 'stderr');

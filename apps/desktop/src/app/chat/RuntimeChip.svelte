@@ -88,6 +88,7 @@
 <ModelPicker
   bind:open
   models={options}
+  harness={session.harness}
   value={keyOf(model)}
   loading={open && busy && !current}
   {error}

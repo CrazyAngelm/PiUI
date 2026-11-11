@@ -212,7 +212,7 @@ export const boardRu: Readonly<Record<string, string>> = {
   'Assign #{0} to @{1} and add this message to the card as a comment. Nothing is sent to the agent.':
     'Назначить #{0} участнику @{1} и добавить это сообщение в карточку как комментарий. Агенту ничего не отправляется.',
   // Errors (fixed copy per host code)
-  'Safe mode is on: PiUI does not change the board.': 'Включён безопасный режим: PiUI не меняет доску.',
+  'Safe mode is on: Nano Desktop does not change the board.': 'Включён безопасный режим: Nano Desktop не меняет доску.',
   'Check the card details and try again.': 'Проверьте данные карточки и повторите попытку.',
   'This card is no longer on the board. Refresh and try again.': 'Этой карточки больше нет на доске. Обновите и повторите.',
   'The board of this project is turned off.': 'Доска этого проекта выключена.',
@@ -222,6 +222,6 @@ export const boardRu: Readonly<Record<string, string>> = {
   'The board is full. Delete or close cards, then try again.': 'Доска заполнена. Удалите или закройте карточки и повторите.',
   'Too many board changes at once. Try again in a moment.': 'Слишком много изменений доски сразу. Повторите чуть позже.',
   'This teammate cannot take cards yet. Open the Team screen to fix it.': 'Этот участник пока не может брать карточки. Исправьте это на экране «Команда».',
-  'PiUI could not save the board. Nothing was lost.': 'PiUI не удалось сохранить доску. Ничего не потеряно.',
+  'Nano Desktop could not save the board. Nothing was lost.': 'Nano Desktop не удалось сохранить доску. Ничего не потеряно.',
   'The board operation could not be completed.': 'Не удалось выполнить операцию с доской.',
 };

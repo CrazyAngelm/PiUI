@@ -647,7 +647,7 @@ pub fn parse_manifest(bytes: &[u8], piui_version: &str) -> Result<ValidatedManif
     if range.is_none() {
         problems.push(Problem::about(
             ProblemCode::EngineRange,
-            "The PiUI version range “{0}” is not valid.",
+            "The Nano Desktop version range “{0}” is not valid.",
             manifest.engines.piui.clone(),
         ));
     }
@@ -931,7 +931,7 @@ fn check_themes(manifest: &PluginManifest, problems: &mut Vec<Problem>) {
                 }
                 None => problems.push(Problem::about(
                     ProblemCode::ThemeColor,
-                    "Theme “{0}” has a color PiUI cannot use.",
+                    "Theme “{0}” has a color Nano Desktop cannot use.",
                     theme.id.clone(),
                 )),
             }

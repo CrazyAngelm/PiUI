@@ -12,7 +12,7 @@ import {
   type LabQueue, type LabSessionRecord, type LabState,
 } from './labState';
 import { chatTurn, compactionTurn, withImageMarkers, type ApprovalStep, type TurnContext, type TurnStep } from './turnScripts';
-import { isAcpHarness } from '../../../../../contracts/harness-identity-v2';
+import { isAcpHarness } from '../../../../../contracts/harness-identity-v3';
 
 /** `lost`: the runtime was disposed before a terminal outcome (the host records uncertainty). */
 export type TurnOutcome = 'succeeded' | 'failed' | 'interrupted' | 'lost';

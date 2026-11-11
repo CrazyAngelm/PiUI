@@ -65,7 +65,7 @@ describe('ApprovalCard MCP form requests', () => {
     expect(tool).not.toContain('Requested values');
     expect(tool).toMatch(/>\s*Accept\s*</);
     const unsupported = html({ ...form, decisions: ['deny', 'cancel'], form: { server: 'docs', fields: [], limitation: 'input-unsupported' } });
-    expect(unsupported).toContain('This request needs a value PiUI cannot show, so it can only be declined.');
+    expect(unsupported).toContain('This request needs a value Nano Desktop cannot show, so it can only be declined.');
     expect(unsupported).not.toMatch(/>\s*Accept\s*</);
   });
 

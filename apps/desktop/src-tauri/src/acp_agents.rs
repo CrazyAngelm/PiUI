@@ -175,7 +175,7 @@ impl AcpRefusal {
                 "The agent's program path does not exist."
             }
             Self::NotInstalled(AcpResolveError::UnsupportedLauncher) => {
-                "This launcher needs a shell, which PiUI never uses. Point the descriptor at the executable or the Node script."
+                "This launcher needs a shell, which Nano Desktop never uses. Point the descriptor at the executable or the Node script."
             }
             Self::NotInstalled(AcpResolveError::NodeUnavailable) => {
                 "Node.js is needed to start this agent but was not found."
@@ -184,11 +184,13 @@ impl AcpRefusal {
                 "Review and trust this agent's command line in Settings → Harnesses."
             }
             Self::UnsupportedVersion => {
-                "The installed version is older than the versions tested with PiUI."
+                "The installed version is older than the versions tested with Nano Desktop."
             }
-            Self::VersionUnknown => "The agent did not report a version PiUI can recognize.",
+            Self::VersionUnknown => {
+                "The agent did not report a version Nano Desktop can recognize."
+            }
             Self::VersionUnconfirmed => {
-                "PiUI has not verified this version. Confirm it in Settings → Harnesses to use it."
+                "Nano Desktop has not verified this version. Confirm it in Settings → Harnesses to use it."
             }
         }
     }

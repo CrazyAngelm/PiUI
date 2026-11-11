@@ -154,7 +154,7 @@
                     {#if round.preview}<p class="round__preview" title={round.preview}>{round.preview}</p>{/if}
                     {#if round.state === 'uncertain'}
                       <div class="uncertain">
-                        <p>{$t('PiUI could not tell how this round ended. Check the sidekick conversation, then reconcile it or abandon it.')}</p>
+                        <p>{$t('Nano Desktop could not tell how this round ended. Check the sidekick conversation, then reconcile it or abandon it.')}</p>
                         <div class="actions">
                           <Button
                             size="sm"

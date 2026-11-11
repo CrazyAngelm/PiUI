@@ -1430,3 +1430,154 @@ version bump: `HarnessSummary.versionStatus` is optional (`verified` or
 `newer`, workspace v15); the ACP `confirm_version` command stays as a no-op,
 and the `unverified-version` state and `VersionUnconfirmed` refusal stay in the
 types and are never produced.
+
+---
+
+## ADR-046 — PiUI becomes Nano Desktop; persisted identifiers stay
+
+**Status:** Accepted 2026-11-11.
+
+**Context:** the application becomes the desktop client of the NanoAgent
+product ("Nano"). Without a Nano account it must remain exactly today's
+workbench over native harnesses. Existing users have data under the identifier
+`dev.piui.desktop`, saved graphs in the `piui-system` format, installed plugins
+that read `--piui-*` tokens, native histories that contain
+`mcp__piui-workspace__*` tool names and environment variables named `PIUI_*`.
+
+**Decision:** rename what people see: product name, window title, binary name
+(`nano-desktop`), installer and portable file names, sidebar mark, About,
+tray, update prompts, release notes, README and the visible strings with their
+Russian catalog keys. Keep every persisted or external identifier unchanged:
+the bundle identifier `dev.piui.desktop` (so the application data and WebView
+profile stay where they are and no migration exists), `piui-foundation.sqlite`
+and its state keys, `piui-system` / `*.piui.json`, `piui-plugin.json`,
+`piui.manifest.json`, `engines.piui`, the `piui-plugin` scheme, `piui://`
+event names, `--piui-*` CSS tokens, `PIUI_*` environment variables, `.piui/`
+project folders, the MCP server name `piui-workspace`, bridge `clientInfo`,
+crate and npm package names. Version 0.3.0 is the first Nano Desktop build.
+
+**Rejected:** a new identifier with a copy migration (risk to user data for no
+user-visible gain; AGENTS.md priority 1); renaming formats (breaks import
+compatibility and plugins); keeping the PiUI name.
+
+**Consequences:** internal names keep the `piui` prefix and are documented as
+historical. A later identifier change needs its own ADR and a tested,
+non-destructive copy.
+
+---
+
+## ADR-047 — An optional Nano account, with a written privacy model
+
+**Status:** Accepted 2026-11-11. Supersedes ADR-017 for the Nano account only.
+
+**Context:** ADR-017 rejected accounts and cloud backends for 1.0 until a
+privacy model and a product decision existed. The product decision is now
+made: Nano Desktop signs into a Nano account to use Nano models, limits and
+media, and to open the user's server agent.
+
+**Decision:**
+- Signing in is optional and off by default. A signed-out application makes no
+  request to Nano servers. Every harness, Fusion, pipeline and plugin feature
+  that worked without an account still does.
+- Sign-in is OAuth 2.0 authorization code with PKCE (S256) in the system
+  browser and a `127.0.0.1` loopback redirect (RFC 8252). The application has
+  no password field and registers no URL scheme.
+- Only the Rust host holds Nano credentials. The refresh token lives in the OS
+  credential store (Windows Credential Manager); the access token lives in host
+  memory. Neither reaches the WebView, a bridge, a native runtime, a file, an
+  IPC payload or a log. If the OS store fails, the session is memory-only and
+  the UI says so; there is no plaintext fallback.
+- What leaves the machine while signed in: account, entitlement and usage
+  requests; prompts, tool output and attachments inside the model requests of
+  Nano sessions; audio the user dictates. Local Nano histories stay on disk
+  and are never uploaded or synced. No telemetry.
+- Safe mode makes no Nano network call; local sign-out still works.
+
+**Rejected:** a password form in the app; a custom URL scheme callback
+(claimable by other applications on Windows); vending the workspace gateway
+key; storing tokens in the WebView.
+
+**Consequences:** the server needs an authorization server, a device list and
+a desktop API (`docs/NANO_DESKTOP_API.md`). Until it exists the client shows
+`NANO_SERVER_UNSUPPORTED`; there is no fake success path outside the clearly
+synthetic development server.
+
+---
+
+## ADR-048 — The Nano harness: upstream Pi, a private agent directory and a host relay
+
+**Status:** Accepted 2026-11-11.
+
+**Context:** the owner wants Nano to run locally on the user's computer under
+Nano limits, as either a local copy of the server's Hermes runtime or a
+modernized Pi. Hermes on the server is upstream `hermes-agent` plus a
+version-coupled monkey-patch bundle, Linux containers and backend-only
+callbacks; a local Windows install needs Python, Git Bash and gigabytes. Pi is
+Node, already a supported harness, Pi JSONL is the history PiUI was built on,
+and its provider and extension hooks cover the Nano additions.
+
+**Decision:**
+- `nano` is a built-in harness identity (identity grammar v3, additive). Its
+  native runtime is unmodified upstream Pi (at least 1.4.0) driven by the
+  shared Pi bridge in a Nano lane; its history is Pi JSONL in the host session
+  directory (`WorkspaceHistoryFormat::Pi`). No second chat format.
+- The Nano lane starts Pi with a private agent directory owned by the host
+  (`PI_CODING_AGENT_DIR`), a host-written `models.json` with one provider
+  `nano`, `--no-approve` (project `.pi` resources never load), telemetry off,
+  version checks off and a cleared environment. The user's own `~/.pi`, its
+  credentials and extensions are never read or changed.
+- The provider points at a host relay on `127.0.0.1:<ephemeral>` that accepts
+  only `POST /s/<session>/v1/chat/completions` and `GET /s/<session>/v1/models`
+  with a per-session 256-bit key, rejects browser-originated requests, enforces
+  entitled modes and a concurrency cap, and forwards to the Nano gateway façade
+  with the host's access token. The relay builds no prompt and runs no agent
+  loop: it forwards bytes and enforces policy. The key is worthless off this
+  machine and dies with the session.
+- Models are the server's four modes (`auto`, `free`, `fast`, `smart`), shown
+  with their tier, cost hint and lock reason. Concrete provider models are a
+  server decision and are never named or promised.
+- A small Nano Pi extension asks before `bash`, `write` and `edit` in the
+  default `native` permission mode (approval cards); `read-only` passes Pi's
+  read tools only; `full-access` drops the prompts; `workspace-write` is
+  refused. The agent runs as the user: not a sandbox.
+- Fusion: Nano may be the sidekick (executor) of a Claude Code or Codex lead
+  under Pi's rule. Nano as lead and as a managed-run coordinator needs host
+  tools in the Pi lane and is refused until then.
+
+**Rejected:** local Hermes as the default (footprint, Windows packaging, patch
+coupling); `acp:nano` (no tool policy, no Fusion roles); a provider inside the
+user's own Pi (touches their configuration); a Pi fork; a server-minted agent
+token in the agent environment (exfiltratable and spendable elsewhere).
+
+**Consequences:** the first release runs on the user's installed Pi; bundling a
+pinned Node and Pi in the installer is a follow-up. The relay is the only new
+listener and is covered by tests for key, host, origin, path and streaming
+behaviour.
+
+---
+
+## ADR-049 — Remote mode is an isolated window that hosts the Nano web app
+
+**Status:** Accepted 2026-11-11.
+
+**Context:** in remote mode the user talks to their agent on Nano servers, as
+in the web app. The web client already offers chat with resumable server-owned
+turns, files, tasks, voice, avatars and settings, over a cookie-authenticated
+protocol that is not versioned for third parties.
+
+**Decision:** "Nano Cloud" opens a separate window (label `nano-cloud`) on the
+Nano web origin. It has no IPC (no capability lists it and the command guard
+accepts only the main window), and a navigation allowlist of Nano origins; any
+other link opens in the system browser. The user signs in there as on the
+website until the server offers a device-bound one-time launch code. Local and
+cloud sessions stay separate: switching never moves files, history or
+credentials.
+
+**Rejected:** a native rewrite of the web client now (about 45 page partials
+over 35 API partials, no public contract); an iframe in the main window (the
+server forbids framing, and it would share the app origin).
+
+**Consequences:** cloud parity follows server releases with no client work.
+Realtime voice and the talking portrait are available through the cloud
+window; a native chat-only client may follow once `/api/desktop/v1` offers a
+versioned session API.

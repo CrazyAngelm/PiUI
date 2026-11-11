@@ -1,4 +1,4 @@
-// Every place that declares the PiUI release version must agree, and the
+// Every place that declares the Nano Desktop release version must agree, and the
 // changelog must describe it. Protocol and contract versions are separate and
 // never checked here. `--tag vX.Y.Z` also requires a release tag to match.
 import { existsSync, readFileSync } from 'node:fs';
@@ -53,7 +53,7 @@ function lockVersions(root) {
   return versions;
 }
 
-/** Client versions PiUI announces to native harnesses in their handshakes. */
+/** Client versions Nano Desktop announces to native harnesses in their handshakes. */
 const BRIDGE_CLIENT_VERSIONS = [
   ['crates/piui-runtime/bridge/codex.mjs', /clientInfo:\s*\{\s*name:\s*"piui",\s*title:\s*"PiUI",\s*version:\s*"([^"]+)"/],
   ['crates/piui-runtime/bridge/hermes.mjs', /clientInfo:\s*\{\s*name:\s*'piui',\s*version:\s*'([^']+)'/],
@@ -117,12 +117,12 @@ function main(argv) {
   if (tagIndex !== -1 && !tag) throw new Error('--tag needs a value such as v0.2.0.');
   const { version, problems } = versionProblems(root, { tag });
   if (problems.length > 0) {
-    console.error('PiUI version check failed:');
+    console.error('Nano Desktop version check failed:');
     for (const problem of problems) console.error(`- ${problem}`);
     process.exitCode = 1;
     return;
   }
-  console.log(`PiUI version check passed: ${version}${tag ? ` (tag ${tag})` : ''}.`);
+  console.log(`Nano Desktop version check passed: ${version}${tag ? ` (tag ${tag})` : ''}.`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) main(process.argv.slice(2));

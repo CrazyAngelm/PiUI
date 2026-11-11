@@ -124,7 +124,7 @@
 
   {#if form}
     {#if form.limitation === 'input-unsupported'}
-      <p class="approval__note">{$t('This request needs a value PiUI cannot show, so it can only be declined.')}</p>
+      <p class="approval__note">{$t('This request needs a value Nano Desktop cannot show, so it can only be declined.')}</p>
     {:else if form.limitation === 'optional-fields-omitted'}
       <p class="approval__note">{$t('Some optional values cannot be entered here and are left empty.')}</p>
     {/if}
@@ -214,6 +214,8 @@
     font-size: var(--piui-text-lg);
     font-weight: var(--piui-weight-semibold);
     word-break: break-word;
+    /* Commands are approved as written: keep their line breaks and spacing. */
+    white-space: pre-wrap;
   }
   .approval__desc {
     margin: 0;

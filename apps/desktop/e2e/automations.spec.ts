@@ -109,18 +109,18 @@ test.describe('automations', () => {
     await expect(dialog.getByRole('status').filter({ hasText: 'This automation starts the pipeline it waits for' })).toBeVisible();
     await source.selectOption({ label: 'Code review' });
     await expect(dialog.getByRole('status').filter({ hasText: 'This automation starts the pipeline it waits for' })).toHaveCount(0);
-    await expect(dialog.getByText('When Code review succeeds, PiUI starts Release check.')).toBeVisible();
+    await expect(dialog.getByText('When Code review succeeds, Nano Desktop starts Release check.')).toBeVisible();
     await expect(dialog.getByText(/^At most one run every 30 s\./)).toBeVisible();
 
     // No result chosen: no preview, and saving is refused.
     const outcomes = dialog.getByRole('group', { name: 'Start when that pipeline' });
     await outcomes.getByRole('checkbox', { name: 'Succeeds' }).click();
-    await expect(dialog.getByText(/PiUI starts Release check/)).toHaveCount(0);
+    await expect(dialog.getByText(/Nano Desktop starts Release check/)).toHaveCount(0);
     await dialog.getByRole('button', { name: 'Save, keep paused' }).click();
     await expect(dialog.getByRole('alert')).toHaveText('Choose at least one result.');
     await outcomes.getByRole('checkbox', { name: 'Succeeds' }).click();
     await outcomes.getByRole('checkbox', { name: 'Fails' }).click();
-    await expect(dialog.getByText('When Code review succeeds or fails, PiUI starts Release check.')).toBeVisible();
+    await expect(dialog.getByText('When Code review succeeds or fails, Nano Desktop starts Release check.')).toBeVisible();
 
     // Files: a pattern and a quiet period in range are required.
     await dialog.getByRole('group', { name: 'Event' }).getByRole('radio', { name: 'When files change' }).click();
@@ -132,7 +132,7 @@ test.describe('automations', () => {
     await dialog.getByRole('button', { name: 'Save, keep paused' }).click();
     await expect(dialog.getByRole('alert')).toHaveText('Wait between 2 and 3600 seconds.');
     await quiet.fill('30');
-    await expect(dialog.getByText('PiUI starts Release check 30 s after matching files stop changing.')).toBeVisible();
+    await expect(dialog.getByText('Nano Desktop starts Release check 30 s after matching files stop changing.')).toBeVisible();
     await dialog.getByRole('button', { name: 'Save and turn on' }).click();
     await expect(dialog).toBeHidden();
 

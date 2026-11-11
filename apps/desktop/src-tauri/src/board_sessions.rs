@@ -132,7 +132,7 @@ pub(crate) fn agent_identity(
 
 fn error_value(error: BoardError) -> Value {
     serde_json::to_value(BoardToolResult::error(error)).unwrap_or_else(|_| {
-        serde_json::json!({"ok": false, "code": "IO_ERROR", "message": "PiUI could not answer."})
+        serde_json::json!({"ok": false, "code": "IO_ERROR", "message": "Nano Desktop could not answer."})
     })
 }
 

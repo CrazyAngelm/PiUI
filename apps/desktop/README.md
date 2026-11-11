@@ -1,6 +1,6 @@
-# PiUI desktop
+# Nano Desktop
 
-This package is the Svelte/Tauri composition layer for PiUI's foundation plus a temporary local live-RPC preview.
+This package is the Svelte/Tauri composition layer for Nano Desktop's foundation plus a temporary local live-RPC preview.
 
 ## What works in this slice
 
@@ -13,7 +13,7 @@ This package is the Svelte/Tauri composition layer for PiUI's foundation plus a 
 ## Intentionally unavailable
 
 - headless/provider authentication UI (Pi auth remains external);
-- safe concurrent CLI/PiUI writer coordination, branch navigation, managed runtime packaging, and release-ready process containment;
+- safe concurrent CLI/Nano Desktop writer coordination, branch navigation, managed runtime packaging, and release-ready process containment;
 - unrestricted filesystem, shell, process, or credential API in the WebView.
 
 The local live-RPC path is a developer preview, not a release/containment claim. The production gate and missing evidence are recorded in [`../../spikes/PHASE0_GATE.md`](../../spikes/PHASE0_GATE.md) and [`../../docs/13_FOUNDATION_STATUS.md`](../../docs/13_FOUNDATION_STATUS.md).
@@ -50,7 +50,7 @@ Add `&updates=` to see Settings → About for signed updates (nothing is downloa
   and "Download and restart" simulates the download;
 - `failing`: every check fails as if offline;
 - `bad-signature`: the download fails the signature check, so nothing installs;
-- `install-fails`: the Windows installer does not start after the agents stopped, so PiUI offers a restart.
+- `install-fails`: the Windows installer does not start after the agents stopped, so Nano Desktop offers a restart.
 
 The classic `client.ts` routes (bootstrap, preferences, projects, trust) still use `mockClient.ts` in the browser.
 

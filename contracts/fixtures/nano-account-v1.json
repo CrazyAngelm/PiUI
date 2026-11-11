@@ -1,0 +1,98 @@
+{
+  "$comment": "Golden fixtures of nano-account-v1.ts (NanoAccountStatusV1). Every value is synthetic.",
+  "signedOut": {
+    "protocol": 1,
+    "revision": 1,
+    "state": "signed-out",
+    "server": { "origin": "https://nanoagents.ru", "development": false },
+    "user": null,
+    "device": null,
+    "workspaces": [],
+    "selectedWorkspaceId": null,
+    "entitlements": null,
+    "usage": null,
+    "capabilities": null,
+    "credentialStore": null,
+    "busy": false,
+    "lastError": null
+  },
+  "signingIn": {
+    "protocol": 1,
+    "revision": 2,
+    "state": "signing-in",
+    "server": { "origin": "https://nanoagents.ru", "development": false },
+    "user": null,
+    "device": null,
+    "workspaces": [],
+    "selectedWorkspaceId": null,
+    "entitlements": null,
+    "usage": null,
+    "capabilities": { "gateway": true, "cloudLaunch": false, "deviceCode": false, "dictation": true, "voice": false, "imageGeneration": false, "avatars": true },
+    "credentialStore": null,
+    "busy": true,
+    "lastError": null
+  },
+  "signedIn": {
+    "protocol": 1,
+    "revision": 5,
+    "state": "signed-in",
+    "server": { "origin": "https://nanoagents.ru", "development": false },
+    "user": { "displayName": "Synthetic Person", "email": "person@example.com" },
+    "device": { "id": "dev_synthetic01", "name": "Nano Desktop on Windows" },
+    "workspaces": [
+      { "id": "ws_synthetic01", "name": "Personal", "role": "owner" },
+      { "id": "ws_synthetic02", "name": "Team", "role": "member" }
+    ],
+    "selectedWorkspaceId": "ws_synthetic01",
+    "entitlements": {
+      "workspaceId": "ws_synthetic01",
+      "plan": { "id": "pro", "name": "Pro", "kind": "paid", "renewsAt": "2026-12-01T00:00:00Z" },
+      "credits": { "balance": 18250, "included": 25000, "periodEndsAt": "2026-12-01T00:00:00Z" },
+      "modes": [
+        { "id": "auto", "name": "Auto", "tier": "mixed", "available": true, "lockedReason": null, "costHint": "Picks a model per request", "contextWindow": 200000, "maxOutputTokens": 32000, "input": ["text", "image"], "reasoning": true },
+        { "id": "free", "name": "Free", "tier": "free", "available": true, "lockedReason": null, "costHint": "Free", "contextWindow": 131072, "maxOutputTokens": 8192, "input": ["text"], "reasoning": false },
+        { "id": "fast", "name": "Fast", "tier": "cheap", "available": true, "lockedReason": null, "costHint": "About 1 credit per 1K tokens", "contextWindow": 200000, "maxOutputTokens": 16384, "input": ["text", "image"], "reasoning": false },
+        { "id": "smart", "name": "Smart", "tier": "paid", "available": false, "lockedReason": "credits", "costHint": "About 8 credits per 1K tokens", "contextWindow": 400000, "maxOutputTokens": 64000, "input": ["text", "image"], "reasoning": true }
+      ],
+      "features": { "localAgent": true, "cloud": true, "dictation": true, "imageGeneration": false, "voice": true, "avatars": true },
+      "limits": { "maxConcurrentRequests": 4, "maxRequestBytes": 8388608, "dictationMaxBytes": 20971520 }
+    },
+    "usage": null,
+    "capabilities": { "gateway": true, "cloudLaunch": false, "deviceCode": false, "dictation": true, "voice": false, "imageGeneration": false, "avatars": true },
+    "credentialStore": "os",
+    "busy": false,
+    "lastError": null
+  },
+  "expired": {
+    "protocol": 1,
+    "revision": 9,
+    "state": "expired",
+    "server": { "origin": "https://nanoagents.ru", "development": false },
+    "user": { "displayName": "Synthetic Person", "email": "person@example.com" },
+    "device": null,
+    "workspaces": [],
+    "selectedWorkspaceId": null,
+    "entitlements": null,
+    "usage": null,
+    "capabilities": null,
+    "credentialStore": null,
+    "busy": false,
+    "lastError": "device-revoked"
+  },
+  "unsupported": {
+    "protocol": 1,
+    "revision": 3,
+    "state": "unsupported",
+    "server": { "origin": "https://nanoagents.ru", "development": false },
+    "user": null,
+    "device": null,
+    "workspaces": [],
+    "selectedWorkspaceId": null,
+    "entitlements": null,
+    "usage": null,
+    "capabilities": null,
+    "credentialStore": null,
+    "busy": false,
+    "lastError": "unsupported-server"
+  }
+}

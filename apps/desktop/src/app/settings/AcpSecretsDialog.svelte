@@ -30,7 +30,7 @@
 
 <Dialog bind:open title={$t('Secret variables for {0}', [agent.descriptor.displayName])} size="md" closeLabel={$t('Close')}>
   <div class="body">
-    <p>{$t('When the agent starts, PiUI passes the value of each selected variable from your environment. PiUI never reads, shows or stores the values. Leave a variable unselected to keep it from the agent.')}</p>
+    <p>{$t('When the agent starts, Nano Desktop passes the value of each selected variable from your environment. Nano Desktop never reads, shows or stores the values. Leave a variable unselected to keep it from the agent.')}</p>
     <AcpSecretChoices names={agent.secretEnvironment} bind:allowed />
     {#if error}<p class="error" role="alert">{$t(error)}</p>{/if}
   </div>

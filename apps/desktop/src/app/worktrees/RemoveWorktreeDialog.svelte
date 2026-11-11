@@ -87,7 +87,7 @@
 >
   <div class="body">
     {#if stage === 'confirm'}
-      <p>{$t('PiUI deletes the worktree folder:')}</p>
+      <p>{$t('Nano Desktop deletes the worktree folder:')}</p>
       <p class="mono">{path}</p>
       <p>
         {$t('The branch {0} stays with its commits. Chats that work in this worktree stop; their history stays readable.', [branch])}

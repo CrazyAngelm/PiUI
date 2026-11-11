@@ -76,7 +76,7 @@
 </script>
 
 <h2>{$t('Background')}</h2>
-<p class="lead">{$t('Automations keep running while PiUI is in the tray. Scheduled runs can use your paid plans.')}</p>
+<p class="lead">{$t('Automations keep running while Nano Desktop is in the tray. Scheduled runs can use your paid plans.')}</p>
 {#if !settings && !error}
   <Skeleton lines={3} />
 {:else}
@@ -85,7 +85,7 @@
     <div class="row">
       <div>
         <strong>{$t('Keep running in the tray when the window is closed')}</strong>
-        <small>{$t('Closing the window hides PiUI in the tray. Quit from the tray menu stops PiUI and every agent it started.')}</small>
+        <small>{$t('Closing the window hides Nano Desktop in the tray. Quit from the tray menu stops Nano Desktop and every agent it started.')}</small>
       </div>
       <Switch
         label={$t('Keep running in the tray when the window is closed')}
@@ -97,15 +97,15 @@
     </div>
     <div class="row">
       <div>
-        <strong>{windows ? $t('Start PiUI when I sign in to Windows') : $t('Start PiUI when I sign in')}</strong>
+        <strong>{windows ? $t('Start Nano Desktop when I sign in to Windows') : $t('Start Nano Desktop when I sign in')}</strong>
         <small>
           {settings?.launchAtLoginAvailable === false
             ? $t('Not available in this build.')
-            : $t('PiUI starts in the tray when the option above is on; otherwise it opens its window.')}
+            : $t('Nano Desktop starts in the tray when the option above is on; otherwise it opens its window.')}
         </small>
       </div>
       <Switch
-        label={windows ? $t('Start PiUI when I sign in to Windows') : $t('Start PiUI when I sign in')}
+        label={windows ? $t('Start Nano Desktop when I sign in to Windows') : $t('Start Nano Desktop when I sign in')}
         hideLabel
         checked={settings?.launchAtLogin ?? false}
         disabled={readOnly || busy !== '' || !(settings?.launchAtLoginAvailable ?? false)}

@@ -137,7 +137,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PiUI-${{ github.ref_name }}-windows-x86_64
+          name: NanoDesktop-${{ github.ref_name }}-windows-x86_64
           path: artifacts/*
           if-no-files-found: error
 
@@ -175,7 +175,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PiUI-${{ github.ref_name }}-linux-x86_64
+          name: NanoDesktop-${{ github.ref_name }}-linux-x86_64
           path: artifacts/*
           if-no-files-found: error
 
@@ -211,7 +211,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PiUI-${{ github.ref_name }}-macos-universal
+          name: NanoDesktop-${{ github.ref_name }}-macos-universal
           path: artifacts/*
           if-no-files-found: error
 
@@ -234,7 +234,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: PiUI-${{ github.ref_name }}-*
+          pattern: NanoDesktop-${{ github.ref_name }}-*
           path: downloads
 
       - name: Verify each platform's checksums and collect the release files
@@ -280,7 +280,7 @@ jobs:
               --verify-tag \
               --prerelease \
               --notes-file "$RUNNER_TEMP/release-notes.md" \
-              --title "PiUI $GITHUB_REF_NAME — developer preview"
+              --title "Nano Desktop $GITHUB_REF_NAME — developer preview"
           fi
 
       - name: Point the update channel at this release
@@ -296,6 +296,6 @@ jobs:
             gh release create "$UPDATER_CHANNEL" release/latest.json \
               --prerelease \
               --target "$GITHUB_SHA" \
-              --title "PiUI update feed" \
-              --notes "latest.json for installed PiUI builds. Download PiUI from the versioned releases, not from here."
+              --title "Nano Desktop update feed" \
+              --notes "latest.json for installed Nano Desktop builds. Download Nano Desktop from the versioned releases, not from here."
           fi

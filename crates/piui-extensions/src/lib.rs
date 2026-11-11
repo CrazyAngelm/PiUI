@@ -770,7 +770,7 @@ const fn diagnostic(code: DiagnosticCode) -> ManifestDiagnostic {
             DiagnosticCode::ManifestTooLarge => "The manifest exceeds the safe size limit.",
             DiagnosticCode::ManifestJsonInvalid => "The manifest is not valid JSON.",
             DiagnosticCode::SchemaUnavailable => "The manifest schema is unavailable.",
-            DiagnosticCode::SchemaInvalid => "The manifest does not match the PiUI schema.",
+            DiagnosticCode::SchemaInvalid => "The manifest does not match the Nano Desktop schema.",
             DiagnosticCode::PackageRootUnavailable => "The package root is unavailable.",
             DiagnosticCode::ContributionIdNamespace => {
                 "A contribution ID is outside the extension namespace."

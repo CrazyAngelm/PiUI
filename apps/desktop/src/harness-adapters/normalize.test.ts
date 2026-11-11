@@ -66,6 +66,6 @@ describe('harnessConfiguration', () => {
     expect(harnessConfiguration('acp:other-agent')).toBe(acpConfiguration);
     expect(acpConfiguration).toMatchObject({ permissionModes: ['native'], speed: false, basePrompt: false, networkAccess: false, filesystemSandbox: false, nativeTools: [], resourceKinds: [] });
     expect(acpConfiguration.oneShot).toBeUndefined();
-    expect(profileHarnesses([{ kind: 'codex' }, { kind: 'acp:gemini-cli' }])).toEqual(['pi', 'prime-agent', 'codex', 'hermes', 'claude-code', 'acp:gemini-cli']);
+    expect(profileHarnesses([{ kind: 'codex' }, { kind: 'acp:gemini-cli' }])).toEqual(['pi', 'prime-agent', 'codex', 'hermes', 'claude-code', 'nano', 'acp:gemini-cli']);
   });
 });

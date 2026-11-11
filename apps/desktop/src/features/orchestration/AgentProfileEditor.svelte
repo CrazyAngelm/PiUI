@@ -115,6 +115,7 @@
   function harnessLabel(harness: Harness): string {
     switch (harness) {
       case 'pi': return 'Pi';
+      case 'nano': return 'Nano';
       case 'prime-agent': return 'Prime Agent';
       case 'codex': return 'Codex'; case 'hermes': return 'Hermes';
       case 'claude-code': return 'Claude Code';
@@ -160,6 +161,7 @@
         <option value="codex">{$t('Codex')}</option>
         <option value="hermes">Hermes</option>
         <option value="claude-code">Claude Code</option>
+        <option value="nano">Nano</option>
       </select>
     {:else}
       <p class="static-field"><strong>{$t('Harness')}</strong><span>{harnessLabel(draft.harness)}</span></p>

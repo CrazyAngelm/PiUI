@@ -23,14 +23,14 @@ export {
  * addresses that resolve to one saved launch command each.
  */
 export const TEAMMATES_ERROR_COPY: Readonly<Record<TeammatesErrorCodeV1 | 'unknown', string>> = {
-  SAFE_MODE: 'Safe mode is on: PiUI does not change teammates.',
+  SAFE_MODE: 'Safe mode is on: Nano Desktop does not change teammates.',
   INVALID_ARGUMENT: 'Check the teammate details and try again.',
   NOT_FOUND: 'This teammate or its pipeline is no longer available.',
   HANDLE_TAKEN: 'Another teammate of this project already uses this handle.',
   REVISION_CONFLICT: 'The teammate changed meanwhile. Reopen it and try again.',
   UNSUPPORTED: 'This harness cannot run a teammate with these settings.',
   LIMIT: 'This project has the most teammates allowed.',
-  IO_ERROR: 'PiUI could not save the teammate. Nothing was lost.',
+  IO_ERROR: 'Nano Desktop could not save the teammate. Nothing was lost.',
   unknown: 'The teammate operation could not be completed.',
 };
 

@@ -204,7 +204,7 @@ describe('UI Lab background mode', () => {
     expect((await call<BackgroundSettingsV1>(host, 'background_update_v1', { keepInTray: true })).keepInTray).toBe(true);
     expect((await call<BackgroundSettingsV1>(host, 'background_update_v1', { launchAtLogin: true })).launchAtLogin).toBe(true);
     expect(await rejection(call(host, 'background_update_v1', {}))).toMatchObject({ code: 'invalid' });
-    const labels = { open: 'Открыть PiUI', pause: 'Приостановить', resume: 'Возобновить', quit: 'Выйти', tooltip: 'PiUI', pausedTooltip: 'PiUI (пауза)' };
+    const labels = { open: 'Открыть Nano Desktop', pause: 'Приостановить', resume: 'Возобновить', quit: 'Выйти', tooltip: 'Nano Desktop', pausedTooltip: 'Nano Desktop (пауза)' };
     expect(await call(host, 'background_tray_labels_v1', labels)).toBeNull();
     expect(await rejection(call(host, 'background_tray_labels_v1', { ...labels, quit: ' ' }))).toMatchObject({ code: 'invalid' });
 

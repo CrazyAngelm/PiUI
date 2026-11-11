@@ -340,14 +340,14 @@ fn workspace_name(host: &HostState, workspace_id: &str) -> Result<String, Worksp
     let index = host
         .index
         .lock()
-        .map_err(|_| tool_error("IO_ERROR", "PiUI could not read its project list."))?;
+        .map_err(|_| tool_error("IO_ERROR", "Nano Desktop could not read its project list."))?;
     index
         .list_projects()
-        .map_err(|_| tool_error("IO_ERROR", "PiUI could not read its project list."))?
+        .map_err(|_| tool_error("IO_ERROR", "Nano Desktop could not read its project list."))?
         .into_iter()
         .find(|project| project.id == workspace_id)
         .map(|project| project.name)
-        .ok_or_else(|| tool_error("NOT_FOUND", "This project is no longer in PiUI."))
+        .ok_or_else(|| tool_error("NOT_FOUND", "This project is no longer in Nano Desktop."))
 }
 
 /// A trusted project folder that can hold worktrees (not personal chats).
@@ -458,7 +458,7 @@ async fn plan_worktree(
                 .ok_or_else(|| {
                     tool_error(
                         "GIT_FAILED",
-                        "PiUI could not choose a free worktree folder.",
+                        "Nano Desktop could not choose a free worktree folder.",
                     )
                 })?
         }
@@ -519,8 +519,12 @@ async fn create_worktree(
         return Err(stale_error());
     }
     if let Some(parent) = planned.path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|_| tool_error("IO_ERROR", "PiUI could not create the worktree folder."))?;
+        std::fs::create_dir_all(parent).map_err(|_| {
+            tool_error(
+                "IO_ERROR",
+                "Nano Desktop could not create the worktree folder.",
+            )
+        })?;
     }
     git::worktree_add(
         &planned.git,
@@ -858,7 +862,7 @@ async fn remove_orphan_worktree(
     ) else {
         return Err(tool_error(
             "NOT_FOUND",
-            "This worktree is no longer managed by PiUI.",
+            "This worktree is no longer managed by Nano Desktop.",
         ));
     };
     let binding = binding.clone();

@@ -133,7 +133,7 @@
 {#if registry.loading && !registry.registry}
   <Skeleton lines={4} />
 {:else if plugins.length === 0}
-  <EmptyState title={$t('No plugins yet')} description={$t('Install a plugin from a folder or a .zip package, or load a folder you are developing. The PiUI repository has examples in examples/plugins.')} />
+  <EmptyState title={$t('No plugins yet')} description={$t('Install a plugin from a folder or a .zip package, or load a folder you are developing. The Nano Desktop repository has examples in examples/plugins.')} />
 {:else}
   <div class="list">
     {#each plugins as plugin (plugin.id)}
@@ -175,8 +175,8 @@
   bind:open={removeOpen}
   title={removing ? $t('Remove {0}?', [removing.name]) : ''}
   description={removing?.source === 'development'
-    ? $t('PiUI forgets this plugin and its settings. Your folder is not touched.')
-    : $t('PiUI stops the plugin, deletes its installed copy and its settings.')}
+    ? $t('Nano Desktop forgets this plugin and its settings. Your folder is not touched.')
+    : $t('Nano Desktop stops the plugin, deletes its installed copy and its settings.')}
   size="sm"
   closeLabel={$t('Close')}
 >

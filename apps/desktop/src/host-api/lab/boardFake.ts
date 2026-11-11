@@ -47,7 +47,7 @@ function failure(code: string, message: string): HostErrorPayload {
   return { code, message, recoverable: true };
 }
 
-const SAFE_MODE = failure('SAFE_MODE', 'Safe mode is on: PiUI does not change the board.');
+const SAFE_MODE = failure('SAFE_MODE', 'Safe mode is on: Nano Desktop does not change the board.');
 const INVALID = failure('INVALID_ARGUMENT', 'Check the card details and try again.');
 const NOT_FOUND = failure('NOT_FOUND', 'That card is no longer on the board.');
 const DISABLED = failure('DISABLED', 'The board of this project is turned off.');

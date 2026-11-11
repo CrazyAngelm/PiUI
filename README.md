@@ -1,4 +1,4 @@
-# PiUI
+# Nano Desktop
 
 <p align="center">
   A local desktop workbench for native agent harnesses — Codex, Claude Code, Pi, Hermes and Prime Agent — and for designing, running and scheduling multi-agent pipelines.
@@ -16,16 +16,18 @@
 </p>
 
 > [!IMPORTANT]
-> PiUI 0.2.0 is a developer preview. Windows is the primary, verified platform. Linux packages build, but native agent lifecycle containment is only verified on Windows; macOS is experimental. A release is code-signed and can update itself only when its notes say so; otherwise it is unsigned and never checks for updates. PiUI is not an OS sandbox. Read the [current limitations](#current-limitations) before using it with important work.
+> Nano Desktop 0.3.0 is a developer preview. Windows is the primary, verified platform. Linux packages build, but native agent lifecycle containment is only verified on Windows; macOS is experimental. A release is code-signed and can update itself only when its notes say so; otherwise it is unsigned and never checks for updates. Nano Desktop is not an OS sandbox. Read the [current limitations](#current-limitations) before using it with important work.
 
-## What PiUI does
+Nano Desktop works with any native harness and needs no account. Signing in to a Nano account is optional: it adds Nano models and cloud mode.
 
-- **Chat with the agent tools you already use.** One chat surface drives Codex, Claude Code, Pi, Hermes and Prime Agent with a harness → model → reasoning picker fed by each harness's own catalog, streaming activity, diffs, inline approvals, a message queue with steer and follow-up, slash commands and in-chat search. Each harness keeps its own sign-in, models, tools, approvals and history; PiUI never adds its own agent loop or provider client and never reads or stores credentials.
-- **Claude Code on your subscription only.** PiUI starts your installed `claude`, removes API-key and cloud-provider variables, refuses any sign-in that is not your Claude subscription, keeps fast mode off and stops a session that reports paid extra usage.
+## What Nano Desktop does
+
+- **Chat with the agent tools you already use.** One chat surface drives Codex, Claude Code, Pi, Hermes and Prime Agent with a harness → model → reasoning picker fed by each harness's own catalog, streaming activity, diffs, inline approvals, a message queue with steer and follow-up, slash commands and in-chat search. Each harness keeps its own sign-in, models, tools, approvals and history; Nano Desktop never adds its own agent loop or provider client and never reads or stores credentials.
+- **Claude Code on your subscription only.** Nano Desktop starts your installed `claude`, removes API-key and cloud-provider variables, refuses any sign-in that is not your Claude subscription, keeps fast mode off and stops a session that reports paid extra usage.
 - **Pipelines.** A visual editor for multi-agent systems: agent, router, model-call and script steps; result, route, message, observation and delegation connections; templates, run inputs, review-loop limits, checks and a read-only assistant that proposes changes. See [portable system files](docs/SYSTEM_FILES.md).
 - **Runs.** A run canvas with the state of every step, live activity, each step's result, conversation, inputs, attempts and token usage, and operator actions: approve, reject, run again from a step, cancel, retry.
-- **Automations.** One-time, interval and day-of-week schedules that start a saved pipeline while PiUI is open. Each schedule is turned on separately. See [scheduled runs](docs/SCHEDULED_RUNS.md).
-- **Local-first.** No account, cloud backend or telemetry. Harnesses talk to their own providers. Project trust lets agents work on a folder within each chat's permissions and is never presented as a sandbox. Start with `--safe-mode` to open PiUI without running extensions or agents.
+- **Automations.** One-time, interval and day-of-week schedules that start a saved pipeline while Nano Desktop is open. Each schedule is turned on separately. See [scheduled runs](docs/SCHEDULED_RUNS.md).
+- **Local-first.** No account is required, and there is no telemetry. Without a Nano account nothing leaves your computer except what each harness sends to its own provider. Harnesses talk to their own providers. Project trust lets agents work on a folder within each chat's permissions and is never presented as a sandbox. Start with `--safe-mode` to open Nano Desktop without running extensions or agents.
 
 ## Supported harnesses
 
@@ -38,54 +40,54 @@
 | Prime Agent | 0.9.2 (tested to 0.9.3) | |
 | ACP agents | any release | Built in: Gemini CLI, OpenCode, Qwen Code, GitHub Copilot CLI, Goose, Kimi Code and Cursor. Add others in Settings → Harnesses. |
 
-Only the minimum version is enforced. A newer release starts and is marked "Newer than tested": PiUI checks the agent's identity, protocol handshake and the settings it applies when it starts, and stops with a clear error if the new version is incompatible. Built-in ACP agents run on your own installation and sign-in; PiUI never installs them. An ACP agent you add yourself runs only after you trust its exact command line.
+Only the minimum version is enforced. A newer release starts and is marked "Newer than tested": Nano Desktop checks the agent's identity, protocol handshake and the settings it applies when it starts, and stops with a clear error if the new version is incompatible. Built-in ACP agents run on your own installation and sign-in; Nano Desktop never installs them. An ACP agent you add yourself runs only after you trust its exact command line.
 
-Settings → Harnesses shows what PiUI found on this computer, the versions and what still needs setup.
+Settings → Harnesses shows what Nano Desktop found on this computer, the versions and what still needs setup.
 
 ## Install
 
 ### Windows 10/11 (recommended)
 
 1. Install at least one harness and sign in with its own tool.
-2. Open the [PiUI releases](https://github.com/CrazyAngelm/PiUI/releases) and choose **v0.2.0**.
-3. Download `PiUI_0.2.0_x64-setup.exe` and `SHA256SUMS.txt`.
-4. Verify the checksum, run the installer (per-user, no administrator rights) and open **PiUI** from the Start menu.
+2. Open the [Nano Desktop releases](https://github.com/CrazyAngelm/PiUI/releases) and choose **v0.3.0**.
+3. Download `NanoDesktop_0.3.0_x64-setup.exe` and `SHA256SUMS.txt`.
+4. Verify the checksum, run the installer (per-user, no administrator rights) and open **Nano Desktop** from the Start menu.
 
 ```powershell
-Get-FileHash .\PiUI_0.2.0_x64-setup.exe -Algorithm SHA256
+Get-FileHash .\NanoDesktop_0.3.0_x64-setup.exe -Algorithm SHA256
 Get-Content .\SHA256SUMS.txt
 ```
 
-The hash printed by `Get-FileHash` must match the installer's line in `SHA256SUMS.txt`. If the release notes say the build is not code-signed, Windows may warn about an unknown publisher; verify the checksum first, or [build from source](#build-from-source). The portable `PiUI_0.2.0_windows_x86_64.exe` runs without installing.
+The hash printed by `Get-FileHash` must match the installer's line in `SHA256SUMS.txt`. If the release notes say the build is not code-signed, Windows may warn about an unknown publisher; verify the checksum first, or [build from source](#build-from-source). The portable `NanoDesktop_0.3.0_windows_x86_64.exe` runs without installing.
 
 ### Linux (x64)
 
-Download `PiUI_0.2.0_amd64.deb` (install with `sudo apt install ./PiUI_0.2.0_amd64.deb`) or `PiUI_0.2.0_amd64.AppImage` (make it executable and run it), and check it with `sha256sum --check --ignore-missing SHA256SUMS.txt`. The packages need WebKitGTK 4.1 (Ubuntu 22.04 or newer). Native agent lifecycle containment is not yet verified on Linux, so harnesses show as not verified there.
+Download `NanoDesktop_0.3.0_amd64.deb` (install with `sudo apt install ./NanoDesktop_0.3.0_amd64.deb`) or `NanoDesktop_0.3.0_amd64.AppImage` (make it executable and run it), and check it with `sha256sum --check --ignore-missing SHA256SUMS.txt`. The packages need WebKitGTK 4.1 (Ubuntu 22.04 or newer). Native agent lifecycle containment is not yet verified on Linux, so harnesses show as not verified there.
 
 ### macOS (experimental)
 
-When a release lists `PiUI_0.2.0_universal.dmg`, it runs on Apple Silicon and Intel Macs. It is ad-hoc signed and not notarized: open it with right-click → **Open** the first time.
+When a release lists `NanoDesktop_0.3.0_universal.dmg`, it runs on Apple Silicon and Intel Macs. It is ad-hoc signed and not notarized: open it with right-click → **Open** the first time.
 
 ### Updating
 
-When a release publishes an update feed, Settings → About offers **Check for updates**, the release notes and **Download and restart**. PiUI asks before installing, verifies the download against the signing key built into your version, stops running chats and pipeline steps as it does when you quit, installs the update and starts again. **Check for updates automatically** is off until you turn it on. Otherwise download a newer release and install it over this one. Chats, pipelines and settings stay in place either way; harness histories stay with their harnesses.
+When a release publishes an update feed, Settings → About offers **Check for updates**, the release notes and **Download and restart**. Nano Desktop asks before installing, verifies the download against the signing key built into your version, stops running chats and pipeline steps as it does when you quit, installs the update and starts again. **Check for updates automatically** is off until you turn it on. Otherwise download a newer release and install it over this one. Chats, pipelines and settings stay in place either way; harness histories stay with their harnesses.
 
 ## First run
 
-1. Start PiUI and choose **New chat**. Pick a harness, a model and a reasoning level, then send a message.
+1. Start Nano Desktop and choose **New chat**. Pick a harness, a model and a reasoning level, then send a message.
 2. To work on files, choose **Add project…** and review the trust prompt for that folder.
 3. Open **Pipelines** to start from a template, **Runs** to follow a pipeline and **Automations** to schedule one.
 
-Do not write to the same session from PiUI and the harness's own CLI at the same time.
+Do not write to the same session from Nano Desktop and the harness's own CLI at the same time.
 
 ## Current limitations
 
-- Windows builds are unsigned until a code-signing certificate is configured for releases, and a build updates itself only when it was released with the update key ([Releasing PiUI](docs/RELEASING.md)).
+- Windows builds are unsigned until a code-signing certificate is configured for releases, and a build updates itself only when it was released with the update key ([Releasing Nano Desktop](docs/RELEASING.md)).
 - Linux and macOS: native agent lifecycle containment is not yet verified and the Linux WebKit end-to-end harness is not implemented; macOS builds are not notarized.
-- Automations run only while PiUI is open.
+- Automations run only while Nano Desktop is open.
 - A Codex model-call step keeps Codex's own tools inside a read-only sandbox; Pi and Claude Code run model calls without tools. Codex MCP tool approvals apply to one call, and URL-mode MCP requests are declined.
 - Script steps run your code on this computer with your permissions; they are not sandboxed.
-- Concurrent writes to one session from PiUI and a harness CLI are unsupported.
+- Concurrent writes to one session from Nano Desktop and a harness CLI are unsupported.
 - Project-local extension JavaScript stays disabled until its trust and isolation design is complete.
 
 See [Foundation status](docs/13_FOUNDATION_STATUS.md), [open risks](docs/12_OPEN_RISKS.md), the [multi-harness implementation status](docs/MULTI_HARNESS_IMPLEMENTATION.md) and the [release checklist](CHECKLIST_RELEASE.md) for the exact status, and the [changelog](CHANGELOG.md) for what changed.
@@ -122,7 +124,7 @@ pnpm release:linux     # .deb + AppImage
 pnpm release:macos     # universal .app + .dmg (experimental)
 ```
 
-Without signing variables these are unsigned builds that never check for updates. [Releasing PiUI](docs/RELEASING.md) explains code signing, signed updates, tagging and verification.
+Without signing variables these are unsigned builds that never check for updates. [Releasing Nano Desktop](docs/RELEASING.md) explains code signing, signed updates, tagging and verification.
 
 ## Quality checks
 
@@ -141,7 +143,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-`pnpm repo:check` also fails when the declared PiUI versions disagree. `pnpm test:smoke` is the static source check. `pnpm test:e2e` dispatches to the real Windows Tauri/WebView2 harness, which passes through a feature-gated debug-only loopback driver and outside-Job fixture cleanup. Linux still fails explicitly because its WebKit harness is not implemented yet.
+`pnpm repo:check` also fails when the declared Nano Desktop versions disagree. `pnpm test:smoke` is the static source check. `pnpm test:e2e` dispatches to the real Windows Tauri/WebView2 harness, which passes through a feature-gated debug-only loopback driver and outside-Job fixture cleanup. Linux still fails explicitly because its WebKit harness is not implemented yet.
 
 ## Repository layout
 
@@ -171,7 +173,7 @@ spikes/                     Isolated evidence and experiments, not runtime depen
 - [Testing and performance](docs/08_TESTING_AND_PERFORMANCE.md)
 - [Roadmap](docs/09_ROADMAP_AND_TASKS.md)
 - [Architecture decisions](docs/10_ADR.md)
-- [Releasing PiUI](docs/RELEASING.md)
+- [Releasing Nano Desktop](docs/RELEASING.md)
 - [Changelog](CHANGELOG.md)
 
 ## Contributing and security
@@ -182,4 +184,4 @@ Report vulnerabilities privately according to [SECURITY.md](SECURITY.md). Never 
 
 ## License
 
-PiUI is licensed under the [MIT License](LICENSE). Third-party dependencies and referenced external materials remain subject to their own licenses and terms.
+Nano Desktop is licensed under the [MIT License](LICENSE). Third-party dependencies and referenced external materials remain subject to their own licenses and terms.

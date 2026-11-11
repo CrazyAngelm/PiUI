@@ -101,7 +101,7 @@ pub(crate) fn check_pair(
     }
     if !matches!(
         sidekick.harness,
-        HarnessKind::ClaudeCode | HarnessKind::Codex | HarnessKind::Pi
+        HarnessKind::ClaudeCode | HarnessKind::Codex | HarnessKind::Pi | HarnessKind::Nano
     ) {
         return Err((
             FusionRefusal::SidekickHarnessUnsupported,
@@ -151,8 +151,9 @@ fn sidekick_role_supported(
         {
             refuse(FusionRefusal::CodexSandboxUnverified)
         }
-        // Pi has no workspace-write mode; both roles must allow full access.
-        HarnessKind::Pi
+        // Pi and Nano (Pi underneath) have no workspace-write mode; both roles
+        // must allow full access.
+        HarnessKind::Pi | HarnessKind::Nano
             if sidekick.permission_mode != PermissionMode::FullAccess
                 || lead.permission_mode != PermissionMode::FullAccess =>
         {

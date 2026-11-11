@@ -271,7 +271,7 @@
       link.download = `${(editor.graph.name || 'pipeline').replace(/[^\p{L}\p{N}_-]+/gu, '-')}.piui.json`;
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
-      if (pinnedSteps.length) toasts.show({ title: $t('Pinned data is not exported'), description: $t('System files never include pinned data; the pins stay in PiUI.') });
+      if (pinnedSteps.length) toasts.show({ title: $t('Pinned data is not exported'), description: $t('System files never include pinned data; the pins stay in Nano Desktop.') });
     } catch (error) {
       toasts.error($t('Could not export'), error instanceof Error ? $t(error.message) : undefined);
     }

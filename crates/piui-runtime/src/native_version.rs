@@ -127,7 +127,7 @@ impl VersionCheck {
     pub(crate) const fn unverified_reason(self) -> Option<&'static str> {
         match self {
             Self::Verified | Self::Newer => None,
-            Self::Older => Some("Older than the oldest version supported by PiUI."),
+            Self::Older => Some("Older than the oldest version supported by Nano Desktop."),
             Self::Unrecognized => Some("The installed version could not be recognized."),
         }
     }
@@ -197,9 +197,29 @@ pub(crate) const HERMES: VerifiedRange = VerifiedRange {
     ceiling: (0, 22, 0),
 };
 
+/// Upstream Pi (`@earendil-works/pi-coding-agent` manifest) that the `nano`
+/// lane drives. The minimum is enforced, unlike plain Pi, which has no version
+/// gate: the lane relies on `models.json` custom providers and on explicit
+/// extensions (`-e`) that 1.4.0 provides. The advisory ceiling is the next minor
+/// release; a newer Pi launches and is shown as "newer than tested".
+pub(crate) const NANO_PI: VerifiedRange = VerifiedRange {
+    minimum: (1, 4, 0),
+    ceiling: (1, 5, 0),
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nano_pi_range_starts_at_the_enforced_minimum() {
+        assert_eq!(NANO_PI.check(Some("1.4.0")), VersionCheck::Verified);
+        assert_eq!(NANO_PI.check(Some("1.4.9")), VersionCheck::Verified);
+        assert_eq!(NANO_PI.check(Some("1.5.0")), VersionCheck::Newer);
+        assert_eq!(NANO_PI.check(Some("1.3.9")), VersionCheck::Older);
+        assert_eq!(NANO_PI.check(Some("1.4.0-beta.1")), VersionCheck::Older);
+        assert_eq!(NANO_PI.check(None), VersionCheck::Unrecognized);
+    }
 
     #[test]
     fn parses_release_prerelease_and_build_versions() {
@@ -312,7 +332,7 @@ mod tests {
         }
         assert_eq!(
             VersionCheck::Older.unverified_reason(),
-            Some("Older than the oldest version supported by PiUI.")
+            Some("Older than the oldest version supported by Nano Desktop.")
         );
         assert_eq!(
             VersionCheck::Unrecognized.unverified_reason(),

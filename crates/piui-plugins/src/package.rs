@@ -438,7 +438,7 @@ fn check_template(bytes: &[u8]) -> Result<(), &'static str> {
     if value.get("format") != Some(&Value::String("piui-system".into()))
         || value.get("version") != Some(&Value::from(4))
     {
-        return Err("Template “{0}” is not a PiUI system file (version 4).");
+        return Err("Template “{0}” is not a Nano Desktop system file (version 4).");
     }
     let validator =
         system_file_validator().ok_or("Template “{0}” could not be checked in this build.")?;

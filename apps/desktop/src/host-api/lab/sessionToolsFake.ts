@@ -78,7 +78,7 @@ function failure(code: string, message: string): HostErrorPayload {
   return { code, message, recoverable: true };
 }
 
-const SAFE_MODE = failure('SAFE_MODE', 'Safe mode is on: PiUI does not change files, git or chats.');
+const SAFE_MODE = failure('SAFE_MODE', 'Safe mode is on: Nano Desktop does not change files, git or chats.');
 const STALE = failure('STALE', 'This changed since you reviewed it. Check it again before continuing.');
 const NOT_TRUSTED = failure('NOT_TRUSTED', 'Trust this project before starting a runtime.');
 const NOT_FOUND = failure('NOT_FOUND', 'The workspace session was not found.');
@@ -156,8 +156,8 @@ function edited(lines: readonly string[], changes: Readonly<Record<number, strin
 const SIDEBAR_HEAD = [
   '<nav class="sidebar" aria-label={$t(\'Workspace navigation\')}>',
   '  <div class="brand">',
-  '    <span class="brand__mark" aria-hidden="true">π</span>',
-  '    <span class="brand__name">PiUI</span>',
+  '    <span class="brand__mark" role="img" aria-label="Nano Desktop">N</span>',
+  '    <span class="brand__name" aria-hidden="true">Nano Desktop</span>',
   '  </div>',
   '</nav>',
 ];
@@ -207,8 +207,8 @@ function demoRepository(): LabRepository {
     }],
     ['apps/desktop/src/app/shell/Sidebar.svelte', {
       head: text(SIDEBAR_HEAD),
-      index: edited(SIDEBAR_HEAD, { 3: '    <span class="brand__name">PiUI Lab</span>' }),
-      worktree: edited(SIDEBAR_HEAD, { 3: '    <span class="brand__name">PiUI Lab</span>' }),
+      index: edited(SIDEBAR_HEAD, { 3: '    <span class="brand__name">Nano Desktop Lab</span>' }),
+      worktree: edited(SIDEBAR_HEAD, { 3: '    <span class="brand__name">Nano Desktop Lab</span>' }),
     }],
     ['docs/OLD_NOTES.md', { head: 'Old notes that nobody reads.\n', index: 'Old notes that nobody reads.\n' }],
     ['apps/desktop/icons/badge.png', { head: 'png-v1', index: 'png-v1', worktree: 'png-v2-larger', binary: true }],
@@ -654,7 +654,7 @@ export function sessionToolsHandlers(runtime: LabSessions, history: LabNativeHis
     if (state.safeMode) throw SAFE_MODE;
     if (!/^[0-9a-f]{32}$/.test(worktreeId)) throw INVALID;
     const found = managed().find((entry) => entry.view.id === worktreeId);
-    if (found === undefined) throw failure('NOT_FOUND', 'This worktree is no longer managed by PiUI.');
+    if (found === undefined) throw failure('NOT_FOUND', 'This worktree is no longer managed by Nano Desktop.');
     if (found.view.sessions.length > 0) throw failure('CONFLICT', "A chat still works in this worktree. Remove it from that chat's details.");
     project(found.view.workspaceId, true);
     const repository = tools.repositories.get(found.repoKey);

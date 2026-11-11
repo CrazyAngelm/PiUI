@@ -103,7 +103,7 @@
         <p class="warn">{$t('Uncommitted changes in the project folder are not included: the worktree starts from the last commit.')}</p>
       {/if}
       <p class="muted">
-        {$t('PiUI creates the folder with git and runs no repository hooks. Removing the worktree later keeps the branch and its commits.')}
+        {$t('Nano Desktop creates the folder with git and runs no repository hooks. Removing the worktree later keeps the branch and its commits.')}
       </p>
     {/if}
   </form>

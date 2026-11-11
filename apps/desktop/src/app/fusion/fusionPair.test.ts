@@ -56,6 +56,12 @@ describe('default Fusion pair', () => {
     expect(pair?.sidekick.permissionMode).toBe('full-access');
   });
 
+  it('puts both roles at full access for a Nano sidekick too', () => {
+    const pair = defaultPair(['codex', 'nano']);
+    expect(pair).toMatchObject({ lead: { harness: 'codex', permissionMode: 'full-access' }, sidekick: { harness: 'nano', permissionMode: 'full-access' } });
+    expect(defaultPair(['nano'])).toBeUndefined();
+  });
+
   it('falls back to the same harness for both roles and to nothing without a lead', () => {
     expect(defaultPair(['codex'])).toMatchObject({ lead: { harness: 'codex' }, sidekick: { harness: 'codex' } });
     expect(defaultPair(['pi', 'hermes'])).toBeUndefined();
@@ -72,6 +78,9 @@ describe('default Fusion pair', () => {
     expect(isFusionLead('claude-code') && isFusionLead('codex')).toBe(true);
     expect(isFusionLead('pi')).toBe(false);
     expect(isFusionSidekick('pi')).toBe(true);
+    // Nano follows Pi: a sidekick, never a lead.
+    expect(isFusionSidekick('nano')).toBe(true);
+    expect(isFusionLead('nano')).toBe(false);
     expect(isFusionSidekick('hermes')).toBe(false);
   });
 });
@@ -159,7 +168,7 @@ describe('refusal copy', () => {
 
 describe('error copy', () => {
   it('maps each Fusion error code to a translated message without host text', () => {
-    for (const code of ['SAFE_MODE', 'INVALID_ARGUMENT', 'NOT_FOUND', 'CONFLICT', 'NOT_SUPPORTED', 'IO_ERROR', 'SIGN_IN_REQUIRED', 'unknown'] as const) {
+    for (const code of ['SAFE_MODE', 'INVALID_ARGUMENT', 'NOT_FOUND', 'CONFLICT', 'NOT_SUPPORTED', 'IO_ERROR', 'SIGN_IN_REQUIRED', 'NANO_SIGN_IN_REQUIRED', 'unknown'] as const) {
       const message = fusionErrorText(new FusionError(code));
       expect(translate(message, 'ru'), code).not.toBe(message);
     }

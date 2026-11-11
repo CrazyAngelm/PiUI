@@ -16,7 +16,7 @@ const result = (partial: Partial<ComposerAttachmentsResult>): ComposerAttachment
   type: 'attachments', protocol: 1, images: [], files: [], rejected: [], ...partial,
 });
 const SUPPORTED = { supported: true } as const;
-const UNSUPPORTED = { supported: false, reason: 'Prime Agent accepts text only in PiUI.' } as const;
+const UNSUPPORTED = { supported: false, reason: 'Prime Agent accepts text only in Nano Desktop.' } as const;
 
 beforeEach(() => {
   for (const mock of Object.values(client)) mock.mockReset();

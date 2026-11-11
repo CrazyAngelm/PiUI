@@ -121,7 +121,7 @@ describe('background mode client (background-v1)', () => {
     });
     expect(await client.settings()).toEqual(settings);
     expect((await client.update({ keepInTray: true })).keepInTray).toBe(true);
-    await client.trayLabels({ open: 'Open PiUI', pause: 'Pause all automations', resume: 'Resume automations', quit: 'Quit PiUI', tooltip: 'PiUI', pausedTooltip: 'PiUI (paused)' });
+    await client.trayLabels({ open: 'Open Nano Desktop', pause: 'Pause all automations', resume: 'Resume automations', quit: 'Quit Nano Desktop', tooltip: 'Nano Desktop', pausedTooltip: 'Nano Desktop (paused)' });
     expect(calls.map((call) => call.route)).toEqual(['background_settings_v1', 'background_update_v1', 'background_tray_labels_v1']);
     expect(calls[0]?.request).toEqual({});
     expect(calls[1]?.request).toEqual({ keepInTray: true });

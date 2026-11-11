@@ -53,7 +53,7 @@ describe('UI Lab ACP agent registry', () => {
     const view = await registry(labHost('demo'));
     expect(view).toMatchObject({ protocol: 1, safeMode: false, checked: true });
     expect(view.harnesses.map((harness) => [harness.harness, harness.state])).toEqual([
-      ['pi', 'ready'], ['prime-agent', 'ready'], ['codex', 'ready'], ['hermes', 'ready'], ['claude-code', 'ready'],
+      ['pi', 'ready'], ['prime-agent', 'ready'], ['codex', 'ready'], ['hermes', 'ready'], ['claude-code', 'ready'], ['nano', 'ready'],
       ['acp:gemini-cli', 'ready'], ['acp:opencode', 'ready'], ['acp:qwen-code', 'not-installed'], ['acp:lab-agent', 'untrusted'],
     ]);
     // A newer native version is ready with the host's advisory status.
@@ -63,6 +63,9 @@ describe('UI Lab ACP agent registry', () => {
     });
     expect(view.harnesses.find((harness) => harness.harness === 'pi')).not.toHaveProperty('versionStatus');
     expect(view.harnesses.find((harness) => harness.harness === 'claude-code')?.signInHint).toContain('Claude subscription');
+    expect(view.harnesses.find((harness) => harness.harness === 'nano')).toMatchObject({
+      name: 'Nano', state: 'ready', verifiedVersions: '1.4.0 and newer', signInHint: 'Sign in to your Nano account to use Nano.',
+    });
     const gemini = agent(view, 'gemini-cli');
     // No version confirmation: an untested or newer version is ready with an advisory status.
     expect(gemini).toMatchObject({

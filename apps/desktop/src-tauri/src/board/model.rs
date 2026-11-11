@@ -715,7 +715,7 @@ impl BoardError {
 
     pub fn message(self) -> &'static str {
         match self {
-            Self::SafeMode => "Safe mode is on: PiUI does not change the board.",
+            Self::SafeMode => "Safe mode is on: Nano Desktop does not change the board.",
             Self::Invalid(message)
             | Self::NotFound(message)
             | Self::Forbidden(message)
@@ -731,7 +731,7 @@ impl BoardError {
             Self::RateLimited => {
                 "Too many board changes in this turn. Stop changing the board and summarize instead."
             }
-            Self::Io => "PiUI could not save the board.",
+            Self::Io => "Nano Desktop could not save the board.",
         }
     }
 }

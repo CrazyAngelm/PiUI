@@ -34,6 +34,7 @@
   import FusionNotice from '../fusion/FusionNotice.svelte';
   import SidekickOfBadge from '../fusion/SidekickOfBadge.svelte';
   import { fusionMembership } from '../fusion/fusionMembership.svelte';
+  import NanoPetStatus from '../nano/NanoPetStatus.svelte';
 
   // Loaded on first use; a script-level import lets the dev server see its dependencies.
   const loadReviewPanel = () => import('../review/ReviewPanel.svelte');
@@ -175,6 +176,9 @@
           <SidekickOfBadge leadSessionId={fusion.leadSessionId} />
         {/if}
         <div class="chat__actions">
+          {#if session.harness === 'nano' && snapshot}
+            <NanoPetStatus status={session.status} approvals={snapshot.approvals.length} blocks={snapshot.blocks} />
+          {/if}
           {#if running && !composerStops}
             <!-- Fusion stops through the broker: a lead stops the pair, a sidekick stops its round (the store routes it). -->
             <Button

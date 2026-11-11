@@ -20,6 +20,7 @@
   import type { FusionRoleNameV1, FusionRoleV1 } from '../../host-api/fusionClient';
   import { Spinner } from '../../lib/ui';
   import { harnessMeta } from '../harnessMeta';
+  import { nanoAccount } from '../nano/nanoAccount.svelte';
   import ModelPicker, { type ModelOption } from '../shell/ModelPicker.svelte';
   import { errorMessage } from '../workspaceStore.svelte';
   import { FUSION_LEADS, FUSION_PERMISSION_CHOICES, FUSION_SIDEKICKS, roleLabel, withHarness, withModel, withPermission, withServiceTier, withThinkingLevel, type RefusalCopy } from './fusionPair';
@@ -58,6 +59,8 @@
     const id = workspaceId;
     const kind = value.harness;
     const enabled = modelsEnabled && current?.available === true;
+    // The Nano catalog is account state: a sign-in, a plan or a credit change loads it again.
+    if (kind === 'nano') void nanoAccount.catalogRevision;
     models = [];
     loadError = '';
     loading = false;
@@ -155,6 +158,7 @@
     <span class="label" id="{uid}-model-label">{$t('Model')}</span>
     <ModelPicker
       models={modelOptions}
+      harness={value.harness}
       value={modelKey}
       defaultOption={true}
       {loading}

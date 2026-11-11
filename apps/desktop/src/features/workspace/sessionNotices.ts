@@ -40,12 +40,12 @@ export function withNotice(snapshot: SessionSnapshot, code: string): SessionSnap
 }
 
 /**
- * The board-tool notice to show for a chat. A Pi chat never gets the tool
+ * The board-tool notice to show for a chat. A Pi or Nano chat never gets the tool
  * (Pi RPC has no custom tools), so it shows before the host reports it.
  */
 export function boardToolNotice(harness: HarnessKind, notices: readonly SessionNoticeCode[]): SessionNoticeCode | undefined {
   if (notices.includes('unsupported-board-tool-resume')) return 'unsupported-board-tool-resume';
-  if (notices.includes('unsupported-board-tool') || harness === 'pi') return 'unsupported-board-tool';
+  if (notices.includes('unsupported-board-tool') || harness === 'pi' || harness === 'nano') return 'unsupported-board-tool';
   return undefined;
 }
 

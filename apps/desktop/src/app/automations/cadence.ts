@@ -86,9 +86,9 @@ export function eventPreview(event: EventTrigger, target: string, t: Translate, 
   const lines: string[] = [];
   if (event.kind === 'run-finished') {
     const source = pipelineName(event.launchCommandId) || t('Missing pipeline');
-    lines.push(t('{0}, PiUI starts {1}.', [finishedText(source, event.outcomes, t), target]));
+    lines.push(t('{0}, Nano Desktop starts {1}.', [finishedText(source, event.outcomes, t), target]));
   } else {
-    lines.push(t('PiUI starts {0} {1} s after matching files stop changing.', [target, event.debounceSeconds]));
+    lines.push(t('Nano Desktop starts {0} {1} s after matching files stop changing.', [target, event.debounceSeconds]));
     if (event.exclude?.length) lines.push(t('Ignored: {0}', [event.exclude.join(', ')]));
     lines.push(t('Changes made while its own run works are ignored. .git, node_modules, target and dist are never watched.'));
   }
@@ -101,7 +101,7 @@ export type OutcomeTone = 'success' | 'neutral' | 'warning' | 'danger';
 /** Last-occurrence badges; every skip names its reason. */
 export const OUTCOME: Readonly<Record<ScheduleOccurrenceOutcome, { readonly label: string; readonly tone: OutcomeTone }>> = {
   started: { label: 'Started', tone: 'success' },
-  skippedMissed: { label: 'Skipped: PiUI was closed or paused', tone: 'neutral' },
+  skippedMissed: { label: 'Skipped: Nano Desktop was closed or paused', tone: 'neutral' },
   skippedOverlap: { label: 'Skipped: previous run still working', tone: 'neutral' },
   skippedChainLimit: { label: 'Skipped: too many chained automations', tone: 'warning' },
   skippedCooldown: { label: 'Skipped: ran moments ago', tone: 'neutral' },

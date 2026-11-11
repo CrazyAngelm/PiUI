@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HarnessModelsResult } from '../../../../../contracts/harness-models-v18';
 import { createOrchestrationClient, type OrchestrationClient, type OrchestrationCommandName } from '../../host-api/orchestrationClient';
 import { labHost } from '../../host-api/lab/labTestKit';
+import { nanoAccount } from '../nano/nanoAccount.svelte';
 import { PipelineEditorStore } from './editorStore.svelte';
 import { readLastPipeline } from './lastPipeline';
 
@@ -10,7 +11,7 @@ const { cached, refreshed, settled } = vi.hoisted(() => ({
   refreshed: vi.fn(),
   settled: vi.fn(),
 }));
-vi.mock('../../host-api/harnessModels', () => ({ cachedHarnessModels: cached, harnessModels: refreshed, catalogSettled: settled, catalogDegraded: () => false }));
+vi.mock('../../host-api/harnessModels', () => ({ cachedHarnessModels: cached, harnessModels: refreshed, catalogSettled: settled, catalogDegraded: () => false, forgetHarnessCatalogs: () => undefined }));
 
 const memory = new Map<string, string>();
 vi.stubGlobal('localStorage', {
@@ -119,6 +120,34 @@ describe('catalog loading flags the resources that are still being discovered', 
     expect(refreshed).toHaveBeenCalledWith({ workspaceId: 'workspace', harness: 'codex' }, true);
     expect(editor.catalogs.codex).toBe(FULL);
     expect(editor.resourcesLoading.codex ?? false).toBe(false);
+  });
+
+  it('does not reuse a Nano catalog once the account changed, and offers a model of the new catalog', async () => {
+    const nano = (models: { id: string; name: string }[]): HarnessModelsResult => ({ protocol: 18, harness: 'nano', models: models.map((model) => ({ ...model, provider: 'nano' })), resources: { items: [], warnings: [] } });
+    const before = nano([{ id: 'auto', name: 'Auto' }, { id: 'smart', name: 'Smart' }]);
+    const after = nano([{ id: 'free', name: 'Free' }]);
+    cached.mockResolvedValueOnce(before).mockResolvedValueOnce(after);
+    settled.mockReturnValue(true);
+    const editor = store();
+    expect(await editor.defaultModel('nano')).toEqual({ model: 'auto', modelProvider: 'nano' });
+    expect(await editor.defaultModel('nano'), 'the same account state reuses the catalog').toEqual({ model: 'auto', modelProvider: 'nano' });
+    expect(cached).toHaveBeenCalledTimes(1);
+
+    // A sign-out, a locked mode or another workspace: the catalog it answered for is out of date.
+    nanoAccount.catalogRevision += 1;
+    expect(editor.catalogs.nano).toBeUndefined();
+    expect(await editor.defaultModel('nano')).toEqual({ model: 'free', modelProvider: 'nano' });
+    expect(cached).toHaveBeenCalledTimes(2);
+    expect(editor.catalogs.nano).toBe(after);
+  });
+
+  it('keeps the catalogs of the other harnesses when the Nano account changes', async () => {
+    cached.mockResolvedValue(FULL);
+    settled.mockReturnValue(true);
+    const editor = store();
+    await editor.loadCatalog('codex');
+    nanoAccount.catalogRevision += 1;
+    expect(editor.catalogs.codex).toBe(FULL);
   });
 
   it('safe mode never probes a harness', async () => {

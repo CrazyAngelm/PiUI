@@ -19,12 +19,16 @@
   import SquarePlus from '@lucide/svelte/icons/square-plus';
   import UsersRound from '@lucide/svelte/icons/users-round';
   import UserPlus from '@lucide/svelte/icons/user-plus';
+  import UserRound from '@lucide/svelte/icons/user-round';
+  import Cloud from '@lucide/svelte/icons/cloud';
   import { boardIntents } from '../board/intents.svelte';
   import { t } from '../../features/locale/language';
   import { runLauncher } from '../triggers/runLauncher.svelte';
   import HarnessMark from './HarnessMark.svelte';
   import PluginPaletteGroup from '../plugins/PluginPaletteGroup.svelte';
   import NativeCommandsPaletteGroup from './NativeCommandsPaletteGroup.svelte';
+  import { nanoAccount } from '../nano/nanoAccount.svelte';
+  import { openNanoCloud } from '../nano/openCloud';
   import { useWorkspace } from './context';
 
   interface Props {
@@ -180,6 +184,14 @@
                 <Command.Item class="palette__item" value="action:refresh-projects" keywords={[$t('Refresh projects'), 'refresh', 'reload', 'projects', 'folders']} onSelect={() => run(refreshProjects)}>
                   <RefreshCw size={15} /><span>{$t('Refresh projects')}</span>
                 </Command.Item>
+                <Command.Item class="palette__item" value="action:nano-account" keywords={[$t('Nano account'), 'nano', 'account', 'sign in', 'credits', 'аккаунт']} onSelect={() => run(() => store.navigate({ name: 'settings', section: 'nano' }))}>
+                  <UserRound size={15} /><span>{$t('Nano account')}</span>
+                </Command.Item>
+                {#if nanoAccount.canUseCloud}
+                  <Command.Item class="palette__item" value="action:nano-cloud" keywords={[$t('Open Nano Cloud'), 'nano', 'cloud', 'облако']} onSelect={() => run(() => void openNanoCloud())}>
+                    <Cloud size={15} /><span>{$t('Open Nano Cloud')}</span>
+                  </Command.Item>
+                {/if}
                 <Command.Item class="palette__item" value="action:settings" keywords={[$t('Settings'), 'settings', 'preferences']} onSelect={() => run(() => store.navigate({ name: 'settings', section: 'general' }))}>
                   <Settings size={15} /><span>{$t('Settings')}</span>
                 </Command.Item>

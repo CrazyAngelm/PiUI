@@ -1,13 +1,14 @@
 import type { HarnessConfiguration, HarnessConfigurations } from './types';
 import type { Harness } from '../../../../contracts/orchestration-v6';
-import { BUILTIN_HARNESSES, isAcpHarness, isBuiltinHarness } from '../../../../contracts/harness-identity-v2';
+import { BUILTIN_HARNESSES, isAcpHarness, isBuiltinHarness } from '../../../../contracts/harness-identity-v3';
 import { codexConfiguration } from './codex';
 import { primeConfiguration } from './prime';
 import { hermesConfiguration } from './hermes';
 import { piConfiguration } from './pi';
 import { claudeCodeConfiguration } from './claude-code';
+import { nanoConfiguration } from './nano';
 import { acpConfiguration } from './acp';
-export const harnessConfigurations: HarnessConfigurations = { codex: codexConfiguration, 'prime-agent': primeConfiguration, pi: piConfiguration, hermes: hermesConfiguration, 'claude-code': claudeCodeConfiguration };
+export const harnessConfigurations: HarnessConfigurations = { codex: codexConfiguration, 'prime-agent': primeConfiguration, pi: piConfiguration, hermes: hermesConfiguration, 'claude-code': claudeCodeConfiguration, nano: nanoConfiguration };
 export const permissionLabels = { native: 'Native permissions', 'read-only': 'Read-only', 'workspace-write': 'Workspace write', 'full-access': 'Full access' } as const;
 
 /** The manifest of any harness identity: built-in adapters, else the generic ACP manifest. */

@@ -50,7 +50,7 @@ function failure(code: string, message: string): HostErrorPayload {
   return { code, message, recoverable: true };
 }
 
-const SAFE_MODE = failure('SAFE_MODE', 'Safe mode is on: PiUI does not change files, git or chats.');
+const SAFE_MODE = failure('SAFE_MODE', 'Safe mode is on: Nano Desktop does not change files, git or chats.');
 const INVALID = failure('INVALID_ARGUMENT', 'Check the required fields and try again.');
 const NOT_FOUND = failure('NOT_FOUND', 'That pipeline template or chat is no longer available.');
 const CHAT_NOT_FOUND = failure('NOT_FOUND', 'That chat is no longer available.');

@@ -458,11 +458,11 @@
   bind:open={reconcileOpen}
   title={$t('Record what happened')}
   description={subpipeline
-    ? $t('PiUI could not confirm how the sub-pipeline ended. Check its child run, then record an operator assertion. It reconciles the journal only.')
+    ? $t('Nano Desktop could not confirm how the sub-pipeline ended. Check its child run, then record an operator assertion. It reconciles the journal only.')
     : pluginNode
-    ? $t('PiUI could not confirm how the plugin node ended. Check what it changed, then record an operator assertion. It reconciles the journal only.')
+    ? $t('Nano Desktop could not confirm how the plugin node ended. Check what it changed, then record an operator assertion. It reconciles the journal only.')
     : script
-    ? $t('PiUI could not confirm how the script ended. Check its effects in the project folder, then record an operator assertion. It reconciles the journal only.')
+    ? $t('Nano Desktop could not confirm how the script ended. Check its effects in the project folder, then record an operator assertion. It reconciles the journal only.')
     : $t('After checking the linked native session, record an operator assertion. It reconciles the journal only.')}
   size="md"
 >

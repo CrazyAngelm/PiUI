@@ -42,7 +42,7 @@ const ERROR_COPY: Readonly<Record<OrchestrationErrorCode, string>> = {
   'subpipeline-cycle': 'These pipelines would run each other as sub-pipelines in a loop. Remove one of the sub-pipeline steps, then save again.',
   'subpipeline-in-use': 'Another saved pipeline runs this one as a sub-pipeline. Remove or change that step first, then delete this pipeline.',
   'subpipeline-breaks-parent': 'Saved pipelines that run this one as a sub-pipeline would stop working with this change. Keep the inputs and outputs they use, or change them first.',
-  'desktop-unavailable': 'Open the PiUI desktop app to use orchestration. Browser preview does not save definitions or execute agents.',
+  'desktop-unavailable': 'Open the Nano Desktop desktop app to use orchestration. Browser preview does not save definitions or execute agents.',
   unknown: 'The workspace operation could not be completed. Your draft is unchanged.',
 };
 

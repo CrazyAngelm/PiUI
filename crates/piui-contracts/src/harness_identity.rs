@@ -1,10 +1,16 @@
-//! Harness identity grammar v2 (ADR-028, ADR-034).
+//! Harness identity grammar v3 (ADR-028, ADR-034, ADR-048).
 //!
 //! v1 was the closed set of built-in harness names (`pi`, `prime-agent`,
 //! `codex`, `hermes`, `claude-code`). v2 keeps every v1 value with its exact
 //! meaning and adds `acp:<descriptor id>`: an Agent Client Protocol agent
 //! described by one registry descriptor. A v1 parser rejects an `acp:` value
 //! with an explicit error instead of misreading it; nothing is renamed.
+//!
+//! v3 is additive over v2: it adds the built-in name `nano` (Nano Desktop's
+//! own harness: upstream Pi driven through a host-owned agent directory, with
+//! Pi JSONL history). A v2 reader rejects `nano` explicitly through the
+//! unknown-identity error instead of misreading it; this is the documented
+//! compatibility rule, and no earlier value changes meaning.
 //!
 //! The descriptor id is a lowercase slug of at most
 //! [`ACP_AGENT_ID_MAX_BYTES`] bytes: ASCII letters, digits and single inner
@@ -15,7 +21,7 @@ use std::fmt;
 use thiserror::Error;
 
 /// Version of the harness identity grammar described above.
-pub const HARNESS_IDENTITY_VERSION: u32 = 2;
+pub const HARNESS_IDENTITY_VERSION: u32 = 3;
 /// Prefix of an ACP agent identity.
 pub const ACP_HARNESS_PREFIX: &str = "acp:";
 /// Longest descriptor id, in bytes.
@@ -175,6 +181,19 @@ mod tests {
         assert!(serde_json::from_value::<AcpAgentId>(serde_json::json!("Gemini")).is_err());
         assert_eq!(format!("{id:?}"), "AcpAgentId(\"gemini-cli\")");
         assert_eq!(id.to_string(), "gemini-cli");
+    }
+
+    #[test]
+    fn identity_grammar_is_v3_and_nano_is_builtin_only() {
+        assert_eq!(HARNESS_IDENTITY_VERSION, 3);
+        let builtin = [("pi", 0_u8), ("nano", 1_u8)];
+        assert_eq!(parse_harness_identity("nano", &builtin, |_| 9), Some(1));
+        // A v2 reader has no `nano` entry: it is neither builtin nor an
+        // `acp:` identity, so it is rejected explicitly.
+        let v2 = [("pi", 0_u8)];
+        assert_eq!(parse_harness_identity("nano", &v2, |_| 9), None);
+        assert_eq!(parse_harness_identity("acp:nano", &v2, |_| 9), Some(9));
+        assert!(AcpAgentId::from_harness_id("nano").is_err());
     }
 
     #[test]

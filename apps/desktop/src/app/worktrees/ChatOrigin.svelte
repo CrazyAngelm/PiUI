@@ -86,14 +86,14 @@
       <button type="button" class="link" onclick={() => void store.openSession(source.id)}>{source.title}</button>
       <p class="note">{$t('This chat continues that one. Its history was not copied or converted.')}</p>
     {:else}
-      <p class="note">{$t('A chat that is no longer in PiUI.')}</p>
+      <p class="note">{$t('A chat that is no longer in Nano Desktop.')}</p>
     {/if}
   </section>
 {/if}
 
 {#if placement?.adopted}
   <section class="origin">
-    <p class="note"><Terminal size={13} /> {$t('Started in the Pi terminal app. PiUI continues the same session file.')}</p>
+    <p class="note"><Terminal size={13} /> {$t('Started in the Pi terminal app. Nano Desktop continues the same session file.')}</p>
   </section>
 {/if}
 

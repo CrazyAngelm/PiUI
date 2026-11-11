@@ -22,6 +22,8 @@
   import GitBranch from '@lucide/svelte/icons/git-branch';
   import KanbanSquare from '@lucide/svelte/icons/square-kanban';
   import UsersRound from '@lucide/svelte/icons/users-round';
+  import Cloud from '@lucide/svelte/icons/cloud';
+  import UserRound from '@lucide/svelte/icons/user-round';
   import type { BoardRegistry } from '../board/boardStore.svelte';
   import { t, language } from '../../features/locale/language';
   import { placements } from '../worktrees/placements.svelte';
@@ -32,6 +34,9 @@
   import { useWorkspace } from './context';
   import { fusionMembership } from '../fusion/fusionMembership.svelte';
   import { chatTree } from './chatTree';
+  import { nanoAccount } from '../nano/nanoAccount.svelte';
+  import { openNanoCloud } from '../nano/openCloud';
+  import { chipFor, creditsText } from '../nano/nanoView';
 
   interface Props {
     onSearch: () => void;
@@ -148,11 +153,15 @@
         icon: pinned ? PinOff : Pin,
         onSelect: () => void store.setProjectPinned(workspace.id, !pinned).catch(() => toasts.error($t('Could not update the project'))),
       },
-      { label: $t('Remove from PiUI…'), icon: FolderMinus, danger: true, disabled: store.safeMode, onSelect: () => (projectDialog = { kind: 'remove', workspace }) },
+      { label: $t('Remove from Nano Desktop…'), icon: FolderMinus, danger: true, disabled: store.safeMode, onSelect: () => (projectDialog = { kind: 'remove', workspace }) },
     ];
   }
 
   const route = $derived(store.route);
+
+  // The optional Nano account: read once after first paint, never before.
+  $effect(() => nanoAccount.startLater());
+  const nanoChip = $derived(chipFor(nanoAccount.status));
   // Runs and Automations have their own entries; the editor and the library
   // sections (agents, teams, step lists) belong to Pipelines. Exactly one is current.
   const onPipelines = $derived(route.name === 'pipelines' && route.section !== 'runs' && route.section !== 'schedules');
@@ -169,8 +178,8 @@
 
 <nav class="sidebar" aria-label={$t('Workspace navigation')}>
   <div class="brand">
-    <span class="brand__mark" aria-hidden="true">π</span>
-    <span class="brand__name">PiUI</span>
+    <span class="brand__mark" role="img" aria-label="Nano Desktop">N</span>
+    <span class="brand__name" aria-hidden="true">Nano Desktop</span>
   </div>
 
   <div class="primary">
@@ -236,6 +245,25 @@
   </div>
 
   <div class="footer">
+    <button
+      type="button"
+      class="nav-item nano-chip"
+      data-tone={nanoChip.tone}
+      onclick={() => go(() => store.navigate({ name: 'settings', section: 'nano' }))}
+      aria-current={route.name === 'settings' && route.section === 'nano' ? 'page' : undefined}
+    >
+      <UserRound size={16} />
+      <span class="nav-item__label">{nanoChip.translate ? $t(nanoChip.label) : nanoChip.label}</span>
+      {#if nanoChip.credits !== undefined}
+        <span class="nano-chip__credits">{creditsText(nanoChip.credits, $language === 'ru' ? 'ru-RU' : 'en-US', true)}<span class="visually-hidden"> {$t('credits')}</span></span>
+      {/if}
+    </button>
+    {#if nanoAccount.canUseCloud}
+      <button type="button" class="nav-item" onclick={() => void openNanoCloud()} disabled={nanoAccount.action === 'cloud'}>
+        <Cloud size={16} />
+        <span class="nav-item__label">{$t('Open Nano Cloud')}</span>
+      </button>
+    {/if}
     <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'settings', section: 'general' }))} aria-current={route.name === 'settings' ? 'page' : undefined}>
       <Settings size={16} />
       <span class="nav-item__label">{$t('Settings')}</span>
@@ -443,6 +471,18 @@
   .nav-item--strong {
     color: var(--piui-text);
     font-weight: var(--piui-weight-medium);
+  }
+  .nano-chip[data-tone='warning'] :global(svg) {
+    color: var(--piui-warning);
+  }
+  .nano-chip[data-tone='danger'] :global(svg),
+  .nano-chip[data-tone='danger'] .nano-chip__credits {
+    color: var(--piui-danger);
+  }
+  .nano-chip__credits {
+    flex: none;
+    font-size: var(--piui-text-xs);
+    font-variant-numeric: tabular-nums;
   }
   .nav-item__label {
     flex: 1;

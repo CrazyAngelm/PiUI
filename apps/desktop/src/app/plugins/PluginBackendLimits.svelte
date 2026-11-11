@@ -22,9 +22,9 @@
 
 <div class="limits">
   {#if !limits}
-    <p class="muted">{$t('PiUI checks what Node.js can limit before the backend first starts.')}</p>
+    <p class="muted">{$t('Nano Desktop checks what Node.js can limit before the backend first starts.')}</p>
   {:else if !limits.enforced}
-    <p class="warn" role="note">{$t('Node.js {0} cannot limit plugin backends, so PiUI will not start this one. Install Node.js 22.13 or later.', [limits.nodeVersion])}</p>
+    <p class="warn" role="note">{$t('Node.js {0} cannot limit plugin backends, so Nano Desktop will not start this one. Install Node.js 22.13 or later.', [limits.nodeVersion])}</p>
   {:else}
     <ul>
       <li>{$t('Limited by Node.js {0}: the backend reads its own files, keeps data in its own folder and cannot start other programs or worker threads.', [limits.nodeVersion])}</li>

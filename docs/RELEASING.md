@@ -1,4 +1,4 @@
-# Releasing PiUI
+# Releasing Nano Desktop
 
 This guide is for the repository owner. A release is a Git tag `vX.Y.Z`; the
 [Release workflow](../.github/workflows/release.yml) builds every platform and
@@ -17,13 +17,21 @@ the Windows build is code-signed.
 | Job | Runner | Produces |
 | --- | --- | --- |
 | `verify` | Ubuntu | Fails unless the tag equals every declared version (`scripts/check-version.mjs --tag`) and `CHANGELOG.md` has a section for it. |
-| `windows` | Windows | All quality gates (repo audit, spec, `pnpm check`, tests, contract tests, rustfmt, clippy, `cargo test --workspace`), then `PiUI_X.Y.Z_x64-setup.exe` (NSIS, per-user install) and `PiUI_X.Y.Z_windows_x86_64.exe` (portable). Authenticode-signed when a certificate is configured; `…-setup.exe.sig` when update signing is configured. |
-| `linux` | Ubuntu 22.04 | `PiUI_X.Y.Z_amd64.deb` and `PiUI_X.Y.Z_amd64.AppImage`, plus `.sig` files when update signing is configured. |
-| `macos` | macOS | Experimental `PiUI_X.Y.Z_universal.dmg` (Apple Silicon and Intel), plus `PiUI_X.Y.Z_universal.app.tar.gz` and its `.sig` when update signing is configured. A failure here never blocks the release. |
+| `windows` | Windows | All quality gates (repo audit, spec, `pnpm check`, tests, contract tests, rustfmt, clippy, `cargo test --workspace`), then `NanoDesktop_X.Y.Z_x64-setup.exe` (NSIS, per-user install) and `NanoDesktop_X.Y.Z_windows_x86_64.exe` (portable). Authenticode-signed when a certificate is configured; `…-setup.exe.sig` when update signing is configured. |
+| `linux` | Ubuntu 22.04 | `NanoDesktop_X.Y.Z_amd64.deb` and `NanoDesktop_X.Y.Z_amd64.AppImage`, plus `.sig` files when update signing is configured. |
+| `macos` | macOS | Experimental `NanoDesktop_X.Y.Z_universal.dmg` (Apple Silicon and Intel), plus `NanoDesktop_X.Y.Z_universal.app.tar.gz` and its `.sig` when update signing is configured. A failure here never blocks the release. |
 | `publish` | Ubuntu | Verifies each job's checksums, writes one `SHA256SUMS.txt` for all files, writes `latest.json` when update signatures exist, and creates the pre-release with generated notes (`scripts/release-feed.mjs`). With `latest.json` it also refreshes the rolling update-channel release (tag `updater` by default). |
 
+Names (ADR-046): `productName` is "Nano Desktop" and `mainBinaryName` is
+`nano-desktop`, so the Windows executable is `nano-desktop.exe`. Tauri names its
+bundles after the product (`Nano Desktop_X.Y.Z_x64-setup.exe`); the release
+scripts drop the space (`NanoDesktop_X.Y.Z_x64-setup.exe`) because GitHub
+rewrites spaces in asset names and the checksum lines would stop matching. The
+bundle identifier `dev.piui.desktop`, crate and package names stay, so existing
+data and settings keep working.
+
 Each build job also uploads its files as a workflow artifact
-(`PiUI-vX.Y.Z-<platform>`), so a failed publish can be inspected or retried.
+(`NanoDesktop-vX.Y.Z-<platform>`), so a failed publish can be inspected or retried.
 
 ## One-time setup
 
@@ -68,9 +76,9 @@ the release is built without updates; malformed values fail the build.
 
 What users get: Settings → About shows the version, **Check for updates**,
 release notes and **Download and restart** behind a confirmation. **Check for
-updates automatically** is off by default; when turned on, PiUI checks well after
+updates automatically** is off by default; when turned on, Nano Desktop checks well after
 start and once a day, and only shows a notice. Every download is verified
-against the built-in public key before anything runs; PiUI stops running chats
+against the built-in public key before anything runs; Nano Desktop stops running chats
 and pipeline steps as it does on quit, installs and restarts.
 
 ### Windows code signing (Authenticode)
@@ -115,14 +123,14 @@ notarization are not wired into the workflow yet.
 1. Set the new version everywhere it is declared: `package.json`,
    `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`,
    `[workspace.package]` in `Cargo.toml` (then run `cargo check` so `Cargo.lock`
-   follows) and the client versions in `crates/piui-runtime/bridge/codex.mjs`
-   and `hermes.mjs`. Contract and protocol versions are separate; do not bump
+   follows) and the client versions in `crates/piui-runtime/bridge/codex.mjs`,
+   `hermes.mjs` and `acp.mjs`. Contract and protocol versions are separate; do not bump
    them for a release.
 2. Add `## [X.Y.Z] - YYYY-MM-DD` to `CHANGELOG.md` (the release notes and the
    in-app notes come from this section) and update the compare links.
 3. Run `pnpm repo:check`; it names every declaration that disagrees.
 4. Commit, push to `main` and wait for CI to pass.
-5. Tag and push: `git tag -a vX.Y.Z -m "PiUI X.Y.Z"` then
+5. Tag and push: `git tag -a vX.Y.Z -m "Nano Desktop X.Y.Z"` then
    `git push origin vX.Y.Z`.
 6. Follow the **Release** workflow run. When `publish` finishes, open the
    pre-release and check the files, the notes and `SHA256SUMS.txt`. With updates
@@ -155,21 +163,21 @@ superseded `target/` trees.
 
 - **Checksums.** Linux: `sha256sum --check --ignore-missing SHA256SUMS.txt`;
   macOS: `shasum -a 256 --check --ignore-missing SHA256SUMS.txt`; Windows:
-  `Get-FileHash .\PiUI_X.Y.Z_x64-setup.exe -Algorithm SHA256` and compare with
+  `Get-FileHash .\NanoDesktop_X.Y.Z_x64-setup.exe -Algorithm SHA256` and compare with
   the file's line.
-- **Authenticode.** `Get-AuthenticodeSignature .\PiUI_X.Y.Z_x64-setup.exe`
+- **Authenticode.** `Get-AuthenticodeSignature .\NanoDesktop_X.Y.Z_x64-setup.exe`
   must report `Valid` and your certificate's subject.
 - **Update signatures.** A `.sig` file and `PIUI_UPDATER_PUBKEY` are base64
   wrappers around minisign files:
 
   ```bash
-  base64 -d PiUI_X.Y.Z_x64-setup.exe.sig > setup.minisig
+  base64 -d NanoDesktop_X.Y.Z_x64-setup.exe.sig > setup.minisig
   echo "$PIUI_UPDATER_PUBKEY" | base64 -d > piui-updater.pub
-  minisign -V -p piui-updater.pub -m PiUI_X.Y.Z_x64-setup.exe -x setup.minisig
+  minisign -V -p piui-updater.pub -m NanoDesktop_X.Y.Z_x64-setup.exe -x setup.minisig
   ```
 
 - **In the app.** Install the previous release, open Settings → About, choose
-  **Check for updates**, confirm **Download and restart**, and check that PiUI
+  **Check for updates**, confirm **Download and restart**, and check that Nano Desktop
   restarts on the new version with chats, pipelines and settings intact.
 
 ## Rollback

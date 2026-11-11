@@ -28,7 +28,7 @@ const CODES: ReadonlySet<string> = new Set<PluginsErrorCode>([
   'BACKEND_TIMEOUT', 'LIMIT', 'IO_ERROR',
 ]);
 
-const UNAVAILABLE_MESSAGE = 'PiUI could not read the plugin list.';
+const UNAVAILABLE_MESSAGE = 'Nano Desktop could not read the plugin list.';
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;
 
 export type PluginsFailureCode = PluginsErrorCode | 'UNAVAILABLE';

@@ -15,6 +15,9 @@
   import { errorMessage } from '../workspaceStore.svelte';
   import { WorkspaceOperationError, workspaceError } from '../../host-api/workspaceClient';
   import AttachButton from '../chat/composer/AttachButton.svelte';
+  import DictateButton from '../nano/DictateButton.svelte';
+  import { insertAtCaret } from '../nano/dictation';
+  import { nanoAccount } from '../nano/nanoAccount.svelte';
   import { ComposerAttachments } from '../chat/composer/composerAttachments.svelte';
   import { FileMentions } from '../chat/composer/composerLookups.svelte';
   import { composerDropTargets } from '../chat/composer/dropTargets.svelte';
@@ -176,6 +179,8 @@
     const kind = harness;
     // A retry asks again for the same project and harness: what is shown stays.
     void catalogAttempt;
+    // The Nano catalog is account state: a sign-in, a plan or a credit change loads it again.
+    if (kind === 'nano') void nanoAccount.catalogRevision;
     const forKey = JSON.stringify([id, kind]);
     if (untrack(() => catalogFor) !== forKey) {
       models = [];
@@ -397,6 +402,12 @@
 
   function syncCaret(): void {
     caret = textarea?.selectionStart ?? text.length;
+  }
+
+  /** Dictated words go in at the caret. */
+  function dictated(words: string): void {
+    const next = insertAtCaret(text, textarea?.selectionStart ?? caret, words);
+    void place(next.text, next.caret);
   }
 
   function choose(index: number): void {
@@ -649,6 +660,7 @@
   <div class="composer__bar">
     <div class="chips">
       <AttachButton images={imageState} busy={attachments.busy} disabled={busy || store.safeMode || !workspaceId || (Boolean(pipelineId) && !fusionMode)} onPick={pick} />
+      <DictateButton onText={dictated} disabled={busy || store.safeMode} />
       {#if !fusionMode}
       <ExecutorPicker
         {workspaceId}
@@ -664,6 +676,7 @@
       {#if harness && !pipelineId}
         <ModelPicker
           models={modelOptions}
+          {harness}
           value={modelKey}
           defaultOption={true}
           loading={modelsLoading}

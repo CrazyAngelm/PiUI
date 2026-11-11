@@ -18,11 +18,11 @@
 
 <div class="summary">
   <section aria-labelledby="run-delete-removed">
-    <h3 id="run-delete-removed"><Trash size={13} /> {$t('Removed from PiUI')}</h3>
+    <h3 id="run-delete-removed"><Trash size={13} /> {$t('Removed from Nano Desktop')}</h3>
     <ul>
-      <li>{$t('This run in PiUI’s run journal: its steps, the results PiUI recorded, attempts and messages')}</li>
+      <li>{$t('This run in Nano Desktop’s run journal: its steps, the results Nano Desktop recorded, attempts and messages')}</li>
       <li>{$t('Its entry in the run list')}</li>
-      {#if scripts > 0}<li>{$t('Script working copies PiUI may still hold for it')}</li>{/if}
+      {#if scripts > 0}<li>{$t('Script working copies Nano Desktop may still hold for it')}</li>{/if}
     </ul>
   </section>
   <section aria-labelledby="run-delete-kept">

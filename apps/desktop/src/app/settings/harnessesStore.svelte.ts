@@ -5,7 +5,7 @@ import type {
   HarnessRegistryV1,
   HarnessStatusV1,
 } from '../../../../../contracts/harness-registry-v1';
-import { acpAgentId, acpHarnessId, isAcpHarness, type HarnessId } from '../../../../../contracts/harness-identity-v2';
+import { acpAgentId, acpHarnessId, isAcpHarness, type HarnessId } from '../../../../../contracts/harness-identity-v3';
 import {
   HarnessRegistryError,
   harnessRegistryError,

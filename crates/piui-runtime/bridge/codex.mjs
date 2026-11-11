@@ -244,7 +244,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   // text: the native error and payload never reach the UI.
   const protocolMismatch = () => fail(
     "native-protocol-mismatch",
-    "The Codex app server rejected or did not properly answer a required startup request. The installed Codex may be incompatible with this PiUI version.",
+    "The Codex app server rejected or did not properly answer a required startup request. The installed Codex may be incompatible with this Nano Desktop version.",
   );
   const mapStatus = (value) => {
     if (value === "inProgress") return "streaming";
@@ -1549,7 +1549,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   };
 
   const initialize = await callDuringStartup("initialize", {
-    clientInfo: { name: "piui", title: "PiUI", version: "0.2.11" },
+    clientInfo: { name: "piui", title: "PiUI", version: "0.3.0" },
     capabilities: { experimentalApi: true, requestAttestation: false },
   });
   if (!isRecord(initialize) || typeof initialize.codexHome !== "string") {

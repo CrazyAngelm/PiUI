@@ -61,8 +61,9 @@ fn literal_native_tool_names<'a>(
         Harness::Pi => PI_NATIVE_TOOL_NAMES,
         Harness::PrimeAgent => PRIME_NATIVE_TOOL_NAMES,
         Harness::ClaudeCode => CLAUDE_NATIVE_TOOL_NAMES,
-        // ACP has no per-session tool restriction contract.
-        Harness::Codex | Harness::Hermes | Harness::Acp(_) => &[],
+        // ACP has no per-session tool restriction contract, and Nano exposes
+        // no per-tool allowlist: its tool rules are refused, never ignored.
+        Harness::Codex | Harness::Hermes | Harness::Nano | Harness::Acp(_) => &[],
     };
     Ok(tools.to_vec())
 }
@@ -125,13 +126,19 @@ pub(crate) fn launch_policy(
         return Err(OrchestrationSchedulerError::unsupported());
     }
     // Claude Code runs only at standard speed: fast mode can use paid extra
-    // usage, so a speed setting is refused before anything is launched.
+    // usage, so a speed setting is refused before anything is launched. Nano
+    // has no speed setting either.
     if profile.service_tier.is_some()
         && matches!(
             profile.harness,
-            Harness::Pi | Harness::Hermes | Harness::ClaudeCode | Harness::Acp(_)
+            Harness::Pi | Harness::Hermes | Harness::ClaudeCode | Harness::Nano | Harness::Acp(_)
         )
     {
+        return Err(OrchestrationSchedulerError::unsupported());
+    }
+    // Nano's reasoning is not configurable in v1 (its modes carry no thinking
+    // levels): a requested level is refused, never silently dropped.
+    if profile.harness == Harness::Nano && profile.reasoning.is_some() {
         return Err(OrchestrationSchedulerError::unsupported());
     }
     // Claude Code runs only Anthropic models (through the user's subscription)
@@ -161,8 +168,13 @@ pub(crate) fn launch_policy(
     if profile.resource_rules.iter().any(|rule| {
         rule.id.trim().is_empty()
             || match profile.harness {
-                // Claude Code and ACP expose no per-session skill or MCP overrides.
-                Harness::Pi | Harness::Hermes | Harness::ClaudeCode | Harness::Acp(_) => true,
+                // Claude Code, Nano and ACP expose no per-session skill or MCP
+                // overrides.
+                Harness::Pi
+                | Harness::Hermes
+                | Harness::ClaudeCode
+                | Harness::Nano
+                | Harness::Acp(_) => true,
                 Harness::PrimeAgent => rule.kind != piui_orchestration::ResourceKind::Skill,
                 Harness::Codex => match rule.kind {
                     piui_orchestration::ResourceKind::Skill => {
@@ -271,7 +283,9 @@ pub(crate) fn launch_policy(
 /// File permission presets the adapter enforces for `harness`.
 fn permission_modes(harness: Harness) -> Vec<piui_orchestration::PermissionMode> {
     match harness {
-        Harness::Pi => vec![
+        // Nano is Pi underneath: its guard asks in native mode, `read-only`
+        // restricts the tools, and `workspace-write` does not exist.
+        Harness::Pi | Harness::Nano => vec![
             piui_orchestration::PermissionMode::Native,
             piui_orchestration::PermissionMode::ReadOnly,
             piui_orchestration::PermissionMode::FullAccess,

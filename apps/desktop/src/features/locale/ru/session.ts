@@ -39,7 +39,7 @@ export const sessionRu: Readonly<Record<string, string>> = {
   Submodule: 'Подмодуль',
   binary: 'двоичный',
   'Only the first 2000 changed files are listed.': 'Показаны только первые 2000 изменённых файлов.',
-  '{0} files have names PiUI cannot show.': 'Файлов с именами, которые PiUI не может показать: {0}.',
+  '{0} files have names Nano Desktop cannot show.': 'Файлов с именами, которые Nano Desktop не может показать: {0}.',
   'Selected file': 'Выбранный файл',
   'Stage file': 'Добавить файл в индекс',
   'Unstage file': 'Убрать файл из индекса',
@@ -54,10 +54,10 @@ export const sessionRu: Readonly<Record<string, string>> = {
   'Revert change {0}…': 'Откатить изменение {0}…',
   'Comment on change {0}…': 'Прокомментировать изменение {0}…',
   'Comment on line {0}': 'Прокомментировать строку {0}',
-  'Binary file, {0}. PiUI shows no content for it.': 'Двоичный файл, {0}. PiUI не показывает его содержимое.',
+  'Binary file, {0}. Nano Desktop shows no content for it.': 'Двоичный файл, {0}. Nano Desktop не показывает его содержимое.',
   'This change is too large to show here ({0}). Review it with git.':
     'Изменение слишком большое для показа здесь ({0}). Просмотрите его в git.',
-  'A symbolic link. PiUI does not follow or move links.': 'Символическая ссылка. PiUI не переходит по ссылкам и не перемещает их.',
+  'A symbolic link. Nano Desktop does not follow or move links.': 'Символическая ссылка. Nano Desktop не переходит по ссылкам и не перемещает их.',
   'A submodule. Manage it with git directly.': 'Подмодуль. Управляйте им напрямую через git.',
   'This file has a merge conflict. Resolve it with your tools or ask the agent.':
     'В файле конфликт слияния. Разрешите его своими инструментами или попросите агента.',
@@ -110,8 +110,8 @@ export const sessionRu: Readonly<Record<string, string>> = {
   'Starts from': 'Начинается с',
   'Uncommitted changes in the project folder are not included: the worktree starts from the last commit.':
     'Незакоммиченные изменения папки проекта не переносятся: worktree начинается с последнего коммита.',
-  'PiUI creates the folder with git and runs no repository hooks. Removing the worktree later keeps the branch and its commits.':
-    'PiUI создаёт папку через git и не запускает хуки репозитория. При удалении worktree ветка и её коммиты сохранятся.',
+  'Nano Desktop creates the folder with git and runs no repository hooks. Removing the worktree later keeps the branch and its commits.':
+    'Nano Desktop создаёт папку через git и не запускает хуки репозитория. При удалении worktree ветка и её коммиты сохранятся.',
   'Use this worktree': 'Использовать этот worktree',
   Branch: 'Ветка',
   'Copy branch name': 'Скопировать имя ветки',
@@ -127,7 +127,7 @@ export const sessionRu: Readonly<Record<string, string>> = {
   'Remove worktree…': 'Удалить worktree…',
   'Remove this worktree?': 'Удалить этот worktree?',
   'Remove the worktree and lose its changes?': 'Удалить worktree и потерять его изменения?',
-  'PiUI deletes the worktree folder:': 'PiUI удалит папку worktree:',
+  'Nano Desktop deletes the worktree folder:': 'Nano Desktop удалит папку worktree:',
   'The branch {0} stays with its commits. Chats that work in this worktree stop; their history stays readable.':
     'Ветка {0} останется со своими коммитами. Чаты, работающие в этом worktree, остановятся; их история останется доступной.',
   'This worktree has {0} uncommitted changes.': 'В worktree незакоммиченных изменений: {0}.',
@@ -144,9 +144,9 @@ export const sessionRu: Readonly<Record<string, string>> = {
   'Continued from': 'Продолжение чата',
   'This chat continues that one. Its history was not copied or converted.':
     'Этот чат продолжает тот. Его история не копировалась и не конвертировалась.',
-  'A chat that is no longer in PiUI.': 'Чат, которого больше нет в PiUI.',
-  'Started in the Pi terminal app. PiUI continues the same session file.':
-    'Начат в терминальном Pi. PiUI продолжает тот же файл сессии.',
+  'A chat that is no longer in Nano Desktop.': 'Чат, которого больше нет в Nano Desktop.',
+  'Started in the Pi terminal app. Nano Desktop continues the same session file.':
+    'Начат в терминальном Pi. Nano Desktop продолжает тот же файл сессии.',
 
   // Continue in another harness.
   'Continuing "{0}" from {1}. Pick a harness and model, edit the message, then send it. The new chat links back; the original stays as it is.':
@@ -159,23 +159,23 @@ export const sessionRu: Readonly<Record<string, string>> = {
   'Please continue from here:': 'Продолжи отсюда:',
 
   // Continue a terminal Pi session.
-  'Continue in PiUI': 'Продолжить в PiUI',
-  'Continue this session in PiUI?': 'Продолжить эту сессию в PiUI?',
-  'PiUI opens the same session file with Pi and adds this chat to the sidebar. It never rewrites the file; Pi appends new turns to it.':
-    'PiUI откроет тот же файл сессии через Pi и добавит чат в боковую панель. PiUI никогда не переписывает файл; новые ходы дописывает сам Pi.',
+  'Continue in Nano Desktop': 'Продолжить в Nano Desktop',
+  'Continue this session in Nano Desktop?': 'Продолжить эту сессию в Nano Desktop?',
+  'Nano Desktop opens the same session file with Pi and adds this chat to the sidebar. It never rewrites the file; Pi appends new turns to it.':
+    'Nano Desktop откроет тот же файл сессии через Pi и добавит чат в боковую панель. Nano Desktop никогда не переписывает файл; новые ходы дописывает сам Pi.',
   'Close it in the Pi terminal app first.': 'Сначала закройте её в терминальном Pi.',
-  'The terminal and PiUI must not write to one session at the same time.':
-    'Терминал и PiUI не должны одновременно писать в одну сессию.',
+  'The terminal and Nano Desktop must not write to one session at the same time.':
+    'Терминал и Nano Desktop не должны одновременно писать в одну сессию.',
 
   // Session tool refusals (host-api/sessionToolErrors.ts).
-  'Safe mode is on: PiUI does not change files, git or chats.':
-    'Включён безопасный режим: PiUI не меняет файлы, git и чаты.',
+  'Safe mode is on: Nano Desktop does not change files, git or chats.':
+    'Включён безопасный режим: Nano Desktop не меняет файлы, git и чаты.',
   'Trust this project folder first.': 'Сначала доверьте эту папку проекта.',
   'This chat or file is no longer available. Refresh and try again.':
     'Этот чат или файл больше недоступен. Обновите и попробуйте снова.',
   'Check the request and try again.': 'Проверьте запрос и попробуйте снова.',
   'The project folder is unavailable.': 'Папка проекта недоступна.',
-  'This changed while PiUI was working on it. Try again.': 'Это изменилось, пока PiUI с ним работал. Попробуйте снова.',
+  'This changed while Nano Desktop was working on it. Try again.': 'Это изменилось, пока Nano Desktop с ним работал. Попробуйте снова.',
   'This folder is not a git repository.': 'Эта папка — не git-репозиторий.',
   'The repository has no commits yet. Make a first commit before creating a worktree.':
     'В репозитории ещё нет коммитов. Сделайте первый коммит, прежде чем создавать worktree.',
@@ -185,16 +185,16 @@ export const sessionRu: Readonly<Record<string, string>> = {
   'This changed since you reviewed it. Check it again before continuing.':
     'Это изменилось после вашего просмотра. Проверьте ещё раз, прежде чем продолжать.',
   'This action is not available here.': 'Здесь это действие недоступно.',
-  'This change is too large for PiUI to show. Use git directly for it.':
-    'Изменение слишком большое для показа в PiUI. Работайте с ним напрямую через git.',
+  'This change is too large for Nano Desktop to show. Use git directly for it.':
+    'Изменение слишком большое для показа в Nano Desktop. Работайте с ним напрямую через git.',
   'Git was not found. Install git and make sure it is on PATH.': 'Git не найден. Установите git и добавьте его в PATH.',
   'Git refused this folder because it belongs to another account. Add it to safe.directory in your git settings.':
     'Git отказался работать с папкой: она принадлежит другой учётной записи. Добавьте её в safe.directory в настройках git.',
   'Another git command is using this repository. Try again in a moment.':
     'Этим репозиторием занята другая команда git. Попробуйте чуть позже.',
   'Git could not complete the operation.': 'Git не смог выполнить операцию.',
-  'This system has no trash PiUI can use. The file was not changed.':
-    'В этой системе нет корзины, которой может пользоваться PiUI. Файл не изменён.',
+  'This system has no trash Nano Desktop can use. The file was not changed.':
+    'В этой системе нет корзины, которой может пользоваться Nano Desktop. Файл не изменён.',
   'The file could not be moved to the trash and was left in place.':
     'Файл не удалось переместить в корзину; он остался на месте.',
   "This chat's worktree was removed. Its history stays readable; start a new chat to keep working.":
@@ -203,7 +203,7 @@ export const sessionRu: Readonly<Record<string, string>> = {
     'Папки worktree этого чата нет или она больше не относится к репозиторию проекта.',
   'This session was written moments ago and may still be open in the Pi terminal app. Close it there, then try again.':
     'В эту сессию писали только что, и она может быть ещё открыта в терминальном Pi. Закройте её там и попробуйте снова.',
-  'PiUI could not save this change. Nothing was lost.': 'PiUI не смог сохранить это изменение. Ничего не потеряно.',
+  'Nano Desktop could not save this change. Nothing was lost.': 'Nano Desktop не смог сохранить это изменение. Ничего не потеряно.',
   'The harness could not start. Its saved history has not been removed.':
     'Харнес не запустился. Его сохранённая история не удалена.',
   'The operation could not be completed.': 'Операцию не удалось выполнить.',
@@ -213,12 +213,12 @@ export const sessionRu: Readonly<Record<string, string>> = {
   'This change can only be handled as a whole file.': 'С этим изменением можно работать только целым файлом.',
   'Stage a new file as a whole.': 'Новый файл добавляется в индекс целиком.',
   'Move a new file to the trash as a whole.': 'Новый файл перемещается в корзину целиком.',
-  'PiUI moves only regular files to the trash. Remove this link yourself.':
-    'PiUI перемещает в корзину только обычные файлы. Удалите эту ссылку сами.',
+  'Nano Desktop moves only regular files to the trash. Remove this link yourself.':
+    'Nano Desktop перемещает в корзину только обычные файлы. Удалите эту ссылку сами.',
   'Unstage this new file first, then move it to the trash.':
     'Сначала уберите этот новый файл из индекса, затем переместите его в корзину.',
-  'This change is too large to show, so PiUI does not revert it.':
-    'Изменение слишком большое для показа, поэтому PiUI его не откатывает.',
+  'This change is too large to show, so Nano Desktop does not revert it.':
+    'Изменение слишком большое для показа, поэтому Nano Desktop его не откатывает.',
   'Unstage these changes first, then revert them.': 'Сначала уберите эти изменения из индекса, затем откатите их.',
   'Worktrees are for project folders. Personal chats have no repository.':
     'Worktree создаются для папок проектов. У личных чатов нет репозитория.',
@@ -234,25 +234,25 @@ export const sessionRu: Readonly<Record<string, string>> = {
   // Settings → Worktrees and orphan worktrees.
   Worktrees: 'Worktree',
   'Manage worktrees': 'Управление worktree',
-  'Folders PiUI created for worktree chats. Deleting a chat keeps its worktree; remove one here when no chat uses it any more. Branches are never deleted.':
-    'Папки, которые PiUI создал для чатов в worktree. При удалении чата его worktree остаётся; удалите его здесь, когда ни один чат им больше не пользуется. Ветки никогда не удаляются.',
+  'Folders Nano Desktop created for worktree chats. Deleting a chat keeps its worktree; remove one here when no chat uses it any more. Branches are never deleted.':
+    'Папки, которые Nano Desktop создал для чатов в worktree. При удалении чата его worktree остаётся; удалите его здесь, когда ни один чат им больше не пользуется. Ветки никогда не удаляются.',
   'Safe mode: worktrees are listed, but none can be removed.': 'Безопасный режим: worktree показаны, но удалить их нельзя.',
   'No worktrees': 'Нет worktree',
   'Worktrees you create for new chats appear here.': 'Здесь появятся worktree, созданные для новых чатов.',
   'Worktrees without a chat: {0}': 'Worktree без чатов: {0}',
   'No chat': 'Нет чата',
   'Folder missing': 'Папки нет',
-  'Project no longer in PiUI': 'Проекта больше нет в PiUI',
+  'Project no longer in Nano Desktop': 'Проекта больше нет в Nano Desktop',
   'from commit {0}': 'от коммита {0}',
   'Open chat {0}': 'Открыть чат {0}',
-  'Used by a chat PiUI does not list.': 'Используется чатом, которого нет в списке PiUI.',
+  'Used by a chat Nano Desktop does not list.': 'Используется чатом, которого нет в списке Nano Desktop.',
   'Remove worktree {0}…': 'Удалить worktree {0}…',
   'Remove…': 'Удалить…',
-  'The worktree folder is already gone. PiUI forgets it:': 'Папки worktree уже нет. PiUI забудет её:',
+  'The worktree folder is already gone. Nano Desktop forgets it:': 'Папки worktree уже нет. Nano Desktop забудет её:',
   'The branch {0} stays with its commits. No chat works in this worktree any more.':
     'Ветка {0} остаётся со своими коммитами. Ни один чат больше не работает в этом worktree.',
   '{0} more changes are not listed.': 'Ещё изменений не показано: {0}.',
-  'This worktree is no longer managed by PiUI.': 'PiUI больше не управляет этим worktree.',
+  'This worktree is no longer managed by Nano Desktop.': 'Nano Desktop больше не управляет этим worktree.',
   "A chat still works in this worktree. Remove it from that chat's details.":
     'В этом worktree ещё работает чат. Удалите worktree в деталях этого чата.',
 

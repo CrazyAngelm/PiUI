@@ -23,7 +23,7 @@ export const runsRu: Readonly<Record<string, string>> = {
   'Opened from a run as a new draft': 'Запуск открыт как новый черновик',
   'Saving creates a new pipeline; the saved one is not changed.': 'Сохранение создаст новый пайплайн; сохранённый не изменится.',
   'Pinned data is not exported': 'Закреплённые данные не экспортируются',
-  'System files never include pinned data; the pins stay in PiUI.': 'Файлы систем не содержат закреплённых данных; они остаются в PiUI.',
+  'System files never include pinned data; the pins stay in Nano Desktop.': 'Файлы систем не содержат закреплённых данных; они остаются в Nano Desktop.',
   'Pinned from run #{0}, {1}.': 'Закреплено из запуска #{0}, {1}.',
   'Nothing ran: the pinned data does not match this step’s result fields, so the step failed.':
     'Ничего не выполнялось: закреплённые данные не подходят к полям результата шага, поэтому шаг завершился ошибкой.',
@@ -81,12 +81,12 @@ export const runsRu: Readonly<Record<string, string>> = {
   'Delete run…': 'Удалить запуск…',
   'Delete run': 'Удалить запуск',
   'Delete this run?': 'Удалить этот запуск?',
-  'Only PiUI’s own records of this run are deleted.': 'Удаляются только собственные записи PiUI об этом запуске.',
-  'Removed from PiUI': 'Удаляется из PiUI',
-  'This run in PiUI’s run journal: its steps, the results PiUI recorded, attempts and messages':
-    'Этот запуск в журнале запусков PiUI: шаги, записанные PiUI результаты, попытки и сообщения',
+  'Only Nano Desktop’s own records of this run are deleted.': 'Удаляются только собственные записи Nano Desktop об этом запуске.',
+  'Removed from Nano Desktop': 'Удаляется из Nano Desktop',
+  'This run in Nano Desktop’s run journal: its steps, the results Nano Desktop recorded, attempts and messages':
+    'Этот запуск в журнале запусков Nano Desktop: шаги, записанные Nano Desktop результаты, попытки и сообщения',
   'Its entry in the run list': 'Строка в списке запусков',
-  'Script working copies PiUI may still hold for it': 'Рабочие копии скриптов, которые PiUI ещё может хранить для него',
+  'Script working copies Nano Desktop may still hold for it': 'Рабочие копии скриптов, которые Nano Desktop ещё может хранить для него',
   'Not touched': 'Не затрагивается',
   'The agents’ conversations in their harnesses ({0} sessions and their native history)':
     'Разговоры агентов в их харнесах (сессий: {0}, вместе с нативной историей)',
@@ -100,7 +100,7 @@ export const runsRu: Readonly<Record<string, string>> = {
   'This run or pipeline changed meanwhile. Nothing was changed; check it and try again.':
     'Запуск или пайплайн успел измениться. Ничего не изменено; проверьте и попробуйте снова.',
   'Safe mode keeps runs and pipelines read-only.': 'В безопасном режиме запуски и пайплайны доступны только для чтения.',
-  'PiUI is closing.': 'PiUI закрывается.',
+  'Nano Desktop is closing.': 'Nano Desktop закрывается.',
   'This run is still running or needs checking. Stop or reconcile it first.':
     'Этот запуск ещё выполняется или требует проверки. Сначала остановите его или запишите исход.',
   'Only the output of a step that succeeded can be pinned.': 'Закрепить можно только результат успешно завершённого шага.',
@@ -109,6 +109,6 @@ export const runsRu: Readonly<Record<string, string>> = {
     'Результат больше, чем допускают закреплённые данные (256 КиБ на шаг, 1 МиБ на пайплайн).',
   'The agent’s history could not be read, so its output cannot be pinned.':
     'Не удалось прочитать историю агента, поэтому его результат нельзя закрепить.',
-  'PiUI could not save this change. Nothing was changed.': 'PiUI не смог сохранить изменение. Ничего не изменено.',
+  'Nano Desktop could not save this change. Nothing was changed.': 'Nano Desktop не смог сохранить изменение. Ничего не изменено.',
   'The operation could not be completed. Nothing was changed.': 'Операцию не удалось выполнить. Ничего не изменено.',
 };

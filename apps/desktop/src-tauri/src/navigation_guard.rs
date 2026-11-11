@@ -18,6 +18,10 @@
 //!   wry forwards frame navigations to the same navigation hook without
 //!   saying which frame they are for, so refusing the origin there would
 //!   break every panel. It acts after the load started, not before.
+//! - **Every platform:** app commands are an allowlist ([`refuses_command_source`]):
+//!   only the `main` webview, showing an app origin, may call them. The Nano
+//!   Cloud window (`nano-cloud`, ADR-049) shows a remote origin and therefore
+//!   never gets IPC; no capability lists it either.
 //! - **Every platform:** app commands refuse a call whose webview shows the
 //!   plugin origin ([`refuses_invoke`]), which closes that short window for
 //!   PiUI's own commands. The core event listener remains reachable during
@@ -38,6 +42,32 @@ pub(crate) fn is_plugin_url(url: &Url) -> bool {
 /// Whether an app command from a webview showing `url` must be refused.
 pub(crate) fn refuses_invoke(url: Option<&Url>) -> bool {
     url.is_some_and(is_plugin_url)
+}
+
+/// The only webview allowed to call app commands.
+const APP_WINDOW: &str = "main";
+
+/// Whether `url` is an origin the application itself serves: the packaged
+/// frontend (`tauri://localhost`, or `http(s)://tauri.localhost` on Windows)
+/// and, in debug builds only, the local dev server.
+pub(crate) fn is_app_origin(url: &Url) -> bool {
+    let host = url.host_str().unwrap_or("");
+    match url.scheme() {
+        "tauri" => host == "localhost",
+        "http" | "https" => {
+            host == "tauri.localhost"
+                || (cfg!(debug_assertions) && matches!(host, "localhost" | "127.0.0.1"))
+        }
+        _ => false,
+    }
+}
+
+/// Whether an app command from the webview `label` currently showing `url`
+/// must be refused. Only the main window on an app origin may call commands;
+/// the plugin origin is refused as well. A webview whose address cannot be
+/// read is judged by its label alone.
+pub(crate) fn refuses_command_source(label: &str, url: Option<&Url>) -> bool {
+    label != APP_WINDOW || refuses_invoke(url) || url.is_some_and(|url| !is_app_origin(url))
 }
 
 /// The page a webview is sent back to: its last page off the plugin origin.
@@ -126,5 +156,62 @@ mod tests {
         assert!(!refuses_invoke(Some(&url("http://tauri.localhost/"))));
         assert!(!refuses_invoke(Some(&url("http://localhost:1420/"))));
         assert!(!refuses_invoke(None));
+    }
+
+    #[test]
+    fn commands_come_only_from_the_main_window_on_an_app_origin() {
+        for app in [
+            "tauri://localhost/index.html",
+            "http://tauri.localhost/",
+            "https://tauri.localhost/?view=settings",
+        ] {
+            assert!(!refuses_command_source("main", Some(&url(app))), "{app}");
+        }
+        assert!(!refuses_command_source("main", None));
+
+        // The cloud window and any other label never get commands, even on
+        // an app origin.
+        for label in ["nano-cloud", "other", "", "Main", "main "] {
+            assert!(
+                refuses_command_source(label, Some(&url("http://tauri.localhost/"))),
+                "{label:?}"
+            );
+            assert!(refuses_command_source(label, None), "{label:?}");
+        }
+
+        // The main window showing a remote or foreign origin is refused.
+        for foreign in [
+            "https://nanoagents.ru/",
+            "https://hermes.nanoagents.ru/",
+            "https://tauri.localhost.evil.example/",
+            "http://evil.example/",
+            "file:///C:/page.html",
+            "about:blank",
+            "http://piui-plugin.localhost/example.hello/ui/index.html",
+            "piui-plugin://localhost/a/b.html",
+            "ws://tauri.localhost/",
+        ] {
+            assert!(
+                refuses_command_source("main", Some(&url(foreign))),
+                "{foreign}"
+            );
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_builds_also_accept_the_local_dev_server() {
+        assert!(!refuses_command_source(
+            "main",
+            Some(&url("http://localhost:1420/"))
+        ));
+        assert!(!refuses_command_source(
+            "main",
+            Some(&url("http://127.0.0.1:1420/"))
+        ));
+        assert!(refuses_command_source(
+            "nano-cloud",
+            Some(&url("http://localhost:1420/"))
+        ));
     }
 }

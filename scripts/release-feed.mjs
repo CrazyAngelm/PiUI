@@ -92,7 +92,7 @@ export function releaseNotes({ files, tag, version, windowsSigning, feed, change
       ? `| ${row.system} | — | Not built for this release. |`
       : `| ${row.system} | ${names.map((name) => `\`${name}\``).join('<br>')} | ${row.note({ windowsSigning })} |`;
   });
-  return `PiUI ${tag} — a desktop workbench for native agent harnesses (Codex, Claude Code, Pi, Hermes, Prime Agent) and multi-agent pipelines. Developer preview.
+  return `Nano Desktop ${tag} — a desktop workbench for native agent harnesses (Codex, Claude Code, Pi, Hermes, Prime Agent) and multi-agent pipelines. Developer preview.
 
 | System | Files | Status |
 | --- | --- | --- |
@@ -100,17 +100,17 @@ ${rows.join('\n')}
 
 ## Before you install
 
-1. Install at least one harness and sign in with its own tool: Codex, Claude Code, Pi, Hermes or Prime Agent. PiUI never asks for or stores credentials. Claude Code runs only with a Claude subscription login (\`claude\` → \`/login\`).
+1. Install at least one harness and sign in with its own tool: Codex, Claude Code, Pi, Hermes or Prime Agent. Nano Desktop never asks for or stores harness credentials. Claude Code runs only with a Claude subscription login (\`claude\` → \`/login\`).
 2. Verify your download against \`SHA256SUMS.txt\`:
-   - Windows (PowerShell): \`Get-FileHash .\\PiUI_${version}_x64-setup.exe -Algorithm SHA256\` and compare with the matching line of \`SHA256SUMS.txt\`.
+   - Windows (PowerShell): \`Get-FileHash .\\NanoDesktop_${version}_x64-setup.exe -Algorithm SHA256\` and compare with the matching line of \`SHA256SUMS.txt\`.
    - Linux and macOS: \`sha256sum --check --ignore-missing SHA256SUMS.txt\` (macOS: \`shasum -a 256 --check --ignore-missing SHA256SUMS.txt\`).
-3. Do not write to the same session from PiUI and the harness CLI at the same time.
+3. Do not write to the same session from Nano Desktop and the harness CLI at the same time.
 
 ## Updates
 
 ${
   feed
-    ? 'This release publishes a signed update feed. Installed builds can check for updates in Settings → About; "Check for updates automatically" is off until you turn it on. PiUI installs an update only after its signature matches the key built into your version.'
+    ? 'This release publishes a signed update feed. Installed builds can check for updates in Settings → About; "Check for updates automatically" is off until you turn it on. Nano Desktop installs an update only after its signature matches the key built into your version.'
     : 'This release has no update feed. Install newer versions manually over this one; your chats, pipelines and settings stay in place.'
 }
 

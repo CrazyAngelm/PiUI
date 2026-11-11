@@ -56,7 +56,7 @@
       case 'runMember':
         return actor.teammateId ? handleOf(workspaceId, actor.teammateId) : $t('A pipeline run');
       case 'host':
-        return 'PiUI';
+        return 'Nano Desktop';
       default: {
         const exhaustive: never = actor;
         return exhaustive;

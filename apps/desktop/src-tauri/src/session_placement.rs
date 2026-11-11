@@ -100,7 +100,7 @@ pub(crate) struct SessionTools {
 fn damaged_error() -> WorkspaceError {
     WorkspaceError {
         code: "IO_ERROR",
-        message: "PiUI could not read where this chat runs. Its history has not been removed.",
+        message: "Nano Desktop could not read where this chat runs. Its history has not been removed.",
         recoverable: true,
     }
 }
@@ -108,7 +108,7 @@ fn damaged_error() -> WorkspaceError {
 fn io_error() -> WorkspaceError {
     WorkspaceError {
         code: "IO_ERROR",
-        message: "PiUI could not save where this chat runs.",
+        message: "Nano Desktop could not save where this chat runs.",
         recoverable: true,
     }
 }
@@ -253,7 +253,7 @@ pub(crate) fn tool_error(code: &'static str, message: &'static str) -> Workspace
 pub(crate) fn safe_mode_error() -> WorkspaceError {
     tool_error(
         "SAFE_MODE",
-        "Safe mode is on: PiUI does not change files, git or chats.",
+        "Safe mode is on: Nano Desktop does not change files, git or chats.",
     )
 }
 
@@ -290,7 +290,7 @@ pub(crate) fn git_error(error: piui_runtime::git::GitError) -> WorkspaceError {
         ),
         GitError::Run(GitRunError::TooLarge) => tool_error(
             "TOO_LARGE",
-            "This change is too large for PiUI to show. Use git directly for it.",
+            "This change is too large for Nano Desktop to show. Use git directly for it.",
         ),
         GitError::Run(GitRunError::TimedOut) => {
             tool_error("GIT_FAILED", "Git did not finish in time.")

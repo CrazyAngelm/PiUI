@@ -224,7 +224,7 @@
   }
 </script>
 
-<Dialog bind:open title={schedule ? $t('Edit automation') : $t('New automation')} description={$t('Runs a saved pipeline on a schedule or after an event while PiUI is open or in the tray.')} size="md">
+<Dialog bind:open title={schedule ? $t('Edit automation') : $t('New automation')} description={$t('Runs a saved pipeline on a schedule or after an event while Nano Desktop is open or in the tray.')} size="md">
   <form class="form" id="schedule-form" onsubmit={(event) => { event.preventDefault(); void submit(true); }} novalidate>
     <Field label={$t('Pipeline to run')} for="schedule-pipeline">
       <select id="schedule-pipeline" class="select" bind:value={launchCommandId} disabled={busy}>
@@ -359,13 +359,13 @@
       {/each}
     {/if}
     {#if mode === 'schedule'}
-      <Field label={$t('If PiUI was closed or paused at that time')}>
+      <Field label={$t('If Nano Desktop was closed or paused at that time')}>
         <Segmented
-          label={$t('If PiUI was closed or paused at that time')}
+          label={$t('If Nano Desktop was closed or paused at that time')}
           bind:value={missed}
           options={[
             { value: 'skip', label: $t('Skip it') },
-            { value: 'coalesce', label: $t('Run once when PiUI opens') },
+            { value: 'coalesce', label: $t('Run once when Nano Desktop opens') },
           ]}
         />
       </Field>
@@ -388,7 +388,7 @@
         <InputFields {inputs} bind:form errors={inputErrors} idPrefix="schedule-input" disabled={busy} />
       </fieldset>
     {/if}
-    <p class="note">{$t('Automations run only while PiUI is open or in the tray; they do not wake the computer. Each run uses your harness subscriptions like a manual run.')}</p>
+    <p class="note">{$t('Automations run only while Nano Desktop is open or in the tray; they do not wake the computer. Each run uses your harness subscriptions like a manual run.')}</p>
     {#if problem || error}<p class="error" role="alert">{$t(problem || error)}</p>{/if}
   </form>
   {#snippet footer()}

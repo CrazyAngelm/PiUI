@@ -73,10 +73,10 @@ export function versionNote(agent: AcpAgentEntryV1): [string, string[]] | undefi
   const version = agent.version ?? '';
   switch (agent.versionStatus) {
     case undefined: return undefined;
-    case 'verified': return ['{0}, tested with PiUI', [version]];
-    case 'no-verified-range': return ['{0}, not verified by PiUI', [version]];
-    case 'newer': return ['{0}, newer than the versions tested with PiUI', [version]];
-    case 'older': return ['{0}, older than the versions tested with PiUI', [version]];
+    case 'verified': return ['{0}, tested with Nano Desktop', [version]];
+    case 'no-verified-range': return ['{0}, not verified by Nano Desktop', [version]];
+    case 'newer': return ['{0}, newer than the versions tested with Nano Desktop', [version]];
+    case 'older': return ['{0}, older than the versions tested with Nano Desktop', [version]];
     case 'unrecognized': return ['The version output was not recognized', []];
     case 'probe-failed': return ['The version check did not finish', []];
     default: {

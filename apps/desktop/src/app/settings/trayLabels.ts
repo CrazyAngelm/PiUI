@@ -6,12 +6,12 @@ export type Translate = (value: string, parameters?: readonly unknown[]) => stri
 /** Tray menu copy in the current interface language (English source keys). */
 export function trayLabels(t: Translate): TrayLabelsV1 {
   return {
-    open: t('Open PiUI'),
+    open: t('Open Nano Desktop'),
     pause: t('Pause all automations'),
     resume: t('Resume automations'),
-    quit: t('Quit PiUI'),
-    tooltip: 'PiUI',
-    pausedTooltip: t('PiUI (automations paused)'),
+    quit: t('Quit Nano Desktop'),
+    tooltip: 'Nano Desktop',
+    pausedTooltip: t('Nano Desktop (automations paused)'),
   };
 }
 

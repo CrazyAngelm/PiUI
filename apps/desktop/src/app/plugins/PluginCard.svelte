@@ -163,7 +163,7 @@
             <li>
               <kbd>{shortcutParts(shortcut.key).join('+')}</kbd> {shortcut.title}
               {#if shortcut.conflict?.kind === 'piui'}
-                <span class="conflict">{$t('PiUI uses this shortcut, so it does nothing.')}</span>
+                <span class="conflict">{$t('Nano Desktop uses this shortcut, so it does nothing.')}</span>
               {:else if shortcut.conflict?.kind === 'plugin'}
                 <span class="conflict">{$t('Also used by {0}, so it does nothing until one of them is disabled.', [shortcut.conflict.with.join(', ')])}</span>
               {/if}

@@ -121,8 +121,8 @@ export const subpipelinesRu: Readonly<Record<string, string>> = {
   'No inputs are mapped; the sub-pipeline uses its defaults.': 'Входы не сопоставлены; вложенный пайплайн использует свои значения по умолчанию.',
   'Run input {0}': 'Входные данные {0}',
   'Result of {0}': 'Результат шага «{0}»',
-  'PiUI could not confirm how the sub-pipeline ended. Check its child run, then record an operator assertion. It reconciles the journal only.':
-    'PiUI не удалось подтвердить, чем закончился вложенный пайплайн. Проверьте его дочерний запуск, затем запишите утверждение оператора. Оно только сверяет журнал.',
+  'Nano Desktop could not confirm how the sub-pipeline ended. Check its child run, then record an operator assertion. It reconciles the journal only.':
+    'Nano Desktop не удалось подтвердить, чем закончился вложенный пайплайн. Проверьте его дочерний запуск, затем запишите утверждение оператора. Оно только сверяет журнал.',
   'Sub-pipeline of #{0}': 'Вложен в #{0}',
 
   // Failure codes of sub-pipeline steps.

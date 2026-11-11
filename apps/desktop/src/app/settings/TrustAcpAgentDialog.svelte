@@ -24,7 +24,7 @@
 <Dialog
   bind:open
   title={$t('Trust {0}?', [agent.descriptor.displayName])}
-  description={$t('PiUI will start exactly this command, without a shell. Review it before you trust it.')}
+  description={$t('Nano Desktop will start exactly this command, without a shell. Review it before you trust it.')}
   size="lg"
   closeLabel={$t('Close')}
 >

@@ -4,6 +4,7 @@
   import FolderCog from '@lucide/svelte/icons/folder-cog';
   import Keyboard from '@lucide/svelte/icons/keyboard';
   import Info from '@lucide/svelte/icons/info';
+  import UserRound from '@lucide/svelte/icons/user-round';
   import ShieldCheck from '@lucide/svelte/icons/shield-check';
   import ShieldAlert from '@lucide/svelte/icons/shield-alert';
   import Plus from '@lucide/svelte/icons/plus';
@@ -20,6 +21,7 @@
   import ExtensionsSettings from '../settings/ExtensionsSettings.svelte';
   import HarnessesSettings from '../settings/HarnessesSettings.svelte';
   import AboutSettings from '../settings/AboutSettings.svelte';
+  import NanoAccountSettings from '../settings/NanoAccountSettings.svelte';
   import Blocks from '@lucide/svelte/icons/blocks';
   import PluginsSettings from '../plugins/PluginsSettings.svelte';
   import PluginThemeRow from '../plugins/PluginThemeRow.svelte';
@@ -34,6 +36,7 @@
 
   const sections: { id: SettingsSection; label: string; icon: typeof Info }[] = [
     { id: 'general', label: 'General', icon: SlidersHorizontal },
+    { id: 'nano', label: 'Nano account', icon: UserRound },
     { id: 'harnesses', label: 'Harnesses', icon: Bot },
     { id: 'extensions', label: 'Extensions', icon: Puzzle },
     { id: 'plugins', label: 'Plugins', icon: Blocks },
@@ -179,6 +182,8 @@
           />
         </div>
       </div>
+    {:else if section === 'nano'}
+      <NanoAccountSettings safeMode={store.safeMode} onOpenUpdates={() => store.navigate({ name: 'settings', section: 'about' })} />
     {:else if section === 'harnesses'}
       <HarnessesSettings />
     {:else if section === 'extensions'}

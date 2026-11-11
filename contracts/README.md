@@ -208,11 +208,24 @@ no other workspace shape changed.
 `harness-identity-v2.ts` versions the identity grammar itself (ADR-034): v1 was
 the closed built-in set; v2 keeps every v1 value and adds `acp:<descriptor id>`
 (a lowercase slug of 1-32 letters, digits and inner hyphens) for Agent Client
-Protocol agents from the host descriptor registry. Workspace v15 `HarnessKind`,
-orchestration v6 `Harness` (v6.3, additive) and portable system files v4 accept
-v2 additively with the same compatibility rules as `claude-code`; v1-v3 system
+Protocol agents from the host descriptor registry. It stays as the frozen
+historical grammar. `harness-identity-v3.ts` is the current one (ADR-048): it
+keeps every v2 value and adds the built-in `nano` (Pi-based, Pi JSONL history).
+Workspace v15 `HarnessKind`, orchestration v6 `Harness` and portable system
+files v5 accept v3 additively with the same compatibility rules as
+`claude-code`; an older reader rejects `nano` explicitly, and v1-v4 system
 files stay closed. Stored workspace registries and orchestration definitions
 decode unchanged (`piui_contracts::harness_identity`, Rust and TS tests).
+
+# Nano account v1 / Nano server v1
+
+`nano-account-v1.ts` is the WebView <-> host IPC of the optional Nano account
+(sign-in, limits, entitled modes, the `nano` model catalog; ADR-047). The
+account is optional and no other harness depends on it.
+`nano-server-v1.ts` is the host <-> Nano server HTTP contract (only the Rust
+host talks to it; the WebView never does). Golden fixtures:
+`fixtures/nano-account-v1.json` and `fixtures/nano-server-v1.json`.
+A signed-out `nano` session fails before launch with `NANO_SIGN_IN_REQUIRED`.
 
 # App update v1
 

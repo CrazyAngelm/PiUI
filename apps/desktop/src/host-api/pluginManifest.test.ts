@@ -54,7 +54,7 @@ describe('plugin manifest v1 and v2 fixtures (shared with crates/piui-plugins)',
     }
   }, 30_000);
 
-  it('reads the v2 contributions and warns about keybindings on PiUI shortcuts', () => {
+  it('reads the v2 contributions and warns about keybindings on Nano Desktop shortcuts', () => {
     const checked = checkPluginManifestText(read(new URL('valid-v2.json', fixtures)), '0.2.2');
     expect(checked.ok).toBe(true);
     if (!checked.ok) return;
@@ -152,7 +152,7 @@ describe('plugin SDK and examples', () => {
     expect(read(new URL('tool-cards/ui/piui-panel.js', examples))).toBe(panel);
   });
 
-  it('the tool-cards MCP server answers over stdio under the permission model PiUI starts it with', async () => {
+  it('the tool-cards MCP server answers over stdio under the permission model Nano Desktop starts it with', async () => {
     const { spawn } = await import('node:child_process');
     const packageRoot = fileURLToPath(new URL('tool-cards', examples));
     const server = spawn(process.execPath, ['--permission', `--allow-fs-read=${packageRoot}`, join(packageRoot, 'mcp', 'server.mjs'), '--stdio'], { stdio: ['pipe', 'pipe', 'ignore'] });

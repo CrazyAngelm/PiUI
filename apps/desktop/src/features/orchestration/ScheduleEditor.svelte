@@ -56,7 +56,7 @@
       : !instant.ok && instant.reason === 'ambiguous' ? 'This local time occurs twice because the clock changes. Choose another time.'
       : !instant.ok ? 'Choose a valid date and time.'
       : interval === undefined ? 'Enter a positive whole-number interval.'
-      : !missedRunPolicy ? 'Choose what happens after PiUI was closed.'
+      : !missedRunPolicy ? 'Choose what happens after Nano Desktop was closed.'
       : !overlapPolicy ? 'Choose what happens while the previous run is active.'
       : undefined;
     if (validation || !instant.ok || interval === undefined || !missedRunPolicy || !overlapPolicy || busy || locked) return;
@@ -73,7 +73,7 @@
     <div><h2 id="schedule-editor-title">{schedule ? $t('Edit schedule') : $t('Create schedule')}</h2></div>
     <span>{locked ? $t('Read-only') : dirty ? $t('Unsaved changes') : $t(source ? 'No unsaved changes' : 'New draft')}</span>
   </header>
-  <p class="notice">{$t('Schedules run only while the PiUI host is open. They do not wake the computer or start PiUI.')}</p>
+  <p class="notice">{$t('Schedules run only while the Nano Desktop host is open. They do not wake the computer or start Nano Desktop.')}</p>
   <p class="hint">{$t('Saving does not enable execution. New schedules and execution-affecting edits must be enabled separately.')}</p>
   {#if calendarRule}<p class="notice" role="status">{$t('This schedule repeats on days of the week. Edit it in Automations.')}</p>{/if}
   <fieldset disabled={busy || locked}>
@@ -104,11 +104,11 @@
       </div>
     {/if}
 
-    <label for="schedule-missed">{$t('After PiUI was closed')}</label>
+    <label for="schedule-missed">{$t('After Nano Desktop was closed')}</label>
     <select id="schedule-missed" bind:value={missedRunPolicy}>
       <option value="">{$t('Choose a policy')}</option>
       <option value="skip">{$t('Skip missed occurrences')}</option>
-      <option value="coalesce">{$t('Run once when PiUI returns')}</option>
+      <option value="coalesce">{$t('Run once when Nano Desktop returns')}</option>
     </select>
 
     <label for="schedule-overlap">{$t('While a previous run is active')}</label>
@@ -119,7 +119,7 @@
     </select>
   </fieldset>
 
-  <section aria-label={$t('Schedule summary')}><h3>{$t('Schedule summary')}</h3><p>{launchCommands.find(command => command.id === launchCommandId)?.name ?? $t('Choose launch command')}</p>{#if preview.ok}<p>{$t('First run at')}: {new Date(preview.instant).toLocaleString(undefined,{timeZone})} · {timeZone}</p>{#if nextAt && Number.isFinite(nextAt.getTime())}<p>{$t('Following occurrence')}: {nextAt.toLocaleString(undefined,{timeZone})}</p>{/if}{:else}<p>{$t('Choose a valid date and time.')}</p>{/if}<p>{$t(missedRunPolicy === 'skip' ? 'Skip missed occurrences' : missedRunPolicy === 'coalesce' ? 'Run once when PiUI returns' : 'Choose what happens after PiUI was closed.')}</p><p>{$t(overlapPolicy === 'skip' ? 'Skip the new occurrence' : overlapPolicy === 'allow' ? 'Allow another run' : 'Choose what happens while the previous run is active.')}</p></section>
+  <section aria-label={$t('Schedule summary')}><h3>{$t('Schedule summary')}</h3><p>{launchCommands.find(command => command.id === launchCommandId)?.name ?? $t('Choose launch command')}</p>{#if preview.ok}<p>{$t('First run at')}: {new Date(preview.instant).toLocaleString(undefined,{timeZone})} · {timeZone}</p>{#if nextAt && Number.isFinite(nextAt.getTime())}<p>{$t('Following occurrence')}: {nextAt.toLocaleString(undefined,{timeZone})}</p>{/if}{:else}<p>{$t('Choose a valid date and time.')}</p>{/if}<p>{$t(missedRunPolicy === 'skip' ? 'Skip missed occurrences' : missedRunPolicy === 'coalesce' ? 'Run once when Nano Desktop returns' : 'Choose what happens after Nano Desktop was closed.')}</p><p>{$t(overlapPolicy === 'skip' ? 'Skip the new occurrence' : overlapPolicy === 'allow' ? 'Allow another run' : 'Choose what happens while the previous run is active.')}</p></section>
   {#if validation || error}<p class="error" role="alert">{$t(error ?? validation ?? '')}</p>{/if}
   {#if launchCommands.length === 0}<p class="notice" role="status">{$t('Create a saved launch command before adding a schedule.')}{#if onCreateSystem}<button type="button" onclick={() => onCreateSystem && navigate(onCreateSystem)}>{$t('Create system')}</button>{/if}</p>{/if}
   {#if discardPrompt}<div class="discard" role="group" aria-label={$t('Unsaved schedule changes')}><p>{$t('Discard unsaved changes?')}</p><button type="button" onclick={() => discardPrompt = false}>{$t('Keep editing')}</button><button type="button" onclick={() => { const action = pendingNavigation ?? onCancel; pendingNavigation = undefined; action(); }}>{$t('Discard changes')}</button></div>{/if}

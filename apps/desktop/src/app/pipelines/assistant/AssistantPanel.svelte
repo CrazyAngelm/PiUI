@@ -36,7 +36,7 @@
   const store = useWorkspace();
 
   // Claude Code first once the host offers it; any available harness works.
-  const PREFERRED: readonly string[] = ['claude-code', 'codex', 'pi', 'prime-agent', 'hermes'];
+  const PREFERRED: readonly string[] = ['claude-code', 'codex', 'pi', 'prime-agent', 'hermes', 'nano'];
   const storageKey = $derived(`piui.pipeline.assistant.v1.${workspaceId}.${editor.graph.id}`);
   // The last model picked per harness; empty means the harness default.
   const MODEL_KEY = 'piui.pipeline.assistant.model.v1';
@@ -319,6 +319,7 @@
     {#if harness}
       <ModelPicker
         models={modelOptions}
+        {harness}
         value={modelKey}
         defaultOption={true}
         loading={modelsLoading}
@@ -395,7 +396,7 @@
             <div class="proposal proposal--bad">
               <strong><TriangleAlert size={13} /> {$t('The proposal did not pass validation')}</strong>
               <pre>{proposal.error}</pre>
-              <Button size="sm" disabled={sending || running} onclick={() => void send(`${$t('Your JSON did not pass PiUI validation. Fix these errors and send the complete system again:')}\n${proposal.error}`)}>{$t('Ask to fix')}</Button>
+              <Button size="sm" disabled={sending || running} onclick={() => void send(`${$t('Your JSON did not pass Nano Desktop validation. Fix these errors and send the complete system again:')}\n${proposal.error}`)}>{$t('Ask to fix')}</Button>
             </div>
           {/if}
         </div>

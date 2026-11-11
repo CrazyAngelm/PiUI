@@ -72,7 +72,7 @@ test.describe('review panel', () => {
     await form.getByRole('textbox', { name: 'Note for the agent' }).fill('Keep the product name in the brand.');
     await form.getByRole('button', { name: 'Add to message' }).click();
     const message = page.getByRole('textbox', { name: 'Message' });
-    await expect(message).toHaveValue('`apps/desktop/src/app/shell/Sidebar.svelte:4`\n>     <span class="brand__name">PiUI Lab</span>\n\nKeep the product name in the brand.');
+    await expect(message).toHaveValue('`apps/desktop/src/app/shell/Sidebar.svelte:4`\n>     <span class="brand__name">Nano Desktop Lab</span>\n\nKeep the product name in the brand.');
     await expect(lab.toast('Added to your message')).toBeVisible();
 
     // An untracked file goes to the trash only after its preview.
@@ -306,7 +306,7 @@ test.describe('continue elsewhere', () => {
     await expect(home(page).getByRole('textbox', { name: 'Message' })).toHaveValue('My own draft');
   });
 
-  test('continue a terminal Pi session in PiUI, and refuse one still open there', async ({ lab, page }) => {
+  test('continue a terminal Pi session in Nano Desktop, and refuse one still open there', async ({ lab, page }) => {
     await lab.open();
     await lab.sidebar.getByRole('button', { name: 'Options for piui' }).click();
     await page.getByRole('menuitem', { name: 'Pi session history' }).click();
@@ -314,17 +314,17 @@ test.describe('continue elsewhere', () => {
     await expect(history).toBeVisible({ timeout: LAZY_VIEW_MS });
 
     await history.getByRole('button', { name: /^Draft release notes for 0\.2\.0/ }).click();
-    await page.getByRole('button', { name: 'Continue in PiUI' }).click();
-    let dialog = page.getByRole('dialog', { name: 'Continue this session in PiUI?' });
+    await page.getByRole('button', { name: 'Continue in Nano Desktop' }).click();
+    let dialog = page.getByRole('dialog', { name: 'Continue this session in Nano Desktop?' });
     await expect(dialog).toContainText('Close it in the Pi terminal app first.');
-    await dialog.getByRole('button', { name: 'Continue in PiUI' }).click();
+    await dialog.getByRole('button', { name: 'Continue in Nano Desktop' }).click();
     await expect(dialog.getByRole('alert')).toContainText('may still be open in the Pi terminal app');
     await dialog.getByRole('button', { name: 'Cancel' }).click();
 
     await history.getByRole('button', { name: /^Make the session index incremental/ }).click();
-    await page.getByRole('button', { name: 'Continue in PiUI' }).click();
-    dialog = page.getByRole('dialog', { name: 'Continue this session in PiUI?' });
-    await dialog.getByRole('button', { name: 'Continue in PiUI' }).click();
+    await page.getByRole('button', { name: 'Continue in Nano Desktop' }).click();
+    dialog = page.getByRole('dialog', { name: 'Continue this session in Nano Desktop?' });
+    await dialog.getByRole('button', { name: 'Continue in Nano Desktop' }).click();
     await expect(page.getByRole('heading', { level: 1, name: 'Make the session index incremental' })).toBeVisible({ timeout: LAZY_VIEW_MS });
     await expect(page.getByRole('region', { name: 'Conversation messages' })).toContainText('Can we make it incremental?');
     await expect(lab.chat(/Make the session index incremental/)).toBeVisible();
@@ -387,7 +387,7 @@ for (const theme of ['light', 'dark'] as const) {
       expect(await axeBlocking(page, '[role="dialog"]'), 'worktree dialog').toEqual([]);
     });
 
-    test('handoff banner and the continue in PiUI dialog pass axe', async ({ lab, page }) => {
+    test('handoff banner and the continue in Nano Desktop dialog pass axe', async ({ lab, page }) => {
       test.slow(); // axe's contrast pass is CPU-heavy.
       await lab.open();
       await lab.chat(/Route host calls through one transport/).click();
@@ -400,9 +400,9 @@ for (const theme of ['light', 'dark'] as const) {
       await page.getByRole('menuitem', { name: 'Pi session history' }).click();
       const history = page.getByRole('complementary', { name: 'Sessions' });
       await history.getByRole('button', { name: /^Make the session index incremental/ }).click({ timeout: LAZY_VIEW_MS });
-      await page.getByRole('button', { name: 'Continue in PiUI' }).click();
-      await expect(page.getByRole('dialog', { name: 'Continue this session in PiUI?' })).toBeVisible();
-      expect(await axeBlocking(page, '[role="dialog"]'), 'continue in PiUI dialog').toEqual([]);
+      await page.getByRole('button', { name: 'Continue in Nano Desktop' }).click();
+      await expect(page.getByRole('dialog', { name: 'Continue this session in Nano Desktop?' })).toBeVisible();
+      expect(await axeBlocking(page, '[role="dialog"]'), 'continue in Nano Desktop dialog').toEqual([]);
     });
   });
 }

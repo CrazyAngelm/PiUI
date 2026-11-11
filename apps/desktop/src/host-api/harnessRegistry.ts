@@ -20,7 +20,7 @@ const REGISTRY_CODES: ReadonlySet<string> = new Set<HarnessRegistryErrorCode>([
   'PLUGIN_OWNED',
 ]);
 
-const UNAVAILABLE_MESSAGE = 'PiUI could not read the harness list.';
+const UNAVAILABLE_MESSAGE = 'Nano Desktop could not read the harness list.';
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;
 
 export type HarnessRegistryFailureCode = HarnessRegistryErrorCode | 'UNAVAILABLE';

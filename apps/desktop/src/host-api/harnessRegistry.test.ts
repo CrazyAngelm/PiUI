@@ -24,7 +24,7 @@ describe('harness registry v1 client', () => {
     for (const cause of [{ code: 'EXPLODED', message: 'stack trace' }, { code: 'CONFLICT', message: 'line\nbreak' }, 'Command harness_registry_v1 not found', undefined]) {
       const mapped = harnessRegistryError(cause);
       expect(mapped).toBeInstanceOf(HarnessRegistryError);
-      expect(mapped.message).toBe('PiUI could not read the harness list.');
+      expect(mapped.message).toBe('Nano Desktop could not read the harness list.');
     }
     expect(harnessRegistryError({ code: 'CONFLICT', message: 'line\nbreak' }).code).toBe('CONFLICT');
     expect(harnessRegistryError('Command harness_registry_v1 not found').code).toBe('UNAVAILABLE');

@@ -61,7 +61,7 @@
 <TooltipPrimitive.Provider delayDuration={400}>
   <main class="gallery">
     <header>
-      <h1>PiUI primitives</h1>
+      <h1>Nano Desktop primitives</h1>
       <Segmented
         label="Theme"
         bind:value={theme}

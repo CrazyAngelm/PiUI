@@ -69,7 +69,7 @@
       <button type="button" class="actor__link" onclick={() => onOpenRun(view.runId)}>{$t('A pipeline run')}</button>
     </span>
   {:else}
-    <span class="actor"><Cpu size={13} aria-hidden="true" /><strong>PiUI</strong></span>
+    <span class="actor"><Cpu size={13} aria-hidden="true" /><strong>Nano Desktop</strong></span>
   {/if}
 {/snippet}
 

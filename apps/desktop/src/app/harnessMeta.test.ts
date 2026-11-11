@@ -4,6 +4,9 @@ import { harnessMeta, rememberHarnessNames } from './harnessMeta';
 describe('harnessMeta', () => {
   it('keeps built-in marks and names ACP agents from the host catalog', () => {
     expect(harnessMeta('codex').label).toBe('Codex');
+    // Nano is a built-in harness: a fixed mark, never the neutral fallback.
+    expect(harnessMeta('nano')).toMatchObject({ label: 'Nano', short: 'Nano', monogram: 'N' });
+    expect(harnessMeta('nano').hue).not.toBe(harnessMeta('something-else').hue);
     const before = harnessMeta('acp:lab-agent');
     expect(before.label).toBe('lab-agent');
     expect(before.monogram).toBe('L');

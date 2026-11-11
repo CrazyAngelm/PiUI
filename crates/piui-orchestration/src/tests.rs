@@ -1264,6 +1264,7 @@ fn claude_code_native_defaults_are_incomparable_with_other_harnesses() {
         Harness::PrimeAgent,
         Harness::Codex,
         Harness::Hermes,
+        Harness::Nano,
     ] {
         for (lead, worker) in [(Harness::ClaudeCode, other), (other, Harness::ClaudeCode)] {
             let mut definition = snapshot();
@@ -1293,6 +1294,93 @@ fn claude_code_native_defaults_are_incomparable_with_other_harnesses() {
     assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_err());
     definition.profiles[1].permission_mode = PermissionMode::ReadOnly;
     assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_ok());
+}
+
+#[test]
+fn nano_harness_is_an_additive_v3_identity_without_a_coordinator() {
+    assert_eq!(serde_json::to_value(Harness::Nano).unwrap(), json!("nano"));
+    assert_eq!(Harness::Nano.to_string(), "nano");
+    assert_eq!(Harness::parse("nano"), Some(Harness::Nano));
+    assert_eq!(Harness::parse("acp:nano"), Some(acp("nano")));
+    for invalid in ["Nano", "nano-agent", "nano "] {
+        assert!(
+            serde_json::from_value::<Harness>(json!(invalid)).is_err(),
+            "{invalid}"
+        );
+    }
+    let profile = profile("nano-profile", Harness::Nano, &[]);
+    let stored = serde_json::to_value(&profile).unwrap();
+    assert_eq!(stored["harness"], json!("nano"));
+    assert_eq!(
+        serde_json::from_value::<AgentProfile>(stored).unwrap(),
+        profile
+    );
+    // A Nano node is an ordinary native task: it validates without spawn
+    // templates or coordinator operations.
+    let mut definition = snapshot();
+    definition.profiles[1].harness = Harness::Nano;
+    validate_definition(&definition).unwrap();
+    // It may not be a coordinator: no spawn templates, no coordinator grant.
+    let mut spawner = snapshot();
+    spawner.profiles[0].harness = Harness::Nano;
+    assert_eq!(
+        validate_definition(&spawner),
+        Err(DefinitionError::CoordinatorUnavailable {
+            profile_id: "lead-profile".into()
+        })
+    );
+    let mut granted = snapshot();
+    granted.profiles[1].harness = Harness::Nano;
+    granted.profiles[1].tool_policy.rules = vec![ToolRule {
+        tool: "orchestration.spawn".into(),
+        decision: ToolDecision::Allow,
+        enforcement: PolicyEnforcement::Coordinator,
+        mandatory: false,
+    }];
+    assert!(matches!(
+        validate_definition(&granted),
+        Err(DefinitionError::CoordinatorUnavailable { .. })
+    ));
+    // Denying a coordinator operation stays valid.
+    granted.profiles[1].tool_policy.rules[0].decision = ToolDecision::Deny;
+    validate_definition(&granted).unwrap();
+}
+
+#[test]
+fn nano_native_defaults_are_incomparable_and_nano_never_delegates() {
+    for other in [
+        Harness::Pi,
+        Harness::PrimeAgent,
+        Harness::Codex,
+        Harness::Hermes,
+        Harness::ClaudeCode,
+        acp("gemini-cli"),
+    ] {
+        for (lead, worker) in [(Harness::Nano, other), (other, Harness::Nano)] {
+            let mut definition = snapshot();
+            definition.profiles[0].harness = lead;
+            definition.profiles[1].harness = worker;
+            definition.profiles[0].permission_mode = PermissionMode::Native;
+            definition.profiles[1].permission_mode = PermissionMode::Native;
+            assert!(
+                authorize_spawn(&definition, "lead-profile", "worker-profile").is_err(),
+                "native {lead:?} -> native {worker:?} must be rejected"
+            );
+        }
+    }
+    // Even Nano -> Nano is refused: delegation needs a coordinator.
+    let mut definition = snapshot();
+    definition.profiles[0].harness = Harness::Nano;
+    definition.profiles[1].harness = Harness::Nano;
+    assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_err());
+    // A declared preset still cannot escalate into a Nano child from another
+    // harness, and a read-only parent still admits a read-only Nano child.
+    definition.profiles[0].harness = Harness::Codex;
+    definition.profiles[0].permission_mode = PermissionMode::ReadOnly;
+    definition.profiles[1].permission_mode = PermissionMode::ReadOnly;
+    assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_ok());
+    definition.profiles[1].permission_mode = PermissionMode::WorkspaceWrite;
+    assert!(authorize_spawn(&definition, "lead-profile", "worker-profile").is_err());
 }
 
 #[test]
@@ -1401,6 +1489,7 @@ fn acp_agents_are_an_additive_v6_identity() {
         ("codex", Harness::Codex),
         ("hermes", Harness::Hermes),
         ("claude-code", Harness::ClaudeCode),
+        ("nano", Harness::Nano),
     ] {
         assert_eq!(
             serde_json::from_value::<Harness>(json!(name)).unwrap(),
@@ -1430,6 +1519,7 @@ fn acp_native_defaults_are_comparable_only_within_the_same_agent() {
         Harness::Codex,
         Harness::Hermes,
         Harness::ClaudeCode,
+        Harness::Nano,
         acp("qwen-code"),
     ];
     for other in others {

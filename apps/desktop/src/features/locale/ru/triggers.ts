@@ -11,14 +11,14 @@ export const triggersRu: Readonly<Record<string, string>> = {
   'When files change': 'Когда меняются файлы',
   'When {0} and {1} more change': 'Когда меняются {0} и ещё {1}',
   'When {0} changes': 'Когда меняется {0}',
-  '{0}, PiUI starts {1}.': '{0}, PiUI запустит «{1}».',
-  'PiUI starts {0} {1} s after matching files stop changing.': 'PiUI запустит «{0}» через {1} с после того, как подходящие файлы перестанут меняться.',
+  '{0}, Nano Desktop starts {1}.': '{0}, Nano Desktop запустит «{1}».',
+  'Nano Desktop starts {0} {1} s after matching files stop changing.': 'Nano Desktop запустит «{0}» через {1} с после того, как подходящие файлы перестанут меняться.',
   'Ignored: {0}': 'Не учитываются: {0}',
   'Changes made while its own run works are ignored. .git, node_modules, target and dist are never watched.':
-    'Изменения во время её собственного запуска не учитываются. За .git, node_modules, target и dist PiUI не следит.',
+    'Изменения во время её собственного запуска не учитываются. За .git, node_modules, target и dist Nano Desktop не следит.',
   'At most one run every {0} s. A chain of automations stops after {1} automatic runs.':
     'Не чаще одного запуска в {0} с. Цепочка автоматизаций останавливается после {1} автоматических запусков.',
-  'Skipped: PiUI was closed or paused': 'Пропущено: PiUI был закрыт или на паузе',
+  'Skipped: Nano Desktop was closed or paused': 'Пропущено: Nano Desktop был закрыт или на паузе',
   'Skipped: too many chained automations': 'Пропущено: слишком длинная цепочка автоматизаций',
   'Skipped: ran moments ago': 'Пропущено: запуск был только что',
   'Skipped: automations paused': 'Пропущено: автоматизации на паузе',
@@ -42,8 +42,8 @@ export const triggersRu: Readonly<Record<string, string>> = {
   'Wait between {0} and {1} seconds.': 'Ожидание — от {0} до {1} секунд.',
 
   // Automations list
-  'Start saved pipelines on a schedule or after an event. They run while PiUI is open or in the tray.':
-    'Запускайте сохранённые пайплайны по расписанию или после события. Они работают, пока PiUI открыт или в трее.',
+  'Start saved pipelines on a schedule or after an event. They run while Nano Desktop is open or in the tray.':
+    'Запускайте сохранённые пайплайны по расписанию или после события. Они работают, пока Nano Desktop открыт или в трее.',
   'Pause all': 'Приостановить все',
   'All automations are paused. Nothing starts until you resume them.': 'Все автоматизации на паузе. Ничего не запустится, пока вы их не возобновите.',
   'Resume automations': 'Возобновить автоматизации',
@@ -54,8 +54,8 @@ export const triggersRu: Readonly<Record<string, string>> = {
   'Turn it on to react to events.': 'Включите, чтобы реагировать на события.',
 
   // Automation dialog
-  'Runs a saved pipeline on a schedule or after an event while PiUI is open or in the tray.':
-    'Запускает сохранённый пайплайн по расписанию или после события, пока PiUI открыт или в трее.',
+  'Runs a saved pipeline on a schedule or after an event while Nano Desktop is open or in the tray.':
+    'Запускает сохранённый пайплайн по расписанию или после события, пока Nano Desktop открыт или в трее.',
   'Pipeline to run': 'Какой пайплайн запускать',
   'On a schedule': 'По расписанию',
   'After an event': 'После события',
@@ -75,9 +75,9 @@ export const triggersRu: Readonly<Record<string, string>> = {
   'Wait until files are quiet for': 'Ждать, пока файлы не меняются',
   '2 to 3600 seconds. Changes during the wait start one run together.': 'От 2 до 3600 секунд. Все изменения за это время дают один запуск.',
   seconds: 'секунд',
-  'If PiUI was closed or paused at that time': 'Если PiUI был закрыт или на паузе в это время',
-  'Automations run only while PiUI is open or in the tray; they do not wake the computer. Each run uses your harness subscriptions like a manual run.':
-    'Автоматизации работают, только пока PiUI открыт или в трее; компьютер они не будят. Каждый запуск расходует подписки харнесов, как ручной запуск.',
+  'If Nano Desktop was closed or paused at that time': 'Если Nano Desktop был закрыт или на паузе в это время',
+  'Automations run only while Nano Desktop is open or in the tray; they do not wake the computer. Each run uses your harness subscriptions like a manual run.':
+    'Автоматизации работают, только пока Nano Desktop открыт или в трее; компьютер они не будят. Каждый запуск расходует подписки харнесов, как ручной запуск.',
   'the pipeline': 'пайплайн',
 
   // Run trigger label
@@ -108,17 +108,17 @@ export const triggersRu: Readonly<Record<string, string>> = {
 
   // Background mode
   Background: 'Фоновый режим',
-  'Automations keep running while PiUI is in the tray. Scheduled runs can use your paid plans.':
-    'Автоматизации продолжают работать, пока PiUI в трее. Запуски по расписанию могут расходовать ваши платные тарифы.',
+  'Automations keep running while Nano Desktop is in the tray. Scheduled runs can use your paid plans.':
+    'Автоматизации продолжают работать, пока Nano Desktop в трее. Запуски по расписанию могут расходовать ваши платные тарифы.',
   'Safe mode keeps background settings read-only.': 'В безопасном режиме настройки фонового режима доступны только для чтения.',
   'Keep running in the tray when the window is closed': 'Оставаться в трее после закрытия окна',
-  'Closing the window hides PiUI in the tray. Quit from the tray menu stops PiUI and every agent it started.':
-    'Закрытие окна сворачивает PiUI в трей. «Выйти» в меню трея останавливает PiUI и всех запущенных им агентов.',
-  'Start PiUI when I sign in to Windows': 'Запускать PiUI при входе в Windows',
-  'Start PiUI when I sign in': 'Запускать PiUI при входе в систему',
+  'Closing the window hides Nano Desktop in the tray. Quit from the tray menu stops Nano Desktop and every agent it started.':
+    'Закрытие окна сворачивает Nano Desktop в трей. «Выйти» в меню трея останавливает Nano Desktop и всех запущенных им агентов.',
+  'Start Nano Desktop when I sign in to Windows': 'Запускать Nano Desktop при входе в Windows',
+  'Start Nano Desktop when I sign in': 'Запускать Nano Desktop при входе в систему',
   'Not available in this build.': 'Недоступно в этой сборке.',
-  'PiUI starts in the tray when the option above is on; otherwise it opens its window.':
-    'Если включён параметр выше, PiUI запустится в трее; иначе откроется окно.',
+  'Nano Desktop starts in the tray when the option above is on; otherwise it opens its window.':
+    'Если включён параметр выше, Nano Desktop запустится в трее; иначе откроется окно.',
   'Pause all automations': 'Приостановить все автоматизации',
   'Nothing starts on a schedule or after an event until you resume. Runs already working continue.':
     'Ничего не запускается по расписанию или после событий, пока вы не возобновите. Уже идущие запуски продолжаются.',
@@ -128,7 +128,7 @@ export const triggersRu: Readonly<Record<string, string>> = {
   'The setting could not be changed. Nothing was changed.': 'Не удалось изменить настройку. Ничего не изменено.',
 
   // Tray menu
-  'Open PiUI': 'Открыть PiUI',
-  'Quit PiUI': 'Выйти из PiUI',
-  'PiUI (automations paused)': 'PiUI (автоматизации на паузе)',
+  'Open Nano Desktop': 'Открыть Nano Desktop',
+  'Quit Nano Desktop': 'Выйти из Nano Desktop',
+  'Nano Desktop (automations paused)': 'Nano Desktop (автоматизации на паузе)',
 };

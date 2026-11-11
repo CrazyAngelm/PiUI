@@ -1100,7 +1100,7 @@ impl FusionBroker {
                 document.revision = revision;
                 return Err(error(
                     SidekickErrorCode::SidekickUnavailable,
-                    "PiUI could not record the brief.",
+                    "Nano Desktop could not record the brief.",
                 ));
             }
             drop(document);
@@ -1836,7 +1836,7 @@ impl FusionBroker {
             }
             return Err(error(
                 SidekickErrorCode::Uncertain,
-                "PiUI could not read this report back from the sidekick's history; open the sidekick's chat to read it.",
+                "Nano Desktop could not read this report back from the sidekick's history; open the sidekick's chat to read it.",
             ));
         };
         if round.report.is_none() {
@@ -2068,7 +2068,7 @@ impl FusionBroker {
                 document.revision = revision;
                 return Err(error(
                     SidekickErrorCode::SidekickUnavailable,
-                    "PiUI could not record the correction.",
+                    "Nano Desktop could not record the correction.",
                 ));
             }
             (round_id, session_id, prompt)
@@ -2256,7 +2256,7 @@ impl FusionBroker {
         let Some((files, truncated)) = self.inner.host.changes(lead.clone()).await else {
             return Err(error(
                 SidekickErrorCode::DiffUnavailable,
-                "This folder is not a git repository, so PiUI cannot show a diff.",
+                "This folder is not a git repository, so Nano Desktop cannot show a diff.",
             ));
         };
         let selected: Vec<&ReviewFileV1> = files

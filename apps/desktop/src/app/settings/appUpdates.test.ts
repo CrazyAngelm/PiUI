@@ -167,7 +167,7 @@ describe('updates in a configured build', () => {
     const stop = await watchUpdateNotices(opened, labClient('available'));
     expect(toasts.items).toHaveLength(1);
     const [toast] = toasts.items;
-    expect(toast?.title).toBe('PiUI 0.2.1 is available');
+    expect(toast?.title).toBe('Nano Desktop 0.2.1 is available');
     expect(toast?.duration).toBe(0);
     toast?.action?.run();
     expect(opened).toHaveBeenCalledOnce();

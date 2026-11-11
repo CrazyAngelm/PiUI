@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -586,5 +586,419 @@ test("when the retries of Pi fail, one error is reported with the failed turn", 
     const completed = events.findIndex((event) => event.type === "turnCompleted");
     assert.equal(events[completed].outcome, "failed");
     assert.equal(events.indexOf(errors[0]), completed - 1, "the error comes with the terminal outcome, not at the first attempt");
+  } finally { await adapter.dispose(); }
+});
+
+// --- Nano lane (harness "nano"): the same bridge, a private agent directory and a cleared environment ---
+
+const RELAY_KEY = "relay-key-canary-0123456789abcdef";
+const AGENT_DIR = join(tmpdir(), "nano-agent");
+const GUARD = join(AGENT_DIR, "nano-guard.ts");
+const NANO_OVERRIDES = { nano: { agentDir: AGENT_DIR, guardExtension: GUARD }, model: { provider: "nano", id: "smart", name: "Smart" } };
+// Like the host, which starts each Nano bridge with the key in its process
+// environment, every Nano config puts the key there for the next adapter.
+function nanoConfig(overrides = {}) {
+  process.env.PIUI_NANO_RELAY_KEY = RELAY_KEY;
+  return config({ harness: "nano", ...NANO_OVERRIDES, ...overrides });
+}
+
+// An entry script that records what Pi was started with, then runs the fixture.
+async function recordingConfig(version) {
+  const directory = await mkdtemp(join(tmpdir(), "piui-pi-launch-"));
+  const record = join(directory, "launch.json");
+  if (version) await writeFile(join(directory, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent", version }));
+  const entry = join(directory, "cli.js");
+  await writeFile(entry, `require("node:fs").writeFileSync(${JSON.stringify(record)}, JSON.stringify({ args: process.argv.slice(2), env: process.env }));\nimport(${JSON.stringify(pathToFileURL(fixture).href)});\n`);
+  return {
+    directory,
+    entry,
+    config: (overrides = {}) => config({ runtimeArgs: [entry], ...overrides }),
+    nanoConfig: (overrides = {}) => nanoConfig({ runtimeArgs: [entry], ...overrides }),
+    launch: async () => JSON.parse(await readFile(record, "utf8")),
+  };
+}
+async function launchOf(overrides) {
+  const recording = await recordingConfig();
+  const events = [];
+  try {
+    const adapter = await createPiAdapter(recording.nanoConfig(overrides), (event) => events.push(event));
+    try { return { launch: await recording.launch(), events, snapshot: await adapter.snapshot() }; }
+    finally { await adapter.dispose(); }
+  } finally { await rm(recording.directory, { recursive: true, force: true }); }
+}
+
+// Mirrors the adapter's allowlist for the platform the test runs on.
+const NANO_OS_ENVIRONMENT = process.platform === "win32" ? new Set([
+  "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "PATH", "TEMP", "TMP", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+  "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432", "COMMONPROGRAMFILES",
+  "COMMONPROGRAMFILES(X86)", "COMMONPROGRAMW6432", "ALLUSERSPROFILE", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS",
+  "USERNAME", "USERDOMAIN", "COMPUTERNAME", "PSMODULEPATH", "LANG", "TZ", "TERM",
+]) : new Set([
+  "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TZ", "TERM", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME",
+  "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME",
+]);
+// Windows adds a few non-secret names to any child it starts, whatever the environment block holds.
+const WINDOWS_ADDED = new Set(["LOGONSERVER", "SESSIONNAME"]);
+const NANO_VARIABLES = new Set(["PI_CODING_AGENT_DIR", "PI_OFFLINE", "PI_SKIP_VERSION_CHECK", "PI_TELEMETRY", "NANO_RELAY_KEY"]);
+const canonical = (name) => (process.platform === "win32" ? name.toUpperCase() : name);
+
+test("the Nano lane starts upstream Pi with its own flags, no approval trust and no relay key in the arguments", async () => {
+  const { launch, events, snapshot } = await launchOf({});
+  assert.deepEqual(launch.args, [
+    "--mode", "rpc", "--no-approve", "--offline", "--session-dir", process.cwd(),
+    "--provider", "nano", "--model", "smart", "--no-extensions", "-e", GUARD,
+  ]);
+  assert.ok(!launch.args.includes("--approve"));
+  assert.ok(!launch.args.includes("--thinking"));
+  assert.ok(!JSON.stringify(launch.args).includes(RELAY_KEY), "the key never reaches the command line");
+  assert.ok(!JSON.stringify(events).includes(RELAY_KEY));
+  assert.ok(!JSON.stringify(snapshot).includes(RELAY_KEY));
+  assert.equal(launch.env.PIUI_NANO_RELAY_KEY, undefined, "the bridge variable never reaches Pi");
+  assert.equal(process.env.PIUI_NANO_RELAY_KEY, undefined, "the bridge removes the key from its own environment");
+});
+
+test("the Nano relay key comes only from the bridge environment, never from the initialize frame", async () => {
+  // A key in the frame is refused even with a key in the environment.
+  await assert.rejects(
+    createPiAdapter(nanoConfig({ runtimeProgram: "must-not-launch", nano: { agentDir: AGENT_DIR, guardExtension: GUARD, relayKey: RELAY_KEY } }), () => {}),
+    (error) => error.bridgeCode === "invalid-request" && !JSON.stringify([error.message, error.safeMessage]).includes(RELAY_KEY),
+  );
+  assert.equal(process.env.PIUI_NANO_RELAY_KEY, undefined, "a refused start removes the key too");
+  for (const value of [undefined, ""]) {
+    const candidate = nanoConfig({ runtimeProgram: "must-not-launch" });
+    if (value === undefined) delete process.env.PIUI_NANO_RELAY_KEY; else process.env.PIUI_NANO_RELAY_KEY = value;
+    await assert.rejects(createPiAdapter(candidate, () => {}), { bridgeCode: "invalid-request" }, JSON.stringify(value));
+  }
+  // The Pi lane neither reads nor removes the variable.
+  process.env.PIUI_NANO_RELAY_KEY = "pi-lane-ignores-it";
+  try {
+    const adapter = await createPiAdapter(config(), () => {});
+    await adapter.dispose();
+    assert.equal(process.env.PIUI_NANO_RELAY_KEY, "pi-lane-ignores-it");
+  } finally { delete process.env.PIUI_NANO_RELAY_KEY; }
+});
+
+test("the Nano lane passes session and name flags like the Pi lane", async () => {
+  const { launch } = await launchOf({ nativeId: "session-7", title: "Nano chat" });
+  assert.deepEqual(launch.args.slice(0, 9), ["--mode", "rpc", "--no-approve", "--offline", "--session-dir", process.cwd(), "--session-id", "session-7", "--name"]);
+  assert.equal(launch.args[9], "Nano chat");
+  const resumed = await launchOf({ nativePath: join(tmpdir(), "native.jsonl") });
+  assert.equal(resumed.launch.args[resumed.launch.args.indexOf("--session") + 1], join(tmpdir(), "native.jsonl"));
+});
+
+test("the Nano lane clears the environment to an OS allowlist plus the Nano variables", async () => {
+  const canaries = {
+    OPENAI_API_KEY: "sk-canary-openai", ANTHROPIC_API_KEY: "sk-canary-anthropic", OPENROUTER_API_KEY: "sk-canary-router",
+    NANO_ACCESS_TOKEN: "canary-access-token", HTTPS_PROXY: "http://user:canary@example.com:8080", PIUI_CANARY: "canary",
+    PI_CODING_AGENT_DIR: "C:/user/.pi/agent", NANO_RELAY_KEY: "stale-key",
+  };
+  const saved = Object.fromEntries(Object.keys(canaries).map((name) => [name, process.env[name]]));
+  Object.assign(process.env, canaries);
+  try {
+    const { launch } = await launchOf({});
+    const names = Object.keys(launch.env).filter((name) => !name.startsWith("="));
+    for (const name of names) {
+      assert.ok(NANO_OS_ENVIRONMENT.has(canonical(name)) || WINDOWS_ADDED.has(canonical(name)) || NANO_VARIABLES.has(canonical(name)) || canonical(name).startsWith("LC_"), `unexpected child variable ${name}`);
+    }
+    assert.equal(launch.env.PI_CODING_AGENT_DIR, AGENT_DIR, "the private agent directory wins over the user's");
+    assert.equal(launch.env.PI_OFFLINE, "1");
+    assert.equal(launch.env.PI_SKIP_VERSION_CHECK, "1");
+    assert.equal(launch.env.PI_TELEMETRY, "0");
+    assert.equal(launch.env.NANO_RELAY_KEY, RELAY_KEY);
+    for (const name of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "NANO_ACCESS_TOKEN", "HTTPS_PROXY", "PIUI_CANARY"]) {
+      assert.ok(!names.some((candidate) => canonical(candidate) === name), `${name} must not reach the child`);
+    }
+    assert.ok(!/sk-canary|canary-access|stale-key|user:canary/.test(JSON.stringify(launch.env)));
+    // What a program the agent starts needs in order to run is kept.
+    assert.ok(names.some((name) => canonical(name) === "PATH"), "PATH is kept");
+    if (process.platform === "win32") assert.ok(names.some((name) => canonical(name) === "SYSTEMROOT"), "SystemRoot is kept");
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+  }
+});
+
+test("the Pi lane keeps its old arguments and inherited environment", async () => {
+  const saved = process.env.PIUI_CANARY;
+  process.env.PIUI_CANARY = "inherited";
+  const recording = await recordingConfig();
+  try {
+    const adapter = await createPiAdapter(recording.config({ model: { provider: "fixture", id: "m", name: "M" }, thinkingLevel: "medium", permissionMode: "read-only", allowedTools: ["read", "grep"] }), () => {});
+    try {
+      const launch = await recording.launch();
+      assert.deepEqual(launch.args, [
+        "--mode", "rpc", "--approve", "--session-dir", process.cwd(), "--provider", "fixture", "--model", "m",
+        "--thinking", "medium", "--tools", "read,grep", "--no-extensions",
+      ]);
+      assert.equal(launch.env.PIUI_CANARY, "inherited", "the Pi lane does not clear the environment");
+      assert.equal(launch.env.NANO_RELAY_KEY, undefined);
+    } finally { await adapter.dispose(); }
+  } finally {
+    if (saved === undefined) delete process.env.PIUI_CANARY; else process.env.PIUI_CANARY = saved;
+    await rm(recording.directory, { recursive: true, force: true });
+  }
+});
+
+test("the Nano read-only mode passes only Pi's read tools and keeps the guard loaded", async () => {
+  const { launch } = await launchOf({ permissionMode: "read-only" });
+  const tools = launch.args.indexOf("--tools");
+  assert.equal(launch.args[tools + 1], "read,grep,find,ls");
+  assert.ok(launch.args.indexOf("--no-extensions") > tools);
+  assert.equal(launch.args[launch.args.indexOf("-e") + 1], GUARD);
+  const narrowed = await launchOf({ permissionMode: "read-only", allowedTools: ["read", "write", "bash"] });
+  assert.equal(narrowed.launch.args[narrowed.launch.args.indexOf("--tools") + 1], "read");
+  const none = await launchOf({ permissionMode: "read-only", allowedTools: ["write"] });
+  assert.ok(none.launch.args.includes("--no-tools"));
+  assert.ok(!none.launch.args.includes("--tools"));
+  assert.ok(none.launch.args.includes("--no-extensions"));
+});
+
+test("the Nano guard flag is present only when the host supplies the extension", async () => {
+  const full = await launchOf({ permissionMode: "full-access", nano: { agentDir: AGENT_DIR, guardExtension: null } });
+  assert.ok(!full.launch.args.includes("-e"));
+  assert.ok(full.launch.args.includes("--no-extensions"), "no discovered extension loads either");
+  const native = await launchOf({ permissionMode: "native" });
+  assert.equal(native.launch.args.filter((value) => value === "-e").length, 1);
+  assert.equal(native.launch.args.at(-1), GUARD);
+  // Native approvals without the guard would run bash, write and edit unasked.
+  await assert.rejects(
+    createPiAdapter(nanoConfig({ runtimeProgram: "must-not-launch", permissionMode: "native", nano: { agentDir: AGENT_DIR, guardExtension: null } }), () => {}),
+    { bridgeCode: "unsupported-policy" },
+  );
+});
+
+test("the Nano lane refuses an incomplete or malformed configuration before starting Pi", async () => {
+  const bad = [
+    { nano: undefined },
+    { nano: null },
+    { nano: "agent" },
+    { nano: [] },
+    { nano: { guardExtension: GUARD } },
+    { nano: { agentDir: AGENT_DIR, guardExtension: GUARD, relayKey: RELAY_KEY } },
+    { nano: { agentDir: AGENT_DIR, guardExtension: GUARD, relayKey: "" } },
+    { nano: { agentDir: 7, guardExtension: GUARD } },
+    { nano: { agentDir: "relative/agent", guardExtension: GUARD } },
+    { nano: { agentDir: AGENT_DIR } },
+    { nano: { agentDir: AGENT_DIR, guardExtension: 5 } },
+    { nano: { agentDir: AGENT_DIR, guardExtension: "nano-guard.ts" } },
+  ];
+  for (const overrides of bad) {
+    await assert.rejects(
+      createPiAdapter(nanoConfig({ runtimeProgram: "must-not-launch", ...overrides }), () => {}),
+      (error) => error.bridgeCode === "invalid-request" && !JSON.stringify([error.message, error.safeMessage]).includes(RELAY_KEY),
+      JSON.stringify(overrides),
+    );
+  }
+  await assert.rejects(createPiAdapter(config({ harness: "codex" }), () => {}), { bridgeCode: "wrong-harness" });
+  await assert.rejects(createPiAdapter(config({ harness: "nano" }), () => {}), { bridgeCode: "invalid-request" });
+});
+
+test("the Nano lane refuses another provider, a model without an id and any thinking level", async () => {
+  for (const model of [{ provider: "openai", id: "gpt-5", name: "GPT" }, { provider: "pi", id: "smart", name: "Smart" }, { id: "smart", name: "Smart" }, { provider: "nano", name: "No id" }, { provider: "nano", id: "", name: "Empty" }]) {
+    await assert.rejects(
+      createPiAdapter(nanoConfig({ runtimeProgram: "must-not-launch", model }), () => {}),
+      { bridgeCode: "unsupported-settings" },
+      JSON.stringify(model),
+    );
+  }
+  await assert.rejects(createPiAdapter(nanoConfig({ runtimeProgram: "must-not-launch", thinkingLevel: "high" }), () => {}), { bridgeCode: "unsupported-settings" });
+});
+
+test("a Nano session reopened without a model keeps its recorded Nano model and refuses any other", async () => {
+  for (const model of [undefined, null]) {
+    const recording = await recordingConfig();
+    try {
+      // The fixture reports a restored Nano model.
+      const adapter = await createPiAdapter(recording.nanoConfig({ model, runtimeArgs: [recording.entry, "--restored-nano-model"] }), () => {});
+      try {
+        const { args } = await recording.launch();
+        // Neither flag: Pi exits on `--provider` without `--model`.
+        assert.deepEqual(args, ["--restored-nano-model", "--mode", "rpc", "--no-approve", "--offline", "--session-dir", process.cwd(), "--no-extensions", "-e", GUARD]);
+      } finally { await adapter.dispose(); }
+    } finally { await rm(recording.directory, { recursive: true, force: true }); }
+  }
+  // The fixture's own (non-Nano) model is what Pi restored: refused, never used.
+  const recording = await recordingConfig();
+  const events = [];
+  try {
+    await assert.rejects(
+      createPiAdapter(recording.nanoConfig({ model: undefined }), (event) => events.push(event)),
+      { bridgeCode: "unsupported-settings" },
+    );
+    const { args } = await recording.launch();
+    assert.ok(!args.includes("--provider"));
+    assert.ok(!events.some((event) => event.type === "status" && event.status === "failed"), "a refused start is not a native failure");
+  } finally { await rm(recording.directory, { recursive: true, force: true }); }
+});
+
+test("the Nano lane refuses what the Pi lane refuses, and starts without the board tool", async () => {
+  const refused = [
+    [{ permissionMode: "workspace-write" }, "unsupported-policy"],
+    [{ coordination: true }, "unsupported-policy"],
+    [{ nativeSubagents: true }, "unsupported-policy"],
+    [{ allowedTools: ["workspace"] }, "unsupported-policy"],
+    [{ resourceRules: [{ kind: "skill", id: "canary", enabled: false }] }, "unsupported-resource-policy"],
+    [{ pluginMcpServers: [{ name: "example", command: process.execPath, args: ["server.mjs"] }] }, "unsupported-settings"],
+  ];
+  for (const [overrides, code] of refused) {
+    await assert.rejects(createPiAdapter(nanoConfig({ runtimeProgram: "must-not-launch", ...overrides }), () => {}), { bridgeCode: code }, JSON.stringify(overrides));
+  }
+  const events = [];
+  const adapter = await createPiAdapter(nanoConfig({ hostTools: ["board"] }), (event) => events.push(event));
+  try { assert.deepEqual(events.filter((event) => event.type === "notice"), [{ type: "notice", code: "unsupported-board-tool" }]); }
+  finally { await adapter.dispose(); }
+});
+
+test("a Nano session needs Pi 1.4.0 or newer when the version is known", async () => {
+  for (const version of ["1.3.9", "0.85.1", "0.99.0"]) {
+    const recording = await recordingConfig(version);
+    try {
+      await assert.rejects(createPiAdapter(recording.nanoConfig(), () => {}), { bridgeCode: "unsupported-native-version" }, version);
+    } finally { await rm(recording.directory, { recursive: true, force: true }); }
+  }
+  for (const version of ["1.4.0", "1.5.2", "2.0.0"]) {
+    const recording = await recordingConfig(version);
+    try {
+      const adapter = await createPiAdapter(recording.nanoConfig(), () => {});
+      await adapter.dispose();
+    } finally { await rm(recording.directory, { recursive: true, force: true }); }
+  }
+  // The Pi lane keeps working on an older Pi.
+  const legacy = await versionedConfig("0.85.1");
+  try {
+    const adapter = await createPiAdapter(legacy.config(), () => {});
+    await adapter.dispose();
+  } finally { await rm(legacy.directory, { recursive: true, force: true }); }
+});
+
+test("Nano sessions list only Nano models and no thinking levels, and cannot switch provider", async () => {
+  const adapter = await createPiAdapter(nanoConfig(), () => {});
+  try {
+    assert.deepEqual(await adapter.models(), [], "the fixture's non-Nano model is never offered");
+    assert.deepEqual(await adapter.catalogModels(), []);
+    assert.deepEqual((await adapter.snapshot()).models, []);
+    await assert.rejects(adapter.setModel({ model: { provider: "fixture", id: "model" } }), { bridgeCode: "unsupported-settings" });
+    await assert.rejects(adapter.setModel({ model: { provider: "nano", id: "fast" }, thinkingLevel: "high" }), { bridgeCode: "unsupported-settings" });
+    await adapter.setModel({ model: { provider: "nano", id: "fast" } });
+  } finally { await adapter.dispose(); }
+  const pi = await createPiAdapter(config(), () => {});
+  try { assert.equal((await pi.models()).length, 1, "the Pi lane still lists every native model"); }
+  finally { await pi.dispose(); }
+});
+
+test("Nano relay errors become fixed summaries and the native text stays private", async () => {
+  for (const [scenario, expected] of [
+    ["nano-credits", "Your Nano credits are used up."],
+    ["nano-plain", "The Pi turn failed."],
+  ]) {
+    const events = [];
+    const adapter = await createPiAdapter(nanoConfig(), (event) => events.push(event));
+    try {
+      await runScenario(adapter, events, scenario);
+      assert.deepEqual(events.filter((event) => event.type === "error"), [{ type: "error", message: expected }], scenario);
+      assert.equal(events.find((event) => event.type === "turnCompleted").outcome, "failed");
+      assert.ok(!/SECRET-MUST-NOT-LEAK|nano_credits_exhausted/.test(JSON.stringify(events)));
+    } finally { await adapter.dispose(); }
+  }
+  // The Pi lane does not interpret relay codes.
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    await runScenario(adapter, events, "nano-credits");
+    assert.deepEqual(events.filter((event) => event.type === "error"), [{ type: "error", message: "The Pi turn failed." }]);
+  } finally { await adapter.dispose(); }
+});
+
+// --- nano-guard.ts: the approval-prompt extension (not a sandbox) ---
+
+async function loadGuard() {
+  try { return (await import(pathToFileURL(fileURLToPath(new URL("./nano-guard.ts", import.meta.url))).href)).default; }
+  catch (error) {
+    if (error?.code === "ERR_UNKNOWN_FILE_EXTENSION") return undefined; // Node without type stripping
+    throw error;
+  }
+}
+async function guardHandler() {
+  const guard = await loadGuard();
+  if (!guard) return undefined;
+  const handlers = {};
+  guard({ on: (name, handler) => { handlers[name] = handler; } });
+  assert.deepEqual(Object.keys(handlers), ["tool_call"]);
+  return handlers.tool_call;
+}
+const uiContext = (answer, calls = []) => ({ hasUI: true, ui: { select: async (title, options) => { calls.push({ title, options }); return typeof answer === "function" ? answer(title, options) : answer; } } });
+
+test("the Nano guard lets read tools through and asks before bash, write and edit", async (t) => {
+  const handler = await guardHandler();
+  if (!handler) return t.skip("this Node cannot load TypeScript");
+  for (const toolName of ["read", "grep", "find", "ls"]) {
+    const calls = [];
+    assert.equal(await handler({ toolName, input: { path: "a" } }, uiContext("Allow once", calls)), undefined);
+    assert.equal(calls.length, 0, `${toolName} never asks`);
+  }
+  const cases = [
+    [{ toolName: "bash", input: { command: "npm   test\r\n--silent" } }, "Run command: npm   test\n--silent"],
+    [{ toolName: "write", input: { path: "src/main.rs" } }, "Write file: src/main.rs"],
+    [{ toolName: "edit", input: { path: "src/lib.rs" } }, "Edit file: src/lib.rs"],
+    [{ toolName: "powershell", input: { command: "ls" } }, "Run tool: powershell"],
+  ];
+  for (const [event, title] of cases) {
+    const calls = [];
+    assert.equal(await handler(event, uiContext("Allow once", calls)), undefined);
+    assert.deepEqual(calls, [{ title, options: ["Allow once", "Deny"] }]);
+  }
+});
+
+test("the Nano guard blocks on Deny, a cancelled dialog, a failed dialog and a session without a UI", async (t) => {
+  const handler = await guardHandler();
+  if (!handler) return t.skip("this Node cannot load TypeScript");
+  const bash = { toolName: "bash", input: { command: "rm -rf build" } };
+  assert.deepEqual(await handler(bash, uiContext("Deny")), { block: true, reason: "Denied by the user." });
+  for (const answer of [undefined, "", "allow once", "Allow"]) {
+    const result = await handler(bash, uiContext(answer));
+    assert.equal(result?.block, true, `answer ${JSON.stringify(answer)} blocks`);
+  }
+  assert.equal((await handler(bash, uiContext(() => { throw new Error("dialog failed"); })))?.block, true);
+  assert.equal((await handler(bash, { hasUI: false, ui: { select: async () => "Allow once" } }))?.block, true);
+  assert.equal((await handler(bash, { ui: { select: async () => "Allow once" } }))?.block, true);
+});
+
+test("the Nano guard shows the whole command, escapes hidden characters and blocks what it cannot show", async (t) => {
+  const handler = await guardHandler();
+  if (!handler) return t.skip("this Node cannot load TypeScript");
+  // A line break after a comment stays a line break: the second command is visible.
+  const calls = [];
+  await handler({ toolName: "bash", input: { command: "echo safe # comment\nrm -rf important" } }, uiContext("Allow once", calls));
+  assert.equal(calls[0].title, "Run command: echo safe # comment\nrm -rf important");
+  // Bidi overrides, zero-width characters, separators and lone carriage returns are escaped.
+  const hidden = [];
+  await handler({ toolName: "bash", input: { command: "ls\u202Etxt.exe\u200B\u2028a\rb" } }, uiContext("Allow once", hidden));
+  assert.equal(hidden[0].title, "Run command: ls\\u{202E}txt.exe\\u{200B}\\u{2028}a\\u{D}b");
+  // Nothing is shortened: a call too long to show is blocked without asking.
+  const long = [];
+  const result = await handler({ toolName: "bash", input: { command: `${"x".repeat(3998)}\u{1F600}${"y".repeat(10)}` } }, uiContext("Allow once", long));
+  assert.equal(result?.block, true);
+  assert.match(result.reason, /too long to show/);
+  assert.equal(long.length, 0);
+  const fits = [];
+  await handler({ toolName: "write", input: { path: "a".repeat(4000) } }, uiContext("Allow once", fits));
+  assert.equal(fits[0].title, `Write file: ${"a".repeat(4000)}`);
+  const empty = [];
+  await handler({ toolName: "write", input: {} }, uiContext("Allow once", empty));
+  assert.equal(empty[0].title, "Write file: (empty)");
+});
+
+test("a guard-style select dialog reaches the host as an approval card and a cancel answers Pi", async () => {
+  // The fixture sends the kind of select request the guard makes.
+  const events = [];
+  const adapter = await createPiAdapter(nanoConfig(), (event) => events.push(event));
+  try {
+    await adapter.prompt({ text: "select", mode: "prompt" });
+    const approval = await waitFor(() => events.find((event) => event.type === "approval")?.approval);
+    assert.deepEqual(approval.options.map((option) => option.label), ["Allow", "Block", "Line one line two"]);
+    assert.deepEqual(approval.decisions, ["approve-once", "cancel"]);
+    await adapter.respond({ requestId: approval.id, decision: "cancel" });
+    assert.equal((await adapter.snapshot()).title, "ui:cancelled", "a cancelled dialog is a refusal the guard blocks on");
   } finally { await adapter.dispose(); }
 });

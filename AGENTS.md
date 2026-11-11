@@ -1,4 +1,4 @@
-# AGENTS.md — mandatory PiUI development rules
+# AGENTS.md — mandatory PiUI / Nano Desktop development rules
 
 ## User-authored system files
 
@@ -16,7 +16,7 @@
   or adapter capabilities. Skills must distinguish verified configuration from
   available native models/tools and must not advertise unsupported isolation.
 
-This file is intended for coding agents and engineers working on the PiUI repository. The requirements below take precedence over the local convenience of any particular task.
+This file is intended for coding agents and engineers working on the PiUI repository (the product is named Nano Desktop since 0.3.0; internal names keep the `piui` prefix, ADR-046). The requirements below take precedence over the local convenience of any particular task.
 
 ## Goal
 
@@ -195,3 +195,72 @@ formats. Never translate one harness history into another chat format.
   cross-harness result edge, denied escalation, unsupported capability, reload,
   safe mode and keyboard operation. Report synthetic and real-provider evidence
   separately. Never claim hundreds of paid model turns from a transport probe.
+
+## Nano account and Nano harness (mandatory)
+
+Design and behaviour: `docs/NANO_DESKTOP.md`; server contract:
+`docs/NANO_DESKTOP_API.md`; decisions ADR-046 to ADR-049; contracts
+`contracts/nano-account-v1.ts` and `contracts/nano-server-v1.ts`.
+
+- A signed-out application and any application in safe mode make **no** Nano
+  network call (no discovery, refresh, relay, dictation or cloud window). Sign-in
+  is optional; every harness, Fusion, pipeline and plugin feature that works
+  without an account must keep working without one. Local sign-out works in safe
+  mode without a network call.
+- Nano credentials live **only in the Rust host**: refresh token in the OS
+  credential store (memory-only if the store fails, never a file), access token
+  in memory. Tokens, authorization codes, PKCE verifiers, relay keys and cloud
+  launch codes never reach the WebView, an IPC payload or event, a bridge
+  frame, a process environment, a log, a test snapshot, the Lab or an exported
+  system file. The one exception is the per-session relay key, on exactly this
+  path: host -> the environment of that session's own Nano bridge process
+  (`PIUI_NANO_RELAY_KEY`, which the bridge reads once and deletes) -> the Pi
+  child environment (`NANO_RELAY_KEY`). It is never in the `initialize` frame
+  or any other bridge frame. Token types redact `Debug`. Never add a Tauri
+  plugin that can return a secret to JavaScript, and never open a URL the
+  WebView supplied: links are enums resolved in the host.
+- The relay is the only new listener: `127.0.0.1:<ephemeral>`, per-session
+  256-bit key compared in constant time before the body is parsed, `Host`
+  check, refusal of any `Origin` or `Sec-Fetch-Site`, fixed path allowlist, an
+  upstream URL built only from the pinned base, entitled modes only, concurrency
+  and size caps, unbuffered streaming, no prompt building, no agent loop, no
+  bodies or headers in logs. Every relay session and request is bound to the
+  account generation it started under: sign-out, expiry, device revocation or
+  a new sign-in refuses it before forwarding and before a retry and cuts its
+  upload, upstream request and stream. It dies with its session.
+- Nano lane (`harness: "nano"`): unmodified upstream Pi (>= 1.4.0) through
+  `crates/piui-runtime/bridge/pi.mjs`, Pi JSONL history, no second chat format.
+  Required flags: `--mode rpc --no-approve --offline`, plus `--provider nano
+  --model <mode>` when a model is given (a reopened session without one keeps
+  its recorded model, which must be a `nano` model); the bridge process and the
+  child environment are **cleared** to an OS allowlist (the child adds
+  `PI_CODING_AGENT_DIR`, `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1`,
+  `PI_TELEMETRY=0` and `NANO_RELAY_KEY`). The agent directory is host-owned and private: never read or
+  write the user's `~/.pi`, `auth.json` or global Pi configuration. Permission
+  modes are `native` (approval guard), `read-only` and `full-access`;
+  `workspace-write`, thinking levels, speed tiers, per-agent tools, skills, MCP,
+  native subagents, the board tool, the coordinator role and a Fusion lead are
+  refused before launch. Fusion allows Nano only as the sidekick. Never describe
+  the Nano agent as sandboxed.
+- Nano models are the server's modes (`auto`, `free`, `fast`, `smart`) from the
+  account's entitlements; never name, promise or hard-code a provider model, and
+  never treat a mode as available unless entitlements say so. Money is not
+  shown; credits are whole numbers.
+- Frozen identifiers (ADR-046): the product name is visible text only. Keep the
+  bundle id `dev.piui.desktop`, `piui-foundation.sqlite`, `piui-system` /
+  `*.piui.json`, `piui-plugin.json`, `piui.manifest.json`, `engines.piui`, the
+  `piui-plugin` scheme, `piui://` events (including `piui://nano-account-v1`),
+  `--piui-*` tokens, `PIUI_*` variables, `.piui/`, `piui-workspace`, bridge
+  `clientInfo`, crate and npm names and `piui.*` storage keys. A change needs
+  its own ADR and a tested, non-destructive copy.
+- `PIUI_NANO_ISSUER` (a development issuer such as `http://127.0.0.1:8787`) is
+  honoured **only** in debug builds and builds with the `e2e-webview-automation`
+  feature, and plain `http` only for a loopback issuer. Release builds always
+  use `https://nanoagents.ru` and never read the variable. Use
+  `tools/nano-dev-server/` for development and E2E; its evidence is synthetic
+  and is reported separately from real-provider evidence.
+- The cloud window (`nano-cloud`) has no IPC: no capability may list it and the
+  command guard stays an allowlist (main window, app origin). Its navigation is
+  limited to Nano origins; other links open in the system browser.
+- Dictation audio is held in memory only and goes through the host; the WebView
+  never makes a Nano request, so the CSP stays unchanged.

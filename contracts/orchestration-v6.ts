@@ -26,7 +26,7 @@
  * `PipelineDefinition.outputs` and the `pipeline` run trigger.
  */
 
-import type { HarnessId } from './harness-identity-v2';
+import type { HarnessId } from './harness-identity-v3';
 
 export type OrchestrationId = string;
 export type Revision = number;

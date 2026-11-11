@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { AcpAgentEntryV1 } from '../../../../../contracts/harness-registry-v1';
-  import { acpHarnessId } from '../../../../../contracts/harness-identity-v2';
+  import { acpHarnessId } from '../../../../../contracts/harness-identity-v3';
   import { t } from '../../features/locale/language';
   import { Badge, Button } from '../../lib/ui';
   import HarnessMark from '../shell/HarnessMark.svelte';
@@ -25,7 +25,7 @@
     ['loadSession', 'Reopening chats'],
     ['models', 'Model choice'],
     ['modes', 'Session modes'],
-    ['mcpHttp', 'PiUI coordination tool'],
+    ['mcpHttp', 'Nano Desktop coordination tool'],
   ] as const;
 
   const agent = $derived(row.agent);
@@ -46,7 +46,7 @@
   <div class="card__main">
     <div class="card__title">
       <strong id={titleId}>{name}</strong>
-      <Badge>{agent.source === 'built-in' ? $t('Ships with PiUI') : agent.source === 'plugin' ? $t('From plugin {0}', [agent.plugin?.name ?? '']) : $t('Added by you')}</Badge>
+      <Badge>{agent.source === 'built-in' ? $t('Ships with Nano Desktop') : agent.source === 'plugin' ? $t('From plugin {0}', [agent.plugin?.name ?? '']) : $t('Added by you')}</Badge>
       {#if agent.version}<span class="muted">v{agent.version}</span>{/if}
       <Badge tone={badge.tone}>{$t(badge.label)}</Badge>
       {#if advisory}<Badge tone={advisory.tone}>{$t(advisory.label)}</Badge>{/if}
@@ -60,7 +60,7 @@
         <div><dt>{$t('Program')}</dt><dd><code>{agent.descriptor.command.program}</code></dd></div>
       {/if}
       {#if version}<div><dt>{$t('Version')}</dt><dd>{$t(version[0], version[1])}</dd></div>{/if}
-      {#if row.status?.verifiedVersions}<div><dt>{$t('Tested with PiUI')}</dt><dd>{row.status.verifiedVersions}</dd></div>{/if}
+      {#if row.status?.verifiedVersions}<div><dt>{$t('Tested with Nano Desktop')}</dt><dd>{row.status.verifiedVersions}</dd></div>{/if}
       {#if hint}
         <div>
           <dt>{$t('Sign-in')}</dt>

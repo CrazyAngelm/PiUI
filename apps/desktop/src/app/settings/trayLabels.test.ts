@@ -11,12 +11,12 @@ const russian: Translate = (value, parameters = []) => english(translate(value, 
 describe('tray menu copy', () => {
   it('comes from the locale catalog in both languages', () => {
     expect(trayLabels(english)).toEqual({
-      open: 'Open PiUI', pause: 'Pause all automations', resume: 'Resume automations', quit: 'Quit PiUI',
-      tooltip: 'PiUI', pausedTooltip: 'PiUI (automations paused)',
+      open: 'Open Nano Desktop', pause: 'Pause all automations', resume: 'Resume automations', quit: 'Quit Nano Desktop',
+      tooltip: 'Nano Desktop', pausedTooltip: 'Nano Desktop (automations paused)',
     });
     const labels = trayLabels(russian);
     for (const key of ['open', 'pause', 'resume', 'quit', 'pausedTooltip'] as const) expect(labels[key]).toMatch(/[а-яё]/i);
-    expect(labels.tooltip).toBe('PiUI');
+    expect(labels.tooltip).toBe('Nano Desktop');
   });
 
   it('is sent to the host and a refusal is harmless', async () => {
@@ -28,7 +28,7 @@ describe('tray menu copy', () => {
     syncTrayLabels(english, createBackgroundClient(async () => { throw { code: 'unavailable' }; }));
     await Promise.resolve();
     expect(sent).toHaveLength(1);
-    expect(sent[0]?.quit).toBe('Выйти из PiUI');
+    expect(sent[0]?.quit).toBe('Выйти из Nano Desktop');
   });
 
   it('translates every background error and pattern explanation', () => {

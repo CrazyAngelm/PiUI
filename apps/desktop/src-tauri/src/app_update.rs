@@ -183,7 +183,7 @@ pub enum AppUpdateErrorCode {
     NotConfigured,
     #[error("another update check or install is running")]
     Busy,
-    #[error("PiUI is closing")]
+    #[error("Nano Desktop is closing")]
     ShuttingDown,
     #[error("this version is not the update found by the last check")]
     NotAvailable,

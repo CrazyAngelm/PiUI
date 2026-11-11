@@ -55,7 +55,7 @@ function failure(code: string, message: string): HostErrorPayload {
   return { code, message, recoverable: true };
 }
 
-const SAFE_MODE = failure('SAFE_MODE', 'Safe mode is on: PiUI does not change teammates.');
+const SAFE_MODE = failure('SAFE_MODE', 'Safe mode is on: Nano Desktop does not change teammates.');
 const INVALID = failure('INVALID_ARGUMENT', 'Check the teammate details and try again.');
 const NOT_FOUND = failure('NOT_FOUND', 'That teammate or launch command is no longer available.');
 const HANDLE_TAKEN = failure('HANDLE_TAKEN', 'Another teammate already uses this handle.');

@@ -159,7 +159,7 @@ describe('session tools v1 contracts', () => {
     await expect(createPlacementClient(answer(fixture.placement.placements)).request({ type: 'list' })).resolves.toMatchObject({ type: 'placements' });
     await expect(createAdoptClient(answer(fixture.adopt.result)).adopt({ sessionId: 'x' })).resolves.toMatchObject({ created: true });
     const failing = createReviewClient(async () => {
-      throw { code: 'SAFE_MODE', message: 'Safe mode is on: PiUI does not change files, git or chats.', recoverable: true };
+      throw { code: 'SAFE_MODE', message: 'Safe mode is on: Nano Desktop does not change files, git or chats.', recoverable: true };
     });
     await expect(failing.request({ type: 'status', sessionId: 's' })).rejects.toMatchObject({ code: 'SAFE_MODE' });
     expect(calls.map(([command]) => command)).toEqual([

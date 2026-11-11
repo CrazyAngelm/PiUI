@@ -29,7 +29,7 @@ export {
  * tool. Host error text never reaches the UI: each code has fixed copy.
  */
 export const BOARD_ERROR_COPY: Readonly<Record<BoardErrorCodeV1 | 'unknown', string>> = {
-  SAFE_MODE: 'Safe mode is on: PiUI does not change the board.',
+  SAFE_MODE: 'Safe mode is on: Nano Desktop does not change the board.',
   INVALID_ARGUMENT: 'Check the card details and try again.',
   NOT_FOUND: 'This card is no longer on the board. Refresh and try again.',
   DISABLED: 'The board of this project is turned off.',
@@ -39,7 +39,7 @@ export const BOARD_ERROR_COPY: Readonly<Record<BoardErrorCodeV1 | 'unknown', str
   LIMIT: 'The board is full. Delete or close cards, then try again.',
   RATE_LIMITED: 'Too many board changes at once. Try again in a moment.',
   NOT_ASSIGNABLE: 'This teammate cannot take cards yet. Open the Team screen to fix it.',
-  IO_ERROR: 'PiUI could not save the board. Nothing was lost.',
+  IO_ERROR: 'Nano Desktop could not save the board. Nothing was lost.',
   unknown: 'The board operation could not be completed.',
 };
 

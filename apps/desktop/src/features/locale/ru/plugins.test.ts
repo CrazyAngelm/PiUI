@@ -71,7 +71,7 @@ describe('Russian copy for plugins', () => {
       EXECUTOR_ISSUES.pluginUnavailable,
       'A plugin node runs on the host and cannot be the orchestrator.',
       ...['plugin-unavailable', 'plugin-config-invalid', 'plugin-input-unavailable', 'plugin-start-failed', 'plugin-node-failed', 'plugin-node-timeout'].map(failureText),
-      'PiUI could not read the plugin list.',
+      'Nano Desktop could not read the plugin list.',
     ];
     expect(keys.every((key) => key.length > 0)).toBe(true);
     expect(keys.filter((key) => !translated(key))).toEqual([]);
@@ -83,7 +83,7 @@ describe('Russian copy for plugins', () => {
       'Plugin node',
       'From plugin {0}',
       'Named fields the node returns as one JSON object. Without fields, its output is passed on as text.',
-      'PiUI could not confirm how the plugin node ended. Check what it changed, then record an operator assertion. It reconciles the journal only.',
+      'Nano Desktop could not confirm how the plugin node ended. Check what it changed, then record an operator assertion. It reconciles the journal only.',
       'I checked what the plugin node did and understand this is an operator assertion.',
       'This agent comes from a plugin. Disable or remove the plugin in Settings → Plugins.',
     ];

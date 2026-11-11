@@ -345,7 +345,7 @@ impl WorkspaceError {
     pub(crate) fn io() -> Self {
         Self {
             code: "IO_ERROR",
-            message: "PiUI could not update the local workspace catalog.",
+            message: "Nano Desktop could not update the local workspace catalog.",
             recoverable: true,
         }
     }
@@ -379,16 +379,25 @@ impl WorkspaceError {
             recoverable: true,
         }
     }
+    /// A Nano start needs a signed-in Nano account (no relay, no entitled
+    /// modes). Nothing was spawned.
+    pub(crate) fn nano_sign_in_required() -> Self {
+        Self {
+            code: NANO_SIGN_IN_REQUIRED,
+            message: "Sign in to your Nano account to use Nano.",
+            recoverable: true,
+        }
+    }
     /// Whether a native start was refused at the harness login check: the
     /// runtime never reached a prompt, so nothing was executed.
     pub(crate) fn is_sign_in_required(&self) -> bool {
-        self.code == Self::subscription_required().code
+        self.code == Self::subscription_required().code || self.code == NANO_SIGN_IN_REQUIRED
     }
     /// Fast mode can bill paid extra usage beyond the base subscription.
     pub(crate) fn fast_mode_unsupported() -> Self {
         Self {
             code: "NOT_SUPPORTED",
-            message: "Claude Code fast mode is not available in PiUI because it can use paid extra usage.",
+            message: "Claude Code fast mode is not available in Nano Desktop because it can use paid extra usage.",
             recoverable: true,
         }
     }
@@ -427,6 +436,10 @@ impl WorkspaceError {
     }
 }
 
+/// Workspace error code of a Nano start without a signed-in Nano account
+/// (mirrors `NANO_SIGN_IN_REQUIRED` of the TypeScript error-code union).
+pub(crate) const NANO_SIGN_IN_REQUIRED: &str = "NANO_SIGN_IN_REQUIRED";
+
 /// Maps a native start failure to its typed workspace status. A refused
 /// non-subscription Claude Code login and an ACP agent's sign-in refusal
 /// have dedicated, actionable statuses.
@@ -436,6 +449,8 @@ fn runtime_failure(error: &NativeRuntimeError) -> WorkspaceError {
             WorkspaceError::subscription_required()
         }
         NativeRuntimeError::AgentSignInRequired { .. } => WorkspaceError::acp_sign_in_required(),
+        // No Nano launch data: the account is not signed in.
+        NativeRuntimeError::NanoNotReady => WorkspaceError::nano_sign_in_required(),
         NativeRuntimeError::Bridge(BridgeFailureCode::Incompatible) => WorkspaceError {
             code: "HARNESS_INCOMPATIBLE",
             message: piui_runtime::workspace_runtime::INCOMPATIBLE_HARNESS_MESSAGE,
@@ -467,6 +482,8 @@ fn reject_unsupported_speed(
         (HarnessKind::ClaudeCode, Some(tier)) if tier != "standard" => {
             Err(WorkspaceError::fast_mode_unsupported())
         }
+        // Nano has no speed setting: refused, never silently ignored.
+        (HarnessKind::Nano, Some(_)) => Err(WorkspaceError::not_supported()),
         _ => Ok(()),
     }
 }
@@ -1077,6 +1094,9 @@ struct WorkspaceHostInner {
     board: Mutex<Option<Arc<dyn BoardSessionHooks>>>,
     /// Fusion pairs; unset until the app is set up (no sidekick tool).
     fusion: Mutex<Option<Arc<dyn FusionSessionHooks>>>,
+    /// The Nano account, relay and launch data (ADR-048); unset until the app
+    /// is set up, where a Nano start is refused before spawning.
+    nano: Mutex<Option<Arc<crate::nano::NanoHost>>>,
     /// ACP agent descriptors, decisions and discovery (ADR-034).
     acp: AcpAgents,
     /// Chat placement (worktrees, handoff links, adopted sessions) and the
@@ -1120,6 +1140,7 @@ impl WorkspaceHost {
                 plugin_mcp: Mutex::new(None),
                 board: Mutex::new(None),
                 fusion: Mutex::new(None),
+                nano: Mutex::new(None),
                 acp: AcpAgents::open(app_data_dir)?,
                 tools: crate::session_placement::SessionTools::open(app_data_dir)?,
                 #[cfg(test)]
@@ -1162,6 +1183,18 @@ impl WorkspaceHost {
 
     fn fusion_hooks(&self) -> Option<Arc<dyn FusionSessionHooks>> {
         self.inner.fusion.lock().ok().and_then(|slot| slot.clone())
+    }
+
+    /// Installs the Nano host (ADR-048). Without it a Nano start is refused
+    /// before anything is spawned and the Nano catalog is a sign-in refusal.
+    pub(crate) fn set_nano_host(&self, host: Arc<crate::nano::NanoHost>) {
+        if let Ok(mut slot) = self.inner.nano.lock() {
+            *slot = Some(host);
+        }
+    }
+
+    pub(crate) fn nano_host(&self) -> Option<Arc<crate::nano::NanoHost>> {
+        self.inner.nano.lock().ok().and_then(|slot| slot.clone())
     }
 
     /// True when the session is a Fusion sidekick, whose turns belong to the
@@ -1295,9 +1328,22 @@ impl WorkspaceHost {
 
     async fn spawn_native(
         &self,
-        config: NativeRuntimeConfig,
+        mut config: NativeRuntimeConfig,
         acp: Option<AcpLaunch>,
     ) -> NativeSpawnResult {
+        // A Nano start gets its agent directory, guard and relay key from the
+        // host. The lease keeps the relay session registered: it is attached
+        // to the runtime below (and dropped with it), and a start that fails,
+        // times out or is cancelled drops it right here with this future.
+        let mut nano_lease = None;
+        if config.harness == HarnessKind::Nano
+            && config.nano.is_none()
+            && let Some(nano) = self.nano_host()
+        {
+            let (launch, lease) = nano.launch(config.permission_mode).await?;
+            config.nano = Some(launch);
+            nano_lease = Some(lease);
+        }
         let agent = config.harness.acp_agent();
         #[cfg(test)]
         {
@@ -1308,13 +1354,20 @@ impl WorkspaceHost {
                 .ok()
                 .and_then(|slot| slot.clone());
             if let Some(spawner) = spawner {
-                return spawner(config).await;
+                let spawned = spawner(config).await;
+                if let (Ok((runtime, _)), Some(lease)) = (&spawned, nano_lease) {
+                    runtime.attach_lease(Box::new(lease));
+                }
+                return spawned;
             }
         }
         let spawned = match acp {
             Some(launch) => NativeRuntime::spawn_acp(config, launch).await,
             None => NativeRuntime::spawn(config).await,
         };
+        if let (Ok((runtime, _)), Some(lease)) = (&spawned, nano_lease) {
+            runtime.attach_lease(Box::new(lease));
+        }
         if let Some(agent) = agent {
             self.inner
                 .acp
@@ -1794,6 +1847,8 @@ impl WorkspaceHost {
                 agent_dir: None,
                 kernel_python: None,
                 host_tools,
+                // Filled by the Nano host in `spawn_native` for a Nano start.
+                nano: None,
             };
             // An ACP agent starts only from its trusted, resolved descriptor.
             let acp = match record.harness.acp_agent() {
@@ -2430,6 +2485,7 @@ impl WorkspaceHost {
             agent_dir: None,
             kernel_python: None,
             host_tools: Vec::new(),
+            nano: None,
         };
         let spawned = self.spawn_native(config, Some(launch)).await;
         let result = match spawned {
@@ -2783,7 +2839,8 @@ fn snapshot_from_history(
 /// history behind the protocol (`session/load`), never in a file PiUI reads.
 fn history_format(harness: HarnessKind) -> Option<WorkspaceHistoryFormat> {
     Some(match harness {
-        HarnessKind::Pi => WorkspaceHistoryFormat::Pi,
+        // Nano's history is Pi JSONL; no second chat format.
+        HarnessKind::Pi | HarnessKind::Nano => WorkspaceHistoryFormat::Pi,
         HarnessKind::PrimeAgent => WorkspaceHistoryFormat::PrimeAgent,
         HarnessKind::Codex => WorkspaceHistoryFormat::Codex,
         HarnessKind::Hermes => WorkspaceHistoryFormat::Hermes,
@@ -2913,14 +2970,27 @@ async fn runtime_settings(
         .workspace
         .live_runtime(session_id)?
         .ok_or_else(WorkspaceError::closed)?;
-    if let RuntimeSettingsCommand::Set { service_tier, .. } = &command {
-        let harness = host.workspace.record(session_id)?.harness;
-        reject_unsupported_speed(harness, service_tier.as_deref())?;
-    }
-    let models = runtime
+    let harness = match &command {
+        RuntimeSettingsCommand::Set { service_tier, .. } => {
+            let harness = host.workspace.record(session_id)?.harness;
+            reject_unsupported_speed(harness, service_tier.as_deref())?;
+            Some(harness)
+        }
+        RuntimeSettingsCommand::Get { .. } => host
+            .workspace
+            .record(session_id)
+            .ok()
+            .map(|record| record.harness),
+    };
+    let mut models = runtime
         .models()
         .await
         .map_err(|_| WorkspaceError::runtime())?;
+    // A Nano session offers, and may switch to, only the modes the account is
+    // entitled to now; a locked mode is refused like any unknown model.
+    if harness == Some(HarnessKind::Nano) {
+        retain_entitled_nano_models(host, &mut models);
+    }
     if let RuntimeSettingsCommand::Set {
         model,
         thinking_level,
@@ -2942,7 +3012,7 @@ async fn runtime_settings(
         validate_model(candidate, thinking_level.as_deref())?;
         let record = host.workspace.record(session_id)?;
         if service_tier.is_some()
-            && (record.harness == HarnessKind::Pi
+            && (matches!(record.harness, HarnessKind::Pi | HarnessKind::Nano)
                 || !matches!(service_tier.as_deref(), Some("standard" | "fast")))
         {
             return Err(WorkspaceError::invalid());
@@ -2956,10 +3026,13 @@ async fn runtime_settings(
             .await
             .map_err(|_| WorkspaceError::runtime())?;
     }
-    let native = runtime
+    let mut native = runtime
         .snapshot()
         .await
         .map_err(|_| WorkspaceError::runtime())?;
+    if harness == Some(HarnessKind::Nano) {
+        retain_entitled_nano_models(host, &mut native.models);
+    }
     Ok(RuntimeSettings {
         protocol: 16,
         session_id: session_id.clone(),
@@ -3101,6 +3174,11 @@ pub async fn harness_models_v18(
         return Err(WorkspaceError::safe_mode());
     }
     let directory = verified_project_directory(state.inner(), &request.workspace_id, true)?;
+    if request.harness == HarnessKind::Nano {
+        // The host serves the Nano catalog from the account's entitled modes;
+        // no Pi process is started to discover models.
+        return nano_host_catalog(state.inner(), request.harness);
+    }
     if let Some(agent) = request.harness.acp_agent() {
         // ACP advertises models only inside a conversation, and a probe
         // conversation would add to the agent's own history. Offer the agent
@@ -3269,6 +3347,40 @@ where
     probe().await
 }
 
+/// Narrows a Nano session's model list to the account's entitled modes;
+/// without a Nano host nothing is entitled.
+fn retain_entitled_nano_models(
+    host: &HostState,
+    models: &mut Vec<piui_runtime::workspace_runtime::WorkspaceModel>,
+) {
+    match host.workspace.nano_host() {
+        Some(nano) => nano.retain_entitled_models(models),
+        None => models.clear(),
+    }
+}
+
+/// The Nano model catalog, served by the host: one row per mode the signed-in
+/// account's entitlements make available (`provider: "nano"`), nothing while
+/// signed out, and no resources. No Pi process is started.
+fn nano_host_catalog(
+    state: &HostState,
+    harness: HarnessKind,
+) -> Result<HarnessModelsResult, WorkspaceError> {
+    let host = state
+        .workspace
+        .nano_host()
+        .ok_or_else(WorkspaceError::nano_sign_in_required)?;
+    Ok(HarnessModelsResult {
+        protocol: 18,
+        harness,
+        models: host.catalog_models(),
+        resources: piui_runtime::workspace_runtime::NativeResourceCatalog {
+            items: Vec::new(),
+            warnings: Vec::new(),
+        },
+    })
+}
+
 async fn spawn_catalog_probe(
     state: &HostState,
     directory: &ProjectDirectory,
@@ -3305,6 +3417,7 @@ async fn spawn_catalog_probe(
         agent_dir: None,
         kernel_python: None,
         host_tools: Vec::new(),
+        nano: None,
     };
     let (runtime, mut events) = NativeRuntime::spawn_catalog(config)
         .await
@@ -3897,7 +4010,8 @@ fn spawn_event_forwarder(forwarding: EventForwarding) -> JoinHandle<()> {
                             &state,
                             &session_id,
                             WorkspaceEventPayload::Error {
-                                message: "PiUI could not save the native session binding.".into(),
+                                message: "Nano Desktop could not save the native session binding."
+                                    .into(),
                             },
                         );
                         break;
@@ -4192,7 +4306,7 @@ fn sidekick_unavailable_result() -> serde_json::Value {
     serde_json::json!({
         "ok": false,
         "code": "sidekick-unavailable",
-        "message": "Fusion is not available in this PiUI process.",
+        "message": "Fusion is not available in this Nano Desktop process.",
         "text": "[PiUI sidekick refused: sidekick-unavailable] Fusion is not available in this PiUI process.",
     })
 }
@@ -4341,6 +4455,12 @@ fn validate_launch_request(request: &WorkspaceLaunchRequest) -> Result<(), Works
         return Err(WorkspaceError::invalid());
     }
     reject_unsupported_speed(request.harness, request.service_tier.as_deref())?;
+    // Nano is Pi underneath: there is no workspace-write mode.
+    if request.harness == HarnessKind::Nano
+        && request.permission_mode == PermissionMode::WorkspaceWrite
+    {
+        return Err(WorkspaceError::not_supported());
+    }
     if request
         .title
         .as_deref()
@@ -4446,6 +4566,7 @@ fn default_title(harness: HarnessKind) -> String {
         HarnessKind::Codex => "New Codex session",
         HarnessKind::Hermes => "New Hermes session",
         HarnessKind::ClaudeCode => "New Claude Code session",
+        HarnessKind::Nano => "New Nano session",
         HarnessKind::Acp(_) => "New agent session",
     }
     .into()
@@ -5213,6 +5334,56 @@ Board."
                 .code,
             "INVALID_ARGUMENT"
         );
+    }
+
+    #[test]
+    fn nano_start_failures_speed_and_modes_are_typed_and_it_shares_pi_history() {
+        use piui_runtime::workspace_runtime::NativeRuntimeError;
+        let not_ready = super::runtime_failure(&NativeRuntimeError::NanoNotReady);
+        assert_eq!(not_ready.code, "NANO_SIGN_IN_REQUIRED");
+        assert!(not_ready.recoverable);
+        assert!(
+            not_ready.is_sign_in_required(),
+            "a certain pre-execution refusal"
+        );
+        assert_eq!(
+            super::runtime_failure(&NativeRuntimeError::NanoCatalogHostServed).code,
+            "RUNTIME_FAILED"
+        );
+        assert_eq!(
+            super::WorkspaceError::nano_sign_in_required().code,
+            super::NANO_SIGN_IN_REQUIRED
+        );
+        assert_eq!(
+            super::reject_unsupported_speed(HarnessKind::Nano, Some("fast"))
+                .expect_err("no speed setting")
+                .code,
+            "NOT_SUPPORTED"
+        );
+        assert!(super::reject_unsupported_speed(HarnessKind::Nano, None).is_ok());
+        assert_eq!(
+            super::history_format(HarnessKind::Nano),
+            super::history_format(HarnessKind::Pi)
+        );
+        assert_eq!(super::default_title(HarnessKind::Nano), "New Nano session");
+        let mut request =
+            crate::workspace_api::native_host_tests::chat_request("workspace", "Nano session");
+        request.harness = HarnessKind::Nano;
+        request.permission_mode = PermissionMode::WorkspaceWrite;
+        assert_eq!(
+            super::validate_launch_request(&request)
+                .expect_err("no workspace-write")
+                .code,
+            "NOT_SUPPORTED"
+        );
+        for mode in [
+            PermissionMode::Native,
+            PermissionMode::ReadOnly,
+            PermissionMode::FullAccess,
+        ] {
+            request.permission_mode = mode;
+            assert!(super::validate_launch_request(&request).is_ok(), "{mode:?}");
+        }
     }
 
     #[test]

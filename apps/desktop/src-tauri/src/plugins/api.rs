@@ -407,18 +407,18 @@ impl From<PluginsError> for PluginsErrorDto {
                 problems,
                 ..Self::new(
                     "INVALID_PACKAGE",
-                    "This is not a valid PiUI plugin package.",
+                    "This is not a valid Nano Desktop plugin package.",
                 )
             },
             PluginsError::Incompatible(range) => Self {
                 problems: vec![Problem::about(
                     ProblemCode::EngineMismatch,
-                    "This plugin needs PiUI {0}.",
+                    "This plugin needs Nano Desktop {0}.",
                     range,
                 )],
                 ..Self::new(
                     "INCOMPATIBLE",
-                    "This plugin does not support this PiUI version.",
+                    "This plugin does not support this Nano Desktop version.",
                 )
             },
             PluginsError::Duplicate => Self::new(
@@ -453,7 +453,9 @@ impl From<PluginsError> for PluginsErrorDto {
                 "LIMIT",
                 "Remove a plugin before adding another (64 at most).",
             ),
-            PluginsError::Io => Self::new("IO_ERROR", "PiUI could not save the plugin list."),
+            PluginsError::Io => {
+                Self::new("IO_ERROR", "Nano Desktop could not save the plugin list.")
+            }
         }
     }
 }
@@ -477,7 +479,7 @@ fn call_error(error: CallError) -> PluginsErrorDto {
             "The plugin's backend could not start.",
         ),
         CallError::NotStarted(StartFailure::ShuttingDown) => {
-            PluginsErrorDto::new("BACKEND_UNAVAILABLE", "PiUI is closing.")
+            PluginsErrorDto::new("BACKEND_UNAVAILABLE", "Nano Desktop is closing.")
         }
         CallError::NotStarted(StartFailure::NodeUnsupported) => PluginsErrorDto::new(
             "BACKEND_UNAVAILABLE",
@@ -997,14 +999,14 @@ fn warm_node_probe() {
 fn pick_path(source: PickSource) -> Option<std::path::PathBuf> {
     match source {
         PickSource::Folder => rfd::FileDialog::new()
-            .set_title("Choose a PiUI plugin folder")
+            .set_title("Choose a Nano Desktop plugin folder")
             .pick_folder(),
         PickSource::Development => rfd::FileDialog::new()
-            .set_title("Load an unpacked PiUI plugin for development")
+            .set_title("Load an unpacked Nano Desktop plugin for development")
             .pick_folder(),
         PickSource::Zip => rfd::FileDialog::new()
-            .set_title("Choose a PiUI plugin package")
-            .add_filter("PiUI plugin (.zip)", &["zip"])
+            .set_title("Choose a Nano Desktop plugin package")
+            .add_filter("Nano Desktop plugin (.zip)", &["zip"])
             .pick_file(),
     }
 }
@@ -1253,7 +1255,7 @@ pub(crate) fn command_result(value: &Value) -> Result<PluginCommandResult, Plugi
     let refuse = || {
         PluginsErrorDto::new(
             "BACKEND_FAILED",
-            "The plugin returned an answer PiUI cannot use.",
+            "The plugin returned an answer Nano Desktop cannot use.",
         )
     };
     let object = value.as_object().ok_or_else(refuse)?;

@@ -2064,7 +2064,13 @@ fn workspace_launch_request(
         task_id: Some(lease.step_id.clone()),
         model: Some(WorkspaceModel {
             id: lease.profile.model.clone(),
-            provider: lease.profile.model_provider.clone(),
+            // A Nano profile may leave the provider out (system files allow
+            // it); the Nano lane only runs provider `nano`.
+            provider: lease
+                .profile
+                .model_provider
+                .clone()
+                .or_else(|| (lease.profile.harness == Harness::Nano).then(|| "nano".to_owned())),
             name: lease.profile.model.clone(),
             thinking_levels: None,
         }),
@@ -2526,6 +2532,7 @@ fn harness_kind(harness: Harness) -> HarnessKind {
         Harness::Codex => HarnessKind::Codex,
         Harness::Hermes => HarnessKind::Hermes,
         Harness::ClaudeCode => HarnessKind::ClaudeCode,
+        Harness::Nano => HarnessKind::Nano,
         Harness::Acp(agent) => HarnessKind::Acp(agent),
     }
 }
@@ -3175,6 +3182,80 @@ mod tests {
             allowed.tool_policy.rules = vec![native_rule(tool, ToolDecision::Allow)];
             assert!(launch_policy(&allowed, &native).is_ok(), "{mode:?} {tool}");
         }
+    }
+
+    #[test]
+    fn nano_launch_policy_is_pi_without_the_coordinator_and_refuses_unsupported_settings() {
+        use piui_orchestration::PermissionMode as Mode;
+        let native = native_capabilities();
+        let mut nano = profile(Harness::Nano);
+        nano.model_provider = Some("nano".into());
+        let (capabilities, policy) = launch_policy(&nano, &native).expect("Nano policy");
+        assert_eq!(
+            capabilities.permission_modes,
+            [Mode::Native, Mode::ReadOnly, Mode::FullAccess],
+            "workspace-write does not exist for Nano"
+        );
+        assert!(!policy.coordinator, "Nano is never a coordinator");
+        assert_eq!(policy.allowed_tools, None);
+        assert!(capabilities.native_enforced_tools.is_empty());
+        let lease = ControlledSpawnLease {
+            run_id: "run".into(),
+            run_revision: 1,
+            task_revision: 1,
+            lease_id: "lease".into(),
+            step_id: "step".into(),
+            member_id: "member".into(),
+            profile: nano.clone(),
+            task_instructions: "Review the change".into(),
+            dependency_result_references: vec![],
+            dependency_outputs: vec![],
+        };
+        let request =
+            workspace_launch_request("workspace", "session", &lease, policy.clone(), None);
+        assert_eq!(request.harness, HarnessKind::Nano);
+        assert_eq!(harness_name(Harness::Nano), "nano");
+        // An omitted provider (allowed in system files) launches as provider nano.
+        let mut unnamed = lease.clone();
+        unnamed.profile.model_provider = None;
+        let request = workspace_launch_request("workspace", "session", &unnamed, policy, None);
+        assert_eq!(
+            request.model.and_then(|model| model.provider).as_deref(),
+            Some("nano")
+        );
+        // Unsupported settings fail before native execution, never ignored.
+        let mut workspace_write = nano.clone();
+        workspace_write.permission_mode = Mode::WorkspaceWrite;
+        assert!(launch_policy(&workspace_write, &native).is_err());
+        let mut speed = nano.clone();
+        speed.service_tier = Some("fast".into());
+        assert!(launch_policy(&speed, &native).is_err());
+        let mut reasoning = nano.clone();
+        reasoning.reasoning = Some("high".into());
+        assert!(launch_policy(&reasoning, &native).is_err());
+        let mut skill = nano.clone();
+        skill.resource_rules = vec![piui_orchestration::ResourceRule {
+            kind: piui_orchestration::ResourceKind::Skill,
+            id: "review".into(),
+            enabled: false,
+        }];
+        assert!(launch_policy(&skill, &native).is_err());
+        let mut tool = nano.clone();
+        tool.tool_policy.rules = vec![native_rule("read", ToolDecision::Allow)];
+        assert!(launch_policy(&tool, &native).is_err());
+        let mut network = nano.clone();
+        network.permission_mode = Mode::ReadOnly;
+        network.network_access = true;
+        assert!(launch_policy(&network, &native).is_err());
+        let mut instructions = nano.clone();
+        instructions.base_instructions = Some("base".into());
+        assert!(launch_policy(&instructions, &native).is_err());
+        // A read-only `llm` step keeps the empty native tool set.
+        let mut one_shot = nano;
+        one_shot.permission_mode = Mode::ReadOnly;
+        let (_, policy) = one_shot_launch_policy(&one_shot, &native).expect("llm step");
+        assert_eq!(policy.allowed_tools, Some(Vec::new()));
+        assert!(!policy.coordinator);
     }
 
     #[test]

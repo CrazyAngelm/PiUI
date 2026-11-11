@@ -36,16 +36,16 @@ describe('Settings → Harnesses presentation', () => {
   });
 
   it('explains the version against the tested range, never as a confirmation', () => {
-    expect(versionNote({ ...gemini, version: '1.2.3', versionStatus: 'verified' })).toEqual(['{0}, tested with PiUI', ['1.2.3']]);
-    expect(versionNote({ ...gemini, version: '0.39.1', versionStatus: 'no-verified-range' })?.[0]).toBe('{0}, not verified by PiUI');
-    expect(versionNote({ ...gemini, version: '3.0.0', versionStatus: 'newer' })?.[0]).toBe('{0}, newer than the versions tested with PiUI');
-    expect(versionNote({ ...gemini, version: '0.1.0', versionStatus: 'older' })?.[0]).toBe('{0}, older than the versions tested with PiUI');
+    expect(versionNote({ ...gemini, version: '1.2.3', versionStatus: 'verified' })).toEqual(['{0}, tested with Nano Desktop', ['1.2.3']]);
+    expect(versionNote({ ...gemini, version: '0.39.1', versionStatus: 'no-verified-range' })?.[0]).toBe('{0}, not verified by Nano Desktop');
+    expect(versionNote({ ...gemini, version: '3.0.0', versionStatus: 'newer' })?.[0]).toBe('{0}, newer than the versions tested with Nano Desktop');
+    expect(versionNote({ ...gemini, version: '0.1.0', versionStatus: 'older' })?.[0]).toBe('{0}, older than the versions tested with Nano Desktop');
     expect(versionNote({ ...gemini, versionStatus: 'probe-failed' })).toEqual(['The version check did not finish', []]);
     expect(versionNote({ ...gemini, versionStatus: 'unrecognized' })?.[0]).toBe('The version output was not recognized');
     expect(versionNote(gemini)).toBeUndefined();
   });
 
-  it('marks versions PiUI has not tested without gating them', () => {
+  it('marks versions Nano Desktop has not tested without gating them', () => {
     expect(versionBadge('newer')).toEqual({ label: 'Newer than tested', tone: 'warning' });
     expect(versionBadge('no-verified-range')).toEqual({ label: 'Untested version', tone: 'warning' });
     expect(versionBadge('unrecognized')).toEqual({ label: 'Version unknown', tone: 'warning' });

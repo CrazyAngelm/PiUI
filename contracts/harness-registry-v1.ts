@@ -16,7 +16,7 @@
  * `unverified-version` and `confirmVersion` stay in the types for older
  * consumers but are never produced and never record anything.
  */
-import type { HarnessId } from './harness-identity-v2';
+import type { HarnessId } from './harness-identity-v3';
 
 export const HARNESS_REGISTRY_PROTOCOL = 1 as const;
 /** Emitted after discovery or a registry change; payload `HarnessRegistryChangedV1`. */

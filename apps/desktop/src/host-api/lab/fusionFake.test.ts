@@ -70,6 +70,10 @@ describe('fusion lab fake', () => {
     // Pi needs both roles at full access.
     expect(refusal(pairOf(role('codex', 'full-access'), role('pi', 'full-access')))).toBeUndefined();
     expect(refusal(pairOf(role('codex', 'workspace-write'), role('pi', 'workspace-write')))).toBe('sidekick-needs-full-access:sidekick');
+    // Nano follows Pi as a sidekick and never leads.
+    expect(refusal(pairOf(role('codex', 'full-access'), role('nano', 'full-access')))).toBeUndefined();
+    expect(refusal(pairOf(role('codex', 'workspace-write'), role('nano', 'workspace-write')))).toBe('sidekick-needs-full-access:sidekick');
+    expect(refusal(pairOf(role('nano', 'full-access'), role('codex', 'full-access')))).toBe('lead-harness-unsupported:lead');
     // A workspace-write Codex sidekick needs the sandbox.
     const sandboxed = pairOf(role('claude-code', 'full-access'), role('codex', 'workspace-write'));
     expect(refusal(sandboxed)).toBeUndefined();

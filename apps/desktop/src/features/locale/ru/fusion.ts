@@ -49,8 +49,8 @@ export const fusionRu: Readonly<Record<string, string>> = {
   'Give the lead at least the Edit project permission.': 'Дайте ведущему хотя бы право «Правка проекта».',
 
   // Errors
-  'Safe mode is on, so Fusion cannot change anything. Restart PiUI without safe mode.':
-    'Включён безопасный режим, поэтому Fusion ничего не может менять. Перезапустите PiUI без безопасного режима.',
+  'Safe mode is on, so Fusion cannot change anything. Restart Nano Desktop without safe mode.':
+    'Включён безопасный режим, поэтому Fusion ничего не может менять. Перезапустите Nano Desktop без безопасного режима.',
   'The host did not accept this request.': 'Хост не принял этот запрос.',
   'This Fusion chat or round no longer exists.': 'Этого чата Fusion или раунда больше нет.',
   'The state changed meanwhile. Try again.': 'Состояние изменилось. Повторите попытку.',
@@ -123,8 +123,8 @@ export const fusionRu: Readonly<Record<string, string>> = {
   'No briefs yet. The lead sends one when it delegates work.': 'Поручений пока нет. Ведущий отправит его, когда делегирует работу.',
   Brief: 'Поручение',
   'Follow-up': 'Уточнение',
-  'PiUI could not tell how this round ended. Check the sidekick conversation, then reconcile it or abandon it.':
-    'PiUI не смог определить, чем закончился этот раунд. Проверьте беседу напарника, затем сверьте раунд или откажитесь от него.',
+  'Nano Desktop could not tell how this round ended. Check the sidekick conversation, then reconcile it or abandon it.':
+    'Nano Desktop не смог определить, чем закончился этот раунд. Проверьте беседу напарника, затем сверьте раунд или откажитесь от него.',
   Reconcile: 'Сверить',
   'Abandon…': 'Отказаться…',
   'Show fewer briefs': 'Показать меньше поручений',

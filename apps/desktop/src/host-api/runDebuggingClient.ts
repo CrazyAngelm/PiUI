@@ -27,14 +27,14 @@ const ERROR_COPY: Readonly<Record<RunDebuggingErrorCode, string>> = {
   'not-found': 'This run, pipeline or step is no longer available. Refresh the list.',
   conflict: 'This run or pipeline changed meanwhile. Nothing was changed; check it and try again.',
   'safe-mode': 'Safe mode keeps runs and pipelines read-only.',
-  'shutting-down': 'PiUI is closing.',
+  'shutting-down': 'Nano Desktop is closing.',
   'run-active': 'This run is still running or needs checking. Stop or reconcile it first.',
   'step-not-succeeded': 'Only the output of a step that succeeded can be pinned.',
   'not-pinnable': 'This step always runs (a reviewing step, callable role or program router), so it cannot be pinned.',
   'no-output': 'This step finished without a recorded output.',
   'too-large': 'This output is larger than pinned data allows (256 KiB per step, 1 MiB per pipeline).',
   'output-unavailable': 'The agent’s history could not be read, so its output cannot be pinned.',
-  io: 'PiUI could not save this change. Nothing was changed.',
+  io: 'Nano Desktop could not save this change. Nothing was changed.',
   unknown: 'The operation could not be completed. Nothing was changed.',
 };
 

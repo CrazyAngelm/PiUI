@@ -37,6 +37,26 @@ it('accepts Claude Code as an additive v15 harness value without changing the ca
   expect(Object.keys(command).sort()).toEqual(['harness', 'permissionMode', 'type', 'workspaceId']);
 });
 
+it('accepts Nano as an additive v15 harness value and words its sign-in refusal', async () => {
+  const { createWorkspaceClient, workspaceError } = await import('./workspaceClient');
+  const kind: import('../../../../contracts/workspace-v15').HarnessKind = 'nano';
+  const model: import('../../../../contracts/workspace-v15').WorkspaceModel = { id: 'auto', provider: 'nano', name: 'Auto' };
+  const catalog: import('../../../../contracts/workspace-v15').WorkspaceCatalog = {
+    ...workspaceFixture.catalog,
+    harnesses: [...workspaceFixture.catalog.harnesses, { kind, name: 'Nano', installed: true, version: '1.4.0', status: 'available' }],
+  };
+  const client = createWorkspaceClient(async () => ({ type: 'catalog', catalog }), async () => () => undefined);
+  expect((await client.catalog()).harnesses.map((harness) => harness.kind)).toEqual(['codex', 'nano']);
+  const command: import('../../../../contracts/workspace-v15').WorkspaceCommand = {
+    type: 'createSession', workspaceId: 'workspace', harness: kind, permissionMode: 'native', model,
+  };
+  expect(Object.keys(command).sort()).toEqual(['harness', 'model', 'permissionMode', 'type', 'workspaceId']);
+  // The refusal of a signed-out Nano start has its own code and fixed copy: no host text reaches the UI.
+  const refusal = workspaceError({ code: 'NANO_SIGN_IN_REQUIRED', message: 'token expired for user@example.com' });
+  expect(refusal.code).toBe('NANO_SIGN_IN_REQUIRED');
+  expect(refusal.message).toBe('Sign in to your Nano account to use Nano.');
+});
+
 it('carries MCP form requests as an additive v15 approval field without changing other approvals', () => {
   const approvals: readonly import('../../../../contracts/workspace-v15').WorkspaceApproval[] = workspaceFixture.snapshot.approvals;
   // Approvals without a form keep their exact earlier v15 shape.
@@ -52,11 +72,23 @@ it('carries MCP form requests as an additive v15 approval field without changing
   expect(Object.keys(answer).sort()).toEqual(['decision', 'requestId', 'sessionId', 'text', 'type']);
 });
 
-describe('harness identity grammar v2', () => {
+describe('harness identity grammar v3', () => {
+  it('keeps every v2 identity and adds nano without changing any shape', async () => {
+    const identity = await import('../../../../contracts/harness-identity-v3');
+    const historical = await import('../../../../contracts/harness-identity-v2');
+    expect(identity.HARNESS_IDENTITY_VERSION).toBe(3);
+    expect(historical.HARNESS_IDENTITY_VERSION).toBe(2);
+    // v3 is v2 plus exactly one built-in; v2 stays the frozen historical grammar.
+    expect(identity.BUILTIN_HARNESSES).toEqual([...historical.BUILTIN_HARNESSES, 'nano']);
+    expect(historical.isHarnessId('nano')).toBe(false);
+    expect(identity.isBuiltinHarness('nano') && identity.isHarnessId('nano') && !identity.isAcpHarness('nano')).toBe(true);
+    expect(identity.isHarnessId('Nano')).toBe(false);
+    expect(identity.isHarnessId('acp:nano')).toBe(true);
+  });
+
   it('keeps every v1 identity and adds acp:<descriptor id> without changing any shape', async () => {
-    const identity = await import('../../../../contracts/harness-identity-v2');
-    expect(identity.HARNESS_IDENTITY_VERSION).toBe(2);
-    for (const kind of ['pi', 'prime-agent', 'codex', 'hermes', 'claude-code']) {
+    const identity = await import('../../../../contracts/harness-identity-v3');
+    for (const kind of ['pi', 'prime-agent', 'codex', 'hermes', 'claude-code', 'nano']) {
       expect(identity.isHarnessId(kind), kind).toBe(true);
       expect(identity.isAcpHarness(kind), kind).toBe(false);
     }

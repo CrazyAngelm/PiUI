@@ -265,7 +265,7 @@
           {/each}
         </nav>
         {#if review.status.truncated}<p class="note">{$t('Only the first 2000 changed files are listed.')}</p>{/if}
-        {#if review.status.hidden > 0}<p class="note">{$t('{0} files have names PiUI cannot show.', [review.status.hidden])}</p>{/if}
+        {#if review.status.hidden > 0}<p class="note">{$t('{0} files have names Nano Desktop cannot show.', [review.status.hidden])}</p>{/if}
 
         <section class="detail" aria-label={$t('Selected file')}>
           {#if review.diffLoading && !diff}
@@ -349,11 +349,11 @@
                 {/key}
               {/if}
             {:else if diff.content.kind === 'binary'}
-              <p class="note">{$t('Binary file, {0}. PiUI shows no content for it.', [formatSize(diff.content.size) || '—'])}</p>
+              <p class="note">{$t('Binary file, {0}. Nano Desktop shows no content for it.', [formatSize(diff.content.size) || '—'])}</p>
             {:else if diff.content.kind === 'too-large'}
               <p class="note">{$t('This change is too large to show here ({0}). Review it with git.', [formatSize(diff.content.size) || '—'])}</p>
             {:else if diff.content.kind === 'symlink'}
-              <p class="note">{$t('A symbolic link. PiUI does not follow or move links.')}</p>
+              <p class="note">{$t('A symbolic link. Nano Desktop does not follow or move links.')}</p>
             {:else if diff.content.kind === 'submodule'}
               <p class="note">{$t('A submodule. Manage it with git directly.')}</p>
             {:else}

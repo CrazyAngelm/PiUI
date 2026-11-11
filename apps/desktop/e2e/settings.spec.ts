@@ -5,7 +5,7 @@ import { expect, test } from './fixtures';
  * replies without a tray icon or a sign-in registration. The native tray and
  * autostart are covered by the Rust tests, not here.
  */
-const LOGIN = /^Start PiUI when I sign in( to Windows)?$/;
+const LOGIN = /^Start Nano Desktop when I sign in( to Windows)?$/;
 
 test.describe('Settings → General and Shortcuts', () => {
   test('language and density rows carry no extra descriptions', async ({ lab, page }) => {

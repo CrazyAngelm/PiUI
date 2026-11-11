@@ -9,7 +9,7 @@ import type {
   NativeSkill,
   WorkspaceModel,
 } from './labContracts';
-import { isAcpHarness } from '../../../../../contracts/harness-identity-v2';
+import { isAcpHarness } from '../../../../../contracts/harness-identity-v3';
 import { workspaceFailure } from './labErrors';
 import { authorizeLive, requireLive, validToken } from './labGuards';
 import type { LabHandlers } from './labHandlers';
@@ -87,6 +87,9 @@ export function labImageSupport(kind: HarnessKind, model: WorkspaceModel | undef
     case 'claude-code':
     case 'hermes':
       return true;
+    case 'nano':
+      // The `free` mode is text only, like its catalog entry.
+      return model?.id !== 'free';
     case 'prime-agent':
       return false;
     default: {
@@ -133,6 +136,8 @@ export function labComposerCatalog(kind: HarnessKind): { commands: NativeCommand
         ],
         skills: [],
       };
+    // A host-owned Pi agent directory: no extensions, prompt templates or skills.
+    case 'nano':
     case 'prime-agent':
       return { commands: [], skills: [] };
     default: {

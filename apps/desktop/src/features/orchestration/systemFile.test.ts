@@ -287,6 +287,58 @@ describe('ACP agents in system files (harness identity v2, orchestration v6.3)',
   });
 });
 
+describe('Nano in system files (harness identity v3, version 5)', () => {
+  /** The ACP review pipeline with its middle agent moved to Nano (version 5 is the first to know it). */
+  const nanoReview = () => {
+    const file = JSON.parse(readFileSync(new URL('../../../../../examples/systems/codex-gemini-acp-review.piui.json', import.meta.url), 'utf8'));
+    file.version = 5;
+    Object.assign(file.agents[1].profile, { name: 'Nano review', harness: 'nano', model: 'auto', permissionMode: 'native' });
+    return file;
+  };
+  it('round-trips a Nano profile and keeps its result edge dependencies', () => {
+    const graph = systemFileToGraph(parseSystemFile(JSON.stringify(nanoReview())));
+    expect(graph.nodes.map((node) => node.profile.harness)).toEqual(['codex', 'nano', 'pi']);
+    const reopened = parseSystemFile(serializeSystemFile(graph));
+    expect(reopened.version).toBe(5);
+    expect(reopened.agents[1]!.profile).toMatchObject({ harness: 'nano', model: 'auto', permissionMode: 'native' });
+    expect(compileGraph(systemFileToGraph(reopened)).pipeline.steps.map((step) => step.dependencyStepIds.length)).toEqual([0, 1, 1]);
+  });
+  it.each(['auto', 'free', 'fast', 'smart'])('accepts the %s mode with every permission Nano supports', (model) => {
+    for (const permissionMode of ['native', 'read-only', 'full-access']) {
+      const file = nanoReview();
+      Object.assign(file.agents[1].profile, { model, modelProvider: 'nano', permissionMode });
+      expect(() => parseSystemFile(JSON.stringify(file)), `${model} ${permissionMode}`).not.toThrow();
+    }
+  });
+  it('keeps versions 1-4 closed to Nano with an explicit refusal', () => {
+    for (const version of [1, 2, 3, 4]) {
+      expect(() => parseSystemFile(JSON.stringify({ ...nanoReview(), version })), `v${version}`).toThrow(/harness/);
+    }
+  });
+  it.each([
+    ['workspace-write', { permissionMode: 'workspace-write' }, /Nano has no workspace-write mode/],
+    ['a model that is not a Nano mode', { model: 'gpt-5' }, /Nano model must be one of auto, free, fast, smart/],
+    ['another provider', { modelProvider: 'openai' }, /Nano runs only Nano models/],
+    ['a reasoning level', { reasoning: 'high' }, /Nano has no reasoning levels/],
+    ['a speed setting', { serviceTier: 'standard' }, /speed is not supported/],
+    ['a base prompt', { baseInstructions: '' }, /base prompt/],
+    ['network access', { networkAccess: true }, /network access/],
+    ['resource rules', { resourceRules: [{ kind: 'skill', id: 'review', enabled: true }] }, /resource kind/],
+    ['a native tool rule', { toolPolicy: { rules: [{ tool: 'bash', decision: 'deny', enforcement: 'native', mandatory: true }] } }, /Nano does not support tool rules/],
+    ['a coordinator tool rule', { toolPolicy: { rules: [{ tool: 'orchestration.send', decision: 'allow', enforcement: 'coordinator', mandatory: true }] } }, /Nano does not support tool rules/],
+  ])('rejects %s without dropping it', (_case, patch, message) => {
+    const file = nanoReview();
+    Object.assign(file.agents[1].profile, patch);
+    expect(() => parseSystemFile(JSON.stringify(file))).toThrow(message);
+  });
+  it('can run a single read-only model call, like Pi (tools disabled)', () => {
+    const file = nanoReview();
+    file.agents[1].executor = { type: 'llm' };
+    file.agents[1].profile.permissionMode = 'read-only';
+    expect(() => parseSystemFile(JSON.stringify(file))).not.toThrow();
+  });
+});
+
 describe('sub-pipelines in system files (v5, orchestration v6.7)', () => {
   const development = () => JSON.parse(readFileSync(new URL('../../../../../examples/systems/development-with-testing.piui.json', import.meta.url), 'utf8'));
   const testing = () => JSON.parse(readFileSync(new URL('../../../../../examples/systems/testing.piui.json', import.meta.url), 'utf8'));

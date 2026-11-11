@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "PiUI desktop host"
+description = "Nano Desktop host"
 
 [lib]
 name = "piui_desktop_lib"
@@ -33,6 +33,7 @@ chrono-tz.workspace = true
 piui-contracts = { path = "../../../crates/piui-contracts" }
 piui-extensions = { path = "../../../crates/piui-extensions" }
 piui-index = { path = "../../../crates/piui-index" }
+piui-nano = { path = "../../../crates/piui-nano" }
 piui-orchestration = { path = "../../../crates/piui-orchestration" }
 piui-plugins = { path = "../../../crates/piui-plugins" }
 piui-platform = { path = "../../../crates/piui-platform" }
@@ -60,6 +61,13 @@ tauri-plugin-single-instance = "=2.4.5"
 [target.'cfg(windows)'.dependencies]
 # The quoted HKCU Run value for "start PiUI when I sign in".
 winreg = "=0.10.1"
+# ShellExecuteW opens sign-in and account pages in the default browser
+# (nano/browser.rs); the URL is one argument, never a shell string.
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 [dev-dependencies]
 tauri = { version = "=2.11.5", features = ["test"] }

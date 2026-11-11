@@ -11,7 +11,7 @@ $ownsMutex = $false
 try {
     try { $ownsMutex = $launcherMutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $ownsMutex = $true }
     if (-not $ownsMutex) { throw 'Another PiUI API starter is already running.' }
-if (Get-Process -Name 'piui-desktop', 'PiUI' -ErrorAction SilentlyContinue) {
+if (Get-Process -Name 'piui-desktop', 'nano-desktop', 'PiUI', 'Nano Desktop' -ErrorAction SilentlyContinue) {
     throw 'PiUI is already open. Close it normally before enabling the API; a second host must not share its durable store.'
 }
 # Cleanup is allowed only after ALL PiUI processes have exited normally.
@@ -22,7 +22,7 @@ if ($ClearStaleConnection) {
     return
 }
 $resolvedExecutable = (Resolve-Path -LiteralPath $Executable).Path
-if ([IO.Path]::GetFileName($resolvedExecutable) -notin @('piui-desktop.exe', 'PiUI.exe')) { throw 'Select the built piui-desktop.exe or installed PiUI.exe.' }
+if ([IO.Path]::GetFileName($resolvedExecutable) -notin @('piui-desktop.exe', 'nano-desktop.exe', 'PiUI.exe', 'Nano Desktop.exe')) { throw 'Select the built piui-desktop.exe, nano-desktop.exe or installed PiUI.exe or Nano Desktop.exe.' }
 # Create an owner-only directory BEFORE writing the operator capability.
 $directory = [IO.Path]::GetFullPath($ConnectionDirectory)
 if (Test-Path -LiteralPath $directory) {

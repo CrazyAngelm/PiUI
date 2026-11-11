@@ -45,7 +45,7 @@ const press = (code: string, key: string, modifiers: Partial<Record<'ctrlKey' | 
 });
 
 describe('plugin keybindings (plugins v2)', () => {
-  it('lets PiUI win and disables a key two plugins share', () => {
+  it('lets Nano Desktop win and disables a key two plugins share', () => {
     const resolved = resolveKeybindings([
       plugin('a', ['Mod+Alt+Shift+T', 'Mod+K']),
       plugin('b', ['Mod+Alt+Shift+T', 'Mod+Shift+F9']),
@@ -72,7 +72,7 @@ describe('plugin keybindings (plugins v2)', () => {
     expect(matchesPluginShortcut(press('KeyT', 't', { ctrlKey: true }), 'Ctrl+T', false)).toBe(false);
   });
 
-  it('reserves every shortcut PiUI itself handles', () => {
+  it('reserves every shortcut Nano Desktop itself handles', () => {
     const root = fileURLToPath(new URL('../../', import.meta.url));
     const found = new Set<string>();
     const walk = (folder: string) => {

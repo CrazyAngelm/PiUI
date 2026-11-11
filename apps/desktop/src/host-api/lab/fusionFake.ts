@@ -67,7 +67,7 @@ function rank(mode: PermissionMode): number | undefined {
   }
 }
 
-const SIDEKICK_HARNESSES: readonly string[] = ['claude-code', 'codex', 'pi'];
+const SIDEKICK_HARNESSES: readonly string[] = ['claude-code', 'codex', 'pi', 'nano'];
 const LEAD_HARNESSES: readonly string[] = ['claude-code', 'codex'];
 
 function sidekickRoleSupported(pair: FusionPairV1, codexSandbox: boolean): FusionRefusalAnswer | undefined {
@@ -79,8 +79,9 @@ function sidekickRoleSupported(pair: FusionPairV1, codexSandbox: boolean): Fusio
       return sidekick.permissionMode === 'full-access' || sidekick.permissionMode === 'native' ? undefined : refuse('sidekick-needs-full-access');
     case 'codex':
       return sidekick.permissionMode === 'workspace-write' && !codexSandbox ? refuse('codex-sandbox-unverified') : undefined;
-    // Pi has no workspace-write mode; both roles must allow full access.
+    // Pi and Nano have no workspace-write mode; both roles must allow full access.
     case 'pi':
+    case 'nano':
       return sidekick.permissionMode !== 'full-access' || lead.permissionMode !== 'full-access' ? refuse('sidekick-needs-full-access') : undefined;
     default:
       return undefined;

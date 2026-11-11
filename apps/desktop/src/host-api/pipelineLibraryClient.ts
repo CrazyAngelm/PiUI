@@ -19,11 +19,11 @@ export type * from '../../../../contracts/pipeline-library-v1';
 
 /** Fixed copy per refusal code; host text never reaches the UI. */
 export const PIPELINE_LIBRARY_ERROR_COPY: Readonly<Record<PipelineLibraryErrorCode | 'unknown', string>> = {
-  SAFE_MODE: 'Safe mode is on: PiUI does not change pipelines or chats.',
+  SAFE_MODE: 'Safe mode is on: Nano Desktop does not change pipelines or chats.',
   INVALID_ARGUMENT: 'Check the template or chat details and try again.',
   NOT_FOUND: 'This template or chat is no longer available. Refresh and try again.',
   LIMIT: 'The pipeline library is full. Delete a template, then try again.',
-  IO_ERROR: 'PiUI could not save the pipeline library. Nothing was lost.',
+  IO_ERROR: 'Nano Desktop could not save the pipeline library. Nothing was lost.',
   unknown: 'The operation could not be completed.',
 };
 
