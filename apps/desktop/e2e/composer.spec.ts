@@ -163,7 +163,7 @@ test.describe('mentions', () => {
 });
 
 test.describe('new chat home', () => {
-  test('Home is the title and the composer: no shortcut cards, no chat list, the message box is the first tab stop', async ({ lab, page }) => {
+  test('Home is the title and the composer: no shortcut cards, no chat list, the composer is the first tab stop', async ({ lab, page }) => {
     await lab.open();
     const composer = home(page);
     await expect(composer.getByRole('heading', { level: 1, name: 'What should we work on?' })).toBeVisible();
@@ -172,8 +172,12 @@ test.describe('new chat home', () => {
     await expect(lab.main.getByRole('button', { name: 'Build a pipeline' })).toHaveCount(0);
     await expect(lab.main.getByRole('button', { name: 'Review runs' })).toHaveCount(0);
     await expect(lab.main.getByRole('heading', { name: 'Recent chats' })).toHaveCount(0);
-    // Nothing on Home precedes the composer: from the main landmark, Tab lands in the message box.
+    // Nothing on Home precedes the composer: from the main landmark, Tab reaches its
+    // Chat | Fusion switch (ADR-043, one tab stop) and then the message box.
+    await expect(page.getByLabel('Chat type')).toBeVisible();
     await lab.main.focus();
+    await page.keyboard.press('Tab');
+    await expect(page.getByLabel('Chat type').locator(':focus')).toHaveCount(1);
     await page.keyboard.press('Tab');
     await expect(message).toBeFocused();
   });

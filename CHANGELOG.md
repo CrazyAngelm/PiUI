@@ -18,6 +18,7 @@ Nano Desktop is currently a developer preview. Versions before 1.0 may change wi
 - Less background work. Native harness discovery is reused for 30 seconds (Settings → Harnesses → Check reads the machine again), checking a present project folder no longer writes to the index, the session and project watchers drop irrelevant file events early, and bursts of board, run, Fusion and automation events share one follow-up read.
 - Smoother streaming. A streamed token no longer regroups the whole transcript or rebuilds the run graph, the reading position is saved once scrolling settles, and the startup theme check no longer loads the plugin manifest validators.
 - The bootstrap, preference, project rename and pin, session catalog and update auto-check commands no longer run on the main thread.
+- The Home composer loads the dictation button and the pipeline inputs bar on first use, which brings the first-paint bundle back inside its budget.
 
 ### Fixed
 

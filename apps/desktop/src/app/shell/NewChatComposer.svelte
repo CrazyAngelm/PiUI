@@ -15,8 +15,6 @@
   import { errorMessage } from '../workspaceStore.svelte';
   import { WorkspaceOperationError, workspaceError } from '../../host-api/workspaceClient';
   import AttachButton from '../chat/composer/AttachButton.svelte';
-  import DictateButton from '../nano/DictateButton.svelte';
-  import { insertAtCaret } from '../nano/dictation';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
   import { ComposerAttachments } from '../chat/composer/composerAttachments.svelte';
   import { FileMentions } from '../chat/composer/composerLookups.svelte';
@@ -25,7 +23,7 @@
   import type { ComposerMenuItem } from '../chat/composer/menuItems';
   import ContextChip from './ContextChip.svelte';
   import ExecutorPicker, { type Executor } from '../chatPipelines/ExecutorPicker.svelte';
-  import PipelineInputsBar from '../chatPipelines/PipelineInputsBar.svelte';
+  import type PipelineInputsBarComponent from '../chatPipelines/PipelineInputsBar.svelte';
   import { chatPipelines, type ChatPipelineDetail } from '../chatPipelines/chatPipelines.svelte';
   import { pendingDrafts } from '../pipelines/pendingDraft.svelte';
   import type { TemplateId } from '../pipelines/templates';
@@ -79,7 +77,9 @@
   let pipelineDetail = $state.raw<ChatPipelineDetail | undefined>();
   let pipelineLoading = $state(false);
   let pipelineError = $state('');
-  let inputsBar = $state<ReturnType<typeof PipelineInputsBar> | undefined>();
+  let inputsBar = $state<ReturnType<typeof PipelineInputsBarComponent> | undefined>();
+  // The bar and its input fields load when a pipeline is chosen, outside the first-paint bundle.
+  const loadInputsBar = () => import('../chatPipelines/PipelineInputsBar.svelte');
   let models = $state.raw<HarnessCatalogModel[]>([]);
   let skills = $state.raw<HarnessResource[]>([]);
   let modelsLoading = $state(false);
@@ -427,10 +427,16 @@
     caret = textarea?.selectionStart ?? text.length;
   }
 
-  /** Dictated words go in at the caret. */
+  // The dictation button and its recorder load once the Nano account allows dictation,
+  // outside the first-paint bundle.
+  const loadDictate = () => import('../nano/DictateButton.svelte');
+
+  /** Dictated words go in at the caret. The helper arrives with the dictation button. */
   function dictated(words: string): void {
-    const next = insertAtCaret(text, textarea?.selectionStart ?? caret, words);
-    void place(next.text, next.caret);
+    void import('../nano/dictation').then(({ insertAtCaret }) => {
+      const next = insertAtCaret(text, textarea?.selectionStart ?? caret, words);
+      return place(next.text, next.caret);
+    });
   }
 
   function choose(index: number): void {
@@ -653,7 +659,9 @@
     {/await}
   {/if}
   {#if pipelineId && !fusionMode}
-    <PipelineInputsBar bind:this={inputsBar} detail={pipelineDetail} loading={pipelineLoading} error={pipelineError} disabled={busy} />
+    {#await loadInputsBar() then { default: PipelineInputsBar }}
+      <PipelineInputsBar bind:this={inputsBar} detail={pipelineDetail} loading={pipelineLoading} error={pipelineError} disabled={busy} />
+    {/await}
   {/if}
   <Textarea
     bind:ref={textarea}
@@ -683,7 +691,11 @@
   <div class="composer__bar">
     <div class="chips">
       <AttachButton images={imageState} busy={attachments.busy} disabled={busy || store.safeMode || !workspaceId || (Boolean(pipelineId) && !fusionMode)} onPick={pick} />
-      <DictateButton onText={dictated} disabled={busy || store.safeMode} />
+      {#if nanoAccount.canDictate}
+        {#await loadDictate() then { default: DictateButton }}
+          <DictateButton onText={dictated} disabled={busy || store.safeMode} />
+        {/await}
+      {/if}
       {#if !fusionMode}
       <ExecutorPicker
         {workspaceId}

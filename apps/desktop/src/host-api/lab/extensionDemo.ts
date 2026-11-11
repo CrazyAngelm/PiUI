@@ -57,7 +57,7 @@ export function extensionDemoTurn(context: TurnContext, prompt: string): TurnSte
       description: 'The extension prepared a draft. Edit it or send it as is; it closes by itself after two minutes.',
       decisions: ['approve-once', 'cancel'],
       inputLabel: 'Release note',
-      prefill: 'feat(history): read Pi sessions and their branches in PiUI',
+      prefill: 'feat(history): read Pi sessions and their branches in Nano Desktop',
       timeoutMs: 120_000,
     },
     'Release note saved.',
