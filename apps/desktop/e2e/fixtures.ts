@@ -35,8 +35,8 @@ export class Lab {
   }
 
   /** Opens the lab and waits for the shell (sidebar and first view) to render. */
-  async open(scenario: LabScenario = 'demo'): Promise<void> {
-    await this.page.goto(`/?lab=${scenario}`);
+  async open(scenario: LabScenario = 'demo', search = ''): Promise<void> {
+    await this.page.goto(`/?lab=${scenario}${search}`);
     await expect(this.sidebar).toBeVisible({ timeout: LAZY_VIEW_MS });
     await expect(this.main).toBeVisible();
   }

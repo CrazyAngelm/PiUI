@@ -33,8 +33,10 @@ and never discards an answered model catalog: a failed or timed-out discovery
 returns the models with an empty resource list and a visible warning. The
 optional request field `part` splits one probe: `models` answers as soon as the
 native catalog does and leaves discovery running in the same probe; the next
-`resources` request for that workspace and harness collects it (unclaimed
-discoveries expire after two minutes; without one the host starts a new probe).
+`resources` request for that workspace and harness collects it. Parallel
+`models` requests queue one discovery each and `resources` requests claim them
+oldest first (unclaimed discoveries expire after two minutes; without one the
+host starts a new probe).
 Model pickers use the split, so they never wait for MCP servers. A request
 without `part` still answers both from one probe.
 
@@ -42,7 +44,10 @@ The workbench never remembers a degraded answer (resources replaced by the
 warning): the next picker asks for the resources again and reuses the answered
 models, the stored snapshot keeps the resources it had, and preflight reports
 one "Could not verify the native catalog" instead of a missing resource per
-rule. An explicit refresh never joins a split load in flight.
+rule. An explicit refresh never joins a split load in flight. The new-chat
+composer shows that warning with Retry and keeps the models and any skills it
+already listed. The UI Lab simulates both cases with `?catalog=slow` and
+`?catalog=no-resources`.
 
 Catalog v14 carries `supportsFast` per model from the adapter. Prime uses its
 native `supportsFastMode` resolver. Pi exposes no Fast service tier; Codex uses

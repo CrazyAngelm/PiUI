@@ -44,7 +44,7 @@ pub use piui_runtime::workspace_runtime::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -2887,24 +2887,20 @@ pub async fn harness_models_v18(
         request.workspace_id.clone(),
         format!("{:?}", request.harness),
     );
-    if request.part == Some(HarnessCatalogPart::Resources)
-        && let Some(resources) = take_catalog_resources(&key).await
-    {
-        return Ok(HarnessModelsResult::resources_only(
-            request.harness,
-            resources,
-        ));
-    }
-    let (runtime, drain) = spawn_catalog_probe(state.inner(), &directory, request.harness).await?;
     let harness = request.harness;
     if request.part == Some(HarnessCatalogPart::Resources) {
-        // No handed-off discovery (expired, claimed, or its task failed):
-        // probe again for the resources alone. A degraded discovery comes
-        // back as a warning, which the UI treats as retryable.
-        let resources = catalog_resources(runtime.resources().await, harness);
-        retire_catalog_probe(&runtime, drain, harness).await;
+        let resources = catalog_resources_part(&key, || async {
+            let (runtime, drain) = spawn_catalog_probe(state.inner(), &directory, harness).await?;
+            // A degraded discovery comes back as a warning, which the UI
+            // treats as retryable.
+            let resources = catalog_resources(runtime.resources().await, harness);
+            retire_catalog_probe(&runtime, drain, harness).await;
+            Ok(resources)
+        })
+        .await?;
         return Ok(HarnessModelsResult::resources_only(harness, resources));
     }
+    let (runtime, drain) = spawn_catalog_probe(state.inner(), &directory, harness).await?;
     let models = match runtime.catalog_models().await {
         Ok(models) => models,
         Err(error) => {
@@ -2954,7 +2950,11 @@ pub async fn harness_models_v18(
 type CatalogKey = (String, String);
 type CatalogDiscovery =
     watch::Receiver<Option<piui_runtime::workspace_runtime::NativeResourceCatalog>>;
-type PendingCatalogResources = HashMap<CatalogKey, (std::time::Instant, CatalogDiscovery)>;
+/// Discoveries per project and harness, oldest first: parallel `models`
+/// requests each hand off their own, and `resources` requests claim them in
+/// the same order.
+type PendingCatalogResources =
+    HashMap<CatalogKey, VecDeque<(std::time::Instant, CatalogDiscovery)>>;
 
 /// Resource discovery left running by a `models` request. Unclaimed entries
 /// expire so a later request never reads an old project state.
@@ -2968,8 +2968,11 @@ fn pending_catalog_resources() -> &'static Mutex<PendingCatalogResources> {
 
 /// Drops every discovery that was not claimed within the TTL.
 fn retain_unexpired(pending: &mut PendingCatalogResources, now: std::time::Instant) {
-    pending.retain(|_, (since, _)| {
-        now.saturating_duration_since(*since) < PENDING_CATALOG_RESOURCES_TTL
+    pending.retain(|_, queue| {
+        queue.retain(|(since, _)| {
+            now.saturating_duration_since(*since) < PENDING_CATALOG_RESOURCES_TTL
+        });
+        !queue.is_empty()
     });
 }
 
@@ -2983,7 +2986,22 @@ fn insert_pending_catalog_resources(
     now: std::time::Instant,
 ) {
     retain_unexpired(pending, now);
-    pending.insert(key, (now, receiver));
+    pending.entry(key).or_default().push_back((now, receiver));
+}
+
+/// Claims the oldest unexpired discovery for this project and harness.
+fn claim_pending_catalog_resources(
+    pending: &mut PendingCatalogResources,
+    key: &CatalogKey,
+    now: std::time::Instant,
+) -> Option<CatalogDiscovery> {
+    retain_unexpired(pending, now);
+    let queue = pending.get_mut(key)?;
+    let (_, receiver) = queue.pop_front()?;
+    if queue.is_empty() {
+        pending.remove(key);
+    }
+    Some(receiver)
 }
 
 async fn take_catalog_resources(
@@ -2993,12 +3011,30 @@ async fn take_catalog_resources(
         let mut pending = pending_catalog_resources()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        retain_unexpired(&mut pending, std::time::Instant::now());
-        pending.remove(key)?.1
+        claim_pending_catalog_resources(&mut pending, key, std::time::Instant::now())?
     };
     // The discovery task always sends; a dropped sender means it failed and
     // the caller starts its own probe.
     receiver.wait_for(Option::is_some).await.ok()?.clone()
+}
+
+/// The `resources` part: a discovery handed off by a `models` request, or,
+/// when none is left (expired, claimed, or its task failed), a probe for the
+/// resources alone.
+async fn catalog_resources_part<Probe, Probing>(
+    key: &CatalogKey,
+    probe: Probe,
+) -> Result<piui_runtime::workspace_runtime::NativeResourceCatalog, WorkspaceError>
+where
+    Probe: FnOnce() -> Probing,
+    Probing: Future<
+        Output = Result<piui_runtime::workspace_runtime::NativeResourceCatalog, WorkspaceError>,
+    >,
+{
+    if let Some(resources) = take_catalog_resources(key).await {
+        return Ok(resources);
+    }
+    probe().await
 }
 
 async fn spawn_catalog_probe(
@@ -4168,10 +4204,12 @@ Board."
     async fn a_models_request_hands_its_resource_discovery_to_one_resources_request() {
         let key = ("handoff-project".to_owned(), "Codex".to_owned());
         let (sender, receiver) = tokio::sync::watch::channel(None);
-        super::pending_catalog_resources()
-            .lock()
-            .unwrap()
-            .insert(key.clone(), (std::time::Instant::now(), receiver));
+        super::insert_pending_catalog_resources(
+            &mut super::pending_catalog_resources().lock().unwrap(),
+            key.clone(),
+            receiver,
+            std::time::Instant::now(),
+        );
         let waiting = tokio::spawn({
             let key = key.clone();
             async move { super::take_catalog_resources(&key).await }
@@ -4192,10 +4230,12 @@ Board."
         );
 
         let (dropped, receiver) = tokio::sync::watch::channel(None);
-        super::pending_catalog_resources()
-            .lock()
-            .unwrap()
-            .insert(key.clone(), (std::time::Instant::now(), receiver));
+        super::insert_pending_catalog_resources(
+            &mut super::pending_catalog_resources().lock().unwrap(),
+            key.clone(),
+            receiver,
+            std::time::Instant::now(),
+        );
         drop(dropped);
         assert!(
             super::take_catalog_resources(&key).await.is_none(),
@@ -4237,15 +4277,110 @@ Board."
     }
 
     #[tokio::test]
-    async fn a_resources_request_without_a_handoff_probes_for_the_resources_alone() {
-        use super::{HarnessKind, HarnessModelsResult};
-        // Nothing handed off (never requested, claimed or expired): the command
-        // falls through to its own probe instead of waiting for a discovery.
-        let key = ("no-handoff-project".to_owned(), "Codex".to_owned());
-        assert!(super::take_catalog_resources(&key).await.is_none());
+    async fn parallel_models_requests_hand_off_one_discovery_each_in_order() {
+        let key = ("queued-project".to_owned(), "Codex".to_owned());
+        let discovery = |name: &str| piui_runtime::workspace_runtime::NativeResourceCatalog {
+            items: Vec::new(),
+            warnings: vec![name.into()],
+        };
+        let (first, receiver) = tokio::sync::watch::channel(None);
+        let now = std::time::Instant::now();
+        super::insert_pending_catalog_resources(
+            &mut super::pending_catalog_resources().lock().unwrap(),
+            key.clone(),
+            receiver,
+            now,
+        );
+        let (second, receiver) = tokio::sync::watch::channel(None);
+        super::insert_pending_catalog_resources(
+            &mut super::pending_catalog_resources().lock().unwrap(),
+            key.clone(),
+            receiver,
+            now,
+        );
+        second.send(Some(discovery("second"))).unwrap();
+        first.send(Some(discovery("first"))).unwrap();
 
-        // That probe answers with resources only: no models, protocol 18, and
-        // a degraded discovery stays a visible warning.
+        let claimed = super::take_catalog_resources(&key)
+            .await
+            .expect("first handoff");
+        assert_eq!(
+            claimed.warnings,
+            ["first"],
+            "the oldest handoff is claimed first"
+        );
+        let claimed = super::take_catalog_resources(&key)
+            .await
+            .expect("second handoff");
+        assert_eq!(
+            claimed.warnings,
+            ["second"],
+            "the second handoff is not overwritten"
+        );
+        assert!(super::take_catalog_resources(&key).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn the_resources_part_probes_only_without_a_handoff() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let probes = AtomicUsize::new(0);
+        let probe = |warning: &'static str| {
+            let probes = &probes;
+            move || async move {
+                probes.fetch_add(1, Ordering::SeqCst);
+                Ok(piui_runtime::workspace_runtime::NativeResourceCatalog {
+                    items: Vec::new(),
+                    warnings: vec![warning.into()],
+                })
+            }
+        };
+
+        let key = ("resources-part-project".to_owned(), "Codex".to_owned());
+        let (sender, receiver) = tokio::sync::watch::channel(None);
+        super::insert_pending_catalog_resources(
+            &mut super::pending_catalog_resources().lock().unwrap(),
+            key.clone(),
+            receiver,
+            std::time::Instant::now(),
+        );
+        sender
+            .send(Some(
+                piui_runtime::workspace_runtime::NativeResourceCatalog {
+                    items: Vec::new(),
+                    warnings: vec!["handed off".into()],
+                },
+            ))
+            .unwrap();
+        let resources = super::catalog_resources_part(&key, probe("probed"))
+            .await
+            .expect("handed-off resources");
+        assert_eq!(resources.warnings, ["handed off"]);
+        assert_eq!(probes.load(Ordering::SeqCst), 0, "a handoff needs no probe");
+
+        let resources = super::catalog_resources_part(&key, probe("probed"))
+            .await
+            .expect("probed resources");
+        assert_eq!(resources.warnings, ["probed"]);
+        assert_eq!(
+            probes.load(Ordering::SeqCst),
+            1,
+            "no handoff left: one probe"
+        );
+
+        let failed =
+            super::catalog_resources_part(&key, || async { Err(super::WorkspaceError::runtime()) })
+                .await;
+        assert!(
+            failed.is_err(),
+            "a probe that cannot start fails the request"
+        );
+    }
+
+    #[test]
+    fn a_probed_resources_answer_carries_resources_only() {
+        use super::{HarnessKind, HarnessModelsResult};
+        // No models, protocol 18, and a degraded discovery stays a visible
+        // warning.
         let degraded = super::catalog_resources(
             Err(piui_runtime::workspace_runtime::NativeRuntimeError::Timeout),
             HarnessKind::Codex,

@@ -9,6 +9,8 @@ import { apiFailure } from './labErrors';
 import type { LabIdSource } from './labRandom';
 
 export type LabScenarioName = 'demo' | 'empty' | 'safe' | 'long';
+/** Native catalog probes: `slow` answers after seconds, `no-resources` degrades resource discovery. */
+export type LabCatalogBehavior = 'normal' | 'slow' | 'no-resources';
 export const LAB_SCENARIOS: readonly LabScenarioName[] = ['demo', 'empty', 'safe', 'long'];
 
 /** A registered folder. The personal Chats workspace is host-owned and always trusted. */
@@ -115,6 +117,7 @@ export interface LabState {
   sessions: Map<string, LabSessionRecord>;
   orchestration: Map<string, LabOrchestrationWorkspace>;
   ids: LabIdSource;
+  catalog?: LabCatalogBehavior;
 }
 
 /** IPC boundary: JSON round-trip drops `undefined` exactly like serde `skip_serializing_if`. */

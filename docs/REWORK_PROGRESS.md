@@ -554,6 +554,12 @@ four read-only GPT 6.1 Sol passes.
   then the 84 touched specs again, all green; `cargo test -p piui-desktop workspace_api`
   71 passed. The Tauri WebView2 E2E run did not finish (its build exceeded the
   bounded run while another session was compiling); no real-provider turn.
+- **Review follow-ups:** parallel `models` requests queue their resource
+  discoveries instead of overwriting one; the `resources` part is a tested
+  function with an injected probe; the new-chat composer reports a failed
+  discovery with Retry; the restricted-project race test holds a slow lab
+  catalog (`?catalog=slow`) and checks the spinner before switching. Unit
+  940/940, `workspace_api` 73 passed, clippy clean, composer lab spec 14/14.
 
 ## Next
 

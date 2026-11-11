@@ -201,16 +201,30 @@ test.describe('new chat home', () => {
   });
 
   test('a restricted project shows no model spinner, even when it was picked while models were loading', async ({ lab, page }) => {
-    await lab.open();
+    // A slow catalog keeps the Codex probe in flight while the project changes.
+    await lab.open('demo', '&catalog=slow');
     const composer = home(page);
-    // A new harness starts a catalog probe (the lab answers after a short delay); leave for the restricted project before it does.
     await composer.getByRole('button', { name: 'Pi', exact: true }).click();
     await lab.option(/^Codex/).click();
+    await expect(composer.getByRole('button', { name: 'Default model' })).toHaveAttribute('aria-busy', 'true');
     await composer.getByRole('button', { name: /^Project and permissions: piui/ }).click();
     await page.getByRole('radio', { name: /^legacy-repo/ }).check();
     await page.keyboard.press('Escape');
     await expect(page.getByText('This folder is restricted. Trust it to let agents work on its files.')).toBeVisible();
     await expect(composer.getByRole('button', { name: 'Default model' })).not.toHaveAttribute('aria-busy', 'true');
+  });
+
+  test('a failed resource discovery keeps the models and offers a retry', async ({ lab, page }) => {
+    await lab.open('demo', '&catalog=no-resources');
+    const composer = home(page);
+    await composer.getByRole('button', { name: 'Pi', exact: true }).click();
+    await lab.option(/^Codex/).click();
+    const warning = page.getByRole('status').filter({ hasText: 'Skills, MCP servers and tools could not be loaded from the harness.' });
+    await expect(warning).toBeVisible();
+    await warning.getByRole('button', { name: 'Retry' }).click();
+    await expect(warning).toBeVisible();
+    await composer.getByRole('button', { name: 'Default model' }).click();
+    await expect(lab.option(/^GPT Lab 5 Codex/)).toBeVisible();
   });
 
   test('a coded catalog refusal settles at once instead of after the retry', async ({ lab, page }) => {

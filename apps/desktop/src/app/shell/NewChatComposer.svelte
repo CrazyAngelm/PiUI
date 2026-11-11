@@ -5,7 +5,7 @@
   import Brain from '@lucide/svelte/icons/brain';
   import { onMount, tick, untrack } from 'svelte';
   import { t } from '../../features/locale/language';
-  import { cachedHarnessModels } from '../../host-api/harnessModels';
+  import { cachedHarnessModels, catalogDegraded } from '../../host-api/harnessModels';
   import ModelPicker, { type ModelOption } from './ModelPicker.svelte';
   import type { HarnessCatalogModel, HarnessModelsResult, HarnessResource } from '../../../../../contracts/harness-models-v18';
   import type { HarnessKind, PermissionMode, WorkspaceSummary } from '../../../../../contracts/workspace-v15';
@@ -74,6 +74,10 @@
   let skills = $state.raw<HarnessResource[]>([]);
   let modelsLoading = $state(false);
   let modelsError = $state('');
+  /** Set when resource discovery failed: the models stay, skills can be retried. */
+  let resourcesWarning = $state('');
+  let catalogAttempt = $state(0);
+  let catalogFor = '';
   let busy = $state(false);
   let textarea = $state<HTMLTextAreaElement | null>(null);
   let menuIndex = $state(0);
@@ -161,9 +165,16 @@
   $effect(() => {
     const id = workspaceId;
     const kind = harness;
-    models = [];
-    skills = [];
+    // A retry asks again for the same project and harness: what is shown stays.
+    void catalogAttempt;
+    const forKey = JSON.stringify([id, kind]);
+    if (untrack(() => catalogFor) !== forKey) {
+      models = [];
+      skills = [];
+    }
+    catalogFor = forKey;
     modelsError = '';
+    resourcesWarning = '';
     // The load this effect cancelled may never settle: no early exit below keeps its spinner.
     modelsLoading = false;
     if (!id || !kind) return;
@@ -175,7 +186,10 @@
     const show = (result: HarnessModelsResult): void => {
       if (cancelled) return;
       models = result.models;
-      skills = result.resources.items;
+      const degraded = catalogDegraded(result);
+      // A failed discovery keeps the skills this picker already showed.
+      if (!degraded || result.resources.items.length) skills = result.resources.items;
+      resourcesWarning = degraded ? 'Skills, MCP servers and tools could not be loaded from the harness.' : '';
       modelsError = '';
       if (modelKey && !result.models.some((item) => JSON.stringify([item.provider, item.id]) === modelKey)) modelKey = '';
     };
@@ -638,6 +652,11 @@
   </p>
 {:else if modelsError && modelsError !== workspaceError({ code: 'SIGN_IN_REQUIRED' }).message}
   <p class="notice notice--error">{modelsError}</p>
+{:else if resourcesWarning && !modelsLoading}
+  <p class="notice" role="status">
+    {$t(resourcesWarning)}
+    <button type="button" class="link" onclick={() => (catalogAttempt += 1)}>{$t('Retry')}</button>
+  </p>
 {/if}
 {#if attachments.references.length}
   {#await import('../chat/composer/ReferenceDialog.svelte') then view}
