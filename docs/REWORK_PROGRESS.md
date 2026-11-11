@@ -599,6 +599,58 @@ four read-only GPT 6.1 Sol passes.
   catalog (`?catalog=slow`) and checks the spinner before switching. Unit
   940/940, `workspace_api` 73 passed, clippy clean, composer lab spec 14/14.
 
+## 2026-11-12 — fast builds and less background work (unreleased)
+
+- **Why a release took 40 minutes.** `target/` was deleted after every release,
+  so each one compiled all 590 units again for clippy, the tests and the
+  release. In the release profile `codegen-units = 1` made the desktop crate a
+  single code-generation thread, and its unused `staticlib` and `cdylib` outputs
+  (mobile template) each repeated the whole-program thin LTO: that one crate
+  took 22 of the 27 minutes of the Rust build. The machine was also short of
+  memory and CPU because of other sessions.
+- **Build changes.** The desktop library is a plain Rust library; release uses
+  16 codegen units with thin LTO; dev keeps line tables only and no debug info
+  for dependencies; `target/` stays as a cache bounded by
+  `scripts/build-cache.mjs` (12 GB budget, 20 GB free-space floor), pruned at
+  the end of every `release-build.mjs` run; `pnpm build:portable` builds and
+  collects only the executable (`scripts/collect-portable.mjs`).
+- **Measured on the same loaded machine** (`tauri build --ci --bundles nsis`,
+  cold): 28 min 55 s before (Rust 27 min 26 s), 8 min 9 s after (Rust
+  7 min 4 s). A rebuild after touching one desktop source file, without the
+  installer: 4 min 48 s (Rust 4 min 11 s). Executable 36.5 MB before, 41.4 MB
+  after; installer 9.7 MB and 10.2 MB. A build without LTO was measured too and
+  was not faster (7 min 49 s cold, 7 min 3 s warm, 41.0 MB), so thin LTO stays.
+  `target/` after a release build, clippy and the test suite: 8.2 GB, against
+  25.4 GB before.
+- **Less background work, host.** Native harness discovery is reused for 30 s
+  per environment and dropped by Settings → Harnesses → Check (launch still
+  resolves and verifies its own executable); checking a present project folder
+  no longer writes to SQLite and reads one row instead of the project list; the
+  project watcher rejects ignored folders before allocating, and the session
+  watcher drops access events and content changes of non-JSONL files and caps
+  one batch at 3 s; seven synchronous commands left the main thread.
+- **Less background work, UI.** Board, chat run, Fusion and automation events
+  share one follow-up read (`lib/coalescedReads.ts`); a streamed token keeps the
+  identity of unchanged transcript rows and rebuilds the run graph only when a
+  step label changes; the reading position is written once scrolling settles;
+  the startup theme check no longer loads the manifest validators; the executor
+  picker no longer repeats a failed catalog request.
+- **Left for separate changes** (each touches gap detection, approvals or
+  durability and needs its own measurement): the per-token copy of a chat's
+  block array and of the snapshot map, incremental Markdown parsing of a
+  streaming answer, loading the transcript of every non-closed chat on a
+  catalog reload, lazy loading of the system-file validators in the pipeline
+  editor, pausing the relative-time clocks in a hidden window, the SQLite
+  journal mode, and skipping a catalog refresh that changes nothing.
+- **Checks.** clippy and `cargo fmt` clean; `cargo test --workspace` 456 of 457 passed (the one-second script-timeout test failed once under load and passes alone);
+  unit 1048/1048; svelte-check 0 errors; contract tests 207/207; repository
+  check with 31 script tests. UI Lab in the built-in browser: a chat streams,
+  the reading position is saved after wheel scrolling on the 3,000-block
+  transcript, the executor picker lists agents and pipelines, the run canvas
+  shows its three steps, no console errors. The Playwright and WebView2 E2E
+  suites were not run (they start a browser with a fresh profile); no
+  real-provider turn.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

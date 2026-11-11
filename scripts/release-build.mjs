@@ -4,11 +4,14 @@
 //   node scripts/release-build.mjs windows   NSIS installer + portable executable
 //   node scripts/release-build.mjs linux     .deb + AppImage
 //   node scripts/release-build.mjs macos     universal .app (update archive) + .dmg (experimental)
+//   node scripts/release-build.mjs windows --portable   portable executable only: the quick local update
 //
 // Code signing and signed update artifacts are added only when their
 // environment variables are present (see scripts/release-config.mjs and
 // docs/RELEASING.md); without them this is the plain unsigned build.
-// `--dry-run` prints the plan without building anything.
+// `--dry-run` prints the plan without building anything. Every build ends by
+// pruning the Cargo cache (scripts/build-cache.mjs): target/ stays, so the next
+// build is incremental, but only within its size budget.
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
@@ -18,26 +21,32 @@ import { PLATFORMS, ReleaseConfigError, releaseConfig, writeReleaseConfig } from
 const BUNDLES = { windows: 'nsis', linux: 'deb,appimage', macos: 'app,dmg' };
 const MACOS_TARGET = 'universal-apple-darwin';
 
-/** The commands for one platform; `configPath` is the optional Tauri fragment. */
-export function releasePlan(root, platform, { configPath, windowsSigning, tauriCli, node = process.execPath }) {
-  const build = [node, tauriCli, 'build', '--ci', '--bundles', BUNDLES[platform]];
+/**
+ * The commands for one platform; `configPath` is the optional Tauri fragment.
+ * `portable` skips the installer and collects only the Windows executable.
+ */
+export function releasePlan(root, platform, { configPath, windowsSigning, tauriCli, node = process.execPath, portable = false }) {
+  const build = [node, tauriCli, 'build', '--ci', ...(portable ? ['--no-bundle'] : ['--bundles', BUNDLES[platform]])];
   if (platform === 'macos') build.push('--target', MACOS_TARGET);
   if (configPath) build.push('--config', configPath);
-  const collect =
-    platform === 'windows'
-      ? [
-          'powershell',
-          '-NoProfile',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-File',
-          join(root, 'scripts', 'prepare-windows-release.ps1'),
-          ...(windowsSigning ? ['-RequireSignature'] : []),
-        ]
-      : [node, join(root, 'scripts', 'prepare-release-artifacts.mjs'), platform];
+  let collect = [node, join(root, 'scripts', 'prepare-release-artifacts.mjs'), platform];
+  if (portable) {
+    collect = [node, join(root, 'scripts', 'collect-portable.mjs')];
+  } else if (platform === 'windows') {
+    collect = [
+      'powershell',
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      join(root, 'scripts', 'prepare-windows-release.ps1'),
+      ...(windowsSigning ? ['-RequireSignature'] : []),
+    ];
+  }
   return [
     { cwd: join(root, 'apps', 'desktop'), command: build },
     { cwd: root, command: collect },
+    { cwd: root, command: [node, join(root, 'scripts', 'build-cache.mjs'), 'prune'] },
   ];
 }
 
@@ -51,8 +60,9 @@ function run({ cwd, command }) {
 function main(argv) {
   const platform = argv.find((argument) => !argument.startsWith('--'));
   const dryRun = argv.includes('--dry-run');
-  if (!PLATFORMS.includes(platform)) {
-    console.error(`Usage: node scripts/release-build.mjs <${PLATFORMS.join('|')}> [--dry-run]`);
+  const portable = argv.includes('--portable');
+  if (!PLATFORMS.includes(platform) || (portable && platform !== 'windows')) {
+    console.error(`Usage: node scripts/release-build.mjs <${PLATFORMS.join('|')}> [--portable (windows only)] [--dry-run]`);
     process.exitCode = 2;
     return;
   }
@@ -66,6 +76,11 @@ function main(argv) {
     process.exitCode = 1;
     return;
   }
+  if (portable && result.config !== null) {
+    console.error('A portable build is unsigned and has no updater. Unset the signing and updater variables, or run the full release.');
+    process.exitCode = 1;
+    return;
+  }
   // In GitHub Actions each line also becomes a run annotation.
   const annotate = process.env.GITHUB_ACTIONS === 'true' ? '::notice::' : '';
   for (const notice of result.notices) console.log(`${annotate}${notice}`);
@@ -74,6 +89,7 @@ function main(argv) {
     configPath: result.config === null ? undefined : result.path,
     windowsSigning: result.windowsSigning !== null,
     tauriCli,
+    portable,
   });
   for (const step of plan) {
     console.log(`> ${step.command.join(' ')}`);

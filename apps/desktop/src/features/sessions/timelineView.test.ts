@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TimelineBlock } from '../../host-api/types';
-import { groupTimelineBlocks, timelineBlockDisplayLabel } from './timelineView';
+import { createTimelineGrouper, groupTimelineBlocks, timelineBlockDisplayLabel } from './timelineView';
 
 function block(id: string, kind: TimelineBlock['kind'], status: TimelineBlock['status'] = 'complete'): TimelineBlock {
   return { id, kind, status };
@@ -68,5 +68,38 @@ describe('groupTimelineBlocks', () => {
       { type: 'activity-group', blocks: [liveTool] },
     ]);
     expect(fallback).toEqual({ ...block('persisted-extension', 'unknown'), fallback: true, safeSummary: 'Unsupported event' });
+  });
+});
+
+describe('createTimelineGrouper', () => {
+  it('keeps the identity of items whose blocks did not change', () => {
+    const group = createTimelineGrouper();
+    const tool = block('tool', 'tool');
+    const thinking = block('thinking', 'thinking');
+    const streaming = block('answer', 'assistant', 'streaming');
+    const grown = { ...streaming, text: 'more' };
+
+    const first = group([tool, thinking, streaming]);
+    const second = group([tool, thinking, grown]);
+
+    expect(second[0]).toBe(first[0]);
+    expect(second[1]).not.toBe(first[1]);
+    expect(second).toEqual(groupTimelineBlocks([tool, thinking, grown]));
+  });
+
+  it('rebuilds a group when one of its blocks changes or a block joins it', () => {
+    const group = createTimelineGrouper();
+    const running = block('first', 'tool', 'streaming');
+    const before = group([running]);
+    const finished = { ...running, status: 'complete' as const };
+    const after = group([finished]);
+
+    expect(after[0]).not.toBe(before[0]);
+    expect(after[0]).toMatchObject({ status: 'complete', autoOpen: false });
+
+    const second = block('second', 'tool');
+    const joined = group([finished, second]);
+    expect(joined[0]).not.toBe(after[0]);
+    expect(joined[0]).toMatchObject({ blocks: [finished, second] });
   });
 });

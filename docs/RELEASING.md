@@ -135,8 +135,15 @@ notarization are not wired into the workflow yet.
 pnpm release:windows   # on Windows: NSIS installer + portable executable
 pnpm release:linux     # on Linux: .deb + AppImage (needs the Tauri system packages)
 pnpm release:macos     # on macOS: universal .app update archive + .dmg
+pnpm build:portable     # on Windows: the portable executable only, no installer
 node scripts/release-build.mjs windows --dry-run   # show what is enabled, build nothing
 ```
+
+`pnpm build:portable` is the quick local update: it skips the installer and
+replaces `artifacts/` with the new executable and its checksum. A copy that is
+still running is moved aside (`*.old`) and keeps working until it is restarted.
+It is unsigned and has no updater, so it refuses to run with the signing or
+updater variables set.
 
 The same environment variables as in CI turn on signing locally:
 `TAURI_SIGNING_PRIVATE_KEY` (or `TAURI_SIGNING_PRIVATE_KEY_PATH`),
@@ -147,9 +154,14 @@ certificate already in your Windows store, including a hardware token) or the
 `scripts/release-config.mjs` writes the resulting Tauri config fragment to
 `target/release-config/` and passes it to `tauri build --config`; it prints
 which features are on and never prints secret values. Output goes to
-`artifacts/` with `SHA256SUMS.txt`. Follow the storage rules in
-[AGENTS.md](../AGENTS.md) afterwards: keep the verified artifacts, delete the
-superseded `target/` trees.
+`artifacts/` with `SHA256SUMS.txt`.
+
+`target/` stays after the build as the compile cache, so the next build
+recompiles only what changed. Every build ends with
+`node scripts/build-cache.mjs prune`, which removes installer staging and drops
+whole profile trees only over the size budget; `pnpm build:cache status` shows
+the sizes and `pnpm build:cache clean` removes the cache. The storage rules are
+in [AGENTS.md](../AGENTS.md).
 
 ## Verifying a release
 

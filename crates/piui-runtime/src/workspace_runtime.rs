@@ -3416,8 +3416,28 @@ const CONTAINMENT_UNVERIFIED_REASON: &str =
 /// A version newer than the tested range is `Available` with
 /// `version_status: Newer` and no reason; only a version below the minimum or
 /// one that cannot be recognized is `Unverified`.
+///
+/// The result is reused for `DISCOVERY_CACHE_TTL` while the discovery inputs
+/// are unchanged (`DiscoveryKey`); `invalidate_native_harness_probe`
+/// drops it. Launching never reads this cache: every start resolves and
+/// verifies its own launch (`resolve_harness_launch_for_config`).
 #[must_use]
 pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
+    NATIVE_DISCOVERY.get_or_probe(
+        DiscoveryKey::current(),
+        std::time::Instant::now(),
+        DISCOVERY_CACHE_TTL,
+        discover_native_harnesses,
+    )
+}
+
+/// Drops the cached discovery so the next probe reads the machine again. The
+/// user's "check again" action calls it.
+pub fn invalidate_native_harness_probe() {
+    NATIVE_DISCOVERY.invalidate();
+}
+
+fn discover_native_harnesses() -> Vec<NativeHarnessSummary> {
     HarnessKind::ALL
         .into_iter()
         .map(|kind| match resolve_harness_launch(kind) {
@@ -3482,6 +3502,127 @@ pub fn probe_native_harnesses() -> Vec<NativeHarnessSummary> {
             },
         })
         .collect()
+}
+
+/// How long a native discovery result is reused.
+const DISCOVERY_CACHE_TTL: Duration = Duration::from_secs(30);
+
+/// Every process environment variable that discovery reads (`resolve_node`,
+/// `resolve_pi_launch`, `global_package_roots`, `native_home_dir`,
+/// `claude_executable_candidates`, `resolve_hermes_launch`).
+const DISCOVERY_ENVIRONMENT: &[&str] = &[
+    "PATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "HOME",
+    "USERPROFILE",
+    "PIUI_NODE",
+    "PIUI_PI_CLI",
+    "PIUI_PI_NODE",
+    "PIUI_HERMES_ROOT",
+    "PIUI_CLAUDE_BIN",
+];
+
+/// The inputs of one discovery run. A cached result is reused only for an
+/// equal key, so a changed environment never returns another run's result.
+/// The working directory is included because relative `PATH` or `PIUI_PI_CLI`
+/// entries resolve against it; the sign-in verdict is part of the result.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DiscoveryKey {
+    environment: Vec<Option<std::ffi::OsString>>,
+    working_directory: Option<PathBuf>,
+    claude_sign_in_required: bool,
+}
+
+impl DiscoveryKey {
+    fn current() -> Self {
+        Self {
+            environment: DISCOVERY_ENVIRONMENT
+                .iter()
+                .copied()
+                .map(std::env::var_os)
+                .collect(),
+            working_directory: std::env::current_dir().ok(),
+            claude_sign_in_required: claude_sign_in_required(),
+        }
+    }
+}
+
+static NATIVE_DISCOVERY: DiscoveryCache<DiscoveryKey, Vec<NativeHarnessSummary>> =
+    DiscoveryCache::new();
+
+struct CachedDiscovery<K, T> {
+    key: K,
+    probed_at: std::time::Instant,
+    value: T,
+}
+
+struct DiscoverySlot<K, T> {
+    /// Bumped by every invalidation; a probe that began before one is not stored.
+    generation: u64,
+    entry: Option<CachedDiscovery<K, T>>,
+}
+
+/// A single-entry, time-limited result cache. The lock is never held while
+/// probing, so concurrent callers may both probe; the last one is kept.
+struct DiscoveryCache<K, T> {
+    slot: StdMutex<DiscoverySlot<K, T>>,
+}
+
+impl<K, T> DiscoveryCache<K, T> {
+    const fn new() -> Self {
+        Self {
+            slot: StdMutex::new(DiscoverySlot {
+                generation: 0,
+                entry: None,
+            }),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, DiscoverySlot<K, T>> {
+        self.slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn invalidate(&self) {
+        let mut slot = self.lock();
+        slot.generation = slot.generation.wrapping_add(1);
+        slot.entry = None;
+    }
+}
+
+impl<K: PartialEq, T: Clone> DiscoveryCache<K, T> {
+    /// The cached value for an equal `key` younger than `ttl` at `now`, else
+    /// the result of `probe`.
+    fn get_or_probe(
+        &self,
+        key: K,
+        now: std::time::Instant,
+        ttl: Duration,
+        probe: impl FnOnce() -> T,
+    ) -> T {
+        let generation = {
+            let slot = self.lock();
+            if let Some(entry) = &slot.entry
+                && entry.key == key
+                && now.saturating_duration_since(entry.probed_at) < ttl
+            {
+                return entry.value.clone();
+            }
+            slot.generation
+        };
+        let value = probe();
+        let mut slot = self.lock();
+        if slot.generation == generation {
+            slot.entry = Some(CachedDiscovery {
+                key,
+                probed_at: now,
+                value: value.clone(),
+            });
+        }
+        value
+    }
 }
 
 #[cfg(test)]
@@ -5268,5 +5409,83 @@ mod tests {
         assert!(HarnessKind::PrimeAgent.supports_board_tool());
         assert!(HarnessKind::Codex.supports_board_tool());
         assert!(!HarnessKind::Pi.supports_board_tool());
+    }
+
+    #[test]
+    fn discovery_cache_reuses_a_result_within_the_ttl_only() {
+        let cache: DiscoveryCache<&str, u32> = DiscoveryCache::new();
+        let ttl = Duration::from_secs(30);
+        let start = std::time::Instant::now();
+        let mut runs = 0;
+        let mut probe = |at: std::time::Instant| {
+            cache.get_or_probe("env", at, ttl, || {
+                runs += 1;
+                runs
+            })
+        };
+        assert_eq!(probe(start), 1);
+        assert_eq!(
+            probe(start + Duration::from_secs(29)),
+            1,
+            "hit inside the TTL"
+        );
+        assert_eq!(probe(start + Duration::from_secs(30)), 2, "miss at the TTL");
+        assert_eq!(
+            probe(start + Duration::from_secs(31)),
+            2,
+            "the new entry is fresh"
+        );
+    }
+
+    #[test]
+    fn discovery_cache_misses_when_the_key_differs() {
+        let cache: DiscoveryCache<&str, u32> = DiscoveryCache::new();
+        let ttl = Duration::from_secs(30);
+        let now = std::time::Instant::now();
+        assert_eq!(cache.get_or_probe("a", now, ttl, || 1), 1);
+        assert_eq!(cache.get_or_probe("b", now, ttl, || 2), 2);
+        // Only the latest key is kept.
+        assert_eq!(cache.get_or_probe("a", now, ttl, || 3), 3);
+        assert_eq!(cache.get_or_probe("a", now, ttl, || 4), 3);
+    }
+
+    #[test]
+    fn discovery_cache_misses_after_invalidation() {
+        let cache: DiscoveryCache<&str, u32> = DiscoveryCache::new();
+        let ttl = Duration::from_secs(30);
+        let now = std::time::Instant::now();
+        assert_eq!(cache.get_or_probe("a", now, ttl, || 1), 1);
+        cache.invalidate();
+        assert_eq!(cache.get_or_probe("a", now, ttl, || 2), 2);
+        assert_eq!(cache.get_or_probe("a", now, ttl, || 3), 2);
+    }
+
+    #[test]
+    fn discovery_cache_drops_a_probe_that_raced_an_invalidation() {
+        let cache: DiscoveryCache<&str, u32> = DiscoveryCache::new();
+        let ttl = Duration::from_secs(30);
+        let now = std::time::Instant::now();
+        // The invalidation lands while the probe runs: its result is returned
+        // but not stored, so the next call probes again.
+        let stale = cache.get_or_probe("a", now, ttl, || {
+            cache.invalidate();
+            1
+        });
+        assert_eq!(stale, 1);
+        assert_eq!(cache.get_or_probe("a", now, ttl, || 2), 2);
+    }
+
+    #[test]
+    fn discovery_cache_recovers_from_a_poisoned_lock() {
+        let cache: DiscoveryCache<&str, u32> = DiscoveryCache::new();
+        let ttl = Duration::from_secs(30);
+        let now = std::time::Instant::now();
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = cache.lock();
+            panic!("poison the discovery lock");
+        }));
+        assert!(poisoned.is_err());
+        assert_eq!(cache.get_or_probe("a", now, ttl, || 1), 1);
+        assert_eq!(cache.get_or_probe("a", now, ttl, || 2), 1);
     }
 }

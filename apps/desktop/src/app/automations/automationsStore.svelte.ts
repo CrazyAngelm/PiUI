@@ -11,6 +11,7 @@ import {
   type ScheduleSnapshot,
 } from '../../host-api/orchestrationClient';
 import { automationsHost, type AutomationsClient } from '../../host-api/automationsClient';
+import { coalesceReads } from '../../lib/coalescedReads';
 
 export class AutomationsStore {
   schedules = $state.raw<readonly ScheduleSnapshot[]>([]);
@@ -27,6 +28,8 @@ export class AutomationsStore {
   private generation = 0;
   private stops: (() => void)[] = [];
   private disposed = false;
+  /** One read in flight; events and calls that arrive meanwhile share one more read. */
+  private readonly reads = coalesceReads(() => this.fetch());
 
   constructor(
     readonly workspaceId: string,
@@ -72,7 +75,12 @@ export class AutomationsStore {
     this.stops = [];
   }
 
-  async refresh(): Promise<void> {
+  /** Resolves after a read that started after this call. */
+  refresh(): Promise<void> {
+    return this.reads.request();
+  }
+
+  private async fetch(): Promise<void> {
     const generation = this.generation;
     this.loading = true;
     this.error = '';
