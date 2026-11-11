@@ -20,6 +20,7 @@ function fixture(version = '1.4.0') {
     'Cargo.lock': `# generated\nversion = 4\n\n[[package]]\nname = "piui-core"\nversion = "${version}"\n\n[[package]]\nname = "piui-desktop"\nversion = "${version}"\ndependencies = [\n "piui-core",\n]\n\n[[package]]\nname = "serde"\nversion = "1.0.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n`,
     'crates/piui-runtime/bridge/codex.mjs': `const init = { clientInfo: { name: "piui", title: "PiUI", version: "${version}" } };\n`,
     'crates/piui-runtime/bridge/hermes.mjs': `const init = { clientInfo: { name: 'piui', version: '${version}' } };\n`,
+    'crates/piui-runtime/bridge/acp.mjs': `const init = { clientInfo: { name: 'piui', title: 'PiUI', version: '${version}' } };\n`,
     'CHANGELOG.md': `# Changelog\n\n## [Unreleased]\n\n## [${version}] - 2026-09-27\n\n- Notes.\n`,
   };
   for (const [path, content] of Object.entries(files)) {
@@ -47,6 +48,7 @@ test('a consistent tree passes, including a matching release tag', () => {
     const sources = declaredVersions(root).map((entry) => entry.source);
     assert.ok(sources.includes('Cargo.lock piui-core'));
     assert.ok(sources.includes('crates/piui-runtime/bridge/hermes.mjs'));
+    assert.ok(sources.includes('crates/piui-runtime/bridge/acp.mjs'));
     // Registry crates are never mistaken for workspace members.
     assert.ok(!sources.some((source) => source.includes('serde')));
   } finally {
@@ -68,6 +70,18 @@ test('every drifting declaration is named', () => {
       'Cargo.lock piui-core: 1.3.0 (expected 1.4.0)',
       'crates/piui-runtime/bridge/codex.mjs: 1.0.0 (expected 1.4.0)',
     ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a drifting ACP bridge version is named, and a missing ACP client identity is refused', () => {
+  const root = fixture();
+  try {
+    edit(root, 'crates/piui-runtime/bridge/acp.mjs', '1.4.0', '1.3.9');
+    assert.deepEqual(versionProblems(root).problems, ['crates/piui-runtime/bridge/acp.mjs: 1.3.9 (expected 1.4.0)']);
+    writeFileSync(join(root, 'crates/piui-runtime/bridge/acp.mjs'), "const init = { clientInfo: { name: 'piui', version: '1.4.0' } };\n");
+    assert.deepEqual(versionProblems(root).problems, ['crates/piui-runtime/bridge/acp.mjs: no version found']);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
