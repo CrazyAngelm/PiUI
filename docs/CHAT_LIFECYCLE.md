@@ -14,9 +14,11 @@ Run it explicitly with `PIUI_DRAFT_REOPEN_TEST_ROOT` set to a disposable directo
 and `CODEX_HOME` set to its `codex-home` child.
 
 The composer model picker shows the current native model even when discovery
-omits it. Codex app-server versions inside the verified range (0.147.0 up to,
-not including, 0.158.0; see `crates/piui-runtime/bridge/CONTRACT.md`) are
-supported; newer versions are reported as unverified until audited. Hidden
+omits it. Codex app-server 0.147.0 and later start (ADR-043): the tested range
+(0.147.0 up to, not including, 0.158.0; see `crates/piui-runtime/bridge/CONTRACT.md`)
+is advisory, a newer version shows "Newer than tested" and still starts, and
+only an older version, an unrecognized identity or a failed protocol handshake
+refuses the session. Hidden
 current models retain their native reasoning metadata;
 an absent model remains visible without invented effort levels. Model changes,
 effort and Fast use `workspace_settings_v16` and the native adapter.
