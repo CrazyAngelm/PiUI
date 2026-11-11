@@ -190,3 +190,71 @@ test('an agent without image input refuses images and lists its ACP commands', a
     });
   } finally { await a.dispose(); }
 });
+
+const withFixtureArgs = (...args) => ({ ...config, runtimeArgs: [...config.runtimeArgs, ...args] });
+
+test('the minimum Hermes version and every newer one start; the tested version is no ceiling', async () => {
+  for (const version of ['0.21.0', '0.21.7', '0.22.0', '1.0.0', 'v1.2.3+build.7']) {
+    const a = await createHermesAdapter(withFixtureArgs(`--hermes-version=${version}`), () => {});
+    try { assert.equal(a.snapshot().status, 'idle', version); } finally { await a.dispose(); }
+  }
+});
+
+test('an older, pre-release or unrecognizable Hermes version is refused as unsupported', async () => {
+  for (const version of ['0.20.9', '0.21.0-rc.1', '0.9.99', 'dev', '0.21']) {
+    await assert.rejects(createHermesAdapter(withFixtureArgs(`--hermes-version=${version}`), () => {}), { bridgeCode: 'unsupported-version' }, version);
+  }
+});
+
+test('handshake drift is a typed protocol mismatch without native text', async () => {
+  for (const args of [['--protocol-version=2'], ['--protocol-version=0'], ['--no-agent-info'], ['--initialize-error'], ['--exit-before-init']]) {
+    await assert.rejects(createHermesAdapter(withFixtureArgs(...args), () => {}), error => {
+      assert.equal(error.bridgeCode, 'native-protocol-mismatch', args.join());
+      assert.doesNotMatch(`${error.message} ${error.safeMessage}`, /PRIVATE_PAYLOAD/);
+      return true;
+    });
+  }
+});
+
+test('reshaped session responses fail closed as a protocol mismatch', async () => {
+  await assert.rejects(createHermesAdapter({ ...withFixtureArgs('--sessions-not-array'), nativeId: 'saved' }, () => {}), { bridgeCode: 'native-protocol-mismatch' });
+  await assert.rejects(createHermesAdapter(withFixtureArgs('--models-not-array'), () => {}), { bridgeCode: 'native-protocol-mismatch' });
+});
+
+test('an unknown native event or content type shows one safe fallback per name and never its payload', async () => {
+  const e = events(), a = await createHermesAdapter(config, e.emit);
+  try {
+    const done = e.next(v => v.type === 'turnCompleted');
+    await a.prompt({ text: 'unknown', mode: 'prompt' });
+    assert.equal((await done).outcome, 'succeeded');
+    const fallbacks = a.snapshot().blocks.filter(b => b.fallback);
+    assert.deepEqual(fallbacks.map(b => b.text).sort(), [
+      'This native content type is not supported by the current renderer.',
+      'Unsupported Hermes event: future_event',
+      'Unsupported Hermes event: other_event',
+      'Unsupported Hermes event: unknown',
+    ], 'repeated events report once and a hostile kind is shown as unknown');
+    assert.doesNotMatch(JSON.stringify([a.snapshot(), e.values]), /PRIVATE_PAYLOAD|<script>/);
+    assert.equal(a.snapshot().status, 'idle');
+  } finally { await a.dispose(); }
+});
+
+test('a handler failure on one native message does not end the session', async () => {
+  const e = events(), a = await createHermesAdapter(config, e.emit);
+  try {
+    const done = e.next(v => v.type === 'turnCompleted');
+    await a.prompt({ text: 'malformed', mode: 'prompt' });
+    assert.equal((await done).outcome, 'succeeded');
+    assert.deepEqual(a.snapshot().blocks.filter(b => b.fallback).map(b => b.text), ['Unsupported Hermes event: tool_call'], 'the unprocessable update is named by kind, once');
+    assert.ok(a.snapshot().blocks.some(b => b.text === 'after malformed'), 'later updates still arrive');
+    assert.ok(!e.values.some(v => v.type === 'status' && v.status === 'failed'));
+
+    // An unprocessable agent request is answered with a JSON-RPC error, not by killing the agent.
+    const finished = e.next(v => v.type === 'turnCompleted' && e.values.filter(w => w.type === 'turnCompleted').length === 2);
+    await a.prompt({ text: 'bad-permission', mode: 'prompt' });
+    assert.equal((await finished).outcome, 'succeeded');
+    assert.ok(a.snapshot().blocks.some(b => b.text === 'client-error:-32602'));
+    assert.equal(a.snapshot().approvals.length, 0);
+    assert.equal(a.snapshot().status, 'idle');
+  } finally { await a.dispose(); }
+});

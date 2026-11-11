@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createAcpAdapter } from './acp.mjs';
@@ -313,4 +314,112 @@ test('dispose reports undelivered follow-ups and is not a turn error', async () 
   assert.ok(e.values.some(v => v.type === 'error' && /not delivered/.test(v.message)));
   assert.ok(!a.snapshot().blocks.some(b => b.kind === 'error'));
   assert.ok(!e.values.some(v => v.type === 'status' && v.status === 'failed'), 'a deliberate close is not a failure');
+});
+
+test('the handshake is the gate: a rejected, malformed or newer protocol is a typed failure', async () => {
+  // Protocol 2 is a version this adapter does not implement; it is not a mismatch of shape.
+  await assert.rejects(createAcpAdapter(config(['--protocol=2']), () => {}), { bridgeCode: 'unsupported-protocol' });
+  await assert.rejects(createAcpAdapter(config(['--protocol=abc']), () => {}), { bridgeCode: 'native-protocol-mismatch' }, 'a protocol version that is not an integer');
+  await assert.rejects(createAcpAdapter(config(['--no-protocol']), () => {}), { bridgeCode: 'native-protocol-mismatch' }, 'no protocol version at all');
+  await assert.rejects(createAcpAdapter(config(['--reject-initialize']), () => {}), { bridgeCode: 'native-protocol-mismatch' }, 'initialize rejected');
+  await assert.rejects(createAcpAdapter(config(['--reject-new']), () => {}), { bridgeCode: 'native-protocol-mismatch' }, 'session/new rejected as invalid');
+  await assert.rejects(createAcpAdapter(config(['--no-session-id']), () => {}), { bridgeCode: 'native-protocol-mismatch' }, 'session/new answered without a conversation');
+  await assert.rejects(createAcpAdapter(config(['--auth-initialize']), () => {}), error => {
+    assert.equal(error.bridgeCode, 'acp-sign-in-required', 'a sign-in request at initialize stays a sign-in request');
+    assert.deepEqual(error.safeDetails, { authMethods: [] });
+    return true;
+  });
+  // The failure text is the adapter's own, never the agent's.
+  await assert.rejects(createAcpAdapter(config(['--reject-initialize']), () => {}), error => {
+    assert.equal(error.safeMessage, 'Fixture Agent rejected the ACP handshake.');
+    return true;
+  });
+  // An agent that answers version 1 starts, whatever its own release number is.
+  const a = await createAcpAdapter(config(), () => {});
+  await a.dispose();
+});
+
+test('PiUI introduces itself with its own release number', () => {
+  const root = JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url), 'utf8'));
+  const source = readFileSync(new URL('./acp.mjs', import.meta.url), 'utf8');
+  const [, version] = source.match(/clientInfo:\s*\{\s*name:\s*'piui',\s*title:\s*'PiUI',\s*version:\s*'([^']+)'/) ?? [];
+  assert.equal(version, root.version, 'acp.mjs reports the release in package.json (the fixture also rejects a clientInfo that is not PiUI)');
+});
+
+test('an update kind the adapter does not know shows one generic notice, never a copy per update', async () => {
+  const e = events(); const a = await createAcpAdapter(config(), e.emit);
+  try {
+    let done = turnDone(e);
+    await a.prompt({ text: 'updates', mode: 'prompt' });
+    assert.equal((await done).outcome, 'succeeded');
+    let fallbacks = a.snapshot().blocks.filter(b => b.fallback && b.title === 'Fixture Agent event');
+    assert.deepEqual(fallbacks.map(b => b.text), ['Unsupported agent update: future_alpha', 'Unsupported agent update: future_beta']);
+    assert.equal(a.snapshot().blocks.find(b => b.kind === 'assistant').text, 'abc', 'repeated notices do not split the message around them');
+    assert.doesNotMatch(JSON.stringify(e.values), /SECRET-MUST-NOT-LEAK/);
+
+    done = turnDone(e);
+    await a.prompt({ text: 'updates-many', mode: 'prompt' });
+    assert.equal((await done).outcome, 'succeeded');
+    fallbacks = a.snapshot().blocks.filter(b => b.fallback && b.title === 'Fixture Agent event');
+    assert.equal(fallbacks.length, 16, 'notices per session are bounded');
+    assert.equal(a.snapshot().status, 'idle');
+  } finally { await a.dispose(); }
+});
+
+test('a frame the adapter cannot interpret is answered and shown once, and the session carries on', async () => {
+  let failures = 0;
+  const e = events();
+  const emit = value => {
+    // The host side of one streamed block fails once, as a bug in the adapter would.
+    if (value.type === 'block' && value.block.kind === 'assistant' && value.block.text === 'boom' && failures === 0) { failures += 1; throw new Error('simulated interpretation failure'); }
+    e.emit(value);
+  };
+  const a = await createAcpAdapter(config(), emit);
+  try {
+    let done = turnDone(e);
+    await a.prompt({ text: 'boom', mode: 'prompt' });
+    assert.equal((await done).outcome, 'succeeded', 'the turn is not failed by one frame it could not read');
+    assert.equal(failures, 1);
+    assert.ok(a.snapshot().blocks.some(b => b.fallback && b.text === 'Unsupported agent update: agent_message_chunk'));
+    assert.ok(!e.values.some(v => v.type === 'status' && v.status === 'failed'));
+    assert.ok(!e.values.some(v => v.type === 'error'));
+    assert.equal(a.snapshot().status, 'idle');
+
+    done = turnDone(e);
+    await a.prompt({ text: 'follow: later', mode: 'prompt' });
+    assert.equal((await done).outcome, 'succeeded');
+    assert.ok(a.snapshot().blocks.some(b => b.kind === 'assistant' && b.text === 'ack follow: later'), 'later prompts still work');
+  } finally { await a.dispose(); }
+});
+
+test('a permission request that cannot be shown is cancelled, never approved', async () => {
+  let failures = 0;
+  const e = events();
+  const emit = value => {
+    if (value.type === 'approval' && failures++ === 0) throw new Error('simulated interpretation failure');
+    e.emit(value);
+  };
+  const a = await createAcpAdapter(config(), emit);
+  try {
+    const done = turnDone(e);
+    await a.prompt({ text: 'approve', mode: 'prompt' });
+    assert.equal((await done).outcome, 'interrupted', 'the agent was told the permission was cancelled');
+    assert.equal(a.snapshot().approvals.length, 0, 'no approval is left pending');
+    assert.ok(!a.snapshot().blocks.some(b => b.text === 'outcome yes'), 'nothing was allowed');
+    assert.ok(!e.values.some(v => v.type === 'approval'), 'the user never saw a request that was not recorded');
+    assert.equal(a.snapshot().status, 'idle');
+  } finally { await a.dispose(); }
+});
+
+test('requests outside the advertised client surface get method-not-found and never become approvals', async () => {
+  const e = events(); const a = await createAcpAdapter(config(), e.emit);
+  try {
+    const done = turnDone(e);
+    await a.prompt({ text: 'unknown-requests', mode: 'prompt' });
+    assert.equal((await done).outcome, 'succeeded');
+    assert.ok(a.snapshot().blocks.some(b => b.kind === 'assistant' && b.text === 'u-1:-32601 u-2:-32601 u-3:-32601 u-4:cancelled'),
+      'approval lookalikes, terminal and private methods are refused; an empty permission request is cancelled');
+    assert.ok(!e.values.some(v => v.type === 'approval'), 'only session/request_permission with choices is an approval');
+    assert.equal(a.snapshot().approvals.length, 0);
+  } finally { await a.dispose(); }
 });

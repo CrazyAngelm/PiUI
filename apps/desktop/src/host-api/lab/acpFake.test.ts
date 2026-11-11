@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { HarnessRegistryCommandV1, HarnessRegistryV1 } from '../../../../../contracts/harness-registry-v1';
+import type { AcpAgentDescriptorV1, HarnessRegistryCommandV1, HarnessRegistryV1 } from '../../../../../contracts/harness-registry-v1';
 import type { SessionModeResultV1 } from '../../../../../contracts/workspace-session-mode-v1';
-import { LAB_GEMINI_DESCRIPTOR, labFingerprint } from './acpFake';
+import { LAB_GEMINI_DESCRIPTOR, LAB_OPENCODE_DESCRIPTOR, labFingerprint } from './acpFake';
 import type { HarnessModelsResult, WorkspaceResult } from './labContracts';
 import type { LabHost } from './labHost';
 import { labHost, record, rejection, snapshotOf } from './labTestKit';
@@ -40,30 +40,41 @@ describe('UI Lab ACP agent registry', () => {
     vi.useRealTimers();
   });
 
-  it('ships the host Gemini CLI descriptor with the host fingerprint', () => {
-    const fixture: unknown = JSON.parse(readFileSync(new URL('../../../../../contracts/fixtures/acp-descriptors/valid-builtin-gemini-cli.json', import.meta.url), 'utf8'));
-    expect(LAB_GEMINI_DESCRIPTOR).toEqual(fixture);
+  it('ships the host Gemini CLI and OpenCode descriptors with the host fingerprints', () => {
+    const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`../../../../../contracts/fixtures/acp-descriptors/${name}.json`, import.meta.url), 'utf8'));
+    expect(LAB_GEMINI_DESCRIPTOR).toEqual(fixture('valid-builtin-gemini-cli'));
+    expect(LAB_OPENCODE_DESCRIPTOR).toEqual(fixture('valid-builtin-opencode'));
     // `contracts/fixtures/harness-registry-v1.json`: the host's SHA-256 of the canonical descriptor.
-    expect(labFingerprint(LAB_GEMINI_DESCRIPTOR)).toBe('546a3012e964972e5071973329d47e81297fbfc3d5d4e508aec9a55031c9b71a');
+    expect(labFingerprint(LAB_GEMINI_DESCRIPTOR)).toBe('de7fd8b6dfda25393e8ed3e3db768bc3137b29e3b89963cdef12f5194845dad3');
+    expect(labFingerprint(LAB_OPENCODE_DESCRIPTOR)).toBe('7f849b762b1ab51729ffec917d5f99db83fdf1aad7a1f6c3a4f2417d2997b233');
   });
 
-  it('lists every harness and seeds a ready, a missing and an untrusted ACP agent', async () => {
+  it('lists every harness and seeds ready shipped agents, a missing and an untrusted one', async () => {
     const view = await registry(labHost('demo'));
     expect(view).toMatchObject({ protocol: 1, safeMode: false, checked: true });
     expect(view.harnesses.map((harness) => [harness.harness, harness.state])).toEqual([
       ['pi', 'ready'], ['prime-agent', 'ready'], ['codex', 'ready'], ['hermes', 'ready'], ['claude-code', 'ready'],
-      ['acp:gemini-cli', 'ready'], ['acp:qwen-code', 'not-installed'], ['acp:lab-agent', 'untrusted'],
+      ['acp:gemini-cli', 'ready'], ['acp:opencode', 'ready'], ['acp:qwen-code', 'not-installed'], ['acp:lab-agent', 'untrusted'],
     ]);
+    // A newer native version is ready with the host's advisory status.
     expect(view.harnesses.find((harness) => harness.harness === 'codex')).toMatchObject({
+      state: 'ready', version: '0.167.0', versionStatus: 'newer',
       verifiedVersions: '0.147.0 and newer', signInHint: "Sign in with Codex's own flow: run `codex login` in a terminal.",
     });
+    expect(view.harnesses.find((harness) => harness.harness === 'pi')).not.toHaveProperty('versionStatus');
     expect(view.harnesses.find((harness) => harness.harness === 'claude-code')?.signInHint).toContain('Claude subscription');
     const gemini = agent(view, 'gemini-cli');
+    // No version confirmation: an untested or newer version is ready with an advisory status.
     expect(gemini).toMatchObject({
-      source: 'built-in', trusted: true, version: '0.39.1', versionStatus: 'no-verified-range', confirmedVersion: '0.39.1',
+      source: 'built-in', state: 'ready', trusted: true, version: '0.39.1', versionStatus: 'no-verified-range',
       secretEnvironment: ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS'], allowedSecrets: [],
     });
-    expect(gemini.commandLine?.args.slice(1)).toEqual(['--experimental-acp']);
+    expect(gemini).not.toHaveProperty('confirmedVersion');
+    expect(gemini.commandLine?.args.slice(1)).toEqual(['--acp']);
+    expect(agent(view, 'opencode')).toMatchObject({
+      source: 'built-in', state: 'ready', trusted: true, version: '1.19.4', versionStatus: 'no-verified-range',
+      commandLine: { program: 'C:/Users/example/AppData/Roaming/npm/node_modules/opencode-ai/bin/opencode.exe', args: ['acp'] },
+    });
     expect(agent(view, 'qwen-code')).toMatchObject({ state: 'not-installed', reason: "The agent's program was not found on PATH.", trusted: false });
     expect(agent(view, 'lab-agent')).toMatchObject({
       state: 'untrusted', trusted: false, commandLine: { program: 'C:/Users/example/.local/bin/lab-agent.exe', args: ['--acp'] },
@@ -110,6 +121,8 @@ describe('UI Lab ACP agent registry', () => {
     if (created.type !== 'session') throw new Error('Expected a session.');
     expect(created.snapshot.session).toMatchObject({ harness: 'acp:lab-agent', title: 'New Lab Agent session', model: { id: 'lab-pro' } });
     expect(agent(await registry(host), 'lab-agent')).toMatchObject({ state: 'ready', authMethods: [] });
+    // A newer or untested version never blocks a start.
+    for (const harness of ['acp:opencode', 'acp:gemini-cli']) expect((await start(host, harness)).type).toBe('session');
   });
 
   it('offers the agent default model and agent-advertised modes', async () => {
@@ -140,7 +153,7 @@ describe('UI Lab ACP agent registry', () => {
     expect(codex.snapshot.modes).toBeUndefined();
   });
 
-  it('adds, confirms, allows secrets and removes user descriptors', async () => {
+  it('adds, runs untested versions, allows secrets and removes user descriptors', async () => {
     const host = labHost('demo');
     let view = await registry(host);
     const invalid = await failure(host, { type: 'add', expectedRevision: view.revision, descriptor: { ...LAB_GEMINI_DESCRIPTOR, id: 'x-agent', shell: 'cmd' } as never });
@@ -156,25 +169,54 @@ describe('UI Lab ACP agent registry', () => {
     // A Node script runs through Node, never through a shell.
     expect(added.commandLine).toEqual({ program: 'C:/Program Files/nodejs/node.exe', args: ['C:/Tools/tool-agent.js', 'acp'] });
     view = await registry(host, { type: 'trust', expectedRevision: view.revision, id: 'tool-agent', fingerprint: added.fingerprint, commandLine: added.commandLine ?? { program: '', args: [] } });
-    expect(agent(view, 'tool-agent')).toMatchObject({ state: 'unverified-version', version: '1.0.0', versionStatus: 'no-verified-range' });
-    expect(await rejection(start(host, 'acp:tool-agent'))).toMatchObject({ code: 'ACP_VERSION_UNCONFIRMED' });
-    expect(await failure(host, { type: 'confirmVersion', expectedRevision: view.revision, id: 'tool-agent', version: '9.9.9' })).toMatchObject({ code: 'NOTHING_TO_CONFIRM' });
-    view = await registry(host, { type: 'confirmVersion', expectedRevision: view.revision, id: 'tool-agent', version: '1.0.0' });
-    expect(agent(view, 'tool-agent')).toMatchObject({ state: 'ready', confirmedVersion: '1.0.0' });
+    // Trusting the command line is the only decision: an untested version is ready at once.
+    expect(agent(view, 'tool-agent')).toMatchObject({ state: 'ready', version: '1.0.0', versionStatus: 'no-verified-range' });
+    expect((await start(host, 'acp:tool-agent')).type).toBe('session');
+    // The old confirmation command has nothing to confirm.
+    expect(await failure(host, { type: 'confirmVersion', expectedRevision: view.revision, id: 'tool-agent', version: '1.0.0' })).toMatchObject({ code: 'NOTHING_TO_CONFIRM' });
+    expect(agent(await registry(host), 'tool-agent')).not.toHaveProperty('confirmedVersion');
     expect(await failure(host, { type: 'allowSecrets', expectedRevision: view.revision, id: 'tool-agent', fingerprint: added.fingerprint, names: ['TOOL_HOME'] }))
       .toMatchObject({ code: 'NOTHING_TO_CONFIRM' });
     view = await registry(host, { type: 'allowSecrets', expectedRevision: view.revision, id: 'tool-agent', fingerprint: added.fingerprint, names: ['TOOL_SECRET'] });
     expect(agent(view, 'tool-agent').allowedSecrets).toEqual(['TOOL_SECRET']);
-    expect(await failure(host, { type: 'remove', expectedRevision: view.revision, id: 'gemini-cli' })).toMatchObject({ code: 'BUILT_IN' });
+    for (const id of ['gemini-cli', 'opencode']) {
+      expect(await failure(host, { type: 'remove', expectedRevision: view.revision, id })).toMatchObject({ code: 'BUILT_IN' });
+    }
     view = await registry(host, { type: 'remove', expectedRevision: view.revision, id: 'tool-agent' });
-    expect(view.agents.map((entry) => entry.descriptor.id)).toEqual(['gemini-cli', 'qwen-code', 'lab-agent']);
+    expect(view.agents.map((entry) => entry.descriptor.id)).toEqual(['gemini-cli', 'opencode', 'qwen-code', 'lab-agent']);
     expect(await failure(host, { type: 'remove', expectedRevision: view.revision, id: 'tool-agent' })).toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('refuses only a version older than the tested minimum', async () => {
+    const host = labHost('demo');
+    let view = await registry(host);
+    // Absolute programs print `1.0.0` on the lab machine.
+    const descriptor = (id: string, version: Partial<AcpAgentDescriptorV1['version']>) => ({
+      schemaVersion: 1 as const, id, displayName: id, command: { program: `C:/Tools/${id}.exe` }, version: { args: ['--version'], ...version },
+    });
+    const cases = [
+      ['old-agent', { verified: { minimum: '2.0.0', ceiling: '3.0.0' } }, 'unsupported-version', 'older', 'UNAVAILABLE'],
+      ['new-agent', { verified: { minimum: '0.1.0', ceiling: '0.9.0' } }, 'ready', 'newer', undefined],
+      ['odd-agent', { pattern: 'never (\\d+)' }, 'ready', 'unrecognized', undefined],
+    ] as const;
+    for (const [id, version, state, versionStatus, refusal] of cases) {
+      view = await registry(host, { type: 'add', expectedRevision: view.revision, descriptor: descriptor(id, version) });
+      const added = agent(view, id);
+      view = await registry(host, { type: 'trust', expectedRevision: view.revision, id, fingerprint: added.fingerprint, commandLine: added.commandLine ?? { program: '', args: [] } });
+      expect(agent(view, id), id).toMatchObject({ state, versionStatus, trusted: true });
+      if (refusal === undefined) expect((await start(host, `acp:${id}`)).type, id).toBe('session');
+      else expect(await rejection(start(host, `acp:${id}`)), id).toMatchObject({ code: refusal });
+    }
+    const catalog = await host.invoke<WorkspaceResult>('workspace_command_v15', { command: { type: 'catalog' } });
+    const rows = catalog.type === 'catalog' ? catalog.catalog.harnesses : [];
+    expect(['acp:old-agent', 'acp:new-agent', 'acp:odd-agent'].map((kind) => rows.find((row) => row.kind === kind)?.status))
+      .toEqual(['unverified', 'available', 'available']);
   });
 
   it('checks again, starts a fresh machine without Gemini and refuses changes in safe mode', async () => {
     const empty = labHost('empty');
     const fresh = await registry(empty, { type: 'check' });
-    expect(fresh.agents.map((entry) => [entry.descriptor.id, entry.state])).toEqual([['gemini-cli', 'not-installed']]);
+    expect(fresh.agents.map((entry) => [entry.descriptor.id, entry.state])).toEqual([['gemini-cli', 'not-installed'], ['opencode', 'not-installed']]);
     expect(await failure(empty, { type: 'confirmVersion', expectedRevision: fresh.revision, id: 'gemini-cli', version: '0.39.1' }))
       .toMatchObject({ code: 'NOTHING_TO_CONFIRM' });
     const safe = labHost('safe');

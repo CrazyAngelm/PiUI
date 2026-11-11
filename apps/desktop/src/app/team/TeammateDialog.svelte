@@ -175,7 +175,7 @@
     })),
   );
   const permissionItems = $derived<PickerItem<PermissionMode>[]>([
-    { value: 'native', label: $t('Harness settings'), description: $t('Use the permissions configured in the harness') },
+    { value: 'native', label: $t('Harness default'), description: $t('Use the permissions configured in the harness') },
     { value: 'read-only', label: $t('Read only'), description: $t('The agent can read but not change files') },
     { value: 'workspace-write', label: $t('Edit project'), description: $t('Changes limited to the project folder') },
     { value: 'full-access', label: $t('Full access'), description: $t('No native restrictions — use with care') },

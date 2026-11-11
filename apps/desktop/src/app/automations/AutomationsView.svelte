@@ -3,7 +3,6 @@
   import Plus from '@lucide/svelte/icons/plus';
   import Pencil from '@lucide/svelte/icons/pencil';
   import Trash2 from '@lucide/svelte/icons/trash-2';
-  import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import Pause from '@lucide/svelte/icons/pause';
   import Play from '@lucide/svelte/icons/play';
   import { onMount, untrack } from 'svelte';
@@ -60,12 +59,8 @@
 
 <section class="automations" aria-labelledby="automations-title">
   <header class="head">
-    <div>
-      <h2 id="automations-title">{$t('Automations')}</h2>
-      <p>{$t('Start saved pipelines on a schedule or after an event. They run while PiUI is open or in the tray.')}</p>
-    </div>
+    <h2 id="automations-title">{$t('Automations')}</h2>
     <div class="head__actions">
-      <IconButton label={$t('Refresh')} onclick={() => void automations.refresh()} disabled={automations.loading}><RefreshCw /></IconButton>
       {#if !automations.paused}
         <Button variant="ghost" onclick={() => void automations.setPaused(true)} disabled={safeMode || automations.busy !== ''}>
           {#snippet leading()}<Pause />{/snippet}
@@ -89,7 +84,18 @@
     </div>
   {/if}
 
-  {#if automations.error}<p class="error" role="alert">{$t(automations.error)}</p>{/if}
+  {#if automations.error}
+    <div class="error" role="alert">
+      <span>{$t(automations.error)}</span>
+      <Button size="sm" variant="ghost" onclick={() => void automations.refresh()} disabled={automations.loading}>{$t('Retry')}</Button>
+    </div>
+  {/if}
+  {#if automations.liveError && !automations.error}
+    <div class="error" role="status">
+      <span>{$t(automations.liveError)}</span>
+      <Button size="sm" variant="ghost" onclick={() => void automations.refresh()} loading={automations.loading}>{$t('Refresh')}</Button>
+    </div>
+  {/if}
   {#if automations.actionError}<p class="error" role="alert">{$t(automations.actionError)}</p>{/if}
 
   {#if automations.loading && automations.schedules.length === 0}
@@ -109,33 +115,33 @@
       {#each automations.schedules as schedule (schedule.value.id)}
         {@const last = schedule.lastOccurrence}
         {@const outcome = last ? OUTCOME[last.outcome] : undefined}
+        {@const upcoming = schedule.enabled && (schedule.value.trigger.type === 'event' || !!schedule.nextDueAt)}
         <li class="card" class:card--off={!schedule.enabled}>
           <div class="card__main">
-            <div class="card__title">
-              <strong>{schedule.value.name}</strong>
-              <Badge tone={schedule.enabled ? 'success' : 'neutral'}>{schedule.enabled ? $t('On') : $t('Off')}</Badge>
-            </div>
+            <strong class="card__title">{schedule.value.name}</strong>
             <p class="muted">
               {automations.pipelineName(schedule.value.launchCommandId) || $t('Missing pipeline')} · {cadence(schedule)}
             </p>
-            <div class="meta">
-              {#if schedule.enabled && schedule.value.trigger.type === 'event'}
-                <span>{waiting(schedule)}</span>
-              {:else if schedule.enabled && schedule.nextDueAt}
-                <span>{$t('Next')}: <b>{when(schedule.nextDueAt, schedule)}</b></span>
-              {:else if !schedule.enabled}
-                <span>{schedule.value.trigger.type === 'event' ? $t('Turn it on to react to events.') : $t('Turn it on to schedule the next run.')}</span>
-              {/if}
-              {#if last && outcome}
-                <span>
-                  {$t('Last')}: {when(last.nominalAt, schedule)} ·
-                  <Badge tone={outcome.tone}>{$t(outcome.label)}</Badge>
-                  {#if last.runId}
-                    <button type="button" class="link" onclick={() => last.runId && onOpenRun(last.runId)}>{$t('Open run')}</button>
+            {#if upcoming || (last && outcome)}
+              <div class="meta">
+                {#if upcoming}
+                  {#if schedule.value.trigger.type === 'event'}
+                    <span>{waiting(schedule)}</span>
+                  {:else}
+                    <span>{$t('Next')}: <b>{when(schedule.nextDueAt, schedule)}</b></span>
                   {/if}
-                </span>
-              {/if}
-            </div>
+                {/if}
+                {#if last && outcome}
+                  <span>
+                    {$t('Last')}: {when(last.nominalAt, schedule)} ·
+                    <Badge tone={outcome.tone}>{$t(outcome.label)}</Badge>
+                    {#if last.runId}
+                      <button type="button" class="link" onclick={() => last.runId && onOpenRun(last.runId)}>{$t('Open run')}</button>
+                    {/if}
+                  </span>
+                {/if}
+              </div>
+            {/if}
           </div>
           <div class="card__actions">
             <Switch
@@ -188,7 +194,7 @@
   }
   .head {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
     gap: var(--piui-space-4);
   }
@@ -196,10 +202,6 @@
     margin: 0;
     font-size: var(--piui-text-2xl);
     font-weight: var(--piui-weight-semibold);
-  }
-  .head p {
-    margin: 4px 0 0;
-    color: var(--piui-text-muted);
   }
   .head__actions {
     display: flex;
@@ -232,11 +234,6 @@
     min-width: 0;
   }
   .card__title {
-    display: flex;
-    align-items: center;
-    gap: var(--piui-space-2);
-  }
-  .card__title strong {
     overflow: hidden;
     font-weight: var(--piui-weight-semibold);
     text-overflow: ellipsis;
@@ -275,6 +272,9 @@
     color: var(--piui-accent);
   }
   .error {
+    display: flex;
+    align-items: center;
+    gap: var(--piui-space-3);
     margin: 0;
     color: var(--piui-danger);
   }

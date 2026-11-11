@@ -39,15 +39,17 @@ import { sha256Hex } from './sha256';
  * `acp:<id>` harnesses. A fake machine decides which programs are "on PATH"
  * and what `--version` prints; nothing runs. Rules mirror
  * `apps/desktop/src-tauri/src/acp_agents.rs`: a user descriptor is untrusted
- * until its exact command line is trusted, an unverified version and each
- * secret-like environment name need their own confirmation, every decision
- * binds to the descriptor fingerprint, and changes name the registry revision.
+ * until its exact command line is trusted, each secret-like environment name
+ * needs its own confirmation, every decision binds to the descriptor
+ * fingerprint, and changes name the registry revision. A version outside the
+ * tested range is advisory (ADR-045): only one older than the minimum refuses;
+ * a newer, untested or unrecognized one starts with a `versionStatus` notice,
+ * and `confirmVersion` has nothing to confirm.
  *
- * Scenarios: `demo`/`long` ship a ready Gemini CLI (version confirmed), a
- * user descriptor whose program is missing (Qwen Code) and an untrusted one
- * (Lab Agent, which asks to sign in on its first start). `safe` has the same
- * agents but runs no discovery, so nothing is checked. `empty` is a fresh
- * machine: Gemini CLI is not installed.
+ * Scenarios: `demo`/`long` ship a ready Gemini CLI and OpenCode (both without a
+ * tested range), a user descriptor whose program is missing (Qwen Code) and an
+ * untrusted one (Lab Agent, which asks to sign in on its first start). `safe` has the same agents but runs no discovery, so nothing is
+ * checked. `empty` is a fresh machine: no built-in agent is installed.
  */
 
 const NODE = 'C:/Program Files/nodejs/node.exe';
@@ -66,6 +68,7 @@ interface LabProgram {
 
 const LAB_PATH: Readonly<Record<string, LabProgram>> = {
   gemini: { entry: 'C:/Users/example/AppData/Roaming/npm/node_modules/@google/gemini-cli/dist/index.js', versionOutput: '0.39.1\n' },
+  opencode: { entry: 'C:/Users/example/AppData/Roaming/npm/node_modules/opencode-ai/bin/opencode.exe', versionOutput: '1.19.4\n' },
   'lab-agent': { entry: 'C:/Users/example/.local/bin/lab-agent.exe', versionOutput: 'lab-agent 1.4.0 (lab build)\n' },
 };
 
@@ -101,7 +104,7 @@ export const LAB_GEMINI_DESCRIPTOR: AcpAgentDescriptorV1 = {
   schemaVersion: 1,
   id: 'gemini-cli',
   displayName: 'Gemini CLI',
-  command: { program: 'gemini', args: ['--experimental-acp'] },
+  command: { program: 'gemini', args: ['--acp'] },
   version: { args: ['--version'] },
   environment: [
     'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_LOCATION',
@@ -110,6 +113,21 @@ export const LAB_GEMINI_DESCRIPTOR: AcpAgentDescriptorV1 = {
   authHint: "Sign in with Gemini CLI's own flow: run `gemini` in a terminal and choose a sign-in method. To use an API key instead, allow PiUI to pass GEMINI_API_KEY below.",
   docsUrl: 'https://github.com/google-gemini/gemini-cli',
 };
+
+/** `contracts/fixtures/acp-descriptors/valid-builtin-opencode.json` */
+export const LAB_OPENCODE_DESCRIPTOR: AcpAgentDescriptorV1 = {
+  schemaVersion: 1,
+  id: 'opencode',
+  displayName: 'OpenCode',
+  command: { program: 'opencode', args: ['acp'] },
+  version: { args: ['--version'] },
+  environment: ['OPENCODE_CONFIG', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY'],
+  authHint: "Sign in with OpenCode's own flow: run `opencode auth login` in a terminal. To use a provider API key instead, allow PiUI to pass it below.",
+  docsUrl: 'https://opencode.ai/docs',
+};
+
+/** The lab ships a subset of the host's built-in agents, in listing order. */
+const BUILT_IN_DESCRIPTORS: readonly AcpAgentDescriptorV1[] = [LAB_GEMINI_DESCRIPTOR, LAB_OPENCODE_DESCRIPTOR];
 
 const QWEN_DESCRIPTOR: AcpAgentDescriptorV1 = {
   schemaVersion: 1,
@@ -158,7 +176,6 @@ interface Discovery {
 interface Decision {
   fingerprint: string;
   trustedCommand?: CommandLineV1;
-  confirmedVersion?: string;
   allowedSecrets: string[];
 }
 
@@ -187,7 +204,6 @@ function registryFailure(code: Exclude<HarnessRegistryErrorCode, 'INVALID_DESCRI
 /** Host `WorkspaceError::acp_refused` / `acp_sign_in_required` payloads. */
 const START_REFUSALS = {
   ACP_TRUST_REQUIRED: 'Review and trust this agent in Settings → Harnesses before starting it.',
-  ACP_VERSION_UNCONFIRMED: "Confirm this agent's version in Settings → Harnesses before starting it.",
   UNAVAILABLE: 'The selected harness is unavailable. Check it in Settings → Harnesses.',
   ACP_SIGN_IN_REQUIRED: 'Sign in to this agent with its own app, then try again. Settings → Harnesses shows how.',
 } as const;
@@ -235,8 +251,6 @@ const sameLine = (left: CommandLineV1 | undefined, right: CommandLineV1): boolea
   left !== undefined && left.program === right.program && left.args.length === right.args.length
   && left.args.every((arg, index) => arg === right.args[index]);
 
-type Refusal = 'unsupported-version' | 'version-unknown' | 'version-unconfirmed';
-
 type Source = 'built-in' | 'user' | 'plugin';
 
 /** An enabled plugin's ACP agent (ADR-032), like `acp_agents::PluginAgent`. */
@@ -261,7 +275,6 @@ export class LabAcpRegistry {
     const fresh = state.scenario === 'empty';
     this.path = fresh ? {} : LAB_PATH;
     this.users = fresh ? [] : [QWEN_DESCRIPTOR, LAB_AGENT_DESCRIPTOR];
-    if (!fresh) this.decide(LAB_GEMINI_DESCRIPTOR).confirmedVersion = '0.39.1';
     this.revision = fresh ? 0 : 3;
     // Start-up discovery has finished ("earlier"); safe mode runs none.
     if (!state.safeMode) for (const [descriptor, source] of this.descriptors()) this.discover(descriptor, source, false);
@@ -271,9 +284,9 @@ export class LabAcpRegistry {
   // ---- views ------------------------------------------------------------------
 
   private descriptors(): [AcpAgentDescriptorV1, Source][] {
-    const owned = [LAB_GEMINI_DESCRIPTOR, ...this.users];
+    const owned = [...BUILT_IN_DESCRIPTORS, ...this.users];
     return [
-      [LAB_GEMINI_DESCRIPTOR, 'built-in'],
+      ...BUILT_IN_DESCRIPTORS.map((descriptor): [AcpAgentDescriptorV1, 'built-in'] => [descriptor, 'built-in']),
       ...this.users.map((descriptor): [AcpAgentDescriptorV1, 'user'] => [descriptor, 'user']),
       ...this.plugins
         .filter((agent) => !owned.some((descriptor) => descriptor.id === agent.descriptor.id))
@@ -289,7 +302,7 @@ export class LabAcpRegistry {
     const before = new Set(this.plugins.map((agent) => agent.descriptor.id));
     const key = (list: readonly LabPluginAgent[]) => JSON.stringify(list.map((agent) => [agent.pluginId, agent.descriptor]));
     const previous = key(this.plugins);
-    const owned = [LAB_GEMINI_DESCRIPTOR, ...this.users];
+    const owned = [...BUILT_IN_DESCRIPTORS, ...this.users];
     this.plugins = agents.filter((agent, index) => agents.findIndex((other) => other.descriptor.id === agent.descriptor.id) === index);
     for (const id of before) if (!this.plugins.some((agent) => agent.descriptor.id === id)) this.discovery.delete(id);
     const report = this.plugins.map((agent): [string, string, boolean] => [
@@ -352,18 +365,15 @@ export class LabAcpRegistry {
     this.discovery.set(descriptor.id, { checkedAt: this.clock.iso(), resolution, ...(report ? { report } : {}) });
   }
 
-  /** `version_gate` */
-  private versionRefusal(descriptor: AcpAgentDescriptorV1, report: VersionReport): Refusal | undefined {
+  /** `version_gate`: only a version older than the minimum refuses; the rest is advisory. */
+  private versionRefused(report: VersionReport): boolean {
     switch (report.status) {
+      case 'older': return true;
       case 'verified':
-      case 'newer': return undefined;
-      case 'older': return 'unsupported-version';
-      case 'probe-failed':
-      case 'unrecognized': return 'version-unknown';
-      case 'no-verified-range': {
-        const confirmed = this.decision(descriptor)?.confirmedVersion;
-        return confirmed !== undefined && confirmed === report.version ? undefined : 'version-unconfirmed';
-      }
+      case 'newer':
+      case 'no-verified-range':
+      case 'unrecognized':
+      case 'probe-failed': return false;
       default: {
         const exhaustive: never = report.status;
         return exhaustive;
@@ -377,12 +387,8 @@ export class LabAcpRegistry {
     if (!found.resolution.ok) return ['not-installed', found.resolution.reason];
     if (!trusted) return ['untrusted', "Review and trust this agent's command line in Settings → Harnesses."];
     if (found.report === undefined) return ['checking', CHECKING];
-    switch (this.versionRefusal(descriptor, found.report)) {
-      case 'unsupported-version': return ['unsupported-version', 'The installed version is older than the versions tested with PiUI.'];
-      case 'version-unconfirmed': return ['unverified-version', 'PiUI has not verified this version. Confirm it in Settings → Harnesses to use it.'];
-      case 'version-unknown': return ['unavailable', 'The agent did not report a version PiUI can recognize.'];
-      default: return this.signIn.has(descriptor.id) ? ['sign-in-required', SIGN_IN_REASON] : ['ready', undefined];
-    }
+    if (this.versionRefused(found.report)) return ['unsupported-version', 'The installed version is older than the versions tested with PiUI.'];
+    return this.signIn.has(descriptor.id) ? ['sign-in-required', SIGN_IN_REASON] : ['ready', undefined];
   }
 
   private entry(descriptor: AcpAgentDescriptorV1, source: Source): AcpAgentEntryV1 {
@@ -402,7 +408,6 @@ export class LabAcpRegistry {
       trusted,
       ...(report?.version === undefined ? {} : { version: report.version }),
       ...(report === undefined ? {} : { versionStatus: report.status }),
-      ...(decision?.confirmedVersion === undefined ? {} : { confirmedVersion: decision.confirmedVersion }),
       secretEnvironment: secretEnvironment(descriptor),
       allowedSecrets: [...(decision?.allowedSecrets ?? [])],
       authMethods: [...(this.signIn.get(descriptor.id) ?? [])],
@@ -448,6 +453,7 @@ export class LabAcpRegistry {
       : summary.status === 'unverified' ? 'unsupported-version' : 'not-installed';
     const hint = BUILTIN_SIGN_IN[kind];
     const verified = BUILTIN_VERIFIED[kind];
+    const { versionStatus } = summary;
     return {
       harness: kind,
       name: summary.name,
@@ -455,6 +461,7 @@ export class LabAcpRegistry {
       state,
       ...(summary.installed ? { location: BUILTIN_LOCATIONS[kind] } : {}),
       ...(summary.version === undefined ? {} : { version: summary.version }),
+      ...(versionStatus === undefined ? {} : { versionStatus }),
       ...(verified === undefined ? {} : { verifiedVersions: verified }),
       ...(summary.reason === undefined ? {} : { reason: summary.reason }),
       ...(hint === undefined ? {} : { signInHint: hint }),
@@ -479,7 +486,7 @@ export class LabAcpRegistry {
     const rows = this.agents().map((agent): HarnessSummary => {
       const status = agent.state === 'ready' || agent.state === 'sign-in-required'
         ? 'available'
-        : agent.state === 'unverified-version' || agent.state === 'untrusted' || agent.state === 'unsupported-version'
+        : agent.state === 'untrusted' || agent.state === 'unsupported-version'
           ? 'unverified'
           : 'unavailable';
       return {
@@ -568,20 +575,9 @@ export class LabAcpRegistry {
         this.changed();
         return;
       }
-      case 'confirmVersion': {
-        const found = this.find(command.id);
-        if (found === undefined) throw new RegistryFailure('NOT_FOUND', REGISTRY_MESSAGES.NOT_FOUND);
-        const [descriptor] = found;
-        const report = this.discovery.get(descriptor.id)?.report;
-        const confirmable = report !== undefined && report.status === 'no-verified-range'
-          && report.version === command.version;
-        if (!confirmable) throw new RegistryFailure('NOTHING_TO_CONFIRM', REGISTRY_MESSAGES.NOTHING_TO_CONFIRM);
-        this.transact(command.expectedRevision, () => {
-          this.decide(descriptor).confirmedVersion = command.version;
-        });
-        this.changed();
-        return;
-      }
+      // Kept for old clients: a version is never confirmed (ADR-045).
+      case 'confirmVersion':
+        throw new RegistryFailure('NOTHING_TO_CONFIRM', REGISTRY_MESSAGES.NOTHING_TO_CONFIRM);
       case 'allowSecrets': {
         const found = this.find(command.id);
         if (found === undefined) throw new RegistryFailure('NOT_FOUND', REGISTRY_MESSAGES.NOT_FOUND);
@@ -599,7 +595,7 @@ export class LabAcpRegistry {
         return;
       }
       case 'remove': {
-        if (command.id === LAB_GEMINI_DESCRIPTOR.id) throw new RegistryFailure('BUILT_IN', REGISTRY_MESSAGES.BUILT_IN);
+        if (BUILT_IN_DESCRIPTORS.some((descriptor) => descriptor.id === command.id)) throw new RegistryFailure('BUILT_IN', REGISTRY_MESSAGES.BUILT_IN);
         if (this.find(command.id)?.[1] === 'plugin') throw new RegistryFailure('PLUGIN_OWNED', REGISTRY_MESSAGES.PLUGIN_OWNED);
         this.transact(command.expectedRevision, () => {
           const index = this.users.findIndex((descriptor) => descriptor.id === command.id);
@@ -632,7 +628,6 @@ export class LabAcpRegistry {
     const agent = this.entry(descriptor, source);
     switch (agent.state) {
       case 'untrusted': throw startRefusal('ACP_TRUST_REQUIRED');
-      case 'unverified-version': throw startRefusal('ACP_VERSION_UNCONFIRMED');
       case 'ready':
       case 'sign-in-required':
         break;

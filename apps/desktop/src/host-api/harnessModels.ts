@@ -1,5 +1,5 @@
 import { hostInvoke } from './transport';
-import type { HarnessModelsRequest, HarnessModelsResult } from '../../../../contracts/harness-models-v18';
+import type { HarnessCatalogPart, HarnessModelsRequest, HarnessModelsResult } from '../../../../contracts/harness-models-v18';
 import type { WorkspaceModel } from '../../../../contracts/workspace-v15';
 import { workspaceError } from './workspaceClient';
 
@@ -19,19 +19,47 @@ export function workspaceModel(model: WorkspaceModel): WorkspaceModel {
 
 // Session-local, workspace-scoped catalog reuse. Explicit refresh and preflight
 // bypass completed entries; concurrent consumers share the native request.
-const catalogs = new Map<string, { promise: Promise<HarnessModelsResult>; pending: boolean }>();
-export function harnessModels(request: HarnessModelsRequest, refresh = false): Promise<HarnessModelsResult> {
-  const key = JSON.stringify([request.workspaceId, request.harness]);
+// `split` marks the entry of a models-then-resources load (`splitCatalog`).
+const catalogs = new Map<string, { promise: Promise<HarnessModelsResult>; pending: boolean; split?: true }>();
+const catalogKey = (request: HarnessModelsRequest): string => JSON.stringify([request.workspaceId, request.harness]);
+const partKey = (request: HarnessModelsRequest, part: HarnessCatalogPart): string => JSON.stringify([request.workspaceId, request.harness, part]);
+
+const RESOURCES_UNAVAILABLE = 'Skills, MCP servers and tools could not be loaded from the harness.';
+
+/**
+ * True when resource discovery failed and the host answered with a warning in
+ * place of the resources: the models are real, the empty resource list is not.
+ */
+export function catalogDegraded(result: HarnessModelsResult): boolean {
+  return result.resources.warnings.includes(RESOURCES_UNAVAILABLE);
+}
+
+function nativeCatalog(request: HarnessModelsRequest, part: HarnessCatalogPart | undefined, refresh: boolean): Promise<HarnessModelsResult> {
+  const full = catalogKey(request);
+  const key = part ? partKey(request, part) : full;
   const cached = catalogs.get(key);
-  if (cached && (!refresh || cached.pending)) return cached.promise;
-  const promise = hostInvoke<HarnessModelsResult>('harness_models_v18', { request }).then(result => {
+  // An explicit refresh joins a full probe in flight, never a split load: that
+  // one may be reusing models answered before.
+  if (cached && (!refresh || (cached.pending && !cached.split))) return cached.promise;
+  // A full refresh also retires the answered parts, so a later split load asks
+  // the harness again instead of reusing the models and resources it replaced.
+  if (refresh && !part) {
+    for (const piece of ['models', 'resources'] as const) {
+      const pieceKey = partKey(request, piece);
+      if (catalogs.get(pieceKey)?.pending === false) catalogs.delete(pieceKey);
+    }
+  }
+  const promise = hostInvoke<HarnessModelsResult>('harness_models_v18', { request: part ? { ...request, part } : request }).then(result => {
     if (result.protocol !== 18 || result.harness !== request.harness) throw new Error('Invalid model catalog');
     entry.pending = false;
-    storeSnapshot(key, result);
+    // A degraded answer is not remembered: the next load asks for the resources again.
+    const degraded = part !== 'models' && catalogDegraded(result);
+    if (degraded && catalogs.get(key) === entry) catalogs.delete(key);
+    if (!part) storeSnapshot(full, degraded ? { ...result, resources: readSnapshot(full, request)?.resources ?? { items: [], warnings: [] } } : result);
     return result;
   }).catch(error => {
     if (catalogs.get(key) === entry) catalogs.delete(key);
-    forgetSnapshot(key);
+    if (part !== 'resources') forgetSnapshot(full);
     const mapped = workspaceError(error);
     if (mapped.code === 'RUNTIME_FAILED') throw new Error('Could not load models.');
     throw mapped;
@@ -39,6 +67,64 @@ export function harnessModels(request: HarnessModelsRequest, refresh = false): P
   const entry = { promise, pending: true };
   catalogs.set(key, entry);
   return entry.promise;
+}
+
+/** Models and resources from one native probe; resolves once both are known. */
+export function harnessModels(request: HarnessModelsRequest, refresh = false): Promise<HarnessModelsResult> {
+  return nativeCatalog(request, undefined, refresh);
+}
+
+/**
+ * True once no native request for this project and harness is in flight: the
+ * models and the resources are both known, or the load ended without them (a
+ * failure, or resources degraded to a warning). False while either is still
+ * loading, so a picker can tell "resources are on their way" from "none".
+ */
+export function catalogSettled(request: HarnessModelsRequest): boolean {
+  return ![catalogKey(request), partKey(request, 'models'), partKey(request, 'resources')].some(key => catalogs.get(key)?.pending);
+}
+
+/**
+ * Models first, resources after: the host answers `models` without waiting for
+ * resource discovery (MCP startup) and hands that discovery to `resources`.
+ * A failed resource discovery keeps the models and reports a warning; that
+ * degraded catalog is not remembered, so the next load asks for the resources
+ * again (the answered models are reused).
+ */
+function splitCatalog(request: HarnessModelsRequest): { models: Promise<HarnessModelsResult>; full: Promise<HarnessModelsResult> } {
+  const key = catalogKey(request);
+  const live = catalogs.get(key);
+  // A later consumer of a split in flight takes its models entry: `live` only
+  // settles with the resources, which can be seconds behind the models.
+  if (live) return { models: (live.split ? catalogs.get(partKey(request, 'models'))?.promise : undefined) ?? live.promise, full: live.promise };
+  const models = nativeCatalog(request, 'models', false);
+  let degraded = false;
+  const full = models.then(listed => nativeCatalog(request, 'resources', false).then(
+    found => {
+      degraded = catalogDegraded(found);
+      return { ...listed, resources: found.resources };
+    },
+    () => {
+      degraded = true;
+      return { ...listed, resources: { items: [], warnings: [RESOURCES_UNAVAILABLE] } };
+    },
+  )).then(result => {
+    entry.pending = false;
+    if (degraded) {
+      if (catalogs.get(key) === entry) catalogs.delete(key);
+      // The snapshot gets the fresh models with the resources it already had.
+      storeSnapshot(key, { ...result, resources: readSnapshot(key, request)?.resources ?? { items: [], warnings: [] } });
+    } else {
+      storeSnapshot(key, result);
+    }
+    return result;
+  }, error => {
+    if (catalogs.get(key) === entry) catalogs.delete(key);
+    throw error;
+  });
+  const entry = { promise: full, pending: true, split: true as const };
+  catalogs.set(key, entry);
+  return { models, full };
 }
 
 // A catalog probe starts the native harness (seconds for Claude Code), so a
@@ -87,15 +173,23 @@ export interface CachedCatalogHandlers {
 
 /**
  * For model pickers: resolves at once with the last catalog of this project
- * and harness when one is remembered, and reports the native probe through
- * `handlers`. Without a snapshot it is `harnessModels`.
+ * and harness when one is remembered, otherwise as soon as the native models
+ * are known; later answers (models, then resources) arrive through `handlers`.
  */
 export function cachedHarnessModels(request: HarnessModelsRequest, handlers: CachedCatalogHandlers = {}): Promise<HarnessModelsResult> {
-  const key = JSON.stringify([request.workspaceId, request.harness]);
+  const key = catalogKey(request);
   const live = catalogs.get(key);
-  const snapshot = live && !live.pending ? undefined : readSnapshot(key, request);
-  const fresh = harnessModels(request);
-  if (!snapshot) return fresh;
-  fresh.then(result => handlers.onFresh?.(result), error => handlers.onError?.(error));
-  return Promise.resolve(snapshot);
+  if (live && !live.pending) return live.promise;
+  const snapshot = readSnapshot(key, request);
+  const { models, full } = splitCatalog(request);
+  if (!snapshot) {
+    // Models resolve the call; resources follow through `onFresh`.
+    full.then(result => handlers.onFresh?.(result), () => undefined);
+    return models;
+  }
+  // Fresher answers follow the snapshot, even when the models are already known.
+  const shown = Promise.resolve(snapshot);
+  if (models !== full) shown.then(() => models).then(result => handlers.onFresh?.({ ...result, resources: snapshot.resources }), () => undefined);
+  shown.then(() => full).then(result => handlers.onFresh?.(result), error => handlers.onError?.(error));
+  return shown;
 }

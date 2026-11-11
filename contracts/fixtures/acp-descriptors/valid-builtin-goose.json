@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "goose",
+  "displayName": "Goose",
+  "command": {
+    "program": "goose",
+    "args": [
+      "acp"
+    ]
+  },
+  "version": {
+    "args": [
+      "--version"
+    ]
+  },
+  "environment": [
+    "GOOSE_PROVIDER",
+    "GOOSE_MODEL",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY"
+  ],
+  "authHint": "Set up Goose's own provider: run `goose configure` in a terminal and choose a provider and model.",
+  "docsUrl": "https://github.com/aaif-goose/goose"
+}

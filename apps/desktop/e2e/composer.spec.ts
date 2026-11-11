@@ -162,6 +162,85 @@ test.describe('mentions', () => {
   });
 });
 
+test.describe('new chat home', () => {
+  test('Home is the title and the composer: no shortcut cards, no chat list, the message box is the first tab stop', async ({ lab, page }) => {
+    await lab.open();
+    const composer = home(page);
+    await expect(composer.getByRole('heading', { level: 1, name: 'What should we work on?' })).toBeVisible();
+    const message = composer.getByRole('textbox', { name: 'Message' });
+    await expect(message).toBeVisible();
+    await expect(lab.main.getByRole('button', { name: 'Build a pipeline' })).toHaveCount(0);
+    await expect(lab.main.getByRole('button', { name: 'Review runs' })).toHaveCount(0);
+    await expect(lab.main.getByRole('heading', { name: 'Recent chats' })).toHaveCount(0);
+    // Nothing on Home precedes the composer: from the main landmark, Tab lands in the message box.
+    await lab.main.focus();
+    await page.keyboard.press('Tab');
+    await expect(message).toBeFocused();
+  });
+
+  test('safe mode adds no hint to Home: the banner already says it', async ({ lab, page }) => {
+    await lab.open('safe');
+    await expect(home(page).getByRole('textbox', { name: 'Message' })).toBeDisabled();
+    await expect(page.getByText('Safe mode is on: history is readable, agents are not started.')).toHaveCount(0);
+  });
+
+  test('the project chip names a permission only after it left the harness default', async ({ lab, page }) => {
+    await lab.open();
+    const composer = home(page);
+    const chip = composer.getByRole('button', { name: /^Project and permissions/ });
+    await expect(chip).toHaveAccessibleName(/^Project and permissions: piui$/);
+    await chip.click();
+    await expect(page.getByRole('radio', { name: /^Harness default/ })).toBeChecked();
+    await page.getByRole('radio', { name: /^Read only/ }).check();
+    await page.keyboard.press('Escape');
+    await expect(chip).toHaveAccessibleName(/^Project and permissions: piui · Read only$/);
+    await chip.click();
+    await page.getByRole('radio', { name: /^Harness default/ }).check();
+    await page.keyboard.press('Escape');
+    await expect(chip).toHaveAccessibleName(/^Project and permissions: piui$/);
+  });
+
+  test('a restricted project shows no model spinner, even when it was picked while models were loading', async ({ lab, page }) => {
+    // A slow catalog keeps the Codex probe in flight while the project changes.
+    await lab.open('demo', '&catalog=slow');
+    const composer = home(page);
+    await composer.getByRole('button', { name: 'Pi', exact: true }).click();
+    await lab.option(/^Codex/).click();
+    await expect(composer.getByRole('button', { name: 'Default model' })).toHaveAttribute('aria-busy', 'true');
+    await composer.getByRole('button', { name: /^Project and permissions: piui/ }).click();
+    await page.getByRole('radio', { name: /^legacy-repo/ }).check();
+    await page.keyboard.press('Escape');
+    await expect(page.getByText('This folder is restricted. Trust it to let agents work on its files.')).toBeVisible();
+    await expect(composer.getByRole('button', { name: 'Default model' })).not.toHaveAttribute('aria-busy', 'true');
+  });
+
+  test('a failed resource discovery keeps the models and offers a retry', async ({ lab, page }) => {
+    await lab.open('demo', '&catalog=no-resources');
+    const composer = home(page);
+    await composer.getByRole('button', { name: 'Pi', exact: true }).click();
+    await lab.option(/^Codex/).click();
+    const warning = page.getByRole('status').filter({ hasText: 'Skills, MCP servers and tools could not be loaded from the harness.' });
+    await expect(warning).toBeVisible();
+    await warning.getByRole('button', { name: 'Retry' }).click();
+    await expect(warning).toBeVisible();
+    await composer.getByRole('button', { name: 'Default model' }).click();
+    await expect(lab.option(/^GPT Lab 5 Codex/)).toBeVisible();
+  });
+
+  test('a coded catalog refusal settles at once instead of after the retry', async ({ lab, page }) => {
+    await lab.open('empty');
+    const composer = home(page);
+    await composer.getByRole('button', { name: 'Pi', exact: true }).click();
+    await lab.option(/^Claude Code/).click();
+    const models = composer.getByRole('button', { name: 'Default model' });
+    // The lab answers a probe after ~350 ms; a retry would add 1.5 s and a second probe.
+    await expect(models).not.toHaveAttribute('aria-busy', 'true', { timeout: 1_200 });
+    await models.click();
+    await page.getByPlaceholder('Search models').fill('zzz');
+    await expect(page.getByText('Could not load models', { exact: true })).toBeVisible();
+  });
+});
+
 test('a harness catalog refresh never undoes the new-chat harness and model pick', async ({ lab, page }) => {
   await lab.open();
   const composer = home(page);

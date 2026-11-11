@@ -20,6 +20,12 @@ export interface HarnessCapabilities {
 export interface HarnessSummary {
   kind: HarnessKind; name: string; installed: boolean; version?: string;
   status: 'available' | 'unavailable' | 'unverified'; reason?: string;
+  /**
+   * Additive (ADR-045): how an `available` harness's version relates to the versions tested with PiUI.
+   * `newer` is above the tested ceiling: the harness still starts, the UI shows "Newer than tested".
+   * Absent when the harness is not available or no tested range is declared.
+   */
+  versionStatus?: 'verified' | 'newer';
 }
 export interface WorkspaceSummary {
   id: string; name: string; trust: 'trusted' | 'restricted'; missing: boolean; personal: boolean;

@@ -459,7 +459,8 @@ table, history format). Closed enums across Rust/TS contracts are replaced by
 registry lookups. Harness versions are accepted by tested ranges with capability
 checks at start and explicit degradation instead of exact pins. A generic ACP
 adapter covers ACP agents; richer native adapters remain for Pi, Codex, Prime,
-Hermes and Claude Code.
+Hermes and Claude Code. *(ADR-045, 2026-11-11: only the minimum of a tested
+range is enforced; its ceiling is advisory and the handshake decides.)*
 
 ## ADR-029 — Claude Code runs only on the user's Claude subscription
 
@@ -477,7 +478,10 @@ is unsupported (refused before launch, pinned off per session with
 that reports extra-usage billing is stopped. A refused login is the typed
 `SIGN_IN_REQUIRED` status with fixed guidance to run `claude` and `/login`. The
 host accepts Claude Code by version range (`>=2.1.0 <3.0.0`) and adds
-`claude-code` as an additive harness identity (ADR-028).
+`claude-code` as an additive harness identity (ADR-028). *(ADR-045: the
+`<3.0.0` ceiling is advisory, so a 3.x release launches as "Newer than tested";
+the minimum, the `(Claude Code)` identity and the subscription checks stay
+enforced.)*
 
 ## ADR-030 — Pipeline document v5 (planned)
 
@@ -794,7 +798,8 @@ range (`minimum <= v < ceiling`), environment variable **names**, a sign-in
 hint, a docs link and restriction-only capability overrides. Its harness
 identity is `acp:<id>` (identity grammar v2, additive in workspace v15,
 orchestration v6.3 and system files v4; v1–v3 files stay closed). PiUI ships a
-Gemini CLI descriptor; users add theirs in Settings → Harnesses. One bridge
+Gemini CLI descriptor (ADR-045 adds six more); users add theirs in Settings →
+Harnesses. One bridge
 (`bridge/acp.mjs`) speaks ACP v1 for every agent.
 
 - **Trust:** a user descriptor never runs, not even `--version`, until the user
@@ -802,15 +807,20 @@ Gemini CLI descriptor; users add theirs in Settings → Harnesses. One bridge
   and npm/pnpm shim resolution) in a review that says trust is not a sandbox.
   Trust, version confirmations and secret choices bind to the descriptor
   fingerprint (SHA-256 of the canonical JSON); any change needs a new review.
-  Shipped descriptors are trusted by PiUI.
+  Shipped descriptors are trusted by PiUI. *(Version confirmations no longer
+  exist: ADR-045.)*
 - **No shell:** absolute PATH entries only; Windows `.exe`/`.com`, npm/pnpm
   `.cmd` shims parsed to `node <script>`, `.js`/`.mjs`/`.cjs` through Node; any
   other batch or PowerShell launcher is refused.
 - **Versions:** the probe runs contained (Job Object before resume or a
   process group) with the base environment, bounded output and a 20 s timeout;
-  results are cached per program identity. Older than the tested range is
+  results are cached per program identity. ~~Older than the tested range is
   unsupported; newer or without a range needs an explicit confirmation of that
-  exact version.
+  exact version.~~ **Superseded by ADR-045 (2026-11-11):** only an older
+  release is refused; a newer one, one without a tested range or an
+  unrecognized or unprobeable version launches with an advisory status and
+  needs no confirmation (`initialize` is the gate). Trust and secret consent
+  below are unchanged.
 - **Environment:** bridge and agent start from a cleared environment: fixed
   locations, locale and PATH plus the descriptor's names. Secret-like names
   (KEY, TOKEN, SECRET, PASSWORD, CREDENTIAL, AUTH, COOKIE, SESSION, PRIVATE)
@@ -839,8 +849,9 @@ because native defaults are incomparable. Dependency results of a closed ACP
 chat come from its own `session/load` replay, verified by content hash. Model
 pickers offer "Agent default" plus the models an earlier session advertised;
 no probe conversation is started. Gemini CLI has no tested range until a
-release is verified with real turns, so every version needs the user's
-confirmation.
+release is verified with real turns, so ~~every version needs the user's
+confirmation~~ (superseded by ADR-045: no confirmation; the agent launches
+with an advisory status).
 
 ## ADR-035 — Run debugging: pinned data, debug in editor, archive and delete (orchestration v6.4)
 
@@ -1288,3 +1299,134 @@ everything that would steer or reconfigure it goes through its owner.
 returns the existing `NOT_SUPPORTED` error. Host tests prove the refusals,
 that the member's native model, mode and pending approval are unchanged, and
 that an ordinary chat keeps every verb.
+## ADR-045 — Forward-compatible native versions: the tested ceiling is advisory, the handshake decides
+
+**Status:** Accepted 2026-11-11 (owner delegated decisions; plan reviewed with
+a second model). Supersedes the "Versions" bullet of ADR-034 and the closed
+ceilings of the native adapters. Applies ADR-013 and ADR-028 (capability
+negotiation instead of version checks) to the version gate itself. Generalizes
+the 0.2.10 change that first admitted newer Codex and ACP releases
+(commit 79790b4) to every native harness.
+
+**Context:** every native adapter used its tested versions as an allow-list.
+Codex 0.158 and later (until 0.2.10), any Prime Agent other than 0.9.2/0.9.3,
+any Hermes other than 0.21.0 and Claude Code 3.x were refused, and every ACP
+agent needed the user to confirm each installed version, so a routine CLI
+update disabled a working harness until the next PiUI release. On 2026-11-11
+the installed Codex 0.165.0 (unchanged for everything the bridge uses) was
+audited and Prime Agent 0.9.5 was refused, and OpenCode 1.19.4 could not start
+at all because its npm shim points to a native executable. A version number records what was tested; the protocol
+handshake and the effective state record what works.
+
+**Decision:**
+
+- **One rule for every harness.** The *minimum* is enforced: an older release
+  is refused with the minimum named. The *tested ceiling* is advisory: a newer
+  release is admitted (`Available`) with `versionStatus: "newer"`, and
+  Settings shows "Newer than tested" beside an enabled launch action. The
+  badge never disables a launch. Tested ranges (`minimum <= v < ceiling`,
+  `crates/piui-runtime/src/native_version.rs`): Codex 0.147.0–0.166.0, Claude
+  Code 2.1.0–3.0.0, Prime Agent 0.9.2–0.9.4, Hermes 0.21.0–0.22.0. Pi has no
+  version gate (its RPC answers and requested settings are validated). An ACP
+  descriptor enforces a minimum only when it declares a tested range.
+- **The real gate is identity, protocol and effective state, and it stays
+  fail-closed.** These fail whatever the version:
+  - not installed, or reachable only through a shell launcher PiUI will not
+    run;
+  - an unrecognized identity: `claude --version` without `(Claude Code)`, a
+    Prime package manifest with another name or without the SDK exports PiUI
+    imports, a Codex `initialize` answer without `codexHome` or without the
+    product token in its `userAgent`;
+  - a release older than the minimum;
+  - an ACP or Hermes `initialize` that negotiates a `protocolVersion` other
+    than 1;
+  - a startup request the agent rejects, or an answer without the fields the
+    bridge needs: the typed bridge failure `native-protocol-mismatch` (host
+    `BridgeFailureCode::Incompatible`, like `unsupported-native-version`,
+    `unsupported-version` and `unsupported-protocol`);
+  - malformed or oversized frames;
+  - a mandatory setting the harness cannot apply (never dropped silently);
+  - a runtime policy breach, such as Claude Code reporting a non-subscription
+    login (ADR-029).
+
+  Unrecognized version text with an established identity still refuses for
+  Codex and Claude Code, where the version line is part of the identity proof.
+  An ACP agent whose version is unrecognized, unprobeable, without a tested
+  range or newer launches with an advisory status and `initialize` decides;
+  only an older release refuses.
+- **Additions are tolerated, control messages are not.** A well-formed
+  notification, item or content block a bridge does not know becomes one
+  sanitized fallback block per type, deduplicated, with no raw payload.
+  Documented housekeeping notifications (Codex `configWarning`,
+  `remoteControl/status/changed`, `account/updated`) are ignored. A server
+  request a bridge does not know is answered with an error and never approved
+  or left pending. A malformed frame is fatal; an exception while handling a
+  well-formed one marks that message unknown and does not fail the transport.
+  PiUI's own IPC schemas stay strict.
+- **Codex feature switches follow the installed CLI.** The fixed `--disable`
+  names break the CLI before `initialize` when upstream removes a feature. The
+  bridge reads `codex features list` and drops only the names the CLI no longer
+  registers; when a name that enforces a requested policy is absent (for
+  example the `multi_agent` switches behind `nativeSubagents:false`) the start
+  fails closed. A requested restriction is never removed to make a start
+  succeed.
+- **ACP: command-line trust stays, version confirmation goes.** A user or
+  plugin descriptor still never runs, not even `--version`, until the user
+  trusts the exact resolved command line, and secret-like environment names
+  still need a per-name consent. A newer, unrecognized or unprobeable version
+  needs no confirmation, and a version string never invalidates trust: only a
+  changed command line or descriptor does. A stored decision's
+  `confirmedVersion` is ignored and never becomes execution trust. Built-in
+  descriptors are trusted by shipping; their secret names still need consent.
+- **Built-in ACP catalog.** One generic `acp:<id>` adapter, no scheduler
+  branches and no registry-provided `npx` download. PiUI ships reviewed
+  descriptors (each probes `--version`; none has a tested range yet):
+
+  | Id | Command | Agent |
+  | --- | --- | --- |
+  | `gemini-cli` | `gemini --acp` (`--experimental-acp` is deprecated) | Gemini CLI |
+  | `opencode` | `opencode acp` | OpenCode |
+  | `qwen-code` | `qwen --acp` | Qwen Code |
+  | `github-copilot` | `copilot --acp` | GitHub Copilot CLI |
+  | `goose` | `goose acp` | Goose |
+  | `kimi` | `kimi acp` | Kimi Code |
+  | `cursor` | `cursor-agent acp` | Cursor |
+
+  Not bundled, on purpose: `codex-acp` and `claude-agent-acp` (Codex and Claude
+  Code have native adapters; `claude-agent-acp` would run Claude outside the
+  subscription, environment and login checks of ADR-029); Aider (no ACP
+  interface: it needs a separate adapter spike that preserves approvals,
+  cancellation and native history, never terminal scraping); Antigravity,
+  Droid, Cline, Auggie, Kilo and Vibe (descriptors that users or plugins add
+  until each has lifecycle fixtures; the shipped plugin example adds Auggie).
+  A new user descriptor cannot take a built-in's id and a plugin's is not
+  registered. A user descriptor stored before PiUI shipped that id keeps
+  precedence with its own command, restrictions and trust; the built-in stays
+  hidden until the user removes the stored one, so an upgrade never changes an
+  existing agent's command or authority.
+- **Version probe.** It runs the resolved program, any shim script, the
+  descriptor arguments up to the last script entrypoint (`node agent.mjs`) and
+  then the version arguments; launch subcommands or flags such as `acp` or
+  `--acp` are not passed.
+- **Windows shims.** An npm `.cmd` shim whose target is a native executable
+  (`opencode.cmd` runs `node_modules\opencode-ai\bin\opencode.exe`) resolves to
+  that validated package-bin executable, never through `cmd.exe`, only when the
+  target is followed by nothing but `%*` (fixed wrapper arguments would be
+  lost, so such a wrapper is refused and the PATH search continues). Node-script
+  shims resolve as before and any other batch or PowerShell launcher is still
+  refused. Trust binds to the resolved target.
+
+**Extension test:** the catalog is descriptor data and users and plugins can
+add agents; the version policy and the gate sit in the host and the bridges,
+so core owns them.
+
+**Consequences:** a CLI update keeps working until its protocol really breaks,
+and then fails with a typed, visible code while native history stays
+untouched. "Tested" keeps its meaning: fixtures and a real-CLI handshake are
+reported separately from real-provider turns, and a built-in added without
+lifecycle evidence claims nothing. A future breaking protocol under the same
+identity still needs adapter work. Contracts change additively without a
+version bump: `HarnessSummary.versionStatus` is optional (`verified` or
+`newer`, workspace v15); the ACP `confirm_version` command stays as a no-op,
+and the `unverified-version` state and `VersionUnconfirmed` refusal stay in the
+types and are never produced.

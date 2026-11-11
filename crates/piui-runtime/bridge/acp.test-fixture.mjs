@@ -1,7 +1,10 @@
 // Fake ACP v1 agent for bridge tests. It speaks LF-framed JSON-RPC 2.0 on
 // stdio and never contacts a model. Flags: --protocol=N, --no-load, --no-http,
-// --auth-required, --config-options, --noise. Stdio MCP servers it receives
-// are answered back as the first agent message of the next prompt.
+// --auth-required, --config-options, --noise, and startup failures:
+// --no-protocol (initialize result without a protocol version),
+// --reject-initialize, --auth-initialize, --reject-new (session/new answers
+// invalid params) and --no-session-id. Stdio MCP servers it receives are
+// answered back as the first agent message of the next prompt.
 import { createInterface } from 'node:readline';
 
 const flag = name => process.argv.includes(name);
@@ -27,6 +30,9 @@ const sessionState = () => configMode
   };
 
 let promptId, permissionReply, clientReply, stdioServers = [];
+// Replies to agent -> client requests that a prompt sends under its own ids.
+const replyHandlers = new Map();
+const ask = (id, method, params, handler) => { replyHandlers.set(id, handler); send({ id, method, params }); };
 async function callCoordinator(server) {
   const headers = { 'content-type': 'application/json', ...Object.fromEntries(server.headers.map(header => [header.name, header.value])) };
   const post = async (id, method, params) => (await (await fetch(server.url, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) })).json()).result;
@@ -99,6 +105,33 @@ async function prompt(message) {
   } else if (text.startsWith('follow:')) {
     say(`ack ${text}`);
     end();
+  } else if (text === 'updates' || text === 'updates-many') {
+    // An agent that repeats updates the adapter does not know: one notice per
+    // kind, however many arrive, and the text around them stays one message.
+    const odd = kind => notify(sessionId, { sessionUpdate: kind, payload: { secret: 'SECRET-MUST-NOT-LEAK' } });
+    if (text === 'updates-many') {
+      for (let index = 0; index < 40; index += 1) odd(`future_${index}`);
+    } else {
+      odd('future_alpha'); odd('future_alpha');
+      say('a', 'm1'); odd('future_alpha');
+      say('b', 'm1'); odd('future_alpha');
+      say('c', 'm1');
+      odd('future_beta'); odd('future_beta');
+    }
+    end();
+  } else if (text === 'unknown-requests') {
+    // Requests that are not part of the client surface PiUI advertised. None
+    // of them may become an approval; the last is a permission request that
+    // offers nothing to choose.
+    const outcomes = [];
+    const answered = id => response => {
+      outcomes.push(`${id}:${response.error?.code ?? response.result?.outcome?.outcome}`);
+      if (outcomes.length === 4) { say(outcomes.sort().join(' ')); end(); }
+    };
+    ask('u-1', 'session/request_approval', { sessionId, options: [{ optionId: 'yes', name: 'Allow', kind: 'allow_once' }] }, answered('u-1'));
+    ask('u-2', 'terminal/create', { sessionId, command: 'rm -rf /' }, answered('u-2'));
+    ask('u-3', 'x/private', {}, answered('u-3'));
+    ask('u-4', 'session/request_permission', { sessionId, toolCall: { toolCallId: 'none' }, options: [] }, answered('u-4'));
   } else if (text === 'fs') {
     clientReply = response => { say(`fs ${response.error?.code}`); end(); };
     send({ id: 'fs-1', method: 'fs/read_text_file', params: { sessionId, path: '/etc/passwd' } });
@@ -129,14 +162,19 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
   if (message.method === undefined) {
     if (message.id === 'perm-1' && permissionReply) { const reply = permissionReply; permissionReply = undefined; reply(message); }
     else if (message.id === 'fs-1' && clientReply) { const reply = clientReply; clientReply = undefined; reply(message); }
+    else if (replyHandlers.has(message.id)) { const reply = replyHandlers.get(message.id); replyHandlers.delete(message.id); reply(message); }
     continue;
   }
   const { method, params, id } = message;
   if (method === 'initialize') {
     if (params.clientCapabilities.fs.readTextFile !== false || params.clientCapabilities.terminal !== false) throw Error('client capabilities must stay off');
-    send({ id, result: { protocolVersion: protocol, agentCapabilities: { loadSession: !flag('--no-load'), promptCapabilities: { image: false }, mcpCapabilities: { http: !flag('--no-http'), sse: false } }, authMethods: [{ id: 'agent-login', name: 'Agent login', description: 'Sign in using the agent' }, { id: 'api-key', name: 'API key\u0007' }], agentInfo: { name: 'fixture', version: '1.2.3' } } });
+    if (params.clientInfo?.name !== 'piui' || !/^\d+\.\d+\.\d+/.test(params.clientInfo?.version ?? '')) throw Error('clientInfo must name PiUI and its release');
+    if (flag('--reject-initialize')) { send({ id, error: { code: -32602, message: 'Invalid params' } }); continue; }
+    if (flag('--auth-initialize')) { send({ id, error: { code: -32000, message: 'Authentication required' } }); continue; }
+    send({ id, result: { ...(flag('--no-protocol') ? {} : { protocolVersion: protocol }), agentCapabilities: { loadSession: !flag('--no-load'), promptCapabilities: { image: false }, mcpCapabilities: { http: !flag('--no-http'), sse: false } }, authMethods: [{ id: 'agent-login', name: 'Agent login', description: 'Sign in using the agent' }, { id: 'api-key', name: 'API key\u0007' }], agentInfo: { name: 'fixture', version: '1.2.3' } } });
   } else if (method === 'session/new' || method === 'session/load') {
     if (flag('--auth-required')) { send({ id, error: { code: -32000, message: 'Authentication required' } }); continue; }
+    if (method === 'session/new' && flag('--reject-new')) { send({ id, error: { code: -32602, message: 'Invalid params' } }); continue; }
     // `saved` and the id this fixture hands out can be reopened; both replay
     // the same short conversation.
     if (method === 'session/load' && !['saved', 'fixture-session'].includes(params.sessionId)) { send({ id, error: { code: -32002, message: 'Resource not found' } }); continue; }
@@ -151,7 +189,7 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       notify(loaded, { sessionUpdate: 'tool_call', toolCallId: 'old-call', title: 'Read notes', kind: 'read', status: 'completed' });
       send({ id, result: configMode ? sessionState() : null });
     } else {
-      send({ id, result: { sessionId: 'fixture-session', ...sessionState() } });
+      send({ id, result: { ...(flag('--no-session-id') ? {} : { sessionId: 'fixture-session' }), ...sessionState() } });
     }
   } else if (method === 'session/prompt') {
     await prompt(message);

@@ -347,6 +347,8 @@ const initializeResponse = () => ({
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 input.on("line", (line) => {
   if (has("--fixture-bad-frame") && line.includes("initialize")) { process.stdout.write("{not json\n"); return; }
+  // A CLI that does not understand the flags or protocol dies before the handshake.
+  if (has("--fixture-exit-before-init") && line.includes("initialize")) process.exit(1);
   const message = JSON.parse(line);
   if (message.type === "control_response") {
     record({ kind: "control-response", response: message.response });
@@ -359,7 +361,9 @@ input.on("line", (line) => {
   if (message.type === "control_request") {
     const { request_id: requestId, request } = message;
     record({ kind: "control", request });
-    if (request.subtype === "initialize") {
+    if (request.subtype === "initialize" && has("--fixture-reject-init")) {
+      refuse(requestId, "Unsupported control request subtype: initialize PRIVATE_PAYLOAD");
+    } else if (request.subtype === "initialize") {
       send({ type: "system", subtype: "hook_started", hook_id: "startup", hook_name: "SessionStart", hook_event: "SessionStart", uuid: randomUUID(), session_id: sessionId });
       ok(requestId, initializeResponse());
     } else if (request.subtype === "interrupt") {

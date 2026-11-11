@@ -13,7 +13,6 @@
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import Ellipsis from '@lucide/svelte/icons/ellipsis';
   import ShieldAlert from '@lucide/svelte/icons/shield-alert';
-  import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import ShieldCheck from '@lucide/svelte/icons/shield-check';
   import ScrollText from '@lucide/svelte/icons/scroll-text';
   import Pencil from '@lucide/svelte/icons/pencil';
@@ -154,6 +153,9 @@
   }
 
   const route = $derived(store.route);
+  // Runs and Automations have their own entries; the editor and the library
+  // sections (agents, teams, step lists) belong to Pipelines. Exactly one is current.
+  const onPipelines = $derived(route.name === 'pipelines' && route.section !== 'runs' && route.section !== 'schedules');
 </script>
 
 {#if projectDialog}
@@ -187,7 +189,7 @@
       <span class="nav-item__label">{$t('Inbox')}</span>
       {#if inboxCount > 0}<span class="count" aria-label={$t('{0} waiting', [inboxCount])}>{inboxCount}</span>{/if}
     </button>
-    <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'pipelines', section: 'systems' }))} aria-current={route.name === 'pipelines' && route.section === 'systems' ? 'page' : undefined}>
+    <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'pipelines', section: 'systems' }))} aria-current={onPipelines ? 'page' : undefined}>
       <Workflow size={16} />
       <span class="nav-item__label">{$t('Pipelines')}</span>
     </button>
@@ -205,31 +207,25 @@
   <div class="section-head">
     <span>{$t('Projects')}</span>
     <div class="section-head__actions">
-      <Menu
-        align="end"
-        items={[
-          { label: $t('Add project…'), icon: Plus, onSelect: () => void store.addProject() },
-          { label: $t('Refresh projects'), icon: RefreshCw, onSelect: () => void store.loadCatalog() },
-        ]}
-      >
-        {#snippet trigger(props)}
-          <button type="button" class="tiny-action" aria-label={$t('Project options')} {...props}><Ellipsis size={14} /></button>
-        {/snippet}
-      </Menu>
       <button type="button" class="tiny-action" aria-label={$t('Add project')} onclick={() => void store.addProject()} disabled={store.addingProject}>
         <Plus size={14} />
       </button>
     </div>
   </div>
 
-  <div class="tree" role="list">
+  <div class="tree">
     {#if store.catalogLoading}
       <div class="loading"><Skeleton lines={4} height="14px" /></div>
     {:else}
-      {#each projects as workspace (workspace.id)}
-        {@render project(workspace, Folder, workspace.name)}
-      {/each}
-      {#if personal}{@render project(personal, MessagesSquare, $t('Personal chats'))}{/if}
+      <!-- The list holds project rows only; the empty-state hint stays outside it. -->
+      {#if projects.length > 0 || personal}
+        <div role="list">
+          {#each projects as workspace (workspace.id)}
+            {@render project(workspace, Folder, workspace.name)}
+          {/each}
+          {#if personal}{@render project(personal, MessagesSquare, $t('Personal chats'))}{/if}
+        </div>
+      {/if}
       {#if projects.length === 0}
         <div class="hint">
           <p>{$t('Add a project folder to work with agents on its files.')}</p>
@@ -304,7 +300,6 @@
               ...boardItems(workspace),
               { label: $t('Pipelines'), icon: Workflow, onSelect: () => go(() => { store.selectWorkspace(workspace.id); store.navigate({ name: 'pipelines', section: 'systems' }); }) },
               historyItem(workspace),
-              { label: $t('Refresh projects'), icon: RefreshCw, onSelect: () => void store.loadCatalog(workspace.id) },
               ...manageItems(workspace),
             ]}
           >

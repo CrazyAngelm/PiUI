@@ -43,8 +43,8 @@ describe('UI Lab host scenarios', () => {
     expect(catalog.harnesses.map((harness) => [harness.kind, harness.status])).toEqual([
       ['pi', 'available'], ['prime-agent', 'available'], ['codex', 'available'], ['hermes', 'available'],
       ['claude-code', 'available'],
-      // ACP agents (ADR-034): shipped Gemini CLI ready, a missing and an untrusted user descriptor.
-      ['acp:gemini-cli', 'available'], ['acp:qwen-code', 'unavailable'], ['acp:lab-agent', 'unverified'],
+      // ACP agents (ADR-034): shipped Gemini CLI and OpenCode ready, a missing and an untrusted user descriptor.
+      ['acp:gemini-cli', 'available'], ['acp:opencode', 'available'], ['acp:qwen-code', 'unavailable'], ['acp:lab-agent', 'unverified'],
     ]);
     const ids = catalog.sessions.map((session) => session.id);
     expect(ids.every(isUuid)).toBe(true);
@@ -56,7 +56,7 @@ describe('UI Lab host scenarios', () => {
     const catalog = await catalogOf('empty');
     expect(catalog.workspaces).toEqual([expect.objectContaining({ name: 'Chats', personal: true, trust: 'trusted' })]);
     expect(catalog.sessions).toEqual([]);
-    expect(catalog.harnesses.map((harness) => harness.status)).toEqual(['available', 'unverified', 'available', 'unavailable', 'available', 'unavailable']);
+    expect(catalog.harnesses.map((harness) => harness.status)).toEqual(['available', 'unverified', 'available', 'unavailable', 'available', 'unavailable', 'unavailable']);
     // Claude Code is installed but signed out: still startable, with the host's typed sign-in reason.
     expect(catalog.harnesses.find((harness) => harness.kind === 'claude-code')).toMatchObject({ kind: 'claude-code', reason: 'Sign in to Claude Code with your Claude subscription: run `claude` in a terminal and use /login.' });
     const bootstrap = await labHost('empty').invoke<AppSnapshot>('bootstrap_v10');

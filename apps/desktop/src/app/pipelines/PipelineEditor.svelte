@@ -33,6 +33,7 @@
   import { OUTPUT_NODE_ID } from './canvas/OutputNodeCard.svelte';
   import OutputInspector from './OutputInspector.svelte';
   import { PipelineEditorStore } from './editorStore.svelte';
+  import { forgetLastPipeline, readLastPipeline } from './lastPipeline';
   import { TEMPLATES, buildTemplate, type TemplateId } from './templates';
   import Blocks from '@lucide/svelte/icons/blocks';
   import PluginTemplates from '../plugins/PluginTemplates.svelte';
@@ -58,9 +59,8 @@
     draftSource?: DraftSource;
     onDirtyChange: (dirty: boolean) => void;
     onRun: (run: OrchestrationRunV6) => void;
-    onLibrary: () => void;
   }
-  let { workspaceId, safeMode, openCommandId, openDraft, draftSource = 'run', onDirtyChange, onRun, onLibrary }: Props = $props();
+  let { workspaceId, safeMode, openCommandId, openDraft, draftSource = 'run', onDirtyChange, onRun }: Props = $props();
   const workspace = useWorkspace();
   const editor = new PipelineEditorStore(untrack(() => workspaceId), untrack(() => safeMode));
 
@@ -69,6 +69,8 @@
   let addMenuOpen = $state(false);
   let inputsOpen = $state(false);
   let saveTemplateOpen = $state(false);
+  // Until the saved pipelines are listed, a remembered one may still open: no start screen flashes by.
+  let restoring = $state(!untrack(() => openDraft) && !untrack(() => openCommandId) && readLastPipeline(untrack(() => workspaceId)) !== undefined);
   const projectName = $derived.by(() => {
     const project = workspace.catalog.workspaces.find((item) => item.id === workspaceId);
     return project?.personal ? $t('Personal chats') : (project?.name ?? $t('This project'));
@@ -115,6 +117,8 @@
   const pinnedSteps = $derived(editor.graph.nodes.filter((node) => node.pinnedOutput !== undefined).map((node) => node.profile.name || node.id));
   const systemItems = $derived<PickerItem[]>(editor.systems.map((item) => ({ value: item.id, label: item.name || $t('Untitled pipeline') })));
   const profileItems = $derived<PickerItem[]>(editor.profiles.map((item) => ({ value: item.id, label: item.name })));
+  /** The start screen lists the first few saved pipelines; the Open menu has all of them. */
+  const savedPipelines = $derived(editor.systems.slice(0, 6));
 
   $effect(() => onDirtyChange(dirty));
   $effect(() => {
@@ -125,7 +129,7 @@
   });
 
   onMount(() => {
-    void editor.refresh();
+    const listed = editor.refresh();
     void chatPipelines.loadLibrary(untrack(() => workspaceId));
     const draft = untrack(() => openDraft);
     void pluginRegistry.start();
@@ -137,12 +141,31 @@
       toasts.show({ title: $t('Opened from a run as a new draft'), description: $t('Saving creates a new pipeline; the saved one is not changed.') });
       setTimeout(() => api?.fitView(), 60);
     } else if (initial) editor.open(initial);
+    else void reopenLast(listed);
     return () => {
       onDirtyChange(false);
       // Leaving the editor stops its script tests' process trees.
       editor.scriptTests.cancelAll();
     };
   });
+
+  /**
+   * Coming back from Runs or Automations reopens the pipeline this project had
+   * open, unless it is gone or something else was started meanwhile.
+   */
+  async function reopenLast(listed: Promise<boolean>): Promise<void> {
+    const ok = await listed;
+    const id = readLastPipeline(workspaceId);
+    restoring = false;
+    // A list that could not be read says nothing about the pipeline: keep it remembered.
+    if (!id || !ok) return;
+    if (!editor.systems.some((item) => item.id === id)) {
+      forgetLastPipeline(workspaceId);
+      return;
+    }
+    if (editor.dirty || editor.busy || editor.graph.nodes.length > 0) return;
+    editor.open(id);
+  }
 
   async function openTemplateDraft(draft: AgentGraph): Promise<void> {
     editor.startFrom(await withDefaultModels(draft, defaultModel));
@@ -205,7 +228,7 @@
   // probing starts the native harness, so it begins before the first click.
   $effect(() => {
     const harness = defaultHarness;
-    if (editor.graph.nodes.length === 0 && !editor.safeMode && !editor.readOnly && !untrack(() => editor.catalogs[harness])) {
+    if (editor.graph.nodes.length === 0 && !restoring && !editor.safeMode && !editor.readOnly && !untrack(() => editor.catalogs[harness])) {
       void editor.loadCatalog(harness);
     }
   });
@@ -300,7 +323,7 @@
       editor.redo();
     } else if (matchesShortcut(event, 'Mod+S')) {
       event.preventDefault();
-      void save();
+      if (!editor.readOnly && editor.graph.nodes.length > 0 && dirty) void save();
     } else if (event.key === 'Tab' && !event.ctrlKey && !event.metaKey && target.closest('.editor__canvas')) {
       event.preventDefault();
       addMenuOpen = true;
@@ -355,7 +378,7 @@
       {#snippet leading()}{#if problemCount}<CircleAlert />{:else}<ShieldCheck />{/if}{/snippet}
       {problemCount ? $t('{0} problems', [problemCount]) : $t('Check')}
     </Button>
-    <Button size="sm" onclick={() => void save()} disabled={editor.readOnly || (!dirty && editor.graph.nodes.length > 0)} loading={editor.operation === 'save'}>
+    <Button size="sm" onclick={() => void save()} disabled={editor.readOnly || editor.graph.nodes.length === 0 || !dirty} loading={editor.operation === 'save'}>
       {#snippet leading()}<Save />{/snippet}
       {$t('Save')}
     </Button>
@@ -370,8 +393,6 @@
         { label: $t('Import JSON…'), icon: Upload, disabled: safeMode, onSelect: () => filePicker?.click() },
         { label: $t('Export JSON'), icon: Download, disabled: editor.graph.nodes.length === 0, onSelect: () => void exportFile() },
         { label: $t('Save as template…'), icon: BookmarkPlus, disabled: safeMode || editor.graph.nodes.length === 0, onSelect: () => (saveTemplateOpen = true) },
-        { type: 'separator' },
-        { label: $t('Agent library'), icon: Library, onSelect: onLibrary },
       ]}
     >
       {#snippet trigger(props)}
@@ -425,17 +446,24 @@
         </Menu>
       </div>
 
-      {#if editor.graph.nodes.length === 0 && !editor.busy}
+      {#if editor.graph.nodes.length === 0 && !editor.busy && !restoring}
         <div class="start">
           <h2>{$t('Build a pipeline')}</h2>
-          <p>{$t('Start from a template or add an agent. Double-click the canvas to add one where you click.')}</p>
           <button type="button" class="ask" onclick={() => setAssistant(true)} disabled={editor.readOnly}>
             <Sparkles size={15} />
-            <span>
-              <strong>{$t('Describe it to the assistant')}</strong>
-              <small>{$t('Say what should happen; it proposes agents, checks and loops for you to apply.')}</small>
-            </span>
+            <strong>{$t('Describe it to the assistant')}</strong>
           </button>
+          {#if savedPipelines.length}
+            <h3 class="templates__title">{$t('Saved pipelines')}</h3>
+            <div class="templates">
+              {#each savedPipelines as item (item.id)}
+                <button type="button" class="template" onclick={() => editor.open(item.id)} disabled={editor.busy}>
+                  <strong>{item.name || $t('Untitled pipeline')}</strong>
+                </button>
+              {/each}
+            </div>
+            <h3 class="templates__title">{$t('Templates')}</h3>
+          {/if}
           <div class="templates">
             {#each TEMPLATES as template (template.id)}
               <button type="button" class="template" onclick={() => void useTemplate(template.id)} disabled={editor.readOnly}>
@@ -507,7 +535,6 @@
 <Dialog
   open={editor.pending !== undefined}
   title={$t('Save changes to this pipeline?')}
-  description={$t('The draft has unsaved changes.')}
   size="sm"
   dismissible={false}
 >
@@ -617,10 +644,10 @@
   }
   .ask {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     gap: var(--piui-space-3);
     width: 100%;
-    margin-bottom: var(--piui-space-3);
+    margin: var(--piui-space-4) 0 var(--piui-space-3);
     padding: var(--piui-space-3) var(--piui-space-4);
     border: 1px solid color-mix(in srgb, var(--piui-accent) 45%, var(--piui-border));
     border-radius: var(--piui-radius-md);
@@ -629,15 +656,7 @@
     text-align: left;
   }
   .ask :global(svg) {
-    margin-top: 2px;
     color: var(--piui-accent);
-  }
-  .ask span {
-    display: grid;
-    gap: 2px;
-  }
-  .ask small {
-    color: var(--piui-text-muted);
   }
   .ask:hover:not(:disabled) {
     background: color-mix(in srgb, var(--piui-accent) 14%, var(--piui-surface-1));
@@ -654,6 +673,8 @@
     left: 50%;
     z-index: 4;
     width: min(720px, calc(100% - 48px));
+    max-height: calc(100% - 24px);
+    overflow-y: auto;
     padding: var(--piui-space-6);
     border: 1px solid var(--piui-border-subtle);
     border-radius: var(--piui-radius-lg);
@@ -666,10 +687,6 @@
     margin: 0;
     font-size: var(--piui-text-2xl);
     font-weight: var(--piui-weight-semibold);
-  }
-  .start p {
-    margin: 6px 0 var(--piui-space-4);
-    color: var(--piui-text-muted);
   }
   .templates__title {
     margin: var(--piui-space-4) 0 var(--piui-space-2);

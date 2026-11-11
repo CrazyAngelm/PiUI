@@ -177,21 +177,29 @@ capability: running the step again after signing in starts it normally.
 `acp-agent-descriptor-v1.schema.json` describes one Agent Client Protocol agent
 (ADR-034): `id`, `displayName`, `command` (`program` on PATH or absolute, fixed
 `args`; never a shell string), `version` (`args`, optional `pattern`, optional
-`verified` range `minimum <= v < ceiling`), `environment` (names passed through
+`verified` range `minimum <= v < ceiling`: the minimum is enforced, the ceiling
+is advisory, so a newer agent starts and is reported as newer than tested; the
+ACP `initialize` handshake is the compatibility gate, ADR-045), `environment` (names passed through
 from the user's environment; values are never stored), `authHint`, `docsUrl`
 and `capabilities` (restrictions only). Unknown fields are rejected, never
 dropped. The host validator (`crates/piui-runtime/src/acp.rs`) and the TS
 contract test share `fixtures/acp-descriptors`: `valid-*` pass both,
 `invalid-*` fail both and `invalid-semantic-*` have a valid shape that only
-the host rules reject. `valid-builtin-gemini-cli.json` is the shipped Gemini
-CLI descriptor, the exact JSON value the host serializes.
+the host rules reject. `valid-builtin-<id>.json` are the shipped descriptors
+(Gemini CLI, OpenCode, Qwen Code, GitHub Copilot, Goose, Kimi Code, Cursor): the
+host embeds these files, so they are the exact JSON values it serializes.
 
 `harness-registry-v1.ts` is the Settings → Harnesses protocol (command
 `harness_registry_v1`, event `piui://harness-registry-v1`): harness readiness,
 detected location, version and verified range for built-in adapters and ACP
-agents, plus add / trust (the exact command line) / confirm version / allow
-secret-like environment names / remove for ACP descriptors, each with an
-`expectedRevision`. Listing never runs an agent; checks and changes are refused
+agents, plus add / trust (the exact command line) / allow secret-like
+environment names / remove for ACP descriptors, each with an
+`expectedRevision`. Versions are advisory (ADR-045, additive within protocol 1):
+`confirmVersion` and the state `unverified-version` stay in the types but are
+never produced (the host answers `NOTHING_TO_CONFIRM`), `versionStatus` reports
+`newer` for a version above the tested range, and the optional
+`HarnessSummary.versionStatus` (workspace v15) carries the same badge into the
+catalog. Listing never runs an agent; checks and changes are refused
 in safe mode. `fixtures/harness-registry-v1.{json,ts}` is the shared golden
 fixture. `workspace-session-mode-v1.ts` adds `workspace_session_mode_v1` and the
 optional v15 `SessionSnapshot.modes` field for agent-advertised session modes;

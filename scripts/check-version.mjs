@@ -57,6 +57,7 @@ function lockVersions(root) {
 const BRIDGE_CLIENT_VERSIONS = [
   ['crates/piui-runtime/bridge/codex.mjs', /clientInfo:\s*\{\s*name:\s*"piui",\s*title:\s*"PiUI",\s*version:\s*"([^"]+)"/],
   ['crates/piui-runtime/bridge/hermes.mjs', /clientInfo:\s*\{\s*name:\s*'piui',\s*version:\s*'([^']+)'/],
+  ['crates/piui-runtime/bridge/acp.mjs', /clientInfo:\s*\{\s*name:\s*'piui',\s*title:\s*'PiUI',\s*version:\s*'([^']+)'/],
 ];
 
 /** Every declared release version as `{ source, version }`. */

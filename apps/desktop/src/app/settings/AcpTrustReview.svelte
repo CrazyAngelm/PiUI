@@ -56,6 +56,7 @@
     <ShieldAlert size={16} aria-hidden="true" />
     <span>{$t('Trust is not a sandbox. The agent runs with your user account’s permissions and keeps its own tools, network access and credentials. PiUI runs this command now to read its version, and later to start chats.')}</span>
   </p>
+  <p>{$t('Trust covers this command line; newer versions start without asking again.')}</p>
   <p class="muted small">{$t('Descriptor fingerprint: {0}', [agent.fingerprint.slice(0, 16)])}</p>
   {#if error}
     <div class="error" role="alert">

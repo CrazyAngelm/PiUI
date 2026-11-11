@@ -1,9 +1,12 @@
 # Hermes adapter
 
-Hermes 0.21.0 is connected through its native Python ACP implementation. PiUI
-contains no Hermes inference loop and does not rewrite global configuration.
+Hermes 0.21.0 and later is connected through its native Python ACP implementation.
+PiUI contains no Hermes inference loop and does not rewrite global configuration.
 The adapter discovers the installed package and venv, verifies ACP protocol 1
-and version 0.21.0, and contains its process tree in the host-owned Job.
+(`protocolVersion` must be 1) and a version of at least 0.21.0, and contains its
+process tree in the host-owned Job. Only the minimum is enforced (ADR-045):
+0.21.0 is the tested release, and a newer one starts and is shown as "Newer than
+tested". The ACP handshake and the history checks below stay the real gate.
 
 The portable contract is system-file v3 (v1/v2 import retained); workspace v15,
 settings v16, lifecycle v17, catalog v18 and orchestration v5 add the harness
@@ -43,8 +46,11 @@ adds that native phase to the existing 20-second bridge request watchdog. Other
 adapter deadlines are unchanged. First paint never waits for this initialization.
 
 Installed-source references: acp_adapter/session.py, server.py, model_catalog.py,
-hermes_cli/inventory.py and hermes_state_common.py. Source compatibility is pinned
-to the verified version, not guessed for a future Hermes release.
+hermes_cli/inventory.py and hermes_state_common.py. Source compatibility was
+verified against 0.21.0. A newer Hermes release is admitted without an audit, but
+a changed protocol or history layout fails the handshake or the history checks
+(`native-protocol-mismatch`, missing or wrong-workspace session) instead of being
+guessed; no session is ever created in place of a missing one.
 
 ## Verification
 

@@ -7,6 +7,24 @@ export async function createHermesAdapter(config, emit, coordinatorRequest, boar
   const { createServer } = await import('node:http');
   const { randomUUID } = await import('node:crypto');
   const fail = (code, message = 'Hermes could not complete the operation.') => Object.assign(new Error(code), { bridgeCode: code, safeMessage: message });
+  // Minimum supported Hermes ACP agent, mirrored by the host (native_version.rs).
+  // Only the minimum is enforced: a newer agent starts, and the handshake and
+  // session responses below stay the fail-closed compatibility gate. A
+  // pre-release of the minimum is older than it.
+  const MINIMUM_HERMES_VERSION = "0.21.0";
+  const parseSemver = text => {
+    const match = typeof text === 'string' ? /^v?(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(text) : null;
+    if (!match) return undefined;
+    const core = match.slice(1, 4).map(Number);
+    return core.every(Number.isSafeInteger) ? { core, prerelease: match[4] !== undefined } : undefined;
+  };
+  const atLeastMinimum = text => {
+    const version = parseSemver(text); const minimum = parseSemver(MINIMUM_HERMES_VERSION);
+    if (!version) return false;
+    const order = version.core[0] - minimum.core[0] || version.core[1] - minimum.core[1] || version.core[2] - minimum.core[2];
+    return order > 0 || (order === 0 && !version.prerelease);
+  };
+  const protocolMismatch = () => fail('native-protocol-mismatch', 'The Hermes ACP agent does not speak the protocol PiUI requires.');
   if (config.harness !== 'hermes' || !isAbsolute(config.cwd) || !config.runtimeProgram || !isAbsolute(config.agentDir)) throw fail('invalid-configuration');
   if (config.permissionMode !== 'native' || config.baseInstructions != null || config.thinkingLevel || config.serviceTier === 'fast' || config.allowedTools != null || config.resourceRules?.length || config.nativeSubagents != null) throw fail('unsupported-settings', 'Hermes ACP does not support the requested per-session restriction.');
   // Plugin MCP servers (plugins v2): stdio servers the host resolved for an
@@ -267,13 +285,23 @@ main()
       finishTurn();
     });
   };
+  // A native event or content type this adapter does not know gets one generic
+  // fallback block per name, never the raw payload; the name is shown only when
+  // it is a short identifier.
+  const reportedUnsupported = new Set();
+  const safeName = value => typeof value === 'string' && /^[A-Za-z0-9_.:/-]{1,80}$/.test(value) ? value : 'unknown';
+  const reportUnsupported = (key, block) => {
+    if (reportedUnsupported.has(key) || reportedUnsupported.size >= 64) return;
+    reportedUnsupported.add(key);
+    put({ id: `hermes-event-${++sequence}`, kind: 'custom', fallback: true, collapsible: true, ...block });
+  };
   const update = message => {
     const u = message.params?.update; if (!u) return;
     const kind = u.sessionUpdate;
     if (['agent_message_chunk', 'agent_thought_chunk', 'user_message_chunk'].includes(kind)) {
       // A user image in replayed history is listed as an `[image]` line.
       const userImage = kind === 'user_message_chunk' && u.content?.type === 'image';
-      if (u.content?.type !== 'text' && !userImage) { put({ id: `hermes-media-${++sequence}`, kind: 'custom', title: 'Hermes content', text: 'This native content type is not supported by the current renderer.', fallback: true }); return; }
+      if (u.content?.type !== 'text' && !userImage) { reportUnsupported(`content:${safeName(u.content?.type)}`, { title: 'Hermes content', text: 'This native content type is not supported by the current renderer.' }); return; }
       const role = kind === 'agent_message_chunk' ? 'assistant' : kind === 'agent_thought_chunk' ? 'thinking' : 'user';
       if (!streamingId || blocks.get(streamingId)?.kind !== role || loading) streamingId = `hermes-${role}-${++sequence}`;
       const previous = blocks.get(streamingId);
@@ -292,7 +320,7 @@ main()
           source: 'command',
         }));
     } else if (!['usage_update', 'current_mode_update', 'session_info_update', 'config_option_update'].includes(kind)) {
-      put({ id: `hermes-event-${++sequence}`, kind: 'custom', title: 'Hermes event', text: String(kind ?? 'Unknown native event'), fallback: true, collapsible: true });
+      reportUnsupported(`update:${safeName(kind)}`, { title: 'Hermes event', text: `Unsupported Hermes event: ${safeName(kind)}` });
     }
   };
   child.stdout.setEncoding('utf8');
@@ -301,8 +329,15 @@ main()
     if (Buffer.byteLength(buffer) > frameLimit) { for (const slot of pending.values()) slot.reject(fail('frame-too-large')); pending.clear(); setStatus('failed'); child.kill(); return; }
     while ((at = buffer.indexOf('\n')) >= 0) {
       const raw = buffer.slice(0, at); buffer = buffer.slice(at + 1); if (!raw.trim()) continue;
+      // Framing/JSON damage is fatal. A well-formed message this adapter cannot
+      // process is not: it becomes a fallback block (update) or a JSON-RPC error
+      // reply (agent request) and the session continues.
+      let msg;
+      try { msg = JSON.parse(raw); } catch { msg = undefined; }
+      if (msg === null || typeof msg !== 'object' || Array.isArray(msg)) {
+        for (const slot of pending.values()) slot.reject(fail('invalid-native-protocol')); pending.clear(); setStatus('failed'); child.kill(); continue;
+      }
       try {
-        const msg = JSON.parse(raw);
         if (msg.method === 'session/update') update(msg);
         else if (msg.method === 'session/request_permission' && msg.id !== undefined) {
           const id = String(msg.id); const options = msg.params.options ?? [];
@@ -311,19 +346,31 @@ main()
           emit({ type: 'approval', approval });
         } else if (msg.method && msg.id !== undefined) send({ id: msg.id, error: { code: -32601, message: 'Client operation unavailable' } });
         else if (pending.has(msg.id)) { const slot = pending.get(msg.id); pending.delete(msg.id); if (msg.error) { const diagnostic = JSON.stringify(msg.error); const category = [['authentication', /API.key|credential|authentication/i], ['database', /database|sqlite|locked/i], ['provider', /provider|model/i], ['dependency', /ImportError|ModuleNotFound|module/i], ['configuration', /validation|argument|TypeError|ValueError/i]].find(([, pattern]) => pattern.test(diagnostic))?.[0] ?? 'native error'; slot.reject(fail('native-request-failed', `Hermes could not complete ${slot.method} (${category}, ${msg.error.code}).`)); } else slot.resolve(msg.result); }
-      } catch { for (const slot of pending.values()) slot.reject(fail('invalid-native-protocol')); pending.clear(); setStatus('failed'); child.kill(); }
+      } catch {
+        if (msg.method === 'session/update') reportUnsupported(`update:${safeName(msg.params?.update?.sessionUpdate)}`, { title: 'Hermes event', text: `Unsupported Hermes event: ${safeName(msg.params?.update?.sessionUpdate)}` });
+        else if (msg.method && msg.id !== undefined) { try { send({ id: msg.id, error: { code: -32602, message: 'Invalid client request' } }); } catch { /* the transport is already gone */ } }
+      }
     }
   });
   const exited = () => { for (const slot of pending.values()) slot.reject(fail('native-exited')); pending.clear(); rejectFollowUps(); if (!disposed) setStatus('failed'); server?.close(); };
   child.once('error', exited); child.once('exit', exited);
   try {
-    const initialized = await request('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'piui', version: '0.2.10' } });
-    if (initialized.protocolVersion !== 1 || initialized.agentInfo?.version !== '0.21.0') throw fail('unsupported-version', 'The Hermes ACP version or protocol is unsupported.');
+    let initialized;
+    try { initialized = await request('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'piui', version: '0.2.10' } }); }
+    // An error answer, or an exit before any answer, means this agent does not
+    // speak the handshake PiUI patches and drives: typed drift, not a crash.
+    catch (error) { throw ['native-request-failed', 'native-exited'].includes(error?.bridgeCode) ? protocolMismatch() : error; }
+    if (initialized === null || typeof initialized !== 'object' || initialized.protocolVersion !== 1 || typeof initialized.agentInfo?.version !== 'string') throw protocolMismatch();
+    if (!atLeastMinimum(initialized.agentInfo.version)) throw fail('unsupported-version', 'The Hermes ACP agent is older than the oldest version PiUI supports.');
     acceptsImages = initialized.agentCapabilities?.promptCapabilities?.image === true;
     if (config.nativeId) {
       // Never call Hermes resume: its missing-id fallback creates a new session.
       let cursor, found;
-      do { const page = await request('session/list', { cwd: config.cwd, ...(cursor ? { cursor } : {}) }); found = page.sessions?.find(item => item.sessionId === config.nativeId); cursor = page.nextCursor; } while (!found && cursor);
+      do {
+        const page = await request('session/list', { cwd: config.cwd, ...(cursor ? { cursor } : {}) });
+        if (page === null || typeof page !== 'object' || !Array.isArray(page.sessions)) throw protocolMismatch();
+        found = page.sessions.find(item => item?.sessionId === config.nativeId); cursor = page.nextCursor;
+      } while (!found && cursor);
       if (!found || !found.cwd || canonical(await realpath(found.cwd)) !== canonical(await realpath(config.cwd))) throw fail('invalid-session', 'The saved Hermes conversation is unavailable in this project.');
       sessionId = config.nativeId;
     }
@@ -331,7 +378,9 @@ main()
     const attached = await request(sessionId ? 'session/load' : 'session/new', { cwd: config.cwd, mcpServers, ...(sessionId ? { sessionId } : {}) });
     loading = false; sessionId ??= attached?.sessionId; boundNativeId = attached?._meta?.hermes?.sessionProvenance?.currentHermesSessionId ?? sessionId;
     if (!sessionId || !attached) throw fail('invalid-session');
-    models = (attached.models?.availableModels ?? []).map(m => ({ id: m.modelId, name: m.name }));
+    const available = attached.models?.availableModels ?? [];
+    if (!Array.isArray(available)) throw protocolMismatch();
+    models = available.map(m => ({ id: m?.modelId, name: m?.name }));
     currentModel = models.find(m => m.id === attached.models?.currentModelId);
     if (config.model && config.model.id !== currentModel?.id) { if (!models.some(m => m.id === config.model.id)) throw fail('invalid-model'); await request('session/set_model', { sessionId, modelId: config.model.id }); currentModel = models.find(m => m.id === config.model.id); }
     setStatus('idle');

@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import { runBridge, sidekickOperationHash, validateBoardOperation, validateSidekickOperation } from "./runner.mjs";
@@ -726,4 +730,68 @@ test("an adapter that does not use deliver keeps the direct acknowledgement", as
   assert.equal(accepted.ok, true);
   await settled(() => answered !== undefined);
   bridge.input.end();
+});
+
+test("an unencodable failure detail, event or result becomes a safe frame instead of an exception", async () => {
+  const cyclic = {}; cyclic.self = cyclic;
+  const bridge = harness(async (_config, emit) => ({
+    async snapshot() { throw Object.assign(new Error("PRIVATE_PAYLOAD"), { bridgeCode: "failed", safeMessage: "Failed.", safeDetails: cyclic }); },
+    async prompt() { const event = { type: "block" }; event.self = event; emit(event); return { accepted: true }; },
+    async models() { return { big: 1n, text: "PRIVATE_PAYLOAD" }; },
+    dispose() {},
+  }));
+  bridge.send(config);
+  await bridge.wait(1);
+  bridge.send({ id: "snapshot", method: "snapshot", params: {} });
+  bridge.send({ id: "prompt", method: "prompt", params: {} });
+  bridge.send({ id: "models", method: "models", params: {} });
+  await bridge.wait(5);
+  assert.deepEqual(bridge.frames.find((frame) => frame.id === "snapshot").error, { code: "failed", message: "Failed." });
+  assert.equal(bridge.frames.find((frame) => frame.id === "prompt").ok, true, "emit never throws into the adapter");
+  assert.ok(bridge.frames.some((frame) => frame.event?.type === "error" && frame.event.message === "The native bridge could not encode an event."));
+  assert.equal(bridge.frames.find((frame) => frame.id === "models").error.code, "native-operation-failed");
+  assert.doesNotMatch(JSON.stringify(bridge.frames), /PRIVATE_PAYLOAD/);
+  bridge.input.end();
+});
+
+test("a failing output never leaves a request as an unhandled rejection", async () => {
+  let writes = 0;
+  const input = new PassThrough();
+  runBridge(async () => ({ dispose() {} }), input, { write() { writes += 1; throw new Error("PRIVATE_PAYLOAD"); } });
+  input.write(`${JSON.stringify(config)}\n`);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(writes >= 3, "the success frame, the failure frame and the last-resort frame were each attempted");
+  input.end();
+});
+
+test("an exception an adapter callback leaves unhandled stops the bridge with one safe event after disposing", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "piui-runner-guard-"));
+  try {
+    const runner = await readFile(new URL("./runner.mjs", import.meta.url), "utf8");
+    const factory = [
+      "globalThis.__PIUI_BRIDGE_FACTORY__ = async () => ({",
+      "  async prompt() { setTimeout(() => { throw new Error('PRIVATE_PAYLOAD'); }, 5); return { accepted: true }; },",
+      "  dispose() { process.stdout.write(JSON.stringify({ event: { type: 'status', status: 'closed' } }) + '\\n'); },",
+      "});",
+    ].join("\n");
+    const file = join(dir, "bridge.mjs");
+    await writeFile(file, `${factory}\n${runner}`);
+    const child = spawn(process.execPath, [file], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    let stdout = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
+    child.stderr.on("data", () => {});
+    const closed = new Promise((resolve) => child.once("close", (code) => resolve(code)));
+    const timeout = setTimeout(() => child.kill(), 8000);
+    child.stdin.write(`${JSON.stringify(config)}\n${JSON.stringify({ id: "prompt", method: "prompt", params: {} })}\n`);
+    const code = await closed;
+    clearTimeout(timeout);
+    const frames = stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(code, 1);
+    assert.deepEqual(frames.find((frame) => frame.id === "prompt"), { id: "prompt", ok: true, result: { accepted: true } });
+    const errorIndex = frames.findIndex((frame) => frame.event?.type === "error");
+    const closedIndex = frames.findIndex((frame) => frame.event?.type === "status" && frame.event.status === "closed");
+    assert.equal(frames[errorIndex].event.message, "The native bridge hit an internal error and stopped.");
+    assert.ok(closedIndex > errorIndex, "the adapter is disposed after the host is told");
+    assert.doesNotMatch(stdout, /PRIVATE_PAYLOAD/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });

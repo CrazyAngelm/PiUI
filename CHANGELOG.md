@@ -6,6 +6,22 @@ PiUI is currently a developer preview. Versions before 1.0 may change without a 
 
 ## [Unreleased]
 
+### Added
+
+- Built-in ACP agents (ADR-045): Gemini CLI (`--acp`), OpenCode, Qwen Code, GitHub Copilot CLI, Goose, Kimi Code and Cursor, next to the descriptors users and plugins add. They are trusted by shipping; sign-in and secret environment names still need your own action and consent.
+- Settings → Harnesses shows "Newer than tested" beside an enabled launch action when an installed release is above the tested range (`versionStatus` in the harness summary, additive).
+- Windows: an npm shim that points to a native executable, such as OpenCode's `opencode.cmd`, now resolves to that executable without `cmd.exe`.
+- A rejected startup request or missing required field of a native harness fails with the typed `native-protocol-mismatch` code.
+
+### Changed
+
+- Only the minimum version of a tested range is enforced for Codex (0.147.0), Claude Code (2.1.0), Prime Agent (0.9.2) and Hermes (0.21.0); a newer release starts. The real gate is the harness identity, the protocol handshake and the settings it applies, which still fail closed. Prime Agent 0.9.5 and Claude Code 3.x, like Codex since 0.2.10, are no longer refused for their version alone.
+- ACP agents no longer need a per-version confirmation. Command-line trust for user and plugin descriptors and the per-name consent for secret environment variables are unchanged; a version string never invalidates trust.
+- Codex: the `--disable` feature switches follow `codex features list`. A name the CLI no longer registers is dropped; a missing switch that enforces a requested policy stops the start instead of being skipped.
+- Native bridges tolerate additions: an unknown well-formed notification, item or content becomes one fallback block per type, documented housekeeping notifications (Codex `configWarning`, `remoteControl/status/changed`, `account/updated`) are ignored, and an unknown server request gets an error reply and is never approved.
+- Gemini CLI starts with `--acp` instead of the deprecated `--experimental-acp`.
+- The example ACP plugin (`examples/plugins/acp-agent`) adds Auggie, because OpenCode is built in now.
+
 ## [0.2.10] - 2026-10-31
 
 ### Changed

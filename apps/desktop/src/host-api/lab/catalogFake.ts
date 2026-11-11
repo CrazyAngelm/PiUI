@@ -23,7 +23,7 @@ export const HARNESS_NAMES: Readonly<Record<HarnessKind, string>> = {
 const VERSIONS: Readonly<Record<HarnessKind, string>> = {
   pi: '0.72.1',
   'prime-agent': '0.9.2',
-  codex: '0.147.0',
+  codex: '0.167.0',
   hermes: '0.21.0',
   'claude-code': '2.1.232',
 };
@@ -36,7 +36,10 @@ export function claudeSignInRequired(summaries: readonly HarnessSummary[]): bool
   return summaries.some((summary) => summary.kind === 'claude-code' && summary.reason === CLAUDE_SIGN_IN_MESSAGE);
 }
 
-/** Every adapter verified: the demo can create sessions on all five harnesses. */
+/** Versions above the tested ceiling: admitted with the host's advisory status (ADR-045). */
+const NEWER_THAN_TESTED: ReadonlySet<HarnessKind> = new Set(['codex']);
+
+/** Every adapter ready: the demo can create sessions on all five harnesses. */
 export function readyHarnesses(): HarnessSummary[] {
   return HARNESS_ORDER.map((kind) => ({
     kind,
@@ -44,6 +47,7 @@ export function readyHarnesses(): HarnessSummary[] {
     installed: true,
     version: VERSIONS[kind],
     status: 'available',
+    ...(NEWER_THAN_TESTED.has(kind) ? { versionStatus: 'newer' as const } : {}),
   }));
 }
 
@@ -58,7 +62,7 @@ export function firstRunHarnesses(): HarnessSummary[] {
         ...summary,
         version: '0.8.1',
         status: 'unverified',
-        reason: 'The installed native harness version is not supported by this adapter.',
+        reason: 'Older than the oldest version supported by PiUI.',
       };
     }
     if (summary.kind === 'hermes') {
@@ -330,6 +334,7 @@ export function defaultSessionTitle(kind: HarnessKind): string {
 /** Names of the agents the lab registry ships or seeds; user-added agents are "Agent". */
 const ACP_LAB_NAMES: Readonly<Record<string, string>> = {
   'acp:gemini-cli': 'Gemini CLI',
+  'acp:opencode': 'OpenCode',
   'acp:qwen-code': 'Qwen Code',
   'acp:lab-agent': 'Lab Agent',
 };

@@ -36,7 +36,27 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
   let manifest;
   try { manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8")); }
   catch { throw fail("runtime-unavailable", "The Prime SDK package could not be loaded."); }
-  if (manifest?.name !== "prime-agent" || !["0.9.2", "0.9.3"].includes(manifest?.version) || manifest?.exports?.["."]?.import !== "./dist/index.js") {
+  // Minimum supported SDK, mirrored by the host (native_version.rs, PRIME_AGENT).
+  // Only the minimum is enforced: a newer package starts, because the package
+  // identity below and the SDK surface check after the import are the
+  // compatibility gate. A pre-release of the minimum is older than it.
+  const MINIMUM_PRIME_VERSION = "0.9.2";
+  const parseSemver = (text) => {
+    const match = typeof text === "string"
+      ? /^v?(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(text)
+      : null;
+    if (!match) return undefined;
+    const core = match.slice(1, 4).map(Number);
+    return core.every(Number.isSafeInteger) ? { core, prerelease: match[4] !== undefined } : undefined;
+  };
+  const atLeastMinimum = (text) => {
+    const version = parseSemver(text);
+    const minimum = parseSemver(MINIMUM_PRIME_VERSION);
+    if (!version) return false;
+    const order = version.core[0] - minimum.core[0] || version.core[1] - minimum.core[1] || version.core[2] - minimum.core[2];
+    return order > 0 || (order === 0 && !version.prerelease);
+  };
+  if (manifest?.name !== "prime-agent" || !atLeastMinimum(manifest?.version) || manifest?.exports?.["."]?.import !== "./dist/index.js") {
     throw fail("unsupported-version", "The installed Prime Agent version is not supported.");
   }
   if (config.kernelPython) process.env.PRIME_AGENT_KERNEL_PYTHON = config.kernelPython;
@@ -44,6 +64,22 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
   let sdk;
   try { sdk = await import(pathToFileURL(join(packageRoot, "dist", "index.js")).href); }
   catch { throw fail("runtime-unavailable", "The Prime SDK package could not be loaded."); }
+  // The SDK is imported, not negotiated: before anything is used, check that
+  // every export this adapter calls exists with the shape it expects. A missing
+  // or reshaped export is a typed incompatibility, not a TypeError mid-start.
+  const protocolMismatch = () => fail("native-protocol-mismatch", "The installed Prime Agent SDK does not provide the interface PiUI requires.");
+  const isFunction = (value) => typeof value === "function";
+  const hasMethods = (owner, names) => owner !== null && ["function", "object"].includes(typeof owner) && names.every((name) => isFunction(owner[name]));
+  const sdkCompatible = hasMethods(sdk, ["createAgentSessionServices"])
+    && hasMethods(sdk.SessionManager, ["create", "open", "listAll"])
+    && hasMethods(sdk.AuthStorage, ["create"])
+    && hasMethods(sdk.ModelRegistry, ["create"])
+    && (config.catalogOnly === true || (
+      hasMethods(sdk, ["createAgentSessionFromServices", "createAgentSessionRuntime"])
+      && hasMethods(sdk.SettingsManager, ["create"])
+      && isFunction(sdk.InProcessAgentConnection)
+    ));
+  if (!sdkCompatible) throw protocolMismatch();
 
   let nativeModelFeatures;
   try {
@@ -80,6 +116,14 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
     } catch {
       if (config.coordination === true) throw fail("runtime-unavailable", "Prime's native tool schema dependency is unavailable.");
       // The board is optional: the chat still starts, without the tool.
+      boardEnabled = false;
+      emit({ type: "notice", code: "unsupported-board-tool" });
+    }
+  }
+  // Custom tools need `defineTool`: mandatory for the coordinator, optional for the board.
+  if (!isFunction(sdk.defineTool)) {
+    if (config.coordination === true) throw protocolMismatch();
+    if (boardEnabled) {
       boardEnabled = false;
       emit({ type: "notice", code: "unsupported-board-tool" });
     }
@@ -194,11 +238,14 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
       async models() { return services.modelRegistry.getAvailable().map(map); },
       async catalogModels() { return services.modelRegistry.getAvailable().map(model => ({ ...map(model), supportsFast: nativeModelFeatures?.supportsFastMode?.(model) === true })); },
       async resources() {
-        const tool = sdk.createIpythonTool(config.cwd);
-        return { items: [
-          ...services.resourceLoader.getSkills().skills.map(skill => ({ kind: 'skill', id: skill.name, name: skill.name, enabled: true, configurable: true })),
-          { kind: 'tool', id: tool.name, name: tool.name, enabled: true, configurable: true },
-        ], warnings: [] };
+        const items = services.resourceLoader.getSkills().skills.map(skill => ({ kind: 'skill', id: skill.name, name: skill.name, enabled: true, configurable: true }));
+        const warnings = [];
+        // The ipython tool factory is not part of the checked surface: without it only that item is missing.
+        if (isFunction(sdk.createIpythonTool)) {
+          const tool = sdk.createIpythonTool(config.cwd);
+          items.push({ kind: 'tool', id: tool.name, name: tool.name, enabled: true, configurable: true });
+        } else warnings.push('Tools could not be loaded from Prime Agent.');
+        return { items, warnings };
       },
       async dispose() { return { disposed: true }; },
     };
@@ -253,6 +300,16 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
     sessionManager,
   });
   const connection = new sdk.InProcessAgentConnection(runtime);
+  const abandonIncompatible = async () => {
+    try { if (isFunction(connection.dispose)) await connection.dispose(); } catch { /* the SDK is already unusable */ }
+    return protocolMismatch();
+  };
+  // Connection and runtime members used from here on, checked once before the first call.
+  if (!["bindHeadlessExtensions", "getState", "getMessages", "subscribe", "prompt", "abort", "abortBash", "dispose", "getAvailableModels"].every((name) => isFunction(connection[name]))
+    || !isFunction(runtime?.session?.getActiveToolNames)
+    || !isFunction(runtime?.services?.modelRegistry?.getAvailable)) {
+    throw await abandonIncompatible();
+  }
   await connection.bindHeadlessExtensions();
   const applyServiceTier = async (tier) => {
     if (!["standard", "fast"].includes(tier) || typeof connection.setServiceTier !== "function") throw fail("unsupported-settings", "Prime service tiers are unavailable.");
@@ -315,6 +372,28 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
     });
   };
 
+  // Event types the SDK is known to emit that PiUI deliberately does not show
+  // (turn/retry/queue/bash/goal/connection housekeeping). Any other type is new
+  // to this adapter: it gets one generic fallback block, named by its type and
+  // never carrying the payload, instead of being dropped without a trace.
+  const IGNORED_EVENTS = new Set([
+    "turn_start", "turn_end", "queue_update", "agent_settled", "agent_status",
+    "auto_retry_start", "auto_retry_end", "auto_compaction_start", "auto_compaction_end",
+    "bash_start", "bash_output", "bash_end", "bash_execution_update", "entry_appended",
+    "session_info_changed", "thinking_level_changed", "service_tier_changed",
+    "session_state", "session_status", "session_resynced", "connection_status", "closed", "auth_stale",
+    "child_usage_attributed", "git_state", "goal_update", "heartbeats_changed", "ipython_sent_agent_message",
+    "recap_update", "refine_complete", "refine_failed", "rlm_progress_note", "session_action_update",
+    "side_question_event", "summarization_retry_attempt_start", "summarization_retry_finished",
+    "summarization_retry_scheduled", "warning",
+  ]);
+  const unknownEventTypes = new Set();
+  const reportUnknownEvent = (type) => {
+    const name = typeof type === "string" && /^[A-Za-z0-9_.:/-]{1,80}$/.test(type) ? type : "unknown";
+    if (unknownEventTypes.has(name)) return;
+    unknownEventTypes.add(name);
+    putBlock({ id: `prime-unknown-${++sequence}`, kind: "unknown", label: "Prime event", status: "complete", safeSummary: `Unsupported Prime event: ${name}`, fallback: true });
+  };
   const handleSessionEvent = (event) => {
     switch (event?.type) {
       case "agent_start":
@@ -410,26 +489,46 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
         break;
       }
       case "extension_error": emit({ type: "error", message: "A Prime extension failed." }); break;
+      default:
+        if (!IGNORED_EVENTS.has(event?.type)) reportUnknownEvent(event?.type);
     }
   };
+  // A handler that throws on one event (a field this SDK changed) must not
+  // become an unhandled rejection that ends the bridge: it becomes one fallback
+  // block for that event type.
   const unsubscribe = connection.subscribe(async (event) => {
-    if (event?.type === "session_event") handleSessionEvent(event.event);
-    else if (event?.type === "extension_error") emit({ type: "error", message: "A Prime extension failed." });
-    else if (event?.type === "session_replaced") {
-      addHistory(event.messages ?? []);
-      title = event.state?.sessionName ?? title;
-      emit({ type: "binding", nativeId: event.state.sessionId, ...(event.state.sessionFile ? { nativePath: event.state.sessionFile } : {}) });
+    try {
+      if (event?.type === "session_event") handleSessionEvent(event.event);
+      else if (event?.type === "extension_error") emit({ type: "error", message: "A Prime extension failed." });
+      else if (event?.type === "session_replaced") {
+        addHistory(event.messages ?? []);
+        title = event.state?.sessionName ?? title;
+        emit({ type: "binding", nativeId: event.state.sessionId, ...(event.state.sessionFile ? { nativePath: event.state.sessionFile } : {}) });
+      } else if (!IGNORED_EVENTS.has(event?.type)) reportUnknownEvent(event?.type);
+    } catch {
+      reportUnknownEvent(event?.type === "session_event" ? event.event?.type : event?.type);
     }
   });
+  if (!isFunction(unsubscribe)) throw await abandonIncompatible();
 
   const state = await connection.getState();
+  // The session id is the native binding PiUI publishes: required.
+  if (state === null || typeof state !== "object" || typeof state.sessionId !== "string") {
+    unsubscribe();
+    throw await abandonIncompatible();
+  }
   model = mapModel(state.model);
   // Native session construction already performs the authoritative model/auth
   // refresh needed to choose its initial model. Reuse that registry state here
   // so initialize does not repeat environment-dependent network work. Explicit
   // `models()` requests continue to call the native refreshing API below.
   modelCatalog = runtime.services.modelRegistry.getAvailable().map(mapModel).filter(Boolean);
-  addHistory(await connection.getMessages());
+  const history = await connection.getMessages();
+  if (!Array.isArray(history)) {
+    unsubscribe();
+    throw await abandonIncompatible();
+  }
+  addHistory(history);
   setStatus(state.isStreaming ? "running" : "idle");
   emit({ type: "binding", nativeId: state.sessionId, ...(state.sessionFile ? { nativePath: state.sessionFile } : {}) });
 

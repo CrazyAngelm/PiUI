@@ -5,7 +5,7 @@
   import Brain from '@lucide/svelte/icons/brain';
   import { onMount, tick, untrack } from 'svelte';
   import { t } from '../../features/locale/language';
-  import { cachedHarnessModels } from '../../host-api/harnessModels';
+  import { cachedHarnessModels, catalogDegraded } from '../../host-api/harnessModels';
   import ModelPicker, { type ModelOption } from './ModelPicker.svelte';
   import type { HarnessCatalogModel, HarnessModelsResult, HarnessResource } from '../../../../../contracts/harness-models-v18';
   import type { HarnessKind, PermissionMode, WorkspaceSummary } from '../../../../../contracts/workspace-v15';
@@ -13,7 +13,7 @@
   import { Spinner, Textarea, toasts } from '../../lib/ui';
   import { harnessMeta } from '../harnessMeta';
   import { errorMessage } from '../workspaceStore.svelte';
-  import { workspaceError } from '../../host-api/workspaceClient';
+  import { WorkspaceOperationError, workspaceError } from '../../host-api/workspaceClient';
   import AttachButton from '../chat/composer/AttachButton.svelte';
   import { ComposerAttachments } from '../chat/composer/composerAttachments.svelte';
   import { FileMentions } from '../chat/composer/composerLookups.svelte';
@@ -34,6 +34,13 @@
   import FusionModeBar from '../fusion/FusionModeBar.svelte';
   import { fusionErrorText, refusalCopy, roleLabel } from '../fusion/fusionPair';
   import type { FusionPairV1 } from '../../host-api/fusionClient';
+
+  const CATALOG_RETRY_DELAY_MS = 1500;
+
+  /** A coded refusal (sign-in, trust, safe mode…) is the host's answer: waiting and asking again cannot change it. */
+  function isVerdict(error: unknown): boolean {
+    return error instanceof WorkspaceOperationError && error.code !== 'UNKNOWN';
+  }
 
   interface Props {
     onTrust: (workspace: WorkspaceSummary) => void;
@@ -74,6 +81,10 @@
   let skills = $state.raw<HarnessResource[]>([]);
   let modelsLoading = $state(false);
   let modelsError = $state('');
+  /** Set when resource discovery failed: the models stay, skills can be retried. */
+  let resourcesWarning = $state('');
+  let catalogAttempt = $state(0);
+  let catalogFor = '';
   let busy = $state(false);
   let textarea = $state<HTMLTextAreaElement | null>(null);
   let menuIndex = $state(0);
@@ -163,38 +174,58 @@
   $effect(() => {
     const id = workspaceId;
     const kind = harness;
-    models = [];
-    skills = [];
+    // A retry asks again for the same project and harness: what is shown stays.
+    void catalogAttempt;
+    const forKey = JSON.stringify([id, kind]);
+    if (untrack(() => catalogFor) !== forKey) {
+      models = [];
+      skills = [];
+    }
+    catalogFor = forKey;
     modelsError = '';
+    resourcesWarning = '';
+    // The load this effect cancelled may never settle: no early exit below keeps its spinner.
+    modelsLoading = false;
     if (!id || !kind) return;
     // A boolean, not the workspace: every session event replaces the catalog.
     if (catalogBlocked) return;
     let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     modelsLoading = true;
     const show = (result: HarnessModelsResult): void => {
       if (cancelled) return;
       models = result.models;
-      skills = result.resources.items;
+      const degraded = catalogDegraded(result);
+      // A failed discovery keeps the skills this picker already showed.
+      if (!degraded || result.resources.items.length) skills = result.resources.items;
+      resourcesWarning = degraded ? 'Skills, MCP servers and tools could not be loaded from the harness.' : '';
+      modelsError = '';
       if (modelKey && !result.models.some((item) => JSON.stringify([item.provider, item.id]) === modelKey)) modelKey = '';
     };
-    cachedHarnessModels(
-      { workspaceId: id, harness: kind },
-      {
-        onFresh: show,
-        onError: (error) => {
-          if (!cancelled) modelsError = errorMessage(error);
-        },
-      },
-    )
-      .then(show)
-      .catch((error: unknown) => {
-        if (!cancelled) modelsError = errorMessage(error);
-      })
-      .finally(() => {
-        if (!cancelled) modelsLoading = false;
-      });
+    // A native probe can fail transiently (slow harness start); retry once
+    // before reporting, unless the host refused with a code. A remembered
+    // catalog stays selectable meanwhile.
+    const load = (attempt: number): void => {
+      const failed = (error: unknown): void => {
+        if (cancelled) return;
+        if (attempt === 0 && !isVerdict(error)) {
+          retry = setTimeout(() => load(1), CATALOG_RETRY_DELAY_MS);
+          return;
+        }
+        modelsError = errorMessage(error);
+        modelsLoading = false;
+      };
+      cachedHarnessModels({ workspaceId: id, harness: kind }, { onFresh: show, onError: failed })
+        .then((result) => {
+          show(result);
+          if (!cancelled) modelsLoading = false;
+        })
+        .catch(failed);
+    };
+    load(0);
     return () => {
       cancelled = true;
+      if (retry) clearTimeout(retry);
     };
   });
 
@@ -336,7 +367,7 @@
     })),
   );
   const permissionItems = $derived<{ value: PermissionMode; label: string; description: string }[]>([
-    { value: 'native', label: $t('Harness settings'), description: $t('Use the permissions configured in the harness') },
+    { value: 'native', label: $t('Harness default'), description: $t('Use the permissions configured in the harness') },
     { value: 'read-only', label: $t('Read only'), description: $t('The agent can read but not change files') },
     { value: 'workspace-write', label: $t('Edit project'), description: $t('Changes limited to the project folder') },
     { value: 'full-access', label: $t('Full access'), description: $t('No native restrictions — use with care') },
@@ -648,7 +679,7 @@
           onFast={(value) => (fast = value)}
         >
           {#snippet trigger(props)}
-            <button type="button" class="chip" {...props}>
+            <button type="button" class="chip" {...props} aria-busy={modelsLoading || undefined}>
               {#if modelsLoading}<Spinner size={12} />{:else}<Brain size={14} />{/if}
               <span>{model?.name ?? $t('Default model')}</span>
               {#if thinkingLevel}<span class="chip__sub">{thinkingLevel}</span>{/if}
@@ -689,6 +720,11 @@
   </p>
 {:else if modelsError && modelsError !== workspaceError({ code: 'SIGN_IN_REQUIRED' }).message}
   <p class="notice notice--error">{modelsError}</p>
+{:else if resourcesWarning && !modelsLoading}
+  <p class="notice" role="status">
+    {$t(resourcesWarning)}
+    <button type="button" class="link" onclick={() => (catalogAttempt += 1)}>{$t('Retry')}</button>
+  </p>
 {/if}
 {#if attachments.references.length}
   {#await import('../chat/composer/ReferenceDialog.svelte') then view}

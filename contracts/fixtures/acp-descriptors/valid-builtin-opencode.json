@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "opencode",
+  "displayName": "OpenCode",
+  "command": {
+    "program": "opencode",
+    "args": [
+      "acp"
+    ]
+  },
+  "version": {
+    "args": [
+      "--version"
+    ]
+  },
+  "environment": [
+    "OPENCODE_CONFIG",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY"
+  ],
+  "authHint": "Sign in with OpenCode's own flow: run `opencode auth login` in a terminal. To use a provider API key instead, allow PiUI to pass it below.",
+  "docsUrl": "https://opencode.ai/docs"
+}

@@ -6,7 +6,7 @@ test.describe('automations', () => {
   test('a weekday calendar schedule previews, saves, turns off and on', async ({ lab, page }) => {
     await lab.open();
     const section = await lab.openAutomations();
-    await expect(section.getByRole('listitem').filter({ hasText: 'Nightly code review' })).toContainText('On');
+    await expect(section.getByRole('listitem').filter({ hasText: 'Nightly code review' }).getByRole('switch')).toBeChecked();
 
     await section.getByRole('button', { name: 'New automation' }).click();
     const dialog = page.getByRole('dialog', { name: 'New automation' });
@@ -51,16 +51,17 @@ test.describe('automations', () => {
 
     const card = section.getByRole('listitem').filter({ hasText: 'Weekday review' });
     await expect(card).toContainText('Code review · Weekdays at 09:00');
-    await expect(card).toContainText('On');
-    await expect(card).toContainText(/Next: /);
     const toggle = card.getByRole('switch');
+    await expect(toggle).toBeChecked();
+    await expect(card).toContainText(/Next: /);
     await expect(toggle).toHaveAccessibleName('Turn off Weekday review');
     await toggle.click();
-    await expect(card).toContainText('Off');
-    await expect(card).toContainText('Turn it on to schedule the next run.');
+    await expect(toggle).not.toBeChecked();
+    await expect(card).not.toContainText(/Next: /);
     await expect(toggle).toHaveAccessibleName('Turn on Weekday review');
     await toggle.click();
-    await expect(card).toContainText('On');
+    await expect(toggle).toBeChecked();
+    await expect(card).toContainText(/Next: /);
   });
 
   test('an invalid time or an empty day set is refused and the dialog stays open', async ({ lab, page }) => {
@@ -89,7 +90,7 @@ test.describe('automations', () => {
     await dialog.getByRole('button', { name: 'Save, keep paused' }).click();
     await expect(dialog).toBeHidden();
     const card = section.getByRole('listitem').filter({ hasText: 'Code review · Sat at 18:30' });
-    await expect(card).toContainText('Off');
+    await expect(card.getByRole('switch')).not.toBeChecked();
   });
 
   test('an "after an event" rule is checked and previewed before it saves', async ({ lab, page }) => {
@@ -136,7 +137,7 @@ test.describe('automations', () => {
     await expect(dialog).toBeHidden();
 
     const card = section.getByRole('listitem').filter({ hasText: 'Release check · When src/**/*.ts changes' });
-    await expect(card).toContainText('On');
+    await expect(card.getByRole('switch')).toBeChecked();
   });
 
   test('Pause all stops every automation until it is resumed', async ({ lab, page }) => {

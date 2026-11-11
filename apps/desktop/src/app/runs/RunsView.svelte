@@ -137,9 +137,7 @@
     {#if runs.listError}<p class="error" role="alert">{$t(runs.listError)}</p>{/if}
     {#if runs.listLoading && runs.summaries.length === 0}
       <div class="list__loading"><Skeleton lines={4} /></div>
-    {:else if visibleRuns.length === 0}
-      <p class="list__empty">{runs.summaries.length ? $t('No runs match this filter.') : $t('No runs yet.')}</p>
-    {:else}
+    {:else if visibleRuns.length > 0}
       <ul>
         {#each visibleRuns as item (item.id)}
           <li>
@@ -162,6 +160,8 @@
           </li>
         {/each}
       </ul>
+    {:else if runs.summaries.length > 0}
+      <p class="list__empty">{$t('No runs match this filter.')}</p>
     {/if}
   </nav>
 
@@ -217,12 +217,14 @@
           <RunCanvas {run} {workspaceId} {views} selectedId={runs.selectedStepId} {activity} onSelect={(id) => runs.select(id)} />
         {/key}
       </div>
-    {:else if runs.runLoading}
+    {:else if runs.runLoading || (runs.listLoading && runs.summaries.length === 0)}
       <div class="stage__loading"><Skeleton lines={6} /></div>
     {:else if runs.runError}
       <EmptyState title={$t('Could not open this run')} description={$t(runs.runError)} />
+    {:else if runs.summaries.length > 0 || runs.listError}
+      <EmptyState icon={History} title={$t('No run selected')} />
     {:else}
-      <EmptyState icon={History} title={$t('No run selected')} description={runs.summaries.length ? $t('Choose a run on the left to see each step, its result and its conversation.') : $t('Build a pipeline in the editor and press Run. Every run appears here with its steps and results.')}>
+      <EmptyState icon={History} title={$t('No runs yet')} description={$t('Press Run in the editor to start one.')}>
         {#snippet actions()}
           <Button size="sm" onclick={() => onEdit(undefined)}>{$t('Open editor')}</Button>
         {/snippet}

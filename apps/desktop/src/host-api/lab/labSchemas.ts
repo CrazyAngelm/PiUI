@@ -47,7 +47,7 @@ export const settingsCommandSchema = tagged('type', {
 
 export const lifecycleCommandSchema = tagged('type', { deleteSession: { sessionId: string } });
 export const historyRequestSchema = object({ sessionId: string });
-export const harnessModelsRequestSchema = object({ workspaceId: string, harness });
+export const harnessModelsRequestSchema = object({ workspaceId: string, harness, part: option(enumOf(['models', 'resources'])) });
 
 export const composerCommandSchema = tagged('type', {
   snapshot: { sessionId: string },

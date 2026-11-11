@@ -162,7 +162,7 @@ For rationale and video comparison, read [research](references/research.md) when
 ## Hermes
 
 Portable version 3 adds `harness: "hermes"`; versions 1 and 2 still import.
-Hermes 0.21 ACP keeps native SQLite history and supports model selection, prompt,
+Hermes (0.21.0 or later; newer releases show "Newer than tested") ACP keeps native SQLite history and supports model selection, prompt,
 cancellation, approvals and session-scoped coordinator MCP tools. Select encoded
 native `provider:model` IDs from its catalog. Its current ACP adapter does not
 expose per-agent reasoning/Fast, base-prompt replacement, strict tools/skills/MCP
@@ -176,7 +176,8 @@ incomparable across harnesses, so it cannot authorize cross-harness spawning.
 
 Portable version 4 accepts `harness: "claude-code"` (additive; earlier files
 are unchanged and versions 1-3 never contain it). PiUI drives the user's own
-installed `claude` CLI (tested range 2.1 to 2.x) and runs it **only on the
+installed `claude` CLI (2.1.0 or later; tested on 2.x, a newer release shows
+"Newer than tested") and runs it **only on the
 user's Claude subscription**: API keys, cloud providers, base-URL proxies, fast
 mode and paid extra usage are never used, and a signed-out CLI fails before any
 turn with "Sign in to Claude Code with your Claude subscription: run `claude` in
@@ -208,11 +209,17 @@ a terminal and use /login." Do not set `serviceTier`; it is refused.
 
 Portable version 4 accepts `harness: "acp:<descriptor id>"` (harness identity
 v2, additive; versions 1-3 never contain it). The id names an Agent Client
-Protocol agent registered in PiUI **Settings → Harnesses**: the built-in Gemini
-CLI (`acp:gemini-cli`) or a descriptor the user added and trusted. A file only
-names the agent; it never carries the command line, environment or trust
-decision, and importing it never adds or trusts an agent. An unknown or
-untrusted id fails at launch with a visible reason.
+Protocol agent registered in PiUI **Settings → Harnesses**: a built-in agent
+(`acp:gemini-cli`, `acp:opencode`, `acp:qwen-code`, `acp:github-copilot`,
+`acp:goose`, `acp:kimi`, `acp:cursor`) or a descriptor the user added (or a
+plugin contributed) and trusted. A built-in id only says what PiUI can launch:
+whether that agent is installed and signed in on this computer is decided in
+Settings → Harnesses, so check the catalog instead of assuming. Codex and
+Claude Code are not ACP agents here: use their native harnesses
+(`claude-agent-acp` is deliberately not offered). Aider has no ACP interface and
+no PiUI adapter yet. A file only names the agent; it never carries the command
+line, environment or trust decision, and importing it never adds or trusts an
+agent. An unknown or untrusted id fails at launch with a visible reason.
 
 - Verified configuration: `model` (`"default"` keeps the agent's own configured
   model; any other ID must be advertised by the agent's session options at
@@ -232,10 +239,15 @@ untrusted id fails at launch with a visible reason.
   them is rejected; use result edges. A closed ACP conversation is read back
   through the agent's own `session/load`; an agent without it cannot reopen
   chats or serve dependency results after a restart.
-- Readiness is the user's decision, not the file's: PiUI has not verified a
-  Gemini CLI release yet, so the user confirms the installed version (and any
-  secret-like environment name such as `GEMINI_API_KEY`) in Settings → Harnesses
-  before the first launch; sign-in happens in the agent's own app.
+- Readiness is the user's decision, not the file's. Built-in agents need no
+  version confirmation: a release newer than tested (or without a tested range)
+  launches and Settings → Harnesses shows "Newer than tested"; only a release
+  older than a declared minimum is refused, and an incompatible protocol fails
+  at start with a visible error. A built-in is not verified with real turns just
+  because it is listed: do not claim tested behavior for it. The user still
+  trusts an added descriptor's exact command line and approves any secret-like
+  environment name (such as `GEMINI_API_KEY`) in Settings → Harnesses; sign-in
+  happens in the agent's own app.
 - See `examples/systems/codex-gemini-acp-review.piui.json` for a Codex -> Gemini
   CLI (ACP) -> Pi result pipeline.
 

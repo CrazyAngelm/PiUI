@@ -2,16 +2,23 @@
 //!
 //! It combines the descriptors shipped with PiUI, the descriptors the user
 //! added, and the user's explicit decisions: trust of the exact command line a
-//! user descriptor starts, confirmation of a version PiUI has not verified,
-//! and confirmation of secret-like environment names. Decisions bind to the
-//! descriptor fingerprint, so any change needs a new decision. The document is
-//! written as complete create-only generations; a failed write leaves the
-//! previous one untouched.
+//! user descriptor starts and confirmation of secret-like environment names.
+//! Decisions bind to the descriptor fingerprint, so any change needs a new
+//! decision. The document is written as complete create-only generations; a
+//! failed write leaves the previous one untouched.
+//!
+//! A version is advisory (ADR-045): only a version older than a descriptor's
+//! declared minimum refuses to start. A newer, unlisted or unreadable version
+//! starts, and `versionStatus` tells the user; the ACP `initialize` handshake
+//! is the compatibility gate. Approval concerns what PiUI executes and which
+//! secrets it passes, never a release number. The legacy
+//! `Decision::confirmed_version` of older documents stays readable and is
+//! ignored.
 //!
 //! Discovery (PATH resolution and a contained `--version` probe) runs outside
-//! the lock and never for an untrusted user descriptor: trust comes before any
-//! execution. Values of environment variables are never read or stored here;
-//! only names are.
+//! the lock, in parallel, and never for an untrusted user descriptor: trust
+//! comes before any execution. Values of environment variables are never read
+//! or stored here; only names are.
 
 use piui_runtime::acp::{
     AcpAgentDescriptor, AcpDescriptorError, AcpLaunch, AcpResolveError, AcpResolvedCommand,
@@ -27,6 +34,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 const DOCUMENT_VERSION: u32 = 1;
@@ -36,6 +44,9 @@ const GENERATION_SUFFIX: &str = ".json";
 /// Most user descriptors kept at once.
 pub(crate) const MAX_USER_AGENTS: usize = 32;
 const MAX_REMEMBERED_MODELS: usize = 500;
+/// Most agents that are resolved and probed at the same time. Each probe is a
+/// contained process, so the bound keeps a first start-up cheap.
+const MAX_PARALLEL_CHECKS: usize = 4;
 
 /// The exact program and arguments a trust decision covers.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +73,9 @@ struct Decision {
     fingerprint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     trusted_command: Option<CommandLine>,
+    /// Legacy (before ADR-045): a confirmed unverified version. Kept so that
+    /// existing documents stay valid (`deny_unknown_fields`); it never grants
+    /// anything and is not shown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     confirmed_version: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -123,7 +137,11 @@ pub(crate) enum HarnessState {
     Ready,
     Checking,
     NotInstalled,
+    /// Older than the descriptor's declared minimum.
     UnsupportedVersion,
+    /// Deprecated (ADR-045): never produced, since a version needs no
+    /// confirmation. Kept in the contract for older consumers.
+    #[allow(dead_code, reason = "kept in the registry contract, never produced")]
     UnverifiedVersion,
     SignInRequired,
     Untrusted,
@@ -136,8 +154,13 @@ pub(crate) enum AcpRefusal {
     Unknown,
     NotInstalled(AcpResolveError),
     Untrusted,
+    /// Older than the descriptor's declared minimum: the only version refusal.
     UnsupportedVersion,
+    /// Never produced since ADR-045: an unreadable version still starts.
+    #[allow(dead_code, reason = "matched by older consumers, never produced")]
     VersionUnknown,
+    /// Never produced since ADR-045: no version needs a confirmation.
+    #[allow(dead_code, reason = "matched by older consumers, never produced")]
     VersionUnconfirmed,
 }
 
@@ -207,10 +230,11 @@ pub(crate) struct AcpAgentView {
     pub trusted: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// Advisory: `newer` is above the tested range, `no-verified-range` and
+    /// the unreadable states carry no claim. None of them stops a start;
+    /// only `older` does.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version_status: Option<AcpVersionStatus>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub confirmed_version: Option<String>,
     /// Secret-like environment names that pass only after a confirmation.
     pub secret_environment: Vec<String>,
     pub allowed_secrets: Vec<String>,
@@ -304,9 +328,18 @@ impl AcpAgents {
         self.lock().map_or(0, |state| state.document.generation)
     }
 
+    /// Every agent, one per id. A stored user descriptor wins over a shipped
+    /// agent with the same id (a later release can ship an agent a user had
+    /// added by hand): the user's command, capability restrictions and trust
+    /// decisions stay what they approved, and existing chats and graphs that
+    /// name the id keep starting that same agent. The shipped agent is hidden
+    /// until the user removes the stored descriptor. An enabled plugin never
+    /// takes the id of a shipped or stored agent.
     fn descriptors(&self, state: &State) -> Vec<(AcpAgentDescriptor, AgentSource)> {
+        let stored = |id: AcpAgentId| state.document.agents.iter().any(|user| user.id == id);
         self.builtins
             .iter()
+            .filter(|builtin| !stored(builtin.id))
             .cloned()
             .map(|descriptor| (descriptor, AgentSource::BuiltIn))
             .chain(
@@ -418,8 +451,10 @@ impl AcpAgents {
     }
 
     /// Resolves every agent (filesystem only) and probes the version of each
-    /// agent that may run: shipped or trusted. Blocking; call it off the
-    /// async executor. `force` repeats cached version probes.
+    /// agent that may run: shipped or trusted. The agents are checked in
+    /// parallel (at most [`MAX_PARALLEL_CHECKS`] at a time), since each probe
+    /// is a separate contained process. Blocking; call it off the async
+    /// executor. `force` repeats cached version probes.
     pub(crate) fn check(&self, only: Option<AcpAgentId>, force: bool) {
         let Ok(state) = self.lock() else {
             return;
@@ -434,24 +469,7 @@ impl AcpAgents {
             })
             .collect::<Vec<_>>();
         drop(state);
-        let results = targets
-            .into_iter()
-            .map(|(descriptor, source, decision)| {
-                let command = resolve_acp_command(&descriptor.command);
-                let version = command.as_ref().ok().and_then(|command| {
-                    may_execute(source, decision.as_ref(), command)
-                        .then(|| probe_acp_version(&descriptor, command, force))
-                });
-                (
-                    descriptor.id,
-                    Discovery {
-                        checked_at: now_string(),
-                        command,
-                        version,
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
+        let results = discover_all(&targets, force);
         if let Ok(mut state) = self.lock() {
             for (id, discovery) in results {
                 // "Check again" lets the next start ask the agent to sign in
@@ -561,34 +579,18 @@ impl AcpAgents {
         Ok(())
     }
 
-    /// Confirms using a version PiUI has not verified. It binds to the exact
-    /// reported version; an update needs a new confirmation.
+    /// Retired (ADR-045): a version needs no confirmation, so there is never
+    /// anything to confirm. The command stays in the registry protocol so
+    /// that an older window gets a typed answer instead of an unknown
+    /// command, and it records nothing.
+    #[allow(clippy::unused_self, reason = "kept for the registry protocol")]
     pub(crate) fn confirm_version(
         &self,
-        expected_revision: u64,
-        id: AcpAgentId,
-        version: &str,
+        _expected_revision: u64,
+        _id: AcpAgentId,
+        _version: &str,
     ) -> Result<(), RegistryError> {
-        let descriptor = {
-            let state = self.lock()?;
-            let (descriptor, _) = self.find(&state, id).ok_or(RegistryError::NotFound)?;
-            let reported = state
-                .discovery
-                .get(&id)
-                .and_then(|discovery| discovery.version.as_ref());
-            let confirmable = reported.is_some_and(|report| {
-                matches!(report.status, AcpVersionStatus::NoVerifiedRange)
-                    && report.version.as_deref() == Some(version)
-            });
-            if !confirmable {
-                return Err(RegistryError::NothingToConfirm);
-            }
-            descriptor
-        };
-        self.transact(expected_revision, |_, document| {
-            decision_entry(document, &descriptor).confirmed_version = Some(version.to_owned());
-            Ok(())
-        })
+        Err(RegistryError::NothingToConfirm)
     }
 
     /// Allows exactly `names` of the descriptor's secret-like environment
@@ -621,18 +623,25 @@ impl AcpAgents {
     }
 
     /// Removes a user descriptor and its decisions. Chats that used it keep
-    /// their history binding; they cannot start until it is added again.
+    /// their history binding; they cannot start until it is added again. A
+    /// shipped agent cannot be removed, but a stored user descriptor that
+    /// hides a shipped agent of the same id can: that removes only the stored
+    /// copy and its decisions, the shipped agent reappears with its own
+    /// decisions, and it is checked again in the background (the cached
+    /// discovery described the removed command).
     pub(crate) fn remove(
         &self,
         expected_revision: u64,
         id: AcpAgentId,
     ) -> Result<(), RegistryError> {
-        if self.builtins.iter().any(|builtin| builtin.id == id) {
-            return Err(RegistryError::BuiltIn);
-        }
+        let shipped = self.builtins.iter().find(|builtin| builtin.id == id);
         {
             let state = self.lock()?;
-            if !state.document.agents.iter().any(|agent| agent.id == id)
+            let stored = state.document.agents.iter().any(|agent| agent.id == id);
+            if shipped.is_some() && !stored {
+                return Err(RegistryError::BuiltIn);
+            }
+            if !stored
                 && state
                     .plugin_agents
                     .iter()
@@ -641,25 +650,40 @@ impl AcpAgents {
                 return Err(RegistryError::PluginOwned);
             }
         }
+        let shipped_fingerprint = shipped.map(AcpAgentDescriptor::fingerprint);
         self.transact(expected_revision, |_, document| {
             let before = document.agents.len();
             document.agents.retain(|agent| agent.id != id);
             if document.agents.len() == before {
                 return Err(RegistryError::NotFound);
             }
-            document.decisions.retain(|decision| decision.id != id);
+            // The shipped agent shares the id; its decisions bind to its own
+            // fingerprint and stay.
+            document.decisions.retain(|decision| {
+                decision.id != id || shipped_fingerprint.as_ref() == Some(&decision.fingerprint)
+            });
             Ok(())
         })?;
-        if let Ok(mut state) = self.lock() {
+        // What was cached described the removed descriptor, never the agent
+        // that may now own the id.
+        let revealed = self.lock().is_ok_and(|mut state| {
             state.discovery.remove(&id);
             state.sign_in.remove(&id);
             state.models.remove(&id);
+            self.find(&state, id).is_some()
+        });
+        if revealed {
+            let registry = self.clone();
+            std::thread::spawn(move || registry.check(Some(id), false));
         }
         Ok(())
     }
 
     /// Builds a start of `id` from its descriptor and decisions, or refuses
-    /// it. Blocking (resolution and a cached version probe).
+    /// it. Blocking (resolution and a cached version probe). Only an untrusted
+    /// user descriptor, a missing program and a version older than the
+    /// declared minimum refuse; any other version, newer or unreadable
+    /// included, starts and is reported as advisory.
     pub(crate) fn launch(&self, id: AcpAgentId) -> Result<AcpLaunch, AcpRefusal> {
         let (descriptor, source, decision) = {
             let state = self.lock().map_err(|_| AcpRefusal::Unknown)?;
@@ -687,7 +711,7 @@ impl AcpAgents {
         }
         let command = command.map_err(AcpRefusal::NotInstalled)?;
         let report = report.ok_or(AcpRefusal::Untrusted)?;
-        version_gate(&report, decision.as_ref())?;
+        version_gate(&report)?;
         let allowed = decision
             .as_ref()
             .map(|decision| decision.allowed_secrets.clone())
@@ -804,6 +828,8 @@ impl AcpAgents {
                     | HarnessState::NotInstalled
                     | HarnessState::Unavailable => (HarnessAvailability::Unavailable, view.reason),
                 };
+                // Only a startable agent has a catalog status.
+                let startable = status == HarnessAvailability::Available;
                 AcpSummary {
                     id: view.descriptor.id,
                     name: view.descriptor.display_name.clone(),
@@ -811,6 +837,13 @@ impl AcpAgents {
                     version: view.version.clone(),
                     status,
                     reason,
+                    version_status: view.version_status.filter(|status| {
+                        startable
+                            && matches!(
+                                status,
+                                AcpVersionStatus::Verified | AcpVersionStatus::Newer
+                            )
+                    }),
                 }
             })
             .collect()
@@ -866,6 +899,10 @@ pub(crate) struct AcpSummary {
     pub version: Option<String>,
     pub status: HarnessAvailability,
     pub reason: Option<&'static str>,
+    /// Advisory tested-range badge of a startable agent: `Verified` (inside
+    /// the declared range) or `Newer` (above its ceiling), nothing otherwise.
+    /// The catalog maps it to `HarnessSummary.versionStatus`.
+    pub version_status: Option<AcpVersionStatus>,
 }
 
 fn decision<'a>(state: &'a State, descriptor: &AcpAgentDescriptor) -> Option<&'a Decision> {
@@ -919,22 +956,71 @@ fn may_execute(
             .is_some_and(|trusted| *trusted == CommandLine::of(command))
 }
 
-fn version_gate(report: &AcpVersionReport, decision: Option<&Decision>) -> Result<(), AcpRefusal> {
+/// One agent to check: its descriptor, source and decisions.
+type CheckTarget = (AcpAgentDescriptor, AgentSource, Option<Decision>);
+
+/// Resolves one agent and, when it may run, probes its version.
+fn discover(target: &CheckTarget, force: bool) -> (AcpAgentId, Discovery) {
+    let (descriptor, source, decision) = target;
+    let command = resolve_acp_command(&descriptor.command);
+    let version = command.as_ref().ok().and_then(|command| {
+        may_execute(*source, decision.as_ref(), command)
+            .then(|| probe_acp_version(descriptor, command, force))
+    });
+    (
+        descriptor.id,
+        Discovery {
+            checked_at: now_string(),
+            command,
+            version,
+        },
+    )
+}
+
+/// Checks `targets` with at most [`MAX_PARALLEL_CHECKS`] workers. Each probe
+/// is bounded by its own timeout, so the slowest agent, not the sum, decides
+/// how long the first discovery takes. The order of the result is not defined;
+/// every entry carries its agent id.
+fn discover_all(targets: &[CheckTarget], force: bool) -> Vec<(AcpAgentId, Discovery)> {
+    let workers = targets.len().min(MAX_PARALLEL_CHECKS);
+    if workers <= 1 {
+        return targets
+            .iter()
+            .map(|target| discover(target, force))
+            .collect();
+    }
+    let next = AtomicUsize::new(0);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let sender = sender.clone();
+            let next = &next;
+            scope.spawn(move || {
+                while let Some(target) = targets.get(next.fetch_add(1, Ordering::Relaxed)) {
+                    if sender.send(discover(target, force)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    drop(sender);
+    receiver.into_iter().collect()
+}
+
+/// The version policy (ADR-045): the descriptor's declared minimum is
+/// enforced, everything else is advisory. A newer version, a descriptor
+/// without a range, an unrecognized version text and a failed probe all start;
+/// the ACP `initialize` handshake (protocol version 1) is the compatibility
+/// gate, and `versionStatus` still tells the user what was found.
+fn version_gate(report: &AcpVersionReport) -> Result<(), AcpRefusal> {
     match report.status {
-        // Newer than the declared range is a non-blocking note, not a gate.
-        AcpVersionStatus::Verified | AcpVersionStatus::Newer => Ok(()),
         AcpVersionStatus::Older => Err(AcpRefusal::UnsupportedVersion),
-        AcpVersionStatus::ProbeFailed | AcpVersionStatus::Unrecognized => {
-            Err(AcpRefusal::VersionUnknown)
-        }
-        AcpVersionStatus::NoVerifiedRange => {
-            let confirmed = decision.and_then(|decision| decision.confirmed_version.as_deref());
-            if confirmed.is_some() && confirmed == report.version.as_deref() {
-                Ok(())
-            } else {
-                Err(AcpRefusal::VersionUnconfirmed)
-            }
-        }
+        AcpVersionStatus::Verified
+        | AcpVersionStatus::Newer
+        | AcpVersionStatus::NoVerifiedRange
+        | AcpVersionStatus::Unrecognized
+        | AcpVersionStatus::ProbeFailed => Ok(()),
     }
 }
 
@@ -970,18 +1056,11 @@ fn view(state: &State, descriptor: AcpAgentDescriptor, source: AgentSource) -> A
             HarnessState::Untrusted,
             Some(AcpRefusal::Untrusted.reason()),
         ),
-        Some(_) => match report
-            .as_ref()
-            .map(|report| version_gate(report, decision.as_ref()))
-        {
+        Some(_) => match report.as_ref().map(version_gate) {
             None => (HarnessState::Checking, Some("Checking this agent…")),
             Some(Err(AcpRefusal::UnsupportedVersion)) => (
                 HarnessState::UnsupportedVersion,
                 Some(AcpRefusal::UnsupportedVersion.reason()),
-            ),
-            Some(Err(AcpRefusal::VersionUnconfirmed)) => (
-                HarnessState::UnverifiedVersion,
-                Some(AcpRefusal::VersionUnconfirmed.reason()),
             ),
             Some(Err(refusal)) => (HarnessState::Unavailable, Some(refusal.reason())),
             Some(Ok(())) if state.sign_in.contains_key(&descriptor.id) => (
@@ -990,8 +1069,8 @@ fn view(state: &State, descriptor: AcpAgentDescriptor, source: AgentSource) -> A
                     "Sign in with the agent's own app, then try again. Settings → Harnesses shows how.",
                 ),
             ),
-            // A confirmed unverified version is ready; `versionStatus` still
-            // tells the user that PiUI has not verified it.
+            // A newer or unlisted version is ready; `versionStatus` still
+            // tells the user that PiUI has not tested it.
             Some(Ok(())) => (HarnessState::Ready, None),
         },
     };
@@ -1002,7 +1081,6 @@ fn view(state: &State, descriptor: AcpAgentDescriptor, source: AgentSource) -> A
             .as_ref()
             .map(|decision| decision.allowed_secrets.clone())
             .unwrap_or_default(),
-        confirmed_version: decision.and_then(|decision| decision.confirmed_version),
         version: report.as_ref().and_then(|report| report.version.clone()),
         version_status: report.map(|report| report.status),
         checked_at: discovery.map(|discovery| discovery.checked_at.clone()),
@@ -1076,7 +1154,7 @@ mod tests {
         let script = root.join("lab-agent.mjs");
         fs::write(
             &script,
-            "import fs from 'node:fs'; fs.appendFileSync(new URL('./ran.marker', import.meta.url), 'x'); if (process.argv.includes('--version')) console.log('lab-agent 1.4.0');",
+            "import fs from 'node:fs'; fs.appendFileSync(new URL('./ran.marker', import.meta.url), 'x'); if (process.argv.includes('--fail')) process.exit(3); if (process.argv.includes('--version')) console.log('lab-agent 1.4.0');",
         )
         .expect("agent script");
         script
@@ -1099,7 +1177,7 @@ mod tests {
     }
 
     #[test]
-    fn user_agents_run_only_after_trust_and_confirmations() {
+    fn user_agents_run_only_after_trust_and_secret_consent() {
         let root = root("trust");
         let script = agent_script(&root);
         let registry = AcpAgents::open(&root).expect("registry");
@@ -1151,22 +1229,20 @@ mod tests {
         assert!(view.trusted);
         assert_eq!(view.version.as_deref(), Some("1.4.0"));
         assert_eq!(view.version_status, Some(AcpVersionStatus::NoVerifiedRange));
-        assert_eq!(view.state, HarnessState::UnverifiedVersion);
         assert_eq!(
-            registry.launch(id()).err(),
-            Some(AcpRefusal::VersionUnconfirmed)
+            view.state,
+            HarnessState::Ready,
+            "trust is the only approval: a version needs no confirmation"
         );
-        assert!(matches!(
-            registry.confirm_version(registry.revision(), id(), "9.9.9"),
-            Err(RegistryError::NothingToConfirm)
-        ));
-        registry
-            .confirm_version(registry.revision(), id(), "1.4.0")
-            .expect("confirm");
-        assert_eq!(
-            registry.view(id()).expect("view").state,
-            HarnessState::Ready
-        );
+        // The retired confirmation command answers without recording anything.
+        let revision = registry.revision();
+        for version in ["9.9.9", "1.4.0"] {
+            assert!(matches!(
+                registry.confirm_version(revision, id(), version),
+                Err(RegistryError::NothingToConfirm)
+            ));
+        }
+        assert_eq!(registry.revision(), revision);
         let launch = registry.launch(id()).expect("launch");
         assert_eq!(
             launch.environment,
@@ -1211,6 +1287,409 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// A registry whose shipped agents are `descriptors` (they point at the
+    /// lab script), so a test can drive the policy without a real CLI.
+    fn shipped_registry(root: &Path, descriptors: &[serde_json::Value]) -> AcpAgents {
+        let mut registry = AcpAgents::open(root).expect("registry");
+        registry.builtins = Arc::new(
+            descriptors
+                .iter()
+                .map(|value| parse_acp_descriptor(&value.to_string()).expect("descriptor"))
+                .collect(),
+        );
+        registry
+    }
+
+    fn lab_descriptor(program: &Path, name: &str, version: serde_json::Value) -> serde_json::Value {
+        let mut value = descriptor(program);
+        value["id"] = json!(name);
+        value["version"] = version;
+        value
+    }
+
+    fn node_available(script: &Path) -> bool {
+        resolve_acp_command(&piui_runtime::acp::AcpCommandSpec {
+            program: script.to_string_lossy().into_owned(),
+            args: Vec::new(),
+        })
+        .is_ok()
+    }
+
+    #[test]
+    fn only_a_version_older_than_the_declared_minimum_refuses_to_start() {
+        let root = root("version-policy");
+        let script = agent_script(&root);
+        if !node_available(&script) {
+            let _ = fs::remove_dir_all(root);
+            return;
+        }
+        // (version command, declared range, expected status, may start)
+        let cases = [
+            (
+                json!({ "args": ["--version"] }),
+                AcpVersionStatus::NoVerifiedRange,
+                true,
+            ),
+            (
+                json!({ "args": ["--version"], "verified": { "minimum": "1.0.0", "ceiling": "2.0.0" } }),
+                AcpVersionStatus::Verified,
+                true,
+            ),
+            (
+                json!({ "args": ["--version"], "verified": { "minimum": "0.1.0", "ceiling": "1.0.0" } }),
+                AcpVersionStatus::Newer,
+                true,
+            ),
+            (
+                json!({ "args": ["--version"], "verified": { "minimum": "2.0.0", "ceiling": "3.0.0" } }),
+                AcpVersionStatus::Older,
+                false,
+            ),
+            (
+                // The version command prints nothing a pattern can read.
+                json!({ "args": ["--other"] }),
+                AcpVersionStatus::Unrecognized,
+                true,
+            ),
+            (
+                // The version command fails.
+                json!({ "args": ["--fail"] }),
+                AcpVersionStatus::ProbeFailed,
+                true,
+            ),
+        ];
+        for (index, (version, status, starts)) in cases.into_iter().enumerate() {
+            let name = format!("lab-policy-{index}");
+            let registry = shipped_registry(&root, &[lab_descriptor(&script, &name, version)]);
+            let agent = AcpAgentId::new(&name).expect("id");
+            registry.check(None, true);
+            let view = registry.view(agent).expect("view");
+            assert_eq!(view.version_status, Some(status), "{name}");
+            let launch = registry.launch(agent);
+            if starts {
+                assert_eq!(view.state, HarnessState::Ready, "{name}");
+                assert!(view.reason.is_none(), "{name}");
+                assert!(launch.is_ok(), "{name}: {:?}", launch.err());
+                let summary = registry
+                    .summaries()
+                    .into_iter()
+                    .find(|summary| summary.id == agent)
+                    .expect("summary");
+                assert_eq!(summary.status, HarnessAvailability::Available, "{name}");
+                // Only the tested-range badges reach the catalog.
+                let advisory =
+                    matches!(status, AcpVersionStatus::Verified | AcpVersionStatus::Newer)
+                        .then_some(status);
+                assert_eq!(summary.version_status, advisory, "{name}");
+            } else {
+                assert_eq!(view.state, HarnessState::UnsupportedVersion, "{name}");
+                assert_eq!(launch.err(), Some(AcpRefusal::UnsupportedVersion), "{name}");
+                let summary = registry
+                    .summaries()
+                    .into_iter()
+                    .find(|summary| summary.id == agent)
+                    .expect("summary");
+                assert_eq!(summary.status, HarnessAvailability::Unverified, "{name}");
+                assert_eq!(summary.version_status, None, "{name}");
+            }
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_user_agent_with_a_newer_version_starts_after_trust_alone() {
+        let root = root("newer-user");
+        let script = agent_script(&root);
+        let registry = AcpAgents::open(&root).expect("registry");
+        let mut user = descriptor(&script);
+        user["version"] = json!({
+            "args": ["--version"],
+            "verified": { "minimum": "0.5.0", "ceiling": "1.0.0" }
+        });
+        registry.add(registry.revision(), &user).expect("add");
+        let view = registry.view(id()).expect("view");
+        let Some(command_line) = view.command_line.clone() else {
+            let _ = fs::remove_dir_all(root);
+            return;
+        };
+        assert_eq!(registry.launch(id()).err(), Some(AcpRefusal::Untrusted));
+        registry
+            .trust(registry.revision(), id(), &view.fingerprint, &command_line)
+            .expect("trust");
+        let view = registry.view(id()).expect("view");
+        assert_eq!(view.version_status, Some(AcpVersionStatus::Newer));
+        assert_eq!(view.state, HarnessState::Ready);
+        assert!(registry.launch(id()).is_ok());
+        // An update of the installed program keeps the trust: the command
+        // line is the same, and the version string is not part of it.
+        fs::write(
+            &script,
+            "if (process.argv.includes('--version')) console.log('lab-agent 9.9.9 (updated build)');",
+        )
+        .expect("updated agent");
+        let reopened = AcpAgents::open(&root).expect("reopen");
+        reopened.check(None, true);
+        let view = reopened.view(id()).expect("view");
+        assert_eq!(view.version.as_deref(), Some("9.9.9"));
+        assert_eq!(view.version_status, Some(AcpVersionStatus::Newer));
+        assert!(view.trusted);
+        assert_eq!(view.state, HarnessState::Ready);
+        assert!(reopened.launch(id()).is_ok());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_legacy_version_confirmation_in_a_stored_document_is_ignored() {
+        let root = root("legacy-confirmation");
+        let script = agent_script(&root);
+        let registry = AcpAgents::open(&root).expect("registry");
+        registry
+            .add(registry.revision(), &descriptor(&script))
+            .expect("add");
+        let view = registry.view(id()).expect("view");
+        let Some(command_line) = view.command_line.clone() else {
+            let _ = fs::remove_dir_all(root);
+            return;
+        };
+        registry
+            .trust(registry.revision(), id(), &view.fingerprint, &command_line)
+            .expect("trust");
+        // Write the confirmation an older PiUI recorded into the document.
+        let directory = root.join(DIRECTORY);
+        let newest = fs::read_dir(&directory)
+            .expect("registry directory")
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| generation_from_path(path).is_some())
+            .max()
+            .expect("a generation");
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&fs::read(&newest).expect("document")).expect("json");
+        document["decisions"][0]["confirmedVersion"] = json!("0.0.1");
+        fs::write(&newest, serde_json::to_vec(&document).expect("json")).expect("rewrite");
+
+        let reopened = AcpAgents::open(&root).expect("a stored confirmation still loads");
+        reopened.check(None, true);
+        let view = reopened.view(id()).expect("view");
+        assert!(view.trusted, "the command trust survives the migration");
+        assert_eq!(view.state, HarnessState::Ready);
+        assert_eq!(view.version.as_deref(), Some("1.4.0"));
+        assert!(reopened.launch(id()).is_ok());
+        let value = serde_json::to_value(&view).expect("view json");
+        assert!(
+            value.get("confirmedVersion").is_none(),
+            "a confirmation is no longer reported"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shipped_agents_start_without_any_approval() {
+        let root = root("shipped-ready");
+        let script = agent_script(&root);
+        if !node_available(&script) {
+            let _ = fs::remove_dir_all(root);
+            return;
+        }
+        let shipped = lab_descriptor(&script, "lab-shipped", json!({ "args": ["--version"] }));
+        let registry = shipped_registry(&root, &[shipped]);
+        let agent = AcpAgentId::new("lab-shipped").expect("id");
+        assert!(!registry.checked());
+        registry.check(None, false);
+        assert!(registry.checked());
+        let view = registry.view(agent).expect("view");
+        assert_eq!(view.source, AgentSource::BuiltIn);
+        assert_eq!(view.state, HarnessState::Ready);
+        assert_eq!(view.version.as_deref(), Some("1.4.0"));
+        assert_eq!(view.version_status, Some(AcpVersionStatus::NoVerifiedRange));
+        let launch = registry.launch(agent).expect("launch");
+        assert_eq!(
+            launch.environment,
+            ["LAB_REGION"],
+            "a shipped descriptor still waits for consent to pass a secret"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn every_agent_is_discovered_when_checks_run_in_parallel() {
+        let root = root("parallel");
+        let script = agent_script(&root);
+        if !node_available(&script) {
+            let _ = fs::remove_dir_all(root);
+            return;
+        }
+        let names = (0..9)
+            .map(|index| format!("lab-parallel-{index}"))
+            .collect::<Vec<_>>();
+        let registry = shipped_registry(
+            &root,
+            &names
+                .iter()
+                .map(|name| lab_descriptor(&script, name, json!({ "args": ["--version"] })))
+                .collect::<Vec<_>>(),
+        );
+        registry.check(None, true);
+        assert!(registry.checked());
+        for name in &names {
+            let view = registry
+                .view(AcpAgentId::new(name).expect("id"))
+                .expect("view");
+            assert_eq!(view.version.as_deref(), Some("1.4.0"), "{name}");
+            assert_eq!(view.state, HarnessState::Ready, "{name}");
+        }
+        // The same worker pool serves a single agent and an empty list.
+        registry.check(Some(AcpAgentId::new(&names[0]).expect("id")), true);
+        assert!(discover_all(&[], false).is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// The agent a newer release ships under the id of a user's own descriptor.
+    /// It points at a program that is not installed, so nothing ever runs.
+    fn shipped_opencode() -> serde_json::Value {
+        let mut value = descriptor(Path::new("lab-shipped-opencode"));
+        value["id"] = json!("opencode");
+        value["displayName"] = json!("Shipped OpenCode");
+        value["command"] = json!({ "program": "lab-shipped-opencode", "args": ["acp"] });
+        value["environment"] = json!(["OPENAI_API_KEY"]);
+        value
+    }
+
+    #[test]
+    fn a_stored_user_descriptor_survives_an_upgrade_that_ships_its_id() {
+        let root = root("shadow");
+        let script = agent_script(&root);
+        let opencode = AcpAgentId::new("opencode").expect("id");
+
+        // Before the upgrade: the user's own `opencode`, pinned to an approved
+        // executable and restricted (never the PiUI coordination tool).
+        let before = shipped_registry(&root, &[]);
+        let mut value = descriptor(&script);
+        value["id"] = json!("opencode");
+        value["capabilities"] = json!({ "mcpHttp": false });
+        before.add(before.revision(), &value).expect("add");
+        let view = before.view(opencode).expect("view");
+        let Some(approved) = view.command_line.clone() else {
+            // No Node on this machine: nothing can resolve or run.
+            let _ = fs::remove_dir_all(root);
+            return;
+        };
+        before
+            .trust(before.revision(), opencode, &view.fingerprint, &approved)
+            .expect("trust");
+        let stored_fingerprint = view.fingerprint;
+
+        // The upgrade ships an agent with the same id.
+        let upgraded = shipped_registry(&root, &[shipped_opencode()]);
+        let shipped = parse_acp_descriptor(&shipped_opencode().to_string()).expect("descriptor");
+        assert_ne!(shipped.fingerprint(), stored_fingerprint);
+        // The shipped agent's own earlier decision (a secret it may pass).
+        let revision = upgraded.revision();
+        upgraded
+            .transact(revision, |_, document| {
+                document.decisions.push(Decision {
+                    id: opencode,
+                    fingerprint: shipped.fingerprint(),
+                    trusted_command: None,
+                    confirmed_version: None,
+                    allowed_secrets: vec!["OPENAI_API_KEY".into()],
+                });
+                Ok(())
+            })
+            .expect("shipped decision");
+        upgraded.check(None, false);
+
+        let views = upgraded
+            .views()
+            .into_iter()
+            .filter(|view| view.descriptor.id == opencode)
+            .collect::<Vec<_>>();
+        assert_eq!(views.len(), 1, "one row per id");
+        let view = &views[0];
+        assert_eq!(view.source, AgentSource::User, "the stored descriptor wins");
+        assert_eq!(view.fingerprint, stored_fingerprint);
+        assert_eq!(view.descriptor.display_name, "Lab Agent");
+        assert_eq!(view.descriptor.command.program, script.to_string_lossy());
+        assert_eq!(view.descriptor.command.args, ["--acp"]);
+        assert_eq!(view.descriptor.capabilities.mcp_http, Some(false));
+        assert!(view.trusted, "its trust decision is kept");
+        assert_eq!(view.command_line.as_ref(), Some(&approved));
+        assert_eq!(view.state, HarnessState::Ready);
+        assert!(
+            view.allowed_secrets.is_empty(),
+            "the shipped agent's decision never applies to it"
+        );
+        let launch = upgraded
+            .launch(opencode)
+            .expect("the approved command starts");
+        assert_eq!(CommandLine::of(&launch.command), approved);
+        assert_eq!(launch.capabilities.mcp_http, Some(false));
+        assert_eq!(launch.display_name, "Lab Agent");
+        // Another restart changes nothing.
+        let again = shipped_registry(&root, &[shipped_opencode()]);
+        assert_eq!(
+            again.view(opencode).map(|view| view.source),
+            Some(AgentSource::User)
+        );
+
+        // The stored descriptor is removable, and the shipped agent reappears
+        // with its own descriptor and decisions, not the removed one's.
+        upgraded
+            .remove(upgraded.revision(), opencode)
+            .expect("the stored descriptor is removable");
+        assert!(upgraded.lock().expect("state").document.agents.is_empty());
+        let view = upgraded.view(opencode).expect("shipped agent reappears");
+        assert_eq!(view.source, AgentSource::BuiltIn);
+        assert_eq!(view.fingerprint, shipped.fingerprint());
+        assert_eq!(view.descriptor.display_name, "Shipped OpenCode");
+        assert_eq!(view.descriptor.command.program, "lab-shipped-opencode");
+        assert_eq!(view.descriptor.capabilities.mcp_http, None);
+        assert_eq!(view.allowed_secrets, ["OPENAI_API_KEY"]);
+        assert_ne!(
+            view.command_line.as_ref(),
+            Some(&approved),
+            "the removed descriptor's discovery is not shown for the shipped agent"
+        );
+        assert!(matches!(
+            upgraded.remove(upgraded.revision(), opencode),
+            Err(RegistryError::BuiltIn)
+        ));
+        let reopened = shipped_registry(&root, &[shipped_opencode()]);
+        assert_eq!(
+            reopened.view(opencode).map(|view| view.source),
+            Some(AgentSource::BuiltIn)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn version_gate_refuses_only_older() {
+        let report = |status| AcpVersionReport {
+            version: Some("1.0.0".into()),
+            status,
+        };
+        for status in [
+            AcpVersionStatus::Verified,
+            AcpVersionStatus::NoVerifiedRange,
+            AcpVersionStatus::Newer,
+            AcpVersionStatus::Unrecognized,
+            AcpVersionStatus::ProbeFailed,
+        ] {
+            assert_eq!(version_gate(&report(status)), Ok(()), "{status:?}");
+        }
+        assert_eq!(
+            version_gate(&report(AcpVersionStatus::Older)),
+            Err(AcpRefusal::UnsupportedVersion)
+        );
+        assert_eq!(
+            version_gate(&AcpVersionReport {
+                version: None,
+                status: AcpVersionStatus::ProbeFailed
+            }),
+            Ok(())
+        );
+    }
+
     #[test]
     fn descriptors_are_validated_unique_and_never_partially_stored() {
         let root = root("validate");
@@ -1252,6 +1731,35 @@ mod tests {
         fs::write(generation_path(&root.join(DIRECTORY), 9), b"{").expect("corrupt");
         let reopened = AcpAgents::open(&root).expect("reopen");
         assert!(reopened.view(id()).is_some());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_shipped_catalog_is_listed_in_order_trusted_and_unchecked() {
+        let root = root("catalog");
+        let registry = AcpAgents::open(&root).expect("registry");
+        let views = registry.views();
+        assert_eq!(
+            views
+                .iter()
+                .map(|view| view.descriptor.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "gemini-cli",
+                "opencode",
+                "qwen-code",
+                "github-copilot",
+                "goose",
+                "kimi",
+                "cursor"
+            ]
+        );
+        for view in &views {
+            assert_eq!(view.source, AgentSource::BuiltIn);
+            assert!(view.trusted);
+            assert_eq!(view.state, HarnessState::Checking);
+            assert!(view.descriptor.version.verified.is_none());
+        }
         let _ = fs::remove_dir_all(root);
     }
 

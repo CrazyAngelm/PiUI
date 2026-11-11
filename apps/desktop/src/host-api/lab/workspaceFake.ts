@@ -29,6 +29,7 @@ import type { LabSessions } from './sessionRuntime';
 
 /** Simulated native process start for catalog probes (the host spawns and retires a runtime). */
 const CATALOG_LATENCY_MS = 350;
+const SLOW_CATALOG_LATENCY_MS = 5_000;
 
 function assertNotSafe(state: LabState): void {
   if (state.safeMode) throw workspaceFailure('SAFE_MODE');
@@ -312,13 +313,17 @@ async function harnessModels(runtime: LabSessions, request: HarnessModelsRequest
     return { protocol: 18, harness: request.harness, models: catalogModels(request.harness), resources: harnessResources(request.harness) };
   }
   assertHarnessAvailable(state, request.harness);
-  await runtime.clock.delay(CATALOG_LATENCY_MS);
+  await runtime.clock.delay(state.catalog === 'slow' ? SLOW_CATALOG_LATENCY_MS : CATALOG_LATENCY_MS);
   assertSignedIn(state, request.harness);
+  // The host's answer when resource discovery fails: models stay, resources become a warning.
+  const degraded = { items: [], warnings: ['Skills, MCP servers and tools could not be loaded from the harness.'] };
   return {
     protocol: 18,
     harness: request.harness,
-    models: catalogModels(request.harness),
-    resources: harnessResources(request.harness),
+    models: request.part === 'resources' ? [] : catalogModels(request.harness),
+    resources: request.part === 'models'
+      ? { items: [], warnings: [] }
+      : state.catalog === 'no-resources' ? degraded : harnessResources(request.harness),
   };
 }
 

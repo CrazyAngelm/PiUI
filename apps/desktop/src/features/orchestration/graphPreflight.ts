@@ -4,6 +4,7 @@ import {
   type SubpipelineInfo, type SubpipelineParent,
 } from '../../host-api/subpipelines';
 import type { HarnessModelsResult } from '../../../../../contracts/harness-models-v18';
+import { catalogDegraded } from '../../host-api/harnessModels';
 import type { AgentProfile } from '../../../../../contracts/orchestration-v6';
 import { executorConfigurationErrors, profileConfigurationErrors } from '../../harness-adapters/validation';
 export interface PreflightIssue { nodeId: string; message: string }
@@ -28,7 +29,9 @@ export async function preflightGraph(graph: AgentGraph, catalog: (harness: Agent
     if (!model) add('The selected model is not in the native catalog.');
     if (profile.reasoning && !model?.thinkingLevels?.includes(profile.reasoning)) add('The selected reasoning level is unavailable for this model.');
     if (profile.serviceTier === 'fast' && !model?.supportsFast) add('Fast is unavailable for this model.');
-    for (const rule of profile.resourceRules ?? []) {
+    const rules = profile.resourceRules ?? [];
+    if (rules.length && models && catalogDegraded(models)) { add('Could not verify the native catalog. Check the harness connection.'); continue; }
+    for (const rule of rules) {
       const resource = models?.resources.items.find(item => item.id === rule.id && item.kind === rule.kind);
       if (!resource || !resource.configurable) add('A selected resource is unavailable or cannot be configured per agent.');
     }

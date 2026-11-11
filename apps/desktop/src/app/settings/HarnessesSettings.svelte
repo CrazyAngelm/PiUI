@@ -11,7 +11,7 @@
   import AcpSecretsDialog from './AcpSecretsDialog.svelte';
   import AddAcpAgentDialog from './AddAcpAgentDialog.svelte';
   import TrustAcpAgentDialog from './TrustAcpAgentDialog.svelte';
-  import { stateBadge } from './acpAgents';
+  import { nativeVersionStatus, stateBadge, versionBadge } from './acpAgents';
   import { HarnessesStore } from './harnessesStore.svelte';
 
   /**
@@ -31,7 +31,6 @@
 
   type Pending =
     | { kind: 'trust'; agent: AcpAgentEntryV1 }
-    | { kind: 'version'; agent: AcpAgentEntryV1; version: string }
     | { kind: 'secrets'; agent: AcpAgentEntryV1 }
     | { kind: 'remove'; agent: AcpAgentEntryV1 };
 
@@ -62,7 +61,7 @@
       return;
     }
     dialogError = undefined;
-    pending = pending.kind === 'version' ? { ...pending, agent: current, version: current.version ?? pending.version } : { ...pending, agent: current };
+    pending = { ...pending, agent: current };
   }
 
   async function decide(action: () => Promise<{ message: string } | undefined>): Promise<void> {
@@ -102,6 +101,7 @@
     <ul class="cards" aria-label={$t('Built-in harnesses')}>
       {#each store.builtins as harness (harness.harness)}
         {@const badge = stateBadge(harness.state, store.safeMode)}
+        {@const advisory = versionBadge(nativeVersionStatus(harness))}
         <li class="card">
           <HarnessMark kind={harness.harness} size={28} />
           <div class="card__main">
@@ -109,6 +109,7 @@
               <strong>{harness.name}</strong>
               {#if harness.version}<span class="muted">v{harness.version}</span>{/if}
               <Badge tone={badge.tone}>{$t(badge.label)}</Badge>
+              {#if advisory}<Badge tone={advisory.tone}>{$t(advisory.label)}</Badge>{/if}
             </div>
             {#if harness.reason}<p class="muted">{$t(harness.reason)}</p>{/if}
             {#if harness.location || harness.verifiedVersions || harness.signInHint}
@@ -137,7 +138,6 @@
           {row}
           {store}
           onTrust={(agent) => open({ kind: 'trust', agent })}
-          onConfirmVersion={(agent) => open({ kind: 'version', agent, version: agent.version ?? '' })}
           onSecrets={(agent) => open({ kind: 'secrets', agent })}
           onRemove={(agent) => open({ kind: 'remove', agent })}
         />
@@ -158,19 +158,6 @@
     onTrust={(agent) => void decide(() => store.trust(agent))}
     onReview={review}
   />
-{:else if pending?.kind === 'version'}
-  {@const target = pending}
-  <AcpConfirmDialog
-    bind:open={dialogOpen}
-    title={$t('Use {0} {1}?', [target.agent.descriptor.displayName, target.version])}
-    confirmLabel={$t('Use this version')}
-    busy={store.busy.startsWith('version:')}
-    error={dialogError}
-    onConfirm={() => void decide(() => store.confirmVersion(target.agent, target.version))}
-  >
-    <p>{$t('PiUI has not verified this version with this agent. It may use the protocol differently than PiUI expects.')}</p>
-    <p class="muted">{$t('The confirmation covers only version {0}. An update needs a new confirmation.', [target.version])}</p>
-  </AcpConfirmDialog>
 {:else if pending?.kind === 'secrets'}
   <AcpSecretsDialog
     bind:open={dialogOpen}

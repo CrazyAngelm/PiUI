@@ -29,13 +29,16 @@
 
 ## Supported harnesses
 
-| Harness | Tested versions | Notes |
+| Harness | Minimum version (tested up to) | Notes |
 | --- | --- | --- |
-| Codex (app-server) | 0.147.x – 0.165.x | Newer versions start normally and show a "newer than tested" note in Settings → Harnesses; older ones are refused. MCP form requests appear as approval cards. |
-| Claude Code | 2.1 and newer | Claude subscription login only: run `claude` in a terminal and use `/login`. |
+| Codex (app-server) | 0.147.0 (tested to 0.165.x) | MCP form requests appear as approval cards. |
+| Claude Code | 2.1.0 (tested on 2.x) | Claude subscription login only: run `claude` in a terminal and use `/login`. |
 | Pi | the installed `pi` CLI | Pi JSONL stays the source of truth for Pi history. |
-| Hermes | 0.21.0 and newer | Through its ACP interface. |
-| Prime Agent | 0.9.2 and newer | |
+| Hermes | 0.21.0 | Through its ACP interface. |
+| Prime Agent | 0.9.2 (tested to 0.9.3) | |
+| ACP agents | any release | Built in: Gemini CLI, OpenCode, Qwen Code, GitHub Copilot CLI, Goose, Kimi Code and Cursor. Add others in Settings → Harnesses. |
+
+Only the minimum version is enforced. A newer release starts and is marked "Newer than tested": PiUI checks the agent's identity, protocol handshake and the settings it applies when it starts, and stops with a clear error if the new version is incompatible. Built-in ACP agents run on your own installation and sign-in; PiUI never installs them. An ACP agent you add yourself runs only after you trust its exact command line.
 
 Settings → Harnesses shows what PiUI found on this computer, the versions and what still needs setup.
 

@@ -48,7 +48,8 @@ Examples in `examples/plugins/`:
   and a sandboxed chat panel;
 - `midnight-theme` — two color themes, no code and no permissions;
 - `pipeline-pack` — two pipeline templates and a JSON transform node;
-- `acp-agent` — adds OpenCode as an ACP agent;
+- `acp-agent` — adds Auggie as an ACP agent (OpenCode and six other agents
+  are built in, ADR-045);
 - `status-tools` — manifest version 2: a status-bar item and two keyboard
   shortcuts;
 - `tool-cards` — manifest version 2: an MCP tool server that drafts issues

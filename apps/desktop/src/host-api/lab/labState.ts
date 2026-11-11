@@ -9,6 +9,8 @@ import { apiFailure } from './labErrors';
 import type { LabIdSource } from './labRandom';
 
 export type LabScenarioName = 'demo' | 'empty' | 'safe' | 'long';
+/** Native catalog probes: `slow` answers after seconds, `no-resources` degrades resource discovery. */
+export type LabCatalogBehavior = 'normal' | 'slow' | 'no-resources';
 export const LAB_SCENARIOS: readonly LabScenarioName[] = ['demo', 'empty', 'safe', 'long'];
 
 /** A registered folder. The personal Chats workspace is host-owned and always trusted. */
@@ -126,6 +128,7 @@ export interface LabState {
    * the same rules the host applies when a Fusion chat is closed or deleted.
    */
   fusionLifecycle?: LabFusionLifecycle;
+  catalog?: LabCatalogBehavior;
 }
 
 export interface LabFusionLifecycle {

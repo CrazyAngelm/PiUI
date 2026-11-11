@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { AcpAgentEntryV1, HarnessState } from '../../../../../contracts/harness-registry-v1';
 import { harnessRegistryFixture } from '../../../../../contracts/fixtures/harness-registry-v1';
 import {
-  canChooseSecrets, canConfirmVersion, canRemove, canTrust, commandLineText, descriptorFromForm, draftDescriptor,
-  emptyDescriptorForm, environmentGroups, formFromDescriptor, formFromJson, formJson, stateBadge, versionNote,
+  canChooseSecrets, canRemove, canTrust, commandLineText, descriptorFromForm, draftDescriptor,
+  emptyDescriptorForm, environmentGroups, formFromDescriptor, formFromJson, formJson, nativeVersionStatus, stateBadge, versionBadge,
+  versionNote,
 } from './acpAgents';
 
 const gemini = harnessRegistryFixture.agents[0] as AcpAgentEntryV1;
@@ -34,27 +35,37 @@ describe('Settings → Harnesses presentation', () => {
     expect(commandLineText({ program: 'gemini', args: [] })).toBe('gemini');
   });
 
-  it('explains the version against the tested range and the confirmation', () => {
+  it('explains the version against the tested range, never as a confirmation', () => {
     expect(versionNote({ ...gemini, version: '1.2.3', versionStatus: 'verified' })).toEqual(['{0}, tested with PiUI', ['1.2.3']]);
     expect(versionNote({ ...gemini, version: '0.39.1', versionStatus: 'no-verified-range' })?.[0]).toBe('{0}, not verified by PiUI');
-    expect(versionNote({ ...gemini, version: '0.39.1', versionStatus: 'no-verified-range', confirmedVersion: '0.39.1' })?.[0])
-      .toBe('{0}, not verified by PiUI; you confirmed this version');
-    expect(versionNote({ ...gemini, version: '3.0.0', versionStatus: 'newer', confirmedVersion: '2.9.0' })?.[0]).toBe('{0}, newer than the versions tested with PiUI');
+    expect(versionNote({ ...gemini, version: '3.0.0', versionStatus: 'newer' })?.[0]).toBe('{0}, newer than the versions tested with PiUI');
     expect(versionNote({ ...gemini, version: '0.1.0', versionStatus: 'older' })?.[0]).toBe('{0}, older than the versions tested with PiUI');
     expect(versionNote({ ...gemini, versionStatus: 'probe-failed' })).toEqual(['The version check did not finish', []]);
     expect(versionNote({ ...gemini, versionStatus: 'unrecognized' })?.[0]).toBe('The version output was not recognized');
     expect(versionNote(gemini)).toBeUndefined();
   });
 
+  it('marks versions PiUI has not tested without gating them', () => {
+    expect(versionBadge('newer')).toEqual({ label: 'Newer than tested', tone: 'warning' });
+    expect(versionBadge('no-verified-range')).toEqual({ label: 'Untested version', tone: 'warning' });
+    expect(versionBadge('unrecognized')).toEqual({ label: 'Version unknown', tone: 'warning' });
+    expect(versionBadge('probe-failed')).toEqual({ label: 'Version unknown', tone: 'warning' });
+    // Tested versions need no notice; an older one is already the "Unsupported version" state.
+    expect([versionBadge('verified'), versionBadge('older'), versionBadge(undefined)]).toEqual([undefined, undefined, undefined]);
+    const native = { harness: 'codex' as const, name: 'Codex', source: 'built-in' as const, state: 'ready' as const };
+    expect(nativeVersionStatus(native)).toBeUndefined();
+    expect(nativeVersionStatus({ ...native, versionStatus: 'newer' })).toBe('newer');
+    expect(versionBadge(nativeVersionStatus({ ...native, versionStatus: 'newer' }))?.label).toBe('Newer than tested');
+  });
+
   it('offers only the decisions the host accepts', () => {
-    expect([canTrust(user), canRemove(user), canConfirmVersion(user), canChooseSecrets(user)]).toEqual([true, true, false, false]);
+    expect([canTrust(user), canRemove(user), canChooseSecrets(user)]).toEqual([true, true, false]);
     expect(canTrust({ ...user, commandLine: undefined })).toBe(false);
     // A plugin's agent is trusted by its command line too, but leaves with its plugin (ADR-032).
     const fromPlugin = { ...user, source: 'plugin' as const, plugin: { id: 'example.agent', name: 'Example' } };
     expect([canTrust(fromPlugin), canRemove(fromPlugin)]).toEqual([true, false]);
     // Shipped agents are trusted by PiUI and cannot be removed.
     expect([canTrust(gemini), canRemove(gemini), canChooseSecrets(gemini)]).toEqual([false, false, true]);
-    expect(canConfirmVersion({ ...gemini, state: 'unverified-version', version: '0.39.1' })).toBe(true);
     expect(environmentGroups({ ...gemini, allowedSecrets: ['GOOGLE_API_KEY'] })).toEqual({
       plain: ['GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_LOCATION', 'GOOGLE_GENAI_USE_VERTEXAI', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY'],
       allowed: ['GOOGLE_API_KEY'],

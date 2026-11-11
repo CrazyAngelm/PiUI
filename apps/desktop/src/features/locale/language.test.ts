@@ -23,7 +23,7 @@ it('translates every step executor issue and one-shot note', () => {
   }
 });
 it('translates safe composer errors without forwarding host details', () => {
-  for (const code of ['TURN_ACTIVE','NO_ACTIVE_TURN','QUEUE_PENDING','DELIVERY_UNCERTAIN','NOT_SUPPORTED','RUNTIME_FAILED','SIGN_IN_REQUIRED']) {
+  for (const code of ['TURN_ACTIVE','NO_ACTIVE_TURN','QUEUE_PENDING','DELIVERY_UNCERTAIN','NOT_SUPPORTED','RUNTIME_FAILED','SIGN_IN_REQUIRED','HARNESS_INCOMPATIBLE']) {
     const message = workspaceError({code,message:'secret native payload'}).message;
     expect(translate(message,'ru')).not.toBe(message);
     expect(translate(message,'ru')).not.toContain('secret');

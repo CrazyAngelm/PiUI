@@ -6,7 +6,7 @@
  * preflight and the host's atomic save.
  */
 import dagre from '@dagrejs/dagre';
-import { cachedHarnessModels, harnessModels } from '../../host-api/harnessModels';
+import { cachedHarnessModels, catalogSettled, harnessModels } from '../../host-api/harnessModels';
 import {
   orchestrationError,
   orchestrationHost,
@@ -44,6 +44,7 @@ import { performRunAction } from '../../features/orchestration/runActions';
 import { GraphDocumentError, openGraph, saveGraph, type Revisions } from './graphDocument';
 import { applyConversion, planConversion, type ConversionContext, type NodeType } from './nodeConversion';
 import { ScriptTests } from './scriptTests.svelte';
+import { forgetLastPipeline, rememberLastPipeline } from './lastPipeline';
 import { scriptTestHost, type ScriptTestClient } from '../../host-api/scriptTestClient';
 
 export type EditorOperation = 'open' | 'save' | 'check' | 'import' | 'run';
@@ -110,6 +111,12 @@ export class PipelineEditorStore {
   showCollaboration = $state(true);
   catalogs = $state.raw<Partial<Record<AgentProfile['harness'], HarnessModelsResult>>>({});
   catalogErrors = $state.raw<Partial<Record<AgentProfile['harness'], string>>>({});
+  /**
+   * The harness's models are known but its skills, MCP servers and tools are
+   * still being discovered (MCP startup takes seconds): resource pickers wait
+   * instead of reporting that nothing is installed.
+   */
+  resourcesLoading = $state.raw<Partial<Record<AgentProfile['harness'], boolean>>>({});
   /** A navigation that waits for "save / discard / keep editing". */
   pending = $state<(() => void | Promise<void>) | undefined>();
   lastRun = $state.raw<OrchestrationRunV6 | undefined>();
@@ -153,15 +160,18 @@ export class PipelineEditorStore {
 
   // ---- document ------------------------------------------------------------
 
-  async refresh(): Promise<void> {
+  /** Reads the saved pipelines; false when the host could not list them. */
+  async refresh(): Promise<boolean> {
     try {
       const catalog = await this.client.orchestration_catalog_v6({ workspaceId: this.workspaceId });
       this.systems = catalog.launchCommands;
       this.profiles = catalog.profiles;
       this.systemsLoaded = true;
       await this.loadSubpipelines();
+      return true;
     } catch (error) {
       this.errors = [message(error)];
+      return false;
     }
   }
 
@@ -225,7 +235,12 @@ export class PipelineEditorStore {
       this.pending = undefined;
       return;
     }
-    if (choice === 'save' && !(await this.save())) return;
+    if (choice === 'save' && !(await this.save())) {
+      // The draft stays as it is and the navigation is cancelled; the failure
+      // is shown by the editor (`errors`, `issues`), not hidden behind the dialog.
+      this.pending = undefined;
+      return;
+    }
     this.pending = undefined;
     await action?.();
   }
@@ -249,7 +264,11 @@ export class PipelineEditorStore {
   }
 
   newGraph(): void {
-    this.guard(() => this.load(emptyGraph(), new Map()));
+    this.guard(() => {
+      this.supersedeOpen();
+      this.load(emptyGraph(), new Map());
+      forgetLastPipeline(this.workspaceId);
+    });
   }
 
   /**
@@ -259,6 +278,7 @@ export class PipelineEditorStore {
    */
   startFrom(graph: AgentGraph): void {
     this.guard(async () => {
+      this.supersedeOpen();
       this.load(this.withResolvedPipelines(graph), new Map());
       // A template is a draft until saved.
       this.baseline = '';
@@ -289,20 +309,37 @@ export class PipelineEditorStore {
     };
   }
 
+  /** Bumped by every open and new draft: a slower, older open never replaces a newer document. */
+  private openGeneration = 0;
+
+  /** A new draft wins over an open still in flight, which then neither loads nor holds `busy`. */
+  private supersedeOpen(): void {
+    this.openGeneration += 1;
+    if (this.operation === 'open') {
+      this.busy = false;
+      this.operation = undefined;
+    }
+  }
+
   open(id: string): void {
     this.guard(async () => {
+      const generation = ++this.openGeneration;
       this.busy = true;
       this.operation = 'open';
       try {
         const opened = await openGraph(this.client, this.workspaceId, id);
+        if (generation !== this.openGeneration) return;
         // Lay out graphs that have no canvas positions yet, before the baseline,
         // so opening one never reports unsaved changes.
         this.load(opened.needsLayout ? autoLayout(opened.graph) : opened.graph, opened.revisions);
+        rememberLastPipeline(this.workspaceId, this.graph.id);
       } catch (error) {
-        this.errors = [message(error)];
+        if (generation === this.openGeneration) this.errors = [message(error)];
       } finally {
-        this.busy = false;
-        this.operation = undefined;
+        if (generation === this.openGeneration) {
+          this.busy = false;
+          this.operation = undefined;
+        }
       }
     });
   }
@@ -623,18 +660,29 @@ export class PipelineEditorStore {
 
   async loadCatalog(harness: AgentProfile['harness'], refresh = false): Promise<void> {
     if (this.safeMode) return;
-    const loaded = (result: HarnessModelsResult): void => {
+    const request = { workspaceId: this.workspaceId, harness };
+    const waitForResources = (waiting: boolean): void => {
+      if ((this.resourcesLoading[harness] ?? false) !== waiting) this.resourcesLoading = { ...this.resourcesLoading, [harness]: waiting };
+    };
+    // An answer carries the models; the resources follow while the probe is unsettled.
+    const loaded = (result: HarnessModelsResult, settled: boolean): void => {
       this.catalogs = { ...this.catalogs, [harness]: result };
       const { [harness]: _error, ...rest } = this.catalogErrors;
       this.catalogErrors = rest;
+      // Remembered resources stay visible while the probe confirms them.
+      waitForResources(!settled && result.resources.items.length === 0);
     };
     const failed = (error: unknown): void => {
       this.catalogErrors = { ...this.catalogErrors, [harness]: error instanceof Error ? error.message : 'Could not load models.' };
+      waitForResources(false);
     };
-    const request = { workspaceId: this.workspaceId, harness };
     try {
       // A remembered catalog shows at once; the native probe replaces it.
-      loaded(refresh ? await harnessModels(request, true) : await cachedHarnessModels(request, { onFresh: loaded, onError: failed }));
+      if (refresh) loaded(await harnessModels(request, true), true);
+      else {
+        const first = await cachedHarnessModels(request, { onFresh: (result) => loaded(result, catalogSettled(request)), onError: failed });
+        loaded(first, catalogSettled(request));
+      }
     } catch (error) {
       failed(error);
     }
@@ -683,6 +731,7 @@ export class PipelineEditorStore {
       if (run && !(await this.check())) return false;
       this.revisions = await saveGraph(this.client, this.workspaceId, this.graph, this.revisions);
       this.baseline = JSON.stringify(this.graph);
+      rememberLastPipeline(this.workspaceId, this.graph.id);
       await this.refresh();
       if (run) {
         this.pendingRunId ??= crypto.randomUUID();

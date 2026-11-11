@@ -1,8 +1,10 @@
 import type {
   AcpAgentDescriptorV1,
   AcpAgentEntryV1,
+  AcpVersionStatus,
   CommandLineV1,
   HarnessState,
+  HarnessStatusV1,
 } from '../../../../../contracts/harness-registry-v1';
 import { ACP_AGENT_ID, checkAcpDescriptor, parseAcpDescriptor, type AcpDescriptorCheck } from '../../host-api/acpDescriptor';
 
@@ -38,17 +40,42 @@ export function commandLineText(line: CommandLineV1): string {
   return [line.program, ...line.args].map((part) => (part === '' || /[\s"]/.test(part) ? `"${part.replace(/"/g, '\\"')}"` : part)).join(' ');
 }
 
+/** Advisory host status of a built-in harness version (`HarnessStatusV1.versionStatus`). */
+export type NativeVersionStatus = 'verified' | 'newer';
+
+/** A built-in harness row with the host's advisory version status, when it reports one. */
+export type NativeHarnessStatus = HarnessStatusV1 & { versionStatus?: NativeVersionStatus };
+
+export const nativeVersionStatus = (harness: NativeHarnessStatus): NativeVersionStatus | undefined => harness.versionStatus;
+
+/**
+ * The notice for a version PiUI has not tested. It never gates a launch: the
+ * identity and protocol checks do, and `older` is already a readiness state.
+ */
+export function versionBadge(status: NativeVersionStatus | AcpVersionStatus | undefined): { label: string; tone: BadgeTone } | undefined {
+  switch (status) {
+    case undefined:
+    case 'verified':
+    case 'older': return undefined;
+    case 'newer': return { label: 'Newer than tested', tone: 'warning' };
+    case 'no-verified-range': return { label: 'Untested version', tone: 'warning' };
+    case 'unrecognized':
+    case 'probe-failed': return { label: 'Version unknown', tone: 'warning' };
+    default: {
+      const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
+}
+
 /** The version line of an ACP agent: `[template, parameters]` for `$t`. */
 export function versionNote(agent: AcpAgentEntryV1): [string, string[]] | undefined {
   const version = agent.version ?? '';
   switch (agent.versionStatus) {
     case undefined: return undefined;
     case 'verified': return ['{0}, tested with PiUI', [version]];
+    case 'no-verified-range': return ['{0}, not verified by PiUI', [version]];
     case 'newer': return ['{0}, newer than the versions tested with PiUI', [version]];
-    case 'no-verified-range':
-      return agent.confirmedVersion === agent.version
-        ? ['{0}, not verified by PiUI; you confirmed this version', [version]]
-        : ['{0}, not verified by PiUI', [version]];
     case 'older': return ['{0}, older than the versions tested with PiUI', [version]];
     case 'unrecognized': return ['The version output was not recognized', []];
     case 'probe-failed': return ['The version check did not finish', []];
@@ -61,7 +88,6 @@ export function versionNote(agent: AcpAgentEntryV1): [string, string[]] | undefi
 
 // A plugin's agent (ADR-032) is trusted like one you added: by its exact command line.
 export const canTrust = (agent: AcpAgentEntryV1): boolean => agent.source !== 'built-in' && agent.state === 'untrusted' && agent.commandLine !== undefined;
-export const canConfirmVersion = (agent: AcpAgentEntryV1): boolean => agent.state === 'unverified-version' && agent.version !== undefined;
 export const canChooseSecrets = (agent: AcpAgentEntryV1): boolean => agent.trusted && agent.secretEnvironment.length > 0;
 export const canRemove = (agent: AcpAgentEntryV1): boolean => agent.source === 'user';
 

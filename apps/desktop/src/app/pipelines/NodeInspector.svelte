@@ -464,7 +464,10 @@
           {/if}
           <div class="section">
             <h3>{$t('Skills, MCP and tools')}</h3>
-            <ResourcePicker {profile} items={catalog?.resources.items ?? []} loading={!catalog && !catalogError} disabled={readOnly} onchange={(change) => patch(change)} />
+            <ResourcePicker {profile} items={catalog?.resources.items ?? []} loading={(!catalog && !catalogError) || editor.resourcesLoading[profile.harness] === true} disabled={readOnly} onchange={(change) => patch(change)} />
+            {#each catalog?.resources.warnings ?? [] as warning (warning)}
+              <p class="hint" role="status">{$t(warning)}</p>
+            {/each}
           </div>
           <div class="section">
             <h3>{$t('May start instances of')}</h3>

@@ -148,4 +148,82 @@ test.describe('pipelines', () => {
     await run.getByRole('button', { name: 'Inputs' }).click();
     await expect(page.getByRole('dialog', { name: 'Run inputs' })).toContainText('Review the changes merged since the last nightly run');
   });
+
+  test('the Library menu belongs to the editor; sections are reached from the sidebar', async ({ lab, page }) => {
+    await lab.open();
+    const editor = await lab.openPipelines();
+    const section = page.getByRole('region', { name: 'Pipelines' });
+    await expect(section.getByLabel('Pipeline sections')).toHaveCount(0);
+    await expect(section.getByRole('button', { name: 'Library', exact: true })).toBeVisible();
+
+    // The editor's menu keeps its own actions; the agent library lives in the Library menu.
+    await editor.getByRole('button', { name: 'More pipeline actions' }).click();
+    await expect(page.getByRole('menuitem', { name: 'New pipeline' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Agent library' })).toHaveCount(0);
+    await page.keyboard.press('Escape');
+
+    await section.getByRole('button', { name: 'Library', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Agents' }).click();
+    await expect(section.getByRole('button', { name: 'Library', exact: true })).toBeVisible();
+
+    await lab.openRuns();
+    await expect(section.getByRole('button', { name: 'Library', exact: true })).toHaveCount(0);
+    await lab.openAutomations();
+    await expect(section.getByRole('button', { name: 'Library', exact: true })).toHaveCount(0);
+  });
+
+  test('the start screen lists saved pipelines and Save waits for something to save', async ({ lab, page }) => {
+    await lab.open();
+    const editor = await lab.openPipelines();
+    await expect(editor.getByRole('heading', { name: 'Saved pipelines' })).toBeVisible();
+    await expect(editor.getByRole('button', { name: 'Code review', exact: true })).toBeVisible();
+    await expect(editor.getByRole('button', { name: 'Release check', exact: true })).toBeVisible();
+    await expect(editor.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+    await expect(editor.getByText('Start from a template or add an agent.')).toHaveCount(0);
+
+    await editor.getByRole('button', { name: 'Release check', exact: true }).click();
+    await expect(editor.getByRole('textbox', { name: 'Pipeline name' })).toHaveValue('Release check');
+    await expect(editor.getByRole('heading', { name: 'Build a pipeline' })).toBeHidden();
+    // Nothing changed yet: still nothing to save.
+    await expect(editor.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+
+    // Unsaved changes enable Save; leaving them asks with a plain title and no description.
+    await editor.getByRole('textbox', { name: 'Pipeline name' }).fill('Release check 2');
+    await editor.getByRole('textbox', { name: 'Pipeline name' }).blur();
+    await expect(editor.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
+    await editor.getByRole('button', { name: 'Open', exact: true }).click();
+    await lab.option('Code review').click();
+    const dialog = page.getByRole('dialog', { name: 'Save changes to this pipeline?' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).not.toContainText('The draft has unsaved changes.');
+    await dialog.getByRole('button', { name: 'Keep editing' }).click();
+    await expect(dialog).toBeHidden();
+    await expect(editor.getByRole('textbox', { name: 'Pipeline name' })).toHaveValue('Release check 2');
+  });
+
+  test('coming back from Runs reopens the pipeline that was open; New forgets it', async ({ lab, page }) => {
+    await lab.open();
+    const editor = await lab.openPipelines();
+    await editor.getByRole('button', { name: 'Release check', exact: true }).click();
+    const name = editor.getByRole('textbox', { name: 'Pipeline name' });
+    await expect(name).toHaveValue('Release check');
+
+    await lab.openRuns();
+    await expect(page.getByRole('region', { name: 'Pipeline editor' })).toBeHidden();
+    await lab.openPipelines();
+    await expect(name).toHaveValue('Release check');
+    await expect(editor.getByRole('heading', { name: 'Build a pipeline' })).toBeHidden();
+
+    await lab.openAutomations();
+    await lab.openPipelines();
+    await expect(name).toHaveValue('Release check');
+
+    await editor.getByRole('button', { name: 'More pipeline actions' }).click();
+    await page.getByRole('menuitem', { name: 'New pipeline' }).click();
+    await expect(editor.getByRole('heading', { name: 'Build a pipeline' })).toBeVisible();
+    await lab.openRuns();
+    await lab.openPipelines();
+    await expect(editor.getByRole('heading', { name: 'Build a pipeline' })).toBeVisible();
+    await expect(name).toHaveValue('');
+  });
 });

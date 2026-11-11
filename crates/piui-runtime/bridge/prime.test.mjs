@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createPrimeAdapter } from "./prime.mjs";
 import { getModelLookupCounts, resetModelLookupCounts, lastConfiguredSkills } from "./fixtures/prime-sdk-fixture/index.mjs";
 
@@ -199,11 +199,76 @@ test("Prime rejects unproved mandatory policy and unsafe paths before SDK start"
   await assert.rejects(createPrimeAdapter(await config({ daemonSocket: "default" }), () => {}), (error) => error.bridgeCode === "unsafe-daemon-endpoint");
 });
 
-test("Prime fails closed for another installed package version", async () => {
+const FIXTURE_EXPORTS = ["SessionManager", "AuthStorage", "ModelRegistry", "SettingsManager", "defineTool", "createIpythonTool",
+  "createAgentSessionServices", "createAgentSessionFromServices", "createAgentSessionRuntime", "InProcessAgentConnection"];
+// An installed-package layout whose entry re-exports the fixture SDK, minus the named exports.
+async function installedPackage(version, { name = "prime-agent", omit = [], typebox = false } = {}) {
   const packageRoot = await mkdtemp(join(tmpdir(), "piui-prime-version-"));
   await mkdir(join(packageRoot, "dist"));
-  await writeFile(join(packageRoot, "package.json"), JSON.stringify({ name: "prime-agent", version: "0.9.4", exports: { ".": { import: "./dist/index.js" } } }));
-  await assert.rejects(createPrimeAdapter(await config({ packageRoot }), () => {}), (error) => error.bridgeCode === "unsupported-version");
+  await writeFile(join(packageRoot, "package.json"), JSON.stringify({ name, version, exports: { ".": { import: "./dist/index.js" } },
+    ...(typebox ? { dependencies: { typebox: "file:./typebox" } } : {}) }));
+  if (typebox) {
+    await mkdir(join(packageRoot, "typebox", "build"), { recursive: true });
+    await writeFile(join(packageRoot, "typebox", "build", "index.mjs"), `export * from ${JSON.stringify(pathToFileURL(join(fixtureRoot, "typebox", "build", "index.mjs")).href)};
+`);
+  }
+  const source = pathToFileURL(join(fixtureRoot, "index.mjs")).href;
+  await writeFile(join(packageRoot, "dist", "index.js"), `export { ${FIXTURE_EXPORTS.filter((export_) => !omit.includes(export_)).join(", ")} } from ${JSON.stringify(source)};
+`);
+  return packageRoot;
+}
+
+test("Prime admits the minimum and every newer installed package version", async () => {
+  for (const version of ["0.9.2", "0.9.4", "0.9.5", "0.10.0", "1.0.0", "v1.2.3+build.7"]) {
+    const adapter = await createPrimeAdapter(await config({ packageRoot: await installedPackage(version) }), () => {});
+    try { assert.equal((await adapter.snapshot()).title, "Fixture Prime", version); } finally { await adapter.dispose(); }
+  }
+});
+
+test("Prime refuses an older, pre-release, unparseable or foreign package", async () => {
+  for (const version of ["0.9.1", "0.8.99", "0.9.2-rc.1", "not-a-version", "0.9", "", null]) {
+    await assert.rejects(createPrimeAdapter(await config({ packageRoot: await installedPackage(version) }), () => {}),
+      (error) => error.bridgeCode === "unsupported-version", `version ${JSON.stringify(version)}`);
+  }
+  await assert.rejects(createPrimeAdapter(await config({ packageRoot: await installedPackage("0.9.5", { name: "other-agent" }) }), () => {}),
+    (error) => error.bridgeCode === "unsupported-version");
+});
+
+test("Prime reports a missing or reshaped SDK export as a typed protocol mismatch", async () => {
+  for (const omit of [["createAgentSessionRuntime"], ["InProcessAgentConnection"], ["SessionManager"], ["createAgentSessionServices"], ["SettingsManager"]]) {
+    await assert.rejects(createPrimeAdapter(await config({ packageRoot: await installedPackage("0.9.5", { omit }) }), () => {}),
+      (error) => error.bridgeCode === "native-protocol-mismatch" && !/createAgentSession|SessionManager|Connection/.test(error.safeMessage ?? error.message), omit.join());
+  }
+  // A catalog-only run never builds a session, so it does not need the session exports.
+  const catalog = await createPrimeAdapter(await config({ catalogOnly: true, packageRoot: await installedPackage("0.9.5", { omit: ["createAgentSessionRuntime", "InProcessAgentConnection"] }) }), () => {});
+  try { assert.equal((await catalog.models()).length, 1); } finally { await catalog.dispose(); }
+  await assert.rejects(createPrimeAdapter(await config({ catalogOnly: true, packageRoot: await installedPackage("0.9.5", { omit: ["ModelRegistry"] }) }), () => {}),
+    (error) => error.bridgeCode === "native-protocol-mismatch");
+  // A coordinated run needs the SDK's tool builder: without it the missing tool is refused, not silently skipped.
+  await assert.rejects(createPrimeAdapter(await config({ coordination: true, nativeSubagents: false, allowedTools: ["workspace"], packageRoot: await installedPackage("0.9.5", { omit: ["defineTool"], typebox: true }) }), () => {}, async () => ({})),
+    (error) => error.bridgeCode === "native-protocol-mismatch");
+  // ...while the optional board tool is skipped with a notice and the chat still starts.
+  const events = eventCollector();
+  const board = await createPrimeAdapter(await config({ hostTools: ["board"], packageRoot: await installedPackage("0.9.5", { omit: ["defineTool"], typebox: true }) }), events.emit, undefined, async () => ({}));
+  try { assert.ok(events.values.some((event) => event.type === "notice" && event.code === "unsupported-board-tool")); } finally { await board.dispose(); }
+});
+
+test("Prime shows one safe fallback per unknown SDK event type and survives a throwing event", async () => {
+  const events = eventCollector();
+  const adapter = await createPrimeAdapter(await config(), events.emit);
+  const start = events.values.length;
+  await adapter.prompt({ text: "unknown-events", mode: "prompt" });
+  await nextEvent(events, (event) => event.type === "turnCompleted" && events.values.indexOf(event) >= start);
+  const fallbacks = events.values.slice(start).filter((event) => event.type === "block" && event.block.fallback === true);
+  assert.deepEqual(fallbacks.map((event) => event.block.safeSummary).sort(), [
+    "Unsupported Prime event: connection_future",
+    "Unsupported Prime event: future_event",
+    "Unsupported Prime event: message_end",
+  ], "each unknown type reports once, the throwing event is named by type only and housekeeping events stay silent");
+  assert.ok(fallbacks.every((event) => event.block.kind === "unknown" && event.block.status === "complete"));
+  assert.doesNotMatch(JSON.stringify(events.values), /PRIVATE_PAYLOAD|circular/, "the raw event payload never reaches the transcript");
+  assert.ok(events.values.slice(start).some((event) => event.type === "status" && event.status === "idle"), "the turn still finishes");
+  await adapter.dispose();
 });
 
 test("Prime filters one skill per session and rejects unsupported MCP isolation", async () => {

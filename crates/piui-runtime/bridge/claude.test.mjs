@@ -352,6 +352,21 @@ test("unsupported or unsafe settings fail before the CLI starts", async () => {
   await assert.rejects(createClaudeAdapter(setup({ model: { id: "sonnet", name: "Sonnet" }, serviceTier: "fast" }).config, () => {}), { bridgeCode: "unsupported-settings" });
 });
 
+test("a CLI that exits or rejects before the handshake is a typed protocol mismatch without native text", async () => {
+  for (const flag of ["--fixture-exit-before-init", "--fixture-reject-init"]) {
+    for (const catalogOnly of [false, true]) {
+      const { config } = setup({ catalogOnly }, [flag]);
+      await assert.rejects(createClaudeAdapter(config, () => {}), (error) => {
+        assert.equal(error.bridgeCode, "native-protocol-mismatch", `${flag} catalogOnly=${catalogOnly}`);
+        assert.doesNotMatch(`${error.message} ${error.safeMessage}`, /PRIVATE_PAYLOAD/);
+        return true;
+      });
+    }
+  }
+  // A signed-out account still answers the handshake: that stays a sign-in problem, not a drift.
+  await assert.rejects(createClaudeAdapter(setup({}, ["--fixture-account", "signed-out"]).config, () => {}), { bridgeCode: "claude-subscription-required" });
+});
+
 test("a prompt streams into blocks, usage and exactly one successful turn", async () => {
   const { config, records } = setup();
   const log = recorder();

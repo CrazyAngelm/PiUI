@@ -148,8 +148,12 @@ function safeAdapterError(error) {
   // method names). Bounded plain data only; never a raw native error.
   const details = error?.safeDetails;
   if (details && typeof details === "object" && !Array.isArray(details)) {
-    const text = JSON.stringify(details);
-    if (text.length <= MAX_DETAILS_BYTES) return { code, message, details: JSON.parse(text) };
+    // Details an adapter built badly (a cycle, a BigInt) are dropped: the failure
+    // frame must still be written, never replaced by an exception here.
+    try {
+      const text = JSON.stringify(details);
+      if (typeof text === "string" && text.length <= MAX_DETAILS_BYTES) return { code, message, details: JSON.parse(text) };
+    } catch { /* unencodable details are omitted */ }
   }
   return { code, message };
 }
@@ -279,9 +283,15 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
 
   const emit = (event) => {
     if (event && typeof event === "object") {
-      if (event.type === 'pooledEvent') { writeFrame(output, {sessionId:event.sessionId,event:event.event}); return; }
-      if (event.type === "turnCompleted") rejectCoordinatorPending();
-      writeFrame(output, { event });
+      try {
+        if (event.type === 'pooledEvent') { writeFrame(output, {sessionId:event.sessionId,event:event.event}); return; }
+        if (event.type === "turnCompleted") rejectCoordinatorPending();
+        writeFrame(output, { event });
+      } catch {
+        // An event that cannot be encoded or written must not throw into the
+        // adapter callback that emitted it. The host sees a fixed safe error.
+        try { writeFrame(output, { event: { type: "error", message: "The native bridge could not encode an event." } }); } catch { /* the output is gone */ }
+      }
     }
   };
 
@@ -467,7 +477,15 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
       failTransport();
       return;
     }
-    const task = dispatch(request).finally(() => inFlight.delete(task));
+    // dispatch answers every ordinary failure itself. This is the last resort:
+    // an exception it could not answer becomes one safe failure frame instead of
+    // an unhandled rejection that would end the whole bridge without a reply.
+    const task = dispatch(request)
+      .catch(() => {
+        const id = typeof request?.id === "string" ? request.id : "";
+        try { writeFrame(output, safeFailure(id, "native-operation-failed", "The native runtime could not complete the request.")); } catch { /* the output is gone */ }
+      })
+      .finally(() => inFlight.delete(task));
     inFlight.add(task);
   };
 
@@ -503,5 +521,22 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
 }
 
 if (typeof globalThis.__PIUI_BRIDGE_FACTORY__ === "function") {
-  runBridge(globalThis.__PIUI_BRIDGE_FACTORY__);
+  const bridge = runBridge(globalThis.__PIUI_BRIDGE_FACTORY__);
+  // An exception that an adapter callback (a timer, a child-process handler, a
+  // rejected promise) leaves unhandled must not end the process silently: the
+  // host gets one fixed safe error event (never the exception text), the adapter
+  // is disposed so its native children stop, and the process exits non-zero.
+  let stopping = false;
+  const stopAfterInternalError = () => {
+    if (stopping) return;
+    stopping = true;
+    try { process.stdout.write(`${JSON.stringify({ event: { type: "error", message: "The native bridge hit an internal error and stopped." } })}\n`); } catch { /* the output is gone */ }
+    const exitNow = () => process.exit(1);
+    // An empty write completes after every earlier frame, so none is cut off.
+    const leave = () => { try { process.stdout.write("", exitNow); } catch { exitNow(); } };
+    setTimeout(exitNow, 2000);
+    void bridge.dispose().then(leave, leave);
+  };
+  process.on("uncaughtException", stopAfterInternalError);
+  process.on("unhandledRejection", stopAfterInternalError);
 }

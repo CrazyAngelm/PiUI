@@ -13,7 +13,7 @@ import { browserTimers, LabClock, type LabTimers } from './labClock';
 import { LabDecodeFailure, tauriArgumentError } from './labErrors';
 import type { LabHandlers } from './labHandlers';
 import { LabIdSource } from './labRandom';
-import { LAB_SCENARIOS, wire, type LabScenarioName, type LabState } from './labState';
+import { LAB_SCENARIOS, wire, type LabCatalogBehavior, type LabScenarioName, type LabState } from './labState';
 import { orchestrationHandlers } from './orchestration/orchestrationFake';
 import { EMPTY_NATIVE_HISTORY, piHistoryHandlers } from './piHistoryFake';
 import { pipelineLibraryHandlers } from './pipelineLibraryFake';
@@ -47,6 +47,8 @@ export interface LabHostOptions {
   readonly claudeSignedOut?: boolean;
   /** App update state (see `appUpdateFake.ts`). Defaults to `?updates=`, then `off`. */
   readonly updates?: LabUpdateScenario;
+  /** Native catalog probe behavior. Defaults to `?catalog=`, then `normal`. */
+  readonly catalog?: LabCatalogBehavior;
 }
 
 export interface LabHost extends HostTransport {
@@ -64,6 +66,12 @@ export function scenarioFromSearch(search: string): LabScenarioName {
 
 function currentScenario(): LabScenarioName {
   return typeof window === 'undefined' ? 'demo' : scenarioFromSearch(window.location.search);
+}
+
+/** `?catalog=slow` or `?catalog=no-resources` (see `LabCatalogBehavior`). */
+export function catalogBehaviorFromSearch(search: string): LabCatalogBehavior {
+  const value = new URLSearchParams(search).get('catalog');
+  return value === 'slow' || value === 'no-resources' ? value : 'normal';
 }
 
 /** `?claude=signed-out` shows Claude Code as not signed in with a Claude subscription. */
@@ -134,6 +142,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     sessions: new Map(seed.sessions.map((record) => [record.id, record])),
     orchestration: new Map(seed.orchestration.map((workspace) => [workspace.workspaceId, workspace])),
     ids: new LabIdSource(`lab:${scenario}`),
+    catalog: options.catalog ?? (typeof window === 'undefined' ? 'normal' : catalogBehaviorFromSearch(window.location.search)),
   };
   const runtime = new LabSessions(state, bus, clock);
   const scheduler = new LabRunScheduler(runtime, bus);

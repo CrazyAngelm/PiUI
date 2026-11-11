@@ -51,7 +51,7 @@
           "maxLength": 200
         },
         "verified": {
-          "description": "Versions tested with PiUI: minimum <= version < ceiling.",
+          "description": "Versions tested with PiUI: minimum <= version < ceiling. The minimum is enforced: an older agent never starts. The ceiling is advisory: a newer agent starts and is reported as newer than tested. Without a range every version starts; the ACP initialize handshake (protocolVersion 1) is the compatibility gate.",
           "type": "object",
           "properties": {
             "minimum": { "$ref": "#/definitions/coreVersion" },

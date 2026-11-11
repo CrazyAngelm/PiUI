@@ -529,6 +529,76 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
   this branch are parked with `#[cfg(any())]`.
 - No real-provider pair ran (phase Ф1.5 is started by the person).
 
+## 2026-11-11 — forward-compatible native versions and built-in ACP catalog (unreleased)
+
+- **ADR-045:** a tested range's minimum is enforced and its ceiling is advisory.
+  A newer release is admitted with `versionStatus: "newer"` and Settings shows
+  "Newer than tested" beside an enabled launch. The real gate stays
+  fail-closed: identity, protocol handshake (typed `native-protocol-mismatch`)
+  and effective policy state. Ranges: Codex 0.147.0–0.166.0, Claude Code
+  2.1.0–3.0.0, Prime Agent 0.9.2–0.9.4, Hermes 0.21.0–0.22.0; Pi has none.
+- **Bridges:** Codex follows `codex features list` for its `--disable` names
+  (drops absent ones, fails closed when a policy-required one is absent); Prime
+  checks package identity and the SDK exports it uses; Hermes no longer compares
+  `agentInfo.version` for equality. Unknown well-formed notifications, items and
+  content get one deduplicated fallback block per type, housekeeping
+  notifications are ignored and unknown server requests are answered with an
+  error. Documented in `crates/piui-runtime/bridge/CONTRACT.md`.
+- **ACP:** per-version confirmation removed (command-line trust and secret
+  consent unchanged); seven built-ins (Gemini CLI `--acp`, OpenCode, Qwen Code,
+  GitHub Copilot CLI, Goose, Kimi Code, Cursor); Windows npm shims that point
+  to a native `.exe` resolve without `cmd.exe`. Not bundled: `codex-acp`,
+  `claude-agent-acp` (would bypass ADR-029), Aider (needs its own adapter
+  spike), Antigravity, Droid, Cline, Auggie, Kilo, Vibe. The plugin example
+  now adds Auggie because OpenCode is built in.
+- **Evidence on this machine** (installed, not yet through PiUI): codex-cli
+  0.165.0 `initialize` + housekeeping notifications, claude 2.1.318, pi 1.4.0,
+  Prime Agent 0.9.5, OpenCode 1.19.4 `acp` `initialize` (protocol 1). Real-CLI
+  handshake and real-provider turns are reported separately from fixtures; no
+  provider turn is claimed.
+- Docs only in this entry; builds and tests are run by the lead at the end.
+
+## 2026-11-11 — systems pass and quieter screens
+
+Led by a Fable audit (plan, then review of the implementation), reviewed by
+four read-only GPT 6.1 Sol passes.
+
+- **Harness catalog:** a second picker no longer waits for resource discovery;
+  a degraded answer (host warning instead of resources) is never cached, its
+  snapshot keeps the earlier resources and preflight reports one unverifiable
+  catalog; an explicit refresh never joins a split load; the inspector keeps
+  remembered resources visible and shows discovery warnings. `part` has a
+  shared Rust/TS compat fixture (`contracts/fixtures/harness-models-v18.json`);
+  pending discoveries expire on insert too.
+- **Pipelines:** the Editor/Runs/Automations switch is gone (the sidebar owns
+  sections, with `aria-current` on the open one); the editor reopens the last
+  pipeline of the project, ignores slower older opens, keeps the remembered id
+  when the list cannot be read; a failed save closes the unsaved-changes dialog
+  and shows the errors; Save and Mod+S wait for something to save; the start
+  screen lists saved pipelines above templates.
+- **Canvas:** inputs are one row of colored dots (names in title and for screen
+  readers, hidden ones named in `+N`), wire colors are stable across deletes,
+  no persistent edge blur, tokens instead of literal colors, per-branch router
+  wiring, Arrange uses real card heights.
+- **Shell:** Home is the heading and the composer; the project options menu
+  moved to the palette (Open automations, Refresh projects); Retry reconnects
+  the event stream and rechecks a restored board/team/history route; lazy views
+  and pipeline sections offer Retry; Runs drops the shown run while another
+  opens, so errors are visible and A→B→A reopens A; Automations reports a dead
+  event stream with Refresh; Inbox, Automations, Chat details and Settings lose
+  repeated secondary text; Board key hints became the columns' description and
+  a Settings → Shortcuts group.
+- **Tests:** unit 940/940; UI Lab Playwright 158/158 before the review fixes,
+  then the 84 touched specs again, all green; `cargo test -p piui-desktop workspace_api`
+  71 passed. The Tauri WebView2 E2E run did not finish (its build exceeded the
+  bounded run while another session was compiling); no real-provider turn.
+- **Review follow-ups:** parallel `models` requests queue their resource
+  discoveries instead of overwriting one; the `resources` part is a tested
+  function with an injected probe; the new-chat composer reports a failed
+  discovery with Retry; the restricted-project race test holds a slow lab
+  catalog (`?catalog=slow`) and checks the spinner before switching. Unit
+  940/940, `workspace_api` 73 passed, clippy clean, composer lab spec 14/14.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

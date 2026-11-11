@@ -172,55 +172,124 @@ items with a safe `error` event. A failed native prompt emits
   - Prime: `images:false` (the SDK connection takes text), empty catalog.
 
 
+## Version policy and protocol tolerance (ADR-045)
+
+One rule for every native harness. A tested range is `minimum <= version <
+ceiling` (`crates/piui-runtime/src/native_version.rs`): Codex `0.147.0`-`0.166.0`,
+Claude Code `2.1.0`-`3.0.0`, Prime Agent `0.9.2`-`0.9.4`, Hermes `0.21.0`-`0.22.0`;
+Pi has no version gate and an ACP descriptor has a range only when it declares one.
+
+- The **minimum is enforced**: an older release fails with `unsupported-native-version`
+  (host discovery: "Older than the oldest version supported by PiUI.").
+- The **ceiling is advisory**: a newer release is admitted. Discovery reports it
+  `available` with `versionStatus: "newer"` (`HarnessSummary.versionStatus`,
+  `"verified" | "newer"`, optional; Settings shows "Newer than tested") and it
+  launches. `VersionCheck::admits()` is `Verified | Newer`.
+- The **real gate is identity, protocol and effective state**, always fail-closed:
+  not installed or shell-only launcher; unrecognized identity (Claude `--version`
+  without `(Claude Code)`, Prime manifest name or SDK exports, Codex `initialize`
+  without `codexHome` or the product token); older than the minimum; ACP or Hermes
+  `protocolVersion` other than 1; a startup request the harness rejects or answers
+  without the required fields; malformed or oversized frames; a mandatory setting
+  that cannot be applied; a runtime policy breach (Claude non-subscription auth,
+  fast mode, extra usage, permission-mode drift). A rejected startup request or
+  missing required field fails with the typed bridge code `native-protocol-mismatch`.
+  The host maps `native-protocol-mismatch`, `unsupported-native-version`,
+  `unsupported-version` and `unsupported-protocol` to `BridgeFailureCode::Incompatible`.
+  Native history is never touched by such a failure.
+- Unrecognized version text with an established identity: Codex and Claude Code keep
+  refusing (the version line is part of their identity proof). ACP launches
+  (`Unrecognized`, `ProbeFailed`, `NoVerifiedRange` and `Newer` all carry an advisory
+  status) and its `initialize` decides; only `Older` refuses.
+- A bridge that enforces a minimum declares it as a literal the Rust tests parse:
+  `VERIFIED_CODEX_VERSIONS = { minimum, ceiling }` in `codex.mjs`,
+  `MINIMUM_PRIME_VERSION` in `prime.mjs`, `MINIMUM_HERMES_VERSION` in `hermes.mjs`.
+
+Tolerance rule (extends the generic fallback of every adapter; PiUI's own IPC schemas
+stay strict):
+
+- A **malformed frame is fatal** (bad JSON, oversized, wrong framing).
+- A **well-formed unknown notification, item or content block** becomes one
+  sanitized fallback block per type, deduplicated within the session; no raw payload,
+  credentials or provider-private fields.
+- **Housekeeping notifications are ignored**: Codex `configWarning` (shown as the fixed
+  `resources().warnings` text), `remoteControl/status/changed`, `account/updated`, and the
+  other control-plane notifications listed below.
+- An **unknown server request is answered with an error** (method not found or a
+  defined denial) and never approved, accepted or left pending.
+- An **exception raised while handling a well-formed frame means "unknown"**, not a
+  transport failure: the frame is treated as unrecognized, the session continues.
+  Unknown terminal outcomes still fail the affected operation.
+
 ## Codex (`codex.mjs`, harness `codex`)
 
 Drives the user's installed `@openai/codex` (`node bin/codex.js app-server --stdio
 -c analytics.enabled=false --disable apps --disable plugins --disable remote_plugin
 --disable recommended_plugins --disable shell_snapshot`, plus `--disable multi_agent
---disable multi_agent_v2` for managed runs and `nativeSubagents:false`) with the
-inherited `CODEX_HOME`. Frames are LF JSON without a `jsonrpc` member; `initialize`
-negotiates `experimentalApi:true, requestAttestation:false`.
+--disable multi_agent_v2` for managed runs and `nativeSubagents:false`) or a
+standalone `codex` executable, with the inherited `CODEX_HOME`. Frames are LF JSON
+without a `jsonrpc` member; `initialize` negotiates `experimentalApi:true,
+requestAttestation:false`.
 
-### Verified version range
+**Feature switches follow the installed CLI.** An unknown `--disable` name is a hard
+CLI error before `initialize`, so the bridge first reads `codex features list` and
+drops only the names the CLI no longer registers (an obsolete restriction). If a name
+that enforces a requested policy (for example the `multi_agent` switches behind
+`nativeSubagents:false`) is absent, the start fails closed before
+anything is sent to the model; a requested restriction is never removed to make a start
+succeed, and a failed start is never retried with a different set of switches.
+
+### Tested version range (ceiling advisory)
 
 - One range, `minimum <= version < ceiling`, currently `0.147.0 <= v < 0.166.0`.
   Only the minimum blocks a launch; the ceiling marks the newest audited line:
   `CODEX_APP_SERVER` in `crates/piui-runtime/src/native_version.rs`, mirrored by
   `VERIFIED_CODEX_VERSIONS` in `codex.mjs`; the Rust test
-  `bridge_mirrors_the_codex_range` keeps the two equal.
+  `bridge_mirrors_the_codex_range` keeps the two equal. Only the minimum is
+  enforced (see Version policy above); a newer app-server (0.166.0 or later) starts.
 - Grammar: `MAJOR.MINOR.PATCH[-pre][+build]` (leading `v` tolerated). A pre-release
   precedes its release (`0.147.0-alpha.1` is older than the minimum); a
-  version at or above the ceiling (including a pre-release of it) is newer
-  than tested. Anything else is unrecognized.
-- Host discovery reads `@openai/codex/package.json` and reports the found
-  `version`. Inside the range it is `available` (on verified platforms); above it
-  also `available`, with the non-blocking note "Newer than the versions tested
-  with PiUI; it still launches."; below it `unverified` with "Older than the
-  oldest version supported by PiUI."; unparseable "The installed version could
-  not be recognized.". Launch refuses only versions below the minimum and
-  unparseable ones (`HarnessUnavailable`); newer versions start normally. The
-  same rule applies to the other harnesses: Claude Code (>= 2.1.0), Prime Agent
-  (>= 0.9.2), Hermes (>= 0.21.0) and ACP agents with a declared range (a newer
-  version is a note; only a missing range still asks for the user's confirmation).
+  pre-release at or above the ceiling previews an untested line
+  (`0.166.0-alpha.2` is newer than tested). Anything else is unrecognized.
+- Host discovery reads `@openai/codex/package.json` (or, for a standalone
+  executable, the identity the CLI reports) and the found `version`. Inside the
+  range it is `available` with `versionStatus: "verified"`; above it `available`
+  with `versionStatus: "newer"` ("Newer than tested", launch enabled); below it
+  "Older than the oldest version supported by PiUI." (`HarnessUnavailable`);
+  unparseable "The installed version could not be recognized." (also refused: the
+  version line is part of the identity proof).
 - The bridge checks the running app-server itself: the first token of the
   `initialize` `userAgent` (`<originator>/<version> (<os>; <arch>) <terminal>
-  (<client name>; <client version>)`, originator = our `clientInfo.name`) must be
-  at least the minimum, else `unsupported-native-version` before `initialized`.
-  The trailing client version is never read.
-- Why 0.166.0: 0.147.0, 0.153.4, 0.157.1, 0.163.0 and 0.165.0 were audited
-  (tables below). Patch releases do not change the protocol. 0.158.0-0.162.1
-  and 0.164.x were not run one by one: the schema diffs are additive for every
-  surface the bridge uses. A later release is not refused; if the protocol
-  drifts the bridge fails closed on the first frame it cannot validate, and the
-  ceiling is raised after the next audit.
-- Auditing a new version (and raising the ceiling): generate the new version's bindings
+  (<client name>; <client version>)`, originator = our `clientInfo.name`) must
+  parse and be at or above the minimum, else `unsupported-native-version` before
+  `initialized`; a newer version passes. The trailing client version is never
+  read. The `userAgent` carries our own originator, so it is not identity proof by
+  itself: the `initialize` answer must also carry `codexHome` (and the product
+  token), else `native-protocol-mismatch`. A rejected `initialize` or a missing
+  required field is `native-protocol-mismatch` as well.
+- Verified on the installed codex-cli 0.165.0: `initialize` returns
+  `{userAgent:"<originator>/0.165.0 (...)", codexHome, platformFamily, platformOs}`,
+  then unsolicited `configWarning`, `remoteControl/status/changed` and
+  `account/updated` (with `emittedAtMs`) notifications, all handled as housekeeping
+  (tolerance rule above); all seven `--disable` names still exist.
+- Why the range ends at 0.166.0: 0.147.0, 0.153.4, 0.157.1, 0.163.0 and 0.165.0
+  were audited (tables below). Patch releases do not change the protocol:
+  `codex-rs/app-server` and `codex-rs/app-server-protocol` are identical at
+  0.157.0 and 0.157.1 (and at 0.156.0 and 0.156.1), so "tested" covers whole
+  lines. 0.158.0-0.162.1 and 0.164.x were not run one by one: the schema diffs
+  are additive for every surface the bridge uses. Later releases are admitted as
+  newer than tested; if the protocol drifts the bridge fails closed on the first
+  frame it cannot validate, and auditing a release only moves the ceiling.
+- Raising the ceiling (documentation of what was tested, not a launch gate):
+  generate the new version's bindings
   (`codex app-server generate-ts --experimental --out <dir>` and
   `codex app-server generate-json-schema --experimental --out <schema-dir>`),
   re-check every row below, run
   `node apps/desktop/scripts/codex-protocol-audit.mjs <schema-dir>` (every frame
   the bridge sends in the fixture flows must validate, with no undeclared
   fields), check that `codex features list` still registers each `--disable`
-  flag (an unknown name is a hard CLI error), extend the fixture
+  flag (the bridge probes it at every start, but a rename should be noticed
+  here), extend the fixture
   (`--codex-version=`) and tests for any change, run the live handshake
   (`PIUI_CODEX_LIVE_HANDSHAKE=<abs path to bin/codex.js> node --test
   --test-name-pattern live: crates/piui-runtime/bridge/codex.test.mjs`; it
@@ -345,9 +414,13 @@ mode, message, requestedSchema, _meta}`; a request without `mode` (MCP before
 
 One generic adapter drives every Agent Client Protocol v1 agent described by a
 registry descriptor (ADR-034, `contracts/acp-agent-descriptor-v1.schema.json`).
-The host resolves the descriptor (PATH or absolute program, Windows `.exe` or an
-npm/pnpm `.cmd` shim started as `node <script>`; never a shell), checks trust and
-confirmations, and starts the bridge with `NativeRuntime::spawn_acp`: the bridge
+The host resolves the descriptor (PATH or absolute program, Windows `.exe`, or an
+npm/pnpm `.cmd` shim started as `node <script>` or, when the shim points at a
+native package-bin executable such as `opencode.cmd` ->
+`node_modules\opencode-ai\bin\opencode.exe`, as that validated `.exe`; never a
+shell or `cmd.exe`, and any other batch or PowerShell launcher is refused),
+checks command-line trust and secret consent, and starts the bridge with
+`NativeRuntime::spawn_acp`: the bridge
 process starts from a cleared environment (the base locations in
 `acp::ACP_BASE_ENVIRONMENT` plus the descriptor's allowlisted names; secret-like
 names only after an explicit confirmation), and the agent inherits exactly that
@@ -355,6 +428,32 @@ environment inside the same Job / process group. `initialize` params add
 `acp: {id, displayName, disable: {loadSession, models, modes, mcpHttp}}`; the
 command line itself arrives as `runtimeProgram`/`runtimeArgs`.
 
+- Versions and trust (ADR-045): there is no per-version confirmation. A user or
+  plugin descriptor runs (even `--version`) only after the user trusts the exact
+  resolved command line, and secret-like environment names pass only with a
+  per-name consent; built-in descriptors are trusted by shipping, their secret
+  names still need consent. A version never invalidates trust, only a changed
+  command line or descriptor does. The probed version is advisory: `Older` than a
+  declared minimum refuses; `Newer`, `Unrecognized`, `ProbeFailed` and
+  `NoVerifiedRange` launch. The host keeps `confirm_version` as a no-op
+  (`NothingToConfirm`), ignores a stored `confirmedVersion` and never produces
+  `AcpRefusal::VersionUnconfirmed` or the `unverified-version` state. `initialize`
+  is the gate: any `protocolVersion` other than 1, a rejected `initialize` or an
+  answer without `protocolVersion` fails with `unsupported-protocol` or
+  `native-protocol-mismatch`.
+- Built-in descriptors (each probes `--version`; no tested range yet): `gemini-cli`
+  `gemini --acp`, `opencode` `opencode acp`, `qwen-code` `qwen --acp`,
+  `github-copilot` `copilot --acp`, `goose` `goose acp`, `kimi` `kimi acp`,
+  `cursor` `cursor-agent acp`. An id of a built-in cannot be reused by a user or
+  plugin descriptor. Not bundled: `codex-acp` and `claude-agent-acp` (native
+  adapters exist; `claude-agent-acp` would bypass the ADR-029 subscription checks),
+  Aider (no ACP interface; separate adapter spike), and Antigravity, Droid, Cline,
+  Auggie, Kilo and Vibe (user or plugin descriptors).
+- Tolerance (see Version policy): an unknown well-formed `session/update` kind or
+  content block is one deduplicated generic fallback block per type; an unknown
+  notification method is ignored without a block only when it is documented
+  housekeeping, else it yields the same fallback; an unknown agent request (any
+  method but `session/request_permission`) is answered `-32601`.
 - Transport: JSON-RPC 2.0 over the agent's stdio, one JSON object per LF; split
   on LF bytes only (U+2028 stays inside a frame), a trailing CR is dropped, a
   partial frame above 32 MiB or an unparseable frame stops the agent (status
@@ -419,9 +518,12 @@ Drives the user's own installed, unmodified `claude` executable (`runtimeProgram
 resolved by the host; `shell:false`, never `--bare`) as
 `-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --replay-user-messages --permission-prompt-tool stdio [--permission-mode <mode>]`
 plus `--session-id <uuid>` (new) or `--resume <uuid>` (open) and
-`--settings {"fastMode":false}`. Protocol verified against Claude Code 2.1.232;
-the host accepts `>=2.1.0 <3.0.0` from `claude --version`. No provider client or
-model loop.
+`--settings {"fastMode":false}`. Protocol verified against Claude Code 2.1.232
+(2.1.318 installed here); the tested range is `>=2.1.0 <3.0.0` from `claude
+--version`, whose line must carry `(Claude Code)` (identity proof, else refused).
+The minimum is enforced; a 3.x release is admitted as "newer than tested" and the
+bridge's `initialize` and `system/init` checks (subscription login, applied
+permission mode, fast mode) stay authoritative. No provider client or model loop.
 
 - Subscription only. The child environment drops API keys, bearer, identity and
   federation tokens (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
@@ -515,3 +617,27 @@ model loop.
 - Catalog: models map `value`/`displayName`/`supportedEffortLevels` (disabled
   rows dropped, provider `anthropic`, `supportsFast` always `false`); commands
   map to `skill` resources. Subagent types are omitted (no matching resource kind).
+
+## Prime Agent and Hermes versions (`prime.mjs`, `hermes.mjs`)
+
+Both follow the Version policy above; the exact pins are gone.
+
+- Prime Agent (`createPrimeAdapter`): minimum `0.9.2`, declared as
+  `const MINIMUM_PRIME_VERSION = "0.9.2";` (the tested range is `0.9.2`-`0.9.4`;
+  0.9.5 is installed here and admitted). The package manifest is identity, not
+  protocol negotiation: its name and the SDK exports the bridge imports must
+  resolve, and the bridge checks the SDK methods it needs before use (session
+  construction, `getState()`, `getMessages()`, subscription, cancellation and
+  the policy controls). A missing name, export or method fails with
+  `native-protocol-mismatch`. An unknown session event reaches the generic
+  fallback block instead of being dropped. The shared daemon is still never used.
+- Hermes (`createHermesAdapter`): minimum `0.21.0`, declared as
+  `const MINIMUM_HERMES_VERSION = "0.21.0";` (tested range `0.21.0`-`0.22.0`). The
+  ACP `initialize` must negotiate `protocolVersion` 1 and the advertised
+  capabilities the adapter uses, else `unsupported-protocol` or
+  `native-protocol-mismatch`; `agentInfo.version` is no longer compared for
+  equality. The history and provenance checks are unchanged: resume still
+  rejects a missing or wrong-workspace session.
+- Pi has no version gate. The bridge validates the RPC answers it relies on and the
+  requested tools and settings; optional feature discovery never becomes a version
+  allow-list.

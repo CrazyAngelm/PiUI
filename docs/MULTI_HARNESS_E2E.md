@@ -24,7 +24,7 @@ The normal-process scenario requires and checks:
 - the real workspace v11 catalog reports protocol 11;
 - an isolated existing folder is registered with typed `add_project_v10`, then its explicit **Review trust** / **Trust** decision is completed in the UI;
 - actual unavailable or unverified harness status and its host reason remain visible in the new-session UI;
-- a prompt-free native session starts only if the host reports either Prime Agent SDK `0.9.2` or a Codex app-server inside its verified version range (`crates/piui-runtime/bridge/CONTRACT.md`) as available;
+- a prompt-free native session starts only if the host reports either Prime Agent SDK `0.9.2` or later or a Codex app-server `0.147.0` or later as available (the tested ceiling is advisory, ADR-045; `crates/piui-runtime/bridge/CONTRACT.md`);
 - the native session is snapshotted, renamed, and kept open across the read-only legacy-history route; visible UI controls then close it, explicitly reopen the same opaque zero-turn workspace session without a duplicate catalog row, prove Idle, and close it again for safe-mode restart;
 - snapshot JSON does not expose `nativeId` or `nativePath`;
 - profile, team, pipeline, and launch-command definitions are created, read, updated, reloaded, and deleted through the visible workspace UI and the real orchestration store;
