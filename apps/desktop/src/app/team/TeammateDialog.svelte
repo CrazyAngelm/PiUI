@@ -171,7 +171,7 @@
       label: item.name,
       description: item.version ? `v${item.version}` : undefined,
       disabled: item.status !== 'available',
-      disabledReason: item.reason ?? $t('Not available'),
+      disabledReason: $t(item.reason ?? 'Not available'),
     })),
   );
   const permissionItems = $derived<PickerItem<PermissionMode>[]>([

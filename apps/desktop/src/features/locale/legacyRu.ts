@@ -307,7 +307,7 @@ export const legacyRu: Readonly<Record<string, string>> = {
   'Skills could not be loaded from Codex.': 'Не удалось загрузить skills Codex.',
   'MCP servers could not be loaded from Codex.': 'Не удалось загрузить MCP-серверы Codex.',
   'MCP tools could not be loaded from Codex.': 'Не удалось загрузить MCP-инструменты Codex.',
-  'Skills, MCP servers and tools could not be loaded from the harness.': 'Не удалось загрузить skills, MCP-серверы и инструменты харнеса.',
+  'Skills, MCP servers and tools could not be loaded from the harness.': 'Не удалось загрузить skills, MCP-серверы и инструменты агента.',
   'Codex reported a configuration warning. Review your Codex config.toml.': 'Codex сообщил о предупреждении конфигурации. Проверьте config.toml Codex.',
   'Codex reported a deprecated setting or feature. Review your Codex configuration.': 'Codex сообщил об устаревшей настройке или функции. Проверьте конфигурацию Codex.',
   'Skills could not be loaded from Pi.': 'Не удалось загрузить skills Pi.',

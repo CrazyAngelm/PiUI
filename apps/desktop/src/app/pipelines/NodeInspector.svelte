@@ -139,7 +139,7 @@
       return {
         value: kind,
         label: status?.name ?? harnessConfiguration(kind).name,
-        description: status?.status === 'available' ? (status.version ? `v${status.version}` : $t('Ready')) : status?.reason ?? $t('Not found on this computer'),
+        description: status?.status === 'available' ? (status.version ? `v${status.version}` : $t('Ready')) : $t(status?.reason ?? 'Not found on this computer'),
         ...(oneShotMissing ? { disabled: true, disabledReason: $t('Cannot answer read-only without tools') } : {}),
       };
     }),

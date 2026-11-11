@@ -55,7 +55,7 @@ export const teamRu: Readonly<Record<string, string>> = {
   'What it is good at and when to hand it work. Agents read this in the roster.':
     'В чём он силён и когда передавать ему работу. Агенты видят это в списке команды.',
   'PiUI saves a one-step pipeline for it, marked as managed by @{0}.': 'PiUI сохранит для него одношаговый пайплайн с пометкой «управляется @{0}».',
-  'Pick a harness': 'Выберите харнесс',
+  'Pick a harness': 'Выберите агента',
   Instructions: 'Инструкции',
   'How it should work on a card. The card text arrives as its input.': 'Как работать над карточкой. Текст карточки придёт на вход.',
   'No saved pipelines yet': 'Сохранённых пайплайнов пока нет',
@@ -76,16 +76,16 @@ export const teamRu: Readonly<Record<string, string>> = {
   'Create teammate': 'Создать участника',
   // Mentions and the chat executor picker
   'Type @ to mention a teammate · Ctrl+Enter sends': 'Наберите @, чтобы упомянуть участника · Ctrl+Enter отправляет',
-  'Harness directly': 'Напрямую харнессу',
+  'Harness directly': 'Напрямую агенту',
   'More pipelines…': 'Другие пайплайны…',
-  'Search teammates, harnesses and pipelines': 'Поиск участников, харнессов и пайплайнов',
+  'Search teammates, harnesses and pipelines': 'Поиск участников, агентов и пайплайнов',
   // Errors (fixed copy per host code)
   'Safe mode is on: PiUI does not change teammates.': 'Включён безопасный режим: PiUI не меняет участников.',
   'Check the teammate details and try again.': 'Проверьте данные участника и повторите попытку.',
   'This teammate or its pipeline is no longer available.': 'Этот участник или его пайплайн больше недоступен.',
   'Another teammate of this project already uses this handle.': 'Другой участник проекта уже использует это имя.',
   'The teammate changed meanwhile. Reopen it and try again.': 'Участник тем временем изменился. Откройте его заново и повторите.',
-  'This harness cannot run a teammate with these settings.': 'Этот харнесс не может запустить участника с такими настройками.',
+  'This harness cannot run a teammate with these settings.': 'Этот агент не может запустить участника с такими настройками.',
   'This project has the most teammates allowed.': 'В проекте уже максимальное число участников.',
   'PiUI could not save the teammate. Nothing was lost.': 'PiUI не удалось сохранить участника. Ничего не потеряно.',
   'The teammate operation could not be completed.': 'Не удалось выполнить операцию с участником.',

@@ -9,9 +9,9 @@ export const acpRu: Readonly<Record<string, string>> = {
 
   // Settings → Harnesses (src/app/settings).
   'Safe mode: PiUI starts no agent program, so harness checks and changes are off.':
-    'Безопасный режим: PiUI не запускает программы агентов, поэтому проверки и изменения харнесов отключены.',
-  'Loading harnesses…': 'Загрузка харнесов…',
-  'Built-in harnesses': 'Встроенные харнесы',
+    'Безопасный режим: PiUI не запускает программы агентов, поэтому проверки и изменения агентов отключены.',
+  'Loading harnesses…': 'Загрузка агентов…',
+  'Built-in harnesses': 'Встроенные агенты',
   Location: 'Расположение',
   'Tested with PiUI': 'Проверено с PiUI',
   'Sign-in': 'Вход',
@@ -66,12 +66,12 @@ export const acpRu: Readonly<Record<string, string>> = {
     'Этому загрузчику нужна оболочка, а PiUI никогда её не использует. Укажите в описании исполняемый файл или скрипт Node.',
   'Node.js is needed to start this agent but was not found.': 'Для запуска этого агента нужен Node.js, но он не найден.',
   "Review and trust this agent's command line in Settings → Harnesses.":
-    'Проверьте командную строку этого агента и доверьте её в «Настройки → Харнесы».',
+    'Проверьте командную строку этого агента и доверьте её в «Настройки → Агенты».',
   'The installed version is older than the versions tested with PiUI.': 'Установленная версия старше версий, проверенных с PiUI.',
   'The agent did not report a version PiUI can recognize.': 'Агент не сообщил версию, которую PiUI может распознать.',
   "Sign in with the agent's own app, then try again. Settings → Harnesses shows how.":
-    'Войдите через приложение самого агента и попробуйте снова. Как это сделать — в «Настройки → Харнесы».',
-  'This agent is no longer registered in Settings → Harnesses.': 'Этот агент больше не зарегистрирован в «Настройки → Харнесы».',
+    'Войдите через приложение самого агента и попробуйте снова. Как это сделать — в «Настройки → Агенты».',
+  'This agent is no longer registered in Settings → Harnesses.': 'Этот агент больше не зарегистрирован в «Настройки → Агенты».',
   'Claude Code runs only on your Claude subscription: run `claude` in a terminal and use /login.':
     'Claude Code работает только по вашей подписке Claude: запустите `claude` в терминале и выполните /login.',
   "Sign in with Codex's own flow: run `codex login` in a terminal.": 'Войдите средствами Codex: выполните `codex login` в терминале.',
@@ -98,8 +98,8 @@ export const acpRu: Readonly<Record<string, string>> = {
     'Установленный harness использует протокол, который эта версия PiUI не поддерживает. Обновите PiUI или harness.',
 
   // Registry errors (harness_registry_v1).
-  'Harness checks and changes are disabled in safe mode.': 'В безопасном режиме проверки и изменения харнесов отключены.',
-  'The harness list changed. Review it and try again.': 'Список харнесов изменился. Проверьте его и попробуйте снова.',
+  'Harness checks and changes are disabled in safe mode.': 'В безопасном режиме проверки и изменения агентов отключены.',
+  'The harness list changed. Review it and try again.': 'Список агентов изменился. Проверьте его и попробуйте снова.',
   'An agent with this ID already exists.': 'Агент с таким ID уже существует.',
   'This agent is no longer registered.': 'Этот агент больше не зарегистрирован.',
   'Agents that ship with PiUI cannot be removed or re-trusted.': 'Агентов, поставляемых с PiUI, нельзя удалить или доверить заново.',
@@ -108,9 +108,9 @@ export const acpRu: Readonly<Record<string, string>> = {
   'The program was not found, so there is nothing to trust yet.': 'Программа не найдена, доверять пока нечему.',
   'There is nothing to confirm for this agent right now. Check it again.': 'Сейчас для этого агента нечего подтверждать. Проверьте его снова.',
   'Remove an agent before adding another (32 at most).': 'Удалите агента, прежде чем добавить нового (не больше 32).',
-  'PiUI could not save the harness list.': 'PiUI не удалось сохранить список харнесов.',
-  'PiUI could not read the harness list.': 'PiUI не удалось прочитать список харнесов.',
-  'Wait for the current harness change to finish.': 'Дождитесь завершения текущего изменения харнесов.',
+  'PiUI could not save the harness list.': 'PiUI не удалось сохранить список агентов.',
+  'PiUI could not read the harness list.': 'PiUI не удалось прочитать список агентов.',
+  'Wait for the current harness change to finish.': 'Дождитесь завершения текущего изменения агентов.',
 
   // Descriptor validation (host AcpDescriptorError and the form).
   'The descriptor is not valid JSON or contains unknown fields.': 'Описание не является корректным JSON или содержит неизвестные поля.',
@@ -206,9 +206,9 @@ export const acpRu: Readonly<Record<string, string>> = {
 
   // Starting an ACP chat (workspace errors).
   'Review and trust this agent in Settings → Harnesses before starting it.':
-    'Перед запуском проверьте этого агента и доверьте его в «Настройки → Харнесы».',
+    'Перед запуском проверьте этого агента и доверьте его в «Настройки → Агенты».',
   "Confirm this agent's version in Settings → Harnesses before starting it.":
-    'Перед запуском подтвердите версию этого агента в «Настройки → Харнесы».',
+    'Перед запуском подтвердите версию этого агента в «Настройки → Агенты».',
   'Sign in to this agent with its own app, then try again. Settings → Harnesses shows how.':
-    'Войдите в этого агента через его собственное приложение и попробуйте снова. Как это сделать — в «Настройки → Харнесы».',
+    'Войдите в этого агента через его собственное приложение и попробуйте снова. Как это сделать — в «Настройки → Агенты».',
 };
