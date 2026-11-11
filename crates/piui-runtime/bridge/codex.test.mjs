@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { isAbsolute, toNamespacedPath } from "node:path";
+import { isAbsolute, join, toNamespacedPath, win32 } from "node:path";
 import test from "node:test";
 import { createCodexAdapter } from "./codex.mjs";
 
@@ -40,8 +42,8 @@ test("still rejects a native thread opened in another workspace", async () => {
   await assert.rejects(createCodexAdapter({ ...config, runtimeArgs: [fixture, "--wrong-cwd"] }, () => {}), { bridgeCode: "native-cwd-mismatch" });
 });
 
-async function waitFor(predicate) {
-  const deadline = Date.now() + 2000;
+async function waitFor(predicate, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const value = predicate();
     if (value) return value;
@@ -425,25 +427,25 @@ test("fails closed for unsupported mandatory policy", async () => {
   );
 });
 
-test("admits app-server versions only inside the verified range", async () => {
-  // Audited protocols (0.147.0, 0.153.4, 0.157.1) and releases between them.
-  for (const version of ["0.147.0", "0.148.0", "0.153.4", "0.157.1", "0.157.1-alpha", "0.157.9"]) {
+test("refuses only app-server versions older than the minimum; newer than tested starts", async () => {
+  // Audited protocols (0.147.0, 0.153.4, 0.157.1), releases between them and
+  // every newer release: the tested ceiling (0.158.0) is advisory, so 0.158.0,
+  // previews of untested lines, the installed 0.165.0 and a future major start.
+  for (const version of [
+    "0.147.0", "0.148.0", "0.153.4", "0.157.1", "0.157.1-alpha", "0.157.9",
+    "0.158.0", "0.158.0-alpha.2", "0.159.0-alpha.4", "0.165.0", "1.0.0",
+  ]) {
     const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, `--codex-version=${version}`] }, () => {});
     try { assert.equal(adapter.snapshot().status, "idle", version); }
     finally { await adapter.dispose(); }
   }
   const rejected = [
     // Older than the minimum; a pre-release precedes its release.
-    ["0.146.9", /requires a verified Codex/],
-    ["0.147.0-alpha.1", /requires a verified Codex/],
-    // Newer than tested, including previews of the untested release line.
-    ["0.158.0", /newer than the versions tested/],
-    ["0.158.0-alpha.2", /newer than the versions tested/],
-    ["0.159.0-alpha.4", /newer than the versions tested/],
-    ["1.0.0", /newer than the versions tested/],
+    ["0.146.9", /older than the oldest version/],
+    ["0.147.0-alpha.1", /older than the oldest version/],
     // Only the leading product token names Codex: the trailing client version
     // `(piui; 0.2.0)` never stands in for an unrecognized Codex version.
-    ["latest", /requires a verified Codex/],
+    ["latest", /could not be recognized/],
   ];
   for (const [version, message] of rejected) {
     const events = [];
@@ -458,6 +460,260 @@ test("admits app-server versions only inside the verified range", async () => {
     createCodexAdapter({ ...config, runtimeArgs: [fixture, "--raw-user-agent"] }, () => {}),
     (error) => error.bridgeCode === "unsupported-native-version",
   );
+});
+
+test("a newer app-server still has to pass the startup checks: protocol drift fails closed with a typed error", async () => {
+  const newer = "--codex-version=0.165.0";
+  const startup = [
+    ["initialize", "--reject-startup=initialize"],
+    ["initialize", "--malformed-startup=initialize"],
+    ["thread/start", "--reject-startup=thread/start"],
+    ["thread/start", "--malformed-startup=thread/start"],
+  ];
+  for (const [method, flag] of startup) {
+    const events = [];
+    await assert.rejects(
+      createCodexAdapter({ ...config, runtimeArgs: [fixture, newer, flag] }, (event) => events.push(event)),
+      (error) => error.bridgeCode === "native-protocol-mismatch"
+        && !/PRIVATE_NATIVE_DETAIL/.test(error.safeMessage) && !/PRIVATE_NATIVE_DETAIL/.test(JSON.stringify(events)),
+      `${method} ${flag}`,
+    );
+    assert.equal(events.some((event) => event.type === "binding"), false, flag);
+  }
+  // Resuming goes through thread/resume, a different required request.
+  for (const flag of ["--reject-startup=thread/resume", "--malformed-startup=thread/resume"]) {
+    await assert.rejects(
+      createCodexAdapter({ ...config, nativeId: "thread-resumed", runtimeArgs: [fixture, newer, flag] }, () => {}),
+      { bridgeCode: "native-protocol-mismatch" },
+      flag,
+    );
+  }
+  // model/list is read after the session is up; the session itself stays usable.
+  for (const flag of ["--reject-startup=model/list", "--malformed-startup=model/list"]) {
+    const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, newer, flag] }, () => {});
+    try {
+      await assert.rejects(adapter.models(), (error) => error.bridgeCode === "native-protocol-mismatch" && !/PRIVATE_NATIVE_DETAIL/.test(error.safeMessage), flag);
+      assert.equal(adapter.snapshot().status, "idle");
+    } finally { await adapter.dispose(); }
+  }
+});
+
+test("known housekeeping notifications of 0.165 are ignored without a block or an error", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--codex-version=0.165.0", "--housekeeping"] }, (event) => events.push(event));
+  try {
+    // The fixture's own `warning` (after its unsupported attestation request is
+    // answered) is the only fallback: account/updated and remoteControl/status/changed add none.
+    await waitFor(() => adapter.snapshot().blocks.some((block) => block.safeSummary === "Unsupported Codex event: warning"));
+    assert.deepEqual(adapter.snapshot().blocks.filter((block) => block.fallback).map((block) => block.safeSummary), ["Unsupported Codex event: warning"]);
+    assert.doesNotMatch(JSON.stringify({ events, snapshot: adapter.snapshot() }), /account\/updated|remoteControl|planType/);
+    assert.deepEqual(events.filter((event) => event.type === "error").map((event) => event.message), ["Codex requested an unsupported host operation."]);
+  } finally { await adapter.dispose(); }
+});
+
+test("an unknown notification becomes one fallback block per method however often it repeats", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--unknown-repeat"] }, (event) => events.push(event));
+  try {
+    await waitFor(() => adapter.snapshot().blocks.some((block) => block.safeSummary === "Unsupported Codex event: future/other"));
+    const summaries = adapter.snapshot().blocks.filter((block) => block.fallback).map((block) => block.safeSummary);
+    assert.equal(summaries.filter((summary) => summary === "Unsupported Codex event: future/stream/delta").length, 1);
+    assert.equal(summaries.filter((summary) => summary === "Unsupported Codex event: future/other").length, 1);
+    assert.equal(events.filter((event) => event.type === "block" && event.block.fallback && /future\//.test(event.block.safeSummary)).length, 2);
+    assert.doesNotMatch(JSON.stringify({ events, snapshot: adapter.snapshot() }), /PRIVATE_PAYLOAD/);
+    assert.equal(adapter.snapshot().status, "idle");
+  } finally { await adapter.dispose(); }
+});
+
+test("a handler that throws on a well-formed frame becomes one fallback and does not end the session", async () => {
+  const events = [];
+  const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--throwing-handlers"] }, (event) => events.push(event));
+  try {
+    // The throwing request is answered with an error instead of left pending.
+    await waitFor(() => adapter.snapshot().title === "throwing-request:error");
+    const summaries = adapter.snapshot().blocks.filter((block) => block.fallback).map((block) => block.safeSummary);
+    for (const method of ["item/fileChange/patchUpdated", "item/started", "item/tool/requestUserInput"]) {
+      assert.equal(summaries.filter((summary) => summary === `Unsupported Codex event: ${method}`).length, 1, method);
+    }
+    assert.equal(adapter.snapshot().approvals.some((approval) => approval.title === "Codex needs input"), false);
+    assert.notEqual(adapter.snapshot().status, "failed");
+    assert.deepEqual(await adapter.prompt({ text: "after the failures", mode: "prompt" }), { accepted: true });
+    await waitFor(() => events.some((event) => event.type === "turnCompleted"));
+    assert.deepEqual(events.filter((event) => event.type === "turnCompleted"), [{ type: "turnCompleted", outcome: "succeeded" }]);
+    assert.equal(adapter.snapshot().status, "idle");
+  } finally { await adapter.dispose(); }
+});
+
+const disabledNames = (adapter) => adapter.snapshot().title.replace(/^disable:/, "").split(",");
+const BASE_DISABLES = ["apps", "plugins", "remote_plugin", "recommended_plugins", "shell_snapshot"];
+const echoedDisables = async (overrides, flags = []) => {
+  const adapter = await createCodexAdapter({ ...config, ...overrides, runtimeArgs: [fixture, "--echo-disables", ...flags] }, () => {});
+  try {
+    await waitFor(() => adapter.snapshot().title.startsWith("disable:"));
+    return disabledNames(adapter);
+  } finally { await adapter.dispose(); }
+};
+
+test("every restriction reaches the app server as --disable when the installed CLI lists its features", async () => {
+  assert.deepEqual(await echoedDisables({}), BASE_DISABLES);
+  assert.deepEqual(await echoedDisables({ nativeSubagents: false }), [...BASE_DISABLES, "multi_agent", "multi_agent_v2"]);
+  // A feature that is registered but retired (stage `removed`) keeps its flag.
+  assert.deepEqual(await echoedDisables({}, ["--features-list=removed:apps"]), BASE_DISABLES);
+});
+
+test("a --disable for a feature absent from a successful listing is dropped", async () => {
+  assert.deepEqual(await echoedDisables({}, ["--features-list=without:plugins,shell_snapshot"]), ["apps", "remote_plugin", "recommended_plugins"]);
+  // Not a requested policy here, so an absent subagent feature changes nothing.
+  assert.deepEqual(await echoedDisables({}, ["--features-list=without:multi_agent_v2"]), BASE_DISABLES);
+});
+
+test("without a successful listing every --disable stays: a failed or unrecognized probe never retries with fewer restrictions", async () => {
+  for (const mode of ["fail", "garbage", "empty"]) {
+    assert.deepEqual(
+      await echoedDisables({ nativeSubagents: false }, [`--features-list=${mode}`]),
+      [...BASE_DISABLES, "multi_agent", "multi_agent_v2"],
+      mode,
+    );
+  }
+});
+
+const processAlive = (pid) => {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
+};
+
+// The fixture probe mimics the Node wrapper of a native codex: it spawns a
+// grandchild (the native executable) and never finishes. Killing only the
+// wrapper would leave that grandchild alive, so both must be gone before the
+// adapter starts the app server, and the start keeps every restriction.
+// The flood probe is ended by the output limit, so its timeout is never the cause.
+for (const [mode, cause, timeoutMs] of [["stall", "stalls past its timeout", 3000], ["flood", "overflows its output limit", 60000]]) {
+  test(`a features probe that ${cause} is ended with its whole process tree before startup continues`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "piui-codex-probe-"));
+    const pidFile = join(dir, "pids.json");
+    let pids;
+    try {
+      const adapter = await createCodexAdapter(
+        { ...config, runtimeArgs: [fixture, "--echo-disables", `--features-list=${mode}`, `--pid-file=${pidFile}`] },
+        () => {},
+        undefined,
+        undefined,
+        undefined,
+        { timeoutMs },
+      );
+      try {
+        await waitFor(() => adapter.snapshot().title.startsWith("disable:"), 15000);
+        assert.deepEqual(disabledNames(adapter), BASE_DISABLES);
+      } finally { await adapter.dispose(); }
+      pids = JSON.parse(readFileSync(pidFile, "utf8"));
+      assert.ok(Number.isInteger(pids.wrapper) && Number.isInteger(pids.grandchild));
+      await waitFor(() => !processAlive(pids.wrapper) && !processAlive(pids.grandchild), 15000);
+    } finally {
+      for (const pid of Object.values(pids ?? {})) { try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+// Windows ends the tree with taskkill, never a shell. The injected spawn lets
+// every platform assert that exact invocation and that startup waits for it.
+const windowsProbeRun = async (taskkillBehavior) => {
+  const order = [];
+  const calls = [];
+  let probe;
+  const fakeSpawn = (program, args, options) => {
+    calls.push({ program, args, options });
+    const child = new EventEmitter();
+    if (calls.length === 1) {
+      probe = Object.assign(child, {
+        pid: 4242,
+        exitCode: null,
+        signalCode: null,
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+        kill: () => { order.push("probe.kill"); exitProbe(); },
+      });
+      return probe;
+    }
+    if (taskkillBehavior === "throws") throw new Error("taskkill cannot start");
+    setTimeout(() => {
+      // A failing taskkill leaves the wrapper (and any descendants) unproven.
+      if (taskkillBehavior !== "fails") exitProbe();
+      order.push("taskkill-exit");
+      child.emit("exit", taskkillBehavior === "fails" ? 128 : 0, null);
+    }, 40);
+    return Object.assign(child, { kill: () => {} });
+  };
+  const exitProbe = () => {
+    if (probe.exitCode !== null) return;
+    probe.exitCode = 1;
+    probe.emit("exit", 1, null);
+    probe.emit("close", 1, null);
+  };
+  const openChild = (program, args, options) => {
+    order.push("app-server");
+    return spawn(program, args, options);
+  };
+  const started = createCodexAdapter(
+    // Successful listings are cached per program and arguments; a distinct
+    // argument keeps this case from reusing another test's listing.
+    { ...config, runtimeArgs: [fixture, "--echo-disables", `--probe-case=${taskkillBehavior}`] },
+    () => {},
+    undefined,
+    openChild,
+    undefined,
+    { timeoutMs: 30, platform: "win32", spawn: fakeSpawn },
+  );
+  if (taskkillBehavior !== "exits") {
+    await assert.rejects(started, { bridgeCode: "native-unavailable" });
+    return { calls, order };
+  }
+  const adapter = await started;
+  try {
+    await waitFor(() => adapter.snapshot().title.startsWith("disable:"));
+    assert.deepEqual(disabledNames(adapter), BASE_DISABLES);
+  } finally { await adapter.dispose(); }
+  return { calls, order };
+};
+
+test("on Windows a stalled features probe is ended by taskkill (absolute path, no shell) before startup continues", async () => {
+  const { calls, order } = await windowsProbeRun("exits");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].options.detached, false);
+  assert.equal(calls[0].options.windowsHide, true);
+  assert.ok(win32.isAbsolute(calls[1].program) && /\\System32\\taskkill\.exe$/i.test(calls[1].program), calls[1].program);
+  assert.deepEqual(calls[1].args, ["/PID", "4242", "/T", "/F"]);
+  assert.deepEqual(calls[1].options, { shell: false, windowsHide: true, stdio: "ignore" });
+  // The wrapper is killed too as a fallback, but only after taskkill finished,
+  // and the app server starts only after that.
+  assert.deepEqual(order, ["taskkill-exit", "probe.kill", "app-server"]);
+});
+
+test("on Windows a taskkill that cannot start refuses startup instead of running beside the probe", async () => {
+  const { calls, order } = await windowsProbeRun("throws");
+  assert.equal(calls.length, 2);
+  assert.deepEqual(order, ["probe.kill"]);
+});
+
+test("on Windows a taskkill that fails refuses startup even if the wrapper exits", async () => {
+  const { calls, order } = await windowsProbeRun("fails");
+  assert.equal(calls.length, 2);
+  assert.deepEqual(order, ["taskkill-exit", "probe.kill"]);
+});
+
+test("a native-subagent policy that cannot be proven fails closed before the app server starts", async () => {
+  for (const mode of ["without:multi_agent", "without:multi_agent_v2", "removed:multi_agent_v2"]) {
+    const flags = [fixture, `--features-list=${mode}`];
+    await assert.rejects(
+      createCodexAdapter({ ...config, nativeSubagents: false, runtimeArgs: flags }, () => {}),
+      { bridgeCode: "unsupported-native-subagent-policy" },
+      `nativeSubagents:false ${mode}`,
+    );
+    await assert.rejects(
+      createCodexAdapter({ ...config, coordination: true, runtimeArgs: flags }, () => {}, async () => ({})),
+      { bridgeCode: "unsupported-native-subagent-policy" },
+      `coordination ${mode}`,
+    );
+  }
 });
 
 for (const [mode, tier] of [["standard", "default"], ["fast", "fast"]]) {

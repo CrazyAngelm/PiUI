@@ -51,7 +51,7 @@ describe('UI Lab plugin host', () => {
       ['example.pipeline-pack', true],
       ['example.status-tools', true],
       ['example.tool-cards', true],
-      ['example.opencode-acp', false],
+      ['example.auggie-acp', false],
       ['lab.broken-sample', true],
     ]);
     const status = entry(registry, 'example.status-tools');
@@ -214,18 +214,18 @@ describe('UI Lab plugin host', () => {
       await vi.runAllTimersAsync();
       return pending;
     };
-    expect((await harnesses()).agents.some((agent) => agent.descriptor.id === 'opencode')).toBe(false);
+    expect((await harnesses()).agents.some((agent) => agent.descriptor.id === 'auggie')).toBe(false);
     const { registry } = await plugins(host);
-    const enabled = await plugins(host, { type: 'setEnabled', expectedRevision: registry.revision, id: 'example.opencode-acp', enabled: true });
-    expect(entry(enabled.registry, 'example.opencode-acp').contributes.acpAgents).toEqual([{ id: 'opencode', displayName: 'OpenCode', registered: true }]);
+    const enabled = await plugins(host, { type: 'setEnabled', expectedRevision: registry.revision, id: 'example.auggie-acp', enabled: true });
+    expect(entry(enabled.registry, 'example.auggie-acp').contributes.acpAgents).toEqual([{ id: 'auggie', displayName: 'Auggie', registered: true }]);
     const listed = await harnesses();
-    const agent = listed.agents.find((item) => item.descriptor.id === 'opencode');
-    expect(agent).toMatchObject({ source: 'plugin', plugin: { id: 'example.opencode-acp', name: 'OpenCode agent' }, trusted: false });
+    const agent = listed.agents.find((item) => item.descriptor.id === 'auggie');
+    expect(agent).toMatchObject({ source: 'plugin', plugin: { id: 'example.auggie-acp', name: 'Auggie agent' }, trusted: false });
     // It leaves with its plugin, not from Settings → Harnesses.
-    expect(await rejection(host.invoke('harness_registry_v1', { command: { type: 'remove', expectedRevision: listed.revision, id: 'opencode' } })))
+    expect(await rejection(host.invoke('harness_registry_v1', { command: { type: 'remove', expectedRevision: listed.revision, id: 'auggie' } })))
       .toMatchObject({ code: 'PLUGIN_OWNED' });
-    await plugins(host, { type: 'remove', expectedRevision: enabled.registry.revision, id: 'example.opencode-acp' });
-    expect((await harnesses()).agents.some((item) => item.descriptor.id === 'opencode')).toBe(false);
+    await plugins(host, { type: 'remove', expectedRevision: enabled.registry.revision, id: 'example.auggie-acp' });
+    expect((await harnesses()).agents.some((item) => item.descriptor.id === 'auggie')).toBe(false);
   });
 });
 

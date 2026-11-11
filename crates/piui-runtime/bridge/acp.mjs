@@ -15,6 +15,11 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
   const NOISE_LIMIT = 64;
   const AUTH_REQUIRED = -32000;
   const METHOD_NOT_FOUND = -32601;
+  const INTERNAL_ERROR = -32603;
+  // JSON-RPC errors that mean the agent did not understand a startup request.
+  const REJECTED_REQUEST = [-32600, METHOD_NOT_FOUND, -32602];
+  // Distinct unsupported-update notices kept per session.
+  const NOTICE_LIMIT = 16;
   const acp = config.acp && typeof config.acp === 'object' ? config.acp : {};
   const name = typeof acp.displayName === 'string' && acp.displayName.trim() ? acp.displayName.trim().slice(0, 64) : 'The agent';
   const disabled = acp.disable && typeof acp.disable === 'object' ? acp.disable : {};
@@ -188,6 +193,8 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
 
   // --- Session updates -> native blocks --------------------------------------
   const TOOL_NAMES = { execute: 'command', edit: 'edit', delete: 'edit', move: 'edit', read: 'read', search: 'search', fetch: 'fetch', think: 'think' };
+  // Agent-controlled keys never reach inherited properties (`__proto__`, `constructor`).
+  const own = (table, key) => typeof key === 'string' && Object.hasOwn(table, key) ? table[key] : undefined;
   const scalarSummary = value => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
     const parts = [];
@@ -232,7 +239,7 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
   const renderTool = state => {
     const { text, truncated } = toolText(state);
     const statusValue = state.status === 'completed' ? 'complete' : state.status === 'failed' ? 'failed' : state.status === 'cancelled' ? 'interrupted' : loading ? 'complete' : 'streaming';
-    put({ id: state.blockId, kind: 'tool', label: 'Tool', title: oneLine(state.title) || `${name} tool`, ...(TOOL_NAMES[state.kind] ? { toolName: TOOL_NAMES[state.kind] } : {}), text, ...(truncated ? { truncated: true } : {}), status: statusValue, collapsible: true });
+    put({ id: state.blockId, kind: 'tool', label: 'Tool', title: oneLine(state.title) || `${name} tool`, ...(own(TOOL_NAMES, state.kind) ? { toolName: own(TOOL_NAMES, state.kind) } : {}), text, ...(truncated ? { truncated: true } : {}), status: statusValue, collapsible: true });
   };
   const updateTool = (update, created) => {
     const key = String(update.toolCallId ?? '');
@@ -273,10 +280,20 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
   };
   const planBlock = entries => {
     const marks = { completed: '[x]', in_progress: '[~]', pending: '[ ]' };
-    const lines = (Array.isArray(entries) ? entries : []).slice(0, 100).map(entry => `${marks[entry?.status] ?? '[ ]'} ${oneLine(entry?.content, 300)}`);
+    const lines = (Array.isArray(entries) ? entries : []).slice(0, 100).map(entry => `${own(marks, entry?.status) ?? '[ ]'} ${oneLine(entry?.content, 300)}`);
     const { text, truncated } = bounded(lines.join('\n'));
     streaming = undefined;
     put({ id: `acp-plan-${turn}`, kind: 'custom', label: 'Plan', title: 'Plan', text, ...(truncated ? { truncated: true } : {}), collapsible: true });
+  };
+  // One generic notice per update kind: an agent that repeats an unknown update
+  // must not fill the transcript with copies of the same block.
+  const noticed = new Set();
+  const unsupportedUpdate = kind => {
+    const label = oneLine(String(kind ?? 'unknown'), 80) || 'unknown';
+    if (noticed.has(label) || noticed.size >= NOTICE_LIMIT) return;
+    noticed.add(label);
+    streaming = undefined;
+    put({ id: `acp-event-${++sequence}`, kind: 'custom', label: name, title: `${name} event`, text: `Unsupported agent update: ${label}`, fallback: true, collapsible: true });
   };
   const onUpdate = params => {
     if (params?.sessionId !== sessionId && sessionId !== undefined) return;
@@ -297,9 +314,7 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
       case 'config_option_update': applyConfigOptions(update.configOptions); break;
       // Context size and agent-side titles are not PiUI turn data.
       case 'usage_update': case 'session_info_update': break;
-      default:
-        streaming = undefined;
-        put({ id: `acp-event-${++sequence}`, kind: 'custom', label: name, title: `${name} event`, text: `Unsupported agent update: ${oneLine(String(kind ?? 'unknown'), 80)}`, fallback: true, collapsible: true });
+      default: unsupportedUpdate(kind);
     }
   };
 
@@ -317,14 +332,15 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
     const detail = known ? toolText(known).text : bounded(scalarSummary(toolCall.rawInput)).text;
     const approval = {
       id,
-      kind: APPROVAL_KINDS[toolCall.kind ?? known?.kind] ?? 'permission',
+      kind: own(APPROVAL_KINDS, toolCall.kind ?? known?.kind) ?? 'permission',
       title: oneLine(toolCall.title ?? known?.title) || `${name} asks for permission`,
       description: [`${name} asks before running this tool.`, bounded(detail, 1200).text].filter(Boolean).join('\n\n'),
       decisions: ['approve-once', 'cancel'],
       options: options.map(({ id: optionId, label }) => ({ id: optionId, label })),
     };
     approvals.set(id, { nativeId: message.id, options, approval });
-    emit({ type: 'approval', approval });
+    try { emit({ type: 'approval', approval }); }
+    catch (error) { approvals.delete(id); throw error; }
   };
 
   // --- Turns -------------------------------------------------------------------
@@ -384,12 +400,26 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
     if (!disposed) { setStatus('failed'); emit({ type: 'error', message: `${name} sent an invalid protocol message and was stopped.` }); }
     child.kill();
   };
+  const interpretationFailed = message => {
+    try {
+      const method = typeof message?.method === 'string' ? message.method : undefined;
+      // A request is answered, never left pending; a permission request is
+      // cancelled, never approved.
+      if (method !== undefined && message.id !== undefined) {
+        if (method === 'session/request_permission') write({ id: message.id, result: { outcome: { outcome: 'cancelled' } } });
+        else write({ id: message.id, error: { code: INTERNAL_ERROR, message: 'Internal error' } });
+      }
+      unsupportedUpdate(method === 'session/update' ? message.params?.update?.sessionUpdate : method ?? 'response');
+    } catch { /* Nothing more can be shown; the session carries on. */ }
+  };
   const onMessage = message => {
     if (!message || typeof message !== 'object' || Array.isArray(message)) { failTransport(); return; }
     if (typeof message.method === 'string') {
       if (message.id !== undefined) {
         if (message.method === 'session/request_permission') onPermission(message);
-        // fs/* and terminal/* were never advertised; nothing else is a client method.
+        // fs/* and terminal/* were never advertised; nothing else is a client
+        // method. Any other request, a lookalike of a permission request
+        // included, is answered with method-not-found and never reaches the user as an approval.
         else write({ id: message.id, error: { code: METHOD_NOT_FOUND, message: 'Method not found' } });
       } else if (message.method === 'session/update') onUpdate(message.params);
       return;
@@ -411,7 +441,10 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
     if (!text.trimStart().startsWith('{')) { if (++noise > NOISE_LIMIT) failTransport(); return; }
     let message;
     try { message = JSON.parse(text); } catch { failTransport(); return; }
-    onMessage(message);
+    // A well-formed frame that the adapter cannot interpret must not take the
+    // bridge down: it is answered and shown once as an unsupported update. A
+    // malformed frame never gets here; it stops the agent above.
+    try { onMessage(message); } catch { interpretationFailed(message); }
   };
   // Split only on LF bytes (never on Unicode line separators); partial
   // frames are kept as chunks, so a long frame is copied once.
@@ -506,8 +539,17 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
 
   // --- Start: initialize, then a new or loaded session ------------------------------------
   try {
-    const initialized = await request('initialize', { protocolVersion: PROTOCOL_VERSION, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: 'piui', title: 'PiUI', version: '0.1.1' } });
-    if (initialized?.protocolVersion !== PROTOCOL_VERSION) throw fail('unsupported-protocol', `${name} speaks an unsupported ACP protocol version.`);
+    // The handshake is the compatibility gate, not the agent's release number.
+    // A rejected or malformed handshake is a protocol mismatch, and so is any
+    // protocol version other than 1 (version 2 is rejected until implemented).
+    const initialized = await request('initialize', { protocolVersion: PROTOCOL_VERSION, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: 'piui', title: 'PiUI', version: '0.2.7' } }).catch(error => {
+      if (error?.bridgeCode !== 'native-request-failed') throw error;
+      throw error.nativeCode === AUTH_REQUIRED ? fail('acp-sign-in-required', `Sign in to ${name} first.`, { authMethods: [] }) : fail('native-protocol-mismatch', `${name} rejected the ACP handshake.`);
+    });
+    if (initialized === null || typeof initialized !== 'object' || Array.isArray(initialized) || !Number.isSafeInteger(initialized.protocolVersion)) {
+      throw fail('native-protocol-mismatch', `${name} answered the ACP handshake without a protocol version.`);
+    }
+    if (initialized.protocolVersion !== PROTOCOL_VERSION) throw fail('unsupported-protocol', `${name} speaks an unsupported ACP protocol version.`);
     agentCapabilities = initialized.agentCapabilities && typeof initialized.agentCapabilities === 'object' ? initialized.agentCapabilities : {};
     authMethods = (Array.isArray(initialized.authMethods) ? initialized.authMethods : []).map(method => oneLine(method?.name ?? method?.id, 80)).filter(Boolean).slice(0, 6);
     if (config.coordination) {
@@ -521,6 +563,8 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
     }
     if (config.coordination || boardEnabled) await startCoordinator();
     const signIn = error => error?.nativeCode === AUTH_REQUIRED ? fail('acp-sign-in-required', `Sign in to ${name} first.`, { authMethods }) : undefined;
+    // A startup request the agent does not understand (invalid request, unknown method, invalid params).
+    const mismatch = (error, what) => error?.bridgeCode === 'native-request-failed' && REJECTED_REQUEST.includes(error.nativeCode) ? fail('native-protocol-mismatch', `${name} rejected the ACP ${what} request.`) : undefined;
     if (config.nativeId) {
       if (agentCapabilities.loadSession !== true || disabled.loadSession) throw fail('resume-unsupported', `${name} cannot reopen saved conversations.`);
       loading = true;
@@ -534,8 +578,8 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
     } else {
       let created;
       try { created = await request('session/new', { cwd, mcpServers }); }
-      catch (error) { throw signIn(error) ?? error; }
-      if (typeof created?.sessionId !== 'string' || !created.sessionId || created.sessionId.length > 256) throw fail('invalid-session', `${name} did not create a conversation.`);
+      catch (error) { throw signIn(error) ?? mismatch(error, 'session') ?? error; }
+      if (typeof created?.sessionId !== 'string' || !created.sessionId || created.sessionId.length > 256) throw fail('native-protocol-mismatch', `${name} did not create a conversation.`);
       sessionId = created.sessionId;
       applySessionState(created);
     }

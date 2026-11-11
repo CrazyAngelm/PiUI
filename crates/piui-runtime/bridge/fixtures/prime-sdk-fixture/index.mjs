@@ -63,6 +63,8 @@ export class InProcessAgentConnection {
   async bindHeadlessExtensions() {}
   subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   emit(event) { for (const listener of this.listeners) listener({ type: "session_event", event }); }
+  // A connection-level event outside the session-event envelope.
+  emitRaw(event) { for (const listener of this.listeners) listener(event); }
   async getState() { return { sessionId: this.runtime.session.sessionId, sessionFile: this.runtime.session.sessionFile, sessionName: this.runtime.session.sessionName, model: this.model, isStreaming: this.streaming }; }
   async getAvailableModels() { return this.runtime.services.modelRegistry.refreshAvailableModels(); }
   async getMessages() { return this.messages; }
@@ -73,6 +75,18 @@ export class InProcessAgentConnection {
       this.streaming = true;
       this.emit({ type: "agent_start" });
       if (text === "wait-for-abort") return;
+      if (text === "unknown-events") {
+        // A known housekeeping event (never shown), event types this adapter has
+        // never seen (repeated, in and outside the session-event envelope) and a
+        // well-formed event its handler cannot process (a circular message).
+        this.emit({ type: "turn_start" });
+        for (const index of [1, 2, 3]) this.emit({ type: "future_event", payload: `PRIVATE_PAYLOAD_${index}` });
+        this.emitRaw({ type: "connection_future", payload: "PRIVATE_PAYLOAD" });
+        const circular = { role: "assistant", content: "circular", stopReason: "stop" };
+        circular.usage = circular;
+        this.emit({ type: "message_end", message: circular });
+        this.emit({ type: "message_end", message: circular });
+      }
       let answer = text === "fail-turn" ? "failed" : "answer";
       if (text === "workspace-roster") {
         const tool = this.runtime.session.customTools.find((candidate) => candidate.name === "workspace");

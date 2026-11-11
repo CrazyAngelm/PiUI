@@ -19,12 +19,6 @@ export const acpRu: Readonly<Record<string, string>> = {
   'Add ACP agent…': 'Добавить ACP-агента…',
   'Agents that speak the Agent Client Protocol. PiUI starts only the exact command line you trust, never through a shell. Trust is not a sandbox: an agent runs with your permissions.':
     'Агенты, работающие по Agent Client Protocol. PiUI запускает только ту командную строку, которой вы доверили, и никогда через оболочку. Доверие — не песочница: агент работает с вашими правами.',
-  'Use {0} {1}?': 'Использовать {0} {1}?',
-  'Use this version': 'Использовать эту версию',
-  'PiUI has not verified this version with this agent. It may use the protocol differently than PiUI expects.':
-    'PiUI не проверял эту версию агента. Она может использовать протокол иначе, чем ожидает PiUI.',
-  'The confirmation covers only version {0}. An update needs a new confirmation.':
-    'Подтверждение действует только для версии {0}. После обновления понадобится новое подтверждение.',
   'Remove {0}?': 'Удалить {0}?',
   'Remove agent': 'Удалить агента',
   'PiUI forgets this descriptor and your decisions about it. Chats with this agent keep their history but cannot start until you add it again.':
@@ -33,10 +27,12 @@ export const acpRu: Readonly<Record<string, string>> = {
   'Not installed': 'Не установлен',
   'Unsupported version': 'Неподдерживаемая версия',
   'Unverified version': 'Непроверенная версия',
+  'Newer than tested': 'Новее проверенных версий',
+  'Untested version': 'Версия не проверялась',
+  'Version unknown': 'Версия не определена',
   'Sign-in required': 'Нужен вход',
   'Needs review': 'Нужна проверка',
   '{0}, tested with PiUI': '{0}, проверена с PiUI',
-  '{0}, not verified by PiUI; you confirmed this version': '{0}, не проверена PiUI; вы подтвердили эту версию',
   '{0}, newer than the versions tested with PiUI': '{0}, новее версий, проверенных с PiUI',
   '{0}, not verified by PiUI': '{0}, не проверена PiUI',
   '{0}, older than the versions tested with PiUI': '{0}, старше версий, проверенных с PiUI',
@@ -60,7 +56,6 @@ export const acpRu: Readonly<Record<string, string>> = {
   'PiUI coordination tool': 'Инструмент координации PiUI',
   Documentation: 'Документация',
   'Review and trust…': 'Проверить и доверить…',
-  'Confirm version…': 'Подтвердить версию…',
   'Secret variables…': 'Секретные переменные…',
 
   // Registry readiness reasons and sign-in hints (host fixed texts).
@@ -74,8 +69,6 @@ export const acpRu: Readonly<Record<string, string>> = {
     'Проверьте командную строку этого агента и доверьте её в «Настройки → Харнесы».',
   'The installed version is older than the versions tested with PiUI.': 'Установленная версия старше версий, проверенных с PiUI.',
   'The agent did not report a version PiUI can recognize.': 'Агент не сообщил версию, которую PiUI может распознать.',
-  'PiUI has not verified this version. Confirm it in Settings → Harnesses to use it.':
-    'PiUI не проверял эту версию. Подтвердите её в «Настройки → Харнесы», чтобы использовать.',
   "Sign in with the agent's own app, then try again. Settings → Harnesses shows how.":
     'Войдите через приложение самого агента и попробуйте снова. Как это сделать — в «Настройки → Харнесы».',
   'This agent is no longer registered in Settings → Harnesses.': 'Этот агент больше не зарегистрирован в «Настройки → Харнесы».',
@@ -84,6 +77,25 @@ export const acpRu: Readonly<Record<string, string>> = {
   "Sign in with Codex's own flow: run `codex login` in a terminal.": 'Войдите средствами Codex: выполните `codex login` в терминале.',
   "Sign in with Gemini CLI's own flow: run `gemini` in a terminal and choose a sign-in method. To use an API key instead, allow PiUI to pass GEMINI_API_KEY below.":
     'Войдите средствами Gemini CLI: запустите `gemini` в терминале и выберите способ входа. Чтобы вместо этого использовать API-ключ, разрешите PiUI передавать GEMINI_API_KEY ниже.',
+  "Sign in with OpenCode's own flow: run `opencode auth login` in a terminal. To use a provider API key instead, allow PiUI to pass it below.":
+    'Войдите средствами OpenCode: выполните `opencode auth login` в терминале. Чтобы вместо этого использовать API-ключ провайдера, разрешите PiUI передать его ниже.',
+  "Sign in with Qwen Code's own flow: run `qwen` in a terminal and use /auth. To use an API key instead, allow PiUI to pass DASHSCOPE_API_KEY or OPENAI_API_KEY below.":
+    'Войдите средствами Qwen Code: запустите `qwen` в терминале и выполните /auth. Чтобы вместо этого использовать API-ключ, разрешите PiUI передавать DASHSCOPE_API_KEY или OPENAI_API_KEY ниже.',
+  "Sign in with Copilot's own flow: run `copilot` in a terminal and use /login. To use a token instead, allow PiUI to pass COPILOT_GITHUB_TOKEN below.":
+    'Войдите средствами Copilot: запустите `copilot` в терминале и выполните /login. Чтобы вместо этого использовать токен, разрешите PiUI передавать COPILOT_GITHUB_TOKEN ниже.',
+  "Set up Goose's own provider: run `goose configure` in a terminal and choose a provider and model.":
+    'Настройте провайдера средствами Goose: выполните `goose configure` в терминале и выберите провайдера и модель.',
+  "Sign in with Kimi Code's own flow: run `kimi` in a terminal and use /login.":
+    'Войдите средствами Kimi Code: запустите `kimi` в терминале и выполните /login.',
+  "Sign in with Cursor's own flow: run `cursor-agent login` in a terminal. To use an API key instead, allow PiUI to pass CURSOR_API_KEY below.":
+    'Войдите средствами Cursor: выполните `cursor-agent login` в терминале. Чтобы вместо этого использовать API-ключ, разрешите PiUI передавать CURSOR_API_KEY ниже.',
+
+  // Native harness refusals (host fixed texts).
+  'The installed native harness version is not supported by this adapter.': 'Установленная версия агента не поддерживается этим адаптером.',
+  'Native lifecycle containment is not yet verified on this platform.':
+    'Завершение процессов агента на этой платформе ещё не проверено.',
+  'The installed harness speaks a protocol this PiUI version does not support. Update PiUI or the harness.':
+    'Установленный harness использует протокол, который эта версия PiUI не поддерживает. Обновите PiUI или harness.',
 
   // Registry errors (harness_registry_v1).
   'Harness checks and changes are disabled in safe mode.': 'В безопасном режиме проверки и изменения харнесов отключены.',
@@ -142,6 +154,8 @@ export const acpRu: Readonly<Record<string, string>> = {
     'Только базовое окружение (расположения, язык и PATH). Никаких ключей и токенов.',
   'Trust is not a sandbox. The agent runs with your user account’s permissions and keeps its own tools, network access and credentials. PiUI runs this command now to read its version, and later to start chats.':
     'Доверие — не песочница. Агент работает с правами вашей учётной записи и сохраняет свои инструменты, доступ к сети и учётные данные. PiUI запустит эту команду сейчас, чтобы узнать версию, а позже — чтобы начинать чаты.',
+  'Trust covers this command line; newer versions start without asking again.':
+    'Доверие относится к этой командной строке; более новые версии запускаются без повторного вопроса.',
   'Descriptor fingerprint: {0}': 'Отпечаток описания: {0}',
   'Review the current command': 'Проверить текущую команду',
   'Trust this command': 'Доверить эту команду',
@@ -168,8 +182,8 @@ export const acpRu: Readonly<Record<string, string>> = {
   'Tested from version': 'Проверено начиная с версии',
   'MAJOR.MINOR.PATCH, included.': 'MAJOR.MINOR.PATCH, включительно.',
   'Tested below version': 'Проверено до версии',
-  'MAJOR.MINOR.PATCH, excluded. Other versions need your confirmation.':
-    'MAJOR.MINOR.PATCH, не включая. Другие версии потребуют вашего подтверждения.',
+  'MAJOR.MINOR.PATCH, excluded. Newer versions start with a notice.':
+    'MAJOR.MINOR.PATCH, не включая. Более новые версии запускаются с пометкой.',
   'Names only, one per line. Values stay in your environment; names such as API keys pass only after you allow them.':
     'Только имена, по одному в строке. Значения остаются в вашем окружении; имена вроде API-ключей передаются только после вашего разрешения.',
   'Sign-in hint': 'Подсказка для входа',

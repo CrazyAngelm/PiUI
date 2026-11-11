@@ -22,6 +22,7 @@ const SAFE_ERRORS: Record<string, string> = {
   QUEUE_PENDING: 'Resolve queued messages before compacting.',
   DELIVERY_UNCERTAIN: 'Check native history before dismissing the uncertain message.',
   RUNTIME_FAILED: 'The harness could not complete the operation. Its saved history has not been removed.',
+  HARNESS_INCOMPATIBLE: 'The installed harness speaks a protocol this PiUI version does not support. Update PiUI or the harness.',
   SESSION_ALREADY_ACTIVE: 'This session is already active in another client. Stop it there before reopening it.',
   SAFE_MODE: 'Runtime actions are disabled in safe mode.',
   APPROVAL_EXPIRED: 'This approval is no longer pending. Refresh the session.',

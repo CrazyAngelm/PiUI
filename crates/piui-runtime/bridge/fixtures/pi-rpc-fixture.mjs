@@ -54,6 +54,18 @@ const scenarios = {
     { type: "extension_ui_request", id: "native-editor", method: "editor", title: "Edit message", prefill: "feat: draft", timeout: 40 },
     { type: "agent_settled" },
   ],
+  // A newer Pi: event types this adapter never saw (repeated and hostile), known
+  // housekeeping events that stay silent, and a frame no handler can process.
+  futureevents: [
+    { type: "agent_start" },
+    { type: "turn_start" },
+    { type: "future_event", payload: secret },
+    { type: "future_event", payload: secret },
+    { type: `<script>${secret}</script>` },
+    { type: "queue_update", queue: [] },
+    null,
+    { type: "agent_settled" },
+  ],
   unknownui: [
     { type: "agent_start" },
     { type: "extension_ui_request", id: "native-custom", method: "custom", payload: secret },

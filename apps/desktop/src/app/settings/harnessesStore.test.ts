@@ -29,7 +29,8 @@ describe('Settings → Harnesses store against the UI Lab host', () => {
     expect(store.error).toBeUndefined();
     expect(store.builtins.map((harness) => harness.harness)).toEqual(['pi', 'prime-agent', 'codex', 'hermes', 'claude-code']);
     expect(store.agents.map((row) => [row.agent.descriptor.id, row.agent.state, row.status?.harness])).toEqual([
-      ['gemini-cli', 'ready', 'acp:gemini-cli'], ['qwen-code', 'not-installed', 'acp:qwen-code'], ['lab-agent', 'untrusted', 'acp:lab-agent'],
+      ['gemini-cli', 'ready', 'acp:gemini-cli'], ['opencode', 'ready', 'acp:opencode'], ['qwen-code', 'not-installed', 'acp:qwen-code'],
+      ['lab-agent', 'untrusted', 'acp:lab-agent'],
     ]);
     expect(harnessMeta('acp:lab-agent').label).toBe('Lab Agent');
     store.dispose();
@@ -49,7 +50,7 @@ describe('Settings → Harnesses store against the UI Lab host', () => {
     const current = await settle(other.run({ type: 'list' }));
     await settle(other.run({ type: 'remove', expectedRevision: current.revision, id: 'qwen-code' }));
     await vi.runAllTimersAsync();
-    expect(store.agents.map((row) => row.agent.descriptor.id)).toEqual(['gemini-cli', 'lab-agent']);
+    expect(store.agents.map((row) => row.agent.descriptor.id)).toEqual(['gemini-cli', 'opencode', 'lab-agent']);
     store.dispose();
   });
 

@@ -2,12 +2,18 @@ import { createInterface } from 'node:readline';
 const send = value => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...value })}\n`);
 const notify = update => send({ method: 'session/update', params: { sessionId: 'saved', update } });
 const models = { currentModelId: 'fixture:model', availableModels: [{ modelId: 'fixture:model', name: 'Fixture' }] };
+const flag = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
+const sessionModels = process.argv.includes('--models-not-array') ? { currentModelId: 'fixture:model', availableModels: 'not-a-list' } : models;
 let promptId;
 for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
   const m = JSON.parse(line); let result = {};
-  if (!m.method) { if (promptId) send({ id: promptId, result: { stopReason: m.result?.outcome?.outcome === 'cancelled' ? 'cancelled' : 'end_turn' } }); continue; }
-  if (m.method === 'initialize') result = { protocolVersion: 1, agentInfo: { version: '0.21.0' }, agentCapabilities: { loadSession: true, promptCapabilities: { image: !process.argv.includes('--no-image') } } };
-  else if (m.method === 'session/list') result = { sessions: [{ sessionId: 'saved', cwd: process.argv.includes('--wrong-cwd') ? '/' : process.cwd() }] };
+  if (!m.method) { if (promptId && m.error) notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `client-error:${m.error.code}` } }); if (promptId) send({ id: promptId, result: { stopReason: m.result?.outcome?.outcome === 'cancelled' ? 'cancelled' : 'end_turn' } }); continue; }
+  if (m.method === 'initialize') {
+    if (process.argv.includes('--exit-before-init')) process.exit(1);
+    if (process.argv.includes('--initialize-error')) { send({ id: m.id, error: { code: -32601, message: 'Method not found PRIVATE_PAYLOAD' } }); continue; }
+    result = { protocolVersion: Number(flag('protocol-version') ?? 1), ...(process.argv.includes('--no-agent-info') ? {} : { agentInfo: { version: flag('hermes-version') ?? '0.21.0' } }), agentCapabilities: { loadSession: true, promptCapabilities: { image: !process.argv.includes('--no-image') } } };
+  }
+  else if (m.method === 'session/list') result = process.argv.includes('--sessions-not-array') ? { sessions: 'not-a-list' } : { sessions: [{ sessionId: 'saved', cwd: process.argv.includes('--wrong-cwd') ? '/' : process.cwd() }] };
   else if (m.method === 'session/new' || m.method === 'session/load') {
     if (m.method === 'session/load') notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'native history' } });
     const stdio = m.params.mcpServers.filter(server => server.type === undefined);
@@ -19,7 +25,7 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       const response = await fetch(server.url, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'workspace', arguments: { type: 'roster' } } }) });
       if (!response.ok || !(await response.json()).result.content.length) throw Error('coordinator transport failed');
     }
-    send({ id: m.id, result: { sessionId: 'saved', models } });
+    send({ id: m.id, result: { sessionId: 'saved', models: sessionModels } });
     // Hermes advertises its headless slash commands right after the session starts.
     notify({ sessionUpdate: 'available_commands_update', availableCommands: [
       { name: 'help', description: 'List available commands', input: null },
@@ -40,6 +46,27 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
       continue;
     }
     if (text === 'wait') { promptId = m.id; continue; }
+    if (text === 'unknown') {
+      // Event kinds and content types this adapter has never seen, repeated and hostile.
+      for (let index = 0; index < 3; index++) notify({ sessionUpdate: 'future_event', secret: 'PRIVATE_PAYLOAD' });
+      notify({ sessionUpdate: 'other_event' });
+      notify({ sessionUpdate: '<script>PRIVATE_PAYLOAD</script>' });
+      for (let index = 0; index < 2; index++) notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'audio', data: 'PRIVATE_PAYLOAD' } });
+      send({ id: m.id, result: { stopReason: 'end_turn' } });
+      continue;
+    }
+    if (text === 'malformed') {
+      // Well-formed JSON-RPC whose update fields this adapter cannot process.
+      for (let index = 0; index < 2; index++) notify({ sessionUpdate: 'tool_call', toolCallId: 'broken', content: {} });
+      notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'after malformed' } });
+      send({ id: m.id, result: { stopReason: 'end_turn' } });
+      continue;
+    }
+    if (text === 'bad-permission') {
+      promptId = m.id;
+      send({ id: 'bad-permission', method: 'session/request_permission' });
+      continue;
+    }
     const providerError = { code: -32603, message: 'provider exploded SECRET-MUST-NOT-LEAK' };
     if (text === 'reject') { send({ id: m.id, error: providerError }); continue; }
     if (text === 'slow' || text === 'slow-reject') {

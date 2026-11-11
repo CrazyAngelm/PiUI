@@ -190,6 +190,22 @@ test("Pi tool blocks show a one-line title and bounded output, never raw payload
   } finally { await adapter.dispose(); }
 });
 
+test("Pi shows one safe fallback per unknown native event type and survives a frame it cannot process", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), (event) => events.push(event));
+  try {
+    await runScenario(adapter, events, "futureevents");
+    const fallbacks = (await adapter.snapshot()).blocks.filter((block) => block.fallback === true);
+    assert.deepEqual(fallbacks.map((block) => block.safeSummary).sort(), [
+      "Unsupported Pi event: future_event",
+      "Unsupported Pi event: unknown",
+    ], "repeats report once; a hostile or missing type is shown as unknown; known housekeeping stays silent");
+    assert.ok(fallbacks.every((block) => block.kind === "unknown" && block.status === "complete"));
+    assert.doesNotMatch(JSON.stringify(events), /SECRET-MUST-NOT-LEAK|<script>/);
+    assert.ok(!events.some((event) => event.type === "status" && event.status === "failed"), "the runtime keeps running");
+  } finally { await adapter.dispose(); }
+});
+
 test("Pi compaction blocks complete on native end events with turn and response fallbacks", async () => {
   const events = [];
   const adapter = await createPiAdapter(config(), (event) => events.push(event));

@@ -5,7 +5,7 @@
   "command": {
     "program": "gemini",
     "args": [
-      "--experimental-acp"
+      "--acp"
     ]
   },
   "version": {

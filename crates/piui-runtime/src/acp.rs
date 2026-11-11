@@ -9,8 +9,11 @@
 //!
 //! This module validates descriptors, resolves their program without a shell
 //! (`PATH`, Windows `.exe`, and npm/pnpm `.cmd` shims that start a Node
-//! script), probes the version under process containment and builds the
-//! agent environment. Trust, storage and confirmations are host decisions.
+//! script or one native executable), probes the version under process
+//! containment and builds the agent environment. Trust, storage and secret
+//! confirmations are host decisions. The version is advisory: only a version
+//! below a declared minimum is refused; the ACP `initialize` handshake is the
+//! compatibility gate.
 
 use crate::native_version::{NativeVersion, VerifiedRange, VersionCheck};
 use crate::script_runner::process_directory;
@@ -175,7 +178,9 @@ pub struct AcpVersionSpec {
     /// Regular expression whose first group (or whole match) is the version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern: Option<String>,
-    /// Versions tested with PiUI: `minimum <= version < ceiling`.
+    /// Versions tested with PiUI: `minimum <= version < ceiling`. The
+    /// minimum is enforced (an older agent never starts); the ceiling is
+    /// advisory (a newer agent starts and is reported as newer than tested).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verified: Option<AcpVerifiedVersions>,
 }
@@ -459,48 +464,31 @@ impl AcpAgentDescriptor {
     }
 }
 
-/// Descriptors shipped with PiUI. Gemini CLI speaks ACP with
-/// `--experimental-acp` (newer releases also accept `--acp`). No version range
-/// is declared: PiUI has not verified a Gemini CLI release yet, so every
-/// version needs the user's explicit confirmation before its first use.
+/// Descriptors shipped with PiUI, one JSON document each in
+/// `contracts/fixtures/acp-descriptors/valid-builtin-<id>.json`: the same
+/// bytes the contract tests of the UI lab check, so the shipped catalog has a
+/// single source of truth. They are reviewed launch recipes for agents that
+/// speak ACP natively (never wrappers around Codex or Claude Code, which have
+/// their own adapters). No descriptor declares a verified range: a version
+/// needs no confirmation, the ACP `initialize` handshake is the gate, and a
+/// range would only add an enforced minimum.
+const BUILTIN_DESCRIPTORS: [&str; 7] = [
+    include_str!("../../../contracts/fixtures/acp-descriptors/valid-builtin-gemini-cli.json"),
+    include_str!("../../../contracts/fixtures/acp-descriptors/valid-builtin-opencode.json"),
+    include_str!("../../../contracts/fixtures/acp-descriptors/valid-builtin-qwen-code.json"),
+    include_str!("../../../contracts/fixtures/acp-descriptors/valid-builtin-github-copilot.json"),
+    include_str!("../../../contracts/fixtures/acp-descriptors/valid-builtin-goose.json"),
+    include_str!("../../../contracts/fixtures/acp-descriptors/valid-builtin-kimi.json"),
+    include_str!("../../../contracts/fixtures/acp-descriptors/valid-builtin-cursor.json"),
+];
+
+/// The descriptors shipped with PiUI, in display order. A document that fails
+/// validation is skipped; a unit test proves every shipped one loads.
 #[must_use]
 pub fn builtin_acp_descriptors() -> Vec<AcpAgentDescriptor> {
-    let text = |value: &str| value.to_owned();
-    AcpAgentId::new("gemini-cli")
-        .ok()
-        .map(|id| AcpAgentDescriptor {
-            schema_version: ACP_DESCRIPTOR_SCHEMA_VERSION,
-            id,
-            display_name: text("Gemini CLI"),
-            command: AcpCommandSpec {
-                program: text("gemini"),
-                args: vec![text("--experimental-acp")],
-            },
-            version: AcpVersionSpec {
-                args: vec![text("--version")],
-                pattern: None,
-                verified: None,
-            },
-            environment: [
-                "GEMINI_API_KEY",
-                "GOOGLE_API_KEY",
-                "GOOGLE_APPLICATION_CREDENTIALS",
-                "GOOGLE_CLOUD_PROJECT",
-                "GOOGLE_CLOUD_LOCATION",
-                "GOOGLE_GENAI_USE_VERTEXAI",
-                "HTTPS_PROXY",
-                "HTTP_PROXY",
-                "NO_PROXY",
-            ]
-            .map(text)
-            .to_vec(),
-            auth_hint: Some(text(
-                "Sign in with Gemini CLI's own flow: run `gemini` in a terminal and choose a sign-in method. To use an API key instead, allow PiUI to pass GEMINI_API_KEY below.",
-            )),
-            docs_url: Some(text("https://github.com/google-gemini/gemini-cli")),
-            capabilities: AcpCapabilityOverrides::default(),
-        })
-        .into_iter()
+    BUILTIN_DESCRIPTORS
+        .iter()
+        .filter_map(|text| parse_acp_descriptor(text).ok())
         .collect()
 }
 
@@ -512,10 +500,67 @@ pub struct AcpResolvedCommand {
     /// Arguments after the program: a Node script for shims, then the
     /// descriptor's own arguments.
     pub args: Vec<String>,
+    /// How many leading entries of `args` belong to the launcher (the Node
+    /// script behind a shim) rather than to the descriptor. A version probe
+    /// keeps them (see [`Self::version_args`] for the descriptor's own).
+    #[serde(skip)]
+    launcher_args: usize,
     /// The file whose identity the version cache binds to (the executable,
     /// or the Node script behind a shim).
     #[serde(skip)]
     identity: PathBuf,
+}
+
+impl AcpResolvedCommand {
+    /// The arguments of a version probe: the launcher's own, the descriptor's
+    /// arguments up to and including the last one that names a script or file
+    /// entrypoint, then `version`. Arguments after the entrypoint (a
+    /// subcommand such as `acp`, a flag such as `--acp`) never reach the
+    /// probe, so `opencode acp` is probed as `opencode --version` while
+    /// `node agent.mjs --acp` is probed as `node agent.mjs --version`, the
+    /// agent itself and not Node.
+    fn version_args(&self, version: &[String]) -> Vec<String> {
+        let (launcher, own) = self.args.split_at(self.launcher_args.min(self.args.len()));
+        let kept = entrypoint_index(own).map_or(0, |index| index + 1);
+        launcher
+            .iter()
+            .chain(&own[..kept])
+            .chain(version)
+            .cloned()
+            .collect()
+    }
+
+    /// The file whose identity the version cache binds to: the script a
+    /// descriptor starts through an interpreter when it exists, otherwise the
+    /// executable (or the Node script behind a shim).
+    fn probe_identity(&self) -> PathBuf {
+        let own = &self.args[self.launcher_args.min(self.args.len())..];
+        entrypoint_index(own)
+            .map(|index| Path::new(&own[index]))
+            .filter(|entrypoint| entrypoint.is_file())
+            .map_or_else(|| self.identity.clone(), Path::to_path_buf)
+    }
+}
+
+/// The last descriptor argument that names the script or file its program
+/// runs (`agent.mjs`, `bin/agent`, `C:\agents\agent.py`) rather than a
+/// subcommand, a flag or an option value (`acp`, `--acp`,
+/// `--config cfg/agent.json`). A script extension always names an entrypoint
+/// (`node --no-warnings agent.mjs`); an extensionless path does only when it
+/// does not follow a flag, where it would be that flag's value.
+fn entrypoint_index(args: &[String]) -> Option<usize> {
+    args.iter().enumerate().rev().find_map(|(index, arg)| {
+        if arg.starts_with('-') {
+            return None;
+        }
+        let lower = arg.to_ascii_lowercase();
+        let script = [".js", ".mjs", ".cjs", ".ts", ".py"]
+            .iter()
+            .any(|extension| lower.ends_with(extension));
+        let after_flag = index > 0 && args[index - 1].starts_with('-');
+        let path = arg.contains(['/', '\\']) && !lower.contains('.');
+        (script || (path && !after_flag)).then_some(index)
+    })
 }
 
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -539,20 +584,34 @@ pub fn resolve_acp_command(spec: &AcpCommandSpec) -> Result<AcpResolvedCommand, 
 
 /// Resolves `spec` against `path` (a `PATH` value). Only absolute `PATH`
 /// entries are searched: a relative entry would resolve against the project
-/// folder, which may contain untrusted files.
+/// folder, which may contain untrusted files. Every hit is tried in order, so
+/// a launcher PiUI cannot run without a shell (a user's own wrapper script)
+/// does not hide a supported installation further along `PATH`; when none
+/// resolves, the first hit's failure is reported.
 pub fn resolve_acp_command_in(
     spec: &AcpCommandSpec,
     path: Option<&OsStr>,
 ) -> Result<AcpResolvedCommand, AcpResolveError> {
     let program = Path::new(&spec.program);
-    let file = if program.is_absolute() {
+    if program.is_absolute() {
         if !program.is_file() {
             return Err(AcpResolveError::Missing);
         }
-        program.to_path_buf()
-    } else {
-        find_program(&spec.program, path).ok_or(AcpResolveError::NotFound)?
-    };
+        return resolve_file(program.to_path_buf(), &spec.args);
+    }
+    let mut first_failure = None;
+    for file in find_programs(&spec.program, path) {
+        match resolve_file(file, &spec.args) {
+            Ok(command) => return Ok(command),
+            Err(error) => {
+                first_failure.get_or_insert(error);
+            }
+        }
+    }
+    Err(first_failure.unwrap_or(AcpResolveError::NotFound))
+}
+
+fn resolve_file(file: PathBuf, args: &[String]) -> Result<AcpResolvedCommand, AcpResolveError> {
     let file = process_directory(&file);
     let extension = file
         .extension()
@@ -562,12 +621,23 @@ pub fn resolve_acp_command_in(
         Some("js" | "mjs" | "cjs") => Ok(node_command(
             resolve_node().map_err(|_| AcpResolveError::NodeUnavailable)?,
             file,
-            &spec.args,
+            args,
         )),
-        Some("cmd" | "bat") if cfg!(windows) => {
-            let script = node_shim_target(&file).ok_or(AcpResolveError::UnsupportedLauncher)?;
+        Some("cmd" | "bat") if cfg!(windows) => resolve_shim(&file, args),
+        Some("exe" | "com") if cfg!(windows) => Ok(executable_command(file, args)),
+        _ if cfg!(windows) => Err(AcpResolveError::UnsupportedLauncher),
+        _ => Ok(executable_command(file, args)),
+    }
+}
+
+/// A Windows `.cmd` shim becomes the Node script (npm, pnpm) or the one native
+/// executable (`opencode.cmd` from the npm package `opencode-ai`) it starts.
+/// Any other batch file needs a shell and is refused.
+fn resolve_shim(shim: &Path, args: &[String]) -> Result<AcpResolvedCommand, AcpResolveError> {
+    match shim_target(shim).ok_or(AcpResolveError::UnsupportedLauncher)? {
+        ShimTarget::Script(script) => {
             // The shim prefers a Node installed beside it, like npm's own.
-            let beside = file
+            let beside = shim
                 .parent()
                 .map(|directory| directory.join("node.exe"))
                 .filter(|node| node.is_file());
@@ -575,11 +645,29 @@ pub fn resolve_acp_command_in(
                 Some(node) => node,
                 None => resolve_node().map_err(|_| AcpResolveError::NodeUnavailable)?,
             };
-            Ok(node_command(node, script, &spec.args))
+            Ok(node_command(node, script, args))
         }
-        Some("exe" | "com") if cfg!(windows) => Ok(executable_command(file, &spec.args)),
-        _ if cfg!(windows) => Err(AcpResolveError::UnsupportedLauncher),
-        _ => Ok(executable_command(file, &spec.args)),
+        ShimTarget::Executable(program) => Ok(executable_command(program, args)),
+    }
+}
+
+fn executable_command(file: PathBuf, args: &[String]) -> AcpResolvedCommand {
+    AcpResolvedCommand {
+        identity: file.clone(),
+        program: file,
+        args: args.to_vec(),
+        launcher_args: 0,
+    }
+}
+
+fn node_command(node: PathBuf, script: PathBuf, args: &[String]) -> AcpResolvedCommand {
+    let mut all = vec![script.to_string_lossy().into_owned()];
+    all.extend(args.iter().cloned());
+    AcpResolvedCommand {
+        program: node,
+        args: all,
+        identity: script,
+        launcher_args: 1,
     }
 }
 
@@ -592,29 +680,17 @@ impl AcpResolvedCommand {
             identity: program.clone(),
             program,
             args,
+            launcher_args: 0,
         }
     }
 }
 
-fn executable_command(file: PathBuf, args: &[String]) -> AcpResolvedCommand {
-    AcpResolvedCommand {
-        identity: file.clone(),
-        program: file,
-        args: args.to_vec(),
-    }
-}
-
-fn node_command(node: PathBuf, script: PathBuf, args: &[String]) -> AcpResolvedCommand {
-    let mut all = vec![script.to_string_lossy().into_owned()];
-    all.extend(args.iter().cloned());
-    AcpResolvedCommand {
-        program: node,
-        args: all,
-        identity: script,
-    }
-}
-
-fn find_program(name: &str, path: Option<&OsStr>) -> Option<PathBuf> {
+/// Every executable file named `name` on the absolute `path` entries, in
+/// `PATH` order (Windows tries `.exe`, `.cmd`, `.bat` in each directory).
+fn find_programs(name: &str, path: Option<&OsStr>) -> Vec<PathBuf> {
+    let Some(path) = path else {
+        return Vec::new();
+    };
     let candidates: Vec<String> = if cfg!(windows) && Path::new(name).extension().is_none() {
         [".exe", ".cmd", ".bat"]
             .iter()
@@ -623,14 +699,16 @@ fn find_program(name: &str, path: Option<&OsStr>) -> Option<PathBuf> {
     } else {
         vec![name.to_owned()]
     };
-    std::env::split_paths(path?)
+    std::env::split_paths(path)
         .filter(|directory| directory.is_absolute())
         .flat_map(|directory| {
             candidates
                 .iter()
-                .map(move |candidate| directory.join(candidate))
+                .map(|candidate| directory.join(candidate))
+                .collect::<Vec<_>>()
         })
-        .find(|file| file.is_file() && executable(file))
+        .filter(|file| file.is_file() && executable(file))
+        .collect()
 }
 
 #[cfg(unix)]
@@ -645,11 +723,28 @@ fn executable(_path: &Path) -> bool {
     true
 }
 
-/// The Node script an npm or pnpm `.cmd` shim starts, when it is exactly one
-/// script next to (or below) the shim: `"%dp0%\node_modules\pkg\cli.js"`
-/// (npm) or `"%~dp0\..\pkg\cli.js"` (pnpm). Any other batch file needs a
-/// shell and is refused.
-fn node_shim_target(shim: &Path) -> Option<PathBuf> {
+/// What a `.cmd` shim starts.
+#[derive(Debug, PartialEq, Eq)]
+enum ShimTarget {
+    /// A Node script, run with the Node installed beside the shim or on `PATH`.
+    Script(PathBuf),
+    /// One native executable, started directly.
+    Executable(PathBuf),
+}
+
+/// The only target of an npm or pnpm `.cmd` shim: exactly one Node script
+/// (`"%dp0%\node_modules\pkg\cli.js"` for npm, `"%~dp0\..\pkg\cli.js"` for
+/// pnpm), or, when the shim names no script, exactly one native executable
+/// (`"%dp0%\node_modules\opencode-ai\bin\opencode.exe" %*`). A native
+/// executable is accepted only in that passthrough form: its line ends with
+/// the closing quote, optional blanks and `%*`. Fixed arguments (`--config
+/// locked.json %*`) would be lost when PiUI starts the executable directly, so
+/// such a shim needs a shell. A shim that names a script is a Node shim
+/// whatever else it mentions; one that names two different scripts or two
+/// different executables is ambiguous. Names with `%` or `!`, and targets that
+/// do not exist, are refused. Any other batch file needs a shell and yields
+/// `None`.
+fn shim_target(shim: &Path) -> Option<ShimTarget> {
     use std::io::Read as _;
     let directory = shim.parent()?;
     let mut bytes = Vec::new();
@@ -662,35 +757,73 @@ fn node_shim_target(shim: &Path) -> Option<PathBuf> {
         return None;
     }
     let text = String::from_utf8_lossy(&bytes);
-    let mut targets: Vec<PathBuf> = Vec::new();
-    for quoted in text.split('"').skip(1).step_by(2) {
-        let Some(relative) = quoted
-            .strip_prefix("%dp0%\\")
-            .or_else(|| quoted.strip_prefix("%~dp0\\"))
-        else {
-            continue;
+    let mut scripts = shim_files(directory, &text, &[".js", ".cjs", ".mjs"], false)?;
+    if !scripts.is_empty() {
+        return match (scripts.pop(), scripts.is_empty()) {
+            (Some(script), true) => Some(ShimTarget::Script(script)),
+            _ => None,
         };
-        let lower = relative.to_ascii_lowercase();
-        if !(lower.ends_with(".js") || lower.ends_with(".cjs") || lower.ends_with(".mjs")) {
-            continue;
-        }
-        if relative.contains(['%', '!']) {
-            return None;
-        }
-        let candidate = directory.join(relative.replace('\\', std::path::MAIN_SEPARATOR_STR));
-        let resolved = process_directory(&std::fs::canonicalize(candidate).ok()?);
-        if !resolved.is_file() {
-            return None;
-        }
-        if !targets.contains(&resolved) {
-            targets.push(resolved);
+    }
+    let mut executables = shim_files(directory, &text, &[".exe"], true)?;
+    match (executables.pop(), executables.is_empty()) {
+        (Some(program), true) => Some(ShimTarget::Executable(program)),
+        _ => None,
+    }
+}
+
+/// The distinct existing files a shim names as `"%dp0%\relative"` (or
+/// `%~dp0`) with one of `extensions`, canonical and without the verbatim
+/// prefix. `None` when a name is unsafe or its file is missing, or, with
+/// `passthrough_only`, when a name is not the last quoted item of its line
+/// followed by nothing but blanks and `%*`. The interpreter probe
+/// `IF EXIST "%dp0%\node.exe"` is not a target.
+fn shim_files(
+    directory: &Path,
+    text: &str,
+    extensions: &[&str],
+    passthrough_only: bool,
+) -> Option<Vec<PathBuf>> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    for line in text.lines() {
+        let parts = line.split('"').collect::<Vec<_>>();
+        for (index, quoted) in parts.iter().enumerate().skip(1).step_by(2) {
+            let Some(relative) = quoted
+                .strip_prefix("%dp0%\\")
+                .or_else(|| quoted.strip_prefix("%~dp0\\"))
+            else {
+                continue;
+            };
+            let lower = relative.to_ascii_lowercase();
+            if !extensions
+                .iter()
+                .any(|extension| lower.ends_with(extension))
+            {
+                continue;
+            }
+            if lower.rsplit('\\').next() == Some("node.exe") {
+                continue;
+            }
+            if relative.contains(['%', '!']) {
+                return None;
+            }
+            // `parts[index + 1]` follows the closing quote; a further part
+            // means another quote, so the line does not end with `%*`.
+            if passthrough_only
+                && (index + 2 != parts.len() || parts[index + 1].trim_matches([' ', '\t']) != "%*")
+            {
+                return None;
+            }
+            let candidate = directory.join(relative.replace('\\', std::path::MAIN_SEPARATOR_STR));
+            let resolved = process_directory(&std::fs::canonicalize(candidate).ok()?);
+            if !resolved.is_file() {
+                return None;
+            }
+            if !files.contains(&resolved) {
+                files.push(resolved);
+            }
         }
     }
-    if targets.len() == 1 {
-        targets.pop()
-    } else {
-        None
-    }
+    Some(files)
 }
 
 /// Outcome of a version probe against the descriptor's verified range.
@@ -701,9 +834,9 @@ pub enum AcpVersionStatus {
     Verified,
     /// The descriptor declares no verified range.
     NoVerifiedRange,
-    /// Newer than the verified range.
+    /// Newer than the verified range (the advisory ceiling): still started.
     Newer,
-    /// Older than the verified range: never started.
+    /// Older than the verified range (the enforced minimum): never started.
     Older,
     /// The output held no version the pattern recognizes.
     Unrecognized,
@@ -728,17 +861,19 @@ type VersionCache = Mutex<HashMap<(PathBuf, Vec<String>), VersionProbe>>;
 
 /// Runs the descriptor's version command at most once per executable
 /// revision (inside a Job or process group, bounded, with only the base
-/// environment) and checks the result against the verified range. `force`
-/// ("Check again") bypasses the cache.
+/// environment) and checks the result against the verified range. The probe
+/// is the program, the Node script behind a shim, the descriptor's own script
+/// entrypoint (`node agent.mjs`) and the version arguments: the launch
+/// arguments after the entrypoint are not passed, so `agent acp` is probed as
+/// `agent --version`. `force` ("Check again") bypasses the cache.
 pub fn probe_acp_version(
     descriptor: &AcpAgentDescriptor,
     command: &AcpResolvedCommand,
     force: bool,
 ) -> AcpVersionReport {
     static CACHE: OnceLock<VersionCache> = OnceLock::new();
-    let mut args = command.args.clone();
-    args.extend(descriptor.version.args.iter().cloned());
-    let metadata = std::fs::metadata(&command.identity).ok();
+    let args = command.version_args(&descriptor.version.args);
+    let metadata = std::fs::metadata(command.probe_identity()).ok();
     let length = metadata.as_ref().map_or(0, std::fs::Metadata::len);
     let modified = metadata.and_then(|metadata| metadata.modified().ok());
     let key = (command.program.clone(), args.clone());
@@ -1021,42 +1156,128 @@ mod tests {
         root
     }
 
-    #[test]
-    fn builtin_descriptors_validate_and_ask_before_secrets() {
-        let gemini = descriptor();
-        assert_eq!(gemini.id.as_str(), "gemini-cli");
-        assert_eq!(gemini.validate(), Ok(()));
-        assert_eq!(gemini.command.args, ["--experimental-acp"]);
-        assert_eq!(
-            gemini.secret_environment(),
-            [
+    /// `(id, program, launch arguments, names that need a secret confirmation)`.
+    /// One generic adapter starts every entry; the table is the review record.
+    const BUILTIN_CATALOG: [(&str, &str, &[&str], &[&str]); 7] = [
+        (
+            "gemini-cli",
+            "gemini",
+            &["--acp"],
+            &[
                 "GEMINI_API_KEY",
                 "GOOGLE_API_KEY",
-                "GOOGLE_APPLICATION_CREDENTIALS"
-            ]
+                "GOOGLE_APPLICATION_CREDENTIALS",
+            ],
+        ),
+        (
+            "opencode",
+            "opencode",
+            &["acp"],
+            &["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"],
+        ),
+        (
+            "qwen-code",
+            "qwen",
+            &["--acp"],
+            &["DASHSCOPE_API_KEY", "OPENAI_API_KEY"],
+        ),
+        (
+            "github-copilot",
+            "copilot",
+            &["--acp"],
+            &["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
+        ),
+        ("goose", "goose", &["acp"], &[]),
+        ("kimi", "kimi", &["acp"], &[]),
+        (
+            "cursor",
+            "cursor-agent",
+            &["acp"],
+            &["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN"],
+        ),
+    ];
+
+    #[test]
+    fn builtin_descriptors_load_validate_and_ask_before_secrets() {
+        let shipped = builtin_acp_descriptors();
+        assert_eq!(
+            shipped.len(),
+            BUILTIN_DESCRIPTORS.len(),
+            "every shipped document must parse and validate"
         );
-        assert!(
-            gemini.version.verified.is_none(),
-            "no Gemini release is verified yet"
-        );
-        // The fingerprint is stable and changes with any field.
+        assert_eq!(shipped.len(), BUILTIN_CATALOG.len());
+        let mut fingerprints = Vec::new();
+        for (descriptor, (id, program, args, secrets)) in shipped.iter().zip(BUILTIN_CATALOG) {
+            assert_eq!(descriptor.id.as_str(), id);
+            assert_eq!(descriptor.validate(), Ok(()), "{id}");
+            assert_eq!(descriptor.command.program, program, "{id}");
+            assert_eq!(descriptor.command.args, args, "{id}");
+            assert_eq!(descriptor.secret_environment(), secrets, "{id}");
+            assert_eq!(descriptor.version.args, ["--version"], "{id}");
+            assert!(
+                descriptor.version.verified.is_none(),
+                "{id}: no range, so an unlisted version is never refused"
+            );
+            for proxy in ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"] {
+                assert!(
+                    descriptor.environment.iter().any(|name| name == proxy),
+                    "{id}: {proxy}"
+                );
+            }
+            assert!(
+                descriptor.auth_hint.is_some() && descriptor.docs_url.is_some(),
+                "{id}: a sign-in hint and a documentation link"
+            );
+            // Never the whole environment, and nothing that changes how the
+            // bridge or the loader runs.
+            assert!(
+                !descriptor
+                    .environment
+                    .iter()
+                    .any(|name| denied_environment(name)),
+                "{id}"
+            );
+            // The fingerprint is stable, and the document round trips.
+            assert_eq!(descriptor.fingerprint().len(), 64);
+            assert!(!fingerprints.contains(&descriptor.fingerprint()), "{id}");
+            fingerprints.push(descriptor.fingerprint());
+            let text = serde_json::to_string(descriptor).expect("json");
+            assert_eq!(parse_acp_descriptor(&text).as_ref(), Ok(descriptor), "{id}");
+        }
+        // Codex and Claude Code have their own adapters; a second wrapper
+        // (Claude's would bypass the subscription-only rule) is not shipped.
+        assert!(!shipped.iter().any(|descriptor| {
+            ["codex", "codex-acp", "claude", "claude-acp", "claude-code"]
+                .contains(&descriptor.id.as_str())
+        }));
+        // Any change to a descriptor is a new fingerprint (a new decision).
+        let gemini = descriptor();
         assert_eq!(gemini.fingerprint(), descriptor().fingerprint());
         let mut changed = gemini.clone();
-        changed.command.args.push("--acp".into());
+        changed.command.args.push("--other".into());
         assert_ne!(changed.fingerprint(), gemini.fingerprint());
-        // Round trip through the documented JSON shape.
-        let text = serde_json::to_string(&gemini).expect("json");
-        assert_eq!(parse_acp_descriptor(&text), Ok(gemini.clone()));
-        // The shared golden fixture is exactly the shipped descriptor.
-        let golden = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../contracts/fixtures/acp-descriptors/valid-builtin-gemini-cli.json"),
-        )
-        .expect("golden fixture");
-        assert_eq!(
-            serde_json::to_value(&gemini).expect("json"),
-            serde_json::from_str::<serde_json::Value>(&golden).expect("golden json")
-        );
+        // The shipped Gemini descriptor starts the current flag, not the
+        // deprecated `--experimental-acp`.
+        assert_eq!(gemini.command.args, ["--acp"]);
+    }
+
+    /// The shipped documents are the shared golden fixtures of the UI lab and
+    /// the contract tests; none of them may drift from the typed shape.
+    #[test]
+    fn builtin_fixtures_are_exactly_the_shipped_descriptors() {
+        for descriptor in builtin_acp_descriptors() {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+                "../../contracts/fixtures/acp-descriptors/valid-builtin-{}.json",
+                descriptor.id
+            ));
+            let golden = std::fs::read_to_string(&path).expect("golden fixture");
+            assert_eq!(
+                serde_json::to_value(&descriptor).expect("json"),
+                serde_json::from_str::<serde_json::Value>(&golden).expect("golden json"),
+                "{}",
+                descriptor.id
+            );
+        }
     }
 
     #[test]
@@ -1444,9 +1665,11 @@ mod tests {
         };
         let root = fresh_directory("probe");
         let script = root.join("agent.mjs");
+        // The launch argument `--acp` must not reach the probe: an agent
+        // such as `opencode acp` has no `acp --version`.
         std::fs::write(
             &script,
-            "if (process.argv.includes('--version')) { console.log(process.env.GEMINI_API_KEY ? 'leaked' : 'lab-agent 1.2.3'); } else { process.exit(3); }",
+            "if (process.argv.includes('--acp')) { process.exit(5); } if (process.argv.includes('--version')) { console.log(process.env.GEMINI_API_KEY ? 'leaked' : 'lab-agent 1.2.3'); } else { process.exit(3); }",
         )
         .expect("script");
         let command = node_command(node, script.clone(), &["--acp".into()]);
@@ -1463,12 +1686,366 @@ mod tests {
                 status: AcpVersionStatus::Verified
             }
         );
+        // A descriptor that runs its script through `node` itself probes the
+        // script, not Node, so the declared minimum is still enforced.
+        let direct = executable_command(
+            command.program.clone(),
+            &[script.to_string_lossy().into_owned(), "--acp".into()],
+        );
+        assert_eq!(direct.program, command.program);
+        assert_eq!(
+            probe_acp_version(&agent, &direct, true),
+            AcpVersionReport {
+                version: Some("1.2.3".into()),
+                status: AcpVersionStatus::Verified
+            }
+        );
         // A failing version command is reported, never guessed.
         agent.version.args = vec!["--other".into()];
         assert_eq!(
             probe_acp_version(&agent, &command, true).status,
             AcpVersionStatus::ProbeFailed
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn version_probes_use_the_launcher_and_never_the_launch_arguments() {
+        let node = PathBuf::from("node");
+        let script = PathBuf::from("agent.mjs");
+        let shimmed = node_command(node, script, &["acp".into()]);
+        assert_eq!(shimmed.args, ["agent.mjs", "acp"]);
+        assert_eq!(
+            shimmed.version_args(&["--version".into()]),
+            ["agent.mjs", "--version"],
+            "the Node script stays, the launch arguments go"
+        );
+        let direct = executable_command(PathBuf::from("opencode"), &["acp".into()]);
+        assert_eq!(direct.args, ["acp"]);
+        assert_eq!(direct.version_args(&["--version".into()]), ["--version"]);
+        assert_eq!(
+            AcpResolvedCommand::test_command(PathBuf::from("x"), vec!["--acp".into()])
+                .version_args(&["-v".into()]),
+            ["-v"]
+        );
+    }
+
+    #[test]
+    fn a_probe_keeps_the_script_entrypoint_a_descriptor_starts() {
+        let version = ["--version".to_owned()];
+        let probe = |program: &str, args: &[&str]| {
+            let args = args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+            executable_command(PathBuf::from(program), &args).version_args(&version)
+        };
+        // `node agent.mjs` probes the agent, not Node itself.
+        assert_eq!(
+            probe("node.exe", &["agent.mjs"]),
+            ["agent.mjs", "--version"]
+        );
+        // Whatever follows the entrypoint (a subcommand, a flag) is dropped;
+        // what precedes it (Node options) stays.
+        assert_eq!(
+            probe("node", &["--no-warnings", "agent.mjs", "acp", "--acp"]),
+            ["--no-warnings", "agent.mjs", "--version"]
+        );
+        assert_eq!(
+            probe("node", &["agent.mjs", "--acp"]),
+            ["agent.mjs", "--version"],
+            "a script followed by a flag keeps the script only"
+        );
+        // A path separator or a known script extension names an entrypoint.
+        assert_eq!(
+            probe("python", &["tools\\agent", "serve"]),
+            ["tools\\agent", "--version"]
+        );
+        assert_eq!(probe("python", &["a/b", "serve"]), ["a/b", "--version"]);
+        assert_eq!(
+            probe("python", &["run.PY", "serve"]),
+            ["run.PY", "--version"]
+        );
+        assert_eq!(
+            probe("deno", &["main.ts", "--acp"]),
+            ["main.ts", "--version"]
+        );
+        // An option's path value is not an entrypoint.
+        assert_eq!(
+            probe("node", &["agent.mjs", "acp", "--config", "cfg/agent.json"]),
+            ["agent.mjs", "--version"]
+        );
+        assert_eq!(
+            probe("agent", &["serve", "--config", "cfg/agent"]),
+            ["--version"]
+        );
+        // Subcommands and flags are not entrypoints, even with a path value.
+        assert_eq!(probe("opencode", &["acp"]), ["--version"]);
+        assert_eq!(probe("gemini", &["--acp"]), ["--version"]);
+        assert_eq!(
+            probe("agent", &["--config=/etc/agent.json", "acp"]),
+            ["--version"]
+        );
+        // The Node script behind a shim stays first, then the descriptor's own.
+        let shimmed = node_command(
+            PathBuf::from("node"),
+            PathBuf::from("cli.mjs"),
+            &["--cfg".into(), "wrapper.js".into(), "--acp".into()],
+        );
+        assert_eq!(
+            shimmed.version_args(&version),
+            ["cli.mjs", "--cfg", "wrapper.js", "--version"]
+        );
+        // Every shipped agent keeps probing `program --version`.
+        for agent in builtin_acp_descriptors() {
+            let command =
+                executable_command(PathBuf::from(&agent.command.program), &agent.command.args);
+            assert_eq!(
+                command.version_args(&agent.version.args),
+                agent.version.args,
+                "{}",
+                agent.id.as_str()
+            );
+        }
+    }
+
+    fn write_shim(directory: &Path, name: &str, target: &str) -> PathBuf {
+        let shim = directory.join(name);
+        std::fs::write(
+            &shim,
+            format!(
+                "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\n{target}\r\n"
+            ),
+        )
+        .expect("shim");
+        shim
+    }
+
+    fn write_file(path: &Path) {
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("directory");
+        std::fs::write(path, b"x").expect("file");
+    }
+
+    fn canonical(path: &Path) -> PathBuf {
+        process_directory(&std::fs::canonicalize(path).expect("canonical path"))
+    }
+
+    #[test]
+    fn a_shim_that_names_one_native_executable_resolves_to_it() {
+        let root = fresh_directory("shim-exe");
+        let npm = root.join("npm");
+        let exe = npm.join("node_modules/opencode-ai/bin/opencode.exe");
+        write_file(&exe);
+        // The real `opencode.cmd` of the npm package `opencode-ai`.
+        let shim = write_shim(
+            &npm,
+            "opencode.cmd",
+            "\"%dp0%\\node_modules\\opencode-ai\\bin\\opencode.exe\"   %*",
+        );
+        assert_eq!(
+            shim_target(&shim),
+            Some(ShimTarget::Executable(canonical(&exe)))
+        );
+        // pnpm spells the directory `%~dp0` and may climb out of it.
+        let pnpm = root.join("pnpm");
+        let store = root.join("store/opencode.exe");
+        write_file(&store);
+        std::fs::create_dir_all(&pnpm).expect("pnpm bin");
+        let shim = write_shim(
+            &pnpm,
+            "opencode.cmd",
+            "\"%~dp0\\..\\store\\opencode.exe\" %*",
+        );
+        assert_eq!(
+            shim_target(&shim),
+            Some(ShimTarget::Executable(canonical(&store)))
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_native_shim_is_followed_only_when_it_passes_its_arguments_through() {
+        let root = fresh_directory("shim-passthrough");
+        let bin = root.join("bin");
+        let exe = bin.join("node_modules/pkg/agent.exe");
+        write_file(&exe);
+        let target = |name: &str, line: &str| shim_target(&write_shim(&bin, name, line));
+        let named = "\"%dp0%\\node_modules\\pkg\\agent.exe\"";
+        // The npm passthrough form, with any blanks before `%*`.
+        for (name, spacing) in [("one.cmd", " "), ("many.cmd", "   "), ("tab.cmd", "\t")] {
+            assert_eq!(
+                target(name, &format!("{named}{spacing}%*")),
+                Some(ShimTarget::Executable(canonical(&exe))),
+                "{name}"
+            );
+        }
+        // Fixed arguments would be dropped by a direct start.
+        for (name, line) in [
+            ("fixed.cmd", format!("{named} --config locked.json %*")),
+            ("quoted.cmd", format!("{named} \"locked.json\" %*")),
+            ("after.cmd", format!("{named} %* --extra")),
+            ("none.cmd", named.to_owned()),
+            ("other.cmd", format!("{named} %1")),
+            (
+                "second.cmd",
+                format!("{named} %* \"%dp0%\\node_modules\\pkg\\agent.exe\""),
+            ),
+        ] {
+            assert_eq!(target(name, &line), None, "{name}: {line}");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shim_targets_refuse_ambiguous_missing_and_unsafe_names() {
+        let root = fresh_directory("shim-refuse");
+        let bin = root.join("bin");
+        write_file(&bin.join("node_modules/pkg/one.exe"));
+        write_file(&bin.join("node_modules/pkg/two.exe"));
+        write_file(&bin.join("node_modules/pkg/a.js"));
+        write_file(&bin.join("node_modules/pkg/b.js"));
+        write_file(&bin.join("node_modules/pkg/%EVIL%.exe"));
+        let target = |name: &str, line: &str| shim_target(&write_shim(&bin, name, line));
+        assert_eq!(
+            target(
+                "ambiguous.cmd",
+                "\"%dp0%\\node_modules\\pkg\\one.exe\" %*\r\n\"%dp0%\\node_modules\\pkg\\two.exe\" %*"
+            ),
+            None,
+            "two different executables"
+        );
+        assert_eq!(
+            target(
+                "scripts.cmd",
+                "\"%dp0%\\node_modules\\pkg\\a.js\" %*\r\n\"%dp0%\\node_modules\\pkg\\b.js\" %*"
+            ),
+            None,
+            "two different scripts"
+        );
+        assert_eq!(
+            target("missing.cmd", "\"%dp0%\\node_modules\\pkg\\gone.exe\" %*"),
+            None,
+            "a missing target"
+        );
+        assert_eq!(
+            target("percent.cmd", "\"%dp0%\\node_modules\\pkg\\%EVIL%.exe\" %*"),
+            None,
+            "a variable in the path"
+        );
+        assert_eq!(
+            target("bang.cmd", "\"%dp0%\\node_modules\\pkg\\one!x.exe\" %*"),
+            None,
+            "delayed expansion in the path"
+        );
+        assert_eq!(
+            target(
+                "interpreter.cmd",
+                "IF EXIST \"%dp0%\\node.exe\" (\"%dp0%\\node.exe\" %*)"
+            ),
+            None,
+            "the interpreter probe is never a target"
+        );
+        assert_eq!(
+            target("wrapper.cmd", "powershell -File run.ps1 %*"),
+            None,
+            "any other batch file needs a shell"
+        );
+        assert_eq!(
+            target("absolute.cmd", "\"C:\\tools\\agent.exe\" %*"),
+            None,
+            "only targets relative to the shim are followed"
+        );
+        // A shim that names a script is a Node shim, whatever else it names.
+        let node_shim = target(
+            "node.cmd",
+            "IF EXIST \"%dp0%\\node.exe\" (SET \"_prog=%dp0%\\node.exe\")\r\n\"%_prog%\" \"%dp0%\\node_modules\\pkg\\a.js\" \"%dp0%\\node_modules\\pkg\\one.exe\" %*",
+        );
+        assert_eq!(
+            node_shim,
+            Some(ShimTarget::Script(canonical(
+                &bin.join("node_modules/pkg/a.js")
+            )))
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shim_targets_allow_spaces_in_every_part_of_the_path() {
+        let root = fresh_directory("shim-spaces");
+        let bin = root.join("global npm");
+        let exe = bin.join("node_modules/lab agent pkg/bin/lab agent.exe");
+        write_file(&exe);
+        let shim = write_shim(
+            &bin,
+            "lab-agent.cmd",
+            "\"%dp0%\\node_modules\\lab agent pkg\\bin\\lab agent.exe\" %*",
+        );
+        assert_eq!(
+            shim_target(&shim),
+            Some(ShimTarget::Executable(canonical(&exe)))
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_native_shim_resolves_without_node_and_later_path_entries_are_searched() {
+        let root = fresh_directory("native-shim");
+        let npm = root.join("npm");
+        let exe = npm.join("node_modules/opencode-ai/bin/opencode.exe");
+        write_file(&exe);
+        write_shim(
+            &npm,
+            "opencode.cmd",
+            "\"%dp0%\\node_modules\\opencode-ai\\bin\\opencode.exe\"   %*",
+        );
+        let spec = AcpCommandSpec {
+            program: "opencode".into(),
+            args: vec!["acp".into()],
+        };
+        let path = std::env::join_paths([npm.clone()]).expect("path");
+        let resolved = resolve_acp_command_in(&spec, Some(&path)).expect("native shim");
+        assert_eq!(
+            resolved.program,
+            canonical(&exe),
+            "not node.exe, not cmd.exe"
+        );
+        assert_eq!(resolved.args, ["acp"]);
+        assert_eq!(resolved.version_args(&["--version".into()]), ["--version"]);
+
+        // A user's wrapper in an earlier PATH entry does not hide the install.
+        let wrapper = root.join("wrapper");
+        std::fs::create_dir_all(&wrapper).expect("wrapper");
+        std::fs::write(
+            wrapper.join("opencode.cmd"),
+            "@echo off\r\npowershell -File run.ps1 %*\r\n",
+        )
+        .expect("wrapper script");
+        let path = std::env::join_paths([wrapper.clone(), npm.clone()]).expect("path");
+        let resolved = resolve_acp_command_in(&spec, Some(&path)).expect("later entry");
+        assert_eq!(resolved.program, canonical(&exe));
+        // Without a supported installation the first failure is reported.
+        let path = std::env::join_paths([wrapper]).expect("path");
+        assert_eq!(
+            resolve_acp_command_in(&spec, Some(&path)),
+            Err(AcpResolveError::UnsupportedLauncher)
+        );
+
+        // A shim that fixes arguments of its own (`--config locked.json`) is
+        // not the passthrough form: starting the executable directly would
+        // lose them, so it is refused and a later PATH entry is searched.
+        let locked = root.join("locked");
+        write_file(&locked.join("node_modules/opencode-ai/bin/opencode.exe"));
+        write_shim(
+            &locked,
+            "opencode.cmd",
+            "\"%dp0%\\node_modules\\opencode-ai\\bin\\opencode.exe\" --config locked.json %*",
+        );
+        let path = std::env::join_paths([locked.clone()]).expect("path");
+        assert_eq!(
+            resolve_acp_command_in(&spec, Some(&path)),
+            Err(AcpResolveError::UnsupportedLauncher)
+        );
+        let path = std::env::join_paths([locked, npm.clone()]).expect("path");
+        let resolved = resolve_acp_command_in(&spec, Some(&path)).expect("later entry");
+        assert_eq!(resolved.program, canonical(&exe));
         let _ = std::fs::remove_dir_all(root);
     }
 }

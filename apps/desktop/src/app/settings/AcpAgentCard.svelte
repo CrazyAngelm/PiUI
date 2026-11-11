@@ -5,7 +5,7 @@
   import { Badge, Button } from '../../lib/ui';
   import HarnessMark from '../shell/HarnessMark.svelte';
   import {
-    canChooseSecrets, canConfirmVersion, canRemove, canTrust, commandLineText, environmentGroups, stateBadge, versionNote,
+    canChooseSecrets, canRemove, canTrust, commandLineText, environmentGroups, stateBadge, versionBadge, versionNote,
   } from './acpAgents';
   import type { AcpAgentRow, HarnessesStore } from './harnessesStore.svelte';
 
@@ -13,11 +13,10 @@
     row: AcpAgentRow;
     store: HarnessesStore;
     onTrust: (agent: AcpAgentEntryV1) => void;
-    onConfirmVersion: (agent: AcpAgentEntryV1) => void;
     onSecrets: (agent: AcpAgentEntryV1) => void;
     onRemove: (agent: AcpAgentEntryV1) => void;
   }
-  let { row, store, onTrust, onConfirmVersion, onSecrets, onRemove }: Props = $props();
+  let { row, store, onTrust, onSecrets, onRemove }: Props = $props();
   // Buttons keep their visible text as the accessible name; the agent name describes them.
   const uid = $props.id();
   const titleId = `${uid}-title`;
@@ -34,6 +33,7 @@
   const name = $derived(agent.descriptor.displayName);
   const badge = $derived(stateBadge(agent.state, store.safeMode));
   const version = $derived(versionNote(agent));
+  const advisory = $derived(versionBadge(agent.versionStatus));
   const environment = $derived(environmentGroups(agent));
   const restricted = $derived(RESTRICTIONS.filter(([key]) => agent.descriptor.capabilities?.[key] === false).map(([, label]) => label));
   const hint = $derived(row.status?.signInHint ?? agent.descriptor.authHint);
@@ -49,6 +49,7 @@
       <Badge>{agent.source === 'built-in' ? $t('Ships with PiUI') : agent.source === 'plugin' ? $t('From plugin {0}', [agent.plugin?.name ?? '']) : $t('Added by you')}</Badge>
       {#if agent.version}<span class="muted">v{agent.version}</span>{/if}
       <Badge tone={badge.tone}>{$t(badge.label)}</Badge>
+      {#if advisory}<Badge tone={advisory.tone}>{$t(advisory.label)}</Badge>{/if}
     </div>
     {#if agent.reason && !(store.safeMode && agent.state === 'checking')}<p class="muted">{$t(agent.reason)}</p>{/if}
     <dl class="facts">
@@ -88,9 +89,6 @@
     <div class="actions">
       {#if canTrust(agent)}
         <Button size="sm" disabled={locked} onclick={() => onTrust(agent)} aria-describedby={titleId}>{$t('Review and trust…')}</Button>
-      {/if}
-      {#if canConfirmVersion(agent)}
-        <Button size="sm" disabled={locked} onclick={() => onConfirmVersion(agent)} aria-describedby={titleId}>{$t('Confirm version…')}</Button>
       {/if}
       {#if canChooseSecrets(agent)}
         <Button size="sm" disabled={locked} onclick={() => onSecrets(agent)} aria-describedby={titleId}>{$t('Secret variables…')}</Button>

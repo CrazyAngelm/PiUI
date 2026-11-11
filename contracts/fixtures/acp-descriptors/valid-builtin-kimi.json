@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "kimi",
+  "displayName": "Kimi Code",
+  "command": {
+    "program": "kimi",
+    "args": [
+      "acp"
+    ]
+  },
+  "version": {
+    "args": [
+      "--version"
+    ]
+  },
+  "environment": [
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY"
+  ],
+  "authHint": "Sign in with Kimi Code's own flow: run `kimi` in a terminal and use /login.",
+  "docsUrl": "https://github.com/MoonshotAI/kimi-code"
+}

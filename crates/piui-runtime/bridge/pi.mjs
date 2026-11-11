@@ -358,6 +358,24 @@ export async function createPiAdapter(config, emit) {
     lastTurnOutcome = undefined;
   };
 
+  // Pi is not version-pinned, so a newer Pi can emit event types this adapter
+  // has never seen. Those the adapter knowingly does not show stay silent; any
+  // other type gets one generic fallback block named by its type, never its
+  // payload, so the session stays readable instead of dropping it unseen.
+  const IGNORED_EVENTS = new Set([
+    "turn_start", "turn_end", "queue_update", "auto_retry_start", "auto_retry_end", "extension_error",
+  ]);
+  const unknownEventTypes = new Set();
+  const reportUnknownEvent = (type) => {
+    const name = typeof type === "string" && /^[A-Za-z0-9_.:/-]{1,80}$/.test(type) ? type : "unknown";
+    if (unknownEventTypes.has(name) || unknownEventTypes.size >= 64) return;
+    unknownEventTypes.add(name);
+    putBlock({
+      id: `pi-unknown-${++blockSequence}`, kind: "unknown", label: "Pi event", status: "complete",
+      safeSummary: `Unsupported Pi event: ${name}`, fallback: true,
+    });
+  };
+
   const handleNativeEvent = (frame) => {
     switch (frame.type) {
       case "agent_start": lastTurnOutcome = undefined; setStatus("running"); break;
@@ -455,6 +473,8 @@ export async function createPiAdapter(config, emit) {
       case "extension_ui_request": handleExtensionRequest(frame); break;
       case "session_info_changed": if (typeof frame.name === "string") state.sessionName = frame.name; break;
       case "thinking_level_changed": state.thinkingLevel = frame.level; break;
+      default:
+        if (!IGNORED_EVENTS.has(frame.type)) reportUnknownEvent(frame.type);
     }
   };
 
@@ -489,7 +509,11 @@ export async function createPiAdapter(config, emit) {
         pending.delete(frame.id);
         if (frame.success === true) slot.resolve(frame.data ?? null);
         else slot.reject(fail("native-command-rejected", "The Pi runtime rejected the request."));
-      } else handleNativeEvent(frame);
+      } else {
+        // A field a newer Pi changed must not escape this handler and end the
+        // runner: the event becomes one fallback block instead.
+        try { handleNativeEvent(frame); } catch { reportUnknownEvent(frame?.type); }
+      }
     }
   });
   child.stdout.on("end", () => { if (stdoutBytes.length) failNative(); });

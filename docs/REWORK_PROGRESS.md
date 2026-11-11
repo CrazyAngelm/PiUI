@@ -491,6 +491,35 @@ subscription** (never API keys / Bedrock / Vertex), see plan §8.4.
 - Tests written (not yet run): graph round-trip, preflight rules, lab child
   run lifecycle, run presentation, export refusal, locale.
 
+## 2026-11-11 — forward-compatible native versions and built-in ACP catalog (unreleased)
+
+- **ADR-043:** a tested range's minimum is enforced and its ceiling is advisory.
+  A newer release is admitted with `versionStatus: "newer"` and Settings shows
+  "Newer than tested" beside an enabled launch. The real gate stays
+  fail-closed: identity, protocol handshake (typed `native-protocol-mismatch`)
+  and effective policy state. Ranges: Codex 0.147.0–0.158.0, Claude Code
+  2.1.0–3.0.0, Prime Agent 0.9.2–0.9.4, Hermes 0.21.0–0.22.0; Pi has none.
+- **Bridges:** Codex follows `codex features list` for its `--disable` names
+  (drops absent ones, fails closed when a policy-required one is absent); Prime
+  checks package identity and the SDK exports it uses; Hermes no longer compares
+  `agentInfo.version` for equality. Unknown well-formed notifications, items and
+  content get one deduplicated fallback block per type, housekeeping
+  notifications are ignored and unknown server requests are answered with an
+  error. Documented in `crates/piui-runtime/bridge/CONTRACT.md`.
+- **ACP:** per-version confirmation removed (command-line trust and secret
+  consent unchanged); seven built-ins (Gemini CLI `--acp`, OpenCode, Qwen Code,
+  GitHub Copilot CLI, Goose, Kimi Code, Cursor); Windows npm shims that point
+  to a native `.exe` resolve without `cmd.exe`. Not bundled: `codex-acp`,
+  `claude-agent-acp` (would bypass ADR-029), Aider (needs its own adapter
+  spike), Antigravity, Droid, Cline, Auggie, Kilo, Vibe. The plugin example
+  now adds Auggie because OpenCode is built in.
+- **Evidence on this machine** (installed, not yet through PiUI): codex-cli
+  0.165.0 `initialize` + housekeeping notifications, claude 2.1.318, pi 1.4.0,
+  Prime Agent 0.9.5, OpenCode 1.19.4 `acp` `initialize` (protocol 1). Real-CLI
+  handshake and real-provider turns are reported separately from fixtures; no
+  provider turn is claimed.
+- Docs only in this entry; builds and tests are run by the lead at the end.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

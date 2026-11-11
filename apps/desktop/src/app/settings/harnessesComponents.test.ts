@@ -42,24 +42,60 @@ describe('Settings → Harnesses components', () => {
   it('renders every harness with status, location, tested versions and sign-in guidance', async () => {
     const { body } = render(HarnessesSettings, { props: { store: storeWith(await registryOf('demo')) } });
     expect(body).toContain('aria-label="Built-in harnesses"');
-    for (const name of ['Pi', 'Prime Agent', 'Codex', 'Hermes', 'Claude Code', 'Gemini CLI', 'Qwen Code', 'Lab Agent']) expect(body).toContain(`>${name}</strong>`);
+    for (const name of ['Pi', 'Prime Agent', 'Codex', 'Hermes', 'Claude Code', 'Gemini CLI', 'OpenCode', 'Qwen Code', 'Lab Agent']) expect(body).toContain(`>${name}</strong>`);
     expect(body).toContain('0.147.0 – 0.157.x');
     expect(body).toContain('C:/Users/example/AppData/Roaming/npm/node_modules/@openai/codex/bin/codex.js');
     expect(body).toContain('Claude Code runs only on your Claude subscription: run `claude` in a terminal and use /login.');
     // ACP agents: the exact command line, the identity, readiness and the next decision.
     expect(body).toContain('acp:gemini-cli');
-    expect(body).toContain('"C:/Program Files/nodejs/node.exe" C:/Users/example/AppData/Roaming/npm/node_modules/@google/gemini-cli/dist/index.js --experimental-acp');
+    expect(body).toContain('"C:/Program Files/nodejs/node.exe" C:/Users/example/AppData/Roaming/npm/node_modules/@google/gemini-cli/dist/index.js --acp');
     expect(body).toContain('Ships with PiUI');
     expect(body).toContain('Added by you');
     expect(body).toContain("The agent's program was not found on PATH.");
     expect(body).toContain('Needs review');
     expect(body).toContain('Review and trust…');
     expect(body).toContain('Secrets not passed: GEMINI_API_KEY, GOOGLE_API_KEY, GOOGLE_APPLICATION_CREDENTIALS');
-    expect(body).toContain('0.39.1, not verified by PiUI; you confirmed this version');
+    // Untested and newer versions are notices, not decisions: no confirmation is offered anywhere.
+    expect(body).toContain('0.39.1, not verified by PiUI');
+    expect(body).toContain('1.19.4, not verified by PiUI');
+    expect(body).not.toContain('you confirmed this version');
+    expect(body).not.toContain('Confirm version…');
     expect(body).toContain('Add ACP agent…');
     // Per-agent buttons keep their visible name and are described by the agent title.
     expect(body).toMatch(/<strong id="([^"]+)-title">Lab Agent<\/strong>[\s\S]*aria-describedby="\1-title"/);
     expect(body).not.toContain('Safe mode:');
+  });
+
+  it('marks versions PiUI has not tested next to the readiness, never instead of it', async () => {
+    const registry = await registryOf('demo');
+    const { body } = render(HarnessesSettings, { props: { store: storeWith(registry) } });
+    // Codex (native, newer) and the shipped agents without a tested range are ready and launchable.
+    expect(body.match(/Newer than tested/g)).toHaveLength(1);
+    expect(body.match(/Untested version/g)).toHaveLength(2);
+    expect(registry.harnesses.find((harness) => harness.harness === 'codex')).toMatchObject({ state: 'ready', versionStatus: 'newer' });
+    const newer: HarnessRegistryV1 = {
+      ...registry,
+      agents: registry.agents.map((agent) => (agent.descriptor.id === 'gemini-cli' ? { ...agent, version: '0.40.0', versionStatus: 'newer' as const } : agent)),
+    };
+    const agentNewer = render(HarnessesSettings, { props: { store: storeWith(newer) } }).body;
+    expect(agentNewer.match(/Newer than tested/g)).toHaveLength(2);
+    expect(agentNewer).toContain('0.40.0, newer than the versions tested with PiUI');
+    const unknown: HarnessRegistryV1 = {
+      ...registry,
+      agents: registry.agents.map((agent) => (agent.descriptor.id === 'gemini-cli' ? { ...agent, versionStatus: 'unrecognized' as const } : agent)),
+    };
+    const shown = render(HarnessesSettings, { props: { store: storeWith(unknown) } }).body;
+    expect(shown).toContain('Version unknown');
+    expect(shown).toContain('The version output was not recognized');
+    expect(shown).not.toContain('Confirm version…');
+    // An older version is the "Unsupported version" state, without a second notice.
+    const older: HarnessRegistryV1 = {
+      ...registry,
+      agents: registry.agents.map((agent) => (agent.descriptor.id === 'gemini-cli' ? { ...agent, state: 'unsupported-version' as const, versionStatus: 'older' as const } : agent)),
+    };
+    const refused = render(HarnessesSettings, { props: { store: storeWith(older) } }).body;
+    expect(refused).toContain('Unsupported version');
+    expect(refused.match(/Newer than tested/g)).toHaveLength(1);
   });
 
   it('announces loading and a registry failure without blocking the rest of Settings', () => {
@@ -91,6 +127,7 @@ describe('Settings → Harnesses components', () => {
     expect(body).toContain('LAB_AGENT_TOKEN, HTTPS_PROXY');
     expect(body).toContain('Secret-like names (LAB_AGENT_TOKEN) pass only after you allow them separately.');
     expect(body).toContain('Trust is not a sandbox.');
+    expect(body).toContain('Trust covers this command line; newer versions start without asking again.');
     expect(body).not.toContain('role="alert"');
     const stale = render(AcpTrustReview, { props: { agent: lab, error: 'The agent or its command line changed since you reviewed it. Review it again.', onReview: noop } }).body;
     expect(stale).toContain('role="alert"');

@@ -15,6 +15,10 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
   const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
   const SUBSCRIPTION_MESSAGE = "Sign in to Claude Code with your Claude subscription. API keys and cloud providers are not used by PiUI.";
   const subscriptionRequired = () => fail("claude-subscription-required", SUBSCRIPTION_MESSAGE);
+  // There is no version gate and no ceiling: any installed CLI starts, and the
+  // initialize handshake is the compatibility check. A CLI that exits or answers
+  // with an error before it completes is not speaking the protocol PiUI drives.
+  const protocolMismatch = () => fail("native-protocol-mismatch", "The installed Claude Code does not speak the protocol PiUI requires.");
   // Fast mode and extra usage are billed beyond the base subscription, so PiUI
   // never enables them: a request for fast mode is refused before anything
   // spawns, every launch pins it off, and a session that starts consuming
@@ -488,7 +492,11 @@ export async function createClaudeAdapter(config, emit, coordinatorRequest, boar
     child.once("error", () => onProcessEnd(current, true));
     child.once("close", () => onProcessEnd(current, false));
     await spawned;
-    return controlRequest({ subtype: "initialize" });
+    try {
+      return await controlRequest({ subtype: "initialize" });
+    } catch (error) {
+      throw ["native-exited", "native-command-rejected"].includes(error?.bridgeCode) ? protocolMismatch() : error;
+    }
   };
   const stopProcess = async (current, timeoutMs) => {
     if (!current || current.ended) return;

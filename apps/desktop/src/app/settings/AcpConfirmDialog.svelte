@@ -3,7 +3,7 @@
   import { t } from '../../features/locale/language';
   import { Button, Dialog } from '../../lib/ui';
 
-  /** One explicit decision about an ACP agent: confirm a version or remove it. */
+  /** One explicit decision about an ACP agent: removing it. */
   interface Props {
     open: boolean;
     title: string;

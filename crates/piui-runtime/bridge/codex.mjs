@@ -1,6 +1,8 @@
 // Codex app-server adapter. All implementation bindings stay factory-local so
 // this source can be concatenated with the common embedded runner.
-export async function createCodexAdapter(config, emit, coordinatorRequest, openChild, boardRequest) {
+// `probeHooks` is a test-only injection (like `openChild`); production callers
+// never pass it: { timeoutMs, platform, spawn } for the `features list` probe.
+export async function createCodexAdapter(config, emit, coordinatorRequest, openChild, boardRequest, probeHooks = {}) {
   const { spawn } = await import("node:child_process");
   const path = await import("node:path");
 
@@ -62,11 +64,14 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     throw fail("unsupported-native-subagent-policy", "Codex cannot prove that native subagents are enabled for this session.");
   }
 
-  // Verified Codex app-server range, mirrored from CODEX_APP_SERVER in
+  // Tested Codex app-server range, mirrored from CODEX_APP_SERVER in
   // crates/piui-runtime/src/native_version.rs (a Rust unit test keeps both
-  // equal): minimum <= version < ceiling on MAJOR.MINOR.PATCH. A pre-release
-  // precedes its release; one at or above the ceiling previews an untested
-  // release line and is newer than tested. See CONTRACT.md (Codex section).
+  // equal): minimum <= version < ceiling on MAJOR.MINOR.PATCH. Only the
+  // minimum is enforced. The ceiling is advisory: a version at or above it
+  // (including a pre-release of an untested line) is "newer" than tested and
+  // starts; the initialize identity check and the required startup responses
+  // below are the compatibility gate. A pre-release precedes its release.
+  // See CONTRACT.md (Codex section).
   const VERIFIED_CODEX_VERSIONS = { minimum: "0.147.0", ceiling: "0.158.0" };
   const parseVersion = (text) => {
     const match = /^v?(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(text);
@@ -178,6 +183,15 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   const safeNativeError = () => fail(
     "native-operation-failed",
     "The Codex app server could not complete the request.",
+  );
+  // A required startup request (initialize, thread/start, thread/resume,
+  // model/list) that the app server rejects with a JSON-RPC error, or answers
+  // without the fields PiUI reads, means this Codex does not speak the protocol
+  // PiUI drives (a renamed method, changed parameters or response). Fixed
+  // text: the native error and payload never reach the UI.
+  const protocolMismatch = () => fail(
+    "native-protocol-mismatch",
+    "The Codex app server rejected or did not properly answer a required startup request. The installed Codex may be incompatible with this PiUI version.",
   );
   const mapStatus = (value) => {
     if (value === "inProgress") return "streaming";
@@ -353,14 +367,21 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     blocks.set(item.id, block);
     emit({ type: "block", block });
   };
+  // One fallback block per method name: a stream of some new event must not
+  // flood the transcript, and a handler that keeps failing on one method is
+  // reported once. Native payloads never reach the block.
+  const unknownEventMethods = new Set();
   const emitUnknown = (method) => {
+    const name = oneLine(typeof method === "string" && method ? method : "unknown", 80);
+    if (unknownEventMethods.has(name)) return;
+    unknownEventMethods.add(name);
     const id = `unknown-${++blockSerial}`;
     const block = {
       id,
       kind: "unknown",
       label: "Codex event",
       status: "complete",
-      safeSummary: `Unsupported Codex event: ${typeof method === "string" ? method : "unknown"}`,
+      safeSummary: `Unsupported Codex event: ${name}`,
       fallback: true,
     };
     blocks.set(id, block);
@@ -898,8 +919,10 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       return;
     }
     if (method === "item/tool/call" && message.id !== undefined) {
-      if (params.namespace === "piui" && params.tool === "board") void answerBoardCall(message);
-      else void answerCoordinatorCall(message);
+      // A failed reply write means the native side is closing; never let it
+      // become an unhandled rejection.
+      if (params.namespace === "piui" && params.tool === "board") void answerBoardCall(message).catch(() => {});
+      else void answerCoordinatorCall(message).catch(() => {});
       return;
     }
     if (serverRequestMethods.has(method) && message.id !== undefined) {
@@ -934,10 +957,12 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       return;
     }
     if (nativeId && typeof params.threadId === "string" && params.threadId !== nativeId) return;
-    // Account quota and gateway sign-in state (the latter new in 0.157) are
-    // control-plane state, not conversation items. Actual turn failures
-    // (including usage limits and authentication) still surface below.
-    if (method === "account/rateLimits/updated" || method === "account/gatewayOAuth/changed") return;
+    // Account quota, account and gateway sign-in state (`account/updated` and
+    // `remoteControl/status/changed` are sent unsolicited right after
+    // `initialize` by 0.165) are control-plane state, not conversation items.
+    // Actual turn failures (including usage limits and authentication) still
+    // surface below.
+    if (["account/rateLimits/updated", "account/gatewayOAuth/changed", "account/updated"].includes(method)) return;
     // Configuration and deprecation warnings describe the user's native Codex
     // configuration (0.157.1 sends startup warnings right after initialize).
     // They become fixed resource warnings; native text and config paths are
@@ -1108,6 +1133,22 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     if ([ "remoteControl/status/changed", "thread/goal/cleared"].includes(method)) return;
     emitUnknown(method);
   };
+  // A well-formed frame whose handler throws (a field this version changed)
+  // must not end the session or the bridge process: it becomes one fallback
+  // block for that method. A request the handler did not register as an
+  // approval is answered with an error so the native side never waits for it.
+  // Malformed frames are not handled here: they stay fatal in acceptNativeFrame.
+  const guardedNotification = (message) => {
+    try {
+      handleNotification(message);
+    } catch {
+      if (message.id !== undefined) {
+        const registered = [...pendingApprovals.values()].some((entry) => entry.nativeRequestId === String(message.id));
+        if (!registered) void writeNative({ id: message.id, error: { code: -32603, message: "Client request failed" } }).catch(() => {});
+      }
+      emitUnknown(message.method);
+    }
+  };
   const acceptNativeFrame = (raw) => {
     if (raw.length > 0 && raw[raw.length - 1] === 0x0d) raw = raw.subarray(0, -1);
     if (raw.length === 0) return;
@@ -1139,11 +1180,13 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       if (!waiter) return;
       pending.delete(key);
       if ("result" in message) waiter.resolve(message.result);
-      else waiter.reject(safeNativeError());
+      // `nativeRejected` marks a JSON-RPC error answer, unlike a transport
+      // loss, so required startup requests can be reported as a mismatch.
+      else waiter.reject(Object.assign(safeNativeError(), { nativeRejected: true }));
       return;
     }
     if (typeof message.method === "string" && !hasResult && !hasError) {
-      handleNotification(message);
+      guardedNotification(message);
       return;
     }
     setStatus("failed");
@@ -1153,15 +1196,166 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     settleNativeStop(false);
   };
 
+  // `--disable <feature>` is a hard CLI error for a name this Codex does not
+  // register, so an upstream removal would fail every start before `initialize`.
+  // The installed CLI's own `features list` (one probe, same program and
+  // argument prefix as the app server, bounded in time and output, in the
+  // bridge's contained process tree) says which names are registered.
+  // - A restriction whose feature is absent from a successful listing is
+  //   dropped: a feature that does not exist cannot be enabled.
+  // - Without a successful listing every argument stays exactly as before;
+  //   the start is never retried with fewer restrictions.
+  // - The native-subagent switch is a requested policy, not a convenience: if
+  //   its features are absent or can no longer be switched off (stage
+  //   `removed`), the session fails closed instead of running with subagents.
+  const DISABLED_FEATURES = ["apps", "plugins", "remote_plugin", "recommended_plugins", "shell_snapshot"];
+  const SUBAGENT_FEATURES = ["multi_agent", "multi_agent_v2"];
+  const FEATURE_PROBE_TIMEOUT_MS = 6000;
+  const FEATURE_PROBE_LIMIT_BYTES = 256 * 1024;
+  const FEATURE_PROBE_TREE_KILL_MS = 5000;
+  const FEATURE_PROBE_EXIT_MS = 2000;
+  // `<name>  <stage>  <enabled>` rows. Strict on purpose: one row of an unknown
+  // shape makes the whole listing unrecognized, because a name misread as
+  // absent would silently drop a restriction.
+  const FEATURE_ROW = /^([A-Za-z][A-Za-z0-9_.-]*)\s+([A-Za-z][A-Za-z _-]*?)\s+(true|false)$/;
+  const parseFeatureListing = (text) => {
+    const rows = text.split(/\r?\n/).map((row) => row.trimEnd()).filter((row) => row.trim() !== "");
+    const features = new Map();
+    for (const row of rows) {
+      const match = FEATURE_ROW.exec(row);
+      if (!match) return undefined;
+      features.set(match[1], match[2]);
+    }
+    // A real listing names the features PiUI already restricts.
+    const known = [...DISABLED_FEATURES, ...SUBAGENT_FEATURES].some((name) => features.has(name));
+    return rows.length >= 5 && known ? features : undefined;
+  };
+  // Successful listings are shared by every adapter of this bridge process
+  // (a pooled workspace opens many sessions through one process).
+  const featureCache = (globalThis.__piuiCodexFeatureListings ??= new Map());
+  const PROBE_NOT_ENDED = Symbol("probe-not-ended");
+  const probeFeatures = async () => {
+    const key = JSON.stringify([config.runtimeProgram, config.runtimeArgs]);
+    if (featureCache.has(key)) return featureCache.get(key);
+    const probePlatform = probeHooks.platform ?? process.platform;
+    const probeSpawn = probeHooks.spawn ?? spawn;
+    const features = await new Promise((resolve) => {
+      let settled = false;
+      let ending = false;
+      let timer;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      };
+      let probe;
+      try {
+        probe = probeSpawn(config.runtimeProgram, [...config.runtimeArgs, "features", "list"], {
+          cwd: config.cwd,
+          env: process.env,
+          windowsHide: true,
+          // A POSIX probe leads its own process group so the whole tree can be
+          // signalled; on Windows the tree is ended with taskkill instead.
+          detached: probePlatform !== "win32",
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      } catch {
+        finish(undefined);
+        return;
+      }
+      // `kill()` ends only the launcher. On a Windows npm install that is the
+      // Node wrapper, which does not forward the signal, so the native codex
+      // executable would survive inside the pooled Job. End the whole tree
+      // here and let startup continue only once the probe is gone.
+      const probeExited = () => probe.exitCode !== null || probe.signalCode !== null;
+      const endTree = async () => {
+        const pid = probe.pid;
+        if (!Number.isInteger(pid) || pid <= 0) {
+          try { probe.kill(); } catch { /* already gone */ }
+          return probeExited();
+        }
+        let treeEnded = true;
+        if (probePlatform === "win32") {
+          // taskkill exits 0 only when it ended the tree (/T); anything else
+          // leaves descendants unproven.
+          treeEnded = await new Promise((done) => {
+            let wait;
+            const over = (code) => { clearTimeout(wait); done(code === 0); };
+            try {
+              const killer = probeSpawn(`${process.env.SystemRoot || "C:\\Windows"}\\System32\\taskkill.exe`, ["/PID", String(pid), "/T", "/F"], {
+                shell: false,
+                windowsHide: true,
+                stdio: "ignore",
+              });
+              wait = setTimeout(() => { try { killer.kill(); } catch { /* already gone */ } done(false); }, FEATURE_PROBE_TREE_KILL_MS);
+              wait.unref?.();
+              killer.once("error", () => over(undefined));
+              killer.once("exit", (code) => over(code));
+            } catch {
+              done(false);
+            }
+          });
+          try { probe.kill(); } catch { /* already gone */ }
+        } else {
+          try { process.kill(-pid, "SIGKILL"); } catch {
+            treeEnded = false;
+            try { probe.kill("SIGKILL"); } catch { /* already gone */ }
+          }
+        }
+        if (!probeExited()) {
+          await new Promise((done) => {
+            const wait = setTimeout(done, FEATURE_PROBE_EXIT_MS);
+            wait.unref?.();
+            probe.once("exit", () => { clearTimeout(wait); done(); });
+          });
+        }
+        return treeEnded && probeExited();
+      };
+      const stop = () => {
+        if (ending) return;
+        ending = true;
+        endTree().catch(() => false).then((ended) => finish(ended ? undefined : PROBE_NOT_ENDED));
+      };
+      timer = setTimeout(stop, probeHooks.timeoutMs ?? FEATURE_PROBE_TIMEOUT_MS);
+      timer.unref?.();
+      const chunks = [];
+      let bytes = 0;
+      probe.on("error", () => { if (!ending) finish(undefined); });
+      probe.stderr.on("data", () => {});
+      probe.stdout.on("data", (chunk) => {
+        if (ending) return;
+        bytes += chunk.length;
+        if (bytes > FEATURE_PROBE_LIMIT_BYTES) {
+          stop();
+          return;
+        }
+        chunks.push(chunk);
+      });
+      probe.once("close", (code) => {
+        if (!ending) finish(code === 0 ? parseFeatureListing(Buffer.concat(chunks).toString("utf8")) : undefined);
+      });
+    });
+    if (features === PROBE_NOT_ENDED) {
+      // Never start a session beside a probe whose process tree may still run.
+      throw fail("native-unavailable", "The Codex executable could not be started.");
+    }
+    if (features) featureCache.set(key, features);
+    return features;
+  };
+  const subagentsOff = coordinationEnabled || config.nativeSubagents === false;
+  const listedFeatures = await probeFeatures();
+  if (listedFeatures && subagentsOff && SUBAGENT_FEATURES.some((name) => !listedFeatures.has(name) || listedFeatures.get(name) === "removed")) {
+    throw fail("unsupported-native-subagent-policy", "Codex cannot prove that native subagents are disabled for this session.");
+  }
+  const disabledFeatures = [
+    ...DISABLED_FEATURES.filter((name) => !listedFeatures || listedFeatures.has(name)),
+    ...(subagentsOff ? SUBAGENT_FEATURES : []),
+  ];
   const args = [
     "app-server", "--stdio", "-c", "analytics.enabled=false",
-    "--disable", "apps",
-    "--disable", "plugins",
-    "--disable", "remote_plugin",
-    "--disable", "recommended_plugins",
-    "--disable", "shell_snapshot",
+    ...disabledFeatures.flatMap((name) => ["--disable", name]),
   ];
-  if (coordinationEnabled || config.nativeSubagents === false) args.push("--disable", "multi_agent", "--disable", "multi_agent_v2");
   // Inherit native CODEX_HOME/auth without inspecting or logging it. sessionDir
   // remains host metadata/scratch; it is not substituted for the user's Codex home.
   const child = (openChild ?? spawn)(config.runtimeProgram, [...config.runtimeArgs, ...args], {
@@ -1223,11 +1417,13 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     settleNativeStop(false);
     return error;
   };
+  // A JSON-RPC error answer to a required startup request is a protocol
+  // mismatch; a lost transport keeps its own typed error.
   const callDuringStartup = async (method, params) => {
     try {
       return await callNative(method, params);
     } catch (error) {
-      throw cleanupStartupFailure(error);
+      throw cleanupStartupFailure(error?.nativeRejected === true ? protocolMismatch() : error);
     }
   };
 
@@ -1235,16 +1431,18 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     clientInfo: { name: "piui", title: "PiUI", version: "0.2.7" },
     capabilities: { experimentalApi: true, requestAttestation: false },
   });
-  if (!initialize || typeof initialize.codexHome !== "string") {
-    throw cleanupStartupFailure(fail("native-handshake-failed", "The Codex app server handshake failed."));
+  if (!isRecord(initialize) || typeof initialize.codexHome !== "string") {
+    throw cleanupStartupFailure(protocolMismatch());
   }
   const versionCheck = checkCodexVersion(typeof initialize.userAgent === "string" ? userAgentVersion(initialize.userAgent) : undefined);
-  if (versionCheck !== "verified") {
+  // Only an older or unrecognizable version is refused. A newer one is
+  // admitted: the required startup responses below are the compatibility gate.
+  if (versionCheck === "older" || versionCheck === "unrecognized") {
     throw cleanupStartupFailure(fail(
       "unsupported-native-version",
-      versionCheck === "newer"
-        ? "Unverified: this Codex app-server is newer than the versions tested with PiUI."
-        : "PiUI requires a verified Codex app-server version.",
+      versionCheck === "older"
+        ? "This Codex app-server is older than the oldest version PiUI supports."
+        : "The Codex app-server version could not be recognized.",
     ));
   }
   try {
@@ -1334,13 +1532,15 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
         initialTurnsPage: { sortDirection: "desc", itemsView: "full" },
       })
     : await callDuringStartup("thread/start", { ...startThreadParams, ephemeral: false, ...(dynamicTools.length ? { dynamicTools } : {}) });
+  // The thread, its id and its effective cwd are required fields of the
+  // thread/start and thread/resume responses of every known version.
+  if (!isRecord(opened) || !isRecord(opened.thread) || typeof opened.thread.id !== "string" || typeof opened.cwd !== "string") {
+    throw cleanupStartupFailure(protocolMismatch());
+  }
   thinkingLevel ??= opened.reasoningEffort ?? undefined;
   serviceTier ??= opened.serviceTier === "fast" ? "fast" : "standard";
-  const thread = opened?.thread;
-  if (!thread || typeof thread.id !== "string") {
-    throw cleanupStartupFailure(fail("native-thread-failed", "Codex could not open the native thread."));
-  }
-  const effectiveCwd = typeof opened.cwd === "string" ? opened.cwd : undefined;
+  const thread = opened.thread;
+  const effectiveCwd = opened.cwd;
   const normalizeCwd = (value) => {
     const normalized = path.resolve(value);
     // Rust canonicalization returns extended-length Windows paths, while the
@@ -1368,7 +1568,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   }
   nativeId = thread.id;
   nativePath = typeof thread.path === "string" ? thread.path : nativePath;
-  for (const message of deferredNativeMessages.splice(0)) handleNotification(message);
+  for (const message of deferredNativeMessages.splice(0)) guardedNotification(message);
   if (typeof opened.modelProvider === "string") currentProvider = opened.modelProvider;
   if (typeof opened.model === "string") {
     const effectiveName = currentModel?.id === opened.model ? currentModel.name : opened.model;
@@ -1577,13 +1777,23 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       do {
         // A native default/resumed model may be hidden from new-model discovery.
         // Keep its authoritative reasoning metadata and selected menu entry.
-        const page = await callNative("model/list", { cursor, includeHidden: true });
-        for (const model of page?.data || []) {
+        let page;
+        try {
+          page = await callNative("model/list", { cursor, includeHidden: true });
+        } catch (error) {
+          throw error?.nativeRejected === true ? protocolMismatch() : error;
+        }
+        // `data` (each model with an id) is a required field of every known version.
+        if (!isRecord(page) || !Array.isArray(page.data)
+          || page.data.some((model) => !isRecord(model) || typeof (model.model || model.id) !== "string")) {
+          throw protocolMismatch();
+        }
+        for (const model of page.data) {
           modelDefaults.set(model.model || model.id, model.defaultReasoningEffort);
           modelModalities.set(model.model || model.id, Array.isArray(model.inputModalities) ? model.inputModalities : undefined);
         }
-        data.push(...(page?.data || []).filter((model) => !model.hidden || (model.model || model.id) === currentModel?.id).map(mapModel));
-        cursor = page?.nextCursor || null;
+        data.push(...page.data.filter((model) => !model.hidden || (model.model || model.id) === currentModel?.id).map(mapModel));
+        cursor = page.nextCursor || null;
       } while (cursor);
       if (currentModel && !data.some((model) => model.id === currentModel.id && model.provider === currentModel.provider)) {
         data.unshift({ ...currentModel, thinkingLevels: [] });

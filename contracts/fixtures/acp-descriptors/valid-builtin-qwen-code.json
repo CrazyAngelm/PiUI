@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "qwen-code",
+  "displayName": "Qwen Code",
+  "command": {
+    "program": "qwen",
+    "args": [
+      "--acp"
+    ]
+  },
+  "version": {
+    "args": [
+      "--version"
+    ]
+  },
+  "environment": [
+    "DASHSCOPE_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_MODEL",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY"
+  ],
+  "authHint": "Sign in with Qwen Code's own flow: run `qwen` in a terminal and use /auth. To use an API key instead, allow PiUI to pass DASHSCOPE_API_KEY or OPENAI_API_KEY below.",
+  "docsUrl": "https://github.com/QwenLM/qwen-code"
+}

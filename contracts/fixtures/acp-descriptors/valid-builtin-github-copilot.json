@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "github-copilot",
+  "displayName": "GitHub Copilot",
+  "command": {
+    "program": "copilot",
+    "args": [
+      "--acp"
+    ]
+  },
+  "version": {
+    "args": [
+      "--version"
+    ]
+  },
+  "environment": [
+    "COPILOT_GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_HOST",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY"
+  ],
+  "authHint": "Sign in with Copilot's own flow: run `copilot` in a terminal and use /login. To use a token instead, allow PiUI to pass COPILOT_GITHUB_TOKEN below.",
+  "docsUrl": "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli"
+}

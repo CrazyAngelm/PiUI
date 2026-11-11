@@ -51,7 +51,7 @@
       <Field label={$t('Tested from version')} for={id('minimum')} optionalLabel={optional} description={$t('MAJOR.MINOR.PATCH, included.')}>
         <Input id={id('minimum')} bind:value={form.verifiedMinimum} placeholder="1.0.0" autocomplete="off" />
       </Field>
-      <Field label={$t('Tested below version')} for={id('ceiling')} optionalLabel={optional} description={$t('MAJOR.MINOR.PATCH, excluded. Other versions need your confirmation.')}>
+      <Field label={$t('Tested below version')} for={id('ceiling')} optionalLabel={optional} description={$t('MAJOR.MINOR.PATCH, excluded. Newer versions start with a notice.')}>
         <Input id={id('ceiling')} bind:value={form.verifiedCeiling} placeholder="2.0.0" autocomplete="off" />
       </Field>
     </div>

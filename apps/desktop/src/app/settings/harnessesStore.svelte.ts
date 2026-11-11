@@ -157,12 +157,6 @@ export class HarnessesStore {
     }, 'caller');
   }
 
-  /** Confirms the exact reported version the user saw; an update needs a new confirmation. */
-  async confirmVersion(agent: AcpAgentEntryV1, version: string): Promise<HarnessRegistryError | undefined> {
-    const id = agent.descriptor.id;
-    return this.perform(`version:${id}`, { type: 'confirmVersion', expectedRevision: this.registry?.revision ?? 0, id, version }, 'caller');
-  }
-
   /** Allows exactly `names` of the secret-like environment names; an empty list withdraws. */
   async allowSecrets(agent: AcpAgentEntryV1, names: string[]): Promise<HarnessRegistryError | undefined> {
     const id = agent.descriptor.id;

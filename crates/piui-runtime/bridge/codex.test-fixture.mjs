@@ -1,5 +1,57 @@
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import readline from "node:readline";
 import { join } from "node:path";
+
+// `codex features list`, the bridge's one probe before it builds the
+// `--disable` arguments (the real table is `<name>  <stage>  <enabled>`).
+// `--features-list=` selects: all (default), without:<a,b> (names not
+// registered), removed:<a,b> (stage `removed`), fail (exit 3), garbage (an
+// unrecognized table), empty (no output), stall / flood (never finish, like
+// the Node wrapper of a native codex: a grandchild stays alive, and `flood`
+// also overflows the output limit). `--pid-file=<path>` receives
+// {"wrapper":pid,"grandchild":pid} before either mode starts to misbehave.
+if (process.argv.includes("features") && process.argv.includes("list")) {
+  const mode = process.argv.find((argument) => argument.startsWith("--features-list="))?.slice("--features-list=".length) ?? "all";
+  const [kind, names = ""] = mode.split(":");
+  if (kind === "stall" || kind === "flood") {
+    // On Windows libuv puts a plain child into a kill-on-close Job of its
+    // parent, so only a detached grandchild survives its wrapper being killed,
+    // like the native executable a real wrapper starts. On POSIX the grandchild
+    // stays in the wrapper's process group, which the bridge signals.
+    const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+      windowsHide: true,
+      detached: process.platform === "win32",
+    });
+    const pidFile = process.argv.find((argument) => argument.startsWith("--pid-file="))?.slice("--pid-file=".length);
+    if (pidFile) writeFileSync(pidFile, JSON.stringify({ wrapper: process.pid, grandchild: grandchild.pid }));
+    setInterval(() => { if (kind === "flood") process.stdout.write("x".repeat(64 * 1024)); }, 20);
+    await new Promise(() => {});
+  }
+  const named = new Set(names.split(",").filter(Boolean));
+  const registered = [
+    ["agent_message_board", "under development", "false"], ["apps", "stable", "true"], ["code_mode", "under development", "false"],
+    ["fast_mode", "stable", "true"], ["guardianv2.thread_context", "removed", "false"], ["multi_agent", "stable", "true"],
+    ["multi_agent_v2", "stable", "true"], ["plugins", "stable", "true"], ["recommended_plugins", "stable", "false"],
+    ["remote_plugin", "stable", "true"], ["shell_snapshot", "stable", "true"],
+  ];
+  let text = "";
+  let code = 0;
+  if (kind === "fail") {
+    process.stderr.write("error: unexpected argument 'features' found\n");
+    code = 3;
+  } else if (kind === "garbage") {
+    text = "Usage: codex features [COMMAND]\n\nCommands:\n  list  List known features\n";
+  } else if (kind !== "empty") {
+    text = registered
+      .filter(([name]) => kind !== "without" || !named.has(name))
+      .map(([name, stage, enabled]) => `${name.padEnd(40)} ${(kind === "removed" && named.has(name) ? "removed" : stage).padEnd(18)} ${enabled}\n`)
+      .join("");
+  }
+  await new Promise((resolve) => process.stdout.write(text, resolve));
+  process.exit(code);
+}
 
 const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -85,8 +137,28 @@ const permissionMatches = (params) => {
   return params.permissions === ":danger-full-access" && params.approvalPolicy === "never";
 };
 
+// Required startup requests answered with a JSON-RPC error
+// (`--reject-startup=<method>`) or without the fields the bridge reads
+// (`--malformed-startup=<method>`), for initialize, thread/start,
+// thread/resume and model/list.
+const rejectStartup = process.argv.find((argument) => argument.startsWith("--reject-startup="))?.slice("--reject-startup=".length);
+const malformedStartup = process.argv.find((argument) => argument.startsWith("--malformed-startup="))?.slice("--malformed-startup=".length);
+const throwingHandlers = process.argv.includes("--throwing-handlers");
+// Feature names given to the app server (`--disable <name>`), echoed as the thread title.
+const disabledFeatures = process.argv.flatMap((argument, index, all) => (argument === "--disable" ? [all[index + 1]] : []));
+
 input.on("line", (line) => {
   const message = JSON.parse(line);
+  if (message.id !== undefined && message.method !== undefined) {
+    if (message.method === rejectStartup) {
+      send({ id: message.id, error: { code: -32601, message: "PRIVATE_NATIVE_DETAIL method not found" } });
+      return;
+    }
+    if (message.method === malformedStartup) {
+      send({ id: message.id, result: message.method === "initialize" ? { userAgent: `piui/${codexVersion} (Fixture OS 1.0; x86_64) fixture-terminal` } : { unexpected: true } });
+      return;
+    }
+  }
   if (poolFixture && message.params?.threadId) threadId = message.params.threadId;
   if (isElicitationReply(message)) {
     send({ method: "item/completed", params: { threadId, turnId: "turn-elicitation", completedAtMs: 9, item: {
@@ -108,6 +180,13 @@ input.on("line", (line) => {
     if (protocolAtLeast(157)) {
       send({ method: "remoteControl/status/changed", params: { status: "disabled", serverName: "fixture", installationId: "fixture-installation", environmentId: null } });
     }
+    // Observed from 0.165.0 right after initialize: unsolicited account state
+    // (never a conversation item) next to the remote-control state above.
+    if (process.argv.includes("--housekeeping")) {
+      send({ method: "account/updated", params: { authMode: "chatgpt", planType: "plus", emittedAtMs: 1 } });
+      send({ method: "account/updated", params: { authMode: "chatgpt", planType: "plus", emittedAtMs: 2 } });
+      send({ method: "remoteControl/status/changed", params: { status: "disabled", serverName: "fixture", installationId: "fixture-installation", environmentId: null } });
+    }
     if (process.argv.includes("--config-warning")) {
       send({ method: "configWarning", params: { summary: "PRIVATE_CONFIG_DETAIL `features.fixture` is ignored.", details: null, path: "C:\\PRIVATE_CONFIG_PATH\\config.toml" } });
     }
@@ -115,6 +194,15 @@ input.on("line", (line) => {
       send({ method: "deprecationNotice", params: { summary: "PRIVATE_DEPRECATION_DETAIL", details: null } });
     }
   } else if (message.method === "initialized") {
+    if (process.argv.includes("--echo-disables")) {
+      send({ method: "thread/name/updated", params: { threadId, threadName: `disable:${disabledFeatures.join(",")}` } });
+    }
+    // Events this bridge does not know, repeated: one fallback block per method,
+    // and nothing from their payload.
+    if (process.argv.includes("--unknown-repeat")) {
+      for (const index of [1, 2, 3]) send({ method: "future/stream/delta", params: { threadId, delta: `PRIVATE_PAYLOAD_${index}` } });
+      send({ method: "future/other", params: { threadId, secret: "PRIVATE_PAYLOAD" } });
+    }
     if (process.argv.includes("--rate-limits")) {
       send({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 20 } } } });
       send({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 21 } } } });
@@ -241,6 +329,13 @@ input.on("line", (line) => {
       send({ method: "item/tool/requestUserInput", id: 905, params: { threadId, turnId: "turn-input", itemId: "input-item", isBlocking: true, autoResolutionMs: null, questions: [{ id: "choice", header: "Choose mode", question: "Which mode should Codex use?", isOther: false, isSecret: false, options: [{ label: "Safe", description: "Use safe mode" }] }] } });
       send({ method: "item/tool/requestUserInput", id: 906, params: { threadId, turnId: "turn-input", itemId: "multi-input", isBlocking: true, autoResolutionMs: null, questions: [{ id: "one", header: "One", question: "First?", isOther: false, isSecret: false, options: null }, { id: "two", header: "Two", question: "Second?", isOther: false, isSecret: false, options: null }] } });
     }
+    if (throwingHandlers) {
+      // Well-formed frames that a handler cannot process (a null entry where an
+      // object is expected): a repeated notification, an item and a request.
+      for (const _ of [1, 2]) send({ method: "item/fileChange/patchUpdated", params: { threadId, turnId: "turn-approval", itemId: "file-item", changes: [null] } });
+      send({ method: "item/started", params: { threadId, turnId: "turn-throw", startedAtMs: 9, item: { type: "fileChange", id: "throwing-item", changes: [null], status: "inProgress" } } });
+      send({ method: "item/tool/requestUserInput", id: 985, params: { threadId, turnId: "turn-throw", itemId: "throwing-input", isBlocking: true, autoResolutionMs: null, questions: [null] } });
+    }
     if (unknownItemsFixture) {
       send({ method: "item/started", params: { threadId, turnId: "turn-items", startedAtMs: 7, item: { type: "commandExecution", id: "command-display", command: "display command", cwd: process.cwd(), aggregatedOutput: "", status: "inProgress" } } });
       // ThreadItem types without a dedicated projection; 0.153 added functionCallOutput.
@@ -335,6 +430,8 @@ input.on("line", (line) => {
     send({ method: "thread/name/updated", params: { threadId, threadName: "coordinator:ok" } });
   } else if (message.id === 911 && message.result?.success === false) {
     send({ method: "warning", params: { threadId, message: "invalid coordinator call rejected" } });
+  } else if (message.id === 985 && message.error?.code === -32603) {
+    send({ method: "thread/name/updated", params: { threadId, threadName: "throwing-request:error" } });
   } else if (message.method === "turn/start") {
     if (expectNetwork && (
       message.params.sandboxPolicy?.type !== "workspaceWrite"

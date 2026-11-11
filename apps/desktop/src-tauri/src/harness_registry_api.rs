@@ -1,18 +1,21 @@
 //! `harness_registry_v1`: Settings → Harnesses (ADR-034).
 //!
 //! Lists every harness with its readiness, detected location, version and
-//! verified range, and manages ACP agents: add a user descriptor, trust its
-//! exact command line, confirm an unverified version or secret-like
-//! environment names, remove it, and check again. Listing never probes;
-//! checks run off the async executor and are refused in safe mode, like every
-//! change. Credentials are never read: sign-in happens in each harness's own
-//! flow and PiUI only shows hints.
+//! tested range, and manages ACP agents: add a user descriptor, trust its
+//! exact command line, confirm secret-like environment names, remove it, and
+//! check again. A version is advisory (ADR-043): only an older-than-minimum
+//! version refuses to start, `versionStatus` reports the rest, and the
+//! `confirmVersion` command is retired (it always answers
+//! `NOTHING_TO_CONFIRM`). Listing never probes; checks run off the async
+//! executor and are refused in safe mode, like every change. Credentials are
+//! never read: sign-in happens in each harness's own flow and PiUI only shows
+//! hints.
 
 use crate::acp_agents::{AcpAgentView, AgentSource, CommandLine, HarnessState, RegistryError};
 use crate::state::HostState;
-use piui_runtime::acp::AcpDescriptorError;
+use piui_runtime::acp::{AcpDescriptorError, AcpVersionStatus};
 use piui_runtime::workspace_runtime::{
-    AcpAgentId, CLAUDE_SIGN_IN_MESSAGE, HarnessAvailability, HarnessKind,
+    AcpAgentId, CLAUDE_SIGN_IN_MESSAGE, HarnessAvailability, HarnessKind, NativeVersionStatus,
     builtin_verified_versions, probe_native_harnesses,
 };
 use serde::{Deserialize, Serialize};
@@ -44,6 +47,7 @@ pub enum HarnessRegistryCommand {
         fingerprint: String,
         command_line: CommandLine,
     },
+    /// Retired (ADR-043): accepted for compatibility, never records anything.
     ConfirmVersion {
         expected_revision: u64,
         id: AcpAgentId,
@@ -75,6 +79,11 @@ pub struct HarnessStatusV1 {
     pub version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verified_versions: Option<String>,
+    /// Advisory (ADR-043): `newer` is above the tested range and still
+    /// starts (UI: "Newer than tested"). Absent when the harness is not
+    /// startable or declares no tested range.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_status: Option<NativeVersionStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -242,6 +251,25 @@ fn builtin_state(
     }
 }
 
+/// The tested-range badge of a startable ACP agent; every other version
+/// outcome makes no claim.
+fn acp_version_status(view: &AcpAgentView) -> Option<NativeVersionStatus> {
+    if !matches!(
+        view.state,
+        HarnessState::Ready | HarnessState::SignInRequired
+    ) {
+        return None;
+    }
+    match view.version_status? {
+        AcpVersionStatus::Verified => Some(NativeVersionStatus::Verified),
+        AcpVersionStatus::Newer => Some(NativeVersionStatus::Newer),
+        AcpVersionStatus::NoVerifiedRange
+        | AcpVersionStatus::Older
+        | AcpVersionStatus::Unrecognized
+        | AcpVersionStatus::ProbeFailed => None,
+    }
+}
+
 fn acp_status(view: &AcpAgentView) -> HarnessStatusV1 {
     HarnessStatusV1 {
         harness: HarnessKind::Acp(view.descriptor.id),
@@ -266,6 +294,7 @@ fn acp_status(view: &AcpAgentView) -> HarnessStatusV1 {
             .verified
             .as_ref()
             .map(|range| format!("{} – <{}", range.minimum, range.ceiling)),
+        version_status: acp_version_status(view),
         reason: view.reason.map(str::to_owned),
         sign_in_hint: view.descriptor.auth_hint.clone(),
         auth_methods: view.auth_methods.clone(),
@@ -293,6 +322,7 @@ async fn registry_view(host: &HostState) -> Result<HarnessRegistryV1, HarnessReg
                 .map(|path| path.to_string_lossy().into_owned()),
             version: summary.version,
             verified_versions: builtin_verified_versions(summary.kind).map(str::to_owned),
+            version_status: summary.version_status,
             reason: summary.reason,
             sign_in_hint: builtin_sign_in_hint(summary.kind).map(str::to_owned),
             auth_methods: Vec::new(),
@@ -390,6 +420,7 @@ pub async fn harness_registry_v1(
             id,
             version,
         } => {
+            // Always `NOTHING_TO_CONFIRM`: a version needs no confirmation.
             acp.confirm_version(expected_revision, id, &version)?;
             true
         }
@@ -487,6 +518,7 @@ mod tests {
                 ),
                 version: Some("0.157.1".into()),
                 verified_versions: builtin_verified_versions(HarnessKind::Codex).map(str::to_owned),
+                version_status: None,
                 reason: None,
                 sign_in_hint: builtin_sign_in_hint(HarnessKind::Codex).map(str::to_owned),
                 auth_methods: Vec::new(),
@@ -508,6 +540,82 @@ mod tests {
             serde_json::to_string_pretty(&actual).unwrap_or_default()
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn registry_rows_carry_the_advisory_version_status() {
+        let descriptor = piui_runtime::acp::builtin_acp_descriptors()
+            .into_iter()
+            .next()
+            .expect("a shipped descriptor");
+        let view = |state, version_status| AcpAgentView {
+            descriptor: descriptor.clone(),
+            source: AgentSource::BuiltIn,
+            fingerprint: descriptor.fingerprint(),
+            state,
+            reason: None,
+            command_line: None,
+            trusted: true,
+            version: Some("9.9.9".into()),
+            version_status,
+            secret_environment: Vec::new(),
+            allowed_secrets: Vec::new(),
+            auth_methods: Vec::new(),
+            checked_at: None,
+            plugin: None,
+        };
+        let newer = view(HarnessState::Ready, Some(AcpVersionStatus::Newer));
+        assert_eq!(acp_version_status(&newer), Some(NativeVersionStatus::Newer));
+        let row = serde_json::to_value(acp_status(&newer)).expect("row");
+        assert_eq!(row["versionStatus"], serde_json::json!("newer"));
+        assert_eq!(row["state"], serde_json::json!("ready"));
+        assert_eq!(
+            acp_version_status(&view(
+                HarnessState::SignInRequired,
+                Some(AcpVersionStatus::Verified)
+            )),
+            Some(NativeVersionStatus::Verified)
+        );
+        // No claim without a tested range or a readable version, and none for
+        // an agent that cannot start.
+        for status in [
+            AcpVersionStatus::NoVerifiedRange,
+            AcpVersionStatus::Unrecognized,
+            AcpVersionStatus::ProbeFailed,
+            AcpVersionStatus::Older,
+        ] {
+            assert_eq!(
+                acp_version_status(&view(HarnessState::Ready, Some(status))),
+                None
+            );
+        }
+        assert_eq!(
+            acp_version_status(&view(
+                HarnessState::UnsupportedVersion,
+                Some(AcpVersionStatus::Newer)
+            )),
+            None
+        );
+        let row = serde_json::to_value(acp_status(&view(HarnessState::Ready, None))).expect("row");
+        assert!(row.get("versionStatus").is_none());
+    }
+
+    #[test]
+    fn the_retired_version_confirmation_parses_and_always_answers_nothing_to_confirm() {
+        let command: HarnessRegistryCommand = serde_json::from_value(serde_json::json!({
+            "type": "confirmVersion", "expectedRevision": 3, "id": "lab-agent", "version": "1.4.0"
+        }))
+        .expect("an older window may still send it");
+        assert!(matches!(
+            command,
+            HarnessRegistryCommand::ConfirmVersion {
+                expected_revision: 3,
+                ..
+            }
+        ));
+        let error = HarnessRegistryError::from(RegistryError::NothingToConfirm);
+        assert_eq!(error.code, "NOTHING_TO_CONFIRM");
+        assert!(error.recoverable);
     }
 
     #[test]

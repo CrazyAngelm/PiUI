@@ -80,6 +80,10 @@ pub struct HarnessSummary {
     pub status: HarnessAvailability,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Tested-range position of an admitted version (ADR-043): `newer` is
+    /// startable and only advisory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_status: Option<piui_runtime::workspace_runtime::NativeVersionStatus>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -432,6 +436,11 @@ fn runtime_failure(error: &NativeRuntimeError) -> WorkspaceError {
             WorkspaceError::subscription_required()
         }
         NativeRuntimeError::AgentSignInRequired { .. } => WorkspaceError::acp_sign_in_required(),
+        NativeRuntimeError::Bridge(BridgeFailureCode::Incompatible) => WorkspaceError {
+            code: "HARNESS_INCOMPATIBLE",
+            message: piui_runtime::workspace_runtime::INCOMPATIBLE_HARNESS_MESSAGE,
+            recoverable: true,
+        },
         _ => WorkspaceError::runtime(),
     }
 }
@@ -1854,6 +1863,7 @@ impl WorkspaceHost {
                 version: summary.version,
                 status: summary.status,
                 reason: summary.reason,
+                version_status: summary.version_status,
             })
             // ACP agents from cached discovery only: listing never runs one.
             .chain(
@@ -1868,6 +1878,15 @@ impl WorkspaceHost {
                         version: summary.version,
                         status: summary.status,
                         reason: summary.reason.map(str::to_owned),
+                        version_status: summary.version_status.and_then(|status| match status {
+                            piui_runtime::acp::AcpVersionStatus::Verified => {
+                                Some(piui_runtime::workspace_runtime::NativeVersionStatus::Verified)
+                            }
+                            piui_runtime::acp::AcpVersionStatus::Newer => {
+                                Some(piui_runtime::workspace_runtime::NativeVersionStatus::Newer)
+                            }
+                            _ => None,
+                        }),
                     }),
             )
             .collect();
@@ -4159,6 +4178,7 @@ Board."
                 version: None,
                 status: HarnessAvailability::Unavailable,
                 reason: Some("Contract fixture only.".into()),
+                version_status: None,
             }],
         };
         assert_eq!(
@@ -4309,6 +4329,7 @@ Board."
             version: Some("2.1.232".into()),
             status: HarnessAvailability::Available,
             reason: Some(super::CLAUDE_SIGN_IN_MESSAGE.into()),
+            version_status: None,
         };
         assert_eq!(
             serde_json::to_value(summary).expect("summary"),
