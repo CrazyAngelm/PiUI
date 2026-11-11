@@ -16,7 +16,7 @@ use crate::state::HostState;
 use piui_runtime::acp::{AcpDescriptorError, AcpVersionStatus};
 use piui_runtime::workspace_runtime::{
     AcpAgentId, CLAUDE_SIGN_IN_MESSAGE, HarnessAvailability, HarnessKind, NativeVersionStatus,
-    builtin_verified_versions, probe_native_harnesses,
+    builtin_verified_versions, invalidate_native_harness_probe, probe_native_harnesses,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
@@ -408,8 +408,10 @@ pub async fn harness_registry_v1(
         HarnessRegistryCommand::List {} => false,
         HarnessRegistryCommand::Check { harness } => {
             let only = harness.and_then(HarnessKind::acp_agent);
+            // The user asked to look again: drop the cached built-in discovery.
+            invalidate_native_harness_probe();
             if harness.is_some_and(|kind| kind.acp_agent().is_none()) {
-                // Built-in discovery is recomputed by every list.
+                // Built-in discovery is recomputed by the list below.
                 false
             } else {
                 check_agents(&app, only, true).await?;

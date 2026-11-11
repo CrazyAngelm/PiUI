@@ -126,23 +126,29 @@ pnpm perf:smoke     # startup, idle RSS, long-session scroll, stream batching
 
 ## Build and release storage hygiene (mandatory)
 
-- `target/` is reproducible build output, not a release archive. A release task
-  is not complete while superseded `target/debug` or `target/release` trees are
-  retained merely for convenience.
-- Before cleanup, prove that no PiUI, Cargo, or Rust compiler process is using
-  the repository target directory. Verify that the installed executable and
-  every release file that must survive (installer, portable executable,
-  checksums, and required evidence) already exist outside `target/` under the
-  fixed repository `artifacts/` or `evidence/` directories.
-- After successful packaging, installation, hash comparison, and launch/health
-  verification, delete obsolete build trees. Remove the whole repository
-  `target/` when no build output is still required; otherwise remove only the
-  exact superseded `target/debug` or `target/release` tree after preserving the
-  current verified deliverables.
-- Apply this post-verification rule to isolated spike `src-tauri/target` trees
-  and task-created temporary build/package staging too. Preserve each sole
-  deliverable, report, checksum, or rollback copy in a stable location outside
-  the generated tree before cleaning it.
+- `target/` is a reproducible build cache, not a release archive, and nothing
+  in it is a deliverable. Keep it between builds: deleting it makes the next
+  build compile every dependency again, which is what turned a release into
+  tens of minutes. Keep it bounded instead.
+- `node scripts/build-cache.mjs prune` runs at the end of every
+  `scripts/release-build.mjs` build. It removes installer staging, timing
+  reports and other leftovers, and drops whole profile trees, `release` last,
+  only while the cache is over its budget (12 GB, `PIUI_BUILD_CACHE_BUDGET_GB`)
+  or the drive has less than 20 GB free (`PIUI_BUILD_CACHE_MIN_FREE_GB`).
+  `status` reports the sizes; a tree in use is left alone.
+- A release task is not complete until the installed executable and every
+  release file that must survive (installer, portable executable, checksums,
+  and required evidence) exist outside `target/` under the fixed repository
+  `artifacts/` or `evidence/` directories, verified by hash and a
+  launch/health check.
+- Remove the whole cache (`node scripts/build-cache.mjs clean`) only when it
+  will not be reused: a finished worktree or spike, a toolchain change that
+  orphans it, or a drive still short of space after pruning. First prove that
+  no PiUI, Cargo, or Rust compiler process is using it.
+- Isolated spike `src-tauri/target` trees and task-created temporary
+  build/package staging are not a cache: delete them when the task ends, after
+  preserving each sole deliverable, report, checksum, or rollback copy in a
+  stable location outside the generated tree.
 - Cleanup commands must resolve and verify the exact repository root and target
   path before recursive deletion. Never accept an arbitrary cleanup path, never
   follow a reparse point, and never delete the installed application, source,

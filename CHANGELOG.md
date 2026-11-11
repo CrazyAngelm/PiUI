@@ -12,6 +12,16 @@ Nano Desktop is currently a developer preview. Versions before 1.0 may change wi
 
 - PiUI is now Nano Desktop (ADR-046): the product name, window title, tray, installer and executable (`nano-desktop.exe`) change. Saved data, settings, systems, plugins and native histories keep their names and keep working; nothing is migrated.
 - Windows autostart registers the value "Nano Desktop" and removes a stale "PiUI" value when you toggle it.
+- Builds are several times faster. The desktop library is built once instead of three times (the unused static and dynamic library outputs each repeated the whole-program optimization), release code generation uses every core, and dev builds keep only line numbers as debug info.
+- `target/` is kept between builds as a size-bounded compile cache instead of being deleted after every release. `pnpm build:cache` shows, prunes or removes it, and every release build prunes it.
+- `pnpm build:portable` builds only the portable Windows executable for a quick local update and replaces `artifacts/` with it; a copy that is still running is moved aside.
+- Less background work. Native harness discovery is reused for 30 seconds (Settings → Harnesses → Check reads the machine again), checking a present project folder no longer writes to the index, the session and project watchers drop irrelevant file events early, and bursts of board, run, Fusion and automation events share one follow-up read.
+- Smoother streaming. A streamed token no longer regroups the whole transcript or rebuilds the run graph, the reading position is saved once scrolling settles, and the startup theme check no longer loads the plugin manifest validators.
+- The bootstrap, preference, project rename and pin, session catalog and update auto-check commands no longer run on the main thread.
+
+### Fixed
+
+- The executor picker no longer repeats a failed pipeline catalog request in a loop; the error stays until the picker is reopened.
 
 ## [0.2.11] - 2026-11-11
 

@@ -120,3 +120,34 @@ export function groupTimelineBlocks(blocks: readonly TimelineBlock[]): TimelineV
 
   return items;
 }
+
+function sameItem(known: TimelineViewItem, item: TimelineViewItem): boolean {
+  if (known.type === 'block') return item.type === 'block' && known.block === item.block;
+  return (
+    item.type === 'activity-group' &&
+    known.blocks.length === item.blocks.length &&
+    known.blocks.every((block, index) => block === item.blocks[index])
+  );
+}
+
+/**
+ * `groupTimelineBlocks` for a live transcript. An item whose blocks are the
+ * same objects as on the previous call keeps its identity, so one streamed
+ * token does not make every earlier activity group recompute its summary and
+ * diff totals.
+ */
+export function createTimelineGrouper(): (blocks: readonly TimelineBlock[]) => TimelineViewItem[] {
+  let previous = new Map<string, TimelineViewItem>();
+  return (blocks) => {
+    const next = new Map<string, TimelineViewItem>();
+    const items = groupTimelineBlocks(blocks).map((item) => {
+      const key = item.type === 'block' ? `block:${item.block.id}` : item.id;
+      const known = previous.get(key);
+      const kept = known !== undefined && sameItem(known, item) ? known : item;
+      next.set(key, kept);
+      return kept;
+    });
+    previous = next;
+    return items;
+  };
+}

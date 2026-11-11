@@ -23,6 +23,7 @@ import {
   type CardV1,
   type CommentMentionV1,
 } from '../../host-api/boardClient';
+import { coalesceReads } from '../../lib/coalescedReads';
 import { withMovedCard } from './boardModel';
 
 type Distribute<T> = T extends unknown ? Omit<T, 'workspaceId'> : never;
@@ -36,6 +37,8 @@ export class BoardStore {
   error = $state<string>();
   private loadSerial = 0;
   private pendingMoves = 0;
+  /** One read in flight; requests that arrive meanwhile share one more read. */
+  private readonly reads = coalesceReads(() => this.fetch());
 
   constructor(readonly workspaceId: string, private readonly client: BoardClient = boardHost) {}
 
@@ -47,8 +50,15 @@ export class BoardStore {
     return cardId === undefined ? undefined : this.board?.cards.find((card) => card.id === cardId);
   }
 
-  async load(): Promise<void> {
-    const serial = ++this.loadSerial;
+  /** Reads the board; resolves after a read that started after this call. */
+  load(): Promise<void> {
+    // A request makes an older in-flight read stale: it is followed by a fresh one.
+    this.loadSerial += 1;
+    return this.reads.request();
+  }
+
+  private async fetch(): Promise<void> {
+    const serial = this.loadSerial;
     this.loading = this.board === undefined;
     try {
       const result = await this.client.request({ type: 'get', workspaceId: this.workspaceId });
@@ -62,7 +72,7 @@ export class BoardStore {
     }
   }
 
-  /** A host change: reload unless an optimistic move is still in flight (it reloads itself). */
+  /** A host change: reload (coalesced) unless an optimistic move is still in flight (it reloads itself). */
   changed(event: BoardChangedEventV1): void {
     if (event.workspaceId !== this.workspaceId) return;
     if (this.board !== undefined && event.revision <= this.board.revision) return;

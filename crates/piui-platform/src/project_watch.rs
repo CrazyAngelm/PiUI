@@ -77,19 +77,27 @@ pub fn relative_change_path(root: &Path, extra_ignored: &[PathBuf], path: &Path)
         return None;
     }
     let relative = path.strip_prefix(root).ok()?;
-    let mut parts = Vec::new();
+    // Reject an ignored folder on the borrowed path, before any allocation.
+    if relative.components().any(|component| {
+        matches!(component, Component::Normal(part)
+            if part.to_str().is_some_and(|part| IGNORED_DIRECTORY_NAMES.contains(&part)))
+    }) {
+        return None;
+    }
+    let mut joined = String::new();
     for component in relative.components() {
         match component {
-            Component::Normal(part) => parts.push(part.to_str()?),
+            Component::Normal(part) => {
+                if !joined.is_empty() {
+                    joined.push('/');
+                }
+                joined.push_str(part.to_str()?);
+            }
             // `..`, a prefix or a root inside a relative path is not a child.
             _ => return None,
         }
     }
-    if parts.is_empty() {
-        return None;
-    }
-    let joined = parts.join("/");
-    (!is_ignored_path(&joined)).then_some(joined)
+    (!joined.is_empty()).then_some(joined)
 }
 
 fn counts(kind: &EventKind) -> bool {
@@ -251,10 +259,21 @@ mod tests {
             Some("src/main.ts")
         );
         assert_eq!(relative("/project/README.md").as_deref(), Some("README.md"));
+        // A non-ignored sibling of an ignored nested folder is reported.
+        assert_eq!(
+            relative("/project/packages/web/src/index.ts").as_deref(),
+            Some("packages/web/src/index.ts")
+        );
+        assert_eq!(
+            relative("/project/node_modules_backup/index.js").as_deref(),
+            Some("node_modules_backup/index.js")
+        );
         for ignored in [
             "/project/.git/index",
             "/project/node_modules/pkg/index.js",
             "/project/crates/app/target/debug/app",
+            "/project/packages/web/node_modules/.bin/tsc",
+            "/project/packages/web/node_modules",
             "/project/web/dist/bundle.js",
             "/project/.pi/agent-sessions/a.jsonl",
             "/project/.piui/state.json",

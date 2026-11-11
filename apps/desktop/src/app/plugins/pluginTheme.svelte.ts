@@ -1,7 +1,7 @@
 import { PLUGIN_THEME_TOKENS } from '../../../../../contracts/piui-plugin-v1';
 import type { PluginThemeV1 } from '../../../../../contracts/plugins-v1';
 import { currentAppearance } from '../../host-api/pluginBridge';
-import { parseColor } from '../../host-api/pluginManifest';
+import { parseColor } from '../../host-api/pluginColor';
 import { pluginRegistry } from './pluginRegistry.svelte';
 
 /**

@@ -143,18 +143,29 @@ test('the release build plan adds the fragment and the signature check only when
   const plan = (platform, options = {}) =>
     releasePlan(root, platform, { tauriCli: 'tauri.js', node: 'node', ...options }).map((step) => step.command.join(' '));
   const windowsCollect = `powershell -NoProfile -ExecutionPolicy Bypass -File ${join(root, 'scripts', 'prepare-windows-release.ps1')}`;
-  assert.deepEqual(plan('windows'), ['node tauri.js build --ci --bundles nsis', windowsCollect]);
+  // Every build ends by pruning the Cargo cache.
+  const prune = `node ${join(root, 'scripts', 'build-cache.mjs')} prune`;
+  assert.deepEqual(plan('windows'), ['node tauri.js build --ci --bundles nsis', windowsCollect, prune]);
   assert.deepEqual(plan('windows', { configPath: 'fragment.json', windowsSigning: true }), [
     'node tauri.js build --ci --bundles nsis --config fragment.json',
     `${windowsCollect} -RequireSignature`,
+    prune,
+  ]);
+  // The quick local update: no installer, only the executable.
+  assert.deepEqual(plan('windows', { portable: true }), [
+    'node tauri.js build --ci --no-bundle',
+    `node ${join(root, 'scripts', 'collect-portable.mjs')}`,
+    prune,
   ]);
   assert.deepEqual(plan('linux'), [
     'node tauri.js build --ci --bundles deb,appimage',
     `node ${join(root, 'scripts', 'prepare-release-artifacts.mjs')} linux`,
+    prune,
   ]);
   assert.deepEqual(plan('macos', { configPath: 'fragment.json' }), [
     'node tauri.js build --ci --bundles app,dmg --target universal-apple-darwin --config fragment.json',
     `node ${join(root, 'scripts', 'prepare-release-artifacts.mjs')} macos`,
+    prune,
   ]);
   assert.equal(releasePlan(root, 'linux', { tauriCli: 'tauri.js' })[0].cwd, join(root, 'apps', 'desktop'));
 });

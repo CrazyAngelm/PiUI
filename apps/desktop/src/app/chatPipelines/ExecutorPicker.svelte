@@ -43,9 +43,12 @@
     value.kind === 'pipeline' ? (selectedDetail?.name ?? commands.find((item) => item.id === value.commandId)?.name ?? $t('Pipeline')) : '',
   );
 
-  // Pipelines load when the picker first opens (and again for another project).
+  // Pipelines load when the picker first opens (and again for another project). The load runs untracked:
+  // its loading flag is reactive, so after a failed request the effect would otherwise ask again forever.
+  // A failure shows `commandErrors` and is retried when the picker reopens.
   $effect(() => {
-    if ((open || value.kind === 'pipeline') && workspaceId && chatPipelines.commands[workspaceId] === undefined) void chatPipelines.loadProject(workspaceId);
+    const id = workspaceId;
+    if ((open || value.kind === 'pipeline') && id && chatPipelines.commands[id] === undefined) untrack(() => void chatPipelines.loadProject(id));
   });
   // Teammates (ADR-041) are listed first; they resolve to a saved launch command.
   $effect(() => {

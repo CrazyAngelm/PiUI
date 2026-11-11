@@ -14,7 +14,7 @@
   import { t } from '../../../features/locale/language';
   import { splitImageMarkers } from '../composer/mentions';
   import MarkdownContent from '../../../components/MarkdownContent.svelte';
-  import { groupTimelineBlocks, type TimelineViewItem } from '../../../features/sessions/timelineView';
+  import { createTimelineGrouper, type TimelineViewItem } from '../../../features/sessions/timelineView';
   import { readWorkspaceHistory } from '../../../host-api/workspaceHistory';
   import type { TimelineBlock } from '../../../host-api/types';
   import { Button, IconButton, Input, Skeleton, Spinner, toasts } from '../../../lib/ui';
@@ -69,7 +69,9 @@
   let match = $state(0);
   let searchInput = $state<HTMLInputElement | null>(null);
 
-  const items = $derived(groupTimelineBlocks(blocks));
+  // Unchanged rows keep their identity while a reply streams.
+  const groupBlocks = createTimelineGrouper();
+  const items = $derived(groupBlocks(blocks));
   const hidden = $derived(Math.max(0, items.length - limit));
   const visible = $derived(hidden > 0 ? items.slice(hidden) : items);
   const matches = $derived(
@@ -157,13 +159,26 @@
     const pin = () => {
       node.scrollTop = node.scrollHeight;
     };
+    let saved = '';
+    let persistTimer: ReturnType<typeof setTimeout> | undefined;
     const persist = () => {
+      if (persistTimer !== undefined) clearTimeout(persistTimer);
+      persistTimer = undefined;
       if (pendingView || searchOpen) return;
+      const key = storageKey();
+      const value = JSON.stringify({ top: Math.round(node.scrollTop), following });
+      if (saved === `${key}:${value}`) return;
       try {
-        localStorage.setItem(storageKey(), JSON.stringify({ top: Math.round(node.scrollTop), following }));
+        localStorage.setItem(key, value);
+        saved = `${key}:${value}`;
       } catch {
         // Optional reading position only.
       }
+    };
+    // Scroll events arrive every frame while a reply streams. The position is
+    // written once they settle, and at once on a chat switch or teardown.
+    const persistSoon = () => {
+      persistTimer ??= setTimeout(persist, 200);
     };
     const load = () => {
       pendingView = { top: 0, following: true };
@@ -202,7 +217,7 @@
       if (distance() <= NEAR_BOTTOM) following = true;
       else if (performance.now() - gestureAt < 1_000) following = false;
       else if (following) pin();
-      persist();
+      persistSoon();
     };
     const observer = new ResizeObserver(() => {
       if (!searchOpen && following) pin();

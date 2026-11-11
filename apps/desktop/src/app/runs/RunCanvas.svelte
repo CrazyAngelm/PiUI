@@ -55,7 +55,13 @@
   // The frozen definition decides the shape; the task journal decides colour.
   const graph = $derived(buildRunGraph(run, workspaceId));
 
+  // One label per step. The shared chat store changes with every streamed
+  // token of any chat; the graph is rebuilt only when a label really changes.
+  const activityLabels = $derived(JSON.stringify(views.map((view) => activity(view.sessionId))));
+
   $effect(() => {
+    const labels = JSON.parse(activityLabels) as string[];
+    const activityOf = new Map(views.map((view, index) => [view.stepId, labels[index] ?? '']));
     const byStep = new Map(views.map((view) => [view.stepId, view]));
     const statusOf = (stepId: string) => byStep.get(stepId)?.state;
     nodes = graph.nodes.flatMap((node) => {
@@ -71,7 +77,7 @@
             view,
             profile: node.kind === 'router' ? undefined : node.profile,
             router: node.kind === 'router',
-            activity: activity(view.sessionId),
+            activity: activityOf.get(node.id) ?? '',
           },
           selected: node.id === selectedId,
           draggable: false,

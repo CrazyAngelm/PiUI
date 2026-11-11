@@ -106,7 +106,10 @@
     const snapshot = store.snapshots[sessionId];
     if (!snapshot) return '';
     if (snapshot.approvals.length) return $t('Waiting for your approval');
-    const live = [...snapshot.blocks].reverse().find((block) => block.status === 'streaming');
+    let live: (typeof snapshot.blocks)[number] | undefined;
+    for (let index = snapshot.blocks.length - 1; index >= 0 && !live; index -= 1) {
+      if (snapshot.blocks[index]?.status === 'streaming') live = snapshot.blocks[index];
+    }
     if (!live) return '';
     if (live.kind === 'tool' || live.kind === 'thinking') return $t(ACTIVITY[toolKind(live)]);
     return $t('Writing…');

@@ -809,7 +809,7 @@ pub async fn app_update_install_v1<R: Runtime>(
     install_version(&app, &updates, &request.version).await
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn app_update_set_auto_check_v1<R: Runtime>(
     app: AppHandle<R>,
     updates: State<'_, AppUpdateState>,

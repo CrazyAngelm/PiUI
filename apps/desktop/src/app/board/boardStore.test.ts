@@ -161,4 +161,81 @@ describe('BoardStore', () => {
     await flush();
     expect(host.commands.filter((command) => command.type === 'get')).toHaveLength(2);
   });
+
+  describe('coalesced reloads', () => {
+    /** A host whose `get` waits until the test answers it; `changed` delivers host events. */
+    function gatedHost() {
+      const gets: { resolve: (revision: number, title?: string) => void; reject: (error: unknown) => void }[] = [];
+      let changed: ((event: BoardChangedEventV1) => void) | undefined;
+      const client: BoardClient = {
+        request(command) {
+          if (command.type !== 'get') return Promise.reject(new Error('unexpected command'));
+          return new Promise<BoardResultV1>((resolve, reject) =>
+            gets.push({
+              resolve: (revision, title = 'Card 1') => resolve({ protocol: 1, type: 'board', board: board([card('a', 1, { title })], revision) }),
+              reject,
+            }),
+          );
+        },
+        async onChanged(handler) {
+          changed = handler;
+          return () => undefined;
+        },
+      };
+      return { client, gets, emit: (revision: number) => changed?.({ protocol: 1, workspaceId: WORKSPACE, revision }) };
+    }
+
+    it('reads once for a single event', async () => {
+      const host = gatedHost();
+      const store = new BoardStore(WORKSPACE, host.client);
+      store.changed({ protocol: 1, workspaceId: WORKSPACE, revision: 1 });
+      expect(host.gets).toHaveLength(1);
+      host.gets[0]?.resolve(1);
+      await flush();
+      expect(host.gets).toHaveLength(1);
+      expect(store.board?.revision).toBe(1);
+    });
+
+    it('runs one more read after a burst of events while a read is in flight', async () => {
+      const host = gatedHost();
+      const store = new BoardStore(WORKSPACE, host.client);
+      const loading = store.load();
+      for (const revision of [2, 3, 4, 5]) store.changed({ protocol: 1, workspaceId: WORKSPACE, revision });
+      expect(host.gets).toHaveLength(1);
+
+      host.gets[0]?.resolve(1, 'Stale');
+      await flush();
+      // The first read predates the burst: its answer is dropped and one fresh read follows.
+      expect(host.gets).toHaveLength(2);
+      expect(store.board).toBeUndefined();
+
+      host.gets[1]?.resolve(5, 'Fresh');
+      await loading;
+      await flush();
+      expect(host.gets).toHaveLength(2);
+      expect(store.card('a')?.title).toBe('Fresh');
+      expect(store.board?.revision).toBe(5);
+      expect(store.loading).toBe(false);
+    });
+
+    it('still reads after a failed read', async () => {
+      const host = gatedHost();
+      const store = new BoardStore(WORKSPACE, host.client);
+      store.changed({ protocol: 1, workspaceId: WORKSPACE, revision: 1 });
+      store.changed({ protocol: 1, workspaceId: WORKSPACE, revision: 2 });
+      host.gets[0]?.reject({ code: 'IO_ERROR' });
+      await flush();
+      expect(host.gets).toHaveLength(2);
+      host.gets[1]?.reject({ code: 'IO_ERROR' });
+      await flush();
+      expect(store.error).toBeTruthy();
+
+      store.changed({ protocol: 1, workspaceId: WORKSPACE, revision: 3 });
+      expect(host.gets).toHaveLength(3);
+      host.gets[2]?.resolve(3);
+      await flush();
+      expect(store.board?.revision).toBe(3);
+      expect(store.error).toBeUndefined();
+    });
+  });
 });

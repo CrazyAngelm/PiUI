@@ -35,7 +35,17 @@ thiserror = "2.0.16"
 tokio = { version = "1.47.1", features = ["io-util", "macros", "process", "rt", "sync", "time"] }
 uuid = { version = "1.18.1", features = ["v4", "serde"] }
 
+# Sixteen units compile the large desktop crate on every core. One unit made
+# its code generation a single thread, the longest step of a release build.
 [profile.release]
-codegen-units = 1
+codegen-units = 16
 lto = "thin"
 strip = "symbols"
+
+# Tests and the dev app need line numbers in backtraces, not full debug info:
+# it only inflates target/ and slows every link.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

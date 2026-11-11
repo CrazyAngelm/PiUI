@@ -149,4 +149,87 @@ describe('Fusion membership cache', () => {
     await vi.waitFor(() => expect(membership.isCurrentSidekick('side-10')).toBe(false));
     expect(membership.isSidekick('side-10')).toBe(true);
   });
+
+  describe('coalesced state reads', () => {
+    /** Holds every `state` read until the test answers it. */
+    function gateState() {
+      const gates: { answer: (state: FusionStateV1) => void; fail: (error: unknown) => void }[] = [];
+      vi.mocked(client.fusionHost.request).mockImplementation((command) => {
+        calls.push(command);
+        if (command.type !== 'state') return Promise.resolve({ type: 'membership', role: null });
+        return new Promise((resolve, reject) => gates.push({ answer: (state) => resolve({ type: 'state', state }), fail: reject }));
+      });
+      return gates;
+    }
+    const emit = (leadSessionId: string, revision: number) => {
+      for (const listener of listeners) listener({ protocol: 1, leadSessionId, revision });
+    };
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    it('reads once for a single event', async () => {
+      membership.rememberSidekick('side-11', 'lead-11');
+      const gates = gateState();
+      void membership.load('side-11');
+      gates[0]?.answer(stateOf('lead-11', [{ id: 'side-11', retired: false }]));
+      await settle();
+      expect(asked('state', 'lead-11')).toBe(1);
+
+      emit('lead-11', 2);
+      expect(asked('state', 'lead-11')).toBe(2);
+      gates[1]?.answer(stateOf('lead-11', [{ id: 'side-11', retired: true }], 2));
+      await settle();
+      expect(asked('state', 'lead-11')).toBe(2);
+      expect(membership.isCurrentSidekick('side-11')).toBe(false);
+    });
+
+    it('reads one more time after a burst of events while a read is in flight', async () => {
+      membership.rememberSidekick('side-12', 'lead-12');
+      const gates = gateState();
+      void membership.load('side-12');
+      emit('lead-12', 2);
+      emit('lead-12', 3);
+      emit('lead-12', 4);
+      expect(asked('state', 'lead-12')).toBe(1);
+
+      gates[0]?.answer(stateOf('lead-12', [{ id: 'side-12', retired: false }], 1));
+      await settle();
+      expect(asked('state', 'lead-12')).toBe(2);
+      gates[1]?.answer(stateOf('lead-12', [{ id: 'side-12', retired: true }], 4));
+      await settle();
+      expect(asked('state', 'lead-12')).toBe(2);
+      // The state shown is the last read, not an earlier one.
+      expect(membership.isCurrentSidekick('side-12')).toBe(false);
+    });
+
+    it('joins a read in flight for an ordinary load instead of reading again', async () => {
+      membership.rememberSidekick('side-13', 'lead-13');
+      const gates = gateState();
+      const first = membership.load('side-13');
+      const second = membership.load('side-13');
+      expect(asked('state', 'lead-13')).toBe(1);
+      gates[0]?.answer(stateOf('lead-13', [{ id: 'side-13', retired: false }]));
+      await Promise.all([first, second]);
+      expect(asked('state', 'lead-13')).toBe(1);
+    });
+
+    it('still reads on a later event after a failed read', async () => {
+      membership.rememberSidekick('side-14', 'lead-14');
+      const gates = gateState();
+      void membership.load('side-14');
+      emit('lead-14', 2);
+      gates[0]?.fail(new client.FusionError('IO_ERROR'));
+      await settle();
+      expect(asked('state', 'lead-14')).toBe(2);
+      gates[1]?.fail(new client.FusionError('IO_ERROR'));
+      await settle();
+      // A failed read keeps the sidekick counted as current and does not wedge later reads.
+      expect(membership.isCurrentSidekick('side-14')).toBe(true);
+
+      emit('lead-14', 3);
+      expect(asked('state', 'lead-14')).toBe(3);
+      gates[2]?.answer(stateOf('lead-14', [{ id: 'side-14', retired: true }], 3));
+      await settle();
+      expect(membership.isCurrentSidekick('side-14')).toBe(false);
+    });
+  });
 });

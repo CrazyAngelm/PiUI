@@ -1,5 +1,6 @@
 import { SvelteMap } from 'svelte/reactivity';
 import { FusionError, fusionHost, type FusionRoleNameV1, type FusionStateV1 } from '../../host-api/fusionClient';
+import { coalesceReads } from '../../lib/coalescedReads';
 
 /** Whether a chat is a Fusion lead, the sidekick of a lead, or neither. */
 export interface FusionMember {
@@ -26,7 +27,8 @@ class FusionMembership {
   /** Retired flag of every sidekick session the lead's last answered `state` listed. */
   private retired = new SvelteMap<string, boolean>();
   private pending = new Map<string, { generation: number; request: Promise<void> }>();
-  private leadLoads = new Map<string, Promise<void>>();
+  /** One `state` read in flight per lead; a forgotten lead gets a new key (the generation) so an old read is never joined. */
+  private leadReads = coalesceReads((leadSessionId: string) => this.refreshLead(leadSessionId), (leadSessionId) => `${this.generation}:${leadSessionId}`);
   private generation = 0;
   private listening = false;
 
@@ -68,7 +70,6 @@ class FusionMembership {
   forgetLead(leadSessionId: string): void {
     this.generation += 1;
     this.pending.clear();
-    this.leadLoads.delete(leadSessionId);
     for (const [sessionId, member] of [...this.entries]) {
       if (sessionId === leadSessionId || member.leadSessionId === leadSessionId) {
         this.entries.delete(sessionId);
@@ -118,14 +119,12 @@ class FusionMembership {
   /** Reads which of the lead's sidekick chats are retired (`state`), and follows later changes. */
   private loadLead(leadSessionId: string, again = false): Promise<void> {
     this.listen();
-    const running = this.leadLoads.get(leadSessionId);
     // An event that arrives while a read is in flight needs a read that starts after it.
-    if (running && !again) return running;
-    const request = (running ? running.then(() => this.refreshLead(leadSessionId)) : this.refreshLead(leadSessionId)).finally(() => {
-      if (this.leadLoads.get(leadSessionId) === request) this.leadLoads.delete(leadSessionId);
-    });
-    this.leadLoads.set(leadSessionId, request);
-    return request;
+    if (!again) {
+      const running = this.leadReads.pending(leadSessionId);
+      if (running) return running;
+    }
+    return this.leadReads.request(leadSessionId);
   }
 
   private async refreshLead(leadSessionId: string): Promise<void> {

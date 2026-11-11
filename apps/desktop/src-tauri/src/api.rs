@@ -46,7 +46,7 @@ struct ProjectRefreshOutcome {
 struct CatalogRefreshAttempt {
     snapshot: ApiSessionCatalogSnapshot,
 }
-#[tauri::command]
+#[tauri::command(async)]
 pub fn bootstrap_v10(state: State<'_, HostState>) -> Result<ApiSnapshot, ApiError> {
     let index = lock_index(&state)?;
     let projects = index
@@ -71,7 +71,7 @@ pub fn bootstrap_v10(state: State<'_, HostState>) -> Result<ApiSnapshot, ApiErro
 
 /// Versioned v8 appearance command. Unlike the legacy route, both additional
 /// display fields are required so a malformed partial v8 request fails closed.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn update_preferences_v8(
     state: State<'_, HostState>,
     theme: String,
@@ -384,7 +384,7 @@ pub async fn set_project_trust(
 
 /// Renames only PiUI's local project label. It never opens or changes the
 /// project directory itself.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn rename_project(
     state: State<'_, HostState>,
     project_id: String,
@@ -399,7 +399,7 @@ pub fn rename_project(
 }
 
 /// Pins or unpins a registry record without touching project/session files.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_project_pinned(
     state: State<'_, HostState>,
     project_id: String,
@@ -475,7 +475,7 @@ pub async fn search_sessions(
 
 /// Returns the last indexed sidebar catalog immediately. A snapshot watermark
 /// lets the WebView discard delayed event delivery safely after reloads.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_session_catalog(
     state: State<'_, HostState>,
     project_id: String,
@@ -487,7 +487,7 @@ pub fn get_session_catalog(
 
 /// Returns the last indexed projectless Chats catalog without exposing its
 /// host-owned workspace identity.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_personal_session_catalog(
     state: State<'_, HostState>,
 ) -> Result<ApiSessionCatalogSnapshot, ApiError> {
@@ -1080,10 +1080,8 @@ fn verified_project_directory_with_index(
     let (trust_state, stored_path) = {
         let index = lock_project_index(index)?;
         let project = index
-            .list_projects()
+            .project_summary(project_id)
             .map_err(|_| ApiError::io())?
-            .into_iter()
-            .find(|project| project.id == project_id)
             .ok_or_else(ApiError::not_found)?;
         let path = index
             .canonical_project_path(project_id)

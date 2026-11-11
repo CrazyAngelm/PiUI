@@ -22,6 +22,7 @@ import {
 } from '../../host-api/orchestrationClient';
 import { pipelineLibraryHost, type ChatPipelineV1, type PipelineLibraryCommandV1, type PipelineLibraryResultV1, type PipelineTemplateV1 } from '../../host-api/pipelineLibraryClient';
 import { resolveRunInputs } from '../../host-api/runInputs';
+import { coalesceReads } from '../../lib/coalescedReads';
 import { readWorkspaceHistory } from '../../host-api/workspaceHistory';
 import { performRunAction } from '../../features/orchestration/runActions';
 import { formatValue } from '../runs/runPresentation';
@@ -87,6 +88,11 @@ export class ChatPipelinesStore {
   private liveStarting = false;
   private readonly pendingDetails = new Map<string, Promise<ChatPipelineDetail>>();
   private readonly pendingAnswers = new Map<string, Promise<string>>();
+  /** One `get_run` in flight per run; invalidations that arrive meanwhile share one more read. */
+  private readonly runReads = coalesceReads(
+    (target: { workspaceId: string; runId: string }) => this.fetchRun(target.workspaceId, target.runId),
+    (target) => `${target.workspaceId}:${target.runId}`,
+  );
 
   constructor(
     private readonly client: OrchestrationClient = orchestrationHost,
@@ -224,7 +230,12 @@ export class ChatPipelinesStore {
     await Promise.all(chat.runs.filter((entry) => !runFinished(this.runs[entry.runId])).map((entry) => this.refreshRun(chat.workspaceId, entry.runId)));
   }
 
-  async refreshRun(workspaceId: string, runId: string): Promise<void> {
+  /** Resolves after a read of the run that started after this call. */
+  refreshRun(workspaceId: string, runId: string): Promise<void> {
+    return this.runReads.request({ workspaceId, runId });
+  }
+
+  private async fetchRun(workspaceId: string, runId: string): Promise<void> {
     try {
       const run = await this.client.orchestration_get_run_v6({ workspaceId, runId });
       if (run) this.putRun(run);

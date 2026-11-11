@@ -164,4 +164,92 @@ describe('ChatPipelinesStore', () => {
     expect(store.pendingResults('chat-1')).toEqual([]);
     expect((await store.withResults('chat-1', 'Next')).text).toBe('Next');
   });
+
+  describe('coalesced reads', () => {
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const library = (chat: ChatPipelineV1 | null) => ({
+      request: async (command: PipelineLibraryCommandV1): Promise<PipelineLibraryResultV1> =>
+        command.type === 'chat' ? { protocol: 1, type: 'chat', chat } : { protocol: 1, type: 'library', templates: [] },
+    });
+    const noHistory = vi.fn(async () => []) as unknown as typeof readWorkspaceHistory;
+
+    it('reads a run once per burst of newer invalidations and ends on the last revision', async () => {
+      const gates: ((revision: number) => void)[] = [];
+      let onRun: ((event: { workspaceId: string; runId: string; revision: number }) => void) | undefined;
+      const client = {
+        listen: async (handler: typeof onRun) => {
+          onRun = handler;
+          return () => undefined;
+        },
+        orchestration_get_run_v6: () =>
+          new Promise((resolve) => gates.push((revision) => resolve({ id: 'r1', revision, status: 'running' } as unknown as OrchestrationRunV6))),
+      } as unknown as OrchestrationClient;
+      const chat = { sessionId: 's1', workspaceId: WORKSPACE, runs: [{ runId: 'r1', startedAt: '2026-09-28T10:00:00.000Z' }] } as ChatPipelineV1;
+      const invalidate = (revision: number) => onRun?.({ workspaceId: WORKSPACE, runId: 'r1', revision });
+      const store = new ChatPipelinesStore(client, library(chat), noHistory);
+
+      await store.loadChat('s1');
+      gates[0]?.(1);
+      await settle();
+      expect(store.runs['r1']?.revision).toBe(1);
+      expect(gates).toHaveLength(1);
+
+      // A single invalidation: one read.
+      invalidate(2);
+      expect(gates).toHaveLength(2);
+      gates[1]?.(2);
+      await settle();
+      expect(gates).toHaveLength(2);
+
+      // A burst while that read is in flight: exactly one more read.
+      invalidate(3);
+      for (const revision of [4, 5, 6]) invalidate(revision);
+      expect(gates).toHaveLength(3);
+      gates[2]?.(3);
+      await settle();
+      expect(gates).toHaveLength(4);
+      gates[3]?.(6);
+      await settle();
+      expect(gates).toHaveLength(4);
+      expect(store.runs['r1']?.revision).toBe(6);
+    });
+
+    it('keeps reading a run after a failed read', async () => {
+      const calls: { resolve: (run: OrchestrationRunV6) => void; reject: (error: unknown) => void }[] = [];
+      const client = {
+        orchestration_get_run_v6: () => new Promise((resolve, reject) => calls.push({ resolve, reject })),
+      } as unknown as OrchestrationClient;
+      const store = new ChatPipelinesStore(client, library(null), noHistory);
+      const first = store.refreshRun(WORKSPACE, 'r2');
+      const second = store.refreshRun(WORKSPACE, 'r2');
+      calls[0]?.reject(new Error('host down'));
+      await first;
+      expect(calls).toHaveLength(2);
+      calls[1]?.resolve({ id: 'r2', revision: 1, status: 'running' } as unknown as OrchestrationRunV6);
+      await second;
+      expect(store.runs['r2']?.revision).toBe(1);
+      void store.refreshRun(WORKSPACE, 'r2');
+      expect(calls).toHaveLength(3);
+    });
+
+    it('does not retry a failed project load by itself, and asks again on an explicit call', async () => {
+      let catalogCalls = 0;
+      const client = {
+        orchestration_catalog_v6: async () => {
+          catalogCalls += 1;
+          throw new Error('host down');
+        },
+      } as unknown as OrchestrationClient;
+      const store = new ChatPipelinesStore(client, library(null), noHistory);
+      await store.loadProject(WORKSPACE);
+      await settle();
+      expect(catalogCalls).toBe(1);
+      expect(store.commands[WORKSPACE]).toBeUndefined();
+      expect(store.commandErrors[WORKSPACE]).toBeTruthy();
+      expect(store.loadingProjects.has(WORKSPACE)).toBe(false);
+
+      await store.loadProject(WORKSPACE);
+      expect(catalogCalls).toBe(2);
+    });
+  });
 });

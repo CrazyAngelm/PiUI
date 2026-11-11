@@ -3990,6 +3990,18 @@ impl ProjectIndex {
             .map_err(IndexError::from)
     }
 
+    /// Single-row lookup of the path-safe summary for one registered project.
+    pub fn project_summary(&self, project_id: &str) -> Result<Option<ProjectSummary>, IndexError> {
+        self.connection
+            .query_row(
+                "SELECT id, name, display_path, trust_state, pinned, missing_since, last_opened_at, agent_kind FROM projects WHERE id = ?1",
+                params![project_id],
+                project_summary_row,
+            )
+            .optional()
+            .map_err(IndexError::from)
+    }
+
     /// Updates the trust decision for an already registered project. The only
     /// returned value is the existing path-safe summary; no canonical path is
     /// exposed to the UI/IPC caller.
@@ -4124,10 +4136,18 @@ impl ProjectIndex {
         project_id: &str,
         missing: bool,
     ) -> Result<(), IndexError> {
-        let missing_since = missing.then(now_epoch_seconds);
+        if !missing {
+            // Clearing is a no-op for a present project; matching no row avoids
+            // a durable write on every project-directory check.
+            self.connection.execute(
+                "UPDATE projects SET missing_since = NULL WHERE id = ?1 AND missing_since IS NOT NULL",
+                params![project_id],
+            )?;
+            return Ok(());
+        }
         self.connection.execute(
             "UPDATE projects SET missing_since = ?2 WHERE id = ?1",
-            params![project_id, missing_since],
+            params![project_id, now_epoch_seconds()],
         )?;
         Ok(())
     }
@@ -5851,6 +5871,72 @@ mod tests {
         ));
         drop(index);
         remove_file(&database).expect("removes legacy database");
+    }
+
+    #[test]
+    fn clearing_project_missing_writes_only_when_the_project_was_missing() {
+        let root =
+            std::env::temp_dir().join(format!("piui-index-project-missing-{}", Uuid::new_v4()));
+        create_dir_all(&root).expect("creates project fixture");
+        let mut index = ProjectIndex::open_in_memory().expect("opens index");
+        let project_id = index
+            .register_project(&root, None, TrustState::Restricted)
+            .expect("registers project")
+            .id;
+        let total_changes = |index: &ProjectIndex| -> i64 {
+            index
+                .connection
+                .query_row("SELECT total_changes()", [], |row| row.get(0))
+                .expect("reads change counter")
+        };
+
+        let before = total_changes(&index);
+        index
+            .mark_project_missing(&project_id, false)
+            .expect("checks present project");
+        assert_eq!(total_changes(&index), before);
+        assert!(
+            !index
+                .project_summary(&project_id)
+                .expect("reads summary")
+                .expect("project exists")
+                .missing
+        );
+
+        index
+            .mark_project_missing(&project_id, true)
+            .expect("marks project missing");
+        assert_eq!(total_changes(&index), before + 1);
+        assert!(
+            index
+                .project_summary(&project_id)
+                .expect("reads summary")
+                .expect("project exists")
+                .missing
+        );
+
+        index
+            .mark_project_missing(&project_id, false)
+            .expect("clears missing marker");
+        assert_eq!(total_changes(&index), before + 2);
+        index
+            .mark_project_missing(&project_id, false)
+            .expect("repeats clear");
+        assert_eq!(total_changes(&index), before + 2);
+        assert!(
+            !index
+                .list_projects()
+                .expect("lists projects")
+                .iter()
+                .any(|project| project.missing)
+        );
+        assert!(
+            index
+                .project_summary("unknown-project")
+                .expect("unknown project is safe")
+                .is_none()
+        );
+        remove_dir_all(&root).expect("removes fixture");
     }
 
     #[test]
