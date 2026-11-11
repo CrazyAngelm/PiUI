@@ -701,27 +701,35 @@ const windowsProbeRun = async (taskkillBehavior) => {
     order.push("app-server");
     return spawn(program, args, options);
   };
-  const started = createCodexAdapter(
-    // Successful listings are cached per program and arguments; a distinct
-    // argument keeps this case from reusing another test's listing.
-    { ...config, runtimeArgs: [fixture, "--echo-disables", `--probe-case=${taskkillBehavior}`] },
-    () => {},
-    undefined,
-    openChild,
-    undefined,
-    undefined,
-    { timeoutMs: 30, platform: "win32", spawn: fakeSpawn },
-  );
-  if (taskkillBehavior !== "exits") {
-    await assert.rejects(started, { bridgeCode: "native-unavailable" });
-    return { calls, order };
-  }
-  const adapter = await started;
+  // The adapter unrefs its probe timer because a real probe's pipes keep the
+  // process alive. The fake probe has no handle, so without this the event
+  // loop can drain before the timer fires and node:test cancels the file.
+  const keepAlive = setInterval(() => {}, 1000);
   try {
-    await waitFor(() => adapter.snapshot().title.startsWith("disable:"));
-    assert.deepEqual(disabledNames(adapter), BASE_DISABLES);
-  } finally { await adapter.dispose(); }
-  return { calls, order };
+    const started = createCodexAdapter(
+      // Successful listings are cached per program and arguments; a distinct
+      // argument keeps this case from reusing another test's listing.
+      { ...config, runtimeArgs: [fixture, "--echo-disables", `--probe-case=${taskkillBehavior}`] },
+      () => {},
+      undefined,
+      openChild,
+      undefined,
+      undefined,
+      { timeoutMs: 30, platform: "win32", spawn: fakeSpawn },
+    );
+    if (taskkillBehavior !== "exits") {
+      await assert.rejects(started, { bridgeCode: "native-unavailable" });
+      return { calls, order };
+    }
+    const adapter = await started;
+    try {
+      await waitFor(() => adapter.snapshot().title.startsWith("disable:"));
+      assert.deepEqual(disabledNames(adapter), BASE_DISABLES);
+    } finally { await adapter.dispose(); }
+    return { calls, order };
+  } finally {
+    clearInterval(keepAlive);
+  }
 };
 
 test("on Windows a stalled features probe is ended by taskkill (absolute path, no shell) before startup continues", async () => {
