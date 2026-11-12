@@ -3,6 +3,8 @@
 // `probeHooks` is a test-only injection (like `openChild`); production callers
 // never pass it: { timeoutMs, platform, spawn } for the `features list` probe.
 export async function createCodexAdapter(config, emit, coordinatorRequest, openChild, boardRequest, sidekickRequest, probeHooks = {}) {
+  const sourceEnvironment = process.env.PIUI_NANO_CODEX_SOURCE;
+  delete process.env.PIUI_NANO_CODEX_SOURCE;
   const { spawn } = await import("node:child_process");
   const path = await import("node:path");
 
@@ -25,6 +27,28 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   if (!new Set(["native", "read-only", "workspace-write", "full-access"]).has(config.permissionMode)) {
     throw fail("unsupported-permission-mode", "The requested Codex permission mode is not supported.");
   }
+  const nanoProvider = "nano-codex-subscription";
+  const nanoKeyName = "PIUI_NANO_CODEX_KEY";
+  const nativeProviderEscape = "codex-native:";
+  let nanoSource;
+  if (sourceEnvironment !== undefined) {
+    const invalid = () => fail("invalid-config", "The isolated Nano source configuration is invalid.");
+    try { nanoSource = JSON.parse(sourceEnvironment); } catch { throw invalid(); }
+    const lease = /^http:\/\/127\.0\.0\.1:([1-9]\d{0,4})\/c\/[1-9]\d*\/v1$/.exec(nanoSource?.baseUrl);
+    if (!lease || Number(lease[1]) > 65535 || !/^[A-Za-z0-9_-]{43}$/.test(nanoSource?.key)
+      || typeof nanoSource?.home !== "string" || !path.isAbsolute(nanoSource.home)
+      || !Array.isArray(nanoSource.modes) || !nanoSource.modes.every(mode => ["auto", "free", "fast", "smart"].includes(mode?.id) && typeof mode.name === "string")
+      || config.model?.provider !== nanoProvider || !nanoSource.modes.some(mode => mode.id === config.model?.id)
+      || config.catalogOnly || config.poolHost || config.coordination || config.nativeSubagents === true
+      || config.thinkingLevel || config.serviceTier || config.hostTools?.length || config.resourceRules?.length || config.pluginMcpServers?.length) throw invalid();
+  } else if (config.model?.provider === nanoProvider) {
+    throw fail("invalid-config", "The isolated Nano source was not supplied.");
+  }
+  const publicProvider = (provider) => !nanoSource && (provider === nanoProvider || provider?.startsWith(nativeProviderEscape))
+    ? nativeProviderEscape + provider : provider;
+  const nativeProvider = (provider) => !nanoSource && provider?.startsWith(nativeProviderEscape)
+    ? provider.slice(nativeProviderEscape.length) : provider;
+  const nativeEnvironment = nanoSource ? { ...process.env, CODEX_HOME: nanoSource.home } : process.env;
   // Codex has no verified way to add an MCP server for one thread without
   // its shared configuration, so plugin servers never reach it.
   if (config.pluginMcpServers?.length) {
@@ -1107,13 +1131,15 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       // nested as `threadSettings`, with the reasoning level as `effort`.
       const settings = params.threadSettings;
       if (!settings || typeof settings !== "object") return;
-      if (typeof settings.modelProvider === "string") currentProvider = settings.modelProvider;
+      if (typeof settings.modelProvider === "string") currentProvider = publicProvider(settings.modelProvider);
       if (typeof settings.model === "string") {
         const name = currentModel?.id === settings.model ? currentModel.name : settings.model;
         currentModel = { id: settings.model, name, ...(currentProvider ? { provider: currentProvider } : {}) };
       }
-      if (typeof settings.effort === "string") thinkingLevel = settings.effort;
-      if ("serviceTier" in settings) serviceTier = isFastTier(settings.serviceTier) ? "fast" : "standard";
+      if (!nanoSource) {
+        if (typeof settings.effort === "string") thinkingLevel = settings.effort;
+        if ("serviceTier" in settings) serviceTier = isFastTier(settings.serviceTier) ? "fast" : "standard";
+      }
       return;
     }
     if (method === "thread/name/updated") {
@@ -1374,7 +1400,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       try {
         probe = probeSpawn(config.runtimeProgram, [...config.runtimeArgs, "features", "list"], {
           cwd: config.cwd,
-          env: process.env,
+          env: nativeEnvironment,
           windowsHide: true,
           // A POSIX probe leads its own process group so the whole tree can be
           // signalled; on Windows the tree is ended with taskkill instead.
@@ -1464,24 +1490,40 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     if (features) featureCache.set(key, features);
     return features;
   };
-  const subagentsOff = coordinationEnabled || config.nativeSubagents === false;
+  const subagentsOff = Boolean(nanoSource) || coordinationEnabled || config.nativeSubagents === false;
   const listedFeatures = await probeFeatures();
+  if (nanoSource && (!listedFeatures || ["hooks", "apps", "plugins"].some(name => !listedFeatures.has(name) || listedFeatures.get(name) === "removed"))) {
+    throw fail("invalid-config", "Codex cannot verify the isolated Nano source configuration.");
+  }
   if (listedFeatures && subagentsOff && SUBAGENT_FEATURES.some((name) => !listedFeatures.has(name) || listedFeatures.get(name) === "removed")) {
     throw fail("unsupported-native-subagent-policy", "Codex cannot prove that native subagents are disabled for this session.");
   }
   const disabledFeatures = [
     ...DISABLED_FEATURES.filter((name) => !listedFeatures || listedFeatures.has(name)),
     ...(subagentsOff ? SUBAGENT_FEATURES : []),
+    ...(nanoSource ? ["hooks"] : []),
   ];
   const args = [
     "app-server", "--stdio", "-c", "analytics.enabled=false",
     ...disabledFeatures.flatMap((name) => ["--disable", name]),
   ];
+  if (nanoSource) {
+    const prefix = `model_providers.${nanoProvider}`;
+    for (const override of [
+      `model_provider=${JSON.stringify(nanoProvider)}`, `${prefix}.name="Nano"`,
+      `${prefix}.base_url=${JSON.stringify(nanoSource.baseUrl)}`, `${prefix}.env_key=${JSON.stringify(nanoKeyName)}`,
+      `${prefix}.wire_api="responses"`, `${prefix}.requires_openai_auth=false`, `${prefix}.supports_websockets=false`,
+      `${prefix}.request_max_retries=0`, `${prefix}.stream_max_retries=0`,
+      `shell_environment_policy.exclude=[${JSON.stringify(nanoKeyName)}]`,
+      "shell_environment_policy.ignore_default_excludes=false", "shell_environment_policy.experimental_use_profile=false",
+      "check_for_update_on_startup=false", "mcp_servers={}", 'web_search="disabled"',
+    ]) args.push("-c", override);
+  }
   // Inherit native CODEX_HOME/auth without inspecting or logging it. sessionDir
   // remains host metadata/scratch; it is not substituted for the user's Codex home.
   const child = (openChild ?? spawn)(config.runtimeProgram, [...config.runtimeArgs, ...args], {
     cwd: config.cwd,
-    env: process.env,
+    env: nanoSource ? { ...nativeEnvironment, [nanoKeyName]: nanoSource.key } : nativeEnvironment,
     windowsHide: true,
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -1763,8 +1805,12 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       await callNative("turn/interrupt", { threadId: nativeId, turnId: activeTurnId });
       return { interrupted: true };
     },
-    async catalogModels() { return (await this.models()).map(model => ({ ...model, supportsFast: true })); },
+    async catalogModels() { return (await this.models()).map(model => ({ ...model, supportsFast: !nanoSource })); },
     async models() {
+      if (nanoSource) {
+        modelCatalog = nanoSource.modes.map(({ id, name }) => ({ id, name, provider: nanoProvider, thinkingLevels: [] }));
+        return modelCatalog;
+      }
       const data = [];
       // model/list does not expose the provider on supported Codex versions.
       const catalogConfig = config.catalogOnly
@@ -1794,7 +1840,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
       } while (cursor);
       const configured = catalogConfig ? await catalogConfig : undefined;
       const configuredProvider = configured?.model_provider;
-      const resolvedProvider = catalogConfig && typeof configuredProvider === "string" && configuredProvider ? configuredProvider : currentProvider;
+      const resolvedProvider = catalogConfig && typeof configuredProvider === "string" && configuredProvider ? publicProvider(configuredProvider) : currentProvider;
       const selectedId = catalogConfig ? configured?.model : currentModel?.id;
       const models = data
         .filter(model => !model.hidden
@@ -1809,6 +1855,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     },
     async setModel({ model, thinkingLevel: nextThinkingLevel, serviceTier: nextServiceTier }) {
       if (!model || typeof model.id !== "string") throw fail("invalid-model", "The Codex model selection is invalid.");
+      if (nanoSource && (model.provider !== nanoProvider || nextThinkingLevel || nextServiceTier)) throw fail("invalid-settings", "The Nano model source cannot be changed on an open chat.");
       if (model.provider && currentProvider && model.provider !== currentProvider) {
         throw fail("unsupported-provider-change", "Codex cannot change model providers on an existing thread.");
       }
@@ -1982,7 +2029,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   const threadParams = {
     cwd: config.cwd,
     ...(serviceTier ? { serviceTier: serviceTier === "fast" ? "fast" : "default" } : {}),
-    ...(currentModel ? { model: currentModel.id, ...(currentModel.provider ? { modelProvider: currentModel.provider } : {}) } : {}),
+    ...(currentModel ? { model: currentModel.id, ...(currentModel.provider ? { modelProvider: nativeProvider(currentModel.provider) } : {}) } : {}),
     ...(typeof config.baseInstructions === "string" ? { baseInstructions: config.baseInstructions, developerInstructions: config.instructions ?? "" } : typeof config.instructions === "string" ? { developerInstructions: config.instructions } : {}),
     config: { ...resourceConfig, ...(coordinationEnabled || config.nativeSubagents === false ? { "features.multi_agent": false, "features.multi_agent_v2": false } : {}) },
     ...permissionParams,
@@ -2001,8 +2048,13 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   if (!isRecord(opened) || !isRecord(opened.thread) || typeof opened.thread.id !== "string" || typeof opened.cwd !== "string") {
     throw cleanupStartupFailure(protocolMismatch());
   }
-  thinkingLevel ??= opened.reasoningEffort ?? undefined;
-  serviceTier ??= isFastTier(opened.serviceTier) ? "fast" : "standard";
+  if (nanoSource && (opened.modelProvider !== nanoProvider || opened.model !== config.model.id)) {
+    throw cleanupStartupFailure(fail("invalid-model", "Codex did not open the Nano model source."));
+  }
+  if (!nanoSource) {
+    thinkingLevel ??= opened.reasoningEffort ?? undefined;
+    serviceTier ??= isFastTier(opened.serviceTier) ? "fast" : "standard";
+  }
   const thread = opened.thread;
   const effectiveCwd = opened.cwd;
   const normalizeCwd = (value) => {
@@ -2039,7 +2091,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     emit({ type: "notice", code: "unsupported-sidekick-tool-resume" });
   }
   for (const message of deferredNativeMessages.splice(0)) guardedNotification(message);
-  if (typeof opened.modelProvider === "string") currentProvider = opened.modelProvider;
+  if (typeof opened.modelProvider === "string") currentProvider = publicProvider(opened.modelProvider);
   if (typeof opened.model === "string") {
     const effectiveName = currentModel?.id === opened.model ? currentModel.name : opened.model;
     currentModel = { id: opened.model, ...(currentProvider ? { provider: currentProvider } : {}), name: effectiveName };

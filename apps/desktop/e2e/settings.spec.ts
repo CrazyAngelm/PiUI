@@ -7,6 +7,39 @@ import { expect, test } from './fixtures';
  */
 const LOGIN = /^Start Nano Desktop when I sign in( to Windows)?$/;
 
+test.describe('Settings → Nano account', () => {
+  test('connects and disconnects ChatGPT and an API source by keyboard', async ({ lab, page }) => {
+    await lab.open();
+    const sections = await lab.openSettings();
+    await sections.getByRole('button', { name: 'Nano account' }).press('Enter');
+    const providers = page.getByRole('region', { name: 'External model providers' });
+    await providers.getByRole('button', { name: 'Continue with ChatGPT' }).press('Enter');
+    const welcome = page.getByRole('dialog', { name: 'You’re using your ChatGPT plan' });
+    await expect(welcome).toBeVisible();
+    await welcome.getByRole('button', { name: 'Got it' }).press('Enter');
+    await providers.getByRole('button', { name: 'Disconnect ChatGPT' }).press('Enter');
+    await expect(providers.getByRole('button', { name: 'Continue with ChatGPT' })).toBeVisible();
+    await providers.getByLabel('Provider name').fill('Demo gateway');
+    await providers.getByLabel('API base URL').fill('https://example.test/v1');
+    await providers.getByLabel('Model ID').fill('demo-model');
+    await providers.getByLabel('Chat Completions request format').press('ArrowDown');
+    await providers.getByRole('button', { name: 'Connect API key…' }).press('Enter');
+    const disconnect = providers.getByRole('button', { name: 'Disconnect Demo gateway' });
+    await expect(disconnect).toBeVisible();
+    await disconnect.press('Enter');
+    await expect(disconnect).toHaveCount(0);
+  });
+
+  test('keeps external provider connections unavailable in safe mode', async ({ lab, page }) => {
+    await lab.open('safe');
+    const sections = await lab.openSettings();
+    await sections.getByRole('button', { name: 'Nano account' }).press('Enter');
+    const providers = page.getByRole('region', { name: 'External model providers' });
+    await expect(page.getByText(/Safe mode is on/)).toBeVisible();
+    await expect(providers).toHaveCount(0);
+  });
+});
+
 test.describe('Settings → General and Shortcuts', () => {
   test('language and density rows carry no extra descriptions', async ({ lab, page }) => {
     await lab.open();

@@ -26,5 +26,10 @@ test-support = []
 [lints.rust]
 unsafe_code = "forbid"
 
+[target.'cfg(windows)'.dependencies]
+ruzstd = "0.9.1"
+tar = "0.4.46"
+tempfile = "3.27.0"
+
 [target.'cfg(windows)'.dev-dependencies]
 uuid.workspace = true

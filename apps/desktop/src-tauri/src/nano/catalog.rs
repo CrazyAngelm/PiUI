@@ -40,11 +40,14 @@ pub(crate) fn catalog_models(status: &NanoAccountStatusV1) -> Vec<NativeCatalogM
 /// may use now: provider `nano` and a mode of [`catalog_models`]. Pi lists
 /// what its `models.json` held when it started; a plan change, an expired or
 /// signed-out account must not leave a locked mode selectable.
-pub(crate) fn retain_entitled(models: &mut Vec<WorkspaceModel>, status: &NanoAccountStatusV1) {
+pub(crate) fn retain_entitled(
+    models: &mut Vec<WorkspaceModel>,
+    status: &NanoAccountStatusV1,
+    provider: &str,
+) {
     let entitled = catalog_models(status);
     models.retain(|model| {
-        model.provider.as_deref() == Some(NANO_MODEL_PROVIDER)
-            && entitled.iter().any(|row| row.id == model.id)
+        model.provider.as_deref() == Some(provider) && entitled.iter().any(|row| row.id == model.id)
     });
 }
 
@@ -88,7 +91,7 @@ mod tests {
             live(Some("nano"), "unknown-mode"),
         ];
         let mut models = all.clone();
-        retain_entitled(&mut models, &status);
+        retain_entitled(&mut models, &status, NANO_MODEL_PROVIDER);
         assert_eq!(
             models
                 .iter()
@@ -98,7 +101,7 @@ mod tests {
         );
         for key in ["signedOut", "expired", "signingIn"] {
             let mut models = all.clone();
-            retain_entitled(&mut models, &fixture_status(key));
+            retain_entitled(&mut models, &fixture_status(key), NANO_MODEL_PROVIDER);
             assert!(models.is_empty(), "{key}");
         }
     }

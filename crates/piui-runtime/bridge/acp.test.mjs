@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmdirSync } from 'node:fs';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { createAcpAdapter } from './acp.mjs';
 
 const fixture = fileURLToPath(new URL('./acp.test-fixture.mjs', import.meta.url));
@@ -422,4 +423,155 @@ test('requests outside the advertised client surface get method-not-found and ne
     assert.ok(!e.values.some(v => v.type === 'approval'), 'only session/request_permission with choices is an approval');
     assert.equal(a.snapshot().approvals.length, 0);
   } finally { await a.dispose(); }
+});
+
+// --- Nano model source (ADR-050) ---------------------------------------------
+const nanoModes = [{ id: 'auto', name: 'Auto' }, { id: 'fast', name: 'Fast' }];
+const nanoConfig = (overrides = {}, modes = nanoModes) => config(['--nano-models'], {
+  harness: 'acp:opencode',
+  sessionDir: join(process.cwd(), 'target'),
+  acp: { id: 'opencode', displayName: 'OpenCode', disable: {}, nano: { provider: 'nano', modes } },
+  model: { id: 'auto', provider: 'nano', name: 'Auto' },
+  ...overrides,
+});
+
+test('the Nano source offers exactly the entitled modes, maps them to the agent ids and keeps the key out of the bridge', async () => {
+  process.env.OPENCODE_CONFIG_CONTENT = '{"provider":{"nano":{"options":{"apiKey":"lease-key-not-for-the-bridge"}}}}';
+  const e = events();
+  let a;
+  try {
+    a = await createAcpAdapter(nanoConfig(), e.emit);
+    assert.equal(process.env.OPENCODE_CONFIG_CONTENT, undefined, 'the bridge removes the key-bearing variable once the agent has it');
+    const snapshot = a.snapshot();
+    assert.deepEqual(snapshot.models, [{ id: 'auto', name: 'Auto', provider: 'nano' }, { id: 'fast', name: 'Fast', provider: 'nano' }],
+      'only entitled modes of the nano provider, named by the host; no locked mode, no foreign provider, no reasoning levels');
+    assert.deepEqual(snapshot.model, { id: 'auto', name: 'Auto', provider: 'nano' });
+    assert.deepEqual((await a.catalogModels()).map(model => [model.id, model.provider]), [['auto', 'nano'], ['fast', 'nano']]);
+    let done = turnDone(e);
+    await a.prompt({ text: 'env OPENCODE_CONFIG_CONTENT', mode: 'prompt' });
+    await done;
+    assert.ok(a.snapshot().blocks.some(b => b.text === 'OPENCODE_CONFIG_CONTENT=visible'), 'the agent keeps its own copy');
+    done = turnDone(e);
+    await a.prompt({ text: 'shell environment', mode: 'prompt' });
+    await done;
+    assert.ok(a.snapshot().blocks.some(b => b.text === 'ENV_CLEAN'), 'the actual bundled hook blanks the child environment');
+    await a.setModel({ model: { id: 'fast', provider: 'nano', name: 'Fast' } });
+    assert.equal(a.snapshot().model.id, 'fast');
+    done = turnDone(e);
+    await a.prompt({ text: 'settings?', mode: 'prompt' });
+    await done;
+    assert.ok(a.snapshot().blocks.some(b => /^model=nano\/fast /.test(b.text ?? '')), 'the agent was told its own model id');
+    assert.doesNotMatch(JSON.stringify([e.values, a.snapshot()]), /lease-key-not-for-the-bridge/);
+    // A change of source or an unoffered mode is refused, never matched by id alone.
+    for (const model of [{ id: 'smart', provider: 'nano', name: 'Smart' }, { id: 'other/gpt', name: 'Other' }, { id: 'default' }, { id: 'fast', name: 'Fast' }, { id: 'nano/fast', provider: 'nano', name: 'x' }]) {
+      await assert.rejects(a.setModel({ model }), { bridgeCode: 'invalid-model' }, JSON.stringify(model));
+    }
+    assert.equal(a.snapshot().model.id, 'fast', 'a refused change keeps the session on its mode');
+  } finally { delete process.env.OPENCODE_CONFIG_CONTENT; await a?.dispose(); }
+});
+
+test('the Nano source fails closed instead of falling back to a native model or source', async () => {
+  const start = overrides => createAcpAdapter(nanoConfig(overrides), () => {});
+  // A mode the account does not offer now (a reopened session whose mode was locked).
+  await assert.rejects(start({ model: { id: 'smart', provider: 'nano', name: 'Smart' } }), { bridgeCode: 'invalid-model' });
+  // Explicit Nano routing requires an entitled Nano mode.
+  await assert.rejects(start({ model: undefined }), { bridgeCode: 'invalid-configuration' });
+  await assert.rejects(start({ model: { id: 'fixture-fast', name: 'x' } }), { bridgeCode: 'invalid-configuration' });
+  await assert.rejects(createAcpAdapter(config(['--nano-models'], { model: { id: 'auto', provider: 'nano', name: 'Auto' } }), () => {}), { bridgeCode: 'invalid-model' });
+  // Only the built-in OpenCode has a Nano source, with a valid mode list.
+  const nano = { provider: 'nano', modes: nanoModes };
+  await assert.rejects(start({ acp: { id: 'fixture-agent', displayName: 'Fixture Agent', disable: {}, nano }, harness: 'acp:fixture-agent' }), { bridgeCode: 'invalid-configuration' });
+  for (const bad of [{ provider: 'other', modes: nanoModes }, { provider: 'nano', modes: [] }, { provider: 'nano', modes: [{ id: 'a/b', name: 'x' }] },
+    { provider: 'nano', modes: [{ id: 'auto', name: 'A' }, { id: 'auto', name: 'B' }] }, { provider: 'nano' }, null]) {
+    await assert.rejects(start({ acp: { id: 'opencode', displayName: 'OpenCode', disable: {}, nano: bad } }), { bridgeCode: 'invalid-configuration' }, JSON.stringify(bad));
+  }
+});
+
+test('a native provider named nano remains native without explicit Nano routing', async () => {
+  const a = await createAcpAdapter(config(['--nano-group'], { model: { id: 'fixture-fast', provider: 'nano' } }), () => {});
+  try {
+    assert.deepEqual(a.snapshot().models.map(model => [model.id, model.provider]), [['fixture-fast', 'nano']]);
+    await a.setModel({ model: { id: 'fixture-fast', provider: 'nano', name: 'x' } });
+    await a.setModel({ model: { id: 'default', provider: 'nano', name: 'x' } });
+  } finally { await a.dispose(); }
+});
+
+test('the Nano source refuses a missing or stale trusted plugin acknowledgement before prompting', async () => {
+  for (const flag of ['--missing-nano-guard', '--stale-nano-guard']) {
+    await assert.rejects(createAcpAdapter(nanoConfig({ runtimeArgs: [fixture, '--nano-models', flag] }), () => {}), {
+      bridgeCode: 'native-start-failed', safeMessage: 'The Nano shell environment guard did not load.',
+    });
+  }
+});
+
+test('the Nano source rejects a native response which did not select the requested mode', async () => {
+  const a = await createAcpAdapter(nanoConfig({ runtimeArgs: [fixture, '--nano-models', '--refuse-model-change'] }), () => {});
+  try {
+    await assert.rejects(a.setModel({ model: { id: 'fast', provider: 'nano' } }), { bridgeCode: 'invalid-model' });
+    assert.equal(a.snapshot().model.id, 'auto', 'the snapshot reflects the actual native response');
+  } finally { await a.dispose(); }
+  await assert.rejects(createAcpAdapter(nanoConfig({
+    runtimeArgs: [fixture, '--nano-models', '--refuse-model-change'], model: { id: 'fast', provider: 'nano' },
+  }), () => {}), { bridgeCode: 'invalid-model' });
+});
+
+test('the Nano source accepts host mode lists without invented count or identifier limits', async () => {
+  const modes = [...nanoModes, ...Array.from({ length: 17 }, (_, index) => ({ id: `mode_${'x'.repeat(65)}_${index}`, name: 'Mode' }))];
+  const a = await createAcpAdapter(nanoConfig({}, modes), () => {});
+  try { assert.equal(a.snapshot().model.id, 'auto'); } finally { await a.dispose(); }
+});
+
+test('the Nano source refuses MCP and host tool subprocess routes', async () => {
+  for (const overrides of [
+    { pluginMcpServers: [{ name: 'fixture', command: process.execPath, args: [] }] },
+    { coordination: true }, { hostTools: ['board'] },
+  ]) {
+    await assert.rejects(createAcpAdapter(nanoConfig(overrides), () => {}), { bridgeCode: 'unsupported-settings' });
+  }
+});
+
+test('Goose starts privately, preserves the project cwd and locks the Nano model and permissions', { skip: process.platform !== 'win32' }, async () => {
+  const root = mkdtempSync(join(process.cwd(), 'target', 'goose-nano-test-'));
+  const provider = 'nano-goose-subscription';
+  const model = { id: 'fast', provider, name: 'Fast' };
+  const environment = {
+    GOOSE_PATH_ROOT: root, GOOSE_SHELL: process.execPath, PIUI_GOOSE_NANO_SHELL: '1',
+    OPENAI_BASE_URL: 'http://127.0.0.1:4455/c/7/v1', OPENAI_API_KEY: 'goose-fixture-lease', GOOSE_MODEL: 'fast',
+  };
+  const previous = Object.fromEntries(Object.keys(environment).map(name => [name, process.env[name]]));
+  const launch = (flags = [], overrides = {}) => config(['--goose-models', ...flags], {
+    harness: 'acp:goose', acp: { id: 'goose', displayName: 'Goose', nano: { provider, modes: [model] } },
+    model, ...overrides,
+  });
+  let a;
+  try {
+    Object.assign(process.env, environment);
+    a = await createAcpAdapter(launch(), () => {});
+    assert.equal(process.env.OPENAI_API_KEY, undefined);
+    assert.deepEqual(a.snapshot().models, [model]);
+    assert.deepEqual(a.snapshot().modes, { current: 'approve', available: [{ id: 'approve', name: 'Approve' }] });
+    await assert.rejects(a.setModel({ model: { id: 'fast', provider: 'openai' } }), { bridgeCode: 'invalid-model' });
+    await assert.rejects(a.setModel({ model: { id: 'auto', provider } }), { bridgeCode: 'invalid-model' });
+    await assert.rejects(a.setMode({ modeId: 'auto' }), { bridgeCode: 'invalid-request' });
+    await assert.rejects(a.prompt({ text: '/extensions', mode: 'prompt' }), { bridgeCode: 'unsupported-method' });
+    assert.doesNotMatch(JSON.stringify(a.snapshot()), /goose-fixture-lease/);
+    await a.dispose();
+    a = undefined;
+    Object.assign(process.env, environment);
+    a = await createAcpAdapter(launch([], { nativeId: 'saved' }), () => {});
+    assert.equal(a.snapshot().nativeId, 'saved');
+    assert.deepEqual(a.snapshot().models, [model]);
+    await a.dispose();
+    a = undefined;
+    Object.assign(process.env, environment);
+    await assert.rejects(createAcpAdapter(launch(['--unverified-goose']), () => {}), { bridgeCode: 'native-protocol-mismatch' });
+    assert.deepEqual(readdirSync(root), []);
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    await a?.dispose();
+    rmdirSync(root);
+  }
 });

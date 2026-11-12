@@ -47,7 +47,7 @@ use crate::status::{
 use crate::store::{CredentialStore, NanoPrefs, PrefsFile, TokenVault, default_os_store};
 use crate::wire::{
     NanoCapabilitiesV1, NanoCloudLaunchV1, NanoDictationResultV1, NanoEntitlementsV1, NanoMeV1,
-    NanoServerErrorCodeV1, NanoUsageV1,
+    NanoModeIdV1, NanoServerErrorCodeV1, NanoUsageV1,
 };
 
 /// Opens the authorization URL in the system browser. Runs on a blocking
@@ -64,6 +64,23 @@ const SIGN_OUT_NETWORK_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountGeneration(u64);
 
+/// A validated inference request and its fixed gateway route.
+pub(crate) enum GatewayRequest {
+    Chat(NanoModeIdV1),
+    Responses(NanoModeIdV1),
+}
+
+#[derive(serde::Deserialize)]
+struct GatewayCapabilities {
+    dialects: GatewayDialects,
+}
+
+#[derive(serde::Deserialize)]
+struct GatewayDialects {
+    #[serde(default)]
+    responses: Vec<NanoModeIdV1>,
+}
+
 /// The host's Nano account. See the module documentation.
 #[derive(Clone)]
 pub struct NanoAccount {
@@ -78,7 +95,7 @@ struct Inner {
     state: Mutex<State>,
     status_tx: watch::Sender<NanoAccountStatusV1>,
     /// Single flight for token refresh and credential-store writes.
-    token_lock: AsyncMutex<()>,
+    token_lock: Arc<AsyncMutex<()>>,
     /// One account/entitlement load at a time.
     load_lock: AsyncMutex<()>,
 }
@@ -277,7 +294,7 @@ impl NanoAccount {
                 prefs,
                 state: Mutex::new(state),
                 status_tx,
-                token_lock: AsyncMutex::new(()),
+                token_lock: Arc::new(AsyncMutex::new(())),
                 load_lock: AsyncMutex::new(()),
             }),
         })
@@ -596,7 +613,7 @@ impl NanoAccount {
         if let Some(token) = self.current_access(generation, rejected)? {
             return Ok(token);
         }
-        let _flight = self.inner.token_lock.lock().await;
+        let flight = self.inner.token_lock.clone().lock_owned().await;
         if let Some(token) = self.current_access(generation, rejected)? {
             return Ok(token);
         }
@@ -612,15 +629,32 @@ impl NanoAccount {
                 (_, Some(token)) => token.clone(),
             }
         };
-        let server = self.server().await?;
-        match oauth::refresh(
-            &self.inner.http,
-            &server,
-            &self.inner.config,
-            &refresh_token,
-        )
+        // A closed relay lease can cancel inference, but the server may
+        // already have rotated this credential. Finish its adoption under
+        // the account's lock even when the caller drops its join handle.
+        let account = self.clone();
+        let refreshed = tokio::spawn(async move {
+            let _flight = flight;
+            account.refresh_locked(generation, &refresh_token).await
+        })
         .await
-        {
+        .map_err(|_| NanoError::Offline)??;
+        self.ensure_generation(generation)
+            .map_err(|_| NanoError::SignInRequired)?;
+        Ok(refreshed)
+    }
+
+    async fn refresh_locked(
+        &self,
+        generation: u64,
+        refresh_token: &SecretString,
+    ) -> Result<SecretString, NanoError> {
+        self.ensure_generation(generation)
+            .map_err(|_| NanoError::SignInRequired)?;
+        let server = self.server().await?;
+        self.ensure_generation(generation)
+            .map_err(|_| NanoError::SignInRequired)?;
+        match oauth::refresh(&self.inner.http, &server, &self.inner.config, refresh_token).await {
             Ok(tokens) => self.adopt_tokens_locked(generation, &server, tokens).await,
             Err(TokenFailure::Rejected) => {
                 self.expire_locked(generation, NanoError::SignInRequired)
@@ -787,26 +821,79 @@ impl NanoAccount {
         json_answer(response).await
     }
 
-    /// Forwards a gateway request of a relay session bound to `generation`
-    /// for the selected workspace:
-    /// `{issuer}/api/desktop/v1/workspaces/{id}/gateway/v1/{leaf...}`, with
+    /// Fetches the server-verified Responses modes for this account and workspace.
+    /// An older server or an unconfigured gateway offers no Responses modes.
+    pub async fn responses_modes(
+        &self,
+        generation: AccountGeneration,
+        workspace: &str,
+    ) -> Vec<NanoModeIdV1> {
+        let (current, status) = self.status_with_generation();
+        if current != generation
+            || status.state != NanoAccountStateV1::SignedIn
+            || status.selected_workspace_id.as_deref() != Some(workspace)
+            || !status
+                .capabilities
+                .is_some_and(|capabilities| capabilities.gateway)
+        {
+            return Vec::new();
+        }
+        let url =
+            self.inner
+                .config
+                .api_url(&["workspaces", workspace, "gateway", "v1", "capabilities"]);
+        let Ok(reply) = self
+            .get_json::<GatewayCapabilities>(generation.0, url)
+            .await
+        else {
+            return Vec::new();
+        };
+        let (current, status) = self.status_with_generation();
+        if current != generation || status.selected_workspace_id.as_deref() != Some(workspace) {
+            return Vec::new();
+        }
+        reply
+            .dialects
+            .responses
+            .into_iter()
+            .filter(|mode| {
+                status
+                    .entitlements
+                    .as_ref()
+                    .is_some_and(|plan| plan.mode_available(*mode))
+            })
+            .collect()
+    }
+
+    /// Forwards inference for the relay's admitted generation and
+    /// workspace to that workspace's fixed dialect route, with
     /// `X-Nano-Device` (this device's id) and `X-Nano-Session` (`session`,
     /// the relay session's opaque tag). Neither is a credential.
     pub(crate) async fn send_gateway(
         &self,
         generation: AccountGeneration,
         session: &str,
-        leaf: &[&str],
-        method: reqwest::Method,
-        body: Option<Bytes>,
+        admitted_workspace: &str,
+        request: GatewayRequest,
+        body: Bytes,
         accept: Option<HeaderValue>,
     ) -> Result<reqwest::Response, NanoError> {
+        let mode = match request {
+            GatewayRequest::Chat(mode) | GatewayRequest::Responses(mode) => mode,
+        };
         let (workspace, device) = {
             let s = self.inner.lock();
             if s.generation != generation.0 {
                 return Err(NanoError::SignInRequired);
             }
             let workspace = s.selected.clone().ok_or(NanoError::SignInRequired)?;
+            let entitlements = s.entitlements.as_ref().ok_or(NanoError::Offline)?;
+            if workspace != admitted_workspace || entitlements.workspace_id != workspace {
+                return Err(NanoError::Offline);
+            }
+            if !entitlements.mode_available(mode) {
+                return Err(NanoError::ModeLocked);
+            }
             let device = s
                 .device
                 .as_ref()
@@ -814,11 +901,15 @@ impl NanoAccount {
             (workspace, device)
         };
         let session = HeaderValue::from_str(session).ok();
-        let mut segments = vec!["workspaces", workspace.as_str(), "gateway", "v1"];
-        segments.extend_from_slice(leaf);
-        let url = self.inner.config.api_url(&segments);
+        let route = match request {
+            GatewayRequest::Chat(_) => &["chat", "completions"][..],
+            GatewayRequest::Responses(_) => &["responses"][..],
+        };
+        let mut path = vec!["workspaces", workspace.as_str(), "gateway", "v1"];
+        path.extend_from_slice(route);
+        let url = self.inner.config.api_url(&path);
         self.send_authorized(generation.0, |http, token| {
-            let mut request = http.request(method.clone(), url.clone()).bearer_auth(token);
+            let mut request = http.post(url.clone()).bearer_auth(token);
             if let Some(device) = &device {
                 request = request.header(DEVICE_HEADER, device.clone());
             }
@@ -828,12 +919,9 @@ impl NanoAccount {
             if let Some(accept) = &accept {
                 request = request.header(ACCEPT, accept.clone());
             }
-            if let Some(body) = &body {
-                request = request
-                    .header(CONTENT_TYPE, "application/json")
-                    .body(body.clone());
-            }
             request
+                .header(CONTENT_TYPE, "application/json")
+                .body(body.clone())
         })
         .await
     }

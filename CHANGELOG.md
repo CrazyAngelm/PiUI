@@ -8,6 +8,12 @@ Nano Desktop is currently a developer preview. Versions before 1.0 may change wi
 
 ## [0.3.0]
 
+### Added
+
+- The Windows x64 installer and portable build include Nano's Pi runtime, Node, and search tools. Nano includes the BES Deep Mode skill and the `/skill-paths` command.
+- OpenCode, Prime Agent, and Goose can show entitled Nano modes alongside their own models on verified Windows releases. The Codex group is available when the selected Nano workspace advertises a verified Responses route.
+- On Windows, **Settings → Nano account → External model providers** connects a ChatGPT plan or an HTTPS OpenAI-compatible API key for the Nano harness.
+
 ### Changed
 
 - PiUI is now Nano Desktop (ADR-046): the product name, window title, tray, installer and executable (`nano-desktop.exe`) change. Saved data, settings, systems, plugins and native histories keep their names and keep working; nothing is migrated.

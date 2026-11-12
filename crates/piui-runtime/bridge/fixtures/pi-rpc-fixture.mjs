@@ -8,6 +8,11 @@ if (catalogOnly && (!process.argv.includes("--no-session") || process.argv.inclu
 let modelRequests = 0;
 // A Nano session reopened without a model: Pi restored the recorded Nano model.
 const restoredNano = process.argv.includes("--restored-nano-model");
+const providerFlag = process.argv.indexOf("--provider");
+const modelFlag = process.argv.indexOf("--model");
+const chosenModel = providerFlag >= 0 && modelFlag >= 0
+  ? { provider: process.argv[providerFlag + 1], id: process.argv[modelFlag + 1], name: process.argv[modelFlag + 1], input: ["text"] }
+  : null;
 let sessionName = process.argv.includes("--no-tools") ? "no-tools" : toolFlag >= 0 ? process.argv[toolFlag + 1] : "Fixture";
 // A scenario step `{ busyProbes: n }` makes the next n `get_state` replies
 // report a streaming run, like a runtime still busy after `agent_end`.
@@ -217,7 +222,7 @@ process.stdin.on("data", (chunk) => {
       sessionName = `images:${request.type}:${request.images.map((image) => `${image.type}/${image.mimeType}/${image.data}`).join(",")}`;
       write({ type: "message_start", message: { id: `user-${request.id}`, role: "user", content: [{ type: "text", text: request.message }, ...request.images] } });
     }
-    if (request.type === "get_state") write({ id: request.id, type: "response", command: request.type, success: true, data: { sessionId: "native-fixture", sessionFile: "host/private.jsonl", sessionName, isStreaming: busyNow(), isCompacting: false, pendingMessageCount: 0, thinkingLevel: "medium", model: restoredNano ? { provider: "nano", id: "smart", name: "Smart", input: ["text"] } : { provider: "fixture", id: "model", name: "Fixture Model", input: textOnly ? ["text"] : ["text", "image"] } } }, true);
+    if (request.type === "get_state") write({ id: request.id, type: "response", command: request.type, success: true, data: { sessionId: "native-fixture", sessionFile: "host/private.jsonl", sessionName, isStreaming: busyNow(), isCompacting: false, pendingMessageCount: 0, thinkingLevel: "medium", model: chosenModel ?? (restoredNano ? { provider: "nano", id: "smart", name: "Smart", input: ["text"] } : { provider: "fixture", id: "model", name: "Fixture Model", input: textOnly ? ["text"] : ["text", "image"] }) } }, true);
     else if (request.type === "get_commands") write({ id: request.id, type: "response", command: request.type, success: true, data: { commands: [
       { name: "skill:review", description: "Review a diff", source: "skill", location: "user", path: "/home/SECRET-MUST-NOT-LEAK/skills/review/SKILL.md" },
       { name: "fix-tests", description: "Fix failing tests", source: "prompt", location: "project", path: "/home/SECRET-MUST-NOT-LEAK/prompts/fix-tests.md" },
@@ -229,6 +234,9 @@ process.stdin.on("data", (chunk) => {
       { id: "entry-private", type: "message", message: { role: "user", content: "hello" } },
       ...(process.argv.includes("--history-answer") ? [{ id: "entry-answer-private", type: "message", message: { role: "assistant", timestamp: ANSWER_TIMESTAMP, stopReason: "stop", content: [{ type: "text", text: "answer" }] } }] : []),
     ] } });
+    else if (request.type === "prompt" && request.message === "/skill-paths") {
+      write({ id: request.id, type: "response", command: request.type, success: true, data: { disposition: "handled" } });
+    }
     else if (request.type === "prompt" && scenarios[request.message]) {
       write({ id: request.id, type: "response", command: request.type, success: true });
       setTimeout(async () => {

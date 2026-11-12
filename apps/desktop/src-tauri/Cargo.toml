@@ -45,6 +45,7 @@ sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net"] }
 uuid.workspace = true
+zeroize = "1.9"
 tauri = { version = "=2.11.5", features = ["tray-icon"] }
 rfd = "0.17.2"
 # Signed updates. Registered only when the build config carries the updater

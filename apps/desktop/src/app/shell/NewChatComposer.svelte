@@ -5,7 +5,7 @@
   import Brain from '@lucide/svelte/icons/brain';
   import { onMount, tick, untrack } from 'svelte';
   import { t } from '../../features/locale/language';
-  import { cachedHarnessModels, catalogDegraded } from '../../host-api/harnessModels';
+  import { cachedHarnessModels, catalogDegraded, isNanoConnectorModel } from '../../host-api/harnessModels';
   import ModelPicker, { type ModelOption } from './ModelPicker.svelte';
   import type { HarnessCatalogModel, HarnessModelsResult, HarnessResource } from '../../../../../contracts/harness-models-v18';
   import type { HarnessKind, PermissionMode, WorkspaceSummary } from '../../../../../contracts/workspace-v15';
@@ -16,6 +16,7 @@
   import { WorkspaceOperationError, workspaceError } from '../../host-api/workspaceClient';
   import AttachButton from '../chat/composer/AttachButton.svelte';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
+  import { NANO_SOURCE_HARNESSES } from '../nano/nanoView';
   import { ComposerAttachments } from '../chat/composer/composerAttachments.svelte';
   import { FileMentions } from '../chat/composer/composerLookups.svelte';
   import { composerDropTargets } from '../chat/composer/dropTargets.svelte';
@@ -108,6 +109,7 @@
   // A string, not the entry: every session event replaces the catalog, only a new version asks again.
   const harnessVersion = $derived(store.catalog.harnesses.find((item) => item.kind === harness)?.version ?? '');
   const model = $derived(resolveModelSelection(models, modelKey, harness));
+  const canUseDefaultModel = $derived(harness !== 'nano' || nanoAccount.availableModes.length > 0);
   const levels = $derived(model?.thinkingLevels ?? []);
   // Before a session exists only the manifest is known; the host decides at send.
   const imageState = $derived(imageSupport(fusionMode && fusionPair ? fusionPair.lead.harness : harness, undefined));
@@ -187,13 +189,17 @@
     // A retry asks again for the same project and harness: what is shown stays.
     void catalogAttempt;
     // The Nano catalog is account state: a sign-in, a plan or a credit change loads it again.
-    if (kind === 'nano') void nanoAccount.catalogRevision;
+    // An agent with a Nano model source lists the same modes as a separate group.
+    const followsNano = kind === 'nano' || NANO_SOURCE_HARNESSES.includes(kind);
+    if (followsNano) void nanoAccount.catalogRevision;
     const forKey = JSON.stringify([id, kind]);
     if (untrack(() => catalogFor) !== forKey) {
       models = [];
       skills = [];
       modelsProvisional = false;
       modelsResolved = false;
+    } else if (followsNano) {
+      models = untrack(() => kind === 'nano' ? [] : models.filter(model => !isNanoConnectorModel(kind, model)));
     }
     catalogFor = forKey;
     modelsError = '';
@@ -418,7 +424,7 @@
       !busy &&
       !store.safeMode &&
       // An explicit model must be present in this project's own catalog.
-      (fusionMode ? fusionReady : pipelineId ? Boolean(pipelineDetail?.accepts) && available.length > 0 : Boolean(harness) && (!modelKey || explicitModelReady)),
+      (fusionMode ? fusionReady : pipelineId ? Boolean(pipelineDetail?.accepts) && available.length > 0 : Boolean(harness) && (modelKey ? explicitModelReady : canUseDefaultModel)),
   );
 
   function setText(value: string): void {
@@ -725,7 +731,7 @@
           models={modelOptions}
           {harness}
           value={model ? modelSelectionKey(model) : modelKey}
-          defaultOption={true}
+          defaultOption={canUseDefaultModel}
           loading={modelsLoading}
           error={modelsError}
           {levels}

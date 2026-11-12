@@ -377,6 +377,27 @@ describe('native harness catalog v19 with v18 catalog data', () => {
     await harnessModels({ ...request, workspaceId: 'other-project' });
     expect([...memory.keys()].filter((key) => key.includes('nano'))).toEqual([]);
   });
+  it('never remembers the Nano group of an agent with a Nano source and never shows one from storage', async () => {
+    localStorage.clear();
+    const request = { workspaceId: 'project', harness: 'acp:opencode' as const };
+    const snapshotKey = (workspaceId: string) => `piui.harness.catalog.v1:${JSON.stringify([workspaceId, 'acp:opencode'])}`;
+    const own = { id: 'default', name: 'Agent default' };
+    const nativeNano = { id: 'nano/native', provider: 'nano', name: 'Native provider model' };
+    const nano = { id: 'auto', provider: 'nano', name: 'Auto' };
+    const native = [own, nativeNano];
+    const listed = { protocol: 18, harness: 'acp:opencode', models: [...native, nano], resources: { items: [], warnings: [] } };
+    invoke.mockResolvedValueOnce(listed).mockResolvedValueOnce(listed);
+    const { cachedHarnessModels, catalogSettled } = await import('./harnessModels');
+    expect((await cachedHarnessModels(request)).models, 'the live answer carries both groups').toEqual([...native, nano]);
+    await vi.waitFor(() => expect(catalogSettled(request)).toBe(true));
+    for (const key of [snapshotKey('project'), snapshotKey('*')]) {
+      expect(JSON.parse(memory.get(key) ?? 'null').result.models, `${key} keeps only the agent's own models`).toEqual(native);
+    }
+    // A snapshot written with the group (an earlier build, or an earlier account) is read without it.
+    localStorage.setItem(snapshotKey('later'), JSON.stringify({ at: Date.now(), result: listed }));
+    invoke.mockResolvedValueOnce({ ...listed, models: native }).mockResolvedValueOnce({ ...listed, models: native });
+    expect((await cachedHarnessModels({ ...request, workspaceId: 'later' })).models, 'a remembered Nano group is never shown').toEqual(native);
+  });
   it('keeps a remembered catalog when the probe fails transiently', async () => {
     localStorage.clear();
     const request = { workspaceId: 'project', harness: 'claude-code' as const };

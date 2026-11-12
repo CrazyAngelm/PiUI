@@ -12,8 +12,8 @@
  * - Every other path is under `/api/desktop/v1` with `Authorization: Bearer
  *   <access token>`. JSON is camelCase. A refused request answers
  *   {@link NanoErrorBodyV1} with the HTTP status listed at each code.
- * - The gateway is OpenAI-compatible chat completions under the workspace;
- *   `model` is a {@link NanoModeIdV1}. The server picks the provider model.
+ * - The gateway serves Chat Completions and advertises additional native
+ *   protocols under the workspace. The server picks the provider model.
  *
  * Fixtures: `fixtures/nano-server-v1.json` (all values synthetic).
  */
@@ -26,6 +26,14 @@ export const NANO_DESKTOP_SCOPES = ['openid', 'profile', 'offline_access', 'nano
 export const NANO_REDIRECT_PATH = '/callback' as const;
 /** The production issuer compiled into release builds. */
 export const NANO_DEFAULT_ISSUER = 'https://nanoagents.ru' as const;
+
+/** GET /workspaces/{workspaceId}/gateway/v1/capabilities, when implemented. */
+export interface NanoGatewayCapabilitiesV1 {
+  readonly dialects: Readonly<Partial<Record<
+    'chat-completions' | 'responses' | 'messages' | 'gemini',
+    readonly NanoModeIdV1[]
+  >>>;
+}
 
 // ---------------------------------------------------------------------------
 // Discovery

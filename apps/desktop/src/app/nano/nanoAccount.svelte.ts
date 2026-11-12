@@ -12,6 +12,7 @@ import {
   type NanoLinkV1,
   type NanoModeV1,
 } from '../../host-api/nanoAccountClient';
+import { NANO_SOURCE_HARNESSES } from './nanoView';
 
 export type NanoAccountAction = 'sign-in' | 'cancel' | 'sign-out' | 'workspace' | 'refresh' | 'link' | 'cloud';
 
@@ -26,7 +27,13 @@ const START_DELAY_MS = 300;
 function catalogFingerprint(status: NanoAccountStatusV1): string {
   const signedIn = status.state === 'signed-in';
   const modes = signedIn ? (status.entitlements?.modes ?? []) : [];
-  return JSON.stringify([signedIn, status.selectedWorkspaceId, modes.map((mode) => [mode.id, mode.available])]);
+  return JSON.stringify([
+    signedIn,
+    status.selectedWorkspaceId,
+    signedIn && status.capabilities?.gateway,
+    signedIn && status.entitlements?.features.localAgent,
+    modes.map((mode) => [mode.id, mode.name, mode.available]),
+  ]);
 }
 
 /**
@@ -108,6 +115,8 @@ export class NanoAccount {
     if (key === this.catalogKey) return;
     this.catalogKey = key;
     forgetHarnessCatalogs(NANO_HARNESS);
+    // Agents with a Nano model source list the same modes as a separate group.
+    for (const harness of NANO_SOURCE_HARNESSES) forgetHarnessCatalogs(harness);
     this.catalogRevision += 1;
   }
 

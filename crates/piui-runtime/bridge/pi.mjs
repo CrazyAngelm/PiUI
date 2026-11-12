@@ -14,6 +14,7 @@ export async function createPiAdapter(config, emit) {
   // host-owned agent directory and a local relay. Everything it adds is gated
   // on `nano`; the Pi lane below is unchanged.
   const nano = config.harness === "nano";
+  const nanoProvider = nano && config.model ? config.model.provider : "nano";
   if (config.harness !== "pi" && !nano) throw fail("wrong-harness", "The Pi adapter received an invalid harness configuration.");
   // The per-session relay key reaches this bridge only through its own
   // process environment (`PIUI_NANO_RELAY_KEY`, set by the host for this one
@@ -34,8 +35,8 @@ export async function createPiAdapter(config, emit) {
     }
     // A reopened or resumed session may come without a model: Pi then keeps
     // the one the session recorded (checked to be a Nano model after start).
-    if (config.model != null && (config.model.provider !== "nano" || !text(config.model.id))) {
-      throw fail("unsupported-settings", "Nano sessions can only use a Nano model.");
+    if (config.model != null && ((nanoProvider !== "nano" && !/^nano-external-[a-f0-9]{32}$/u.test(nanoProvider)) || !text(config.model.id))) {
+      throw fail("unsupported-settings", "The Nano session model source is invalid.");
     }
     if (config.thinkingLevel) throw fail("unsupported-settings", "Nano models have no thinking levels.");
     // Without the guard the native permission mode would run bash, write and
@@ -137,7 +138,11 @@ export async function createPiAdapter(config, emit) {
 
   const catalogOnly = !nano && config.catalogOnly === true;
   // Nano never passes `--approve`: project `.pi` resources stay untrusted.
-  const commandArgs = [...config.runtimeArgs, "--mode", "rpc", ...(nano ? ["--no-approve", "--offline"] : ["--approve"]), "--session-dir", config.sessionDir];
+  const bundledDir = nano ? join(config.nano.agentDir, "bundled") : undefined;
+  const commandArgs = [
+    ...(bundledDir ? ["--require", join(bundledDir, "relay-auth.cjs")] : []),
+    ...config.runtimeArgs, "--mode", "rpc", ...(nano ? ["--no-approve", "--offline"] : ["--approve"]), "--session-dir", config.sessionDir,
+  ];
   if (catalogOnly) {
     commandArgs.push("--no-session");
   } else {
@@ -147,23 +152,27 @@ export async function createPiAdapter(config, emit) {
   }
   // Pi 1.4.0 exits when `--provider` comes without `--model`, so a Nano start
   // without a model passes neither and lets Pi restore the session's model.
-  if (nano) { if (config.model) commandArgs.push("--provider", "nano", "--model", config.model.id); }
+  if (nano) { if (config.model) commandArgs.push("--provider", nanoProvider, "--model", config.model.id); }
   else {
     if (config.model?.provider) commandArgs.push("--provider", config.model.provider);
     if (config.model?.id) commandArgs.push("--model", config.model.id);
     if (config.thinkingLevel) commandArgs.push("--thinking", config.thinkingLevel);
   }
-  if (nano) {
-    // `--no-extensions` turns off discovered, configured and built-in
-    // extensions (cli.md) but an explicit `-e` path still loads, so the guard
-    // is the only extension. `--tools` and `--no-tools` select tools by name and
-    // do not unload an extension, so they never conflict with `-e`.
-    if (Array.isArray(effectiveAllowedTools)) {
-      if (effectiveAllowedTools.length === 0) commandArgs.push("--no-tools");
-      else commandArgs.push("--tools", effectiveAllowedTools.join(","));
+  if (bundledDir) {
+    const windows = process.platform === "win32";
+    const windowsShell = "nano_powershell";
+    const nativeTools = windows
+      ? (effectiveAllowedTools ?? ["read", "edit", "write", "bash"]).map((name) => name === "bash" ? windowsShell : name)
+      : effectiveAllowedTools;
+    // Disable discovery and explicitly load only the host's bundled assets.
+    if (Array.isArray(nativeTools)) {
+      if (nativeTools.length === 0) commandArgs.push("--no-tools");
+      else commandArgs.push("--tools", nativeTools.join(","));
     }
-    commandArgs.push("--no-extensions");
+    commandArgs.push("--no-skills", "--skill", join(bundledDir, "bes-deep-mode", "SKILL.md"));
+    commandArgs.push("--no-extensions", "-e", join(bundledDir, "skill-paths.ts"));
     if (config.nano.guardExtension) commandArgs.push("-e", config.nano.guardExtension);
+    if (nativeTools?.includes(windowsShell)) commandArgs.push("-e", join(bundledDir, "windows-powershell.ts"));
   } else if (Array.isArray(effectiveAllowedTools)) {
     if (effectiveAllowedTools.length === 0) commandArgs.push("--no-tools", "--no-extensions");
     else commandArgs.push("--tools", effectiveAllowedTools.join(","), "--no-extensions");
@@ -172,14 +181,15 @@ export async function createPiAdapter(config, emit) {
   // Nano starts Pi from a cleared environment: an OS allowlist plus the Nano
   // variables. Nothing else is inherited, so no provider API key, token or
   // proxy credential of the user reaches the agent or its shell tools. The
-  // allowlist is what a program started by `bash` needs to run at all (system
+  // allowlist is what a program started by a shell tool needs to run (system
   // directories, executable lookup, temp and profile locations, locale); it
-  // holds no secrets. Proxy variables are left out on purpose: they can embed
+  // holds no secrets. The preload consumes NANO_RELAY_KEY before Pi starts.
+  // Proxy variables are left out on purpose: they can embed
   // credentials and the relay is on loopback.
   function nanoChildEnvironment(lane) {
     const windows = process.platform === "win32";
     const exact = new Set(windows ? [
-      "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "PATH", "TEMP", "TMP", "USERPROFILE",
+      "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "PATH", "NODEFAULTCURRENTDIRECTORYINEXEPATH", "TEMP", "TMP", "USERPROFILE",
       "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
       "PROGRAMW6432", "COMMONPROGRAMFILES", "COMMONPROGRAMFILES(X86)", "COMMONPROGRAMW6432", "ALLUSERSPROFILE",
       "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS", "USERNAME", "USERDOMAIN", "COMPUTERNAME",
@@ -202,6 +212,7 @@ export async function createPiAdapter(config, emit) {
       PI_SKIP_VERSION_CHECK: "1",
       PI_TELEMETRY: "0",
       NANO_RELAY_KEY: nanoRelayKey,
+      NANO_RELAY_PROVIDER: nanoProvider,
     };
   }
 
@@ -368,7 +379,7 @@ export async function createPiAdapter(config, emit) {
     ...(nano ? {} : nativeModelFeatures?.getSupportedThinkingLevels ? { thinkingLevels: nativeModelFeatures.getSupportedThinkingLevels(candidate) } : Array.isArray(candidate.thinkingLevels) ? { thinkingLevels: candidate.thinkingLevels.filter((x) => typeof x === "string") } : {}),
   } : undefined;
   // A Nano session lists only Nano models, never another provider's.
-  const mapModels = (list) => (Array.isArray(list) ? list : []).map(mapModel).filter((entry) => entry && (!nano || entry.provider === "nano"));
+  const mapModels = (list) => (Array.isArray(list) ? list : []).map(mapModel).filter((entry) => entry && (!nano || entry.provider === nanoProvider));
   const historyBlock = (entry, useEntryId) => {
     if (entry?.type !== "message" || !entry.message) return undefined;
     const role = entry.message.role;
@@ -518,6 +529,12 @@ export async function createPiAdapter(config, emit) {
     }
     if (/model[^\n]*(not found|unknown|unavailable)|unsupported[^\n]*model|\b404\b/.test(detail)) {
       return "The selected Pi model is unavailable.";
+    }
+    if (detail.includes("subscription_sharing_workplace_individual_usage_limit_exceeded")) {
+      return "Your ChatGPT workspace usage limit was reached. Open Nano account settings to manage ChatGPT usage.";
+    }
+    if (detail.includes("subscription_sharing_usage_limit_exceeded")) {
+      return "Your ChatGPT plan usage limit was reached. Open Nano account settings to manage ChatGPT usage.";
     }
     if (/rate[ _-]?limit|quota|too many requests|\b429\b|overloaded|capacity/.test(detail)) {
       return "The Pi model provider is temporarily unavailable.";
@@ -766,10 +783,10 @@ export async function createPiAdapter(config, emit) {
     state = await request("get_state");
     // Without a requested model Pi restored the session's own (or the private
     // directory's default); anything but a Nano model is refused, never used.
-    if (nano && !config.model && state?.model?.provider !== "nano") {
+    if (nano && (state?.model?.provider !== nanoProvider || (config.model && state.model.id !== config.model.id))) {
       disposing = true;
       try { child.kill(); } catch {}
-      throw fail("unsupported-settings", "This session does not use a Nano model.");
+      throw fail("unsupported-settings", "The Nano session did not start on its selected model source.");
     }
     model = mapModel(state.model);
     const modelResult = await request("get_available_models");
@@ -889,7 +906,14 @@ export async function createPiAdapter(config, emit) {
         // Both modes use `prompt`: Pi queues it as a follow-up while a run is
         // streaming and starts a run when idle. RPC `follow_up` only queues, so
         // an idle follow-up would be admitted without ever running.
-        try { await request("prompt", { message: text, streamingBehavior: "followUp", ...extra }); }
+        try {
+          const result = await request("prompt", { message: text, streamingBehavior: "followUp", ...extra });
+          // A local slash command finishes in the acknowledgement itself.
+          if (result?.disposition === "handled") {
+            admittedTurns = Math.max(0, admittedTurns - 1);
+            emit({ type: "turnCompleted", outcome: "succeeded" });
+          }
+        }
         catch (error) { admittedTurns = Math.max(0, admittedTurns - 1); throw error; }
       }
       return { accepted: true };
@@ -904,7 +928,7 @@ export async function createPiAdapter(config, emit) {
     async setModel({ model: requested, thinkingLevel, serviceTier }) {
       if (serviceTier != null) throw fail("unsupported-settings", "This harness does not support service tiers.");
       if (!requested?.id || !requested?.provider) throw fail("invalid-request", "Pi model selection requires a provider and model id.");
-      if (nano && (requested.provider !== "nano" || thinkingLevel)) throw fail("unsupported-settings", "Nano sessions can only use a Nano model without a thinking level.");
+      if (nano && (requested.provider !== nanoProvider || thinkingLevel)) throw fail("unsupported-settings", "Nano sessions keep their model source and have no thinking levels.");
       model = mapModel(await request("set_model", { provider: requested.provider, modelId: requested.id }));
       if (thinkingLevel) await request("set_thinking_level", { level: thinkingLevel });
     },

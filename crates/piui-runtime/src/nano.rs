@@ -25,6 +25,30 @@ use std::path::PathBuf;
 /// guard before `bash`, `write` and `edit` in `native` permission mode.
 pub const NANO_GUARD_EXTENSION_SOURCE: &str = include_str!("../bridge/nano-guard.ts");
 
+/// Trusted files written below the Nano agent directory's `bundled/` folder.
+pub const NANO_BUNDLED_ASSETS: &[(&str, &str)] = &[
+    (
+        "relay-auth.cjs",
+        include_str!("../bridge/bundled/relay-auth.cjs"),
+    ),
+    (
+        "skill-paths.ts",
+        include_str!("../bridge/bundled/skill-paths.ts"),
+    ),
+    (
+        "windows-powershell.ts",
+        include_str!("../bridge/bundled/windows-powershell.ts"),
+    ),
+    (
+        "bes-deep-mode/SKILL.md",
+        include_str!("../bridge/bundled/bes-deep-mode/SKILL.md"),
+    ),
+    (
+        "bes-deep-mode/LICENSE",
+        include_str!("../bridge/bundled/bes-deep-mode/LICENSE"),
+    ),
+];
+
 /// Longest relay key the runtime accepts, in bytes.
 const MAX_RELAY_KEY_BYTES: usize = 512;
 
@@ -43,6 +67,7 @@ pub const NANO_WINDOWS_ENVIRONMENT: &[&str] = &[
     "COMSPEC",
     "PATHEXT",
     "PATH",
+    "NODEFAULTCURRENTDIRECTORYINEXEPATH",
     "TEMP",
     "TMP",
     "USERPROFILE",
@@ -165,6 +190,9 @@ pub struct NanoRuntimeLaunch {
     /// Pi agent directory (`PI_CODING_AGENT_DIR`) with the host-written
     /// `models.json`; never the user's own `~/.pi/agent`.
     pub agent_dir: PathBuf,
+    /// Common application-owned cache for the verified bundled runtime.
+    #[serde(skip)]
+    pub bundle_cache_dir: PathBuf,
     /// Absolute path of the written guard extension; `None` in `full-access`.
     pub guard_extension: Option<PathBuf>,
     #[serde(skip)]
@@ -192,6 +220,7 @@ mod tests {
         assert_eq!(format!("{key:#?}"), "NanoRelayKey(<redacted>)");
         let launch = NanoRuntimeLaunch {
             agent_dir: PathBuf::from("agent"),
+            bundle_cache_dir: PathBuf::from("runtime"),
             guard_extension: None,
             relay_key: key,
         };

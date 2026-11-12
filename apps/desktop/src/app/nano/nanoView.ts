@@ -1,4 +1,20 @@
 import type { NanoAccountStatusV1, NanoCreditsV1, NanoModeLockV1, NanoModeTierV1, NanoModeV1 } from '../../host-api/nanoAccountClient';
+import { NANO_CODEX_MODEL_PROVIDER, NANO_GOOSE_MODEL_PROVIDER, NANO_MODEL_PROVIDER, NANO_PRIME_MODEL_PROVIDER } from '../../../../../contracts/nano-account-v1';
+
+/**
+ * Harnesses other than `nano` whose model catalog carries the account's Nano modes as
+ * a separate group identified by the harness's Nano provider. The host
+ * builds that group from the entitlements on every request, so it follows the account
+ * like the Nano catalog does and is never remembered across sessions.
+ */
+export const NANO_SOURCE_HARNESSES: readonly string[] = ['acp:opencode', 'prime-agent', 'codex', 'acp:goose'];
+
+export function nanoSourceProvider(harness: string): string {
+  if (harness === 'prime-agent') return NANO_PRIME_MODEL_PROVIDER;
+  if (harness === 'codex') return NANO_CODEX_MODEL_PROVIDER;
+  if (harness === 'acp:goose') return NANO_GOOSE_MODEL_PROVIDER;
+  return NANO_MODEL_PROVIDER;
+}
 
 /** English source strings; the views translate them through the locale catalog. */
 export const NANO_LOCK_COPY: Readonly<Record<NanoModeLockV1, string>> = {

@@ -249,6 +249,11 @@ input.on("line", (line) => {
       return;
     }
     if (message.method === "thread/resume") threadId = message.params.threadId;
+    if (process.argv.includes("--nano-named-native-provider")
+      && message.params.modelProvider !== "nano-codex-subscription") {
+      send({ id: message.id, error: { code: -32602, message: "expected original native provider" } });
+      return;
+    }
     const turns = activeResumeFixture && message.method === "thread/resume"
       ? [{ id: "active-resumed-turn", status: "inProgress", items: [] }]
       : [];
@@ -267,7 +272,7 @@ input.on("line", (line) => {
       thread: { id: threadId, path: rolloutPath, status: threadStatus, turns: message.method === "thread/resume" ? [] : turns },
       initialTurnsPage: message.method === "thread/resume" ? { data: turns, nextCursor: null, backwardsCursor: null } : null,
       model: "fixture-model",
-      modelProvider: "openai",
+      modelProvider: process.argv.includes("--nano-named-native-provider") ? "nano-codex-subscription" : "openai",
       cwd: process.argv.includes("--wrong-cwd") ? join(process.cwd(), "another-workspace")
         : process.argv.includes("--plain-cwd") ? process.cwd().slice(4) : process.cwd(),
       sandbox: effectiveSandbox,
@@ -501,7 +506,8 @@ input.on("line", (line) => {
     ] : [];
     send({ id: message.id, result: { data: [{ skills: [{ name: "Review", path: "/skills/review/SKILL.md", enabled: false }, ...extra] }] } });
   } else if (message.method === "config/read") {
-    const provider = process.argv.includes("--custom-model-provider") ? { model_provider: "fixture-gateway" } : {};
+    const provider = process.argv.includes("--nano-named-native-provider") ? { model_provider: "nano-codex-subscription" }
+      : process.argv.includes("--custom-model-provider") ? { model_provider: "fixture-gateway" } : {};
     const model = process.argv.includes("--configured-hidden-model") ? { model: "fixture-model" } : {};
     send({ id: message.id, result: { config: { ...provider, ...model, mcp_servers: { docs: { enabled: true, env: { TOKEN: "SECRET-MUST-NOT-LEAK" } } } } } });
   } else if (message.method === "mcpServerStatus/list") {

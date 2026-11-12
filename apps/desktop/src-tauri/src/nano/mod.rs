@@ -18,11 +18,14 @@ pub(crate) mod catalog;
 pub(crate) mod cloud_window;
 pub(crate) mod commands;
 pub(crate) mod launch;
+pub(crate) mod provider_commands;
+mod provider_prompt;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use piui_nano::external_providers::ExternalProviderRegistry;
 use piui_nano::status::{
     NanoAccountProtocolV1, NanoAccountStateV1, NanoAccountStatusV1, NanoServerInfoV1,
 };
@@ -51,6 +54,8 @@ pub(crate) struct NanoHost {
     cloud_profile_dir: PathBuf,
     /// Started by the first Nano launch; dropped with the application.
     relay: tokio::sync::OnceCell<Relay>,
+    external_providers: Arc<ExternalProviderRegistry>,
+    external_provider_prompt: tokio::sync::Mutex<()>,
     /// Fingerprint of the agent directory's current content.
     prepared: tokio::sync::Mutex<Option<String>>,
 }
@@ -74,12 +79,20 @@ impl NanoHost {
                 NanoAccount::new(config, prefs)
             }
         });
+        let provider_path = app_data_dir.join("nano-external-providers-v1.json");
+        let external_providers = if memory_store_only {
+            ExternalProviderRegistry::with_memory(provider_path)
+        } else {
+            ExternalProviderRegistry::new(provider_path)
+        };
         Self {
             safe_mode,
             account,
             agent_dir: app_data_dir.join("nano").join("pi-agent"),
             cloud_profile_dir,
             relay: tokio::sync::OnceCell::new(),
+            external_providers: Arc::new(external_providers),
+            external_provider_prompt: tokio::sync::Mutex::new(()),
             prepared: tokio::sync::Mutex::new(None),
         }
     }
@@ -113,13 +126,54 @@ impl NanoHost {
         catalog::catalog_models(&self.status())
     }
 
+    pub(crate) async fn external_catalog(
+        &self,
+    ) -> Vec<piui_runtime::workspace_runtime::NativeCatalogModel> {
+        if self.safe_mode || !cfg!(windows) {
+            return Vec::new();
+        }
+        let registry = self.external_providers.clone();
+        let api_key_registry = registry.clone();
+        let mut models: Vec<_> = tokio::task::spawn_blocking(move || {
+            api_key_registry
+                .available()
+                .unwrap_or_default()
+                .into_iter()
+                .map(
+                    |provider| piui_runtime::workspace_runtime::NativeCatalogModel {
+                        provider: Some(provider.provider_id()),
+                        id: provider.spec.model_id.clone(),
+                        name: provider.spec.name,
+                        thinking_levels: None,
+                        supports_fast: false,
+                    },
+                )
+                .collect()
+        })
+        .await
+        .unwrap_or_default();
+        if let Ok(status) = registry.chatgpt.status().await {
+            models.extend(status.models.into_iter().map(|model| {
+                piui_runtime::workspace_runtime::NativeCatalogModel {
+                    provider: Some(piui_nano::openai_subscription::CHATGPT_PROVIDER_ID.to_owned()),
+                    id: model.id,
+                    name: model.name,
+                    thinking_levels: None,
+                    supports_fast: false,
+                }
+            }));
+        }
+        models
+    }
+
     /// Narrows a live Nano session's model list to the modes the account may
     /// use now ([`catalog::retain_entitled`]).
     pub(crate) fn retain_entitled_models(
         &self,
         models: &mut Vec<piui_runtime::workspace_runtime::WorkspaceModel>,
+        provider: &str,
     ) {
-        catalog::retain_entitled(models, &self.status());
+        catalog::retain_entitled(models, &self.status(), provider);
     }
 
     /// Whether the account can start a Nano session now (the harness list
@@ -148,6 +202,10 @@ impl NanoHost {
             agent_dir: app_data_dir.join("nano").join("pi-agent"),
             cloud_profile_dir: app_data_dir.join("nano").join("cloud-profile"),
             relay: tokio::sync::OnceCell::new(),
+            external_providers: Arc::new(ExternalProviderRegistry::with_memory(
+                app_data_dir.join("nano-external-providers-v1.json"),
+            )),
+            external_provider_prompt: tokio::sync::Mutex::new(()),
             prepared: tokio::sync::Mutex::new(None),
         }
     }
@@ -288,13 +346,9 @@ pub(crate) mod tests {
     #[test]
     fn an_unusable_issuer_leaves_a_signed_out_status_with_the_error() {
         let host = NanoHost {
-            safe_mode: false,
             account: NanoConfig::from_parts(Some("http://example.com"), "0.3.0")
                 .and_then(|config| NanoAccount::with_store(config, None, None)),
-            agent_dir: PathBuf::from("agent"),
-            cloud_profile_dir: PathBuf::from("cloud"),
-            relay: tokio::sync::OnceCell::new(),
-            prepared: tokio::sync::Mutex::new(None),
+            ..NanoHost::for_tests(Path::new("unused"), false)
         };
         let status = host.status();
         assert_eq!(status.state, NanoAccountStateV1::SignedOut);

@@ -16,6 +16,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { stageWindowsNanoRuntime } from './nano-runtime/stage.mjs';
 import { PLATFORMS, ReleaseConfigError, releaseConfig, writeReleaseConfig } from './release-config.mjs';
 
 const BUNDLES = { windows: 'nsis', linux: 'deb,appimage', macos: 'app,dmg' };
@@ -50,14 +51,14 @@ export function releasePlan(root, platform, { configPath, windowsSigning, tauriC
   ];
 }
 
-function run({ cwd, command }) {
+function run({ cwd, command }, env = process.env) {
   const [program, ...args] = command;
-  const result = spawnSync(program, args, { cwd, stdio: 'inherit' });
+  const result = spawnSync(program, args, { cwd, env, stdio: 'inherit' });
   if (result.error) throw result.error;
-  if (result.status !== 0) process.exit(result.status ?? 1);
+  return result.status ?? 1;
 }
 
-function main(argv) {
+async function main(argv) {
   const platform = argv.find((argument) => !argument.startsWith('--'));
   const dryRun = argv.includes('--dry-run');
   const portable = argv.includes('--portable');
@@ -91,10 +92,36 @@ function main(argv) {
     tauriCli,
     portable,
   });
-  for (const step of plan) {
+  for (const [index, step] of plan.entries()) {
+    const bundlesNano = index === 0 && platform === 'windows';
+    if (bundlesNano) console.log('Stage the pinned Nano runtime for Windows x64.');
     console.log(`> ${step.command.join(' ')}`);
-    if (!dryRun) run(step);
+    if (dryRun) continue;
+    const staged = bundlesNano ? await stageWindowsNanoRuntime() : null;
+    try {
+      const env = staged ? { ...process.env, ...staged.env } : process.env;
+      if (staged) {
+        console.log(`Nano runtime Pi ${staged.env.PIUI_NANO_RUNTIME_VERSION}: ${staged.files} files, ${staged.bytes} archive bytes.`);
+        const smoke = {
+          cwd: root,
+          command: ['cargo', 'test', '--release', '--locked', '-p', 'piui-runtime', '--lib', 'bundled_nano'],
+        };
+        console.log(`> ${smoke.command.join(' ')}`);
+        const smokeStatus = run(smoke, env);
+        if (smokeStatus !== 0) {
+          process.exitCode = smokeStatus;
+          return;
+        }
+      }
+      const status = run(step, env);
+      if (status !== 0) {
+        process.exitCode = status;
+        return;
+      }
+    } finally {
+      staged?.dispose();
+    }
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) main(process.argv.slice(2));
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) await main(process.argv.slice(2));

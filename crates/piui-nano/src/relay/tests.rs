@@ -72,6 +72,30 @@ async fn raw(port: u16, request: String) -> String {
 }
 
 #[tokio::test]
+async fn revocation_releases_the_upstream_slot_without_downstream_polling() {
+    let counter = Arc::new(AtomicUsize::new(1));
+    let (close, closed) = oneshot::channel::<()>();
+    let stream = Guarded::new(
+        Box::pin(futures_util::stream::pending()),
+        InflightPermit {
+            counter: counter.clone(),
+        },
+        Box::pin(async move {
+            let _ = closed.await;
+        }),
+    );
+    close.send(()).expect("revoke the stream");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while counter.load(Ordering::SeqCst) != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the slot is released even when Hyper cannot poll");
+    drop(stream);
+}
+
+#[tokio::test]
 async fn streams_the_upstream_answer_without_buffering() {
     let s = setup(None).await;
     let (tx, rx) = mpsc::unbounded_channel();
@@ -766,9 +790,9 @@ async fn a_request_of_an_ended_generation_is_never_sent_upstream() {
         .send_gateway(
             before,
             "ses_test",
-            &["chat", "completions"],
-            reqwest::Method::POST,
-            Some(Bytes::from(chat_body("free"))),
+            "ws_synthetic01",
+            crate::account::GatewayRequest::Chat(NanoModeIdV1::Free),
+            Bytes::from(chat_body("free")),
             None,
         )
         .await;
@@ -778,4 +802,601 @@ async fn a_request_of_an_ended_generation_is_never_sent_upstream() {
     s.account
         .report_server_error(before, NanoError::CreditsExhausted);
     assert_eq!(s.account.status().last_error, None);
+}
+
+#[tokio::test]
+async fn responses_connector_exposes_and_forwards_only_verified_modes() {
+    let s = setup(None).await;
+    let generation = s.account.generation();
+    let workspace = "ws_synthetic01";
+    assert!(
+        s.account
+            .responses_modes(generation, workspace)
+            .await
+            .is_empty()
+    );
+    s.fake.state().gateway_dialects = json!({ "responses": ["free"] });
+    let modes = s.account.responses_modes(generation, workspace).await;
+    assert_eq!(modes, vec![NanoModeIdV1::Free]);
+    let lease = s
+        .relay
+        .register_codex_connector("codex-test", generation, workspace, modes)
+        .expect("Codex lease");
+    let client = test_client();
+    let base = lease.base_url();
+    let key = lease.key().expose();
+    let catalog: Value = client
+        .get(format!("{base}/models"))
+        .bearer_auth(key)
+        .send()
+        .await
+        .expect("catalog")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(catalog["data"].as_array().expect("model list").len(), 1);
+    assert_eq!(catalog["data"][0]["id"], "free");
+    let responses = |mode| {
+        client
+            .post(format!("{base}/responses"))
+            .bearer_auth(key)
+            .json(&json!({ "model": mode, "input": [] }))
+    };
+    assert_eq!(
+        responses("smart")
+            .send()
+            .await
+            .expect("locked mode")
+            .status(),
+        403
+    );
+    assert_eq!(post_at(&base, key, chat_body("free")).await.status(), 401);
+    assert_eq!(
+        responses("free")
+            .send()
+            .await
+            .expect("Responses request")
+            .status(),
+        200
+    );
+    let calls = s.fake.state().gateway_calls.clone();
+    assert_eq!(calls.len(), 1);
+    assert!(calls[0].path.ends_with("/gateway/v1/responses"));
+    assert_eq!(calls[0].authorization, "Bearer access-1");
+    s.account
+        .select_workspace("ws_synthetic02")
+        .await
+        .expect("switch workspace");
+    assert_eq!(s.account.generation(), generation);
+    assert_eq!(
+        responses("free")
+            .send()
+            .await
+            .expect("stale workspace lease")
+            .status(),
+        401
+    );
+    assert_eq!(s.fake.state().gateway_calls.len(), 1);
+}
+
+#[tokio::test]
+async fn goose_connector_forwards_only_its_selected_mode() {
+    let s = setup(None).await;
+    let lease = s
+        .relay
+        .register_goose_connector("goose-test", s.account.generation(), NanoModeIdV1::Free)
+        .expect("Goose lease");
+    let base = lease.base_url();
+    let key = lease.key().expose();
+    let catalog: Value = test_client()
+        .get(format!("{base}/models"))
+        .bearer_auth(key)
+        .send()
+        .await
+        .expect("catalog")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(catalog["data"].as_array().expect("model list").len(), 1);
+    assert_eq!(catalog["data"][0]["id"], "free");
+    assert_eq!(post_at(&base, key, chat_body("smart")).await.status(), 403);
+    assert_eq!(post_at(&base, key, chat_body("free")).await.status(), 200);
+    assert_eq!(s.fake.state().gateway_calls.len(), 1);
+}
+
+// Connector leases (ADR-050): synthetic evidence only (`FakeNano`).
+
+fn register_at(
+    s: &Setup,
+    session_id: &str,
+    generation: AccountGeneration,
+) -> Result<ConnectorLease, ConnectorLeaseError> {
+    s.relay.register_connector(
+        ConnectorHarness::OpenCodeAcp,
+        session_id,
+        ConnectorDialect::ChatCompletions,
+        generation,
+    )
+}
+
+fn open_lease(s: &Setup, session_id: &str) -> ConnectorLease {
+    register_at(s, session_id, s.account.generation()).expect("lease")
+}
+
+async fn post_at(base: &str, key: &str, body: String) -> reqwest::Response {
+    test_client()
+        .post(format!("{base}/chat/completions"))
+        .bearer_auth(key)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body)
+        .send()
+        .await
+        .expect("send")
+}
+
+async fn wait_until_connectors_closed(relay: &Relay) {
+    for _ in 0..200 {
+        if relay
+            .shared
+            .keys
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .connectors
+            .is_empty()
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the relay never closed its connector leases");
+}
+
+#[test]
+fn connector_lease_debug_is_redacted() {
+    let lease = ConnectorLease {
+        id: 9,
+        port: 4000,
+        harness: ConnectorHarness::OpenCodeAcp,
+        session_id: "ses-opencode-1".to_owned(),
+        dialect: ConnectorDialect::ChatCompletions,
+        key: ConnectorKey(SecretString::new("synthetic-connector-key".to_owned())),
+        shared: Weak::new(),
+    };
+    let debug = format!("{lease:?}");
+    assert!(!debug.contains("synthetic"), "{debug}");
+    assert!(debug.contains("ses-opencode-1"), "{debug}");
+    assert!(!format!("{:?}", lease.key()).contains("synthetic"));
+    assert_eq!(lease.base_url(), "http://127.0.0.1:4000/c/9/v1");
+    assert_eq!(lease.key().expose(), "synthetic-connector-key");
+}
+
+#[tokio::test]
+async fn a_lease_streams_its_own_namespace_with_the_fixed_upstream_request() {
+    let s = setup(None).await;
+    let lease = open_lease(&s, "ses-opencode-1");
+    assert_eq!(lease.harness(), ConnectorHarness::OpenCodeAcp);
+    assert_eq!(lease.session_id(), "ses-opencode-1");
+    assert_eq!(lease.dialect(), ConnectorDialect::ChatCompletions);
+    assert_eq!(
+        lease.base_url(),
+        format!("http://127.0.0.1:{}/c/{}/v1", s.relay.port(), lease.id())
+    );
+    let key = lease.key().expose().to_owned();
+    assert_ne!(key, s.session.key().expose());
+    assert_ne!(lease.id(), s.session.id());
+
+    let (tx, rx) = mpsc::unbounded_channel();
+    s.fake.state().gateway = Gateway::Stream(rx);
+    let body = chat_body("free");
+    let mut response = post_at(&lease.base_url(), &key, body.clone()).await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.headers()[reqwest::header::CONTENT_TYPE],
+        "text/event-stream"
+    );
+    tx.send(Bytes::from_static(b"data: one\n\n"))
+        .expect("send one");
+    let first = tokio::time::timeout(Duration::from_secs(5), response.chunk())
+        .await
+        .expect("first chunk arrives before the stream ends")
+        .expect("chunk")
+        .expect("some");
+    assert_eq!(first, Bytes::from_static(b"data: one\n\n"));
+    tx.send(Bytes::from_static(b"data: [DONE]\n\n"))
+        .expect("send done");
+    drop(tx);
+    let mut rest = Vec::new();
+    while let Some(chunk) = response.chunk().await.expect("chunk") {
+        rest.extend_from_slice(&chunk);
+    }
+    assert_eq!(rest, b"data: [DONE]\n\n");
+
+    // The upstream request is exactly the Pi lane's: fixed path, the host's
+    // access token, the body unchanged, an opaque tag and the device id.
+    let calls = s.fake.state().gateway_calls.clone();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0].path,
+        "/api/desktop/v1/workspaces/ws_synthetic01/gateway/v1/chat/completions"
+    );
+    assert_eq!(calls[0].body, Bytes::from(body));
+    assert_eq!(calls[0].authorization, "Bearer access-1");
+    assert!(!calls[0].authorization.contains(&key));
+    assert_eq!(calls[0].device, "dev_synthetic01");
+    let tag = calls[0].session.as_str();
+    assert!(
+        tag.len() == 36
+            && tag.starts_with("ses_")
+            && tag[4..].bytes().all(|c| c.is_ascii_hexdigit()),
+        "{tag}"
+    );
+    assert!(!tag.contains(&key));
+    assert!(!tag.contains(lease.session_id()));
+}
+
+#[tokio::test]
+async fn lease_and_session_keys_never_cross_namespaces() {
+    let s = setup(None).await;
+    let first = open_lease(&s, "ses-opencode-1");
+    let second = open_lease(&s, "ses-opencode-2");
+    let client = test_client();
+    let port = s.relay.port();
+    let pi_key = s.session.key().expose().to_owned();
+    let lease_key = first.key().expose().to_owned();
+    let pi = s.session.id();
+    let own = first.id();
+    let sibling = second.id();
+
+    for (path, key, status) in [
+        (format!("/c/{own}/v1/models"), &lease_key, 200),
+        // A lease key opens no Pi namespace, including the shared `/v1`.
+        ("/v1/models".to_owned(), &lease_key, 401),
+        (format!("/s/{pi}/v1/models"), &lease_key, 401),
+        (format!("/s/{own}/v1/models"), &lease_key, 401),
+        // Nor another lease's namespace.
+        (format!("/c/{sibling}/v1/models"), &lease_key, 401),
+        // A Pi session key opens no connector namespace.
+        (format!("/c/{own}/v1/models"), &pi_key, 401),
+        (format!("/c/{pi}/v1/models"), &pi_key, 401),
+        ("/v1/models".to_owned(), &pi_key, 200),
+        (format!("/s/{pi}/v1/models"), &pi_key, 200),
+        // No other route, nesting or malformed lease number.
+        (format!("/c/{own}/v1/embeddings"), &lease_key, 404),
+        (format!("/c/{own}/v1/responses"), &lease_key, 405),
+        (format!("/c/{own}/v1/messages"), &lease_key, 404),
+        (format!("/c/{own}/s/{pi}/v1/models"), &lease_key, 404),
+        (format!("/s/{pi}/c/{own}/v1/models"), &lease_key, 404),
+        ("/c/abc/v1/models".to_owned(), &lease_key, 404),
+        ("/c//v1/models".to_owned(), &lease_key, 404),
+        (format!("/c/{own}/models"), &lease_key, 404),
+    ] {
+        let response = client
+            .get(format!("http://127.0.0.1:{port}{path}"))
+            .bearer_auth(key)
+            .send()
+            .await
+            .expect("send");
+        assert_eq!(response.status(), status, "{path}");
+    }
+
+    for url in [s.relay.base_url(), s.session.base_url(), second.base_url()] {
+        let response = post_at(&url, &lease_key, chat_body("free")).await;
+        assert_eq!(response.status(), 401, "{url}");
+    }
+    let response = post_at(&first.base_url(), &pi_key, chat_body("free")).await;
+    assert_eq!(response.status(), 401);
+    let get_chat = client
+        .get(format!("{}/chat/completions", first.base_url()))
+        .bearer_auth(&lease_key)
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(get_chat.status(), 405);
+
+    let headers = bearer_headers(&lease_key);
+    assert!(matches!(
+        s.relay.shared.check_key(&headers, None),
+        KeyCheck::Refused
+    ));
+    assert!(matches!(
+        s.relay.shared.check_key(&headers, Some(own)),
+        KeyCheck::Refused
+    ));
+    assert!(matches!(
+        s.relay
+            .shared
+            .check_connector_key(&bearer_headers(&pi_key), own, Route::Chat),
+        KeyCheck::Refused
+    ));
+    assert!(s.fake.state().gateway_calls.is_empty());
+}
+
+#[tokio::test]
+async fn a_lease_is_scoped_to_the_entitled_nano_modes() {
+    let s = setup(Some(server_fixture("entitlementsFree"))).await;
+    let lease = open_lease(&s, "ses-opencode-1");
+    let key = lease.key().expose().to_owned();
+    let base = lease.base_url();
+
+    let listed: Value = test_client()
+        .get(format!("{base}/models"))
+        .bearer_auth(&key)
+        .send()
+        .await
+        .expect("send")
+        .json()
+        .await
+        .expect("json");
+    let models = listed["data"].as_array().expect("data");
+    let ids: Vec<&str> = models
+        .iter()
+        .map(|model| model["id"].as_str().expect("id"))
+        .collect();
+    assert_eq!(ids, ["free"]);
+    assert!(models.iter().all(|model| model["owned_by"] == "nano"));
+
+    for model in ["smart", "gpt-5", "openai/gpt-4o", ""] {
+        let (status, error) = openai_error_of(post_at(&base, &key, chat_body(model)).await).await;
+        assert_eq!(
+            (status, error["code"].as_str()),
+            (403, Some("nano_mode_locked")),
+            "{model}"
+        );
+    }
+    assert!(s.fake.state().gateway_calls.is_empty());
+    assert_eq!(post_at(&base, &key, chat_body("free")).await.status(), 200);
+    assert_eq!(s.fake.state().gateway_calls.len(), 1);
+}
+
+#[tokio::test]
+async fn a_harness_session_holds_at_most_one_live_lease() {
+    let s = setup(None).await;
+    let first = open_lease(&s, "ses-opencode-1");
+    assert_eq!(
+        register_at(&s, "ses-opencode-1", s.account.generation()).err(),
+        Some(ConnectorLeaseError::AlreadyLeased)
+    );
+    let second = open_lease(&s, "ses-opencode-2");
+    assert_ne!(first.id(), second.id());
+    assert_ne!(first.key().expose(), second.key().expose());
+    for invalid in ["", "ses\nopencode", "ses\topencode"] {
+        assert_eq!(
+            register_at(&s, invalid, s.account.generation()).err(),
+            Some(ConnectorLeaseError::InvalidSessionId),
+            "{invalid:?}"
+        );
+    }
+
+    first.revoke();
+    let again = open_lease(&s, "ses-opencode-1");
+    assert_eq!(
+        post_at(&again.base_url(), again.key().expose(), chat_body("free"))
+            .await
+            .status(),
+        200
+    );
+
+    let before = s.account.generation();
+    s.account.sign_out(false).await.expect("sign out");
+    assert_eq!(
+        register_at(&s, "ses-opencode-3", before).err(),
+        Some(ConnectorLeaseError::SignInRequired)
+    );
+    wait_until_connectors_closed(&s.relay).await;
+}
+
+#[tokio::test]
+async fn revoking_a_lease_cuts_its_stream_and_refuses_its_key_only() {
+    let s = setup(None).await;
+    let lease = open_lease(&s, "ses-opencode-1");
+    let sibling = open_lease(&s, "ses-opencode-2");
+    let key = lease.key().expose().to_owned();
+    let url = lease.base_url();
+    let (tx, rx) = mpsc::unbounded_channel();
+    s.fake.state().gateway = Gateway::Stream(rx);
+    let mut response = post_at(&url, &key, chat_body("free")).await;
+    assert_eq!(response.status(), 200);
+    tx.send(Bytes::from_static(b"data: one\n\n")).expect("send");
+    let first = tokio::time::timeout(Duration::from_secs(5), response.chunk())
+        .await
+        .expect("first chunk")
+        .expect("chunk");
+    assert!(first.is_some());
+
+    lease.revoke();
+    let ended = tokio::time::timeout(Duration::from_secs(5), response.chunk())
+        .await
+        .expect("the stream ends with its lease");
+    assert!(
+        !matches!(ended, Ok(Some(_))),
+        "no data after the revocation"
+    );
+    let _ = tx.send(Bytes::from_static(b"data: late\n\n"));
+    wait_for_inflight(&s.relay, 0).await;
+    assert_eq!(post_at(&url, &key, chat_body("free")).await.status(), 401);
+
+    // Its sibling lease and the Pi session are untouched, and the Pi
+    // session ends without touching the lease.
+    let sibling_url = sibling.base_url();
+    let sibling_key = sibling.key().expose().to_owned();
+    assert_eq!(
+        post_at(&sibling_url, &sibling_key, chat_body("free"))
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(
+        post(&s.relay, s.session.key().expose(), chat_body("free"))
+            .await
+            .status(),
+        200
+    );
+    drop(s.session);
+    assert_eq!(
+        post_at(&sibling_url, &sibling_key, chat_body("free"))
+            .await
+            .status(),
+        200
+    );
+}
+
+#[tokio::test]
+async fn dropping_a_lease_ends_its_pending_upstream_request() {
+    let s = setup(None).await;
+    s.fake.state().gateway = Gateway::Hang;
+    let lease = open_lease(&s, "ses-opencode-1");
+    let url = lease.base_url();
+    let key = lease.key().expose().to_owned();
+    let pending = tokio::spawn(async move { post_at(&url, &key, chat_body("free")).await });
+    wait_for_gateway_calls(&s.fake, 1).await;
+
+    drop(lease);
+    let response = tokio::time::timeout(Duration::from_secs(5), pending)
+        .await
+        .expect("the request ends when its lease is dropped")
+        .expect("task");
+    let (status, error) = openai_error_of(response).await;
+    assert_eq!(
+        (status, error["code"].as_str()),
+        (401, Some("nano_sign_in_required"))
+    );
+    wait_for_inflight(&s.relay, 0).await;
+}
+
+#[tokio::test]
+async fn sign_out_retires_leases_and_cuts_their_streams() {
+    let s = setup(None).await;
+    let lease = open_lease(&s, "ses-opencode-1");
+    let key = lease.key().expose().to_owned();
+    let url = lease.base_url();
+    let (tx, rx) = mpsc::unbounded_channel();
+    s.fake.state().gateway = Gateway::Stream(rx);
+    let mut response = post_at(&url, &key, chat_body("free")).await;
+    assert_eq!(response.status(), 200);
+    tx.send(Bytes::from_static(b"data: one\n\n")).expect("send");
+    let first = tokio::time::timeout(Duration::from_secs(5), response.chunk())
+        .await
+        .expect("first chunk")
+        .expect("chunk");
+    assert!(first.is_some());
+
+    s.account.sign_out(false).await.expect("sign out");
+    wait_until_connectors_closed(&s.relay).await;
+    let ended = tokio::time::timeout(Duration::from_secs(5), response.chunk())
+        .await
+        .expect("the stream ends after sign-out");
+    assert!(!matches!(ended, Ok(Some(_))), "no data after sign-out");
+
+    // The retired key answers `nano_sign_in_required` on its own namespace
+    // only: elsewhere it is an unknown key.
+    let (status, error) = openai_error_of(post_at(&url, &key, chat_body("free")).await).await;
+    assert_eq!(
+        (status, error["code"].as_str()),
+        (401, Some("nano_sign_in_required"))
+    );
+    assert_eq!(post(&s.relay, &key, chat_body("free")).await.status(), 401);
+    let headers = bearer_headers(&key);
+    assert!(matches!(
+        s.relay
+            .shared
+            .check_connector_key(&headers, lease.id(), Route::Chat),
+        KeyCheck::Retired
+    ));
+    assert!(matches!(
+        s.relay
+            .shared
+            .check_connector_key(&headers, lease.id() + 1, Route::Chat),
+        KeyCheck::Refused
+    ));
+    assert!(matches!(
+        s.relay.shared.check_key(&headers, None),
+        KeyCheck::Refused
+    ));
+    assert_eq!(s.fake.state().gateway_calls.len(), 1);
+}
+
+#[tokio::test]
+async fn a_new_generation_leases_the_same_session_afresh() {
+    let s = setup(None).await;
+    let old = open_lease(&s, "ses-opencode-1");
+    let old_key = old.key().expose().to_owned();
+    let old_url = old.base_url();
+    s.account.sign_out(false).await.expect("sign out");
+    wait_until_connectors_closed(&s.relay).await;
+
+    // The same person signs in again (a stored credential, as on restart).
+    s.store
+        .save(&SecretString::new("refresh-1".to_owned()))
+        .expect("store");
+    s.account.restore().await;
+    assert_eq!(s.account.status().state, NanoAccountStateV1::SignedIn);
+    let fresh = open_lease(&s, "ses-opencode-1");
+    assert_ne!(fresh.base_url(), old_url);
+    // Dropping the stale lease leaves the fresh one alone.
+    drop(old);
+    // Let the relay observe every published change first.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        post_at(&fresh.base_url(), fresh.key().expose(), chat_body("free"))
+            .await
+            .status(),
+        200
+    );
+    let (status, error) =
+        openai_error_of(post_at(&old_url, &old_key, chat_body("free")).await).await;
+    assert_eq!(
+        (status, error["code"].as_str()),
+        (401, Some("nano_sign_in_required"))
+    );
+}
+
+#[tokio::test]
+async fn close_all_sessions_also_retires_leases() {
+    let s = setup(None).await;
+    let lease = open_lease(&s, "ses-opencode-1");
+    let key = lease.key().expose().to_owned();
+    let url = lease.base_url();
+    s.relay.close_all_sessions();
+    let (status, error) = openai_error_of(post_at(&url, &key, chat_body("free")).await).await;
+    assert_eq!(
+        (status, error["code"].as_str()),
+        (401, Some("nano_sign_in_required"))
+    );
+    assert!(s.fake.state().gateway_calls.is_empty());
+    // The retired lease no longer holds the harness session.
+    let fresh = open_lease(&s, "ses-opencode-1");
+    assert_eq!(
+        post_at(&fresh.base_url(), fresh.key().expose(), chat_body("free"))
+            .await
+            .status(),
+        200
+    );
+}
+
+#[tokio::test]
+async fn a_lease_shares_the_account_concurrency_cap() {
+    let mut entitlements = server_fixture("entitlementsPaid");
+    entitlements["limits"]["maxConcurrentRequests"] = json!(1);
+    let s = setup(Some(entitlements)).await;
+    let lease = open_lease(&s, "ses-opencode-1");
+    let (tx, rx) = mpsc::unbounded_channel();
+    s.fake.state().gateway = Gateway::Stream(rx);
+    let held = post(&s.relay, s.session.key().expose(), chat_body("free")).await;
+    assert_eq!(held.status(), 200);
+
+    let refused = post_at(&lease.base_url(), lease.key().expose(), chat_body("free")).await;
+    let (status, error) = openai_error_of(refused).await;
+    assert_eq!(
+        (status, error["code"].as_str()),
+        (429, Some("nano_rate_limited"))
+    );
+    drop(tx);
+    let _ = held.bytes().await;
+    wait_for_inflight(&s.relay, 0).await;
+    assert_eq!(
+        post_at(&lease.base_url(), lease.key().expose(), chat_body("free"))
+            .await
+            .status(),
+        200
+    );
 }

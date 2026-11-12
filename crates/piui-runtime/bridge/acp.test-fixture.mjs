@@ -6,19 +6,38 @@
 // invalid params) and --no-session-id. Stdio MCP servers it receives are
 // answered back as the first agent message of the next prompt.
 import { createInterface } from 'node:readline';
+import { writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 
 const flag = name => process.argv.includes(name);
 if (flag('--version')) { process.stdout.write('fixture-agent 1.2.3\n'); process.exit(0); }
 const protocol = Number(process.argv.find(arg => arg.startsWith('--protocol='))?.split('=')[1] ?? 1);
 const send = value => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...value })}\n`);
 const notify = (sessionId, update) => send({ method: 'session/update', params: { sessionId, update } });
-const configMode = flag('--config-options');
-let currentModel = 'fixture-fast', currentMode = 'default', currentThought = 'medium';
+// --nano-models: an OpenCode-like flat model list of `provider/model` values
+// (the Nano provider plus a foreign one); --nano-group: a native list whose
+// group is named like the Nano provider. Both imply config options.
+const nanoModels = flag('--nano-models');
+const gooseModels = flag('--goose-models');
+let nanoHooks;
+if (nanoModels && process.env.PIUI_NANO_OPENCODE_READY && !flag('--missing-nano-guard')) {
+  const { default: plugin } = await import('./bundled/opencode-shell-env.mjs');
+  nanoHooks = await plugin();
+  if (flag('--stale-nano-guard')) writeFileSync(process.env.PIUI_NANO_OPENCODE_READY, 'stale');
+}
+const configMode = flag('--config-options') || nanoModels || gooseModels || flag('--nano-group');
+let currentModel = gooseModels ? process.env.GOOSE_MODEL : nanoModels ? 'nano/auto' : 'fixture-fast';
+let currentMode = gooseModels ? 'approve' : 'default', currentThought = 'medium';
+const modelOptions = () => nanoModels
+  ? [{ value: 'nano/auto', name: 'Nano/Auto' }, { value: 'nano/fast', name: 'Nano/Fast' }, { value: 'nano/smart', name: 'Nano/Smart' }, { value: 'other/gpt', name: 'Other/GPT' }]
+  : gooseModels
+    ? [{ value: process.env.GOOSE_MODEL, name: 'Selected model' }, { value: 'some-native-model', name: 'Native model' }]
+  : flag('--nano-group')
+    ? [{ group: 'nano', name: 'nano', options: [{ value: 'fixture-fast', name: 'Fixture Fast' }] }]
+    : [{ group: 'Fixture', name: 'Fixture', options: [{ value: 'fixture-fast', name: 'Fixture Fast' }, { value: 'fixture-deep', name: 'Fixture Deep', description: 'Slow' }] }];
 const configOptions = () => [
-  { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: currentModel, options: [
-    { group: 'Fixture', name: 'Fixture', options: [{ value: 'fixture-fast', name: 'Fixture Fast' }, { value: 'fixture-deep', name: 'Fixture Deep', description: 'Slow' }] },
-  ] },
-  { id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: currentMode, options: [{ value: 'default', name: 'Default' }, { value: 'plan', name: 'Plan', description: 'Read-only' }] },
+  { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: currentModel, options: modelOptions() },
+  { id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: currentMode, options: gooseModels ? [{ value: 'approve', name: 'Approve' }, { value: 'auto', name: 'Automatic' }] : [{ value: 'default', name: 'Default' }, { value: 'plan', name: 'Plan', description: 'Read-only' }] },
   { id: 'effort', name: 'Reasoning', category: 'thought_level', type: 'select', currentValue: currentThought, options: [{ value: 'low', name: 'Low' }, { value: 'medium', name: 'Medium' }, { value: 'high', name: 'High' }] },
   { id: 'brave', name: 'Brave', type: 'boolean', currentValue: false },
 ];
@@ -139,6 +158,14 @@ async function prompt(message) {
     const name = text.slice(4);
     say(`${name}=${process.env[name] === undefined ? 'absent' : 'visible'}`);
     end();
+  } else if (text === 'shell environment') {
+    const output = { env: {} };
+    await nanoHooks?.['shell.env']({ cwd: process.cwd() }, output);
+    const child = spawnSync(process.execPath, ['-e', 'process.stdout.write(process.env.OPENCODE_CONFIG_CONTENT ? "ENV_LEAK" : "ENV_CLEAN")'], {
+      env: { ...process.env, ...output.env }, encoding: 'utf8', windowsHide: true,
+    });
+    say(child.stdout);
+    end();
   } else if (text === 'settings?') {
     say(`model=${currentModel} mode=${currentMode} thought=${currentThought}`);
     end();
@@ -171,7 +198,8 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
     if (params.clientInfo?.name !== 'piui' || !/^\d+\.\d+\.\d+/.test(params.clientInfo?.version ?? '')) throw Error('clientInfo must name PiUI and its release');
     if (flag('--reject-initialize')) { send({ id, error: { code: -32602, message: 'Invalid params' } }); continue; }
     if (flag('--auth-initialize')) { send({ id, error: { code: -32000, message: 'Authentication required' } }); continue; }
-    send({ id, result: { ...(flag('--no-protocol') ? {} : { protocolVersion: protocol }), agentCapabilities: { loadSession: !flag('--no-load'), promptCapabilities: { image: false }, mcpCapabilities: { http: !flag('--no-http'), sse: false } }, authMethods: [{ id: 'agent-login', name: 'Agent login', description: 'Sign in using the agent' }, { id: 'api-key', name: 'API key\u0007' }], agentInfo: { name: 'fixture', version: '1.2.3' } } });
+    const agentInfo = gooseModels ? { name: 'goose', version: flag('--unverified-goose') ? '1.60.0' : '1.59.0' } : { name: 'fixture', version: '1.2.3' };
+    send({ id, result: { ...(flag('--no-protocol') ? {} : { protocolVersion: protocol }), agentCapabilities: { loadSession: !flag('--no-load'), promptCapabilities: { image: false }, mcpCapabilities: { http: !flag('--no-http'), sse: false } }, authMethods: [{ id: 'agent-login', name: 'Agent login', description: 'Sign in using the agent' }, { id: 'api-key', name: 'API key\u0007' }], agentInfo } });
   } else if (method === 'session/new' || method === 'session/load') {
     if (flag('--auth-required')) { send({ id, error: { code: -32000, message: 'Authentication required' } }); continue; }
     if (method === 'session/new' && flag('--reject-new')) { send({ id, error: { code: -32602, message: 'Invalid params' } }); continue; }
@@ -179,6 +207,10 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
     // the same short conversation.
     if (method === 'session/load' && !['saved', 'fixture-session'].includes(params.sessionId)) { send({ id, error: { code: -32002, message: 'Resource not found' } }); continue; }
     if (params.cwd.startsWith('\\\\?\\')) throw Error('verbatim cwd');
+    if (gooseModels) {
+      if (process.cwd() === params.cwd || params.mcpServers.length || !process.env.OPENAI_API_KEY) throw Error('Goose launch was not isolated');
+      if (method === 'session/new' && JSON.stringify(params._meta?.enabledExtensions) !== JSON.stringify([{ type: 'platform', name: 'developer', bundled: true }])) throw Error('Goose extensions were not restricted');
+    }
     for (const server of params.mcpServers.filter(server => server.type === 'http')) await callCoordinator(server);
     stdioServers = params.mcpServers.filter(server => server.type === undefined);
     if (method === 'session/load') {
@@ -202,7 +234,7 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
     currentMode = params.modeId;
     send({ id, result: {} });
   } else if (method === 'session/set_config_option') {
-    if (params.configId === 'model') currentModel = params.value;
+    if (params.configId === 'model' && !flag('--refuse-model-change')) currentModel = params.value;
     else if (params.configId === 'mode') currentMode = params.value;
     else if (params.configId === 'effort') currentThought = params.value;
     send({ id, result: { configOptions: configOptions() } });

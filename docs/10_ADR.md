@@ -1518,9 +1518,11 @@ and its provider and extension hooks cover the Nano additions.
 
 **Decision:**
 - `nano` is a built-in harness identity (identity grammar v3, additive). Its
-  native runtime is unmodified upstream Pi (at least 1.4.0) driven by the
-  shared Pi bridge in a Nano lane; its history is Pi JSONL in the host session
-  directory (`WorkspaceHistoryFormat::Pi`). No second chat format.
+  native runtime is upstream Pi (at least 1.4.0) driven by the shared Pi bridge
+  in a Nano lane. Windows x64 releases embed the pinned Node.js and Pi runtime
+  and the Windows search utilities required by Pi offline. The host publishes
+  the verified runtime atomically on first use. Its history is Pi JSONL in
+  the host session directory (`WorkspaceHistoryFormat::Pi`).
 - The Nano lane starts Pi with a private agent directory owned by the host
   (`PI_CODING_AGENT_DIR`), a host-written `models.json` with one provider
   `nano`, `--no-approve` (project `.pi` resources never load), telemetry off,
@@ -1536,10 +1538,15 @@ and its provider and extension hooks cover the Nano additions.
 - Models are the server's four modes (`auto`, `free`, `fast`, `smart`), shown
   with their tier, cost hint and lock reason. Concrete provider models are a
   server decision and are never named or promised.
-- A small Nano Pi extension asks before `bash`, `write` and `edit` in the
-  default `native` permission mode (approval cards); `read-only` passes Pi's
+- A small Nano Pi extension asks before shell commands, `write` and `edit` in
+  the default `native` permission mode (approval cards); `read-only` passes Pi's
   read tools only; `full-access` drops the prompts; `workspace-write` is
   refused. The agent runs as the user: not a sandbox.
+- The host supplies the BES Deep Mode skill and `/skill-paths` explicitly.
+  The Nano runtime disables discovery of other extensions and skills.
+  On Windows, Nano binds Pi's shell operations to the system PowerShell's
+  absolute path. The Node preload removes the relay key from the environment
+  before tool subprocesses can inherit it.
 - Fusion: Nano may be the sidekick (executor) of a Claude Code or Codex lead
   under Pi's rule. Nano as lead and as a managed-run coordinator needs host
   tools in the Pi lane and is refused until then.
@@ -1549,10 +1556,12 @@ coupling); `acp:nano` (no tool policy, no Fusion roles); a provider inside the
 user's own Pi (touches their configuration); a Pi fork; a server-minted agent
 token in the agent environment (exfiltratable and spendable elsewhere).
 
-**Consequences:** the first release runs on the user's installed Pi; bundling a
-pinned Node and Pi in the installer is a follow-up. The relay is the only new
-listener and is covered by tests for key, host, origin, path and streaming
-behaviour.
+**Consequences:** Windows x64 users can start the Nano lane without separately
+installing Pi or Node.js. Existing Pi installations keep their own launcher and
+configuration. The runtime is verified against the manifest embedded in the
+executable before spawn. This detects corruption and unexpected files in the
+runtime cache. The relay is covered by tests for key, host, origin, path and
+streaming behaviour.
 
 ---
 
@@ -1581,3 +1590,201 @@ server forbids framing, and it would share the app origin).
 Realtime voice and the talking portrait are available through the cloud
 window; a native chat-only client may follow once `/api/desktop/v1` offers a
 versioned session API.
+
+---
+
+## ADR-050 — Nano connector leases: the Nano account as a model group in other harnesses
+
+**Status:** Proposed 2026-11-12. Additive to ADR-048: the Pi-lane relay
+session, its `/v1` and `/s/<id>/v1` paths and the `PIUI_NANO_RELAY_KEY` ->
+`NANO_RELAY_KEY` key path are unchanged. Pilot scope: the OpenCode ACP
+harness, one lease per harness session.
+
+**Context:** a signed-in user wants the Nano modes offered as a separate model
+group inside each compatible harness, not only in the Nano lane. OpenCode
+over ACP can use an OpenAI Chat Completions provider at a configurable base
+URL with a bearer key. Handing it the Pi-lane relay key would widen the one
+documented exception for that key (AGENTS.md) and let one key serve two
+paths; handing it the access token or a gateway key is the token export that
+ADR-047 and ADR-048 reject.
+
+**Decision:**
+- The relay gains a second, separate key kind, the *connector lease*
+  (`ConnectorLease`, key type `ConnectorKey`). The host issues it with
+  `Relay::register_connector(harness, session_id, dialect, generation)`. It is
+  bound to a typed harness (`ConnectorHarness::OpenCodeAcp`, the only value),
+  the harness session id (one live lease per harness session), a typed
+  dialect (`ConnectorDialect::ChatCompletions`, the only value) and the
+  account generation the launch was gated on. An ended generation, a session
+  that already holds a live lease or an empty session id (or one with a
+  control character) registers nothing, with a typed `ConnectorLeaseError`.
+- Same listener, separate namespace: `POST /c/<id>/v1/chat/completions` and
+  `GET /c/<id>/v1/models`, the fixed allowlist of the Chat Completions dialect.
+  The relay adds no other route, dialect or protocol translation.
+- The namespaces share no key. A lease key is refused (a bare 401) on the
+  shared `/v1`, on every `/s/<id>/v1` and on every other lease's
+  `/c/<id>/v1`; a relay-session key is refused on every `/c/<id>/v1`. The key
+  is compared in constant time with the one lease of the requested namespace
+  before the body is read. A retired lease key answers
+  `nano_sign_in_required` only on its own `/c/<id>/v1`.
+- After the key check a lease request takes the existing relay path
+  unchanged: `Host`, `Origin` and `Sec-Fetch-*` checks, account
+  availability, entitled modes (`/models` lists only available modes; any
+  other model, including a provider model name, answers `nano_mode_locked`
+  before anything goes upstream), the entitlement size and concurrency caps
+  shared with relay sessions (no new caps), the upload deadline, the upstream
+  URL built only from the pinned issuer (`.../gateway/v1/chat/completions`)
+  with the host's access token and the existing diagnostics headers (the
+  device id and an opaque per-lease `ses_` tag), and the unbuffered native
+  SSE answer.
+- Revocation: dropping the lease or calling `revoke()` removes its key and
+  cuts its upload, upstream request and stream. The end of its generation
+  (sign-out, expiry, device revocation, a new sign-in) and
+  `Relay::close_all_sessions` retire it the same way. A relay session and a
+  lease end independently, and a later generation can lease the same harness
+  session again under a new number and key.
+- Secrets: the lease gives the host only its base URL
+  (`http://127.0.0.1:<port>/c/<id>/v1`) and a typed `ConnectorKey` (redacted
+  `Debug`, no `Display`, `Clone` or serialization). No new upstream credential
+  exists; the access and refresh tokens never leave the host. The key has no
+  value off this machine and no authority beyond its namespace of the relay.
+- Delivery is fixed only by the amendment below (the OpenCode pilot) and by
+  AGENTS.md beside the relay-key exception. No other code may pass a
+  `ConnectorKey` anywhere. It never reaches the WebView, an IPC payload or
+  event, a bridge frame, a file, a log, a test snapshot, the Lab or an
+  exported system file.
+
+**Rejected:** reusing the relay-session key (it widens the Pi-only key path
+and its namespaces); accepting lease keys on the shared `/v1` (a key would
+then serve every session); a second listener (another port to police, for no
+gain); giving the harness an access token or gateway key (exportable and
+spendable elsewhere); translating other protocols (Responses, Anthropic
+Messages) in the relay (that is prompt shaping, not forwarding); caps per
+connector (the account's entitlement caps already bound the relay).
+
+**Consequences:** the first part of this ADR is the foundational capability:
+`crates/piui-nano/src/relay.rs` and its synthetic tests (cross-namespace use,
+model scope, revoke/drop/sign-out/new generation, the shared cap, the fixed
+upstream request and streaming). The evidence is synthetic (`FakeNano`), not
+real-provider evidence.
+
+### Amendment 2026-11-12: host wiring for OpenCode (still Proposed)
+
+**Source and identity.** Nano catalog rows use `WorkspaceModel.provider = nano`
+and bare mode IDs. Native OpenCode IDs stay provider-qualified, so a native
+provider named `nano` retains its own models. The host records the selected
+source in its session registry with a backward-compatible default for existing
+records. The wire contracts stay unchanged. Only the shipped, trusted
+`opencode` entry has an ACP Nano source
+(`AcpAgents::supports_nano_source`: its id and `AgentSource::BuiltIn`); a stored
+or plugin descriptor with that id is refused (`NanoSourceUnavailable`) and never
+receives a key. There is no custom descriptor.
+
+**Delivery path (the exception recorded in AGENTS.md).** host
+(`NanoHost::launch_acp_source`: one connector lease per PiUI session, gated on
+the account generation and the Nano launch gate) -> `OPENCODE_CONFIG_CONTENT` in
+the environment of that session's own ACP bridge process -> the OpenCode child
+(the bridge removes the variable from its own environment after spawning). It is
+never in the `initialize` frame or another bridge frame, argv, a file, an IPC
+payload, a log or a catalog cache. The descriptor's pass-through names (API
+keys, proxies, a configuration path) are not passed on this source, and the
+agent's `XDG_*` folders are a host-owned private folder, so the user's own
+OpenCode configuration, credentials and history are neither read nor written
+and no global file is modified. The configuration enables only the `nano`
+provider with the entitled modes at read time, keeps OpenCode asking before
+shell commands and edits, and the bridge exposes only those modes.
+
+**Reach of the key.** The pilot requires the verified Windows OpenCode 1.19.4
+shell hook. The host supplies one bundled plugin and checks its startup
+marker before the session can accept a prompt. Its `shell.env` hook clears the
+provider configuration variable for shell subprocesses. The host disables
+project configuration, other plugins, MCP, LSP and formatters on this source.
+The local lease is scoped to its namespace and the account's entitled modes.
+It ends when the session ends, the account signs out, or a new sign-in starts.
+
+**Lifecycle.** A start or reopen on the Nano source passes the Nano launch gate
+or fails with `NANO_SIGN_IN_REQUIRED`; it never starts natively. A reopened
+session is started with its recorded Nano mode and fails if OpenCode does not
+report it (`invalid-model`). Changing between the sources inside a session is
+refused (`INVALID_ARGUMENT`); the other source needs a new session. Sign-out
+retires the lease, which cuts its streams, and drops the group from the next
+catalog. The catalog adds the account's current modes as a group only while a
+Nano session could start; those rows are never kept in the agent's remembered
+models or in the WebView's catalog snapshots.
+
+**Verification.** OpenCode 1.19.4 completed the native ACP test against a
+synthetic streaming server, including the credential-free shell environment.
+The installed Windows build then showed native models alongside all four
+entitled Nano modes and completed a real Nano turn in Free mode.
+Evidence: `evidence/nano-runtime-windows-20261112.json`.
+
+### Amendment 2026-11-12: Prime Agent connector (Proposed)
+
+Prime Agent's Windows 0.9.5 SDK can register an OpenAI Chat Completions provider
+in memory. The Nano source uses that SDK in the contained session bridge with
+host-owned paths and no connection to the shared Prime daemon. An ordinary
+Prime session keeps its native model catalog and launch path. A Nano-source
+session records the chosen source, gets only entitled modes through a
+generation-bound connector lease and keeps Prime native history. The catalog
+requires the verified SDK and launcher. Configuration that would introduce an
+unverified tool, plugin or external resource fails before native execution.
+
+The short-lived loopback lease is injected into the session bridge only and
+removed before the bridge imports the SDK or starts any native tool. The SDK's
+in-memory authentication entry supplies the lease to its model transport. The
+upstream Nano credential stays in the Rust host. A connected Prime session
+cannot change sources, and its lease retires with the session or Nano account
+generation.
+
+## ADR-051 — External API sources in Nano Pi (Proposed)
+
+Settings can connect a user-selected OpenAI Chat Completions model without a
+Nano sign-in. The Windows host asks for its API key in an app-owned masked
+native dialog. The WebView submits the name, HTTPS API base URL and model ID
+through `nano_providers_v1`. It never receives a credential or a loopback
+lease. The vault entry binds the key to the original endpoint and model, so a
+modified metadata file cannot redirect the credential. There is no file or
+process environment fallback for the API key.
+
+The existing loopback listener serves `/p/<lease>/v1` with a separate session
+lease. It forwards Chat Completions only to the pinned endpoint, with redirects
+disabled, after verifying the local credential and exact model. Its upload and
+stream are cancelled when the connection or the session ends. Signing out of
+Nano leaves external connections available. Safe mode starts neither source.
+
+Pi gets the same per-session key handoff as the Nano lane and the same guard,
+bundled skills and native JSONL. An external session gets its own host-owned
+agent directory, one model source, and no external API key. The model source
+stays fixed on resume. The provider ID in model metadata identifies a local
+connection and carries no credential. The feature does not add any authentication
+method to Pi's user-wide config. OAuth and API dialects other than Chat
+Completions require their own verified integration.
+
+## ADR-052 — Sign in with ChatGPT in Nano Pi (Proposed)
+
+The MIT-licensed, locally hosted Windows desktop supports one ChatGPT plan
+connection per app profile. The host opens the fixed OpenAI authorization URL
+in the system browser and reuses the existing one-shot loopback callback code
+with the ChatGPT redirect path. Each attempt binds state, nonce and PKCE to the
+same redirect. The Rust host exchanges the code with the issued client ID,
+validates the ID token with OpenAI's published keys, verifies issuer, audience,
+expiry and nonce, and requires the ChatGPT direct-plan scope before loading the
+account's visible model catalog. The stable host identifier and the issued
+account registration survive sign-out for reconnecting the same account.
+
+The host holds access tokens in memory and stores the rotating refresh token in
+Windows Credential Manager, with a reported memory-only fallback. OAuth codes,
+tokens and provider lease keys are absent from the settings contract. The
+WebView can ask the host to open only the fixed browser actions. The private
+Pi agent directory and the native JSONL journal keep no OpenAI credential.
+Catalog reads from the desktop use cached account metadata without network I/O.
+After restart the first request refreshes and checks the model catalog before
+using the selected model. Disconnect retires local leases and attempts remote
+revocation. Safe mode refuses the connection and never makes its requests.
+
+The existing external relay lease admits the selected model and stateless
+streamed requests only. It forwards to OpenAI's public `/v1/responses` endpoint.
+Native Pi builds prompts and calls local function tools via `additional_tools`.
+No Cloud or Nano subscription access is needed. This route follows the
+[official public integration](https://developers.openai.com/siwc/token-sharing-open-source)
+and its [Responses preview requirements](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).

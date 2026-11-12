@@ -1,4 +1,6 @@
 export async function createPrimeAdapter(config, emit, coordinatorRequest, boardRequest) {
+  const sourceEnvironment = process.env.PIUI_PRIME_NANO_SOURCE;
+  delete process.env.PIUI_PRIME_NANO_SOURCE;
   const { createHash } = await import("node:crypto");
   const { readFile, stat } = await import("node:fs/promises");
   const { createRequire } = await import("node:module");
@@ -6,6 +8,24 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
   const { pathToFileURL } = await import("node:url");
 
   const fail = (code, safeMessage) => Object.assign(new Error(code), { bridgeCode: code, safeMessage });
+  const NANO_PROVIDER = "nano-desktop-subscription";
+  const PRIME_NATIVE_PREFIX = "piui-prime-native:";
+  const nanoModel = config.model?.provider === NANO_PROVIDER;
+  let nanoSource;
+  if (sourceEnvironment !== undefined) {
+    const invalid = () => fail("invalid-request", "The Prime Nano source configuration is invalid.");
+    try { nanoSource = JSON.parse(sourceEnvironment); } catch { throw invalid(); }
+    const lease = /^http:\/\/127\.0\.0\.1:([1-9]\d{0,4})\/c\/[1-9]\d*\/v1$/.exec(nanoSource?.baseUrl);
+    if (!lease || Number(lease[1]) > 65535 || !/^[A-Za-z0-9_-]{43}$/.test(nanoSource?.key)
+      || !Array.isArray(nanoSource?.modes) || nanoSource.modes.length === 0
+      || !nanoSource.modes.every(mode => /^[a-z]+$/.test(mode?.id) && typeof mode?.id === "string" && typeof mode.name === "string")
+      || new Set(nanoSource.modes.map(mode => mode.id)).size !== nanoSource.modes.length
+      || !nanoModel || !nanoSource.modes.some(mode => mode.id === config.model?.id) || config.catalogOnly === true) throw invalid();
+  }
+  const exposedProvider = (provider) => !nanoSource && typeof provider === "string" && (provider === NANO_PROVIDER || provider.startsWith(PRIME_NATIVE_PREFIX))
+    ? PRIME_NATIVE_PREFIX + provider : provider;
+  const nativeProvider = (provider) => !nanoSource && typeof provider === "string" && provider.startsWith(PRIME_NATIVE_PREFIX)
+    ? provider.slice(PRIME_NATIVE_PREFIX.length) : provider;
   if (config.harness !== "prime-agent") throw fail("wrong-harness", "The Prime adapter received an invalid harness configuration.");
   if (![config.cwd, config.sessionDir, config.packageRoot, config.agentDir].every((value) => typeof value === "string" && isAbsolute(value))) {
     throw fail("runtime-unavailable", "The Prime runtime configuration is unavailable.");
@@ -16,7 +36,7 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
   if (config.permissionMode !== "native") {
     throw fail("unsupported-policy", "This Prime adapter currently supports only Prime's native permission policy.");
   }
-  if (config.nativeSubagents === false && (!Array.isArray(config.allowedTools) || config.allowedTools.includes("ipython"))) {
+  if (!nanoSource && config.nativeSubagents === false && (!Array.isArray(config.allowedTools) || config.allowedTools.includes("ipython"))) {
     throw fail("unsupported-policy", "Disabling native Prime RLM requires an enforced tool allowlist without ipython.");
   }
   if (config.nativeSubagents === true && Array.isArray(config.allowedTools) && !config.allowedTools.includes("ipython")) {
@@ -30,6 +50,13 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
   }
   if (config.kernelPython !== undefined && (typeof config.kernelPython !== "string" || !isAbsolute(config.kernelPython))) {
     throw fail("runtime-unavailable", "The configured Prime kernel runtime is invalid.");
+  }
+  if (nanoSource && (config.nativeSubagents === true || config.coordination === true || config.kernelPython !== undefined
+    || (config.resourceRules ?? []).length > 0 || config.pluginMcpServers?.length
+    || config.allowedTools?.some(name => !["bash", "edit", "board"].includes(name))
+    || (config.thinkingLevel && config.thinkingLevel !== "off")
+    || (config.serviceTier && config.serviceTier !== "standard"))) {
+    throw fail("unsupported-policy", "The Prime Nano source supports native Bash and edit tools without Prime RLM, custom resources or reasoning overrides.");
   }
 
   const packageRoot = resolve(config.packageRoot);
@@ -59,6 +86,10 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
   if (manifest?.name !== "prime-agent" || !atLeastMinimum(manifest?.version) || manifest?.exports?.["."]?.import !== "./dist/index.js") {
     throw fail("unsupported-version", "The installed Prime Agent version is not supported.");
   }
+  const VERIFIED_NANO_PRIME_VERSION = "0.9.5";
+  if (nanoSource && manifest.version !== VERIFIED_NANO_PRIME_VERSION) {
+    throw fail("unsupported-version", "The installed Prime Agent version is not verified for the Nano source.");
+  }
   if (config.kernelPython) process.env.PRIME_AGENT_KERNEL_PYTHON = config.kernelPython;
 
   let sdk;
@@ -80,6 +111,10 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
       && isFunction(sdk.InProcessAgentConnection)
     ));
   if (!sdkCompatible) throw protocolMismatch();
+  if (nanoSource && (!hasMethods(sdk.AuthStorage, ["inMemory"])
+    || !hasMethods(sdk.ModelRegistry, ["inMemory"])
+    || !hasMethods(sdk.SettingsManager, ["inMemory"])
+    || !hasMethods(sdk, ["createBashToolDefinition", "createEditToolDefinition"]))) throw protocolMismatch();
 
   let nativeModelFeatures;
   try {
@@ -198,6 +233,11 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
     ? (boardTool && !config.allowedTools.includes("board") ? [...config.allowedTools, "board"] : config.allowedTools)
     : undefined;
   const customTools = [workspaceTool, boardTool].filter(Boolean);
+  if (nanoSource && nativeToolAllowlist?.includes("board") && !boardTool) {
+    throw fail("unsupported-policy", "The board tool is unavailable for this Prime session.");
+  }
+  const nanoTools = nanoSource ? [sdk.createBashToolDefinition(config.cwd), sdk.createEditToolDefinition(config.cwd)] : [];
+  const nanoToolNames = nanoSource ? (nativeToolAllowlist ?? [...nanoTools.map(tool => tool.name), ...(boardTool ? ["board"] : [])]) : [];
 
   const sessionRoot = resolve(config.sessionDir);
   const containedSessionPath = (input) => {
@@ -229,11 +269,18 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
     sessionManager = sdk.SessionManager.create(config.cwd, sessionRoot);
   }
 
-  const authStorage = sdk.AuthStorage.create(join(config.agentDir, "auth.json"), { usePrimeCliConfig: true });
+  const authPath = join(config.agentDir, "auth.json");
+  const nativeAuthOptions = { usePrimeCliConfig: true };
+  const authStorage = nanoSource ? sdk.AuthStorage.inMemory()
+    : config.catalogOnly === true && !(await stat(authPath).catch(error => {
+      if (error?.code === "ENOENT") return null;
+      throw fail("runtime-unavailable", "The Prime model catalog could not be read.");
+    })) ? sdk.AuthStorage.inMemory({}, nativeAuthOptions)
+      : sdk.AuthStorage.create(authPath, nativeAuthOptions);
   if (config.catalogOnly === true) {
     const modelRegistry = sdk.ModelRegistry.create(authStorage, join(config.agentDir, 'models.json'));
     const services = await sdk.createAgentSessionServices({ cwd: config.cwd, agentDir: config.agentDir, authStorage, modelRegistry, telemetryDisabled: true });
-    const map = candidate => ({ id: candidate.id, provider: candidate.provider, name: candidate.name ?? candidate.id, ...(nativeModelFeatures?.getSupportedThinkingLevels ? { thinkingLevels: nativeModelFeatures.getSupportedThinkingLevels(candidate) } : {}) });
+    const map = candidate => ({ id: candidate.id, provider: exposedProvider(candidate.provider), name: candidate.name ?? candidate.id, ...(nativeModelFeatures?.getSupportedThinkingLevels ? { thinkingLevels: nativeModelFeatures.getSupportedThinkingLevels(candidate) } : {}) });
     return {
       async models() { return services.modelRegistry.getAvailable().map(map); },
       async catalogModels() { return services.modelRegistry.getAvailable().map(model => ({ ...map(model), supportsFast: nativeModelFeatures?.supportsFastMode?.(model) === true })); },
@@ -250,12 +297,27 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
       async dispose() { return { disposed: true }; },
     };
   }
-  let selectedModel = config.model?.id ? { id: config.model.id, provider: config.model.provider } : undefined;
+  let selectedModel = config.model?.id ? { id: config.model.id, provider: nativeProvider(config.model.provider) } : undefined;
   if ((config.resourceRules ?? []).some(rule => rule.kind !== "skill")) throw fail("unsupported-resource-policy", "Prime does not expose per-session MCP disabling, including built-in integrations.");
   if (config.pluginMcpServers?.length) throw fail("unsupported-settings", "Prime Agent cannot take a plugin's MCP server for one chat.");
   const createRuntime = async ({ cwd, sessionManager: manager, sessionStartEvent }) => {
-    const settingsManager = sdk.SettingsManager.create(cwd, config.agentDir);
-    const modelRegistry = sdk.ModelRegistry.create(authStorage, join(config.agentDir, "models.json"));
+    const settingsManager = nanoSource ? sdk.SettingsManager.inMemory() : sdk.SettingsManager.create(cwd, config.agentDir);
+    const modelRegistry = nanoSource ? sdk.ModelRegistry.inMemory(authStorage) : sdk.ModelRegistry.create(authStorage, join(config.agentDir, "models.json"));
+    if (nanoSource) {
+      if (!hasMethods(modelRegistry, ["registerProvider"])) throw protocolMismatch();
+      // Prime's models.json parser uses these SDK defaults when limits are absent.
+      modelRegistry.registerProvider(NANO_PROVIDER, {
+        baseUrl: nanoSource.baseUrl,
+        apiKey: nanoSource.key,
+        api: "openai-completions",
+        models: nanoSource.modes.map(mode => ({
+          id: mode.id, name: mode.name, reasoning: false, input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: mode.contextWindow ?? 128000,
+          maxTokens: mode.maxOutputTokens ?? 16384,
+        })),
+      });
+    }
     let model;
     if (selectedModel) {
       const available = await modelRegistry.getAvailable();
@@ -270,12 +332,18 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
       authStorage,
       settingsManager,
       modelRegistry,
+      ...(nanoSource ? { telemetryDisabled: true, noBuiltinHerdrReporter: true } : {}),
       resourceLoaderOptions: {
+        ...(nanoSource ? {
+          noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true, noContextFiles: true,
+          systemPrompt: "", appendSystemPrompt: [],
+          appendSystemPromptOverride: () => typeof config.instructions === "string" && config.instructions.trim() ? [config.instructions] : [],
+        } : {}),
         ...((config.resourceRules ?? []).length ? { skillsOverride: (base) => {
           if (config.resourceRules.some(rule => rule.enabled && !base.skills.some(skill => skill.name === rule.id))) throw fail("resource-unavailable", "An enabled Prime skill is not available in the native resource loader.");
           return { ...base, skills: base.skills.filter(skill => !config.resourceRules.some(rule => rule.kind === "skill" && rule.id === skill.name && !rule.enabled)) };
         } } : {}),
-        ...(typeof config.instructions === "string" && config.instructions.trim() ? { appendSystemPrompt: [config.instructions] } : {}),
+        ...(!nanoSource && typeof config.instructions === "string" && config.instructions.trim() ? { appendSystemPrompt: [config.instructions] } : {}),
       },
     });
     return {
@@ -286,8 +354,13 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
         ...(model ? { model } : {}),
         ...(config.thinkingLevel ? { thinkingLevel: config.thinkingLevel } : {}),
         ...(config.serviceTier ? { serviceTier: config.serviceTier === "fast" ? "priority" : "default" } : {}),
-        ...(nativeToolAllowlist ? { tools: nativeToolAllowlist } : {}),
-        ...(customTools.length ? { customTools } : {}),
+        ...(nanoSource ? {
+          tools: nanoToolNames, noTools: "builtin", includeGoals: false, prewarmIpythonKernel: false, telemetryDisabled: true,
+          customTools: [...nanoTools, ...customTools],
+        } : {
+          ...(nativeToolAllowlist ? { tools: nativeToolAllowlist } : {}),
+          ...(customTools.length ? { customTools } : {}),
+        }),
       })),
       services,
       diagnostics: services.diagnostics,
@@ -338,10 +411,13 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
   const safeToolName = (value) => typeof value === "string" && value.length <= 160 ? value : "tool";
   const mapModel = (candidate) => candidate && typeof candidate.id === "string" ? {
     id: candidate.id,
-    ...(typeof candidate.provider === "string" ? { provider: candidate.provider } : {}),
+    ...(typeof candidate.provider === "string" ? { provider: exposedProvider(candidate.provider) } : {}),
     name: typeof candidate.name === "string" ? candidate.name : candidate.id,
     ...(nativeModelFeatures?.getSupportedThinkingLevels ? { thinkingLevels: nativeModelFeatures.getSupportedThinkingLevels(candidate) } : {}),
   } : undefined;
+  const mapModelCatalog = (models) => models
+    .filter(candidate => !nanoSource || candidate.provider === NANO_PROVIDER)
+    .map(mapModel).filter(Boolean);
   const putBlock = (block) => {
     blocks.set(block.id, block);
     emit({ type: "block", block });
@@ -522,7 +598,7 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
   // refresh needed to choose its initial model. Reuse that registry state here
   // so initialize does not repeat environment-dependent network work. Explicit
   // `models()` requests continue to call the native refreshing API below.
-  modelCatalog = runtime.services.modelRegistry.getAvailable().map(mapModel).filter(Boolean);
+  modelCatalog = mapModelCatalog(runtime.services.modelRegistry.getAvailable());
   const history = await connection.getMessages();
   if (!Array.isArray(history)) {
     unsubscribe();
@@ -603,7 +679,7 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
     },
     async models() {
       if (disposed) throw fail("not-running", "The Prime runtime is not running.");
-      modelCatalog = (await connection.getAvailableModels()).map(mapModel).filter(Boolean);
+      modelCatalog = mapModelCatalog(await connection.getAvailableModels());
       return modelCatalog;
     },
     async resources() {
@@ -613,7 +689,10 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
       } catch { warnings.push("Skills could not be loaded from Prime Agent."); }
       try {
         const active = new Set(runtime.session.getActiveToolNames());
-        for (const tool of runtime.session.getAllTools()) items.push({ kind: "tool", id: tool.name, name: tool.name, enabled: active.has(tool.name), configurable: ["ipython", "workspace"].includes(tool.name) });
+        for (const tool of runtime.session.getAllTools()) {
+          if (nanoSource && !nanoToolNames.includes(tool.name)) continue;
+          items.push({ kind: "tool", id: tool.name, name: tool.name, enabled: active.has(tool.name), configurable: ["ipython", "workspace"].includes(tool.name) });
+        }
       } catch { warnings.push("Tools could not be loaded from Prime Agent."); }
       return { items, warnings };
     },
@@ -622,11 +701,12 @@ export async function createPrimeAdapter(config, emit, coordinatorRequest, board
       if (!requested?.id) throw fail("invalid-request", "A Prime model id is required.");
       const matches = modelCatalog.filter((candidate) => candidate.id === requested.id && (!requested.provider || candidate.provider === requested.provider));
       if (matches.length !== 1 || !matches[0].provider) throw fail("model-unavailable", "The selected Prime model is unavailable or ambiguous.");
-      const raw = runtime.services.modelRegistry.getAvailable().find(entry => entry.id === matches[0].id && entry.provider === matches[0].provider);
+      const provider = nativeProvider(matches[0].provider);
+      const raw = runtime.services.modelRegistry.getAvailable().find(entry => entry.id === matches[0].id && entry.provider === provider);
       if (thinkingLevel && nativeModelFeatures?.getSupportedThinkingLevels && !nativeModelFeatures.getSupportedThinkingLevels(raw).includes(thinkingLevel)) throw fail("invalid-settings", "Unsupported Prime reasoning level.");
       if (serviceTier === "fast" && nativeModelFeatures?.supportsFastMode?.(raw) !== true) throw fail("unsupported-settings", "This Prime model does not support Fast.");
-      model = mapModel(await connection.setModel(matches[0].provider, matches[0].id));
-      selectedModel = { id: matches[0].id, provider: matches[0].provider };
+      model = mapModel(await connection.setModel(provider, matches[0].id));
+      selectedModel = { id: matches[0].id, provider };
       if (thinkingLevel) await connection.setThinkingLevel(thinkingLevel);
       if (serviceTier) await applyServiceTier(serviceTier);
     },

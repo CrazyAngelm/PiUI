@@ -10,6 +10,7 @@ pub use crate::native_version::NativeVersionStatus;
 use crate::native_version::{
     CLAUDE_CODE, CODEX_APP_SERVER, HERMES, NANO_PI, PRIME_AGENT, VerifiedRange,
 };
+use crate::prime_nano::{self, PrimeNanoSource};
 use crate::real_rpc::resolve_pi_launch;
 pub use piui_contracts::harness_identity::AcpAgentId;
 use piui_contracts::harness_identity::{
@@ -1314,6 +1315,8 @@ pub enum NativeRuntimeError {
     /// workspace error code `NANO_SIGN_IN_REQUIRED`.
     #[error("Nano is not ready: sign in to your Nano account")]
     NanoNotReady,
+    #[error("The bundled Nano runtime could not be verified or prepared")]
+    NanoRuntimeUnavailable,
     /// Catalog-only spawns are never used for Nano: the host serves the Nano
     /// model catalog itself from the account's entitled modes, so no Pi
     /// process is started to discover models.
@@ -1342,6 +1345,24 @@ struct AcpBridgeConfig<'a> {
     id: &'a str,
     display_name: &'a str,
     disable: AcpBridgeDisable,
+    /// The Nano source's provider and entitled modes. Never its key or URL:
+    /// those travel only in the bridge process environment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nano: Option<AcpBridgeNano<'a>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AcpBridgeNano<'a> {
+    provider: &'static str,
+    modes: Vec<AcpBridgeNanoMode<'a>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AcpBridgeNanoMode<'a> {
+    id: &'a str,
+    name: &'a str,
 }
 
 /// Features a descriptor switched off (restrictions only).
@@ -1366,6 +1387,17 @@ impl<'a> AcpBridgeConfig<'a> {
                 modes: off(launch.capabilities.modes),
                 mcp_http: off(launch.capabilities.mcp_http),
             },
+            nano: launch.nano.as_ref().map(|source| AcpBridgeNano {
+                provider: source.provider(),
+                modes: source
+                    .modes()
+                    .iter()
+                    .map(|mode| AcpBridgeNanoMode {
+                        id: &mode.id,
+                        name: &mode.name,
+                    })
+                    .collect(),
+            }),
         }
     }
 }
@@ -1527,6 +1559,12 @@ pub struct NativeRuntime {
     containment: Arc<RuntimeContainment>,
 }
 
+enum IsolatedLaunch<'a> {
+    Acp(&'a AcpLaunch),
+    PrimeNano(&'a PrimeNanoSource),
+    CodexNano(&'a crate::codex_nano::CodexNanoSource),
+}
+
 impl NativeRuntime {
     /// Ties a host-owned value to this runtime. It is dropped when the
     /// runtime is dropped (after the process tree was terminated) or earlier,
@@ -1657,8 +1695,7 @@ impl NativeRuntime {
     ) -> Result<(Self, NativeEventReceiver), NativeRuntimeError> {
         let config = resolve_native_runtime_config(config)?;
         validate_config(&config)?;
-        let node = resolve_node()?;
-        let launch = resolve_harness_launch_for_config(&config)?;
+        let (node, launch) = resolve_session_launch(&config).await?;
         let source = bridge_source(config.harness)?;
         let harness = config.harness;
         let spawned = if harness == HarnessKind::Codex && config.coordination {
@@ -1668,6 +1705,90 @@ impl NativeRuntime {
         };
         record_native_account(harness, spawned.as_ref().map(|_| ()));
         spawned
+    }
+
+    /// Starts verified Prime on the host's isolated Nano provider. The lease
+    /// travels only in this bridge process's environment, then in its registry.
+    pub async fn spawn_prime_nano(
+        mut config: NativeRuntimeConfig,
+        source: PrimeNanoSource,
+    ) -> Result<(Self, NativeEventReceiver), NativeRuntimeError> {
+        if !cfg!(windows)
+            || config.harness != HarnessKind::PrimeAgent
+            || !config.model.as_ref().is_some_and(|model| {
+                model.provider.as_deref() == Some(prime_nano::PROVIDER)
+                    && source.has_mode(&model.id)
+            })
+        {
+            return Err(NativeRuntimeError::InvalidConfiguration);
+        }
+        if !valid_prime_nano_options(&config) {
+            return Err(NativeRuntimeError::Bridge(
+                BridgeFailureCode::UnsupportedPolicy,
+            ));
+        }
+        config.agent_dir = Some(source.home().join("agent"));
+        let config = resolve_native_runtime_config(config)?;
+        let (node, launch) = resolve_session_launch(&config).await?;
+        if launch.version.as_deref() != Some(prime_nano::VERSION) {
+            return Err(NativeRuntimeError::HarnessUnavailable);
+        }
+        validate_config(&config)?;
+        std::fs::create_dir_all(source.home().join("tmp"))
+            .map_err(|_| NativeRuntimeError::Spawn)?;
+        let bridge = bridge_source(config.harness)?;
+        Self::spawn_resolved(
+            config,
+            node,
+            launch,
+            bridge,
+            false,
+            false,
+            Some(IsolatedLaunch::PrimeNano(&source)),
+        )
+        .await
+    }
+
+    /// Starts a standalone app-server without sharing the native user's home or pool.
+    pub async fn spawn_codex_nano(
+        config: NativeRuntimeConfig,
+        source: crate::codex_nano::CodexNanoSource,
+    ) -> Result<(Self, NativeEventReceiver), NativeRuntimeError> {
+        if config.harness != HarnessKind::Codex
+            || config.coordination
+            || config.native_subagents == Some(true)
+            || config.service_tier.is_some()
+            || config.thinking_level.is_some()
+            || config
+                .resource_rules
+                .as_ref()
+                .is_some_and(|rules| rules.as_array().is_none_or(|items| !items.is_empty()))
+            || !config.plugin_mcp_servers.is_empty()
+            || !config.host_tools.is_empty()
+            || !config.model.as_ref().is_some_and(|model| {
+                model.provider.as_deref() == Some(crate::codex_nano::PROVIDER)
+                    && source.has_mode(&model.id)
+            })
+        {
+            return Err(NativeRuntimeError::InvalidConfiguration);
+        }
+        validate_config(&config)?;
+        let node = resolve_node()?;
+        let launch = tokio::task::spawn_blocking(resolve_codex_nano_launch)
+            .await
+            .map_err(|_| NativeRuntimeError::Spawn)??;
+        std::fs::create_dir_all(source.home()).map_err(|_| NativeRuntimeError::Spawn)?;
+        let bridge = bridge_source(config.harness)?;
+        Self::spawn_resolved(
+            config,
+            node,
+            launch,
+            bridge,
+            false,
+            false,
+            Some(IsolatedLaunch::CodexNano(&source)),
+        )
+        .await
     }
 
     /// Starts an ACP agent from a host-resolved descriptor launch. The bridge
@@ -1682,15 +1803,50 @@ impl NativeRuntime {
         {
             return Err(NativeRuntimeError::InvalidConfiguration);
         }
+        // Match an explicit Nano source to its agent and selected entitlement.
+        let model_provider = config
+            .model
+            .as_ref()
+            .and_then(|model| model.provider.as_deref());
+        let source_matches = match &launch.nano {
+            Some(source) => {
+                source.agent() == launch.agent.as_str()
+                    && model_provider == Some(source.provider())
+                    && config
+                        .model
+                        .as_ref()
+                        .is_some_and(|model| source.modes().iter().any(|mode| mode.id == model.id))
+            }
+            None => model_provider != Some(crate::acp_nano::GOOSE_NANO_SOURCE_PROVIDER),
+        };
+        if !source_matches {
+            return Err(NativeRuntimeError::InvalidConfiguration);
+        }
         validate_config(&config)?;
         let node = resolve_node()?;
         let source = bridge_source(config.harness)?;
         let resolved = ResolvedHarnessLaunch {
             program: launch.command.program.clone(),
-            args: launch.command.args.clone(),
+            args: launch
+                .nano
+                .as_ref()
+                .and_then(crate::acp_nano::AcpNanoSource::args)
+                .map_or_else(
+                    || launch.command.args.clone(),
+                    |args| args.iter().map(ToString::to_string).collect(),
+                ),
             version: None,
         };
-        Self::spawn_resolved(config, node, resolved, source, false, false, Some(&launch)).await
+        Self::spawn_resolved(
+            config,
+            node,
+            resolved,
+            source,
+            false,
+            false,
+            Some(IsolatedLaunch::Acp(&launch)),
+        )
+        .await
     }
 
     pub async fn spawn_catalog(
@@ -1719,15 +1875,48 @@ impl NativeRuntime {
         source: Vec<u8>,
         pool_host: bool,
         catalog_only: bool,
-        acp: Option<&AcpLaunch>,
+        isolated: Option<IsolatedLaunch<'_>>,
     ) -> Result<(Self, NativeEventReceiver), NativeRuntimeError> {
         let source_len =
             u32::try_from(source.len()).map_err(|_| NativeRuntimeError::BridgeSourceTooLarge)?;
         #[cfg(windows)]
         let mut windows_job = WindowsJob::new().map_err(|_| NativeRuntimeError::Containment)?;
 
-        let environment = acp.map(|launch| launch.environment.as_slice());
-        let mut command = Command::from(bridge_command(&node, &config, environment));
+        let acp = match isolated {
+            Some(IsolatedLaunch::Acp(launch)) => Some(launch),
+            _ => None,
+        };
+        // A Nano-source start passes no descriptor name (API keys, proxies, a
+        // configuration path): its exact environment is the source's.
+        let environment = acp.map(|launch| {
+            if launch.nano.is_some() {
+                &[][..]
+            } else {
+                launch.environment.as_slice()
+            }
+        });
+        let mut bridge = bridge_command(&node, &config, environment);
+        if let Some(source) = acp.and_then(|launch| launch.nano.as_ref()) {
+            for (name, value) in source.environment() {
+                bridge.env(name, value);
+            }
+        }
+        if let Some(IsolatedLaunch::PrimeNano(source)) = isolated {
+            prime_nano_environment(&mut bridge, source);
+        }
+        if let Some(IsolatedLaunch::CodexNano(source)) = isolated {
+            let host = std::env::vars_os().collect::<Vec<_>>();
+            bridge
+                .env_clear()
+                .envs(crate::nano::nano_bridge_environment(&host, cfg!(windows)))
+                .env(
+                    crate::codex_nano::SOURCE_ENV,
+                    source
+                        .bridge_environment()
+                        .map_err(|_| NativeRuntimeError::InvalidConfiguration)?,
+                );
+        }
+        let mut command = Command::from(bridge);
         command.kill_on_drop(false);
         #[cfg(unix)]
         command.process_group(0);
@@ -2574,11 +2763,7 @@ pub fn resolve_native_runtime_config(
     }
     let package_root = match config.package_root.take() {
         Some(root) => root,
-        None => global_package_roots()
-            .into_iter()
-            .map(|root| root.join("prime-agent"))
-            .find(|root| verified_prime_package_root(root))
-            .ok_or(NativeRuntimeError::HarnessUnavailable)?,
+        None => find_prime_package_root().ok_or(NativeRuntimeError::HarnessUnavailable)?,
     };
     if !verified_prime_package_root(&package_root) {
         return Err(NativeRuntimeError::HarnessUnavailable);
@@ -2588,6 +2773,26 @@ pub fn resolve_native_runtime_config(
     }
     config.package_root = Some(package_root);
     Ok(config)
+}
+
+fn find_prime_package_root() -> Option<PathBuf> {
+    global_package_roots()
+        .into_iter()
+        .map(|root| root.join("prime-agent"))
+        .find(|root| verified_prime_package_root(root))
+}
+
+/// Checks the installed Prime build without starting the CLI or its daemon.
+#[must_use]
+pub fn prime_nano_available() -> bool {
+    cfg!(windows)
+        && system_node_available()
+        && find_prime_package_root().is_some_and(|root| {
+            let cli = root.join("dist/bundle/cli.js");
+            cli.is_file()
+                && root.join("dist/index.js").is_file()
+                && package_version(&cli).as_deref() == Some(prime_nano::VERSION)
+        })
 }
 
 fn resolve_native_agent_dir(package_root: &Path) -> Result<PathBuf, NativeRuntimeError> {
@@ -2665,6 +2870,7 @@ fn validate_nano_config(config: &NativeRuntimeConfig) -> Result<(), NativeRuntim
         // No speed setting exists for Nano; it is never silently ignored.
         || config.service_tier.is_some()
         || !nano.agent_dir.is_absolute()
+        || !nano.bundle_cache_dir.is_absolute()
         || nano
             .guard_extension
             .as_deref()
@@ -2677,6 +2883,37 @@ fn validate_nano_config(config: &NativeRuntimeConfig) -> Result<(), NativeRuntim
         return Err(NativeRuntimeError::InvalidConfiguration);
     }
     Ok(())
+}
+
+fn valid_prime_nano_options(config: &NativeRuntimeConfig) -> bool {
+    config.permission_mode == PermissionMode::Native
+        && !config.coordination
+        && config.native_subagents != Some(true)
+        && config.kernel_python.is_none()
+        && config.plugin_mcp_servers.is_empty()
+        && config
+            .host_tools
+            .iter()
+            .all(|tool| *tool == HostTool::Board)
+        && config
+            .resource_rules
+            .as_ref()
+            .is_none_or(|rules| rules.is_null() || rules.as_array().is_some_and(Vec::is_empty))
+        && config.allowed_tools.as_ref().is_none_or(|tools| {
+            tools.iter().all(|tool| match tool.as_str() {
+                "bash" | "edit" => true,
+                "board" => config.host_tools.contains(&HostTool::Board),
+                _ => false,
+            })
+        })
+        && config
+            .thinking_level
+            .as_deref()
+            .is_none_or(|level| level == "off")
+        && config
+            .service_tier
+            .as_deref()
+            .is_none_or(|tier| tier == "standard")
 }
 
 fn validate_config(config: &NativeRuntimeConfig) -> Result<(), NativeRuntimeError> {
@@ -2831,6 +3068,68 @@ struct ResolvedHarnessLaunch {
     program: PathBuf,
     args: Vec<String>,
     version: Option<String>,
+}
+
+/// The lease environment is supported by the verified, direct Windows binary.
+pub fn codex_nano_available() -> bool {
+    resolve_node().is_ok() && resolve_codex_nano_launch().is_ok()
+}
+
+fn resolve_codex_nano_launch() -> Result<ResolvedHarnessLaunch, NativeRuntimeError> {
+    if !cfg!(all(windows, target_arch = "x86_64")) {
+        return Err(NativeRuntimeError::HarnessUnavailable);
+    }
+    let launcher = resolve_harness_launch(HarnessKind::Codex)?;
+    if launcher.version.as_deref() != Some(crate::codex_nano::VERSION) {
+        return Err(NativeRuntimeError::HarnessUnavailable);
+    }
+    let program = launcher
+        .args
+        .first()
+        .map(Path::new)
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .map(|root| root.join(crate::codex_nano::NATIVE_ENTRY))
+        .filter(|path| path.is_absolute() && crate::codex_nano::verified_binary(path))
+        .ok_or(NativeRuntimeError::HarnessUnavailable)?;
+    Ok(ResolvedHarnessLaunch {
+        program,
+        args: Vec::new(),
+        version: launcher.version,
+    })
+}
+
+async fn resolve_session_launch(
+    config: &NativeRuntimeConfig,
+) -> Result<(PathBuf, ResolvedHarnessLaunch), NativeRuntimeError> {
+    #[cfg(bundled_nano_runtime)]
+    if config.harness == HarnessKind::Nano {
+        use crate::bundled_nano::{NODE, PI_CLI, PI_VERSION};
+
+        if !harness_version_supported(HarnessKind::Nano, Some(PI_VERSION)) {
+            return Err(NativeRuntimeError::NanoRuntimeUnavailable);
+        }
+        let cache = config
+            .nano
+            .as_ref()
+            .map(|launch| launch.bundle_cache_dir.clone())
+            .ok_or(NativeRuntimeError::NanoNotReady)?;
+        let root = tokio::task::spawn_blocking(move || crate::bundled_nano::prepare(&cache))
+            .await
+            .map_err(|_| NativeRuntimeError::Spawn)?
+            .map_err(|_| NativeRuntimeError::NanoRuntimeUnavailable)?;
+        let node = root.join(NODE);
+        let entry = root.join(PI_CLI);
+        return Ok((
+            node.clone(),
+            ResolvedHarnessLaunch {
+                program: node,
+                args: vec![entry.to_string_lossy().into_owned()],
+                version: Some(PI_VERSION.to_owned()),
+            },
+        ));
+    }
+    Ok((resolve_node()?, resolve_harness_launch_for_config(config)?))
 }
 
 fn resolve_harness_launch_for_config(
@@ -3051,6 +3350,8 @@ fn bridge_command(
     for name in OPERATOR_ENVIRONMENT {
         standard.env_remove(name);
     }
+    standard.env_remove(prime_nano::SOURCE_ENV);
+    standard.env_remove(crate::codex_nano::SOURCE_ENV);
     if config.harness == HarnessKind::ClaudeCode {
         scrub_claude_environment(&mut standard);
     }
@@ -3065,6 +3366,17 @@ fn bridge_command(
         standard
             .env_clear()
             .envs(crate::nano::nano_bridge_environment(&host, cfg!(windows)));
+        #[cfg(bundled_nano_runtime)]
+        if let Some(tools) = node.parent().filter(|directory| directory.is_absolute()) {
+            let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+            let paths = std::iter::once(tools.to_path_buf())
+                .chain(std::env::split_paths(&inherited_path).filter(|path| path.is_absolute()));
+            let path = std::env::join_paths(paths).unwrap_or_else(|_| tools.as_os_str().to_owned());
+            standard.env("PATH", path);
+            // Pi resolves fd and rg by name. Windows must search the bundle
+            // ahead of executables in the project working directory.
+            standard.env("NoDefaultCurrentDirectoryInExePath", "1");
+        }
         if let Some(nano) = config.nano.as_ref() {
             standard.env(
                 crate::nano::NANO_RELAY_KEY_BRIDGE_ENV,
@@ -3086,6 +3398,42 @@ fn bridge_command(
         standard.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
     }
     standard
+}
+
+fn prime_nano_environment(command: &mut std::process::Command, source: &PrimeNanoSource) {
+    let host = std::env::vars_os().collect::<Vec<_>>();
+    let home = source.home();
+    let home_variables = [
+        "HOME",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PROGRAMDATA",
+    ];
+    let xdg_variables = [
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+    ];
+    command
+        .env_clear()
+        .envs(crate::nano::nano_bridge_environment(&host, cfg!(windows)))
+        .env_remove("HOMEDRIVE")
+        .env_remove("HOMEPATH")
+        .envs(
+            home_variables
+                .into_iter()
+                .chain(xdg_variables)
+                .map(|name| (name, home)),
+        )
+        .envs(["TEMP", "TMP", "TMPDIR"].map(|name| (name, home.join("tmp"))))
+        .env("PRIME_AGENT_CODING_AGENT_DIR", home.join("agent"))
+        .env("PI_CODING_AGENT_DIR", home.join("agent"))
+        .env("PRIME_AGENT_TELEMETRY", "0")
+        .env("DO_NOT_TRACK", "1")
+        .env("NoDefaultCurrentDirectoryInExePath", "1")
+        .env(prime_nano::SOURCE_ENV, source.bridge_environment_value());
 }
 
 /// Removes every non-subscription credential, provider switch, billing
@@ -3298,6 +3646,12 @@ fn package_version(entry: &Path) -> Option<String> {
         }
     }
     None
+}
+
+/// Whether this process can start a bridge that needs the system Node runtime.
+#[must_use]
+pub fn system_node_available() -> bool {
+    resolve_node().is_ok()
 }
 
 pub(crate) fn resolve_node() -> Result<PathBuf, NativeRuntimeError> {
@@ -3631,68 +3985,91 @@ pub fn invalidate_native_harness_probe() {
 fn discover_native_harnesses() -> Vec<NativeHarnessSummary> {
     HarnessKind::ALL
         .into_iter()
-        .map(|kind| match resolve_harness_launch(kind) {
-            Ok(launch) => {
-                let version_status = harness_version_range(kind)
-                    .and_then(|range| range.check(launch.version.as_deref()).status());
-                let platform_verified = cfg!(windows);
-                let (status, reason) =
-                    if let Some(reason) = version_refusal_reason(kind, launch.version.as_deref()) {
-                        (HarnessAvailability::Unverified, Some(reason.into()))
-                    } else if !platform_verified {
-                        (
-                            HarnessAvailability::Unverified,
-                            Some(CONTAINMENT_UNVERIFIED_REASON.into()),
-                        )
-                    } else if kind == HarnessKind::ClaudeCode && claude_sign_in_required() {
-                        // Still startable: the next start verifies the native login again.
-                        (
-                            HarnessAvailability::Available,
-                            Some(CLAUDE_SIGN_IN_MESSAGE.into()),
-                        )
-                    } else {
-                        (HarnessAvailability::Available, None)
-                    };
-                // The entry script of a Node package, else the executable.
-                let location = launch
-                    .args
-                    .first()
-                    .map(PathBuf::from)
-                    .filter(|path| path.is_absolute())
-                    .unwrap_or(launch.program);
-                NativeHarnessSummary {
-                    kind,
-                    name: kind.display_name().into(),
-                    installed: true,
-                    version: launch.version,
-                    status,
-                    reason,
-                    location: Some(location),
-                    version_status,
-                }
-            }
-            Err(NativeRuntimeError::NodeUnavailable) => NativeHarnessSummary {
-                kind,
-                name: kind.display_name().into(),
-                installed: false,
-                version: None,
-                status: HarnessAvailability::Unavailable,
-                reason: Some("Node is unavailable.".into()),
-                location: None,
-                version_status: None,
-            },
-            Err(_) => NativeHarnessSummary {
-                kind,
-                name: kind.display_name().into(),
-                installed: false,
-                version: None,
-                status: HarnessAvailability::Unavailable,
-                reason: Some("The native harness is not installed.".into()),
-                location: None,
-                version_status: None,
-            },
-        })
+        .map(discover_native_harness)
         .collect()
+}
+
+fn discover_native_harness(kind: HarnessKind) -> NativeHarnessSummary {
+    #[cfg(bundled_nano_runtime)]
+    if kind == HarnessKind::Nano {
+        let version = Some(crate::bundled_nano::PI_VERSION);
+        let reason = version_refusal_reason(kind, version);
+        return NativeHarnessSummary {
+            kind,
+            name: kind.display_name().into(),
+            installed: true,
+            version: version.map(str::to_owned),
+            status: if reason.is_none() {
+                HarnessAvailability::Available
+            } else {
+                HarnessAvailability::Unverified
+            },
+            reason: reason.map(str::to_owned),
+            location: std::env::current_exe().ok(),
+            version_status: reason.is_none().then_some(NativeVersionStatus::Verified),
+        };
+    }
+    match resolve_harness_launch(kind) {
+        Ok(launch) => {
+            let version_status = harness_version_range(kind)
+                .and_then(|range| range.check(launch.version.as_deref()).status());
+            let platform_verified = cfg!(windows);
+            let (status, reason) =
+                if let Some(reason) = version_refusal_reason(kind, launch.version.as_deref()) {
+                    (HarnessAvailability::Unverified, Some(reason.into()))
+                } else if !platform_verified {
+                    (
+                        HarnessAvailability::Unverified,
+                        Some(CONTAINMENT_UNVERIFIED_REASON.into()),
+                    )
+                } else if kind == HarnessKind::ClaudeCode && claude_sign_in_required() {
+                    // Still startable: the next start verifies the native login again.
+                    (
+                        HarnessAvailability::Available,
+                        Some(CLAUDE_SIGN_IN_MESSAGE.into()),
+                    )
+                } else {
+                    (HarnessAvailability::Available, None)
+                };
+            // The entry script of a Node package, else the executable.
+            let location = launch
+                .args
+                .first()
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .unwrap_or(launch.program);
+            NativeHarnessSummary {
+                kind,
+                name: kind.display_name().into(),
+                installed: true,
+                version: launch.version,
+                status,
+                reason,
+                location: Some(location),
+                version_status,
+            }
+        }
+        Err(NativeRuntimeError::NodeUnavailable) => NativeHarnessSummary {
+            kind,
+            name: kind.display_name().into(),
+            installed: false,
+            version: None,
+            status: HarnessAvailability::Unavailable,
+            reason: Some("Node is unavailable.".into()),
+            location: None,
+            version_status: None,
+        },
+        Err(_) => NativeHarnessSummary {
+            kind,
+            name: kind.display_name().into(),
+            installed: false,
+            version: None,
+            status: HarnessAvailability::Unavailable,
+            reason: Some("The native harness is not installed.".into()),
+            location: None,
+            version_status: None,
+        },
+    }
 }
 
 /// How long a native discovery result is reused.
@@ -3862,10 +4239,82 @@ mod tests {
         }
     }
 
+    #[test]
+    fn prime_nano_launch_keeps_its_key_off_native_launches_and_initialize() {
+        let mut config = test_config();
+        config.harness = HarnessKind::PrimeAgent;
+        let home = config.cwd.join("prime-nano-test-home");
+        let key = "z".repeat(43);
+        let source = PrimeNanoSource::new(
+            "http://127.0.0.1:3219/c/1/v1",
+            &key,
+            vec![prime_nano::PrimeNanoMode {
+                id: "auto".into(),
+                name: "Auto".into(),
+                context_window: None,
+                max_output_tokens: None,
+            }],
+            home.clone(),
+        )
+        .expect("source");
+        assert!(valid_prime_nano_options(&config));
+        config.allowed_tools = Some(vec!["ipython".to_owned()]);
+        assert!(!valid_prime_nano_options(&config));
+        config.allowed_tools = Some(vec!["board".to_owned()]);
+        assert!(!valid_prime_nano_options(&config));
+        config.host_tools = vec![HostTool::Board];
+        assert!(valid_prime_nano_options(&config));
+        config.coordination = true;
+        assert!(!valid_prime_nano_options(&config));
+
+        let command = bridge_command(Path::new("node"), &config, None);
+        assert!(
+            command
+                .get_envs()
+                .any(|(name, value)| name == prime_nano::SOURCE_ENV && value.is_none())
+        );
+        let mut command = command;
+        prime_nano_environment(&mut command, &source);
+        let entries: Vec<_> = command.get_envs().collect();
+        assert_eq!(
+            entries
+                .iter()
+                .filter(
+                    |(_, value)| value.is_some_and(|value| value.to_string_lossy().contains(&key))
+                )
+                .count(),
+            1
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|(name, value)| *name == prime_nano::SOURCE_ENV && value.is_some())
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|(name, value)| *name == "USERPROFILE" && *value == Some(home.as_os_str()))
+        );
+        let initialize = InitializeConfig {
+            config: &config,
+            runtime_program: "node".into(),
+            runtime_args: Vec::new(),
+            pool_host: false,
+            catalog_only: false,
+            acp: None,
+        };
+        assert!(
+            !serde_json::to_string(&initialize)
+                .expect("bridge frame")
+                .contains(&key)
+        );
+    }
+
     fn nano_launch(guard: bool) -> NanoRuntimeLaunch {
         let root = std::env::current_dir().expect("cwd");
         NanoRuntimeLaunch {
             agent_dir: root.join("nano-agent"),
+            bundle_cache_dir: root.join("runtime"),
             guard_extension: guard.then(|| root.join("nano-agent").join("nano-guard.ts")),
             relay_key: NanoRelayKey::new("rk-test-secret"),
         }
@@ -3876,6 +4325,146 @@ mod tests {
         config.harness = HarnessKind::Nano;
         config.nano = Some(nano_launch(true));
         config
+    }
+
+    #[cfg(bundled_nano_runtime)]
+    #[tokio::test]
+    async fn bundled_nano_starts_native_pi_with_only_its_shipped_resources() {
+        let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
+        let root = tempfile::tempdir_in(target).expect("isolated bundle test root");
+        const CLEAN_CHILD: &str = "PIUI_TEST_BUNDLED_NANO_CLEAN_CHILD";
+        if std::env::var_os(CLEAN_CHILD).is_none() {
+            let system_root = std::env::var_os("SystemRoot").expect("Windows system directory");
+            let result = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .args([
+                    "--exact",
+                    "workspace_runtime::tests::bundled_nano_starts_native_pi_with_only_its_shipped_resources",
+                    "--nocapture",
+                ])
+                .env_clear()
+                .env(CLEAN_CHILD, "1")
+                .env("SystemRoot", &system_root)
+                .env("PATH", Path::new(&system_root).join("System32"))
+                .env("USERPROFILE", root.path())
+                .env("APPDATA", root.path())
+                .env("LOCALAPPDATA", root.path())
+                .env("TEMP", root.path())
+                .env("TMP", root.path())
+                .output()
+                .expect("launch the isolated test child");
+            assert!(
+                result.status.success()
+                    && String::from_utf8_lossy(&result.stdout).contains("1 passed"),
+                "{}{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr),
+            );
+            return;
+        }
+        let mut config = nano_config();
+        let summary = discover_native_harness(HarnessKind::Nano);
+        assert_eq!(
+            summary.version.as_deref(),
+            Some(crate::bundled_nano::PI_VERSION)
+        );
+        assert_eq!(summary.version_status, Some(NativeVersionStatus::Verified));
+        config.cwd = root.path().join("project");
+        config.session_dir = root.path().join("sessions");
+        config.model = Some(WorkspaceModel {
+            id: "auto".into(),
+            provider: Some("nano".into()),
+            name: "Nano Auto".into(),
+            thinking_levels: None,
+        });
+        std::fs::create_dir_all(&config.session_dir).expect("sessions");
+        let project_skill = config.cwd.join(".agents/skills/project-only");
+        std::fs::create_dir_all(&project_skill).expect("project skill");
+        std::fs::write(
+            project_skill.join("SKILL.md"),
+            "---\nname: project-only\ndescription: Untrusted project skill\n---\n",
+        )
+        .expect("untrusted skill fixture");
+
+        let agent = root.path().join("nano/agent");
+        let guard = agent.join("nano-guard.ts");
+        std::fs::create_dir_all(&agent).expect("private agent directory");
+        std::fs::write(&guard, crate::nano::NANO_GUARD_EXTENSION_SOURCE).expect("guard");
+        for (relative, source) in crate::nano::NANO_BUNDLED_ASSETS {
+            let asset = agent.join("bundled").join(relative);
+            std::fs::create_dir_all(asset.parent().expect("asset directory"))
+                .expect("asset directory");
+            std::fs::write(asset, source).expect("write shipped resource");
+        }
+        std::fs::write(
+            agent.join("models.json"),
+            json!({
+                "providers": {
+                    "nano": {
+                        "baseUrl": "http://127.0.0.1:1/v1",
+                        "api": "openai-completions",
+                        "apiKey": "$NANO_RELAY_KEY",
+                        "models": [{
+                            "id": "auto", "name": "Nano Auto", "contextWindow": 8192,
+                            "maxTokens": 2048, "input": ["text"], "reasoning": false
+                        }]
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("synthetic model configuration");
+        std::fs::write(
+            agent.join("settings.json"),
+            r#"{"defaultProvider":"nano","defaultModel":"auto","defaultTools":["-bash","+powershell"]}"#,
+        )
+        .expect("Windows tool defaults");
+        config.nano = Some(NanoRuntimeLaunch {
+            agent_dir: agent,
+            bundle_cache_dir: root.path().join("nano/runtime"),
+            guard_extension: Some(guard),
+            relay_key: NanoRelayKey::new("rk-bundled-test"),
+        });
+
+        let (runtime, mut events) = NativeRuntime::spawn(config)
+            .await
+            .expect("bundled Nano starts");
+        let snapshot = runtime.snapshot().await.expect("live Nano snapshot");
+        assert_eq!(
+            snapshot.model.and_then(|model| model.provider).as_deref(),
+            Some("nano")
+        );
+        let commands = runtime
+            .composer_catalog()
+            .await
+            .expect("native command catalog")
+            .commands;
+        assert!(commands.iter().any(|command| command.name == "skill-paths"));
+        assert!(
+            commands
+                .iter()
+                .any(|command| command.name.contains("bes-deep-mode"))
+        );
+        assert!(
+            commands
+                .iter()
+                .all(|command| !command.name.contains("project-only"))
+        );
+        runtime
+            .prompt("/skill-paths".into(), PromptMode::Prompt)
+            .await
+            .expect("bundled Nano accepts its local command");
+        timeout(REQUEST_TIMEOUT, async {
+            while let Some(event) = events.recv().await {
+                if let NativeEvent::TurnCompleted { outcome } = event {
+                    assert_eq!(outcome, TurnOutcome::Succeeded);
+                    return;
+                }
+            }
+            panic!("the bundled command retired without completing");
+        })
+        .await
+        .expect("bundled command completes without model inference");
+        runtime.dispose().await.expect("retire native runtime");
     }
 
     #[tokio::test]
@@ -4647,6 +5236,7 @@ mod tests {
             ),
             environment,
             capabilities: AcpCapabilityOverrides::default(),
+            nano: None,
         };
         let mut config = test_config();
         config.harness = HarnessKind::Acp(agent);
@@ -4736,6 +5326,138 @@ mod tests {
                 .await
                 .err(),
             Some(NativeRuntimeError::InvalidConfiguration)
+        );
+    }
+
+    /// Full stack on the Nano model source (ADR-050): the production runner and
+    /// ACP bridge, the fake agent (it lists `provider/model` rows), the source's
+    /// exact environment, and the source/model agreement that never falls back.
+    #[tokio::test]
+    async fn the_nano_source_starts_the_agent_with_its_exact_environment_and_never_falls_back() {
+        use crate::acp::{AcpCapabilityOverrides, AcpResolvedCommand};
+        use crate::acp_nano::{AcpNanoMode, AcpNanoSource};
+        let Ok(node) = resolve_node() else {
+            return;
+        };
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("bridge/acp.test-fixture.mjs")
+            .to_string_lossy()
+            .into_owned();
+        let agent = AcpAgentId::new("opencode").expect("agent id");
+        let home = std::env::temp_dir().join(format!("piui-nano-source-{}", std::process::id()));
+        let source = || {
+            AcpNanoSource::opencode(
+                "http://127.0.0.1:4455/c/7/v1",
+                "lease-key-0123456789",
+                vec![
+                    AcpNanoMode {
+                        id: "auto".into(),
+                        name: "Auto".into(),
+                    },
+                    AcpNanoMode {
+                        id: "fast".into(),
+                        name: "Fast".into(),
+                    },
+                ],
+                home.clone(),
+            )
+            .expect("source")
+        };
+        // A name the test process has but no base environment passes.
+        let probe = ["CARGO_MANIFEST_DIR", "CARGO", "CARGO_HOME", "RUSTUP_HOME"]
+            .into_iter()
+            .find(|name| std::env::var_os(name).is_some());
+        let launch = |nano: Option<AcpNanoSource>| AcpLaunch {
+            agent,
+            display_name: "OpenCode".into(),
+            command: AcpResolvedCommand::test_command(
+                node.clone(),
+                vec![fixture.clone(), "--nano-models".to_owned()],
+            ),
+            // A descriptor name that passes on the native source.
+            environment: probe.map(str::to_owned).into_iter().collect(),
+            capabilities: AcpCapabilityOverrides::default(),
+            nano,
+        };
+        let nano_model = WorkspaceModel {
+            id: "auto".into(),
+            provider: Some("nano".into()),
+            name: "Auto".into(),
+            thinking_levels: None,
+        };
+        let mut config = test_config();
+        config.harness = HarnessKind::Acp(agent);
+        config.model = Some(nano_model.clone());
+
+        let (runtime, mut events) =
+            NativeRuntime::spawn_acp(config.clone(), launch(Some(source())))
+                .await
+                .expect("the Nano-source agent starts");
+        let snapshot = runtime.snapshot().await.expect("snapshot");
+        assert_eq!(snapshot.model, Some(nano_model.clone()));
+        assert_eq!(
+            snapshot
+                .models
+                .iter()
+                .map(|model| (model.provider.as_deref(), model.id.as_str()))
+                .collect::<Vec<_>>(),
+            [(Some("nano"), "auto"), (Some("nano"), "fast")],
+            "only the entitled modes, named by the host"
+        );
+        let source_environment = [
+            "OPENCODE_CONFIG_CONTENT",
+            "OPENCODE_DISABLE_PROJECT_CONFIG",
+            "XDG_DATA_HOME",
+        ];
+        for name in source_environment.into_iter().chain(probe) {
+            runtime
+                .prompt(format!("env {name}"), PromptMode::Prompt)
+                .await
+                .expect("prompt");
+            assert_eq!(completed_turn(&mut events).await, TurnOutcome::Succeeded);
+        }
+        let blocks = runtime.snapshot().await.expect("snapshot").blocks;
+        let said = |text: &str| {
+            blocks
+                .iter()
+                .any(|block| block.text.as_deref() == Some(text))
+        };
+        for name in source_environment {
+            assert!(said(&format!("{name}=visible")), "{name} reaches the agent");
+        }
+        if let Some(name) = probe {
+            assert!(
+                said(&format!("{name}=absent")),
+                "a descriptor pass-through name never reaches the Nano source"
+            );
+        }
+        runtime.dispose().await.expect("dispose");
+
+        // The source and the model agree in both directions; nothing falls back.
+        assert!(
+            NativeRuntime::spawn_acp(config.clone(), launch(None))
+                .await
+                .is_err(),
+            "an unqualified Nano mode is not substituted for a native model"
+        );
+        let mut native = config.clone();
+        native.model = None;
+        assert_eq!(
+            NativeRuntime::spawn_acp(native, launch(Some(source())))
+                .await
+                .err(),
+            Some(NativeRuntimeError::InvalidConfiguration),
+            "the Nano source never starts without a Nano mode"
+        );
+        let other = AcpAgentId::new("other-agent").expect("id");
+        let mut elsewhere = config;
+        elsewhere.harness = HarnessKind::Acp(other);
+        let mut shadow = launch(Some(source()));
+        shadow.agent = other;
+        assert_eq!(
+            NativeRuntime::spawn_acp(elsewhere, shadow).await.err(),
+            Some(NativeRuntimeError::InvalidConfiguration),
+            "the OpenCode source cannot start another agent"
         );
     }
 
@@ -5184,7 +5906,7 @@ mod tests {
             command.get_envs().all(|(_, value)| value.is_none()),
             "the launcher only removes variables"
         );
-        // Other harnesses keep the user's environment minus operator capabilities.
+        // Other harnesses keep the user's environment minus host-only capabilities.
         config.harness = HarnessKind::Codex;
         let other = bridge_command(Path::new("node"), &config, None);
         let other_removed = other
@@ -5195,6 +5917,7 @@ mod tests {
             other_removed,
             OPERATOR_ENVIRONMENT
                 .iter()
+                .chain([&prime_nano::SOURCE_ENV, &crate::codex_nano::SOURCE_ENV])
                 .map(|name| (*name).to_owned())
                 .collect::<HashSet<_>>()
         );

@@ -21,7 +21,11 @@
 pub use piui_contracts as contracts;
 
 pub mod acp;
+pub mod acp_nano;
+#[cfg(all(windows, any(test, bundled_nano_runtime)))]
+mod bundled_nano;
 pub mod codec;
+pub mod codex_nano;
 mod extension_manager;
 pub mod extension_ui;
 pub mod fake;
@@ -29,6 +33,7 @@ pub mod git;
 pub mod nano;
 mod native_version;
 pub mod plugin_backend;
+pub mod prime_nano;
 pub mod provenance;
 pub mod read_only_probe;
 pub mod real_rpc;

@@ -965,6 +965,8 @@ pub fn run() -> Result<(), tauri::Error> {
             app_update::app_update_set_auto_check_v1,
             app_update::app_update_restart_v1,
             nano::commands::nano_account_status_v1,
+            nano::provider_commands::nano_providers_v1,
+            nano::provider_commands::nano_chatgpt_v1,
             nano::commands::nano_account_sign_in_v1,
             nano::commands::nano_account_cancel_sign_in_v1,
             nano::commands::nano_account_sign_out_v1,

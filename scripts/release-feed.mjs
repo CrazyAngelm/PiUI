@@ -100,7 +100,7 @@ ${rows.join('\n')}
 
 ## Before you install
 
-1. Install at least one harness and sign in with its own tool: Codex, Claude Code, Pi, Hermes or Prime Agent. Nano Desktop never asks for or stores harness credentials. Claude Code runs only with a Claude subscription login (\`claude\` → \`/login\`).
+1. On Windows x64, sign in to Nano Desktop to use the included Nano harness. To use Codex, Claude Code, Pi, Hermes or Prime Agent, install that harness and sign in with its own tool. Claude Code uses a Claude subscription login (\`claude\` → \`/login\`).
 2. Verify your download against \`SHA256SUMS.txt\`:
    - Windows (PowerShell): \`Get-FileHash .\\NanoDesktop_${version}_x64-setup.exe -Algorithm SHA256\` and compare with the matching line of \`SHA256SUMS.txt\`.
    - Linux and macOS: \`sha256sum --check --ignore-missing SHA256SUMS.txt\` (macOS: \`shasum -a 256 --check --ignore-missing SHA256SUMS.txt\`).

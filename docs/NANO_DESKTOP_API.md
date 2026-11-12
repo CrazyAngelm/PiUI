@@ -369,6 +369,16 @@ website. `403 feature_not_in_plan` when `features.cloud` is false.
 `POST /api/desktop/v1/workspaces/{workspaceId}/gateway/v1/chat/completions` and
 `GET /api/desktop/v1/workspaces/{workspaceId}/gateway/v1/models`. See section 5.
 
+For servers that expose additional dialects, authenticated
+`GET /api/desktop/v1/workspaces/{workspaceId}/gateway/v1/capabilities`
+returns `{"dialects":{"chat-completions":["free"],"responses":["free"]}}`
+with the available mode IDs for each verified protocol. Missing dialects are
+unavailable. Codex uses `POST .../gateway/v1/responses` only for advertised
+modes and sends the same Nano device and session headers as Chat Completions.
+The backend can also advertise `messages` for Anthropic Messages and
+`gemini` for Gemini GenerateContent. Availability is scoped to the account,
+workspace and operator-verified provider routes.
+
 ## 5. Gateway semantics
 
 An OpenAI-compatible Chat Completions facade. The desktop's local relay puts

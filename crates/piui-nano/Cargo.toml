@@ -20,6 +20,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 # rustls without a bundled provider: the crate builds its own ring-based TLS
 # configuration with the platform verifier (no aws-lc, no native-tls).
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls-no-provider", "system-proxy"] }
+ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-platform-verifier = "0.7"
 semver = "1"

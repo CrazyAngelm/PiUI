@@ -152,6 +152,22 @@ pub fn default_os_store(issuer_origin: &str) -> Option<Arc<dyn CredentialStore>>
     }
 }
 
+/// A separate OS credential entry for an external provider connection.
+pub(crate) fn external_provider_store(id: &str) -> Option<Arc<dyn CredentialStore>> {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        Some(Arc::new(OsCredentialStore {
+            service: "dev.piui.desktop.external-provider".to_owned(),
+            user: id.to_owned(),
+        }))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = id;
+        None
+    }
+}
+
 /// The persistent store plus the in-memory fallback.
 pub(crate) struct TokenVault {
     persistent: Option<Arc<dyn CredentialStore>>,

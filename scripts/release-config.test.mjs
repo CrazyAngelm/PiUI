@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { releasePlan } from './release-build.mjs';
+import { fileManifest, pinnedPiVersion } from './nano-runtime/stage.mjs';
 import { ReleaseConfigError, isTauriPublicKey, releaseConfig, writeReleaseConfig } from './release-config.mjs';
 
 // minisign's published test public key (from minisign-verify's tests), in the
@@ -168,4 +169,35 @@ test('the release build plan adds the fragment and the signature check only when
     prune,
   ]);
   assert.equal(releasePlan(root, 'linux', { tauriCli: 'tauri.js' })[0].cwd, join(root, 'apps', 'desktop'));
+});
+
+test('the Nano bundle lock pins Pi and each npm registry package', () => {
+  const lock = JSON.parse(readFileSync(new URL('./nano-runtime/package-lock.json', import.meta.url)));
+  const packageJson = JSON.parse(readFileSync(new URL('./nano-runtime/package.json', import.meta.url)));
+  const pi = '@earendil-works/pi-coding-agent';
+  const version = packageJson.dependencies[pi];
+  assert.equal(pinnedPiVersion(lock, version), version);
+  assert.throws(() => pinnedPiVersion(lock, '^1.5.2'), /must pin/);
+  delete lock.packages[`node_modules/${pi}`].integrity;
+  assert.throws(() => pinnedPiVersion(lock, version), /must pin/);
+});
+
+test('the Nano bundle manifest records relative paths, lengths and SHA-256 and rejects links', () => {
+  const root = mkdtempSync(join(tmpdir(), 'piui-nano-manifest-'));
+  try {
+    mkdirSync(join(root, 'nested'));
+    const file = join(root, 'nested', 'package.json');
+    writeFileSync(file, 'abc');
+    writeFileSync(join(root, 'manifest.json'), 'excluded');
+    assert.deepEqual(fileManifest(root, ['nested']), {
+      'nested/package.json': {
+        sha256: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+        size: 3,
+      },
+    });
+    linkSync(file, join(root, 'nested', 'alias'));
+    assert.throws(() => fileManifest(root, ['nested']), /Unsupported Nano runtime entry/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

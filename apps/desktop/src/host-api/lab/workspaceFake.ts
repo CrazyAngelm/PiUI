@@ -1,7 +1,10 @@
 import {
-  accountCatalogModel, accountDefaultModel, accountModels, accountRuntimeModels, catalogModels, claudeSignInRequired,
+  accountCatalogModel, accountDefaultModel, accountModels, accountRuntimeModels, claudeSignInRequired,
   defaultSessionTitle, harnessResources, permissionModes, reportsServiceTier,
 } from './catalogFake';
+import { NANO_MODEL_PROVIDER } from '../../../../../contracts/nano-account-v1';
+import { NANO_EXTERNAL_PROVIDER_PREFIX } from '../../../../../contracts/nano-providers-v1';
+import { NANO_SOURCE_HARNESSES, nanoSourceProvider } from '../../app/nano/nanoView';
 import { assertAcpStartable, isAgentDefault } from './acpFake';
 import { isAcpHarness } from '../../../../../contracts/harness-identity-v3';
 import type { HarnessModelsResultV19 } from '../../../../../contracts/harness-models-v19';
@@ -51,8 +54,14 @@ function assertSignedIn(state: LabState, harness: HarnessKind): void {
  * can use the gateway and the local agent with a mode open; otherwise it is refused
  * before anything starts. The catalog never refuses: it is empty while signed out.
  */
-function assertNanoReady(state: LabState, harness: HarnessKind): void {
-  if (harness !== 'nano') return;
+function assertNanoReady(state: LabState, harness: HarnessKind, model: WorkspaceModel | undefined = undefined): void {
+  if (harness === 'nano' && model?.provider?.startsWith(NANO_EXTERNAL_PROVIDER_PREFIX)) {
+    if (!accountCatalogModel(state, harness, model.id, model.provider)) throw workspaceFailure('RUNTIME_FAILED');
+    return;
+  }
+  // The Nano lane, and the Nano source of the agent that has one (a Nano mode picked at start).
+  const nanoProvider = nanoSourceProvider(harness);
+  if (harness !== 'nano' && !(NANO_SOURCE_HARNESSES.includes(harness) && model?.provider === nanoProvider)) return;
   const status = state.nanoAccount?.status();
   if (status === undefined || !labNanoLaunchReady(status)) throw workspaceFailure('NANO_SIGN_IN_REQUIRED');
 }
@@ -111,7 +120,11 @@ function createSession(runtime: LabSessions, command: Extract<WorkspaceCommand, 
   assertHarnessAvailable(state, command.harness);
   if (!permissionModes(command.harness).includes(command.permissionMode)) throw workspaceFailure('RUNTIME_FAILED');
   assertSignedIn(state, command.harness);
-  assertNanoReady(state, command.harness);
+  assertNanoReady(state, command.harness, command.model);
+  // A Nano mode starts only on the agent that has a Nano source; any other agent refuses it.
+  if (command.model?.provider === NANO_MODEL_PROVIDER && command.harness !== 'nano' && !NANO_SOURCE_HARNESSES.includes(command.harness)) {
+    throw workspaceFailure('RUNTIME_FAILED');
+  }
   // A mode the account cannot use (locked by plan or credits) is not in its catalog: refused like an unknown model.
   if (command.model && accountCatalogModel(state, command.harness, command.model.id, command.model.provider) === undefined) {
     throw workspaceFailure('RUNTIME_FAILED');
@@ -152,7 +165,8 @@ function openSession(runtime: LabSessions, sessionId: string): WorkspaceResult {
   if (record.runId !== undefined) throw workspaceFailure('NOT_SUPPORTED');
   assertAcpStartable(state, record.harness);
   assertHarnessAvailable(state, record.harness);
-  assertNanoReady(state, record.harness);
+  // A session recorded on the Nano source reopens on it or is refused; it never starts natively.
+  assertNanoReady(state, record.harness, record.model);
   runtime.open(record);
   const result: SessionSnapshotResult = { type: 'session', snapshot: liveSnapshot(state, record) };
   runtime.publishSession(record);
@@ -211,6 +225,14 @@ function workspaceCommand(runtime: LabSessions, command: WorkspaceCommand): Work
       const live = requireLive(record);
       if (live.status === 'failed') throw workspaceFailure('RUNTIME_FAILED');
       if ((record.harness === 'pi' || record.harness === 'nano') && !command.model.provider) throw workspaceFailure('RUNTIME_FAILED');
+      // An ACP session keeps its model source: it never changes between the agent's own models and the Nano modes.
+      const nanoProvider = nanoSourceProvider(record.harness);
+      if (NANO_SOURCE_HARNESSES.includes(record.harness) && (command.model.provider === nanoProvider) !== (record.model?.provider === nanoProvider)) {
+        throw workspaceFailure('INVALID_ARGUMENT');
+      }
+      if (record.harness === 'nano' && (command.model.provider ?? NANO_MODEL_PROVIDER) !== (record.model?.provider ?? NANO_MODEL_PROVIDER)) {
+        throw workspaceFailure('INVALID_ARGUMENT');
+      }
       if (accountCatalogModel(state, record.harness, command.model.id, command.model.provider) === undefined) throw workspaceFailure('RUNTIME_FAILED');
       record.model = { ...command.model };
       record.thinkingLevel = command.thinkingLevel ?? carriedThinkingLevel(command.model, record.thinkingLevel);
@@ -267,7 +289,7 @@ function runtimeSettings(runtime: LabSessions, command: RuntimeSettingsCommand):
     throw workspaceFailure('NOT_SUPPORTED');
   }
   if (live.status === 'failed') throw workspaceFailure('RUNTIME_FAILED');
-  const models = accountRuntimeModels(state, record.harness);
+  const models = accountRuntimeModels(state, record.harness, record.model);
   if (command.type === 'set') {
     if (live.status !== 'idle') throw workspaceFailure('INVALID_ARGUMENT');
     const candidate = models.find((model) => model.id === command.model.id && model.provider === command.model.provider);
@@ -324,9 +346,10 @@ async function harnessModels(runtime: LabSessions, request: HarnessModelsRequest
   const { state } = runtime;
   assertNotSafe(state);
   verifiedProject(state, request.workspaceId, true);
-  // ACP: no probe conversation; the agent default plus remembered models.
+  // ACP: no probe conversation; the agent default plus remembered models, and for the
+  // agent with a Nano model source the account's current modes as a separate group.
   if (isAcpHarness(request.harness)) {
-    return { protocol: 18, harness: request.harness, models: catalogModels(request.harness), resources: harnessResources(request.harness) };
+    return { protocol: 18, harness: request.harness, models: accountModels(state, request.harness), resources: harnessResources(request.harness) };
   }
   assertHarnessAvailable(state, request.harness);
   await runtime.clock.delay(state.catalog === 'slow' ? SLOW_CATALOG_LATENCY_MS : CATALOG_LATENCY_MS);

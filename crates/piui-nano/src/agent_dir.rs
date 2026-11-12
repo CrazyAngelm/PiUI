@@ -8,13 +8,14 @@
 //! with `-e` when the permission mode needs it. No credential is ever written
 //! here.
 
-use std::io;
 use std::net::Ipv4Addr;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::{fs, io};
 
 use serde_json::{Value, json};
 use url::{Host, Url};
 
+use crate::external_providers::{ExternalProvider, ExternalRequestFormat};
 use crate::fsutil::atomic_write;
 use crate::status::NANO_MODEL_PROVIDER;
 use crate::wire::{NanoModeInputV1, NanoModeV1};
@@ -76,6 +77,96 @@ pub fn prepare_pi_agent_dir(
     })
 }
 
+/// Writes a one-session Pi configuration for a host-owned provider lease.
+pub fn prepare_external_pi_agent_dir(
+    dir: &Path,
+    relay_base_url: &str,
+    provider: &ExternalProvider,
+    guard_source: &str,
+) -> Result<(), AgentDirError> {
+    validate_relay_url(relay_base_url)?;
+    let provider_id = provider.provider_id();
+    let model_id = &provider.spec.model_id;
+    // Pi otherwise detects compatibility from the loopback URL. Select the
+    // upstream format explicitly while keeping the relay endpoint and model fixed.
+    let (openai, max_tokens_field) = match provider.spec.request_format {
+        ExternalRequestFormat::Compatible => (false, "max_tokens"),
+        ExternalRequestFormat::OpenAi => (true, "max_completion_tokens"),
+    };
+    let mut models = json!({ "providers": { (provider_id.clone()): {
+        "name": provider.spec.name,
+        "baseUrl": relay_base_url,
+        "api": "openai-completions",
+        "apiKey": format!("${RELAY_KEY_ENV}"),
+        "models": [{
+            "id": model_id, "name": model_id, "reasoning": false, "input": ["text"],
+            "compat": {
+                "supportsStore": openai,
+                "supportsDeveloperRole": openai,
+                "maxTokensField": max_tokens_field,
+            },
+        }],
+    } } });
+    if provider.is_chatgpt() {
+        let entry = &mut models["providers"][&provider_id];
+        entry["api"] = json!("openai-responses");
+        // Pi uses the developer role for its system prompt only on reasoning
+        // models. Omit the reasoning field when the Nano lane runs with off.
+        entry["models"][0]["reasoning"] = json!(true);
+        entry["models"][0]["thinkingLevelMap"] = json!({
+            "off": null, "minimal": null, "low": null, "medium": null, "high": null,
+        });
+        entry["models"][0]["compat"] = json!({
+            "supportsDeveloperRole": true,
+            "supportsMidConvoSystemMessages": true,
+            "supportsAdditionalTools": true,
+            "supportsMaxOutputTokens": false,
+            "supportsLongCacheRetention": false,
+            "promptCacheKeyMode": "disabled",
+        });
+    }
+    let mut settings = settings_document(&[]);
+    settings["defaultProvider"] = json!(provider_id);
+    settings["defaultModel"] = json!(model_id);
+    if provider.is_chatgpt() {
+        settings["defaultThinkingLevel"] = json!("off");
+    }
+    atomic_write(&dir.join("models.json"), &pretty(&models)?)?;
+    atomic_write(&dir.join("settings.json"), &pretty(&settings)?)?;
+    atomic_write(
+        &dir.join(GUARD_DIR).join(GUARD_FILE),
+        guard_source.as_bytes(),
+    )?;
+    Ok(())
+}
+
+/// Installs the embedded Nano resources in an undiscoverable subdirectory.
+/// The bridge explicitly names the files Pi may load.
+///
+/// # Errors
+/// Returns an error for an invalid relative path or if an asset cannot be written.
+pub fn prepare_pi_bundled_assets(dir: &Path, assets: &[(&str, &str)]) -> io::Result<()> {
+    let bundled = dir.join("bundled");
+    for (name, source) in assets {
+        let relative = Path::new(name);
+        if name.is_empty()
+            || !relative
+                .components()
+                .all(|part| matches!(part, Component::Normal(_)))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid Nano asset path",
+            ));
+        }
+        let path = bundled.join(relative);
+        if !fs::read(&path).is_ok_and(|current| current == source.as_bytes()) {
+            atomic_write(&path, source.as_bytes())?;
+        }
+    }
+    Ok(())
+}
+
 fn pretty(value: &Value) -> io::Result<Vec<u8>> {
     let mut bytes = serde_json::to_vec_pretty(value).map_err(io::Error::other)?;
     bytes.push(b'\n');
@@ -99,12 +190,13 @@ fn validate_relay_url(raw: &str) -> Result<(), AgentDirError> {
     Ok(())
 }
 
-/// `/v1` or `/s/<digits>/v1`.
+/// `/v1`, `/s/<digits>/v1` or `/p/<digits>/v1`.
 fn relay_path(path: &str) -> bool {
     if path == "/v1" {
         return true;
     }
     path.strip_prefix("/s/")
+        .or_else(|| path.strip_prefix("/p/"))
         .and_then(|rest| rest.strip_suffix("/v1"))
         .is_some_and(|id| {
             !id.is_empty() && id.len() <= 19 && id.bytes().all(|c| c.is_ascii_digit())
@@ -179,6 +271,7 @@ fn settings_document(modes: &[NanoModeV1]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::external_providers::ExternalProviderSpec;
     use crate::wire::NanoEntitlementsV1;
     use crate::wire::tests::server_fixture;
 
@@ -190,6 +283,42 @@ mod tests {
 
     fn read_json(path: &Path) -> Value {
         serde_json::from_slice(&std::fs::read(path).expect("read")).expect("json")
+    }
+
+    #[test]
+    fn external_models_pin_the_selected_request_format_behind_the_relay() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut provider = ExternalProvider {
+            id: "1".repeat(32),
+            spec: ExternalProviderSpec {
+                name: "External fixture".to_owned(),
+                base_url: "https://models.example.test/v1".to_owned(),
+                model_id: "vendor/model".to_owned(),
+                request_format: ExternalRequestFormat::Compatible,
+            },
+        };
+        let relay = "http://127.0.0.1:43123/p/7/v1";
+        for (format, openai, tokens) in [
+            (ExternalRequestFormat::Compatible, false, "max_tokens"),
+            (ExternalRequestFormat::OpenAi, true, "max_completion_tokens"),
+        ] {
+            provider.spec.request_format = format;
+            prepare_external_pi_agent_dir(dir.path(), relay, &provider, "")
+                .expect("external source");
+            let document = read_json(&dir.path().join("models.json"));
+            let model_provider = &document["providers"][provider.provider_id()];
+            assert_eq!(model_provider["baseUrl"], relay);
+            assert_eq!(model_provider["apiKey"], "$NANO_RELAY_KEY");
+            let model = &model_provider["models"][0];
+            assert_eq!(model["id"], provider.spec.model_id);
+            assert_eq!(
+                model["compat"],
+                json!({
+                    "supportsStore": openai, "supportsDeveloperRole": openai, "maxTokensField": tokens,
+                })
+            );
+            assert!(!document.to_string().contains("models.example.test"));
+        }
     }
 
     #[test]
@@ -221,6 +350,7 @@ mod tests {
         assert_eq!(settings["defaultProvider"], "nano");
         assert_eq!(settings["defaultModel"], "free");
         assert_eq!(settings["enableInstallTelemetry"], false);
+        assert!(settings.get("defaultTools").is_none());
 
         assert_eq!(
             prepared.guard_path,
@@ -232,6 +362,27 @@ mod tests {
             "export default function () {}\n"
         );
         assert!(!dir.path().join("auth.json").exists());
+    }
+
+    #[test]
+    fn restores_bundled_assets_and_refuses_paths_outside_the_bundle() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bundled/bes-deep-mode/SKILL.md");
+        let assets = [("bes-deep-mode/SKILL.md", "embedded skill")];
+        prepare_pi_bundled_assets(dir.path(), &assets).expect("install assets");
+        fs::write(&path, "modified").expect("modify skill");
+        prepare_pi_bundled_assets(dir.path(), &assets).expect("repair assets");
+        assert_eq!(
+            fs::read_to_string(path).expect("read skill"),
+            "embedded skill"
+        );
+        assert_eq!(
+            prepare_pi_bundled_assets(dir.path(), &[("../outside", "unexpected")])
+                .expect_err("must reject traversal")
+                .kind(),
+            io::ErrorKind::InvalidInput,
+        );
+        assert!(!dir.path().join("outside").exists());
     }
 
     #[test]

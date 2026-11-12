@@ -74,6 +74,21 @@ test("Pi RPC adapter snapshots history and returns prompt admission", async () =
   await adapter.dispose();
 });
 
+test("Pi local commands complete without an agent event and leave the next prompt independent", async () => {
+  const events = [];
+  const adapter = await createPiAdapter(config(), event => events.push(event));
+  try {
+    const completed = () => events.filter(event => event.type === "turnCompleted");
+    await adapter.prompt({ text: "/skill-paths", mode: "prompt" });
+    assert.deepEqual(completed(), [{ type: "turnCompleted", outcome: "succeeded" }]);
+    assert.equal((await adapter.snapshot()).status, "idle");
+    await adapter.prompt({ text: "test", mode: "prompt" });
+    assert.equal(completed().length, 1);
+    await waitFor(() => completed().length === 2);
+    assert.deepEqual(completed().map(event => event.outcome), ["succeeded", "succeeded"]);
+  } finally { await adapter.dispose(); }
+});
+
 test("approval responses are single-use and do not expose native origin", async () => {
   const events = [];
   const adapter = await createPiAdapter(config(), (event) => events.push(event));
@@ -608,8 +623,14 @@ test("when the retries of Pi fail, one error is reported with the failed turn", 
 // --- Nano lane (harness "nano"): the same bridge, a private agent directory and a cleared environment ---
 
 const RELAY_KEY = "relay-key-canary-0123456789abcdef";
-const AGENT_DIR = join(tmpdir(), "nano-agent");
+const AGENT_DIR = fileURLToPath(new URL(".", import.meta.url));
 const GUARD = join(AGENT_DIR, "nano-guard.ts");
+const SKILL_PATHS = join(AGENT_DIR, "bundled", "skill-paths.ts");
+const BES_SKILL = join(AGENT_DIR, "bundled", "bes-deep-mode", "SKILL.md");
+const BUNDLED_FLAGS = ["--no-skills", "--skill", BES_SKILL, "--no-extensions", "-e", SKILL_PATHS];
+const WINDOWS_POWERSHELL = join(AGENT_DIR, "bundled", "windows-powershell.ts");
+const WINDOWS_NATIVE_TOOLS = process.platform === "win32" ? ["--tools", "read,edit,write,nano_powershell"] : [];
+const WINDOWS_SHELL_FLAGS = process.platform === "win32" ? ["-e", WINDOWS_POWERSHELL] : [];
 const NANO_OVERRIDES = { nano: { agentDir: AGENT_DIR, guardExtension: GUARD }, model: { provider: "nano", id: "smart", name: "Smart" } };
 // Like the host, which starts each Nano bridge with the key in its process
 // environment, every Nano config puts the key there for the next adapter.
@@ -655,14 +676,14 @@ const NANO_OS_ENVIRONMENT = process.platform === "win32" ? new Set([
 ]);
 // Windows adds a few non-secret names to any child it starts, whatever the environment block holds.
 const WINDOWS_ADDED = new Set(["LOGONSERVER", "SESSIONNAME"]);
-const NANO_VARIABLES = new Set(["PI_CODING_AGENT_DIR", "PI_OFFLINE", "PI_SKIP_VERSION_CHECK", "PI_TELEMETRY", "NANO_RELAY_KEY"]);
+const NANO_VARIABLES = new Set(["PI_CODING_AGENT_DIR", "PI_OFFLINE", "PI_SKIP_VERSION_CHECK", "PI_TELEMETRY"]);
 const canonical = (name) => (process.platform === "win32" ? name.toUpperCase() : name);
 
 test("the Nano lane starts upstream Pi with its own flags, no approval trust and no relay key in the arguments", async () => {
   const { launch, events, snapshot } = await launchOf({});
   assert.deepEqual(launch.args, [
     "--mode", "rpc", "--no-approve", "--offline", "--session-dir", process.cwd(),
-    "--provider", "nano", "--model", "smart", "--no-extensions", "-e", GUARD,
+    "--provider", "nano", "--model", "smart", ...WINDOWS_NATIVE_TOOLS, ...BUNDLED_FLAGS, "-e", GUARD, ...WINDOWS_SHELL_FLAGS,
   ]);
   assert.ok(!launch.args.includes("--approve"));
   assert.ok(!launch.args.includes("--thinking"));
@@ -671,6 +692,14 @@ test("the Nano lane starts upstream Pi with its own flags, no approval trust and
   assert.ok(!JSON.stringify(snapshot).includes(RELAY_KEY));
   assert.equal(launch.env.PIUI_NANO_RELAY_KEY, undefined, "the bridge variable never reaches Pi");
   assert.equal(process.env.PIUI_NANO_RELAY_KEY, undefined, "the bridge removes the key from its own environment");
+});
+
+test("a host-configured external source stays selected in the private Nano Pi lane", async () => {
+  const model = { provider: `nano-external-${"f".repeat(32)}`, id: "vendor/model", name: "External model" };
+  const { launch, snapshot } = await launchOf({ model });
+  assert.deepEqual(launch.args.slice(6, 10), ["--provider", model.provider, "--model", model.id]);
+  assert.equal(snapshot.model.provider, model.provider);
+  assert.equal(snapshot.model.id, model.id);
 });
 
 test("the Nano relay key comes only from the bridge environment, never from the initialize frame", async () => {
@@ -692,6 +721,20 @@ test("the Nano relay key comes only from the bridge environment, never from the 
     await adapter.dispose();
     assert.equal(process.env.PIUI_NANO_RELAY_KEY, "pi-lane-ignores-it");
   } finally { delete process.env.PIUI_NANO_RELAY_KEY; }
+});
+
+test("Nano refuses to run the CLI without the relay key preload", async () => {
+  const recording = await recordingConfig();
+  const events = [];
+  try {
+    await assert.rejects(
+      createPiAdapter(recording.nanoConfig({ nano: { agentDir: recording.directory, guardExtension: GUARD } }),
+        (event) => events.push(event)),
+      { bridgeCode: "runtime-exited" },
+    );
+    await assert.rejects(recording.launch(), { code: "ENOENT" });
+    assert.ok(!JSON.stringify(events).includes(RELAY_KEY));
+  } finally { await rm(recording.directory, { recursive: true, force: true }); }
 });
 
 test("the Nano lane passes session and name flags like the Pi lane", async () => {
@@ -720,8 +763,8 @@ test("the Nano lane clears the environment to an OS allowlist plus the Nano vari
     assert.equal(launch.env.PI_OFFLINE, "1");
     assert.equal(launch.env.PI_SKIP_VERSION_CHECK, "1");
     assert.equal(launch.env.PI_TELEMETRY, "0");
-    assert.equal(launch.env.NANO_RELAY_KEY, RELAY_KEY);
-    for (const name of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "NANO_ACCESS_TOKEN", "HTTPS_PROXY", "PIUI_CANARY"]) {
+    assert.equal(launch.env.NANO_RELAY_KEY, undefined, "the Pi preload removes the key before the CLI runs");
+    for (const name of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "NANO_ACCESS_TOKEN", "HTTPS_PROXY", "PIUI_CANARY", "NANO_RELAY_KEY"]) {
       assert.ok(!names.some((candidate) => canonical(candidate) === name), `${name} must not reach the child`);
     }
     assert.ok(!/sk-canary|canary-access|stale-key|user:canary/.test(JSON.stringify(launch.env)));
@@ -761,7 +804,9 @@ test("the Nano read-only mode passes only Pi's read tools and keeps the guard lo
   const tools = launch.args.indexOf("--tools");
   assert.equal(launch.args[tools + 1], "read,grep,find,ls");
   assert.ok(launch.args.indexOf("--no-extensions") > tools);
-  assert.equal(launch.args[launch.args.indexOf("-e") + 1], GUARD);
+  assert.equal(launch.args[launch.args.lastIndexOf("-e") + 1], GUARD);
+  assert.deepEqual(launch.args.slice(tools + 2, -2), BUNDLED_FLAGS);
+  assert.ok(!launch.args.includes(WINDOWS_POWERSHELL));
   const narrowed = await launchOf({ permissionMode: "read-only", allowedTools: ["read", "write", "bash"] });
   assert.equal(narrowed.launch.args[narrowed.launch.args.indexOf("--tools") + 1], "read");
   const none = await launchOf({ permissionMode: "read-only", allowedTools: ["write"] });
@@ -772,16 +817,25 @@ test("the Nano read-only mode passes only Pi's read tools and keeps the guard lo
 
 test("the Nano guard flag is present only when the host supplies the extension", async () => {
   const full = await launchOf({ permissionMode: "full-access", nano: { agentDir: AGENT_DIR, guardExtension: null } });
-  assert.ok(!full.launch.args.includes("-e"));
-  assert.ok(full.launch.args.includes("--no-extensions"), "no discovered extension loads either");
+  const fullFlags = [...WINDOWS_NATIVE_TOOLS, ...BUNDLED_FLAGS, ...WINDOWS_SHELL_FLAGS];
+  assert.deepEqual(full.launch.args.slice(-fullFlags.length), fullFlags);
+  assert.ok(!full.launch.args.includes(GUARD));
   const native = await launchOf({ permissionMode: "native" });
-  assert.equal(native.launch.args.filter((value) => value === "-e").length, 1);
-  assert.equal(native.launch.args.at(-1), GUARD);
+  assert.equal(native.launch.args.filter((value) => value === "-e").length, 2 + WINDOWS_SHELL_FLAGS.length / 2);
+  assert.equal(native.launch.args.at(-1 - WINDOWS_SHELL_FLAGS.length), GUARD);
   // Native approvals without the guard would run bash, write and edit unasked.
   await assert.rejects(
     createPiAdapter(nanoConfig({ runtimeProgram: "must-not-launch", permissionMode: "native", nano: { agentDir: AGENT_DIR, guardExtension: null } }), () => {}),
     { bridgeCode: "unsupported-policy" },
   );
+});
+
+test("a narrowed Windows Nano tool allowlist controls registration of the trusted shell", { skip: process.platform !== "win32" }, async () => {
+  const read = await launchOf({ allowedTools: ["read"] });
+  assert.ok(!read.launch.args.includes(WINDOWS_POWERSHELL));
+  const shell = await launchOf({ allowedTools: ["bash"] });
+  assert.equal(shell.launch.args[shell.launch.args.indexOf("--tools") + 1], "nano_powershell");
+  assert.ok(shell.launch.args.includes(WINDOWS_POWERSHELL));
 });
 
 test("the Nano lane refuses an incomplete or malformed configuration before starting Pi", async () => {
@@ -830,7 +884,7 @@ test("a Nano session reopened without a model keeps its recorded Nano model and 
       try {
         const { args } = await recording.launch();
         // Neither flag: Pi exits on `--provider` without `--model`.
-        assert.deepEqual(args, ["--restored-nano-model", "--mode", "rpc", "--no-approve", "--offline", "--session-dir", process.cwd(), "--no-extensions", "-e", GUARD]);
+        assert.deepEqual(args, ["--restored-nano-model", "--mode", "rpc", "--no-approve", "--offline", "--session-dir", process.cwd(), ...WINDOWS_NATIVE_TOOLS, ...BUNDLED_FLAGS, "-e", GUARD, ...WINDOWS_SHELL_FLAGS]);
       } finally { await adapter.dispose(); }
     } finally { await rm(recording.directory, { recursive: true, force: true }); }
   }
@@ -945,7 +999,7 @@ async function guardHandler() {
 }
 const uiContext = (answer, calls = []) => ({ hasUI: true, ui: { select: async (title, options) => { calls.push({ title, options }); return typeof answer === "function" ? answer(title, options) : answer; } } });
 
-test("the Nano guard lets read tools through and asks before bash, write and edit", async (t) => {
+test("the Nano guard lets read tools through and asks before Bash, PowerShell, write and edit", async (t) => {
   const handler = await guardHandler();
   if (!handler) return t.skip("this Node cannot load TypeScript");
   for (const toolName of ["read", "grep", "find", "ls"]) {
@@ -957,7 +1011,9 @@ test("the Nano guard lets read tools through and asks before bash, write and edi
     [{ toolName: "bash", input: { command: "npm   test\r\n--silent" } }, "Run command: npm   test\n--silent"],
     [{ toolName: "write", input: { path: "src/main.rs" } }, "Write file: src/main.rs"],
     [{ toolName: "edit", input: { path: "src/lib.rs" } }, "Edit file: src/lib.rs"],
-    [{ toolName: "powershell", input: { command: "ls" } }, "Run tool: powershell"],
+    [{ toolName: "powershell", input: { command: "Get-Item 'first file'\r\nGet-Item 'second file'" } }, "Run command: Get-Item 'first file'\nGet-Item 'second file'"],
+    [{ toolName: "nano_powershell", input: { command: "Get-ChildItem" } }, "Run command: Get-ChildItem"],
+    [{ toolName: "another-tool", input: { command: "ls" } }, "Run tool: another-tool"],
   ];
   for (const [event, title] of cases) {
     const calls = [];
@@ -1012,6 +1068,7 @@ test("a guard-style select dialog reaches the host as an approval card and a can
   try {
     await adapter.prompt({ text: "select", mode: "prompt" });
     const approval = await waitFor(() => events.find((event) => event.type === "approval")?.approval);
+    assert.equal(approval.title, "Allow dangerous command?", "the command's native title reaches the approval card");
     assert.deepEqual(approval.options.map((option) => option.label), ["Allow", "Block", "Line one line two"]);
     assert.deepEqual(approval.decisions, ["approve-once", "cancel"]);
     await adapter.respond({ requestId: approval.id, decision: "cancel" });

@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyWorkspaceEvent } from '../../features/workspace/workspaceState';
 import { createWorkspaceClient } from '../workspaceClient';
 import type { HarnessModelsResultV19 } from '../../../../../contracts/harness-models-v19';
+import { NANO_PRIME_MODEL_PROVIDER } from '../../../../../contracts/nano-account-v1';
+import { NANO_EXTERNAL_PROVIDER_PREFIX, type NanoProvidersResultV1 } from '../../../../../contracts/nano-providers-v1';
+import { NANO_CHATGPT_PROVIDER_ID, type NanoChatGptResultV1 } from '../../../../../contracts/nano-chatgpt-v1';
 import type {
   HarnessKind, HarnessModelsResult, RuntimeSettings, SessionSnapshot, WorkspaceEvent, WorkspaceHistoryResultV1, WorkspaceResult,
 } from './labContracts';
@@ -36,6 +39,12 @@ async function create(host: LabHost, harness: HarnessKind, extra: Record<string,
   const result = await command(host, { type: 'createSession', workspaceId: projectId(host, 'piui'), harness, permissionMode: 'native', ...extra });
   if (result.type !== 'session') throw new Error('Expected a created session.');
   return result.snapshot;
+}
+
+async function nativeCatalog(host: LabHost, harness: HarnessKind): Promise<HarnessModelsResult> {
+  const pending = host.invoke<HarnessModelsResult>('harness_models_v18', { request: { workspaceId: projectId(host, 'piui'), harness } });
+  await vi.advanceTimersByTimeAsync(400);
+  return pending;
 }
 
 describe('UI Lab workspace host', () => {
@@ -379,6 +388,103 @@ describe('UI Lab workspace host', () => {
     expect(await rejection(command(host, { type: 'openSession', sessionId: id }))).toMatchObject({ code: 'NANO_SIGN_IN_REQUIRED' });
     // The saved history stays readable without a process.
     expect((await snapshot(host, id)).session.status).toBe('closed');
+  });
+
+  it('offers the account modes as a separate group of OpenCode and keeps each session on its model source', async () => {
+    const opencode: HarnessKind = 'acp:opencode';
+    const catalogOf = async (host: LabHost): Promise<[string | undefined, string][]> => {
+      const result = await host.invoke<HarnessModelsResult>('harness_models_v18', { request: { workspaceId: projectId(host, 'piui'), harness: opencode } });
+      return result.models.map((model) => [model.provider, model.id]);
+    };
+    const nanoModel = (id: string) => ({ id, provider: 'nano', name: id });
+    const ownRows: [string | undefined, string][] = [[undefined, 'default'], [undefined, 'lab-pro'], [undefined, 'lab-flash']];
+    const nanoRows: [string | undefined, string][] = [['nano', 'auto'], ['nano', 'free'], ['nano', 'fast'], ['nano', 'smart']];
+
+    // Signed out (the lab default): the agent's own models only, and a Nano mode cannot start.
+    const out = labHost();
+    expect(await catalogOf(out)).toEqual(ownRows);
+    expect(await rejection(create(out, opencode, { model: nanoModel('auto') }))).toMatchObject({ code: 'NANO_SIGN_IN_REQUIRED' });
+    expect((await create(out, opencode)).session.model?.provider, 'the native source needs no account').toBeUndefined();
+
+    // Signed in: the same catalog plus the account's current modes as their own group.
+    const host = labHost('demo', { nano: 'signed-in' });
+    expect(await catalogOf(host)).toEqual([...ownRows, ...nanoRows]);
+    const nano = await create(host, opencode, { model: nanoModel('fast') });
+    expect(nano.session.model).toMatchObject({ id: 'fast', provider: 'nano' });
+    expect(nano.models.map((model) => [model.provider, model.id]), 'a Nano-source session lists the account modes only').toEqual(nanoRows);
+    const native = await create(host, opencode);
+    expect(native.models.every((model) => model.provider === undefined), 'a native session never lists a Nano mode').toBe(true);
+
+    // The source never changes inside a session, in either direction; modes of one source switch freely.
+    expect(await rejection(command(host, { type: 'setModel', sessionId: nano.session.id, model: { id: 'lab-pro', name: 'Lab Pro' } }))).toMatchObject({ code: 'INVALID_ARGUMENT' });
+    expect(await rejection(command(host, { type: 'setModel', sessionId: native.session.id, model: nanoModel('auto') }))).toMatchObject({ code: 'INVALID_ARGUMENT' });
+    expect(await command(host, { type: 'setModel', sessionId: nano.session.id, model: nanoModel('free') })).toEqual({ type: 'accepted', sessionId: nano.session.id });
+    // No other agent takes a Nano mode.
+    expect(await rejection(create(host, 'acp:gemini-cli', { model: nanoModel('auto') }))).toMatchObject({ code: 'RUNTIME_FAILED' });
+
+    // Reopening keeps the recorded source: signed out, the Nano-source chat is refused and the native one reopens.
+    await command(host, { type: 'closeSession', sessionId: nano.session.id });
+    await command(host, { type: 'closeSession', sessionId: native.session.id });
+    await host.invoke('nano_account_sign_out_v1');
+    expect(await rejection(command(host, { type: 'openSession', sessionId: nano.session.id }))).toMatchObject({ code: 'NANO_SIGN_IN_REQUIRED' });
+    expect((await command(host, { type: 'openSession', sessionId: native.session.id })).type).toBe('session');
+    // Signing out ends the group at once.
+    expect(await catalogOf(host)).toEqual(ownRows);
+  });
+
+  it('keeps Prime Nano modes separate from the native catalog and live source', async () => {
+    const host = labHost('demo', { nano: 'signed-in' });
+    const catalog = await nativeCatalog(host, 'prime-agent');
+    expect(catalog.models.map(model => model.provider)).toEqual(['prime-lab', 'prime-lab', ...Array<string>(4).fill(NANO_PRIME_MODEL_PROVIDER)]);
+    const selected = { id: 'free', provider: NANO_PRIME_MODEL_PROVIDER, name: 'Free' };
+    const connected = await create(host, 'prime-agent', { model: selected });
+    const native = await create(host, 'prime-agent');
+    expect(connected.models.every(model => model.provider === NANO_PRIME_MODEL_PROVIDER)).toBe(true);
+    expect(native.models.every(model => model.provider === 'prime-lab')).toBe(true);
+    expect(await rejection(command(host, { type: 'setModel', sessionId: native.session.id, model: selected }))).toMatchObject({ code: 'INVALID_ARGUMENT' });
+    await command(host, { type: 'closeSession', sessionId: connected.session.id });
+    await host.invoke('nano_account_sign_out_v1');
+    expect(await rejection(command(host, { type: 'openSession', sessionId: connected.session.id }))).toMatchObject({ code: 'NANO_SIGN_IN_REQUIRED' });
+    const signedOut = await nativeCatalog(host, 'prime-agent');
+    expect(signedOut.models.every(model => model.provider === 'prime-lab')).toBe(true);
+  });
+
+  it('adds a configured API model to Nano Pi while signed out and refuses reuse after removal', async () => {
+    const host = labHost();
+    const spec = { name: 'Provider Lab', baseUrl: 'https://models.example.test/v1', modelId: 'vendor/test' };
+    const configured = await host.invoke<NanoProvidersResultV1>('nano_providers_v1', { request: { type: 'connect', spec, language: 'en' } });
+    const source = configured.providers[0];
+    expect(source?.spec).toEqual({ ...spec, requestFormat: 'compatible' });
+    const model = { id: spec.modelId, name: spec.name, provider: NANO_EXTERNAL_PROVIDER_PREFIX + source?.id };
+    const catalog = await nativeCatalog(host, 'nano');
+    expect(catalog.models).toEqual([{ ...model, supportsFast: false }]);
+    const session = await create(host, 'nano', { model });
+    expect(session.session.model).toMatchObject(model);
+    await command(host, { type: 'closeSession', sessionId: session.session.id });
+    await host.invoke('nano_providers_v1', { request: { type: 'disconnect', id: source?.id } });
+    expect(await rejection(command(host, { type: 'openSession', sessionId: session.session.id }))).toMatchObject({ code: 'RUNTIME_FAILED' });
+    expect((await nativeCatalog(host, 'nano')).models).toEqual([]);
+    const openai = await host.invoke<NanoProvidersResultV1>('nano_providers_v1', {
+      request: { type: 'connect', spec: { ...spec, requestFormat: 'openai' }, language: 'en' },
+    });
+    expect(openai.providers[0]?.spec.requestFormat).toBe('openai');
+    await expect(host.invoke('nano_providers_v1', {
+      request: { type: 'connect', spec: { ...spec, requestFormat: 'invalid' }, language: 'en' },
+    })).rejects.toMatchObject({ code: 'invalid-provider' });
+  });
+
+  it('routes ChatGPT plan models through Nano Pi without a Nano account', async () => {
+    const host = labHost();
+    const invoke = (type: 'connect' | 'disconnect') => host.invoke<NanoChatGptResultV1>('nano_chatgpt_v1', { request: { type } });
+    const result = await invoke('connect');
+    expect(result.status.connected).toBe(true);
+    const model = { id: 'synthetic-chatgpt-model', name: 'ChatGPT Demo', provider: NANO_CHATGPT_PROVIDER_ID };
+    expect((await nativeCatalog(host, 'nano')).models).toEqual([{ ...model, supportsFast: false }]);
+    const session = await create(host, 'nano', { model });
+    await command(host, { type: 'closeSession', sessionId: session.session.id });
+    expect((await invoke('disconnect')).status.connected).toBe(false);
+    expect((await nativeCatalog(host, 'nano')).models).toEqual([]);
+    expect(await rejection(command(host, { type: 'openSession', sessionId: session.session.id }))).toMatchObject({ code: 'RUNTIME_FAILED' });
   });
 
   it('enforces trust, lifecycle and creation rules with host error codes', async () => {

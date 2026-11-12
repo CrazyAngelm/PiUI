@@ -40,6 +40,10 @@ export const NANO_ACCOUNT_EVENT_V1 = 'piui://nano-account-v1' as const;
 export const NANO_HARNESS = 'nano' as const;
 /** `WorkspaceModel.provider` of every Nano mode row. */
 export const NANO_MODEL_PROVIDER = 'nano' as const;
+/** Prime's desktop subscription identity leaves its native `nano` provider available. */
+export const NANO_PRIME_MODEL_PROVIDER = 'nano-desktop-subscription' as const;
+export const NANO_CODEX_MODEL_PROVIDER = 'nano-codex-subscription' as const;
+export const NANO_GOOSE_MODEL_PROVIDER = 'nano-goose-subscription' as const;
 
 /**
  * - `signed-out`: no credential; nothing contacts the server.

@@ -17,7 +17,7 @@
 
 use crate::native_version::{NativeVersion, VerifiedRange, VersionCheck};
 use crate::script_runner::process_directory;
-use crate::workspace_runtime::resolve_node;
+use crate::workspace_runtime::{WorkspaceModel, resolve_node};
 pub use piui_contracts::harness_identity::AcpAgentId;
 #[cfg(any(unix, windows))]
 use piui_platform::ProcessContainment;
@@ -27,7 +27,7 @@ use piui_platform::{ProcessGroupId, UnixProcessGroup};
 use piui_platform::{ProcessId, SuspendedProcess, WindowsJob};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -896,7 +896,13 @@ pub fn probe_acp_version(
         Some(output) => output,
         None => {
             let environment = acp_environment(&std::env::vars_os().collect::<Vec<_>>(), &[]);
-            let output = run_version_command(&command.program, &args, &environment);
+            let output = run_probe_command(
+                &command.program,
+                &args,
+                &environment,
+                &std::env::temp_dir(),
+                ProbeOutput::Version,
+            );
             if let Some(mut cache) = CACHE.get().and_then(|cache| cache.lock().ok()) {
                 cache.insert(
                     key,
@@ -960,16 +966,16 @@ fn version_report(descriptor: &AcpAgentDescriptor, output: Option<&str>) -> AcpV
     }
 }
 
-/// Reads at most [`VERSION_OUTPUT_LIMIT`] bytes and drains the rest, so the
+/// Reads at most `limit` bytes and drains the rest, so the
 /// child never blocks on a full pipe.
-fn read_bounded(mut stream: impl std::io::Read) -> Vec<u8> {
+fn read_bounded(mut stream: impl std::io::Read, limit: usize) -> Vec<u8> {
     let mut kept = Vec::new();
     let mut buffer = [0_u8; 1024];
     loop {
         match stream.read(&mut buffer) {
             Ok(0) | Err(_) => break,
             Ok(read) => {
-                let room = VERSION_OUTPUT_LIMIT.saturating_sub(kept.len());
+                let room = limit.saturating_sub(kept.len());
                 kept.extend_from_slice(&buffer[..read.min(room)]);
             }
         }
@@ -977,23 +983,37 @@ fn read_bounded(mut stream: impl std::io::Read) -> Vec<u8> {
     kept
 }
 
-/// Runs one version command inside the same containment as a runtime: a
+enum ProbeOutput {
+    Version,
+    NativeModels,
+}
+
+/// Runs one probe command inside the same containment as a runtime: a
 /// Windows Job assigned before resume or an owned Unix process group. The
 /// whole tree is retired afterwards; only bounded output survives.
-fn run_version_command(
+fn run_probe_command(
     program: &Path,
     args: &[String],
     environment: &[(OsString, OsString)],
+    cwd: &Path,
+    output: ProbeOutput,
 ) -> Option<String> {
+    let (stdout_limit, stderr) = match output {
+        ProbeOutput::Version => (VERSION_OUTPUT_LIMIT, std::process::Stdio::piped()),
+        ProbeOutput::NativeModels => (
+            crate::codec::RpcCodecConfig::DEFAULT_MAX_FRAME_BYTES,
+            std::process::Stdio::null(),
+        ),
+    };
     let mut command = std::process::Command::new(program);
     command
         .args(args)
         .env_clear()
         .envs(environment.iter().map(|(name, value)| (name, value)))
-        .current_dir(std::env::temp_dir())
+        .current_dir(cwd)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+        .stderr(stderr);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt as _;
@@ -1043,14 +1063,14 @@ fn run_version_command(
         .map(|stream| {
             let (sender, receiver) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
-                let _ = sender.send(read_bounded(stream));
+                let _ = sender.send(read_bounded(stream, stdout_limit));
             });
             receiver
         })
         .chain(child.stderr.take().map(|stream| {
             let (sender, receiver) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
-                let _ = sender.send(read_bounded(stream));
+                let _ = sender.send(read_bounded(stream, VERSION_OUTPUT_LIMIT));
             });
             receiver
         }))
@@ -1130,6 +1150,64 @@ pub struct AcpLaunch {
     /// the descriptor's non-secret names and its confirmed secret-like names.
     pub environment: Vec<String>,
     pub capabilities: AcpCapabilityOverrides,
+    /// `Some` starts the agent on the Nano model source (ADR-050): its exact
+    /// environment replaces `environment` (no descriptor pass-through name
+    /// reaches that start). `None` is the agent's own native source.
+    pub nano: Option<crate::acp_nano::AcpNanoSource>,
+}
+
+/// Gets the configured OpenCode models without opening a conversation.
+/// The host calls this for its trusted, verified built-in OpenCode launch
+/// from an authorized project directory, off the UI path.
+pub fn probe_opencode_native_models(launch: &AcpLaunch, cwd: &Path) -> Option<Vec<WorkspaceModel>> {
+    if launch.agent.as_str() != crate::acp_nano::NANO_SOURCE_AGENT
+        || launch.nano.is_some()
+        || !launch.command.program.is_absolute()
+        || !cwd.is_absolute()
+    {
+        return None;
+    }
+    let environment = acp_environment(
+        &std::env::vars_os().collect::<Vec<_>>(),
+        &launch.environment,
+    );
+    let output = run_probe_command(
+        &launch.command.program,
+        &launch.command.version_args(&["models".into()]),
+        &environment,
+        cwd,
+        ProbeOutput::NativeModels,
+    )?;
+    Some(parse_opencode_models(&output))
+}
+
+fn parse_opencode_models(output: &str) -> Vec<WorkspaceModel> {
+    // The ACP bridge and the host's remembered catalog already keep 500 rows.
+    const MAX_CATALOG_MODELS: usize = 500;
+    let mut seen = HashSet::new();
+    output
+        .split_inclusive('\n')
+        .filter_map(|line| {
+            // Native stdout terminates every row. A bounded capture can end
+            // inside the next ID, so only accept complete LF or CRLF rows.
+            let id = line.strip_suffix('\n')?.trim_end_matches('\r');
+            let (provider, name) = id.split_once('/')?;
+            if provider.trim().is_empty()
+                || name.trim().is_empty()
+                || id.chars().any(char::is_control)
+                || !seen.insert(id)
+            {
+                return None;
+            }
+            Some(WorkspaceModel {
+                id: id.to_owned(),
+                provider: Some(provider.to_owned()),
+                name: name.to_owned(),
+                thinking_levels: None,
+            })
+        })
+        .take(MAX_CATALOG_MODELS)
+        .collect()
 }
 
 #[cfg(test)]
@@ -1656,6 +1734,70 @@ mod tests {
             Err(AcpResolveError::UnsupportedLauncher)
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn open_code_model_rows_keep_the_native_provider_and_qualified_id() {
+        let models = parse_opencode_models(concat!(
+            "nano/provider/model\r\n",
+            "vendor/model\n",
+            "vendor/model\n",
+            "invalid row\n",
+            "vendor/\n",
+            "/model\n",
+            "vendor/bad\u{001b}id\n",
+            "vendor/incomplete"
+        ));
+        assert_eq!(
+            models,
+            [
+                WorkspaceModel {
+                    id: "nano/provider/model".into(),
+                    provider: Some("nano".into()),
+                    name: "provider/model".into(),
+                    thinking_levels: None,
+                },
+                WorkspaceModel {
+                    id: "vendor/model".into(),
+                    provider: Some("vendor".into()),
+                    name: "model".into(),
+                    thinking_levels: None,
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn open_code_catalog_probes_stdout_in_the_authorized_directory() {
+        let Ok(node) = resolve_node() else {
+            return;
+        };
+        let root = fresh_directory("opencode-models");
+        let script = root.join("agent.mjs");
+        std::fs::write(
+            &script,
+            r#"import { existsSync } from 'node:fs';
+if (process.argv.slice(2).join() !== 'models' || !existsSync('agent.mjs')) process.exit(2);
+console.error('diagnostic/not-a-model');
+console.log('nano/local');"#,
+        )
+        .expect("probe fixture");
+        let mut launch = AcpLaunch {
+            agent: AcpAgentId::new("opencode").expect("agent id"),
+            display_name: "OpenCode".into(),
+            command: node_command(node, script.clone(), &["acp".into()]),
+            environment: Vec::new(),
+            capabilities: descriptor().capabilities,
+            nano: None,
+        };
+        let models = probe_opencode_native_models(&launch, &root);
+        launch.agent = AcpAgentId::new("gemini-cli").expect("agent id");
+        assert!(probe_opencode_native_models(&launch, &root).is_none());
+        std::fs::remove_file(&script).expect("remove probe fixture");
+        std::fs::remove_dir(&root).expect("remove probe fixture directory");
+        let models = models.expect("native probe");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "nano/local");
     }
 
     #[test]

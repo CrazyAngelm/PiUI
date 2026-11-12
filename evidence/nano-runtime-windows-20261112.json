@@ -1,0 +1,52 @@
+{
+  "date": "2026-11-12",
+  "platform": "windows-x64",
+  "branch": "codex/nano-desktop-integrations",
+  "artifacts": {
+    "NanoDesktop_0.3.0_windows_x86_64.exe": "189f8065de9de5142963e600660eb23cb65c2d9b01ecc46b7dc171785a3aaf30",
+    "NanoDesktop_0.3.0_x64-setup.exe": "9b1380d783efd84f3c9e37fad063228c094f0ce304975e786219da1687548b1a"
+  },
+  "installedExecutable": "nano-desktop.exe (per-user installation)",
+  "installedSha256": "cf7107ab2018bf019ff6e7d6817fb65cd14015274b22df5383b49c6a4ef82ada",
+  "installedHealth": "NSIS exit 0, verified installed size and desktop shortcut target, authenticated operator ping",
+  "desktopShortcut": "Nano Desktop.lnk (Windows desktop)",
+  "safeModeHealth": "Earlier Windows iteration: Agent API ping and workspace catalog with PATH=System32",
+  "bundledPi": "1.5.2",
+  "bundledNode": "22.23.5",
+  "bundledRuntimeReleaseTests": 4,
+  "nanoRustTests": 115,
+  "desktopRustTests": { "passed": 482, "skipped": 1 },
+  "runtimeRustTests": { "passed": 265, "skipped": 9 },
+  "frontendUnitTests": 1229,
+  "frontendContractTests": 227,
+  "bridgeTests": { "passed": 182, "skipped": 4 },
+  "independentReadOnlyReviews": 4,
+  "installedBundledPi": "With process PATH restricted to System32, /skill-paths completed, a real Nano Free turn returned NANO_BUNDLED_OK, and native history reopened.",
+  "opencode": "Native 1.19.4 with synthetic SSE and shell credential isolation verified separately",
+  "realNanoProviderInEarlierInstalledIteration": {
+    "account": "Existing signed-in Nano account, free mode",
+    "bundledPi": "NANO_PI_OK",
+    "openCode": "NANO_OPENCODE_OK",
+    "openCodeCatalog": "Native model groups plus a separate Nano group with auto, free, fast and smart",
+    "toolsRequested": false
+  },
+  "latestPrimeCheck": {
+    "availableNanoFreeMode": true,
+    "nativeCatalogRows": 0,
+    "nativeSdkBaselineRows": 0,
+    "realTurnStarted": true,
+    "realTurnResult": "NANO_PRIME_OK",
+    "realTurnReopened": true,
+    "syntheticNativeProof": "Prime 0.9.5 streamed, ran Bash without the relay key and reopened native JSONL"
+  },
+  "externalProviderProof": "Bundled Pi 1.5.2 streamed authenticated synthetic responses with both request formats. Real provider sign-in and a turn in the installed WebView were not tested.",
+  "subsequentSourceChecks": {
+    "codex": "Native Windows 0.165.0 streamed two authenticated synthetic Responses requests, excluded the key from PowerShell, left the project MCP canary off, and reopened the native thread. The executable hash matches the official npm payload.",
+    "goose": "Native Windows 1.59.0 streamed synthetic Chat Completions in new and resumed ACP sessions with a fresh lease. The compiled Windows GUI shell helper excluded the key from PowerShell and the project hook stayed off.",
+    "gooseLiveCandidate": "The Windows release candidate offered a native default plus auto/free/fast/smart, completed a real Nano Free turn (NANO_GOOSE_OK) and reopened the native chat.",
+    "gooseInstalled": "The installed Windows build listed the same four modes and the native default. Reopening the existing Goose chat replayed its real Nano response through the recorded source.",
+    "chatGpt": "Bundled Pi 1.5.2 and production bridge used the Rust-generated external Responses configuration. Synthetic streaming, native tools, private history and empty Pi auth were verified. Live OAuth and plan inference are pending.",
+    "claudeCode": "Native Windows Claude Code sent two authenticated synthetic Anthropic Messages requests. Bash inherited the synthetic key with native defaults, and was clean through the prototype trusted wrapper. Managed settings and native resume remain unverified."
+  },
+  "uiLabKeyboardProof": "The keyboard-only ChatGPT/API-key settings flows and safe-mode fallback passed with a persistent Edge profile."
+}

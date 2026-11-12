@@ -232,7 +232,9 @@ fn builtin_sign_in_hint(kind: HarnessKind) -> Option<&'static str> {
         HarnessKind::Codex => {
             Some("Sign in with Codex's own flow: run `codex login` in a terminal.")
         }
-        HarnessKind::Nano => Some("Sign in to your Nano account to use Nano."),
+        HarnessKind::Nano => {
+            Some("Sign in for Nano subscription models or connect an API provider in Settings.")
+        }
         _ => None,
     }
 }
@@ -325,10 +327,11 @@ async fn registry_view(host: &HostState) -> Result<HarnessRegistryV1, HarnessReg
     let agents = acp.views();
     // Nano needs an account that can start a session on top of the installed
     // Pi: without one it is listed as "sign in required", never as ready.
-    let nano_ready = host
-        .workspace
-        .nano_host()
-        .is_some_and(|nano| nano.can_launch());
+    let nano_ready = if let Some(nano) = host.workspace.nano_host() {
+        nano.can_launch() || !nano.external_catalog().await.is_empty()
+    } else {
+        false
+    };
     let harnesses = builtin
         .into_iter()
         .map(|summary| HarnessStatusV1 {

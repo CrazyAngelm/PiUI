@@ -22,6 +22,7 @@
   import HarnessesSettings from '../settings/HarnessesSettings.svelte';
   import AboutSettings from '../settings/AboutSettings.svelte';
   import NanoAccountSettings from '../settings/NanoAccountSettings.svelte';
+  import NanoProviderSettings from '../settings/NanoProviderSettings.svelte';
   import Blocks from '@lucide/svelte/icons/blocks';
   import PluginsSettings from '../plugins/PluginsSettings.svelte';
   import PluginThemeRow from '../plugins/PluginThemeRow.svelte';
@@ -184,6 +185,7 @@
       </div>
     {:else if section === 'nano'}
       <NanoAccountSettings safeMode={store.safeMode} onOpenUpdates={() => store.navigate({ name: 'settings', section: 'about' })} />
+      {#if !store.safeMode}<NanoProviderSettings onChange={() => void store.loadCatalog()} />{/if}
     {:else if section === 'harnesses'}
       <HarnessesSettings />
     {:else if section === 'extensions'}

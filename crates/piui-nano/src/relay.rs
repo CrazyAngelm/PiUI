@@ -18,6 +18,16 @@
 //! (sign-out, device revocation, a dead refresh token, a new sign-in) or the
 //! session is dropped, so a later sign-in (possibly of another person) never
 //! serves an earlier session.
+//!
+//! Connector leases (ADR-050) are a second, separate key kind on the same
+//! listener: a [`ConnectorLease`] is bound to one harness session (the
+//! OpenCode ACP pilot), the Chat Completions dialect and the account
+//! generation, and its [`ConnectorKey`] opens only
+//! `http://127.0.0.1:<port>/c/<lease>/v1`. Lease keys are never accepted on
+//! `/v1` or `/s/<session>/v1`, and Pi session keys never on `/c/<lease>/v1`.
+//! After the key check a lease request takes exactly the Pi path above:
+//! the same entitlement checks and caps, the same upstream request and the
+//! same unbuffered stream.
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -26,7 +36,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -43,7 +53,7 @@ use serde::Deserialize;
 use subtle::{Choice, ConditionallySelectable as _, ConstantTimeEq};
 use tokio::net::TcpListener;
 use tokio::sync::{oneshot, watch};
-use tokio::task::JoinSet;
+use tokio::task::{AbortHandle, JoinSet};
 
 use crate::account::{AccountGeneration, NanoAccount};
 use crate::error::NanoError;
@@ -75,6 +85,9 @@ pub struct Relay {
     _shutdown: oneshot::Sender<()>,
 }
 
+mod external;
+pub use external::ExternalProviderLease;
+
 struct Shared {
     account: NanoAccount,
     port: u16,
@@ -89,10 +102,17 @@ struct Shared {
 struct Keys {
     live: HashMap<u64, LiveSession>,
     retired: Vec<SecretString>,
+    /// Connector leases (`/c/<id>/v1`); never consulted for `/v1` or `/s/`.
+    connectors: HashMap<u64, LiveConnector>,
+    /// Retired lease keys with their lease number: they answer
+    /// `nano_sign_in_required` on their own `/c/<id>/v1` only.
+    retired_connectors: Vec<(u64, SecretString)>,
+    external_providers: HashMap<u64, external::LiveExternalProvider>,
 }
 
-/// A registered session. Removing it from [`Keys::live`] drops `alive`,
-/// which ends every upload, upstream request and stream it admitted.
+/// A registered session (or the grant of a connector lease). Removing it
+/// from [`Keys::live`] (or [`Keys::connectors`]) drops `alive`, which ends
+/// every upload, upstream request and stream it admitted.
 struct LiveSession {
     key: SecretString,
     generation: AccountGeneration,
@@ -102,18 +122,46 @@ struct LiveSession {
     alive: watch::Sender<()>,
 }
 
+impl LiveSession {
+    fn ticket(&self) -> Ticket {
+        Ticket {
+            generation: self.generation,
+            tag: self.tag.clone(),
+            alive: self.alive.subscribe(),
+            allowed_modes: None,
+            workspace: None,
+        }
+    }
+}
+
+/// A registered connector lease: its grant and what it is bound to.
+struct LiveConnector {
+    grant: LiveSession,
+    harness: ConnectorHarness,
+    session_id: String,
+    dialect: ConnectorDialect,
+    allowed_modes: Option<Arc<[NanoModeIdV1]>>,
+    workspace: Option<Arc<str>>,
+}
+
 /// What one admitted request carries from its session.
 struct Ticket {
     generation: AccountGeneration,
     tag: Arc<str>,
     /// Closes when the session is dropped or closed.
     alive: watch::Receiver<()>,
+    allowed_modes: Option<Arc<[NanoModeIdV1]>>,
+    workspace: Option<Arc<str>>,
 }
 
 impl Ticket {
     /// Whether the session is still registered and its generation current.
     fn valid(&self, account: &NanoAccount) -> bool {
-        self.alive.has_changed().is_ok() && account.generation() == self.generation
+        self.alive.has_changed().is_ok()
+            && account.generation() == self.generation
+            && self.workspace.as_deref().is_none_or(|workspace| {
+                account.status().selected_workspace_id.as_deref() == Some(workspace)
+            })
     }
 
     /// Completes when the session ends.
@@ -183,6 +231,166 @@ impl Drop for RelaySession {
     }
 }
 
+/// The harness a connector lease is issued to (ADR-050).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectorHarness {
+    /// OpenCode driven over ACP: the pilot connector.
+    OpenCodeAcp,
+    /// Prime Agent driven by its native SDK in the session bridge.
+    PrimeAgent,
+    /// A native Codex app-server session using OpenAI Responses.
+    Codex,
+    /// A native Goose ACP session using OpenAI Chat Completions.
+    GooseAcp,
+}
+
+/// The model API dialect a connector lease speaks (ADR-050).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectorDialect {
+    /// OpenAI Chat Completions: `POST chat/completions`, `GET models`.
+    ChatCompletions,
+    /// OpenAI Responses: `POST responses`, `GET models`.
+    Responses,
+}
+
+impl ConnectorDialect {
+    /// Whether the dialect serves `route` (the relay's fixed allowlist).
+    fn serves(self, route: Route) -> bool {
+        match self {
+            Self::ChatCompletions => matches!(route, Route::Chat | Route::Models),
+            Self::Responses => matches!(route, Route::Responses | Route::Models),
+        }
+    }
+}
+
+/// Why [`Relay::register_connector`] issued no lease. Nothing is registered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectorLeaseError {
+    /// The account generation is no longer current (signed out, expired,
+    /// revoked or signed in again since the launch was gated).
+    SignInRequired,
+    /// This harness session already holds a live lease of this generation.
+    AlreadyLeased,
+    /// The harness session id is empty or contains a control character.
+    InvalidSessionId,
+    InvalidDialect,
+    /// The OS random number generator is unavailable.
+    RandomUnavailable,
+}
+
+impl std::fmt::Display for ConnectorLeaseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::SignInRequired => "the Nano account generation of the launch has ended",
+            Self::AlreadyLeased => "the harness session already holds a Nano connector lease",
+            Self::InvalidSessionId => "the session id is empty or has a control character",
+            Self::InvalidDialect => "the connector has no verified modes for this dialect",
+            Self::RandomUnavailable => "the OS random number generator is unavailable",
+        })
+    }
+}
+
+impl std::error::Error for ConnectorLeaseError {}
+
+/// The bearer key of one connector lease: 256 bits from the OS RNG, valid
+/// only on its lease's `/c/<id>/v1`. It is not an account credential: the
+/// access and refresh tokens never leave the host. `Debug` is redacted, and
+/// the type has no `Display`, `Clone` or serialization.
+pub struct ConnectorKey(SecretString);
+
+impl ConnectorKey {
+    /// The key text, for the host to hand to its own harness session only
+    /// (the delivery path is fixed by the host wiring, ADR-050); never a
+    /// WebView, an IPC payload or event, a bridge frame, a file or a log.
+    pub fn expose(&self) -> &str {
+        self.0.expose()
+    }
+}
+
+impl std::fmt::Debug for ConnectorKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ConnectorKey(<redacted>)")
+    }
+}
+
+/// A harness session's revocable access to the relay (ADR-050). Dropping it
+/// (or [`ConnectorLease::revoke`]) unregisters its key and ends the lease's
+/// open requests and streams; the end of its account generation does the
+/// same.
+pub struct ConnectorLease {
+    id: u64,
+    port: u16,
+    harness: ConnectorHarness,
+    session_id: String,
+    dialect: ConnectorDialect,
+    key: ConnectorKey,
+    shared: Weak<Shared>,
+}
+
+impl std::fmt::Debug for ConnectorLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectorLease")
+            .field("id", &self.id)
+            .field("harness", &self.harness)
+            .field("session_id", &self.session_id)
+            .field("dialect", &self.dialect)
+            .field("key", &"<redacted>")
+            .finish()
+    }
+}
+
+impl ConnectorLease {
+    /// The lease key, accepted only by [`ConnectorLease::base_url`].
+    pub fn key(&self) -> &ConnectorKey {
+        &self.key
+    }
+
+    /// The lease number used in [`ConnectorLease::base_url`] (not secret).
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// The harness the lease is bound to.
+    pub fn harness(&self) -> ConnectorHarness {
+        self.harness
+    }
+
+    /// The harness session the lease is bound to.
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    /// The dialect the lease is bound to.
+    pub fn dialect(&self) -> ConnectorDialect {
+        self.dialect
+    }
+
+    /// `http://127.0.0.1:<port>/c/<id>/v1`: accepts only this lease's key.
+    pub fn base_url(&self) -> String {
+        format!("http://127.0.0.1:{}/c/{}/v1", self.port, self.id)
+    }
+
+    /// Revokes the lease now: the same as dropping it.
+    pub fn revoke(self) {
+        drop(self);
+    }
+}
+
+impl Drop for ConnectorLease {
+    fn drop(&mut self) {
+        if let Some(shared) = self.shared.upgrade() {
+            let removed = shared
+                .keys
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .connectors
+                .remove(&self.id);
+            // Dropped outside the lock: closes `alive` for its requests.
+            drop(removed);
+        }
+    }
+}
+
 impl Relay {
     /// Binds `127.0.0.1:0` and serves in a spawned task.
     ///
@@ -229,7 +437,8 @@ impl Relay {
         self.shared.port
     }
 
-    /// `http://127.0.0.1:<port>/v1`: accepts any live session's key.
+    /// `http://127.0.0.1:<port>/v1`: accepts any live session's key (never
+    /// a connector lease's).
     pub fn base_url(&self) -> String {
         format!("http://127.0.0.1:{}/v1", self.shared.port)
     }
@@ -255,7 +464,7 @@ impl Relay {
             .unwrap_or_else(PoisonError::into_inner);
         // Checked under the key lock: a generation that already ended is
         // refused here, and one that ends after this check retires the key
-        // (`retire_stale` waits for this lock).
+        // (the retirement sweep waits for this lock).
         if self.shared.account.generation() != generation {
             return Err(NanoError::SignInRequired);
         }
@@ -279,10 +488,152 @@ impl Relay {
         })
     }
 
-    /// Retires every session key and cuts every open request and stream.
-    /// Sessions of an ended generation are also retired automatically.
+    /// Issues a connector lease (ADR-050) with a fresh 256-bit key, bound to
+    /// `harness`, its `session_id`, `dialect` and `generation` (read together
+    /// with the status the launch was gated on, see
+    /// [`NanoAccount::status_with_generation`]). A harness session holds at
+    /// most one live lease; dropping or revoking it frees the session.
+    ///
+    /// # Errors
+    /// [`ConnectorLeaseError::SignInRequired`] when `generation` is no longer
+    /// current, [`ConnectorLeaseError::AlreadyLeased`] when the session
+    /// already holds a live lease, [`ConnectorLeaseError::InvalidSessionId`]
+    /// for an empty id or one with a control character, and
+    /// [`ConnectorLeaseError::RandomUnavailable`] when the OS RNG fails.
+    /// Nothing is registered on error.
+    pub fn register_connector(
+        &self,
+        harness: ConnectorHarness,
+        session_id: &str,
+        dialect: ConnectorDialect,
+        generation: AccountGeneration,
+    ) -> Result<ConnectorLease, ConnectorLeaseError> {
+        if dialect == ConnectorDialect::Responses
+            || matches!(
+                harness,
+                ConnectorHarness::Codex | ConnectorHarness::GooseAcp
+            )
+        {
+            return Err(ConnectorLeaseError::InvalidDialect);
+        }
+        self.register_connector_with_modes(harness, session_id, dialect, generation, None, None)
+    }
+
+    /// Registers a Codex lease restricted to the server-advertised modes.
+    pub fn register_codex_connector(
+        &self,
+        session_id: &str,
+        generation: AccountGeneration,
+        workspace: &str,
+        modes: Vec<NanoModeIdV1>,
+    ) -> Result<ConnectorLease, ConnectorLeaseError> {
+        if modes.is_empty() {
+            return Err(ConnectorLeaseError::InvalidDialect);
+        }
+        self.register_connector_with_modes(
+            ConnectorHarness::Codex,
+            session_id,
+            ConnectorDialect::Responses,
+            generation,
+            Some(modes.into()),
+            Some(workspace),
+        )
+    }
+
+    /// Registers a Goose lease for the mode fixed at process launch.
+    pub fn register_goose_connector(
+        &self,
+        session_id: &str,
+        generation: AccountGeneration,
+        mode: NanoModeIdV1,
+    ) -> Result<ConnectorLease, ConnectorLeaseError> {
+        self.register_connector_with_modes(
+            ConnectorHarness::GooseAcp,
+            session_id,
+            ConnectorDialect::ChatCompletions,
+            generation,
+            Some(Arc::from([mode])),
+            None,
+        )
+    }
+
+    fn register_connector_with_modes(
+        &self,
+        harness: ConnectorHarness,
+        session_id: &str,
+        dialect: ConnectorDialect,
+        generation: AccountGeneration,
+        allowed_modes: Option<Arc<[NanoModeIdV1]>>,
+        workspace: Option<&str>,
+    ) -> Result<ConnectorLease, ConnectorLeaseError> {
+        if session_id.is_empty() || session_id.chars().any(char::is_control) {
+            return Err(ConnectorLeaseError::InvalidSessionId);
+        }
+        let key = random_token().map_err(|_| ConnectorLeaseError::RandomUnavailable)?;
+        let tag = session_tag().map_err(|_| ConnectorLeaseError::RandomUnavailable)?;
+        let mut keys = self
+            .shared
+            .keys
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        // Checked under the key lock, as in `register_session`.
+        if self.shared.account.generation() != generation
+            || workspace.is_some_and(|workspace| {
+                self.shared
+                    .account
+                    .status()
+                    .selected_workspace_id
+                    .as_deref()
+                    != Some(workspace)
+            })
+        {
+            return Err(ConnectorLeaseError::SignInRequired);
+        }
+        // A lease of an ended generation does not hold the session: it is
+        // already refused and is retired when the relay sees the change.
+        let leased = keys.connectors.values().any(|lease| {
+            lease.harness == harness
+                && lease.session_id == session_id
+                && lease.grant.generation == generation
+        });
+        if leased {
+            return Err(ConnectorLeaseError::AlreadyLeased);
+        }
+        let id = self.shared.next_session.fetch_add(1, Ordering::Relaxed);
+        let (alive, _) = watch::channel(());
+        keys.connectors.insert(
+            id,
+            LiveConnector {
+                grant: LiveSession {
+                    key: key.clone(),
+                    generation,
+                    tag,
+                    alive,
+                },
+                harness,
+                session_id: session_id.to_owned(),
+                dialect,
+                allowed_modes,
+                workspace: workspace.map(Arc::from),
+            },
+        );
+        drop(keys);
+        Ok(ConnectorLease {
+            id,
+            port: self.shared.port,
+            harness,
+            session_id: session_id.to_owned(),
+            dialect,
+            key: ConnectorKey(key),
+            shared: Arc::downgrade(&self.shared),
+        })
+    }
+
+    /// Retires every session key and connector lease key and cuts every open
+    /// request and stream. Sessions and leases of an ended generation are
+    /// also retired automatically.
     pub fn close_all_sessions(&self) {
-        self.shared.retire_where(|_| true);
+        self.shared.retire(true);
     }
 }
 
@@ -312,7 +663,7 @@ async fn accept_loop(
                 status.borrow_and_update();
                 // A generation ends inside a published change (sign-out,
                 // expiry, a new sign-in): retire the sessions it held.
-                shared.retire_stale(shared.account.generation());
+                shared.retire(false);
             }
             accepted = listener.accept() => {
                 let Ok((stream, peer)) = accepted else {
@@ -344,35 +695,62 @@ async fn accept_loop(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Route {
     Chat,
+    Responses,
     Models,
 }
 
-/// `/v1/<leaf>` or `/s/<session>/v1/<leaf>`; `Err` is the status to answer.
-fn parse_route(method: &Method, path: &str) -> Result<(Route, Option<u64>), StatusCode> {
-    let (session, rest) = match path.strip_prefix("/s/") {
-        Some(rest) => {
-            let (id, rest) = rest.split_once('/').ok_or(StatusCode::NOT_FOUND)?;
-            if id.is_empty() || id.len() > 19 || !id.bytes().all(|c| c.is_ascii_digit()) {
-                return Err(StatusCode::NOT_FOUND);
-            }
-            let id = id.parse::<u64>().map_err(|_| StatusCode::NOT_FOUND)?;
-            (Some(id), rest)
-        }
-        None => (None, path.strip_prefix('/').ok_or(StatusCode::NOT_FOUND)?),
+/// Which keys a path accepts. The namespaces share no key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Namespace {
+    /// `/v1` (`None`: any live session's key) or `/s/<id>/v1` (that
+    /// session's key only).
+    Session(Option<u64>),
+    /// `/c/<id>/v1`: that connector lease's key only.
+    Connector(u64),
+    /// `/p/<id>/v1`: an external provider session lease.
+    ExternalProvider(u64),
+}
+
+/// `/v1/<leaf>`, `/s/<session>/v1/<leaf>` or `/c/<lease>/v1/<leaf>`; `Err` is
+/// the status to answer.
+fn parse_route(method: &Method, path: &str) -> Result<(Route, Namespace), StatusCode> {
+    let (namespace, rest) = if let Some(rest) = path.strip_prefix("/s/") {
+        let (id, rest) = scoped(rest)?;
+        (Namespace::Session(Some(id)), rest)
+    } else if let Some(rest) = path.strip_prefix("/c/") {
+        let (id, rest) = scoped(rest)?;
+        (Namespace::Connector(id), rest)
+    } else if let Some(rest) = path.strip_prefix("/p/") {
+        let (id, rest) = scoped(rest)?;
+        (Namespace::ExternalProvider(id), rest)
+    } else {
+        let rest = path.strip_prefix('/').ok_or(StatusCode::NOT_FOUND)?;
+        (Namespace::Session(None), rest)
     };
     let route = match rest {
         "v1/chat/completions" => Route::Chat,
+        "v1/responses" if !matches!(namespace, Namespace::Session(_)) => Route::Responses,
         "v1/models" => Route::Models,
         _ => return Err(StatusCode::NOT_FOUND),
     };
     let expected = match route {
-        Route::Chat => Method::POST,
+        Route::Chat | Route::Responses => Method::POST,
         Route::Models => Method::GET,
     };
     if *method != expected {
         return Err(StatusCode::METHOD_NOT_ALLOWED);
     }
-    Ok((route, session))
+    Ok((route, namespace))
+}
+
+/// `<id>/<rest>` after a scoped prefix: a decimal `u64` and the remainder.
+fn scoped(path: &str) -> Result<(u64, &str), StatusCode> {
+    let (id, rest) = path.split_once('/').ok_or(StatusCode::NOT_FOUND)?;
+    if id.is_empty() || id.len() > 19 || !id.bytes().all(|c| c.is_ascii_digit()) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let id = id.parse::<u64>().map_err(|_| StatusCode::NOT_FOUND)?;
+    Ok((id, rest))
 }
 
 enum KeyCheck {
@@ -385,25 +763,32 @@ async fn handle(shared: &Shared, request: Request<Incoming>) -> Response<RelayBo
     if !shared.host_allowed(&request) || from_browser(request.headers()) {
         return plain(StatusCode::FORBIDDEN);
     }
-    let (route, session) = match parse_route(request.method(), request.uri().path()) {
+    let (route, namespace) = match parse_route(request.method(), request.uri().path()) {
         Ok(found) => found,
         Err(status) => return plain(status),
     };
-    let ticket = match shared.check_key(request.headers(), session) {
+    let checked = match namespace {
+        Namespace::Session(session) => shared.check_key(request.headers(), session),
+        Namespace::Connector(id) => shared.check_connector_key(request.headers(), id, route),
+        Namespace::ExternalProvider(id) => {
+            return external::handle(shared, request, id, route).await;
+        }
+    };
+    let ticket = match checked {
         KeyCheck::Live(ticket) => ticket,
         KeyCheck::Retired => return openai_error(NanoRelayErrorCodeV1::NanoSignInRequired),
         KeyCheck::Refused => return plain(StatusCode::UNAUTHORIZED),
     };
-    if !ticket.valid(&shared.account) {
+    let (generation, status) = shared.account.status_with_generation();
+    if generation != ticket.generation || !ticket.valid(&shared.account) {
         return openai_error(NanoRelayErrorCodeV1::NanoSignInRequired);
     }
-    let status = shared.account.status();
     if let Err(code) = availability(&status) {
         return openai_error(code);
     }
     match route {
-        Route::Models => models(&status),
-        Route::Chat => chat(shared, request, &status, ticket).await,
+        Route::Models => models(&status, ticket.allowed_modes.as_deref()),
+        Route::Chat | Route::Responses => complete(shared, request, &status, ticket, route).await,
     }
 }
 
@@ -421,17 +806,12 @@ impl Shared {
         host_ok && authority_ok
     }
 
-    /// Constant-time comparison against every candidate key (no early exit).
+    /// Constant-time comparison against every candidate session key (no
+    /// early exit). Connector lease keys are never candidates.
     fn check_key(&self, headers: &HeaderMap, session: Option<u64>) -> KeyCheck {
-        let mut values = headers.get_all(AUTHORIZATION).iter();
-        let (Some(value), None) = (values.next(), values.next()) else {
+        let Some(presented) = bearer(headers) else {
             return KeyCheck::Refused;
         };
-        let value = value.as_bytes();
-        if value.len() < 7 || !value[..7].eq_ignore_ascii_case(b"bearer ") {
-            return KeyCheck::Refused;
-        }
-        let presented = &value[7..];
         let keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
         let mut live = Choice::from(0);
         let mut matched = 0_u64;
@@ -449,11 +829,7 @@ impl Shared {
         if bool::from(live)
             && let Some(entry) = keys.live.get(&matched)
         {
-            KeyCheck::Live(Ticket {
-                generation: entry.generation,
-                tag: entry.tag.clone(),
-                alive: entry.alive.subscribe(),
-            })
+            KeyCheck::Live(entry.ticket())
         } else if bool::from(retired) {
             KeyCheck::Retired
         } else {
@@ -461,17 +837,53 @@ impl Shared {
         }
     }
 
-    /// Retires the sessions of an ended generation.
-    fn retire_stale(&self, current: AccountGeneration) {
-        self.retire_where(|session| session.generation != current);
+    /// Constant-time comparison against the key of lease `id` only, which
+    /// must serve `route` in its dialect, and against the retired keys of
+    /// that lease. Session keys are never candidates.
+    fn check_connector_key(&self, headers: &HeaderMap, id: u64, route: Route) -> KeyCheck {
+        let Some(presented) = bearer(headers) else {
+            return KeyCheck::Refused;
+        };
+        let keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+        let lease = keys
+            .connectors
+            .get(&id)
+            .filter(|lease| lease.dialect.serves(route));
+        let live = lease.map_or(Choice::from(0), |lease| {
+            lease.grant.key.expose().as_bytes().ct_eq(presented)
+        });
+        let mut retired = Choice::from(0);
+        for (_, key) in keys
+            .retired_connectors
+            .iter()
+            .filter(|(retired_id, _)| *retired_id == id)
+        {
+            retired |= key.expose().as_bytes().ct_eq(presented);
+        }
+        match lease {
+            Some(lease) if bool::from(live) => {
+                let mut ticket = lease.grant.ticket();
+                ticket.allowed_modes = lease.allowed_modes.clone();
+                ticket.workspace = lease.workspace.clone();
+                KeyCheck::Live(ticket)
+            }
+            _ if bool::from(retired) => KeyCheck::Retired,
+            _ => KeyCheck::Refused,
+        }
     }
 
-    /// Moves the matching sessions' keys to the retired list (they then
-    /// answer `nano_sign_in_required`) and drops the sessions, which ends
-    /// their open uploads, upstream requests and streams.
-    fn retire_where(&self, retire: impl Fn(&LiveSession) -> bool) {
-        let ended: Vec<LiveSession> = {
+    /// Moves the keys of all sessions and leases, or those of ended
+    /// generations, to their
+    /// retired lists (they then answer `nano_sign_in_required`, each in its
+    /// own namespace) and drops them, which ends their open uploads,
+    /// upstream requests and streams.
+    fn retire(&self, all: bool) {
+        let ended: (Vec<LiveSession>, Vec<LiveConnector>) = {
             let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+            // Registration uses the same lock. A generation observed before
+            // taking it could retire a fresh key admitted by a new sign-in.
+            let (current, status) = self.account.status_with_generation();
+            let retire = |session: &LiveSession| all || session.generation != current;
             let ids: Vec<u64> = keys
                 .live
                 .iter()
@@ -484,7 +896,30 @@ impl Shared {
                 .extend(ended.iter().map(|session| session.key.clone()));
             let excess = keys.retired.len().saturating_sub(RETIRED_KEYS);
             keys.retired = keys.retired.split_off(excess);
-            ended
+
+            let ids: Vec<u64> = keys
+                .connectors
+                .iter()
+                .filter(|(_, lease)| {
+                    retire(&lease.grant)
+                        || lease.workspace.as_deref().is_some_and(|workspace| {
+                            status.selected_workspace_id.as_deref() != Some(workspace)
+                        })
+                })
+                .map(|(id, _)| *id)
+                .collect();
+            let leases: Vec<(u64, LiveConnector)> = ids
+                .iter()
+                .filter_map(|id| keys.connectors.remove(id).map(|lease| (*id, lease)))
+                .collect();
+            keys.retired_connectors.extend(
+                leases
+                    .iter()
+                    .map(|(id, lease)| (*id, lease.grant.key.clone())),
+            );
+            let excess = keys.retired_connectors.len().saturating_sub(RETIRED_KEYS);
+            keys.retired_connectors = keys.retired_connectors.split_off(excess);
+            (ended, leases.into_iter().map(|(_, lease)| lease).collect())
         };
         // Dropped outside the lock: closes `alive` for their requests.
         drop(ended);
@@ -500,6 +935,19 @@ impl Shared {
                 counter: self.inflight.clone(),
             })
     }
+}
+
+/// The key of a single `Authorization: Bearer <key>` header.
+fn bearer(headers: &HeaderMap) -> Option<&[u8]> {
+    let mut values = headers.get_all(AUTHORIZATION).iter();
+    let (Some(value), None) = (values.next(), values.next()) else {
+        return None;
+    };
+    let value = value.as_bytes();
+    if value.len() < 7 || !value[..7].eq_ignore_ascii_case(b"bearer ") {
+        return None;
+    }
+    Some(&value[7..])
 }
 
 /// Browsers send `Sec-Fetch-Site` on every request (and `Origin` on
@@ -528,12 +976,12 @@ fn availability(status: &NanoAccountStatusV1) -> Result<(), NanoRelayErrorCodeV1
     }
 }
 
-fn models(status: &NanoAccountStatusV1) -> Response<RelayBody> {
+fn models(status: &NanoAccountStatusV1, allowed: Option<&[NanoModeIdV1]>) -> Response<RelayBody> {
     let data: Vec<serde_json::Value> = status
         .entitlements
         .iter()
         .flat_map(|entitlements| entitlements.modes.iter())
-        .filter(|mode| mode.available)
+        .filter(|mode| mode.available && allowed.is_none_or(|ids| ids.contains(&mode.id)))
         .map(|mode| {
             serde_json::json!({
                 "id": mode.id.as_str(),
@@ -554,11 +1002,12 @@ struct ModelField {
     model: String,
 }
 
-async fn chat(
+async fn complete(
     shared: &Shared,
     request: Request<Incoming>,
     status: &NanoAccountStatusV1,
     ticket: Ticket,
+    route: Route,
 ) -> Response<RelayBody> {
     let Some(entitlements) = status.entitlements.as_ref() else {
         return openai_error_with(
@@ -612,14 +1061,18 @@ async fn chat(
         return openai_error_with(
             NanoRelayErrorCodeV1::NanoUpstreamError,
             StatusCode::BAD_REQUEST,
-            "The request is not a JSON chat completion with a model.",
+            "The request is not a JSON inference request with a model.",
         );
     };
-    let entitled =
-        NanoModeIdV1::parse(&field.model).is_some_and(|mode| entitlements.mode_available(mode));
-    if !entitled {
+    let Some(mode) = NanoModeIdV1::parse(&field.model).filter(|mode| {
+        entitlements.mode_available(*mode)
+            && ticket
+                .allowed_modes
+                .as_ref()
+                .is_none_or(|allowed| allowed.contains(mode))
+    }) else {
         return openai_error(NanoRelayErrorCodeV1::NanoModeLocked);
-    }
+    };
     // The account may have signed out (and another one in) during the
     // upload: forward only for the generation the session belongs to.
     if !ticket.valid(&shared.account) {
@@ -627,13 +1080,18 @@ async fn chat(
     }
 
     let upstream = tokio::select! {
+        biased;
         () = ticket.ended() => return openai_error(NanoRelayErrorCodeV1::NanoSignInRequired),
         upstream = shared.account.send_gateway(
             ticket.generation,
             &ticket.tag,
-            &["chat", "completions"],
-            reqwest::Method::POST,
-            Some(body),
+            &entitlements.workspace_id,
+            match route {
+                Route::Chat => crate::account::GatewayRequest::Chat(mode),
+                Route::Responses => crate::account::GatewayRequest::Responses(mode),
+                Route::Models => unreachable!("model discovery is handled before forwarding"),
+            },
+            body,
             accept,
         ) => upstream,
     };
@@ -677,12 +1135,7 @@ fn stream_back(
         .get(CONTENT_TYPE)
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static("application/json"));
-    let stream = Guarded {
-        inner: Box::pin(response.bytes_stream()),
-        closed,
-        done: false,
-        _permit: permit,
-    };
+    let stream = Guarded::new(Box::pin(response.bytes_stream()), permit, closed);
     let body = StreamBody::new(stream).boxed_unsync();
     let mut answer = Response::new(body);
     *answer.status_mut() = status;
@@ -696,10 +1149,52 @@ fn stream_back(
 type UpstreamStream = Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>>;
 
 struct Guarded {
-    inner: UpstreamStream,
-    closed: ClosedFuture,
+    upstream: Arc<Mutex<Upstream>>,
+    cancellation: AbortHandle,
     done: bool,
-    _permit: InflightPermit,
+}
+
+struct Upstream {
+    active: Option<(UpstreamStream, InflightPermit)>,
+    reader: Option<Waker>,
+}
+
+impl Guarded {
+    fn new(stream: UpstreamStream, permit: InflightPermit, closed: ClosedFuture) -> Self {
+        let upstream = Arc::new(Mutex::new(Upstream {
+            active: Some((stream, permit)),
+            reader: None,
+        }));
+        let cancelled = upstream.clone();
+        // Hyper may stop polling the body when its downstream socket blocks.
+        // Revoke the upstream and release the slot even in that state.
+        let cancellation = tokio::spawn(async move {
+            closed.await;
+            let mut state = cancelled.lock().unwrap_or_else(PoisonError::into_inner);
+            state.active.take();
+            if let Some(reader) = state.reader.take() {
+                drop(state);
+                reader.wake();
+            }
+        })
+        .abort_handle();
+        Self {
+            upstream,
+            cancellation,
+            done: false,
+        }
+    }
+}
+
+impl Drop for Guarded {
+    fn drop(&mut self) {
+        self.cancellation.abort();
+        self.upstream
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .active
+            .take();
+    }
 }
 
 impl Stream for Guarded {
@@ -709,16 +1204,32 @@ impl Stream for Guarded {
         if self.done {
             return Poll::Ready(None);
         }
-        if self.closed.as_mut().poll(cx).is_ready() {
+        let result = {
+            let mut upstream = self.upstream.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some((stream, _permit)) = upstream.active.as_mut() {
+                let result = stream.as_mut().poll_next(cx);
+                match &result {
+                    Poll::Pending => upstream.reader = Some(cx.waker().clone()),
+                    Poll::Ready(None | Some(Err(_))) => {
+                        upstream.active.take();
+                    }
+                    Poll::Ready(Some(Ok(_))) => {}
+                }
+                Some(result)
+            } else {
+                None
+            }
+        };
+        let Some(result) = result else {
             self.done = true;
             return Poll::Ready(Some(Err(std::io::Error::other(
                 "the Nano session was closed",
             ))));
+        };
+        if matches!(result, Poll::Ready(None | Some(Err(_)))) {
+            self.done = true;
         }
-        self.inner
-            .as_mut()
-            .poll_next(cx)
-            .map(|item| item.map(|chunk| chunk.map(Frame::data).map_err(std::io::Error::other)))
+        result.map(|item| item.map(|chunk| chunk.map(Frame::data).map_err(std::io::Error::other)))
     }
 }
 

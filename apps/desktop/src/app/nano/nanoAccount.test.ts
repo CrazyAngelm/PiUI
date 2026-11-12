@@ -4,7 +4,7 @@ import { createNanoAccountClient, type NanoAccountClient, type NanoAccountStatus
 import { LAB_NANO_SIGN_IN_MS, type LabNanoScenario } from '../../host-api/lab/nanoAccountFake';
 import { labHost } from '../../host-api/lab/labTestKit';
 import { NanoAccount } from './nanoAccount.svelte';
-import { chipFor, creditsFraction, creditsLevel, creditsText, lockCopy, retryAction } from './nanoView';
+import { NANO_SOURCE_HARNESSES, chipFor, creditsFraction, creditsLevel, creditsText, lockCopy, retryAction } from './nanoView';
 
 const { forget } = vi.hoisted(() => ({ forget: vi.fn() }));
 vi.mock('../../host-api/harnessModels', async (importOriginal) => ({
@@ -263,8 +263,16 @@ describe('Nano account store', () => {
 describe('Nano model catalog revision', () => {
   it('forgets the Nano catalogs and bumps the revision only when the catalog can change', async () => {
     const account = await started('signed-in');
+    // The Nano lane and every agent with a Nano model source (a separate group of
+    // the same modes) forget their catalogs together, once per change.
+    const perChange = 1 + NANO_SOURCE_HARNESSES.length;
+    expect(NANO_SOURCE_HARNESSES).toEqual(['acp:opencode', 'prime-agent', 'codex', 'acp:goose']);
     expect(forget).toHaveBeenCalledWith('nano');
-    expect(forget).toHaveBeenCalledTimes(1);
+    expect(forget).toHaveBeenCalledWith('acp:opencode');
+    expect(forget).toHaveBeenCalledWith('prime-agent');
+    expect(forget).toHaveBeenCalledWith('codex');
+    expect(forget).toHaveBeenCalledWith('acp:goose');
+    expect(forget).toHaveBeenCalledTimes(perChange);
     expect(account.catalogRevision, 'the first status is a change').toBe(1);
 
     // Credits and plan dates are not part of the catalog.
@@ -274,15 +282,17 @@ describe('Nano model catalog revision', () => {
     // Another workspace has other entitled modes.
     await account.selectWorkspace('ws_synthetic02');
     expect(account.catalogRevision).toBe(2);
-    expect(forget).toHaveBeenCalledTimes(2);
+    expect(forget).toHaveBeenCalledTimes(2 * perChange);
 
     // Events of the same state do not bump it again.
     await vi.advanceTimersByTimeAsync(50);
     expect(account.catalogRevision).toBe(2);
 
+    // Sign-out ends the group in every affected catalog before the pickers ask again.
     await account.signOut();
     expect(account.catalogRevision).toBe(3);
-    expect(forget).toHaveBeenCalledTimes(3);
+    expect(forget).toHaveBeenCalledTimes(3 * perChange);
+    expect(forget.mock.calls.slice(-perChange).map(([harness]) => harness)).toEqual(['nano', ...NANO_SOURCE_HARNESSES]);
   });
 
   it('follows a sign-in only once it completes, and a mode locked by exhausted credits', async () => {

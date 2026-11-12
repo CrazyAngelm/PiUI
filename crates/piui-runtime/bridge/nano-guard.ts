@@ -14,7 +14,7 @@
  *
  * Behaviour:
  * - `read`, `grep`, `find` and `ls` pass without a question.
- * - `bash`, `write`, `edit`, and any other tool this guard does not know, ask
+ * - Shell commands, `write`, `edit`, and other tools ask
  *   through `ctx.ui.select` with the options "Allow once" and "Deny". In Pi RPC
  *   mode that dialog becomes an `extension_ui_request`, which the bridge shows
  *   as an approval card.
@@ -60,13 +60,14 @@ function shown(value: unknown): string | undefined {
 
 function question(event: ToolCallEvent): string | undefined {
 	const input = event.input ?? {};
+	const shell = ["bash", "powershell", "nano_powershell"].includes(event.toolName);
 	const label =
-		event.toolName === "bash" ? "Run command" : event.toolName === "write" ? "Write file" : event.toolName === "edit" ? "Edit file" : undefined;
+		shell ? "Run command" : event.toolName === "write" ? "Write file" : event.toolName === "edit" ? "Edit file" : undefined;
 	if (label === undefined) {
 		const name = shown(event.toolName);
 		return name === undefined ? undefined : `Run tool: ${name}`;
 	}
-	const subject = shown(event.toolName === "bash" ? input.command : input.path);
+	const subject = shown(shell ? input.command : input.path);
 	return subject === undefined ? undefined : `${label}: ${subject}`;
 }
 

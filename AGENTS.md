@@ -218,11 +218,38 @@ Design and behaviour: `docs/NANO_DESKTOP.md`; server contract:
   in memory. Tokens, authorization codes, PKCE verifiers, relay keys and cloud
   launch codes never reach the WebView, an IPC payload or event, a bridge
   frame, a process environment, a log, a test snapshot, the Lab or an exported
-  system file. The one exception is the per-session relay key, on exactly this
-  path: host -> the environment of that session's own Nano bridge process
-  (`PIUI_NANO_RELAY_KEY`, which the bridge reads once and deletes) -> the Pi
-  child environment (`NANO_RELAY_KEY`). It is never in the `initialize` frame
-  or any other bridge frame. Token types redact `Debug`. Never add a Tauri
+  system file. Only short-lived loopback session keys may follow the paths
+  below. (1) The relay key: host -> the environment of that session's
+  own Nano bridge process (`PIUI_NANO_RELAY_KEY`, which the bridge reads once
+  and deletes) -> the Pi child environment (`NANO_RELAY_KEY`). (2) The
+  connector lease key (Proposed ADR-050), for the verified Windows release
+  of the shipped OpenCode ACP agent
+  only when a Nano mode is the session's model: host
+  (`NanoHost::launch_acp_source`) -> `OPENCODE_CONFIG_CONTENT` in the
+  environment of that session's own ACP bridge process (which removes it from
+  its own environment after spawning the agent) -> the OpenCode child. Only
+  the host's verified shell hook is loaded. It clears the variable for each
+  shell child. Project configuration, other plugins, MCP, LSP and formatters
+  are disabled for this source. (3) For verified Windows Prime Agent 0.9.5,
+  host -> `PIUI_PRIME_NANO_SOURCE` in that session's own Prime bridge ->
+  the Prime SDK's in-memory authentication entry. The bridge removes the
+  variable before importing the SDK and before any child process starts.
+  The Prime Nano source runs in-process with private paths and no shared
+  daemon or unverified resources. (4) For verified Windows Codex, host ->
+  `PIUI_NANO_CODEX_SOURCE` in its own bridge -> `PIUI_NANO_CODEX_KEY` in
+  the private app-server. The bridge clears the source before spawning the
+  app-server. Native shell policy excludes the key, and the source disables
+  hooks, apps, plugins, web search and MCP servers. Responses grants are
+  scoped to the selected workspace and disable automatic transport retries.
+  (5) For verified Windows Goose, host ->
+  the dedicated ACP bridge -> `OPENAI_API_KEY` in the pinned Goose process.
+  It launches in an app-owned directory with the developer extension only.
+  Its required app-owned shell launcher clears the key before starting the
+  real shell. (6) ChatGPT plan sign-in (ADR-052) uses the one-shot OAuth listener,
+  a separate host credential-store entry and the existing Pi lease path for
+  the account's entitled OpenAI model. A lease is loopback-only, scoped to
+  entitled modes and revoked with the session. No session key is in the `initialize` frame or
+  any other bridge frame, argv, a file or a catalog cache. Token types redact `Debug`. Never add a Tauri
   plugin that can return a secret to JavaScript, and never open a URL the
   WebView supplied: links are enums resolved in the host.
 - The relay is the only new listener: `127.0.0.1:<ephemeral>`, per-session

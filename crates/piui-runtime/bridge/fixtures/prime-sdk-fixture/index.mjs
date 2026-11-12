@@ -12,7 +12,7 @@ export const SessionManager = {
   open(path, sessionDir) { return new Manager(process.cwd(), sessionDir, path); },
   async listAll(_callbacks, sessionDir) { return [{ id: "saved", path: `${sessionDir}/saved.jsonl` }]; },
 };
-export const AuthStorage = { create(path, options) { return { path, options }; } };
+export const AuthStorage = { create(path, options) { return { path, options }; }, inMemory(_data, options) { return { memory: true, options }; } };
 let fastModelLookups = 0;
 let refreshedModelLookups = 0;
 export function resetModelLookupCounts() { fastModelLookups = 0; refreshedModelLookups = 0; }
@@ -21,15 +21,35 @@ class Registry {
   constructor(empty = false) { this.models = empty ? [] : [{ id: "fixture-model", provider: "fixture-provider", name: "Fixture model" }]; }
   getAvailable() { fastModelLookups += 1; return this.models; }
   async refreshAvailableModels() { refreshedModelLookups += 1; return this.models; }
+  registerProvider(provider, config) {
+    if (process.env.PIUI_PRIME_NANO_SOURCE !== undefined) throw new Error("source environment still present");
+    this.models.push(...config.models.map(model => ({ ...model, provider })));
+  }
 }
-export const ModelRegistry = { create(authStorage) { return new Registry(authStorage.path.includes("empty-model")); } };
-export const SettingsManager = { create() { return {}; } };
+export const ModelRegistry = {
+  create(authStorage, modelsPath) {
+    const registry = new Registry(modelsPath.includes("empty-model"));
+    if (modelsPath.includes("native-cli-catalog") && authStorage.memory && authStorage.options?.usePrimeCliConfig) {
+      registry.models.push({ id: "prime-cli-model", provider: "prime-inference", name: "Prime CLI model" });
+    }
+    if (modelsPath.includes("provider-collision")) registry.models.push(
+      { id: "auto", provider: "nano", name: "Native Nano namesake" },
+      { id: "auto", provider: "piui-prime-native:nano", name: "Native escape namesake" },
+      { id: "auto", provider: "nano-desktop-subscription", name: "Native connector namesake" },
+    );
+    return registry;
+  },
+  inMemory() { return new Registry(true); },
+};
+export const SettingsManager = { create() { return {}; }, inMemory() { return { memory: true }; } };
 export function defineTool(tool) { return tool; }
 export function createIpythonTool() { return { name: 'ipython' }; }
+export function createBashToolDefinition() { return { name: "bash" }; }
+export function createEditToolDefinition() { return { name: "edit" }; }
 let configuredSkills = [];
 export function lastConfiguredSkills() { return configuredSkills; }
 export async function createAgentSessionServices(options) {
-  const base = { skills: [{ name: "alpha" }, { name: "beta" }], diagnostics: [] };
+  const base = { skills: options.resourceLoaderOptions?.noSkills ? [] : [{ name: "alpha" }, { name: "beta" }], diagnostics: [] };
   configuredSkills = (options.resourceLoaderOptions?.skillsOverride?.(base) ?? base).skills.map(skill => skill.name);
   return { ...options, diagnostics: [], resourceLoader: { getSkills: () => ({ skills: configuredSkills.map(name => ({ name })) }) }, mcpManager: {} };
 }
@@ -46,7 +66,7 @@ export async function createAgentSessionRuntime(factory, options) {
     sessionFile: options.sessionManager.getSessionFile(),
     sessionName: "Fixture Prime",
     getActiveToolNames() { return built.session.activeTools; },
-    getAllTools() { return [{ name: "ipython" }, { name: "workspace" }, { name: "external_tool" }]; },
+    getAllTools() { return [...new Set(["ipython", "workspace", "external_tool", ...built.session.customTools.map(tool => tool.name)])].map(name => ({ name })); },
     resourceLoader: built.services.resourceLoader,
   };
   return { session, services: built.services };

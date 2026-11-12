@@ -55,6 +55,7 @@ pub(crate) struct FakeState {
     pub(crate) valid_refresh: String,
     pub(crate) current_access: String,
     pub(crate) entitlements: Value,
+    pub(crate) gateway_dialects: Value,
     pub(crate) gateway: Gateway,
     /// The gateway answers 401 `token_expired` for this access token.
     pub(crate) reject_access: Option<String>,
@@ -88,6 +89,7 @@ impl FakeNano {
             valid_refresh: "refresh-0".to_owned(),
             current_access: String::new(),
             entitlements: server_fixture("entitlementsPaid"),
+            gateway_dialects: json!({}),
             gateway: Gateway::Json,
             reject_access: None,
             grants: Vec::new(),
@@ -371,7 +373,13 @@ async fn route(
             usage["workspaceId"] = Value::from(path.split('/').nth(5).unwrap_or_default());
             json_response(200, &usage)
         }
-        (Method::POST, path) if path.ends_with("/gateway/v1/chat/completions") => {
+        (Method::GET, path) if path.ends_with("/gateway/v1/capabilities") && authorized() => {
+            json_response(200, &json!({ "dialects": lock().gateway_dialects }))
+        }
+        (Method::POST, path)
+            if path.ends_with("/gateway/v1/chat/completions")
+                || path.ends_with("/gateway/v1/responses") =>
+        {
             let answer = {
                 let mut s = lock();
                 s.gateway_calls.push(GatewayCall {

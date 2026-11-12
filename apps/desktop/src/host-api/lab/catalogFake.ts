@@ -4,9 +4,12 @@ import type {
 } from './labContracts';
 import { isAcpHarness } from '../../../../../contracts/harness-identity-v3';
 import { NANO_MODEL_PROVIDER } from '../../../../../contracts/nano-account-v1';
+import { NANO_EXTERNAL_PROVIDER_PREFIX } from '../../../../../contracts/nano-providers-v1';
+import { NANO_CHATGPT_PROVIDER_ID } from '../../../../../contracts/nano-chatgpt-v1';
+import { NANO_SOURCE_HARNESSES, nanoSourceProvider } from '../../app/nano/nanoView';
 import { ACP_DEFAULT_MODEL } from '../../harness-adapters/acp';
 import type { LabState } from './labState';
-import { labNanoOpenModes } from './nanoAccountFake';
+import { labNanoLaunchReady, labNanoOpenModes } from './nanoAccountFake';
 
 /**
  * Native harness inventory for the lab. Model and resource names are clearly
@@ -361,6 +364,7 @@ export function defaultSessionTitle(kind: HarnessKind): string {
 /** Names of the agents the lab registry ships or seeds; user-added agents are "Agent". */
 const ACP_LAB_NAMES: Readonly<Record<string, string>> = {
   'acp:gemini-cli': 'Gemini CLI',
+  'acp:goose': 'Goose',
   'acp:opencode': 'OpenCode',
   'acp:qwen-code': 'Qwen Code',
   'acp:lab-agent': 'Lab Agent',
@@ -401,22 +405,47 @@ export function catalogModels(kind: HarnessKind): HarnessCatalogModel[] {
  * server order, and nothing while signed out; every other harness lists its
  * native catalog.
  */
-export function accountModels(state: Pick<LabState, 'nanoAccount'>, kind: HarnessKind): HarnessCatalogModel[] {
-  if (kind !== 'nano') return catalogModels(kind);
-  const status = state.nanoAccount?.status();
-  if (status === undefined) return [];
-  return labNanoOpenModes(status).map((mode) => model(NANO_MODEL_PROVIDER, mode.id, mode.name.trim() === '' ? mode.id : mode.name, undefined, false));
+type ModelSources = Pick<LabState, 'nanoAccount' | 'externalProviders' | 'chatGpt'>;
+
+export function accountModels(state: ModelSources, kind: HarnessKind): HarnessCatalogModel[] {
+  if (kind === 'nano') return [...nanoModeRows(state), ...(state.externalProviders ?? []).map(provider =>
+    model(NANO_EXTERNAL_PROVIDER_PREFIX + provider.id, provider.spec.modelId, provider.spec.name, undefined, false)),
+    ...(state.chatGpt?.models ?? []).map(row => model(NANO_CHATGPT_PROVIDER_ID, row.id, row.name, undefined, false))];
+  // An agent with a Nano model source (`workspace_api.rs`): its own catalog, then the account's
+  // current modes as a separate group, only while a Nano session could start. Live account state.
+  if (NANO_SOURCE_HARNESSES.includes(kind)) {
+    const status = state.nanoAccount?.status();
+    return [...catalogModels(kind), ...(status !== undefined && labNanoLaunchReady(status) ? nanoModeRows(state, kind) : [])];
+  }
+  return catalogModels(kind);
 }
 
-/** `runtimeModels` for the account: what a live session of `kind` can switch between. */
-export function accountRuntimeModels(state: Pick<LabState, 'nanoAccount'>, kind: HarnessKind): WorkspaceModel[] {
+/** The account's open modes, one row each, in server order (nothing while signed out). */
+function nanoModeRows(state: Pick<LabState, 'nanoAccount'>, harness: HarnessKind = 'nano'): HarnessCatalogModel[] {
+  const status = state.nanoAccount?.status();
+  if (status === undefined) return [];
+  const provider = nanoSourceProvider(harness);
+  return labNanoOpenModes(status).map((mode) => model(provider, mode.id, mode.name.trim() === '' ? mode.id : mode.name, undefined, false));
+}
+
+/**
+ * `runtimeModels` for the account: what a live session of `kind` can switch between.
+ * A session of the Nano-source agent whose model is a Nano mode lists the account's
+ * modes only; its source never changes, so it never lists the agent's own models.
+ */
+export function accountRuntimeModels(state: ModelSources, kind: HarnessKind, current: WorkspaceModel | undefined = undefined): WorkspaceModel[] {
+  if (NANO_SOURCE_HARNESSES.includes(kind)) {
+    if (current?.provider !== nanoSourceProvider(kind)) return runtimeModels(kind);
+    return nanoModeRows(state, kind).map(({ supportsFast: _fast, ...rest }) => ({ ...rest }));
+  }
   if (kind !== 'nano') return runtimeModels(kind);
-  return accountModels(state, kind).map(({ supportsFast: _fast, ...rest }) => ({ ...rest }));
+  return accountModels(state, kind).filter(model => model.provider === (current?.provider ?? NANO_MODEL_PROVIDER))
+    .map(({ supportsFast: _fast, ...rest }) => ({ ...rest }));
 }
 
 /** `catalogModel` for the account: a locked or unknown mode is not found. */
 export function accountCatalogModel(
-  state: Pick<LabState, 'nanoAccount'>,
+  state: ModelSources,
   kind: HarnessKind,
   id: string,
   provider: string | undefined,

@@ -5,6 +5,8 @@ import type {
   UsageReceipt, WorkspaceApproval, WorkspaceModel, WorkspaceSession, WorkspaceSummary,
 } from './labContracts';
 import type { NanoAccountStatusV1 } from '../../../../../contracts/nano-account-v1';
+import type { NanoExternalProviderV1 } from '../../../../../contracts/nano-providers-v1';
+import type { NanoChatGptResultV1 } from '../../../../../contracts/nano-chatgpt-v1';
 import type { LabRun } from './orchestration/runEngine';
 import { apiFailure } from './labErrors';
 import type { LabIdSource } from './labRandom';
@@ -136,6 +138,8 @@ export interface LabState {
    * desktop host does. Absent means no account: nothing for Nano is offered.
    */
   nanoAccount?: { status(): NanoAccountStatusV1 };
+  externalProviders?: NanoExternalProviderV1[];
+  chatGpt?: NanoChatGptResultV1['status'];
 }
 
 export interface LabFusionLifecycle {

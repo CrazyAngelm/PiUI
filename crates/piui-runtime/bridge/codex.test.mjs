@@ -20,6 +20,29 @@ const config = {
   daemonSocket: "fixture-reserved-endpoint",
 };
 
+test("Codex refuses a selected Nano model if its private source is absent", async () => {
+  const model = { id: "free", provider: "nano-codex-subscription", name: "Free" };
+  await assert.rejects(createCodexAdapter({ ...config, model }, () => {}), { bridgeCode: "invalid-config" });
+});
+
+test("a native Codex provider with Nano's name has a distinct catalog identity", async () => {
+  const runtimeArgs = [fixture, "--nano-named-native-provider"];
+  const probe = await createCodexAdapter({
+    ...config, catalogOnly: true, runtimeArgs,
+  }, () => {});
+  let model;
+  try {
+    const models = await probe.catalogModels();
+    assert.ok(models.length > 0);
+    assert.ok(models.every(model => model.provider === "codex-native:nano-codex-subscription"));
+    [model] = models;
+  } finally { await probe.dispose(); }
+  const adapter = await createCodexAdapter({ ...config, model, runtimeArgs }, () => {});
+  try {
+    assert.equal(adapter.snapshot().model.provider, "codex-native:nano-codex-subscription");
+  } finally { await adapter.dispose(); }
+});
+
 test("composer commands use native compaction and steer without inventing a queued native turn", async () => {
   const adapter = await createCodexAdapter({ ...config, runtimeArgs: [fixture, "--hold-turn"] }, () => {});
   try {

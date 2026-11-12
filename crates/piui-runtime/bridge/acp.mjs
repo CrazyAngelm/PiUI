@@ -7,7 +7,8 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
   const { spawn } = await import('node:child_process');
   const { createServer } = await import('node:http');
   const { createHash, randomUUID } = await import('node:crypto');
-  const { isAbsolute } = await import('node:path');
+  const { isAbsolute, join } = await import('node:path');
+  const { mkdtemp, readFile, rm, rmdir } = await import('node:fs/promises');
 
   const PROTOCOL_VERSION = 1;
   const FRAME_LIMIT = 32 * 1024 * 1024;
@@ -25,6 +26,26 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
   const disabled = acp.disable && typeof acp.disable === 'object' ? acp.disable : {};
   const fail = (code, message = `${name} could not complete the operation.`, details) =>
     Object.assign(new Error(code), { bridgeCode: code, safeMessage: message, ...(details ? { safeDetails: details } : {}) });
+
+  // The host sends only the provider name and entitled modes in the frame.
+  const NANO_PROVIDER = 'nano';
+  const GOOSE_NANO_PROVIDER = 'nano-goose-subscription';
+  const gooseNano = acp.nano?.provider === GOOSE_NANO_PROVIDER;
+  const nanoProvider = gooseNano ? GOOSE_NANO_PROVIDER : NANO_PROVIDER;
+  let nanoModes;
+  if (acp.nano !== undefined) {
+    const entries = acp.nano && typeof acp.nano === 'object' && acp.nano.provider === nanoProvider && Array.isArray(acp.nano.modes) ? acp.nano.modes : undefined;
+    if (acp.id !== (gooseNano ? 'goose' : 'opencode') || !entries?.length || (gooseNano && entries.length !== 1)
+      || !entries.every(mode => typeof mode?.id === 'string' && /^[A-Za-z0-9._-]+$/.test(mode.id) && typeof mode.name === 'string')
+      || new Set(entries.map(mode => mode.id)).size !== entries.length) {
+      throw fail('invalid-configuration');
+    }
+    nanoModes = new Map(entries.map(mode => [mode.id, mode.name.trim() || mode.id]));
+  }
+  // The model source is explicit and never falls back: a Nano mode is started
+  // on the Nano source and the Nano source starts with a Nano mode.
+  if ((nanoModes && config.model?.provider !== nanoProvider) || (!gooseNano && config.model?.provider === GOOSE_NANO_PROVIDER)) throw fail('invalid-configuration');
+  if (nanoModes && !nanoModes.has(config.model?.id)) throw fail('invalid-model', `The selected model is not offered by ${name}.`);
 
   if (typeof config.harness !== 'string' || !config.harness.startsWith('acp:') || config.harness.slice(4) !== acp.id
     || typeof config.cwd !== 'string' || !isAbsolute(config.cwd)
@@ -50,6 +71,9 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
     throw fail('unsupported-settings', 'The plugin MCP servers for this chat are invalid.');
   }
   if (pluginMcpServers.length && config.coordination) throw fail('unsupported-settings', 'Plugin MCP servers are only for ordinary chats.');
+  if (nanoModes && (pluginMcpServers.length || config.coordination || config.hostTools?.length)) {
+    throw fail('unsupported-settings', 'The Nano source does not allow MCP servers or host tools.');
+  }
 
   // Windows canonical paths are verbatim (`\\?\C:\...`); agents expect the plain spelling.
   const plainPath = value => value.startsWith('\\\\?\\UNC\\') ? `\\\\${value.slice(8)}` : value.startsWith('\\\\?\\') ? value.slice(4) : value;
@@ -70,7 +94,54 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
   };
 
   // --- Process and JSON-RPC transport -------------------------------------
-  const child = spawn(config.runtimeProgram, config.runtimeArgs, { cwd, windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'], env: process.env });
+  let readyDirectory, readyPath, gooseStartDirectory, gooseExited;
+  const cleanReadiness = async () => {
+    if (gooseStartDirectory) {
+      // Windows retains the cwd handle until the agent has exited.
+      await gooseExited;
+      await rmdir(gooseStartDirectory).catch(() => {});
+    }
+    if (!readyDirectory) return;
+    await rm(readyPath, { force: true }).catch(() => {});
+    await rmdir(readyDirectory).catch(() => {});
+  };
+  if (gooseNano) {
+    const root = process.env.GOOSE_PATH_ROOT;
+    if (process.platform !== 'win32' || !root || !isAbsolute(root)
+      || !process.env.GOOSE_SHELL || !isAbsolute(process.env.GOOSE_SHELL)
+      || process.env.PIUI_GOOSE_NANO_SHELL !== '1' || !process.env.OPENAI_API_KEY
+      || process.env.GOOSE_MODEL !== config.model.id
+      || !/^http:\/\/127\.0\.0\.1:\d+\/c\/\d+\/v1$/.test(process.env.OPENAI_BASE_URL ?? '')) {
+      throw fail('invalid-configuration');
+    }
+    try {
+      // Goose resolves project hooks from its process cwd, independently of
+      // the cwd it uses for ACP tools and history.
+      gooseStartDirectory = await mkdtemp(join(plainPath(root), '.goose-nano-'));
+    } catch { throw fail('native-start-failed'); }
+  } else if (nanoModes) {
+    if (typeof config.sessionDir !== 'string' || !isAbsolute(config.sessionDir)) throw fail('invalid-configuration');
+    try {
+      readyDirectory = await mkdtemp(join(plainPath(config.sessionDir), '.opencode-guard-'));
+      readyPath = join(readyDirectory, 'ready');
+    } catch { throw fail('native-start-failed'); }
+  }
+  const childEnvironment = { ...process.env, ...(readyPath ? { PIUI_NANO_OPENCODE_READY: readyPath } : {}) };
+  const child = spawn(config.runtimeProgram, config.runtimeArgs, { cwd: gooseStartDirectory ?? cwd, windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'], env: childEnvironment });
+  if (gooseStartDirectory) gooseExited = new Promise(resolve => child.once('close', resolve));
+  // The Nano source's provider configuration (it embeds the lease key) reached
+  // this process by environment; once the agent has its copy, only the agent
+  // keeps it (read once and removed, as the Nano Pi bridge does).
+  if (nanoModes) {
+    const leaseEnv = gooseNano ? 'OPENAI_API_KEY' : 'OPENCODE_CONFIG_CONTENT';
+    delete process.env[leaseEnv];
+    delete childEnvironment[leaseEnv];
+  }
+  const verifyNanoGuard = async () => {
+    if (!readyPath) return;
+    const ready = await readFile(readyPath, 'utf8').catch(() => undefined);
+    if (ready !== String(child.pid)) throw fail('native-start-failed', 'The Nano shell environment guard did not load.');
+  };
   child.stderr.on('data', () => {}); // Native diagnostics can contain prompts or credentials.
   child.stdin.on('error', () => {});
   const pending = new Map();
@@ -96,6 +167,10 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
   let turn = 0, sequence = 0, streaming, loading = false, disposed = false, bound = Boolean(config.nativeId), instructionsSent = Boolean(config.nativeId);
   let agentCapabilities = {}, authMethods = [], commands = [];
   let modelControl, models = [], currentModelId, thought, currentThought, modeControl, modes = [], currentModeId;
+  // Public model id -> the id the agent knows. They differ only on the Nano
+  // source, where the public id is the mode (`auto`) and the agent's is `nano/auto`.
+  let nativeModelIds = new Map();
+  const nativeModel = id => nativeModelIds.get(id) ?? id;
 
   const setStatus = value => { status = value; emit({ type: 'status', status }); };
   const put = block => { const value = { status: 'complete', ...block }; blocks.set(value.id, value); emit({ type: 'block', block: value }); return value; };
@@ -131,6 +206,30 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
     }
     return values;
   };
+  // `entries` are the agent's own rows (`value` is its model id). The Nano source
+  // keeps exactly the entitled modes of the `nano` provider, named by the host,
+  // and drops everything else the agent lists. Without explicit acp.nano
+  // metadata every provider group belongs to the native agent, even `nano`.
+  const adoptModels = (entries, currentNative) => {
+    const next = [];
+    const known = new Map();
+    for (const item of entries) {
+      if (nanoModes) {
+        const mode = gooseNano ? item.value : item.value.startsWith(`${NANO_PROVIDER}/`) ? item.value.slice(NANO_PROVIDER.length + 1) : undefined;
+        if (mode === undefined || !nanoModes.has(mode)) continue;
+        next.push({ id: mode, name: nanoModes.get(mode), provider: nanoProvider });
+        known.set(mode, item.value);
+      } else {
+        const provider = item.group;
+        next.push({ id: item.value, name: item.name, ...(provider ? { provider } : {}) });
+      }
+    }
+    models = next;
+    nativeModelIds = known;
+    currentModelId = nanoModes
+      ? [...known].find(([, native]) => native === currentNative)?.[0]
+      : currentNative;
+  };
   const applyConfigOptions = list => {
     if (!Array.isArray(list)) return;
     for (const option of list) {
@@ -138,13 +237,13 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
       const values = selectValues(option.options);
       if (option.category === 'model' && !disabled.models) {
         modelControl = { kind: 'config', configId: option.id };
-        models = values.map(item => ({ id: item.value, name: item.name, ...(item.group ? { provider: item.group } : {}) }));
-        currentModelId = option.currentValue;
+        adoptModels(values, option.currentValue);
       } else if (option.category === 'mode' && !disabled.modes) {
         modeControl = { kind: 'config', configId: option.id };
-        modes = values.map(item => ({ id: item.value, name: item.name, ...(item.description ? { description: item.description } : {}) }));
+        modes = values.filter(item => !gooseNano || item.value === 'approve').map(item => ({ id: item.value, name: item.name, ...(item.description ? { description: item.description } : {}) }));
         currentModeId = option.currentValue;
-      } else if (option.category === 'thought_level') {
+      } else if (option.category === 'thought_level' && !nanoModes) {
+        // Nano modes have no reasoning levels (the server owns the mode's model).
         thought = { configId: option.id, values: values.map(item => item.value) };
         currentThought = option.currentValue;
       }
@@ -155,12 +254,14 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
     applyConfigOptions(state.configOptions);
     if (!modelControl && !disabled.models && Array.isArray(state.models?.availableModels)) {
       modelControl = { kind: 'legacy' };
-      models = state.models.availableModels.filter(item => typeof item?.modelId === 'string').slice(0, 500).map(item => ({ id: item.modelId, name: oneLine(item.name, 80) || item.modelId }));
-      currentModelId = typeof state.models.currentModelId === 'string' ? state.models.currentModelId : undefined;
+      adoptModels(
+        state.models.availableModels.filter(item => typeof item?.modelId === 'string').slice(0, 500).map(item => ({ value: item.modelId, name: oneLine(item.name, 80) || item.modelId })),
+        typeof state.models.currentModelId === 'string' ? state.models.currentModelId : undefined,
+      );
     }
     if (!modeControl && !disabled.modes && Array.isArray(state.modes?.availableModes)) {
       modeControl = { kind: 'legacy' };
-      modes = state.modes.availableModes.filter(item => typeof item?.id === 'string').slice(0, 50).map(item => ({ id: item.id, name: oneLine(item.name, 80) || item.id, ...(oneLine(item.description) ? { description: oneLine(item.description) } : {}) }));
+      modes = state.modes.availableModes.filter(item => typeof item?.id === 'string' && (!gooseNano || item.id === 'approve')).slice(0, 50).map(item => ({ id: item.id, name: oneLine(item.name, 80) || item.id, ...(oneLine(item.description) ? { description: oneLine(item.description) } : {}) }));
       currentModeId = typeof state.modes.currentModeId === 'string' ? state.modes.currentModeId : undefined;
     }
   };
@@ -170,12 +271,21 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
     const result = await request('session/set_config_option', { sessionId, configId, value });
     applyConfigOptions(result?.configOptions);
   };
-  const selectModel = async id => {
+  // The model source is part of a model's identity: a model of the other
+  // source is refused, never matched by its id alone.
+  const selectModel = async (id, provider) => {
+    if (nanoModes && provider !== nanoProvider) throw fail('invalid-model', `The selected model is not offered by ${name}.`);
     if (!modelControl || !models.some(item => item.id === id)) throw fail('invalid-model', `The selected model is not offered by ${name}.`);
     if (id === currentModelId) return;
-    if (modelControl.kind === 'config') await setConfig(modelControl.configId, id);
-    else await request('session/set_model', { sessionId, modelId: id });
-    currentModelId = id;
+    const target = nativeModel(id);
+    if (modelControl.kind === 'config') {
+      await setConfig(modelControl.configId, target);
+      if (nanoModes && currentModelId !== id) throw fail('invalid-model', `${name} did not select the requested Nano mode.`);
+      if (!nanoModes) currentModelId = id;
+    } else {
+      await request('session/set_model', { sessionId, modelId: target });
+      currentModelId = id;
+    }
   };
   const selectThought = async level => {
     if (!thought || !thought.values.includes(level)) throw fail('unsupported-settings', `${name} does not offer the selected reasoning level.`);
@@ -308,9 +418,9 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
       case 'tool_call_update': updateTool(update, false); break;
       case 'plan': planBlock(update.entries); break;
       case 'available_commands_update':
-        commands = (Array.isArray(update.availableCommands) ? update.availableCommands : []).filter(item => typeof item?.name === 'string').slice(0, 200).map(item => oneLine(item.name, 80)).filter(Boolean);
+        if (!gooseNano) commands = (Array.isArray(update.availableCommands) ? update.availableCommands : []).filter(item => typeof item?.name === 'string').slice(0, 200).map(item => oneLine(item.name, 80)).filter(Boolean);
         break;
-      case 'current_mode_update': if (typeof update.currentModeId === 'string' && modes.some(item => item.id === update.currentModeId)) currentModeId = update.currentModeId; break;
+      case 'current_mode_update': if (typeof update.currentModeId === 'string' && (gooseNano || modes.some(item => item.id === update.currentModeId))) currentModeId = update.currentModeId; break;
       case 'config_option_update': applyConfigOptions(update.configOptions); break;
       // Context size and agent-side titles are not PiUI turn data.
       case 'usage_update': case 'session_info_update': break;
@@ -346,6 +456,12 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
   // --- Turns -------------------------------------------------------------------
   const finishTurn = () => {
     if (disposed || status !== 'running') return;
+    if (gooseNano && (currentModeId !== 'approve' || currentModelId !== config.model.id)) {
+      rejectFollowUps();
+      setStatus('failed');
+      showError('Goose changed the Nano session model or approval mode.');
+      return;
+    }
     const next = followUps.shift();
     if (next === undefined) setStatus('idle');
     else startTurn(next);
@@ -550,6 +666,10 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
       throw fail('native-protocol-mismatch', `${name} answered the ACP handshake without a protocol version.`);
     }
     if (initialized.protocolVersion !== PROTOCOL_VERSION) throw fail('unsupported-protocol', `${name} speaks an unsupported ACP protocol version.`);
+    if (gooseNano && (initialized.agentInfo?.name !== 'goose' || initialized.agentInfo?.version !== '1.59.0')) {
+      throw fail('native-protocol-mismatch', 'This Goose release has no verified Nano source.');
+    }
+    await verifyNanoGuard();
     agentCapabilities = initialized.agentCapabilities && typeof initialized.agentCapabilities === 'object' ? initialized.agentCapabilities : {};
     authMethods = (Array.isArray(initialized.authMethods) ? initialized.authMethods : []).map(method => oneLine(method?.name ?? method?.id, 80)).filter(Boolean).slice(0, 6);
     if (config.coordination) {
@@ -577,19 +697,29 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
       applySessionState(loaded);
     } else {
       let created;
-      try { created = await request('session/new', { cwd, mcpServers }); }
+      const params = { cwd, mcpServers };
+      if (gooseNano) params._meta = { enabledExtensions: [{ type: 'platform', name: 'developer', bundled: true }] };
+      try { created = await request('session/new', params); }
       catch (error) { throw signIn(error) ?? mismatch(error, 'session') ?? error; }
       if (typeof created?.sessionId !== 'string' || !created.sessionId || created.sessionId.length > 256) throw fail('native-protocol-mismatch', `${name} did not create a conversation.`);
       sessionId = created.sessionId;
       applySessionState(created);
     }
-    if (config.model?.id && config.model.id !== 'default') await selectModel(config.model.id);
+    if (nanoModes) {
+      await verifyNanoGuard();
+      // Fail closed: the session runs on exactly the Nano mode it was started
+      // or recorded with, never the agent's default and never another source.
+      await selectModel(config.model.id, config.model.provider);
+      if (currentModelId !== config.model.id) throw fail('invalid-model', `The selected model is not offered by ${name}.`);
+      if (gooseNano && currentModeId !== 'approve') throw fail('unsupported-settings', 'Goose did not enable approval for the Nano source.');
+    } else if (config.model?.id && config.model.id !== 'default') await selectModel(config.model.id, config.model.provider);
     if (config.thinkingLevel) await selectThought(config.thinkingLevel);
     setStatus('idle');
   } catch (error) {
     disposed = true;
     child.kill();
     server?.close();
+    await cleanReadiness();
     throw typeof error?.bridgeCode === 'string' ? error : fail('native-start-failed', `${name} could not start.`);
   }
 
@@ -626,6 +756,12 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
     composerCapabilities() { return { steer: false, compact: false }; },
     async prompt({ text, mode } = {}) {
       if (typeof text !== 'string' || !text.trim()) throw fail('invalid-request', 'A non-empty prompt is required.');
+      if (gooseNano && (currentModeId !== 'approve' || currentModelId !== config.model.id)) {
+        throw fail('unsupported-settings', 'Goose changed the Nano session model or approval mode.');
+      }
+      if (gooseNano && /^\s*\/[\w-]+(?:\s|$)/u.test(text)) {
+        throw fail('unsupported-method', 'Native slash commands are unavailable on the Nano source of Goose.');
+      }
       if (mode === 'steer') throw fail('unsupported-method', `${name} cannot steer an active turn.`);
       if (mode !== 'prompt' && mode !== 'follow-up') throw fail('invalid-request', 'The prompt mode is invalid.');
       if (disposed || exited || transportFailed || status === 'failed') throw fail('not-running', `${name} is not running.`);
@@ -645,7 +781,9 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
       if (status !== 'idle') throw fail('turn-active', 'Wait for the current turn before changing these settings.');
       if (serviceTier != null && serviceTier !== 'standard') throw fail('unsupported-settings', `${name} has no speed setting.`);
       if (!model || typeof model.id !== 'string') throw fail('invalid-request', 'A model is required.');
-      if (model.id !== 'default') await selectModel(model.id);
+      // A change of model source needs a new session: refused, never matched by id.
+      if (nanoModes && model.provider !== nanoProvider) throw fail('invalid-model', `The selected model is not offered by ${name}.`);
+      if (nanoModes || model.id !== 'default') await selectModel(model.id, model.provider);
       if (thinkingLevel != null) await selectThought(thinkingLevel);
       const current = currentModel();
       return { ...(current ? { model: workspaceModel(current) } : {}), ...(currentThought ? { thinkingLevel: currentThought } : {}) };
@@ -680,6 +818,7 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
       server?.close();
       child.stdin.end();
       child.kill();
+      await cleanReadiness();
     },
   };
 }

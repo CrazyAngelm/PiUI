@@ -19,7 +19,7 @@ limits come from a Nano account.
 | Mode | What is true | Network to Nano |
 |---|---|---|
 | No account (default) | Exactly the workbench of 0.2.x. The `nano` harness is listed as "sign in required" and blocks nothing else. | None. Not even discovery. |
-| Signed in, local Nano | The user's own Pi runs on this computer against the four Nano modes (Auto, Free, Fast, Smart) under the workspace's limits. History is Pi JSONL on this disk. | Account, entitlement and usage requests; the prompts of Nano sessions through the relay; audio the user dictates. |
+| Signed in, local Nano | Upstream Pi runs on this computer against the Nano modes available to the workspace. The Windows release supplies its own Pi and Node.js. History is Pi JSONL on this disk. | Account, entitlement and usage requests; the prompts of Nano sessions through the relay; audio the user dictates. |
 | Nano Cloud window | The user's server agent in the Nano web app, in a separate isolated window. | Whatever the web app does, in its own window and profile. |
 
 Local and cloud sessions never merge: no file, history or credential moves
@@ -155,9 +155,12 @@ UI            host                         system browser           Nano server
 ## 5. The Nano harness and the relay
 
 `nano` is a built-in harness identity (grammar v3, additive over v2). Its native
-runtime is the user's installed upstream Pi at least 1.4.0, driven by the Pi
-bridge in a Nano lane. Its history format is Pi JSONL in the host session
-directory; Pi JSONL stays authoritative, nothing is translated.
+runtime is upstream Pi, driven by the Pi bridge in a Nano lane. Windows x64
+release builds include a pinned Pi and Node.js, plus ripgrep and fd. The host
+extracts and verifies that runtime on first use under the app data directory,
+without a download at install or session start. Development builds and other
+platforms use an installed upstream Pi at least 1.4.0. Pi JSONL in the host
+session directory remains the authoritative history.
 
 Lane launch (everything below is enforced by the host before a native start):
 
@@ -180,24 +183,51 @@ Lane launch (everything below is enforced by the host before a native start):
   Pi child as `NANO_RELAY_KEY`. The key is never in the `initialize` frame,
   an argument, an event or a log.
 - Permission modes: `native` (default; the `nano-guard` extension asks before
-  `bash`, `write` and `edit`, shown as approval cards), `read-only` (`--tools
+  shell commands, `write` and `edit`, shown as approval cards), `read-only` (`--tools
   read,grep,find,ls`), `full-access` (no guard). `workspace-write` is refused
   before launch because Pi has no OS boundary. All of this is an approval
   prompt and a tool list, not a sandbox; the UI says so wherever a mode is
   chosen.
+- Nano explicitly loads the bundled BES Deep Mode skill and the
+  `/skill-paths` command. On Windows, Nano registers a PowerShell tool using
+  Pi's shell operations and the absolute path to the system PowerShell. It
+  works on machines without Git Bash. A preload holds the relay key in the
+  Pi process so tool subprocesses do not inherit it.
 - Unsupported and refused before native execution: thinking levels, speed tiers,
   base-prompt replacement, per-agent tools, skills and MCP servers, the board
   tool, plugin MCP servers, native subagents, the coordinator role, and network
   restriction. See `src/harness-adapters/nano.ts`.
-- A Nano session needs: signed in, a selected workspace, `capabilities.gateway`
+- A session using Nano subscription models needs sign-in, a selected workspace, `capabilities.gateway`
   and `entitlements.features.localAgent`. Otherwise it fails before launch with
   `NANO_SIGN_IN_REQUIRED` or a typed refusal; there is no fallback to another
   harness. Signed out, existing Nano chats stay readable from their local JSONL.
-- Models in catalogs are the account's available modes
+- Nano subscription models in catalogs are the account's available modes
   (`WorkspaceModel { id: <mode>, provider: "nano", name }`), host-served from
   entitlements, not native discovery; signed out the list is empty and nothing
   is spawned. Tier, cost hint and lock reason are joined by mode id in the
   picker.
+- OpenCode and Prime Agent on their verified Windows releases offer a **Nano
+  subscription** group alongside the native catalog. Goose uses the same
+  picker and starts a separate native ACP process on the selected mode. Codex
+  uses a separate native app-server on Windows and adds only modes that the
+  signed-in workspace gateway advertises for the Responses dialect. Reopening
+  a Nano connector session uses its saved source and native history.
+- On Windows, **Settings → Nano account → External model providers** can add a
+  model from an HTTPS OpenAI Chat Completions endpoint. Enter the model ID and
+  select the endpoint's request format. The native dialog confirms the exact
+  destination and accepts the API key, which the host stores in Credential
+  Manager. Choose the model in the Nano harness under **External model providers**.
+  The connection works while signed out of Nano and has its own session history.
+  Disconnecting revokes its requests and removes it from the picker.
+- The same Windows settings section offers **Continue with ChatGPT**. The
+  system browser asks for permission to use the account's ChatGPT plan. After
+  sign-in, choose a model in the Nano harness under **ChatGPT**. The picker
+  uses the account's model catalog and shows where to manage ChatGPT usage.
+  The connection supports one ChatGPT account per Nano Desktop profile and
+  works independently of a Nano account. Connecting sends sign-in and catalog
+  requests to OpenAI. Selected chats send inference to its public Responses
+  API. Disconnect ends local requests and reports if OpenAI did not confirm
+  remote revocation. [OpenAI's sign-in and plan usage guide](https://developers.openai.com/siwc/token-sharing-open-source).
 
 Relay request path: Pi sends `POST /s/<session>/v1/chat/completions` (or
 `GET .../v1/models`) to `127.0.0.1:<ephemeral>` with `Authorization: Bearer
@@ -377,9 +407,9 @@ server-side limits.
 
 ## 13. Limitations and follow-ups
 
-- Pi and Node are not bundled: the first release drives the user's installed Pi
-  (at least 1.4.0). Bundling a pinned Node and Pi, with a compiled-in hash
-  manifest, is the next step.
+- The Windows x64 build embeds the runtime archive and its file manifest.
+  Verification rejects incomplete or changed contents before starting Nano.
+  Other platforms still resolve a separately installed Pi and Node.js.
 - Nano as the lead of Fusion, as a coordinator and with the board tool needs
   host tools in the Pi lane (native custom tool registration calling a
   bridge-owned loopback endpoint). Refused until then.

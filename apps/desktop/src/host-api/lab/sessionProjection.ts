@@ -78,7 +78,7 @@ export function liveSnapshot(state: LabState, record: LabSessionRecord): Session
     blocks: record.blocks.map((block) => ({ ...block })),
     approvals: (record.live?.approvals ?? []).map((approval) => ({ ...approval })),
     capabilities: harnessCapabilities(record.harness, summary),
-    models: accountRuntimeModels(state, record.harness),
+    models: accountRuntimeModels(state, record.harness, record.model),
     // Agent-advertised session modes (additive, ADR-034): live ACP sessions only.
     ...(isAcpHarness(record.harness)
       ? { modes: { current: record.mode ?? ACP_LAB_MODES[0]?.id ?? '', available: ACP_LAB_MODES.map((mode) => ({ ...mode })) } }

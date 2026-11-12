@@ -194,6 +194,7 @@ impl WorkspaceHost {
             title,
             updated_at: now_string(),
             model: None,
+            nano_connector: false,
             thinking_level: None,
             permission_mode: PermissionMode::Native,
             profile_id: None,

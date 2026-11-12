@@ -418,6 +418,7 @@ impl WorkspaceError {
             AcpRefusal::Unknown
             | AcpRefusal::NotInstalled(_)
             | AcpRefusal::UnsupportedVersion
+            | AcpRefusal::NanoSourceUnavailable
             | AcpRefusal::VersionUnknown => Self {
                 code: "UNAVAILABLE",
                 message: "The selected harness is unavailable. Check it in Settings → Harnesses.",
@@ -451,6 +452,11 @@ fn runtime_failure(error: &NativeRuntimeError) -> WorkspaceError {
         NativeRuntimeError::AgentSignInRequired { .. } => WorkspaceError::acp_sign_in_required(),
         // No Nano launch data: the account is not signed in.
         NativeRuntimeError::NanoNotReady => WorkspaceError::nano_sign_in_required(),
+        NativeRuntimeError::NanoRuntimeUnavailable => WorkspaceError {
+            code: "UNAVAILABLE",
+            message: "The bundled Nano runtime could not be verified or prepared.",
+            recoverable: true,
+        },
         NativeRuntimeError::Bridge(BridgeFailureCode::Incompatible) => WorkspaceError {
             code: "HARNESS_INCOMPATIBLE",
             message: piui_runtime::workspace_runtime::INCOMPATIBLE_HARNESS_MESSAGE,
@@ -1330,19 +1336,87 @@ impl WorkspaceHost {
         &self,
         mut config: NativeRuntimeConfig,
         acp: Option<AcpLaunch>,
+        nano_source: bool,
     ) -> NativeSpawnResult {
         // A Nano start gets its agent directory, guard and relay key from the
         // host. The lease keeps the relay session registered: it is attached
         // to the runtime below (and dropped with it), and a start that fails,
         // times out or is cancelled drops it right here with this future.
         let mut nano_lease = None;
+        let mut external_lease = None;
         if config.harness == HarnessKind::Nano
             && config.nano.is_none()
             && let Some(nano) = self.nano_host()
         {
-            let (launch, lease) = nano.launch(config.permission_mode).await?;
-            config.nano = Some(launch);
-            nano_lease = Some(lease);
+            if let Some(model) = config
+                .model
+                .as_ref()
+                .filter(|model| external_model_id(Some(model)).is_some())
+            {
+                let (launch, lease) = nano
+                    .launch_external(model, &config.session_dir, config.permission_mode)
+                    .await?;
+                config.nano = Some(launch);
+                external_lease = Some(lease);
+            } else {
+                let (launch, lease) = nano.launch(config.permission_mode).await?;
+                config.nano = Some(launch);
+                nano_lease = Some(lease);
+            }
+        }
+        // A connector launch uses the recorded source, even if a native
+        // provider happens to use the same model name.
+        let mut acp = acp;
+        let mut source_lease = None;
+        let mut prime_source = None;
+        if nano_source {
+            if !supports_nano_connector(config.harness)
+                || !is_nano_model(config.harness, config.model.as_ref())
+            {
+                return Err(NativeRuntimeError::InvalidConfiguration);
+            }
+            let nano = self.nano_host().ok_or(NativeRuntimeError::NanoNotReady)?;
+            let session_id = config
+                .session_dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or(NativeRuntimeError::InvalidConfiguration)?;
+            if config.harness == HarnessKind::PrimeAgent {
+                let (source, lease) = nano.launch_prime_source(session_id).await?;
+                prime_source = Some(source);
+                source_lease = Some(lease);
+            } else if config.harness == HarnessKind::Codex {
+                let (source, lease) = nano.launch_codex_source(session_id).await?;
+                let (runtime, events) = NativeRuntime::spawn_codex_nano(config, source).await?;
+                runtime.attach_lease(Box::new(lease));
+                return Ok((runtime, events));
+            } else {
+                let launch = acp
+                    .as_mut()
+                    .ok_or(NativeRuntimeError::InvalidConfiguration)?;
+                if !self.inner.acp.verified_nano_source(launch.agent) {
+                    return Err(NativeRuntimeError::InvalidConfiguration);
+                }
+                let resolved = launch.clone();
+                if !tokio::task::spawn_blocking(move || AcpAgents::verified_nano_binary(&resolved))
+                    .await
+                    .unwrap_or(false)
+                {
+                    return Err(NativeRuntimeError::InvalidConfiguration);
+                }
+                let (source, lease) =
+                    if launch.agent.as_str() == piui_runtime::acp_nano::GOOSE_NANO_SOURCE_AGENT {
+                        let model = config
+                            .model
+                            .as_ref()
+                            .ok_or(NativeRuntimeError::InvalidConfiguration)?;
+                        nano.launch_goose_source(session_id, model).await?
+                    } else {
+                        nano.launch_acp_source(session_id).await?
+                    };
+                launch.nano = Some(source);
+                source_lease = Some(lease);
+            }
         }
         let agent = config.harness.acp_agent();
         #[cfg(test)]
@@ -1361,11 +1435,19 @@ impl WorkspaceHost {
                 return spawned;
             }
         }
-        let spawned = match acp {
-            Some(launch) => NativeRuntime::spawn_acp(config, launch).await,
-            None => NativeRuntime::spawn(config).await,
+        let spawned = match (acp, prime_source) {
+            (Some(launch), None) => NativeRuntime::spawn_acp(config, launch).await,
+            (None, Some(source)) => NativeRuntime::spawn_prime_nano(config, source).await,
+            (None, None) => NativeRuntime::spawn(config).await,
+            (Some(_), Some(_)) => Err(NativeRuntimeError::InvalidConfiguration),
         };
         if let (Ok((runtime, _)), Some(lease)) = (&spawned, nano_lease) {
+            runtime.attach_lease(Box::new(lease));
+        }
+        if let (Ok((runtime, _)), Some(lease)) = (&spawned, source_lease) {
+            runtime.attach_lease(Box::new(lease));
+        }
+        if let (Ok((runtime, _)), Some(lease)) = (&spawned, external_lease) {
             runtime.attach_lease(Box::new(lease));
         }
         if let Some(agent) = agent {
@@ -1493,6 +1575,8 @@ impl WorkspaceHost {
                 }
             }),
             updated_at: now_string(),
+            nano_connector: supports_nano_connector(request.harness)
+                && is_nano_model(request.harness, request.model.as_ref()),
             model: request.model,
             thinking_level: request.thinking_level,
             permission_mode: request.permission_mode,
@@ -1789,13 +1873,13 @@ impl WorkspaceHost {
             .fusion_hooks()
             .and_then(|hooks| hooks.setup(&record.id));
         let sidekick = fusion.as_ref().is_some_and(|setup| setup.sidekick);
-        let plugin_mcp_servers = if sidekick {
+        let plugin_mcp_servers = if sidekick || record.nano_connector {
             Vec::new()
         } else {
             self.plugin_mcp_servers(&record, &cwd, managed).await
         };
         let board = match resume_binding(&record) {
-            Ok(_) if !sidekick => self.board_setup(&record).await,
+            Ok(_) if !sidekick && !record.nano_connector => self.board_setup(&record).await,
             _ => None,
         };
         let (mut host_tools, mut instructions) = match &board {
@@ -1817,6 +1901,19 @@ impl WorkspaceHost {
             let session_directory = self.inner.native_root.join(&record.id);
             fs::create_dir_all(&session_directory).map_err(|_| WorkspaceError::io())?;
             let (resume_native_id, resume_native_path) = resume_binding(&record)?;
+            // The model source is part of a session: one recorded on the
+            // Nano source reopens on that source and mode, or fails; it never
+            // starts natively. A native session reopens as before.
+            let nano_source = record.nano_connector;
+            let model = if nano_source {
+                Some(recorded_nano_model(&record).ok_or_else(WorkspaceError::invalid)?)
+            } else if record.harness == HarnessKind::Nano
+                && external_model_id(record.model.as_ref()).is_some()
+            {
+                record.model.clone()
+            } else {
+                model
+            };
             let config = NativeRuntimeConfig {
                 harness: record.harness,
                 cwd,
@@ -1852,13 +1949,21 @@ impl WorkspaceHost {
             };
             // An ACP agent starts only from its trusted, resolved descriptor.
             let acp = match record.harness.acp_agent() {
-                Some(agent) => Some(self.acp_launch(agent).await?),
+                Some(agent) => {
+                    if nano_source {
+                        self.inner
+                            .acp
+                            .require_nano_source(agent)
+                            .map_err(WorkspaceError::acp_refused)?;
+                    }
+                    Some(self.acp_launch(agent).await?)
+                }
                 None => None,
             };
             // Dropping an unfinished spawn terminates its partially started
             // process tree; it never affects another session.
             let (runtime, mut events) = tokio::select! {
-                spawned = self.spawn_native(config, acp) => {
+                spawned = self.spawn_native(config, acp, nano_source) => {
                     spawned.map_err(|error| runtime_failure(&error))?
                 }
                 () = reservation.cancelled() => return Err(WorkspaceError::conflict()),
@@ -1877,7 +1982,15 @@ impl WorkspaceHost {
                     });
                 }
             };
-            if let Some(agent) = record.harness.acp_agent() {
+            // The Nano source never falls back: a session started or reopened
+            // on it must report a Nano mode as its model, or it is retired.
+            if nano_source && !is_nano_model(record.harness, native.model.as_ref()) {
+                retire_unpublished_runtime(&runtime, events).await;
+                return Err(WorkspaceError::runtime());
+            }
+            if !record.nano_connector
+                && let Some(agent) = record.harness.acp_agent()
+            {
                 self.inner.acp.remember_models(agent, &native.models);
             }
             // Codex and ACP conversations are bound when their first turn is
@@ -2223,6 +2336,30 @@ impl WorkspaceHost {
         publisher: &WorkspaceEventPublisher,
     ) -> Result<(), WorkspaceError> {
         validate_model(&model, thinking_level.as_deref())?;
+        // The model source is part of a session: it never changes
+        // between its native source and the Nano source (a new session picks
+        // the other source).
+        let recorded = self.record(session_id)?;
+        if recorded.harness == HarnessKind::Nano
+            && external_model_id(recorded.model.as_ref()) != external_model_id(Some(&model))
+        {
+            return Err(WorkspaceError::invalid());
+        }
+        if supports_nano_connector(recorded.harness)
+            && is_nano_model(recorded.harness, Some(&model)) != recorded.nano_connector
+        {
+            return Err(WorkspaceError::invalid());
+        }
+        if uses_nano_models(&recorded) {
+            let nano = self
+                .nano_host()
+                .ok_or_else(WorkspaceError::nano_sign_in_required)?;
+            let mut offered = vec![model.clone()];
+            nano.retain_entitled_models(&mut offered, nano_provider(recorded.harness));
+            if offered.is_empty() {
+                return Err(WorkspaceError::invalid());
+            }
+        }
         let (runtime, state) = self
             .live_runtime(session_id)?
             .ok_or_else(WorkspaceError::closed)?;
@@ -2456,11 +2593,25 @@ impl WorkspaceHost {
             .native_id
             .clone()
             .ok_or_else(WorkspaceError::not_found)?;
+        // A conversation recorded on the Nano source is replayed on that
+        // source (its history lives in the Nano source's own folder), or the
+        // reference fails; it is never read through the native source.
+        let model = recorded_nano_model(&record);
+        if record.nano_connector {
+            if model.is_none() {
+                return Err(WorkspaceError::invalid());
+            }
+            self.inner
+                .acp
+                .require_nano_source(agent)
+                .map_err(WorkspaceError::acp_refused)?;
+        }
         let launch = self.acp_launch(agent).await?;
         let session_directory = self
             .inner
             .native_root
             .join(format!("history-{}", Uuid::new_v4()));
+        fs::create_dir_all(&session_directory).map_err(|_| WorkspaceError::io())?;
         let config = NativeRuntimeConfig {
             harness: record.harness,
             cwd: directory.canonical_path().to_path_buf(),
@@ -2468,7 +2619,7 @@ impl WorkspaceHost {
             native_id: Some(native_id),
             native_path: None,
             title: None,
-            model: None,
+            model,
             thinking_level: None,
             instructions: None,
             base_instructions: None,
@@ -2487,7 +2638,9 @@ impl WorkspaceHost {
             host_tools: Vec::new(),
             nano: None,
         };
-        let spawned = self.spawn_native(config, Some(launch)).await;
+        let spawned = self
+            .spawn_native(config, Some(launch), record.nano_connector)
+            .await;
         let result = match spawned {
             Ok((runtime, mut events)) => {
                 let snapshot = events.buffer_while(runtime.snapshot()).await;
@@ -2588,6 +2741,34 @@ impl WorkspaceHost {
         }
     }
 
+    /// Stops chats whose credential source was disconnected. Native history is
+    /// retained so reconnecting can reopen it with a new lease.
+    pub(crate) async fn shutdown_external_provider(&self, provider: &str) {
+        let ids = lock(&self.inner.registry)
+            .map(|registry| {
+                registry
+                    .sessions()
+                    .iter()
+                    .filter(|session| {
+                        session.harness == HarnessKind::Nano
+                            && session
+                                .model
+                                .as_ref()
+                                .and_then(|model| model.provider.as_deref())
+                                == Some(provider)
+                    })
+                    .map(|session| session.id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for id in ids {
+            if self.pending_start(&id).is_some() || self.live_runtime(&id).ok().flatten().is_some()
+            {
+                let _ = self.close_session(&id).await;
+            }
+        }
+    }
+
     fn live_runtime(&self, session_id: &str) -> Result<Option<LiveRuntimeHandle>, WorkspaceError> {
         validate_session_id(session_id)?;
         Ok(lock(&self.inner.live)?
@@ -2676,7 +2857,9 @@ impl WorkspaceHost {
             if !keep_title {
                 record.title = snapshot.title.clone();
             }
-            record.model = snapshot.model.clone();
+            if !record.nano_connector || is_nano_model(record.harness, snapshot.model.as_ref()) {
+                record.model = snapshot.model.clone();
+            }
             record.updated_at = now_string();
         })
     }
@@ -2970,26 +3153,41 @@ async fn runtime_settings(
         .workspace
         .live_runtime(session_id)?
         .ok_or_else(WorkspaceError::closed)?;
-    let harness = match &command {
-        RuntimeSettingsCommand::Set { service_tier, .. } => {
-            let harness = host.workspace.record(session_id)?.harness;
-            reject_unsupported_speed(harness, service_tier.as_deref())?;
-            Some(harness)
-        }
-        RuntimeSettingsCommand::Get { .. } => host
-            .workspace
-            .record(session_id)
-            .ok()
-            .map(|record| record.harness),
-    };
+    if let RuntimeSettingsCommand::Set { service_tier, .. } = &command {
+        let harness = host.workspace.record(session_id)?.harness;
+        reject_unsupported_speed(harness, service_tier.as_deref())?;
+    }
     let mut models = runtime
         .models()
         .await
         .map_err(|_| WorkspaceError::runtime())?;
-    // A Nano session offers, and may switch to, only the modes the account is
-    // entitled to now; a locked mode is refused like any unknown model.
-    if harness == Some(HarnessKind::Nano) {
-        retain_entitled_nano_models(host, &mut models);
+    // A Nano session (the Nano lane, or an ACP session on the Nano source)
+    // offers, and may switch to, only the modes the account is entitled to
+    // now; a locked mode is refused like any unknown model.
+    let record = host.workspace.record(session_id)?;
+    let nano_models = uses_nano_models(&record);
+    let external_models = if record.harness == HarnessKind::Nano
+        && external_model_id(record.model.as_ref()).is_some()
+    {
+        Some(match host.workspace.nano_host() {
+            Some(nano) => nano.external_catalog().await,
+            None => Vec::new(),
+        })
+    } else {
+        None
+    };
+    let retain_external = |models: &mut Vec<WorkspaceModel>| {
+        if let Some(external) = &external_models {
+            models.retain(|model| {
+                external
+                    .iter()
+                    .any(|row| row.id == model.id && row.provider == model.provider)
+            });
+        }
+    };
+    retain_external(&mut models);
+    if nano_models {
+        retain_entitled_nano_models(host, &mut models, record.harness);
     }
     if let RuntimeSettingsCommand::Set {
         model,
@@ -3010,7 +3208,6 @@ async fn runtime_settings(
             .find(|candidate| candidate.id == model.id && candidate.provider == model.provider)
             .ok_or_else(WorkspaceError::invalid)?;
         validate_model(candidate, thinking_level.as_deref())?;
-        let record = host.workspace.record(session_id)?;
         if service_tier.is_some()
             && (matches!(record.harness, HarnessKind::Pi | HarnessKind::Nano)
                 || !matches!(service_tier.as_deref(), Some("standard" | "fast")))
@@ -3030,8 +3227,9 @@ async fn runtime_settings(
         .snapshot()
         .await
         .map_err(|_| WorkspaceError::runtime())?;
-    if harness == Some(HarnessKind::Nano) {
-        retain_entitled_nano_models(host, &mut native.models);
+    retain_external(&mut native.models);
+    if nano_models {
+        retain_entitled_nano_models(host, &mut native.models, record.harness);
     }
     Ok(RuntimeSettings {
         protocol: 16,
@@ -3248,16 +3446,53 @@ async fn harness_models(
     if request.harness == HarnessKind::Nano {
         // The host serves the Nano catalog from the account's entitled modes;
         // no Pi process is started to discover models.
-        return nano_host_catalog(state, request.harness);
+        return nano_host_catalog(state, request.harness).await;
     }
     if let Some(agent) = request.harness.acp_agent() {
         // ACP advertises models only inside a conversation, and a probe
         // conversation would add to the agent's own history. Offer the agent
         // default plus what its last conversation in this host advertised.
+        let mut models = state.workspace.inner.acp.catalog_models(agent);
+        // Agents with a verified Nano source also offer the account's current
+        // Nano modes as a separate group. They are live
+        // account state: built from the entitlements on every request, only
+        // while a Nano session could start, and never kept in the agent's
+        // remembered models. Signed out, nothing is added.
+        if state.workspace.inner.acp.supports_nano_source(agent)
+            && piui_runtime::workspace_runtime::system_node_available()
+            && let Ok(launch) = state.workspace.acp_launch(agent).await
+            && state.workspace.inner.acp.verified_nano_source(agent)
+        {
+            if request.part != Some(HarnessCatalogPart::Resources)
+                && agent.as_str() == piui_runtime::acp_nano::NANO_SOURCE_AGENT
+            {
+                let cwd = directory.canonical_path().to_path_buf();
+                let resolved = launch.clone();
+                if let Ok(Some(native)) = tokio::task::spawn_blocking(move || {
+                    piui_runtime::acp::probe_opencode_native_models(&resolved, &cwd)
+                })
+                .await
+                {
+                    state.workspace.inner.acp.remember_models(agent, &native);
+                    models = state.workspace.inner.acp.catalog_models(agent);
+                }
+            }
+            if let Some(nano) = state.workspace.nano_host()
+                && nano.can_launch()
+                && tokio::task::spawn_blocking(move || AcpAgents::verified_nano_binary(&launch))
+                    .await
+                    .unwrap_or(false)
+            {
+                models.extend(nano.catalog_models().into_iter().map(|mut model| {
+                    model.provider = Some(nano_provider(request.harness).to_owned());
+                    model
+                }));
+            }
+        }
         return Ok(HarnessModelsResult {
             protocol: 18,
             harness: request.harness,
-            models: state.workspace.inner.acp.catalog_models(agent),
+            models,
             resources: piui_runtime::workspace_runtime::NativeResourceCatalog {
                 items: Vec::new(),
                 warnings: Vec::new(),
@@ -3282,17 +3517,37 @@ async fn harness_models(
         .await?;
         return Ok(HarnessModelsResult::resources_only(harness, resources));
     }
-    let (runtime, drain) = spawn_catalog_probe(state, &directory, harness).await?;
-    let models = match runtime.catalog_models().await {
+    let (probe, connector_models) = tokio::join!(
+        spawn_catalog_probe(state, &directory, harness),
+        verified_native_connector_models(state, harness)
+    );
+    let native_unavailable = |error| {
+        if connector_models.is_empty() {
+            Err(error)
+        } else {
+            Ok(HarnessModelsResult {
+                protocol: 18,
+                harness,
+                models: connector_models.clone(),
+                resources: empty_resource_catalog(),
+            })
+        }
+    };
+    let (runtime, drain) = match probe {
+        Ok(probe) => probe,
+        Err(error) => return native_unavailable(error),
+    };
+    let mut models = match runtime.catalog_models().await {
         Ok(models) => models,
         Err(error) => {
             retire_catalog_probe(&runtime, drain, harness).await;
             eprintln!(
                 "event=harness_catalog_failed phase=models harness={harness:?} code={error:?}"
             );
-            return Err(WorkspaceError::runtime());
+            return native_unavailable(WorkspaceError::runtime());
         }
     };
+    models.extend(connector_models);
     if request.part == Some(HarnessCatalogPart::Models) {
         // Resource discovery waits on native MCP startup (about ten seconds
         // for Codex). Answer the models now; the same probe finishes the
@@ -3327,6 +3582,47 @@ async fn harness_models(
         models,
         resources,
     })
+}
+
+async fn verified_native_connector_models(
+    state: &HostState,
+    harness: HarnessKind,
+) -> Vec<piui_runtime::workspace_runtime::NativeCatalogModel> {
+    let Some(nano) = state.workspace.nano_host().filter(|nano| nano.can_launch()) else {
+        return Vec::new();
+    };
+    match harness {
+        HarnessKind::PrimeAgent
+            if tokio::task::spawn_blocking(
+                piui_runtime::workspace_runtime::prime_nano_available,
+            )
+            .await
+            .unwrap_or(false) =>
+        {
+            nano.catalog_models()
+                .into_iter()
+                .map(|mut model| {
+                    model.provider = Some(nano_provider(harness).to_owned());
+                    model
+                })
+                .collect()
+        }
+        HarnessKind::Codex => {
+            let models = nano.codex_catalog().await;
+            if !models.is_empty()
+                && tokio::task::spawn_blocking(
+                    piui_runtime::workspace_runtime::codex_nano_available,
+                )
+                .await
+                .unwrap_or(false)
+            {
+                models
+            } else {
+                Vec::new()
+            }
+        }
+        _ => Vec::new(),
+    }
 }
 
 type CatalogKey = (String, String, Option<Uuid>);
@@ -3428,17 +3724,79 @@ where
 fn retain_entitled_nano_models(
     host: &HostState,
     models: &mut Vec<piui_runtime::workspace_runtime::WorkspaceModel>,
+    harness: HarnessKind,
 ) {
     match host.workspace.nano_host() {
-        Some(nano) => nano.retain_entitled_models(models),
+        Some(nano) => nano.retain_entitled_models(models, nano_provider(harness)),
         None => models.clear(),
     }
+}
+
+fn supports_nano_connector(harness: HarnessKind) -> bool {
+    matches!(harness, HarnessKind::PrimeAgent | HarnessKind::Codex)
+        || harness.acp_agent().is_some_and(|agent| {
+            matches!(
+                agent.as_str(),
+                piui_runtime::acp_nano::NANO_SOURCE_AGENT
+                    | piui_runtime::acp_nano::GOOSE_NANO_SOURCE_AGENT
+            )
+        })
+}
+
+/// The host offers bare Nano mode IDs. OpenCode's native catalog uses
+/// qualified provider/model IDs, even when a provider is named Nano.
+fn nano_provider(harness: HarnessKind) -> &'static str {
+    match harness {
+        HarnessKind::PrimeAgent => piui_runtime::prime_nano::PROVIDER,
+        HarnessKind::Codex => piui_runtime::codex_nano::PROVIDER,
+        _ if harness.acp_agent().is_some_and(|agent| {
+            agent.as_str() == piui_runtime::acp_nano::GOOSE_NANO_SOURCE_AGENT
+        }) =>
+        {
+            piui_runtime::acp_nano::GOOSE_NANO_SOURCE_PROVIDER
+        }
+        _ => piui_nano::status::NANO_MODEL_PROVIDER,
+    }
+}
+
+fn is_nano_model(harness: HarnessKind, model: Option<&WorkspaceModel>) -> bool {
+    model.is_some_and(|model| {
+        model.provider.as_deref() == Some(nano_provider(harness))
+            && piui_nano::wire::NanoModeIdV1::parse(&model.id).is_some()
+    })
+}
+
+/// The mode a connector session was recorded on, if it runs on the Nano source.
+fn recorded_nano_model(
+    record: &PersistedSession,
+) -> Option<piui_runtime::workspace_runtime::WorkspaceModel> {
+    if !record.nano_connector || !supports_nano_connector(record.harness) {
+        return None;
+    }
+    record
+        .model
+        .clone()
+        .filter(|model| is_nano_model(record.harness, Some(model)))
+}
+
+/// Whether a session's model list is the account's Nano modes: the Nano lane,
+/// or a connector session on the Nano source.
+fn uses_nano_models(record: &PersistedSession) -> bool {
+    (record.harness == HarnessKind::Nano && external_model_id(record.model.as_ref()).is_none())
+        || (record.nano_connector && supports_nano_connector(record.harness))
+}
+
+fn external_model_id(model: Option<&WorkspaceModel>) -> Option<&str> {
+    model?
+        .provider
+        .as_deref()
+        .and_then(piui_nano::external_providers::connection_id)
 }
 
 /// The Nano model catalog, served by the host: one row per mode the signed-in
 /// account's entitlements make available (`provider: "nano"`), nothing while
 /// signed out, and no resources. No Pi process is started.
-fn nano_host_catalog(
+async fn nano_host_catalog(
     state: &HostState,
     harness: HarnessKind,
 ) -> Result<HarnessModelsResult, WorkspaceError> {
@@ -3446,10 +3804,12 @@ fn nano_host_catalog(
         .workspace
         .nano_host()
         .ok_or_else(WorkspaceError::nano_sign_in_required)?;
+    let mut models = host.catalog_models();
+    models.extend(host.external_catalog().await);
     Ok(HarnessModelsResult {
         protocol: 18,
         harness,
-        models: host.catalog_models(),
+        models,
         resources: piui_runtime::workspace_runtime::NativeResourceCatalog {
             items: Vec::new(),
             warnings: Vec::new(),
@@ -5568,6 +5928,96 @@ Board."
     }
 
     #[test]
+    fn a_saved_connector_source_does_not_reclassify_native_models() {
+        use piui_runtime::workspace_runtime::{AcpAgentId, WorkspaceModel};
+        let model = |provider: Option<&str>, id: &str| WorkspaceModel {
+            id: id.into(),
+            provider: provider.map(str::to_owned),
+            name: id.into(),
+            thinking_levels: None,
+        };
+        let session =
+            |harness: HarnessKind, model: Option<WorkspaceModel>| super::PersistedSession {
+                composer: Default::default(),
+                usage: Vec::new(),
+                id: "s".into(),
+                workspace_id: "w".into(),
+                harness,
+                title: "t".into(),
+                updated_at: "now".into(),
+                model,
+                nano_connector: false,
+                thinking_level: None,
+                permission_mode: PermissionMode::Native,
+                profile_id: None,
+                run_id: None,
+                member_id: None,
+                native_id: None,
+                native_path: None,
+                revision: 0,
+                materialized: None,
+            };
+        let opencode = HarnessKind::Acp(AcpAgentId::new("opencode").expect("id"));
+        let nano = model(Some("nano"), "auto");
+        assert!(super::is_nano_model(opencode, Some(&nano)));
+        assert!(!super::is_nano_model(HarnessKind::PrimeAgent, Some(&nano)));
+        let prime_nano = model(Some(piui_runtime::prime_nano::PROVIDER), "auto");
+        assert!(super::is_nano_model(
+            HarnessKind::PrimeAgent,
+            Some(&prime_nano)
+        ));
+        assert!(
+            !super::is_nano_model(opencode, Some(&model(None, "auto"))),
+            "an id alone is no source"
+        );
+        assert!(!super::is_nano_model(
+            opencode,
+            Some(&model(Some("anthropic"), "auto"))
+        ));
+        assert!(!super::is_nano_model(opencode, None));
+        assert_eq!(
+            piui_runtime::acp_nano::NANO_SOURCE_PROVIDER,
+            piui_nano::status::NANO_MODEL_PROVIDER,
+            "the runtime and the account name the provider alike"
+        );
+        // Reopen: only an ACP session recorded on a Nano mode reopens on the
+        // Nano source; everything else is unchanged.
+        let mut connected = session(opencode, Some(nano.clone()));
+        assert_eq!(
+            super::recorded_nano_model(&connected),
+            None,
+            "legacy records remain native"
+        );
+        connected.nano_connector = true;
+        assert_eq!(super::recorded_nano_model(&connected), Some(nano.clone()));
+        assert!(!super::is_nano_model(
+            opencode,
+            Some(&model(Some("nano"), "nano/auto"))
+        ));
+        assert_eq!(
+            super::recorded_nano_model(&session(opencode, Some(model(None, "x")))),
+            None
+        );
+        assert_eq!(super::recorded_nano_model(&session(opencode, None)), None);
+        for other in [HarnessKind::Pi, HarnessKind::Nano] {
+            assert_eq!(
+                super::recorded_nano_model(&session(other, Some(nano.clone()))),
+                None
+            );
+        }
+        assert!(super::uses_nano_models(&session(HarnessKind::Nano, None)));
+        assert!(super::uses_nano_models(&connected));
+        assert!(!super::uses_nano_models(&session(
+            opencode,
+            Some(model(None, "auto"))
+        )));
+        assert!(!super::uses_nano_models(&session(
+            HarnessKind::Pi,
+            Some(nano)
+        )));
+    }
+
+    #[test]
     fn ordinary_create_rejects_a_forged_profile_binding() {
         assert!(
             serde_json::from_value::<WorkspaceCommand>(serde_json::json!({
@@ -5667,6 +6117,7 @@ Board."
             title: "Renamed before first turn".into(),
             updated_at: "0".into(),
             model: None,
+            nano_connector: false,
             thinking_level: None,
             permission_mode: PermissionMode::Native,
             profile_id: None,
@@ -5834,6 +6285,7 @@ Board."
             title: "Empty restart proof".into(),
             updated_at: "0".into(),
             model: None,
+            nano_connector: false,
             thinking_level: None,
             permission_mode: PermissionMode::Native,
             profile_id: None,
@@ -5969,6 +6421,7 @@ Board."
             title: "Plugin tools".into(),
             updated_at: "0".into(),
             model: None,
+            nano_connector: false,
             thinking_level: None,
             permission_mode: PermissionMode::Native,
             profile_id: None,

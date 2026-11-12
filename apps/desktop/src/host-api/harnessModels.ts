@@ -1,7 +1,9 @@
 import { hostInvoke } from './transport';
 import type { HarnessCatalogPart, HarnessModelsRequest, HarnessModelsResult } from '../../../../contracts/harness-models-v18';
 import type { HarnessModelsResultV19 } from '../../../../contracts/harness-models-v19';
+import { NANO_MODE_IDS } from '../../../../contracts/nano-server-v1';
 import type { WorkspaceModel } from '../../../../contracts/workspace-v15';
+import { NANO_SOURCE_HARNESSES, nanoSourceProvider } from '../app/nano/nanoView';
 import { workspaceError } from './workspaceClient';
 
 /**
@@ -209,6 +211,23 @@ const harnessSnapshotKey = (request: HarnessModelsRequest): string => JSON.strin
  */
 const NO_SNAPSHOT_HARNESS = 'nano';
 
+/**
+ * Another harness's catalog can carry the account's Nano modes as a separate
+ * group (provider `nano`, an agent with a Nano model source). Those rows are the
+ * same account state: never written to storage and never read back, so a
+ * snapshot cannot offer a mode of an earlier or signed-out account. The
+ * harness's own models are remembered as before.
+ */
+export function isNanoConnectorModel(harness: string, model: { id: string; provider?: string | null }): boolean {
+  return NANO_SOURCE_HARNESSES.includes(harness)
+    && model.provider === nanoSourceProvider(harness)
+    && NANO_MODE_IDS.some(id => id === model.id);
+}
+
+function ownModels<Model extends { id: string; provider?: string | null }>(harness: string, models: readonly Model[]): Model[] {
+  return models.filter(model => !isNanoConnectorModel(harness, model));
+}
+
 /** The harness of a catalog key (`[workspaceId, harness]` or `[workspaceId, harness, part]`). */
 function harnessOfKey(key: string): string | undefined {
   try {
@@ -256,8 +275,9 @@ function storeSnapshot(key: string, request: HarnessModelsRequest, result: Harne
   if (result.harness === NO_SNAPSHOT_HARNESS) return;
   try {
     const at = Date.now();
-    localStorage.setItem(SNAPSHOT_KEY + key, JSON.stringify({ at, result }));
-    const models: HarnessModelsResult = { protocol: 18, harness: result.harness, models: result.models, resources: { items: [], warnings: [] } };
+    const own = ownModels(result.harness, result.models);
+    localStorage.setItem(SNAPSHOT_KEY + key, JSON.stringify({ at, result: { ...result, models: own } }));
+    const models: HarnessModelsResult = { protocol: 18, harness: result.harness, models: own, resources: { items: [], warnings: [] } };
     localStorage.setItem(SNAPSHOT_KEY + harnessSnapshotKey(request), JSON.stringify({ at, result: models }));
   } catch {
     // The snapshot is a convenience; the probe stays authoritative.
@@ -282,7 +302,7 @@ function readSnapshot(key: string, request: HarnessModelsRequest): HarnessModels
     if (typeof at !== 'number' || Date.now() - at > SNAPSHOT_MAX_AGE) return undefined;
     if (!result || result.protocol !== 18 || result.harness !== request.harness || !Array.isArray(result.models)) return undefined;
     const resources = result.resources && Array.isArray(result.resources.items) ? result.resources : { items: [], warnings: [] };
-    return { protocol: 18, harness: request.harness, models: result.models, resources };
+    return { protocol: 18, harness: request.harness, models: ownModels(request.harness, result.models), resources };
   } catch {
     return undefined;
   }

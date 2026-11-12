@@ -49,6 +49,14 @@ test("Prime catalog reads native definitions without starting a model session or
   } finally { await adapter.dispose(); }
 });
 
+test("Prime catalog keeps CLI credentials available without creating auth.json", async () => {
+  const agentDir = await mkdtemp(join(tmpdir(), "piui-native-cli-catalog-"));
+  const adapter = await createPrimeAdapter(await config({ catalogOnly: true, agentDir }), () => {});
+  try {
+    assert.ok((await adapter.catalogModels()).some(model => model.id === "prime-cli-model"));
+  } finally { await adapter.dispose(); }
+});
+
 test("Prime SDK adapter snapshots history and returns prompt admission", async () => {
   const events = eventCollector();
   const adapter = await createPrimeAdapter(await config(), events.emit);
@@ -200,7 +208,8 @@ test("Prime rejects unproved mandatory policy and unsafe paths before SDK start"
 });
 
 const FIXTURE_EXPORTS = ["SessionManager", "AuthStorage", "ModelRegistry", "SettingsManager", "defineTool", "createIpythonTool",
-  "createAgentSessionServices", "createAgentSessionFromServices", "createAgentSessionRuntime", "InProcessAgentConnection"];
+  "createAgentSessionServices", "createAgentSessionFromServices", "createAgentSessionRuntime", "InProcessAgentConnection",
+  "createBashToolDefinition", "createEditToolDefinition"];
 // An installed-package layout whose entry re-exports the fixture SDK, minus the named exports.
 async function installedPackage(version, { name = "prime-agent", omit = [], typebox = false } = {}) {
   const packageRoot = await mkdtemp(join(tmpdir(), "piui-prime-version-"));
@@ -217,6 +226,52 @@ async function installedPackage(version, { name = "prime-agent", omit = [], type
 `);
   return packageRoot;
 }
+
+test("Prime Nano source consumes its environment and exposes only entitled modes and isolated tools", async () => {
+  const provider = "nano-desktop-subscription";
+  const native = await config({
+    packageRoot: await installedPackage("0.9.5"), nativeSubagents: undefined,
+    model: { id: "auto", provider, name: "Auto" }, allowedTools: ["bash"],
+  });
+  const launch = (overrides = {}, source = {}) => {
+    process.env.PIUI_PRIME_NANO_SOURCE = JSON.stringify({
+      baseUrl: "http://127.0.0.1:3219/c/1/v1", key: "z".repeat(43),
+      modes: [{ id: "auto", name: "Auto" }, { id: "fast", name: "Fast" }], ...source,
+    });
+    return createPrimeAdapter({ ...native, ...overrides }, () => {});
+  };
+  const adapter = await launch();
+  try {
+    assert.equal(process.env.PIUI_PRIME_NANO_SOURCE, undefined);
+    assert.deepEqual((await adapter.models()).map(model => [model.provider, model.id]), [[provider, "auto"], [provider, "fast"]]);
+    assert.deepEqual((await adapter.resources()).items.map(({ id }) => id), ["bash"]);
+    assert.equal((await adapter.snapshot()).capabilities.nativeSubagents.supported, false);
+    await adapter.setModel({ model: { provider, id: "fast" } });
+    assert.equal((await adapter.snapshot()).model.id, "fast");
+    await assert.rejects(adapter.setModel({ model: { provider: "fixture-provider", id: "fixture-model" } }), { bridgeCode: "model-unavailable" });
+  } finally { await adapter.dispose(); }
+  await assert.rejects(launch({ model: { provider, id: "smart" } }), { bridgeCode: "invalid-request" });
+  await assert.rejects(launch({}, { baseUrl: "https://example.test/v1" }), { bridgeCode: "invalid-request" });
+  await assert.rejects(launch({ allowedTools: ["ipython"] }), { bridgeCode: "unsupported-policy" });
+  await assert.rejects(launch({ nativeSubagents: true }), { bridgeCode: "unsupported-policy" });
+  await assert.rejects(launch({ resourceRules: [{ kind: "skill", id: "alpha", enabled: true }] }), { bridgeCode: "unsupported-policy" });
+  await assert.rejects(launch({ packageRoot: await installedPackage("0.9.6") }), { bridgeCode: "unsupported-version" });
+  assert.equal(process.env.PIUI_PRIME_NANO_SOURCE, undefined);
+});
+
+test("Prime retains and reversibly encodes native provider IDs that collide with the Nano source", async () => {
+  const agentDir = await mkdtemp(join(tmpdir(), "piui-prime-provider-collision-"));
+  const native = await config({ agentDir });
+  const catalog = await createPrimeAdapter({ ...native, catalogOnly: true }, () => {});
+  const providers = (await catalog.catalogModels()).filter(model => model.id === "auto").map(model => model.provider);
+  assert.deepEqual(providers, ["nano", "piui-prime-native:piui-prime-native:nano", "piui-prime-native:nano-desktop-subscription"]);
+  await catalog.dispose();
+  const adapter = await createPrimeAdapter({ ...native, model: { id: "auto", provider: providers[0] } }, () => {});
+  try {
+    await adapter.setModel({ model: { id: "auto", provider: providers[2] } });
+    assert.equal((await adapter.snapshot()).model.provider, providers[2]);
+  } finally { await adapter.dispose(); }
+});
 
 test("Prime admits the minimum and every newer installed package version", async () => {
   for (const version of ["0.9.2", "0.9.4", "0.9.5", "0.10.0", "1.0.0", "v1.2.3+build.7"]) {

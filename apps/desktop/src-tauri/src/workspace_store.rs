@@ -28,6 +28,8 @@ pub(super) struct PersistedSession {
     pub updated_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<WorkspaceModel>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub nano_connector: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_level: Option<String>,
     pub permission_mode: PermissionMode,
@@ -363,6 +365,7 @@ mod tests {
             title: "Session".into(),
             updated_at: "1".into(),
             model: None,
+            nano_connector: false,
             thinking_level: None,
             permission_mode: PermissionMode::Native,
             profile_id: None,

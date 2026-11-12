@@ -383,6 +383,38 @@ async fn a_cancel_during_the_code_exchange_revokes_the_issued_tokens() {
 }
 
 #[tokio::test]
+async fn a_gateway_request_never_switches_workspaces_after_admission() {
+    let fake = FakeNano::start().await;
+    let (account, _store) = fake.signed_in().await;
+    let (generation, admitted) = account.status_with_generation();
+    let admitted = admitted.selected_workspace_id.expect("admitted workspace");
+    account
+        .select_workspace("ws_synthetic02")
+        .await
+        .expect("switch");
+    wait_for(&account, |status| {
+        status
+            .entitlements
+            .as_ref()
+            .is_some_and(|plan| plan.workspace_id == "ws_synthetic02")
+    })
+    .await;
+
+    let sent = account
+        .send_gateway(
+            generation,
+            "ses_test",
+            &admitted,
+            GatewayRequest::Chat(NanoModeIdV1::Free),
+            Bytes::from_static(b"{}"),
+            None,
+        )
+        .await;
+    assert_eq!(sent.err(), Some(NanoError::Offline));
+    assert!(fake.state().gateway_calls.is_empty());
+}
+
+#[tokio::test]
 async fn a_sign_out_during_a_retry_refresh_never_replays_the_request() {
     let fake = FakeNano::start().await;
     let (account, store) = fake.signed_in().await;
@@ -399,9 +431,9 @@ async fn a_sign_out_during_a_retry_refresh_never_replays_the_request() {
             .send_gateway(
                 generation,
                 "ses_test",
-                &["chat", "completions"],
-                reqwest::Method::POST,
-                Some(Bytes::from_static(b"{}")),
+                "ws_synthetic01",
+                GatewayRequest::Chat(NanoModeIdV1::Free),
+                Bytes::from_static(b"{}"),
                 None,
             )
             .await
@@ -431,6 +463,73 @@ async fn a_sign_out_during_a_retry_refresh_never_replays_the_request() {
         account.access_token().await.err(),
         Some(NanoError::SignInRequired)
     );
+}
+
+#[tokio::test]
+async fn a_cancelled_gateway_retry_still_adopts_the_rotated_token() {
+    let fake = FakeNano::start().await;
+    let (account, store) = fake.signed_in().await;
+    let gate = Arc::new(tokio::sync::Notify::new());
+    {
+        let mut state = fake.state();
+        state.reject_access = Some("access-1".to_owned());
+        state.token_gate = Some(gate.clone());
+    }
+    let generation = account.generation();
+    let sender = account.clone();
+    let cancelled = tokio::spawn(async move {
+        sender
+            .send_gateway(
+                generation,
+                "ses_closed",
+                "ws_synthetic01",
+                GatewayRequest::Chat(NanoModeIdV1::Free),
+                Bytes::from_static(b"{}"),
+                None,
+            )
+            .await
+    });
+    // Abort the same gateway future the relay drops when its lease closes.
+    wait_for_token_requests(&fake, 2).await;
+    cancelled.abort();
+    assert!(
+        cancelled
+            .await
+            .expect_err("aborted gateway request")
+            .is_cancelled()
+    );
+    fake.state().token_gate = None;
+    gate.notify_one();
+
+    let rejected = SecretString::new("access-1".to_owned());
+    let token = account
+        .ensure_access_token(generation.0, Some(&rejected))
+        .await
+        .expect("the account finishes the in-flight rotation");
+    assert_eq!(token.expose(), "access-2");
+    assert_eq!(stored(&store).as_deref(), Some("refresh-2"));
+    assert_eq!(fake.state().token_requests, 2, "only one refresh was sent");
+    assert_eq!(
+        fake.state().gateway_calls.len(),
+        1,
+        "the closed chat did not replay"
+    );
+
+    let next = account
+        .send_gateway(
+            generation,
+            "ses_new",
+            "ws_synthetic01",
+            GatewayRequest::Chat(NanoModeIdV1::Free),
+            Bytes::from_static(b"{}"),
+            None,
+        )
+        .await
+        .expect("a later chat still has account access");
+    assert!(next.status().is_success());
+    let calls = &fake.state().gateway_calls;
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[1].authorization, "Bearer access-2");
 }
 
 #[test]

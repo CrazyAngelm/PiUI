@@ -25,11 +25,16 @@ use piui_runtime::acp::{
     AcpVersionReport, AcpVersionStatus, builtin_acp_descriptors, parse_acp_descriptor,
     probe_acp_version, resolve_acp_command, secret_like_environment,
 };
+use piui_runtime::acp_nano::{
+    GOOSE_NANO_EXE_SHA256, GOOSE_NANO_SOURCE_AGENT, GOOSE_NANO_SOURCE_PROVIDER, GOOSE_NANO_VERSION,
+    NANO_SOURCE_AGENT, NANO_SOURCE_PROVIDER,
+};
 use piui_runtime::workspace_runtime::{
     AcpAgentId, HarnessAvailability, HarnessCapabilities, NativeCatalogModel, NativeRuntimeError,
     WorkspaceModel, acp_harness_capabilities,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write as _};
@@ -162,12 +167,18 @@ pub(crate) enum AcpRefusal {
     /// Never produced since ADR-045: no version needs a confirmation.
     #[allow(dead_code, reason = "matched by older consumers, never produced")]
     VersionUnconfirmed,
+    /// The Nano model source starts only the shipped OpenCode entry: the id is
+    /// not OpenCode's, or a descriptor of the user's shadows the shipped one.
+    NanoSourceUnavailable,
 }
 
 impl AcpRefusal {
     pub(crate) const fn reason(self) -> &'static str {
         match self {
             Self::Unknown => "This agent is no longer registered in Settings → Harnesses.",
+            Self::NanoSourceUnavailable => {
+                "Nano models run only through the built-in OpenCode entry. Remove your own OpenCode descriptor in Settings → Harnesses."
+            }
             Self::NotInstalled(AcpResolveError::NotFound) => {
                 "The agent's program was not found on PATH."
             }
@@ -730,7 +741,68 @@ impl AcpAgents {
             command,
             environment,
             capabilities: descriptor.capabilities,
+            nano: None,
         })
+    }
+
+    /// Whether `id` is a shipped agent with a Nano
+    /// model source: its own id, and no stored or plugin descriptor shadowing
+    /// the shipped one (that program would receive the lease key).
+    pub(crate) fn supports_nano_source(&self, id: AcpAgentId) -> bool {
+        matches!(id.as_str(), NANO_SOURCE_AGENT | GOOSE_NANO_SOURCE_AGENT)
+            && self.lock().is_ok_and(|state| {
+                self.find(&state, id)
+                    .is_some_and(|(_, source)| source == AgentSource::BuiltIn)
+            })
+    }
+
+    /// The model source was verified against this native Windows release.
+    pub(crate) fn verified_nano_source(&self, id: AcpAgentId) -> bool {
+        cfg!(windows)
+            && self.supports_nano_source(id)
+            && self.lock().is_ok_and(|state| {
+                state
+                    .discovery
+                    .get(&id)
+                    .and_then(|entry| entry.version.as_ref())
+                    .and_then(|report| report.version.as_deref())
+                    == Some(match id.as_str() {
+                        GOOSE_NANO_SOURCE_AGENT => GOOSE_NANO_VERSION,
+                        _ => "1.19.4",
+                    })
+            })
+    }
+
+    /// A version string alone cannot authorize handing a key to an executable.
+    /// Call after native discovery, outside the UI thread.
+    pub(crate) fn verified_nano_binary(launch: &AcpLaunch) -> bool {
+        if !cfg!(all(windows, target_arch = "x86_64"))
+            || launch.command.args != ["acp"]
+            || !launch.command.program.is_absolute()
+        {
+            return false;
+        }
+        let expected = match launch.agent.as_str() {
+            // Native Windows x64 executable in opencode-windows-x64@1.19.4.
+            NANO_SOURCE_AGENT => "41c848c0986720c02d39b015bd2672e454a221052f6947854bc508d8765d9711",
+            GOOSE_NANO_SOURCE_AGENT => GOOSE_NANO_EXE_SHA256,
+            _ => return false,
+        };
+        let Ok(mut binary) = File::open(&launch.command.program) else {
+            return false;
+        };
+        let mut digest = Sha256::new();
+        io::copy(&mut binary, &mut digest).is_ok() && format!("{:x}", digest.finalize()) == expected
+    }
+
+    /// The refusal a Nano-source start of `id` gets unless [`Self::launch`]
+    /// resolved a shipped entry that supports the Nano source.
+    pub(crate) fn require_nano_source(&self, id: AcpAgentId) -> Result<(), AcpRefusal> {
+        if self.supports_nano_source(id) {
+            Ok(())
+        } else {
+            Err(AcpRefusal::NanoSourceUnavailable)
+        }
     }
 
     /// Records the outcome of a start: a sign-in refusal keeps the agent's
@@ -752,15 +824,27 @@ impl AcpAgents {
 
     /// Remembers the models a live session advertised, so pickers can offer
     /// them before the next session starts. Host memory only.
+    ///
+    /// Only the agent's own models are remembered. A Nano mode is account
+    /// state (entitlements), served live by the host: it is never kept here,
+    /// so a later catalog cannot offer a mode of an earlier account.
     pub(crate) fn remember_models(&self, id: AcpAgentId, models: &[WorkspaceModel]) {
-        if models.is_empty() {
+        let own: Vec<WorkspaceModel> = models
+            .iter()
+            .filter(|model| {
+                model.provider.as_deref() != Some(GOOSE_NANO_SOURCE_PROVIDER)
+                    && (id.as_str() != NANO_SOURCE_AGENT
+                        || model.provider.as_deref() != Some(NANO_SOURCE_PROVIDER)
+                        || piui_nano::wire::NanoModeIdV1::parse(&model.id).is_none())
+            })
+            .take(MAX_REMEMBERED_MODELS)
+            .cloned()
+            .collect();
+        if own.is_empty() {
             return;
         }
         if let Ok(mut state) = self.lock() {
-            state.models.insert(
-                id,
-                models.iter().take(MAX_REMEMBERED_MODELS).cloned().collect(),
-            );
+            state.models.insert(id, own);
         }
     }
 
@@ -1804,6 +1888,47 @@ mod tests {
             ["default", "gemini-lab"]
         );
         assert!(!registry.offline_capabilities(gemini).prompt.supported);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn nano_modes_are_never_remembered_and_only_the_shipped_opencode_has_the_source() {
+        let root = root("nano-source");
+        let registry = AcpAgents::open(&root).expect("registry");
+        let opencode = AcpAgentId::new("opencode").expect("id");
+        let gemini = AcpAgentId::new("gemini-cli").expect("id");
+        let model = |provider: Option<&str>, id: &str| WorkspaceModel {
+            id: id.into(),
+            provider: provider.map(str::to_owned),
+            name: id.into(),
+            thinking_levels: None,
+        };
+        let ids = |registry: &AcpAgents| {
+            registry
+                .catalog_models(opencode)
+                .into_iter()
+                .map(|model| model.id)
+                .collect::<Vec<_>>()
+        };
+        // Entitlement rows (provider `nano`) never enter the remembered
+        // catalog, mixed with the agent's own models or alone.
+        registry.remember_models(
+            opencode,
+            &[model(Some("nano"), "auto"), model(None, "vendor/native")],
+        );
+        assert_eq!(ids(&registry), ["default", "vendor/native"]);
+        registry.remember_models(opencode, &[model(Some("nano"), "fast")]);
+        assert_eq!(ids(&registry), ["default", "vendor/native"]);
+        registry.remember_models(opencode, &[model(Some("nano"), "nano/native")]);
+        assert_eq!(ids(&registry), ["default", "nano/native"]);
+
+        assert!(registry.supports_nano_source(opencode));
+        assert!(registry.require_nano_source(opencode).is_ok());
+        assert!(!registry.supports_nano_source(gemini));
+        assert_eq!(
+            registry.require_nano_source(gemini),
+            Err(AcpRefusal::NanoSourceUnavailable)
+        );
         let _ = fs::remove_dir_all(root);
     }
 

@@ -5,6 +5,7 @@ import { acpHandlers } from './acpFake';
 import { appUpdateHandlers, updateScenarioFromSearch, type LabUpdateScenario } from './appUpdateFake';
 import { classicHandlers } from './classicFake';
 import { createLabNanoAccount, nanoScenarioFromSearch, type LabNanoScenario } from './nanoAccountFake';
+import { nanoChatGptHandler, nanoProvidersHandler } from './nanoProvidersFake';
 import { composerHandlers } from './composerFake';
 import { composerInputsHandlers } from './composerInputsFake';
 import { demoExtensions, extensionHandlers } from './extensionsFake';
@@ -181,6 +182,8 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
       clock,
     ),
     ...nanoAccount.handlers,
+    nano_providers_v1: (args) => nanoProvidersHandler(state, args),
+    nano_chatgpt_v1: (args) => nanoChatGptHandler(state, args),
     ...sessionToolsHandlers(runtime, seed.nativeHistory ?? EMPTY_NATIVE_HISTORY),
     ...pipelineLibraryHandlers(runtime),
     ...teammatesHandlers(runtime, bus, team),

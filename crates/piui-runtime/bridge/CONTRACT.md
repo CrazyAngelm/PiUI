@@ -428,6 +428,42 @@ environment inside the same Job / process group. `initialize` params add
 `acp: {id, displayName, disable: {loadSession, models, modes, mcpHttp}}`; the
 command line itself arrives as `runtimeProgram`/`runtimeArgs`.
 
+**OpenCode Nano model source (ADR-050).** A session whose model is a
+Nano mode (`model.provider: "nano"`, the same provider the Nano lane uses) runs on
+a second, explicit model source. `acp` then also carries
+`nano: {provider: "nano", modes: [{id, name}]}` (the entitled modes; never a URL or
+key) and the bridge fails with `invalid-configuration` unless the source and the
+model agree in both directions and the agent id is `opencode`. The runtime starts
+that bridge from the same cleared environment plus *exactly* the variables of
+`acp_nano::AcpNanoSource::environment()` and none of the descriptor's pass-through
+names: `OPENCODE_CONFIG_CONTENT` (an inline OpenCode configuration that enables only
+the `nano` provider at the host relay's `/c/<lease>/v1` with the per-session lease
+key and the entitled modes), fixed `OPENCODE_*` switches (pure mode, no default
+plugins, no external skills, no downloads, no update check, no model-list fetch),
+`DO_NOT_TRACK` and four `XDG_*` directories below a host-owned private folder. The
+key is therefore only in that bridge process's environment: the bridge removes
+`OPENCODE_CONFIG_CONTENT` from its own `process.env` right after spawning the
+agent, which keeps its copy (its shell commands, MCP servers and plugins inherit
+it; see ADR-050). The adapter exposes only the `nano/<mode>` rows of the modes the
+host listed, as `{id: <mode>, provider: "nano", name}` (no reasoning levels), and
+maps the id back when selecting; `setModel` and the start refuse (`invalid-model`)
+any model of the other source, an unlisted mode or the agent default, so a source
+or mode never changes silently. A native provider named `nano` remains native
+when the host did not choose the Nano source.
+
+**Goose Nano model source.** The host verifies the Windows x64 executable and
+sends `acp.nano: {provider: "nano-goose-subscription", modes: [{id, name}]}`.
+The single mode is configured on Goose's OpenAI-compatible provider. The
+relay URL and lease key enter the bridge environment through `OPENAI_BASE_URL`
+and `OPENAI_API_KEY`. The bridge drops its copy of the key after spawning
+Goose, which starts in a fresh private directory. ACP keeps the actual project
+directory for tools and history. New sessions explicitly select only the
+built-in Developer extension, and native resume reuses that session's private
+history. The host-owned `GOOSE_SHELL` entry runs PowerShell after clearing
+the key from the child environment. The bridge requires Goose 1.59.0 and the
+approval mode, refuses MCP, host tools and slash commands, and exposes only
+the selected Nano model. A mismatched source or mode fails before inference.
+
 - Versions and trust (ADR-045): there is no per-version confirmation. A user or
   plugin descriptor runs (even `--version`) only after the user trusts the exact
   resolved command line, and secret-like environment names pass only with a
@@ -644,9 +680,10 @@ Both follow the Version policy above; the exact pins are gone.
 
 ## Nano lane (`pi.mjs`, harness `nano`, ADR-048)
 
-`createPiAdapter` also serves `harness: "nano"`: the user's installed upstream Pi
-(`@earendil-works/pi-coding-agent`, at least 1.4.0) driven through the same RPC
-code against a host-owned agent directory and a local relay. Everything below is
+`createPiAdapter` also serves `harness: "nano"`: upstream Pi
+(`@earendil-works/pi-coding-agent`, at least 1.4.0), bundled in Windows releases,
+driven through the same RPC code against a host-owned agent directory and a local
+relay. Everything below is
 gated on the harness; the `pi` lane's command line, environment and behaviour are
 unchanged. Any other harness is refused with `wrong-harness`.
 
@@ -658,16 +695,19 @@ unchanged. Any other harness is refused with `wrong-harness`.
 - `guardExtension`: absolute path of the approval-guard extension
   (`bridge/nano-guard.ts`, embedded by the host and written next to `models.json`),
   or `null`. The `native` permission mode refuses `null` with `unsupported-policy`
-  (it would run `bash`, `write` and `edit` unasked); `read-only` and `full-access`
+  (it would run shell commands and file writes unasked); `read-only` and `full-access`
   accept it.
 The per-session relay key is **not** part of the frame (a `nano.relayKey` field is
 refused with `invalid-request`). The host runs one bridge process per Nano
 session and starts it from a cleared environment: the OS allowlist below plus
 `PIUI_NANO_RELAY_KEY`. The adapter reads that variable once at startup, deletes it
 from its own `process.env` at once (also when the start is refused) and passes the
-key only to the Pi child's environment as `NANO_RELAY_KEY`: never an argument,
-event, error or log line. `models.json` refers to it as `$NANO_RELAY_KEY`. The
-`pi` lane neither reads nor removes the variable.
+key only to the Pi child's initial environment as `NANO_RELAY_KEY`. The Node
+preload removes it before Pi runs and keeps it in memory. The always-loaded
+extension binds it to Pi's `nano` provider at startup and on extension reload.
+The key never reaches a tool subprocess, argument, event, error, log or file.
+`models.json` contains the `$NANO_RELAY_KEY` placeholder. The `pi` lane neither
+reads nor removes the variable.
 
 A missing or mistyped `nano` object, a relative path, an empty value or a missing
 or empty `PIUI_NANO_RELAY_KEY` fails before any process starts with
@@ -688,23 +728,31 @@ fails with `unsupported-native-version`; an unidentified launcher is admitted.
 Command line, in this order:
 
 ```
-<runtimeArgs> --mode rpc --no-approve --offline --session-dir <sessionDir>
+--require <agentDir>/bundled/relay-auth.cjs <runtimeArgs>
+  --mode rpc --no-approve --offline --session-dir <sessionDir>
   [--session <path> | --session-id <id>] [--name <title>]
   [--provider nano --model <model.id>]
-  [--tools <list> | --no-tools] --no-extensions [-e <guardExtension>]
+  [--tools <list> | --no-tools]
+  --no-skills --skill <agentDir>/bundled/bes-deep-mode/SKILL.md
+  --no-extensions -e <agentDir>/bundled/skill-paths.ts [-e <guardExtension>]
+  [-e <agentDir>/bundled/windows-powershell.ts]
 ```
 
 `--approve` is never passed, so project `.pi` resources stay untrusted. The tool
 list follows the Pi lane (`read-only` gives `read,grep,find,ls`; an allowlist is
-intersected with it). `--no-extensions` turns off discovered, configured and
-built-in extensions, and an explicit `-e` path still loads (Pi `cli.md`);
-`--tools`/`--no-tools` pick tools by name and do not unload extensions, so the
-guard stays loaded in every mode that supplies it, including `read-only`.
+intersected with it). On Windows Nano excludes the built-in shell and, when
+the tool policy allows shell commands, explicitly loads the PowerShell tool.
+The tool uses Pi's own shell operations with the system PowerShell executable's
+absolute path. `--no-skills` and `--no-extensions` disable discovery.
+Explicit `--skill` and `-e` paths load the host's built-in resources. The
+`/skill-paths` command reports the loaded BES skill and registers no tools.
+`--tools` and `--no-tools` select tools and keep the explicitly loaded extensions.
 
 The child starts from a **cleared environment**: only the allowlist plus
 `PI_CODING_AGENT_DIR`, `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1`, `PI_TELEMETRY=0`
-and `NANO_RELAY_KEY` (they override anything inherited). The allowlist is what a
-program the agent starts through `bash` needs and holds no secrets. Names match
+and `NANO_RELAY_KEY` (they override anything inherited). The preload removes
+`NANO_RELAY_KEY`, leaving the allowlist and non-secret settings for tool
+subprocesses. Names match
 case-insensitively on Windows. The host starts the Nano bridge itself from the
 same allowlist (`crates/piui-runtime/src/nano.rs`, kept identical by a test), so
 the bridge process inherits nothing else of the user's environment either.

@@ -4,10 +4,13 @@
   import Zap from '@lucide/svelte/icons/zap';
   import { t } from '../../features/locale/language';
   import { runtimeSettings } from '../../host-api/runtimeSettings';
+  import { isNanoConnectorModel } from '../../host-api/harnessModels';
+  import { NANO_EXTERNAL_PROVIDER_PREFIX } from '../../../../../contracts/nano-providers-v1';
   import type { RuntimeSettings } from '../../../../../contracts/workspace-settings-v16';
   import type { WorkspaceModel, WorkspaceSession } from '../../../../../contracts/workspace-v15';
   import { Spinner } from '../../lib/ui';
   import ModelPicker, { type ModelOption } from '../shell/ModelPicker.svelte';
+  import { nanoAccount } from '../nano/nanoAccount.svelte';
   import { errorMessage } from '../workspaceStore.svelte';
 
   interface Props {
@@ -24,6 +27,10 @@
 
   const current = $derived(settings?.sessionId === session.id ? settings : undefined);
   const model = $derived(current?.model ?? session.model);
+  const externalSource = $derived(session.harness === 'nano' && model?.provider?.startsWith(NANO_EXTERNAL_PROVIDER_PREFIX));
+  const nanoSource = $derived(session.harness === 'nano'
+    ? !externalSource
+    : Boolean(model && isNanoConnectorModel(session.harness, model)));
   const keyOf = (value: WorkspaceModel | null | undefined) => (value ? JSON.stringify([value.provider, value.id]) : '');
   const levels = $derived(
     current?.models.find((entry) => keyOf(entry) === keyOf(model))?.thinkingLevels ?? model?.thinkingLevels ?? [],
@@ -37,8 +44,10 @@
     fast: Boolean(entry.supportsFast),
   });
   const options = $derived<ModelOption[]>([
-    ...(model && !current?.models.some((entry) => keyOf(entry) === keyOf(model)) ? [option(model)] : []),
-    ...(current?.models ?? []).map(option),
+    ...(model && !nanoSource && !externalSource && !current?.models.some((entry) => keyOf(entry) === keyOf(model)) ? [option(model)] : []),
+    ...(current?.models ?? [])
+      .filter(entry => !nanoSource || nanoAccount.availableModes.some(mode => mode.id === entry.id))
+      .map(option),
   ]);
 
   $effect(() => {

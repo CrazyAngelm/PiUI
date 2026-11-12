@@ -19,6 +19,11 @@
   import Search from '@lucide/svelte/icons/search';
   import Sparkles from '@lucide/svelte/icons/sparkles';
   import Zap from '@lucide/svelte/icons/zap';
+  import { NANO_MODEL_PROVIDER } from '../../../../../contracts/nano-account-v1';
+  import { NANO_EXTERNAL_PROVIDER_PREFIX } from '../../../../../contracts/nano-providers-v1';
+  import { NANO_CHATGPT_PROVIDER_ID } from '../../../../../contracts/nano-chatgpt-v1';
+  import { nanoChatGpt } from '../../host-api/nanoProviders';
+  import { isNanoConnectorModel } from '../../host-api/harnessModels';
   import { t } from '../../features/locale/language';
   import { Spinner, Switch } from '../../lib/ui';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
@@ -81,14 +86,34 @@
     onFast = () => {},
   }: Props = $props();
 
+  const nanoGroup = '\u0000nano';
+  const chatGptGroup = '\u0000chatgpt';
+  const externalGroup = '\u0000external';
+  const usesChatGpt = $derived(harness === 'nano' && models.some(model => model.key === value && model.provider === NANO_CHATGPT_PROVIDER_ID));
+  let manageUsageError = $state(false);
   const groups = $derived.by(() => {
     const byGroup = new Map<string, ModelOption[]>();
     for (const model of models) {
-      const key = model.provider ?? '';
+      const connector = isNanoConnectorModel(harness, model);
+      if (connector && (!nanoAccount.status?.capabilities?.gateway
+        || !nanoAccount.status.entitlements?.features.localAgent
+        || !nanoAccount.availableModes.some(mode => mode.id === model.id))) continue;
+      const external = harness === 'nano' && model.provider?.startsWith(NANO_EXTERNAL_PROVIDER_PREFIX);
+      const key = (harness === 'nano' && model.provider === NANO_MODEL_PROVIDER) || connector
+        ? nanoGroup : model.provider === NANO_CHATGPT_PROVIDER_ID ? chatGptGroup : external ? externalGroup : model.provider ?? '';
       byGroup.set(key, [...(byGroup.get(key) ?? []), model]);
     }
     return [...byGroup.entries()];
   });
+  // A list can mix sources of one harness: the harness's own models (no provider) and
+  // the account's Nano modes (provider `nano`, an agent with a Nano model source).
+  // Each is its own group; the unnamed native group is named once there is another.
+  function heading(group: string): string {
+    if (group === nanoGroup) return 'Nano';
+    if (group === chatGptGroup) return 'ChatGPT';
+    if (group === externalGroup) return $t('External model providers');
+    return group || (groups.length > 1 ? $t('Native models') : '');
+  }
   // Nano: what the account does not allow, listed after the harness's own rows.
   const nano = $derived(harness === 'nano');
   const lockedModes = $derived(nano ? nanoAccount.lockedModes : []);
@@ -172,8 +197,9 @@
               </Command.Item>
             {/if}
             {#each groups as [group, items] (group)}
+              {@const title = heading(group)}
               <Command.Group>
-                {#if group}<Command.GroupHeading class="piui-models__heading"><span>{group}</span></Command.GroupHeading>{/if}
+                {#if title}<Command.GroupHeading class="piui-models__heading"><span>{title}</span></Command.GroupHeading>{/if}
                 <Command.GroupItems>
                   {#each items as model (model.key)}
                     <Command.Item
@@ -259,7 +285,16 @@
             <Switch label={$t('Fast mode')} hideLabel={true} checked={fast} disabled={busy} onCheckedChange={(checked: boolean) => onFast(checked)} />
           </div>
         {/if}
-        {#if !tuning}
+        {#if usesChatGpt}
+          <div class="piui-models__row">
+            <span class="piui-models__label">{$t('Using ChatGPT plan')}</span>
+            <button type="button" class="manage-usage" onclick={async () => {
+              manageUsageError = false;
+              try { await nanoChatGpt({ type: 'manage-usage' }); } catch { manageUsageError = true; }
+            }}>{$t('Manage usage')}</button>
+          </div>
+          {#if manageUsageError}<p class="piui-models__error" role="alert">{$t('Could not open ChatGPT in your browser.')}</p>{/if}
+        {:else if !tuning}
           <p class="piui-models__hint">{hint || $t('This model has no reasoning options.')}</p>
         {/if}
         {#if error}<p class="piui-models__error" role="alert">{error}</p>{/if}
@@ -269,6 +304,7 @@
 </Popover.Root>
 
 <style>
+  .manage-usage { color: var(--piui-text-muted); background: transparent; border: 0; text-decoration: underline; }
   :global(.piui-models) {
     position: relative;
     z-index: var(--piui-z-dropdown);

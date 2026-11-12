@@ -28,6 +28,13 @@ const CANCELLED_PAGE: &str = "Sign-in was cancelled. You can close this tab.";
 #[derive(Debug, Clone)]
 pub struct AuthorizationCode(pub SecretString);
 
+pub(crate) const CHATGPT_REDIRECT_PATH: &str = "/auth/callback";
+
+struct Callback {
+    code: AuthorizationCode,
+    client_id: Option<String>,
+}
+
 /// A bound redirect listener.
 #[derive(Debug)]
 pub struct CallbackListener {
@@ -40,7 +47,7 @@ enum Outcome {
     /// Not the callback (wrong path, wrong state...); keep waiting.
     Ignored,
     /// The flow is over.
-    Done(Result<AuthorizationCode, NanoError>),
+    Done(Result<Callback, NanoError>),
 }
 
 impl CallbackListener {
@@ -66,7 +73,11 @@ impl CallbackListener {
 
     /// `http://127.0.0.1:<port>/callback`.
     pub fn redirect_uri(&self) -> String {
-        format!("http://127.0.0.1:{}{NANO_REDIRECT_PATH}", self.port)
+        self.redirect_uri_for(NANO_REDIRECT_PATH)
+    }
+
+    pub(crate) fn redirect_uri_for(&self, path: &str) -> String {
+        format!("http://127.0.0.1:{}{path}", self.port)
     }
 
     /// Serves connections until a callback carrying `expected_state`
@@ -90,11 +101,48 @@ impl CallbackListener {
         timeout: Duration,
         cancel: impl Future<Output = ()> + Send,
     ) -> Result<AuthorizationCode, NanoError> {
+        self.wait_for(
+            expected_state,
+            expected_issuer,
+            NANO_REDIRECT_PATH,
+            timeout,
+            cancel,
+        )
+        .await
+        .map(|callback| callback.code)
+    }
+
+    pub(crate) async fn wait_for_chatgpt(
+        self,
+        expected_state: &SecretString,
+        expected_issuer: &str,
+        cancel: impl Future<Output = ()> + Send,
+    ) -> Result<(AuthorizationCode, Option<String>), NanoError> {
+        self.wait_for(
+            expected_state,
+            expected_issuer,
+            CHATGPT_REDIRECT_PATH,
+            SIGN_IN_TIMEOUT,
+            cancel,
+        )
+        .await
+        .map(|callback| (callback.code, callback.client_id))
+    }
+
+    async fn wait_for(
+        self,
+        state: &SecretString,
+        issuer: &str,
+        path: &'static str,
+        timeout: Duration,
+        cancel: impl Future<Output = ()> + Send,
+    ) -> Result<Callback, NanoError> {
         let expected = Arc::new(Expected {
-            state: expected_state.clone(),
-            issuer: expected_issuer.trim_end_matches('/').to_owned(),
+            state: state.clone(),
+            issuer: issuer.trim_end_matches('/').to_owned(),
+            path,
         });
-        let (tx, mut rx) = mpsc::channel::<Result<AuthorizationCode, NanoError>>(1);
+        let (tx, mut rx) = mpsc::channel::<Result<Callback, NanoError>>(1);
         let mut connections = JoinSet::new();
         let deadline = tokio::time::sleep(timeout);
         tokio::pin!(deadline);
@@ -129,6 +177,7 @@ impl CallbackListener {
 struct Expected {
     state: SecretString,
     issuer: String,
+    path: &'static str,
 }
 
 async fn serve(mut stream: TcpStream, expected: &Expected) -> Outcome {
@@ -142,7 +191,7 @@ async fn serve(mut stream: TcpStream, expected: &Expected) -> Outcome {
         request_line.next().unwrap_or_default(),
     );
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    if path != NANO_REDIRECT_PATH {
+    if path != expected.path {
         let _ = respond(&mut stream, 404, "Not Found", None).await;
         return Outcome::Ignored;
     }
@@ -166,18 +215,20 @@ async fn serve(mut stream: TcpStream, expected: &Expected) -> Outcome {
     outcome
 }
 
-/// Decides a `/callback` query.
+/// Decides a callback query for the selected authorization server.
 fn evaluate(query: &str, expected: &Expected) -> Outcome {
     let mut state = None;
     let mut code = None;
     let mut error = None;
     let mut issuer = None;
+    let mut client_id = None;
     for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
         let slot = match key.as_ref() {
             "state" => &mut state,
             "code" => &mut code,
             "error" => &mut error,
             "iss" => &mut issuer,
+            "client_id" if expected.path == CHATGPT_REDIRECT_PATH => &mut client_id,
             _ => continue,
         };
         if slot.is_some() {
@@ -190,10 +241,13 @@ fn evaluate(query: &str, expected: &Expected) -> Outcome {
     if !state_ok {
         return Outcome::Ignored;
     }
-    // RFC 9207: the server names itself in every authorization response,
-    // success or error. A missing or different `iss` may come from another
-    // authorization server (mix-up), so the sign-in fails either way.
-    if issuer.is_none_or(|issuer| issuer.trim_end_matches('/') != expected.issuer) {
+    // Nano requires RFC 9207; ChatGPT documents a callback without `iss`.
+    if issuer
+        .as_deref()
+        .map_or(expected.path == NANO_REDIRECT_PATH, |issuer| {
+            issuer.trim_end_matches('/') != expected.issuer
+        })
+    {
         return Outcome::Done(Err(NanoError::SignInFailed));
     }
     if let Some(error) = error {
@@ -204,7 +258,10 @@ fn evaluate(query: &str, expected: &Expected) -> Outcome {
         }));
     }
     match code.filter(|code| !code.is_empty()) {
-        Some(code) => Outcome::Done(Ok(AuthorizationCode(SecretString::new(code)))),
+        Some(code) => Outcome::Done(Ok(Callback {
+            code: AuthorizationCode(SecretString::new(code)),
+            client_id,
+        })),
         None => Outcome::Done(Err(NanoError::SignInFailed)),
     }
 }
@@ -271,6 +328,45 @@ mod tests {
 
     fn state() -> SecretString {
         SecretString::new("expected-state".to_owned())
+    }
+
+    #[tokio::test]
+    async fn chatgpt_callback_needs_state_and_an_unambiguous_client_id() {
+        let listener = CallbackListener::bind().await.expect("listener");
+        let port = listener.port();
+        let reply =
+            tokio::spawn(
+                async move { listener.wait_for_chatgpt(&state(), ISSUER, pending()).await },
+            );
+        assert!(
+            get(port, "/callback?state=expected-state&code=wrong-path")
+                .await
+                .contains("404")
+        );
+        assert!(
+            get(port, "/auth/callback?state=wrong&code=wrong-state")
+                .await
+                .contains("400")
+        );
+        assert!(
+            get(
+                port,
+                "/auth/callback?state=expected-state&code=bad&client_id=oaiapp_1&client_id=oaiapp_2"
+            )
+            .await
+            .contains("400")
+        );
+        assert!(
+            get(
+                port,
+                "/auth/callback?state=expected-state&code=fixture&client_id=oaiapp_fixture"
+            )
+            .await
+            .contains("200")
+        );
+        let (code, client_id) = reply.await.expect("task").expect("callback");
+        assert_eq!(code.0.expose(), "fixture");
+        assert_eq!(client_id.as_deref(), Some("oaiapp_fixture"));
     }
 
     async fn get(port: u16, target: &str) -> String {

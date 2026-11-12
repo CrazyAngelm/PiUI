@@ -153,6 +153,14 @@ still running is moved aside (`*.old`) and keeps working until it is restarted.
 It is unsigned and has no updater, so it refuses to run with the signing or
 updater variables set.
 
+Both Windows x64 release commands build an executable with a private Nano
+runtime. The build host uses a Node.js distribution that includes npm.
+The build verifies the pinned Windows utilities and installs the
+locked Pi dependencies with npm lifecycle scripts disabled. At first Nano
+launch, the host extracts the embedded package under the application data
+directory and verifies it against the embedded manifest. Nano sessions use
+that Node.js and Pi. The ordinary Pi harness still uses the user's installation.
+
 The same environment variables as in CI turn on signing locally:
 `TAURI_SIGNING_PRIVATE_KEY` (or `TAURI_SIGNING_PRIVATE_KEY_PATH`),
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `PIUI_UPDATER_PUBKEY` and
