@@ -1,0 +1,101 @@
+{
+  "status": "pass",
+  "target": "isolated Tauri WebView2 dev harness",
+  "scenario": "shell-default-view",
+  "timings": {
+    "normal": {
+      "startup": 1495,
+      "settingsFirstOpen": 13136,
+      "projectTrust": 15661,
+      "theme": 1421,
+      "total": 23481
+    },
+    "safe": {
+      "safe": 1401,
+      "total": 1401
+    }
+  },
+  "ownedWindowMeasurements": [
+    {
+      "name": "shell-home-system-theme",
+      "width": 2360,
+      "height": 1560,
+      "memory": {
+        "scope": "snapshot-of-owned-app-process-tree",
+        "processesFound": 13,
+        "processesMeasured": 13,
+        "complete": true,
+        "sumWorkingSetBytes": 652152832,
+        "sumPrivateBytes": 350150656
+      }
+    },
+    {
+      "name": "shell-settings-light",
+      "width": 2360,
+      "height": 1560,
+      "memory": {
+        "scope": "snapshot-of-owned-app-process-tree",
+        "processesFound": 9,
+        "processesMeasured": 9,
+        "complete": true,
+        "sumWorkingSetBytes": 701255680,
+        "sumPrivateBytes": 444166144
+      }
+    },
+    {
+      "name": "shell-settings-dark",
+      "width": 2360,
+      "height": 1560,
+      "memory": {
+        "scope": "snapshot-of-owned-app-process-tree",
+        "processesFound": 9,
+        "processesMeasured": 9,
+        "complete": true,
+        "sumWorkingSetBytes": 719810560,
+        "sumPrivateBytes": 465772544
+      }
+    },
+    {
+      "name": "shell-safe-mode",
+      "width": 2360,
+      "height": 1560,
+      "memory": {
+        "scope": "snapshot-of-owned-app-process-tree",
+        "processesFound": 9,
+        "processesMeasured": 9,
+        "complete": true,
+        "sumWorkingSetBytes": 565227520,
+        "sumPrivateBytes": 324763648
+      }
+    }
+  ],
+  "screenshots": [
+    "D:\\Projects\\PIUI\\evidence\\2026-11-12-catalog-fixes\\shell-home-system-theme.png",
+    "D:\\Projects\\PIUI\\evidence\\2026-11-12-catalog-fixes\\shell-settings-light.png",
+    "D:\\Projects\\PIUI\\evidence\\2026-11-12-catalog-fixes\\shell-settings-dark.png",
+    "D:\\Projects\\PIUI\\evidence\\2026-11-12-catalog-fixes\\shell-safe-mode.png"
+  ],
+  "webviewVersion": "157.0.0.0",
+  "checks": [
+    "shell-default-view",
+    "shell-landmarks-and-labels",
+    "typed-host-project-registration",
+    "new-project-restricted",
+    "explicit-ui-project-trust",
+    "trust-dialog-focus-trap",
+    "trust-dialog-escape-focus-restore",
+    "palette-escape-focus-restore",
+    "theme-persisted-by-host (rgb(244, 244, 244) → rgb(19, 18, 20))",
+    "russian-copy-persisted-user-content-untranslated",
+    "pipelines-view-default-shell",
+    "home-composer-enabled",
+    "shell-safe-mode-banner",
+    "shell-safe-mode-composer-disabled",
+    "shell-safe-mode-catalog-readable",
+    "debug-only-loopback-webview-automation",
+    "no-provider-credentials-in-fixture",
+    "prime-runtime-not-launched",
+    "outer-job-empty-before-fixture-removal",
+    "fixture-removed"
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "sourceCommit": "1e1e474b0fe9a99bf924ee19d88045481b43a516",
+  "build": "Windows release, portable EXE and NSIS installer",
+  "nativeCompileSeconds": 301,
+  "frontendBuildSeconds": 22.43,
+  "finalization": "Initial collector failed to autoload Microsoft.PowerShell.Security; rerunning the same collector succeeded, followed by successful build-cache prune.",
+  "artifacts": [
+    {
+      "path": "D:\\Projects\\PIUI\\artifacts\\NanoDesktop_0.3.0_windows_x86_64.exe",
+      "bytes": 43670016,
+      "sha256": "7bd5d6ffc3552f12a00776a7abe12ceb7a83fe24dd80c492bb80ddc915138ec8",
+      "verified": true
+    },
+    {
+      "path": "D:\\Projects\\PIUI\\artifacts\\NanoDesktop_0.3.0_x64-setup.exe",
+      "bytes": 10771526,
+      "sha256": "49b0963f66339f4b39c86586043bea9729ec3b605ccd219693609d83d2c107ac",
+      "verified": true
+    }
+  ],
+  "launch": {
+    "mode": "--safe-mode",
+    "result": "passed",
+    "checks": [
+      "packaged tauri.localhost UI rendered",
+      "Russian navigation uses Конвейеры",
+      "pipeline editor rendered",
+      "pipeline assistant rendered",
+      "safe-mode banner visible",
+      "test process exited after close"
+    ],
+    "paidProviderTurns": 0
+  },
+  "cache": {
+    "budgetGb": 12,
+    "remainingGb": 2.2,
+    "removed": "debug profile and release staging",
+    "freeBeforeGbRounded": 95,
+    "freeAfterGbRounded": 107
+  },
+  "rollback": "evidence/2026-11-12-catalog-fixes/rollback"
+}
