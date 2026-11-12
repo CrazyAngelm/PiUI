@@ -743,8 +743,11 @@ export class WorkspaceStore {
           ...(request.serviceTier ? { serviceTier: request.serviceTier } : {}),
         });
       } catch (cause) {
-        // The chat still works with native defaults; report instead of hiding it.
-        error = errorMessage(cause);
+        // A requested setting was refused. Keep the chat and unsent draft for
+        // correction; never submit the first prompt with different settings.
+        this.updateDraft(sessionId, request.text);
+        this.updateAttachments(sessionId, request.attachments ?? []);
+        return { sessionId, error: errorMessage(cause) };
       }
     }
     const text = request.text.trim();

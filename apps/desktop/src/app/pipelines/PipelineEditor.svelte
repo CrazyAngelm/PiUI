@@ -19,6 +19,7 @@
   import Workflow from '@lucide/svelte/icons/workflow';
   import Sparkles from '@lucide/svelte/icons/sparkles';
   import { t } from '../../features/locale/language';
+  import { nanoAccount } from '../nano/nanoAccount.svelte';
   import { Badge, Button, Dialog, Menu, Picker, Spinner, matchesShortcut, toasts, type PickerItem } from '../../lib/ui';
   import type { AgentProfile, OrchestrationRunV6, RunInputValue } from '../../host-api/orchestrationClient';
   import { orchestrationHost } from '../../host-api/orchestrationClient';
@@ -175,7 +176,7 @@
 
   /** First model of the harness's native catalog, so new agents can run at once. */
   async function defaultModel(harness: AgentProfile['harness']): Promise<Pick<AgentProfile, 'model' | 'modelProvider'> | undefined> {
-    if (!editor.catalogs[harness]) await editor.loadCatalog(harness);
+    await editor.loadCatalog(harness, false, workspace.catalog.harnesses.find((item) => item.kind === harness)?.version);
     const model = editor.catalogs[harness]?.models[0];
     return model ? { model: model.id, ...(model.provider ? { modelProvider: model.provider } : {}) } : undefined;
   }
@@ -228,8 +229,10 @@
   // probing starts the native harness, so it begins before the first click.
   $effect(() => {
     const harness = defaultHarness;
-    if (editor.graph.nodes.length === 0 && !restoring && !editor.safeMode && !editor.readOnly && !untrack(() => editor.catalogs[harness])) {
-      void editor.loadCatalog(harness);
+    const version = workspace.catalog.harnesses.find((item) => item.kind === harness)?.version;
+    if (harness === 'nano') void nanoAccount.catalogRevision;
+    if (editor.graph.nodes.length === 0 && !restoring && !editor.safeMode && !editor.readOnly) {
+      untrack(() => void editor.loadCatalog(harness, false, version));
     }
   });
 

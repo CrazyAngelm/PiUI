@@ -43,6 +43,58 @@ test("still rejects a native thread opened in another workspace", async () => {
   await assert.rejects(createCodexAdapter({ ...config, runtimeArgs: [fixture, "--wrong-cwd"] }, () => {}), { bridgeCode: "native-cwd-mismatch" });
 });
 
+test("catalog-only Codex reads models and resources without starting or binding a thread", async () => {
+  for (const [reject, overrides] of [["thread/start", {}], ["thread/resume", { nativeId: "saved" }]]) {
+    const events = [];
+    const adapter = await createCodexAdapter({ ...config, ...overrides, catalogOnly: true, runtimeArgs: [fixture, `--reject-startup=${reject}`] }, event => events.push(event));
+    try {
+      assert.deepEqual(await adapter.catalogModels(), [{ id: "fixture-model", name: "Fixture Model", thinkingLevels: ["low"], supportsFast: true }]);
+      assert.deepEqual((await adapter.resources()).items.map(item => item.kind), ["skill", "mcp", "tool"]);
+      assert.equal(adapter.prompt, undefined);
+      assert.ok(!events.some(event => event.type === "binding"));
+    } finally { await adapter.dispose(); }
+  }
+});
+
+test("catalog-only Codex preserves models and available resources when skill discovery fails", async () => {
+  const adapter = await createCodexAdapter({ ...config, catalogOnly: true, runtimeArgs: [fixture, "--reject-startup=skills/list"] }, () => {});
+  try {
+    const resources = await adapter.resources();
+    assert.deepEqual(resources.items.map(item => item.kind), ["mcp", "tool"]);
+    assert.deepEqual(resources.warnings, ["Skills could not be loaded from Codex."]);
+    assert.equal((await adapter.catalogModels())[0].id, "fixture-model");
+  } finally { await adapter.dispose(); }
+});
+
+test("catalog-only Codex labels models with the configured native provider when known", async () => {
+  for (const [runtimeArgs, provider] of [
+    [[fixture, "--custom-model-provider"], "fixture-gateway"],
+    [[fixture, "--reject-startup=config/read"], undefined],
+  ]) {
+    const adapter = await createCodexAdapter({ ...config, catalogOnly: true, runtimeArgs }, () => {});
+    try {
+      const [model] = await adapter.catalogModels();
+      assert.equal(model.id, "fixture-model");
+      assert.equal(model.provider, provider);
+    } finally { await adapter.dispose(); }
+  }
+});
+
+test("catalog-only Codex keeps the configured or native default model even when hidden", async () => {
+  for (const flag of ["--configured-hidden-model", "--hidden-model-is-default"]) {
+    const adapter = await createCodexAdapter({
+      ...config,
+      catalogOnly: true,
+      runtimeArgs: [fixture, "--hidden-current-model", flag],
+    }, () => {});
+    try {
+      assert.deepEqual(await adapter.catalogModels(), [{
+        id: "fixture-model", name: "Hidden current", thinkingLevels: ["low", "ultra"], supportsFast: true,
+      }]);
+    } finally { await adapter.dispose(); }
+  }
+});
+
 async function waitFor(predicate, timeoutMs = 2000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {

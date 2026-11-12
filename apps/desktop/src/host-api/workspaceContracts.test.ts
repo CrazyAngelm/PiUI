@@ -199,3 +199,22 @@ describe('harness models v18 request part', () => {
     }
   });
 });
+
+it('correlates only v19 split catalog requests with a discovery UUID', async () => {
+  const { decodeHarnessModelsRequestV19, harnessModelsRequestSchema } = await import('./lab/labSchemas');
+  const { decode } = await import('./lab/labSchema');
+  const fixture = JSON.parse(readFileSync(new URL('../../../../contracts/fixtures/harness-models-v19.json', import.meta.url), 'utf8')) as {
+    accepted: import('../../../../contracts/harness-models-v19').HarnessModelsRequestV19[];
+    rejected: unknown[];
+    result: import('../../../../contracts/harness-models-v19').HarnessModelsResultV19;
+  };
+  expect(fixture.accepted.map((request) => request.part)).toEqual([undefined, 'models', 'resources']);
+  for (const request of fixture.accepted) {
+    expect(decodeHarnessModelsRequestV19({ request })).toEqual(request);
+    if (request.part) expect(() => decode(harnessModelsRequestSchema, request)).toThrow();
+  }
+  for (const request of fixture.rejected) {
+    expect(() => decodeHarnessModelsRequestV19({ request }), JSON.stringify(request)).toThrow();
+  }
+  expect(fixture.result).toMatchObject({ protocol: 19, catalog: { protocol: 18, harness: 'codex' } });
+});

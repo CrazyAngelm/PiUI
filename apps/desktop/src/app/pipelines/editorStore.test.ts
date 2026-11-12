@@ -117,27 +117,58 @@ describe('catalog loading flags the resources that are still being discovered', 
     const editor = store();
     editor.resourcesLoading = { codex: true };
     await editor.loadCatalog('codex', true);
-    expect(refreshed).toHaveBeenCalledWith({ workspaceId: 'workspace', harness: 'codex' }, true);
+    expect(refreshed).toHaveBeenCalledWith({ workspaceId: 'workspace', harness: 'codex' }, true, undefined);
     expect(editor.catalogs.codex).toBe(FULL);
     expect(editor.resourcesLoading.codex ?? false).toBe(false);
+  });
+
+  it('passes native version changes through to the shared cache', async () => {
+    cached.mockResolvedValue(FULL);
+    refreshed.mockResolvedValue(FULL);
+    const editor = store();
+    await editor.loadCatalog('codex', false, '1');
+    await editor.loadCatalog('codex', false, '2');
+    expect(cached).toHaveBeenLastCalledWith({ workspaceId: 'workspace', harness: 'codex' }, expect.objectContaining({ version: '2' }));
+    await editor.loadCatalog('codex', true, '2');
+    expect(refreshed).toHaveBeenCalledWith({ workspaceId: 'workspace', harness: 'codex' }, true, '2');
+  });
+
+  it('keeps a refreshed catalog when an older picker load or failure answers later', async () => {
+    let complete!: (result: HarnessModelsResult) => void;
+    let fail!: (error: unknown) => void;
+    cached.mockImplementation((_request: unknown, handlers: { onError: (error: unknown) => void }) => {
+      fail = handlers.onError;
+      return new Promise(resolve => { complete = resolve; });
+    });
+    refreshed.mockResolvedValue(FULL);
+    const editor = store();
+    const old = editor.loadCatalog('codex');
+    await editor.loadCatalog('codex', true);
+    complete(MODELS_ONLY);
+    await old;
+    fail(new Error('old failure'));
+    expect(editor.catalogs.codex).toEqual(FULL);
+    expect(editor.catalogErrors.codex).toBeUndefined();
+    expect(editor.resourcesLoading.codex).toBeFalsy();
   });
 
   it('does not reuse a Nano catalog once the account changed, and offers a model of the new catalog', async () => {
     const nano = (models: { id: string; name: string }[]): HarnessModelsResult => ({ protocol: 18, harness: 'nano', models: models.map((model) => ({ ...model, provider: 'nano' })), resources: { items: [], warnings: [] } });
     const before = nano([{ id: 'auto', name: 'Auto' }, { id: 'smart', name: 'Smart' }]);
     const after = nano([{ id: 'free', name: 'Free' }]);
-    cached.mockResolvedValueOnce(before).mockResolvedValueOnce(after);
+    cached.mockResolvedValue(before);
     settled.mockReturnValue(true);
     const editor = store();
     expect(await editor.defaultModel('nano')).toEqual({ model: 'auto', modelProvider: 'nano' });
     expect(await editor.defaultModel('nano'), 'the same account state reuses the catalog').toEqual({ model: 'auto', modelProvider: 'nano' });
-    expect(cached).toHaveBeenCalledTimes(1);
+    expect(cached, 'each selection checks the shared cache freshness').toHaveBeenCalledTimes(2);
 
     // A sign-out, a locked mode or another workspace: the catalog it answered for is out of date.
     nanoAccount.catalogRevision += 1;
+    cached.mockResolvedValue(after);
     expect(editor.catalogs.nano).toBeUndefined();
     expect(await editor.defaultModel('nano')).toEqual({ model: 'free', modelProvider: 'nano' });
-    expect(cached).toHaveBeenCalledTimes(2);
+    expect(cached).toHaveBeenCalledTimes(3);
     expect(editor.catalogs.nano).toBe(after);
   });
 

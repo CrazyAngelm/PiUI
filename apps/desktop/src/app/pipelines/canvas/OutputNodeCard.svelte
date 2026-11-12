@@ -8,6 +8,7 @@
   export interface OutputNodeData extends Record<string, unknown> {
     outputs: readonly PipelineOutput[];
     problems: number;
+    readOnly: boolean;
   }
   export type OutputFlowNode = Node<OutputNodeData, 'output'>;
 </script>
@@ -23,7 +24,15 @@
 </script>
 
 <div class="output" class:output--selected={selected} class:output--problem={data.problems > 0}>
-  <Handle type="target" position={Position.Left} id="in" class="port port--in" isConnectable={false} />
+  <Handle
+    type="target"
+    position={Position.Left}
+    id="in"
+    class={data.outputs.length ? 'port port--in port--wired' : 'port port--in'}
+    style="--port: var(--piui-chaos-gold)"
+    isConnectable={!data.readOnly}
+    aria-label={$t('Connect to Output')}
+  />
   <header>
     <span class="mark" aria-hidden="true"><LogOut size={12} /></span>
     <strong>{$t('Output')}</strong>

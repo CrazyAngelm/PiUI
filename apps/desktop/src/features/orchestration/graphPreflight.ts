@@ -4,6 +4,7 @@ import {
   type SubpipelineInfo, type SubpipelineParent,
 } from '../../host-api/subpipelines';
 import type { HarnessModelsResult } from '../../../../../contracts/harness-models-v18';
+import { modelSelectionKey, resolveModelSelection } from '../../host-api/modelSelection';
 import { catalogDegraded } from '../../host-api/harnessModels';
 import type { AgentProfile } from '../../../../../contracts/orchestration-v6';
 import { executorConfigurationErrors, profileConfigurationErrors } from '../../harness-adapters/validation';
@@ -25,7 +26,11 @@ export async function preflightGraph(graph: AgentGraph, catalog: (harness: Agent
     for (const message of executorConfigurationErrors(node.id,node.executor,profile)) add(message);
     if (failed.has(profile.harness)) { add('Could not verify the native catalog. Check the harness connection.'); continue; }
     const models = catalogs.get(profile.harness);
-    const model = models?.models.find(model => model.id === profile.model && model.provider === profile.modelProvider);
+    const model = resolveModelSelection(
+      models?.models ?? [],
+      modelSelectionKey({ id: profile.model, provider: profile.modelProvider }),
+      profile.harness,
+    );
     if (!model) add('The selected model is not in the native catalog.');
     if (profile.reasoning && !model?.thinkingLevels?.includes(profile.reasoning)) add('The selected reasoning level is unavailable for this model.');
     if (profile.serviceTier === 'fast' && !model?.supportsFast) add('Fast is unavailable for this model.');

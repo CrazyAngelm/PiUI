@@ -3,7 +3,7 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   // Settings → Plugins (src/app/plugins).
   Plugins: 'Плагины',
   'Plugins add commands, chat panels, themes, pipeline templates, pipeline nodes and ACP agents. You review every permission before a plugin is installed. Plugins are not a sandbox: install only plugins you trust.':
-    'Плагины добавляют команды, панели чата, темы, шаблоны и ноды пайплайнов, а также ACP-агентов. Перед установкой плагина вы проверяете каждое разрешение. Плагины — не песочница: устанавливайте только те, которым доверяете.',
+    'Плагины добавляют команды, панели чата, темы, шаблоны и ноды конвейеров, а также ACP-агентов. Перед установкой плагина вы проверяете каждое разрешение. Плагины — не песочница: устанавливайте только те, которым доверяете.',
   'Install from folder…': 'Установить из папки…',
   'Install from .zip…': 'Установить из .zip…',
   'Load unpacked…': 'Загрузить распакованный…',
@@ -40,14 +40,14 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Panels: {0}': 'Панели: {0}',
   'Themes: {0}': 'Темы: {0}',
   'Templates: {0}': 'Шаблоны: {0}',
-  'Pipeline nodes: {0}': 'Ноды пайплайнов: {0}',
+  'Pipeline nodes: {0}': 'Ноды конвейеров: {0}',
   'ACP agents: {0}': 'ACP-агенты: {0}',
   'Status items: {0}': 'Элементы строки состояния: {0}',
   'MCP tool servers: {0}': 'MCP-серверы инструментов: {0}',
   'MCP tool servers': 'MCP-серверы инструментов',
   'MCP tool server': 'MCP-сервер инструментов',
   'An offered server joins each new Claude Code, Hermes or ACP agent chat for that chat only; your harness settings are not changed. Codex, Pi, Prime Agent and pipeline runs never get it. It runs under the same Node.js limits as the backend.':
-    'Предложенный сервер подключается к каждому новому чату Claude Code, Hermes или ACP-агента только для этого чата; настройки агента не меняются. Codex, Pi, Prime Agent и запуски пайплайнов его никогда не получают. Он работает с теми же ограничениями Node.js, что и бэкенд.',
+    'Предложенный сервер подключается к каждому новому чату Claude Code, Hermes или ACP-агента только для этого чата; настройки агента не меняются. Codex, Pi, Prime Agent и запуски конвейеров его никогда не получают. Он работает с теми же ограничениями Node.js, что и бэкенд.',
   'Offer {0} to new chats': 'Предлагать {0} новым чатам',
   'New chats that can take it get this tool server': 'Новые чаты, которые это поддерживают, получат этот сервер инструментов',
   'New chats no longer get this tool server': 'Новые чаты больше не получают этот сервер инструментов',
@@ -76,9 +76,9 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Panels run in an isolated frame without access to Nano Desktop, your files or the network.': 'Панели работают в изолированном фрейме без доступа к Nano Desktop, вашим файлам и сети.',
   'Keep its own settings in Nano Desktop': 'Хранить собственные настройки в Nano Desktop',
   'Nano Desktop shows the settings form and stores the values.': 'Nano Desktop показывает форму настроек и хранит значения.',
-  'Run its own pipeline nodes': 'Выполнять собственные ноды пайплайнов',
+  'Run its own pipeline nodes': 'Выполнять собственные ноды конвейеров',
   "Nodes run in the plugin's backend when a pipeline in a trusted project reaches them.":
-    'Ноды выполняются в бэкенде плагина, когда до них доходит пайплайн в доверенном проекте.',
+    'Ноды выполняются в бэкенде плагина, когда до них доходит конвейер в доверенном проекте.',
   'Add ACP agents to Settings → Harnesses': 'Добавлять ACP-агентов в «Настройки → Агенты»',
   'Each agent runs only after you trust its exact command line there.': 'Каждый агент запустится только после того, как вы там доверите его точную командную строку.',
   'See the title of the open chat': 'Видеть название открытого чата',
@@ -140,8 +140,8 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Node.js was not found. The backend cannot start until Node.js is installed.': 'Node.js не найден. Бэкенд не сможет запуститься, пока Node.js не установлен.',
   Adds: 'Добавляет',
   Panel: 'Панель',
-  'Pipeline template': 'Шаблон пайплайна',
-  'Pipeline node': 'Нода пайплайна',
+  'Pipeline template': 'Шаблон конвейера',
+  'Pipeline node': 'Нода конвейера',
   'Fields: {0}': 'Поля: {0}',
   'Each ACP agent still needs its own command-line trust in Settings → Harnesses before it runs.':
     'Каждому ACP-агенту перед запуском всё равно нужно отдельное доверие к его командной строке в «Настройки → Агенты».',
@@ -205,7 +205,7 @@ export const pluginsRu: Readonly<Record<string, string>> = {
   'Named fields the node returns as one JSON object. Without fields, its output is passed on as text.':
     'Именованные поля, которые нода возвращает одним JSON-объектом. Без полей её вывод передаётся дальше как текст.',
   'The plugin for this node is not installed, enabled and trusted to run pipeline nodes.':
-    'Плагин этой ноды не установлен, выключен или не имеет разрешения выполнять ноды пайплайнов.',
+    'Плагин этой ноды не установлен, выключен или не имеет разрешения выполнять ноды конвейеров.',
   'The plugin node’s configuration does not match what the plugin declares.': 'Настройки ноды плагина не соответствуют тому, что объявляет плагин.',
   'The plugin node could not get the results of earlier steps.': 'Нода плагина не смогла получить результаты предыдущих шагов.',
   'The plugin’s backend could not be started.': 'Не удалось запустить бэкенд плагина.',

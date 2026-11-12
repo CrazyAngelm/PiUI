@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyWorkspaceEvent } from '../../features/workspace/workspaceState';
 import { createWorkspaceClient } from '../workspaceClient';
+import type { HarnessModelsResultV19 } from '../../../../../contracts/harness-models-v19';
 import type {
   HarnessKind, HarnessModelsResult, RuntimeSettings, SessionSnapshot, WorkspaceEvent, WorkspaceHistoryResultV1, WorkspaceResult,
 } from './labContracts';
@@ -418,6 +419,27 @@ describe('UI Lab workspace host', () => {
     const chats = empty.state.projects[0]?.id;
     expect(await rejection(empty.invoke('harness_models_v18', { request: { workspaceId: chats, harness: 'hermes' } })))
       .toMatchObject({ code: 'RUNTIME_FAILED' });
+  });
+
+  it('serves the versioned catalog envelope for both parts of a discovery', async () => {
+    const host = labHost();
+    const request = {
+      workspaceId: projectId(host, 'piui'),
+      harness: 'codex',
+      discoveryId: '35b4e23b-622a-4833-878e-ce8050a4e1fb',
+    };
+    const models = host.invoke<HarnessModelsResultV19>('harness_models_v19', { request: { ...request, part: 'models' } });
+    await vi.advanceTimersByTimeAsync(400);
+    expect(await models).toMatchObject({
+      protocol: 19,
+      catalog: { protocol: 18, harness: 'codex', models: expect.arrayContaining([expect.any(Object)]), resources: { items: [] } },
+    });
+    const resources = host.invoke<HarnessModelsResultV19>('harness_models_v19', { request: { ...request, part: 'resources' } });
+    await vi.advanceTimersByTimeAsync(400);
+    expect(await resources).toMatchObject({
+      protocol: 19,
+      catalog: { protocol: 18, harness: 'codex', models: [], resources: { items: expect.arrayContaining([expect.any(Object)]) } },
+    });
   });
 
   it('runs Claude Code on the subscription only: effort catalog, no fast mode, typed sign-in status', async () => {

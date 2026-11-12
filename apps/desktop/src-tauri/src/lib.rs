@@ -949,6 +949,7 @@ pub fn run() -> Result<(), tauri::Error> {
             workspace_api::composer::workspace_composer_v19,
             workspace_api::workspace_lifecycle_v17,
             workspace_api::harness_models_v18,
+            workspace_api::harness_models_v19,
             workspace_api::workspace_session_mode_v1,
             review_api::workspace_review_v1,
             placement_api::workspace_placement_v1,

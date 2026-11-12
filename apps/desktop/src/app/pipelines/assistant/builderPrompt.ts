@@ -12,7 +12,7 @@ export const CONTEXT_CLOSE = '</piui-builder-context>';
 export interface HarnessChoice {
   harness: string;
   label: string;
-  models: string[];
+  models?: string[];
 }
 
 export interface EnvelopeInput {
@@ -54,7 +54,8 @@ export function builderEnvelope({ first, draftJson, problems, harnesses, text }:
   if (first) lines.push(BRIEF, '');
   lines.push('Available harnesses and models:');
   for (const choice of harnesses) {
-    lines.push(`- ${choice.harness} (${choice.label}): ${choice.models.length ? choice.models.join(', ') : 'no models listed'}`);
+    const label = `- ${choice.harness} (${choice.label})`;
+    lines.push(choice.models ? `${label}: ${choice.models.join(', ') || 'no models listed'}` : `${label} — model catalog not yet available`);
   }
   lines.push('', 'Current editor draft:', '```json', draftJson.trim(), '```');
   lines.push('', problems.length ? `Problems reported by Check:\n${problems.map((problem) => `- ${problem}`).join('\n')}` : 'Check reports no problems.');

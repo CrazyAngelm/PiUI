@@ -1,7 +1,7 @@
 // Hermes owns inference, tools, authentication and SQLite history. This adapter
 // translates ACP messages only; the containing host Job owns every child.
-export async function createHermesAdapter(config, emit, coordinatorRequest, boardRequest) {
-  const { spawn } = await import('node:child_process');
+export async function createHermesAdapter(config, emit, coordinatorRequest, boardRequest, _sidekickRequest, spawnChild) {
+  const spawn = spawnChild ?? (await import('node:child_process')).spawn;
   const { realpath } = await import('node:fs/promises');
   const { join, isAbsolute } = await import('node:path');
   const { createServer } = await import('node:http');
@@ -80,45 +80,60 @@ def piui_model_state(model,provider,base_url):
  current=encode_model_choice(provider,model)
  return SessionModelState(current_model_id=current,available_models=cat.models) if cat.models else None
 `;
-  const catalogSource = `import contextlib,json,sys
+  const inventoryPreamble = `import contextlib,json,sys
 with contextlib.redirect_stdout(sys.stderr):
  from hermes_cli.config import load_config
- from acp_adapter.auth import detect_provider
  from acp_adapter.entry import _load_env
  _load_env()
+ cfg=load_config()
+`;
+  const modelCatalogSource = `${inventoryPreamble} from acp_adapter.auth import detect_provider
  exec(${JSON.stringify(inventorySource)})
- from tools.skills_tool import _find_all_skills,_is_skill_disabled
- cfg=load_config(); model=cfg.get('model') or {}; model=model if isinstance(model,dict) else {'default':model}
+ model=cfg.get('model') or {}; model=model if isinstance(model,dict) else {'default':model}
  state=piui_model_state(str(model.get('default') or ''),str(model.get('provider') or detect_provider() or ''),str(model.get('base_url') or ''))
  models=[] if state is None else [{'id':m.model_id,'name':m.name,'supportsFast':False} for m in state.available_models]
- warnings=[]
- items=[{'kind':'skill','id':s['name'],'name':s['name'],'enabled':not _is_skill_disabled(s['name']),'configurable':False} for s in _find_all_skills()]
+print(json.dumps(models))`;
+  const resourceCatalogSource = `${inventoryPreamble} warnings=[]
+ items=[]
+ try:
+  from tools.skills_tool import _find_all_skills,_is_skill_disabled
+  items += [{'kind':'skill','id':s['name'],'name':s['name'],'enabled':not _is_skill_disabled(s['name']),'configurable':False} for s in _find_all_skills()]
+ except Exception: warnings.append('Hermes skill inventory is unavailable.')
  items += [{'kind':'mcp','id':n,'name':n,'enabled':not isinstance(v,dict) or v.get('enabled',True) is not False,'configurable':False} for n,v in (cfg.get('mcp_servers') or {}).items()]
  try:
   from model_tools import get_tool_definitions
   items += [{'kind':'tool','id':t['function']['name'],'name':t['function']['name'],'enabled':True,'configurable':False} for t in get_tool_definitions(enabled_toolsets=['hermes-acp'],quiet_mode=True)]
  except Exception: warnings.append('Hermes tool inventory is unavailable.')
-print(json.dumps({'models':models,'resources':{'items':items,'warnings':warnings}}))`;
-  let catalog;
-  async function readCatalog() {
-    if (catalog) return catalog;
-    const child = start(['-P', '-c', catalogSource]);
+print(json.dumps({'items':items,'warnings':warnings}))`;
+  function readInventory(source) {
+    const child = start(['-P', '-c', source]);
     let data = '';
     child.stdout.setEncoding('utf8'); child.stdout.on('data', part => { data += part; if (Buffer.byteLength(data) > frameLimit) child.kill(); });
-    catalog = await new Promise((resolve, reject) => {
-      child.once('error', () => reject(fail('catalog-unavailable')));
-      child.once('exit', code => { try { if (code !== 0) throw new Error(); resolve(JSON.parse(data)); } catch { reject(fail('catalog-unavailable')); } });
+    return new Promise((resolve, reject) => {
+      child.once('error', () => { children.delete(child); reject(fail('catalog-unavailable')); });
+      child.once('close', code => { try { if (code !== 0) throw new Error(); resolve(JSON.parse(data)); } catch { reject(fail('catalog-unavailable')); } });
     });
-    return catalog;
   }
+  let resourceInventory;
+  const resources = () => resourceInventory ??= readInventory(resourceCatalogSource).catch(error => {
+    resourceInventory = undefined;
+    throw error;
+  });
   const capability = (supported, enforcement = 'native') => ({ supported, enforcement: supported ? enforcement : 'unsupported' });
   const capabilities = { prompt: capability(true), resume: capability(true), models: capability(true), approvals: capability(true), instructions: capability(true, 'coordinator'), toolPolicy: capability(false), nativeSubagents: capability(false) };
-  if (config.catalogOnly) { await readCatalog(); return {
-    async catalogModels() { return (await readCatalog()).models; },
-    async models() { return (await readCatalog()).models.map(({ supportsFast, ...model }) => model); },
-    async resources() { return (await readCatalog()).resources; },
-    async dispose() { for (const child of children) child.kill(); },
-  }; }
+  if (config.catalogOnly) {
+    let modelInventory;
+    const catalogModels = () => modelInventory ??= readInventory(modelCatalogSource).catch(error => {
+      modelInventory = undefined;
+      throw error;
+    });
+    return {
+      catalogModels,
+      async models() { return (await catalogModels()).map(({ supportsFast, ...model }) => model); },
+      resources,
+      async dispose() { for (const child of children) child.kill(); },
+    };
+  }
 
   let server;
   // Hermes takes stdio MCP servers over ACP; plugin servers join this session only.
@@ -389,7 +404,7 @@ main()
     snapshot() { return { nativeId: boundNativeId, nativePath, materialized: true, title, status, ...(currentModel ? { model: currentModel } : {}), models, blocks: [...blocks.values()], approvals: [...approvals.values()].map(item => item.approval), capabilities }; },
     async models() { return models; },
     async catalogModels() { return models.map(m => ({ ...m, supportsFast: false })); },
-    async resources() { return (await readCatalog()).resources; },
+    resources,
     composerCapabilities() { return { steer: false, compact: false, images: acceptsImages }; },
     // Hermes skills have no mention syntax of their own; its ACP commands do.
     composerCatalog() { return { commands: availableCommands, skills: [] }; },

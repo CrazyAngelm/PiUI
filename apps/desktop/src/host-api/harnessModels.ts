@@ -1,5 +1,6 @@
 import { hostInvoke } from './transport';
 import type { HarnessCatalogPart, HarnessModelsRequest, HarnessModelsResult } from '../../../../contracts/harness-models-v18';
+import type { HarnessModelsResultV19 } from '../../../../contracts/harness-models-v19';
 import type { WorkspaceModel } from '../../../../contracts/workspace-v15';
 import { workspaceError } from './workspaceClient';
 
@@ -19,12 +20,13 @@ export function workspaceModel(model: WorkspaceModel): WorkspaceModel {
 
 // Session-local, workspace-scoped catalog reuse. Explicit refresh and preflight
 // bypass completed entries; concurrent consumers share the native request.
-// `split` marks the entry of a models-then-resources load (`splitCatalog`);
+// `models` lets pickers join a full refresh before resource discovery finishes;
 // `at` is when a completed entry was answered; `version` is the native version
-// a picker named when the load started (unknown for direct callers).
+// named when the load started, also retained for direct refresh callers.
 // `owner` is the split generation a part load belongs to.
-interface CatalogEntry { promise: Promise<HarnessModelsResult>; pending: boolean; split?: true; at?: number; version?: string; owner?: number }
+interface CatalogEntry { promise: Promise<HarnessModelsResult>; pending: boolean; models?: Promise<HarnessModelsResult>; fullRequest?: boolean; at?: number; version?: string; owner?: number }
 const catalogs = new Map<string, CatalogEntry>();
+const knownVersions = new Map<string, string>();
 /** A picker shows an older completed catalog at once and asks the harness again in the background. */
 const CATALOG_STALE_MS = 5 * 60 * 1000;
 // Every native load of a project's whole catalog (a split load or a full probe)
@@ -66,42 +68,39 @@ const RESOURCES_UNAVAILABLE = 'Skills, MCP servers and tools could not be loaded
  * place of the resources: the models are real, the empty resource list is not.
  */
 export function catalogDegraded(result: HarnessModelsResult): boolean {
-  return result.resources.warnings.includes(RESOURCES_UNAVAILABLE);
+  return result.resources.warnings.some(warning => warning === RESOURCES_UNAVAILABLE
+    || warning === 'Skills could not be loaded from Codex.'
+    || warning === 'MCP servers could not be loaded from Codex.'
+    || warning === 'MCP tools could not be loaded from Codex.'
+    || warning === 'Hermes tool inventory is unavailable.'
+    || warning === 'Hermes skill inventory is unavailable.'
+    || warning === 'Skills could not be loaded from Pi.'
+    || warning === 'Skills could not be loaded from Prime Agent.'
+    || warning === 'Tools could not be loaded from Prime Agent.'
+    || /^MCP server .+ could not start\.$/u.test(warning));
 }
 
 /** `owner` is the generation of the split load a part belongs to. */
-function nativeCatalog(request: HarnessModelsRequest, part: HarnessCatalogPart | undefined, refresh: boolean, owner?: number): Promise<HarnessModelsResult> {
+function nativeCatalog(request: HarnessModelsRequest, part: HarnessCatalogPart, owner: number, discoveryId: string, version: string | undefined): Promise<HarnessModelsResult> {
   const full = catalogKey(request);
-  const key = part ? partKey(request, part) : full;
+  const key = partKey(request, part);
   const cached = catalogs.get(key);
   // A split never joins a part another split started while it is in flight (it
   // answers for an older CLI or a replaced load), nor another split's resources
   // (each split claims its own discovery). Answered models are reused.
-  const foreign = part !== undefined && cached !== undefined && cached.owner !== owner && (cached.pending || part === 'resources');
-  // An explicit refresh joins a full probe in flight, never a split load: that
-  // one may be reusing models answered before.
-  if (cached && !foreign && (!refresh || (cached.pending && !cached.split))) return cached.promise;
-  // A full refresh also retires the answered parts, so a later split load asks
-  // the harness again instead of reusing the models and resources it replaced.
-  if (refresh && !part) {
-    for (const piece of ['models', 'resources'] as const) {
-      const pieceKey = partKey(request, piece);
-      if (catalogs.get(pieceKey)?.pending === false) catalogs.delete(pieceKey);
-    }
-  }
-  const generation = part ? owner : nextGeneration(full);
-  const promise = hostInvoke<HarnessModelsResult>('harness_models_v18', { request: part ? { ...request, part } : request }).then(result => {
+  const foreign = cached !== undefined && cached.owner !== owner && (cached.pending || part === 'resources');
+  if (cached && !foreign && (cached.pending || !outdated(cached, version))) return cached.promise;
+  const promise = hostInvoke<HarnessModelsResultV19>('harness_models_v19', { request: { ...request, part, discoveryId } }).then(response => {
+    if (response.protocol !== 19) throw new Error('Invalid model catalog');
+    const result = response.catalog;
     if (result.protocol !== 18 || result.harness !== request.harness) throw new Error('Invalid model catalog');
     entry.pending = false;
     entry.at = Date.now();
     // A degraded answer is not remembered: the next load asks for the resources again.
-    const degraded = part !== 'models' && catalogDegraded(result);
+    const degraded = part === 'resources' && catalogDegraded(result);
     // A part of a replaced split is not the catalog's answer: the next split asks again.
-    const superseded = part !== undefined && owner !== undefined && generations.get(full) !== owner;
+    const superseded = generations.get(full) !== owner;
     if ((degraded || superseded) && catalogs.get(key) === entry) catalogs.delete(key);
-    if (!part && generations.get(full) === generation) {
-      storeSnapshot(full, request, degraded ? { ...result, resources: readSnapshot(full, request)?.resources ?? { items: [], warnings: [] } } : result);
-    }
     return result;
   }).catch(error => {
     if (catalogs.get(key) === entry) catalogs.delete(key);
@@ -109,21 +108,27 @@ function nativeCatalog(request: HarnessModelsRequest, part: HarnessCatalogPart |
     // A coded refusal (sign-in, trust, safe mode…) retires what was remembered;
     // a transient failure (slow start, crash) keeps it for the next picker.
     // A newer load answers for the snapshot instead of this older one.
-    const newest = generation === undefined || generations.get(full) === generation;
+    const newest = generations.get(full) === owner;
     if (part !== 'resources' && !transient(mapped.code) && newest) forgetSnapshot(full, request);
     if (mapped.code === 'RUNTIME_FAILED') throw new Error('Could not load models.');
     throw mapped;
   });
-  const entry: CatalogEntry = { promise, pending: true, ...(part && owner !== undefined ? { owner } : {}) };
+  const entry: CatalogEntry = { promise, pending: true, owner, version };
   // A replaced split's part runs unlisted: it must not displace the newest split's part.
-  if (!part || owner === undefined || owner === generations.get(full) || !catalogs.has(key)) catalogs.set(key, entry);
-  if (!part) currentLoads.set(full, promise);
+  if (owner === generations.get(full) || !catalogs.has(key)) catalogs.set(key, entry);
   return entry.promise;
 }
 
 /** Models and resources from one native probe; resolves once both are known. */
-export function harnessModels(request: HarnessModelsRequest, refresh = false): Promise<HarnessModelsResult> {
-  return nativeCatalog(request, undefined, refresh);
+export function harnessModels(request: HarnessModelsRequest, refresh = false, version: string | undefined = undefined): Promise<HarnessModelsResult> {
+  const key = catalogKey(request);
+  if (version) knownVersions.set(key, version);
+  const live = catalogs.get(key);
+  // Explicit refreshes share each other, but replace a picker's split that
+  // may have reused an older models answer. Every path exposes models early.
+  const nativeVersion = version ?? knownVersions.get(key);
+  if ((live && otherVersion(live, nativeVersion)) || (refresh && !(live?.pending && live.fullRequest))) retire(request, true);
+  return splitCatalog(request, nativeVersion, true).full;
 }
 
 /**
@@ -143,24 +148,24 @@ export function catalogSettled(request: HarnessModelsRequest): boolean {
  * degraded catalog is not remembered, so the next load asks for the resources
  * again (the answered models are reused).
  */
-function splitCatalog(request: HarnessModelsRequest, version: string | undefined): { models: Promise<HarnessModelsResult>; full: Promise<HarnessModelsResult> } {
+function splitCatalog(request: HarnessModelsRequest, version: string | undefined, fullRequest = false): { models: Promise<HarnessModelsResult>; full: Promise<HarnessModelsResult> } {
   const key = catalogKey(request);
   const live = catalogs.get(key);
   // A later consumer of a split in flight takes its models entry: `live` only
   // settles with the resources, which can be seconds behind the models.
-  if (live) return { models: (live.split ? catalogs.get(partKey(request, 'models'))?.promise : undefined) ?? live.promise, full: live.promise };
+  if (live) return { models: live.models ?? live.promise, full: live.promise };
   const generation = nextGeneration(key);
-  const models = nativeCatalog(request, 'models', false, generation);
+  const discoveryId = crypto.randomUUID();
+  const models = nativeCatalog(request, 'models', generation, discoveryId, version);
   let degraded = false;
   const unavailable = (listed: HarnessModelsResult): HarnessModelsResult => {
     degraded = true;
     return { ...listed, resources: { items: [], warnings: [RESOURCES_UNAVAILABLE] } };
   };
-  // Even a replaced split collects its own discovery: the host hands queued
-  // discoveries out oldest first, so skipping it would give the newer split this
-  // one's (older) resources. Its answer then reaches nobody (generation check).
+  // Both parts name the same discovery, even if their IPC answers arrive out
+  // of order or another WebView left an unclaimed probe behind.
   const full = models.then(listed => {
-    return nativeCatalog(request, 'resources', false, generation).then(
+    return nativeCatalog(request, 'resources', generation, discoveryId, version).then(
       found => {
         degraded = catalogDegraded(found);
         return { ...listed, resources: found.resources };
@@ -175,12 +180,13 @@ function splitCatalog(request: HarnessModelsRequest, version: string | undefined
       // A degraded snapshot gets the fresh models with the resources it already had.
       storeSnapshot(key, request, degraded ? { ...result, resources: readSnapshot(key, request)?.resources ?? { items: [], warnings: [] } } : result);
     }
-    return result;
+    return generations.get(key) === generation ? result : (newestAnswer(key) ?? result);
   }, error => {
     if (catalogs.get(key) === entry) catalogs.delete(key);
+    if (generations.get(key) !== generation) return newestAnswer(key) ?? Promise.reject(error);
     throw error;
   });
-  const entry: CatalogEntry = { promise: full, pending: true, split: true, ...(version ? { version } : {}) };
+  const entry: CatalogEntry = { promise: full, models, fullRequest, pending: true, version };
   catalogs.set(key, entry);
   currentLoads.set(key, full);
   return { models, full };
@@ -219,6 +225,13 @@ function harnessOfKey(key: string): string | undefined {
  * its own callers but is not reused. For catalogs that follow account state.
  */
 export function forgetHarnessCatalogs(harness: string): void {
+  for (const key of [...generations.keys()]) {
+    if (harnessOfKey(key) === harness) {
+      nextGeneration(key);
+      currentLoads.delete(key);
+      knownVersions.delete(key);
+    }
+  }
   for (const key of [...catalogs.keys()]) {
     if (harnessOfKey(key) === harness) catalogs.delete(key);
   }
@@ -293,7 +306,7 @@ export interface CachedCatalogHandlers {
 
 /** The load answered for another native version than the one shown now (a CLI update). */
 function otherVersion(entry: CatalogEntry, version: string | undefined): boolean {
-  return Boolean(version && entry.version && entry.version !== version);
+  return Boolean(version && entry.version !== version);
 }
 
 /** Whether a picker should ask the harness again behind a completed catalog. */
@@ -322,7 +335,8 @@ function retire(request: HarnessModelsRequest, inFlight: boolean): void {
  */
 export function cachedHarnessModels(request: HarnessModelsRequest, handlers: CachedCatalogHandlers = {}): Promise<HarnessModelsResult> {
   const key = catalogKey(request);
-  const { version } = handlers;
+  const version = handlers.version ?? knownVersions.get(key);
+  if (version) knownVersions.set(key, version);
   const live = catalogs.get(key);
   let earlier: Promise<HarnessModelsResult> | undefined;
   if (live && !live.pending) {

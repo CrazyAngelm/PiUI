@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
-vi.mock('./transport', () => ({ hostInvoke: invoke, hostListen: vi.fn(), desktopAvailable: true }));
+vi.mock('./transport', () => ({
+  hostInvoke: async (...args: unknown[]) => ({ protocol: 19, catalog: await invoke(...args) }),
+  hostListen: vi.fn(), desktopAvailable: true,
+}));
 const memory = new Map<string, string>();
 vi.stubGlobal('localStorage', {
   getItem: (key: string) => memory.get(key) ?? null,
@@ -14,12 +17,14 @@ let harnessModels: typeof import('./harnessModels').harnessModels;
 let workspaceModel: typeof import('./harnessModels').workspaceModel;
 beforeEach(async () => { vi.resetModules(); invoke.mockReset(); ({ harnessModels, workspaceModel } = await import('./harnessModels')); });
 
-describe('native harness catalog v18', () => {
+describe('native harness catalog v19 with v18 catalog data', () => {
   it('preserves provider identity and native capability values', async () => {
     const result = { protocol: 18, harness: 'pi', models: [{ id: 'model', provider: 'local', name: 'Model', thinkingLevels: ['off', 'high'] }], resources: { items: [], warnings: [] } };
-    invoke.mockResolvedValueOnce(result);
+    invoke.mockResolvedValueOnce(result).mockResolvedValueOnce(result);
     expect(await harnessModels({ workspaceId: 'project', harness: 'pi' })).toEqual(result);
-    expect(invoke).toHaveBeenLastCalledWith('harness_models_v18', { request: { workspaceId: 'project', harness: 'pi' } });
+    const discoveryId = invoke.mock.calls[0]![1].request.discoveryId;
+    expect(discoveryId).toMatch(/^[\da-f-]{36}$/u);
+    expect(invoke).toHaveBeenLastCalledWith('harness_models_v19', { request: { workspaceId: 'project', harness: 'pi', part: 'resources', discoveryId } });
   });
   it('shares concurrent loads, reuses all six catalogs and refreshes explicitly', async () => {
     for (const harness of ['pi', 'codex', 'prime-agent', 'hermes', 'claude-code', 'nano'] as const) {
@@ -27,18 +32,19 @@ describe('native harness catalog v18', () => {
       const result = { protocol: 18, harness, models: [], resources: { items: [], warnings: [] } };
       let complete!: (value: typeof result) => void;
       invoke.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+      invoke.mockResolvedValueOnce(result);
       const first = harnessModels(request), second = harnessModels(request), concurrentRefresh = harnessModels(request, true);
       expect(second).toBe(first); expect(concurrentRefresh).toBe(first);
       complete(result); await first;
       const calls = invoke.mock.calls.length;
-      expect(await harnessModels(request)).toBe(result);
+      expect(await harnessModels(request)).toEqual(result);
       expect(invoke).toHaveBeenCalledTimes(calls);
-      invoke.mockResolvedValueOnce(result);
+      invoke.mockResolvedValueOnce(result).mockResolvedValueOnce(result);
       await harnessModels(request, true);
-      expect(invoke).toHaveBeenCalledTimes(calls + 1);
-      invoke.mockResolvedValueOnce(result);
-      await harnessModels({ ...request, workspaceId: 'other-project' });
       expect(invoke).toHaveBeenCalledTimes(calls + 2);
+      invoke.mockResolvedValueOnce(result).mockResolvedValueOnce(result);
+      await harnessModels({ ...request, workspaceId: 'other-project' });
+      expect(invoke).toHaveBeenCalledTimes(calls + 4);
     }
   });
   it('does not cache failures or show session-history errors for catalog failures', async () => {
@@ -46,9 +52,9 @@ describe('native harness catalog v18', () => {
     invoke.mockRejectedValueOnce({ code: 'RUNTIME_FAILED' });
     await expect(harnessModels(request)).rejects.toThrow('Could not load models.');
     const result = { protocol: 18, harness: 'prime-agent', models: [], resources: { items: [], warnings: [] } };
-    invoke.mockResolvedValueOnce(result);
+    invoke.mockResolvedValueOnce(result).mockResolvedValueOnce(result);
     expect(await harnessModels(request)).toEqual(result);
-    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke).toHaveBeenCalledTimes(3);
   });
   it('rejects a mismatched harness and sanitizes native failures', async () => {
     invoke.mockResolvedValueOnce({ protocol: 18, harness: 'codex' });
@@ -64,14 +70,14 @@ describe('native harness catalog v18', () => {
       message: 'Sign in to Claude Code with your Claude subscription: run `claude` in a terminal and use /login.',
     });
     const result = { protocol: 18, harness: 'claude-code', models: [{ id: 'sonnet', provider: 'anthropic', name: 'Sonnet', thinkingLevels: ['low', 'high'], supportsFast: false }], resources: { items: [], warnings: [] } };
-    invoke.mockResolvedValueOnce(result);
+    invoke.mockResolvedValueOnce(result).mockResolvedValueOnce(result);
     expect(await harnessModels(request), 'a failure is never cached').toEqual(result);
   });
   it('shows a remembered catalog at once and reports the probe that replaces it', async () => {
     localStorage.clear();
     const request = { workspaceId: 'project', harness: 'claude-code' as const };
     const old = { protocol: 18, harness: 'claude-code', models: [{ id: 'sonnet', name: 'Sonnet' }], resources: { items: [], warnings: [] } };
-    invoke.mockResolvedValueOnce(old);
+    invoke.mockResolvedValueOnce(old).mockResolvedValueOnce(old);
     await harnessModels(request);
     vi.resetModules();
     const fresh = await import('./harnessModels');
@@ -98,8 +104,8 @@ describe('native harness catalog v18', () => {
     const { cachedHarnessModels } = await import('./harnessModels');
     const onFresh = vi.fn();
     expect(await cachedHarnessModels(request, { onFresh })).toEqual(listed);
-    expect(invoke).toHaveBeenNthCalledWith(1, 'harness_models_v18', { request: { ...request, part: 'models' } });
-    await vi.waitFor(() => expect(invoke).toHaveBeenNthCalledWith(2, 'harness_models_v18', { request: { ...request, part: 'resources' } }));
+    expect(invoke).toHaveBeenNthCalledWith(1, 'harness_models_v19', { request: { ...request, part: 'models', discoveryId: expect.any(String) } });
+    await vi.waitFor(() => expect(invoke).toHaveBeenNthCalledWith(2, 'harness_models_v19', { request: { ...request, part: 'resources', discoveryId: expect.any(String) } }));
     discover(found);
     await vi.waitFor(() => expect(onFresh).toHaveBeenCalledWith({ ...listed, resources: found.resources }));
     expect(await harnessModels(request), 'the merged catalog is reused').toEqual({ ...listed, resources: found.resources });
@@ -157,7 +163,7 @@ describe('native harness catalog v18', () => {
     await cachedHarnessModels(request, { onFresh: retry });
     await vi.waitFor(() => expect(retry).toHaveBeenLastCalledWith({ ...listed, resources: found.resources }));
     expect(invoke).toHaveBeenCalledTimes(3);
-    expect(invoke).toHaveBeenNthCalledWith(3, 'harness_models_v18', { request: { ...request, part: 'resources' } });
+    expect(invoke).toHaveBeenNthCalledWith(3, 'harness_models_v19', { request: { ...request, part: 'resources', discoveryId: expect.any(String) } });
     expect(await harnessModels(request), 'the complete catalog is reused').toEqual({ ...listed, resources: found.resources });
     expect(invoke).toHaveBeenCalledTimes(3);
   });
@@ -218,7 +224,7 @@ describe('native harness catalog v18', () => {
     invoke.mockResolvedValueOnce(listed);
     invoke.mockResolvedValueOnce(listed);
     await cachedHarnessModels(request);
-    expect(invoke).toHaveBeenNthCalledWith(4, 'harness_models_v18', { request: { ...request, part: 'models' } });
+    expect(invoke).toHaveBeenNthCalledWith(4, 'harness_models_v19', { request: { ...request, part: 'models', discoveryId: expect.any(String) } });
   });
   it('does not remember resources the host degraded to a warning, on the split and the full path', async () => {
     localStorage.clear();
@@ -239,14 +245,14 @@ describe('native harness catalog v18', () => {
     const retry = vi.fn();
     await cachedHarnessModels(request, { onFresh: retry });
     await vi.waitFor(() => expect(retry).toHaveBeenLastCalledWith({ ...listed, resources: found.resources }));
-    expect(invoke).toHaveBeenNthCalledWith(3, 'harness_models_v18', { request: { ...request, part: 'resources' } });
+    expect(invoke).toHaveBeenNthCalledWith(3, 'harness_models_v19', { request: { ...request, part: 'resources', discoveryId: expect.any(String) } });
 
     const other = { workspaceId: 'other', harness: 'codex' as const };
-    invoke.mockResolvedValueOnce({ ...listed, resources: warned.resources });
+    invoke.mockResolvedValueOnce(listed).mockResolvedValueOnce(warned);
     expect(catalogDegraded(await harnessModels(other))).toBe(true);
     invoke.mockResolvedValueOnce({ ...listed, resources: found.resources });
     expect((await harnessModels(other)).resources, 'the degraded full answer was not reused').toEqual(found.resources);
-    expect(invoke).toHaveBeenCalledTimes(5);
+    expect(invoke).toHaveBeenCalledTimes(6);
   });
   it('shows a later picker the snapshot first, then the answers it already has', async () => {
     localStorage.clear();
@@ -277,9 +283,9 @@ describe('native harness catalog v18', () => {
     await cachedHarnessModels(request);
     await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
     const newer = { ...listed, models: [{ id: 'gpt-2', name: 'GPT 2' }] };
-    invoke.mockResolvedValueOnce(newer);
+    invoke.mockResolvedValueOnce(newer).mockResolvedValueOnce(newer);
     expect(await harnessModels(request, true)).toEqual(newer);
-    expect(invoke).toHaveBeenNthCalledWith(3, 'harness_models_v18', { request });
+    expect(invoke).toHaveBeenNthCalledWith(3, 'harness_models_v19', { request: { ...request, part: 'models', discoveryId: expect.any(String) } });
   });
   it('settles a catalog whose models failed', async () => {
     localStorage.clear();
@@ -294,7 +300,7 @@ describe('native harness catalog v18', () => {
   it('forgets a remembered catalog when the probe fails and never serves it to direct callers', async () => {
     localStorage.clear();
     const request = { workspaceId: 'project', harness: 'claude-code' as const };
-    invoke.mockResolvedValueOnce({ protocol: 18, harness: 'claude-code', models: [], resources: { items: [], warnings: [] } });
+    invoke.mockResolvedValue({ protocol: 18, harness: 'claude-code', models: [], resources: { items: [], warnings: [] } });
     await harnessModels(request);
     vi.resetModules();
     let fresh = await import('./harnessModels');
@@ -316,8 +322,11 @@ describe('native harness catalog v18', () => {
     invoke.mockResolvedValueOnce(answer('nano', 'auto'));
     invoke.mockResolvedValueOnce(answer('nano', 'auto'));
     invoke.mockResolvedValueOnce(answer('codex', 'gpt'));
+    invoke.mockResolvedValueOnce(answer('nano', 'auto'));
+    invoke.mockResolvedValueOnce(answer('nano', 'auto'));
+    invoke.mockResolvedValueOnce(answer('codex', 'gpt'));
     await Promise.all([harnessModels(nano), harnessModels(otherNano), harnessModels(codex)]);
-    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(invoke).toHaveBeenCalledTimes(6);
     // Snapshots of older sessions: a part key never appears in storage, a full key does.
     for (const key of [snapshotKey('project', 'nano'), snapshotKey('other-project', 'nano'), snapshotKey('project', 'codex')]) {
       localStorage.setItem(key, JSON.stringify({ at: Date.now(), result: answer(JSON.parse(key.slice('piui.harness.catalog.v1:'.length))[1], 'old') }));
@@ -327,10 +336,10 @@ describe('native harness catalog v18', () => {
     forgetHarnessCatalogs('nano');
     expect([...memory.keys()].sort()).toEqual([snapshotKey('project', 'codex'), snapshotKey('*', 'codex'), 'unrelated'].sort());
     expect(await harnessModels(codex), 'another harness is reused').toEqual(answer('codex', 'gpt'));
-    expect(invoke).toHaveBeenCalledTimes(3);
-    invoke.mockResolvedValueOnce(answer('nano', 'free'));
+    expect(invoke).toHaveBeenCalledTimes(6);
+    invoke.mockResolvedValueOnce(answer('nano', 'free')).mockResolvedValueOnce(answer('nano', 'free'));
     expect(await harnessModels(nano), 'a forgotten catalog is asked for again').toEqual(answer('nano', 'free'));
-    expect(invoke).toHaveBeenCalledTimes(4);
+    expect(invoke).toHaveBeenCalledTimes(8);
   });
   it('forgets the part entries of a split load too', async () => {
     localStorage.clear();
@@ -347,7 +356,7 @@ describe('native harness catalog v18', () => {
     invoke.mockResolvedValueOnce(next);
     invoke.mockResolvedValueOnce(next);
     expect((await cachedHarnessModels(request)).models, 'neither the full entry nor the models part is reused').toEqual(next.models);
-    expect(invoke).toHaveBeenNthCalledWith(3, 'harness_models_v18', { request: { ...request, part: 'models' } });
+    expect(invoke).toHaveBeenNthCalledWith(3, 'harness_models_v19', { request: { ...request, part: 'models', discoveryId: expect.any(String) } });
   });
   it('never remembers a Nano catalog in storage and never shows one from an earlier session', async () => {
     localStorage.clear();
@@ -364,7 +373,7 @@ describe('native harness catalog v18', () => {
     expect(JSON.parse(memory.get(snapshotKey) ?? 'null').result.models, 'the old snapshot is untouched, not rewritten').toEqual(earlier.models);
     // The full (non-split) load stores nothing either.
     localStorage.clear();
-    invoke.mockResolvedValueOnce(listed);
+    invoke.mockResolvedValueOnce(listed).mockResolvedValueOnce(listed);
     await harnessModels({ ...request, workspaceId: 'other-project' });
     expect([...memory.keys()].filter((key) => key.includes('nano'))).toEqual([]);
   });
@@ -372,7 +381,7 @@ describe('native harness catalog v18', () => {
     localStorage.clear();
     const request = { workspaceId: 'project', harness: 'claude-code' as const };
     const old = { protocol: 18, harness: 'claude-code', models: [{ id: 'sonnet', name: 'Sonnet' }], resources: { items: [], warnings: [] } };
-    invoke.mockResolvedValueOnce(old);
+    invoke.mockResolvedValueOnce(old).mockResolvedValueOnce(old);
     await harnessModels(request);
     vi.resetModules();
     const fresh = await import('./harnessModels');
@@ -388,7 +397,7 @@ describe('native harness catalog v18', () => {
   it('shows another project’s models of the same harness as a provisional list', async () => {
     localStorage.clear();
     const listed = { protocol: 18, harness: 'claude-code', models: [{ id: 'opus', name: 'Opus' }], resources: { items: [{ kind: 'skill', id: 'review', name: 'review', enabled: true, configurable: false }], warnings: [] } };
-    invoke.mockResolvedValueOnce(listed);
+    invoke.mockResolvedValueOnce(listed).mockResolvedValueOnce(listed);
     await harnessModels({ workspaceId: 'first', harness: 'claude-code' });
     vi.resetModules();
     const fresh = await import('./harnessModels');
@@ -424,7 +433,7 @@ describe('native harness catalog v18', () => {
       invoke.mockResolvedValueOnce(listed);
       const onFresh = vi.fn();
       expect(await cachedHarnessModels(request, { onFresh }), 'no wait for the probe').toEqual(listed);
-      expect(invoke).toHaveBeenNthCalledWith(3, 'harness_models_v18', { request: { ...request, part: 'models' } });
+      expect(invoke).toHaveBeenNthCalledWith(3, 'harness_models_v19', { request: { ...request, part: 'models', discoveryId: expect.any(String) } });
       complete(newer);
       await vi.waitFor(() => expect(onFresh).toHaveBeenCalledWith(newer));
     } finally {
@@ -458,7 +467,7 @@ describe('native harness catalog v18', () => {
     const onFresh = vi.fn();
     await cachedHarnessModels(request, { onFresh });
     await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
-    invoke.mockResolvedValueOnce(newer);
+    invoke.mockResolvedValueOnce(newer).mockResolvedValueOnce(newer);
     expect(await harnessModels(request, true)).toEqual(newer);
     discover(old);
     await vi.waitFor(() => expect(onFresh).toHaveBeenCalled());
@@ -476,7 +485,7 @@ describe('native harness catalog v18', () => {
     invoke.mockResolvedValueOnce(listed);
     invoke.mockResolvedValueOnce(listed);
     expect(await cachedHarnessModels(request, { version: '2.1.322' })).toEqual(listed);
-    expect(invoke, 'the new CLI is asked').toHaveBeenNthCalledWith(2, 'harness_models_v18', { request: { ...request, part: 'models' } });
+    expect(invoke, 'the new CLI is asked').toHaveBeenNthCalledWith(2, 'harness_models_v19', { request: { ...request, part: 'models', discoveryId: expect.any(String) } });
   });
   it('the old version’s late load collects its own discovery and the new load gets its own resources', async () => {
     localStorage.clear();
@@ -504,6 +513,108 @@ describe('native harness catalog v18', () => {
     expect(invoke, 'each load claims its own discovery').toHaveBeenCalledTimes(4);
     expect(onFresh, 'the old discovery never reaches the new picker').not.toHaveBeenCalledWith(expect.objectContaining({ resources: stale.resources }));
     await vi.waitFor(() => expect(old, 'the old picker gets the new answer').toHaveBeenCalledWith({ ...after, resources: found.resources }));
+  });
+  it('lets a picker join an explicit full refresh before its resources finish', async () => {
+    localStorage.clear();
+    const request = { workspaceId: 'project', harness: 'codex' as const };
+    const listed = { protocol: 18, harness: 'codex', models: [{ id: 'gpt', name: 'GPT' }], resources: { items: [], warnings: [] } };
+    let resources!: (value: typeof listed) => void;
+    invoke.mockResolvedValueOnce(listed).mockImplementationOnce(() => new Promise(resolve => { resources = resolve; }));
+    const full = harnessModels(request, true);
+    const { cachedHarnessModels } = await import('./harnessModels');
+    expect(await cachedHarnessModels(request)).toEqual(listed);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    resources(listed);
+    expect(await full).toEqual(listed);
+  });
+  it.each(['expiry', 'version'] as const)('revalidates models after degraded resources on %s', async (change) => {
+    localStorage.clear();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const request = { workspaceId: 'project', harness: 'codex' as const };
+      const listed = { protocol: 18, harness: 'codex', models: [{ id: 'old', name: 'Old' }], resources: { items: [], warnings: [] } };
+      invoke.mockResolvedValueOnce(listed).mockRejectedValueOnce({ code: 'RUNTIME_FAILED' });
+      await harnessModels(request, false, '1');
+      // Existing catalog freshness is five minutes; advance beyond that policy.
+      if (change === 'expiry') vi.setSystemTime(Date.now() + 6 * 60 * 1000);
+      const newer = { ...listed, models: [{ id: 'new', name: 'New' }] };
+      invoke.mockResolvedValueOnce(newer).mockResolvedValueOnce(newer);
+      const { cachedHarnessModels } = await import('./harnessModels');
+      const onFresh = vi.fn();
+      await cachedHarnessModels(request, { version: change === 'version' ? '2' : '1', onFresh });
+      await vi.waitFor(() => expect(onFresh).toHaveBeenLastCalledWith(newer));
+      expect(invoke).toHaveBeenNthCalledWith(3, 'harness_models_v19', { request: { ...request, part: 'models', discoveryId: expect.any(String) } });
+    } finally { vi.useRealTimers(); }
+  });
+  it.each([
+    'Skills could not be loaded from Codex.',
+    'MCP servers could not be loaded from Codex.',
+    'MCP tools could not be loaded from Codex.',
+    'MCP server docs could not start.',
+    'Hermes tool inventory is unavailable.',
+    'Hermes skill inventory is unavailable.',
+    'Skills could not be loaded from Pi.',
+    'Skills could not be loaded from Prime Agent.',
+    'Tools could not be loaded from Prime Agent.',
+  ])('retries partially failed resources: %s', async (warning) => {
+    localStorage.clear();
+    const request = { workspaceId: 'project', harness: 'codex' as const };
+    const listed = { protocol: 18 as const, harness: 'codex' as const, models: [], resources: { items: [], warnings: [] } };
+    invoke.mockResolvedValueOnce(listed).mockResolvedValueOnce({ ...listed, resources: { items: [], warnings: [warning] } });
+    const { catalogDegraded } = await import('./harnessModels');
+    expect(catalogDegraded(await harnessModels(request))).toBe(true);
+    invoke.mockResolvedValueOnce(listed);
+    expect(await harnessModels(request)).toEqual(listed);
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(catalogDegraded({ ...listed, resources: { items: [], warnings: ['A deprecated configuration option was used.'] } })).toBe(false);
+  });
+  it('pairs reversed model answers with their own discovery resources', async () => {
+    localStorage.clear();
+    const request = { workspaceId: 'project', harness: 'codex' as const };
+    const answer = (id: string) => ({ protocol: 18, harness: 'codex', models: [{ id, name: id }], resources: { items: [], warnings: [] } });
+    const pending = new Map<string, (result: ReturnType<typeof answer>) => void>();
+    const ids = new Map<string, string>();
+    invoke.mockImplementation((_command, args) => {
+      const { discoveryId, part } = args.request;
+      if (part === 'models') return new Promise(resolve => { pending.set(discoveryId, resolve); });
+      return { ...answer(ids.get(discoveryId)!), resources: { items: [], warnings: [ids.get(discoveryId)!] } };
+    });
+    const first = harnessModels(request, false, '1');
+    const second = harnessModels(request, false, '2');
+    const [oldId, newId] = [...pending.keys()];
+    expect(oldId).not.toBe(newId);
+    ids.set(oldId!, 'old'); ids.set(newId!, 'new');
+    pending.get(newId!)!(answer('new'));
+    expect((await second).resources.warnings).toEqual(['new']);
+    pending.get(oldId!)!(answer('old'));
+    expect((await first).resources.warnings, 'a superseded direct caller receives the newest catalog').toEqual(['new']);
+    expect(invoke).toHaveBeenLastCalledWith('harness_models_v19', { request: { ...request, part: 'resources', discoveryId: oldId } });
+    expect((await harnessModels(request)).models).toEqual(answer('new').models);
+  });
+  it('does not restore forgotten snapshots when an old request settles', async () => {
+    localStorage.clear();
+    const request = { workspaceId: 'project', harness: 'codex' as const };
+    const listed = { protocol: 18, harness: 'codex', models: [], resources: { items: [], warnings: [] } };
+    let finish!: (value: typeof listed) => void;
+    invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValueOnce(listed);
+    const pending = harnessModels(request);
+    const { forgetHarnessCatalogs } = await import('./harnessModels');
+    forgetHarnessCatalogs('codex');
+    finish(listed);
+    await pending;
+    expect([...memory.keys()]).toEqual([]);
+  });
+  it('a superseded direct failure cannot replace a newer successful catalog', async () => {
+    localStorage.clear();
+    const request = { workspaceId: 'project', harness: 'codex' as const };
+    const listed = { protocol: 18, harness: 'codex', models: [], resources: { items: [], warnings: [] } };
+    let fail!: (error: unknown) => void;
+    invoke.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    const old = harnessModels(request, false, '1');
+    invoke.mockResolvedValueOnce(listed).mockResolvedValueOnce(listed);
+    await harnessModels(request, false, '2');
+    fail({ code: 'RUNTIME_FAILED' });
+    expect(await old).toEqual(listed);
   });
   it('forwards only session model fields: the host rejects catalog-only fields', () => {
     const catalogEntry = { id: 'gpt-5.5', provider: null as unknown as string, name: 'GPT-5.5', thinkingLevels: ['low', 'high'], supportsFast: true };

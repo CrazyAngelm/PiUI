@@ -23,6 +23,15 @@ describe('pipeline assistant prompt', () => {
     expect(stripEnvelope('plain question')).toBe('plain question');
   });
 
+  it('distinguishes an unresolved catalog from one that answered without models', () => {
+    const text = builderEnvelope({
+      first: true, draftJson: '{}', problems: [], text: 'Build a team',
+      harnesses: [{ harness: 'codex', label: 'Codex' }, { harness: 'pi', label: 'Pi', models: [] }],
+    });
+    expect(text).toContain('- codex (Codex) — model catalog not yet available');
+    expect(text).toContain('- pi (Pi): no models listed');
+  });
+
   it('reads the last PiUI system block and keeps the prose for display', () => {
     const file = JSON.stringify(graphToSystemFile(draft()));
     const answer = `Added a reviewer.\n\n\`\`\`json\n{"not":"a system"}\n\`\`\`\n\n\`\`\`json\n${file}\n\`\`\`\nDone.`;

@@ -1,0 +1,28 @@
+{
+  "contract": "harness-models-v19",
+  "accepted": [
+    { "workspaceId": "project", "harness": "codex" },
+    { "workspaceId": "project", "harness": "codex", "part": "models", "discoveryId": "35b4e23b-622a-4833-878e-ce8050a4e1fb" },
+    { "workspaceId": "project", "harness": "codex", "part": "resources", "discoveryId": "35b4e23b-622a-4833-878e-ce8050a4e1fb" }
+  ],
+  "rejected": [
+    { "workspaceId": "project", "harness": "codex", "part": "models" },
+    { "workspaceId": "project", "harness": "codex", "part": "resources", "discoveryId": "" },
+    { "workspaceId": "project", "harness": "codex", "part": "resources", "discoveryId": "nope" },
+    { "workspaceId": "project", "harness": "codex", "part": "resources", "discoveryId": "35b4e23b622a4833878ece8050a4e1fb" },
+    { "workspaceId": "project", "harness": "codex", "part": "resources", "discoveryId": null },
+    { "workspaceId": "project", "harness": "codex", "discoveryId": "35b4e23b-622a-4833-878e-ce8050a4e1fb" },
+    { "workspaceId": "project", "harness": "codex", "part": null, "discoveryId": null },
+    { "workspaceId": "project", "harness": "codex", "part": "everything", "discoveryId": "35b4e23b-622a-4833-878e-ce8050a4e1fb" },
+    { "workspaceId": "project", "harness": "codex", "nativePath": "private" }
+  ],
+  "result": {
+    "protocol": 19,
+    "catalog": {
+      "protocol": 18,
+      "harness": "codex",
+      "models": [],
+      "resources": { "items": [], "warnings": [] }
+    }
+  }
+}

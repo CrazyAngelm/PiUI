@@ -91,7 +91,7 @@ export const classicRu: Readonly<Record<string, string>> = {
   'Project name': 'Название проекта',
   'Save name': 'Сохранить название',
   'Remove {0} from Nano Desktop?': 'Убрать {0} из Nano Desktop?',
-  'Nano Desktop forgets this folder. Its chats, pipelines and automations disappear from Nano Desktop, and automations stop running.': 'Nano Desktop забудет эту папку. Её чаты, пайплайны и автоматизации исчезнут из Nano Desktop, а автоматизации перестанут запускаться.',
+  'Nano Desktop forgets this folder. Its chats, pipelines and automations disappear from Nano Desktop, and automations stop running.': 'Nano Desktop забудет эту папку. Её чаты, конвейеры и автоматизации исчезнут из Nano Desktop, а автоматизации перестанут запускаться.',
   'Nothing is deleted from disk.': 'С диска ничего не удаляется.',
   'The folder, its files and each harness’s own history stay where they are. Adding the folder again starts a new entry.': 'Папка, её файлы и собственная история каждого агента остаются на месте. Если добавить папку снова, появится новая запись.',
   'Stop the agents running in this folder first ({0}).': 'Сначала остановите агентов, работающих в этой папке ({0}).',

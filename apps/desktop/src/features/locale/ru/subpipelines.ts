@@ -1,37 +1,37 @@
 /** Russian UI copy for sub-pipelines (orchestration v6.7, ADR-042). Keys are the English source strings. */
 export const subpipelinesRu: Readonly<Record<string, string>> = {
   // Editor: adding and showing a sub-pipeline step.
-  'Sub-pipelines': 'Вложенные пайплайны',
-  'Sub-pipeline': 'Вложенный пайплайн',
-  'Untitled sub-pipeline': 'Вложенный пайплайн без имени',
-  'Unknown pipeline': 'Неизвестный пайплайн',
-  'No pipeline chosen': 'Пайплайн не выбран',
+  'Sub-pipelines': 'Вложенные конвейеры',
+  'Sub-pipeline': 'Вложенный конвейер',
+  'Untitled sub-pipeline': 'Вложенный конвейер без имени',
+  'Unknown pipeline': 'Неизвестный конвейер',
+  'No pipeline chosen': 'Конвейер не выбран',
   In: 'Вход',
   Out: 'Выход',
   none: 'нет',
   'last step text': 'текст последнего шага',
-  'Reading the pipeline…': 'Чтение пайплайна…',
-  'Choose a saved pipeline to run': 'Выберите сохранённый пайплайн для запуска',
-  'Runs a saved pipeline as one step': 'Запускает сохранённый пайплайн как один шаг',
-  Pipeline: 'Пайплайн',
-  'Open pipeline {0}': 'Открыть пайплайн {0}',
+  'Reading the pipeline…': 'Чтение конвейера…',
+  'Choose a saved pipeline to run': 'Выберите сохранённый конвейер для запуска',
+  'Runs a saved pipeline as one step': 'Запускает сохранённый конвейер как один шаг',
+  Pipeline: 'Конвейер',
+  'Open pipeline {0}': 'Открыть конвейер {0}',
   Open: 'Открыть',
-  'Open pipeline': 'Открыть пайплайн',
+  'Open pipeline': 'Открыть конвейер',
   'Step name': 'Название шага',
 
   // Inspector of a sub-pipeline step.
   'Runs a saved pipeline of this project as its own run, with its own agents, approvals and history. This step finishes when that run finishes.':
-    'Запускает сохранённый пайплайн этого проекта отдельным запуском, со своими агентами, одобрениями и историей. Шаг завершается, когда завершается этот запуск.',
-  'Pipeline to run': 'Какой пайплайн запускать',
-  'No other saved pipelines': 'Других сохранённых пайплайнов нет',
-  'Choose a pipeline': 'Выберите пайплайн',
+    'Запускает сохранённый конвейер этого проекта отдельным запуском, со своими агентами, одобрениями и историей. Шаг завершается, когда завершается этот запуск.',
+  'Pipeline to run': 'Какой конвейер запускать',
+  'No other saved pipelines': 'Других сохранённых конвейеров нет',
+  'Choose a pipeline': 'Выберите конвейер',
   'Inputs of {0}': 'Входные данные «{0}»',
-  'This pipeline asks for no inputs.': 'Этот пайплайн не запрашивает входных данных.',
+  'This pipeline asks for no inputs.': 'Этот конвейер не запрашивает входных данных.',
   'Value from': 'Значение из',
   'Default: {0}': 'По умолчанию: {0}',
   'Not set': 'Не задано',
   'Fixed value': 'Фиксированное значение',
-  'Run input of this pipeline': 'Входные данные этого пайплайна',
+  'Run input of this pipeline': 'Входные данные этого конвейера',
   'Result of a connected step': 'Результат связанного шага',
   'Fixed value for {0}': 'Фиксированное значение для «{0}»',
   'Run input for {0}': 'Входные данные для «{0}»',
@@ -42,19 +42,20 @@ export const subpipelinesRu: Readonly<Record<string, string>> = {
   'Remove mapping {0}': 'Удалить сопоставление {0}',
   Result: 'Результат',
   'This pipeline declares no outputs, so this step returns the text of its last finished step. Declare outputs on its Output block to return named fields.':
-    'У этого пайплайна нет объявленных выходов, поэтому шаг вернёт текст его последнего завершённого шага. Объявите выходы в его блоке «Выход», чтобы возвращать именованные поля.',
+    'У этого конвейера нет объявленных выходов, поэтому шаг вернёт текст его последнего завершённого шага. Объявите выходы в его блоке «Выход», чтобы возвращать именованные поля.',
   'Its outputs become this step’s result fields: {0}.': 'Его выходы становятся полями результата этого шага: {0}.',
-  'Use the pipeline’s outputs as result fields': 'Взять выходы пайплайна как поля результата',
+  'Use the pipeline’s outputs as result fields': 'Взять выходы конвейера как поля результата',
   'The sub-pipeline’s declared outputs, checked when its run finishes. Without fields, the text of its last finished step is passed on.':
-    'Объявленные выходы вложенного пайплайна, проверяются по завершении его запуска. Без полей передаётся текст его последнего завершённого шага.',
+    'Объявленные выходы вложенного конвейера, проверяются по завершении его запуска. Без полей передаётся текст его последнего завершённого шага.',
 
   // The Output block.
   Output: 'Выход',
   Outputs: 'Выходы',
   'No declared outputs': 'Выходы не объявлены',
+  'A router exposes branch routes, not a result output.': 'У маршрутизатора есть выходы веток, но нет собственного результата.',
   'Close output settings': 'Закрыть настройки выхода',
   'What this pipeline returns when another pipeline runs it as a sub-pipeline. Without outputs, it returns the text of its last finished step.':
-    'Что возвращает этот пайплайн, когда другой пайплайн запускает его как вложенный. Без выходов возвращается текст его последнего завершённого шага.',
+    'Что возвращает этот конвейер, когда другой конвейер запускает его как вложенный. Без выходов возвращается текст его последнего завершённого шага.',
   'Output name': 'Имя выхода',
   Type: 'Тип',
   'Remove output {0}': 'Удалить выход {0}',
@@ -63,53 +64,56 @@ export const subpipelinesRu: Readonly<Record<string, string>> = {
   'Missing step': 'Шаг отсутствует',
   'not declared': 'не объявлено',
   'Add output': 'Добавить выход',
+  'Only result connections can connect to Output.': 'К выходу можно подключать только результат.',
+  'Choose a source step for Output.': 'Выберите шаг, результат которого передаётся на выход.',
+  'Connect to Output': 'Подключить к выходу',
 
   // Graph and system-file issues.
-  'Choose which saved pipeline this sub-pipeline step runs.': 'Выберите, какой сохранённый пайплайн запускает этот шаг.',
-  'The pipeline this sub-pipeline step runs no longer exists.': 'Пайплайна, который запускает этот шаг, больше нет.',
-  'A pipeline cannot run itself as a sub-pipeline.': 'Пайплайн не может запускать сам себя как вложенный.',
-  'These sub-pipelines run each other in a loop.': 'Эти вложенные пайплайны запускают друг друга по кругу.',
+  'Choose which saved pipeline this sub-pipeline step runs.': 'Выберите, какой сохранённый конвейер запускает этот шаг.',
+  'The pipeline this sub-pipeline step runs no longer exists.': 'Конвейера, который запускает этот шаг, больше нет.',
+  'A pipeline cannot run itself as a sub-pipeline.': 'Конвейер не может запускать сам себя как вложенный.',
+  'These sub-pipelines run each other in a loop.': 'Эти вложенные конвейеры запускают друг друга по кругу.',
   'Map every required input of the sub-pipeline that has no default.':
-    'Задайте каждое обязательное входное значение вложенного пайплайна, у которого нет значения по умолчанию.',
-  'A mapped input is not declared by the sub-pipeline.': 'Вложенный пайплайн не объявляет одно из сопоставленных входных значений.',
-  'A fixed value does not match the type of its sub-pipeline input.': 'Фиксированное значение не соответствует типу входа вложенного пайплайна.',
+    'Задайте каждое обязательное входное значение вложенного конвейера, у которого нет значения по умолчанию.',
+  'A mapped input is not declared by the sub-pipeline.': 'Вложенный конвейер не объявляет одно из сопоставленных входных значений.',
+  'A fixed value does not match the type of its sub-pipeline input.': 'Фиксированное значение не соответствует типу входа вложенного конвейера.',
   'A sub-pipeline input uses a run input this pipeline does not declare.':
-    'Вход вложенного пайплайна берёт входные данные, которые этот пайплайн не объявляет.',
+    'Вход вложенного конвейера берёт входные данные, которые этот конвейер не объявляет.',
   'A sub-pipeline input can only use the result of a step connected directly before it.':
-    'Вход вложенного пайплайна может брать результат только шага, связанного с ним напрямую перед ним.',
+    'Вход вложенного конвейера может брать результат только шага, связанного с ним напрямую перед ним.',
   'A sub-pipeline input uses a result field the source step does not declare.':
-    'Вход вложенного пайплайна берёт поле результата, которое шаг-источник не объявляет.',
-  'A sub-pipeline input gets a value of a different type.': 'Вход вложенного пайплайна получает значение другого типа.',
+    'Вход вложенного конвейера берёт поле результата, которое шаг-источник не объявляет.',
+  'A sub-pipeline input gets a value of a different type.': 'Вход вложенного конвейера получает значение другого типа.',
   'A sub-pipeline step maps its inputs itself; remove its input mappings.':
-    'Шаг вложенного пайплайна сам сопоставляет свои входы; удалите его привязки входных данных.',
+    'Шаг вложенного конвейера сам сопоставляет свои входы; удалите его привязки входных данных.',
   'Outputs need unique names (a lowercase letter, then letters, digits or underscores), at most 32, and a step with a declared field or its whole text.':
     'Выходам нужны уникальные имена (строчная буква, затем буквы, цифры или подчёркивания), не более 32, и шаг с объявленным полем или весь его текст.',
 
   // System files v5: sub-pipelines by name, and saved parents.
   'Pipeline “{0}” is not in this project. Pick a saved pipeline for this step.':
-    'Пайплайна «{0}» нет в этом проекте. Выберите для этого шага сохранённый пайплайн.',
+    'Конвейера «{0}» нет в этом проекте. Выберите для этого шага сохранённый конвейер.',
   'Saved pipelines that run this one as a sub-pipeline would stop working: {0}. Keep the inputs and outputs they use, or change them first.':
-    'Сохранённые пайплайны, которые запускают этот как вложенный, перестанут работать: {0}. Сохраните входы и выходы, которые они используют, или сначала измените их.',
+    'Сохранённые конвейеры, которые запускают этот как вложенный, перестанут работать: {0}. Сохраните входы и выходы, которые они используют, или сначала измените их.',
   '“{0}” not found': '«{0}» не найден',
-  'Pick a saved pipeline for this step': 'Выберите сохранённый пайплайн для этого шага',
+  'Pick a saved pipeline for this step': 'Выберите сохранённый конвейер для этого шага',
   'A sub-pipeline step runs a pipeline whose name is unknown. Pick a saved pipeline for it, then export again.':
-    'Шаг вложенного пайплайна запускает пайплайн с неизвестным именем. Выберите для него сохранённый пайплайн и экспортируйте снова.',
-  'A sub-pipeline runs on the host and cannot be the orchestrator.': 'Вложенный пайплайн выполняется на хосте и не может быть координатором.',
+    'Шаг вложенного конвейера запускает конвейер с неизвестным именем. Выберите для него сохранённый конвейер и экспортируйте снова.',
+  'A sub-pipeline runs on the host and cannot be the orchestrator.': 'Вложенный конвейер выполняется на хосте и не может быть координатором.',
 
   // Save and delete refusals of the host.
   'A sub-pipeline step runs a pipeline that is not saved in this project. Pick a saved pipeline for it, then save again.':
-    'Шаг вложенного пайплайна запускает пайплайн, который не сохранён в этом проекте. Выберите для него сохранённый пайплайн и сохраните снова.',
+    'Шаг вложенного конвейера запускает конвейер, который не сохранён в этом проекте. Выберите для него сохранённый конвейер и сохраните снова.',
   'A sub-pipeline step’s inputs do not match what its pipeline asks for. Check the step’s input mapping, then save again.':
-    'Входы шага вложенного пайплайна не соответствуют тому, что запрашивает его пайплайн. Проверьте сопоставление входов шага и сохраните снова.',
+    'Входы шага вложенного конвейера не соответствуют тому, что запрашивает его конвейер. Проверьте сопоставление входов шага и сохраните снова.',
   'These pipelines would run each other as sub-pipelines in a loop. Remove one of the sub-pipeline steps, then save again.':
-    'Эти пайплайны запускали бы друг друга как вложенные по кругу. Удалите один из шагов вложенного пайплайна и сохраните снова.',
+    'Эти конвейеры запускали бы друг друга как вложенные по кругу. Удалите один из шагов вложенного конвейера и сохраните снова.',
   'Another saved pipeline runs this one as a sub-pipeline. Remove or change that step first, then delete this pipeline.':
-    'Другой сохранённый пайплайн запускает этот как вложенный. Сначала удалите или измените тот шаг, затем удалите этот пайплайн.',
+    'Другой сохранённый конвейер запускает этот как вложенный. Сначала удалите или измените тот шаг, затем удалите этот конвейер.',
   'Saved pipelines that run this one as a sub-pipeline would stop working with this change. Keep the inputs and outputs they use, or change them first.':
-    'С этим изменением перестанут работать сохранённые пайплайны, которые запускают этот как вложенный. Сохраните входы и выходы, которые они используют, или сначала измените их.',
+    'С этим изменением перестанут работать сохранённые конвейеры, которые запускают этот как вложенный. Сохраните входы и выходы, которые они используют, или сначала измените их.',
 
   // Runs.
-  'Sub-pipeline of run': 'Вложенный пайплайн запуска',
+  'Sub-pipeline of run': 'Вложенный конвейер запуска',
   'Open parent run {0}': 'Открыть родительский запуск {0}',
   'level {0} of {1}': 'уровень {0} из {1}',
   'child run': 'дочерний запуск',
@@ -117,28 +121,28 @@ export const subpipelinesRu: Readonly<Record<string, string>> = {
   'Child run: {0}': 'Дочерний запуск: {0}',
   'Child run': 'Дочерний запуск',
   'Open child run': 'Открыть дочерний запуск',
-  'Inputs of the sub-pipeline': 'Входные данные вложенного пайплайна',
-  'No inputs are mapped; the sub-pipeline uses its defaults.': 'Входы не сопоставлены; вложенный пайплайн использует свои значения по умолчанию.',
+  'Inputs of the sub-pipeline': 'Входные данные вложенного конвейера',
+  'No inputs are mapped; the sub-pipeline uses its defaults.': 'Входы не сопоставлены; вложенный конвейер использует свои значения по умолчанию.',
   'Run input {0}': 'Входные данные {0}',
   'Result of {0}': 'Результат шага «{0}»',
   'Nano Desktop could not confirm how the sub-pipeline ended. Check its child run, then record an operator assertion. It reconciles the journal only.':
-    'Nano Desktop не удалось подтвердить, чем закончился вложенный пайплайн. Проверьте его дочерний запуск, затем запишите утверждение оператора. Оно только сверяет журнал.',
+    'Nano Desktop не удалось подтвердить, чем закончился вложенный конвейер. Проверьте его дочерний запуск, затем запишите утверждение оператора. Оно только сверяет журнал.',
   'Sub-pipeline of #{0}': 'Вложен в #{0}',
 
   // Failure codes of sub-pipeline steps.
   'The pipeline this step runs no longer exists or cannot start, so nothing ran.':
-    'Пайплайна, который запускает этот шаг, больше нет или его нельзя запустить, поэтому ничего не выполнялось.',
+    'Конвейера, который запускает этот шаг, больше нет или его нельзя запустить, поэтому ничего не выполнялось.',
   'This sub-pipeline would run a pipeline that is already running above it, so nothing ran.':
-    'Этот вложенный пайплайн запустил бы пайплайн, который уже выполняется выше по цепочке, поэтому ничего не выполнялось.',
+    'Этот вложенный конвейер запустил бы конвейер, который уже выполняется выше по цепочке, поэтому ничего не выполнялось.',
   'Sub-pipelines are nested too deeply (at most 4 levels), so nothing ran.':
-    'Вложенные пайплайны вложены слишком глубоко (не более 4 уровней), поэтому ничего не выполнялось.',
+    'Вложенные конвейеры вложены слишком глубоко (не более 4 уровней), поэтому ничего не выполнялось.',
   'A value for the sub-pipeline’s inputs does not match what it asks for, so nothing ran.':
-    'Значение для входов вложенного пайплайна не соответствует тому, что он запрашивает, поэтому ничего не выполнялось.',
+    'Значение для входов вложенного конвейера не соответствует тому, что он запрашивает, поэтому ничего не выполнялось.',
   'A result this sub-pipeline needs as input was not available, so nothing ran.':
-    'Результат, нужный вложенному пайплайну как вход, был недоступен, поэтому ничего не выполнялось.',
+    'Результат, нужный вложенному конвейеру как вход, был недоступен, поэтому ничего не выполнялось.',
   'The sub-pipeline’s run failed. Open the child run to see which step.':
-    'Запуск вложенного пайплайна завершился ошибкой. Откройте дочерний запуск, чтобы увидеть, на каком шаге.',
-  'The sub-pipeline’s run was cancelled.': 'Запуск вложенного пайплайна был отменён.',
+    'Запуск вложенного конвейера завершился ошибкой. Откройте дочерний запуск, чтобы увидеть, на каком шаге.',
+  'The sub-pipeline’s run was cancelled.': 'Запуск вложенного конвейера был отменён.',
   'The sub-pipeline finished, but a declared output had no value.':
-    'Вложенный пайплайн завершился, но у одного из объявленных выходов не оказалось значения.',
+    'Вложенный конвейер завершился, но у одного из объявленных выходов не оказалось значения.',
 };

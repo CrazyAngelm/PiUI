@@ -1,6 +1,11 @@
 let pending = Buffer.alloc(0);
 const toolFlag = process.argv.indexOf("--tools");
 const textOnly = process.argv.includes("--text-only-model");
+const catalogOnly = process.argv.includes("--catalog-only-fixture");
+if (catalogOnly && (!process.argv.includes("--no-session") || process.argv.includes("--session") || process.argv.includes("--session-id"))) {
+  throw new Error("catalog must not restore or persist a native session");
+}
+let modelRequests = 0;
 // A Nano session reopened without a model: Pi restored the recorded Nano model.
 const restoredNano = process.argv.includes("--restored-nano-model");
 let sessionName = process.argv.includes("--no-tools") ? "no-tools" : toolFlag >= 0 ? process.argv[toolFlag + 1] : "Fixture";
@@ -199,6 +204,14 @@ process.stdin.on("data", (chunk) => {
     const line = pending.subarray(0, lf); pending = pending.subarray(lf + 1);
     if (!line.length) continue;
     const request = JSON.parse(line.toString("utf8"));
+    if (catalogOnly) {
+      if (request.type === "get_available_models" && ++modelRequests > 1) throw new Error("duplicate model lookup");
+      if (!["get_available_models", "get_commands"].includes(request.type)) throw new Error("unexpected session request");
+      if (request.type === "get_commands" && process.argv.includes("--fail-commands")) {
+        write({ id: request.id, type: "response", command: request.type, success: false });
+        continue;
+      }
+    }
     // Records the images a prompt carried so tests can read them back as the title.
     if (Array.isArray(request.images)) {
       sessionName = `images:${request.type}:${request.images.map((image) => `${image.type}/${image.mimeType}/${image.data}`).join(",")}`;

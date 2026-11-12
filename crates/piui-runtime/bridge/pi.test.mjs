@@ -36,6 +36,22 @@ test("Pi rejects per-session resource filtering before starting the native proce
   await assert.rejects(createPiAdapter(config({ runtimeProgram: "must-not-launch", pluginMcpServers: [{ name: "example-tool-cards-issues", command: process.execPath, args: ["server.mjs"] }] }), () => {}), { bridgeCode: "unsupported-settings" });
 });
 
+test("Pi catalog uses one model request and skips state and history even if skills fail", async () => {
+  for (const failCommands of [false, true]) {
+    const events = [];
+    const runtimeArgs = [fixture, "--catalog-only-fixture", ...(failCommands ? ["--fail-commands"] : [])];
+    const adapter = await createPiAdapter(config({ catalogOnly: true, nativeId: "saved", runtimeArgs }), event => events.push(event));
+    try {
+      assert.deepEqual(await adapter.catalogModels(), [{ id: "model", provider: "fixture", name: "Fixture Model", supportsFast: false }]);
+      const resources = await adapter.resources();
+      assert.deepEqual(resources.warnings, failCommands ? ["Skills could not be loaded from Pi."] : []);
+      assert.equal(resources.items.some(item => item.kind === "skill"), !failCommands);
+      assert.equal(adapter.prompt, undefined);
+      assert.ok(!events.some(event => event.type === "binding"));
+    } finally { await adapter.dispose(); }
+  }
+});
+
 test("Pi RPC adapter snapshots history and returns prompt admission", async () => {
   const events = [];
   const adapter = await createPiAdapter(config(), (event) => events.push(event));

@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createHermesAdapter } from './hermes.mjs';
@@ -7,6 +9,46 @@ function events() {
   const values = [], waiters = [];
   return { values, emit(value) { values.push(value); for (const waiter of waiters) if (waiter.p(value)) waiter.resolve(value); }, next(p) { return new Promise(resolve => waiters.push({ p, resolve })); } };
 }
+test('catalog-only Hermes lists models while independent resource discovery is pending or fails', async () => {
+  const invocations = [];
+  const spawnInventory = (_program, args) => {
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    const finish = (code, payload) => {
+      child.stdout.end(payload === undefined ? undefined : JSON.stringify(payload));
+      child.emit('exit', code);
+      child.emit('close', code);
+    };
+    child.kill = () => finish(1);
+    assert.deepEqual(args.slice(0, 2), ['-P', '-c']);
+    invocations.push({ source: args[2], finish });
+    return child;
+  };
+  const adapter = await createHermesAdapter({ ...config, catalogOnly: true }, () => {}, undefined, undefined, undefined, spawnInventory);
+  try {
+    assert.equal(invocations.length, 0);
+    const resources = adapter.resources();
+    const models = adapter.catalogModels();
+    assert.match(invocations[0].source, /_find_all_skills/);
+    assert.doesNotMatch(invocations[0].source, /piui_model_state/);
+    assert.match(invocations[1].source, /piui_model_state/);
+    assert.doesNotMatch(invocations[1].source, /_find_all_skills|get_tool_definitions/);
+    const model = { id: 'fixture-model', name: 'Fixture Model', supportsFast: false };
+    invocations[1].finish(0, [model]);
+    assert.deepEqual(await models, [model]);
+    invocations[0].finish(1);
+    await assert.rejects(resources, { bridgeCode: 'catalog-unavailable' });
+    assert.deepEqual(await adapter.models(), [{ id: model.id, name: model.name }]);
+
+    const retry = adapter.resources();
+    assert.equal(invocations.length, 3);
+    const partial = { items: [{ kind: 'mcp', id: 'fixture', name: 'fixture', enabled: true, configurable: false }], warnings: ['Hermes skill inventory is unavailable.'] };
+    invocations[2].finish(0, partial);
+    assert.deepEqual(await retry, partial);
+  } finally { await adapter.dispose(); }
+});
+
 test('native ACP streams LF-framed text and preserves generic fallback', async () => {
   const e = events(); const a = await createHermesAdapter(config, e.emit);
   try {

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createOrchestrationClient, type OrchestrationCommandName } from '../../host-api/orchestrationClient';
 import { labHost } from '../../host-api/lab/labTestKit';
-import { formatIssue, SUBPIPELINE_ISSUE_TEMPLATES, SUBPIPELINE_ISSUES } from '../../host-api/subpipelines';
+import { formatIssue, MAX_PIPELINE_OUTPUTS, SUBPIPELINE_ISSUE_TEMPLATES, SUBPIPELINE_ISSUES } from '../../host-api/subpipelines';
 import { PipelineEditorStore } from './editorStore.svelte';
 import { openGraph } from './graphDocument';
 
@@ -22,6 +22,74 @@ describe('sub-pipeline steps in the editor', () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('connects steps to Output as unique declarations, supports undo and persists them without a synthetic step', async () => {
+    const { client, workspaceId } = lab();
+    const editor = new PipelineEditorStore(workspaceId, false, client);
+    await editor.refresh();
+    const release = editor.systems.find((item) => item.name === 'Release check');
+    editor.open(release!.id);
+    await vi.waitFor(() => expect(editor.graph.id).toBe(release!.id));
+    const [first, second] = editor.graph.nodes;
+    const edges = editor.graph.edges;
+    expect(editor.connectOutput(first!.id)).toBeUndefined();
+    expect(editor.connectOutput(first!.id)).toBeUndefined();
+    expect(editor.graph.outputs).toEqual([{ name: 'result', kind: 'text', sourceStepId: first!.id }]);
+    expect(editor.connectOutput(second!.id)).toBeUndefined();
+    const outputs = [
+      { name: 'result', kind: 'text', sourceStepId: first!.id },
+      { name: 'result2', kind: 'text', sourceStepId: second!.id },
+    ];
+    expect(editor.graph.outputs).toEqual(outputs);
+    expect(editor.graph.edges).toEqual(edges);
+    editor.undo();
+    expect(editor.graph.outputs).toHaveLength(1);
+    editor.redo();
+    expect(editor.graph.outputs).toEqual(outputs);
+    expect(await editor.save()).toBe(true);
+    const reopened = await openGraph(client, workspaceId, editor.graph.id);
+    expect(reopened.graph.outputs).toEqual(outputs);
+    expect(reopened.graph.nodes.map((node) => node.id)).toEqual(editor.graph.nodes.map((node) => node.id));
+    expect(reopened.graph.edges).toEqual(edges);
+  });
+
+  it('refuses invalid Output wires and the contract output limit without changing the graph', () => {
+    const editor = new PipelineEditorStore('workspace', false);
+    const source = editor.addNode('agent', { x: 0, y: 0 });
+    const router = editor.addNode('router', { x: 300, y: 0 });
+    const unchanged = () => JSON.stringify(editor.graph);
+    let before = unchanged();
+    expect(editor.connectOutput('missing')).toBe('Choose a source step for Output.');
+    expect(editor.connectOutput(router)).toBe('A router exposes branch routes, not a result output.');
+    editor.connectKind = 'send';
+    expect(editor.connectOutput(source)).toBe('Only result connections can connect to Output.');
+    expect(unchanged()).toBe(before);
+    editor.connectKind = 'result';
+    editor.updateNode(source, { executionMode: 'callable' });
+    before = unchanged();
+    expect(editor.connectOutput(source)).toContain('Callable agents');
+    expect(unchanged()).toBe(before);
+    editor.updateNode(source, { executionMode: 'scheduled' });
+    editor.setOutputs(Array.from({ length: MAX_PIPELINE_OUTPUTS }, (_, index) => ({ name: `result${index}`, kind: 'text', sourceStepId: router })));
+    before = unchanged();
+    expect(editor.connectOutput(source)).toBe(SUBPIPELINE_ISSUES.outputs);
+    expect(unchanged()).toBe(before);
+  });
+
+  it('keeps Output declarations unchanged in safe mode or while the editor is busy', () => {
+    const editable = new PipelineEditorStore('workspace', false);
+    const source = editable.addNode('agent', { x: 0, y: 0 });
+    const safe = new PipelineEditorStore('workspace', true);
+    safe.fillIn(editable.graph);
+    editable.busy = true;
+    for (const editor of [safe, editable]) {
+      const before = editor.graph;
+      editor.connectOutput(source);
+      editor.setOutputs([{ name: 'result', kind: 'text', sourceStepId: source }]);
+      expect(editor.graph).toBe(before);
+      expect(editor.graph.outputs).toBeUndefined();
+    }
   });
 
   it('adds a step for a saved pipeline, maps its inputs and saves them with the outputs', async () => {

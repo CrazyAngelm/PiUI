@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import X from '@lucide/svelte/icons/x';
   import Copy from '@lucide/svelte/icons/copy';
   import Trash from '@lucide/svelte/icons/trash-2';
@@ -28,6 +29,8 @@
   import RouterSettings from '../../features/orchestration/RouterSettings.svelte';
   import { Checkbox, Field, IconButton, Input, Menu, Picker, Segmented, Switch, Tabs, Textarea, toasts, type PickerItem } from '../../lib/ui';
   import HarnessMark from '../shell/HarnessMark.svelte';
+  import { nanoAccount } from '../nano/nanoAccount.svelte';
+  import { modelSelectionKey, resolveModelSelection } from '../../host-api/modelSelection';
   import { useWorkspace } from '../shell/context';
   import type { PipelineEditorStore } from './editorStore.svelte';
   import NodeTypeMenu from './NodeTypeMenu.svelte';
@@ -70,7 +73,8 @@
   const catalog = $derived(editor.catalogs[profile.harness]);
   const catalogError = $derived(editor.catalogErrors[profile.harness]);
   const models = $derived(catalog?.models ?? []);
-  const model = $derived(models.find((item) => item.id === profile.model && item.provider === profile.modelProvider) ?? models.find((item) => item.id === profile.model));
+  const model = $derived(resolveModelSelection(models, modelSelectionKey({ id: profile.model, provider: profile.modelProvider }), profile.harness));
+  const harnessVersion = $derived(workspace.catalog.harnesses.find((item) => item.kind === profile.harness)?.version);
   const levels = $derived(model?.thinkingLevels ?? []);
   const problems = $derived(editor.nodeProblems(node.id));
   const readOnly = $derived(editor.readOnly);
@@ -78,8 +82,13 @@
 
   // Load the native catalog of the selected harness when the agent is shown.
   $effect(() => {
-    if ((!isRouter || agentRouter) && !script && !plugin && !subpipeline && !editor.catalogs[profile.harness] && !editor.catalogErrors[profile.harness]) {
-      void editor.loadCatalog(profile.harness);
+    const harness = profile.harness;
+    const version = harnessVersion;
+    if (harness === 'nano') void nanoAccount.catalogRevision;
+    // Reopening an inspector revalidates the shared cache; catalog updates do
+    // not retrigger this effect or create a discovery loop.
+    if ((!isRouter || agentRouter) && !script && !plugin && !subpipeline) {
+      untrack(() => void editor.loadCatalog(harness, false, version));
     }
   });
 
@@ -340,11 +349,11 @@
             <HarnessLimitations harness={profile.harness} />
             <Field label={$t('Model')} error={catalogError}>
               {#snippet action()}
-                <IconButton size="sm" label={$t('Refresh models')} onclick={() => void editor.loadCatalog(profile.harness, true)}><RefreshCw /></IconButton>
+                <IconButton size="sm" label={$t('Refresh models')} onclick={() => void editor.loadCatalog(profile.harness, true, harnessVersion)}><RefreshCw /></IconButton>
               {/snippet}
               <Picker
                 items={modelItems}
-                value={JSON.stringify([profile.modelProvider ?? model?.provider ?? '', profile.model])}
+                value={JSON.stringify([model ? (model.provider ?? '') : (profile.modelProvider ?? ''), profile.model])}
                 label={$t('Model')}
                 searchPlaceholder={$t('Search models')}
                 emptyText={catalog ? $t('No models found') : $t('Loading models…')}

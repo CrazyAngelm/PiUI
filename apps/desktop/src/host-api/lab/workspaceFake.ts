@@ -4,6 +4,7 @@ import {
 } from './catalogFake';
 import { assertAcpStartable, isAgentDefault } from './acpFake';
 import { isAcpHarness } from '../../../../../contracts/harness-identity-v3';
+import type { HarnessModelsResultV19 } from '../../../../../contracts/harness-models-v19';
 import type {
   HarnessModelsRequest, HarnessModelsResult, HarnessKind, RuntimeSettings, RuntimeSettingsCommand, SessionSnapshot,
   WorkspaceCatalog, WorkspaceCommand, WorkspaceHistoryRequestV1, WorkspaceHistoryResultV1, WorkspaceLifecycleCommand,
@@ -19,7 +20,7 @@ import type { LabHandlers } from './labHandlers';
 import { isUuid } from './labRandom';
 import { decodeArgument } from './labSchema';
 import {
-  harnessModelsRequestSchema, historyRequestSchema, lifecycleCommandSchema, settingsCommandSchema, workspaceCommandSchema,
+  decodeHarnessModelsRequestV19, harnessModelsRequestSchema, historyRequestSchema, lifecycleCommandSchema, settingsCommandSchema, workspaceCommandSchema,
 } from './labSchemas';
 import {
   newQueue, sessionSummary, verifiedProject, workspaceSummary,
@@ -355,5 +356,9 @@ export function workspaceHandlers(runtime: LabSessions): LabHandlers {
       history(runtime.state, decodeArgument<WorkspaceHistoryRequestV1>(args, 'request', historyRequestSchema)),
     harness_models_v18: (args) =>
       harnessModels(runtime, decodeArgument<HarnessModelsRequest>(args, 'request', harnessModelsRequestSchema)),
+    harness_models_v19: async (args): Promise<HarnessModelsResultV19> => ({
+      protocol: 19,
+      catalog: await harnessModels(runtime, decodeHarnessModelsRequestV19(args)),
+    }),
   };
 }

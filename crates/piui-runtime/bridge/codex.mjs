@@ -1572,13 +1572,6 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     throw cleanupStartupFailure(error);
   }
 
-  const permissionParams = config.permissionMode === "read-only"
-    ? { permissions: ":read-only", approvalPolicy: "never" }
-    : config.permissionMode === "workspace-write"
-      ? { permissions: ":workspace", approvalPolicy: "never" }
-      : config.permissionMode === "full-access"
-        ? { permissions: ":danger-full-access", approvalPolicy: "never" }
-        : {};
   const turnSandboxPolicy = config.networkAccess === true
     ? config.permissionMode === "read-only"
       ? { type: "readOnly", networkAccess: true }
@@ -1590,6 +1583,335 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
           excludeSlashTmp: false,
         }
     : undefined;
+  const mapModel = (model, provider) => ({
+    id: model.model || model.id,
+    ...(provider ? { provider } : {}),
+    name: model.displayName || model.model || model.id,
+    thinkingLevels: (model.supportedReasoningEfforts || [])
+      .map((option) => option.reasoningEffort || option.effort)
+      .filter((value) => typeof value === "string"),
+  });
+  const readConfig = () => callNative("config/read", { includeLayers: false, cwd: config.cwd });
+  const acceptsImages = () => {
+    const modalities = currentModel ? modelModalities.get(currentModel.id) : undefined;
+    return Array.isArray(modalities) && modalities.includes("image");
+  };
+  // Skills of this thread's folder (`skills/list`). A `$name` mention of an
+  // enabled skill in the prompt text also gets its native `skill` input item,
+  // as the Codex app-server documents, so Codex injects the skill itself.
+  const loadSkills = async () => {
+    const response = await callNative("skills/list", { cwds: [config.cwd], forceReload: false });
+    const skills = [];
+    for (const group of response?.data ?? []) for (const skill of group?.skills ?? []) {
+      if (typeof skill?.name === "string" && typeof skill.path === "string" && skill.enabled !== false) skills.push(skill);
+    }
+    return skills;
+  };
+  const mentionPattern = (name) => new RegExp(`(^|\\s)\\$${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[\\s.,;:!?)\\]])`);
+  const skillInputs = async (text) => {
+    if (!text.includes("$")) return [];
+    const skills = await loadSkills().catch(() => []);
+    const counts = new Map();
+    for (const skill of skills) counts.set(skill.name, (counts.get(skill.name) ?? 0) + 1);
+    // An ambiguous name is left for Codex to resolve from the text alone.
+    return skills
+      .filter((skill) => counts.get(skill.name) === 1 && mentionPattern(skill.name).test(text))
+      .map((skill) => ({ type: "skill", name: skill.name, path: skill.path }));
+  };
+  const adapter = {
+    async resources() {
+      const items = [];
+      const warnings = [...mcpStartupFailures]
+        .sort((left, right) => left.localeCompare(right))
+        .map((name) => `MCP server ${name} could not start.`);
+      warnings.push(...controlPlaneWarnings);
+      try {
+        const response = await callNative("skills/list", { cwds: [config.cwd], forceReload: false });
+        for (const group of response.data ?? []) for (const skill of group.skills ?? []) {
+          if (typeof skill.path === "string") items.push({ kind: "skill", id: skill.path, name: skill.name ?? skill.path, enabled: skill.enabled !== false, configurable: true });
+        }
+      } catch { warnings.push("Skills could not be loaded from Codex."); }
+      try {
+        const response = await readConfig();
+        for (const [id, server] of Object.entries(response.config?.mcp_servers ?? {})) items.push({ kind: "mcp", id, name: id, enabled: server.enabled !== false, configurable: true });
+      } catch { warnings.push("MCP servers could not be loaded from Codex."); }
+      try {
+        let cursor;
+        do {
+          const response = await callNative("mcpServerStatus/list", { ...(cursor ? { cursor } : {}) });
+          for (const server of response.data ?? []) for (const [id, tool] of Object.entries(server.tools ?? {})) items.push({ kind: "tool", id, name: tool.name ?? id, enabled: true, configurable: false });
+          cursor = response.nextCursor;
+        } while (cursor);
+      } catch { warnings.push("MCP tools could not be loaded from Codex."); }
+      return { items, warnings };
+    },
+    snapshot() {
+  return {
+        nativeId,
+        thinkingLevel,
+        serviceTier,
+        materialized,
+        ...(bindingPublished && nativePath ? { nativePath } : {}),
+        title,
+        status,
+        ...(currentModel ? { model: currentModel } : {}),
+        blocks: [...blocks.values()],
+        approvals: [...pendingApprovals.values()].map((entry) => entry.approval),
+        capabilities: {
+          prompt: { supported: true, enforcement: "native" },
+          resume: { supported: true, enforcement: "native" },
+          models: { supported: true, enforcement: "native" },
+          approvals: { supported: true, enforcement: "native" },
+          instructions: { supported: true, enforcement: "native" },
+          toolPolicy: { supported: false, enforcement: "unsupported", reason: "Codex app-server has no restrictive tool allowlist contract." },
+          nativeSubagents: coordinationEnabled
+            ? { supported: true, enforcement: "coordinator" }
+            : { supported: true, enforcement: "native" },
+        },
+        models: modelCatalog,
+      };
+    },
+    // Images follow the current model's native `inputModalities`.
+    async composerCapabilities() {
+      if (!modelModalities.size) await adapter.models().catch(() => undefined);
+      return { steer: true, compact: true, images: acceptsImages() };
+    },
+    // Codex app-server exposes no slash-command catalog (its TUI expands
+    // custom prompts itself); skills are mentioned as `$name`.
+    async composerCatalog() {
+      const skills = await loadSkills();
+      return {
+        commands: [],
+        skills: skills.map((skill) => {
+          const description = [skill.interface?.shortDescription, skill.shortDescription, skill.description]
+            .find((value) => typeof value === "string" && value.trim());
+          return { name: skill.name, ...(description ? { description: oneLine(description, 300) } : {}), mention: `$${skill.name}` };
+        }),
+      };
+    },
+    async compact() {
+      if (status !== "idle" || activeTurnId || startingTurn) throw fail("turn-active", "Wait for the current turn before compacting.");
+      startingTurn = true;
+      try { await callNative("thread/compact/start", { threadId: nativeId }); return { accepted: true }; }
+      finally { startingTurn = false; }
+    },
+    async prompt({ text, mode, images }) {
+      if (typeof text !== "string" || !new Set(["prompt", "steer", "follow-up"]).has(mode)) {
+        throw fail("invalid-prompt", "The Codex prompt request is invalid.");
+      }
+      const attached = imageInputs(images);
+      // Awaits only for images or `$` mentions, after admission is decided.
+      const nativeInput = async () => {
+        if (attached.length) {
+          if (!modelModalities.size) await adapter.models().catch(() => undefined);
+          if (!acceptsImages()) throw fail("unsupported-input", "The current Codex model does not accept images.");
+        }
+        return [textInput(text), ...attached, ...(await skillInputs(text))];
+      };
+      if (status === "failed" || status === "closed" || status === "stopping") {
+        throw fail("native-not-ready", "The Codex thread is not ready for a prompt.");
+      }
+      if (activeTurnId) {
+        if (mode !== "steer") throw fail("turn-active", "Codex is already running a turn.");
+        const expectedTurnId = activeTurnId;
+        await callNative("turn/steer", {
+          threadId: nativeId,
+          expectedTurnId,
+          input: await nativeInput(),
+        });
+        return { accepted: true };
+      }
+      if (startingTurn) throw fail("turn-active", "Codex is already starting a turn.");
+      if (mode === "steer") throw fail("no-active-turn", "There is no active turn to steer.");
+      startingTurn = true;
+      try {
+        const input = await nativeInput();
+        const response = await callNative("turn/start", {
+          threadId: nativeId,
+          input,
+          ...(serviceTier ? { serviceTier: serviceTier === "fast" ? "fast" : "default" } : {}),
+          ...(currentModel ? { model: currentModel.id } : {}),
+          ...(thinkingLevel ? { effort: thinkingLevel } : {}),
+          ...(turnSandboxPolicy ? { sandboxPolicy: turnSandboxPolicy } : {}),
+        });
+        const acceptedTurnId = response?.turn?.id;
+        if (!acceptedTurnId) throw safeNativeError();
+        activeTurnId = acceptedTurnId === lastCompletedTurnId ? undefined : acceptedTurnId;
+        materialized = true;
+        publishBinding();
+        if (activeTurnId) setStatus("running");
+        if (interruptStartingTurn && activeTurnId) {
+          interruptStartingTurn = false;
+          await callNative("turn/interrupt", { threadId: nativeId, turnId: activeTurnId });
+        }
+        return { accepted: true };
+      } finally {
+        startingTurn = false;
+        interruptStartingTurn = false;
+      }
+    },
+    async interrupt() {
+      if (startingTurn && !activeTurnId) {
+        interruptStartingTurn = true;
+        cancelElicitations();
+        return { interrupted: true };
+      }
+      if (!activeTurnId) throw fail("no-active-turn", "Codex has no active turn to interrupt.");
+      abortCoordinatorCalls(activeTurnId);
+      // Stopping the turn dismisses its open MCP requests instead of leaving them waiting.
+      cancelElicitations();
+      await callNative("turn/interrupt", { threadId: nativeId, turnId: activeTurnId });
+      return { interrupted: true };
+    },
+    async catalogModels() { return (await this.models()).map(model => ({ ...model, supportsFast: true })); },
+    async models() {
+      const data = [];
+      // model/list does not expose the provider on supported Codex versions.
+      const catalogConfig = config.catalogOnly
+        ? readConfig().then(result => result?.config, () => undefined)
+        : undefined;
+      let cursor = null;
+      do {
+        // A native default/resumed model may be hidden from new-model discovery.
+        // Keep its authoritative reasoning metadata and selected menu entry.
+        let page;
+        try {
+          page = await callNative("model/list", { cursor, includeHidden: true });
+        } catch (error) {
+          throw error?.nativeRejected === true ? protocolMismatch() : error;
+        }
+        // `data` (each model with an id) is a required field of every known version.
+        if (!isRecord(page) || !Array.isArray(page.data)
+          || page.data.some((model) => !isRecord(model) || typeof (model.model || model.id) !== "string")) {
+          throw protocolMismatch();
+        }
+        for (const model of page.data) {
+          modelDefaults.set(model.model || model.id, model.defaultReasoningEffort);
+          modelModalities.set(model.model || model.id, Array.isArray(model.inputModalities) ? model.inputModalities : undefined);
+        }
+        data.push(...page.data);
+        cursor = page.nextCursor || null;
+      } while (cursor);
+      const configured = catalogConfig ? await catalogConfig : undefined;
+      const configuredProvider = configured?.model_provider;
+      const resolvedProvider = catalogConfig && typeof configuredProvider === "string" && configuredProvider ? configuredProvider : currentProvider;
+      const selectedId = catalogConfig ? configured?.model : currentModel?.id;
+      const models = data
+        .filter(model => !model.hidden
+          || (model.model || model.id) === selectedId
+          || (catalogConfig && !selectedId && model.isDefault === true))
+        .map(model => mapModel(model, resolvedProvider));
+      if (currentModel && !models.some((model) => model.id === currentModel.id && model.provider === currentModel.provider)) {
+        models.unshift({ ...currentModel, thinkingLevels: [] });
+      }
+      modelCatalog = models;
+      return models;
+    },
+    async setModel({ model, thinkingLevel: nextThinkingLevel, serviceTier: nextServiceTier }) {
+      if (!model || typeof model.id !== "string") throw fail("invalid-model", "The Codex model selection is invalid.");
+      if (model.provider && currentProvider && model.provider !== currentProvider) {
+        throw fail("unsupported-provider-change", "Codex cannot change model providers on an existing thread.");
+      }
+      if (nextServiceTier != null && !["standard", "fast"].includes(nextServiceTier)) throw fail("invalid-settings", "Invalid Codex service tier.");
+      const candidate = modelCatalog.find((entry) => entry.id === model.id);
+      if (!candidate || (nextThinkingLevel && !candidate.thinkingLevels.includes(nextThinkingLevel))) throw fail("invalid-settings", "The model or reasoning level is unavailable.");
+      const effectiveEffort = nextThinkingLevel ?? (currentModel?.id !== model.id ? modelDefaults.get(model.id) : thinkingLevel);
+      await callNative("thread/settings/update", {
+        threadId: nativeId,
+        model: model.id,
+        ...(nextServiceTier ? { serviceTier: nextServiceTier === "fast" ? "fast" : "default" } : {}),
+        ...(typeof effectiveEffort === "string" ? { effort: effectiveEffort } : {}),
+      });
+      serviceTier = nextServiceTier || serviceTier;
+      currentProvider = model.provider || currentProvider;
+      currentModel = { id: model.id, ...(currentProvider ? { provider: currentProvider } : {}), name: model.name || model.id };
+      thinkingLevel = effectiveEffort;
+      return { model: currentModel, ...(thinkingLevel ? { thinkingLevel } : {}) };
+    },
+    async respond({ requestId, decision, text }) {
+      const entry = pendingApprovals.get(requestId);
+      if (!entry || entry.responding) throw fail("stale-approval", "The approval request is no longer pending.");
+      if ((entry.params.threadId || entry.params.conversationId) && (entry.params.threadId || entry.params.conversationId) !== nativeId) {
+        throw fail("approval-origin-mismatch", "The approval request does not belong to this Codex thread.");
+      }
+      if (!entry.approval.decisions.includes(decision)) {
+        throw fail("unsupported-decision", "The selected approval decision is not available.");
+      }
+      let result;
+      if (entry.elicitation) {
+        // Validated before the request retires: an invalid answer keeps it pending.
+        result = decision === "approve-once"
+          ? { action: "accept", content: elicitationContent(entry, text) }
+          : { action: decision === "deny" ? "decline" : "cancel", content: null };
+      } else if (entry.method === "item/permissions/requestApproval") {
+        const approved = decision === "approve-once" || decision === "approve-session";
+        result = {
+          permissions: approved ? (entry.params.permissions || {}) : {},
+          scope: decision === "approve-session" ? "session" : "turn",
+        };
+      } else if (entry.method === "item/tool/requestUserInput") {
+        const questions = Array.isArray(entry.params.questions) ? entry.params.questions : [];
+        if (decision === "approve-once" && (questions.length !== 1 || typeof text !== "string")) {
+          throw fail("input-required", "Codex requires one text response for this request.");
+        }
+        result = {
+          answers: Object.fromEntries(questions.map((question, index) => [
+            question.id,
+            { answers: decision === "approve-once" && index === 0 ? [text] : [] },
+          ])),
+        };
+      } else {
+        const legacy = entry.method === "execCommandApproval" || entry.method === "applyPatchApproval";
+        const mapped = legacy
+          ? { "approve-once": "approved", "approve-session": "approved_for_session", deny: { denied: { rejection: "Denied by user" } }, cancel: "abort" }[decision]
+          : { "approve-once": "accept", "approve-session": "acceptForSession", deny: "decline", cancel: "cancel" }[decision];
+        result = { decision: mapped };
+      }
+      entry.responding = true;
+      try {
+        await writeNative({ id: entry.nativeId, result });
+      } catch (error) {
+        entry.responding = false;
+        throw error;
+      }
+      retireApproval(requestId);
+      return { resolved: true };
+    },
+    async rename({ title: nextTitle }) {
+      if (typeof nextTitle !== "string" || nextTitle.trim() === "") throw fail("invalid-title", "The Codex title is invalid.");
+      await callNative("thread/name/set", { threadId: nativeId, name: nextTitle });
+      title = nextTitle;
+      return { title };
+    },
+    async dispose() {
+      if (disposed) return { disposed: true };
+      disposed = true;
+      abortCoordinatorCalls();
+      setStatus("stopping");
+      child.stdin.end();
+      const cleanupBound = new Promise((resolve) => {
+        const timer = setTimeout(resolve, 5000, "timeout");
+        timer.unref?.();
+      });
+      if (await Promise.race([exited.then(() => "exit"), cleanupBound]) === "timeout") child.kill();
+      settleNativeStop(false);
+      setStatus("closed");
+      return { disposed: true };
+    },
+  };
+  if (config.catalogOnly) {
+    // Inventory endpoints belong to the app server and need no thread.
+    const { resources, models, catalogModels, dispose } = adapter;
+    return { resources, models, catalogModels, dispose };
+  }
+
+  const permissionParams = config.permissionMode === "read-only"
+    ? { permissions: ":read-only", approvalPolicy: "never" }
+    : config.permissionMode === "workspace-write"
+      ? { permissions: ":workspace", approvalPolicy: "never" }
+      : config.permissionMode === "full-access"
+        ? { permissions: ":danger-full-access", approvalPolicy: "never" }
+        : {};
   const workspaceTools = coordinationEnabled ? [{
     type: "namespace",
     name: "workspace",
@@ -1738,308 +2060,5 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
     setStatus("failed");
     emit({ type: "error", message: "Codex resumed a thread in a system error state." });
   } else setStatus("idle");
-
-  const mapModel = (model) => ({
-    id: model.model || model.id,
-    ...(currentProvider ? { provider: currentProvider } : {}),
-    name: model.displayName || model.model || model.id,
-    thinkingLevels: (model.supportedReasoningEfforts || [])
-      .map((option) => option.reasoningEffort || option.effort)
-      .filter((value) => typeof value === "string"),
-  });
-  const acceptsImages = () => {
-    const modalities = currentModel ? modelModalities.get(currentModel.id) : undefined;
-    return Array.isArray(modalities) && modalities.includes("image");
-  };
-  // Skills of this thread's folder (`skills/list`). A `$name` mention of an
-  // enabled skill in the prompt text also gets its native `skill` input item,
-  // as the Codex app-server documents, so Codex injects the skill itself.
-  const loadSkills = async () => {
-    const response = await callNative("skills/list", { cwds: [config.cwd], forceReload: false });
-    const skills = [];
-    for (const group of response?.data ?? []) for (const skill of group?.skills ?? []) {
-      if (typeof skill?.name === "string" && typeof skill.path === "string" && skill.enabled !== false) skills.push(skill);
-    }
-    return skills;
-  };
-  const mentionPattern = (name) => new RegExp(`(^|\\s)\\$${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[\\s.,;:!?)\\]])`);
-  const skillInputs = async (text) => {
-    if (!text.includes("$")) return [];
-    const skills = await loadSkills().catch(() => []);
-    const counts = new Map();
-    for (const skill of skills) counts.set(skill.name, (counts.get(skill.name) ?? 0) + 1);
-    // An ambiguous name is left for Codex to resolve from the text alone.
-    return skills
-      .filter((skill) => counts.get(skill.name) === 1 && mentionPattern(skill.name).test(text))
-      .map((skill) => ({ type: "skill", name: skill.name, path: skill.path }));
-  };
-  const adapter = {
-    async resources() {
-      const items = [];
-      const warnings = [...mcpStartupFailures]
-        .sort((left, right) => left.localeCompare(right))
-        .map((name) => `MCP server ${name} could not start.`);
-      warnings.push(...controlPlaneWarnings);
-      try {
-        const response = await callNative("skills/list", { cwds: [config.cwd], forceReload: false });
-        for (const group of response.data ?? []) for (const skill of group.skills ?? []) {
-          if (typeof skill.path === "string") items.push({ kind: "skill", id: skill.path, name: skill.name ?? skill.path, enabled: skill.enabled !== false, configurable: true });
-        }
-      } catch { warnings.push("Skills could not be loaded from Codex."); }
-      try {
-        const response = await callNative("config/read", { includeLayers: false, cwd: config.cwd });
-        for (const [id, server] of Object.entries(response.config?.mcp_servers ?? {})) items.push({ kind: "mcp", id, name: id, enabled: server.enabled !== false, configurable: true });
-      } catch { warnings.push("MCP servers could not be loaded from Codex."); }
-      try {
-        let cursor;
-        do {
-          const response = await callNative("mcpServerStatus/list", { ...(cursor ? { cursor } : {}) });
-          for (const server of response.data ?? []) for (const [id, tool] of Object.entries(server.tools ?? {})) items.push({ kind: "tool", id, name: tool.name ?? id, enabled: true, configurable: false });
-          cursor = response.nextCursor;
-        } while (cursor);
-      } catch { warnings.push("MCP tools could not be loaded from Codex."); }
-      return { items, warnings };
-    },
-    snapshot() {
-  return {
-        nativeId,
-        thinkingLevel,
-        serviceTier,
-        materialized,
-        ...(bindingPublished && nativePath ? { nativePath } : {}),
-        title,
-        status,
-        ...(currentModel ? { model: currentModel } : {}),
-        blocks: [...blocks.values()],
-        approvals: [...pendingApprovals.values()].map((entry) => entry.approval),
-        capabilities: {
-          prompt: { supported: true, enforcement: "native" },
-          resume: { supported: true, enforcement: "native" },
-          models: { supported: true, enforcement: "native" },
-          approvals: { supported: true, enforcement: "native" },
-          instructions: { supported: true, enforcement: "native" },
-          toolPolicy: { supported: false, enforcement: "unsupported", reason: "Codex app-server has no restrictive tool allowlist contract." },
-          nativeSubagents: coordinationEnabled
-            ? { supported: true, enforcement: "coordinator" }
-            : { supported: true, enforcement: "native" },
-        },
-        models: modelCatalog,
-      };
-    },
-    // Images follow the current model's native `inputModalities`.
-    async composerCapabilities() {
-      if (!modelModalities.size) await adapter.models().catch(() => undefined);
-      return { steer: true, compact: true, images: acceptsImages() };
-    },
-    // Codex app-server exposes no slash-command catalog (its TUI expands
-    // custom prompts itself); skills are mentioned as `$name`.
-    async composerCatalog() {
-      const skills = await loadSkills();
-      return {
-        commands: [],
-        skills: skills.map((skill) => {
-          const description = [skill.interface?.shortDescription, skill.shortDescription, skill.description]
-            .find((value) => typeof value === "string" && value.trim());
-          return { name: skill.name, ...(description ? { description: oneLine(description, 300) } : {}), mention: `$${skill.name}` };
-        }),
-      };
-    },
-    async compact() {
-      if (status !== "idle" || activeTurnId || startingTurn) throw fail("turn-active", "Wait for the current turn before compacting.");
-      startingTurn = true;
-      try { await callNative("thread/compact/start", { threadId: nativeId }); return { accepted: true }; }
-      finally { startingTurn = false; }
-    },
-    async prompt({ text, mode, images }) {
-      if (typeof text !== "string" || !new Set(["prompt", "steer", "follow-up"]).has(mode)) {
-        throw fail("invalid-prompt", "The Codex prompt request is invalid.");
-      }
-      const attached = imageInputs(images);
-      // Awaits only for images or `$` mentions, after admission is decided.
-      const nativeInput = async () => {
-        if (attached.length) {
-          if (!modelModalities.size) await adapter.models().catch(() => undefined);
-          if (!acceptsImages()) throw fail("unsupported-input", "The current Codex model does not accept images.");
-        }
-        return [textInput(text), ...attached, ...(await skillInputs(text))];
-      };
-      if (status === "failed" || status === "closed" || status === "stopping") {
-        throw fail("native-not-ready", "The Codex thread is not ready for a prompt.");
-      }
-      if (activeTurnId) {
-        if (mode !== "steer") throw fail("turn-active", "Codex is already running a turn.");
-        const expectedTurnId = activeTurnId;
-        await callNative("turn/steer", {
-          threadId: nativeId,
-          expectedTurnId,
-          input: await nativeInput(),
-        });
-        return { accepted: true };
-      }
-      if (startingTurn) throw fail("turn-active", "Codex is already starting a turn.");
-      if (mode === "steer") throw fail("no-active-turn", "There is no active turn to steer.");
-      startingTurn = true;
-      try {
-        const input = await nativeInput();
-        const response = await callNative("turn/start", {
-          threadId: nativeId,
-          input,
-          ...(serviceTier ? { serviceTier: serviceTier === "fast" ? "fast" : "default" } : {}),
-          ...(currentModel ? { model: currentModel.id } : {}),
-          ...(thinkingLevel ? { effort: thinkingLevel } : {}),
-          ...(turnSandboxPolicy ? { sandboxPolicy: turnSandboxPolicy } : {}),
-        });
-        const acceptedTurnId = response?.turn?.id;
-        if (!acceptedTurnId) throw safeNativeError();
-        activeTurnId = acceptedTurnId === lastCompletedTurnId ? undefined : acceptedTurnId;
-        materialized = true;
-        publishBinding();
-        if (activeTurnId) setStatus("running");
-        if (interruptStartingTurn && activeTurnId) {
-          interruptStartingTurn = false;
-          await callNative("turn/interrupt", { threadId: nativeId, turnId: activeTurnId });
-        }
-        return { accepted: true };
-      } finally {
-        startingTurn = false;
-        interruptStartingTurn = false;
-      }
-    },
-    async interrupt() {
-      if (startingTurn && !activeTurnId) {
-        interruptStartingTurn = true;
-        cancelElicitations();
-        return { interrupted: true };
-      }
-      if (!activeTurnId) throw fail("no-active-turn", "Codex has no active turn to interrupt.");
-      abortCoordinatorCalls(activeTurnId);
-      // Stopping the turn dismisses its open MCP requests instead of leaving them waiting.
-      cancelElicitations();
-      await callNative("turn/interrupt", { threadId: nativeId, turnId: activeTurnId });
-      return { interrupted: true };
-    },
-    async catalogModels() { return (await this.models()).map(model => ({ ...model, supportsFast: true })); },
-    async models() {
-      const data = [];
-      let cursor = null;
-      do {
-        // A native default/resumed model may be hidden from new-model discovery.
-        // Keep its authoritative reasoning metadata and selected menu entry.
-        let page;
-        try {
-          page = await callNative("model/list", { cursor, includeHidden: true });
-        } catch (error) {
-          throw error?.nativeRejected === true ? protocolMismatch() : error;
-        }
-        // `data` (each model with an id) is a required field of every known version.
-        if (!isRecord(page) || !Array.isArray(page.data)
-          || page.data.some((model) => !isRecord(model) || typeof (model.model || model.id) !== "string")) {
-          throw protocolMismatch();
-        }
-        for (const model of page.data) {
-          modelDefaults.set(model.model || model.id, model.defaultReasoningEffort);
-          modelModalities.set(model.model || model.id, Array.isArray(model.inputModalities) ? model.inputModalities : undefined);
-        }
-        data.push(...page.data.filter((model) => !model.hidden || (model.model || model.id) === currentModel?.id).map(mapModel));
-        cursor = page.nextCursor || null;
-      } while (cursor);
-      if (currentModel && !data.some((model) => model.id === currentModel.id && model.provider === currentModel.provider)) {
-        data.unshift({ ...currentModel, thinkingLevels: [] });
-      }
-      modelCatalog = data;
-      return data;
-    },
-    async setModel({ model, thinkingLevel: nextThinkingLevel, serviceTier: nextServiceTier }) {
-      if (!model || typeof model.id !== "string") throw fail("invalid-model", "The Codex model selection is invalid.");
-      if (model.provider && currentProvider && model.provider !== currentProvider) {
-        throw fail("unsupported-provider-change", "Codex cannot change model providers on an existing thread.");
-      }
-      if (nextServiceTier != null && !["standard", "fast"].includes(nextServiceTier)) throw fail("invalid-settings", "Invalid Codex service tier.");
-      const candidate = modelCatalog.find((entry) => entry.id === model.id);
-      if (!candidate || (nextThinkingLevel && !candidate.thinkingLevels.includes(nextThinkingLevel))) throw fail("invalid-settings", "The model or reasoning level is unavailable.");
-      const effectiveEffort = nextThinkingLevel ?? (currentModel?.id !== model.id ? modelDefaults.get(model.id) : thinkingLevel);
-      await callNative("thread/settings/update", {
-        threadId: nativeId,
-        model: model.id,
-        ...(nextServiceTier ? { serviceTier: nextServiceTier === "fast" ? "fast" : "default" } : {}),
-        ...(typeof effectiveEffort === "string" ? { effort: effectiveEffort } : {}),
-      });
-      serviceTier = nextServiceTier || serviceTier;
-      currentProvider = model.provider || currentProvider;
-      currentModel = { id: model.id, ...(currentProvider ? { provider: currentProvider } : {}), name: model.name || model.id };
-      thinkingLevel = effectiveEffort;
-      return { model: currentModel, ...(thinkingLevel ? { thinkingLevel } : {}) };
-    },
-    async respond({ requestId, decision, text }) {
-      const entry = pendingApprovals.get(requestId);
-      if (!entry || entry.responding) throw fail("stale-approval", "The approval request is no longer pending.");
-      if ((entry.params.threadId || entry.params.conversationId) && (entry.params.threadId || entry.params.conversationId) !== nativeId) {
-        throw fail("approval-origin-mismatch", "The approval request does not belong to this Codex thread.");
-      }
-      if (!entry.approval.decisions.includes(decision)) {
-        throw fail("unsupported-decision", "The selected approval decision is not available.");
-      }
-      let result;
-      if (entry.elicitation) {
-        // Validated before the request retires: an invalid answer keeps it pending.
-        result = decision === "approve-once"
-          ? { action: "accept", content: elicitationContent(entry, text) }
-          : { action: decision === "deny" ? "decline" : "cancel", content: null };
-      } else if (entry.method === "item/permissions/requestApproval") {
-        const approved = decision === "approve-once" || decision === "approve-session";
-        result = {
-          permissions: approved ? (entry.params.permissions || {}) : {},
-          scope: decision === "approve-session" ? "session" : "turn",
-        };
-      } else if (entry.method === "item/tool/requestUserInput") {
-        const questions = Array.isArray(entry.params.questions) ? entry.params.questions : [];
-        if (decision === "approve-once" && (questions.length !== 1 || typeof text !== "string")) {
-          throw fail("input-required", "Codex requires one text response for this request.");
-        }
-        result = {
-          answers: Object.fromEntries(questions.map((question, index) => [
-            question.id,
-            { answers: decision === "approve-once" && index === 0 ? [text] : [] },
-          ])),
-        };
-      } else {
-        const legacy = entry.method === "execCommandApproval" || entry.method === "applyPatchApproval";
-        const mapped = legacy
-          ? { "approve-once": "approved", "approve-session": "approved_for_session", deny: { denied: { rejection: "Denied by user" } }, cancel: "abort" }[decision]
-          : { "approve-once": "accept", "approve-session": "acceptForSession", deny: "decline", cancel: "cancel" }[decision];
-        result = { decision: mapped };
-      }
-      entry.responding = true;
-      try {
-        await writeNative({ id: entry.nativeId, result });
-      } catch (error) {
-        entry.responding = false;
-        throw error;
-      }
-      retireApproval(requestId);
-      return { resolved: true };
-    },
-    async rename({ title: nextTitle }) {
-      if (typeof nextTitle !== "string" || nextTitle.trim() === "") throw fail("invalid-title", "The Codex title is invalid.");
-      await callNative("thread/name/set", { threadId: nativeId, name: nextTitle });
-      title = nextTitle;
-      return { title };
-    },
-    async dispose() {
-      if (disposed) return { disposed: true };
-      disposed = true;
-      abortCoordinatorCalls();
-      setStatus("stopping");
-      child.stdin.end();
-      const cleanupBound = new Promise((resolve) => {
-        const timer = setTimeout(resolve, 5000, "timeout");
-        timer.unref?.();
-      });
-      if (await Promise.race([exited.then(() => "exit"), cleanupBound]) === "timeout") child.kill();
-      settleNativeStop(false);
-      setStatus("closed");
-      return { disposed: true };
-    },
-  };
   return adapter;
 }

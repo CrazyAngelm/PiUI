@@ -3,7 +3,7 @@ export const teamRu: Readonly<Record<string, string>> = {
   // Team screen
   'Open team': 'Открыть команду',
   'New teammate': 'Новый участник',
-  'A saved pipeline': 'Сохранённый пайплайн',
+  'A saved pipeline': 'Сохранённый конвейер',
   'Asks before starting': 'Спрашивает перед запуском',
   'Starts when assigned': 'Запускается при назначении',
   'Starts only when you press Start run': 'Запускается только по кнопке «Запустить»',
@@ -14,7 +14,7 @@ export const teamRu: Readonly<Record<string, string>> = {
   'The team could not be loaded': 'Не удалось загрузить команду',
   'No teammates yet': 'Участников пока нет',
   'A teammate is an @handle for one agent or one saved pipeline. Assign it cards, or mention it in a comment.':
-    'Участник — это @имя для одного агента или сохранённого пайплайна. Назначайте ему карточки или упоминайте в комментариях.',
+    'Участник — это @имя для одного агента или сохранённого конвейера. Назначайте ему карточки или упоминайте в комментариях.',
   Teammates: 'Участники',
   'No role yet': 'Роль не указана',
   '@{0} enabled': '@{0} включён',
@@ -29,9 +29,9 @@ export const teamRu: Readonly<Record<string, string>> = {
   'Run {0} for #{1}': 'Запуск {0} по #{1}',
   'Delete @{0}?': 'Удалить @{0}?',
   'The agent, team, pipeline and launch command Nano Desktop created for it are deleted too. Cards keep their history and become unassigned.':
-    'Агент, команда, пайплайн и команда запуска, созданные для него Nano Desktop, тоже удаляются. Карточки сохраняют историю и остаются без исполнителя.',
+    'Агент, команда, конвейер и команда запуска, созданные для него Nano Desktop, тоже удаляются. Карточки сохраняют историю и остаются без исполнителя.',
   'The pipeline it wraps stays. Cards keep their history and become unassigned.':
-    'Пайплайн, который он использует, остаётся. Карточки сохраняют историю и остаются без исполнителя.',
+    'Конвейер, который он использует, остаётся. Карточки сохраняют историю и остаются без исполнителя.',
   'Delete teammate': 'Удалить участника',
   // Quick-create dialog
   'Who is it?': 'Кто это?',
@@ -54,13 +54,13 @@ export const teamRu: Readonly<Record<string, string>> = {
   Role: 'Роль',
   'What it is good at and when to hand it work. Agents read this in the roster.':
     'В чём он силён и когда передавать ему работу. Агенты видят это в списке команды.',
-  'Nano Desktop saves a one-step pipeline for it, marked as managed by @{0}.': 'Nano Desktop сохранит для него одношаговый пайплайн с пометкой «управляется @{0}».',
+  'Nano Desktop saves a one-step pipeline for it, marked as managed by @{0}.': 'Nano Desktop сохранит для него одношаговый конвейер с пометкой «управляется @{0}».',
   'Pick a harness': 'Выберите агента',
   Instructions: 'Инструкции',
   'How it should work on a card. The card text arrives as its input.': 'Как работать над карточкой. Текст карточки придёт на вход.',
-  'No saved pipelines yet': 'Сохранённых пайплайнов пока нет',
-  'Pick a saved pipeline': 'Выберите сохранённый пайплайн',
-  'Create pipeline in editor': 'Создать пайплайн в редакторе',
+  'No saved pipelines yet': 'Сохранённых конвейеров пока нет',
+  'Pick a saved pipeline': 'Выберите сохранённый конвейер',
+  'Create pipeline in editor': 'Создать конвейер в редакторе',
   'When a card is assigned': 'Когда назначена карточка',
   'Ask me': 'Спросить меня',
   'A start request waits in the Inbox.': 'Запрос на запуск ждёт во «Входящих».',
@@ -77,12 +77,12 @@ export const teamRu: Readonly<Record<string, string>> = {
   // Mentions and the chat executor picker
   'Type @ to mention a teammate · Ctrl+Enter sends': 'Наберите @, чтобы упомянуть участника · Ctrl+Enter отправляет',
   'Harness directly': 'Напрямую агенту',
-  'More pipelines…': 'Другие пайплайны…',
-  'Search teammates, harnesses and pipelines': 'Поиск участников, агентов и пайплайнов',
+  'More pipelines…': 'Другие конвейеры…',
+  'Search teammates, harnesses and pipelines': 'Поиск участников, агентов и конвейеров',
   // Errors (fixed copy per host code)
   'Safe mode is on: Nano Desktop does not change teammates.': 'Включён безопасный режим: Nano Desktop не меняет участников.',
   'Check the teammate details and try again.': 'Проверьте данные участника и повторите попытку.',
-  'This teammate or its pipeline is no longer available.': 'Этот участник или его пайплайн больше недоступен.',
+  'This teammate or its pipeline is no longer available.': 'Этот участник или его конвейер больше недоступен.',
   'Another teammate of this project already uses this handle.': 'Другой участник проекта уже использует это имя.',
   'The teammate changed meanwhile. Reopen it and try again.': 'Участник тем временем изменился. Откройте его заново и повторите.',
   'This harness cannot run a teammate with these settings.': 'Этот агент не может запустить участника с такими настройками.',

@@ -1,8 +1,11 @@
 import {
   arrayOf, boolean, custom, datetime, enumOf, json, lazy, mapOf, object, option, string, tagged, u32, u64, withDefault,
   type Schema,
+  decodeArgument,
 } from './labSchema';
 import { BUILTIN_HARNESSES, isHarnessId } from '../../../../../contracts/harness-identity-v3';
+import type { HarnessModelsRequestV19 } from '../../../../../contracts/harness-models-v19';
+import { isUuid } from './labRandom';
 
 /** Request schemas transcribed from the Rust DTOs (`deny_unknown_fields` everywhere). */
 // Harness identity v2 (`parse_harness_identity`): a built-in name or `acp:<agent id>`.
@@ -47,7 +50,22 @@ export const settingsCommandSchema = tagged('type', {
 
 export const lifecycleCommandSchema = tagged('type', { deleteSession: { sessionId: string } });
 export const historyRequestSchema = object({ sessionId: string });
-export const harnessModelsRequestSchema = object({ workspaceId: string, harness, part: option(enumOf(['models', 'resources'])) });
+const catalogPart = enumOf(['models', 'resources']);
+export const harnessModelsRequestSchema = object({ workspaceId: string, harness, part: option(catalogPart) });
+const fullCatalogRequest = object({ workspaceId: string, harness });
+const splitCatalogRequest = object({
+  workspaceId: string,
+  harness,
+  part: catalogPart,
+  discoveryId: custom((value) => value.length === 36 && isUuid(value) ? undefined : 'expected a hyphenated UUID'),
+});
+
+export function decodeHarnessModelsRequestV19(args: Readonly<Record<string, unknown>>): HarnessModelsRequestV19 {
+  const request = args.request;
+  const split = request !== null && typeof request === 'object'
+    && (Object.hasOwn(request, 'part') || Object.hasOwn(request, 'discoveryId'));
+  return decodeArgument(args, 'request', split ? splitCatalogRequest : fullCatalogRequest);
+}
 
 export const composerCommandSchema = tagged('type', {
   snapshot: { sessionId: string },

@@ -501,7 +501,9 @@ input.on("line", (line) => {
     ] : [];
     send({ id: message.id, result: { data: [{ skills: [{ name: "Review", path: "/skills/review/SKILL.md", enabled: false }, ...extra] }] } });
   } else if (message.method === "config/read") {
-    send({ id: message.id, result: { config: { mcp_servers: { docs: { enabled: true, env: { TOKEN: "SECRET-MUST-NOT-LEAK" } } } } } });
+    const provider = process.argv.includes("--custom-model-provider") ? { model_provider: "fixture-gateway" } : {};
+    const model = process.argv.includes("--configured-hidden-model") ? { model: "fixture-model" } : {};
+    send({ id: message.id, result: { config: { ...provider, ...model, mcp_servers: { docs: { enabled: true, env: { TOKEN: "SECRET-MUST-NOT-LEAK" } } } } } });
   } else if (message.method === "mcpServerStatus/list") {
     send({ id: message.id, result: { data: [{ name: "docs", tools: { search_docs: { name: "Search docs" } } }], nextCursor: null } });
   } else if (message.method === "model/list") {
@@ -509,7 +511,7 @@ input.on("line", (line) => {
     if (process.argv.includes("--missing-current-model")) { send({ id: message.id, result: { data: [], nextCursor: null } }); return; }
     if (process.argv.includes("--hidden-current-model")) {
       const data = message.params.includeHidden ? [
-        { id: "fixture-model", displayName: "Hidden current", hidden: true, supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "ultra" }] },
+        { id: "fixture-model", displayName: "Hidden current", hidden: true, isDefault: process.argv.includes("--hidden-model-is-default"), supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "ultra" }] },
         { id: "other-hidden", hidden: true },
       ] : [];
       send({ id: message.id, result: { data, nextCursor: null } }); return;

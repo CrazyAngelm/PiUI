@@ -138,7 +138,7 @@ export const boardRu: Readonly<Record<string, string>> = {
   // Timeline
   'Open the chat': 'Открыть чат',
   '{0} in a chat': '{0} в чате',
-  'A pipeline run': 'Запуск пайплайна',
+  'A pipeline run': 'Запуск конвейера',
   'Activity and comments': 'История и комментарии',
   'Undo: {0}': 'Отменить: {0}',
   'created the card': 'создал(а) карточку',

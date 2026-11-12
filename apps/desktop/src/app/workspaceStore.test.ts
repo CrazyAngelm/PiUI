@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { workspaceHost } from '../host-api/workspaceClient';
 import { WorkspaceStore } from './workspaceStore.svelte';
+import * as settingsApi from '../host-api/runtimeSettings';
+import * as composerApi from '../host-api/composerClient';
 
 // Extension surfaces are their own chunk with their own tests; starting the shell does not need them.
 vi.mock('./chat/extensions/extensionSurfaces.svelte', () => ({
@@ -37,6 +39,27 @@ describe('WorkspaceStore start', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it('keeps the first prompt unsent if the harness refuses the requested settings', async () => {
+    const store = new WorkspaceStore();
+    await store.loadCatalog();
+    const session = store.catalog.sessions.find((item) => item.harness === 'codex')!;
+    const snapshot = await workspaceHost.request({ type: 'snapshot', sessionId: session.id });
+    expect(snapshot.type).toBe('session');
+    const original = workspaceHost.request.bind(workspaceHost);
+    vi.spyOn(workspaceHost, 'request').mockImplementation(command => command.type === 'createSession' ? Promise.resolve(snapshot) : original(command));
+    vi.spyOn(settingsApi, 'runtimeSettings').mockRejectedValueOnce(new Error('The requested reasoning level is unavailable.'));
+    const send = vi.spyOn(composerApi, 'composerRequest');
+    const message = 'Keep this first prompt until the settings are corrected.';
+
+    const result = await store.createChat({ workspaceId: session.workspaceId, harness: 'codex', permissionMode: 'read-only',
+      model: { id: 'selected', name: 'Selected' }, thinkingLevel: 'high', text: message }, { open: false });
+
+    expect(result).toEqual({ sessionId: session.id, error: 'The requested reasoning level is unavailable.' });
+    expect(send).not.toHaveBeenCalled();
+    expect(store.drafts[session.id]).toBe(message);
+    store.dispose();
   });
 
   it('stops loading and reports the error when the event stream cannot start', async () => {

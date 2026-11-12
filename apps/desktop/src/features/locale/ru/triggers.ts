@@ -37,37 +37,37 @@ export const triggersRu: Readonly<Record<string, string>> = {
   'Add at least one file pattern.': 'Добавьте хотя бы один шаблон файлов.',
   'Use at most {0} patterns in each list.': 'Не больше {0} шаблонов в каждом списке.',
   'Pattern “{0}”: {1}': 'Шаблон «{0}»: {1}',
-  'Choose the pipeline to wait for.': 'Выберите пайплайн, завершения которого ждать.',
+  'Choose the pipeline to wait for.': 'Выберите конвейер, завершения которого ждать.',
   'Choose at least one result.': 'Выберите хотя бы один результат.',
   'Wait between {0} and {1} seconds.': 'Ожидание — от {0} до {1} секунд.',
 
   // Automations list
   'Start saved pipelines on a schedule or after an event. They run while Nano Desktop is open or in the tray.':
-    'Запускайте сохранённые пайплайны по расписанию или после события. Они работают, пока Nano Desktop открыт или в трее.',
+    'Запускайте сохранённые конвейеры по расписанию или после события. Они работают, пока Nano Desktop открыт или в трее.',
   'Pause all': 'Приостановить все',
   'All automations are paused. Nothing starts until you resume them.': 'Все автоматизации на паузе. Ничего не запустится, пока вы их не возобновите.',
   'Resume automations': 'Возобновить автоматизации',
   'Run a pipeline every morning, when another pipeline finishes or when project files change.':
-    'Запускайте пайплайн каждое утро, после завершения другого пайплайна или при изменении файлов проекта.',
+    'Запускайте конвейер каждое утро, после завершения другого конвейера или при изменении файлов проекта.',
   'Watching project files': 'Следит за файлами проекта',
   'Waiting for {0} to finish': 'Ждёт завершения «{0}»',
   'Turn it on to react to events.': 'Включите, чтобы реагировать на события.',
 
   // Automation dialog
   'Runs a saved pipeline on a schedule or after an event while Nano Desktop is open or in the tray.':
-    'Запускает сохранённый пайплайн по расписанию или после события, пока Nano Desktop открыт или в трее.',
-  'Pipeline to run': 'Какой пайплайн запускать',
+    'Запускает сохранённый конвейер по расписанию или после события, пока Nano Desktop открыт или в трее.',
+  'Pipeline to run': 'Какой конвейер запускать',
   'On a schedule': 'По расписанию',
   'After an event': 'После события',
   Event: 'Событие',
-  'When a pipeline finishes': 'Когда пайплайн завершится',
-  'Pipeline to wait for': 'Какого пайплайна ждать',
-  'Start when that pipeline': 'Запускать, когда этот пайплайн',
+  'When a pipeline finishes': 'Когда конвейер завершится',
+  'Pipeline to wait for': 'Какого конвейера ждать',
+  'Start when that pipeline': 'Запускать, когда этот конвейер',
   Succeeds: 'завершится успешно',
   Fails: 'завершится с ошибкой',
   'Is stopped': 'будет остановлен',
   'This automation starts the pipeline it waits for, so each run can start the next one. The chain stops after 3 automatic runs.':
-    'Эта автоматизация запускает тот же пайплайн, которого ждёт, поэтому каждый запуск может начать следующий. Цепочка остановится после 3 автоматических запусков.',
+    'Эта автоматизация запускает тот же конвейер, которого ждёт, поэтому каждый запуск может начать следующий. Цепочка остановится после 3 автоматических запусков.',
   'Files to watch': 'За какими файлами следить',
   'One pattern per line, relative to the project folder. src/**/*.ts matches TypeScript files under src; *.md matches Markdown files in any folder.':
     'По одному шаблону на строку, относительно папки проекта. src/**/*.ts — файлы TypeScript в src; *.md — файлы Markdown в любой папке.',
@@ -78,7 +78,7 @@ export const triggersRu: Readonly<Record<string, string>> = {
   'If Nano Desktop was closed or paused at that time': 'Если Nano Desktop был закрыт или на паузе в это время',
   'Automations run only while Nano Desktop is open or in the tray; they do not wake the computer. Each run uses your harness subscriptions like a manual run.':
     'Автоматизации работают, только пока Nano Desktop открыт или в трее; компьютер они не будят. Каждый запуск расходует подписки агентов, как ручной запуск.',
-  'the pipeline': 'пайплайн',
+  'the pipeline': 'конвейер',
 
   // Run trigger label
   'Started by {0}': 'Запущено автоматизацией «{0}»',
@@ -89,22 +89,22 @@ export const triggersRu: Readonly<Record<string, string>> = {
   'Started from a chat': 'Запущено из чата',
 
   // Run a pipeline from a chat
-  'Run a saved pipeline of this project': 'Запустить сохранённый пайплайн этого проекта',
-  'Run pipeline…': 'Запустить пайплайн…',
-  'Run a pipeline': 'Запустить пайплайн',
-  'Open a chat in a project first, then run one of its pipelines.': 'Сначала откройте чат в проекте, затем запустите один из его пайплайнов.',
+  'Run a saved pipeline of this project': 'Запустить сохранённый конвейер этого проекта',
+  'Run pipeline…': 'Запустить конвейер…',
+  'Run a pipeline': 'Запустить конвейер',
+  'Open a chat in a project first, then run one of its pipelines.': 'Сначала откройте чат в проекте, затем запустите один из его конвейеров.',
   'This project folder is missing.': 'Папка этого проекта не найдена.',
-  'Trust this folder from the sidebar to run its pipelines.': 'Отметьте папку как доверенную в боковой панели, чтобы запускать её пайплайны.',
+  'Trust this folder from the sidebar to run its pipelines.': 'Отметьте папку как доверенную в боковой панели, чтобы запускать её конвейеры.',
   'Run started: {0}': 'Запуск начат: {0}',
   'Follow it in Runs. This chat is not changed.': 'Следите за ним в разделе «Запуски». Этот чат не меняется.',
   'Starts a saved pipeline of {0}. The run appears in Runs; the chat is not changed.':
-    'Запускает сохранённый пайплайн проекта {0}. Запуск появится в разделе «Запуски»; чат не меняется.',
+    'Запускает сохранённый конвейер проекта {0}. Запуск появится в разделе «Запуски»; чат не меняется.',
   'This project has no saved pipelines yet. Build one in Pipelines first.':
-    'В этом проекте пока нет сохранённых пайплайнов. Сначала создайте пайплайн в разделе «Пайплайны».',
-  'Saved pipelines': 'Сохранённые пайплайны',
-  'This pipeline asks for inputs on the next step.': 'На следующем шаге пайплайн попросит входные данные.',
+    'В этом проекте пока нет сохранённых конвейеров. Сначала создайте конвейер в разделе «Конвейеры».',
+  'Saved pipelines': 'Сохранённые конвейеры',
+  'This pipeline asks for inputs on the next step.': 'На следующем шаге конвейер попросит входные данные.',
   'Next…': 'Далее…',
-  'This pipeline is no longer saved. Choose another one.': 'Этот пайплайн больше не сохранён. Выберите другой.',
+  'This pipeline is no longer saved. Choose another one.': 'Этот конвейер больше не сохранён. Выберите другой.',
 
   // Background mode
   Background: 'Фоновый режим',

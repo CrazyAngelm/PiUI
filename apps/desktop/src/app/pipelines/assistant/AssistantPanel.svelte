@@ -1,3 +1,9 @@
+<script module lang="ts">
+  import { SvelteMap } from 'svelte/reactivity';
+
+  const operations = new SvelteMap<string, 'send' | 'settings'>();
+</script>
+
 <script lang="ts">
   import Sparkles from '@lucide/svelte/icons/sparkles';
   import X from '@lucide/svelte/icons/x';
@@ -9,20 +15,23 @@
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
   import Brain from '@lucide/svelte/icons/brain';
   import Zap from '@lucide/svelte/icons/zap';
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { t } from '../../../features/locale/language';
   import MarkdownContent from '../../../components/MarkdownContent.svelte';
   import { graphToSystemFile } from '../../../features/orchestration/systemFile';
   import { composerRequest } from '../../../host-api/composerClient';
   import { workspaceModel } from '../../../host-api/harnessModels';
   import { runtimeSettings } from '../../../host-api/runtimeSettings';
+  import type { RuntimeSettings, RuntimeSettingsCommand } from '../../../../../../contracts/workspace-settings-v16';
   import type { HarnessKind } from '../../../../../../contracts/workspace-v15';
   import { Button, IconButton, Picker, Spinner, Textarea, toasts, type PickerItem } from '../../../lib/ui';
   import ApprovalCard from '../../shell/ApprovalCard.svelte';
   import ModelPicker, { type ModelOption } from '../../shell/ModelPicker.svelte';
+  import { modelSelectionKey as keyOf, resolveModelSelection } from '../../../host-api/modelSelection';
   import HarnessMark from '../../shell/HarnessMark.svelte';
   import { useWorkspace } from '../../shell/context';
   import { errorMessage } from '../../workspaceStore.svelte';
+  import { nanoAccount } from '../../nano/nanoAccount.svelte';
   import { harnessMeta } from '../../harnessMeta';
   import type { PipelineEditorStore } from '../editorStore.svelte';
   import { applyProposal, builderEnvelope, isEmptyChange, readProposal, stripEnvelope, summarizeChange, type HarnessChoice } from './builderPrompt';
@@ -42,45 +51,69 @@
   const MODEL_KEY = 'piui.pipeline.assistant.model.v1';
 
   let sessionId = $state('');
-  let harness = $state<HarnessKind | ''>('');
+  let draftHarness = $state<HarnessKind | ''>('');
   let text = $state('');
-  let sending = $state(false);
+  const sending = $derived(operations.get(storageKey) === 'send');
   let error = $state('');
   let list = $state<HTMLDivElement | null>(null);
   let input = $state<HTMLTextAreaElement | null>(null);
   let applied = $state<Record<string, boolean>>({});
-  let modelKey = $state('');
-  let modelBusy = $state(false);
-  let level = $state('');
-  let fast = $state(false);
+  let draftModelKey = $state('');
+  const modelBusy = $derived(operations.get(storageKey) === 'settings');
+  let draftLevel = $state('');
+  let draftFast = $state(false);
+  let settings = $state.raw<RuntimeSettings>();
+  let settingsLoading = $state(false);
+
+  const snapshot = $derived(sessionId ? store.snapshots[sessionId] : undefined);
+  const session = $derived(snapshot?.session ?? store.catalog.sessions.find((item) => item.id === sessionId));
+  const harness = $derived(sessionId ? (session?.harness ?? '') : draftHarness);
+  const currentSettings = $derived(settings?.sessionId === sessionId ? settings : undefined);
+  const nativeModel = $derived(currentSettings?.model ?? session?.model);
 
   const available = $derived(store.catalog.harnesses.filter((item) => item.status === 'available'));
   const harnessItems = $derived<PickerItem<HarnessKind>[]>(
     available.map((item) => ({ value: item.kind, label: harnessMeta(item.kind).label, description: item.version ? `v${item.version}` : undefined })),
   );
-  const keyOf = (value: { provider?: string | null; id: string }) => JSON.stringify([value.provider ?? null, value.id]);
   const models = $derived(harness ? (editor.catalogs[harness]?.models ?? []) : []);
-  const modelsError = $derived(harness ? Boolean(editor.catalogErrors[harness]) : false);
+  const modelsError = $derived(harness ? (editor.catalogErrors[harness] ?? '') : '');
   const modelsLoading = $derived(Boolean(harness) && !editor.safeMode && !modelsError && !(harness && editor.catalogs[harness]));
-  const model = $derived(modelKey ? models.find((item) => keyOf(item) === modelKey) : undefined);
-  const levels = $derived(model?.thinkingLevels ?? []);
-  const fastAvailable = $derived(Boolean(model?.supportsFast));
+  const harnessVersion = $derived(store.catalog.harnesses.find((item) => item.kind === harness)?.version);
+  const modelKey = $derived(sessionId ? (nativeModel ? keyOf(nativeModel) : '') : draftModelKey);
+  const listedModel = $derived(sessionId ? models.find((item) => keyOf(item) === modelKey) : resolveModelSelection(models, modelKey, harness));
+  const model = $derived(sessionId ? nativeModel : listedModel);
+  const level = $derived(sessionId
+    ? (currentSettings?.thinkingLevel ?? '')
+    : (listedModel?.thinkingLevels?.includes(draftLevel) ? draftLevel : ''));
+  const fast = $derived(sessionId ? currentSettings?.serviceTier === 'fast' : Boolean(listedModel?.supportsFast && draftFast));
+  $effect(() => {
+    if (sessionId || !listedModel) return;
+    if (draftLevel !== level) draftLevel = level;
+    if (draftFast !== fast) draftFast = fast;
+  });
+  const levels = $derived(currentSettings?.models.find((entry) => keyOf(entry) === modelKey)?.thinkingLevels ?? listedModel?.thinkingLevels ?? model?.thinkingLevels ?? []);
+  const fastAvailable = $derived(Boolean(listedModel?.supportsFast ?? currentSettings?.serviceTier));
+  const pickerModels = $derived(
+    currentSettings
+      ? currentSettings.models.map((entry) => ({ ...entry, supportsFast: models.find((item) => keyOf(item) === keyOf(entry))?.supportsFast }))
+      : models,
+  );
   const modelOptions = $derived<ModelOption[]>(
-    models.map((item) => ({
+    [
+      ...(nativeModel && !pickerModels.some((entry) => keyOf(entry) === keyOf(nativeModel)) ? [nativeModel] : []),
+      ...pickerModels,
+    ].map((item) => ({
       key: keyOf(item),
       name: item.name,
       id: item.id,
       ...(item.provider ? { provider: item.provider } : {}),
       reasoning: Boolean(item.thinkingLevels?.length),
-      fast: Boolean(item.supportsFast),
+      fast: Boolean('supportsFast' in item && item.supportsFast),
     })),
   );
-  const snapshot = $derived(sessionId ? store.snapshots[sessionId] : undefined);
-  const running = $derived(snapshot ? ['starting', 'running', 'stopping'].includes(snapshot.session.status) : false);
-
-  $effect(() => {
-    if (fast && !fastAvailable) fast = false;
-  });
+  const running = $derived(Boolean(session && ['starting', 'running', 'stopping'].includes(session.status)));
+  const canSend = $derived(Boolean(harness) && !editor.safeMode && !sending && !modelBusy && Boolean(sessionId || !modelKey || listedModel));
+  const canTune = $derived(!editor.safeMode && !sending && !modelBusy && !settingsLoading && (!sessionId || session?.status === 'idle'));
 
   interface Message {
     id: string;
@@ -101,33 +134,59 @@
   });
 
   // Restore this draft's conversation, or pick a harness for a new one.
+  let restoredFor = '';
   $effect(() => {
+    const key = storageKey;
+    if (restoredFor !== key) {
+      restoredFor = key;
+      sessionId = '';
+      applied = {};
+    }
+    if (sending) return;
     let saved = '';
     try {
-      saved = localStorage.getItem(storageKey) ?? '';
+      saved = localStorage.getItem(key) ?? '';
     } catch {
       saved = '';
     }
-    if (saved && store.catalog.sessions.some((session) => session.id === saved)) {
+    if (saved && (store.snapshots[saved] || store.catalog.sessions.some((session) => session.id === saved))) {
       sessionId = saved;
       if (!store.snapshots[saved]) void store.reconcileSession(saved);
     }
   });
   $effect(() => {
-    if (harness || !available.length) return;
-    harness = PREFERRED.map((kind) => available.find((item) => item.kind === kind)).find(Boolean)?.kind ?? available[0]!.kind;
+    if (sessionId || sending || modelBusy || draftHarness || !available.length) return;
+    chooseHarness(PREFERRED.map((kind) => available.find((item) => item.kind === kind)).find(Boolean)?.kind ?? available[0]!.kind);
   });
-  // Load the harness's models and restore the model last picked for it.
   $effect(() => {
     const kind = harness;
-    if (!kind) return;
-    modelKey = readModels()[kind] ?? '';
-    if (!editor.catalogs[kind]) void editor.loadCatalog(kind);
+    const version = harnessVersion;
+    if (kind === 'nano') void nanoAccount.catalogRevision;
+    if (kind && !editor.safeMode) untrack(() => void editor.loadCatalog(kind, false, version));
   });
-  // A remembered model the harness no longer offers falls back to its default.
+  // Only live runtimes expose tuning. Closed history still carries the native model.
   $effect(() => {
-    const catalog = harness ? editor.catalogs[harness] : undefined;
-    if (modelKey && catalog && !catalog.models.some((item) => keyOf(item) === modelKey)) modelKey = '';
+    const id = sessionId;
+    const live = session?.status === 'idle';
+    if (!id || !live || modelBusy || editor.safeMode) {
+      settingsLoading = false;
+      return;
+    }
+    let active = true;
+    settingsLoading = true;
+    void runtimeSettings({ type: 'get', sessionId: id })
+      .then((result) => {
+        if (active) settings = result;
+      })
+      .catch(() => {
+        // The snapshot still identifies the model if runtime tuning is unavailable.
+      })
+      .finally(() => {
+        if (active) settingsLoading = false;
+      });
+    return () => {
+      active = false;
+    };
   });
   $effect(() => {
     void messages.length;
@@ -137,10 +196,10 @@
     });
   });
 
-  function remember(id: string): void {
-    sessionId = id;
+  function remember(key: string, id: string): void {
+    if (key === storageKey) sessionId = id;
     try {
-      localStorage.setItem(storageKey, id);
+      localStorage.setItem(key, id);
     } catch {
       // The conversation stays reachable from the project's chats.
     }
@@ -155,79 +214,78 @@
     }
   }
 
-  async function selectModel(value: string): Promise<void> {
-    if (value === modelKey || !harness) return;
-    const next = value ? models.find((item) => keyOf(item) === value) : undefined;
-    if (value && !next) return;
-    const nextFast = Boolean(next?.supportsFast && fast);
-    if (sessionId && next) {
-      // A live conversation switches model natively and keeps its history.
-      modelBusy = true;
-      error = '';
-      try {
-        if (fast && !nextFast && model?.supportsFast) {
-          // Clear Fast on the old capable model before switching to one that cannot use it.
-          await runtimeSettings({ type: 'set', sessionId, model: workspaceModel(model), serviceTier: 'standard' });
-          fast = false;
-          await runtimeSettings({ type: 'set', sessionId, model: workspaceModel(next) });
-        } else {
-          await runtimeSettings({ type: 'set', sessionId, model: workspaceModel(next), ...(nextFast ? { serviceTier: 'fast' } : {}) });
-        }
-      } catch (cause) {
-        error = errorMessage(cause);
-        return;
-      } finally {
-        modelBusy = false;
-      }
-    } else if (sessionId) {
-      // A native session cannot return to "no override": start a new one.
-      reset();
-    }
-    modelKey = value;
-    level = '';
-    fast = nextFast;
+  function chooseHarness(value: HarnessKind): void {
+    draftHarness = value;
+    draftModelKey = readModels()[value] ?? '';
+    draftLevel = '';
+    draftFast = false;
+  }
+
+  function rememberModel(kind: HarnessKind, value: string): void {
     try {
-      localStorage.setItem(MODEL_KEY, JSON.stringify({ ...readModels(), [harness]: value }));
+      localStorage.setItem(MODEL_KEY, JSON.stringify({ ...readModels(), [kind]: value }));
     } catch {
       // The choice lasts for this panel only.
     }
   }
 
-  async function selectLevel(value: string): Promise<void> {
-    if (value === level) return;
-    if (sessionId && model && value) {
-      modelBusy = true;
-      error = '';
-      try {
-        await runtimeSettings({ type: 'set', sessionId, model: workspaceModel(model), thinkingLevel: value, ...(fast ? { serviceTier: 'fast' } : {}) });
-      } catch (cause) {
-        error = errorMessage(cause);
-        return;
-      } finally {
-        modelBusy = false;
+  async function updateSettings(command: Extract<RuntimeSettingsCommand, { type: 'set' }>, clearFast = false): Promise<boolean> {
+    const oldModel = nativeModel;
+    const key = storageKey;
+    operations.set(key, 'settings');
+    error = '';
+    try {
+      if (clearFast && oldModel) {
+        const result = await runtimeSettings({ type: 'set', sessionId: command.sessionId, model: workspaceModel(oldModel), serviceTier: 'standard' });
+        if (key === storageKey && sessionId === command.sessionId) settings = result;
       }
+      const result = await runtimeSettings(command);
+      if (key === storageKey && sessionId === command.sessionId) settings = result;
+      return true;
+    } catch (cause) {
+      if (key === storageKey && sessionId === command.sessionId) error = errorMessage(cause);
+      return false;
+    } finally {
+      operations.delete(key);
     }
-    level = value;
+  }
+
+  async function selectModel(value: string): Promise<void> {
+    const kind = harness;
+    if (!canTune || !kind || value === modelKey) return;
+    const next = value ? pickerModels.find((item) => keyOf(item) === value) : undefined;
+    if (value && !next) return;
+    const nextFast = Boolean(next?.supportsFast && fast);
+    if (sessionId && next) {
+      if (!await updateSettings({
+        type: 'set', sessionId, model: workspaceModel(next), ...(nextFast ? { serviceTier: 'fast' } : {}),
+      }, fast && !nextFast)) return;
+    } else {
+      if (sessionId) reset(); // The runtime has no "no override" setting.
+      draftModelKey = value;
+      draftLevel = '';
+      draftFast = nextFast;
+    }
+    rememberModel(kind, value);
+  }
+
+  async function selectLevel(value: string): Promise<void> {
+    if (!canTune || value === level || !model) return;
+    if (sessionId) {
+      if (value) await updateSettings({ type: 'set', sessionId, model: workspaceModel(model), thinkingLevel: value, ...(fast ? { serviceTier: 'fast' } : {}) });
+    } else draftLevel = value;
   }
 
   async function selectFast(value: boolean): Promise<void> {
-    if (value === fast || !model?.supportsFast) return;
+    if (!canTune || value === fast || !model || !fastAvailable) return;
     if (sessionId) {
-      modelBusy = true;
-      error = '';
-      try {
-        await runtimeSettings({ type: 'set', sessionId, model: workspaceModel(model), serviceTier: value ? 'fast' : 'standard' });
-      } catch (cause) {
-        error = errorMessage(cause);
-        return;
-      } finally {
-        modelBusy = false;
-      }
-    }
-    fast = value;
+      await updateSettings({ type: 'set', sessionId, model: workspaceModel(model), serviceTier: value ? 'fast' : 'standard' });
+    } else draftFast = value;
   }
 
   function reset(): void {
+    if (sending || modelBusy) return;
+    if (harness) chooseHarness(harness);
     sessionId = '';
     applied = {};
     try {
@@ -237,27 +295,26 @@
     }
   }
 
-  async function choices(): Promise<HarnessChoice[]> {
-    // Model lists let the assistant pick real models instead of inventing them.
-    await Promise.all(available.map((item) => (editor.catalogs[item.kind] ? undefined : editor.loadCatalog(item.kind))));
+  function choices(): HarnessChoice[] {
     return available.map((item) => ({
       harness: item.kind,
       label: harnessMeta(item.kind).label,
-      models: (editor.catalogs[item.kind]?.models ?? []).map((model) => model.id).slice(0, 24),
+      models: editor.catalogs[item.kind]?.models.map((entry) => entry.id),
     }));
   }
 
   async function send(request = text): Promise<void> {
     const message = request.trim();
-    if (!message || sending || !harness) return;
-    sending = true;
+    if (!message || !canSend || !harness) return;
+    const key = storageKey;
+    operations.set(key, 'send');
     error = '';
     try {
       const envelope = builderEnvelope({
         first: !sessionId,
         draftJson: JSON.stringify(graphToSystemFile(editor.graph, editor.systems), null, 1),
         problems: [...editor.issues.map((issue) => issue.message), ...editor.preflight.map((issue) => issue.message)],
-        harnesses: await choices(),
+        harnesses: choices(),
         text: message,
       });
       if (!sessionId) {
@@ -265,23 +322,26 @@
           {
             workspaceId,
             harness,
-            ...(model ? { model, ...(level ? { thinkingLevel: level } : {}) } : {}),
-            ...(model?.supportsFast && fast ? { serviceTier: 'fast' } : {}),
+            ...(listedModel ? { model: listedModel, ...(level ? { thinkingLevel: level } : {}) } : {}),
+            ...(listedModel?.supportsFast && fast ? { serviceTier: 'fast' } : {}),
             permissionMode: 'read-only',
             text: envelope,
           },
           { open: false, title: $t('Pipeline assistant: {0}', [editor.graph.name || $t('Untitled pipeline')]) },
         );
-        remember(outcome.sessionId);
-        if (outcome.error) error = outcome.error;
+        remember(key, outcome.sessionId);
+        if (outcome.error) {
+          if (key === storageKey) error = outcome.error;
+          return;
+        }
       } else {
         await composerRequest({ type: 'send', sessionId, requestId: crypto.randomUUID(), text: envelope, mode: running ? 'follow-up' : 'prompt' });
       }
-      if (request === text) text = '';
+      if (key === storageKey && request === text) text = '';
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : String(cause);
+      if (key === storageKey) error = errorMessage(cause);
     } finally {
-      sending = false;
+      operations.delete(key);
       void tick().then(() => input?.focus());
     }
   }
@@ -307,9 +367,9 @@
   <header class="head">
     <Sparkles size={15} />
     <h2>{$t('Assistant')}</h2>
-    <Picker items={harnessItems} value={harness || undefined} label={$t('Harness')} onSelect={(value) => { if (value !== harness) { harness = value; reset(); level = ''; fast = false; } }}>
+    <Picker items={harnessItems} value={harness || undefined} label={$t('Harness')} onSelect={(value) => { if (!sending && !modelBusy && value !== harness) { reset(); chooseHarness(value); } }}>
       {#snippet trigger(props)}
-        <button type="button" class="chip" {...props} disabled={sending}>
+        <button type="button" class="chip" {...props} disabled={sending || modelBusy}>
           {#if harness}<HarnessMark kind={harness} size={16} />{/if}
           <span>{harness ? harnessMeta(harness).label : $t('No harness')}</span>
           <ChevronDown size={12} />
@@ -320,16 +380,16 @@
       <ModelPicker
         models={modelOptions}
         {harness}
-        value={modelKey}
+        value={model ? keyOf(model) : modelKey}
         defaultOption={true}
-        loading={modelsLoading}
-        error={modelsError ? $t('Could not load models') : ''}
+        loading={modelsLoading || settingsLoading}
+        error={modelsError ? $t(modelsError) : ''}
         {levels}
         {level}
-        levelDefault={true}
+        levelDefault={!sessionId}
         {fastAvailable}
         {fast}
-        busy={modelBusy || sending || running}
+        busy={!canTune}
         width={340}
         hint={model ? $t('This model has no reasoning options.') : $t('Pick a model to tune reasoning.')}
         onModel={(value) => void selectModel(value)}
@@ -337,9 +397,9 @@
         onFast={(value) => void selectFast(value)}
       >
         {#snippet trigger(props)}
-          <button type="button" class="chip chip--model" {...props} disabled={sending || running || modelBusy}>
-            {#if modelBusy || modelsLoading}<Spinner size={12} />{:else}<Brain size={13} />{/if}
-            <span>{model?.name ?? $t('Default model')}</span>
+          <button type="button" class="chip chip--model" {...props} disabled={!canTune}>
+            {#if modelBusy || modelsLoading || settingsLoading}<Spinner size={12} />{:else}<Brain size={13} />{/if}
+            <span>{model?.name ?? (modelKey ? $t('Choose a model') : $t('Default model'))}</span>
             {#if level}<span class="chip__sub">{level}</span>{/if}
             {#if fast}<Zap size={12} />{/if}
             <ChevronDown size={12} />
@@ -348,7 +408,7 @@
       </ModelPicker>
     {/if}
     <span class="spacer"></span>
-    <IconButton size="sm" label={$t('New conversation')} disabled={!sessionId || sending} onclick={reset}><RotateCcw /></IconButton>
+    <IconButton size="sm" label={$t('New conversation')} disabled={!sessionId || sending || modelBusy} onclick={reset}><RotateCcw /></IconButton>
     <IconButton size="sm" label={$t('Close assistant')} onclick={onClose}><X /></IconButton>
   </header>
 
@@ -358,7 +418,7 @@
         <p>{$t('Describe what the pipeline should achieve. The assistant proposes agents and links; you review and apply them to this draft.')}</p>
         <div class="suggestions">
           {#each SUGGESTIONS as suggestion (suggestion)}
-            <button type="button" onclick={() => void send($t(suggestion))} disabled={sending || !harness}>{$t(suggestion)}</button>
+            <button type="button" onclick={() => void send($t(suggestion))} disabled={!canSend}>{$t(suggestion)}</button>
           {/each}
         </div>
         {#if !available.length}<p class="warn">{$t('No agent harness is ready yet.')}</p>{/if}
@@ -396,7 +456,7 @@
             <div class="proposal proposal--bad">
               <strong><TriangleAlert size={13} /> {$t('The proposal did not pass validation')}</strong>
               <pre>{proposal.error}</pre>
-              <Button size="sm" disabled={sending || running} onclick={() => void send(`${$t('Your JSON did not pass Nano Desktop validation. Fix these errors and send the complete system again:')}\n${proposal.error}`)}>{$t('Ask to fix')}</Button>
+              <Button size="sm" disabled={!canSend || running} onclick={() => void send(`${$t('Your JSON did not pass Nano Desktop validation. Fix these errors and send the complete system again:')}\n${proposal.error}`)}>{$t('Ask to fix')}</Button>
             </div>
           {/if}
         </div>
@@ -408,8 +468,16 @@
   </div>
 
   {#if error}<p class="error" role="alert">{$t(error)}</p>{/if}
+  {#if modelsError}
+    <p class="error" role="status">
+      {$t(modelsError)}
+      <Button size="sm" onclick={() => harness && void editor.loadCatalog(harness, true, harnessVersion)}>{$t('Retry')}</Button>
+    </p>
+  {:else if !sessionId && modelKey && !listedModel && !modelsLoading}
+    <p class="error" role="status">{$t('Choose a model')}</p>
+  {/if}
   {#if editor.problemCount() > 0 && messages.length > 0 && !running}
-    <button type="button" class="fix" onclick={() => void send($t('Check found problems in the draft. Fix them and send the complete system again.'))} disabled={sending}>
+    <button type="button" class="fix" onclick={() => void send($t('Check found problems in the draft. Fix them and send the complete system again.'))} disabled={!canSend}>
       <TriangleAlert size={13} /> {$t('Ask the assistant to fix {0} problems', [editor.problemCount()])}
     </button>
   {/if}
@@ -422,7 +490,7 @@
       maxRows={8}
       placeholder={$t('Ask for a pipeline or a change…')}
       aria-label={$t('Message to the assistant')}
-      disabled={!harness}
+      disabled={!harness && !sending}
       onkeydown={(event) => {
         if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
           event.preventDefault();
@@ -435,7 +503,7 @@
       {#if running}
         <IconButton size="sm" label={$t('Stop')} onclick={() => void store.interrupt(sessionId)}><Square /></IconButton>
       {/if}
-      <IconButton size="sm" label={$t('Send')} disabled={!text.trim() || sending || !harness} onclick={() => void send()}>
+      <IconButton size="sm" label={$t('Send')} disabled={!text.trim() || !canSend} onclick={() => void send()}>
         {#if sending}<Spinner size={12} />{:else}<ArrowUp />{/if}
       </IconButton>
     </div>

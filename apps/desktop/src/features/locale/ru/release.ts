@@ -26,9 +26,9 @@ export const releaseRu: Readonly<Record<string, string>> = {
     'Nano Desktop устанавливает обновление, только если его подпись совпадает с ключом, встроенным в эту версию. Для проверки Nano Desktop обращается к {0}.',
   'Install Nano Desktop {0}?': 'Установить Nano Desktop {0}?',
   'Nano Desktop downloads the update and checks its signature. Then it stops running chats and pipeline steps as it does when you quit, installs the update and starts again.':
-    'Nano Desktop загрузит обновление и проверит его подпись. Затем остановит идущие чаты и шаги пайплайнов, как при выходе, установит обновление и запустится снова.',
+    'Nano Desktop загрузит обновление и проверит его подпись. Затем остановит идущие чаты и шаги конвейеров, как при выходе, установит обновление и запустится снова.',
   'Finish or copy any message you are writing first. Interrupted pipeline steps can be reviewed in Runs after the restart.':
-    'Сначала допишите или скопируйте сообщение, которое набираете. Прерванные шаги пайплайнов можно будет проверить в разделе «Запуски» после перезапуска.',
+    'Сначала допишите или скопируйте сообщение, которое набираете. Прерванные шаги конвейеров можно будет проверить в разделе «Запуски» после перезапуска.',
   // Update failures (host codes)
   'The update request was not valid.': 'Некорректный запрос обновления.',
   'Updates are not set up in this build.': 'В этой сборке обновления не настроены.',

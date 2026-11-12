@@ -19,7 +19,7 @@ import {
   type PipelineOutput,
   type RunInputValue,
 } from '../../host-api/orchestrationClient';
-import { outputFields, parseIssue, referencedCommands, resolvePipelineName, type SubpipelineInfo } from '../../host-api/subpipelines';
+import { MAX_PIPELINE_OUTPUTS, SUBPIPELINE_ISSUES, outputFields, parseIssue, referencedCommands, resolvePipelineName, type SubpipelineInfo } from '../../host-api/subpipelines';
 import type { HarnessModelsResult } from '../../../../../contracts/harness-models-v18';
 import {
   emptyGraph,
@@ -47,6 +47,7 @@ import { applyConversion, planConversion, type ConversionContext, type NodeType 
 import { ScriptTests } from './scriptTests.svelte';
 import { forgetLastPipeline, rememberLastPipeline } from './lastPipeline';
 import { scriptTestHost, type ScriptTestClient } from '../../host-api/scriptTestClient';
+import { inputNameFrom } from './inputs/runInputs';
 
 export type EditorOperation = 'open' | 'save' | 'check' | 'import' | 'run';
 export const NODE_WIDTH = 248;
@@ -113,6 +114,7 @@ export class PipelineEditorStore {
   private loadedCatalogs = $state.raw<Partial<Record<AgentProfile['harness'], HarnessModelsResult>>>({});
   /** The `nanoAccount.catalogRevision` the loaded Nano catalog answered for. */
   private nanoCatalogRevision = -1;
+  private catalogLoads = new Map<AgentProfile['harness'], symbol>();
   catalogErrors = $state.raw<Partial<Record<AgentProfile['harness'], string>>>({});
   /**
    * The harness's models are known but its skills, MCP servers and tools are
@@ -553,7 +555,7 @@ export class PipelineEditorStore {
 
   /** The first model of a harness's native catalog, so a new profile can run at once. */
   async defaultModel(harness: AgentProfile['harness']): Promise<Pick<AgentProfile, 'model' | 'modelProvider'> | undefined> {
-    if (!this.catalogs[harness]) await this.loadCatalog(harness);
+    await this.loadCatalog(harness);
     const model = this.catalogs[harness]?.models[0];
     return model ? { model: model.id, ...(model.provider ? { modelProvider: model.provider } : {}) } : undefined;
   }
@@ -645,8 +647,26 @@ export class PipelineEditorStore {
     this.commit(autoLayout(this.graph, heights));
   }
 
+  /** A wire to Output declares a result; Output is never an executable step. */
+  connectOutput(source: string): string | undefined {
+    if (this.readOnly) return undefined;
+    if (this.connectKind !== 'result') return 'Only result connections can connect to Output.';
+    const node = this.graph.nodes.find((item) => item.id === source);
+    if (!node) return 'Choose a source step for Output.';
+    if (node.kind === 'router') return 'A router exposes branch routes, not a result output.';
+    if (node.executionMode === 'callable') return 'Callable agents exchange results through their caller, not pipeline dependencies.';
+    const outputs = this.graph.outputs ?? [];
+    if (outputs.some((output) => output.sourceStepId === source)) return undefined;
+    if (outputs.length >= MAX_PIPELINE_OUTPUTS) return SUBPIPELINE_ISSUES.outputs;
+    const name = inputNameFrom('result', new Set(outputs.map((output) => output.name)));
+    this.settle();
+    this.setOutputs([...outputs, { name, kind: 'text', sourceStepId: source }]);
+    return undefined;
+  }
+
   /** Declared outputs (v6.7): what the pipeline returns when it runs as a sub-pipeline. */
   setOutputs(outputs: PipelineOutput[], live = false): void {
+    if (this.readOnly) return;
     const next = { ...this.graph, outputs: outputs.length ? outputs : undefined };
     if (live) this.setLive(next);
     else this.commit(next);
@@ -672,9 +692,11 @@ export class PipelineEditorStore {
     return rest;
   }
 
-  async loadCatalog(harness: AgentProfile['harness'], refresh = false): Promise<void> {
+  async loadCatalog(harness: AgentProfile['harness'], refresh = false, version: string | undefined = undefined): Promise<void> {
     if (this.safeMode) return;
     const request = { workspaceId: this.workspaceId, harness };
+    const load = Symbol();
+    this.catalogLoads.set(harness, load);
     // The account state this answer is for; a change while it loads leaves it out of date.
     const accountRevision = nanoAccount.catalogRevision;
     const waitForResources = (waiting: boolean): void => {
@@ -682,6 +704,7 @@ export class PipelineEditorStore {
     };
     // An answer carries the models; the resources follow while the probe is unsettled.
     const loaded = (result: HarnessModelsResult, settled: boolean): void => {
+      if (this.catalogLoads.get(harness) !== load) return;
       if (harness === 'nano') this.nanoCatalogRevision = accountRevision;
       this.loadedCatalogs = { ...this.loadedCatalogs, [harness]: result };
       const { [harness]: _error, ...rest } = this.catalogErrors;
@@ -690,14 +713,15 @@ export class PipelineEditorStore {
       waitForResources(!settled && result.resources.items.length === 0);
     };
     const failed = (error: unknown): void => {
+      if (this.catalogLoads.get(harness) !== load) return;
       this.catalogErrors = { ...this.catalogErrors, [harness]: error instanceof Error ? error.message : 'Could not load models.' };
       waitForResources(false);
     };
     try {
       // A remembered catalog shows at once; the native probe replaces it.
-      if (refresh) loaded(await harnessModels(request, true), true);
+      if (refresh) loaded(await harnessModels(request, true, version), true);
       else {
-        const first = await cachedHarnessModels(request, { onFresh: (result) => loaded(result, catalogSettled(request)), onError: failed });
+        const first = await cachedHarnessModels(request, { version, onFresh: (result) => loaded(result, catalogSettled(request)), onError: failed });
         loaded(first, catalogSettled(request));
       }
     } catch (error) {

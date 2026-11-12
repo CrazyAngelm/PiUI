@@ -171,7 +171,7 @@ export const acpRu: Readonly<Record<string, string>> = {
   JSON: 'JSON',
   'Agent ID': 'ID агента',
   'Lowercase letters, digits and hyphens, for example qwen-code. Chats and pipelines use it as acp:<ID>.':
-    'Строчные латинские буквы, цифры и дефисы, например qwen-code. Чаты и пайплайны используют его как acp:<ID>.',
+    'Строчные латинские буквы, цифры и дефисы, например qwen-code. Чаты и конвейеры используют его как acp:<ID>.',
   'A program name found on PATH or an absolute path. Nano Desktop never uses a shell.':
     'Имя программы из PATH или абсолютный путь. Nano Desktop никогда не использует оболочку.',
   'One argument per line, for example --experimental-acp.': 'По одному аргументу в строке, например --experimental-acp.',

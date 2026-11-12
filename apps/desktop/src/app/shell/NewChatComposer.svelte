@@ -31,6 +31,7 @@
   import type { AgentGraph } from '../../features/orchestration/agentGraph';
   import { useWorkspace } from './context';
   import { createOpenGuard } from './openGuard';
+  import { modelSelectionKey, resolveModelSelection } from '../../host-api/modelSelection';
   import { reconcileSelection, restoredSelection, type NewChatChoice, type NewChatSelection } from './newChatChoice';
   import FusionModeBar from '../fusion/FusionModeBar.svelte';
   import { fusionErrorText, refusalCopy, roleLabel } from '../fusion/fusionPair';
@@ -85,11 +86,12 @@
   let modelsLoading = $state(false);
   /** The list is another project's catalog of this harness, shown until this project's own answers. */
   let modelsProvisional = $state(false);
+  let modelsResolved = $state(false);
   let modelsError = $state('');
   /** Set when resource discovery failed: the models stay, skills can be retried. */
   let resourcesWarning = $state('');
   let catalogAttempt = $state(0);
-  let catalogFor = '';
+  let catalogFor = $state('');
   let busy = $state(false);
   let textarea = $state<HTMLTextAreaElement | null>(null);
   let menuIndex = $state(0);
@@ -105,7 +107,7 @@
   const available = $derived(store.catalog.harnesses.filter((item) => item.status === 'available'));
   // A string, not the entry: every session event replaces the catalog, only a new version asks again.
   const harnessVersion = $derived(store.catalog.harnesses.find((item) => item.kind === harness)?.version ?? '');
-  const model = $derived(models.find((item) => JSON.stringify([item.provider, item.id]) === modelKey));
+  const model = $derived(resolveModelSelection(models, modelKey, harness));
   const levels = $derived(model?.thinkingLevels ?? []);
   // Before a session exists only the manifest is known; the host decides at send.
   const imageState = $derived(imageSupport(fusionMode && fusionPair ? fusionPair.lead.harness : harness, undefined));
@@ -191,6 +193,7 @@
       models = [];
       skills = [];
       modelsProvisional = false;
+      modelsResolved = false;
     }
     catalogFor = forKey;
     modelsError = '';
@@ -207,12 +210,12 @@
       if (cancelled) return;
       models = result.models;
       modelsProvisional = false;
+      modelsResolved = true;
       const degraded = catalogDegraded(result);
       // A failed discovery keeps the skills this picker already showed.
       if (!degraded || result.resources.items.length) skills = result.resources.items;
       resourcesWarning = degraded ? 'Skills, MCP servers and tools could not be loaded from the harness.' : '';
       modelsError = '';
-      if (modelKey && !result.models.some((item) => JSON.stringify([item.provider, item.id]) === modelKey)) modelKey = '';
     };
     // A native probe can fail transiently (slow harness start); retry once
     // before reporting, unless the host refused with a code. A remembered
@@ -298,6 +301,7 @@
   });
 
   $effect(() => {
+    if (modelKey && !explicitModelReady) return;
     if (thinkingLevel && !levels.includes(thinkingLevel)) thinkingLevel = '';
     if (fast && !model?.supportsFast) fast = false;
   });
@@ -347,7 +351,12 @@
       return;
     }
     pipelineId = '';
-    if (next.harness) harness = next.harness;
+    if (next.harness && next.harness !== harness) {
+      harness = next.harness;
+      modelKey = '';
+      thinkingLevel = '';
+      fast = false;
+    }
   }
 
   /** A template becomes a new draft in the editor; saving it there is the person's decision. */
@@ -385,7 +394,7 @@
 
   const modelOptions = $derived<ModelOption[]>(
     models.map((item) => ({
-      key: JSON.stringify([item.provider, item.id]),
+      key: modelSelectionKey(item),
       name: item.name,
       id: item.id,
       ...(item.provider ? { provider: item.provider } : {}),
@@ -400,13 +409,16 @@
     { value: 'full-access', label: $t('Full access'), description: $t('No native restrictions — use with care') },
   ]);
 
+  const explicitModelReady = $derived(
+    catalogFor === JSON.stringify([workspaceId, harness]) && modelsResolved && !modelsProvisional && Boolean(model),
+  );
   const canSend = $derived(
     Boolean(text.trim()) &&
       Boolean(workspaceId) &&
       !busy &&
       !store.safeMode &&
-      // A model picked from another project's list waits for this project's own catalog.
-      (fusionMode ? fusionReady : pipelineId ? Boolean(pipelineDetail?.accepts) && available.length > 0 : Boolean(harness) && !(modelsProvisional && modelKey)),
+      // An explicit model must be present in this project's own catalog.
+      (fusionMode ? fusionReady : pipelineId ? Boolean(pipelineDetail?.accepts) && available.length > 0 : Boolean(harness) && (!modelKey || explicitModelReady)),
   );
 
   function setText(value: string): void {
@@ -712,7 +724,7 @@
         <ModelPicker
           models={modelOptions}
           {harness}
-          value={modelKey}
+          value={model ? modelSelectionKey(model) : modelKey}
           defaultOption={true}
           loading={modelsLoading}
           error={modelsError}
@@ -729,7 +741,7 @@
           {#snippet trigger(props)}
             <button type="button" class="chip" {...props} aria-busy={modelsLoading || undefined}>
               {#if modelsLoading}<Spinner size={12} />{:else}<Brain size={14} />{/if}
-              <span>{model?.name ?? $t('Default model')}</span>
+              <span>{model?.name ?? (modelKey ? $t('Choose a model') : $t('Default model'))}</span>
               {#if thinkingLevel}<span class="chip__sub">{thinkingLevel}</span>{/if}
               {#if fast}<Zap size={12} />{/if}
               <ChevronDown size={12} />
@@ -767,7 +779,12 @@
     <button type="button" class="link" onclick={() => onTrust(workspace)}>{$t('Review trust…')}</button>
   </p>
 {:else if modelsError && modelsError !== workspaceError({ code: 'SIGN_IN_REQUIRED' }).message}
-  <p class="notice notice--error">{modelsError}</p>
+  <p class="notice notice--error" role="status">
+    {$t(modelsError)}
+    <button type="button" class="link" onclick={() => (catalogAttempt += 1)}>{$t('Retry')}</button>
+  </p>
+{:else if !pipelineId && !fusionMode && modelKey && modelsResolved && !model}
+  <p class="notice notice--error">{$t('Choose a model')}</p>
 {:else if resourcesWarning && !modelsLoading}
   <p class="notice" role="status">
     {$t(resourcesWarning)}

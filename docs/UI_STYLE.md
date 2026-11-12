@@ -68,6 +68,13 @@ one-way. Messaging permits sending to the target; observation permits reading
 the target's activity; delegation permits spawning the target profile subject
 to the existing host permission checks.
 
+Dragging a scheduled step's result port to the pipeline Output block declares
+its whole result text and opens the output settings, where a named field can be
+chosen instead. Reconnecting the same source preserves its declarations. This
+is one undoable edit to the pipeline outputs, not a dependency or executable
+step; collaboration links, callable agents and router branches are refused.
+Russian interface copy calls a pipeline «конвейер».
+
 
 Library lists show the saved name and useful summary: model, members/coordinator,
 or tasks/dependencies. Empty lists explain the first action; saved launches use

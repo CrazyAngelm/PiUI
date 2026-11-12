@@ -9,6 +9,20 @@ it('checks actual reasoning and Fast rather than manifest examples', async () =>
   expect((await preflightGraph(graph,async () => ({...catalog,models:[{id:'native',name:'Native',thinkingLevels:['low']}]}))).map(issue => issue.message)).toContain('Fast is unavailable for this model.');
   expect(await preflightGraph(graph,async () => {throw Error('offline');})).toHaveLength(1);
 });
+it('accepts the legacy Codex OpenAI provider only for a matching or unique provider-less model', async () => {
+  const graph = emptyGraph();
+  const node = newGraphNode(0);
+  node.profile = { ...node.profile, model: 'gpt-5', modelProvider: 'openai' };
+  graph.nodes = [node];
+  const model = { id: 'gpt-5', name: 'GPT 5' };
+  const catalog = { protocol: 18 as const, harness: 'codex' as const, models: [model], resources: { items: [], warnings: [] } };
+  expect(await preflightGraph(graph, async () => catalog)).toEqual([]);
+  expect(await preflightGraph(graph, async () => ({ ...catalog, models: [{ ...model, provider: 'custom' }] })))
+    .toContainEqual({ nodeId: node.id, message: 'The selected model is not in the native catalog.' });
+  node.profile = { ...node.profile, modelProvider: 'custom' };
+  expect(await preflightGraph(graph, async () => catalog))
+    .toContainEqual({ nodeId: node.id, message: 'The selected model is not in the native catalog.' });
+});
 it('reports an unverifiable catalog once instead of every selected resource when discovery degraded', async () => {
   const graph = emptyGraph(); graph.nodes = [newGraphNode(0)];
   graph.nodes[0]!.profile = { ...graph.nodes[0]!.profile, model: 'native', reasoning: undefined, serviceTier: undefined,

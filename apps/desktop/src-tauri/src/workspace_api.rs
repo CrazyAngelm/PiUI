@@ -3138,6 +3138,40 @@ pub enum HarnessCatalogPart {
     Resources,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum HarnessModelsRequestV19 {
+    #[serde(rename_all = "camelCase")]
+    Full {
+        workspace_id: String,
+        harness: HarnessKind,
+    },
+    #[serde(rename_all = "camelCase")]
+    Split {
+        workspace_id: String,
+        harness: HarnessKind,
+        part: HarnessCatalogPart,
+        #[serde(deserialize_with = "catalog_discovery_id")]
+        discovery_id: Uuid,
+    },
+}
+
+fn catalog_discovery_id<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Uuid, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    Uuid::parse_str(&value)
+        .ok()
+        .filter(|id| id.hyphenated().to_string().eq_ignore_ascii_case(&value))
+        .ok_or_else(|| serde::de::Error::custom("expected a hyphenated UUID"))
+}
+
+#[derive(Serialize)]
+pub struct HarnessModelsResultV19 {
+    protocol: u8,
+    catalog: HarnessModelsResult,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HarnessModelsResult {
@@ -3170,14 +3204,51 @@ pub async fn harness_models_v18(
     state: State<'_, HostState>,
     request: HarnessModelsRequest,
 ) -> Result<HarnessModelsResult, WorkspaceError> {
+    harness_models(state.inner(), request, None).await
+}
+
+#[tauri::command]
+pub async fn harness_models_v19(
+    state: State<'_, HostState>,
+    request: HarnessModelsRequestV19,
+) -> Result<HarnessModelsResultV19, WorkspaceError> {
+    let (workspace_id, harness, part, discovery_id) = match request {
+        HarnessModelsRequestV19::Full {
+            workspace_id,
+            harness,
+        } => (workspace_id, harness, None, None),
+        HarnessModelsRequestV19::Split {
+            workspace_id,
+            harness,
+            part,
+            discovery_id,
+        } => (workspace_id, harness, Some(part), Some(discovery_id)),
+    };
+    let request = HarnessModelsRequest {
+        workspace_id,
+        harness,
+        part,
+    };
+    let catalog = harness_models(state.inner(), request, discovery_id).await?;
+    Ok(HarnessModelsResultV19 {
+        protocol: 19,
+        catalog,
+    })
+}
+
+async fn harness_models(
+    state: &HostState,
+    request: HarnessModelsRequest,
+    discovery_id: Option<Uuid>,
+) -> Result<HarnessModelsResult, WorkspaceError> {
     if state.safe_mode {
         return Err(WorkspaceError::safe_mode());
     }
-    let directory = verified_project_directory(state.inner(), &request.workspace_id, true)?;
+    let directory = verified_project_directory(state, &request.workspace_id, true)?;
     if request.harness == HarnessKind::Nano {
         // The host serves the Nano catalog from the account's entitled modes;
         // no Pi process is started to discover models.
-        return nano_host_catalog(state.inner(), request.harness);
+        return nano_host_catalog(state, request.harness);
     }
     if let Some(agent) = request.harness.acp_agent() {
         // ACP advertises models only inside a conversation, and a probe
@@ -3194,13 +3265,14 @@ pub async fn harness_models_v18(
         });
     }
     let key = (
-        request.workspace_id.clone(),
+        request.workspace_id,
         format!("{:?}", request.harness),
+        discovery_id,
     );
     let harness = request.harness;
     if request.part == Some(HarnessCatalogPart::Resources) {
         let resources = catalog_resources_part(&key, || async {
-            let (runtime, drain) = spawn_catalog_probe(state.inner(), &directory, harness).await?;
+            let (runtime, drain) = spawn_catalog_probe(state, &directory, harness).await?;
             // A degraded discovery comes back as a warning, which the UI
             // treats as retryable.
             let resources = catalog_resources(runtime.resources().await, harness);
@@ -3210,7 +3282,7 @@ pub async fn harness_models_v18(
         .await?;
         return Ok(HarnessModelsResult::resources_only(harness, resources));
     }
-    let (runtime, drain) = spawn_catalog_probe(state.inner(), &directory, harness).await?;
+    let (runtime, drain) = spawn_catalog_probe(state, &directory, harness).await?;
     let models = match runtime.catalog_models().await {
         Ok(models) => models,
         Err(error) => {
@@ -3257,12 +3329,11 @@ pub async fn harness_models_v18(
     })
 }
 
-type CatalogKey = (String, String);
+type CatalogKey = (String, String, Option<Uuid>);
 type CatalogDiscovery =
     watch::Receiver<Option<piui_runtime::workspace_runtime::NativeResourceCatalog>>;
-/// Discoveries per project and harness, oldest first: parallel `models`
-/// requests each hand off their own, and `resources` requests claim them in
-/// the same order.
+/// V18 uses a FIFO for each project and harness. V19 claims a single
+/// discovery by its UUID within the same project and harness.
 type PendingCatalogResources =
     HashMap<CatalogKey, VecDeque<(std::time::Instant, CatalogDiscovery)>>;
 
@@ -3296,7 +3367,12 @@ fn insert_pending_catalog_resources(
     now: std::time::Instant,
 ) {
     retain_unexpired(pending, now);
-    pending.entry(key).or_default().push_back((now, receiver));
+    let correlated = key.2.is_some();
+    let queue = pending.entry(key).or_default();
+    if correlated {
+        queue.clear();
+    }
+    queue.push_back((now, receiver));
 }
 
 /// Claims the oldest unexpired discovery for this project and harness.
@@ -4678,7 +4754,7 @@ Board."
 
     #[tokio::test]
     async fn a_models_request_hands_its_resource_discovery_to_one_resources_request() {
-        let key = ("handoff-project".to_owned(), "Codex".to_owned());
+        let key = ("handoff-project".to_owned(), "Codex".to_owned(), None);
         let (sender, receiver) = tokio::sync::watch::channel(None);
         super::insert_pending_catalog_resources(
             &mut super::pending_catalog_resources().lock().unwrap(),
@@ -4752,9 +4828,110 @@ Board."
         }
     }
 
+    #[test]
+    fn catalog_v19_contract_correlates_only_split_requests() {
+        use super::{HarnessModelsRequestV19, HarnessModelsResultV19};
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/fixtures/harness-models-v19.json"
+        ))
+        .expect("harness models v19 fixture");
+        for request in fixture["accepted"].as_array().expect("accepted requests") {
+            serde_json::from_value::<HarnessModelsRequestV19>(request.clone())
+                .expect("accepted v19 request");
+            if request.get("part").is_some() {
+                assert!(
+                    serde_json::from_value::<super::HarnessModelsRequest>(request.clone()).is_err()
+                );
+            }
+        }
+        for request in fixture["rejected"].as_array().expect("rejected requests") {
+            assert!(
+                serde_json::from_value::<HarnessModelsRequestV19>(request.clone()).is_err(),
+                "{request}"
+            );
+        }
+        let result = HarnessModelsResultV19 {
+            protocol: 19,
+            catalog: super::HarnessModelsResult::resources_only(
+                super::HarnessKind::Codex,
+                super::empty_resource_catalog(),
+            ),
+        };
+        assert_eq!(
+            serde_json::to_value(result).expect("serialized result"),
+            fixture["result"]
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_v19_claims_only_its_workspace_harness_and_discovery_id() {
+        let first_id = super::Uuid::new_v4();
+        let legacy_key = ("correlated-project".to_owned(), "Codex".to_owned(), None);
+        let first_key = (legacy_key.0.clone(), legacy_key.1.clone(), Some(first_id));
+        let second_key = (
+            legacy_key.0.clone(),
+            legacy_key.1.clone(),
+            Some(super::Uuid::new_v4()),
+        );
+        let other_workspace = (
+            "different-project".to_owned(),
+            legacy_key.1.clone(),
+            Some(first_id),
+        );
+        let other_harness = (legacy_key.0.clone(), "Pi".to_owned(), Some(first_id));
+        for (key, warning) in [
+            (&legacy_key, "legacy"),
+            (&first_key, "first"),
+            (&second_key, "second"),
+        ] {
+            let (sender, receiver) = tokio::sync::watch::channel(None);
+            super::insert_pending_catalog_resources(
+                &mut super::pending_catalog_resources()
+                    .lock()
+                    .expect("pending lock"),
+                key.clone(),
+                receiver,
+                std::time::Instant::now(),
+            );
+            sender
+                .send(Some(
+                    piui_runtime::workspace_runtime::NativeResourceCatalog {
+                        items: Vec::new(),
+                        warnings: vec![warning.into()],
+                    },
+                ))
+                .expect("pending discovery");
+        }
+
+        for missing in [&other_workspace, &other_harness] {
+            let resources = super::catalog_resources_part(missing, || async {
+                Ok(piui_runtime::workspace_runtime::NativeResourceCatalog {
+                    items: Vec::new(),
+                    warnings: vec!["fresh".into()],
+                })
+            })
+            .await
+            .expect("fresh discovery");
+            assert_eq!(resources.warnings, ["fresh"]);
+        }
+        for (key, warning) in [
+            (&second_key, "second"),
+            (&first_key, "first"),
+            (&legacy_key, "legacy"),
+        ] {
+            let resources = super::catalog_resources_part(key, || async {
+                panic!("matching discovery must be reused");
+            })
+            .await
+            .expect("matched discovery");
+            assert_eq!(resources.warnings, [warning]);
+        }
+        assert!(super::take_catalog_resources(&first_key).await.is_none());
+    }
+
     #[tokio::test]
     async fn parallel_models_requests_hand_off_one_discovery_each_in_order() {
-        let key = ("queued-project".to_owned(), "Codex".to_owned());
+        let key = ("queued-project".to_owned(), "Codex".to_owned(), None);
         let discovery = |name: &str| piui_runtime::workspace_runtime::NativeResourceCatalog {
             items: Vec::new(),
             warnings: vec![name.into()],
@@ -4811,7 +4988,11 @@ Board."
             }
         };
 
-        let key = ("resources-part-project".to_owned(), "Codex".to_owned());
+        let key = (
+            "resources-part-project".to_owned(),
+            "Codex".to_owned(),
+            None,
+        );
         let (sender, receiver) = tokio::sync::watch::channel(None);
         super::insert_pending_catalog_resources(
             &mut super::pending_catalog_resources().lock().unwrap(),
@@ -4880,7 +5061,7 @@ Board."
         let ttl = super::PENDING_CATALOG_RESOURCES_TTL;
         let second = std::time::Duration::from_secs(1);
         let mut pending = PendingCatalogResources::new();
-        let key = |name: &str| (name.to_owned(), "Codex".to_owned());
+        let key = |name: &str| (name.to_owned(), "Codex".to_owned(), None);
 
         let (_sender, receiver) = tokio::sync::watch::channel(None);
         insert_pending_catalog_resources(&mut pending, key("old"), receiver, start);

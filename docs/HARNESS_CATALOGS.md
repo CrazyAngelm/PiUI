@@ -1,8 +1,9 @@
 # Native settings catalogs
 
-`harness_models_v18` is an additive host route. It accepts only a trusted
-workspace ID and a typed harness identity; safe mode rejects runtime discovery.
-The v11 workspace grammar and native history formats remain unchanged.
+`harness_models_v19` accepts a trusted workspace ID and a typed harness
+identity. Safe mode rejects runtime discovery. Its response wraps the catalog
+in `{ protocol: 19, catalog }`. The agent API still uses `harness_models_v18`
+with its original request and response.
 
 The response preserves model ID and provider together, native reasoning levels,
 and resource IDs, names, default state and configurability. UI examples in an
@@ -10,8 +11,11 @@ adapter manifest are never used as a model's reasoning options. Catalog failures
 remain visible and retryable. Imported settings missing from a catalog remain
 visible and are not silently removed.
 
-Codex reads `model/list`, `skills/list`, `config/read` (projected to MCP names and
-enabled state only), and `mcpServerStatus/list`. Pi uses its RPC model/command
+Codex reads `model/list`, `skills/list`, `config/read` (projected to the configured
+model provider and MCP names/enabled state only), and `mcpServerStatus/list`.
+Catalog-only Codex initialization never starts or resumes a thread. An absent
+provider stays absent; a saved legacy OpenAI selection can match a unique
+provider-less Codex model, but never a different explicit provider. Pi uses its RPC model/command
 catalog and the installed Pi AI SDK's thinking-level resolver. Prime uses its
 native model registry and resource services in catalog-only mode, without
 creating an inference session or refreshing credentials over the network.
@@ -26,23 +30,29 @@ Every required restriction is still checked by the existing host launch policy.
 
 The host owns and disposes discovery processes. Prime receives an explicit
 isolated supervisor address. Catalog discovery does not create a PiUI chat,
-write native history, or submit a model prompt.
+write native history, or submit a model prompt. Pi catalog-only startup uses
+`--no-session` and asks for models once. Hermes discovers models separately from
+skills and tools, so a failed resource import cannot prevent model selection.
 
 Resource discovery waits on native MCP startup (about ten seconds for Codex)
 and never discards an answered model catalog: a failed or timed-out discovery
 returns the models with an empty resource list and a visible warning. The
-optional request field `part` splits one probe: `models` answers as soon as the
-native catalog does and leaves discovery running in the same probe; the next
-`resources` request for that workspace and harness collects it. Parallel
-`models` requests queue one discovery each and `resources` requests claim them
-oldest first (unclaimed discoveries expire after two minutes; without one the
-host starts a new probe).
-Model pickers use the split, so they never wait for MCP servers. A request
-without `part` still answers both from one probe.
+v19 split request pairs `part` with a UUID in `discoveryId`. The `models` part
+returns as soon as the native models are available and leaves resource discovery
+running in the same probe. The `resources` part claims that discovery by
+workspace, harness, and UUID. A missing or expired match starts a fresh
+resource-only probe. The existing two-minute expiry applies to unclaimed
+discoveries. V18 split callers continue to claim discoveries in FIFO order.
+Model pickers and frontend full refreshes use the split, so a picker joining a
+refresh can show models while MCP servers start.
+A full v19 request omits both fields and returns models and resources together.
 
 The workbench never remembers a degraded answer (resources replaced by the
 warning): the next picker asks for the resources again and reuses the answered
-models, the stored snapshot keeps the resources it had, and preflight reports
+models while they are within the existing five-minute freshness window and
+match the native version. Partial failures (skills, MCP servers or tools) are
+also degraded; ordinary configuration warnings are not. The stored snapshot
+keeps the resources it had, and preflight reports
 one "Could not verify the native catalog" instead of a missing resource per
 rule. An explicit refresh never joins a split load in flight. The new-chat
 composer shows that warning with Retry and keeps the models and any skills it
@@ -59,6 +69,22 @@ is shown at once and asked again in the background. A coded refusal
 (`SIGN_IN_REQUIRED`, trust, safe mode) forgets the snapshots; a transient
 failure (`RUNTIME_FAILED`, unknown) keeps them. Sign-in checks and preflight
 never read a snapshot.
+
+The pipeline inspector and assistant revalidate through this shared cache on
+open or harness/version changes. Their component state does not extend the
+catalog lifetime. New chat preserves an explicit remembered selection while
+its catalog loads; a missing selection requires choosing another model or the
+native default instead of silently starting a different model.
+
+The pipeline assistant restores harness and model from its native session,
+and reasoning/Fast from live runtime settings when available. Settings changes
+finish before a prompt can be sent, including when the panel is closed and
+reopened during the operation. Draft reasoning and Fast are reconciled with
+fresh model capabilities. If requested settings are refused at chat creation,
+the chat and draft are retained and no first prompt is submitted with defaults.
+Building the prompt uses already loaded
+catalogs; an unknown catalog is marked unknown, and unused harnesses never
+block the assistant's send.
 
 Catalog v14 carries `supportsFast` per model from the adapter. Prime uses its
 native `supportsFastMode` resolver. Pi exposes no Fast service tier; Codex uses

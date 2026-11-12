@@ -99,7 +99,7 @@
         problems: editor.nodeProblems(node.id).length,
         readOnly,
         wire: wireOf(node.id),
-        wiredOut: graph.edges.some((edge) => edge.from === node.id && WIRED.has(edge.kind)),
+        wiredOut: graph.edges.some((edge) => edge.from === node.id && WIRED.has(edge.kind)) || (graph.outputs ?? []).some((output) => output.sourceStepId === node.id),
         wiredBranches: graph.edges.filter((edge) => edge.from === node.id && edge.kind === 'route').map((edge) => edge.branchId ?? ''),
         inputs: [...new Set(graph.edges.filter((edge) => edge.to === node.id && WIRED.has(edge.kind)).map((edge) => edge.from))].map((from) => ({
           id: from,
@@ -174,11 +174,11 @@
         type: 'output',
         ariaLabel: $t('Output'),
         position: { x, y },
-        data: { outputs, problems: editor.issues.filter((issue) => issue.message === SUBPIPELINE_ISSUES.outputs).length },
+        data: { outputs, readOnly, problems: editor.issues.filter((issue) => issue.message === SUBPIPELINE_ISSUES.outputs).length },
         selected: editor.selectedId === OUTPUT_NODE_ID,
         draggable: false,
         deletable: false,
-        connectable: false,
+        connectable: !readOnly,
       } as OutputFlowNode);
       for (const source of new Set(outputs.map((output) => output.sourceStepId))) {
         if (!names.has(source)) continue;
@@ -187,7 +187,7 @@
           type: 'piui',
           source,
           target: OUTPUT_NODE_ID,
-          ariaLabel: connectionLabel($t, 'start', names.get(source) ?? '', $t('Output')),
+          ariaLabel: connectionLabel($t, 'result', names.get(source) ?? '', $t('Output')),
           sourceHandle: 'out',
           targetHandle: 'in',
           data: { kind: 'result' },
@@ -245,6 +245,16 @@
   }
 
   function beforeConnect(connection: Connection): false {
+    if (connection.target === OUTPUT_NODE_ID) {
+      const error = editor.connectOutput(connection.source);
+      if (error) toasts.error($t('Cannot connect'), $t(error));
+      else if (!editor.readOnly) {
+        editor.selectedId = OUTPUT_NODE_ID;
+        editor.selectedEdge = '';
+      }
+      sync();
+      return false;
+    }
     const before = new Set(editor.graph.edges.map(edgeKey));
     const error = editor.connect(connection.source, connection.target, connection.sourceHandle);
     if (error) toasts.error($t('Cannot connect'), $t(error));

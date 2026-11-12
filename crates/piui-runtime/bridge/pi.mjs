@@ -135,11 +135,16 @@ export async function createPiAdapter(config, emit) {
     ? config.allowedTools.filter((name) => config.permissionMode !== "read-only" || readOnlyTools.has(name))
     : config.permissionMode === "read-only" ? [...readOnlyTools] : undefined;
 
+  const catalogOnly = !nano && config.catalogOnly === true;
   // Nano never passes `--approve`: project `.pi` resources stay untrusted.
   const commandArgs = [...config.runtimeArgs, "--mode", "rpc", ...(nano ? ["--no-approve", "--offline"] : ["--approve"]), "--session-dir", config.sessionDir];
-  if (config.nativePath) commandArgs.push("--session", config.nativePath);
-  else if (config.nativeId) commandArgs.push("--session-id", config.nativeId);
-  if (config.title) commandArgs.push("--name", config.title);
+  if (catalogOnly) {
+    commandArgs.push("--no-session");
+  } else {
+    if (config.nativePath) commandArgs.push("--session", config.nativePath);
+    else if (config.nativeId) commandArgs.push("--session-id", config.nativeId);
+    if (config.title) commandArgs.push("--name", config.title);
+  }
   // Pi 1.4.0 exits when `--provider` comes without `--model`, so a Nano start
   // without a model passes neither and lets Pi restore the session's model.
   if (nano) { if (config.model) commandArgs.push("--provider", "nano", "--model", config.model.id); }
@@ -201,7 +206,7 @@ export async function createPiAdapter(config, emit) {
   }
 
   let instructionDirectory;
-  if (typeof config.instructions === "string" && config.instructions.trim()) {
+  if (!catalogOnly && typeof config.instructions === "string" && config.instructions.trim()) {
     instructionDirectory = await mkdtemp(join(config.sessionDir, "instructions-"));
     const instructionPath = join(instructionDirectory, "append.md");
     await writeFile(instructionPath, config.instructions, { mode: 0o600 });
@@ -757,26 +762,28 @@ export async function createPiAdapter(config, emit) {
   child.on("exit", cleanupInstructions);
   child.on("error", cleanupInstructions);
 
-  state = await request("get_state");
-  // Without a requested model Pi restored the session's own (or the private
-  // directory's default); anything but a Nano model is refused, never used.
-  if (nano && !config.model && state?.model?.provider !== "nano") {
-    disposing = true;
-    try { child.kill(); } catch {}
-    throw fail("unsupported-settings", "This session does not use a Nano model.");
+  if (!catalogOnly) {
+    state = await request("get_state");
+    // Without a requested model Pi restored the session's own (or the private
+    // directory's default); anything but a Nano model is refused, never used.
+    if (nano && !config.model && state?.model?.provider !== "nano") {
+      disposing = true;
+      try { child.kill(); } catch {}
+      throw fail("unsupported-settings", "This session does not use a Nano model.");
+    }
+    model = mapModel(state.model);
+    const modelResult = await request("get_available_models");
+    availableModels = mapModels(modelResult?.models);
+    const entriesResult = await request("get_entries").catch(() => ({ entries: [] }));
+    for (const entry of entriesResult?.entries ?? []) {
+      let block = historyBlock(entry);
+      // Two entries must never share an id: fall back to the entry id.
+      if (block && blocks.has(block.id)) block = historyBlock(entry, true);
+      if (block) blocks.set(block.id, block);
+    }
+    setStatus(state.isStreaming ? "running" : "idle");
+    emit({ type: "binding", nativeId: state.sessionId, ...(state.sessionFile ? { nativePath: state.sessionFile } : {}) });
   }
-  model = mapModel(state.model);
-  const modelResult = await request("get_available_models");
-  availableModels = mapModels(modelResult?.models);
-  const entriesResult = await request("get_entries").catch(() => ({ entries: [] }));
-  for (const entry of entriesResult?.entries ?? []) {
-    let block = historyBlock(entry);
-    // Two entries must never share an id: fall back to the entry id.
-    if (block && blocks.has(block.id)) block = historyBlock(entry, true);
-    if (block) blocks.set(block.id, block);
-  }
-  setStatus(state.isStreaming ? "running" : "idle");
-  emit({ type: "binding", nativeId: state.sessionId, ...(state.sessionFile ? { nativePath: state.sessionFile } : {}) });
 
   const capabilities = {
     prompt: { supported: true, enforcement: "native" },
@@ -797,7 +804,7 @@ export async function createPiAdapter(config, emit) {
     }
   };
 
-  return {
+  const adapter = {
     async resources() {
       const items = [...builtInTools].map(id => ({ kind: "tool", id, name: id, enabled: true, configurable: true }));
       const warnings = [];
@@ -928,4 +935,9 @@ export async function createPiAdapter(config, emit) {
       setStatus("closed");
     },
   };
+  if (catalogOnly) {
+    const { resources, models, catalogModels, dispose } = adapter;
+    return { resources, models, catalogModels, dispose };
+  }
+  return adapter;
 }
