@@ -218,8 +218,12 @@ export async function runShellWebview2Proof({
   checks.push('typed-host-project-registration', 'new-project-restricted');
 
   // 3. Trust is an explicit, labelled, non-sandbox decision with a focus trap.
+  const settingsStartedAt = performance.now();
   await click('Settings', sidebar);
-  await waitFor(settingsNav, 'Settings');
+  // The first lazy view requires Vite's cold module transforms, just like the
+  // pipeline editor below. Use the launcher's existing startup bound.
+  await waitFor(settingsNav, 'Settings', startupBoundMs);
+  timings.settingsFirstOpen = normalizedMilliseconds(performance.now() - settingsStartedAt);
   await click('Projects', settingsNav);
   const reviewButton = `[...document.querySelectorAll('article')].find((card) => card.textContent?.includes(${JSON.stringify(added.name)}))`;
   await waitFor(`${reviewButton}`, 'project card in Settings');
