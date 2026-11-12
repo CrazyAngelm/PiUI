@@ -46,6 +46,17 @@
     style={data.inputs.length ? `--port: ${data.inputs[0].wire}` : undefined}
     isConnectable={!data.readOnly}
   />
+  {#if data.wiredOut}
+    <!-- Declared outputs may read router data; branch handles remain control gates. -->
+    <Handle
+      type="source"
+      position={Position.Right}
+      id="out"
+      class="port port--out port--wired"
+      style={`top: 22px; --port: ${data.wire}`}
+      isConnectable={false}
+    />
+  {/if}
   <header>
     <span class="icon"><Split size={14} /></span>
     <div class="title">

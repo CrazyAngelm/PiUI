@@ -729,6 +729,23 @@ four read-only GPT 6.1 Sol passes.
   the UI language lives only in the WebView, and passing it to the host is an
   IPC contract change left for a separate task.
 
+## Automatic pipeline completion links — 2026-11-12
+
+- Pipelines without declared output fields now connect terminal scheduled steps
+  to Output automatically. The card says “Pipeline end” / «Конец конвейера».
+  These are presentation-only completion links: saved graphs, dependencies and
+  the native last-succeeded-step fallback are unchanged. Explicit mappings keep
+  their sources, including a non-connectable result anchor for router outputs.
+- Completion links do not close the inspector when clicked. Callable helpers
+  and router control branches do not become implicit output sources.
+- Updated `piui-systems` and its installed copy to explain automatic completion,
+  explicit output mappings and the absence of a serialized Output pseudo-agent.
+- Verification: 23 focused unit tests, 9 persistent-Edge UI Lab scenarios (all
+  templates, save/reopen, explicit mapping, undo/redo, refused collaboration and
+  safe mode), Svelte diagnostics and E2E TypeScript checks. Four independent
+  read-only GPT-6.1 Sol reviews; concrete findings were fixed and exercised.
+  No real-provider turns were run.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

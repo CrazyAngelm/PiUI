@@ -52,6 +52,10 @@ export const subpipelinesRu: Readonly<Record<string, string>> = {
   Output: 'Выход',
   Outputs: 'Выходы',
   'No declared outputs': 'Выходы не объявлены',
+  'Pipeline end': 'Конец конвейера',
+  'Completion connection from {0} to {1}': 'Завершение: связь от «{0}» к «{1}»',
+  'Final steps connect here automatically. Add outputs only when you need named result fields.':
+    'Конечные шаги соединяются с результатом автоматически. Добавляйте выходы, только если нужны именованные поля результата.',
   'A router exposes branch routes, not a result output.': 'У маршрутизатора есть выходы веток, но нет собственного результата.',
   'Close output settings': 'Закрыть настройки выхода',
   'What this pipeline returns when another pipeline runs it as a sub-pipeline. Without outputs, it returns the text of its last finished step.':

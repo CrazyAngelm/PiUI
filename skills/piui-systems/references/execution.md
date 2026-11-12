@@ -104,6 +104,8 @@ remain importable (version 5 adds sub-pipelines and `outputs`). Orchestration IP
   the child run id. A pipeline's additive `outputs` (`name`, `kind`,
   `sourceStepId`, optional `field`) become the step's checked result data;
   without outputs the step records the child's last succeeded step text.
+  The editor draws completion links from terminal scheduled steps to **Output**
+  in this case. Those links do not select or combine child results.
   Codes: `subpipeline-unavailable`, `subpipeline-cycle`, `subpipeline-depth`,
   `subpipeline-input-invalid`, `subpipeline-input-unavailable` (nothing
   started), `subpipeline-failed`, `subpipeline-cancelled`,

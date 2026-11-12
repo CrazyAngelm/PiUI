@@ -106,8 +106,12 @@ each child input with `{"kind": "value", "value": …}`, `{"kind": "input",
 "name": "<run input of this file>"}` or `{"kind": "step", "agent": "<direct
 upstream agent id>", "field"?: "…"}`. The node's `profile` only names the step
 (like a script: `"model": "pipeline"`); give it `resultFields` matching the
-child's outputs. Top-level `outputs: [{"name", "kind", "agent", "field"?}]`
-declare what a pipeline returns when another runs it. See
+child's outputs. Declare top-level `outputs: [{"name", "kind", "agent", "field"?}]`
+when a parent pipeline needs a stable result from a specific step or field.
+With no declared outputs, the editor automatically links terminal scheduled
+steps to the **Output** block for display. Do not add an `__output` agent or
+a connection to that block in JSON. Without declarations, a child returns
+its last succeeded step's text. See
 [execution semantics](references/execution.md) and
 `examples/systems/development-with-testing.piui.json` (runs
 `examples/systems/testing.piui.json`). `pnpm system:check` reports the names as

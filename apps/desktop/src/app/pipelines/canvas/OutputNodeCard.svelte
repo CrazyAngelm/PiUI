@@ -7,6 +7,7 @@
 
   export interface OutputNodeData extends Record<string, unknown> {
     outputs: readonly PipelineOutput[];
+    wired: boolean;
     problems: number;
     readOnly: boolean;
   }
@@ -28,7 +29,7 @@
     type="target"
     position={Position.Left}
     id="in"
-    class={data.outputs.length ? 'port port--in port--wired' : 'port port--in'}
+    class={data.wired ? 'port port--in port--wired' : 'port port--in'}
     style="--port: var(--piui-chaos-gold)"
     isConnectable={!data.readOnly}
     aria-label={$t('Connect to Output')}
@@ -39,7 +40,7 @@
     {#if data.problems > 0}<span class="problem" title={$t('{0} problems', [data.problems])}><CircleAlert size={12} /></span>{/if}
   </header>
   {#if data.outputs.length === 0}
-    <p class="muted">{$t('No declared outputs')}</p>
+    <p class="muted">{$t('Pipeline end')}</p>
   {:else}
     <ul>
       {#each shown as output (output.name)}

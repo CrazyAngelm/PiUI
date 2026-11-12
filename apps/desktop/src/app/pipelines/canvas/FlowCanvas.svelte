@@ -27,6 +27,7 @@
   );
   import FlowBridge, { type FlowApi } from './FlowBridge.svelte';
   import { connectionLabel } from './connectionLabel';
+  import { outputConnections } from './outputConnections';
   import SparkConnectionLine from './SparkConnectionLine.svelte';
   import { createWireAssigner } from './wireHue';
 
@@ -80,6 +81,7 @@
   function sync(): void {
     const graph = editor.graph;
     const readOnly = editor.readOnly;
+    const output = outputConnections(graph);
     // Accessible names of nodes and connections (Svelte Flow defaults use ids).
     const names = new Map(graph.nodes.map((node) => [
       node.id,
@@ -99,7 +101,7 @@
         problems: editor.nodeProblems(node.id).length,
         readOnly,
         wire: wireOf(node.id),
-        wiredOut: graph.edges.some((edge) => edge.from === node.id && WIRED.has(edge.kind)) || (graph.outputs ?? []).some((output) => output.sourceStepId === node.id),
+        wiredOut: output.sources.has(node.id) || (node.kind !== 'router' && graph.edges.some((edge) => edge.from === node.id && WIRED.has(edge.kind))),
         wiredBranches: graph.edges.filter((edge) => edge.from === node.id && edge.kind === 'route').map((edge) => edge.branchId ?? ''),
         inputs: [...new Set(graph.edges.filter((edge) => edge.to === node.id && WIRED.has(edge.kind)).map((edge) => edge.from))].map((from) => ({
           id: from,
@@ -157,8 +159,8 @@
         });
       }
     }
-    // The Output block (v6.7) shows what the pipeline returns as a sub-pipeline;
-    // like Start it is presentation only and never part of the saved graph.
+    // With no declared fields, Output marks the end of each scheduled branch.
+    // Like Start, these links are presentation only, never saved dependencies.
     const outputNodes: OutputFlowNode[] = [];
     const outputEdges: PiuiFlowEdge[] = [];
     if (graph.nodes.length) {
@@ -174,20 +176,19 @@
         type: 'output',
         ariaLabel: $t('Output'),
         position: { x, y },
-        data: { outputs, readOnly, problems: editor.issues.filter((issue) => issue.message === SUBPIPELINE_ISSUES.outputs).length },
+        data: { outputs, wired: output.sources.size > 0, readOnly, problems: editor.issues.filter((issue) => issue.message === SUBPIPELINE_ISSUES.outputs).length },
         selected: editor.selectedId === OUTPUT_NODE_ID,
         draggable: false,
         deletable: false,
         connectable: !readOnly,
       } as OutputFlowNode);
-      for (const source of new Set(outputs.map((output) => output.sourceStepId))) {
-        if (!names.has(source)) continue;
+      for (const source of output.sources) {
         outputEdges.push({
           id: `${OUTPUT_NODE_ID}:${source}`,
           type: 'piui',
           source,
           target: OUTPUT_NODE_ID,
-          ariaLabel: connectionLabel($t, 'result', names.get(source) ?? '', $t('Output')),
+          ariaLabel: connectionLabel($t, output.implicit ? 'completion' : 'result', names.get(source) ?? '', $t('Output')),
           sourceHandle: 'out',
           targetHandle: 'in',
           data: { kind: 'result' },
@@ -309,6 +310,7 @@
       editor.selectedEdge = '';
     }}
     onedgeclick={({ edge }) => {
+      if (blockEdge(edge.id)) return;
       editor.selectedEdge = edge.id;
       editor.selectedId = '';
     }}

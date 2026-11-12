@@ -14,7 +14,8 @@ const KIND_LABEL: Readonly<Record<ConnectionKind, string>> = {
  * Accessible name of a canvas connection, e.g. "Result connection from
  * Developer to Reviewer", instead of Svelte Flow's default built from ids.
  */
-export function connectionLabel(t: Translate, kind: ConnectionKind | 'start', from: string, to: string): string {
+export function connectionLabel(t: Translate, kind: ConnectionKind | 'start' | 'completion', from: string, to: string): string {
+  if (kind === 'completion') return t('Completion connection from {0} to {1}', [from, to]);
   return kind === 'start'
     ? t('Connection from {0} to {1}', [from, to])
     : t('{0} connection from {1} to {2}', [t(KIND_LABEL[kind]), from, to]);

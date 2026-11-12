@@ -68,6 +68,11 @@ one-way. Messaging permits sending to the target; observation permits reading
 the target's activity; delegation permits spawning the target profile subject
 to the existing host permission checks.
 
+With no declared outputs, the graph draws completion links from scheduled
+steps with no downstream result dependency, excluding routers. These links
+are visual only; they are not saved as connections and do not select results.
+When there are declared outputs, the graph shows links from their sources.
+
 Dragging a scheduled step's result port to the pipeline Output block declares
 its whole result text and opens the output settings, where a named field can be
 chosen instead. Reconnecting the same source preserves its declarations. This

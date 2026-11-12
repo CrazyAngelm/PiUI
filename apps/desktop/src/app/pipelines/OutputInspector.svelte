@@ -139,7 +139,7 @@
         {/each}
       </ul>
     {:else}
-      <p class="hint">{$t('No declared outputs')}</p>
+      <p class="hint">{$t('Final steps connect here automatically. Add outputs only when you need named result fields.')}</p>
     {/if}
     <Button size="sm" variant="secondary" disabled={editor.readOnly || sources.length === 0 || outputs.length >= MAX_PIPELINE_OUTPUTS} onclick={add}>
       {#snippet leading()}<Plus />{/snippet}
