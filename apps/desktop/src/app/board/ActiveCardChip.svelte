@@ -199,7 +199,7 @@
     padding: 0 8px;
     border: 1px solid var(--piui-border-subtle);
     border-radius: var(--piui-radius-sm);
-    background: var(--piui-chaos-streak, transparent);
+    background: var(--piui-decoration-wash, transparent);
     color: var(--piui-text);
     font-size: var(--piui-text-sm);
     white-space: nowrap;

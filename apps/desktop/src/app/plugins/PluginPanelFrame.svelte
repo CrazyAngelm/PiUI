@@ -163,7 +163,7 @@
     const observer = new MutationObserver(() => {
       if (status === 'ready') post({ type: 'event', channel, event: 'theme', data: theme() });
     });
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-plugin-theme'] });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-style', 'data-plugin-theme'] });
     return () => {
       window.removeEventListener('message', listener);
       observer.disconnect();

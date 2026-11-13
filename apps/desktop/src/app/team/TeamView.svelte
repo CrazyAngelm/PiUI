@@ -312,7 +312,7 @@
     display: flex;
     align-items: center;
     gap: var(--piui-space-2);
-    color: var(--piui-chaos);
+    color: var(--piui-decoration-primary);
   }
   h1 {
     margin: 0;
@@ -361,7 +361,7 @@
     border-radius: var(--piui-radius-sm);
   }
   .row--current {
-    background: var(--piui-chaos-streak), var(--piui-selected);
+    background: var(--piui-decoration-wash), var(--piui-selected);
   }
   .row__main {
     display: flex;
@@ -400,6 +400,9 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .row--current .row__role {
+    color: var(--piui-text-muted);
+  }
   .pill {
     display: inline-flex;
     align-items: center;
@@ -409,15 +412,16 @@
     font-size: 11px;
     line-height: 20px;
     background: var(--piui-surface-2);
-    clip-path: polygon(8% 0, 100% 0, 92% 100%, 0 100%);
+    clip-path: var(--piui-decoration-badge-shape);
+    border-radius: var(--piui-decoration-radius);
   }
   .pill--working {
-    background: color-mix(in srgb, var(--piui-chaos-spark) 18%, transparent);
-    color: var(--piui-chaos-spark);
+    background: var(--piui-success-surface);
+    color: var(--piui-success-text);
   }
   .pill--queued {
-    background: color-mix(in srgb, var(--piui-chaos-gold) 18%, transparent);
-    color: var(--piui-chaos-gold);
+    background: var(--piui-warning-surface);
+    color: var(--piui-warning-text);
   }
   .detail {
     display: grid;

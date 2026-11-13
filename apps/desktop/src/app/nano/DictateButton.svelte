@@ -117,10 +117,10 @@
   /* Recording: one crimson accent, a slanted blade like the model picker's current row. */
   .dictate--recording {
     padding: 0 8px;
-    border-color: color-mix(in srgb, var(--piui-chaos) 55%, transparent);
-    background: var(--piui-chaos-streak);
-    color: var(--piui-chaos);
-    box-shadow: 0 0 10px var(--piui-chaos-glow);
+    border-color: color-mix(in srgb, var(--piui-decoration-primary) 55%, transparent);
+    background: var(--piui-decoration-wash);
+    color: var(--piui-decoration-primary);
+    box-shadow: 0 0 10px var(--piui-decoration-glow);
     animation: dictate-pulse 1.4s ease-in-out infinite;
   }
   .dictate__clock {
@@ -130,7 +130,7 @@
   }
   @keyframes dictate-pulse {
     50% {
-      box-shadow: 0 0 2px var(--piui-chaos-glow);
+      box-shadow: 0 0 2px var(--piui-decoration-glow);
     }
   }
   @media (prefers-reduced-motion: reduce) {

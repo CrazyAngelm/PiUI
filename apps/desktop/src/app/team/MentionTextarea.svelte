@@ -187,7 +187,7 @@
     cursor: pointer;
   }
   .mention__option--active {
-    background: var(--piui-chaos-streak), var(--piui-hover);
+    background: var(--piui-decoration-wash), var(--piui-hover);
   }
   .mention__handle {
     font-weight: var(--piui-weight-medium);

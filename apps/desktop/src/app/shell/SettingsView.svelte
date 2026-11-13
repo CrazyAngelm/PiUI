@@ -27,6 +27,7 @@
   import PluginsSettings from '../plugins/PluginsSettings.svelte';
   import PluginThemeRow from '../plugins/PluginThemeRow.svelte';
   import { useWorkspace } from './context';
+  import { stylePreference, type BuiltinStyle } from '../../styles/stylePreference.svelte';
 
   interface Props {
     section: SettingsSection;
@@ -116,6 +117,21 @@
             value={$language}
             options={[{ value: 'en', label: 'English' }, { value: 'ru', label: 'Русский' }]}
             onValueChange={(value: Language) => setLanguage(value)}
+          />
+        </div>
+        <div class="row">
+          <div>
+            <strong>{$t('Visual style')}</strong>
+            {#if stylePreference.sessionOnly}<small role="status">{$t('This style could not be saved. It will last until you close the app.')}</small>{/if}
+          </div>
+          <Segmented
+            label={$t('Visual style')}
+            value={stylePreference.value}
+            options={[
+              { value: 'nano', label: 'Nano' },
+              { value: 'chaos', label: 'Chaos' },
+            ]}
+            onValueChange={(value: BuiltinStyle) => stylePreference.set(value)}
           />
         </div>
         <div class="row">

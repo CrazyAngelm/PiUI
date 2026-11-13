@@ -214,7 +214,7 @@
     display: grid;
     gap: var(--piui-space-3);
     padding: var(--piui-space-4) var(--piui-space-3) var(--piui-space-3);
-    background: radial-gradient(120% 40% at 100% 0%, color-mix(in srgb, var(--piui-chaos) 8%, transparent), transparent 60%);
+    background: radial-gradient(120% 40% at 100% 0%, color-mix(in srgb, var(--piui-decoration-primary) 8%, transparent), transparent 60%);
   }
   .panel__streak {
     position: absolute;
@@ -222,8 +222,8 @@
     left: 0;
     width: 62%;
     height: 2px;
-    background: linear-gradient(90deg, var(--piui-chaos), var(--piui-chaos-gold) 55%, transparent);
-    clip-path: polygon(0 0, 100% 0, 96% 100%, 0 100%);
+    background: linear-gradient(90deg, var(--piui-decoration-primary), var(--piui-decoration-secondary) 55%, transparent);
+    clip-path: var(--piui-decoration-line-shape);
     pointer-events: none;
   }
   .panel__head {
@@ -240,7 +240,7 @@
     font-weight: var(--piui-weight-semibold);
   }
   h3 {
-    color: var(--piui-chaos);
+    color: var(--piui-decoration-primary);
     font-size: 10px;
     font-weight: var(--piui-weight-semibold);
     letter-spacing: 0.14em;
@@ -255,12 +255,12 @@
     gap: 2px;
     padding: var(--piui-space-2) var(--piui-space-3);
     border: 1px solid var(--piui-border-subtle);
-    border-left: 3px solid var(--piui-chaos);
+    border-left: 3px solid var(--piui-decoration-primary);
     border-radius: var(--piui-radius-sm);
     background: var(--piui-surface-2);
   }
   .role:nth-child(2) {
-    border-left-color: var(--piui-chaos-gold);
+    border-left-color: var(--piui-decoration-secondary);
   }
   .role__name {
     color: var(--piui-text-muted);

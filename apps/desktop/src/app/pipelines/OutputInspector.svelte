@@ -173,7 +173,7 @@
     width: 20px;
     height: 20px;
     border-radius: 50%;
-    background: var(--piui-chaos-gold);
+    background: var(--piui-decoration-secondary);
     color: var(--piui-bg);
   }
   h2 {

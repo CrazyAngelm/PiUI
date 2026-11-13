@@ -1788,3 +1788,9 @@ Native Pi builds prompts and calls local function tools via `additional_tools`.
 No Cloud or Nano subscription access is needed. This route follows the
 [official public integration](https://developers.openai.com/siwc/token-sharing-open-source)
 and its [Responses preview requirements](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
+
+## ADR-053 — Shared Nano interface with explicit work locations
+
+Accepted for isolated implementation on 2026-11-13. See
+[the decision](adr/053-shared-nano-interface.md) and
+[the stage contract and evidence](NANO_UNIFICATION.md).

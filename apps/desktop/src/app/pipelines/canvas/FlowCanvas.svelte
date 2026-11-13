@@ -195,7 +195,7 @@
           class: 'output-edge',
           selectable: false,
           deletable: false,
-          markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: 'var(--piui-chaos-gold)' },
+          markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: 'var(--piui-decoration-secondary)' },
         });
       }
     }
@@ -420,7 +420,7 @@
     stroke-dasharray: 5 4;
   }
   .canvas :global(.output-edge .piui-edge) {
-    stroke: color-mix(in srgb, var(--piui-chaos-gold) 70%, transparent);
+    stroke: color-mix(in srgb, var(--piui-decoration-secondary) 70%, transparent);
     stroke-dasharray: 5 4;
   }
   .canvas :global(.port:hover),

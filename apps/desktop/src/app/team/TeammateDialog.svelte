@@ -577,14 +577,15 @@
     width: 6px;
     height: 12px;
     background: var(--piui-border-strong);
-    clip-path: polygon(40% 0, 100% 0, 60% 100%, 0 100%);
+    clip-path: var(--piui-decoration-marker-shape);
+    border-radius: var(--piui-decoration-radius);
   }
   .steps__item--current .steps__blade {
-    background: linear-gradient(180deg, var(--piui-chaos-gold), var(--piui-chaos));
-    box-shadow: 0 0 8px var(--piui-chaos-glow);
+    background: linear-gradient(180deg, var(--piui-decoration-secondary), var(--piui-decoration-primary));
+    box-shadow: 0 0 8px var(--piui-decoration-glow);
   }
   .steps__item--done .steps__blade {
-    background: var(--piui-chaos);
+    background: var(--piui-decoration-primary);
   }
   .grid {
     display: grid;
@@ -634,7 +635,7 @@
     border: 1px solid var(--piui-border);
     border-radius: 6px;
     background: var(--swatch);
-    clip-path: polygon(14% 0, 100% 0, 86% 100%, 0 100%);
+    clip-path: var(--piui-decoration-gauge-shape);
   }
   .swatch--current {
     outline: 2px solid var(--piui-text);
@@ -713,9 +714,9 @@
     font-weight: var(--piui-weight-semibold);
   }
   .emoji--current {
-    border-color: var(--piui-chaos);
-    background: color-mix(in srgb, var(--piui-chaos) 18%, transparent);
-    box-shadow: 0 0 8px var(--piui-chaos-glow);
+    border-color: var(--piui-decoration-primary);
+    background: color-mix(in srgb, var(--piui-decoration-primary) 18%, transparent);
+    box-shadow: 0 0 8px var(--piui-decoration-glow);
     color: var(--piui-text);
   }
   @media (max-width: 520px) {

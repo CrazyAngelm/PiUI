@@ -4,6 +4,7 @@ import { runAgentApiProof, setupAgentWorkspace } from './agent-api-e2e.mjs';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createWebviewAutomationServer } from './webview-automation.mjs';
@@ -14,6 +15,8 @@ import { runShellWebview2Proof } from './shell-webview2-e2e.mjs';
 // the native workspace fixture instead.
 const AGENT_API_SCENARIO = process.argv.includes('--agent-api');
 const SHELL_SCENARIO = !AGENT_API_SCENARIO;
+const SAFE_ONLY = process.argv.includes('--safe-only');
+if (SAFE_ONLY && AGENT_API_SCENARIO) throw new Error('Choose either --safe-only or --agent-api.');
 
 if (process.platform !== 'win32') {
   throw new Error('This WebView2 proof is Windows-only; run the Linux WebKit harness separately.');
@@ -22,6 +25,7 @@ if (process.platform !== 'win32') {
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const DESKTOP_ROOT = resolve(SCRIPT_DIR, '..');
 const REPOSITORY_ROOT = resolve(DESKTOP_ROOT, '..', '..');
+const VITE_CLI = join(dirname(createRequire(import.meta.url).resolve('vite/package.json')), 'bin', 'vite.js');
 const STARTUP_BOUND_MS = 30_000;
 const BUILD_BOUND_MS = 600_000;
 const COMMAND_BOUND_MS = 5_000;
@@ -966,9 +970,9 @@ wire_api = "responses"
     }
     vite = spawnLogged(
       jobRunner,
-      process.env.ComSpec ?? 'cmd.exe',
-      ['/d', '/s', '/c', `pnpm --filter @piui/desktop exec vite --host 127.0.0.1 --port ${devPort} --strictPort`],
-      { cwd: REPOSITORY_ROOT, windowsHide: true },
+      process.execPath,
+      [VITE_CLI, '--host', '127.0.0.1', '--port', String(devPort), '--strictPort'],
+      { cwd: DESKTOP_ROOT, windowsHide: true },
       viteLog,
     );
     await waitForStarted(vite, COMMAND_BOUND_MS, 'Vite');
@@ -997,11 +1001,13 @@ wire_api = "responses"
 
     app = spawnLogged(
       jobRunner,
-      executable, [],
+      executable, SAFE_ONLY ? ['--safe-mode'] : [],
       { cwd: REPOSITORY_ROOT, windowsHide: true, env: runtimeEnvironment },
       appLog,
     );
-    await waitForStarted(app, COMMAND_BOUND_MS, 'Tauri WebView2');
+    // Starting a freshly linked native binary is part of startup, not a UI
+    // command. Use the harness's existing startup bound for its Job handshake.
+    await waitForStarted(app, STARTUP_BOUND_MS, 'Tauri WebView2');
     await waitForAutomationPage(automation, pageOrigin, STARTUP_BOUND_MS, app);
     assertIsolatedTauriData(fixture);
     let screenshotSequence = 0;
@@ -1030,36 +1036,39 @@ wire_api = "responses"
         await ownedWindowOperation(['--resize', String(width), String(height), '--resize-only']);
       },
     };
-    const apiWorkspace = AGENT_API_SCENARIO ? await setupAgentWorkspace(agentConnection, fixture.primeProjectCanonical) : undefined;
-    const normalResult = AGENT_API_SCENARIO ? { checks: [], cleanup: {workspaceId: apiWorkspace} }
-      : await runShellWebview2Proof({ automation, expectedPageUrl: pageOrigin,
-          harness: { fixture, ownedChild: app }, mode: 'normal',
-          commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot });
-    const normalChecks = normalResult.checks;
-    if (AGENT_API_SCENARIO) normalChecks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, automation, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
+    let normalResult = { checks: [], screenshots: [] };
+    if (!SAFE_ONLY) {
+      const apiWorkspace = AGENT_API_SCENARIO ? await setupAgentWorkspace(agentConnection, fixture.primeProjectCanonical) : undefined;
+      normalResult = AGENT_API_SCENARIO ? { checks: [], cleanup: {workspaceId: apiWorkspace} }
+        : await runShellWebview2Proof({ automation, expectedPageUrl: pageOrigin,
+            harness: { fixture, ownedChild: app }, mode: 'normal',
+            commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot });
+      if (AGENT_API_SCENARIO) normalResult.checks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, automation, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
 
-    // A separate contained process proves that safe mode prevents the same
-    // project from exposing a live runtime surface.
-    await terminateContained(app, 'Tauri WebView2');
-    app = undefined;
-    const safeModeMinimumGeneration = automation.generation;
-    app = spawnLogged(
-      jobRunner,
-      executable, ['--safe-mode'],
-      { cwd: REPOSITORY_ROOT, windowsHide: true, env: runtimeEnvironment },
-      safeAppLog,
-    );
-    await waitForStarted(app, COMMAND_BOUND_MS, 'safe-mode Tauri WebView2');
-    await waitForAutomationPage(
-      automation,
-      pageOrigin,
-      STARTUP_BOUND_MS,
-      app,
-      safeModeMinimumGeneration,
-    );
+      // A separate contained process proves that safe mode prevents the same
+      // project from exposing a live runtime surface.
+      await terminateContained(app, 'Tauri WebView2');
+      app = undefined;
+      const safeModeMinimumGeneration = automation.generation;
+      app = spawnLogged(
+        jobRunner,
+        executable, ['--safe-mode'],
+        { cwd: REPOSITORY_ROOT, windowsHide: true, env: runtimeEnvironment },
+        safeAppLog,
+      );
+      await waitForStarted(app, STARTUP_BOUND_MS, 'safe-mode Tauri WebView2');
+      await waitForAutomationPage(
+        automation,
+        pageOrigin,
+        STARTUP_BOUND_MS,
+        app,
+        safeModeMinimumGeneration,
+      );
+    }
+    const normalChecks = normalResult.checks;
     const safeResult = AGENT_API_SCENARIO ? {checks: []}
       : await runShellWebview2Proof({ automation, expectedPageUrl: pageOrigin,
-          harness: { fixture, ownedChild: app }, mode: 'safe',
+          harness: { fixture, ownedChild: app }, mode: 'safe', freshSafe: SAFE_ONLY,
           commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot });
     const safeChecks = safeResult.checks;
     if (AGENT_API_SCENARIO) safeChecks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, safe: true, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
@@ -1067,7 +1076,7 @@ wire_api = "responses"
     passReport = {
       status: 'pass',
       target: 'isolated Tauri WebView2 dev harness',
-      scenario: AGENT_API_SCENARIO ? 'agent-api-v1' : 'shell-default-view',
+      scenario: SAFE_ONLY ? 'shell-safe-clean-start' : AGENT_API_SCENARIO ? 'agent-api-v1' : 'shell-default-view',
       native: normalResult.native,
       timings: { normal: normalResult.timings, safe: safeResult.timings },
       ownedWindowMeasurements,

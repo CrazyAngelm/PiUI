@@ -404,6 +404,6 @@
     }
   }
   .run-row__child {
-    color: var(--piui-chaos-gold);
+    color: var(--piui-decoration-secondary);
   }
 </style>

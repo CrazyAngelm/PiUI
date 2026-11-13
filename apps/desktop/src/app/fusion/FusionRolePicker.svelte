@@ -220,12 +220,12 @@
     min-width: 0;
     padding: var(--piui-space-3);
     border: 1px solid var(--piui-border-subtle);
-    border-top: 2px solid var(--piui-chaos);
+    border-top: 2px solid var(--piui-decoration-primary);
     border-radius: var(--piui-radius-sm);
     background: var(--piui-surface-1);
   }
   .role:nth-of-type(2) {
-    border-top-color: var(--piui-chaos-gold);
+    border-top-color: var(--piui-decoration-secondary);
   }
   .role--refused {
     border-color: var(--piui-danger-border);

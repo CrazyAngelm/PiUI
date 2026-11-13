@@ -2,10 +2,13 @@ import { mount } from 'svelte';
 import { get } from 'svelte/store';
 import App from './app/DesktopRoot.svelte';
 import { language, loadRussian } from './features/locale/language';
+import { stylePreference } from './styles/stylePreference.svelte';
 import './styles/reset.css';
 import './styles/tokens.css';
 import './styles/app.css';
 import './styles/motion.css';
+
+stylePreference.apply();
 
 const target = document.getElementById('app');
 

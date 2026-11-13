@@ -1,4 +1,5 @@
 import { test as base, expect, type ConsoleMessage, type Locator, type Page } from '@playwright/test';
+import { windowsBrowserProfile } from './persistent-browser';
 
 /**
  * Shared helpers for the UI Lab specs. Every test gets a fresh browser context,
@@ -110,6 +111,29 @@ interface LabOptions {
 }
 
 export const test = base.extend<{ lab: Lab } & LabOptions>({
+  browser: [async ({ playwright, browserName, channel, headless, launchOptions }, use, workerInfo) => {
+    const profile = browserName === 'chromium'
+      ? windowsBrowserProfile(`${workerInfo.project.name}-${workerInfo.parallelIndex}`, workerInfo.project.use.baseURL ?? '')
+      : undefined;
+    const options = { ...launchOptions, channel, headless };
+    if (profile) {
+      const context = await playwright.chromium.launchPersistentContext(profile, options);
+      try {
+        const browser = context.browser();
+        if (!browser) throw new Error('Persistent Chromium context has no browser.');
+        await use(browser);
+      } finally {
+        await context.close();
+      }
+    } else {
+      const browser = await playwright[browserName].launch(options);
+      try {
+        await use(browser);
+      } finally {
+        await browser.close();
+      }
+    }
+  }, { scope: 'worker' }],
   allowConsoleErrors: [false, { option: true }],
   lab: async ({ page, allowConsoleErrors }, use) => {
     const lab = new Lab(page);

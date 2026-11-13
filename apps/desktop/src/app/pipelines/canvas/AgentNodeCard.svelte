@@ -263,11 +263,11 @@
     color: var(--piui-accent);
   }
   .mark--pipeline {
-    background: color-mix(in srgb, var(--piui-chaos-gold) 18%, var(--piui-surface-3));
-    color: var(--piui-chaos-gold);
+    background: color-mix(in srgb, var(--piui-decoration-secondary) 18%, var(--piui-surface-3));
+    color: var(--piui-decoration-secondary);
   }
   .chip--pipeline {
-    background: color-mix(in srgb, var(--piui-chaos-gold) 14%, transparent);
+    background: color-mix(in srgb, var(--piui-decoration-secondary) 14%, transparent);
     color: var(--piui-text);
   }
   .io {

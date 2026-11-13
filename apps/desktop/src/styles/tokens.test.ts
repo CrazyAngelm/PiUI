@@ -16,9 +16,17 @@ function ratio(a: string, b: string): number {
   return (high + 0.05) / (low + 0.05);
 }
 describe('workspace semantic palette', () => {
-  for (const selector of [':root {', ':root[data-theme="light"]', ':root[data-theme="system"]']) {
+  const nano = ':root:not([data-style="chaos"]):not([data-plugin-theme])';
+  const palettes = [
+    { selector: 'Chaos dark', values: tokens(':root {') },
+    { selector: 'Chaos light', values: tokens(':root[data-theme="light"]') },
+    { selector: 'Chaos system light', values: tokens(':root[data-theme="system"]') },
+    { selector: 'Nano dark', values: { ...tokens(':root {'), ...tokens(`${nano} {`) } },
+    { selector: 'Nano light', values: { ...tokens(':root[data-theme="light"]'), ...tokens(`${nano}[data-theme="light"]`) } },
+    { selector: 'Nano system light', values: { ...tokens(':root[data-theme="system"]'), ...tokens(`${nano}[data-theme="system"]`) } },
+  ];
+  for (const { selector, values } of palettes) {
     it(`meets WCAG AA normal-text and control contrast for ${selector}`, () => {
-      const values = tokens(selector);
       for (const surface of ['bg', 'bg-raised', 'surface-1', 'surface-2', 'surface-3']) {
         for (const text of ['text', 'text-muted', 'text-faint', 'accent', 'danger', 'warning', 'success']) {
           // WCAG 2.2 SC 1.4.3, normal text. Not an application-specific threshold.
@@ -33,7 +41,6 @@ describe('workspace semantic palette', () => {
       expect(ratio(values['--piui-accent-ink'], values['--piui-accent'])).toBeGreaterThanOrEqual(4.5);
     });
     it(`keeps highlighted code readable on the code surface for ${selector}`, () => {
-      const values = tokens(selector);
       for (const token of ['keyword', 'string', 'number', 'comment', 'function', 'type', 'property', 'punctuation']) {
         expect(ratio(values[`--piui-syntax-${token}`], values['--piui-code-surface']), `${selector}: ${token}`).toBeGreaterThanOrEqual(4.5);
       }
@@ -41,5 +48,6 @@ describe('workspace semantic palette', () => {
   }
   it('keeps system light identical to explicit light', () => {
     expect(tokens(':root[data-theme="system"]')).toEqual(tokens(':root[data-theme="light"]'));
+    expect(tokens(`${nano}[data-theme="system"]`)).toEqual(tokens(`${nano}[data-theme="light"]`));
   });
 });

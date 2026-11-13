@@ -316,10 +316,10 @@
     border: 1px solid var(--piui-border);
     border-radius: var(--piui-radius-md);
     background:
-      radial-gradient(120% 60% at 100% 0%, color-mix(in srgb, var(--piui-chaos) 9%, transparent), transparent 60%),
+      radial-gradient(120% 60% at 100% 0%, color-mix(in srgb, var(--piui-decoration-primary) 9%, transparent), transparent 60%),
       var(--piui-surface-1);
     color: var(--piui-text);
-    box-shadow: var(--piui-shadow-3), 0 0 0 1px color-mix(in srgb, var(--piui-chaos) 12%, transparent);
+    box-shadow: var(--piui-shadow-3), 0 0 0 1px color-mix(in srgb, var(--piui-decoration-primary) 12%, transparent);
     outline: none;
     animation: piui-pop-in var(--piui-duration-fast) var(--piui-ease-out);
   }
@@ -335,7 +335,7 @@
     right: 0;
     left: 0;
     height: 2px;
-    background: linear-gradient(90deg, var(--piui-chaos), var(--piui-chaos-gold) 55%, var(--piui-chaos));
+    background: linear-gradient(90deg, var(--piui-decoration-primary), var(--piui-decoration-secondary) 55%, var(--piui-decoration-primary));
     pointer-events: none;
   }
   .piui-models__search {
@@ -379,7 +379,7 @@
     align-items: center;
     gap: var(--piui-space-2);
     padding: 10px 8px 4px;
-    color: var(--piui-chaos);
+    color: var(--piui-decoration-primary);
     font-size: 10px;
     font-weight: var(--piui-weight-semibold);
     letter-spacing: 0.14em;
@@ -389,7 +389,7 @@
     content: '';
     flex: 1;
     height: 1px;
-    background: linear-gradient(90deg, color-mix(in srgb, var(--piui-chaos) 45%, transparent), transparent);
+    background: linear-gradient(90deg, color-mix(in srgb, var(--piui-decoration-primary) 45%, transparent), transparent);
   }
   :global(.piui-models__item) {
     position: relative;
@@ -411,10 +411,10 @@
     opacity: 0.6;
   }
   :global(.piui-models__item[data-current]) {
-    background: var(--piui-chaos-streak);
+    background: var(--piui-decoration-wash);
   }
   :global(.piui-models__item[data-current][data-selected]) {
-    background: var(--piui-chaos-streak), var(--piui-hover);
+    background: var(--piui-decoration-wash), var(--piui-hover);
   }
   /* The current model gets a slanted crimson blade instead of a checkmark. */
   .piui-models__mark {
@@ -427,14 +427,15 @@
     color: var(--piui-text-muted);
   }
   :global(.piui-models__item[data-current]) .piui-models__mark {
-    color: var(--piui-chaos);
+    color: var(--piui-decoration-primary);
   }
   :global(.piui-models__item[data-current]) .piui-models__mark:empty {
     width: 5px;
     margin: 0 5px 0 4px;
-    background: linear-gradient(180deg, var(--piui-chaos-gold), var(--piui-chaos));
-    clip-path: polygon(40% 0, 100% 0, 60% 100%, 0 100%);
-    box-shadow: 0 0 10px var(--piui-chaos-glow);
+    background: linear-gradient(180deg, var(--piui-decoration-secondary), var(--piui-decoration-primary));
+    clip-path: var(--piui-decoration-marker-shape);
+    border-radius: var(--piui-decoration-radius);
+    box-shadow: 0 0 10px var(--piui-decoration-glow);
   }
   .piui-models__main {
     display: grid;
@@ -475,11 +476,12 @@
     height: 20px;
     border: 1px solid var(--piui-border-subtle);
     color: var(--piui-text-muted);
-    clip-path: polygon(22% 0, 100% 0, 78% 100%, 0 100%);
+    clip-path: var(--piui-decoration-capability-shape);
+    border-radius: var(--piui-decoration-radius);
     background: var(--piui-surface-2);
   }
   .piui-models__cap--fast {
-    color: var(--piui-chaos-gold);
+    color: var(--piui-decoration-secondary);
   }
   .piui-models__tune {
     display: grid;
@@ -505,7 +507,7 @@
     font-size: var(--piui-text-sm);
   }
   .piui-models__label--hot {
-    color: var(--piui-chaos-gold);
+    color: var(--piui-decoration-secondary);
   }
   .piui-models__value {
     color: var(--piui-text);
@@ -542,26 +544,27 @@
   .piui-models__bar {
     height: 10px;
     background: var(--piui-surface-3);
-    clip-path: polygon(14% 0, 100% 0, 86% 100%, 0 100%);
+    clip-path: var(--piui-decoration-gauge-shape);
+    border-radius: var(--piui-decoration-radius);
     transition:
       background var(--piui-duration-fast) var(--piui-ease-out),
       box-shadow var(--piui-duration-fast) var(--piui-ease-out);
   }
   .piui-models__step:hover:not(:disabled) .piui-models__bar {
-    background: color-mix(in srgb, var(--piui-chaos) 35%, var(--piui-surface-3));
+    background: color-mix(in srgb, var(--piui-decoration-primary) 35%, var(--piui-surface-3));
   }
   .piui-models__step--lit .piui-models__bar {
-    background: linear-gradient(90deg, var(--piui-chaos-deep), var(--piui-chaos));
+    background: linear-gradient(90deg, var(--piui-decoration-deep), var(--piui-decoration-primary));
   }
   .piui-models__step[aria-checked='true'] .piui-models__bar {
-    background: linear-gradient(90deg, var(--piui-chaos), var(--piui-chaos-gold));
-    box-shadow: 0 0 12px var(--piui-chaos-glow);
+    background: linear-gradient(90deg, var(--piui-decoration-primary), var(--piui-decoration-secondary));
+    box-shadow: 0 0 12px var(--piui-decoration-glow);
   }
   .piui-models__step--auto .piui-models__bar {
     background: repeating-linear-gradient(135deg, var(--piui-surface-3) 0 3px, transparent 3px 6px);
   }
   .piui-models__step--auto[aria-checked='true'] .piui-models__bar {
-    background: repeating-linear-gradient(135deg, var(--piui-chaos-spark) 0 3px, transparent 3px 6px);
+    background: repeating-linear-gradient(135deg, var(--piui-decoration-spark) 0 3px, transparent 3px 6px);
     box-shadow: none;
   }
   .piui-models__steplabel {

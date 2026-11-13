@@ -53,7 +53,7 @@ describe('plugin registry', () => {
   it('offers panels, themes, templates and node types of active plugins only', async () => {
     const { registry } = await labRegistry();
     expect(registry.panels('chat-details').map(({ plugin, panel }) => `${plugin.id}/${panel.id}`)).toEqual(['example.hello-command/hello']);
-    expect(registry.themes().map(({ theme }) => theme.id)).toEqual(['midnight', 'paper']);
+    expect(registry.themes().map(({ theme }) => theme.id)).toEqual(['midnight', 'paper', 'partial']);
     expect(registry.templates().map(({ template }) => template.id)).toEqual(['draft-and-critique', 'collect-and-reshape']);
     expect(registry.nodeTypes().map(({ nodeType }) => nodeType.id)).toEqual(['json-transform']);
     expect(registry.activeTheme()).toBeUndefined();

@@ -91,7 +91,17 @@ function manifest(value: unknown): PluginManifest {
 }
 
 const HELLO = manifest(helloManifest);
-const THEMES = manifest(themeManifest);
+const THEMES = manifest({
+  ...themeManifest,
+  contributes: {
+    ...themeManifest.contributes,
+    themes: [
+      ...themeManifest.contributes.themes,
+      // Valid v1 partial palette: omitted colors keep their original fallback.
+      { id: 'partial', label: 'Partial palette', appearance: 'dark', tokens: { 'action-ink': '#eeeeee', accent: '#232b28', 'accent-ink': '#ffffff' } },
+    ],
+  },
+});
 const PACK = manifest(packManifest);
 const ACP = manifest(acpManifest);
 const STATUS = manifest(statusManifest);

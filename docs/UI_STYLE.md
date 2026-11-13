@@ -1,23 +1,32 @@
 # PiUI interface rules
 
-PiUI is a focused desktop workbench. Use charcoal surfaces, restrained burgundy
-actions and warm neutral text. Keep the graph and conversation as the main
-content. These rules apply to chat, systems, library, settings and dialogs.
+Nano Desktop is a focused desktop workbench. Keep the graph and conversation as
+the main content. These rules apply to chat, systems, library, settings and
+dialogs in every built-in style and compatible plugin palette.
 
-Visual direction (2026-09-28): "Chaos", inspired by Shadow the Hedgehog. Black
-and graphite bodies, crimson energy streaks, inhibitor-ring gold, a rare emerald
-spark; sharp slanted shapes (parallelogram bars, blade markers, speed streaks)
-instead of soft pills. Use the `--piui-chaos-*` tokens for emphasis only:
-gauges, the current selection, a popover's top streak. Text surfaces stay calm
-and readable; one energetic accent per surface, never a screen of glow.
+Built-in styles (2026-11-13): **Nano** is the default, using the personal Nano
+web product's «Свет» emerald palette and rounded, quiet markers. **Chaos** keeps
+the previous graphite/burgundy palette, crimson/gold accents and slanted markers.
+Style is independent of Light, Dark and System appearance. The local
+`piui.appearance.style` preference is applied before mounting and needs no account
+or network; an existing explicit style choice is preserved. Appearance and plugin
+palette selections are not changed when a style is selected. Active v1 plugin
+palettes retain the previous base colors for omitted tokens, so existing partial
+palettes keep their contrast. Disabling the palette restores the chosen style.
+
+Use semantic colors and `--piui-decoration-*` ornament tokens. The old
+`--piui-chaos-*` names retain their original palette for existing consumers and
+saved teammate colors. Shapes belong to the style tokens, not literal polygons
+in individual screens. Text surfaces stay calm and readable; accents belong to
+gauges, current selection and popovers, never a whole screen of glow.
 
 - Use `styles/tokens.css` for colors, typography, spacing and radii. The existing
   13px UI base, 4px spacing unit, 6px control radius and 10/16px surface radii are
   the shared scale. Larger text is for conversation reading and page titles.
   Do not add another font, palette or component framework per screen.
-- Reserve solid burgundy for the primary action. Use a quiet tinted surface for
+- Use the style's solid action color for the primary action. Use a quiet tinted surface for
   selection; hover, selection and keyboard focus remain distinguishable.
-  Gradients and glow belong to chaos accents (a lit gauge, the current item),
+  Gradients and glow belong to style accents (a lit gauge, the current item),
   not to backgrounds of whole panels. Avoid oversized cards and heavy outlines.
 - Keep controls compact and labels close to fields. Grow writing areas, not
   every control. Task editing has a large area and a focused modal. Panels

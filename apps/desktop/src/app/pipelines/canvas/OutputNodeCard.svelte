@@ -30,7 +30,7 @@
     position={Position.Left}
     id="in"
     class={data.wired ? 'port port--in port--wired' : 'port port--in'}
-    style="--port: var(--piui-chaos-gold)"
+    style="--port: var(--piui-decoration-secondary)"
     isConnectable={!data.readOnly}
     aria-label={$t('Connect to Output')}
   />
@@ -55,9 +55,9 @@
   .output {
     width: 196px;
     padding: 10px 12px;
-    border: 1px solid color-mix(in srgb, var(--piui-chaos-gold) 45%, var(--piui-border));
+    border: 1px solid color-mix(in srgb, var(--piui-decoration-secondary) 45%, var(--piui-border));
     border-radius: 14px;
-    background: color-mix(in srgb, var(--piui-chaos-gold) 6%, var(--piui-surface-1));
+    background: color-mix(in srgb, var(--piui-decoration-secondary) 6%, var(--piui-surface-1));
     box-shadow: var(--piui-shadow-1);
     color: var(--piui-text);
     cursor: pointer;
@@ -83,7 +83,7 @@
     width: 20px;
     height: 20px;
     border-radius: 50%;
-    background: var(--piui-chaos-gold);
+    background: var(--piui-decoration-secondary);
     color: var(--piui-bg);
   }
   strong {

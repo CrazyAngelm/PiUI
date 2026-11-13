@@ -462,7 +462,7 @@
     align-items: center;
     gap: var(--piui-space-2);
     min-width: 0;
-    color: var(--piui-chaos);
+    color: var(--piui-decoration-primary);
   }
   h1 {
     margin: 0;
@@ -523,8 +523,8 @@
     align-self: start;
   }
   .column--drop {
-    border-color: var(--piui-chaos);
-    box-shadow: 0 0 0 1px var(--piui-chaos-glow);
+    border-color: var(--piui-decoration-primary);
+    box-shadow: 0 0 0 1px var(--piui-decoration-glow);
   }
   .column__head {
     position: relative;
@@ -540,12 +540,12 @@
     right: 40%;
     bottom: 0;
     height: 1px;
-    background: linear-gradient(90deg, color-mix(in srgb, var(--piui-chaos) 45%, transparent), transparent);
+    background: linear-gradient(90deg, color-mix(in srgb, var(--piui-decoration-primary) 45%, transparent), transparent);
   }
   .column[data-status='inProgress'] .column__head::after {
     height: 2px;
-    background: linear-gradient(90deg, var(--piui-chaos), var(--piui-chaos-gold) 55%, transparent);
-    clip-path: polygon(0 0, 100% 0, 96% 100%, 0 100%);
+    background: linear-gradient(90deg, var(--piui-decoration-primary), var(--piui-decoration-secondary) 55%, transparent);
+    clip-path: var(--piui-decoration-line-shape);
   }
   h2 {
     margin: 0;
@@ -640,8 +640,8 @@
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--piui-focus) 45%, transparent);
   }
   .tile--current {
-    background: var(--piui-chaos-streak), var(--piui-bg-raised);
-    border-color: color-mix(in srgb, var(--piui-chaos) 45%, var(--piui-border));
+    background: var(--piui-decoration-wash), var(--piui-bg-raised);
+    border-color: color-mix(in srgb, var(--piui-decoration-primary) 45%, var(--piui-border));
   }
   .tile--dragging {
     opacity: 0.5;
@@ -653,14 +653,15 @@
     bottom: 6px;
     left: 3px;
     width: 3px;
-    clip-path: polygon(40% 0, 100% 0, 60% 100%, 0 100%);
+    clip-path: var(--piui-decoration-marker-shape);
+    border-radius: var(--piui-decoration-radius);
   }
   .tile[data-priority='urgent'] .tile__blade {
-    background: linear-gradient(180deg, var(--piui-chaos-gold), var(--piui-chaos));
-    box-shadow: 0 0 8px var(--piui-chaos-glow);
+    background: linear-gradient(180deg, var(--piui-decoration-secondary), var(--piui-decoration-primary));
+    box-shadow: 0 0 8px var(--piui-decoration-glow);
   }
   .tile[data-priority='high'] .tile__blade {
-    background: var(--piui-chaos-gold);
+    background: var(--piui-decoration-secondary);
   }
   .tile__top {
     display: flex;
@@ -706,11 +707,11 @@
     line-height: 18px;
   }
   .priority--urgent {
-    background: color-mix(in srgb, var(--piui-chaos) 18%, transparent);
-    color: var(--piui-chaos);
+    background: var(--piui-danger-surface);
+    color: var(--piui-danger-text);
   }
   .priority--high {
-    color: var(--piui-chaos-gold);
+    color: var(--piui-decoration-secondary);
   }
   .priority--low {
     color: var(--piui-text-faint);

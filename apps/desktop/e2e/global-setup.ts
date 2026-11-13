@@ -1,4 +1,5 @@
 import { chromium, type FullConfig } from '@playwright/test';
+import { windowsBrowserProfile } from './persistent-browser';
 
 /**
  * Warms the Vite dev server once before the workers start: the first visit of
@@ -10,7 +11,15 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
   const lab = config.projects.find((project) => project.name === 'lab');
   const baseURL = lab?.use.baseURL;
   if (!lab || !baseURL) return;
-  const browser = await chromium.launch({ channel: lab.use.channel });
+  const profile = windowsBrowserProfile('warmup', baseURL);
+  const persistent = profile
+    ? await chromium.launchPersistentContext(profile, { channel: lab.use.channel })
+    : undefined;
+  const browser = persistent ? persistent.browser() : await chromium.launch({ channel: lab.use.channel });
+  if (!browser) {
+    await persistent?.close();
+    throw new Error('Persistent Chromium context has no browser.');
+  }
   try {
     const page = await browser.newPage();
     await page.goto(`${baseURL}/?lab=demo`);

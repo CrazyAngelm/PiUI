@@ -145,12 +145,13 @@
     bottom: 3px;
     left: 3px;
     width: 3px;
-    background: linear-gradient(180deg, var(--piui-chaos-gold), var(--piui-chaos));
-    clip-path: polygon(40% 0, 100% 0, 60% 100%, 0 100%);
+    background: linear-gradient(180deg, var(--piui-decoration-secondary), var(--piui-decoration-primary));
+    clip-path: var(--piui-decoration-marker-shape);
+    border-radius: var(--piui-decoration-radius);
   }
   .badge:hover,
   .badge[data-state='open'] {
-    border-color: var(--piui-chaos);
+    border-color: var(--piui-decoration-primary);
     background: var(--piui-hover);
   }
   .badge:focus-visible {

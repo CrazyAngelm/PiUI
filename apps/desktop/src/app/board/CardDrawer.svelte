@@ -523,8 +523,8 @@
     left: 0;
     width: 62%;
     height: 2px;
-    background: linear-gradient(90deg, var(--piui-chaos), var(--piui-chaos-gold) 55%, transparent);
-    clip-path: polygon(0 0, 100% 0, 96% 100%, 0 100%);
+    background: linear-gradient(90deg, var(--piui-decoration-primary), var(--piui-decoration-secondary) 55%, transparent);
+    clip-path: var(--piui-decoration-line-shape);
   }
   .drawer__head {
     display: flex;
@@ -543,7 +543,7 @@
   }
   .drawer__number {
     font-family: var(--piui-font-mono);
-    color: var(--piui-chaos);
+    color: var(--piui-decoration-primary);
   }
   .drawer__spacer {
     flex: 1;
@@ -632,7 +632,7 @@
     padding: 8px 10px;
     border: 1px solid var(--piui-border-subtle);
     border-radius: var(--piui-radius-sm);
-    background: var(--piui-chaos-streak), var(--piui-bg);
+    background: var(--piui-decoration-wash), var(--piui-bg);
   }
   .start {
     display: grid;

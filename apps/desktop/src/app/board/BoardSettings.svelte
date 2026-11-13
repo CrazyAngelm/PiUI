@@ -135,8 +135,8 @@
     left: calc(-1 * var(--piui-space-3));
     width: 62%;
     height: 2px;
-    background: linear-gradient(90deg, var(--piui-chaos), var(--piui-chaos-gold) 55%, transparent);
-    clip-path: polygon(0 0, 100% 0, 96% 100%, 0 100%);
+    background: linear-gradient(90deg, var(--piui-decoration-primary), var(--piui-decoration-secondary) 55%, transparent);
+    clip-path: var(--piui-decoration-line-shape);
   }
   h2 {
     margin: 0;
@@ -152,7 +152,7 @@
   }
   .group__label {
     padding: 0;
-    color: var(--piui-chaos);
+    color: var(--piui-decoration-primary);
     font-size: 10px;
     font-weight: var(--piui-weight-semibold);
     letter-spacing: 0.14em;

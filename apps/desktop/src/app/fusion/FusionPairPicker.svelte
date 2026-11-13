@@ -163,7 +163,7 @@
     border: 1px solid var(--piui-border);
     border-radius: 14px;
     background:
-      radial-gradient(120% 70% at 100% 0%, color-mix(in srgb, var(--piui-chaos) 7%, transparent), transparent 60%),
+      radial-gradient(120% 70% at 100% 0%, color-mix(in srgb, var(--piui-decoration-primary) 7%, transparent), transparent 60%),
       var(--piui-surface-1);
   }
   .intro {

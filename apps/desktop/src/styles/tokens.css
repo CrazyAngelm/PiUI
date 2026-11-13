@@ -1,10 +1,10 @@
 /*
- * PiUI design tokens v2.
+ * PiUI design tokens: Nano and Chaos built-in styles.
  *
- * Direction: "Obsidian / Carbon" — warm graphite surfaces, restrained wine
- * accent, calm hierarchy. Colors are semantic; components never use literal
- * hex values. Existing v1 token names are kept so legacy screens keep working
- * while they are rebuilt on the primitives in `src/lib/ui`.
+ * The base palette below preserves Chaos. Nano overrides it locally at the
+ * end of this file and is the default, including before the app mounts.
+ * Style and light/dark/system appearance are independent. Existing public
+ * token names remain compatible with plugins and saved teammate colors.
  *
  * Scales: spacing 4px grid (space-1..8, 10, 12), type 11–24px, radius xs..full,
  * elevation 1..3, z-index layers, motion durations with reduced-motion support.
@@ -354,11 +354,25 @@
 }
 
 /*
- * Chaos energy (Shadow-inspired): crimson streaks, inhibitor-ring gold, emerald
- * spark. Emphasis only: gauges, selected states, highlights. Kept outside the
- * theme blocks above: those colors are the plugin theme-token contract.
+ * Style ornaments. Chaos uses crimson/gold and slanted markers; Nano uses
+ * emerald and rounded markers. These are presentation values, not status or
+ * permission semantics. Color-theme plugins keep their existing contract.
  */
 :root {
+  --piui-decoration-primary: #e0364a;
+  --piui-decoration-deep: #6e1422;
+  --piui-decoration-secondary: #f0c050;
+  --piui-decoration-spark: #58e0a8;
+  --piui-decoration-glow: rgba(224, 54, 74, 0.38);
+  --piui-decoration-wash: linear-gradient(100deg, rgba(224, 54, 74, 0.2), rgba(224, 54, 74, 0) 70%);
+  --piui-decoration-line-shape: polygon(0 0, 100% 0, 96% 100%, 0 100%);
+  --piui-decoration-marker-shape: polygon(40% 0, 100% 0, 60% 100%, 0 100%);
+  --piui-decoration-badge-shape: polygon(8% 0, 100% 0, 92% 100%, 0 100%);
+  --piui-decoration-capability-shape: polygon(22% 0, 100% 0, 78% 100%, 0 100%);
+  --piui-decoration-gauge-shape: polygon(14% 0, 100% 0, 86% 100%, 0 100%);
+  --piui-decoration-meter-shape: polygon(0 0, 100% 0, 99% 100%, 0 100%);
+  --piui-decoration-radius: 0px;
+  /* Stable legacy palette: saved teammate identities and old plugins use it. */
   --piui-chaos: #e0364a;
   --piui-chaos-deep: #6e1422;
   --piui-chaos-gold: #f0c050;
@@ -374,6 +388,12 @@
   --piui-chaos-spark: #0f8a5c;
   --piui-chaos-glow: rgba(184, 36, 58, 0.22);
   --piui-chaos-streak: linear-gradient(100deg, rgba(184, 36, 58, 0.12), rgba(184, 36, 58, 0) 70%);
+  --piui-decoration-primary: #b8243a;
+  --piui-decoration-deep: #f3d3d9;
+  --piui-decoration-secondary: #9a6a00;
+  --piui-decoration-spark: #0f8a5c;
+  --piui-decoration-glow: rgba(184, 36, 58, 0.22);
+  --piui-decoration-wash: linear-gradient(100deg, rgba(184, 36, 58, 0.12), rgba(184, 36, 58, 0) 70%);
 }
 
 @media (prefers-color-scheme: light) {
@@ -384,6 +404,12 @@
     --piui-chaos-spark: #0f8a5c;
     --piui-chaos-glow: rgba(184, 36, 58, 0.22);
     --piui-chaos-streak: linear-gradient(100deg, rgba(184, 36, 58, 0.12), rgba(184, 36, 58, 0) 70%);
+    --piui-decoration-primary: #b8243a;
+    --piui-decoration-deep: #f3d3d9;
+    --piui-decoration-secondary: #9a6a00;
+    --piui-decoration-spark: #0f8a5c;
+    --piui-decoration-glow: rgba(184, 36, 58, 0.22);
+    --piui-decoration-wash: linear-gradient(100deg, rgba(184, 36, 58, 0.12), rgba(184, 36, 58, 0) 70%);
   }
 }
 
@@ -421,4 +447,140 @@
     --piui-wire-6: #2f8a43;
     --piui-wire-idle: #4a464c;
   }
+}
+
+/* Nano / Свет, from the personal Nano web palette (not the business cabinet).
+ * Absence or an unknown style uses Nano; the explicit Chaos selection keeps
+ * every base palette above. All assets and values are bundled, with no network.
+ */
+:root:not([data-style="chaos"]):not([data-plugin-theme]) {
+  --piui-bg: #101513;
+  --piui-bg-raised: #151c19;
+  --piui-bg-sunken: #0c100f;
+  --piui-surface-1: #1c2220;
+  --piui-surface-2: #232b28;
+  --piui-surface-3: #29332f;
+  --piui-overlay: rgba(6, 8, 7, 0.66);
+  --piui-hover: rgba(238, 242, 241, 0.045);
+  --piui-pressed: rgba(238, 242, 241, 0.08);
+  --piui-selected: #263731;
+  --piui-selected-strong: #30483e;
+  --piui-text: #eef2f1;
+  --piui-text-muted: #ccd7d3;
+  --piui-text-faint: #97a9a2;
+  --piui-text-disabled: #748881;
+  --piui-border: #3e4c46;
+  --piui-border-subtle: #29332f;
+  --piui-border-strong: #748881;
+  --piui-accent: #6fd9b0;
+  --piui-accent-ink: #10241b;
+  --piui-accent-soft: #263731;
+  --piui-action: #10845e;
+  --piui-action-hover: #0f7b57;
+  --piui-action-pressed: #0e7251;
+  --piui-action-ink: #ffffff;
+  --piui-focus: #6fd9b0;
+  --piui-danger: #e8aaa5;
+  --piui-warning: #e7a994;
+  --piui-success: #9caf82;
+  --piui-info: #93b4d8;
+  --piui-user-surface: #263731;
+  --piui-user-border: #3e5c4f;
+  --piui-code-surface: #0c100f;
+
+  --piui-decoration-primary: var(--piui-accent);
+  --piui-decoration-deep: var(--piui-action);
+  --piui-decoration-secondary: var(--piui-accent);
+  --piui-decoration-spark: var(--piui-accent);
+  --piui-decoration-glow: rgba(52, 192, 143, 0.16);
+  --piui-decoration-wash: linear-gradient(100deg, rgba(52, 192, 143, 0.09), rgba(52, 192, 143, 0) 70%);
+}
+
+:root:not([data-style="chaos"]):not([data-plugin-theme])[data-theme="light"] {
+  --piui-bg: #ebefee;
+  --piui-bg-raised: #e4eae8;
+  --piui-bg-sunken: #dee6e3;
+  --piui-surface-1: #fbfcfc;
+  --piui-surface-2: #f1f4f3;
+  --piui-surface-3: #e8edeb;
+  --piui-overlay: rgba(31, 45, 40, 0.32);
+  --piui-hover: rgba(31, 45, 40, 0.045);
+  --piui-pressed: rgba(31, 45, 40, 0.08);
+  --piui-selected: #dcefe7;
+  --piui-selected-strong: #cbe5d9;
+  --piui-text: #1b211f;
+  --piui-text-muted: #353d3a;
+  --piui-text-faint: #5e6965;
+  --piui-text-disabled: #899790;
+  --piui-border: #bbc9c2;
+  --piui-border-subtle: #d7e1dc;
+  --piui-border-strong: #65736e;
+  --piui-accent: #0f6a4b;
+  --piui-accent-ink: #ffffff;
+  --piui-accent-soft: #dcefe7;
+  --piui-action: #107150;
+  --piui-action-hover: #0d6546;
+  --piui-action-pressed: #0b593e;
+  --piui-action-ink: #ffffff;
+  --piui-focus: #0f6a4b;
+  --piui-danger: #9a2a21;
+  --piui-warning: #785714;
+  --piui-success: #3c5c1f;
+  --piui-info: #2f5a86;
+  --piui-user-surface: #dcefe7;
+  --piui-user-border: #a6c8b8;
+  --piui-code-surface: #f6f9f8;
+  --piui-decoration-glow: rgba(16, 132, 94, 0.12);
+  --piui-decoration-wash: linear-gradient(100deg, rgba(16, 132, 94, 0.08), rgba(16, 132, 94, 0) 70%);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-style="chaos"]):not([data-plugin-theme])[data-theme="system"] {
+    --piui-bg: #ebefee;
+    --piui-bg-raised: #e4eae8;
+    --piui-bg-sunken: #dee6e3;
+    --piui-surface-1: #fbfcfc;
+    --piui-surface-2: #f1f4f3;
+    --piui-surface-3: #e8edeb;
+    --piui-overlay: rgba(31, 45, 40, 0.32);
+    --piui-hover: rgba(31, 45, 40, 0.045);
+    --piui-pressed: rgba(31, 45, 40, 0.08);
+    --piui-selected: #dcefe7;
+    --piui-selected-strong: #cbe5d9;
+    --piui-text: #1b211f;
+    --piui-text-muted: #353d3a;
+    --piui-text-faint: #5e6965;
+    --piui-text-disabled: #899790;
+    --piui-border: #bbc9c2;
+    --piui-border-subtle: #d7e1dc;
+    --piui-border-strong: #65736e;
+    --piui-accent: #0f6a4b;
+    --piui-accent-ink: #ffffff;
+    --piui-accent-soft: #dcefe7;
+    --piui-action: #107150;
+    --piui-action-hover: #0d6546;
+    --piui-action-pressed: #0b593e;
+    --piui-action-ink: #ffffff;
+    --piui-focus: #0f6a4b;
+    --piui-danger: #9a2a21;
+    --piui-warning: #785714;
+    --piui-success: #3c5c1f;
+    --piui-info: #2f5a86;
+    --piui-user-surface: #dcefe7;
+    --piui-user-border: #a6c8b8;
+    --piui-code-surface: #f6f9f8;
+    --piui-decoration-glow: rgba(16, 132, 94, 0.12);
+    --piui-decoration-wash: linear-gradient(100deg, rgba(16, 132, 94, 0.08), rgba(16, 132, 94, 0) 70%);
+  }
+}
+
+/* Palette plugins retain the legacy fallback for omitted colors. Shapes are independent. */
+:root:not([data-style="chaos"]) {
+  --piui-decoration-line-shape: none;
+  --piui-decoration-marker-shape: none;
+  --piui-decoration-badge-shape: none;
+  --piui-decoration-capability-shape: none;
+  --piui-decoration-gauge-shape: none;
+  --piui-decoration-meter-shape: none;
+  --piui-decoration-radius: var(--piui-radius-sm);
 }

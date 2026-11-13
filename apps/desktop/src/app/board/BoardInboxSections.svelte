@@ -159,7 +159,7 @@
     gap: var(--piui-space-2);
     padding: 6px 8px;
     border-radius: var(--piui-radius-sm);
-    background: var(--piui-chaos-streak);
+    background: var(--piui-decoration-wash);
   }
   .row__text {
     display: grid;

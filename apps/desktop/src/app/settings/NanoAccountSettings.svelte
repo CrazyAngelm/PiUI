@@ -377,17 +377,18 @@
     height: 8px;
     border: 0;
     background: var(--piui-surface-3);
-    clip-path: polygon(0 0, 100% 0, 99% 100%, 0 100%);
+    clip-path: var(--piui-decoration-meter-shape);
+    border-radius: var(--piui-decoration-radius);
     overflow: hidden;
   }
   .gauge__bar::-webkit-progress-bar {
     background: var(--piui-surface-3);
   }
   .gauge__bar::-webkit-progress-value {
-    background: linear-gradient(90deg, var(--piui-chaos), var(--piui-chaos-gold));
+    background: linear-gradient(90deg, var(--piui-decoration-primary), var(--piui-decoration-secondary));
   }
   .gauge__bar::-moz-progress-bar {
-    background: linear-gradient(90deg, var(--piui-chaos), var(--piui-chaos-gold));
+    background: linear-gradient(90deg, var(--piui-decoration-primary), var(--piui-decoration-secondary));
   }
   .gauge__bar[data-level='low']::-webkit-progress-value {
     background: var(--piui-warning);

@@ -34,13 +34,15 @@ function buttonExpression(name, root = 'document') {
 /**
  * Run the default-view proof inside the real Tauri WebView2 process.
  * `mode` is `normal` (fresh isolated data) or `safe` (the same data, restarted
- * with `--safe-mode`).
+ * with `--safe-mode`). `freshSafe` checks a clean safe start without asserting
+ * that a preceding normal run saved its project.
  */
 export async function runShellWebview2Proof({
   automation,
   expectedPageUrl,
   harness,
   mode,
+  freshSafe = false,
   commandBoundMs,
   startupBoundMs,
   captureScreenshot,
@@ -54,6 +56,7 @@ export async function runShellWebview2Proof({
   if (!harness?.fixture || !harness?.ownedChild) {
     throw new TypeError('Shell E2E requires the controller-owned fixture and contained Tauri child.');
   }
+  if (freshSafe && mode !== 'safe') throw new TypeError('Fresh safe proof requires safe mode.');
   if (mode !== 'normal' && mode !== 'safe') throw new TypeError('Shell E2E mode must be normal or safe.');
   if (!Number.isSafeInteger(commandBoundMs) || commandBoundMs <= 0 || !Number.isSafeInteger(startupBoundMs) || startupBoundMs < commandBoundMs) {
     throw new TypeError('Shell E2E requires the launcher command and startup bounds.');
@@ -170,8 +173,22 @@ export async function runShellWebview2Proof({
     assertion(safe.message === true && safe.start === true, `Safe mode left the new-chat composer enabled: ${JSON.stringify(safe)}`);
     const snapshot = await catalog();
     assertion(snapshot.safeMode === true, 'The host catalog did not report safe mode.');
-    assertion(snapshot.workspaces.some((workspace) => !workspace.personal && workspace.trust === 'trusted'), 'Safe mode lost the trusted fixture project from the readable catalog.');
-    await waitFor(`${sidebar} && [...${sidebar}.querySelectorAll('button[aria-expanded]')].length >= 2`, 'safe-mode project tree');
+    await click('Settings', sidebar);
+    await click('General', settingsNav);
+    const safeStyleGroup = `document.querySelector('[role="group"][aria-label="Visual style"]')`;
+    await waitFor(safeStyleGroup, 'built-in styles in safe mode');
+    await focusButton('Chaos', safeStyleGroup);
+    await automation.dispatchKey({ key: 'Enter', code: 'Enter' });
+    await waitFor(`document.documentElement.dataset.style === 'chaos'`, 'Chaos in safe mode');
+    await focusButton('Nano', safeStyleGroup);
+    await automation.dispatchKey({ key: 'Enter', code: 'Enter' });
+    await waitFor(`document.documentElement.dataset.style === 'nano'`, 'Nano in safe mode');
+    await click('New chat', sidebar);
+    checks.push('built-in-style-keyboard-safe-mode');
+    if (!freshSafe) {
+      assertion(snapshot.workspaces.some((workspace) => !workspace.personal && workspace.trust === 'trusted'), 'Safe mode lost the trusted fixture project from the readable catalog.');
+      await waitFor(`${sidebar} && [...${sidebar}.querySelectorAll('button[aria-expanded]')].length >= 2`, 'safe-mode project tree');
+    }
     await capture('shell-safe-mode');
     timings.safe = normalizedMilliseconds(performance.now() - phase);
     checks.push('shell-safe-mode-banner', 'shell-safe-mode-composer-disabled', 'shell-safe-mode-catalog-readable');
@@ -289,6 +306,33 @@ export async function runShellWebview2Proof({
   await waitFor(`document.documentElement.dataset.theme === 'system'`, 'system theme restored');
   timings.theme = normalizedMilliseconds(performance.now() - phase);
   checks.push(`theme-persisted-by-host (${lightBackground} → ${darkBackground})`);
+
+  // Design style is a local preference, independent of the host's appearance.
+  const styleGroup = `document.querySelector('[role="group"][aria-label="Visual style"]')`;
+  await waitFor(styleGroup, 'visual style control');
+  const nanoBackground = await evaluate(`getComputedStyle(document.body).backgroundColor`);
+  await focusButton('Nano', styleGroup);
+  await automation.dispatchKey({ key: 'ArrowRight', code: 'ArrowRight' });
+  await waitFor(`document.activeElement === (${buttonExpression('Chaos', styleGroup)})`, 'arrow key reaches Chaos');
+  await automation.dispatchKey({ key: 'Enter', code: 'Enter' });
+  await waitFor(`document.documentElement.dataset.style === 'chaos'`, 'Chaos selected by keyboard');
+  await waitFor(`(${buttonExpression('Chaos', styleGroup)})?.getAttribute('aria-checked') === 'true'`, 'Chaos exposes checked state');
+  const chaosBackground = await evaluate(`getComputedStyle(document.body).backgroundColor`);
+  assertion(nanoBackground !== chaosBackground, 'Nano and Chaos render the same background.');
+  assertion(await evaluate(`document.documentElement.dataset.theme === 'system'`), 'Style changed host appearance.');
+  await reload();
+  await waitFor(`document.documentElement.dataset.style === 'chaos'`, 'Chaos persisted after reload', startupBoundMs);
+  await click('Settings', sidebar);
+  await capture('shell-style-chaos');
+  await focusButton('Chaos', styleGroup);
+  await automation.dispatchKey({ key: 'ArrowLeft', code: 'ArrowLeft' });
+  await waitFor(`document.activeElement === (${buttonExpression('Nano', styleGroup)})`, 'arrow key reaches Nano');
+  await automation.dispatchKey({ key: 'Enter', code: 'Enter' });
+  await waitFor(`document.documentElement.dataset.style === 'nano'`, 'Nano selected by keyboard');
+  assertion(await evaluate(`document.documentElement.dataset.theme === 'system'`), 'Nano changed host appearance.');
+  assertion(await evaluate(`getComputedStyle(document.body).backgroundColor`) === nanoBackground, 'Nano palette was not restored.');
+  await capture('shell-style-nano');
+  checks.push('nano-chaos-keyboard-persistence-independent-appearance');
 
   // 6. Russian copy renders, persists and leaves user content alone.
   await click('Русский', `document.querySelector('[role="group"][aria-label="Language"]')`);

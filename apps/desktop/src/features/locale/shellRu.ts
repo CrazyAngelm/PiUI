@@ -1,5 +1,7 @@
 /** Russian copy for the rebuilt workbench shell. User content, prompts, model IDs and names are never translated. */
 export const shellRu: Readonly<Record<string, string>> = {
+  "Visual style": "Визуальный стиль",
+  "This style could not be saved. It will last until you close the app.": "Не удалось сохранить стиль. Он будет действовать до закрытия приложения.",
   "External model providers": "Внешние провайдеры моделей",
   "Use your ChatGPT plan": "Используйте подписку ChatGPT",
   "Eligible requests to ChatGPT models use your ChatGPT plan or credits.": "Поддерживаемые запросы к моделям ChatGPT расходуют лимиты подписки или кредиты ChatGPT.",

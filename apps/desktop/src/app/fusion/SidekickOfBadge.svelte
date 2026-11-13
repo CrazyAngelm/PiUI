@@ -36,7 +36,7 @@
     height: 24px;
     padding: 0 10px;
     border: 1px solid var(--piui-border-subtle);
-    border-left: 3px solid var(--piui-chaos-gold);
+    border-left: 3px solid var(--piui-decoration-secondary);
     border-radius: var(--piui-radius-xs);
     background: var(--piui-surface-2);
     color: var(--piui-text-muted);

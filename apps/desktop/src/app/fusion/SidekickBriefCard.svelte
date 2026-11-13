@@ -47,7 +47,7 @@
     gap: 6px;
     padding: 8px 10px;
     border: 1px solid var(--piui-border-subtle);
-    border-left: 3px solid var(--piui-chaos-gold);
+    border-left: 3px solid var(--piui-decoration-secondary);
     border-radius: var(--piui-radius-sm);
     background: var(--piui-surface-1);
   }

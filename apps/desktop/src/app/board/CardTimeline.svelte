@@ -139,8 +139,9 @@
   .entry__dot {
     width: 5px;
     height: 9px;
-    background: color-mix(in srgb, var(--piui-chaos) 55%, transparent);
-    clip-path: polygon(40% 0, 100% 0, 60% 100%, 0 100%);
+    background: color-mix(in srgb, var(--piui-decoration-primary) 55%, transparent);
+    clip-path: var(--piui-decoration-marker-shape);
+    border-radius: var(--piui-decoration-radius);
   }
   .entry__text {
     min-width: 0;
@@ -179,8 +180,8 @@
   .comment__mention {
     padding: 0 3px;
     border-radius: var(--piui-radius-xs);
-    background: color-mix(in srgb, var(--piui-chaos) 14%, transparent);
-    color: var(--piui-chaos);
+    background: color-mix(in srgb, var(--piui-decoration-primary) 14%, transparent);
+    color: var(--piui-decoration-primary);
     font-weight: var(--piui-weight-medium);
   }
   .undo {
@@ -197,6 +198,6 @@
   }
   .undo:hover:not(:disabled) {
     color: var(--piui-text);
-    border-color: var(--piui-chaos);
+    border-color: var(--piui-decoration-primary);
   }
 </style>
