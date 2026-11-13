@@ -213,6 +213,8 @@
   });
 
   async function chooseExecutor(next: Executor): Promise<void> {
+    // Templates are offered to new chats only.
+    if (next.kind === 'template') return;
     try {
       await chatPipelines.setChatPipeline(sessionId, workspaceId, next.kind === 'pipeline' ? next.commandId : undefined);
     } catch (cause) {

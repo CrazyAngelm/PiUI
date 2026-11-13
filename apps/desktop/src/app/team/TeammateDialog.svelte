@@ -418,6 +418,7 @@
         {#if harness}
           <ModelPicker
             models={modelOptions}
+            favoritesScope={harness}
             value={modelKey}
             loading={modelsLoading}
             error={modelsError}

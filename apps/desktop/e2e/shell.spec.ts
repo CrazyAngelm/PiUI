@@ -239,7 +239,7 @@ test.describe('appearance and language', () => {
 
     const sidebar = page.getByRole('navigation', { name: 'Навигация рабочей области' });
     await expect(sidebar.getByRole('button', { name: 'Новый чат Ctrl+N' })).toBeVisible();
-    await expect(sidebar.getByRole('button', { name: 'Пайплайны', exact: true })).toBeVisible();
+    await expect(sidebar.getByRole('button', { name: 'Конвейеры', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { level: 1, name: 'Настройки' })).toBeVisible();
     await expect(page.getByRole('group', { name: 'Тема' }).getByRole('radio', { name: 'Тёмная' })).toBeVisible();
     // Chat titles are user content and stay as written.

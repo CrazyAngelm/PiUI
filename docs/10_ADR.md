@@ -1788,3 +1788,86 @@ Native Pi builds prompts and calls local function tools via `additional_tools`.
 No Cloud or Nano subscription access is needed. This route follows the
 [official public integration](https://developers.openai.com/siwc/token-sharing-open-source)
 and its [Responses preview requirements](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
+
+## ADR-053 — A composer template is saved on its first send
+
+**Status:** Accepted 2026-11-13 (the owner asked for templates that run on send). Amends ADR-040.
+
+**Context:** ADR-040 opened a template in the editor as an unsaved draft. The
+owner wants a template picked in the new-chat composer to behave like any other
+executor: the message is the input of the first element and the pipeline runs
+without leaving the chat. Runs need a saved team and pipeline; there is no
+ephemeral run API.
+
+**Decision:**
+
+- Picking a template in the Pipelines tab makes it the executor. Nothing is
+  saved and nothing navigates. A line under the composer states that sending
+  saves the template as a pipeline of this project.
+- On send, the draft gets default models (the composer's model when its harness
+  matches, otherwise the first catalog model; none available is an error and
+  nothing is saved), is validated, receives a unique name, and is saved through
+  `orchestration_save_graph_v6` with fresh ids and no `expectedRevision`, so it
+  can create but never overwrite. A toast confirms the save. The executor then
+  becomes the saved pipeline and the existing chat pipeline start runs it.
+- A failed save keeps the text and the selection and leaves nothing behind. A
+  failed run start leaves the saved pipeline selected, so a retry never saves
+  twice. A remembered template-to-pipeline mapping hides the template row while
+  its saved copy exists.
+- The editor path is unchanged: using a template there still opens an unsaved
+  draft. Existing chats offer no templates. Safe mode and untrusted projects
+  show no pipelines or templates.
+
+**Consequences:** sending can create a pipeline in the project (visible in its
+list and removable there). The default model may be costly; it can be changed
+in the editor afterwards. Orchestration v6 and the system file format are
+unchanged. Images cannot be sent through a pipeline.
+
+## ADR-054 — Host-opened terminal for native sign-in
+
+**Status:** Accepted 2026-11-13 (the owner asked for per-harness Connect).
+
+**Context:** Codex, Claude Code and Pi sign in with their own tools. Nano
+Desktop must never handle their credentials, yet asking people to find a
+terminal by hand is a poor first run.
+
+**Decision:** the host command `harness_connect_v1`
+(`contracts/harness-connect-v1.ts`) has two operations. `describe` returns, for
+Pi, Codex and Claude Code only, the display command (`pi`, `codex login`,
+`claude`), the text to type once it runs (`/login`) and whether a terminal can
+be opened now. `openTerminal` takes a harness enum and opens a terminal that
+runs the resolved harness program with fixed arguments.
+
+- The WebView sends only an enum. The host owns the program and the arguments;
+  no string from the request reaches a command line, and there is no shell.
+- Windows: `CreateProcessW` with `lpApplicationName` = the resolved program,
+  a command line of the quoted program plus quoted arguments, the home
+  directory as the working directory and `CREATE_NEW_CONSOLE |
+  CREATE_UNICODE_ENVIRONMENT` (no standard-handle redirection, so the console
+  program uses its own new console in dev and packaged runs); no `cmd.exe`, no
+  `wt.exe`, no `ShellExecuteW`. Linux: a fixed list of terminal emulators
+  resolved from absolute PATH directories and started with argv only; none
+  found answers `NO_TERMINAL`. Other platforms answer `NOT_SUPPORTED` and the
+  dialog falls back to the copyable command.
+- The terminal does not inherit the host environment. The host passes
+  `std::env::vars_os()` through `piui_runtime::native_sign_in_environment`,
+  which removes what a managed harness process never inherits: the operator
+  variables (`PIUI_AGENT_API_*`), the Prime and Codex Nano lease sources and,
+  for Claude Code, every name of `CLAUDE_SCRUBBED_ENVIRONMENT` (API keys,
+  provider switches, `CLAUDECODE` and other parent-session markers), so
+  Claude's subscription-only policy (ADR-029) holds for sign-in too. Names are
+  compared case-insensitively on Windows. Windows builds an explicit sorted,
+  double-NUL-terminated UTF-16 block from the result; Linux uses `env_clear()`
+  plus the result.
+- Safe mode: `describe` still answers but with `terminal: false`;
+  `openTerminal` answers `SAFE_MODE`.
+- Nano, Prime Agent, Hermes and ACP agents have no terminal entry (Nano shares
+  Pi's resolution but signs in through its account). The app does not read,
+  write or verify the resulting credentials; only Claude Code and Nano report
+  `sign-in-required`, so the UI never claims "Connected" for the others. After
+  signing in, **Check again** re-reads the harness.
+
+**Consequences:** a new typed host command and Rust module; the capability file
+is unchanged. The sign-in program runs outside any Nano Desktop containment, as
+it would if the user started it. Linux terminal launch is unverified on real
+distributions.

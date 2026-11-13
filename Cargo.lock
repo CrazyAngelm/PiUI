@@ -3023,7 +3023,7 @@ dependencies = [
 
 [[package]]
 name = "piui-contracts"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3032,7 +3032,7 @@ dependencies = [
 
 [[package]]
 name = "piui-desktop"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3066,7 +3066,7 @@ dependencies = [
 
 [[package]]
 name = "piui-extensions"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "jsonschema",
  "libc",
@@ -3077,7 +3077,7 @@ dependencies = [
 
 [[package]]
 name = "piui-index"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "libc",
  "piui-contracts",
@@ -3093,7 +3093,7 @@ dependencies = [
 
 [[package]]
 name = "piui-nano"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -3122,7 +3122,7 @@ dependencies = [
 
 [[package]]
 name = "piui-orchestration"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "piui-contracts",
  "serde",
@@ -3132,7 +3132,7 @@ dependencies = [
 
 [[package]]
 name = "piui-platform"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "ignore",
  "libc",
@@ -3143,7 +3143,7 @@ dependencies = [
 
 [[package]]
 name = "piui-plugins"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -3157,7 +3157,7 @@ dependencies = [
 
 [[package]]
 name = "piui-runtime"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "ed25519-dalek",
  "piui-contracts",

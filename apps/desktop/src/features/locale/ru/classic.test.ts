@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { CHAT_HISTORY_FALLBACK } from '../../../app/history/chatHistory.svelte';
 import { HISTORY_NOTICES } from '../../../app/history/historyStore.svelte';
 import { parseStateLabel, treeIssueLabel } from '../../../app/history/piHistory';
 import { EXTENSIONS_MESSAGES } from '../../../host-api/extensionsClient';
@@ -19,7 +20,11 @@ const PORTED_FILES = [
 
 /** Keys added to shared screens (sidebar, palette, transcript, approval card). */
 const SHARED_KEYS = [
-  '{0} session history',
+  'Session history',
+  'Open chat',
+  'Nothing found',
+  'Search',
+  CHAT_HISTORY_FALLBACK,
   'Open session history',
   'Load earlier history',
   'Rename…',

@@ -3,16 +3,30 @@
   import { language, t } from '../../features/locale/language';
   import { forgetHarnessCatalogs } from '../../host-api/harnessModels';
   import { NANO_CHATGPT_ERRORS, NANO_PROVIDER_ERRORS, nanoChatGpt, nanoProviders } from '../../host-api/nanoProviders';
-  import { Button, Dialog, Skeleton } from '../../lib/ui';
+  import { Button, Dialog, Field, Input, Skeleton } from '../../lib/ui';
   import type { NanoExternalProviderRequestFormatV1, NanoProvidersErrorCodeV1, NanoProvidersRequestV1, NanoProvidersResultV1 } from '../../../../../contracts/nano-providers-v1';
   import type { NanoChatGptErrorCodeV1, NanoChatGptRequestV1, NanoChatGptResultV1 } from '../../../../../contracts/nano-chatgpt-v1';
 
+  /**
+   * The Nano harness's model sources (ChatGPT plan and OpenAI-compatible
+   * APIs). They live in Settings → Harnesses → Nano → Connect, not in the
+   * Nano account: they are not part of signing in to Nano.
+   */
   const formatLabels: Record<NanoExternalProviderRequestFormatV1, string> = {
     compatible: 'Compatible (max_tokens)',
     openai: 'OpenAI (max_completion_tokens)',
   };
 
+  /** The model sources changed: reload the harness catalogs. */
   let { onChange }: { onChange: () => void } = $props();
+  const uid = $props.id();
+  const titleId = `${uid}-providers`;
+  const chatgptTitleId = `${uid}-chatgpt`;
+  const nameId = `${uid}-name`;
+  const urlId = `${uid}-url`;
+  const modelFieldId = `${uid}-model`;
+  const formatId = `${uid}-format`;
+
   let result = $state<NanoProvidersResultV1>();
   let busy = $state(false);
   let error = $state('');
@@ -85,31 +99,39 @@
   }
 </script>
 
-<section class="providers" aria-labelledby="external-providers-title">
-  <h2 id="external-providers-title">{$t('External model providers')}</h2>
+<section class="providers" aria-labelledby={titleId}>
+  <h3 id={titleId}>{$t('External model providers')}</h3>
   {#if error}<p class="provider-error" role="alert">{$t(error)}</p>{/if}
   {#if !result && busy}
     <Skeleton lines={2} />
   {:else if result?.supported}
     {#if chatgpt?.supported || chatgptError}
-      <section class="chatgpt" aria-labelledby="chatgpt-provider-title">
-        <h3 id="chatgpt-provider-title">{$t('Use your ChatGPT plan')}</h3>
+      <section class="block" aria-labelledby={chatgptTitleId}>
+        <h4 id={chatgptTitleId}>{$t('Use your ChatGPT plan')}</h4>
         <p class="detail">{$t('Eligible requests to ChatGPT models use your ChatGPT plan or credits.')}</p>
         {#if chatgptError}<p class="provider-error" role="alert">{$t(chatgptError)}</p>{/if}
         {#if chatgpt?.status.connected}
-          {#if chatgpt.status.email}<p>{chatgpt.status.email}</p>{/if}
+          {#if chatgpt.status.email}<p class="email">{chatgpt.status.email}</p>{/if}
           {#if chatgpt.status.credentialStore === 'memory'}
             <p class="detail">{$t('This ChatGPT connection lasts until you close Nano Desktop.')}</p>
           {/if}
-          <Button variant="ghost" disabled={!!chatgptBusy} onclick={() => void runChatGpt({ type: 'manage-usage' })}>{$t('Manage usage')}</Button>
-          <Button variant="ghost" disabled={!!chatgptBusy} onclick={() => void runChatGpt({ type: 'disconnect' })}>{$t('Disconnect ChatGPT')}</Button>
+          <div class="actions">
+            <Button size="sm" variant="ghost" disabled={!!chatgptBusy} onclick={() => void runChatGpt({ type: 'manage-usage' })}>{$t('Manage usage')}</Button>
+            <Button size="sm" variant="ghost" disabled={!!chatgptBusy} onclick={() => void runChatGpt({ type: 'disconnect' })}>{$t('Disconnect ChatGPT')}</Button>
+          </div>
         {:else if chatgptBusy === 'connect'}
           <p class="detail" role="status">{$t('Finish signing in to ChatGPT in your browser.')}</p>
-          <Button variant="ghost" onclick={() => void runChatGpt({ type: 'cancel' })}>{$t('Cancel')}</Button>
+          <div class="actions">
+            <Button size="sm" variant="ghost" onclick={() => void runChatGpt({ type: 'cancel' })}>{$t('Cancel')}</Button>
+          </div>
         {:else if chatgpt?.supported}
-          <Button variant="primary" data-oai-siwc-button="" disabled={!!chatgptBusy} onclick={() => void runChatGpt({ type: 'connect' })}>{$t('Continue with ChatGPT')}</Button>
+          <div class="actions">
+            <Button variant="primary" data-oai-siwc-button="" disabled={!!chatgptBusy} onclick={() => void runChatGpt({ type: 'connect' })}>{$t('Continue with ChatGPT')}</Button>
+          </div>
         {:else if chatgptError}
-          <Button variant="ghost" onclick={() => void runChatGpt({ type: 'status' })}>{$t('Retry')}</Button>
+          <div class="actions">
+            <Button size="sm" variant="ghost" onclick={() => void runChatGpt({ type: 'status' })}>{$t('Retry')}</Button>
+          </div>
         {/if}
       </section>
     {/if}
@@ -117,38 +139,46 @@
       <ul class="connections">
         {#each result.providers as provider (provider.id)}
           <li>
-            <div>
+            <div class="connection">
               <strong>{provider.spec.name}</strong>
-              <div class="detail">{provider.spec.modelId} · {provider.spec.baseUrl} · {$t(formatLabels[provider.spec.requestFormat ?? 'compatible'])}</div>
+              <span class="detail">{provider.spec.modelId} · {provider.spec.baseUrl} · {$t(formatLabels[provider.spec.requestFormat ?? 'compatible'])}</span>
             </div>
-            <Button variant="ghost" disabled={busy} aria-label={$t('Disconnect {0}', [provider.spec.name])}
+            <Button size="sm" variant="ghost" disabled={busy} aria-label={$t('Disconnect {0}', [provider.spec.name])}
               onclick={() => void run({ type: 'disconnect', id: provider.id })}>{$t('Disconnect')}</Button>
           </li>
         {/each}
       </ul>
     {/if}
-    <p class="detail">{$t('Add a model from an OpenAI-compatible API. Enter its key in the Windows dialog.')}</p>
-    <form onsubmit={(event) => {
-      event.preventDefault();
-      void run({ type: 'connect', language: $language, spec: { name: name.trim(), baseUrl: baseUrl.trim(), modelId: modelId.trim(), requestFormat } });
-    }}>
-      <label>{$t('Provider name')}<input bind:value={name} required disabled={busy} /></label>
-      <label>{$t('API base URL')}<input bind:value={baseUrl} type="url" placeholder="https://api.example.com/v1" required disabled={busy} /></label>
-      <label>{$t('Model ID')}<input bind:value={modelId} required disabled={busy} /></label>
-      <label>{$t('Chat Completions request format')}
-        <select bind:value={requestFormat} disabled={busy}>
-          <option value="compatible">{$t(formatLabels.compatible)}</option>
-          <option value="openai">{$t(formatLabels.openai)}</option>
-        </select>
-      </label>
-      <Button variant="primary" type="submit" disabled={busy || !name.trim() || !baseUrl.trim() || !modelId.trim()}>
-        {$t('Connect API key…')}
-      </Button>
-    </form>
+    <div class="block">
+      <p class="detail">{$t('Add a model from an OpenAI-compatible API. Enter its key in the Windows dialog.')}</p>
+      <form onsubmit={(event) => {
+        event.preventDefault();
+        void run({ type: 'connect', language: $language, spec: { name: name.trim(), baseUrl: baseUrl.trim(), modelId: modelId.trim(), requestFormat } });
+      }}>
+        <Field label={$t('Provider name')} for={nameId}>
+          <Input id={nameId} bind:value={name} required disabled={busy} />
+        </Field>
+        <Field label={$t('API base URL')} for={urlId}>
+          <Input id={urlId} bind:value={baseUrl} type="url" placeholder="https://api.example.com/v1" required disabled={busy} />
+        </Field>
+        <Field label={$t('Model ID')} for={modelFieldId}>
+          <Input id={modelFieldId} bind:value={modelId} required disabled={busy} />
+        </Field>
+        <Field label={$t('Chat Completions request format')} for={formatId}>
+          <select id={formatId} bind:value={requestFormat} disabled={busy}>
+            <option value="compatible">{$t(formatLabels.compatible)}</option>
+            <option value="openai">{$t(formatLabels.openai)}</option>
+          </select>
+        </Field>
+        <Button variant="primary" type="submit" disabled={busy || !name.trim() || !baseUrl.trim() || !modelId.trim()}>
+          {$t('Connect API key…')}
+        </Button>
+      </form>
+    </div>
   {:else if result}
     <p class="detail">{$t(NANO_PROVIDER_ERRORS.unsupported)}</p>
   {:else if error}
-    <Button variant="ghost" onclick={() => void run({ type: 'list' })}>{$t('Retry')}</Button>
+    <Button size="sm" variant="ghost" onclick={() => void run({ type: 'list' })}>{$t('Retry')}</Button>
   {/if}
 </section>
 
@@ -161,25 +191,89 @@
 </Dialog>
 
 <style>
-  .providers { margin-block-start: 2rem; }
-  h2 { margin: 0 0 .75rem; font-size: 1rem; }
-  h3 { margin: 0; font-size: .95rem; }
-  .chatgpt { margin-block-end: 1rem; }
-  form, label { display: grid; gap: .4rem; }
-  form { gap: .75rem; max-inline-size: 31rem; }
-  form :global(button) { justify-self: start; }
-  input, select {
-    min-inline-size: 0;
-    padding: .55rem .65rem;
+  .providers {
+    display: grid;
+    gap: var(--piui-space-4);
+  }
+  h3 {
+    margin: 0;
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
+    font-weight: var(--piui-weight-semibold);
+  }
+  h4 {
+    margin: 0;
+    font-size: inherit;
+    font-weight: var(--piui-weight-semibold);
+  }
+  p {
+    margin: 0;
+  }
+  .block {
+    display: grid;
+    gap: var(--piui-space-2);
+    padding-top: var(--piui-space-4);
+    border-top: 1px solid var(--piui-border-subtle);
+  }
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--piui-space-2);
+  }
+  form {
+    display: grid;
+    gap: var(--piui-space-3);
+    max-width: 31rem;
+  }
+  form :global(button[type='submit']) {
+    justify-self: start;
+  }
+  select {
+    height: var(--piui-control-md);
+    padding: 0 var(--piui-space-3);
     border: 1px solid var(--piui-border);
     border-radius: var(--piui-radius-sm);
-    background: var(--piui-bg);
+    background: var(--piui-bg-sunken);
     color: var(--piui-text);
     font: inherit;
   }
-  input:focus-visible, select:focus-visible { outline: 2px solid var(--piui-accent); outline-offset: 2px; }
-  .connections { list-style: none; padding: 0; }
-  li { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding-block: .5rem; }
-  .detail { color: var(--piui-text-muted); overflow-wrap: anywhere; }
-  .provider-error { color: var(--piui-danger); }
+  select:hover {
+    border-color: var(--piui-border-strong);
+  }
+  select:focus-visible {
+    outline: none;
+    border-color: var(--piui-focus);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--piui-focus) 18%, transparent);
+  }
+  .connections {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .connections li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--piui-space-3);
+    padding-block: var(--piui-space-2);
+    border-top: 1px solid var(--piui-border-subtle);
+  }
+  .connection {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+  .email {
+    overflow-wrap: anywhere;
+  }
+  .detail {
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
+    line-height: var(--piui-leading-normal);
+    overflow-wrap: anywhere;
+  }
+  .provider-error {
+    color: var(--piui-danger-text);
+  }
 </style>

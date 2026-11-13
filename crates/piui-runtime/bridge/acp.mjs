@@ -658,7 +658,7 @@ export async function createAcpAdapter(config, emit, coordinatorRequest, boardRe
     // The handshake is the compatibility gate, not the agent's release number.
     // A rejected or malformed handshake is a protocol mismatch, and so is any
     // protocol version other than 1 (version 2 is rejected until implemented).
-    const initialized = await request('initialize', { protocolVersion: PROTOCOL_VERSION, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: 'piui', title: 'PiUI', version: '0.3.0' } }).catch(error => {
+    const initialized = await request('initialize', { protocolVersion: PROTOCOL_VERSION, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: 'piui', title: 'PiUI', version: '0.3.1' } }).catch(error => {
       if (error?.bridgeCode !== 'native-request-failed') throw error;
       throw error.nativeCode === AUTH_REQUIRED ? fail('acp-sign-in-required', `Sign in to ${name} first.`, { authMethods: [] }) : fail('native-protocol-mismatch', `${name} rejected the ACP handshake.`);
     });

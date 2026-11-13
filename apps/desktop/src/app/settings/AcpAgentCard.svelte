@@ -1,22 +1,31 @@
 <script lang="ts">
+  import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import type { AcpAgentEntryV1 } from '../../../../../contracts/harness-registry-v1';
   import { acpHarnessId } from '../../../../../contracts/harness-identity-v3';
   import { t } from '../../features/locale/language';
-  import { Badge, Button } from '../../lib/ui';
+  import { Button, StatusDot } from '../../lib/ui';
   import HarnessMark from '../shell/HarnessMark.svelte';
   import {
-    canChooseSecrets, canRemove, canTrust, commandLineText, environmentGroups, stateBadge, versionBadge, versionNote,
+    canChooseSecrets, canRemove, canTrust, commandLineText, environmentGroups, versionBadge, versionNote,
   } from './acpAgents';
+  import { canConnectAgent, connectIsPrimary, rowStatus } from './harnessConnect.svelte';
   import type { AcpAgentRow, HarnessesStore } from './harnessesStore.svelte';
 
+  /**
+   * One ACP agent as a row (ADR-034): the status and the next decision stay
+   * visible; identity, command, environment and the rest sit under Details.
+   * Signing in is the Connect dialog (ADR-054).
+   */
   interface Props {
     row: AcpAgentRow;
     store: HarnessesStore;
+    onConnect: (agent: AcpAgentEntryV1) => void;
     onTrust: (agent: AcpAgentEntryV1) => void;
-    onSecrets: (agent: AcpAgentEntryV1) => void;
     onRemove: (agent: AcpAgentEntryV1) => void;
+    /** Review the secret variables the agent may receive; offered even when it is not installed. */
+    onSecrets: (agent: AcpAgentEntryV1) => void;
   }
-  let { row, store, onTrust, onSecrets, onRemove }: Props = $props();
+  let { row, store, onConnect, onTrust, onRemove, onSecrets }: Props = $props();
   // Buttons keep their visible text as the accessible name; the agent name describes them.
   const uid = $props.id();
   const titleId = `${uid}-title`;
@@ -31,27 +40,50 @@
   const agent = $derived(row.agent);
   const harness = $derived(acpHarnessId(agent.descriptor.id));
   const name = $derived(agent.descriptor.displayName);
-  const badge = $derived(stateBadge(agent.state, store.safeMode));
+  const status = $derived(rowStatus(agent.state, store.safeMode));
   const version = $derived(versionNote(agent));
   const advisory = $derived(versionBadge(agent.versionStatus));
   const environment = $derived(environmentGroups(agent));
   const restricted = $derived(RESTRICTIONS.filter(([key]) => agent.descriptor.capabilities?.[key] === false).map(([, label]) => label));
-  const hint = $derived(row.status?.signInHint ?? agent.descriptor.authHint);
   const locked = $derived(store.safeMode || store.busy !== '');
   const error = $derived(store.agentErrors[agent.descriptor.id]);
+  const source = $derived(agent.source === 'built-in' ? 'Ships with Nano Desktop' : agent.source === 'plugin' ? undefined : 'Added by you');
 </script>
 
-<li class="card">
-  <HarnessMark kind={harness} size={28} />
-  <div class="card__main">
-    <div class="card__title">
+<li class="row">
+  <div class="row__line">
+    <HarnessMark kind={harness} size={24} />
+    <div class="row__name">
       <strong id={titleId}>{name}</strong>
-      <Badge>{agent.source === 'built-in' ? $t('Ships with Nano Desktop') : agent.source === 'plugin' ? $t('From plugin {0}', [agent.plugin?.name ?? '']) : $t('Added by you')}</Badge>
       {#if agent.version}<span class="muted">v{agent.version}</span>{/if}
-      <Badge tone={badge.tone}>{$t(badge.label)}</Badge>
-      {#if advisory}<Badge tone={advisory.tone}>{$t(advisory.label)}</Badge>{/if}
+      {#if advisory}<span class="muted">{$t(advisory.label)}</span>{/if}
     </div>
-    {#if agent.reason && !(store.safeMode && agent.state === 'checking')}<p class="muted">{$t(agent.reason)}</p>{/if}
+    <span class="state" class:state--attention={!status.ready && status.dot === 'waiting'} class:state--danger={status.dot === 'failed'}>
+      {#if status.ready}
+        <StatusDot status={status.dot} label={$t(status.label)} />
+      {:else}
+        <StatusDot status={status.dot} />
+        <span>{$t(status.label)}</span>
+      {/if}
+    </span>
+    {#if canTrust(agent)}
+      <Button size="sm" variant="primary" disabled={locked} onclick={() => onTrust(agent)} aria-describedby={titleId}>{$t('Review and trust…')}</Button>
+    {/if}
+    {#if canConnectAgent(agent)}
+      <Button
+        size="sm"
+        variant={connectIsPrimary(agent.state) ? 'primary' : 'secondary'}
+        disabled={locked}
+        onclick={() => onConnect(agent)}
+        aria-describedby={titleId}
+      >{$t('Connect')}</Button>
+    {/if}
+  </div>
+  {#if agent.reason && !(store.safeMode && agent.state === 'checking')}<p class="row__reason muted">{$t(agent.reason)}</p>{/if}
+  {#if error}<p class="row__reason problem" role="alert">{$t(error)}</p>{/if}
+  <details class="row__details">
+    <summary><ChevronRight size={12} />{$t('Details')}</summary>
+    {#if source}<p class="muted source">{$t(source)}</p>{:else if agent.plugin}<p class="muted source">{$t('From plugin {0}', [agent.plugin.name])}</p>{/if}
     <dl class="facts">
       <div><dt>{$t('Identity')}</dt><dd><code>{harness}</code></dd></div>
       {#if agent.commandLine}
@@ -61,15 +93,6 @@
       {/if}
       {#if version}<div><dt>{$t('Version')}</dt><dd>{$t(version[0], version[1])}</dd></div>{/if}
       {#if row.status?.verifiedVersions}<div><dt>{$t('Tested with Nano Desktop')}</dt><dd>{row.status.verifiedVersions}</dd></div>{/if}
-      {#if hint}
-        <div>
-          <dt>{$t('Sign-in')}</dt>
-          <dd>
-            {$t(hint)}
-            {#if agent.authMethods.length > 0}<span class="muted">{$t('The agent offers: {0}.', [agent.authMethods.join(', ')])}</span>{/if}
-          </dd>
-        </div>
-      {/if}
       {#if environment.plain.length + environment.allowed.length + environment.withheld.length > 0}
         <div>
           <dt>{$t('Environment')}</dt>
@@ -85,14 +108,7 @@
       {/if}
       {#if agent.descriptor.docsUrl}<div><dt>{$t('Documentation')}</dt><dd><code>{agent.descriptor.docsUrl}</code></dd></div>{/if}
     </dl>
-    {#if error}<p class="error" role="alert">{$t(error)}</p>{/if}
     <div class="actions">
-      {#if canTrust(agent)}
-        <Button size="sm" disabled={locked} onclick={() => onTrust(agent)} aria-describedby={titleId}>{$t('Review and trust…')}</Button>
-      {/if}
-      {#if canChooseSecrets(agent)}
-        <Button size="sm" disabled={locked} onclick={() => onSecrets(agent)} aria-describedby={titleId}>{$t('Secret variables…')}</Button>
-      {/if}
       <Button
         size="sm"
         variant="ghost"
@@ -101,44 +117,95 @@
         onclick={() => void store.check(harness)}
         aria-describedby={titleId}
       >{$t('Check again')}</Button>
+      {#if canChooseSecrets(agent)}
+        <Button size="sm" variant="ghost" disabled={locked} onclick={() => onSecrets(agent)} aria-describedby={titleId}>{$t('Secret variables…')}</Button>
+      {/if}
       {#if canRemove(agent)}
         <Button size="sm" variant="ghost" disabled={locked} onclick={() => onRemove(agent)} aria-describedby={titleId}>{$t('Remove…')}</Button>
       {/if}
     </div>
-  </div>
+  </details>
 </li>
 
 <style>
-  .card {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--piui-space-3);
-    padding: var(--piui-space-3) var(--piui-space-4);
-    border: 1px solid var(--piui-border-subtle);
-    border-radius: var(--piui-radius-md);
-    background: var(--piui-bg-raised);
-  }
-  .card__main {
+  .row {
     display: grid;
+    gap: var(--piui-space-1);
+    padding: var(--piui-space-3) var(--piui-space-4);
+  }
+  .row__line {
+    display: flex;
+    align-items: center;
+    gap: var(--piui-space-3);
+    min-height: 32px;
+  }
+  .row__name {
+    display: flex;
     flex: 1;
-    gap: var(--piui-space-2);
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--piui-space-1) var(--piui-space-2);
     min-width: 0;
   }
-  .card__title {
-    display: flex;
-    flex-wrap: wrap;
+  .row__name strong {
+    font-weight: var(--piui-weight-medium);
+  }
+  .row__name .muted {
+    font-size: var(--piui-text-sm);
+  }
+  .state {
+    display: inline-flex;
     align-items: center;
     gap: var(--piui-space-2);
-    min-height: 28px;
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
+  }
+  .state--attention {
+    color: var(--piui-warning-text);
+  }
+  .state--danger {
+    color: var(--piui-danger-text);
+  }
+  .row__reason,
+  .row__details {
+    margin: 0 0 0 calc(24px + var(--piui-space-3));
+    font-size: var(--piui-text-sm);
   }
   p {
     margin: 0;
   }
+  .source {
+    margin-top: var(--piui-space-2);
+  }
+  summary {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--piui-space-1);
+    border-radius: var(--piui-radius-sm);
+    color: var(--piui-text-muted);
+    cursor: pointer;
+    list-style: none;
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  summary:hover {
+    color: var(--piui-text);
+  }
+  summary:focus-visible {
+    outline: 2px solid var(--piui-focus);
+    outline-offset: 2px;
+  }
+  summary :global(svg) {
+    transition: transform var(--piui-duration-fast) var(--piui-ease-out);
+  }
+  details[open] > summary :global(svg) {
+    transform: rotate(90deg);
+  }
   .facts {
     display: grid;
     gap: 4px;
-    margin: 0;
-    font-size: var(--piui-text-sm);
+    margin: var(--piui-space-2) 0;
   }
   .facts div {
     display: grid;
@@ -164,11 +231,12 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--piui-space-2);
+    margin-left: calc(var(--piui-space-2) * -1);
   }
   .muted {
     color: var(--piui-text-muted);
   }
-  .error {
+  .problem {
     color: var(--piui-danger-text);
   }
 </style>

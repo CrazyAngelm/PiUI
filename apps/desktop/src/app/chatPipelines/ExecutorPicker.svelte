@@ -1,8 +1,18 @@
 <script lang="ts" module>
   import type { HarnessKind } from '../../../../../contracts/workspace-v15';
 
-  /** Who handles the next message: the harness directly, or a saved pipeline. */
-  export type Executor = { kind: 'direct'; harness: HarnessKind | '' } | { kind: 'pipeline'; commandId: string };
+  /**
+   * Who handles the next message: the harness directly, a saved pipeline, or a
+   * template that is saved as a pipeline when the message is sent (`id` is
+   * `builtin:<TemplateId>` or `saved:<templateId>`).
+   */
+  export type Executor =
+    | { kind: 'direct'; harness: HarnessKind | '' }
+    | { kind: 'pipeline'; commandId: string }
+    | { kind: 'template'; id: string; name: string };
+
+  type Tab = 'direct' | 'pipelines';
+  type Section = 'direct' | 'teammates' | 'pipelines' | 'templates';
 </script>
 
 <script lang="ts">
@@ -10,12 +20,12 @@
   import Route from '@lucide/svelte/icons/route';
   import Workflow from '@lucide/svelte/icons/workflow';
   import { t } from '../../features/locale/language';
-  import { Picker, Spinner, type PickerItem } from '../../lib/ui';
+  import { Picker, Segmented, Spinner, type PickerItem } from '../../lib/ui';
   import { harnessMeta } from '../harnessMeta';
   import HarnessMark from '../shell/HarnessMark.svelte';
   import { TEMPLATES, type TemplateId } from '../pipelines/templateCatalog';
-  import type { PipelineTemplateV1 } from '../../host-api/pipelineLibraryClient';
   import { chatPipelines } from './chatPipelines.svelte';
+  import { rememberedPipeline, templateKey } from './templateRun';
   import { untrack } from 'svelte';
   import { teammates } from '../team/teammatesStore.svelte';
   import TeammateAvatar from '../team/TeammateAvatar.svelte';
@@ -25,23 +35,35 @@
     value: Executor;
     /** Harnesses offered for direct chats; an existing chat offers only its own. */
     harnesses: readonly { kind: HarnessKind; name: string; version?: string; available: boolean; reason?: string }[];
-    /** Offer templates (new chats only): choosing one opens it in the editor. */
+    /** Offer templates (new chats only): a chosen template becomes the executor and is saved as a pipeline when the message is sent. */
     templates?: boolean;
     disabled?: boolean;
     onChange: (next: Executor) => void;
-    onTemplate?: (template: { kind: 'builtin'; id: TemplateId } | { kind: 'saved'; template: PipelineTemplateV1 }) => void;
     onManage?: () => void;
   }
-  let { workspaceId, value, harnesses, templates = false, disabled = false, onChange, onTemplate, onManage }: Props = $props();
+  let { workspaceId, value, harnesses, templates = false, disabled = false, onChange, onManage }: Props = $props();
+
+  type Row = PickerItem & { section: Section };
 
   let open = $state(false);
+  let tab = $state<Tab>('direct');
+  let search = $state('');
   const commands = $derived(chatPipelines.commands[workspaceId] ?? []);
   const library = $derived(chatPipelines.libraries[workspaceId]);
   const loading = $derived(chatPipelines.loadingProjects.has(workspaceId));
   const selectedDetail = $derived(value.kind === 'pipeline' ? chatPipelines.detailFor(workspaceId, value.commandId) : undefined);
   const selectedName = $derived(
-    value.kind === 'pipeline' ? (selectedDetail?.name ?? commands.find((item) => item.id === value.commandId)?.name ?? $t('Pipeline')) : '',
+    value.kind === 'pipeline'
+      ? (selectedDetail?.name ?? commands.find((item) => item.id === value.commandId)?.name ?? $t('Pipeline'))
+      : value.kind === 'template'
+        ? value.name
+        : '',
   );
+
+  // The picker opens on the tab of the current executor.
+  $effect.pre(() => {
+    if (open) untrack(() => (tab = value.kind === 'direct' ? 'direct' : 'pipelines'));
+  });
 
   // Pipelines load when the picker first opens (and again for another project). The load runs untracked:
   // its loading flag is reactive, so after a failed request the effect would otherwise ask again forever.
@@ -50,7 +72,7 @@
     const id = workspaceId;
     if ((open || value.kind === 'pipeline') && id && chatPipelines.commands[id] === undefined) untrack(() => void chatPipelines.loadProject(id));
   });
-  // Teammates (ADR-041) are listed first; they resolve to a saved launch command.
+  // Teammates (ADR-041) are listed with the pipelines; they resolve to a saved launch command.
   $effect(() => {
     const id = workspaceId;
     if ((open || value.kind === 'pipeline') && id) untrack(() => void teammates.ensure(id));
@@ -59,44 +81,41 @@
   const teammateCommands = $derived(new Set(team.map((teammate) => teammate.launchCommandId)));
   const selectedTeammate = $derived(value.kind === 'pipeline' ? teammates.byLaunchCommand(workspaceId, value.commandId) : undefined);
 
-  const items = $derived.by<PickerItem[]>(() => {
-    const list: PickerItem[] = [];
-    const teamGroup = $t('Teammates');
+  const rows = $derived.by<Row[]>(() => {
+    const list: Row[] = [];
+    for (const item of harnesses) {
+      list.push({
+        section: 'direct',
+        value: `direct:${item.kind}`,
+        label: item.name,
+        description: item.version ? `v${item.version}` : undefined,
+        disabled: !item.available,
+        disabledReason: $t(item.reason ?? 'Not available'),
+      });
+    }
     for (const teammate of team) {
       const detail = chatPipelines.detailFor(workspaceId, teammate.launchCommandId);
       const status = teammates.status(workspaceId, teammate.id);
       const reason = !teammate.enabled ? $t('Turned off') : detail !== undefined && !detail.accepts ? $t('No message input — open it in Pipelines') : undefined;
       list.push({
+        section: 'teammates',
         value: `teammate:${teammate.id}`,
         label: `@${teammate.handle} · ${teammate.name}`,
         description: teammate.role || undefined,
-        group: teamGroup,
         keywords: [teammate.handle, teammate.name, teammate.role],
         badges: status && status.availability !== 'idle' ? [$t(status.availability === 'working' ? 'Working' : 'Queued')] : undefined,
         disabled: reason !== undefined,
         disabledReason: reason,
       });
     }
-    const direct = $t('Harness directly');
-    for (const item of harnesses) {
-      list.push({
-        value: `direct:${item.kind}`,
-        label: item.name,
-        description: item.version ? `v${item.version}` : undefined,
-        group: direct,
-        disabled: !item.available,
-        disabledReason: $t(item.reason ?? 'Not available'),
-      });
-    }
-    const saved = $t('More pipelines…');
     for (const command of commands) {
       if (teammateCommands.has(command.id)) continue;
       const detail = chatPipelines.detailFor(workspaceId, command.id);
       list.push({
+        section: 'pipelines',
         value: `pipeline:${command.id}`,
         label: command.name || $t('Untitled pipeline'),
         description: detail?.reply ? $t('Answers: {0} · {1}', [harnessMeta(detail.reply.harness).label, detail.reply.stepName]) : undefined,
-        group: saved,
         keywords: [command.name],
         badges: library?.chatDefault === command.id ? [$t('default')] : undefined,
         disabled: detail !== undefined && !detail.accepts,
@@ -104,26 +123,58 @@
       });
     }
     if (templates) {
-      const group = $t('Start from a template');
+      // A template already saved from this picker is listed as the pipeline it became.
+      const known = new Set(commands.map((command) => command.id));
+      const fresh = (key: string): boolean => {
+        const saved = rememberedPipeline(workspaceId, key);
+        return saved === undefined || !known.has(saved);
+      };
       for (const template of library?.templates ?? []) {
+        const key = templateKey({ kind: 'saved', template });
+        if (!fresh(key)) continue;
         list.push({
-          value: `saved:${template.id}`,
+          section: 'templates',
+          value: key,
           label: template.name,
           description: template.description,
-          group,
           badges: [template.scope.kind === 'global' ? $t('yours') : $t('project')],
         });
       }
       for (const template of TEMPLATES) {
-        list.push({ value: `builtin:${template.id}`, label: $t(template.title), description: $t(template.description), group, badges: [$t('built-in')] });
+        const key = templateKey({ kind: 'builtin', id: template.id });
+        if (!fresh(key)) continue;
+        list.push({ section: 'templates', value: key, label: $t(template.title), description: $t(template.description), badges: [$t('built-in')] });
       }
     }
     return list;
   });
 
+  const searching = $derived(search.trim() !== '');
+  // A search spans both tabs and groups its results; without one, a tab shows only its own rows.
+  const items = $derived.by<PickerItem[]>(() => {
+    const withTeam = rows.some((row) => row.section === 'teammates');
+    const heading = (section: Section): string | undefined => {
+      if (section === 'direct') return searching ? $t('Direct') : undefined;
+      if (section === 'teammates') return $t('Teammates');
+      if (section === 'pipelines') return searching || withTeam ? $t('Pipelines') : undefined;
+      return $t('Templates');
+    };
+    return rows
+      .filter((row) => searching || (tab === 'direct') === (row.section === 'direct'))
+      .map(({ section, ...item }) => ({ ...item, group: heading(section) }));
+  });
+
   const current = $derived(
-    value.kind === 'pipeline' ? (selectedTeammate ? `teammate:${selectedTeammate.id}` : `pipeline:${value.commandId}`) : `direct:${value.harness}`,
+    value.kind === 'template'
+      ? value.id
+      : value.kind === 'pipeline'
+        ? selectedTeammate
+          ? `teammate:${selectedTeammate.id}`
+          : `pipeline:${value.commandId}`
+        : `direct:${value.harness}`,
   );
+  const showFooter = $derived(tab === 'pipelines' && (loading || Boolean(chatPipelines.commandErrors[workspaceId]) || Boolean(onManage)));
+  const waiting = $derived(loading && (tab === 'pipelines' || searching));
 
   function select(next: string): void {
     const [kind, id = ''] = [next.slice(0, next.indexOf(':')), next.slice(next.indexOf(':') + 1)];
@@ -132,31 +183,43 @@
     else if (kind === 'teammate') {
       const teammate = team.find((item) => item.id === id);
       if (teammate) onChange({ kind: 'pipeline', commandId: teammate.launchCommandId });
-    }
-    else if (kind === 'builtin') onTemplate?.({ kind: 'builtin', id: id as TemplateId });
-    else if (kind === 'saved') {
+    } else if (kind === 'builtin') {
+      const template = TEMPLATES.find((item) => item.id === (id as TemplateId));
+      if (template) onChange({ kind: 'template', id: next, name: $t(template.title) });
+    } else if (kind === 'saved') {
       const template = library?.templates.find((item) => item.id === id);
-      if (template) onTemplate?.({ kind: 'saved', template });
+      if (template) onChange({ kind: 'template', id: next, name: template.name });
     }
+  }
+
+  /** Left and right switch the tab while the search is empty. */
+  function searchKeydown(event: KeyboardEvent): void {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || search !== '') return;
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    tab = tab === 'direct' ? 'pipelines' : 'direct';
   }
 </script>
 
 <Picker
   bind:open
+  bind:search
   {items}
   value={current}
   label={$t('Who answers')}
   searchPlaceholder={$t('Search teammates, harnesses and pipelines')}
-  emptyText={loading ? $t('Loading pipelines…') : $t('Nothing found')}
+  emptyText={waiting ? $t('Loading pipelines…') : $t('Nothing found')}
   width={360}
   onSelect={select}
+  onSearchKeydown={searchKeydown}
+  footer={showFooter ? footerContent : undefined}
 >
   {#snippet trigger(props)}
-    <button type="button" class="chip" class:chip--pipeline={value.kind === 'pipeline'} {...props} {disabled} title={$t('Who answers')}>
+    <button type="button" class="chip" class:chip--pipeline={value.kind !== 'direct'} {...props} {disabled} title={$t('Who answers')}>
       {#if selectedTeammate}
         <TeammateAvatar avatar={selectedTeammate.avatar} color={selectedTeammate.color} size={16} />
         <span>@{selectedTeammate.handle}</span>
-      {:else if value.kind === 'pipeline'}
+      {:else if value.kind !== 'direct'}
         <Route size={14} />
         <span>{selectedName}</span>
       {:else}
@@ -166,19 +229,32 @@
       <ChevronDown size={12} />
     </button>
   {/snippet}
-  {#snippet footer()}
-    <div class="footer">
-      {#if loading}<Spinner size={12} />{/if}
-      {#if chatPipelines.commandErrors[workspaceId]}<span class="footer__error">{$t(chatPipelines.commandErrors[workspaceId] ?? '')}</span>{/if}
-      {#if onManage}
-        <button type="button" class="footer__link" onclick={() => { open = false; onManage?.(); }}>
-          <Workflow size={13} />
-          {$t('Manage pipelines')}
-        </button>
-      {/if}
-    </div>
+  {#snippet header({ focusSearch })}
+    <Segmented
+      size="sm"
+      label={$t('Executor type')}
+      bind:value={tab}
+      options={[
+        { value: 'direct', label: $t('Direct') },
+        { value: 'pipelines', label: $t('Pipelines') },
+      ]}
+      onValueChange={focusSearch}
+    />
   {/snippet}
 </Picker>
+
+{#snippet footerContent()}
+  <div class="footer">
+    {#if loading}<Spinner size={12} />{/if}
+    {#if chatPipelines.commandErrors[workspaceId]}<span class="footer__error">{$t(chatPipelines.commandErrors[workspaceId] ?? '')}</span>{/if}
+    {#if onManage}
+      <button type="button" class="footer__link" onclick={() => { open = false; onManage?.(); }}>
+        <Workflow size={13} />
+        {$t('Manage pipelines')}
+      </button>
+    {/if}
+  </div>
+{/snippet}
 
 <style>
   .chip {
@@ -212,11 +288,6 @@
     display: flex;
     align-items: center;
     gap: var(--piui-space-2);
-    padding: 6px 8px;
-    border-top: 1px solid var(--piui-border-subtle);
-  }
-  .footer:empty {
-    display: none;
   }
   .footer__error {
     color: var(--piui-danger);

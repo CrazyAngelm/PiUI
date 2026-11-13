@@ -212,7 +212,7 @@ Lane launch (everything below is enforced by the host before a native start):
   uses a separate native app-server on Windows and adds only modes that the
   signed-in workspace gateway advertises for the Responses dialect. Reopening
   a Nano connector session uses its saved source and native history.
-- On Windows, **Settings → Nano account → External model providers** can add a
+- On Windows, **Settings → Harnesses → Nano → Connect** can add a
   model from an HTTPS OpenAI Chat Completions endpoint. Enter the model ID and
   select the endpoint's request format. The native dialog confirms the exact
   destination and accepts the API key, which the host stores in Credential

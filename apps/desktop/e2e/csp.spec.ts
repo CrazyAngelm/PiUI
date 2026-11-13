@@ -131,10 +131,10 @@ test('main screens run under the app CSP without violations', async ({ lab, page
 
   // Read-only Pi session history with its branches.
   await lab.sidebar.getByRole('button', { name: 'Options for piui' }).click();
-  await page.getByRole('menuitem', { name: 'Pi session history' }).click();
+  await page.getByRole('menuitem', { name: 'Session history' }).click();
   await page.getByRole('button', { name: /^Make the session index incremental/ }).click();
   await expect(page.getByRole('complementary', { name: 'Session details' }).getByRole('region', { name: 'Branches' })).toBeVisible();
-  await clean('Pi session history');
+  await clean('Session history');
 
   // Automations: the schedule dialog opens and closes.
   const automations = await lab.openAutomations();

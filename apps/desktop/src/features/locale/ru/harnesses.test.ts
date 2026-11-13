@@ -4,6 +4,7 @@ import { harnessConfigurations } from '../../../harness-adapters';
 import { profileConfigurationErrors } from '../../../harness-adapters/validation';
 import { failureText } from '../../../app/runs/runGraph';
 import { APPROVAL_FIELD_ISSUES } from '../../../host-api/approvalForms';
+import { HARNESS_CONNECT_ERRORS } from '../../../host-api/harnessConnect';
 import { translate } from '../language';
 
 it('translates the node inspector limitations of every harness', () => {
@@ -66,4 +67,27 @@ it('translates every static Nano profile problem the editor can show', () => {
   }).map((message) => message.replace(/^node: /, ''));
   expect(problems).toHaveLength(5);
   for (const message of problems) expect(translate(message, 'ru'), message).not.toBe(message);
+});
+
+it('translates the Connect dialog and every terminal failure, keeping the placeholders', () => {
+  for (const message of [
+    'Connect',
+    'Connect {0}',
+    '{0} signs in with its own tools. Nano Desktop never sees its credentials.',
+    'Open terminal',
+    'Copy command',
+    'Then type {0} there.',
+    'Finish signing in in the terminal, then check again.',
+    'Sign in with {0}’s own tools in a terminal, then check again.',
+    'Safe mode is on: Nano Desktop starts no agent program.',
+    'Open Nano account',
+    'Done',
+    ...Object.values(HARNESS_CONNECT_ERRORS),
+  ]) {
+    expect(translate(message, 'ru'), message).not.toBe(message);
+  }
+  for (const message of ['Connect {0}', '{0} signs in with its own tools. Nano Desktop never sees its credentials.', 'Then type {0} there.', 'Sign in with {0}’s own tools in a terminal, then check again.']) {
+    expect(translate(message, 'ru'), message).toContain('{0}');
+  }
+  expect(translate('Connect', 'ru')).toBe('Подключить');
 });

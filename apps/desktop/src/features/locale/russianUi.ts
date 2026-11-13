@@ -297,7 +297,7 @@ export const russianUi: Readonly<Record<string, string>> = {
   "Response": "Ответ", "Review trust": "Проверить доверие",
   "Safe mode.": "Безопасный режим.", "Search": "Поиск",
   "Search models": "Поиск моделей",
-  "Session history": "История беседы",
+  "Session history": "История сессий",
   "Session timeline": "Лента беседы", "Settings sections": "Разделы настроек", "Show": "Показать",
   "Stopped": "Остановлено", "Team  /": "Команда /", "Thinking": "Размышления", "Trust": "Доверие",
   "Unavailable": "Недоступно", "Unavailable pipeline (": "Недоступный процесс (", "Unavailable team (": "Недоступная команда (",

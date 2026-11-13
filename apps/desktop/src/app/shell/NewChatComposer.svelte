@@ -26,12 +26,9 @@
   import ExecutorPicker, { type Executor } from '../chatPipelines/ExecutorPicker.svelte';
   import type PipelineInputsBarComponent from '../chatPipelines/PipelineInputsBar.svelte';
   import { chatPipelines, type ChatPipelineDetail } from '../chatPipelines/chatPipelines.svelte';
-  import { pendingDrafts } from '../pipelines/pendingDraft.svelte';
-  import type { TemplateId } from '../pipelines/templates';
-  import type { PipelineTemplateV1 } from '../../host-api/pipelineLibraryClient';
-  import type { AgentGraph } from '../../features/orchestration/agentGraph';
+  import { choiceFromKey, draftFromTemplate, readyToSave, rememberPipeline, type TemplateChoice, type TemplateDraft } from '../chatPipelines/templateRun';
+  import type { AgentProfile, RunInputValue } from '../../host-api/orchestrationClient';
   import { useWorkspace } from './context';
-  import { createOpenGuard } from './openGuard';
   import { modelSelectionKey, resolveModelSelection } from '../../host-api/modelSelection';
   import { reconcileSelection, restoredSelection, type NewChatChoice, type NewChatSelection } from './newChatChoice';
   import FusionModeBar from '../fusion/FusionModeBar.svelte';
@@ -72,6 +69,11 @@
   let permissionMode = $state<PermissionMode>('native');
   /** A saved pipeline the first message goes through; empty talks to the harness directly. */
   let pipelineId = $state('');
+  /** A template that becomes a pipeline of the project when the first message is sent (ADR-053). */
+  let templateChoice = $state.raw<{ choice: TemplateChoice; key: string; name: string } | undefined>();
+  let draft = $state.raw<TemplateDraft | undefined>();
+  let draftLoading = $state(false);
+  let draftError = $state('');
   // Fusion (ADR-043): while on, the pair picker replaces the single-agent choices.
   let fusionMode = $state(false);
   let fusionPair = $state.raw<FusionPairV1 | undefined>();
@@ -100,8 +102,6 @@
   let htmlDragging = $state(false);
   const attachments = new ComposerAttachments(store.attachmentsFor(DRAFT_KEY), (images) => store.updateAttachments(DRAFT_KEY, images));
   const fileMentions = new FileMentions();
-  /** A lazy template load that finishes after the project changed, a newer click or unmount is dropped. */
-  const templateOpens = createOpenGuard<string>();
 
   const workspaces = $derived(store.catalog.workspaces.filter((workspace) => !workspace.missing));
   const workspace = $derived(workspaces.find((item) => item.id === workspaceId));
@@ -306,6 +306,39 @@
     };
   });
 
+  // A template belongs to the project it was chosen in.
+  $effect(() => {
+    void workspaceId;
+    untrack(() => (templateChoice = undefined));
+  });
+  // A chosen template is built once, outside the first-paint bundle; its preview feeds the inputs bar and the send check.
+  $effect(() => {
+    const picked = templateChoice;
+    const id = workspaceId;
+    draft = undefined;
+    draftError = '';
+    draftLoading = false;
+    if (!picked || !id) return;
+    let cancelled = false;
+    draftLoading = true;
+    const base = untrack(() => (harness || available[0]?.kind || 'codex') as AgentProfile['harness']);
+    const names = untrack(() => (chatPipelines.commands[id] ?? []).map((command) => ({ id: command.id, name: command.name })));
+    const translate = (value: string, parameters?: readonly unknown[]): string => $t(value, parameters);
+    draftFromTemplate(picked.choice, base, translate, names)
+      .then((next) => {
+        if (!cancelled) draft = next;
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) draftError = errorMessage(error);
+      })
+      .finally(() => {
+        if (!cancelled) draftLoading = false;
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
+
   $effect(() => {
     if (modelKey && !explicitModelReady) return;
     if (thinkingLevel && !levels.includes(thinkingLevel)) thinkingLevel = '';
@@ -324,7 +357,6 @@
     return () => {
       unregister();
       fileMentions.dispose();
-      templateOpens.close();
     };
   });
 
@@ -338,7 +370,21 @@
     }
   }
 
-  const executor = $derived<Executor>(pipelineId ? { kind: 'pipeline', commandId: pipelineId } : { kind: 'direct', harness });
+  const executor = $derived<Executor>(
+    templateChoice
+      ? { kind: 'template', id: templateChoice.key, name: templateChoice.name }
+      : pipelineId
+        ? { kind: 'pipeline', commandId: pipelineId }
+        : { kind: 'direct', harness },
+  );
+  /** The message goes through a pipeline: a saved one, or a template saved on send. */
+  const usesPipeline = $derived(Boolean(templateChoice) || Boolean(pipelineId));
+  /** What the inputs bar shows: the template's unsaved preview, else the saved pipeline. */
+  const barDetail = $derived(templateChoice ? (draft?.detail.accepts ? draft.detail : undefined) : pipelineDetail);
+  const barError = $derived(
+    templateChoice ? (draftError || (draft && !draft.detail.accepts ? 'This template does not accept chat messages.' : '')) : pipelineError,
+  );
+  const barLoading = $derived(templateChoice ? draftLoading : pipelineLoading);
   const executorHarnesses = $derived(
     store.catalog.harnesses.map((item) => ({
       kind: item.kind,
@@ -349,9 +395,17 @@
     })),
   );
   /** The harness that holds the chat: the pipeline's answering agent, else the direct pick. */
-  const chatHarness = $derived<HarnessKind | ''>(pipelineId ? (pipelineDetail?.reply?.harness ?? harness) : harness);
+  const chatHarness = $derived<HarnessKind | ''>(usesPipeline ? (barDetail?.reply?.harness ?? harness) : harness);
 
   function chooseExecutor(next: Executor): void {
+    if (next.kind === 'template') {
+      const choice = choiceFromKey(next.id, chatPipelines.libraries[workspaceId]?.templates ?? []);
+      if (!choice) return;
+      pipelineId = '';
+      templateChoice = { choice, key: next.id, name: next.name };
+      return;
+    }
+    templateChoice = undefined;
     if (next.kind === 'pipeline') {
       pipelineId = next.commandId;
       return;
@@ -365,31 +419,13 @@
     }
   }
 
-  /** A template becomes a new draft in the editor; saving it there is the person's decision. */
-  async function openTemplate(choice: { kind: 'builtin'; id: TemplateId } | { kind: 'saved'; template: PipelineTemplateV1 }): Promise<void> {
-    // Everything the action needs is read now: the lazy imports below yield, and
-    // the person may select another project meanwhile.
-    const targetId = workspaceId;
-    if (!targetId) return;
-    const base = (harness || available[0]?.kind || 'codex') as AgentGraph['nodes'][number]['profile']['harness'];
-    const translate = (value: string): string => $t(value);
-    const mayComplete = templateOpens.begin(targetId, () => workspaceId);
-    let graph: AgentGraph;
-    try {
-      // Graph building and the system-file validators stay out of the first-paint bundle.
-      graph =
-        choice.kind === 'builtin'
-          ? (await import('../pipelines/templates')).buildTemplate(choice.id, base, translate)
-          : (await import('../chatPipelines/templateLibrary')).graphFromTemplate(choice.template);
-    } catch (error) {
-      if (mayComplete()) toasts.error($t('This template could not be opened'), errorMessage(error));
-      return;
-    }
-    // A stale completion (another project, a newer click, a closed composer) is dropped.
-    if (!mayComplete()) return;
-    pendingDrafts.offer(targetId, graph, 'template');
-    store.selectWorkspace(targetId);
-    store.navigate({ name: 'pipelines', section: 'systems' });
+  /** The model a template step runs on: this composer's model for its own harness, else the first of the harness's catalog (the editor's rule). */
+  async function templateModel(targetId: string, kind: AgentProfile['harness']): Promise<Pick<AgentProfile, 'model' | 'modelProvider'> | undefined> {
+    if (kind === harness && model) return { model: model.id, ...(model.provider ? { modelProvider: model.provider } : {}) };
+    const version = store.catalog.harnesses.find((item) => item.kind === kind)?.version;
+    const result = await cachedHarnessModels({ workspaceId: targetId, harness: kind as HarnessKind }, version ? { version } : {});
+    const first = result.models[0];
+    return first ? { model: first.id, ...(first.provider ? { modelProvider: first.provider } : {}) } : undefined;
   }
 
   function managePipelines(): void {
@@ -424,7 +460,13 @@
       !busy &&
       !store.safeMode &&
       // An explicit model must be present in this project's own catalog.
-      (fusionMode ? fusionReady : pipelineId ? Boolean(pipelineDetail?.accepts) && available.length > 0 : Boolean(harness) && (modelKey ? explicitModelReady : canUseDefaultModel)),
+      (fusionMode
+        ? fusionReady
+        : templateChoice
+          ? Boolean(draft?.detail.accepts) && available.length > 0
+          : pipelineId
+            ? Boolean(pipelineDetail?.accepts) && available.length > 0
+            : Boolean(harness) && (modelKey ? explicitModelReady : canUseDefaultModel)),
   );
 
   function setText(value: string): void {
@@ -466,6 +508,59 @@
     void place(next.text, next.caret);
   }
 
+  /**
+   * Everything a pipeline chat needs, captured once before the first await: the
+   * composer stays editable, so the project, text or mode may change meanwhile.
+   */
+  type PipelineRequest = {
+    workspaceId: string;
+    commandId: string;
+    text: string;
+    values: Record<string, RunInputValue>;
+    permissionMode: PermissionMode;
+    fallbackHarness: HarnessKind;
+    available: HarnessKind[];
+    title: string;
+  };
+
+  function capturePipelineRequest(commandId: string, values: Record<string, RunInputValue>, fallbackHarness: HarnessKind): PipelineRequest {
+    const message = text;
+    return {
+      workspaceId,
+      commandId,
+      text: message,
+      values,
+      permissionMode,
+      fallbackHarness,
+      available: available.map((item) => item.kind),
+      title: (message.trim().split(/\r?\n/u)[0] ?? '').slice(0, 80),
+    };
+  }
+
+  /** Starts the chat from a captured request. The caller owns `busy`. */
+  async function runPipelineRequest(request: PipelineRequest): Promise<void> {
+    try {
+      await chatPipelines.startChat(store, {
+        workspaceId: request.workspaceId,
+        commandId: request.commandId,
+        text: request.text,
+        values: request.values,
+        permissionMode: request.permissionMode,
+        fallbackHarness: request.fallbackHarness,
+        available: request.available,
+        safeMode: store.safeMode,
+        title: request.title,
+      });
+      // Only what was sent is cleared; text typed meanwhile stays.
+      if (text === request.text) {
+        text = '';
+        store.updateDraft(DRAFT_KEY, '');
+      }
+    } catch (error) {
+      toasts.error($t('Could not start the chat'), $t(errorMessage(error)));
+    }
+  }
+
   async function sendThroughPipeline(): Promise<void> {
     if (attachments.images.length) {
       toasts.error($t('Pipelines take text only'), $t('Remove the images, or talk to the harness directly.'));
@@ -474,24 +569,53 @@
     const values = inputsBar?.collect();
     const fallback = harness || available[0]?.kind;
     if (!values || !fallback) return;
+    const request = capturePipelineRequest(pipelineId, values, fallback);
     busy = true;
-    const message = text;
     try {
-      await chatPipelines.startChat(store, {
-        workspaceId,
-        commandId: pipelineId,
-        text: message,
-        values,
-        permissionMode,
-        fallbackHarness: fallback,
-        available: available.map((item) => item.kind),
-        safeMode: store.safeMode,
-        title: (message.trim().split(/\r?\n/u)[0] ?? '').slice(0, 80),
-      });
-      text = '';
-      store.updateDraft(DRAFT_KEY, '');
-    } catch (error) {
-      toasts.error($t('Could not start the chat'), $t(errorMessage(error)));
+      await runPipelineRequest(request);
+    } finally {
+      busy = false;
+    }
+  }
+
+  /**
+   * A template is saved as a new pipeline of the project on its first message
+   * (ADR-053), then runs like any saved one. Nothing is saved when the draft
+   * is not ready; once saved, the executor is the saved pipeline, so a failed
+   * run start is retried without saving again.
+   */
+  async function sendThroughTemplate(): Promise<void> {
+    const current = draft;
+    if (!current) return;
+    if (attachments.images.length) {
+      toasts.error($t('Pipelines take text only'), $t('Remove the images, or talk to the harness directly.'));
+      return;
+    }
+    const values = inputsBar?.collect();
+    const fallback = harness || available[0]?.kind;
+    if (!values || !fallback) return;
+    // The whole request is captured before the first await (the saved pipeline's id is the
+    // only missing piece): the person may switch project or edit the text while it saves.
+    const targetId = workspaceId;
+    const request = capturePipelineRequest('', values, fallback);
+    busy = true;
+    try {
+      let commandId: string;
+      try {
+        const taken = (chatPipelines.commands[targetId] ?? []).map((command) => command.name);
+        const graph = await readyToSave(current, (kind) => templateModel(targetId, kind), taken, (value, parameters) => $t(value, parameters));
+        commandId = await chatPipelines.saveTemplate(targetId, graph);
+        rememberPipeline(targetId, current.key, commandId);
+        toasts.show({ title: $t('Saved “{0}” to this project’s pipelines', [graph.name]) });
+      } catch (error) {
+        toasts.error($t('Could not save the pipeline'), $t(errorMessage(error)));
+        return;
+      }
+      if (workspaceId === targetId) {
+        templateChoice = undefined;
+        pipelineId = commandId;
+      }
+      await runPipelineRequest({ ...request, commandId });
     } finally {
       busy = false;
     }
@@ -536,6 +660,11 @@
     }
     if (fusionMode) {
       await sendFusion();
+      return;
+    }
+    if (templateChoice) {
+      remember();
+      await sendThroughTemplate();
       return;
     }
     if (pipelineId) {
@@ -676,10 +805,14 @@
       <view.default notices={attachments.notices} onDismiss={() => attachments.dismissNotices()} />
     {/await}
   {/if}
-  {#if pipelineId && !fusionMode}
-    {#await loadInputsBar() then { default: PipelineInputsBar }}
-      <PipelineInputsBar bind:this={inputsBar} detail={pipelineDetail} loading={pipelineLoading} error={pipelineError} disabled={busy} />
-    {/await}
+  {#if usesPipeline && !fusionMode}
+    {#if templateChoice && draftLoading}
+      <p class="composer__template"><Spinner size={12} /> {$t('Preparing the template…')}</p>
+    {:else}
+      {#await loadInputsBar() then { default: PipelineInputsBar }}
+        <PipelineInputsBar bind:this={inputsBar} detail={barDetail} loading={barLoading} error={barError} disabled={busy} />
+      {/await}
+    {/if}
   {/if}
   <Textarea
     bind:ref={textarea}
@@ -698,7 +831,7 @@
     onpaste={pasted}
     minRows={3}
     maxRows={14}
-    placeholder={pipelineId ? $t('Describe the task for the pipeline…') : $t('Describe a task, ask a question or @mention a file…')}
+    placeholder={usesPipeline ? $t('Describe the task for the pipeline…') : $t('Describe a task, ask a question or @mention a file…')}
     aria-label={$t('Message')}
     aria-autocomplete="list"
     aria-controls={menu ? 'new-chat-menu' : undefined}
@@ -708,7 +841,7 @@
   />
   <div class="composer__bar">
     <div class="chips">
-      <AttachButton images={imageState} busy={attachments.busy} disabled={busy || store.safeMode || !workspaceId || (Boolean(pipelineId) && !fusionMode)} onPick={pick} />
+      <AttachButton images={imageState} busy={attachments.busy} disabled={busy || store.safeMode || !workspaceId || (usesPipeline && !fusionMode)} onPick={pick} />
       {#if nanoAccount.canDictate}
         {#await loadDictate() then { default: DictateButton }}
           <DictateButton onText={dictated} disabled={busy || store.safeMode} />
@@ -720,13 +853,12 @@
         value={executor}
         harnesses={executorHarnesses}
         templates={pipelinesAllowed}
-        disabled={available.length === 0 && !pipelineId}
+        disabled={available.length === 0 && !usesPipeline}
         onChange={chooseExecutor}
-        onTemplate={openTemplate}
         onManage={pipelinesAllowed ? managePipelines : undefined}
       />
 
-      {#if harness && !pipelineId}
+      {#if harness && !usesPipeline}
         <ModelPicker
           models={modelOptions}
           {harness}
@@ -748,7 +880,7 @@
             <button type="button" class="chip" {...props} aria-busy={modelsLoading || undefined}>
               {#if modelsLoading}<Spinner size={12} />{:else}<Brain size={14} />{/if}
               <span>{model?.name ?? (modelKey ? $t('Choose a model') : $t('Default model'))}</span>
-              {#if thinkingLevel}<span class="chip__sub">{thinkingLevel}</span>{/if}
+              {#if thinkingLevel}<span class="chip__sub">{$t(thinkingLevel)}</span>{/if}
               {#if fast}<Zap size={12} />{/if}
               <ChevronDown size={12} />
             </button>
@@ -763,7 +895,7 @@
         {workspaceId}
         {permissionMode}
         permissions={permissionItems}
-        worktree={!pipelineId && !fusionMode}
+        worktree={!usesPipeline && !fusionMode}
         permissionsApply={!fusionMode}
         disabled={store.safeMode}
         onWorkspace={(value) => (workspaceId = value)}
@@ -778,6 +910,9 @@
     <div class="composer__drop" aria-hidden="true">{$t('Drop images or files to attach')}</div>
   {/if}
 </div>
+{#if templateChoice && !fusionMode && !draftLoading}
+  <p class="notice">{$t('Sending saves this template as a pipeline in this project.')}</p>
+{/if}
 {#if chatHarness === 'claude-code' && workspaceId}{#await import('../chat/ClaudeSignInStatus.svelte') then status}<status.default {workspaceId} observe />{/await}{/if}
 {#if workspace && !workspace.personal && workspace.trust !== 'trusted'}
   <p class="notice">
@@ -789,7 +924,7 @@
     {$t(modelsError)}
     <button type="button" class="link" onclick={() => (catalogAttempt += 1)}>{$t('Retry')}</button>
   </p>
-{:else if !pipelineId && !fusionMode && modelKey && modelsResolved && !model}
+{:else if !usesPipeline && !fusionMode && modelKey && modelsResolved && !model}
   <p class="notice notice--error">{$t('Choose a model')}</p>
 {:else if resourcesWarning && !modelsLoading}
   <p class="notice" role="status">
@@ -831,6 +966,15 @@
   .composer__warning {
     margin: 8px 12px 0;
     color: var(--piui-warning-text);
+    font-size: var(--piui-text-sm);
+  }
+  .composer__template {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    padding: 6px 12px 0 14px;
+    color: var(--piui-text-muted);
     font-size: var(--piui-text-sm);
   }
   .composer__bar {

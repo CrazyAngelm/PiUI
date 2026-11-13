@@ -746,6 +746,37 @@ four read-only GPT 6.1 Sol passes.
   read-only GPT-6.1 Sol reviews; concrete findings were fixed and exercised.
   No real-provider turns were run.
 
+## 0.3.1 UX release — 2026-11-13
+
+- Version 0.3.1 (every file `scripts/check-version.mjs` reads, the nine `piui-*`
+  lock entries, bridge `clientInfo`, README installer names, changelog).
+- The new-chat executor picker has Direct / Pipelines tabs; a template becomes
+  the executor and is saved as a project pipeline on the first send, then runs
+  (ADR-053, amends ADR-040).
+- Model favorites (Favorites / All models, hearts, `Shift+Enter`), stored
+  locally per harness as `piui.models.favorites.v1`.
+- New reasoning ramp control with the same radiogroup and switch accessibility
+  contract.
+- "Session history" covers every harness: the Pi/Prime native index plus
+  read-only chats Nano Desktop started with other harnesses. Sessions created
+  in other harnesses' own apps are still not discovered.
+- Settings → Harnesses redesign with per-harness Connect; provider settings
+  moved from the Nano account tab into Nano's Connect dialog; host command
+  `harness_connect_v1` opens a terminal for native sign-in (ADR-054).
+- Verification (synthetic, UI Lab and unit tests; no real-provider turns):
+  Vitest 93 files / 651 tests and svelte-check (0 errors) pass. Playwright
+  `lab` covers every spec and `prod-csp` passes 5/5. Two stale expectations
+  from earlier commits were updated (the Russian sidebar label and the Output
+  block copy from bb3c820). Two `model-selection` tests from 00d87ca fail the
+  same way on a clean b872807 checkout under load (`clock.pauseAt` race and
+  the 5 s slow-catalog window) and are left for a separate fix. `cargo fmt`,
+  `cargo clippy --workspace --all-targets -D warnings` and `cargo test
+  --workspace` pass, except an orchestration script timing test that passes
+  alone. The Nano-source ACP test now uses the real Node runtime instead of a
+  pip launcher shim. Four read-only GPT-6.1 Sol reviews; their findings were
+  fixed. The native sign-in terminal (`CreateProcessW`) was not launched for
+  real.
+
 ## Next
 
 See [PLAN_REMAINING_2026-09-26_RU.md](PLAN_REMAINING_2026-09-26_RU.md).

@@ -25,6 +25,7 @@ use piui_platform::{ProcessId, SuspendedProcess, WindowsJob};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -3070,6 +3071,115 @@ struct ResolvedHarnessLaunch {
     version: Option<String>,
 }
 
+/// The native sign-in command of a harness (ADR-054). `display` and `then` are
+/// shown to the user; `args` follow the launcher's own arguments. Fixed text:
+/// nothing here comes from a request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeSignInEntry {
+    /// `codex login`, `claude`, `pi`. Display text, never a path.
+    pub display: &'static str,
+    /// Typed inside the CLI once it runs, for example `/login`.
+    pub then: Option<&'static str>,
+    /// Arguments appended to the resolved launch.
+    pub args: &'static [&'static str],
+}
+
+/// Only Pi, Codex and Claude Code sign in through their own CLI. Nano shares
+/// Pi's resolution but signs in through the Nano account, so it has no entry.
+#[must_use]
+pub const fn native_sign_in_entry(kind: HarnessKind) -> Option<NativeSignInEntry> {
+    match kind {
+        HarnessKind::Pi => Some(NativeSignInEntry {
+            display: "pi",
+            then: Some("/login"),
+            args: &[],
+        }),
+        HarnessKind::Codex => Some(NativeSignInEntry {
+            display: "codex login",
+            then: None,
+            args: &["login"],
+        }),
+        HarnessKind::ClaudeCode => Some(NativeSignInEntry {
+            display: "claude",
+            then: Some("/login"),
+            args: &[],
+        }),
+        HarnessKind::PrimeAgent | HarnessKind::Hermes | HarnessKind::Nano | HarnessKind::Acp(_) => {
+            None
+        }
+    }
+}
+
+/// A resolved program and its complete argument list for a native sign-in.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativeSignInLaunch {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+}
+
+/// Resolves the user's installed harness exactly as a session launch does
+/// (`resolve_harness_launch`) and appends the fixed sign-in arguments. Fails
+/// with `HarnessUnavailable` for a harness without a sign-in entry or one that
+/// is not installed. Never runs anything beyond that resolution.
+pub fn resolve_native_sign_in(kind: HarnessKind) -> Result<NativeSignInLaunch, NativeRuntimeError> {
+    let entry = native_sign_in_entry(kind).ok_or(NativeRuntimeError::HarnessUnavailable)?;
+    let launch = resolve_harness_launch(kind)?;
+    let mut args = launch.args;
+    args.extend(entry.args.iter().map(|arg| (*arg).to_owned()));
+    Ok(NativeSignInLaunch {
+        program: launch.program,
+        args,
+    })
+}
+
+/// The environment a native sign-in terminal starts with: `vars` (normally the
+/// host's `std::env::vars_os()`) minus everything a managed harness process
+/// never inherits (`bridge_command`): the operator capabilities, the Prime and
+/// Codex Nano lease sources and, for Claude Code, every name of
+/// [`CLAUDE_SCRUBBED_ENVIRONMENT`] (API keys, provider switches, parent-session
+/// markers such as `CLAUDECODE`). Names compare case-insensitively on Windows,
+/// where the environment is case-insensitive. Values are never read or logged.
+#[must_use]
+pub fn native_sign_in_environment(
+    kind: HarnessKind,
+    vars: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Vec<(OsString, OsString)> {
+    native_sign_in_environment_with(kind, vars, cfg!(windows))
+}
+
+fn native_sign_in_environment_with(
+    kind: HarnessKind,
+    vars: impl IntoIterator<Item = (OsString, OsString)>,
+    case_insensitive: bool,
+) -> Vec<(OsString, OsString)> {
+    let claude = kind == HarnessKind::ClaudeCode;
+    let withheld = |name: &OsStr| {
+        // A name that is not valid Unicode cannot equal any listed ASCII name.
+        let Some(name) = name.to_str() else {
+            return false;
+        };
+        let listed = |candidate: &str| {
+            if case_insensitive {
+                candidate.eq_ignore_ascii_case(name)
+            } else {
+                candidate == name
+            }
+        };
+        OPERATOR_ENVIRONMENT
+            .iter()
+            .any(|candidate| listed(candidate))
+            || listed(prime_nano::SOURCE_ENV)
+            || listed(crate::codex_nano::SOURCE_ENV)
+            || (claude
+                && CLAUDE_SCRUBBED_ENVIRONMENT
+                    .iter()
+                    .any(|candidate| listed(candidate)))
+    };
+    vars.into_iter()
+        .filter(|(name, _)| !withheld(name))
+        .collect()
+}
+
 /// The lease environment is supported by the verified, direct Windows binary.
 pub fn codex_nano_available() -> bool {
     resolve_node().is_ok() && resolve_codex_nano_launch().is_ok()
@@ -5339,6 +5449,19 @@ mod tests {
         let Ok(node) = resolve_node() else {
             return;
         };
+        // The OpenCode guard accepts only the PID of the process the bridge
+        // spawned. A launcher first on PATH (a pip or version-manager
+        // `node.exe` that starts the real runtime as its child) would load
+        // the plugin under another PID and be refused, so the fake agent runs
+        // on the runtime itself.
+        let node = std::process::Command::new(&node)
+            .args(["-p", "process.execPath"])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()))
+            .filter(|runtime| runtime.is_absolute() && runtime.is_file())
+            .unwrap_or(node);
         let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("bridge/acp.test-fixture.mjs")
             .to_string_lossy()
@@ -5860,6 +5983,62 @@ mod tests {
         assert!(!is_native_claude_executable(Path::new("claude.exe")));
         assert!(!is_native_claude_executable(&root.join("missing.exe")));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn sign_in_vars(names: &[&str]) -> Vec<(OsString, OsString)> {
+        names
+            .iter()
+            .map(|name| (OsString::from(*name), OsString::from("value")))
+            .collect()
+    }
+
+    fn sign_in_names(vars: &[(OsString, OsString)]) -> Vec<String> {
+        vars.iter()
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn native_sign_in_environment_withholds_host_capabilities_for_every_harness() {
+        let mut names = OPERATOR_ENVIRONMENT.to_vec();
+        names.extend([prime_nano::SOURCE_ENV, crate::codex_nano::SOURCE_ENV]);
+        names.extend(["PATH", "HOME", "ANTHROPIC_API_KEY", "CLAUDECODE"]);
+        for kind in [HarnessKind::Pi, HarnessKind::Codex] {
+            let kept = native_sign_in_environment_with(kind, sign_in_vars(&names), false);
+            // Only Claude Code drops the subscription-policy names.
+            assert_eq!(
+                sign_in_names(&kept),
+                ["PATH", "HOME", "ANTHROPIC_API_KEY", "CLAUDECODE"],
+                "{kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_sign_in_environment_scrubs_every_claude_name_and_keeps_the_rest() {
+        let mut names: Vec<&str> = CLAUDE_SCRUBBED_ENVIRONMENT.to_vec();
+        names.extend(OPERATOR_ENVIRONMENT);
+        names.extend([prime_nano::SOURCE_ENV, crate::codex_nano::SOURCE_ENV]);
+        names.extend(["PATH", "USERPROFILE", "CLAUDE_CONFIG_DIR"]);
+        let kept =
+            native_sign_in_environment_with(HarnessKind::ClaudeCode, sign_in_vars(&names), false);
+        assert_eq!(
+            sign_in_names(&kept),
+            ["PATH", "USERPROFILE", "CLAUDE_CONFIG_DIR"]
+        );
+        assert!(CLAUDE_SCRUBBED_ENVIRONMENT.contains(&"CLAUDECODE"));
+        // Values travel untouched.
+        assert!(kept.iter().all(|(_, value)| value == "value"));
+    }
+
+    #[test]
+    fn native_sign_in_environment_compares_names_by_the_platform_rule() {
+        let vars = sign_in_vars(&["claudecode", "Piui_Agent_Api_Token", "Path"]);
+        let windows = native_sign_in_environment_with(HarnessKind::ClaudeCode, vars.clone(), true);
+        assert_eq!(sign_in_names(&windows), ["Path"]);
+        let unix = native_sign_in_environment_with(HarnessKind::ClaudeCode, vars, false);
+        assert_eq!(sign_in_names(&unix).len(), 3);
+        assert!(native_sign_in_environment(HarnessKind::Pi, Vec::new()).is_empty());
     }
 
     fn uuid_like_suffix() -> u128 {

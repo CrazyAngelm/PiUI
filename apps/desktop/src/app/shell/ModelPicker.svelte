@@ -12,8 +12,9 @@
 
 <script lang="ts">
   import { Command, Popover } from 'bits-ui';
-  import { getContext, type Snippet } from 'svelte';
+  import { getContext, untrack, type Snippet } from 'svelte';
   import Brain from '@lucide/svelte/icons/brain';
+  import Heart from '@lucide/svelte/icons/heart';
   import Lock from '@lucide/svelte/icons/lock';
   import LogIn from '@lucide/svelte/icons/log-in';
   import Search from '@lucide/svelte/icons/search';
@@ -25,16 +26,22 @@
   import { nanoChatGpt } from '../../host-api/nanoProviders';
   import { isNanoConnectorModel } from '../../host-api/harnessModels';
   import { t } from '../../features/locale/language';
-  import { Spinner, Switch } from '../../lib/ui';
+  import { Segmented, Spinner } from '../../lib/ui';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
   import { lockCopy } from '../nano/nanoView';
   import type { WorkspaceStore } from '../workspaceStore.svelte';
   import { WORKSPACE_CONTEXT } from './context';
+  import { modelFavorites } from './modelFavorites.svelte';
+  import { defaultTab, favoriteKey, visibleModels, type ModelTab } from './modelPickerView';
+  import ReasoningControl from './ReasoningControl.svelte';
+  import { reasoningSteps } from './reasoningSteps';
 
   interface Props {
     models: readonly ModelOption[];
     /** Harness of the list: for `nano` the account's locked modes and a sign-in row follow the catalog rows. */
     harness?: string;
+    /** Whose favorites the list shows; defaults to the harness. */
+    favoritesScope?: string;
     /** Selected model key; '' is the harness default when `defaultOption` is set. */
     value: string;
     open?: boolean;
@@ -65,6 +72,7 @@
   let {
     models,
     harness = '',
+    favoritesScope = undefined,
     value,
     open = $bindable(false),
     defaultOption = false,
@@ -91,9 +99,75 @@
   const externalGroup = '\u0000external';
   const usesChatGpt = $derived(harness === 'nano' && models.some(model => model.key === value && model.provider === NANO_CHATGPT_PROVIDER_ID));
   let manageUsageError = $state(false);
+
+  // Favorites: a local preference per scope. A non-empty search always covers every model.
+  const scope = $derived(favoritesScope ?? harness);
+  const favoriteKeys = $derived(modelFavorites.list(scope));
+  const favoriteSet = $derived(new Set(favoriteKeys));
+  let tab = $state<ModelTab>('all');
+  let kept = $state<string[]>([]);
+  let search = $state('');
+  let tabTouched = $state(false);
+  let searchInput = $state<HTMLInputElement | null>(null);
+  const searching = $derived(search.trim() !== '');
+  const shownTab = $derived<ModelTab>(searching ? 'all' : tab);
+  const listed = $derived(visibleModels(models, { tab, search, favorites: favoriteKeys, value, kept }));
+  const tabOptions = $derived<{ value: ModelTab; label: string }[]>([
+    { value: 'favorites', label: $t('Favorites') },
+    { value: 'all', label: $t('All models') },
+  ]);
+  $effect(() => {
+    if (!open) return;
+    untrack(() => {
+      kept = [];
+      search = '';
+      tabTouched = false;
+    });
+  });
+  // The catalog can arrive after the popover opened: until the user picks a tab, follow it.
+  $effect(() => {
+    if (!open || tabTouched) return;
+    tab = defaultTab(models, untrack(() => favoriteKeys));
+  });
+
+  function changeTab(next: ModelTab): void {
+    tabTouched = true;
+    tab = next;
+    kept = [];
+    search = '';
+    searchInput?.focus();
+  }
+
+  function toggleFavorite(model: ModelOption): void {
+    const key = favoriteKey(model);
+    tabTouched = true;
+    // Un-favoriting on the Favorites tab keeps the row until the tab changes or the popover closes.
+    kept = favoriteSet.has(key) && shownTab === 'favorites' ? [...kept, key] : kept.filter((entry) => entry !== key);
+    modelFavorites.toggle(scope, key);
+  }
+
+  function listKey(event: KeyboardEvent): void {
+    // An IME composition owns its keys (Shift+Enter may commit the text).
+    if (event.isComposing || event.keyCode === 229) return;
+    if (event.key === 'Enter' && event.shiftKey) {
+      // Shift+Enter flips the favorite of the highlighted row and never picks it.
+      event.preventDefault();
+      const row = (event.currentTarget as HTMLElement).querySelector('[data-command-item][data-selected]');
+      const key = row?.getAttribute('data-fav');
+      const model = key ? models.find((entry) => favoriteKey(entry) === key) : undefined;
+      if (model) toggleFavorite(model);
+      return;
+    }
+    if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && event.target === searchInput && search === '' && !event.shiftKey) {
+      event.preventDefault();
+      const next: ModelTab = event.key === 'ArrowLeft' ? 'favorites' : 'all';
+      if (next !== shownTab) changeTab(next);
+    }
+  }
+
   const groups = $derived.by(() => {
     const byGroup = new Map<string, ModelOption[]>();
-    for (const model of models) {
+    for (const model of listed) {
       const connector = isNanoConnectorModel(harness, model);
       if (connector && (!nanoAccount.status?.capabilities?.gateway
         || !nanoAccount.status.entitlements?.features.localAgent
@@ -116,8 +190,8 @@
   }
   // Nano: what the account does not allow, listed after the harness's own rows.
   const nano = $derived(harness === 'nano');
-  const lockedModes = $derived(nano ? nanoAccount.lockedModes : []);
-  const signInRow = $derived(nano && nanoAccount.needsSignIn);
+  const lockedModes = $derived(nano && shownTab === 'all' ? nanoAccount.lockedModes : []);
+  const signInRow = $derived(nano && shownTab === 'all' && nanoAccount.needsSignIn);
   const workspace = getContext<WorkspaceStore | undefined>(WORKSPACE_CONTEXT);
   $effect(() => {
     if (nano) void nanoAccount.start();
@@ -128,36 +202,13 @@
     workspace?.navigate({ name: 'settings', section: 'nano' });
   }
 
-  const steps = $derived<{ value: string; label: string }[]>([
-    ...(levelDefault ? [{ value: '', label: $t('Auto') }] : []),
-    ...levels.map((item) => ({ value: item, label: item })),
-  ]);
-  const activeStep = $derived(steps.findIndex((step) => step.value === level));
-  const tuning = $derived(steps.length > 0 || fastAvailable);
-  let gauge = $state<HTMLDivElement | null>(null);
+  // The hint shows only when the reasoning control has nothing to offer.
+  const tuning = $derived(reasoningSteps(levels, levelDefault).length > 0 || fastAvailable);
 
   function choose(key: string, model: ModelOption | undefined): void {
     onModel(key);
     // Stay open when the new model has something to tune.
     if (!model || (!model.reasoning && !model.fast)) open = false;
-  }
-
-  function stepKey(event: KeyboardEvent, index: number): void {
-    const last = steps.length - 1;
-    const next =
-      event.key === 'ArrowRight' || event.key === 'ArrowUp'
-        ? Math.min(last, index + 1)
-        : event.key === 'ArrowLeft' || event.key === 'ArrowDown'
-          ? Math.max(0, index - 1)
-          : event.key === 'Home'
-            ? 0
-            : event.key === 'End'
-              ? last
-              : -1;
-    if (next < 0) return;
-    event.preventDefault();
-    onLevel(steps[next]!.value);
-    gauge?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next]?.focus();
   }
 </script>
 
@@ -170,17 +221,23 @@
   <Popover.Portal>
     <Popover.Content class="piui-models" {align} {side} sideOffset={6} collisionPadding={8} style="width: {width}px">
       <span class="piui-models__streak" aria-hidden="true"></span>
-      <Command.Root label={$t('Model')} loop>
+      <Command.Root label={$t('Model')} loop onkeydown={listKey}>
         <div class="piui-models__search">
           <Search size={14} />
-          <Command.Input class="piui-models__input" placeholder={$t('Search models')} aria-label={$t('Search models')} />
+          <Command.Input class="piui-models__input" placeholder={$t('Search models')} aria-label={$t('Search models')} bind:value={search} bind:ref={searchInput} />
           {#if loading}<Spinner size={12} />{/if}
+        </div>
+        <div class="piui-models__tabs">
+          <Segmented size="sm" label={$t('Models shown')} value={shownTab} options={tabOptions} onValueChange={changeTab} />
         </div>
         <Command.List class="piui-models__list">
           <Command.Viewport>
             <Command.Empty class="piui-models__empty">
-              {error ? $t('Could not load models') : loading ? $t('Loading models…') : $t('No models found')}
+              {error ? $t('Could not load models') : loading ? $t('Loading models…') : shownTab === 'favorites' ? $t('No favorites yet') : $t('No models found')}
             </Command.Empty>
+            {#if shownTab === 'favorites' && defaultOption && listed.length === 0 && !loading && !error}
+              <div class="piui-models__empty">{$t('No favorites yet')}</div>
+            {/if}
             {#if defaultOption}
               <Command.Item
                 class="piui-models__item"
@@ -202,11 +259,14 @@
                 {#if title}<Command.GroupHeading class="piui-models__heading"><span>{title}</span></Command.GroupHeading>{/if}
                 <Command.GroupItems>
                   {#each items as model (model.key)}
+                    {@const fav = favoriteSet.has(favoriteKey(model))}
                     <Command.Item
                       class="piui-models__item"
                       value={`${group}\u0000${model.key}`}
                       keywords={[model.name, model.id]}
                       data-current={model.key === value ? '' : undefined}
+                      data-fav={favoriteKey(model)}
+                      aria-keyshortcuts="Shift+Enter"
                       onSelect={() => choose(model.key, model)}
                     >
                       <span class="piui-models__mark" aria-hidden="true"></span>
@@ -225,6 +285,21 @@
                             <Zap size={12} aria-label={$t('fast')} />
                           </span>
                         {/if}
+                      </span>
+                      {#if fav}<span class="visually-hidden">, {$t('favorite')}</span>{/if}
+                      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (Presentational inside an option, which cannot hold a button; the keyboard path is Shift+Enter on the row.) -->
+                      <span
+                        class="piui-models__fav"
+                        class:piui-models__fav--on={fav}
+                        aria-hidden="true"
+                        title={fav ? $t('Remove from favorites (Shift+Enter)') : $t('Add to favorites (Shift+Enter)')}
+                        onmousedown={(event) => event.preventDefault()}
+                        onclick={(event) => {
+                          event.stopPropagation();
+                          toggleFavorite(model);
+                        }}
+                      >
+                        <Heart size={14} fill={fav ? 'currentColor' : 'none'} />
                       </span>
                     </Command.Item>
                   {/each}
@@ -252,39 +327,8 @@
         </Command.List>
       </Command.Root>
 
-      <div class="piui-models__tune" class:piui-models__tune--busy={busy}>
-        {#if steps.length}
-          <div class="piui-models__row">
-            <span class="piui-models__label"><Brain size={13} /> {$t('Reasoning')}</span>
-            <span class="piui-models__value">{activeStep >= 0 ? steps[activeStep]!.label : $t('Native default')}</span>
-          </div>
-          <div class="piui-models__gauge" role="radiogroup" aria-label={$t('Reasoning')} bind:this={gauge} style="--steps: {steps.length}">
-            {#each steps as step, index (step.value)}
-              <button
-                type="button"
-                role="radio"
-                class="piui-models__step"
-                class:piui-models__step--lit={activeStep >= 0 && index <= activeStep && step.value !== ''}
-                class:piui-models__step--auto={step.value === ''}
-                aria-checked={index === activeStep}
-                tabindex={index === (activeStep >= 0 ? activeStep : 0) ? 0 : -1}
-                disabled={busy}
-                title={step.label}
-                onclick={() => onLevel(step.value)}
-                onkeydown={(event) => stepKey(event, index)}
-              >
-                <span class="piui-models__bar" aria-hidden="true"></span>
-                <span class="piui-models__steplabel">{step.label}</span>
-              </button>
-            {/each}
-          </div>
-        {/if}
-        {#if fastAvailable}
-          <div class="piui-models__row piui-models__row--fast">
-            <span class="piui-models__label" class:piui-models__label--hot={fast}><Zap size={13} /> {$t('Fast mode')}</span>
-            <Switch label={$t('Fast mode')} hideLabel={true} checked={fast} disabled={busy} onCheckedChange={(checked: boolean) => onFast(checked)} />
-          </div>
-        {/if}
+      <div class="piui-models__tune">
+        <ReasoningControl {levels} {level} {levelDefault} {fastAvailable} {fast} {busy} {onLevel} {onFast} />
         {#if usesChatGpt}
           <div class="piui-models__row">
             <span class="piui-models__label">{$t('Using ChatGPT plan')}</span>
@@ -481,15 +525,44 @@
   .piui-models__cap--fast {
     color: var(--piui-chaos-gold);
   }
+  .piui-models__tabs {
+    padding: var(--piui-space-2) var(--piui-space-2) 0;
+  }
+  .piui-models__tabs :global(.piui-seg) {
+    display: flex;
+    width: 100%;
+  }
+  .piui-models__tabs :global(.piui-seg__item) {
+    flex: 1;
+  }
+  /* The heart sits calm and muted; lit it is a crimson heart with a gold rim. */
+  .piui-models__fav {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 26px;
+    height: 26px;
+    border-radius: var(--piui-radius-xs);
+    color: var(--piui-text-muted);
+    cursor: pointer;
+    transition: color var(--piui-duration-fast) var(--piui-ease-out);
+  }
+  .piui-models__fav:hover {
+    color: var(--piui-chaos-gold);
+  }
+  .piui-models__fav--on {
+    color: var(--piui-chaos);
+  }
+  .piui-models__fav--on :global(svg) {
+    stroke: var(--piui-chaos-gold);
+  }
   .piui-models__tune {
     display: grid;
     gap: var(--piui-space-2);
     padding: var(--piui-space-3);
     border-top: 1px solid var(--piui-border-subtle);
     background: color-mix(in srgb, var(--piui-bg-sunken) 55%, transparent);
-  }
-  .piui-models__tune--busy {
-    opacity: 0.7;
   }
   .piui-models__row {
     display: flex;
@@ -504,80 +577,6 @@
     color: var(--piui-text-muted);
     font-size: var(--piui-text-sm);
   }
-  .piui-models__label--hot {
-    color: var(--piui-chaos-gold);
-  }
-  .piui-models__value {
-    color: var(--piui-text);
-    font-family: var(--piui-font-mono);
-    font-size: var(--piui-text-xs);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-  /* Reasoning as a rising chaos-energy gauge: every level fits, none scroll. */
-  .piui-models__gauge {
-    display: grid;
-    grid-template-columns: repeat(var(--steps), minmax(0, 1fr));
-    gap: 4px;
-  }
-  .piui-models__step {
-    display: grid;
-    gap: 5px;
-    justify-items: stretch;
-    min-width: 0;
-    padding: 4px 0 2px;
-    border: 0;
-    border-radius: var(--piui-radius-xs);
-    background: transparent;
-    color: var(--piui-text-muted);
-    cursor: pointer;
-  }
-  .piui-models__step:focus-visible {
-    outline: 2px solid var(--piui-focus);
-    outline-offset: 1px;
-  }
-  .piui-models__step:disabled {
-    cursor: default;
-  }
-  .piui-models__bar {
-    height: 10px;
-    background: var(--piui-surface-3);
-    clip-path: polygon(14% 0, 100% 0, 86% 100%, 0 100%);
-    transition:
-      background var(--piui-duration-fast) var(--piui-ease-out),
-      box-shadow var(--piui-duration-fast) var(--piui-ease-out);
-  }
-  .piui-models__step:hover:not(:disabled) .piui-models__bar {
-    background: color-mix(in srgb, var(--piui-chaos) 35%, var(--piui-surface-3));
-  }
-  .piui-models__step--lit .piui-models__bar {
-    background: linear-gradient(90deg, var(--piui-chaos-deep), var(--piui-chaos));
-  }
-  .piui-models__step[aria-checked='true'] .piui-models__bar {
-    background: linear-gradient(90deg, var(--piui-chaos), var(--piui-chaos-gold));
-    box-shadow: 0 0 12px var(--piui-chaos-glow);
-  }
-  .piui-models__step--auto .piui-models__bar {
-    background: repeating-linear-gradient(135deg, var(--piui-surface-3) 0 3px, transparent 3px 6px);
-  }
-  .piui-models__step--auto[aria-checked='true'] .piui-models__bar {
-    background: repeating-linear-gradient(135deg, var(--piui-chaos-spark) 0 3px, transparent 3px 6px);
-    box-shadow: none;
-  }
-  .piui-models__steplabel {
-    overflow: hidden;
-    font-size: var(--piui-text-xs);
-    text-align: center;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .piui-models__step[aria-checked='true'] .piui-models__steplabel {
-    color: var(--piui-text);
-    font-weight: var(--piui-weight-semibold);
-  }
-  .piui-models__row--fast {
-    padding-top: var(--piui-space-1);
-  }
   .piui-models__hint,
   .piui-models__error {
     margin: 0;
@@ -588,10 +587,5 @@
   }
   .piui-models__error {
     color: var(--piui-danger);
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .piui-models__bar {
-      transition: none;
-    }
   }
 </style>

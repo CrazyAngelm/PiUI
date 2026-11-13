@@ -91,11 +91,10 @@
     onNavigate();
   }
 
-  /** Read-only native history the index found in this folder (or personal chats). */
+  /** Read-only history of this folder (or personal chats) across the connected harnesses. */
   function historyItem(workspace: WorkspaceSummary): MenuEntry {
-    const prime = store.projectSummaries.some((project) => project.id === workspace.id && project.agentKind === 'prime-agent');
     return {
-      label: $t('{0} session history', [prime ? 'Prime Agent' : 'Pi']),
+      label: $t('Session history'),
       icon: ScrollText,
       onSelect: () => go(() => store.navigate({ name: 'history', workspaceId: workspace.id })),
     };

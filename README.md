@@ -16,7 +16,7 @@
 </p>
 
 > [!IMPORTANT]
-> Nano Desktop 0.3.0 is a developer preview. Windows is the primary, verified platform. Linux packages build, but native agent lifecycle containment is only verified on Windows; macOS is experimental. A release is code-signed and can update itself only when its notes say so; otherwise it is unsigned and never checks for updates. Nano Desktop is not an OS sandbox. Read the [current limitations](#current-limitations) before using it with important work.
+> Nano Desktop 0.3.1 is a developer preview. Windows is the primary, verified platform. Linux packages build, but native agent lifecycle containment is only verified on Windows; macOS is experimental. A release is code-signed and can update itself only when its notes say so; otherwise it is unsigned and never checks for updates. Nano Desktop is not an OS sandbox. Read the [current limitations](#current-limitations) before using it with important work.
 
 Nano Desktop works with any native harness and needs no account. Signing in to a Nano account is optional: it adds Nano models and cloud mode.
 
@@ -49,24 +49,24 @@ Settings → Harnesses shows what Nano Desktop found on this computer, the versi
 ### Windows 10/11 (recommended)
 
 1. Install at least one harness and sign in with its own tool.
-2. Open the [Nano Desktop releases](https://github.com/CrazyAngelm/PiUI/releases) and choose **v0.3.0**.
-3. Download `NanoDesktop_0.3.0_x64-setup.exe` and `SHA256SUMS.txt`.
+2. Open the [Nano Desktop releases](https://github.com/CrazyAngelm/PiUI/releases) and choose **v0.3.1**.
+3. Download `NanoDesktop_0.3.1_x64-setup.exe` and `SHA256SUMS.txt`.
 4. Verify the checksum, run the installer (per-user, no administrator rights) and open **Nano Desktop** from the Start menu.
 
 ```powershell
-Get-FileHash .\NanoDesktop_0.3.0_x64-setup.exe -Algorithm SHA256
+Get-FileHash .\NanoDesktop_0.3.1_x64-setup.exe -Algorithm SHA256
 Get-Content .\SHA256SUMS.txt
 ```
 
-The hash printed by `Get-FileHash` must match the installer's line in `SHA256SUMS.txt`. If the release notes say the build is not code-signed, Windows may warn about an unknown publisher; verify the checksum first, or [build from source](#build-from-source). The portable `NanoDesktop_0.3.0_windows_x86_64.exe` runs without installing.
+The hash printed by `Get-FileHash` must match the installer's line in `SHA256SUMS.txt`. If the release notes say the build is not code-signed, Windows may warn about an unknown publisher; verify the checksum first, or [build from source](#build-from-source). The portable `NanoDesktop_0.3.1_windows_x86_64.exe` runs without installing.
 
 ### Linux (x64)
 
-Download `NanoDesktop_0.3.0_amd64.deb` (install with `sudo apt install ./NanoDesktop_0.3.0_amd64.deb`) or `NanoDesktop_0.3.0_amd64.AppImage` (make it executable and run it), and check it with `sha256sum --check --ignore-missing SHA256SUMS.txt`. The packages need WebKitGTK 4.1 (Ubuntu 22.04 or newer). Native agent lifecycle containment is not yet verified on Linux, so harnesses show as not verified there.
+Download `NanoDesktop_0.3.1_amd64.deb` (install with `sudo apt install ./NanoDesktop_0.3.1_amd64.deb`) or `NanoDesktop_0.3.1_amd64.AppImage` (make it executable and run it), and check it with `sha256sum --check --ignore-missing SHA256SUMS.txt`. The packages need WebKitGTK 4.1 (Ubuntu 22.04 or newer). Native agent lifecycle containment is not yet verified on Linux, so harnesses show as not verified there.
 
 ### macOS (experimental)
 
-When a release lists `NanoDesktop_0.3.0_universal.dmg`, it runs on Apple Silicon and Intel Macs. It is ad-hoc signed and not notarized: open it with right-click → **Open** the first time.
+When a release lists `NanoDesktop_0.3.1_universal.dmg`, it runs on Apple Silicon and Intel Macs. It is ad-hoc signed and not notarized: open it with right-click → **Open** the first time.
 
 ### Updating
 

@@ -78,3 +78,7 @@ pub use supervisor::{
     ProductionRuntimeSupervisor, SupervisorError,
 };
 pub mod workspace_usage;
+pub use workspace_runtime::{
+    NativeSignInEntry, NativeSignInLaunch, native_sign_in_entry, native_sign_in_environment,
+    resolve_native_sign_in,
+};

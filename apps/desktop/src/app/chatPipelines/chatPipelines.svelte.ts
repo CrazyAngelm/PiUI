@@ -24,6 +24,7 @@ import { pipelineLibraryHost, type ChatPipelineV1, type PipelineLibraryCommandV1
 import { resolveRunInputs } from '../../host-api/runInputs';
 import { coalesceReads } from '../../lib/coalescedReads';
 import { readWorkspaceHistory } from '../../host-api/workspaceHistory';
+import type { AgentGraph } from '../../features/orchestration/agentGraph';
 import { performRunAction } from '../../features/orchestration/runActions';
 import { formatValue } from '../runs/runPresentation';
 import { acceptsChat, answerTask, chatInput, extraInputs, outputsAnswer, replyStep, runMessage, withPipelineContext, type PipelineContext } from './chatPipeline';
@@ -192,6 +193,37 @@ export class ChatPipelinesStore {
     }
     this.details = { ...this.details, [this.detailKey(workspaceId, commandId)]: detail };
     return detail;
+  }
+
+  /** Re-reads the project's launch commands (not their details); undefined when the host could not answer. */
+  private async refreshCommands(workspaceId: string): Promise<readonly DefinitionSummary[] | undefined> {
+    try {
+      const catalog = await this.client.orchestration_catalog_v6({ workspaceId });
+      this.commands = { ...this.commands, [workspaceId]: catalog.launchCommands };
+      return catalog.launchCommands;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Saves a template draft (ADR-053) as a new pipeline of the project and
+   * returns its launch command id. Every id is fresh and no revision is sent,
+   * so the host can create but never overwrite; a failed save leaves nothing.
+   * After a failure the project is read again: a command with the draft's id
+   * means the host did commit before the answer was lost.
+   */
+  async saveTemplate(workspaceId: string, graph: AgentGraph): Promise<string> {
+    const { saveGraph } = await import('../pipelines/graphDocument');
+    try {
+      await saveGraph(this.client, workspaceId, graph, new Map());
+    } catch (cause) {
+      const known = await this.refreshCommands(workspaceId);
+      if (known?.some((command) => command.id === graph.id)) return graph.id;
+      throw cause instanceof ChatPipelineError ? cause : new ChatPipelineError(orchestrationError(cause).message);
+    }
+    await this.refreshCommands(workspaceId);
+    return graph.id;
   }
 
   async setChatDefault(workspaceId: string, commandId: string | undefined): Promise<void> {

@@ -115,7 +115,7 @@
     <button type="button" class="chip" {...props} {disabled} title={disabled ? $t('Available while the agent is idle') : undefined}>
       {#if busy}<Spinner size={12} />{:else}<Brain size={14} />{/if}
       <span>{model?.name ?? $t('Default model')}</span>
-      {#if current?.thinkingLevel}<span class="chip__sub">{current.thinkingLevel}</span>{/if}
+      {#if current?.thinkingLevel}<span class="chip__sub">{$t(current.thinkingLevel)}</span>{/if}
       {#if current?.serviceTier === 'fast'}<Zap size={12} />{/if}
       <ChevronDown size={12} />
     </button>

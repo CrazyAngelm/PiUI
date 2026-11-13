@@ -34,6 +34,7 @@
     toasts,
     type PickerItem,
   } from '../lib/ui';
+  import ReasoningControl from '../app/shell/ReasoningControl.svelte';
 
   let theme = $state<'dark' | 'light' | 'system'>('dark');
   $effect(() => {
@@ -56,6 +57,15 @@
     { value: 'claude-sonnet', label: 'Claude Sonnet', group: 'Anthropic' },
     { value: 'local-qwen', label: 'Qwen 3 Coder', group: 'Local', disabled: true, disabledReason: 'Provider not signed in' },
   ];
+
+  const codexLevels = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+  const claudeLevels = ['low', 'medium', 'high', 'xhigh', 'max'];
+  const shortLevels = ['off', 'low', 'medium'];
+  let codexLevel = $state('high');
+  let codexFast = $state(true);
+  let claudeLevel = $state('');
+  let shortLevel = $state('');
+  let soloFast = $state(false);
 </script>
 
 <TooltipPrimitive.Provider delayDuration={400}>
@@ -147,6 +157,35 @@
               { value: 'xhigh', label: 'XHigh' },
             ]}
           />
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Reasoning control</h2>
+      <div class="row tunes">
+        <div class="tune">
+          <ReasoningControl
+            levels={codexLevels}
+            level={codexLevel}
+            levelDefault
+            fastAvailable
+            fast={codexFast}
+            onLevel={(value) => (codexLevel = value)}
+            onFast={(value) => (codexFast = value)}
+          />
+        </div>
+        <div class="tune">
+          <ReasoningControl levels={claudeLevels} level={claudeLevel} onLevel={(value) => (claudeLevel = value)} />
+        </div>
+        <div class="tune tune--narrow">
+          <ReasoningControl levels={shortLevels} level={shortLevel} levelDefault onLevel={(value) => (shortLevel = value)} />
+        </div>
+        <div class="tune">
+          <ReasoningControl levels={codexLevels} level="medium" levelDefault fastAvailable busy />
+        </div>
+        <div class="tune tune--narrow">
+          <ReasoningControl fastAvailable fast={soloFast} onFast={(value) => (soloFast = value)} />
         </div>
       </div>
     </section>
@@ -295,5 +334,21 @@
   }
   .chip:hover {
     background: var(--piui-pressed);
+  }
+  .tunes {
+    align-items: flex-start;
+  }
+  /* The model picker's tuning block: its width and sunken surface. */
+  .tune {
+    box-sizing: border-box;
+    width: 380px;
+    max-width: 100%;
+    padding: var(--piui-space-3);
+    border: 1px solid var(--piui-border);
+    border-radius: var(--piui-radius-md);
+    background: color-mix(in srgb, var(--piui-bg-sunken) 55%, var(--piui-surface-1));
+  }
+  .tune--narrow {
+    width: 340px;
   }
 </style>

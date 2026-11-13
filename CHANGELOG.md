@@ -6,6 +6,20 @@ Nano Desktop is currently a developer preview. Versions before 1.0 may change wi
 
 ## [Unreleased]
 
+## [0.3.1]
+
+### Added
+
+- The new-chat executor picker has two tabs, **Direct** and **Pipelines**. A ready pipeline or template becomes the chat's executor instead of opening the editor: the message you send is the input of the pipeline's first element and the pipeline runs automatically. A template is saved as a new pipeline of the project on the first send (ADR-053); a line under the composer says so and a toast confirms it. **Manage pipelines** opens the editor and appears only in the Pipelines tab.
+- Model favorites. The model list has **Favorites** and **All models** tabs, a heart on every model, and `Shift+Enter` to toggle the highlighted model. Favorites are a local preference kept per harness.
+- **Settings → Harnesses → Connect.** Each harness row has a Connect dialog. For Codex, Claude Code and Pi, Nano Desktop can open a terminal that runs the harness's own sign-in; the app never sees the credentials (ADR-054).
+
+### Changed
+
+- The reasoning control is a rising slanted ramp with one readout; keyboard and screen-reader behaviour is unchanged.
+- "Pi session history" is now **Session history**. For Pi and Prime Agent it still shows the native index. For other harnesses it lists chats started in Nano Desktop as read-only transcripts with an **Open chat** button; sessions created in those harnesses' own apps are not discovered.
+- **Settings → Harnesses** is a calmer list of rows with details on demand. External model providers (ChatGPT plan and API providers) moved from **Settings → Nano account** to **Settings → Harnesses → Nano → Connect**.
+
 ## [0.3.0]
 
 ### Added

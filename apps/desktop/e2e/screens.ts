@@ -172,7 +172,7 @@ export const SCREENS: readonly Screen[] = [
     name: 'pi-history',
     async open(lab) {
       await lab.sidebar.getByRole('button', { name: 'Options for piui' }).click();
-      await lab.page.getByRole('menuitem', { name: 'Pi session history' }).click();
+      await lab.page.getByRole('menuitem', { name: 'Session history' }).click();
       await lab.page.getByRole('button', { name: /^Make the session index incremental/ }).click();
       await expect(lab.page.getByRole('complementary', { name: 'Session details' }).getByRole('region', { name: 'Branches' })).toBeVisible();
       await settled(lab.page);
