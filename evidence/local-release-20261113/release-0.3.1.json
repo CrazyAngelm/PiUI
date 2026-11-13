@@ -1,0 +1,35 @@
+{
+  "timestamp": "2026-11-13T18:16:51+07:00",
+  "commit": "e1a2a3f",
+  "branch": "main (local; feat/0.3.1-ux fast-forwarded, not pushed)",
+  "changes": "0.3.1: new-chat executor picker with Direct / Pipelines tabs (a pipeline or template runs on send; a template is saved as a project pipeline on first send, ADR-053), model favorites (Favorites / All models, hearts, Shift+Enter), new reasoning ramp control, Session history across every harness, Settings -> Harnesses redesign with per-harness Connect and a host-opened native sign-in terminal (CreateProcessW, sanitized environment, ADR-054), external model providers moved from the Nano account tab to Nano -> Connect",
+  "release": {
+    "portable": {
+      "path": "artifacts/NanoDesktop_0.3.1_windows_x86_64.exe",
+      "bytes": 96145408,
+      "sha256": "2d54d3badb9e82de9ff45456e469664e349c658632a921fe0c4fb438560eb45f"
+    },
+    "installer": {
+      "path": "artifacts/NanoDesktop_0.3.1_x64-setup.exe",
+      "bytes": 59589871,
+      "sha256": "0dd542692fdb7fa705a9a736a641d53bc038e404f274a295f80f9078e2b49c98"
+    },
+    "authenticode": "NotSigned (no certificate configured)",
+    "updater": "not configured; the app makes no update checks",
+    "installed": "installer run silently into D:\\Programs\\Nano Desktop (currentUser); nano-desktop.exe reports ProductVersion 0.3.1 (was 0.3.0). Desktop and Start Menu 'Nano Desktop.lnk' re-saved, pointing at that executable",
+    "launch": "installed executable started for 12 s: process alive, Responding=true, main window 'Nano Desktop', msedgewebview2 child; closed with CloseMainWindow"
+  },
+  "supersedes": "0.3.0",
+  "build": "first attempt failed with rustc-LLVM out of memory (about 2 GB of 32 GB RAM free on a shared machine); rebuilt with CARGO_BUILD_JOBS=2 and the Windows Node.js installation first on PATH (the pip nodejs-wheel node has no npm)",
+  "verification": {
+    "local": "cargo fmt --check and cargo clippy --workspace --all-targets -D warnings clean; cargo test --workspace passed except orchestration_scheduler::script_tests::failing_and_timed_out_scripts_fail_with_typed_codes, which passed alone; the Nano-source ACP test was fixed to use the real Node runtime instead of a launcher shim; vitest 93 files / 651 tests passed; svelte-check 0 errors; Playwright lab covers every spec (2 model-selection tests from 00d87ca fail identically on a clean b872807 checkout); prod-csp 5/5",
+    "reviews": "four read-only GPT-6.1 Sol reviews; findings fixed",
+    "ci": "not run: the merge is local and not pushed",
+    "artifactHashes": "artifacts/ verified against SHA256SUMS.txt"
+  },
+  "notVerified": "a real native sign-in terminal launch; real-provider turns",
+  "freeBytes": {
+    "C": 22613778432,
+    "D": 49606828032
+  }
+}
