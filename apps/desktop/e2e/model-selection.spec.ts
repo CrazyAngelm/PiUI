@@ -1,8 +1,29 @@
+import type { Page } from '@playwright/test';
 import { DEMO_PROJECTS } from '../src/host-api/lab/scenarios/demoChats';
 import { expect, test } from './fixtures';
 
 const codexModel = JSON.stringify(['openai-lab', 'gpt-lab-5-codex']);
 const codexMini = JSON.stringify(['openai-lab', 'gpt-lab-5-mini']);
+
+/** `SLOW_CATALOG_LATENCY_MS` of the lab host: how long `?catalog=slow` withholds a catalog. */
+const SLOW_CATALOG_MS = 5_000;
+/** `START_DELAY_MS` of `nanoAccount`: the account starts this long after the sidebar paints. */
+const NANO_START_MS = 300;
+/** Far beyond the time two protocol calls take, so the pause below is always in the page's future. */
+const CLOCK_LEAD_MS = 60_000;
+
+/**
+ * Stops the page clock before the first script of the page runs: Playwright replays
+ * `install` and `pauseAt` at document start, so the lab's slow catalogs are due a
+ * fixed 5 s after the test starts and fire only when `page.clock.runFor` says so,
+ * however loaded the machine is. Pausing after the page has loaded would race the
+ * running clock (and the catalogs' own real-time delay).
+ */
+async function stopClock(page: Page): Promise<void> {
+  const origin = Date.now();
+  await page.clock.install({ time: origin });
+  await page.clock.pauseAt(origin + CLOCK_LEAD_MS);
+}
 
 test('a cold remembered model blocks the first send until its own catalog answers', async ({ lab, page }) => {
   await page.addInitScript(({ workspace, modelKey }) => {
@@ -74,18 +95,15 @@ test('the pipeline assistant restores the session harness, model, reasoning and 
 });
 
 test('the assistant can send with the default model while catalogs have not answered', async ({ lab, page }) => {
-  await page.clock.install();
+  await stopClock(page);
   await lab.open('demo', '&catalog=slow');
   const editor = await lab.openPipelines();
-  const freezeAt = await page.evaluate(() => Date.now());
-  await page.clock.pauseAt(freezeAt);
   await editor.getByRole('button', { name: 'Assistant', exact: true }).click();
   const assistant = page.getByRole('complementary', { name: 'Pipeline assistant' });
   const message = assistant.getByRole('textbox', { name: 'Message to the assistant' });
   await message.fill('Build a review pipeline');
   await message.press('Enter');
   await expect(assistant.getByRole('button', { name: 'New conversation' })).toBeEnabled();
-  await page.clock.resume();
 });
 
 test('reopening the assistant while the first send is pending keeps the same conversation', async ({ lab, page }) => {
@@ -128,7 +146,14 @@ test('reopening the assistant while the first send is pending keeps the same con
 });
 
 test('fresh catalog capabilities clear obsolete reasoning and Fast for a new assistant conversation', async ({ lab, page }) => {
-  await page.addInitScript((workspaceId) => {
+  await stopClock(page);
+  await lab.open('demo', '&catalog=slow');
+  // The Nano account starts a moment after first paint and drops every remembered catalog
+  // of the agents with a Nano model source, so a catalog remembered before that is gone.
+  // Let it start first; what is remembered below is what the assistant then finds.
+  await page.clock.runFor(NANO_START_MS);
+  await expect(lab.sidebar.getByRole('button', { name: 'Sign in to Nano' })).toBeVisible();
+  await page.evaluate((workspaceId) => {
     const harness = 'prime-agent';
     const model = { id: 'prime-lab-small', provider: 'prime-lab', name: 'Prime Lab Small', thinkingLevels: ['high'], supportsFast: true };
     localStorage.setItem('piui.pipeline.assistant.model.v1', JSON.stringify({ [harness]: JSON.stringify([model.provider, model.id]) }));
@@ -136,7 +161,6 @@ test('fresh catalog capabilities clear obsolete reasoning and Fast for a new ass
       at: Date.now(), result: { protocol: 18, harness, models: [model], resources: { items: [], warnings: [] } },
     }));
   }, DEMO_PROJECTS.piui);
-  await lab.open('demo', '&catalog=slow');
   const editor = await lab.openPipelines();
   await editor.getByRole('button', { name: 'Assistant', exact: true }).click();
   const assistant = page.getByRole('complementary', { name: 'Pipeline assistant' });
@@ -147,6 +171,8 @@ test('fresh catalog capabilities clear obsolete reasoning and Fast for a new ass
   await page.getByRole('switch', { name: 'Fast mode' }).click();
   await page.keyboard.press('Escape');
   await expect(assistant.getByRole('button', { name: 'Prime Lab Small high', exact: true })).toBeVisible();
+  // Only the remembered levels existed until now; the slow probe answers here.
+  await page.clock.runFor(SLOW_CATALOG_MS);
   await assistant.getByRole('button', { name: 'Prime Lab Small', exact: true }).click();
   await expect(page.getByRole('radio', { name: 'high', exact: true })).toHaveCount(0);
   await expect(page.getByRole('switch', { name: 'Fast mode' })).toHaveCount(0);
