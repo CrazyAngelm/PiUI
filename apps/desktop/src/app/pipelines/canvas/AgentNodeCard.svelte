@@ -6,6 +6,7 @@
 
   export interface AgentNodeData extends Record<string, unknown> {
     node: GraphNode;
+    executionLocation?: 'this-computer' | 'cloud-draft';
     problems: number;
     readOnly: boolean;
     /** This step's wire color. */
@@ -36,7 +37,8 @@
   import SquareArrowOutUpRight from '@lucide/svelte/icons/square-arrow-out-up-right';
   import NodeInputs from './NodeInputs.svelte';
   import { firstCodeLine, RUNTIME_LABEL } from '../executors';
-  import { t } from '../../../features/locale/language';
+  import { useTranslation } from '../../../features/locale/context';
+  const t = useTranslation();
   import HarnessMark from '../../shell/HarnessMark.svelte';
   import { harnessMeta } from '../../harnessMeta';
 
@@ -124,7 +126,7 @@
     <footer>
       {#if node.pinnedOutput}<span class="chip chip--pinned" title={$t('Pinned data: a run with pinned data skips this step')}><Pin size={11} /> {$t('Pinned')}</span>{/if}
       {#if llm}<span class="chip" title={$t('One model answer, read-only and without tools')}><MessageSquareText size={11} /> {$t('Model call')}</span>{/if}
-      {#if script}<span class="chip" title={$t('Runs on this computer in the project folder')}><Code size={11} /> {$t('Script')}</span>{/if}
+      {#if script}<span class="chip" title={$t(data.executionLocation === 'cloud-draft' ? 'Script stored in this draft; execution is not enabled.' : 'Runs on this computer in the project folder')}><Code size={11} /> {$t('Script')}</span>{/if}
       {#if subpipeline}<span class="chip chip--pipeline" title={$t('Runs a saved pipeline as one step')}><Workflow size={11} /> {$t('Pipeline')}</span>{/if}
       {#if callable}<span class="chip" title={$t('Started only when another agent calls it')}><PhoneIncoming size={11} /> {$t('On call')}</span>{/if}
       {#if node.requireApproval}<span class="chip" title={$t('A person approves the result')}><ShieldCheck size={11} /> {$t('Approval')}</span>{/if}

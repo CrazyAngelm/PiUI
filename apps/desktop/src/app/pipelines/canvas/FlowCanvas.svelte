@@ -10,15 +10,18 @@
   import Redo2 from '@lucide/svelte/icons/redo-2';
   import Eye from '@lucide/svelte/icons/eye';
   import EyeOff from '@lucide/svelte/icons/eye-off';
-  import { t } from '../../../features/locale/language';
+  import { useTranslation } from '../../../features/locale/context';
+  const t = useTranslation();
   import type { ConnectionKind } from '../../../features/orchestration/agentGraph';
   import { IconButton, Segmented, toasts } from '../../../lib/ui';
-  import { edgeKey, type PipelineEditorStore } from '../editorStore.svelte';
+  import { edgeKey } from '../../../features/orchestration/graphCanvasEditing';
+  import type { GraphCanvasController } from './graphCanvasController';
   import AgentNodeCard, { type AgentFlowNode } from './AgentNodeCard.svelte';
   import RouterNodeCard, { type RouterFlowNode } from './RouterNodeCard.svelte';
   import PiuiEdge, { type PiuiFlowEdge } from './PiuiEdge.svelte';
-  import StartNodeCard, { START_NODE_ID, type StartFlowNode } from './StartNodeCard.svelte';
-  import OutputNodeCard, { OUTPUT_NODE_ID, type OutputFlowNode } from './OutputNodeCard.svelte';
+  import StartNodeCard, { type StartFlowNode } from './StartNodeCard.svelte';
+  import OutputNodeCard, { type OutputFlowNode } from './OutputNodeCard.svelte';
+  import { presentationNodeIds, presentationEdgeId, isPresentationEdge as blockEdge } from './graphRenderIdentity';
   import { RUN_INPUT_ISSUES } from '../../../host-api/runInputs';
   import { SUBPIPELINE_ISSUES } from '../../../host-api/subpipelines';
 
@@ -32,7 +35,7 @@
   import { createWireAssigner } from './wireHue';
 
   interface Props {
-    editor: PipelineEditorStore;
+    editor: GraphCanvasController;
     /** Called when the user double-clicks empty canvas (flow coordinates). */
     onAddRequest: (position: { x: number; y: number }) => void;
     onready: (api: FlowApi) => void;
@@ -42,8 +45,8 @@
   type FlowNode = AgentFlowNode | RouterFlowNode | StartFlowNode | OutputFlowNode;
   const nodeTypes = { agent: AgentNodeCard, router: RouterNodeCard, start: StartNodeCard, output: OutputNodeCard };
   /** Presentation-only blocks: never deleted, moved or saved. */
-  const BLOCK_IDS: ReadonlySet<string> = new Set([START_NODE_ID, OUTPUT_NODE_ID]);
-  const blockEdge = (id: string): boolean => id.startsWith(`${START_NODE_ID}:`) || id.startsWith(`${OUTPUT_NODE_ID}:`);
+  const blocks = $derived(presentationNodeIds(editor.graph.nodes.map(node => node.id)));
+  const BLOCK_IDS: ReadonlySet<string> = $derived(new Set([blocks.start, blocks.output]));
   const edgeTypes = { piui: PiuiEdge };
   const COLLABORATION: ReadonlySet<ConnectionKind> = new Set(['send', 'observe', 'spawn']);
   const markerColor: Record<ConnectionKind, string> = {
@@ -68,13 +71,14 @@
   const assignWires = createWireAssigner();
 
   $effect(() => {
+    const root = container?.closest<HTMLElement>('[data-nano-ui]') ?? document.documentElement;
     const read = () => {
-      const theme = document.documentElement.dataset.theme;
+      const theme = root.dataset.theme;
       colorMode = theme === 'dark' || theme === 'light' ? theme : 'system';
     };
     read();
     const observer = new MutationObserver(read);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
     return () => observer.disconnect();
   });
 
@@ -98,6 +102,7 @@
       position: { x: node.x, y: node.y },
       data: {
         node,
+        executionLocation: editor.executionLocation ?? 'this-computer',
         problems: editor.nodeProblems(node.id).length,
         readOnly,
         wire: wireOf(node.id),
@@ -131,12 +136,12 @@
       const inputProblems = editor.issues.filter((issue) => INPUT_ISSUES.has(issue.message)).length;
       startNodes.push(
         {
-          id: START_NODE_ID,
+          id: blocks.start,
           type: 'start',
           ariaLabel: $t('Start'),
           position: { x, y },
           data: { inputs: graph.inputs ?? [], problems: inputProblems },
-          selected: editor.selectedId === START_NODE_ID,
+          selected: editor.selectedBlock === 'start',
           draggable: false,
           deletable: false,
           connectable: false,
@@ -144,9 +149,9 @@
       );
       for (const entry of entries) {
         startEdges.push({
-          id: `${START_NODE_ID}:${entry.id}`,
+          id: presentationEdgeId('start', entry.id),
           type: 'piui',
-          source: START_NODE_ID,
+          source: blocks.start,
           target: entry.id,
           ariaLabel: connectionLabel($t, 'start', $t('Start'), names.get(entry.id) ?? ''),
           sourceHandle: 'out',
@@ -172,22 +177,22 @@
       const y = placed.reduce((sum, node) => sum + node.y, 0) / placed.length + 8;
       const outputs = graph.outputs ?? [];
       outputNodes.push({
-        id: OUTPUT_NODE_ID,
+        id: blocks.output,
         type: 'output',
         ariaLabel: $t('Output'),
         position: { x, y },
         data: { outputs, wired: output.sources.size > 0, readOnly, problems: editor.issues.filter((issue) => issue.message === SUBPIPELINE_ISSUES.outputs).length },
-        selected: editor.selectedId === OUTPUT_NODE_ID,
+        selected: editor.selectedBlock === 'output',
         draggable: false,
         deletable: false,
         connectable: !readOnly,
       } as OutputFlowNode);
       for (const source of output.sources) {
         outputEdges.push({
-          id: `${OUTPUT_NODE_ID}:${source}`,
+          id: presentationEdgeId('output', source),
           type: 'piui',
           source,
-          target: OUTPUT_NODE_ID,
+          target: blocks.output,
           ariaLabel: connectionLabel($t, output.implicit ? 'completion' : 'result', names.get(source) ?? '', $t('Output')),
           sourceHandle: 'out',
           targetHandle: 'in',
@@ -226,11 +231,13 @@
     // Re-project whenever the document, selection, problems or mode change.
     void editor.graph;
     void editor.selectedId;
+    void editor.selectedBlock;
     void editor.selectedEdge;
     void editor.issues;
     void editor.preflight;
     void editor.showCollaboration;
     void editor.busy;
+    void editor.readOnly;
     void fresh;
     sync();
   });
@@ -246,11 +253,12 @@
   }
 
   function beforeConnect(connection: Connection): false {
-    if (connection.target === OUTPUT_NODE_ID) {
+    if (connection.target === blocks.output) {
       const error = editor.connectOutput(connection.source);
       if (error) toasts.error($t('Cannot connect'), $t(error));
       else if (!editor.readOnly) {
-        editor.selectedId = OUTPUT_NODE_ID;
+        editor.selectedId = '';
+        editor.selectedBlock = 'output';
         editor.selectedEdge = '';
       }
       sync();
@@ -268,6 +276,14 @@
       sync();
     }
     return false;
+  }
+
+  function selectNode(node: FlowNode): void {
+    const block = node.type === 'start' ? 'start' : node.type === 'output' ? 'output' : undefined;
+    if (block) {
+      if (editor.selectedBlock !== block) { editor.selectedId = ''; editor.selectedBlock = block; }
+    } else if (editor.selectedId !== node.id || editor.selectedBlock !== undefined) editor.selectedId = node.id;
+    if (editor.selectedEdge) editor.selectedEdge = '';
   }
 
   const kindOptions = $derived([
@@ -305,9 +321,15 @@
     }}
     onnodedragstop={({ nodes: moved }) =>
       editor.movedNodes(moved.filter((node) => !BLOCK_IDS.has(node.id)).map((node) => ({ id: node.id, x: node.position.x, y: node.position.y })))}
-    onnodeclick={({ node }) => {
-      editor.selectedId = node.id;
-      editor.selectedEdge = '';
+    onnodeclick={({ node }) => selectNode(node)}
+    onselectionchange={({ nodes: selectedNodes, edges: selectedEdges }) => {
+      // A single keyboard-selected node opens the inspector. Rectangle/multi
+      // selection stays owned by Svelte Flow for bulk delete and movement.
+      if (selectedNodes.length === 1) selectNode(selectedNodes[0]);
+      else if (selectedNodes.length === 0) {
+        const edge = selectedEdges.find(item => !blockEdge(item.id));
+        if (edge && editor.selectedEdge !== edge.id) { editor.selectedId = ''; editor.selectedEdge = edge.id; }
+      }
     }}
     onedgeclick={({ edge }) => {
       if (blockEdge(edge.id)) return;

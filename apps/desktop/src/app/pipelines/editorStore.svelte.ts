@@ -5,7 +5,6 @@
  * previous editor: connection checks, structural issues, native catalog
  * preflight and the host's atomic save.
  */
-import dagre from '@dagrejs/dagre';
 import { cachedHarnessModels, catalogSettled, harnessModels } from '../../host-api/harnessModels';
 import { nanoAccount } from '../nano/nanoAccount.svelte';
 import {
@@ -40,7 +39,6 @@ import { parentIssues, preflightGraph, subpipelineIssues, type PreflightIssue } 
 import { pluginNodeIssues } from '../plugins/pluginNodes';
 import { pluginRegistry } from '../plugins/pluginRegistry.svelte';
 import { GraphHistory, duplicateNode } from '../../features/orchestration/graphHistory';
-import { graphNodeHeight } from '../../features/orchestration/graphLayout';
 import { performRunAction } from '../../features/orchestration/runActions';
 import { GraphDocumentError, openGraph, saveGraph, type Revisions } from './graphDocument';
 import { applyConversion, planConversion, type ConversionContext, type NodeType } from './nodeConversion';
@@ -50,7 +48,8 @@ import { scriptTestHost, type ScriptTestClient } from '../../host-api/scriptTest
 import { inputNameFrom } from './inputs/runInputs';
 
 export type EditorOperation = 'open' | 'save' | 'check' | 'import' | 'run';
-export const NODE_WIDTH = 248;
+export { autoLayout, edgeKey, NODE_WIDTH } from '../../features/orchestration/graphCanvasEditing';
+import { autoLayout, edgeKey, syncRouterInputs } from '../../features/orchestration/graphCanvasEditing';
 
 function message(error: unknown): string {
   if (error instanceof GraphDocumentError) return error.message;
@@ -58,47 +57,15 @@ function message(error: unknown): string {
   return orchestrationError(error).message;
 }
 
-function syncRouterInputs(graph: AgentGraph): AgentGraph {
-  const nodes = graph.nodes.map((node) => {
-    if (node.kind !== 'router' || !node.router) return node;
-    const inputStepId = graph.edges.find((edge) => edge.kind === 'result' && edge.to === node.id)?.from ?? '';
-    return node.router.inputStepId === inputStepId ? node : { ...node, router: { ...node.router, inputStepId } };
-  });
-  return { ...graph, nodes };
-}
-
-export function edgeKey(edge: { from: string; to: string; kind: ConnectionKind; branchId?: string }): string {
-  return `${edge.from}:${edge.to}:${edge.kind}:${edge.branchId ?? ''}`;
-}
-
-/** Dagre layout of result and route edges, left to right; returns a new graph. */
-export function autoLayout(graph: AgentGraph, heights: ReadonlyMap<string, number> = new Map()): AgentGraph {
-  if (!graph.nodes.length) return graph;
-  const layout = new dagre.graphlib.Graph();
-  layout.setGraph({ rankdir: 'LR', nodesep: 48, ranksep: 96, marginx: 40, marginy: 40 });
-  layout.setDefaultEdgeLabel(() => ({}));
-  for (const node of graph.nodes) {
-    layout.setNode(node.id, { width: NODE_WIDTH, height: heights.get(node.id) ?? graphNodeHeight(node) });
-  }
-  for (const edge of graph.edges) {
-    if (edge.kind === 'result' || edge.kind === 'route' || edge.kind === 'spawn') layout.setEdge(edge.from, edge.to);
-  }
-  dagre.layout(layout);
-  return {
-    ...graph,
-    nodes: graph.nodes.map((node) => {
-      const placed = layout.node(node.id);
-      return placed ? { ...node, x: Math.round(placed.x - NODE_WIDTH / 2), y: Math.round(placed.y - placed.height / 2) } : node;
-    }),
-  };
-}
-
 export class PipelineEditorStore {
   graph = $state.raw<AgentGraph>(emptyGraph());
   baseline = $state(JSON.stringify(this.graph));
   systems = $state.raw<readonly DefinitionSummary[]>([]);
   profiles = $state.raw<readonly DefinitionSummary[]>([]);
-  selectedId = $state('');
+  private selectionId = $state('');
+  selectedBlock = $state<'start' | 'output' | undefined>();
+  get selectedId(): string { return this.selectionId; }
+  set selectedId(value: string) { this.selectionId = value; this.selectedBlock = undefined; }
   selectedEdge = $state('');
   busy = $state(false);
   operation = $state<EditorOperation | undefined>();

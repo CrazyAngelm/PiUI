@@ -134,3 +134,81 @@ launching the same Vite CLI directly with Node was ready in 8,244 ms. The
 harness now uses that direct launch. Native process startup uses the existing
 startup bound rather than the shorter UI-command bound. No new bound was
 introduced.
+
+### Shared web graph
+
+Implemented, reviewed and verified for the stage commit.
+The shared package mounts Desktop's actual graph canvas and v1-v5 portable
+parser in a scoped browser island. Blazor owns authentication, workspace/profile
+lifetime and storage. Import creates a new unsaved identity; save atomically
+stores the entire portable v5 document with compare-and-swap revision checks.
+Identical retries after a lost acknowledgement return the same saved revision.
+There is no execution endpoint in this stage.
+
+Four independent read-only reviews used `gpt-6.1-sol` with `max`, all against
+the same frozen trees (`f879282718090884ed65c4b4c413969edefb35b1` in PIUI and
+`4b84cfb2116ddf72fdb15ce8ed223067b45cd6b5` in NanoAgentProject):
+`stage2_review_1` (Gauss), `stage2_review_2` (Heisenberg),
+`stage2_review_3` (Dewey), `stage2_review_4` (Schrodinger).
+
+Confirmed corrections:
+
+- Pending raw JSON owns editing until applied/discarded; it cannot overwrite a
+  later canvas edit. Focused text input immediately marks the draft dirty.
+- Lost-create acknowledgements allow guarded Reload; conflict actions survive
+  subsequent validation. Forks preserve pending document edits.
+- Portable IDs cannot collide with synthetic canvas nodes or concatenated edge
+  IDs. Keyboard node selection opens the inspector.
+- Each mount has its own locale context and tooltip portal. Production resolves
+  one locale module and replaces the dependency's NODE_ENV expression at build.
+- Only actual workspace/profile/navigation changes prompt for dirty drafts.
+  Same-scope agent changes and transient refresh errors retain the editor.
+  Accepted navigation freezes and retires even a previously clean editor before
+  awaiting a mutation, preventing newly typed text from being discarded later.
+- Scope rejection bypasses the generic session-recovery throttle. A stable mount
+  token and shared retirement task remove callbacks/beforeunload before forced
+  navigation, including detached elements and late module loading.
+- The existing Hermes back-stack remains the sole owner of browser history.
+  A competing NavigationLock caused repeated chat fragments and a blank page in
+  the actual browser; explicit scope/logout guards and beforeunload protect the
+  draft without a second history owner.
+- The server parser accepts recursive predicates beyond the .NET JSON default;
+  depth derives from input length, and the locally registered schema evaluator
+  refuses insufficient CLR stack capacity safely. Escaped NUL is preserved in
+  the document and escaped only in its PostgreSQL listing label.
+
+Validation:
+
+- 134 focused controller/parser/render-identity/Desktop-editor tests passed;
+  the faithful lost-ack fixture correction passed eight controller tests again.
+- Whole Desktop and shared package Svelte/TypeScript: zero errors and warnings.
+- Static published-module browser suite: 3/3 passed with clean teardown; the
+  corrected changed-after-lost-ack case passed again (1/1). It serves dist bytes
+  directly, without Vite rewriting or a process shim, and checks independent
+  English/Russian mounts while preserving the outer French host document.
+- All 105 source hashes match staged Git UTF-8/LF objects; all three artifact
+  hashes verify. Source tree SHA-256:
+  `3e154fbb62146336c2a87887cbe6be6fce24b995ce5b9d1d6d7f2dc5a4e7b1a8`.
+- 17/17 focused .NET tests passed, zero skipped, including actual PostgreSQL
+  migration/CAS/ownership, exact deep-predicate/NUL round trips, controlled stack
+  refusal and distinct API error codes. Future-stage source is excluded.
+- The actual Blazor WASM host and published Svelte module passed all 15 lifecycle
+  checks with clean exit: save, conflict/reload, invalid import, dirty navigation,
+  transient failure retention, scope retirement, delayed logout, held request
+  cancellation and delayed CSS/module completion. HTTP responses in this browser
+  proof are synthetic; PostgreSQL behavior is proven separately above.
+- The final WebApp build passed with one pre-existing unused-field warning;
+  the imported artifact check passed. Proof logs and screenshots are kept in the
+  task-owned D: scratch directory, outside source and release deliverables.
+- A focused happy-path Blazor probe imported the existing two-agent fixture,
+  proved all four cards inside the canvas before manual Fit, edited a task,
+  connected Research to Review and saved through the actual .NET bridge. The
+  parent inspected the resulting screenshot; the populated graph is visible.
+
+Boundary retained deliberately: direct PUT validates the fixed embedded schema;
+portable semantic validation belongs to the shared import parser and execution
+admission. A schema-valid direct API document can therefore be refused by the
+editor's semantic parser. Storage never evaluates scripts or grants execution.
+The initial Vite-hosted browser run masked production module defects and ended
+with a teardown timeout; the static artifact tests above replace that evidence.
+No production database, real-provider turn or installed application was changed.

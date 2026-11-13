@@ -1,0 +1,14 @@
+:root {
+  display: block;
+  position: relative;
+  isolation: isolate;
+  font-family: var(--piui-font-ui);
+  line-height: var(--piui-leading-normal);
+}
+*, *::before, *::after { box-sizing: border-box; }
+button, input, textarea, select { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; }
+button:focus-visible { outline: 2px solid var(--piui-focus); outline-offset: 2px; }
+svg { flex-shrink: 0; }
+@keyframes piui-fade-in { from { opacity: 0; } to { opacity: 1; } }

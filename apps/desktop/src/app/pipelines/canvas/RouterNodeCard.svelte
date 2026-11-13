@@ -22,7 +22,8 @@
   import Split from '@lucide/svelte/icons/split';
   import CircleAlert from '@lucide/svelte/icons/circle-alert';
   import Pin from '@lucide/svelte/icons/pin';
-  import { t } from '../../../features/locale/language';
+  import { useTranslation } from '../../../features/locale/context';
+  const t = useTranslation();
   import NodeInputs from './NodeInputs.svelte';
 
   let { data, selected }: NodeProps<RouterFlowNode> = $props();

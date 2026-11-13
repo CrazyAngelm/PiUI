@@ -15,7 +15,8 @@
   import { Handle, Position, type NodeProps } from '@xyflow/svelte';
   import Play from '@lucide/svelte/icons/play';
   import CircleAlert from '@lucide/svelte/icons/circle-alert';
-  import { t } from '../../../features/locale/language';
+  import { useTranslation } from '../../../features/locale/context';
+  const t = useTranslation();
 
   let { data, selected }: NodeProps<StartFlowNode> = $props();
   const shown = $derived(data.inputs.slice(0, 3));

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="fr" data-theme="light">
+  <head><meta charset="utf-8"><link rel="stylesheet" href="../dist/nano-graph.css"><title>Shared graph integration fixture</title>
+    <style>body { margin: 0; background: rgb(250, 240, 230); color: rgb(45, 35, 25); font: 16px sans-serif; } #legacy { padding: 16px; }</style>
+  </head>
+  <body><div id="legacy">Existing host interface <button>Host action</button></div><main id="graph"></main><div id="second"></div>
+    <script type="module">
+      import { mountGraphEditor } from '../dist/nano-graph.js';
+      let handle;
+      let second;
+      const saved = new Map();
+      const calls = [];
+      let rejectSave = false;
+      let loseAck = false;
+      const options = (language) => ({
+        contractVersion: 1, language, appearance: 'light',
+        async list() { return [...saved.values()].map(value => ({ id: value.id, revision: value.revision, name: JSON.parse(value.document).name })); },
+        async load(id) { return saved.get(id) ?? null; },
+        async save(request) {
+          calls.push(request);
+          const before = saved.get(request.id);
+          if (!rejectSave && before?.document === request.document && before.revision === (request.expectedRevision ?? 0) + 1) return { kind: 'saved', snapshot: before };
+          if (rejectSave || (before?.revision ?? null) !== request.expectedRevision) return { kind: 'conflict' };
+          const snapshot = { contractVersion: 1, id: request.id, revision: (before?.revision ?? 0) + 1, document: request.document };
+          saved.set(request.id, snapshot);
+          if (loseAck) { loseAck = false; throw new Error('Synthetic lost acknowledgement'); }
+          return { kind: 'saved', snapshot };
+        },
+      });
+      window.nanoGraphFixture = {
+        async mount(document) {
+          await handle?.dispose();
+          await second?.dispose();
+          const id = crypto.randomUUID();
+          saved.clear(); calls.length = 0; rejectSave = false; loseAck = false;
+          saved.set(id, { contractVersion: 1, id, revision: 1, document });
+          handle = mountGraphEditor(window.document.querySelector('#graph'), options('en'));
+          return id;
+        },
+        conflict() { rejectSave = true; },
+        loseNextAcknowledgement() { loseAck = true; },
+        mountSecond(language) { second = mountGraphEditor(document.querySelector('#second'), options(language)); },
+        allowSave() { rejectSave = false; },
+        calls() { return structuredClone(calls); },
+        appearance(value) { handle.setAppearance(value); },
+        dirty() { return handle.hasUnsavedChanges(); },
+        async dispose() { await handle.dispose(); await second?.dispose(); },
+      };
+    </script>
+  </body>
+</html>

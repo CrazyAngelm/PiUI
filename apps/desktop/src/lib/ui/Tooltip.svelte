@@ -2,6 +2,7 @@
   import { Tooltip } from 'bits-ui';
   import type { Snippet } from 'svelte';
   import Kbd from './Kbd.svelte';
+  import { usePortalTarget } from './portalContext';
 
   interface Props {
     content: string;
@@ -13,6 +14,7 @@
   }
 
   let { content, shortcut, side = 'top', disabled = false, trigger }: Props = $props();
+  const portalTarget = usePortalTarget();
 </script>
 
 <Tooltip.Root {disabled}>
@@ -21,7 +23,7 @@
       {@render trigger(props)}
     {/snippet}
   </Tooltip.Trigger>
-  <Tooltip.Portal>
+  <Tooltip.Portal to={portalTarget?.()}>
     <Tooltip.Content class="piui-tooltip" sideOffset={6} {side} collisionPadding={8}>
       <span>{content}</span>
       {#if shortcut}<Kbd keys={shortcut} tone="inverse" />{/if}

@@ -9,6 +9,16 @@ const structured = () => JSON.parse(readFileSync(new URL('../../../../../example
 /** Parsed, deliberately untyped documents that tests corrupt. */
 type SystemFileJson = ReturnType<typeof structured>;
 describe('portable system files', () => {
+  it('accepts schema-valid deep predicates and escaped NUL text without inventing JSON limits', () => {
+    const cases = JSON.parse(readFileSync(new URL('../../../../../contracts/fixtures/shared-graph-edge-cases-v1.json', import.meta.url), 'utf8'));
+    for (const input of Object.values(cases)) {
+      const parsed = parseSystemFile(JSON.stringify(input));
+      const roundTrip = parseSystemFile(serializeSystemFile(systemFileToGraph(parsed)));
+      expect(roundTrip.name).toBe(parsed.name);
+      expect(roundTrip.agents.map(agent => agent.router)).toEqual(parsed.agents.map(agent => agent.router));
+    }
+    expect(parseSystemFile(JSON.stringify(cases.escapedNulName)).name).toBe('Pipeline\0name');
+  });
   it('round-trips structured mappings and review acceptance without losing local references', () => {
     const file = JSON.parse(readFileSync(new URL('../../../../../examples/systems/structured-review.piui.json', import.meta.url), 'utf8'));
     const graph = systemFileToGraph(parseSystemFile(JSON.stringify(file)));

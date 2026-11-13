@@ -30,8 +30,6 @@
   import { profileForHarness } from '../../harness-adapters/normalize';
   import { harnessConfiguration } from '../../harness-adapters';
   import RunInputsDialog from './inputs/RunInputsDialog.svelte';
-  import { START_NODE_ID } from './canvas/StartNodeCard.svelte';
-  import { OUTPUT_NODE_ID } from './canvas/OutputNodeCard.svelte';
   import OutputInspector from './OutputInspector.svelte';
   import { PipelineEditorStore } from './editorStore.svelte';
   import { forgetLastPipeline, readLastPipeline } from './lastPipeline';
@@ -509,9 +507,9 @@
       {#key selected.id}
         <NodeInspector {editor} node={selected} onClose={() => (editor.selectedId = '')} onFocusNode={focusNode} />
       {/key}
-    {:else if editor.selectedId === START_NODE_ID}
+    {:else if editor.selectedBlock === 'start'}
       <StartInspector {editor} onClose={() => (editor.selectedId = '')} />
-    {:else if editor.selectedId === OUTPUT_NODE_ID}
+    {:else if editor.selectedBlock === 'output'}
       <OutputInspector {editor} onClose={() => (editor.selectedId = '')} />
     {/if}
     {#if assistantOpen && assistantModule}
