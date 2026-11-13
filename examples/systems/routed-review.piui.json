@@ -63,7 +63,14 @@
           }
         ]
       },
-      "task": "Select the matching status route."
+      "task": "Select the matching status route.",
+      "requireApproval": true,
+      "resultFields": [
+        {
+          "name": "selectedBranchIds",
+          "kind": "text-list"
+        }
+      ]
     },
     {
       "id": "review",

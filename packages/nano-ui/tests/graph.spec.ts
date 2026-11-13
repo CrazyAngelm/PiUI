@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { test, expect } from './browserFixture';
+import type { GraphCreationProfile, GraphEditorDraftState } from '../../../contracts/graph-drafts-v1';
 
 interface GraphFixture {
   mount(document: string): Promise<string>;
@@ -11,11 +12,60 @@ interface GraphFixture {
   calls(): { id: string; expectedRevision: number | null; document: string }[];
   appearance(value: 'light' | 'dark' | 'system'): void;
   dirty(): boolean;
+  state(): GraphEditorDraftState;
+  states(): GraphEditorDraftState[];
+  creationProfile(value: GraphCreationProfile | null): void;
   dispose(): Promise<void>;
 }
 declare global { interface Window { nanoGraphFixture: GraphFixture } }
 
 const fixture = readFileSync(new URL('../../../examples/systems/structured-review.piui.json', import.meta.url), 'utf8');
+
+test('host capabilities affect future nodes, imported targets require confirmation, and draft identity is immediate', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/tests/host.html');
+  await page.waitForFunction(() => Boolean(window.nanoGraphFixture));
+  const id = await page.evaluate(document => window.nanoGraphFixture.mount(document), fixture);
+  await page.evaluate(() => window.nanoGraphFixture.creationProfile({ harness: 'hermes', permissionMode: 'native', model: 'smart', models: ['free', 'smart'] }));
+  await page.getByRole('button', { name: 'Add agent', exact: true }).press('Enter');
+  await expect(page.getByRole('combobox', { name: 'Execution target', exact: true })).toHaveValue('configured');
+  const model = page.getByRole('combobox', { name: 'Model', exact: true });
+  await expect(model).toHaveValue('smart');
+  await expect(model.locator('option')).toHaveCount(2);
+  await page.getByLabel('Pipeline name', { exact: true }).fill('Cloud graph');
+  await page.getByLabel('Task', { exact: true }).fill('A synthetic task');
+  expect((await page.evaluate(() => window.nanoGraphFixture.state())).dirty).toBe(true);
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.nanoGraphFixture.state().revision)).toBe(1);
+  expect((await page.evaluate(() => window.nanoGraphFixture.state())).dirty).toBe(false);
+  await page.getByRole('combobox', { name: 'Saved pipelines', exact: true }).selectOption(id);
+  await expect.poll(() => page.evaluate(() => window.nanoGraphFixture.state().id)).toBe(id);
+  await page.locator('.svelte-flow__node-agent').first().press('Enter');
+  const task = page.getByLabel('Task', { exact: true });
+  await expect(task).toHaveValue(JSON.parse(fixture).agents[0].task);
+  const target = page.getByRole('combobox', { name: 'Execution target', exact: true });
+  await target.selectOption('cloud');
+  await expect(page.getByRole('region', { name: 'Replace native settings' })).toContainText('native settings will be replaced');
+  await page.getByRole('button', { name: 'Keep current settings', exact: true }).press('Enter');
+  expect((await page.evaluate(() => window.nanoGraphFixture.state())).dirty).toBe(false);
+  await target.selectOption('cloud');
+  // A revoked entitlement cannot apply a previously confirmed model.
+  await page.evaluate(() => window.nanoGraphFixture.creationProfile(null));
+  await page.getByRole('button', { name: 'Replace with Nano Cloud settings', exact: true }).press('Enter');
+  await expect(page.getByRole('alert')).toContainText('capabilities changed');
+  expect((await page.evaluate(() => window.nanoGraphFixture.state())).dirty).toBe(false);
+  await page.evaluate(() => window.nanoGraphFixture.creationProfile({ harness: 'hermes', permissionMode: 'native', model: 'free', models: ['free'] }));
+  await target.selectOption('cloud');
+  await page.getByRole('button', { name: 'Replace with Nano Cloud settings', exact: true }).press('Enter');
+  await expect(model).toHaveValue('free');
+  await expect(task).toHaveValue(JSON.parse(fixture).agents[0].task);
+  expect((await page.evaluate(() => window.nanoGraphFixture.state())).dirty).toBe(true);
+  await page.getByRole('button', { name: 'Undo', exact: true }).press('Enter');
+  await expect.poll(() => page.evaluate(() => window.nanoGraphFixture.state().dirty)).toBe(false);
+  await expect.poll(() => page.evaluate(() => window.nanoGraphFixture.states().at(-1))).toEqual({ id, revision: 1, dirty: false });
+  expect(errors).toEqual([]);
+});
 
 test('shared graph keeps the host isolated and preserves a conflicting draft through import, save and reload', async ({ page }, testInfo) => {
   const pageErrors: string[] = [];

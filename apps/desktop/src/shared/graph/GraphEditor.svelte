@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import type { GraphEditorDraftState } from '../../../../../contracts/graph-drafts-v1';
+  import type { AgentProfile } from '../../../../../contracts/orchestration-v6';
+  import { cloudProfile, replacedProfileSettings, usesCloudProfile } from './cloudCreationProfile';
   import { Tooltip } from 'bits-ui';
   import FlowCanvas from '../../app/pipelines/canvas/FlowCanvas.svelte';
   import type { FlowApi } from '../../app/pipelines/canvas/FlowBridge.svelte';
@@ -9,8 +12,8 @@
   import { providePortalTarget } from '../../lib/ui/portalContext';
   import { PortableGraphDraft } from './portableGraphDraft.svelte';
 
-  interface Props { editor: PortableGraphDraft; portalTarget: HTMLElement }
-  let { editor, portalTarget }: Props = $props();
+  interface Props { editor: PortableGraphDraft; portalTarget: HTMLElement; onDraftState?: (state: GraphEditorDraftState) => void }
+  let { editor, portalTarget, onDraftState }: Props = $props();
   providePortalTarget(() => portalTarget);
   const id = $props.id();
   let flow = $state.raw<FlowApi | undefined>();
@@ -21,6 +24,40 @@
   let sourceBranch = $state('');
   let rawDocument = $state('');
   let documentOpen = $state(false);
+  let lastDraftState = '';
+  let replacement = $state<{ graphId: string; nodeId: string; previous: string; profile: AgentProfile; changes: { label: string; value: string }[] } | undefined>();
+
+  $effect(() => {
+    const state = editor.draftState();
+    const key = JSON.stringify(state);
+    if (key !== lastDraftState) { lastDraftState = key; untrack(() => onDraftState?.(state)); }
+  });
+
+  function chooseCloudTarget(): void {
+    const node = editor.selected, capability = editor.creationProfile;
+    if (!node || !capability || editor.readOnly) return;
+    replacement = { graphId: editor.graph.id, nodeId: node.id, previous: JSON.stringify(node.profile),
+      profile: cloudProfile(node.profile, capability), changes: replacedProfileSettings(node.profile) };
+  }
+
+  function confirmCloudTarget(): void {
+    if (!replacement || editor.readOnly) return;
+    const node = editor.graph.nodes.find(item => item.id === replacement?.nodeId);
+    if (editor.graph.id !== replacement.graphId || !node || JSON.stringify(node.profile) !== replacement.previous || !editor.creationProfile) {
+      editor.errors = ['The step or cloud capabilities changed. Choose the target again.'];
+      replacement = undefined;
+      return;
+    }
+    // The confirmation refers to this exact profile. A changed server model grant
+    // must be selected again instead of silently changing the confirmed default.
+    if (!editor.creationProfile.models.includes(replacement.profile.model)) {
+      editor.errors = ['The step or cloud capabilities changed. Choose the target again.'];
+      replacement = undefined;
+      return;
+    }
+    editor.updateNode(node.id, { profile: replacement.profile });
+    replacement = undefined;
+  }
 
   $effect(() => {
     // Reload/discard and canvas edits update an unedited document view. Never
@@ -141,6 +178,16 @@
     {/if}
     {#if editor.pendingDocument !== undefined}<p class="notice" role="status">{$t('Apply or discard the document edits to continue editing the graph.')}</p>{/if}
     {#if editor.notice}<p class="notice" role="status">{$t(editor.notice)}</p>{/if}
+    {#if replacement}
+      <section class="notice" aria-label={$t('Replace native settings')}>
+        <h2>{$t('Use Nano Cloud for this step?')}</h2>
+        <p>{$t('The following native settings will be replaced. The step name, instructions and task stay unchanged.')}</p>
+        <dl>{#each replacement.changes as change}<dt>{$t(change.label)}</dt><dd>{change.label === 'Harness' && change.value === 'hermes' ? $t('Nano Cloud') : $t(change.value)}</dd>{/each}</dl>
+        <p>{$t('New profile: Nano Cloud, model {0}, native permissions from the server profile. This is not a read-only or isolated execution mode.', [replacement.profile.model])}</p>
+        <Button disabled={editor.readOnly} onclick={confirmCloudTarget}>{$t('Replace with Nano Cloud settings')}</Button>
+        <Button disabled={editor.unavailable} onclick={() => { replacement = undefined; }}>{$t('Keep current settings')}</Button>
+      </section>
+    {/if}
 
     <div class="name-row">
       <label for={`${id}-name`}>{$t('Pipeline name')}</label>
@@ -155,14 +202,30 @@
         {#if editor.selected}
           {@const selected = editor.selected}
           <h2>{$t('Step details')}</h2>
+          {#if (!selected.executor || selected.executor.type === 'agent') && selected.router?.mode !== 'program'}
+            <label for={`${id}-target-host`}>{$t('Execution target')}</label>
+            <select id={`${id}-target-host`} value="configured" disabled={editor.readOnly}
+              onchange={(event) => { event.currentTarget.value = 'configured'; chooseCloudTarget(); }}>
+              <option value="configured">{usesCloudProfile(selected.profile, editor.creationProfile) ? $t('Nano Cloud') : $t('Configured harness: {0}', [selected.profile.harness])}</option>
+              {#if !usesCloudProfile(selected.profile, editor.creationProfile)}<option value="cloud" disabled={!editor.creationProfile}>{$t('Nano Cloud')}</option>{/if}
+            </select>
+            {#if !editor.creationProfile}<p class="hint">{$t('Nano Cloud is unavailable. Imported settings are kept for Desktop.')}</p>{/if}
+          {/if}
           <label for={`${id}-step-name`}>{$t('Name')}</label>
           <input id={`${id}-step-name`} value={selected.profile.name} disabled={editor.readOnly} oninput={(event) => editor.updateNode(selected.id, { profile: { ...selected.profile, name: event.currentTarget.value } })} />
           <label for={`${id}-step-task`}>{$t('Task')}</label>
           <textarea id={`${id}-step-task`} value={selected.task} disabled={editor.readOnly} oninput={(event) => editor.updateNode(selected.id, { task: event.currentTarget.value })}></textarea>
-          {#if !selected.executor || selected.executor.type === 'llm'}
+          {#if !selected.executor || selected.executor.type === 'agent' || selected.executor.type === 'llm'}
             <label for={`${id}-step-model`}>{$t('Model')}</label>
-            <input id={`${id}-step-model`} value={selected.profile.model} disabled={editor.readOnly} oninput={(event) => editor.updateNode(selected.id, { profile: { ...selected.profile, model: event.currentTarget.value } })} />
-            <p class="hint">{$t('Harness')}: {selected.profile.harness}. {$t('Model availability and execution are checked by the destination host.')}</p>
+            {#if usesCloudProfile(selected.profile, editor.creationProfile) && editor.creationProfile}
+              <select id={`${id}-step-model`} value={selected.profile.model} disabled={editor.readOnly}
+                onchange={(event) => editor.updateNode(selected.id, { profile: { ...selected.profile, model: event.currentTarget.value } })}>
+                {#each editor.creationProfile.models as model}<option value={model}>{model}</option>{/each}
+              </select>
+            {:else}
+              <input id={`${id}-step-model`} value={selected.profile.model} disabled={editor.readOnly} oninput={(event) => editor.updateNode(selected.id, { profile: { ...selected.profile, model: event.currentTarget.value } })} />
+            {/if}
+            <p class="hint">{$t('Harness')}: {selected.profile.harness === 'hermes' ? $t('Nano Cloud') : selected.profile.harness}. {$t('Model availability and execution are checked by the destination host.')}</p>
           {/if}
           <p class="hint">{$t('All step settings are preserved in the portable document below.')}</p>
         {:else}

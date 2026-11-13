@@ -1,4 +1,5 @@
-import type { GraphDraftPersistence, GraphDraftSnapshot, GraphDraftSummary } from '../../../../../contracts/graph-drafts-v1';
+import type { GraphCreationProfile, GraphDraftPersistence, GraphDraftSnapshot, GraphDraftSummary, GraphEditorDraftState } from '../../../../../contracts/graph-drafts-v1';
+import { checkedCreationProfile, cloudProfile } from './cloudCreationProfile';
 import type { GraphCanvasController } from '../../app/pipelines/canvas/graphCanvasController';
 import { inputNameFrom } from '../../app/pipelines/inputs/runInputs';
 import {
@@ -38,8 +39,16 @@ export class PortableGraphDraft implements GraphCanvasController {
   private baseline = $state(JSON.stringify(this.graph));
   private history = new GraphHistory(this.graph);
   private disposed = false;
+  creationProfile = $state.raw<GraphCreationProfile | null>(null);
 
-  constructor(private readonly persistence: GraphDraftPersistence) {}
+  constructor(private readonly persistence: GraphDraftPersistence, profile: GraphCreationProfile | null | undefined = undefined) {
+    this.creationProfile = checkedCreationProfile(profile);
+  }
+
+  draftState(): GraphEditorDraftState { return { id: this.graph.id, revision: this.revision, dirty: this.dirty }; }
+  setCreationProfile(profile: GraphCreationProfile | null): void {
+    if (!this.disposed) this.creationProfile = checkedCreationProfile(profile);
+  }
 
   get unavailable(): boolean { return this.busy || this.disposed; }
   /** Pending JSON owns editing until explicitly applied or discarded. */
@@ -207,6 +216,7 @@ export class PortableGraphDraft implements GraphCanvasController {
   addAgent(position: { x: number; y: number }): void {
     if (this.readOnly) return;
     const node = newGraphNode(this.graph.nodes.length);
+    if (this.creationProfile) node.profile = cloudProfile(node.profile, this.creationProfile);
     node.x = Math.max(0, Math.round(position.x));
     node.y = Math.max(0, Math.round(position.y));
     this.commit({ ...this.graph, nodes: [...this.graph.nodes, node] });

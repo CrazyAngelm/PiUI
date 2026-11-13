@@ -1,0 +1,16 @@
+[package]
+name = "piui-graph-kernel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Private, stateless JSON boundary for Nano cloud graph transitions"
+
+[dependencies]
+piui-orchestration = { path = "../piui-orchestration" }
+serde.workspace = true
+serde_json.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

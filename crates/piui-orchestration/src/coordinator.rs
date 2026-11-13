@@ -1777,7 +1777,11 @@ fn advance_program_routers(run: &mut Run) {
             if let Some(task) = run.tasks.iter_mut().find(|task| task.step_id == step_id) {
                 match result {
                     Ok(selected) => {
-                        task.status = TaskStatus::Succeeded;
+                        task.status = if step.require_approval {
+                            TaskStatus::AwaitingApproval
+                        } else {
+                            TaskStatus::Succeeded
+                        };
                         let field = router
                             .selection_field
                             .as_deref()

@@ -32,6 +32,11 @@ IDs under `selectionField`; one, many, or zero IDs are valid, while unknown or
 duplicate IDs fail the router. Route edges are control gates: every ordinary
 dependency still has to succeed, and an unselected branch is explicitly
 skipped. A router never grants tools, permissions, or authority to its targets.
+Program routers can require human approval before successors start. Their pure
+selection result can be bound downstream; declare the selection field as
+`text-list` in `resultFields` when exposing it in portable bindings or outputs.
+Program routers do not produce a boolean review verdict, so `review` is refused;
+use a separate native review step instead of attaching a review rule to them.
 
 ## Agent, model call or script
 

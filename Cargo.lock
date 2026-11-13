@@ -3076,6 +3076,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "piui-graph-kernel"
+version = "0.3.0"
+dependencies = [
+ "piui-orchestration",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "piui-index"
 version = "0.3.0"
 dependencies = [

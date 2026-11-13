@@ -26,6 +26,34 @@ function storage(): GraphDraftPersistence & { values: Map<string, GraphDraftSnap
 }
 
 describe('portable graph draft integration boundary', () => {
+  it('uses current host defaults only for future nodes and exposes exact saved/dirty identity', async () => {
+    const editor = new PortableGraphDraft(storage());
+    const initial = editor.draftState();
+    expect(initial).toEqual({ id: editor.graph.id, revision: null, dirty: false });
+    editor.setCreationProfile({ harness: 'hermes', permissionMode: 'native', model: 'smart', models: ['free', 'smart'] });
+    expect(editor.draftState()).toEqual(initial);
+    editor.addAgent({ x: 0, y: 0 });
+    expect(editor.selected?.profile).toMatchObject({ harness: 'hermes', model: 'smart', permissionMode: 'native' });
+    editor.rename('Cloud draft');
+    editor.updateNode(editor.selectedId, { task: 'A synthetic task' });
+    expect(editor.draftState().dirty).toBe(true);
+    expect(await editor.save()).toBe(true);
+    expect(editor.draftState()).toEqual({ id: initial.id, revision: 1, dirty: false });
+    editor.pendingDocument = '{';
+    expect(editor.draftState().dirty).toBe(true);
+    editor.discardDocument();
+    expect(editor.importText(fixture)).toBe(true);
+    expect(editor.graph.nodes[0].profile.harness).toBe(parseSystemFile(fixture).agents[0].profile.harness);
+    const imported = editor.exportText();
+    editor.setCreationProfile({ harness: 'hermes', permissionMode: 'native', model: 'free', models: ['free'] });
+    expect(editor.exportText()).toBe(imported);
+    editor.addAgent({ x: 0, y: 0 });
+    expect(editor.selected?.profile.model).toBe('free');
+    editor.setCreationProfile(null);
+    const before = editor.exportText();
+    expect(() => editor.setCreationProfile({ harness: 'hermes', permissionMode: 'native', model: 'smart', models: ['free'] })).toThrow();
+    expect(editor.exportText()).toBe(before);
+  });
   it('gives pending JSON exclusive editing authority until apply or discard', () => {
     const editor = new PortableGraphDraft(storage());
     editor.importText(fixture);

@@ -10,6 +10,7 @@
       let second;
       const saved = new Map();
       const calls = [];
+      const states = [];
       let rejectSave = false;
       let loseAck = false;
       const options = (language) => ({
@@ -32,9 +33,9 @@
           await handle?.dispose();
           await second?.dispose();
           const id = crypto.randomUUID();
-          saved.clear(); calls.length = 0; rejectSave = false; loseAck = false;
+          saved.clear(); calls.length = 0; states.length = 0; rejectSave = false; loseAck = false;
           saved.set(id, { contractVersion: 1, id, revision: 1, document });
-          handle = mountGraphEditor(window.document.querySelector('#graph'), options('en'));
+          handle = mountGraphEditor(window.document.querySelector('#graph'), { ...options('en'), onDraftState: state => states.push(state) });
           return id;
         },
         conflict() { rejectSave = true; },
@@ -44,6 +45,9 @@
         calls() { return structuredClone(calls); },
         appearance(value) { handle.setAppearance(value); },
         dirty() { return handle.hasUnsavedChanges(); },
+        state() { return handle.getDraftState(); },
+        states() { return structuredClone(states); },
+        creationProfile(value) { handle.setCreationProfile(value); },
         async dispose() { await handle.dispose(); await second?.dispose(); },
       };
     </script>

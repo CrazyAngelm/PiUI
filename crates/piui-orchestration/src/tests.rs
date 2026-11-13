@@ -269,6 +269,92 @@ fn agent_router_rejects_unknown_or_duplicate_branch_ids() {
 }
 
 #[test]
+fn program_router_approval_guards_successors_and_passes_declared_output() {
+    for approved in [true, false] {
+        let mut definition = router_snapshot();
+        let router_id = definition.pipeline.steps[1].id.clone();
+        definition.pipeline.steps[1].require_approval = true;
+        definition.pipeline.steps[1].result_fields = vec![ResultField {
+            name: "selectedBranchIds".into(),
+            kind: ResultFieldKind::TextList,
+        }];
+        definition.pipeline.steps[2].input_bindings = serde_json::from_value(json!([{
+            "sourceStepId": router_id, "field": "selectedBranchIds", "name": "routes"
+        }]))
+        .unwrap();
+        let mut run = Coordinator::new_run("router-approval", definition).unwrap();
+        finish_checked(&mut run, r#"{"score":2}"#, "build-native");
+        Coordinator::advance_automatic_steps(&mut run);
+        assert_eq!(run.tasks[1].status, TaskStatus::AwaitingApproval);
+        assert!(Coordinator::ready_task_ids(&run).is_empty());
+        assert!(run.tasks[1].execution.is_none());
+        let revision = run.revision();
+        let task_revision = run.tasks[1].revision;
+        Coordinator::control_flow(
+            &mut run,
+            revision,
+            FlowAction::Decide {
+                step_id: router_id.clone(),
+                task_revision,
+                approved,
+            },
+        )
+        .unwrap();
+        if approved {
+            let revision = run.revision();
+            let launch = Coordinator::dispatch_next(
+                &mut run,
+                revision,
+                NativeExecutionReference {
+                    id: "successor-native".into(),
+                },
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(launch.dependency_outputs.len(), 1);
+            let output = &launch.dependency_outputs[0];
+            assert_eq!(output.step_id, router_id);
+            assert_eq!(
+                output.data,
+                Some(json!({"selectedBranchIds":["score-two", "has-score"]}))
+            );
+            assert_eq!(
+                output.fields,
+                vec![ResultSelection {
+                    field: "selectedBranchIds".into(),
+                    name: "routes".into()
+                }]
+            );
+            assert!(
+                launch.dependency_result_references.is_empty(),
+                "pure router has no native message"
+            );
+        } else {
+            assert_eq!(run.tasks[1].status, TaskStatus::Failed);
+            assert!(Coordinator::ready_task_ids(&run).is_empty());
+        }
+    }
+}
+
+#[test]
+fn program_router_review_is_refused_instead_of_silently_ignored() {
+    let mut definition = router_snapshot();
+    definition.pipeline.steps[1].result_fields = vec![ResultField {
+        name: "approved".into(),
+        kind: ResultFieldKind::Boolean,
+    }];
+    definition.pipeline.steps[1].review = Some(ReviewRule {
+        field: "approved".into(),
+        retry_from_step_id: "build".into(),
+        max_iterations: None,
+    });
+    assert!(
+        matches!(Coordinator::new_run("unsupported-router-review", definition), Err(CoordinatorError::InvalidDefinition(DefinitionError::InvalidFlow { reason }))
+        if reason.contains("program router output"))
+    );
+}
+
+#[test]
 fn revision_cycle_retains_attempts_and_pauses_identical_feedback() {
     let mut definition = snapshot();
     definition.pipeline.steps[1].result_fields = vec![ResultField {

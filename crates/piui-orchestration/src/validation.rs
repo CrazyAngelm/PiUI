@@ -315,6 +315,11 @@ fn validate_pipeline(snapshot: &RunDefinitionSnapshot) -> Result<(), DefinitionE
             }
         }
         if let Some(router) = &step.router {
+            if router.mode == RouterMode::Program && step.review.is_some() {
+                return Err(DefinitionError::InvalidFlow {
+                    reason: "program router output has no boolean review verdict; use approval or a native review step",
+                });
+            }
             require_nonempty("router input step", &router.input_step_id)?;
             if step.dependency_step_ids.len() != 1
                 || !step.dependency_step_ids.contains(&router.input_step_id)

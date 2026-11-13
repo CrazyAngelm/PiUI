@@ -1,0 +1,62 @@
+{
+  "protocol": 1,
+  "requestId": "fixture-create",
+  "command": {
+    "type": "create",
+    "runId": "run",
+    "definition": {
+      "profiles": [
+        {
+          "id": "worker",
+          "name": "Worker",
+          "harness": "hermes",
+          "model": "native",
+          "permissionMode": "native",
+          "instructions": "Fixture instructions\u2028remain one JSON line",
+          "toolPolicy": { "rules": [] },
+          "allowedSpawnProfileIds": []
+        }
+      ],
+      "team": {
+        "id": "team",
+        "name": "Team",
+        "members": [{ "id": "member", "profileId": "worker" }],
+        "sendEdges": [],
+        "observeEdges": [],
+        "orchestratorMemberId": "member"
+      },
+      "pipeline": {
+        "id": "pipeline",
+        "name": "Two tasks",
+        "steps": [
+          {
+            "id": "a",
+            "name": "First",
+            "assignedMemberId": "member",
+            "instructions": "First task",
+            "dependencyStepIds": [],
+            "resultFields": [{ "name": "approved", "kind": "boolean" }]
+          },
+          {
+            "id": "b",
+            "name": "Second",
+            "assignedMemberId": "member",
+            "instructions": "Second task",
+            "dependencyStepIds": ["a"],
+            "inputBindings": [{ "sourceStepId": "a", "field": "approved", "name": "verdict" }]
+          }
+        ]
+      }
+    },
+    "inputs": {},
+    "usePinnedData": false,
+    "profileCapabilities": {
+      "worker": {
+        "permissionModes": ["native"],
+        "nativeEnforcedTools": [],
+        "coordinatorEnforcedTools": [],
+        "agentOperations": { "roster": false, "send": false, "observe": false, "spawn": false }
+      }
+    }
+  }
+}

@@ -5,7 +5,7 @@ const channel = process.env.PIUI_E2E_CHANNEL ?? (process.env.CI ? 'chromium' : '
 
 export default defineConfig({
   testDir: './tests',
-  testMatch: '*.spec.ts',
+  testMatch: 'graph.spec.ts',
   // Root measured 2.84 GiB free RAM with concurrent repository builds.
   workers: 1,
   outputDir: './test-results',

@@ -93,7 +93,7 @@
         <span class="sub" title={childName || node.pipelineName}>{$t('Sub-pipeline')} · {childName || (subpipeline.launchCommandId ? $t('Unknown pipeline') : node.pipelineName ? $t('“{0}” not found', [node.pipelineName]) : $t('No pipeline chosen'))}</span>
       {:else}
         <span class="sub" title={profile.model}>
-          {[harnessMeta(profile.harness).short, profile.model, profile.reasoning].filter(Boolean).join(' · ')}
+          {[data.executionLocation === 'cloud-draft' && profile.harness === 'hermes' ? $t('Nano Cloud') : harnessMeta(profile.harness).short, profile.model, profile.reasoning].filter(Boolean).join(' · ')}
           {#if profile.serviceTier === 'fast'}<Zap size={11} />{/if}
         </span>
       {/if}

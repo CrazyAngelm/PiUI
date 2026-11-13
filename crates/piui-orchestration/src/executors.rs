@@ -532,21 +532,23 @@ pub(crate) fn script_dependencies(run: &Run, step: &PipelineStep) -> Vec<ScriptD
         .collect()
 }
 
-/// Recorded results of succeeded host-executed and pinned (v6.4)
+/// Recorded results of succeeded host-executed, program-router and pinned (v6.4)
 /// dependencies of `step`, with the step's input bindings from each.
 pub(crate) fn dependency_outputs(run: &Run, step: &PipelineStep) -> Vec<DependencyOutput> {
     step.dependency_step_ids
         .iter()
         .filter(|dependency| {
-            run.definition
-                .pipeline
-                .steps
+            run.definition.pipeline.steps.iter().any(|source| {
+                source.id == **dependency
+                    && (source.is_host_executed()
+                        || source
+                            .router
+                            .as_ref()
+                            .is_some_and(|router| router.mode == crate::RouterMode::Program))
+            }) || run
+                .tasks
                 .iter()
-                .any(|source| source.id == **dependency && source.is_host_executed())
-                || run
-                    .tasks
-                    .iter()
-                    .any(|task| task.step_id == **dependency && task.pinned)
+                .any(|task| task.step_id == **dependency && task.pinned)
         })
         .filter_map(|dependency| {
             let task = run

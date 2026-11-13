@@ -37,10 +37,26 @@ export interface GraphEditorOptions extends GraphDraftPersistence {
   contractVersion: 1;
   language: 'en' | 'ru';
   appearance?: 'light' | 'dark' | 'system';
+  /** Optional host capability data. Only future new nodes use this profile. */
+  creationProfile?: GraphCreationProfile | null;
+  onDraftState?: (state: GraphEditorDraftState) => void;
 }
+
+export interface GraphCreationProfile {
+  harness: 'hermes';
+  permissionMode: 'native';
+  model: string;
+  /** The host's current entitlement result, not a bundled model catalog. */
+  models: readonly string[];
+}
+
+export interface GraphEditorDraftState { id: string; revision: number | null; dirty: boolean }
 
 export interface GraphEditorHandle {
   hasUnsavedChanges(): boolean;
+  /** Optional in pre-execution bundles; hosts must check availability at runtime. */
+  getDraftState(): GraphEditorDraftState;
+  setCreationProfile(profile: GraphCreationProfile | null): void;
   setAppearance(value: 'light' | 'dark' | 'system'): void;
   dispose(): Promise<void>;
 }

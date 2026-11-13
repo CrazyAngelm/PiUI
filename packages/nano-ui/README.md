@@ -13,6 +13,17 @@ undo history, layout and v1–v5 portable parser. Its controller only owns an
 editable draft. No native transport, Lab transport, provider, credential,
 session/history conversion or execution API belongs to this package.
 
+Hosts may observe `onDraftState` and read `getDraftState()` immediately before
+executing a saved revision. Identity, revision and dirtiness are presentation
+data, never execution authority. Hosts must feature-detect `getDraftState` and
+`setCreationProfile` when an older bundle may be cached; absent methods leave
+editing available and execution disabled. An optional `creationProfile` (or a
+later `setCreationProfile`) comes from the host's current capabilities and model
+entitlements. It applies only to newly created nodes. Imported profiles remain
+intact; changing their target to Nano Cloud discloses the native settings that
+will be replaced and requires an explicit confirmation. Setting the capability
+to null removes the cloud choice without rewriting any saved or open graph.
+
 Load `nano-graph.css` from the host's fixed static path, import
 `mountGraphEditor` from `nano-graph.js`, and pass an empty DOM element plus
 `GraphEditorOptions` from `contracts/graph-drafts-v1.ts`. The host provides

@@ -15,6 +15,7 @@ const appearances = new Set(['light', 'dark', 'system']);
 export function mountGraphEditor(target: HTMLElement, options: GraphEditorOptions): GraphEditorHandle {
   if (options.contractVersion !== 1 || !['en', 'ru'].includes(options.language)
     || !appearances.has(options.appearance ?? 'system')
+    || (options.onDraftState !== undefined && typeof options.onDraftState !== 'function')
     || !['list', 'load', 'save'].every(key => typeof options[key as 'list' | 'load' | 'save'] === 'function')) {
     throw new Error('Unsupported graph editor contract.');
   }
@@ -26,15 +27,17 @@ export function mountGraphEditor(target: HTMLElement, options: GraphEditorOption
   root.dataset.theme = options.appearance ?? 'system';
   root.dataset.reducedMotion = 'system';
   root.lang = options.language;
+  const editor = new PortableGraphDraft(options, options.creationProfile);
   target.append(root);
-  const editor = new PortableGraphDraft(options);
   let component: ReturnType<typeof mount>;
-  try { component = mount(GraphEditor, { target: root, props: { editor, portalTarget: root }, context: new Map([[TRANSLATION_CONTEXT, createTranslation(options.language)]]) }); }
+  try { component = mount(GraphEditor, { target: root, props: { editor, portalTarget: root, onDraftState: options.onDraftState }, context: new Map([[TRANSLATION_CONTEXT, createTranslation(options.language)]]) }); }
   catch (error) { editor.dispose(); root.remove(); throw error; }
   mounted.add(target);
   let disposed = false;
   return {
     hasUnsavedChanges: () => !disposed && editor.dirty,
+    getDraftState: () => { if (disposed) throw new Error('Graph editor disposed.'); return editor.draftState(); },
+    setCreationProfile(profile) { if (!disposed) editor.setCreationProfile(profile); },
     setAppearance(value) {
       if (!appearances.has(value)) throw new Error('Unsupported graph editor appearance.');
       if (!disposed) root.dataset.theme = value;

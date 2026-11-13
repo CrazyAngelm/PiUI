@@ -278,3 +278,61 @@ Validation already completed:
 
 No paid account, real provider, deployment or installed executable
 replacement is implied by these synthetic HTTP and rendering fixtures.
+
+### Cloud execution
+
+Implemented, independently reviewed and verified for the stage commit.
+The server freezes an explicitly selected saved draft, uses the packaged Rust
+transition core, and persists exact native-effect identities before dispatch.
+Hermes retains native history and agent execution. Unsupported cloud profiles
+remain intact in the draft and are refused before execution.
+
+Four independent read-only `gpt-6.1-sol` / `max` reviews inspected the same
+PIUI tree `38ef1167a59158126cc6e68be5ed995ea54f6ad7` and server tree
+`43f2e585319d51d498a3ff563034ab4139fa292d`:
+`stage3_review_1` (Hubble), `stage3_review_2` (Kepler),
+`stage3_review_3` (Bacon), `stage3_review_4` (Sagan).
+
+Confirmed corrections cover pending-versus-started cancellation, checked
+recovery after a durable native acknowledgement, exact unmodified native
+message reads, repeated stream deltas and foreign stop frames, authoritative
+free-plan modes, empty prelaunch tasks, portable NUL identifiers, immutable
+rejected-command receipts, paused pending reservations and progress after
+approval while another branch remains active. Program routers now obey human
+approval, pass declared selection fields, and explicitly refuse boolean review
+semantics. Team work and graph effects share the existing native concurrency
+policy. The web controls support pause/resume and deliberate repeat; retry
+confirmation is scoped to its run, and stale/unverifiable result text is evicted.
+
+Final kernel checks passed: orchestration 99/99, kernel 13/13, all-target clippy
+with warnings denied, portable routed example validation, and Windows/Linux
+packaged executable probes. Source fingerprint:
+`73fc416766319b87e1863ba1526787d00ab6dc4835537844256e860d43f06df6`.
+The Linux artifact ran in the actual server base image as non-root with a
+read-only filesystem and no network, without source or a Rust toolchain.
+Native runtime patch tests passed 6/6 using real SQLite and synthetic delivery.
+
+The final integrated server build succeeded. All 59 selected .NET tests passed
+without skips: 56 graph/native-proxy/shared-work-capacity cases and three
+conversation projections. The graph cases use the packaged Windows kernel and
+real isolated PostgreSQL; native delivery remains synthetic. The first
+remediation run exposed a scoped EF identity-map stale ACK and a blank-prompt
+fixture that still requested nonempty structured-result instructions. Commands
+now refresh tracked state before their new transaction; the blank-prompt fixture
+removes those instructions. The passing rerun covers both corrections.
+
+Actual compiled Blazor with the published graph bundle passed all 19 integration
+checks, including explicit profile conversion, typed inputs, lost-ACK identity,
+pause/resume, deliberate repeat, fresh verified results, cross-run retry guards,
+reconciliation, cancellation and older optional-port editing. The parent inspected
+the final screenshot. Browser execution HTTP is synthetic; this complements the
+real PostgreSQL/kernel proof rather than claiming a real-provider run. The first
+expanded smoke invocation supplied a v2 example while adding v5 fields; the parser
+correctly refused it. The harness now checks its fixture version and uses the
+existing v5 example. Graph source fingerprint for this stage:
+`a6b2467518d4ec1cf36fc916a6a7d6e7b496f42cd6141d21025b52d6c1c014eb`.
+
+Two proposed scope expansions were rejected: a later draft save does not
+invalidate an already verified frozen revision, and graph delegation refusal
+does not claim to disable normal tools inside the admitted native harness.
+Those ownership boundaries are explicit in the server contract.
