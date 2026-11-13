@@ -1,5 +1,8 @@
 /** Russian UI copy for chat attachments, mentions and review. Keys are the English source strings. */
 export const chatRu: Readonly<Record<string, string>> = {
+  'Could not load history. Try again.': 'Не удалось загрузить историю. Попробуйте ещё раз.',
+  'Could not load the full answer. Try again.': 'Не удалось загрузить полный ответ. Попробуйте ещё раз.',
+  'Could not open attachment.': 'Не удалось открыть вложение.',
   // Transcript activity summaries and diff statistics.
   '{0} lines added, {1} removed': 'Добавлено строк: {0}, удалено: {1}',
   // Attachments: paperclip, paste and drag and drop.

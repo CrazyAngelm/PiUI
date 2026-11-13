@@ -1,0 +1,2 @@
+/* The embedding host gives its slot a height; this root owns the internal scroll. */
+:root { height: 100%; min-height: 0; }

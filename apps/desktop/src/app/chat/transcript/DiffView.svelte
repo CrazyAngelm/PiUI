@@ -2,7 +2,8 @@
   import type { Snippet } from 'svelte';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import FileCode from '@lucide/svelte/icons/file-code';
-  import { t } from '../../../features/locale/language';
+  import { useTranslation } from '../../../features/locale/context';
+  const t = useTranslation();
   import { parseDiff, type DiffLine } from './diff';
 
   interface Props {

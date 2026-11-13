@@ -1,5 +1,7 @@
 /** Russian UI copy for the Nano account, Nano Cloud entry, dictation and the Nano avatar. Keys are the English source strings. */
 export const nanoRu: Readonly<Record<string, string>> = {
+  'Work location': 'Место работы',
+  'This computer': 'Этот компьютер',
   // Settings → Nano account
   'Nano account': 'Аккаунт Nano',
   'Development server': 'Сервер разработки',

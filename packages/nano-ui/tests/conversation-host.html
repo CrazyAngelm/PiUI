@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="fr" data-theme="light">
+<head><meta charset="utf-8"><title>Conversation owner boundary</title><link rel="stylesheet" href="/dist-conversation/nano-conversation.css"><style>body { background: linen; } #conversation, #second { height: 650px; } .nano-conversation-root { height: 100%; }</style></head>
+<body><h1>Host conversation fixture</h1><div id="conversation"></div><div id="second"></div>
+<script type="module">
+  import { mountConversation } from '/dist-conversation/nano-conversation.js';
+  let handle, second, current, view;
+  const log = [];
+  const waits = new Map();
+  const held = new Set();
+  const failures = new Set();
+  const snapshot = sessionId => ({
+    blocks: [
+      { id: 'user', kind: 'user', text: 'Please read the notes\n[image]', status: 'complete' },
+      { id: 'tool', kind: 'tool', toolName: 'unregistered_tool', title: 'Unregistered tool', text: 'Generic tool output', fallback: true, status: 'complete' },
+      { id: 'unknown', kind: 'unknown', label: 'Future event', text: '<img src=x onerror=alert(1)>Readable unknown content', fallback: true, status: 'complete' },
+      { id: 'answer', kind: 'assistant', text: 'Starting ' + sessionId, status: 'streaming' },
+    ],
+    approvals: [{ id: 'approval', sessionId, kind: 'command', title: 'Run tests for ' + sessionId, description: 'Run the project test command', decisions: ['approve-once', 'deny'] }],
+    attachments: [{ id: 'notes', blockId: 'user', label: 'notes.txt', mediaType: 'text/plain' }], connection: 'connected', loading: false,
+  });
+  async function operation(name, owner, signal, payload, result) {
+    log.push({ name, ...owner, payload });
+    signal.addEventListener('abort', () => log.push({ name: 'aborted', operation: name, ...owner }), { once: true });
+    if (failures.delete(name)) throw new Error('Owner operation failed');
+    if (held.delete(name)) await new Promise((resolve, reject) => waits.set(name, { resolve, reject }));
+    return result;
+  }
+  function owner(location, sessionId) {
+    const identity = { location, scopeId: location === 'native' ? 'workspace' : 'account', sessionId };
+    return { identity,
+      readHistory: signal => operation('history', identity, signal, null, [{ id: 'history', kind: 'assistant', text: 'Private history ' + sessionId, status: 'complete' }]),
+      openAttachment: (id, signal) => operation('attachment', identity, signal, id),
+      respond: (id, decision, answer, signal) => operation('approval', identity, signal, { id, decision, answer }),
+      reconnect: signal => operation('reconnect', identity, signal, null, { ...snapshot(sessionId), approvals: [], blocks: [{ id: 'restored', kind: 'assistant', text: 'Recovered ' + sessionId, status: 'complete' }], attachments: [] }),
+    };
+  }
+  window.nanoConversationFixture = {
+    async mount(location = 'cloud', fullHistory = true) {
+      await handle?.dispose(); log.length = 0; held.clear(); waits.clear(); failures.clear();
+      current = owner(location, 'first'); view = snapshot('first');
+      if (!fullHistory) delete current.readHistory;
+      handle = mountConversation(document.getElementById('conversation'), { contractVersion: 1, language: 'en', appearance: 'light', agentLabel: 'Agent', owner: current, snapshot: view });
+    },
+    stream() { view = { ...view, blocks: view.blocks.map(block => block.id === 'answer' ? { ...block, text: 'Streamed final answer', status: 'complete' } : block) }; handle.update(current.identity, view); },
+    loadOlder() { view = { ...view, blocks: [{ id: 'older', kind: 'assistant', text: 'Older final answer', status: 'complete' }, ...view.blocks] }; handle.update(current.identity, view); },
+    replaceWindow() { view = { ...view, blocks: [{ id: 'replacement', kind: 'assistant', text: 'Replacement final answer', status: 'complete' }], attachments: [] }; handle.update(current.identity, view); },
+    longApproval() { view = { ...view, approvals: view.approvals.map(approval => ({ ...approval, description: 'Multiline command details\n'.repeat(window.innerHeight) })) }; handle.update(current.identity, view); },
+    disconnect() { view = { ...view, connection: 'disconnected' }; handle.update(current.identity, view); },
+    hold(name) { held.add(name); }, fail(name) { failures.add(name); },
+    settle(name, fail = false) { const wait = waits.get(name); waits.delete(name); if (fail) wait.reject(new Error('Old owner failed')); else wait.resolve(); },
+    switchOwner() { current = owner(current.identity.location === 'native' ? 'cloud' : 'native', 'second'); view = snapshot('second'); handle.setOwner(current, view); },
+    calls() { return log; },
+    mountSecond() { second = mountConversation(document.getElementById('second'), { contractVersion: 1, language: 'ru', agentLabel: 'Агент', owner: owner('cloud', 'russian'), snapshot: snapshot('russian') }); },
+    async dispose() { await handle?.dispose(); await second?.dispose(); },
+  };
+</script></body></html>

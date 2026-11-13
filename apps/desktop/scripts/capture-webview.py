@@ -48,7 +48,7 @@ def capture(parent_pid: int, output: Path | None, resize: tuple[int, int] | None
         more = kernel.Process32FirstW(snapshot, c.byref(entry))
         while more:
             process_parents[entry.th32ProcessID] = entry.th32ParentProcessID
-            if entry.th32ParentProcessID == parent_pid and entry.szExeFile.lower() == "piui-desktop.exe":
+            if entry.th32ParentProcessID == parent_pid and entry.szExeFile.lower() == "piui-e2e.exe":
                 children.add(entry.th32ProcessID)
             more = kernel.Process32NextW(snapshot, c.byref(entry))
     finally:

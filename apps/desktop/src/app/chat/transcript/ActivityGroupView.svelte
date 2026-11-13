@@ -1,7 +1,8 @@
 <script lang="ts">
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import CircleAlert from '@lucide/svelte/icons/circle-alert';
-  import { t, language } from '../../../features/locale/language';
+  import { useTranslation } from '../../../features/locale/context';
+  const t = useTranslation();
   import type { TimelineActivityGroup } from '../../../features/sessions/timelineView';
   import { Spinner } from '../../../lib/ui';
   import ToolRow from './ToolRow.svelte';
@@ -9,13 +10,14 @@
 
   interface Props {
     group: TimelineActivityGroup;
+    language: 'en' | 'ru';
     /** Remembered disclosure state across re-renders, keyed by block id. */
     openState: Record<string, boolean>;
     onOpenChange: (id: string, open: boolean) => void;
   }
-  let { group, openState, onOpenChange }: Props = $props();
+  let { group, language, openState, onOpenChange }: Props = $props();
 
-  const summary = $derived(activitySummary(group.blocks, $language));
+  const summary = $derived(activitySummary(group.blocks, language));
   const diffStats = $derived(activityDiffTotals(group.blocks));
   const live = $derived(group.status === 'streaming');
   const problem = $derived(group.status === 'failed' || group.status === 'interrupted');

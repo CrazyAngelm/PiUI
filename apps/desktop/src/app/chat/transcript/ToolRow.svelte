@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import Terminal from '@lucide/svelte/icons/terminal';
   import FilePen from '@lucide/svelte/icons/file-pen';
   import FileText from '@lucide/svelte/icons/file-text';
@@ -9,14 +10,17 @@
   import Brain from '@lucide/svelte/icons/brain';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import Copy from '@lucide/svelte/icons/copy';
-  import { t } from '../../../features/locale/language';
+  import { useTranslation } from '../../../features/locale/context';
+  import { useConversationPresentation } from '../../../shared/conversation/context';
+  const t = useTranslation();
+  const presentation = useConversationPresentation();
+  let disposed = false;
+  onDestroy(() => { disposed = true; });
   import type { TimelineBlock } from '../../../host-api/types';
-  import { Badge, IconButton, Spinner, toasts } from '../../../lib/ui';
+  import { Badge, IconButton, Spinner } from '../../../lib/ui';
   import MarkdownContent from '../../../components/MarkdownContent.svelte';
   import DiffView from './DiffView.svelte';
   import { looksLikeDiff, toolKind, toolTitle, type ToolKind } from './toolKinds';
-  import { rendererActivity } from '../../../host-api/pluginBridge';
-  import { pluginRegistry } from '../../plugins/pluginRegistry.svelte';
   import SidekickBriefCard from '../../fusion/SidekickBriefCard.svelte';
   import { parseSidekickBlock, sidekickChip } from '../../fusion/sidekickBlock';
 
@@ -54,26 +58,16 @@
   const isDiff = $derived(kind === 'edit' && looksLikeDiff(block.text));
   // A plugin's own view of this tool (plugins v2). The plain view is always
   // one click away and takes over when the plugin is off or its frame fails.
-  const renderer = $derived(kind === 'thinking' ? undefined : pluginRegistry.renderer(block.toolName));
+  const renderer = $derived(kind === 'thinking' ? undefined : presentation.renderer?.(block));
   let plain = $state(false);
   let rendererFailed = $state(false);
   const pluginView = $derived(renderer !== undefined && !plain && !rendererFailed);
-  const activity = $derived(renderer ? rendererActivity(block) : undefined);
-  // The frame is plugin code's host: its own chunk, loaded only when needed.
-  let Frame = $state<typeof import('../../plugins/PluginPanelFrame.svelte').default | undefined>();
-  $effect(() => {
-    if (!pluginView || !open || Frame) return;
-    import('../../plugins/PluginPanelFrame.svelte')
-      .then((module) => (Frame = module.default))
-      .catch(() => (rendererFailed = true));
-  });
-
   async function copy(): Promise<void> {
     try {
       await navigator.clipboard.writeText(body);
-      toasts.success($t('Copied'));
+      if (!disposed) presentation.notify('success', $t('Copied'));
     } catch {
-      toasts.error($t('Could not copy'));
+      if (!disposed) presentation.notify('error', $t('Could not copy'));
     }
   }
 </script>
@@ -94,7 +88,7 @@
       {#if renderer}
         <div class="views" role="group" aria-label={$t('How to show this tool')}>
           <button type="button" class="views__option" aria-pressed={pluginView} disabled={rendererFailed} onclick={() => (plain = false)}>
-            {$t('{0} (plugin {1})', [renderer.renderer.title, renderer.plugin.name])}
+            {$t('{0} (plugin {1})', [renderer.title, renderer.source])}
           </button>
           <button type="button" class="views__option" aria-pressed={!pluginView} onclick={() => (plain = true)}>{$t('Plain view')}</button>
         </div>
@@ -105,18 +99,10 @@
           </p>
         {/if}
       {/if}
-      {#if pluginView && renderer && activity}
-        {#if Frame}
-          <Frame
-            plugin={renderer.plugin}
-            panel={{ id: renderer.renderer.id, title: renderer.renderer.title, url: renderer.renderer.url }}
-            chat={null}
-            {activity}
-            onStatus={(status) => {
-              if (status === 'failed') rendererFailed = true;
-            }}
-          />
-        {/if}
+      {#if pluginView && renderer}
+        {#key renderer.key}
+          <renderer.component {block} onFailure={() => (rendererFailed = true)} />
+        {/key}
       {:else if sidekick}
         <SidekickBriefCard view={sidekick} />
       {:else if isDiff}

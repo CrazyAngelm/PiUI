@@ -336,3 +336,100 @@ Two proposed scope expansions were rejected: a later draft save does not
 invalidate an already verified frozen revision, and graph delegation refusal
 does not claim to disable normal tools inside the admitted native harness.
 Those ownership boundaries are explicit in the server contract.
+
+### Shared conversation boundary
+
+Implemented, reviewed and verified for the stage commit.
+Desktop's real transcript and approval wrappers now use the shared presentation.
+Native plugins, history, composer and dispatch retain their owners. Blazor offers
+an explicit preview and return to its ordinary transcript; Home retains transport,
+uploads, streaming, paging, approval, notifications and PDF export. This is the
+verified boundary for incremental migration, not full legacy-screen parity.
+The eligible Desktop sidebar exposes This computer and Open Nano Cloud without
+moving local sessions; the existing cloud window remains isolated from IPC.
+
+Four read-only `gpt-6.1-sol` / `max` reviews inspected the same immutable PIUI
+tree `26cc554265e03ca87f0184982d5aa90cceb29ad1` and server tree
+`e9647e76e9be250e9fdaadac11262591749575c5`:
+`stage5_review_1` (Aquinas), `stage5_review_2` (Nietzsche),
+`stage5_review_3` (Einstein), `stage5_review_4` (Chandrasekhar).
+
+Confirmed corrections:
+
+- Home fences stale history, reconnect continuations and approval notifications
+  at the actual state owner, including A-to-B-to-A selection, late failures and
+  a same-session history response arriving after a new streamed turn.
+- A destroyed native approval card cannot send a global toast into another chat.
+- Loaded-window search follows current streaming/paged blocks, reconciles its
+  selected match and returns keyboard focus after Escape.
+- Cloud text does not decode native pipeline envelopes or the literal `[image]`
+  marker. Only the native owner enables that interpretation.
+- Durable reading position is supplied only by the existing native wrapper.
+  Cloud mounts leave no account/session position identifiers in localStorage,
+  including temporary conversations and teardown.
+- Long approvals have a labelled, keyboard-scrollable region so their buttons
+  remain reachable in the owner's constrained viewport.
+- Opaque attachment IDs bind resource identity rather than array position.
+  Reordering cannot redirect an existing button; removed resources are refused.
+- Existing completion notifications remain visible in preview. PDF export
+  deliberately restores and awaits the ordinary transcript before printing.
+
+Validation:
+
+- Final whole Desktop, graph and conversation Svelte checks have zero errors
+  and warnings; E2E TypeScript passes. A new native fixture initially imported
+  the UI barrel, exposing Svelte-only type exports to plain TypeScript; importing
+  the same toast singleton directly fixes that test-only dependency.
+- Focused native/shared units passed 23/23; the changed controller passed 6/6.
+  Existing Lab scenarios have six passes in the first seven-case invocation and
+  one passing focused renderer rerun. The renderer failure resolved its fixture
+  hostname to a foreign IPv6 server; a process-local IPv4 rule corrected the
+  harness. The passing scenarios cover streaming, safe mode, form validation,
+  damaged history, plugin renderer success/fallback and work-location navigation.
+- The final static published conversation artifact has passing evidence for all
+  five browser scenarios: four passed together, followed by one focused search
+  rerun after its replacement fixture stopped retaining an attachment for a removed
+  block. Checks include live search/focus, long approval scrolling/keyboard,
+  native/cloud literal handling, no cloud persistence, owner fences, streaming,
+  attachments, approvals, reconnect, generic fallback and scoped locale/styles.
+- Actual Tauri/WebView2 passed native/shared rendering, generic fallback,
+  streaming, focused owner attachment/approval actions, reconnect/disposal and
+  suppression of a late destroyed-card failure. The parent inspected its capture.
+  WebView2 was `157.0.0.0`; executable SHA-256:
+  `312c3a3380eb8a962688d3e61542b7becf2d90a9668344ae429b4785bb5164e4`.
+  Owned Job teardown was empty and the fixture removed. Native actions use DOM
+  focus/click; OS keyboard delivery is not claimed. Keyboard interaction is
+  independently covered by the browser scenarios. The process snapshot measured
+  nine of eleven owned processes: 530,620,416 working-set bytes and 287,866,880
+  private bytes, explicitly incomplete and not a release startup benchmark.
+- The separate conversation production build passes its native/Lab import
+  boundary. All 80 normalized source hashes and both artifact hashes match the
+  imported dependency, source fingerprint
+  `e82d5592e5c6b0b952b7663e939930d92531b895d40e0b92952b12605d851bba`.
+- The graph artifact was independently rebuilt/imported after the shared Russian
+  catalog additions. All four static graph integration scenarios passed on those
+  exact bytes. Its final source fingerprint is
+  `566e69c624953712b8757b8f974c2aa2e070c2356f4899ccb5d027ea6a9b7e44`;
+  the Stage 3 actual Blazor proof above records its pre-catalog artifact separately.
+- Final Blazor incremental compilation succeeds. All four projection tests pass,
+  including stable IDs across reordered/duplicate/removed attachments. Earlier
+  integrated graph/native tests are recorded under Cloud execution above.
+- Actual compiled Blazor and the published conversation bytes passed the extended
+  owner integration flow: ordinary default, keyboard opt-in, loaded/generic
+  history, search, file preview, partial SSE and cursor reconnection, notifications,
+  keyboard approval, retry without another send, A/B and A/B/A held history,
+  same-chat history versus a new stream, stale approval/older-page failures,
+  populated PDF fallback, return to ordinary view and late CSS disposal/remount.
+  There were no page or fixture errors. The parent inspected the final capture.
+  First opt-in mount measured 402 ms on this machine. The fixture records two
+  deliberate sends, two approval requests and two resume streams; it is synthetic
+  HTTP/SSE integration, not paid-provider usage. Its first run incorrectly omitted
+  CompletedAtUtc from a completed turn; correcting the fixture's existing DTO
+  semantics resolved that failure without changing product behavior.
+
+A proposed per-session preview consent gate was rejected: the explicit tab-level
+presentation choice intentionally follows ordinary navigation and grants no new
+authority. A fresh panel defaults to the ordinary transcript. Full composer,
+branch/edit/copy, cost, custom renderer, media and other legacy parity remains
+documented in `SHARED_CONVERSATION.md` and the server's shared-conversation guide;
+this stage does not claim those migrations, real provider use or deployment.

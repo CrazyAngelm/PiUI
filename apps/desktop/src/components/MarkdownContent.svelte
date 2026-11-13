@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { t } from '../features/locale/language';
+  import { useTranslation } from '../features/locale/context';
+  const t = useTranslation();
   import { parseMarkdown, type InlineNode } from './markdown';
 
   export let source: string;

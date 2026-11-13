@@ -11,6 +11,7 @@ import { createWebviewAutomationServer } from './webview-automation.mjs';
 import { startComposerProvider } from './composer-provider.mjs';
 import { runShellWebview2Proof } from './shell-webview2-e2e.mjs';
 import { runAvatarWebview2Proof } from './avatar-webview2-e2e.mjs';
+import { runConversationWebview2Proof } from './conversation-webview2-e2e.mjs';
 
 // Default: the new shell proof. `--agent-api` runs the agent API proof with
 // the native workspace fixture instead.
@@ -18,6 +19,8 @@ const AGENT_API_SCENARIO = process.argv.includes('--agent-api');
 const SHELL_SCENARIO = !AGENT_API_SCENARIO;
 const SAFE_ONLY = process.argv.includes('--safe-only');
 const AVATAR_SCENARIO = process.argv.includes('--avatar');
+const CONVERSATION_SCENARIO = process.argv.includes('--conversation');
+if (CONVERSATION_SCENARIO && (AVATAR_SCENARIO || AGENT_API_SCENARIO || SAFE_ONLY)) throw new Error('--conversation is an independent normal-start proof.');
 if (SAFE_ONLY && AGENT_API_SCENARIO) throw new Error('Choose either --safe-only or --agent-api.');
 if (AVATAR_SCENARIO && AGENT_API_SCENARIO) throw new Error('Choose either --avatar or --agent-api.');
 
@@ -1059,12 +1062,13 @@ wire_api = "responses"
       const apiWorkspace = AGENT_API_SCENARIO ? await setupAgentWorkspace(agentConnection, fixture.primeProjectCanonical) : undefined;
       normalResult = AGENT_API_SCENARIO ? { checks: [], cleanup: {workspaceId: apiWorkspace} }
         : AVATAR_SCENARIO ? await runAvatarWebview2Proof({ automation, safe: false })
+        : CONVERSATION_SCENARIO ? await runConversationWebview2Proof({ automation, captureScreenshot: workspaceCallbacks.captureScreenshot, screenshotPath: join(fixtureRoot, 'workspace-screenshots', 'shared-conversation.png') })
         : await runShellWebview2Proof({ automation, expectedPageUrl: pageOrigin,
             harness: { fixture, ownedChild: app }, mode: 'normal',
             commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot });
       if (AGENT_API_SCENARIO) normalResult.checks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, automation, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
 
-      if (!AVATAR_SCENARIO) {
+      if (!AVATAR_SCENARIO && !CONVERSATION_SCENARIO) {
       // A separate contained process proves that safe mode prevents the same
       // project from exposing a live runtime surface.
       await terminateContained(app, 'Tauri WebView2');
@@ -1087,7 +1091,7 @@ wire_api = "responses"
       }
     }
     const normalChecks = normalResult.checks;
-    const safeResult = AGENT_API_SCENARIO ? {checks: []}
+    const safeResult = AGENT_API_SCENARIO || CONVERSATION_SCENARIO ? {checks: []}
       : AVATAR_SCENARIO ? (SAFE_ONLY ? await runAvatarWebview2Proof({ automation, safe: true }) : { checks: [] })
       : await runShellWebview2Proof({ automation, expectedPageUrl: pageOrigin,
           harness: { fixture, ownedChild: app }, mode: 'safe', freshSafe: SAFE_ONLY,
@@ -1098,7 +1102,7 @@ wire_api = "responses"
     passReport = {
       status: 'pass',
       target: 'isolated Tauri WebView2 dev harness',
-      scenario: AVATAR_SCENARIO ? (SAFE_ONLY ? 'avatar-safe-clean-start' : 'avatar-signed-out-and-synthetic-renderer') : SAFE_ONLY ? 'shell-safe-clean-start' : AGENT_API_SCENARIO ? 'agent-api-v1' : 'shell-default-view',
+      scenario: CONVERSATION_SCENARIO ? 'shared-conversation-native-and-cloud-presentation' : AVATAR_SCENARIO ? (SAFE_ONLY ? 'avatar-safe-clean-start' : 'avatar-signed-out-and-synthetic-renderer') : SAFE_ONLY ? 'shell-safe-clean-start' : AGENT_API_SCENARIO ? 'agent-api-v1' : 'shell-default-view',
       native: normalResult.native,
       timings: { normal: normalResult.timings, safe: safeResult.timings },
       ownedWindowMeasurements,

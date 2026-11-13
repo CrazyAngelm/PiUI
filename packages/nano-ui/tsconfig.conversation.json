@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/conversation.ts",
+    "src/conversationLocale.ts",
+    "vite.conversation.config.ts",
+    "playwright.conversation.config.ts",
+    "tests/conversation.spec.ts",
+    "../../apps/desktop/src/shared/conversation/**/*.ts",
+    "../../apps/desktop/src/shared/conversation/**/*.svelte"
+  ],
+  "exclude": ["**/*.test.ts"]
+}

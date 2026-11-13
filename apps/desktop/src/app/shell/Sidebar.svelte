@@ -22,7 +22,6 @@
   import GitBranch from '@lucide/svelte/icons/git-branch';
   import KanbanSquare from '@lucide/svelte/icons/square-kanban';
   import UsersRound from '@lucide/svelte/icons/users-round';
-  import Cloud from '@lucide/svelte/icons/cloud';
   import UserRound from '@lucide/svelte/icons/user-round';
   import type { BoardRegistry } from '../board/boardStore.svelte';
   import { t, language } from '../../features/locale/language';
@@ -35,7 +34,7 @@
   import { fusionMembership } from '../fusion/fusionMembership.svelte';
   import { chatTree } from './chatTree';
   import { nanoAccount } from '../nano/nanoAccount.svelte';
-  import { openNanoCloud } from '../nano/openCloud';
+  import WorkLocation from '../nano/WorkLocation.svelte';
   import { chipFor, creditsText } from '../nano/nanoView';
 
   interface Props {
@@ -182,6 +181,8 @@
     <span class="brand__name" aria-hidden="true">Nano Desktop</span>
   </div>
 
+  <WorkLocation />
+
   <div class="primary">
     <button type="button" class="nav-item nav-item--strong" onclick={() => go(() => store.goHome())} aria-current={route.name === 'home' ? 'page' : undefined}>
       <SquarePen size={16} />
@@ -258,12 +259,6 @@
         <span class="nano-chip__credits">{creditsText(nanoChip.credits, $language === 'ru' ? 'ru-RU' : 'en-US', true)}<span class="visually-hidden"> {$t('credits')}</span></span>
       {/if}
     </button>
-    {#if nanoAccount.canUseCloud}
-      <button type="button" class="nav-item" onclick={() => void openNanoCloud()} disabled={nanoAccount.action === 'cloud'}>
-        <Cloud size={16} />
-        <span class="nav-item__label">{$t('Open Nano Cloud')}</span>
-      </button>
-    {/if}
     <button type="button" class="nav-item" onclick={() => go(() => store.navigate({ name: 'settings', section: 'general' }))} aria-current={route.name === 'settings' ? 'page' : undefined}>
       <Settings size={16} />
       <span class="nav-item__label">{$t('Settings')}</span>
