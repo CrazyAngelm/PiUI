@@ -39,11 +39,15 @@ describe('Settings → Nano account', () => {
     expect(body).not.toContain('role="alert"');
   });
 
-  it('shows the avatar switch with an accessible name in every state', async () => {
-    for (const name of ['signed-out', 'signed-in', 'expired'] as const) {
+  it('shows the named avatar switch only with current account access', async () => {
+    expect(html(await started('signed-in'))).toContain('aria-label="Show Nano avatar"');
+    for (const name of ['signed-out', 'free', 'expired', 'offline', 'unsupported'] as const) {
       const body = html(await started(name));
-      expect(body, name).toContain('aria-label="Show Nano avatar"');
+      expect(body, name).not.toContain('aria-label="Show Nano avatar"');
     }
+    const account = await started('signed-in');
+    withStatus(account, { capabilities: { ...account.status!.capabilities!, avatars: false } });
+    expect(html(account)).not.toContain('aria-label="Show Nano avatar"');
   });
 
   it('waits for the browser and offers to cancel while signing in', async () => {
@@ -138,7 +142,7 @@ describe('Settings → Nano account', () => {
       expect(body, name).toContain('Forget saved sign-in');
       for (const text of ['Sign in', 'Create account', 'Manage plan', 'Sign out', 'aria-busy']) expect(body, `${name} ${text}`).not.toContain(text);
       expect(body, name).not.toContain('The saved sign-in was removed.');
-      expect(body, name).toContain('aria-label="Show Nano avatar"');
+      expect(body, name).not.toContain('aria-label="Show Nano avatar"');
     }
     // The page is reachable before the status is known.
     const waiting = html(new NanoAccount(createNanoAccountClient(async <T>() => fixture.signedOut as T, async () => () => undefined)), true);

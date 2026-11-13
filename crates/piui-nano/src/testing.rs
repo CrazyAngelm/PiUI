@@ -69,6 +69,19 @@ pub(crate) struct FakeState {
     pub(crate) token_requests: u32,
     /// The `X-Nano-Client` value of every request (empty when missing).
     pub(crate) clients: Vec<String>,
+    pub(crate) avatar: Option<FakeAvatar>,
+    pub(crate) avatar_calls: Vec<(String, String)>,
+}
+
+/// Synthetic avatar responses; tests control a held body without real assets.
+pub(crate) struct FakeAvatar {
+    pub(crate) list: Value,
+    pub(crate) manifest: Value,
+    pub(crate) media: Bytes,
+    pub(crate) mime: &'static str,
+    pub(crate) refusal: Option<(u16, &'static str)>,
+    pub(crate) stream: Option<mpsc::UnboundedReceiver<Bytes>>,
+    pub(crate) requested: Arc<Notify>,
 }
 
 pub(crate) struct FakeNano {
@@ -99,6 +112,8 @@ impl FakeNano {
             token_gate: None,
             token_requests: 0,
             clients: Vec::new(),
+            avatar: None,
+            avatar_calls: Vec::new(),
         }));
         let (tx, mut rx) = oneshot::channel::<()>();
         let served = state.clone();
@@ -270,6 +285,7 @@ async fn route(
     let lock = || state.lock().unwrap_or_else(PoisonError::into_inner);
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
+    let uri = request.uri().to_string();
     let authorization = header(&request, "authorization");
     let device = header(&request, "x-nano-device");
     let session = header(&request, "x-nano-session");
@@ -361,6 +377,47 @@ async fn route(
         }
         (Method::GET, "/api/desktop/v1/me") if authorized() => {
             json_response(200, &server_fixture("me"))
+        }
+        (Method::GET, path) if path.contains("/avatars") => {
+            let mut s = lock();
+            s.avatar_calls.push((uri, authorization.clone()));
+            if authorization != format!("Bearer {}", s.current_access) {
+                return error(401, "unauthorized");
+            }
+            let Some(avatar) = s.avatar.as_mut() else {
+                return error(404, "not_found");
+            };
+            avatar.requested.notify_one();
+            if let Some((status, code)) = avatar.refusal {
+                return error(status, code);
+            }
+            if path.ends_with("/avatars") {
+                return json_response(200, &avatar.list);
+            }
+            if path.ends_with("/manifest") {
+                return json_response(200, &avatar.manifest);
+            }
+            if path.ends_with("/media/atlas") {
+                let body = match avatar.stream.take() {
+                    None => full(avatar.media.clone()),
+                    Some(receiver) => {
+                        let stream =
+                            futures_util::stream::unfold(receiver, |mut receiver| async move {
+                                receiver.recv().await.map(|chunk| {
+                                    (Ok::<_, Infallible>(Frame::data(chunk)), receiver)
+                                })
+                            });
+                        StreamBody::new(stream).boxed_unsync()
+                    }
+                };
+                let mut response = Response::new(body);
+                response.headers_mut().insert(
+                    http::header::CONTENT_TYPE,
+                    http::HeaderValue::from_static(avatar.mime),
+                );
+                return response;
+            }
+            error(404, "not_found")
         }
         (Method::GET, path) if path.ends_with("/entitlements") && authorized() => {
             let mut entitlements = lock().entitlements.clone();

@@ -171,6 +171,10 @@ export class NanoAccount {
     return this.signedIn && this.entitlements?.features.dictation === true && this.status?.capabilities?.dictation === true;
   }
 
+  get canUseAvatars(): boolean {
+    return this.signedIn && this.status?.selectedWorkspaceId != null && this.entitlements?.features.avatars === true && this.status?.capabilities?.avatars === true;
+  }
+
   get dictationMaxBytes(): number | undefined {
     return this.entitlements?.limits.dictationMaxBytes;
   }

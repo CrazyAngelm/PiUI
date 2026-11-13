@@ -50,6 +50,8 @@ use crate::wire::{
     NanoModeIdV1, NanoServerErrorCodeV1, NanoUsageV1,
 };
 
+pub mod avatar;
+
 /// Opens the authorization URL in the system browser. Runs on a blocking
 /// thread; `Err(())` reports `browser-failed`.
 pub type OpenBrowser = Box<dyn FnOnce(&Url) -> Result<(), ()> + Send + 'static>;
@@ -116,6 +118,8 @@ struct SignIn {
 struct State {
     revision: u64,
     generation: u64,
+    /// Changes only when avatar custody changes, including workspace A -> B -> A.
+    avatar_epoch: u64,
     phase: NanoAccountStateV1,
     server: Option<Arc<ServerDescription>>,
     capabilities: Option<NanoCapabilitiesV1>,
@@ -178,7 +182,11 @@ impl Inner {
     /// Applies `change` and publishes the new status.
     fn mutate<R>(&self, change: impl FnOnce(&mut State) -> R) -> R {
         let mut s = self.lock();
+        let avatar_before = avatar::custody_key(&s);
         let result = change(&mut s);
+        if avatar_before != avatar::custody_key(&s) {
+            s.avatar_epoch += 1;
+        }
         s.revision += 1;
         let status = self.snapshot(&s);
         self.status_tx.send_replace(status);
@@ -252,6 +260,7 @@ impl NanoAccount {
         let state = State {
             revision: 1,
             generation: 0,
+            avatar_epoch: 0,
             phase: NanoAccountStateV1::SignedOut,
             server: None,
             capabilities: None,

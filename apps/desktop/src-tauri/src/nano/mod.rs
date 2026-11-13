@@ -13,6 +13,7 @@
 //! contacts a Nano server either: after first paint the host only reads the
 //! credential store for a stored refresh token (`NanoAccount::restore`).
 
+pub(crate) mod avatar;
 pub(crate) mod browser;
 pub(crate) mod catalog;
 pub(crate) mod cloud_window;
@@ -311,6 +312,13 @@ fn spawn_status_forwarder<R: Runtime>(app: AppHandle<R>, host: Arc<NanoHost>) {
                 cloud_window::clear(&app, &host.cloud_profile_dir);
             }
             previous = current;
+            // Publish custody before account presentation. An old media request can
+            // never be adopted by the UI of a newly signed-in account/workspace.
+            let _ = app.emit_to(
+                MAIN_WINDOW,
+                piui_nano::account::avatar::NANO_AVATAR_EVENT_V1,
+                host.avatar_scope(),
+            );
             let _ = app.emit_to(
                 MAIN_WINDOW,
                 NANO_ACCOUNT_EVENT_V1,

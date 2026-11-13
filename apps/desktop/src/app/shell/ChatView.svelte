@@ -176,8 +176,8 @@
           <SidekickOfBadge leadSessionId={fusion.leadSessionId} />
         {/if}
         <div class="chat__actions">
-          {#if session.harness === 'nano' && snapshot}
-            <NanoPetStatus status={session.status} approvals={snapshot.approvals.length} blocks={snapshot.blocks} />
+          {#if snapshot}
+            <NanoPetStatus status={session.status} approvals={snapshot.approvals.length} blocks={snapshot.blocks} safeMode={store.safeMode} />
           {/if}
           {#if running && !composerStops}
             <!-- Fusion stops through the broker: a lead stops the pair, a sidekick stops its round (the store routes it). -->

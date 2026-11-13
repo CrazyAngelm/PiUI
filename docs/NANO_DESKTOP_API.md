@@ -379,6 +379,36 @@ The backend can also advertise `messages` for Anthropic Messages and
 `gemini` for Gemini GenerateContent. Availability is scoped to the account,
 workspace and operator-verified provider routes.
 
+### 4.8 Server-owned avatars
+
+All three reads require a current desktop device authorization, workspace
+membership, an active own profile and the avatar entitlement. They return
+`Cache-Control: no-store`; media does not use conditional or range responses.
+The host never accepts an asset URL or filesystem path from the WebView.
+
+- `GET /api/desktop/v1/workspaces/{workspaceId}/avatars` returns
+  `{ workspaceId, selectedAvatarId: string | null, avatars: [{ id, name }] }`.
+  The selected ID follows the server profile. An unset, pending or removed
+  selection remains null; clients must not substitute a bundled/default pet.
+- `GET /api/desktop/v1/workspaces/{workspaceId}/avatars/{avatarId}/manifest`
+  returns the descriptor defined by `NanoAvatarManifestV1` in
+  `contracts/nano-avatars-v1.ts`: schema version, fixed renderer version,
+  media SHA-256/MIME/byte count, atlas geometry and animation clips. Version 1
+  uses `nano-atlas`, WebP, 192×208 cells, eight columns and nine rows.
+- `GET /api/desktop/v1/workspaces/{workspaceId}/avatars/{avatarId}/media/atlas?sha256={hash}`
+  returns the exact media named by the descriptor, or 409 if it has changed.
+  Only the fixed atlas variant and authorized stock/own ready IDs are accepted.
+  The existing server avatar generator's 16 MiB result bound also applies here.
+
+The server rechecks authority after reading an asset. The host binds every
+request/body read to its account generation and avatar custody epoch; account,
+workspace or entitlement changes cancel it. Credits-only updates do not reload
+the avatar. An authoritative avatar feature or workspace-access refusal clears the
+cached avatar entitlement only for that exact custody; a later explicit account
+refresh can restore the server-granted right. Old requests cannot change a new
+workspace or sign-in. The WebView receives neither bearer credentials nor reusable asset
+URLs. Media and decoded bitmaps are temporary display data.
+
 ## 5. Gateway semantics
 
 An OpenAI-compatible Chat Completions facade. The desktop's local relay puts

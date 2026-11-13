@@ -22,7 +22,10 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
   }
   try {
     const page = await browser.newPage();
-    await page.goto(`${baseURL}/?lab=demo`);
+    // Cold module transformation is covered by the existing landmark readiness
+    // bound below; waiting for every load resource here used the shorter default
+    // navigation deadline and failed before that readiness check could run.
+    await page.goto(`${baseURL}/?lab=demo`, { waitUntil: 'commit' });
     const sidebar = page.getByRole('navigation', { name: 'Workspace navigation' });
     await sidebar.waitFor({ timeout: 120_000 });
     const visit = async (name: RegExp, ready: () => Promise<unknown>) => {

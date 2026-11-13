@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "avatarId": "nano",
+  "name": "Synthetic Lab avatar",
+  "renderer": "nano-atlas",
+  "rendererVersion": 1,
+  "media": { "variant": "atlas", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "mimeType": "image/webp", "byteCount": 4 },
+  "atlas": { "cellWidth": 192, "cellHeight": 208, "columns": 8, "rows": 9 },
+  "clips": {
+    "idle": { "row": 0, "frames": 6, "ms": 180, "desync": true },
+    "think": { "row": 1, "frames": 6, "ms": 150 },
+    "work": { "row": 2, "frames": 6, "ms": 120 },
+    "wait": { "row": 3, "frames": 6, "ms": 150, "hold": { "frames": [0, 5], "ms": 1100 } },
+    "done": { "row": 4, "frames": 5, "ms": 140, "repeat": 2, "still": 2 },
+    "error": { "row": 5, "frames": 8, "ms": 140, "repeat": 1, "still": 4 },
+    "wave": { "row": 6, "frames": 4, "ms": 140, "repeat": 3, "still": 1 },
+    "sleep": { "row": 7, "frames": 6, "ms": 400, "desync": true },
+    "talk": { "row": 8, "frames": 4, "ms": 110 },
+    "still": { "row": 0, "frames": 1, "ms": null }
+  }
+}

@@ -1,8 +1,8 @@
 // Windows WebView2 interaction proof for an isolated Tauri dev harness.
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { runAgentApiProof, setupAgentWorkspace } from './agent-api-e2e.mjs';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -10,13 +10,16 @@ import { fileURLToPath } from 'node:url';
 import { createWebviewAutomationServer } from './webview-automation.mjs';
 import { startComposerProvider } from './composer-provider.mjs';
 import { runShellWebview2Proof } from './shell-webview2-e2e.mjs';
+import { runAvatarWebview2Proof } from './avatar-webview2-e2e.mjs';
 
 // Default: the new shell proof. `--agent-api` runs the agent API proof with
 // the native workspace fixture instead.
 const AGENT_API_SCENARIO = process.argv.includes('--agent-api');
 const SHELL_SCENARIO = !AGENT_API_SCENARIO;
 const SAFE_ONLY = process.argv.includes('--safe-only');
+const AVATAR_SCENARIO = process.argv.includes('--avatar');
 if (SAFE_ONLY && AGENT_API_SCENARIO) throw new Error('Choose either --safe-only or --agent-api.');
+if (AVATAR_SCENARIO && AGENT_API_SCENARIO) throw new Error('Choose either --avatar or --agent-api.');
 
 if (process.platform !== 'win32') {
   throw new Error('This WebView2 proof is Windows-only; run the Linux WebKit harness separately.');
@@ -882,6 +885,7 @@ async function runIsolatedHarness() {
   let cleanupFailure;
   let passReport;
   let composerProvider;
+  let executableSha256;
   try {
     automation = await createWebviewAutomationServer({
       allowedOrigin: pageOrigin,
@@ -997,7 +1001,21 @@ wire_api = "responses"
     );
     await waitForStarted(build, COMMAND_BOUND_MS, 'Tauri E2E build');
     await waitForExit(build, BUILD_BOUND_MS, 'Tauri E2E build');
-    const executable = compilerArtifactFromBuildLog(buildLog, cargoTargetDirectory);
+    const builtExecutable = compilerArtifactFromBuildLog(buildLog, cargoTargetDirectory);
+    // Other checked-out branches share this Cargo cache. Run a verified fixture
+    // copy so Windows does not lock their output and a later build cannot replace
+    // the binary under this proof. The outer owner removes the fixture afterwards.
+    const digest = async (path) => {
+      const hash = createHash('sha256');
+      for await (const chunk of createReadStream(path)) hash.update(chunk);
+      return hash.digest('hex');
+    };
+    executableSha256 = await digest(builtExecutable);
+    const executable = join(fixtureRoot, 'piui-e2e.exe');
+    copyFileSync(builtExecutable, executable);
+    if (await digest(executable) !== executableSha256 || await digest(builtExecutable) !== executableSha256) {
+      throw new Error('The compiled executable changed while preparing its isolated copy.');
+    }
 
     app = spawnLogged(
       jobRunner,
@@ -1040,11 +1058,13 @@ wire_api = "responses"
     if (!SAFE_ONLY) {
       const apiWorkspace = AGENT_API_SCENARIO ? await setupAgentWorkspace(agentConnection, fixture.primeProjectCanonical) : undefined;
       normalResult = AGENT_API_SCENARIO ? { checks: [], cleanup: {workspaceId: apiWorkspace} }
+        : AVATAR_SCENARIO ? await runAvatarWebview2Proof({ automation, safe: false })
         : await runShellWebview2Proof({ automation, expectedPageUrl: pageOrigin,
             harness: { fixture, ownedChild: app }, mode: 'normal',
             commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot });
       if (AGENT_API_SCENARIO) normalResult.checks.push(...await runAgentApiProof({ connection: agentConnection, workspaceId: normalResult.cleanup.workspaceId, automation, commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS }));
 
+      if (!AVATAR_SCENARIO) {
       // A separate contained process proves that safe mode prevents the same
       // project from exposing a live runtime surface.
       await terminateContained(app, 'Tauri WebView2');
@@ -1064,9 +1084,11 @@ wire_api = "responses"
         app,
         safeModeMinimumGeneration,
       );
+      }
     }
     const normalChecks = normalResult.checks;
     const safeResult = AGENT_API_SCENARIO ? {checks: []}
+      : AVATAR_SCENARIO ? (SAFE_ONLY ? await runAvatarWebview2Proof({ automation, safe: true }) : { checks: [] })
       : await runShellWebview2Proof({ automation, expectedPageUrl: pageOrigin,
           harness: { fixture, ownedChild: app }, mode: 'safe', freshSafe: SAFE_ONLY,
           commandBoundMs: COMMAND_BOUND_MS, startupBoundMs: STARTUP_BOUND_MS, captureScreenshot: workspaceCallbacks.captureScreenshot });
@@ -1076,12 +1098,13 @@ wire_api = "responses"
     passReport = {
       status: 'pass',
       target: 'isolated Tauri WebView2 dev harness',
-      scenario: SAFE_ONLY ? 'shell-safe-clean-start' : AGENT_API_SCENARIO ? 'agent-api-v1' : 'shell-default-view',
+      scenario: AVATAR_SCENARIO ? (SAFE_ONLY ? 'avatar-safe-clean-start' : 'avatar-signed-out-and-synthetic-renderer') : SAFE_ONLY ? 'shell-safe-clean-start' : AGENT_API_SCENARIO ? 'agent-api-v1' : 'shell-default-view',
       native: normalResult.native,
       timings: { normal: normalResult.timings, safe: safeResult.timings },
       ownedWindowMeasurements,
       screenshots: [...(normalResult.screenshots ?? []), ...(safeResult.screenshots ?? [])],
       webviewVersion: automation.currentPage?.webviewVersion ?? 'unknown',
+      executableSha256,
       checks: [
         ...normalChecks,
         ...safeChecks,

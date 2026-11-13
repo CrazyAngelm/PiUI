@@ -240,12 +240,14 @@
   </div>
 {/if}
 
+{#if !safeMode && account.canUseAvatars}
 <div class="rows pet">
   <div class="row">
     <span>{$t('Show Nano avatar')}</span>
     <Switch label={$t('Show Nano avatar')} hideLabel checked={nanoPetPreference.enabled} onCheckedChange={(checked: boolean) => nanoPetPreference.set(checked)} />
   </div>
 </div>
+{/if}
 
 <style>
   h2 {

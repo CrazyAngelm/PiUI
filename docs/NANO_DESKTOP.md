@@ -356,12 +356,19 @@ on the Nano web app (`meta.links.cloud`, default `https://hermes.nanoagents.ru/`
 
 ## 10. Pet avatar and dictation
 
-- Pet avatar: a Svelte component that steps a WebP sprite atlas by session
-  state (idle, think, work, wait, done, error). A `nano` look is bundled;
-  further looks, when the server offers them, are downloaded by the host, with
-  hash, size and type checked, and cached. Reduced motion shows a still frame.
-  It is decoration: nothing depends on it, and it makes no request while signed
-  out.
+- Pet avatar: optional decoration for chats using any harness, gated by both
+  `capabilities.avatars` and `features.avatars`. The server selects the avatar
+  from the person's own profile; no selection means no decoration. The host
+  fetches the catalog, versioned animation descriptor and WebP media through its
+  authenticated account client. No sprite library ships with Desktop and no
+  avatar is cached on disk. The host checks identity, MIME type, hash, byte count
+  and atlas geometry before returning media through `nano-avatars-v1`.
+  The WebView decodes in memory and paints a Canvas; reduced motion uses a still
+  frame. The bitmap is released when the last visible chat releases it or its
+  account/workspace/entitlement context ends. Pending requests and late decodes
+  cannot publish media into a new context. Failed media leaves chat readable.
+  Signed-out and safe-mode screens make no avatar request and have no empty
+  avatar slot or unavailable avatar preference.
 - Dictation: a composer feature that works for every harness. The WebView
   records with `MediaRecorder` (push-to-talk, at most five minutes, visible
   recording state) and sends the bytes to the host (`nano_dictation_v1`); the

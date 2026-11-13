@@ -212,3 +212,69 @@ editor's semantic parser. Storage never evaluates scripts or grants execution.
 The initial Vite-hosted browser run masked production module defects and ended
 with a teardown timeout; the static artifact tests above replace that evidence.
 No production database, real-provider turn or installed application was changed.
+
+### Server avatars
+
+Implemented, independently reviewed and verified for the stage commit. This
+independent stage commits before cloud execution; it adds no graph/runtime dependency.
+The bundled offline atlas is removed. Rust owns authenticated catalog,
+manifest and media requests; the main WebView receives temporary checked
+pixels and a versioned descriptor. Account/workspace/capability/entitlement
+custody revokes in-flight work and releases decoded bitmaps. Signed-out and
+safe-mode applications expose neither an avatar slot nor its setting.
+
+Four independent read-only reviews used `gpt-6.1-sol` with `max`, against the
+same immutable PIUI tree `94cc9c8ad4cd2824347f748c96c9bab860da14fc` and server
+tree `7236ed57aa53e3c2d288478fabb394ea860d9958`:
+`stage4_review_1` (Parfit), `stage4_review_2` (Dirac),
+`stage4_review_3` (Mill), `stage4_review_4` (Epicurus).
+
+Confirmed corrections:
+
+- Desktop uses the shared descriptor's normal first pass, subsequent hold
+  sequence, reduced-motion `still` frame and return to idle after finite repeats.
+- An authoritative feature/workspace refusal clears only the requesting avatar custody's
+  cached entitlement. A late request cannot revoke a new account/workspace.
+- Server post-read access checks include the authoritative user token cutoff,
+  including password reset before the device row is lazily marked revoked.
+- Custom avatar readiness is checked again after the descriptor/access reads,
+  refusing media deleted while those reads were in flight.
+- Existing Settings assertions now require no avatar switch for signed-out,
+  expired, free-plan, unavailable-server and safe-mode states; the entitled
+  setting retains its accessible name.
+
+Validation already completed:
+
+- Focused renderer/client/state units: 18/18 passed after animation corrections;
+  Settings: 17/17 passed. E2E TypeScript passed, so the proposed missing ambient
+  declaration error did not reproduce. The earlier whole Desktop Svelte check
+  had zero errors and warnings.
+- Final Rust avatar HTTP/custody suite: 9/9 passed, including typed entitlement
+  and workspace denials, no repeated load after denial, stale scope fencing,
+  held-body cancellation and ordinary media errors preserving entitlement.
+  All-target `piui-nano` clippy with `-D warnings` passed. The original whole
+  account suite had 119 passes before the additional avatar cases.
+- UI Lab avatar flow passed for entitled Pi/Hermes chats, keyboard preference,
+  sign-out, free-plan and safe-mode absence, with no Nano or old-atlas browser
+  request. Host network isolation is established separately by Rust checks.
+- Initial actual Tauri/WebView2 normal and fresh safe-start proofs passed with
+  empty owned Job trees and removed fixtures. Normal proof decoded and painted
+  generated synthetic WebP, refused corrupt media, released its bitmap, and
+  refused a signed-out host load. Safe mode refused the host load without a
+  network request. The final normal proof also passed actual pixel comparison
+  against the descriptor's error `still` frame, with clean owned-job teardown.
+  WebView2 was `157.0.0.0`; executable SHA-256:
+  `3dd2f6bdfde54c64559aafb9569c7f4f7497a7c7709cdf60668c513862a1e4a5`.
+  Synthetic decode took 69.1 ms and mount/paint 69.2 ms on this loaded machine;
+  these are fixture measurements, not a release startup benchmark.
+- Server remediation build: zero errors; avatar tests: 34/34 passed, no skips,
+  including actual checked-in stock media, device/account cutoff, custom
+  deletion during reads and conditional/range header refusal. The first pass
+  exposed a test assertion's null `StringValues` conversion; checking the absent
+  header's count corrected the test.
+- Actual Blazor loaded `/pets/atlas-v1.json` successfully and initialized
+  `window.hermesPets`. That fixture has no selected pet, so this proves shared
+  descriptor initialization, not stock sprite animation in the browser.
+
+No paid account, real provider, deployment or installed executable
+replacement is implied by these synthetic HTTP and rendering fixtures.

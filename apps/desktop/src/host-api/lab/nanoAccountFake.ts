@@ -11,6 +11,7 @@ import type { LabEventBus } from './labBus';
 import type { LabClock } from './labClock';
 import type { LabHandlers } from './labHandlers';
 import { decodeArgument, enumOf, object, string } from './labSchema';
+import { createLabNanoAvatar } from './nanoAvatarFake';
 
 /**
  * Nano account v1 in the UI Lab. Nothing leaves the browser: no sign-in page
@@ -138,6 +139,7 @@ export function createLabNanoAccount(scenario: LabNanoScenario, bus: LabEventBus
   // Safe mode restores nothing: the host reports a signed-out account whatever is stored.
   let status: NanoAccountStatusV1 = initial(safeMode ? 'signed-out' : scenario, workspaces);
   let cancelSignIn: (() => void) | undefined;
+  const avatar = createLabNanoAvatar(bus, () => status, safeMode);
 
   function initial(name: LabNanoScenario, rows: readonly (typeof PERSONAL | typeof TEAM)[]): NanoAccountStatusV1 {
     const base: NanoAccountStatusV1 = {
@@ -194,6 +196,7 @@ export function createLabNanoAccount(scenario: LabNanoScenario, bus: LabEventBus
 
   const publish = (next: Partial<NanoAccountStatusV1>): NanoAccountStatusV1 => {
     status = { ...status, ...next, revision: status.revision + 1 };
+    avatar.publish();
     bus.emit(NANO_ACCOUNT_EVENT_V1, { type: 'status', status });
     return status;
   };
@@ -210,6 +213,11 @@ export function createLabNanoAccount(scenario: LabNanoScenario, bus: LabEventBus
   };
 
   const handlers: LabHandlers = {
+    nano_avatar_scope_v1: () => avatar.scope(),
+    nano_avatar_load_v1: (args) => {
+      const request = decodeArgument<{ context: string }>(args, 'request', object({ context: string }));
+      return avatar.load(request.context);
+    },
     nano_account_status_v1: () => status,
     nano_account_sign_in_v1: () => {
       requireLive();
@@ -222,6 +230,7 @@ export function createLabNanoAccount(scenario: LabNanoScenario, bus: LabEventBus
         cancelSignIn = undefined;
         const base = { ...status, revision: status.revision + 1 };
         status = signedIn(base, workspaces, signedInVariant);
+        avatar.publish();
         bus.emit(NANO_ACCOUNT_EVENT_V1, { type: 'status', status });
       });
       return waiting;

@@ -1,49 +1,6 @@
 import type { SessionStatus } from '../../../../../contracts/workspace-v15';
 
-/**
- * The Nano pet's small sprite atlas (`assets/nano/atlas.small.webp`, 768x936):
- * 8 columns by 9 rows of 96x104 cells. Every row is one state; a row holds
- * that many frames. Copied from the NanoAgent web app's `pets/nano/atlas.small.webp`
- * together with the clip table of its `hermes-pets.js` (frame counts, frame
- * durations, repeats), which is the atlas descriptor: the atlas has no JSON of its own.
- */
-export const NANO_PET_ATLAS = { columns: 8, rows: 9, cellWidth: 96, cellHeight: 104 } as const;
-
-export const NANO_PET_STATES = ['idle', 'think', 'work', 'wait', 'done', 'error', 'wave', 'sleep', 'talk'] as const;
-export type NanoPetState = (typeof NANO_PET_STATES)[number];
-
-export interface NanoPetClip {
-  /** Row of the atlas. */
-  readonly row: number;
-  /** Frames in the row (from column 0). */
-  readonly frames: number;
-  /** Milliseconds per frame. */
-  readonly ms: number;
-  /** Times a one-shot plays before the pet returns to its first frame; absent loops. */
-  readonly repeat?: number;
-}
-
-export const NANO_PET_CLIPS: Readonly<Record<NanoPetState, NanoPetClip>> = {
-  idle: { row: 0, frames: 6, ms: 180 },
-  think: { row: 1, frames: 6, ms: 150 },
-  work: { row: 2, frames: 6, ms: 120 },
-  wait: { row: 3, frames: 6, ms: 150 },
-  done: { row: 4, frames: 5, ms: 140, repeat: 2 },
-  error: { row: 5, frames: 8, ms: 140, repeat: 1 },
-  wave: { row: 6, frames: 4, ms: 140, repeat: 3 },
-  sleep: { row: 7, frames: 6, ms: 400 },
-  talk: { row: 8, frames: 4, ms: 110 },
-};
-
-/** An unknown state is a calm pet. */
-export function clipFor(state: string): NanoPetClip {
-  return Object.hasOwn(NANO_PET_CLIPS, state) ? NANO_PET_CLIPS[state as NanoPetState] : NANO_PET_CLIPS.idle;
-}
-
-/** Atlas row of a state, 0-based. */
-export function rowFor(state: string): number {
-  return clipFor(state).row;
-}
+export type NanoPetState = Exclude<import('../../../../../contracts/nano-avatars-v1').NanoAvatarClipIdV1, 'still'>;
 
 /** The block facts the pet reads; a subset of the desktop timeline block. */
 export interface PetBlock {
@@ -99,9 +56,6 @@ const ACTIVE: readonly SessionStatus[] = ['starting', 'running', 'stopping'];
 export function turnFinished(previous: SessionStatus | undefined, next: SessionStatus): boolean {
   return previous !== undefined && ACTIVE.includes(previous) && next === 'idle';
 }
-
-/** How long the cheer lasts: the `done` clip plays twice (1.4 s) and a beat. */
-export const NANO_PET_DONE_MS = 1_800;
 
 // ---- the "Show Nano avatar" setting ---------------------------------------
 

@@ -1,101 +1,64 @@
 <script lang="ts">
-  import { clipFor, NANO_PET_ATLAS, type NanoPetState } from './nanoPet';
+  import type { ReadyAvatar } from './nanoAvatar.svelte';
+  import { clipDuration, poseAt } from './avatarAnimation';
+  import type { NanoPetState } from './nanoPet';
 
-  interface Props {
-    state?: NanoPetState;
-    /** Width of one cell in pixels; the height follows the atlas cell (96x104). */
-    size?: number;
-  }
-  let { state = 'idle', size = 32 }: Props = $props();
+  interface Props { avatar: ReadyAvatar; state?: NanoPetState; size?: number }
+  let { avatar, state = 'idle', size = 32 }: Props = $props();
+  let canvas: HTMLCanvasElement;
+  const atlas = $derived(avatar.manifest.atlas);
+  const clip = $derived(avatar.manifest.clips[state]);
 
-  const clip = $derived(clipFor(state));
+  $effect(() => {
+    const surface = canvas;
+    const context = surface?.getContext('2d');
+    if (!context) return;
+    const { bitmap } = avatar;
+    const geometry = atlas;
+    const animation = clip;
+    const clips = avatar.manifest.clips;
+    const activity = state;
+    const media = matchMedia('(prefers-reduced-motion: reduce)');
+    const started = performance.now();
+    const offset = animation.desync ? Math.random() * clipDuration(animation) : 0;
+    let frameRequest = 0;
+    let lastPose = '';
+    let stopped = false;
+    function paint(now: number): void {
+      if (stopped || bitmap.width === 0) return;
+      const reduced = media.matches || document.documentElement.dataset.reducedMotion === 'reduce';
+      const pose = poseAt(clips, activity, now - started + offset, reduced);
+      const identity = `${pose.row}:${pose.frame}`;
+      if (identity !== lastPose) {
+        context!.clearRect(0, 0, surface.width, surface.height);
+        context!.drawImage(bitmap, pose.frame * geometry.cellWidth, pose.row * geometry.cellHeight,
+          geometry.cellWidth, geometry.cellHeight, 0, 0, surface.width, surface.height);
+        lastPose = identity;
+      }
+      if (pose.animated) {
+        frameRequest = requestAnimationFrame(paint);
+      }
+    }
+    const restart = (): void => { cancelAnimationFrame(frameRequest); paint(performance.now()); };
+    media.addEventListener('change', restart);
+    const observer = new MutationObserver(restart);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-reduced-motion'] });
+    paint(started);
+    return () => {
+      stopped = true;
+      cancelAnimationFrame(frameRequest);
+      observer.disconnect();
+      media.removeEventListener('change', restart);
+      context.clearRect(0, 0, surface.width, surface.height);
+    };
+  });
 </script>
 
-<!--
-  The pet is decoration: the chat's status already says what the agent does.
-  Pure CSS sprite: the row is the state, steps() walks its frames, and
-  reduced motion keeps the first frame. Custom properties are set through the
-  CSSOM (style: directives), which the desktop CSP allows.
--->
-<span
-  class="pet"
-  class:pet--idle={state === 'idle'}
-  aria-hidden="true"
-  data-state={state}
-  style:--pet-size={size}
-  style:--pet-row={clip.row}
-  style:--pet-frames={clip.frames}
-  style:--pet-ms={clip.ms}
-  style:--pet-repeat={clip.repeat ?? 'infinite'}
-  style:--pet-columns={NANO_PET_ATLAS.columns}
-  style:--pet-rows={NANO_PET_ATLAS.rows}
-></span>
+<!-- Decoration only: the existing chat status remains the accessible, generic fallback. -->
+<canvas bind:this={canvas} class="pet" aria-hidden="true" data-state={state}
+  width={atlas.cellWidth} height={atlas.cellHeight}
+  style:width={`${size}px`} style:height={`${size * atlas.cellHeight / atlas.cellWidth}px`}></canvas>
 
 <style>
-  .pet {
-    --cell-w: calc(var(--pet-size) * 1px);
-    --cell-h: calc(var(--pet-size) * 1px * 104 / 96);
-    display: inline-block;
-    flex: none;
-    width: var(--cell-w);
-    height: var(--cell-h);
-    background-image: url('../../assets/nano/atlas.small.webp');
-    background-repeat: no-repeat;
-    background-size: calc(var(--cell-w) * var(--pet-columns)) calc(var(--cell-h) * var(--pet-rows));
-    background-position: 0 calc(var(--cell-h) * var(--pet-row) * -1);
-    pointer-events: none;
-    user-select: none;
-    animation: pet-run calc(var(--pet-frames) * var(--pet-ms) * 1ms) steps(var(--pet-frames)) var(--pet-repeat);
-  }
-  @keyframes pet-run {
-    from {
-      background-position-x: 0;
-    }
-    to {
-      background-position-x: calc(var(--cell-w) * var(--pet-frames) * -1);
-    }
-  }
-  /*
-    Rest breathes on the open-eyed frames (0 1 3 4 5) and blinks once (frame 2)
-    every six seconds; walking the row would blink on every lap.
-  */
-  .pet--idle {
-    animation: pet-rest 6s steps(1, end) infinite;
-  }
-  @keyframes pet-rest {
-    0% {
-      background-position-x: 0;
-    }
-    17% {
-      background-position-x: calc(var(--cell-w) * -1);
-    }
-    34% {
-      background-position-x: calc(var(--cell-w) * -3);
-    }
-    50% {
-      background-position-x: calc(var(--cell-w) * -4);
-    }
-    66% {
-      background-position-x: calc(var(--cell-w) * -5);
-    }
-    82% {
-      background-position-x: 0;
-    }
-    94% {
-      background-position-x: calc(var(--cell-w) * -2);
-    }
-    97% {
-      background-position-x: 0;
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .pet,
-    .pet--idle {
-      animation: none;
-    }
-  }
-  :global(:root[data-reduced-motion='reduce']) .pet,
-  :global(:root[data-reduced-motion='reduce']) .pet--idle {
-    animation: none;
-  }
+  .pet { display: inline-block; flex: none; pointer-events: none; user-select: none; }
 </style>

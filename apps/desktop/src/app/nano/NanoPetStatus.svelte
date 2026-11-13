@@ -2,8 +2,11 @@
   import { untrack } from 'svelte';
   import type { SessionStatus } from '../../../../../contracts/workspace-v15';
   import NanoPet from './NanoPet.svelte';
-  import { NANO_PET_DONE_MS, petStateFor, turnFinished, type PetBlock } from './nanoPet';
+  import { petStateFor, turnFinished, type PetBlock } from './nanoPet';
   import { nanoPetPreference } from './nanoPetPreference.svelte';
+  import { nanoAccount } from './nanoAccount.svelte';
+  import { nanoAvatar } from './nanoAvatar.svelte';
+  import { clipDuration } from './avatarAnimation';
 
   interface Props {
     /** Status of the Nano chat. */
@@ -12,8 +15,14 @@
     approvals: number;
     blocks: readonly PetBlock[];
     size?: number;
+    safeMode: boolean;
   }
-  let { status, approvals, blocks, size = 32 }: Props = $props();
+  let { status, approvals, blocks, size = 32, safeMode }: Props = $props();
+
+  const enabled = $derived(!safeMode && nanoAccount.canUseAvatars && nanoPetPreference.enabled);
+  $effect(() => {
+    if (enabled) return nanoAvatar.acquire();
+  });
 
   // A finished turn cheers for a moment, then the pet rests again.
   let cheering = $state(false);
@@ -27,13 +36,15 @@
       return;
     }
     cheering = true;
-    const timer = setTimeout(() => (cheering = false), NANO_PET_DONE_MS);
+    const done = untrack(() => nanoAvatar.ready?.manifest.clips.done);
+    if (!done) { cheering = false; return; }
+    const timer = setTimeout(() => (cheering = false), clipDuration(done) * (done.repeat ?? 1));
     return () => clearTimeout(timer);
   });
 
   const petState = $derived(petStateFor({ status, approvals, blocks, justFinished: cheering }));
 </script>
 
-{#if nanoPetPreference.enabled}
-  <NanoPet state={petState} {size} />
+{#if enabled && nanoAvatar.ready}
+  <NanoPet avatar={nanoAvatar.ready} state={petState} {size} />
 {/if}
