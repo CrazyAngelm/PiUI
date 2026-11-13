@@ -1,10 +1,12 @@
 import type {
-  ConversationIdentity, ConversationOwner, ConversationSnapshot,
+  ConversationIdentity, ConversationOwner, ConversationSnapshot, ConversationMessageAction,
 } from '../../../../../contracts/conversation-presentation-v1';
 import type { ApprovalDecision } from '../../../../../contracts/workspace-v15';
 
 export const conversationKey = (identity: ConversationIdentity): string => JSON.stringify([identity.location, identity.scopeId, identity.sessionId]);
 const stale = (): DOMException => new DOMException('Conversation owner changed.', 'AbortError');
+const messageActions = new Set<ConversationMessageAction>(['copy', 'edit', 'branch', 'repeat', 'refresh']);
+export const messageActionKey = (id: string, action: ConversationMessageAction): string => JSON.stringify([id, action]);
 
 function validate(owner: ConversationOwner, snapshot: ConversationSnapshot): void {
   const { identity } = owner;
@@ -15,6 +17,20 @@ function validate(owner: ConversationOwner, snapshot: ConversationSnapshot): voi
   if (new Set(snapshot.approvals.map(approval => approval.id)).size !== snapshot.approvals.length) throw new Error('Conversation approval IDs must be unique.');
   if (new Set(snapshot.attachments.map(attachment => attachment.id)).size !== snapshot.attachments.length || snapshot.attachments.some(attachment => !blocks.has(attachment.blockId))) throw new Error('Attachments must identify a displayed message.');
   if (!['connected', 'reconnecting', 'disconnected'].includes(snapshot.connection)) throw new Error('Unsupported conversation connection state.');
+  if (snapshot.messageControls !== undefined) {
+    const controls = snapshot.messageControls;
+    if (!Array.isArray(controls) || new Set(controls.map(item => item.id)).size !== controls.length
+      || new Set(controls.map(item => item.blockId)).size !== controls.length
+      || controls.some(item => typeof item.id !== 'string' || !item.id || !blocks.has(item.blockId)
+        || !Array.isArray(item.actions) || new Set(item.actions.map(action => action.kind)).size !== item.actions.length
+        || item.actions.some(action => !messageActions.has(action.kind)
+          || action.disabled !== undefined && typeof action.disabled !== 'boolean'
+          || action.busy !== undefined && typeof action.busy !== 'boolean')
+        || item.copied !== undefined && typeof item.copied !== 'boolean'
+        || item.usage !== undefined && (typeof item.usage.label !== 'string'
+          || item.usage.description !== undefined && typeof item.usage.description !== 'string')))
+      throw new Error('Message controls must identify displayed messages and supported actions.');
+  }
 }
 
 /** Display lifetime only. The owner retains history, networking, auth and execution. */
@@ -26,6 +42,8 @@ export class ConversationController {
   approvalErrors = $state<Record<string, string>>({});
   reconnecting = $state(false);
   error = $state('');
+  busyMessageActions = $state<Record<string, boolean>>({});
+  messageActionErrors = $state<Record<string, string>>({});
   retired = $state(false);
   private pending = new Set<AbortController>();
   private revision = 0;
@@ -53,6 +71,8 @@ export class ConversationController {
     this.approvalErrors = {};
     this.reconnecting = false;
     this.error = '';
+    this.busyMessageActions = {};
+    this.messageActionErrors = {};
   }
 
   update(identity: ConversationIdentity, snapshot: ConversationSnapshot): void {
@@ -94,6 +114,36 @@ export class ConversationController {
       if (!owner.openAttachment) throw new Error('Opening attachments is not available.');
       return owner.openAttachment(id, signal);
     });
+  };
+
+  /** A rendered control keeps its originating owner even before the DOM flushes. */
+  bindMessageActions(): (id: string, action: ConversationMessageAction) => Promise<void> {
+    const generation = this.generation;
+    return (id, action) => this.actOnMessage(id, action, generation);
+  }
+
+  actOnMessage = async (id: string, action: ConversationMessageAction, originGeneration: number = this.generation): Promise<void> => {
+    if (originGeneration !== this.generation) throw stale();
+    const controls = this.snapshot?.messageControls?.find(item => item.id === id);
+    const offered = controls?.actions.find(item => item.kind === action);
+    const key = messageActionKey(id, action);
+    if (!offered || offered.disabled || offered.busy || this.busyMessageActions[key]
+      || !this.active().actOnMessage) throw new Error('Message action is not available.');
+    const generation = this.generation;
+    this.busyMessageActions = { ...this.busyMessageActions, [key]: true };
+    this.messageActionErrors = { ...this.messageActionErrors, [JSON.stringify(id)]: '' };
+    try {
+      await this.request((owner, signal) => owner.actOnMessage!(id, action, signal));
+    } catch {
+      if (!this.retired && generation === this.generation
+        && this.snapshot?.messageControls?.some(item => item.id === id))
+        this.messageActionErrors = { ...this.messageActionErrors, [JSON.stringify(id)]: 'Could not complete the message action.' };
+    } finally {
+      if (!this.retired && generation === this.generation) {
+        const { [key]: _finished, ...pending } = this.busyMessageActions;
+        this.busyMessageActions = pending;
+      }
+    }
   };
 
   async respond(id: string, decision: ApprovalDecision, answer: string | undefined): Promise<void> {

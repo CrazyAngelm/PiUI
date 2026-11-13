@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ConversationController } from './conversationController.svelte';
+import { ConversationController, messageActionKey } from './conversationController.svelte';
 import type { ConversationOwner, ConversationSnapshot } from '../../../../../contracts/conversation-presentation-v1';
 
 function snapshot(sessionId = 'chat'): ConversationSnapshot {
@@ -19,6 +19,90 @@ function deferred<T>() {
 }
 
 describe('explicit conversation owner boundary', () => {
+  const actionable = (): ConversationSnapshot => ({ ...snapshot(), messageControls: [{
+    id: '__proto__', blockId: 'answer', actions: [{ kind: 'copy' }, { kind: 'branch' }, { kind: 'repeat', disabled: true }],
+    usage: { label: '7 credits', description: 'Owner supplied' },
+  }] });
+
+  it('routes only offered and currently enabled message actions through their owner', async () => {
+    const actOnMessage = vi.fn(async () => undefined);
+    const controller = new ConversationController({ identity, actOnMessage }, actionable());
+    await controller.actOnMessage('__proto__', 'copy');
+    expect(actOnMessage).toHaveBeenCalledWith('__proto__', 'copy', expect.any(AbortSignal));
+    await expect(controller.actOnMessage('__proto__', 'repeat')).rejects.toThrow('not available');
+    await expect(controller.actOnMessage('__proto__', 'edit')).rejects.toThrow('not available');
+    await expect(controller.actOnMessage('other-message', 'branch')).rejects.toThrow('not available');
+    controller.update(identity, snapshot());
+    await expect(controller.actOnMessage('__proto__', 'branch')).rejects.toThrow('not available');
+    expect(actOnMessage).toHaveBeenCalledTimes(1);
+    const withoutPort = new ConversationController({ identity }, actionable());
+    await expect(withoutPort.actOnMessage('__proto__', 'copy')).rejects.toThrow('not available');
+  });
+
+  it('admits a single pending message action and permits explicit retry after its failure', async () => {
+    const held = deferred<void>();
+    const actOnMessage = vi.fn().mockImplementationOnce(() => held.promise).mockResolvedValue(undefined);
+    const controller = new ConversationController({ identity, actOnMessage }, actionable());
+    const first = controller.actOnMessage('__proto__', 'branch');
+    expect(controller.busyMessageActions[messageActionKey('__proto__', 'branch')]).toBe(true);
+    await expect(controller.actOnMessage('__proto__', 'branch')).rejects.toThrow('not available');
+    expect(actOnMessage).toHaveBeenCalledTimes(1);
+    held.reject(new Error('native owner refused'));
+    await first;
+    expect(controller.messageActionErrors[JSON.stringify('__proto__')]).toBe('Could not complete the message action.');
+    expect(controller.busyMessageActions).toEqual({});
+    await controller.actOnMessage('__proto__', 'branch');
+    expect(actOnMessage).toHaveBeenCalledTimes(2);
+    expect(controller.messageActionErrors[JSON.stringify('__proto__')]).toBe('');
+  });
+
+  it('retires held action failures across owner changes even when target IDs are reused', async () => {
+    const held = deferred<void>();
+    let signal: AbortSignal | undefined;
+    const controller = new ConversationController({ identity, actOnMessage: async (_id, _action, value) => { signal = value; await held.promise; } }, actionable());
+    const pending = controller.actOnMessage('__proto__', 'copy');
+    const other = { ...identity, scopeId: 'another-account' };
+    controller.setOwner({ identity: other, actOnMessage: async () => undefined }, actionable());
+    await pending;
+    expect(signal?.aborted).toBe(true);
+    held.reject(new Error('old clipboard failed'));
+    await Promise.resolve();
+    expect(controller.messageActionErrors).toEqual({});
+    expect(controller.busyMessageActions).toEqual({});
+  });
+
+  it('does not attach a failed action to replacement message contents in the same owner', async () => {
+    const held = deferred<void>();
+    const controller = new ConversationController({ identity, actOnMessage: () => held.promise }, actionable());
+    const pending = controller.actOnMessage('__proto__', 'branch');
+    const updated = actionable(); updated.messageControls![0]!.id = 'replacement-content';
+    controller.update(identity, updated);
+    await expect(controller.actOnMessage('__proto__', 'copy')).rejects.toThrow('not available');
+    held.reject(new Error('old target failed')); await pending;
+    expect(controller.messageActionErrors[JSON.stringify('replacement-content')]).toBeUndefined();
+    expect(controller.busyMessageActions).toEqual({});
+  });
+
+  it('binds rendered actions to their original owner even after returning to identical IDs', async () => {
+    const actOnMessage = vi.fn(async () => undefined);
+    const controller = new ConversationController({ identity, actOnMessage }, actionable());
+    const oldAction = controller.bindMessageActions();
+    controller.setOwner({ identity: { ...identity, scopeId: 'another-account' }, actOnMessage }, actionable());
+    controller.setOwner({ identity, actOnMessage }, actionable());
+    await expect(oldAction('__proto__', 'copy')).rejects.toMatchObject({ name: 'AbortError' });
+    expect(actOnMessage).not.toHaveBeenCalled();
+    await controller.bindMessageActions()('__proto__', 'copy');
+    expect(actOnMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects ambiguous message capability projections while preserving optional old-owner compatibility', () => {
+    expect(() => new ConversationController({ identity }, snapshot())).not.toThrow();
+    const duplicate = actionable(); duplicate.messageControls!.push({ ...duplicate.messageControls![0]!, id: 'other' });
+    expect(() => new ConversationController({ identity }, duplicate)).toThrow('Message controls');
+    const unknownBlock = actionable(); unknownBlock.messageControls![0]!.blockId = 'missing';
+    expect(() => new ConversationController({ identity }, unknownBlock)).toThrow('Message controls');
+  });
+
   it.each(['native', 'cloud'] as const)('routes history, attachments and approvals only to its %s owner', async location => {
     const view = snapshot();
     const owner: ConversationOwner = { identity: { ...identity, location }, readHistory: vi.fn(async () => view.blocks), openAttachment: vi.fn(async () => {}), respond: vi.fn(async () => {}) };

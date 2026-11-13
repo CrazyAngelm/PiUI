@@ -26,7 +26,7 @@ mount element; the transcript owns its internal scroll region.
 `TimelineBlock` and `WorkspaceApproval` are existing projections, not a second
 stored chat format. An owner explicitly identifies its location, account/workspace
 scope and session. It supplies snapshots and optional history, approval,
-attachment-opening and reconnect operations. No operation implies HTTP, native
+attachment-opening, reconnect and per-message operations. No operation implies HTTP, native
 IPC, a Lab host or authority to use another owner's files. Attachment metadata
 contains opaque IDs and labels; only the owner resolves or previews them.
 
@@ -37,6 +37,29 @@ history, notification or approval failure to a new session. A reconnect result
 cannot replace a streaming snapshot delivered after that reconnect began.
 Snapshots remain authoritative: an approval acknowledgement alone does not remove
 a request from the display. The owner must publish its resulting state.
+
+Stage 6 adds optional `messageControls` and `actOnMessage`. Controls bind an
+opaque content/reference ID to a displayed block and list available copy, edit,
+branch, repeat and refresh actions, plus owner-formatted usage. The owner resolves
+the current target and checks eligibility again before dispatch. Each rendered
+button retains its original owner generation and control ID, so an old DOM node
+cannot borrow a replacement owner's authority before the next render. Pending
+duplicates are refused per action; a pending copy does not block an eligible edit.
+Failures stay with the current content and owner. The
+renderer never implements clipboard policy, branching, billing or message delivery.
+An absent controls field preserves native copy/full-answer behavior; an explicitly
+present array delegates the footer to the owner. These additive fields do not
+change native IPC or persisted history.
+
+The Blazor owner uses its existing actions: edit places text in the composer
+without sending; repeat starts a new turn; interrupted refresh reads state without
+resending. Copy feedback and branch placement/navigation are also fenced after
+awaits, including a departure and return to the same conversation or workspace
+tab. Pending branch admission survives those presentation changes for its original
+account/session until the operation finishes. Header, footer and polling recovery
+share one quiet history read per owner, preventing an older response from erasing
+a recovered answer. Detached temporary-chat cleanup retains its original account
+context and storage key without taking navigation back from the user.
 
 The shared surface makes no requests on mount. Reading history is optional;
 without that port, search covers only the supplied snapshot. Reconnection is
@@ -61,8 +84,8 @@ Cloud search over a windowed projection must not be described as full-history
 search. Native plugin/custom tool rendering is only supplied by the native
 wrapper; the browser artifact keeps the generic readable fallback.
 
-The remaining migration scenarios are composer parity, editing/branching/retry
-semantics, pagination and full-history search, preview/download behavior,
+The remaining migration scenarios are composer parity, pagination and
+full-history search, inline media and preview/download behavior,
 provider-specific extension UI, native plugin panels and accessibility/layout
 parity across the complete legacy screen. These must be checked in their owning
 application before replacing that screen. No provider turn, deployment or

@@ -33,6 +33,14 @@
       openAttachment: (id, signal) => operation('attachment', identity, signal, id),
       respond: (id, decision, answer, signal) => operation('approval', identity, signal, { id, decision, answer }),
       reconnect: signal => operation('reconnect', identity, signal, null, { ...snapshot(sessionId), approvals: [], blocks: [{ id: 'restored', kind: 'assistant', text: 'Recovered ' + sessionId, status: 'complete' }], attachments: [] }),
+      actOnMessage: async (id, action, signal) => {
+        await operation('message', identity, signal, { id, action });
+        if (signal.aborted || current.identity.sessionId !== identity.sessionId || current.identity.scopeId !== identity.scopeId) return;
+        if (action === 'copy') {
+          view = { ...view, messageControls: view.messageControls.map(item => ({ ...item, copied: item.id === id })) };
+          handle.update(identity, view);
+        }
+      },
     };
   }
   window.nanoConversationFixture = {
@@ -46,6 +54,27 @@
     loadOlder() { view = { ...view, blocks: [{ id: 'older', kind: 'assistant', text: 'Older final answer', status: 'complete' }, ...view.blocks] }; handle.update(current.identity, view); },
     replaceWindow() { view = { ...view, blocks: [{ id: 'replacement', kind: 'assistant', text: 'Replacement final answer', status: 'complete' }], attachments: [] }; handle.update(current.identity, view); },
     longApproval() { view = { ...view, approvals: view.approvals.map(approval => ({ ...approval, description: 'Multiline command details\n'.repeat(window.innerHeight) })) }; handle.update(current.identity, view); },
+    enableMessageActions() {
+      view = { ...view, messageControls: [
+        { id: 'user-content-v1', blockId: 'user', actions: [{kind:'copy'}, {kind:'edit'}, {kind:'branch'}] },
+        { id: 'answer-content-v1', blockId: 'answer', actions: [{kind:'copy'}, {kind:'repeat',disabled:true}, {kind:'refresh'}], usage: {label:'7 credits',description:'Owner supplied usage'} },
+      ] }; handle.update(current.identity, view);
+    },
+    allowRepeat() { view = { ...view, messageControls: view.messageControls.map(item => item.blockId === 'answer' ? {...item,actions:[{kind:'copy'},{kind:'repeat'}]} : item) }; handle.update(current.identity,view); },
+    replaceMessageTarget() { view = { ...view, messageControls: view.messageControls.map(item => item.blockId === 'user' ? {...item,id:'user-content-v2'} : item), blocks: view.blocks.map(block=>block.id==='user'?{...block,text:'Replacement question'}:block) }; handle.update(current.identity,view); },
+    clickStaleOwnerButton() {
+      const button = document.querySelector('#conversation [data-timeline-block="user"] [aria-label="Copy message"]');
+      const original = current.identity;
+      handle.setOwner(owner(original.location, 'between'), { ...view, approvals: [] });
+      current = owner(original.location, original.sessionId);
+      handle.setOwner(current, view);
+      button.click();
+    },
+    clickStaleContentButton() {
+      const button = document.querySelector('#conversation [data-timeline-block="user"] [aria-label="Copy message"]');
+      window.nanoConversationFixture.replaceMessageTarget();
+      button.click();
+    },
     disconnect() { view = { ...view, connection: 'disconnected' }; handle.update(current.identity, view); },
     hold(name) { held.add(name); }, fail(name) { failures.add(name); },
     settle(name, fail = false) { const wait = waits.get(name); waits.delete(name); if (fail) wait.reject(new Error('Old owner failed')); else wait.resolve(); },

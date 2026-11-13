@@ -33,7 +33,9 @@
   </header>
   {#if controller.error}<p role="alert">{$t(controller.error)}</p>{/if}
   {#key controller.generation}
-    <ConversationTranscript blocks={snapshot.blocks} loading={snapshot.loading} sessionKey={conversationKey(owner.identity)} nativeMarkers={owner.identity.location === 'native'} {agentLabel} {language} bind:searchOpen readHistory={owner.readHistory ? controller.readHistory : undefined} attachments={snapshot.attachments} onOpenAttachment={owner.openAttachment ? controller.openAttachment : undefined} />
+    <ConversationTranscript blocks={snapshot.blocks} loading={snapshot.loading} sessionKey={conversationKey(owner.identity)} nativeMarkers={owner.identity.location === 'native'} {agentLabel} {language} bind:searchOpen readHistory={owner.readHistory ? controller.readHistory : undefined} attachments={snapshot.attachments} onOpenAttachment={owner.openAttachment ? controller.openAttachment : undefined}
+      messageControls={snapshot.messageControls} onMessageAction={owner.actOnMessage ? controller.bindMessageActions() : undefined}
+      busyMessageActions={controller.busyMessageActions} messageActionErrors={controller.messageActionErrors} />
     <!-- svelte-ignore a11y_no_noninteractive_tabindex (Long approvals have their own keyboard-scrollable region.) -->
     <div class="approvals" role="region" aria-label={$t('Approval requests')} tabindex="0">
       {#each snapshot.approvals as approval (approval.id)}

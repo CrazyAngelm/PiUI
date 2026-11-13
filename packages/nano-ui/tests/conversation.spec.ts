@@ -8,10 +8,91 @@ interface Fixture {
   stream(): void; disconnect(): void; switchOwner(): void;
   loadOlder(): void; replaceWindow(): void;
   longApproval(): void;
+  enableMessageActions(): void; allowRepeat(): void; replaceMessageTarget(): void;
+  clickStaleOwnerButton(): void; clickStaleContentButton(): void;
   hold(name: string): void; fail(name: string): void; settle(name: string, fail?: boolean): void;
   calls(): OwnerCall[]; mountSecond(): void; dispose(): Promise<void>;
 }
 declare global { interface Window { nanoConversationFixture: Fixture } }
+
+test('connected old buttons cannot borrow a new owner or target before the DOM flushes', async ({ page }) => {
+  await page.goto('/tests/conversation-host.html');
+  await page.waitForFunction(() => !!window.nanoConversationFixture);
+  const question = page.locator('#conversation [data-timeline-block="user"]');
+  for (const transition of ['clickStaleOwnerButton', 'clickStaleContentButton'] as const) {
+    await page.evaluate(async () => { await window.nanoConversationFixture.mount('cloud', false); window.nanoConversationFixture.enableMessageActions(); });
+    await expect(question.getByRole('button', { name: 'Copy message', exact: true })).toBeVisible();
+    // Both the owner/content change and the old DOM activation share one task.
+    await page.evaluate(action => window.nanoConversationFixture[action](), transition);
+    await expect(question.getByRole('button', { name: 'Copy message', exact: true })).toBeVisible();
+    expect((await page.evaluate(() => window.nanoConversationFixture.calls())).filter(call => call.name === 'message')).toEqual([]);
+    await question.getByRole('button', { name: 'Copy message', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await expect(question.getByRole('button', { name: 'Copied', exact: true })).toBeVisible();
+    expect((await page.evaluate(() => window.nanoConversationFixture.calls())).filter(call => call.name === 'message')).toHaveLength(1);
+  }
+  await page.evaluate(() => window.nanoConversationFixture.dispose());
+});
+
+test('message controls use owner actions and credit labels with keyboard and pending-action guards', async ({ page }, testInfo) => {
+  await page.goto('/tests/conversation-host.html');
+  await page.waitForFunction(() => !!window.nanoConversationFixture);
+  await page.evaluate(async () => { await window.nanoConversationFixture.mount('cloud', false); window.nanoConversationFixture.stream(); window.nanoConversationFixture.enableMessageActions(); });
+  const root = page.locator('#conversation');
+  const question = root.locator('[data-timeline-block="user"]');
+  const answer = root.locator('[data-timeline-block="answer"]');
+  await expect(question.getByRole('group', {name:'Message actions'})).toBeVisible();
+  await expect(answer.getByText('7 credits', {exact:true})).toHaveAttribute('title', 'Owner supplied usage');
+  await expect(root.getByRole('button', {name:'Copy answer',exact:true})).toHaveCount(0);
+  await question.getByRole('button', {name:'Copy message',exact:true}).focus();
+  await page.keyboard.press('Enter');
+  await expect(question.getByRole('button', {name:'Copied',exact:true})).toBeVisible();
+  await page.keyboard.press('Tab');
+  await expect(question.getByRole('button', {name:'Edit and send again',exact:true})).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(question.getByText('Please read the notes', {exact:false})).toBeVisible();
+  await expect(answer.getByRole('button', {name:'Repeat request',exact:true})).toBeDisabled();
+  await answer.getByRole('button', {name:'Refresh conversation',exact:true}).focus();
+  await page.keyboard.press('Enter');
+  await page.evaluate(() => window.nanoConversationFixture.allowRepeat());
+  await answer.getByRole('button', {name:'Repeat request',exact:true}).focus();
+  await page.keyboard.press('Enter');
+  await page.evaluate(() => window.nanoConversationFixture.hold('message'));
+  const branch = question.getByRole('button', {name:'Branch into a new chat',exact:true});
+  await branch.focus(); await page.keyboard.press('Enter');
+  await expect(branch).toBeDisabled();
+  await expect(branch).toHaveAttribute('aria-busy','true');
+  await page.keyboard.press('Enter');
+  expect((await page.evaluate(() => window.nanoConversationFixture.calls())).filter(call => call.name === 'message').map(call => (call.payload as {action:string}).action)).toEqual(['copy','edit','refresh','repeat','branch']);
+  await page.evaluate(() => window.nanoConversationFixture.settle('message'));
+  await expect(branch).toBeEnabled();
+  await root.screenshot({path:testInfo.outputPath('owner-message-actions.png')});
+  await page.evaluate(() => window.nanoConversationFixture.dispose());
+});
+
+test('message action failures stay with the current content and never cross a retired owner', async ({ page }) => {
+  await page.goto('/tests/conversation-host.html');
+  await page.waitForFunction(() => !!window.nanoConversationFixture);
+  await page.evaluate(async () => { await window.nanoConversationFixture.mount('cloud', false); window.nanoConversationFixture.stream(); window.nanoConversationFixture.enableMessageActions(); window.nanoConversationFixture.fail('message'); });
+  const root = page.locator('#conversation');
+  const question = root.locator('[data-timeline-block="user"]');
+  const branch = question.getByRole('button', {name:'Branch into a new chat',exact:true});
+  await branch.click();
+  await expect(question.getByRole('alert')).toHaveText('Could not complete the message action.');
+  await page.evaluate(() => window.nanoConversationFixture.hold('message'));
+  await branch.click();
+  await expect(branch).toBeDisabled();
+  await page.evaluate(() => { window.nanoConversationFixture.replaceMessageTarget(); window.nanoConversationFixture.settle('message', true); });
+  await expect(question).toContainText('Replacement question');
+  await expect(question.getByRole('alert')).toHaveCount(0);
+  await page.evaluate(() => window.nanoConversationFixture.hold('message'));
+  await branch.click();
+  await expect(branch).toBeDisabled();
+  await page.evaluate(() => { window.nanoConversationFixture.switchOwner(); window.nanoConversationFixture.settle('message',true); });
+  await expect(root.getByRole('group', {name:'Message actions'})).toHaveCount(0);
+  await expect(root.getByRole('alert')).toHaveCount(0);
+  await page.evaluate(() => window.nanoConversationFixture.dispose());
+});
 
 test('long approval remains scrollable and its decisions are keyboard reachable', async ({ page }) => {
   await page.goto('/tests/conversation-host.html');

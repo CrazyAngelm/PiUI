@@ -13,7 +13,8 @@
   import ImageIcon from '@lucide/svelte/icons/image';
   import { useTranslation } from '../../features/locale/context';
   import { useConversationPresentation } from './context';
-  import type { ConversationAttachment } from '../../../../../contracts/conversation-presentation-v1';
+  import type { ConversationAttachment, ConversationMessageControls, ConversationMessageAction } from '../../../../../contracts/conversation-presentation-v1';
+  import MessageControls from './MessageControls.svelte';
   const t = useTranslation();
   const presentation = useConversationPresentation();
   import { splitImageMarkers } from '../../app/chat/composer/mentions';
@@ -41,6 +42,10 @@
     language?: 'en' | 'ru';
     attachments?: readonly ConversationAttachment[];
     onOpenAttachment?: (id: string) => Promise<void>;
+    messageControls?: readonly ConversationMessageControls[];
+    onMessageAction?: (id: string, action: ConversationMessageAction) => Promise<void>;
+    busyMessageActions?: Readonly<Record<string, boolean>>;
+    messageActionErrors?: Readonly<Record<string, string>>;
     agentLabel: string;
     searchOpen?: boolean;
     /** Read-only native history pages older entries in from the host. */
@@ -62,6 +67,10 @@
     language = 'en',
     attachments = [],
     onOpenAttachment,
+    messageControls,
+    onMessageAction,
+    busyMessageActions = {},
+    messageActionErrors = {},
     agentLabel,
     searchOpen = $bindable(false),
     olderAvailable = false,
@@ -94,6 +103,7 @@
   // Unchanged rows keep their identity while a reply streams.
   const groupBlocks = createTimelineGrouper();
   const items = $derived(groupBlocks(blocks));
+  const controlsByBlock = $derived(new Map(messageControls?.map(item => [item.blockId, item])));
   const attachmentsByBlock = $derived.by(() => {
     const grouped = new Map<string, ConversationAttachment[]>();
     for (const attachment of attachments) {
@@ -348,6 +358,18 @@
   {/if}
 {/snippet}
 
+{#snippet messageFooter(block: TimelineBlock)}
+  {@const controls = controlsByBlock.get(block.id)}
+  {#if controls}
+    <div class="message-footer" class:message-footer--user={block.kind === 'user'}>
+      {#key controls.id}
+      <MessageControls {controls} createdAt={block.createdAt} available={!!onMessageAction}
+        busyActions={busyMessageActions} error={messageActionErrors[JSON.stringify(controls.id)] ?? ''} onAction={onMessageAction} />
+      {/key}
+    </div>
+  {/if}
+{/snippet}
+
 <div class="transcript">
   {#if searchOpen}
     <div class="search" role="search">
@@ -404,11 +426,12 @@
             <ActivityGroupView group={item} {language} {openState} onOpenChange={setOpen} />
             {#each item.blocks as block (block.id)}
               {@render attachmentList(attachmentsByBlock.get(block.id) ?? [])}
+              {@render messageFooter(block)}
             {/each}
           </div>
         {:else}
           {@const block = item.block}
-          <div class="item" data-timeline-block={block.id}>
+          <div class="item" class:item--controls={controlsByBlock.has(block.id)} data-timeline-block={block.id}>
             {@render attachmentList(attachmentsByBlock.get(block.id) ?? [])}
             {#if block.kind === 'user'}
               <!-- Bridges list a message's images as trailing `[image]` lines; bytes never reach the transcript. -->
@@ -439,11 +462,11 @@
                   <p class="muted">{block.safeSummary}</p>
                 {/if}
                 {#if block.status === 'streaming'}<span class="caret" aria-hidden="true"></span>{/if}
-                {#if block.status === 'failed' || block.status === 'interrupted' || (turnEnds.has(block.id) && block.status !== 'streaming' && block.text)}
+                {#if block.status === 'failed' || block.status === 'interrupted' || (messageControls === undefined && turnEnds.has(block.id) && block.status !== 'streaming' && block.text)}
                 <div class="assistant__meta">
                   {#if block.status === 'failed'}<span class="warn">{$t('The turn failed')}</span>{/if}
                   {#if block.status === 'interrupted'}<span class="warn">{$t('Stopped')}</span>{/if}
-                  {#if block.text}
+                  {#if block.text && messageControls === undefined}
                     <span class="assistant__actions">
                       <IconButton size="sm" label={$t('Copy answer')} onclick={() => void answerAction(block, true)} disabled={busyAnswers[block.id]}><Copy /></IconButton>
                       {#if block.truncated && !fullAnswers[block.id] && readHistory}
@@ -476,6 +499,7 @@
                 {#if block.text}<MarkdownContent source={block.text} compact={true} />{:else}<p class="muted">{block.safeSummary ?? $t('This session event is not supported by a richer renderer yet.')}</p>{/if}
               </details>
             {/if}
+            {@render messageFooter(block)}
           </div>
         {/if}
         {/if}
@@ -489,6 +513,9 @@
 </div>
 
 <style>
+  .message-footer { margin-bottom: var(--piui-space-3); }
+  .message-footer--user { display: flex; flex-direction: column; align-items: flex-end; }
+  .item--controls > .user, .item--controls > .assistant { margin-bottom: var(--piui-space-1); }
   .attachments { display: flex; flex-wrap: wrap; gap: var(--piui-space-2); padding: 0; margin: 0 0 var(--piui-space-2); list-style: none; }
   .transcript {
     position: relative;

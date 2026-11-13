@@ -11,6 +11,14 @@ const russian: Readonly<Record<string, string>> = {
   'Reconnect': 'Восстановить соединение',
   'Attachments': 'Вложения',
   'Approval requests': 'Запросы подтверждения',
+  'Message actions': 'Действия с сообщением',
+  'Copy message': 'Скопировать сообщение',
+  'Copied': 'Скопировано',
+  'Edit and send again': 'Изменить и отправить заново',
+  'Branch into a new chat': 'Ответвить в новый диалог',
+  'Repeat request': 'Повторить запрос',
+  'Refresh conversation': 'Обновить диалог',
+  'Could not complete the message action.': 'Не удалось выполнить действие с сообщением.',
 };
 
 export function createConversationTranslation(language: Language) {

@@ -71,6 +71,10 @@ test.describe('new chat', () => {
   });
 
   test('safe mode keeps history readable and refuses to start agents', async ({ lab, page }) => {
+    // A page-local clipboard double preserves the user's real clipboard.
+    await page.addInitScript(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+      writeText: async (text: string) => { (window as Window & { nativeCopyProof?: string }).nativeCopyProof = text; },
+    } }));
     await lab.open('safe');
     await expect(page.getByText('Safe mode: history is read-only and agents are not started.')).toBeVisible();
     await expect(home(page).getByRole('textbox', { name: 'Message' })).toBeDisabled();
@@ -79,6 +83,12 @@ test.describe('new chat', () => {
     await expect(page.getByRole('region', { name: 'Conversation messages' })).toContainText('Does anything still import Tauri directly');
     await expect(page.getByText('Runtime actions are disabled in safe mode. Your draft is preserved.')).toBeVisible();
     await expect(page.getByRole('textbox', { name: 'Message' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Copy answer', exact: true }).last().focus();
+    await page.keyboard.press('Enter');
+    await expect.poll(() => page.evaluate(() => (window as Window & { nativeCopyProof?: string }).nativeCopyProof ?? '')).not.toBe('');
+    await expect(lab.toast('Answer copied')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Edit and send again', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Branch into a new chat', exact: true })).toHaveCount(0);
   });
 
   test('a signed-out Claude Code refuses the chat with a sign-in hint', async ({ lab, page }) => {

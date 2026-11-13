@@ -40,6 +40,7 @@ is not a prerequisite for the first useful releases.
 | Cloud execution | Durable .NET execution host using the Rust transition core and verified native runtime references | Successful run, cancellation, duplicate command, restart/unknown outcome, tenant denial and unsupported-capability refusal |
 | Server avatars | Server-owned manifest/assets, host-only authenticated fetch, ephemeral display and entitlement-driven UI for supported sessions | Allowed/denied paths, account generation/revocation, no offline bundled library, no avatar request in signed-out/safe mode, failed media does not break chat |
 | Shared conversation boundary | Prove reusable conversation presentation with native and cloud data owners | Streaming, attachments, approvals, reconnect and generic fallback; record remaining legacy scenarios before replacing any existing screen |
+| Shared message actions | Existing cloud copy/edit/branch/repeat/refresh and credit usage in the shared transcript through explicit owner capabilities | Existing semantics and eligibility, no send on edit or refresh, native copy compatibility, stale-target/owner and duplicate-action refusal, keyboard flow, actual Blazor integration |
 
 After each key stage, **four independent GPT-6.1 Sol reviewers configured with
 max reasoning** inspect read-only. They do not edit files or create commits.
@@ -433,3 +434,140 @@ authority. A fresh panel defaults to the ordinary transcript. Full composer,
 branch/edit/copy, cost, custom renderer, media and other legacy parity remains
 documented in `SHARED_CONVERSATION.md` and the server's shared-conversation guide;
 this stage does not claim those migrations, real provider use or deployment.
+
+### Shared message actions — completed and verified, 2026-11-14
+
+This stage closes the legacy message-footer gap while keeping preview opt-in.
+The shared renderer displays owner-provided per-message capabilities and formatted
+credit usage. Cloud operations call the existing Home copy, edit-to-composer,
+branch, repeat-new-turn and interrupted-turn refresh paths. Editing never sends
+automatically; refresh never becomes a repeated model request. Existing cloud
+eligibility and busy states remain authoritative. Native wrappers without this
+optional capability retain their current copy/full-answer behavior and gain no
+unsupported editing or branching authority.
+
+Opaque control IDs bind the displayed message and its native reference/content.
+Owners revalidate targets and current capability before dispatch. Late success,
+failure and follow-up navigation are fenced at Home as well as the island,
+including A-to-B-to-A selection. The display neither reconstructs message history
+nor implements branching, billing or delivery. The additive presentation-v1 fields
+remain optional; old owners and old displays keep their existing behavior. Native
+IPC and stored history formats are unchanged.
+
+Acceptance covers the complete cloud action flow, denied/unavailable capabilities,
+copy/branch errors, duplicate dispatch, changed message contents, stale owners,
+keyboard labels and focus, and native/safe-mode compatibility. Source and artifact
+hashes must match; actual Blazor integration, relevant shared/native checks and
+four immutable-tree read-only Sol/max reviews are required before remediation
+verification and commits. Source-only reviews may overlap the frozen candidate's
+test execution; no candidate edits occur until all four reports return.
+Composer replacement, inline media, full-history search, special guest/group/voice
+views, widgets and default activation remain subsequent migration stages.
+
+Fable 5.2/max consultation was attempted through installed subscription-only
+Claude with read-only tools. It returned `OAuth session expired and could not be
+refreshed` without a model result. This stage is based on the parent's current
+source inspection, not a claimed Fable recommendation.
+
+Stage 6 implementation and evidence:
+
+- Shared controls are labelled buttons grouped under the owning message. The
+  user footer follows the right-aligned bubble; assistant controls follow its
+  text without an empty legacy toolbar. Russian strings belong to the separate
+  conversation locale, so the graph artifact is unchanged.
+- The .NET projection uses the existing footer eligibility and credit formatter.
+  Origin generation travels with the private JS callback; component identity also
+  includes that generation. Home re-resolves the current message and eligibility.
+  Its copy feedback and branch error/list/selection/draft work retain that owner.
+  Scoped temporary-session removal returns its intentional new owner stamp so
+  selection from a temporary chat remains possible.
+- Controller tests pass 12/12. Desktop and conversation Svelte checks report
+  zero errors/warnings; E2E TypeScript passes. The final conversation check and
+  production build pass after the visual correction. Its compressed JS is
+  211.88 kB, compared with Stage 5's 209.34 kB; no startup benchmark is inferred.
+- All eight final static browser scenarios pass, including message-action
+  keyboard order/activation, offered and denied capabilities, duplicate pending
+  action, owner/content changes, failure feedback and existing shared flows.
+  Same-task activation of retained DOM buttons after owner/content replacement
+  is refused, while the replacement buttons remain keyboard-operable.
+  Focused native Lab scenarios pass 2/2: harness/model/reasoning streaming and
+  safe-mode readable history with keyboard copy. The safe test uses a page-local
+  clipboard adapter and does not modify the user's OS clipboard.
+- Actual Tauri/WebView2 passes the existing native/shared wrapper flow on the
+  pre-review candidate: streaming, readable generic fallback, focused attachment
+  and approval dispatch, reconnect, stale-card disposal and empty owned Job.
+  The fixture was removed; the parent inspected its capture. WebView2 was
+  `157.0.0.0`, executable SHA-256
+  `4dbcc8fc7b19df70495ab66028c2c1e07e348125f24fdc2ed8ec80aa746fa0f6`.
+  The owned-process snapshot measured all nine found processes: 558,862,336
+  working-set bytes and 289,357,824 private bytes. This is synthetic presentation
+  evidence, not a real-provider turn or release startup/RSS benchmark. DOM
+  focus/click is distinguished from keyboard activation covered in the browser.
+  This native owner does not supply the new footer capability; the later bound
+  footer-callback correction is covered by the final static browser checks.
+- Blazor compilation passes with zero errors and the existing unused
+  `_projectsLoaded` warning. Eight projection/component tests, six Home lifecycle
+  regressions and fourteen existing Wave3 checks pass (28/28, no skips). They
+  cover target/capability eligibility, changed-content/native-reference refusal,
+  stale-origin epoch, rendered attachment clones, copy feedback, tab retirement,
+  shared recovery reads and captured temporary cleanup scope.
+- All 81 normalized source hashes and both imported artifact hashes match.
+  Conversation source fingerprint:
+  `96ed9296fde124f46e415d3abe31a9150e899d7cc787ccabcd625a5752933ada`.
+
+Four independent read-only `gpt-6.1-sol` / `max` reviews completed on the same
+frozen candidate trees: PIUI `30e51368733f13659dec23db62bec80cc3868aa5`, server
+`a4611c0253e84447eed7638b736e937589603e02`. Reviewers were `stage6_review_1`
+(Avicenna), `stage6_review_2` (Hume), `stage6_review_3` (Lorentz) and
+`stage6_review_4` (Turing). The parent released the source freeze only after all
+four reports and validated the necessary findings before remediation.
+
+Corrections preserve current-owner action behavior while closing reproduced or
+source-confirmed contract gaps:
+
+- Rendered buttons bind their original owner generation and target. A parent
+  probe reproduced both old-owner and old-content retargeting in one browser
+  task; the final static regression refuses both.
+- Branch completion cannot override Files navigation or Chat-to-Files-to-Chat
+  navigation. Pending branch admission remains attached to its account/session
+  across A-to-B-to-A, while another session may branch independently.
+- Ordinary copy/branch accepts the current renderer's attachment-merged message
+  as well as the current raw message; changed content is still refused.
+- Different offered actions on one message remain independent. A denied second
+  copy clears the previous success badge rather than invalidating its expiry.
+- Detached temporary cleanup keeps its captured storage/account scope across
+  another selection, hides the detached chat and never deletes under a new
+  account's credentials.
+- Header, footer and interrupted polling share quiet history admission, so an
+  older response cannot overwrite a recovered answer.
+- The parent's held-repeat probe reproduced a late `message_answered` response
+  navigating from B back to A. Repeat follow-up and feedback now retain the
+  originating presentation owner, including A-to-B-to-A retirement.
+
+The final compiled Blazor action flow passes with the unchanged published shared
+artifact. Its eleven recorded scenario groups cover keyboard actions and usage,
+distinct concurrent actions, pending branches across session/tab retirement,
+changed content, repeat as a new turn, shared quiet recovery, late and current
+`message_answered` responses, ordinary attachment-merged copy/branch, intentional
+temporary-branch selection and cleanup after a held beacon plus second selection.
+The parent inspected the final screenshot. First opt-in mount measured 641 ms;
+this is a single fixture observation, not a performance target or comparison.
+The fixture records nine branch requests, seven send attempts (including three
+deliberate 409 responses) and deletion of both synthetic temporary sessions.
+There are no page or fixture errors; optional API 404s and injected 503/409
+responses are recorded separately.
+
+The browser uses actual compiled Home/component handlers with synthetic HTTP/SSE
+and a controlled clipboard. Its delivery instruments only `hermes-chat` and
+`hermes-conversation-island`, including their fingerprint aliases, to hold the
+existing beacon await and observe completed .NET calls. Only those test-delivered
+modules omit their original importmap digests; the published conversation bytes
+and hashes stay unchanged. Returning from Files intentionally restores the
+ordinary default, and the fixture explicitly opts in again. These checks do not
+claim paid-provider usage, OS clipboard contents, deployment or complete legacy
+screen parity.
+
+Stage evidence, reviewer summaries and checksums are preserved outside build
+caches in `evidence/nano-unification-20261113/stage6/`. The shared transcript
+remains opt-in. Inline media/files, composer parity and the other migration
+boundaries above remain later work; the installed application is unchanged.

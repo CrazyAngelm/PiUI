@@ -20,12 +20,27 @@ export interface ConversationAttachment {
   mediaType?: string;
 }
 
+/** The owner supplies existing message operations, never executable callbacks or URLs. */
+export type ConversationMessageAction = 'copy' | 'edit' | 'branch' | 'repeat' | 'refresh';
+
+export interface ConversationMessageControls {
+  /** Opaque, bound to the message contents/native reference; never reused for another target. */
+  id: string;
+  blockId: string;
+  actions: { kind: ConversationMessageAction; disabled?: boolean; busy?: boolean }[];
+  copied?: boolean;
+  /** Already formatted by the account owner, not a second billing calculation. */
+  usage?: { label: string; description?: string };
+}
+
 export interface ConversationSnapshot {
   blocks: TimelineBlock[];
   approvals: WorkspaceApproval[];
   attachments: ConversationAttachment[];
   connection: 'connected' | 'reconnecting' | 'disconnected';
   loading: boolean;
+  /** Optional additive v1 capability. Omitted owners keep the existing native copy display. */
+  messageControls?: ConversationMessageControls[];
 }
 
 /** Every operation belongs to this exact identity. No implicit HTTP/Lab/native fallback. */
@@ -35,6 +50,7 @@ export interface ConversationOwner {
   respond?: (requestId: string, decision: ApprovalDecision, answer: string | undefined, signal: AbortSignal) => Promise<void>;
   openAttachment?: (attachmentId: string, signal: AbortSignal) => Promise<void>;
   reconnect?: (signal: AbortSignal) => Promise<ConversationSnapshot>;
+  actOnMessage?: (controlId: string, action: ConversationMessageAction, signal: AbortSignal) => Promise<void>;
 }
 
 export interface ConversationOptions {
