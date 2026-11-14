@@ -37,6 +37,8 @@ export function applyPluginVisualStyle(style: PluginVisualStyleV1 | undefined, r
   }
   if (style.ornaments) {
     for (const [shape, value] of Object.entries(SHAPES)) set(`decoration-${shape}-shape`, style.ornaments === 'plain' ? 'none' : value);
+    set('decoration-gauge-tilt', style.ornaments === 'plain' ? '0deg' : '-12deg');
+    set('decoration-gauge-overhang', style.ornaments === 'plain' ? '0px' : '7px');
     set('decoration-radius', style.ornaments === 'plain' ? 'var(--piui-radius-sm)' : '0px');
   }
   if (style.font) set('font-ui', style.font === 'mono' ? 'var(--piui-font-mono)' : SYSTEM_FONT);

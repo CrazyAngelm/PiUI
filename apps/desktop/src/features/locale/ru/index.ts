@@ -6,6 +6,7 @@ import { classicRu } from './classic';
 import { executorsRu } from './executors';
 import { fusionRu } from './fusion';
 import { harnessesRu } from './harnesses';
+import { modelsRu } from './models';
 import { nanoRu } from './nano';
 import { pluginsRu } from './plugins';
 import { releaseRu } from './release';
@@ -25,6 +26,7 @@ export const featureRu: Readonly<Record<string, string>> = {
   ...executorsRu,
   ...fusionRu,
   ...harnessesRu,
+  ...modelsRu,
   ...nanoRu,
   ...pluginsRu,
   ...releaseRu,

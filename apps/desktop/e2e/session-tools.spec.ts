@@ -309,7 +309,7 @@ test.describe('continue elsewhere', () => {
   test('continue a terminal Pi session in Nano Desktop, and refuse one still open there', async ({ lab, page }) => {
     await lab.open();
     await lab.sidebar.getByRole('button', { name: 'Options for piui' }).click();
-    await page.getByRole('menuitem', { name: 'Pi session history' }).click();
+    await page.getByRole('menuitem', { name: 'Session history' }).click();
     const history = page.getByRole('complementary', { name: 'Sessions' });
     await expect(history).toBeVisible({ timeout: LAZY_VIEW_MS });
 
@@ -397,7 +397,7 @@ for (const theme of ['light', 'dark'] as const) {
       expect(await axeBlocking(page, 'section.home'), 'handoff composer').toEqual([]);
 
       await lab.sidebar.getByRole('button', { name: 'Options for piui' }).click();
-      await page.getByRole('menuitem', { name: 'Pi session history' }).click();
+      await page.getByRole('menuitem', { name: 'Session history' }).click();
       const history = page.getByRole('complementary', { name: 'Sessions' });
       await history.getByRole('button', { name: /^Make the session index incremental/ }).click({ timeout: LAZY_VIEW_MS });
       await page.getByRole('button', { name: 'Continue in Nano Desktop' }).click();

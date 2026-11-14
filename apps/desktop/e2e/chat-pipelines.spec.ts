@@ -35,15 +35,59 @@ test.describe('chat pipelines', () => {
     await expect(page.getByText('The next message hands the pipeline result to Prime Agent.')).toHaveCount(0);
   });
 
-  test('a template chosen in the composer opens in the editor unsaved', async ({ lab, page }) => {
+  test('a template chosen in the composer is saved and run on send, without opening the editor', async ({ lab, page }) => {
+    test.slow(); // The lab run uses real timers.
     await lab.open();
     const composer = home(page);
     await composer.getByRole('button', { name: 'Pi', exact: true }).click();
-    await page.getByRole('combobox', { name: 'Who answers' }).fill('Review loop');
+    await page.getByRole('radio', { name: 'Pipelines' }).click();
     await lab.option(/^Review loop.*built-in/).click();
-    await expect(lab.toast('Opened a template as a new pipeline')).toBeVisible();
-    await expect(page.getByRole('textbox', { name: 'Pipeline name' })).toHaveValue('Review loop');
-    await expect(page.getByText('Unsaved')).toBeVisible();
+
+    // Choosing only selects: the editor stays closed and the chip names the template.
+    await expect(page.getByRole('region', { name: 'Pipeline editor' })).toHaveCount(0);
+    await expect(composer.getByRole('button', { name: 'Review loop', exact: true })).toBeVisible();
+    await expect(page.getByText('Sending saves this template as a pipeline in this project.')).toBeVisible();
+    await expect(composer.getByRole('group', { name: 'Pipeline for this message' })).toContainText('Runs Review loop');
+
+    await composer.getByRole('textbox', { name: 'Message' }).fill('Add input validation to the signup form');
+    await composer.getByRole('button', { name: 'Start chat' }).click();
+
+    await expect(lab.toast(/Saved .Review loop. to this project.s pipelines/)).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Pipeline editor' })).toHaveCount(0);
+    await expect(page.getByRole('article', { name: 'Pipeline run: Review loop' })).toBeVisible({ timeout: 30_000 });
+  });
+
+  test('the executor picker has a Direct and a Pipelines tab, and only Pipelines offers the editor', async ({ lab, page }) => {
+    await lab.open();
+    const composer = home(page);
+    await composer.getByRole('button', { name: 'Pi', exact: true }).click();
+    const search = page.getByRole('combobox', { name: 'Who answers' });
+    const manage = page.getByRole('button', { name: 'Manage pipelines' });
+    const tabs = page.getByRole('group', { name: 'Executor type' });
+
+    // Opens on the tab of the current executor, with the search focused.
+    await expect(search).toBeFocused();
+    await expect(tabs.getByRole('radio', { name: 'Direct' })).toBeChecked();
+    await expect(manage).toHaveCount(0);
+    await expect(lab.option(/^Review loop/)).toHaveCount(0);
+
+    // Left and right switch the tab while the search is empty; clicking a tab keeps the search focused.
+    await page.keyboard.press('ArrowRight');
+    await expect(tabs.getByRole('radio', { name: 'Pipelines' })).toBeChecked();
+    await expect(lab.option(/^Review loop.*built-in/)).toBeVisible();
+    await expect(manage).toBeVisible();
+    await tabs.getByRole('radio', { name: 'Direct' }).click();
+    await expect(search).toBeFocused();
+    await expect(manage).toHaveCount(0);
+
+    // A search spans both tabs.
+    await search.fill('Review loop');
+    await expect(lab.option(/^Review loop.*built-in/)).toBeVisible();
+    await search.fill('');
+
+    await tabs.getByRole('radio', { name: 'Pipelines' }).click();
+    await manage.click();
+    await expect(page.getByRole('region', { name: 'Pipeline editor' })).toBeVisible({ timeout: 30_000 });
   });
 
   test('project, permissions and worktree share one keyboard-operable chip', async ({ lab, page }) => {

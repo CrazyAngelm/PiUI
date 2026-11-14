@@ -52,22 +52,24 @@ declare global {
 }
 
 /** Delay the existing owner operation, without replacing its actual Lab path. */
-async function holdNewChat(page: Page, kind: 'direct' | 'pipeline', position: 'before' | 'after' = 'before'): Promise<void> {
+async function holdNewChat(page: Page, kind: 'direct' | 'pipeline' | 'template', position: 'before' | 'after' = 'before'): Promise<void> {
   await page.evaluate(async ({ kind, position }) => {
-    type Owner = { startChat: (...args: unknown[]) => Promise<unknown> };
+    type Owner = Partial<Record<'startChat' | 'saveTemplate', (...args: unknown[]) => Promise<unknown>>>;
     const path = kind === 'direct' ? '/src/app/workspaceStore.svelte.ts' : '/src/app/chatPipelines/chatPipelines.svelte.ts';
     const module = await import(/* @vite-ignore */ path) as { WorkspaceStore: { prototype: Owner }; chatPipelines: Owner };
     const owner = kind === 'direct' ? module.WorkspaceStore.prototype : module.chatPipelines;
-    const original = owner.startChat;
+    const method = kind === 'template' ? 'saveTemplate' : 'startChat';
+    const original = owner[method];
+    if (!original) throw new Error(`No owner method: ${method}`);
     let finish!: (fail?: boolean) => void;
     const held = new Promise<void>((resolve, reject) => {
       finish = (fail = false) => fail ? reject(new Error('Synthetic delayed start refusal')) : resolve();
     });
     const gate: NonNullable<Window['composerSendGate']> = {
-      phase: 'ready', finish, restore: () => { owner.startChat = original; delete window.composerSendGate; },
+      phase: 'ready', finish, restore: () => { owner[method] = original; delete window.composerSendGate; },
     };
     window.composerSendGate = gate;
-    owner.startChat = async function (...args: unknown[]) {
+    owner[method] = async function (...args: unknown[]) {
       try {
         if (position === 'before') { gate.phase = 'waiting'; await held; }
         const result = await original.apply(this, args);
@@ -204,9 +206,36 @@ test.describe('shared composer owner integration', () => {
     await home(page).getByRole('button', { name: 'Start chat' }).click();
     await expect.poll(() => page.evaluate(() => window.composerSendGate?.phase)).toBe('waiting');
     await editor.fill('The next pipeline draft');
+    await editor.fill('Captured pipeline message');
     await releaseNewChat(page);
     await lab.nav('New chat').click();
-    await expect(home(page).getByRole('textbox', { name: 'Message' })).toHaveValue('The next pipeline draft');
+    await expect(home(page).getByRole('textbox', { name: 'Message' })).toHaveValue('Captured pipeline message');
+  });
+
+  test('saving a template captures acknowledgement before async save and preserves retyped Home input', async ({ lab, page }) => {
+    const composer = home(page);
+    await composer.getByRole('button', { name: 'Pi', exact: true }).click();
+    await page.getByRole('radio', { name: 'Pipelines' }).click();
+    await lab.option(/^Review loop.*built-in/).click();
+    await expect(composer.getByRole('group', { name: 'Pipeline for this message' })).toContainText('Runs Review loop');
+    await holdNewChat(page, 'template');
+    await composer.getByRole('textbox', { name: 'Message' }).fill('Captured template message');
+    await composer.getByRole('button', { name: 'Start chat' }).click();
+    await expect.poll(() => page.evaluate(() => window.composerSendGate?.phase)).toBe('waiting');
+    // A new editor deliberately repeats the sent words while the old template
+    // save is pending. Capturing only after save would erase this newer draft.
+    await lab.openSettings();
+    await lab.nav('New chat').click();
+    const editor = home(page).getByRole('textbox', { name: 'Message' });
+    await editor.fill('');
+    await editor.fill('Captured template message');
+    await releaseNewChat(page);
+    await expect(page.getByRole('article', { name: 'Pipeline run: Review loop' })).toBeVisible();
+    await lab.nav('New chat').click();
+    await expect(home(page).getByRole('textbox', { name: 'Message' })).toHaveValue('Captured template message');
+    await lab.openSettings();
+    await lab.nav('New chat').click();
+    await expect(home(page).getByRole('textbox', { name: 'Message' })).toHaveValue('Captured template message');
   });
 
   test('a refused start retains the unsent draft and attachments', async ({ lab, page }) => {

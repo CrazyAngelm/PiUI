@@ -212,7 +212,7 @@ Lane launch (everything below is enforced by the host before a native start):
   uses a separate native app-server on Windows and adds only modes that the
   signed-in workspace gateway advertises for the Responses dialect. Reopening
   a Nano connector session uses its saved source and native history.
-- On Windows, **Settings → Nano account → External model providers** can add a
+- On Windows, **Settings → Harnesses → Nano → Connect** can add a
   model from an HTTPS OpenAI Chat Completions endpoint. Enter the model ID and
   select the endpoint's request format. The native dialog confirms the exact
   destination and accepts the API key, which the host stores in Credential
@@ -430,8 +430,9 @@ server-side limits.
   tokens and a non-exportable device key are a later hardening step.
 - Releases are unsigned previews until a signing certificate exists; signing
   becomes mandatory before the installer is offered on a website.
-- Only Windows has verified process containment and credential storage; no
-  claim is made for macOS or Linux.
+- Windows has verified process containment and OS credential storage. Linux
+  contains agents in a process group (a descendant that calls `setsid` leaves
+  it) and keeps the Nano sign-in in memory only; no claim is made for macOS.
 - Downloads in the cloud window are cancelled; a host save dialog is a later
   step.
 - Evidence so far is synthetic (the dev server and fixtures). Real-provider

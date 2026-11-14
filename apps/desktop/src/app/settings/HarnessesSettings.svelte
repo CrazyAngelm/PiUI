@@ -1,32 +1,53 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import Plus from '@lucide/svelte/icons/plus';
+  import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import type { AcpAgentEntryV1 } from '../../../../../contracts/harness-registry-v1';
+  import { acpAgentId, acpHarnessId, isAcpHarness, type HarnessId } from '../../../../../contracts/harness-identity-v3';
   import { t } from '../../features/locale/language';
-  import { Badge, Button, Skeleton } from '../../lib/ui';
+  import { Button, Skeleton, StatusDot } from '../../lib/ui';
   import HarnessMark from '../shell/HarnessMark.svelte';
   import AcpAgentCard from './AcpAgentCard.svelte';
   import AcpConfirmDialog from './AcpConfirmDialog.svelte';
   import AcpSecretsDialog from './AcpSecretsDialog.svelte';
   import AddAcpAgentDialog from './AddAcpAgentDialog.svelte';
+  import HarnessConnectDialog from './HarnessConnectDialog.svelte';
   import TrustAcpAgentDialog from './TrustAcpAgentDialog.svelte';
-  import { nativeVersionStatus, stateBadge, versionBadge } from './acpAgents';
+  import { nativeVersionStatus, versionBadge } from './acpAgents';
+  import { canConnectBuiltin, connectIsPrimary, HarnessConnectStore, rowStatus } from './harnessConnect.svelte';
   import { HarnessesStore } from './harnessesStore.svelte';
 
   /**
    * Settings → Harnesses (ADR-034): readiness of every harness and the ACP
-   * agent registry. Loaded after mount; checks never block first paint.
+   * agent registry, one calm list. Each harness signs in with its own tools:
+   * Connect (ADR-054) shows how. Loaded after mount; checks never block first
+   * paint.
    */
   interface Props {
     /** Injected by tests; the section owns its store otherwise. */
     store?: HarnessesStore;
+    connect?: HarnessConnectStore;
+    /** Opens Settings → Nano account. */
+    onOpenNanoAccount?: () => void;
+    /** ChatGPT or an external provider changed: model catalogs are stale. */
+    onModelSourcesChange?: () => void;
   }
-  let { store = new HarnessesStore() }: Props = $props();
+  let {
+    store = new HarnessesStore(),
+    connect = new HarnessConnectStore(),
+    onOpenNanoAccount = () => {},
+    onModelSourcesChange = () => {},
+  }: Props = $props();
+  const uid = $props.id();
 
   onMount(() => {
     void store.start();
-    return () => store.dispose();
+    void connect.describe();
+    return () => {
+      store.dispose();
+      connect.dispose();
+    };
   });
 
   type Pending =
@@ -40,8 +61,29 @@
   let dialogOpen = $state(false);
   let adding = $state(false);
   let dialogError = $state<string>();
+  // Connect shows the harness as it is now, so only its identity is kept.
+  let connecting = $state<HarnessId>();
+  let connectOpen = $state(false);
 
   const locked = $derived(store.safeMode || store.busy !== '');
+  const target = $derived.by(() => {
+    const harness = connecting;
+    if (harness === undefined) return undefined;
+    if (isAcpHarness(harness)) {
+      const row = store.agents.find((entry) => entry.agent.descriptor.id === acpAgentId(harness));
+      if (row === undefined) return undefined;
+      return {
+        harness,
+        name: row.agent.descriptor.displayName,
+        agent: row.agent,
+        hint: row.status?.signInHint ?? row.agent.descriptor.authHint,
+        authMethods: row.agent.authMethods,
+      };
+    }
+    const status = store.builtins.find((entry) => entry.harness === harness);
+    if (status === undefined) return undefined;
+    return { harness, name: status.name, agent: undefined, hint: status.signInHint, authMethods: [] as string[] };
+  });
 
   function open(next: Pending): void {
     pending = next;
@@ -51,6 +93,16 @@
 
   function close(): void {
     dialogOpen = false;
+  }
+
+  function connectTo(harness: HarnessId): void {
+    connecting = harness;
+    connectOpen = true;
+  }
+
+  /** The Connect dialog closes first; the existing secrets review opens right after. */
+  function chooseSecrets(agent: AcpAgentEntryV1): void {
+    void tick().then(() => open({ kind: 'secrets', agent }));
   }
 
   /** After a rejected decision: review the agent as it is now, or close when it is gone. */
@@ -82,12 +134,11 @@
 <div class="harnesses">
   <div class="title-row">
     <h2>{$t('Harnesses')}</h2>
-    <Button size="sm" onclick={() => void store.check()} loading={store.busy === 'check'} disabled={locked}>
+    <Button size="sm" variant="ghost" onclick={() => void store.check()} loading={store.busy === 'check'} disabled={locked}>
       {#snippet leading()}<RefreshCw />{/snippet}
       {$t('Check again')}
     </Button>
   </div>
-  <p class="lead">{$t('Nano Desktop drives the agent tools installed on this computer. Each harness keeps its own sign-in, models and history.')}</p>
   {#if store.safeMode}
     <p class="note" role="status">{$t('Safe mode: Nano Desktop starts no agent program, so harness checks and changes are off.')}</p>
   {/if}
@@ -98,28 +149,47 @@
       <div class="loading" role="status"><span class="visually-hidden">{$t('Loading harnesses…')}</span><Skeleton lines={3} height="16px" /></div>
     {/if}
   {:else}
-    <ul class="cards" aria-label={$t('Built-in harnesses')}>
+    <ul class="rows" aria-label={$t('Built-in harnesses')}>
       {#each store.builtins as harness (harness.harness)}
-        {@const badge = stateBadge(harness.state, store.safeMode)}
+        {@const status = rowStatus(harness.state, store.safeMode)}
         {@const advisory = versionBadge(nativeVersionStatus(harness))}
-        <li class="card">
-          <HarnessMark kind={harness.harness} size={28} />
-          <div class="card__main">
-            <div class="card__title">
-              <strong>{harness.name}</strong>
+        {@const titleId = `${uid}-${harness.harness}`}
+        <li class="row">
+          <div class="row__line">
+            <HarnessMark kind={harness.harness} size={24} />
+            <div class="row__name">
+              <strong id={titleId}>{harness.name}</strong>
               {#if harness.version}<span class="muted">v{harness.version}</span>{/if}
-              <Badge tone={badge.tone}>{$t(badge.label)}</Badge>
-              {#if advisory}<Badge tone={advisory.tone}>{$t(advisory.label)}</Badge>{/if}
+              {#if advisory}<span class="muted">{$t(advisory.label)}</span>{/if}
             </div>
-            {#if harness.reason}<p class="muted">{$t(harness.reason)}</p>{/if}
-            {#if harness.location || harness.verifiedVersions || harness.signInHint}
+            <span class="state" class:state--attention={!status.ready && status.dot === 'waiting'} class:state--danger={status.dot === 'failed'}>
+              {#if status.ready}
+                <StatusDot status={status.dot} label={$t(status.label)} />
+              {:else}
+                <StatusDot status={status.dot} />
+                <span>{$t(status.label)}</span>
+              {/if}
+            </span>
+            {#if canConnectBuiltin(harness.state)}
+              <Button
+                size="sm"
+                variant={connectIsPrimary(harness.state) ? 'primary' : 'secondary'}
+                disabled={locked}
+                aria-describedby={titleId}
+                onclick={() => connectTo(harness.harness)}
+              >{$t('Connect')}</Button>
+            {/if}
+          </div>
+          {#if harness.reason}<p class="row__reason muted">{$t(harness.reason)}</p>{/if}
+          {#if harness.location || harness.verifiedVersions}
+            <details class="row__details">
+              <summary><ChevronRight size={12} />{$t('Details')}</summary>
               <dl class="facts">
                 {#if harness.location}<div><dt>{$t('Location')}</dt><dd><code>{harness.location}</code></dd></div>{/if}
                 {#if harness.verifiedVersions}<div><dt>{$t('Tested with Nano Desktop')}</dt><dd>{harness.verifiedVersions}</dd></div>{/if}
-                {#if harness.signInHint}<div><dt>{$t('Sign-in')}</dt><dd>{$t(harness.signInHint)}</dd></div>{/if}
               </dl>
-            {/if}
-          </div>
+            </details>
+          {/if}
         </li>
       {/each}
     </ul>
@@ -131,23 +201,40 @@
         {$t('Add ACP agent…')}
       </Button>
     </div>
-    <p class="lead">{$t('Agents that speak the Agent Client Protocol. Nano Desktop starts only the exact command line you trust, never through a shell. Trust is not a sandbox: an agent runs with your permissions.')}</p>
-    <ul class="cards" aria-labelledby="acp-agents-title">
-      {#each store.agents as row (row.agent.descriptor.id)}
-        <AcpAgentCard
-          {row}
-          {store}
-          onTrust={(agent) => open({ kind: 'trust', agent })}
-          onSecrets={(agent) => open({ kind: 'secrets', agent })}
-          onRemove={(agent) => open({ kind: 'remove', agent })}
-        />
-      {/each}
-    </ul>
+    {#if store.agents.length > 0}
+      <ul class="rows" aria-labelledby="acp-agents-title">
+        {#each store.agents as row (row.agent.descriptor.id)}
+          <AcpAgentCard
+            {row}
+            {store}
+            onConnect={(agent) => connectTo(acpHarnessId(agent.descriptor.id))}
+            onTrust={(agent) => open({ kind: 'trust', agent })}
+            onRemove={(agent) => open({ kind: 'remove', agent })}
+            onSecrets={(agent) => open({ kind: 'secrets', agent })}
+          />
+        {/each}
+      </ul>
+    {/if}
   {/if}
-  <p class="muted small">{$t('Sign in inside each harness (for example in its terminal app). Nano Desktop never reads harness credentials. The optional Nano account keeps its sign-in in the system credential store (in memory only if that is unavailable), out of reach of the interface.')}</p>
 </div>
 
 <AddAcpAgentDialog bind:open={adding} {store} onAdded={added} />
+
+{#if target !== undefined}
+  <HarnessConnectDialog
+    bind:open={connectOpen}
+    harness={target.harness}
+    name={target.name}
+    agent={target.agent}
+    hint={target.hint}
+    authMethods={target.authMethods}
+    {store}
+    {connect}
+    {onOpenNanoAccount}
+    {onModelSourcesChange}
+    onSecrets={chooseSecrets}
+  />
+{/if}
 
 {#if pending?.kind === 'trust'}
   <TrustAcpAgentDialog
@@ -167,15 +254,15 @@
     onSave={(agent, names) => void decide(() => store.allowSecrets(agent, names))}
   />
 {:else if pending?.kind === 'remove'}
-  {@const target = pending}
+  {@const removing = pending}
   <AcpConfirmDialog
     bind:open={dialogOpen}
-    title={$t('Remove {0}?', [target.agent.descriptor.displayName])}
+    title={$t('Remove {0}?', [removing.agent.descriptor.displayName])}
     confirmLabel={$t('Remove agent')}
     confirmVariant="danger"
     busy={store.busy.startsWith('remove:')}
     error={dialogError}
-    onConfirm={() => void decide(() => store.remove(target.agent))}
+    onConfirm={() => void decide(() => store.remove(removing.agent))}
   >
     <p>{$t('Nano Desktop forgets this descriptor and your decisions about it. Chats with this agent keep their history but cannot start until you add it again.')}</p>
   </AcpConfirmDialog>
@@ -202,14 +289,10 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--piui-space-3);
+    margin-bottom: var(--piui-space-3);
   }
   .title-row--section {
     margin-top: var(--piui-space-8);
-  }
-  .lead {
-    margin: var(--piui-space-2) 0 var(--piui-space-4);
-    color: var(--piui-text-muted);
-    line-height: var(--piui-leading-normal);
   }
   .note {
     margin: 0 0 var(--piui-space-4);
@@ -226,43 +309,89 @@
   .loading {
     padding: var(--piui-space-4) 0;
   }
-  .cards {
-    display: grid;
-    gap: var(--piui-space-2);
+  .rows {
     margin: 0;
     padding: 0;
     list-style: none;
-  }
-  .card {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--piui-space-3);
-    padding: var(--piui-space-3) var(--piui-space-4);
     border: 1px solid var(--piui-border-subtle);
     border-radius: var(--piui-radius-md);
     background: var(--piui-bg-raised);
   }
-  .card__main {
+  .rows > :global(li + li) {
+    border-top: 1px solid var(--piui-border-subtle);
+  }
+  .row {
     display: grid;
+    gap: var(--piui-space-1);
+    padding: var(--piui-space-3) var(--piui-space-4);
+  }
+  .row__line {
+    display: flex;
+    align-items: center;
+    gap: var(--piui-space-3);
+    min-height: 32px;
+  }
+  .row__name {
+    display: flex;
     flex: 1;
-    gap: var(--piui-space-2);
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--piui-space-1) var(--piui-space-2);
     min-width: 0;
   }
-  .card__title {
-    display: flex;
-    flex-wrap: wrap;
+  .row__name strong {
+    font-weight: var(--piui-weight-medium);
+  }
+  .row__name .muted {
+    font-size: var(--piui-text-sm);
+  }
+  .state {
+    display: inline-flex;
     align-items: center;
     gap: var(--piui-space-2);
-    min-height: 28px;
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
   }
-  .card p {
-    margin: 0;
+  .state--attention {
+    color: var(--piui-warning-text);
+  }
+  .state--danger {
+    color: var(--piui-danger-text);
+  }
+  .row__reason,
+  .row__details {
+    margin: 0 0 0 calc(24px + var(--piui-space-3));
+    font-size: var(--piui-text-sm);
+  }
+  summary {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--piui-space-1);
+    border-radius: var(--piui-radius-sm);
+    color: var(--piui-text-muted);
+    cursor: pointer;
+    list-style: none;
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  summary:hover {
+    color: var(--piui-text);
+  }
+  summary:focus-visible {
+    outline: 2px solid var(--piui-focus);
+    outline-offset: 2px;
+  }
+  summary :global(svg) {
+    transition: transform var(--piui-duration-fast) var(--piui-ease-out);
+  }
+  details[open] > summary :global(svg) {
+    transform: rotate(90deg);
   }
   .facts {
     display: grid;
     gap: 4px;
-    margin: 0;
-    font-size: var(--piui-text-sm);
+    margin: var(--piui-space-2) 0 var(--piui-space-1);
   }
   .facts div {
     display: grid;
@@ -280,11 +409,10 @@
     font-family: var(--piui-font-mono);
     font-size: 0.95em;
   }
+  p {
+    margin: 0;
+  }
   .muted {
     color: var(--piui-text-muted);
-  }
-  .small {
-    margin-top: var(--piui-space-4);
-    font-size: var(--piui-text-sm);
   }
 </style>

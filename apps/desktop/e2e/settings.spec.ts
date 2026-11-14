@@ -1,4 +1,5 @@
-import { expect, test } from './fixtures';
+import type { Page } from '@playwright/test';
+import { expect, test, type Lab } from './fixtures';
 
 /**
  * Settings → Background in the UI Lab: the host's background-v1 checks and
@@ -7,16 +8,52 @@ import { expect, test } from './fixtures';
  */
 const LOGIN = /^Start Nano Desktop when I sign in( to Windows)?$/;
 
+/** Opens Settings → Harnesses and returns its built-in rows by harness name. */
+async function openHarnesses(lab: Lab, page: Page) {
+  const sections = await lab.openSettings();
+  await sections.getByRole('button', { name: 'Harnesses' }).click();
+  await expect(page.getByRole('heading', { level: 2, name: 'Harnesses' })).toBeVisible();
+  const list = page.getByRole('list', { name: 'Built-in harnesses' });
+  return {
+    sections,
+    row: (name: string) => list.getByRole('listitem').filter({ has: page.getByText(name, { exact: true }) }),
+  };
+}
+
 test.describe('Settings → Nano account', () => {
-  test('connects and disconnects ChatGPT and an API source by keyboard', async ({ lab, page }) => {
+  test('no longer lists model providers: they belong to the Nano harness', async ({ lab, page }) => {
     await lab.open();
     const sections = await lab.openSettings();
     await sections.getByRole('button', { name: 'Nano account' }).press('Enter');
-    const providers = page.getByRole('region', { name: 'External model providers' });
+    await expect(sections.getByRole('button', { name: 'Nano account' })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('region', { name: 'External model providers' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Continue with ChatGPT' })).toHaveCount(0);
+  });
+
+  test('keeps the account page free of provider setup in safe mode', async ({ lab, page }) => {
+    await lab.open('safe');
+    const sections = await lab.openSettings();
+    await sections.getByRole('button', { name: 'Nano account' }).press('Enter');
+    await expect(page.getByText(/Safe mode is on/)).toBeVisible();
+    await expect(page.getByRole('region', { name: 'External model providers' })).toHaveCount(0);
+  });
+});
+
+test.describe('Settings → Harnesses → Connect', () => {
+  test('connects and disconnects ChatGPT and an API source from the Nano dialog by keyboard', async ({ lab, page }) => {
+    await lab.open();
+    const { row } = await openHarnesses(lab, page);
+    await row('Nano').getByRole('button', { name: 'Connect' }).press('Enter');
+    const dialog = page.getByRole('dialog', { name: 'Connect Nano' });
+    await expect(dialog).toBeVisible();
+    const providers = dialog.getByRole('region', { name: 'External model providers' });
     await providers.getByRole('button', { name: 'Continue with ChatGPT' }).press('Enter');
     const welcome = page.getByRole('dialog', { name: 'You’re using your ChatGPT plan' });
     await expect(welcome).toBeVisible();
     await welcome.getByRole('button', { name: 'Got it' }).press('Enter');
+    await expect(welcome).toHaveCount(0);
+    // The nested welcome closed without closing the Connect dialog.
+    await expect(dialog).toBeVisible();
     await providers.getByRole('button', { name: 'Disconnect ChatGPT' }).press('Enter');
     await expect(providers.getByRole('button', { name: 'Continue with ChatGPT' })).toBeVisible();
     await providers.getByLabel('Provider name').fill('Demo gateway');
@@ -28,15 +65,86 @@ test.describe('Settings → Nano account', () => {
     await expect(disconnect).toBeVisible();
     await disconnect.press('Enter');
     await expect(disconnect).toHaveCount(0);
+    await dialog.getByRole('button', { name: 'Done' }).press('Enter');
+    await expect(dialog).toHaveCount(0);
   });
 
-  test('keeps external provider connections unavailable in safe mode', async ({ lab, page }) => {
+  test('opens the Nano account from the Nano dialog', async ({ lab, page }) => {
+    await lab.open();
+    const { row, sections } = await openHarnesses(lab, page);
+    await row('Nano').getByRole('button', { name: 'Connect' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Connect Nano' });
+    await dialog.getByRole('button', { name: 'Open Nano account' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(sections.getByRole('button', { name: 'Nano account' })).toHaveAttribute('aria-current', 'page');
+  });
+
+  test('disables Connect in safe mode', async ({ lab, page }) => {
     await lab.open('safe');
-    const sections = await lab.openSettings();
-    await sections.getByRole('button', { name: 'Nano account' }).press('Enter');
-    const providers = page.getByRole('region', { name: 'External model providers' });
-    await expect(page.getByText(/Safe mode is on/)).toBeVisible();
-    await expect(providers).toHaveCount(0);
+    const { row } = await openHarnesses(lab, page);
+    for (const name of ['Codex', 'Claude Code', 'Nano']) {
+      await expect(row(name).getByRole('button', { name: 'Connect' })).toBeDisabled();
+    }
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+  });
+
+  test('shows the Codex command and opens a terminal through the host', async ({ lab, page }) => {
+    await lab.open();
+    const { row } = await openHarnesses(lab, page);
+    await row('Codex').getByRole('button', { name: 'Connect' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Connect Codex' });
+    await expect(dialog.getByText('Codex signs in with its own tools. Nano Desktop never sees its credentials.')).toBeVisible();
+    await expect(dialog.locator('code', { hasText: /^codex login$/ })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Copy command' })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Open terminal' }).click();
+    await expect(dialog.getByRole('status').filter({ hasText: 'Finish signing in in the terminal, then check again.' })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Check again' }).click();
+    await expect(dialog.getByRole('button', { name: 'Check again' })).toBeEnabled();
+    await dialog.getByRole('button', { name: 'Done' }).click();
+    await expect(dialog).toHaveCount(0);
+  });
+
+  test('Claude Code that needs a sign-in shows its status and the second command', async ({ lab, page }) => {
+    await lab.open('demo', '&claude=signed-out');
+    const { row } = await openHarnesses(lab, page);
+    await expect(row('Claude Code').getByText('Sign-in required')).toBeVisible();
+    await row('Claude Code').getByRole('button', { name: 'Connect' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Connect Claude Code' });
+    await expect(dialog.locator('code', { hasText: /^claude$/ })).toBeVisible();
+    await expect(dialog.getByText('Then type /login there.')).toBeVisible();
+  });
+
+  test('gives Prime Agent one line of guidance and no terminal', async ({ lab, page }) => {
+    await lab.open();
+    const { row } = await openHarnesses(lab, page);
+    await row('Prime Agent').getByRole('button', { name: 'Connect' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Connect Prime Agent' });
+    await expect(dialog.getByText('Sign in with Prime Agent’s own tools in a terminal, then check again.')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Open terminal' })).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: 'Check again' })).toBeVisible();
+  });
+
+  test('an ACP agent explains its sign-in and hands over to the secret variables review', async ({ lab, page }) => {
+    await lab.open();
+    await openHarnesses(lab, page);
+    const agents = page.getByRole('list', { name: 'ACP agents' });
+    const gemini = agents.getByRole('listitem').filter({ has: page.getByText('Gemini CLI', { exact: true }) });
+    await gemini.getByRole('button', { name: 'Connect' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Connect Gemini CLI' });
+    await expect(dialog.getByText(/run `gemini` in a terminal/)).toBeVisible();
+    await dialog.getByRole('button', { name: 'Secret variables…' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole('dialog', { name: 'Secret variables for Gemini CLI' })).toBeVisible();
+  });
+
+  test('keeps location and tested versions under Details', async ({ lab, page }) => {
+    await lab.open();
+    const { row } = await openHarnesses(lab, page);
+    const codex = row('Codex');
+    await expect(codex.getByText('Location')).toBeHidden();
+    await codex.getByText('Details', { exact: true }).click();
+    await expect(codex.getByText('Location')).toBeVisible();
+    await expect(codex.getByText('Tested with Nano Desktop')).toBeVisible();
   });
 });
 

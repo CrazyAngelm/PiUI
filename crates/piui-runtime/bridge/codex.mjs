@@ -1591,7 +1591,7 @@ export async function createCodexAdapter(config, emit, coordinatorRequest, openC
   };
 
   const initialize = await callDuringStartup("initialize", {
-    clientInfo: { name: "piui", title: "PiUI", version: "0.3.0" },
+    clientInfo: { name: "piui", title: "PiUI", version: "0.3.1" },
     capabilities: { experimentalApi: true, requestAttestation: false },
   });
   if (!isRecord(initialize) || typeof initialize.codexHome !== "string") {

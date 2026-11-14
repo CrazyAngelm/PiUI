@@ -35,7 +35,7 @@ deleted.
 
 | Capability | Classic location | New shell location | Status |
 | --- | --- | --- | --- |
-| Browse the Pi sessions the index found in a project folder (sessions run in the Pi terminal app) | `ProjectSidebar` session list, `App.svelte` catalog logic | Sidebar project menu → "Pi session history" (route `history`), `app/history/HistoryView.svelte` | Ported |
+| Browse the Pi sessions the index found in a project folder (sessions run in the Pi terminal app) | `ProjectSidebar` session list, `App.svelte` catalog logic | Sidebar project menu → "Session history" (route `history`), `app/history/HistoryView.svelte` | Ported |
 | Browse projectless Pi chats (personal scope) | `ProjectSidebar` "Chats" group | Sidebar "Personal chats" menu → session history (personal catalog) | Ported |
 | Cache-first catalog, reconcile on open, refresh, degraded state, watcher hints, catalog events | `App.svelte` (`applyProjectCatalog`, root hints, 15 s poll) | `app/history/historyStore.svelte.ts` (cached → refresh, `piui://session-catalog`, `piui://session-root-hint`, Refresh button) | Ported (15 s poll dropped: watcher hints, refresh on open and the Refresh button cover it for a read-only view) |
 | Prime Agent project history (projects added as Prime Agent) | same, `agentKind` marker | Same history view, titled "Prime Agent session history" | Ported |
@@ -191,7 +191,7 @@ uses it for Tier 1A (gap 3).
 
 Run the lab (`pnpm --filter @piui/desktop dev`, `?lab=demo`):
 
-1. Sidebar → `piui` → "…" → "Pi session history": "Make the session index
+1. Sidebar → `piui` → "…" → "Session history": "Make the session index
    incremental" has three branches (details → Branches), "Walk through the
    orchestration store migration" pages older history, "Rename the catalog
    watcher" is partly readable, "Draft release notes" shows extension,

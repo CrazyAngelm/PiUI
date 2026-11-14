@@ -178,7 +178,7 @@ the source chat is untouched. "Cancel" restores the earlier new-chat draft.
 
 ## Continue a terminal Pi session (`workspace_adopt_v1`)
 
-Pi session history → a session → "Continue in PiUI" → a confirmation that
+Session history → a session → "Continue in PiUI" → a confirmation that
 asks to close it in the Pi terminal app first. The host, in a trusted Pi
 folder and outside safe mode:
 

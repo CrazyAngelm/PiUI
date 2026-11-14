@@ -1,4 +1,4 @@
-# ADR-053 — Shared Nano interface with explicit work locations
+# ADR-056 — Shared Nano interface with explicit work locations
 
 Status: accepted for isolated implementation, 2026-11-13.
 

@@ -370,6 +370,9 @@
   --piui-decoration-badge-shape: polygon(8% 0, 100% 0, 92% 100%, 0 100%);
   --piui-decoration-capability-shape: polygon(22% 0, 100% 0, 78% 100%, 0 100%);
   --piui-decoration-gauge-shape: polygon(14% 0, 100% 0, 86% 100%, 0 100%);
+  --piui-decoration-gauge-tilt: -12deg;
+  /* Existing ramp overhang: its 32px hit area leans 32px * tan(12deg). */
+  --piui-decoration-gauge-overhang: 7px;
   --piui-decoration-meter-shape: polygon(0 0, 100% 0, 99% 100%, 0 100%);
   --piui-decoration-radius: 0px;
   /* Stable legacy palette: saved teammate identities and old plugins use it. */
@@ -581,6 +584,8 @@
   --piui-decoration-badge-shape: none;
   --piui-decoration-capability-shape: none;
   --piui-decoration-gauge-shape: none;
+  --piui-decoration-gauge-tilt: 0deg;
+  --piui-decoration-gauge-overhang: 0px;
   --piui-decoration-meter-shape: none;
   --piui-decoration-radius: var(--piui-radius-sm);
 }

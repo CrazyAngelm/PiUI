@@ -31,6 +31,12 @@
     trigger: Snippet<[Record<string, unknown>]>;
     /** Optional content under the list, e.g. reasoning controls. */
     footer?: Snippet;
+    /** Optional content between the search and the list, e.g. tabs. `focusSearch` returns the focus to the search field. */
+    header?: Snippet<[{ focusSearch: () => void }]>;
+    /** The search text; reset to empty whenever the picker closes. */
+    search?: string;
+    /** Keys pressed in the search field. */
+    onSearchKeydown?: (event: KeyboardEvent) => void;
     onSelect: (value: T) => void;
   }
 
@@ -46,8 +52,24 @@
     side = 'bottom',
     trigger,
     footer,
+    header,
+    search = $bindable(''),
+    onSearchKeydown,
     onSelect,
   }: Props = $props();
+
+  let searchField = $state<HTMLInputElement | null>(null);
+  const focusSearch = (): void => searchField?.focus();
+
+  // The popover content unmounts on close, so the field starts empty: the bound text follows.
+  $effect(() => {
+    if (!open) search = '';
+  });
+
+  /** Enter on a header control acts on that control, not on the highlighted row. */
+  function headerKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Enter') event.stopPropagation();
+  }
 
   const groups = $derived.by(() => {
     const byGroup = new Map<string, PickerItem<T>[]>();
@@ -85,8 +107,19 @@
       <Command.Root label={label} loop>
         <div class="piui-picker__search">
           <Search size={14} />
-          <Command.Input class="piui-picker__input" placeholder={searchPlaceholder} aria-label={searchPlaceholder} />
+          <Command.Input
+            bind:ref={searchField}
+            bind:value={search}
+            class="piui-picker__input"
+            placeholder={searchPlaceholder}
+            aria-label={searchPlaceholder}
+            onkeydown={onSearchKeydown}
+          />
         </div>
+        {#if header}
+          <!-- svelte-ignore a11y_no_static_element_interactions (Only keeps Enter on a header control from reaching the list; the controls are the keyboard targets.) -->
+          <div class="piui-picker__header" onkeydown={headerKeydown}>{@render header({ focusSearch })}</div>
+        {/if}
         <Command.List class="piui-picker__list">
           <Command.Viewport>
             <Command.Empty class="piui-picker__empty">{emptyText}</Command.Empty>
@@ -157,6 +190,10 @@
     padding: 0 var(--piui-space-3);
     border-bottom: 1px solid var(--piui-border-subtle);
     color: var(--piui-text-muted);
+  }
+  .piui-picker__header {
+    display: flex;
+    padding: var(--piui-space-2) var(--piui-space-3) 0;
   }
   :global(.piui-picker__input) {
     flex: 1;

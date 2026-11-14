@@ -158,7 +158,46 @@ function safeAdapterError(error) {
   return { code, message };
 }
 
-export function runBridge(factory, input = process.stdin, output = process.stdout) {
+/**
+ * Ends the Unix process group this bridge leads, itself included. The host
+ * starts every bridge as the leader of its own group and retires that group
+ * when it stops a session; when the host itself is gone (stdin EOF), nothing
+ * else would, so a native tool process left behind ends with the bridge.
+ * A group whose id is this pid exists only while this process leads it (POSIX
+ * never reuses a pid that is still a process group id), so the check never
+ * reaches another group. On Windows the host's job object owns the tree.
+ */
+export function retireOwnProcessGroup(kill = process.kill.bind(process), platform = process.platform, pid = process.pid) {
+  if (platform === "win32") return false;
+  try { kill(-pid, 0); } catch { return false; }
+  try { kill(-pid, "SIGKILL"); } catch { return false; }
+  return true;
+}
+
+/**
+ * After the host is gone: lets the bridge's own child processes finish their
+ * graceful exit (a native harness flushing its history), then retires the
+ * group, which now holds only what they left behind. A child that has not
+ * exited within `graceMs` is retired with the rest.
+ */
+export function retireOwnProcessGroupAfterChildren({
+  platform = process.platform,
+  resources = () => process.getActiveResourcesInfo(),
+  retire = () => retireOwnProcessGroup(),
+  graceMs = 5000,
+  pollMs = 50,
+  now = Date.now,
+} = {}) {
+  if (platform === "win32") return;
+  const deadline = now() + graceMs;
+  const check = () => {
+    if (!resources().includes("ProcessWrap") || now() >= deadline) retire();
+    else setTimeout(check, pollMs);
+  };
+  check();
+}
+
+export function runBridge(factory, input = process.stdin, output = process.stdout, { afterEnd } = {}) {
   if (typeof factory !== "function") {
     throw new TypeError("A native adapter factory is required.");
   }
@@ -513,7 +552,9 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
   input.on("end", () => {
     rejectCoordinatorPending();
     if (pending.length !== 0) failTransport();
-    void Promise.allSettled([...inFlight]).then(disposeAdapter);
+    void Promise.allSettled([...inFlight])
+      .then(disposeAdapter)
+      .then(() => afterEnd?.(), () => afterEnd?.());
   });
   input.on("error", failTransport);
 
@@ -521,7 +562,9 @@ export function runBridge(factory, input = process.stdin, output = process.stdou
 }
 
 if (typeof globalThis.__PIUI_BRIDGE_FACTORY__ === "function") {
-  const bridge = runBridge(globalThis.__PIUI_BRIDGE_FACTORY__);
+  const bridge = runBridge(globalThis.__PIUI_BRIDGE_FACTORY__, process.stdin, process.stdout, {
+    afterEnd: () => { retireOwnProcessGroupAfterChildren(); },
+  });
   // An exception that an adapter callback (a timer, a child-process handler, a
   // rejected promise) leaves unhandled must not end the process silently: the
   // host gets one fixed safe error event (never the exception text), the adapter

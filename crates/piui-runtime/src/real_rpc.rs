@@ -2948,27 +2948,44 @@ fn find_prime_launcher() -> Option<PathBuf> {
     find_launcher_in_path(names, std::env::var_os("PATH"))
 }
 
-fn resolve_global_cli_js() -> Option<PathBuf> {
-    const PACKAGE: &str = "@earendil-works/pi-coding-agent";
-    const REL: &str = "dist/cli.js";
+const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent";
+const PI_CLI: &str = "dist/cli.js";
 
-    // Derive the npm global bin directory from the `pi` launcher, then climb to
-    // the sibling node_modules entry. Keeps this cross-platform without
-    // spawning `npm` or hard-coding install roots.
-    let pi_path = find_pi_launcher()?;
-    let bin_dir = pi_path.parent()?;
-    let candidate = bin_dir.join("node_modules").join(PACKAGE).join(REL);
-    if candidate.is_file() {
+fn resolve_global_cli_js() -> Option<PathBuf> {
+    // Derive the package from the `pi` launcher first; keeps this
+    // cross-platform without spawning `npm` or hard-coding install roots.
+    if let Some(candidate) = find_pi_launcher().as_deref().and_then(pi_cli_from_launcher) {
         return Some(candidate);
     }
+    common_global_roots()
+        .into_iter()
+        .map(|root| root.join(PI_PACKAGE).join(PI_CLI))
+        .find(|candidate| candidate.is_file())
+}
 
-    for root in common_global_roots() {
-        let candidate = root.join(PACKAGE).join(REL);
-        if candidate.is_file() {
-            return Some(candidate);
+fn pi_cli_from_launcher(launcher: &Path) -> Option<PathBuf> {
+    #[cfg(not(windows))]
+    {
+        // npm/nvm expose `<prefix>/bin/pi` as a symlink to the package's
+        // `dist/bundle/cli.js` under `<prefix>/lib/node_modules`.
+        if let Ok(target) = std::fs::canonicalize(launcher)
+            && target.ends_with(Path::new("dist/bundle/cli.js"))
+            && let Some(package) = target.ancestors().nth(3)
+            && package.ends_with(Path::new(PI_PACKAGE))
+        {
+            let candidate = package.join(PI_CLI);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
         }
     }
-    None
+    // Windows npm keeps the package beside its `pi.cmd` shim.
+    let candidate = launcher
+        .parent()?
+        .join("node_modules")
+        .join(PI_PACKAGE)
+        .join(PI_CLI);
+    candidate.is_file().then_some(candidate)
 }
 
 fn find_pi_launcher() -> Option<PathBuf> {
@@ -3052,15 +3069,44 @@ fn common_global_roots() -> Vec<PathBuf> {
         );
         roots.push(home.join(".pnpm-global").join("lib").join("node_modules"));
     }
+    #[cfg(not(windows))]
+    roots.extend(node_prefix_global_roots(std::env::var_os("PATH")));
     roots.push(PathBuf::from("/usr/local/lib/node_modules"));
     roots.push(PathBuf::from("/usr/lib/node_modules"));
     roots
 }
 
+/// npm's default global package root on Unix is beside the Node installation
+/// itself: `<prefix>/bin/node` and `<prefix>/lib/node_modules` (nvm, fnm, the
+/// official archives, distribution packages). The first `node` in an
+/// absolute PATH directory decides, both as found and through its symlinks.
+#[cfg(not(windows))]
+pub(crate) fn node_prefix_global_roots(path_env: Option<OsString>) -> Vec<PathBuf> {
+    let Some(node) = path_env.as_deref().and_then(|path| {
+        std::env::split_paths(path)
+            .filter(|directory| directory.is_absolute())
+            .map(|directory| directory.join("node"))
+            .find(|candidate| candidate.is_file())
+    }) else {
+        return Vec::new();
+    };
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for program in [Some(node.clone()), std::fs::canonicalize(&node).ok()]
+        .into_iter()
+        .flatten()
+    {
+        if let Some(prefix) = program.parent().and_then(Path::parent) {
+            let root = prefix.join("lib").join("node_modules");
+            if !roots.contains(&root) {
+                roots.push(root);
+            }
+        }
+    }
+    roots
+}
+
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use super::prime_cli_from_launcher;
     use super::{
         COMMAND_TIMEOUT, LIVE_EVENT_CHANNEL_CAPACITY, LOCAL_RUNTIME_EVENT_PROTOCOL,
         MAX_PRIME_ACTIVITY_SNAPSHOT_ITEMS, PRIME_SESSION_ACTIVE_STDERR_MARKERS, PrimeActivity,
@@ -3075,6 +3121,8 @@ mod tests {
         scan_fixed_marker, transition_starting_to_ready, validate_success_response,
         validate_supported_prime_cli_identity,
     };
+    #[cfg(unix)]
+    use super::{node_prefix_global_roots, pi_cli_from_launcher, prime_cli_from_launcher};
     use crate::extension_ui::{
         ExtensionDialogRequest, ExtensionUiAction, ExtensionUiMailbox, ExtensionUiResponse,
     };
@@ -3259,6 +3307,52 @@ mod tests {
                 "session-b.jsonl"
             ]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pi_launch_resolves_an_npm_prefix_symlink_and_the_node_prefix_root() {
+        use std::os::unix::fs::symlink;
+
+        let serial = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "piui-pi-symlink-test-{}-{serial}",
+            std::process::id()
+        ));
+        let package = root
+            .join("lib")
+            .join("node_modules")
+            .join("@earendil-works")
+            .join("pi-coding-agent");
+        let bundle = package.join("dist").join("bundle").join("cli.js");
+        let cli = package.join("dist").join("cli.js");
+        let bin = root.join("bin");
+        fs::create_dir_all(bundle.parent().expect("bundle parent")).expect("creates package");
+        fs::create_dir_all(&bin).expect("creates npm bin fixture");
+        fs::write(&bundle, "// fixture").expect("writes bundle entry");
+        fs::write(&cli, "// fixture").expect("writes cli entry");
+        fs::write(bin.join("node"), "").expect("writes node fixture");
+        symlink(&bundle, bin.join("pi")).expect("links npm Pi launcher");
+        let canonical_package = fs::canonicalize(&package).expect("canonical package");
+        assert_eq!(
+            pi_cli_from_launcher(&bin.join("pi")),
+            Some(canonical_package.join("dist").join("cli.js"))
+        );
+
+        // Another package's `pi` launcher is not Pi.
+        let other = root.join("lib/node_modules/other/dist/bundle/cli.js");
+        fs::create_dir_all(other.parent().expect("other parent")).expect("creates other");
+        fs::write(&other, "// fixture").expect("writes other");
+        symlink(&other, bin.join("other-pi")).expect("links other launcher");
+        assert_eq!(pi_cli_from_launcher(&bin.join("other-pi")), None);
+
+        let path = std::env::join_paths(["relative/bin".into(), bin.clone()]).expect("PATH");
+        assert_eq!(
+            node_prefix_global_roots(Some(path)).first(),
+            Some(&root.join("lib").join("node_modules"))
+        );
+        assert!(node_prefix_global_roots(Some("relative".into())).is_empty());
+        fs::remove_dir_all(root).expect("removes npm symlink fixture");
     }
 
     #[cfg(unix)]

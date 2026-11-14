@@ -11,7 +11,7 @@ Thanks for helping improve PiUI.
 
 ## Development workflow
 
-1. Create a focused branch from `main`.
+1. Create a focused branch from `master`.
 2. Make the smallest coherent change.
 3. Add or update tests for the happy path and at least one failure path.
 4. Update product, architecture, or contract documentation when behavior changes.

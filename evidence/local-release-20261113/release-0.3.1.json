@@ -1,0 +1,35 @@
+{
+  "timestamp": "2026-11-14T02:34:04+07:00",
+  "commit": "e81db4b",
+  "branch": "main (local; feat/0.3.1-ux fast-forwarded, then the model-selection e2e fix from claude/epic-khorana-fc0d2b; not pushed)",
+  "changes": "0.3.1: new-chat executor picker with Direct / Pipelines tabs (a pipeline or template runs on send; a template is saved as a project pipeline on first send, ADR-053), model favorites (Favorites / All models, hearts, Shift+Enter), new reasoning ramp control, Session history across every harness, Settings -> Harnesses redesign with per-harness Connect and a host-opened native sign-in terminal (CreateProcessW, sanitized environment, ADR-054), external model providers moved from the Nano account tab to Nano -> Connect. Rebuilt after e81db4b, which changes only apps/desktop/e2e/model-selection.spec.ts",
+  "release": {
+    "portable": {
+      "path": "artifacts/NanoDesktop_0.3.1_windows_x86_64.exe",
+      "bytes": 96145408,
+      "sha256": "486c3cdf6531c1ae6894e098c30051b8a5e70cd3da81e33a420a109a8693d8c8"
+    },
+    "installer": {
+      "path": "artifacts/NanoDesktop_0.3.1_x64-setup.exe",
+      "bytes": 59591409,
+      "sha256": "b31ff7f431e2eb39993057d07c37d089ee02188605341f6c5236935c53d0cc71"
+    },
+    "authenticode": "NotSigned (no certificate configured)",
+    "updater": "not configured; the app makes no update checks",
+    "installed": "installer run silently into D:\\Programs\\Nano Desktop (currentUser); nano-desktop.exe reports ProductVersion 0.3.1. Desktop and Start Menu 'Nano Desktop.lnk' re-saved, pointing at that executable",
+    "launch": "installed executable started for 12 s: process alive, Responding=true, main window 'Nano Desktop'; closed with CloseMainWindow"
+  },
+  "supersedes": "0.3.0 (and the first 0.3.1 build from e1a2a3f, whose hashes were 2d54d3ba... portable and 0dd54269... installer)",
+  "build": "built with CARGO_BUILD_JOBS=2 and the Windows Node.js installation first on PATH: the shared machine had about 2 GB of 32 GB RAM free (a full-parallel build hit rustc-LLVM out of memory), and the pip nodejs-wheel node has no npm. The cache prune removed target/debug (12 GB, over budget)",
+  "verification": {
+    "local": "cargo fmt --check and cargo clippy --workspace --all-targets -D warnings clean; cargo test --workspace passed except orchestration_scheduler::script_tests::failing_and_timed_out_scripts_fail_with_typed_codes, which passed alone; the Nano-source ACP test was fixed to use the real Node runtime instead of a launcher shim; vitest 93 files / 651 tests passed; svelte-check 0 errors; Playwright lab covers every spec, and model-selection.spec.ts passes 6/6 on e81db4b; prod-csp 5/5",
+    "reviews": "four read-only GPT-6.1 Sol reviews; findings fixed",
+    "ci": "not run: the merge is local and not pushed",
+    "artifactHashes": "artifacts/ verified against SHA256SUMS.txt"
+  },
+  "notVerified": "a real native sign-in terminal launch; real-provider turns",
+  "freeBytes": {
+    "C": 22529413120,
+    "D": 47110963200
+  }
+}

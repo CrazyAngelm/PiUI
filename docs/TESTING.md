@@ -79,7 +79,7 @@ Covered flows, each with at least one failure path:
 - Pi extension UI (`/extension-demo` in "Pi extension playground"): notices,
   statuses, panels above and below the message box, the window title, prepared
   text and the four dialog kinds, answered and then declined or dismissed.
-- Pi session history: a session with three branches, the read-only reader, a
+- Session history: a session with three branches, the read-only reader, a
   damaged file with the generic fallback, a filter without matches.
 - Run from a chat: `/run` → inputs → "Run started" toast → Open run, Ctrl+K
   "Run pipeline…", a project without saved pipelines.

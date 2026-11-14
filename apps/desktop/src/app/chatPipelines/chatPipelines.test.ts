@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { OrchestrationClient, OrchestrationRunV6, PipelineDefinition, StartRunRequestV7 } from '../../host-api/orchestrationClient';
 import type { ChatPipelineV1, PipelineLibraryCommandV1, PipelineLibraryResultV1 } from '../../host-api/pipelineLibraryClient';
 import type { readWorkspaceHistory } from '../../host-api/workspaceHistory';
-import { ChatPipelinesStore, type ChatCreator } from './chatPipelines.svelte';
+import { buildTemplate } from '../pipelines/templates';
+import { ChatPipelineError, ChatPipelinesStore, type ChatCreator } from './chatPipelines.svelte';
 
+type SaveGraphRequest = Parameters<OrchestrationClient['orchestration_save_graph_v6']>[0];
 const WORKSPACE = 'ws';
 const pipeline = (inputs: PipelineDefinition['inputs']): PipelineDefinition => ({
   id: 'pipe',
@@ -250,6 +252,75 @@ describe('ChatPipelinesStore', () => {
 
       await store.loadProject(WORKSPACE);
       expect(catalogCalls).toBe(2);
+    });
+  });
+
+  describe('saveTemplate (ADR-053)', () => {
+    const draft = () => {
+      const built = buildTemplate('review', 'codex', (value) => value);
+      return { ...built, nodes: built.nodes.map((node) => ({ ...node, profile: { ...node.profile, model: 'gpt' } })) };
+    };
+    const noHistory = vi.fn(async () => []) as unknown as typeof readWorkspaceHistory;
+    const library = { request: async (): Promise<PipelineLibraryResultV1> => ({ protocol: 1, type: 'library', templates: [] }) };
+
+    it('creates the pipeline without any expected revision, returns its command id and lists it', async () => {
+      const saved: SaveGraphRequest[] = [];
+      let listed: { id: string; name: string }[] = [];
+      const client = {
+        orchestration_save_graph_v6: async (request: SaveGraphRequest) => {
+          saved.push(request);
+          listed = [{ id: request.command.value.id, name: request.command.value.name }];
+          return null;
+        },
+        orchestration_catalog_v6: async () => ({ launchCommands: listed }),
+      } as unknown as OrchestrationClient;
+      const store = new ChatPipelinesStore(client, library, noHistory);
+      const value = draft();
+      expect(await store.saveTemplate(WORKSPACE, value)).toBe(value.id);
+      expect(saved).toHaveLength(1);
+      const request = saved[0]!;
+      expect(request.command.value).toMatchObject({ id: value.id, name: 'Review loop' });
+      expect([request.team, request.pipeline, request.command, ...request.profiles].some((item) => 'expectedRevision' in item)).toBe(false);
+      expect(store.commands[WORKSPACE]?.map((command) => command.id)).toEqual([value.id]);
+    });
+
+    it('treats a save whose answer was lost as saved when the project already lists the id', async () => {
+      const value = draft();
+      const client = {
+        orchestration_save_graph_v6: async () => {
+          throw { code: 'unknown' };
+        },
+        orchestration_catalog_v6: async () => ({ launchCommands: [{ id: value.id, name: value.name }] }),
+      } as unknown as OrchestrationClient;
+      const store = new ChatPipelinesStore(client, library, noHistory);
+      expect(await store.saveTemplate(WORKSPACE, value)).toBe(value.id);
+      expect(store.commands[WORKSPACE]?.map((command) => command.id)).toEqual([value.id]);
+    });
+
+    it('rethrows a failed save as a chat pipeline error when nothing was created', async () => {
+      const client = {
+        orchestration_save_graph_v6: async () => {
+          throw { code: 'invalid' };
+        },
+        orchestration_catalog_v6: async () => ({ launchCommands: [] }),
+      } as unknown as OrchestrationClient;
+      const store = new ChatPipelinesStore(client, library, noHistory);
+      await expect(store.saveTemplate(WORKSPACE, draft())).rejects.toBeInstanceOf(ChatPipelineError);
+      expect(store.commands[WORKSPACE]).toEqual([]);
+    });
+
+    it('rethrows when the project cannot be read after a failed save either', async () => {
+      const client = {
+        orchestration_save_graph_v6: async () => {
+          throw { code: 'unknown' };
+        },
+        orchestration_catalog_v6: async () => {
+          throw new Error('host down');
+        },
+      } as unknown as OrchestrationClient;
+      const store = new ChatPipelinesStore(client, library, noHistory);
+      await expect(store.saveTemplate(WORKSPACE, draft())).rejects.toBeInstanceOf(ChatPipelineError);
+      expect(store.commands[WORKSPACE]).toBeUndefined();
     });
   });
 });

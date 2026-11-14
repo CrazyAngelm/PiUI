@@ -65,8 +65,12 @@ tauri-plugin-single-instance = "=2.4.5"
 winreg = "=0.10.1"
 # ShellExecuteW opens sign-in and account pages in the default browser
 # (nano/browser.rs); the URL is one argument, never a shell string.
+# CreateProcessW (Security + System_Threading) opens the sign-in terminal
+# (terminal.rs) with an explicit environment block.
 windows-sys = { version = "0.61.2", features = [
   "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_Threading",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }

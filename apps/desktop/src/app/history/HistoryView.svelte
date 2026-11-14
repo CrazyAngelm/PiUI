@@ -11,13 +11,28 @@
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
   import { t, language } from '../../features/locale/language';
   import { piHistoryHost } from '../../host-api/piHistoryClient';
+  import { readWorkspaceHistory } from '../../host-api/workspaceHistory';
   import { Badge, Button, EmptyState, IconButton, Input, Picker, Skeleton, Spinner, matchesShortcut, type PickerItem } from '../../lib/ui';
   import Transcript from '../chat/transcript/Transcript.svelte';
   import { relativeTime } from '../format';
+  import { harnessMeta } from '../harnessMeta';
   import { useWorkspace } from '../shell/context';
+  import { placements } from '../worktrees/placements.svelte';
+  import HarnessMark from '../shell/HarnessMark.svelte';
   import HistoryDetails from './HistoryDetails.svelte';
   import ContinueInPiui from './ContinueInPiui.svelte';
   import { PiHistoryStore } from './historyStore.svelte';
+  import {
+    ALL_HARNESSES,
+    ChatHistoryReader,
+    effectiveFilter,
+    filterOptions,
+    indexedKindOf,
+    matchesFilter,
+    mergeRows,
+    otherHarnessChats,
+    type HistoryFilter,
+  } from './chatHistory.svelte';
   import { historyAgentLabel, parseStateLabel, scopeForWorkspace } from './piHistory';
 
   interface Props {
@@ -27,6 +42,7 @@
   let { workspaceId, sessionId }: Props = $props();
   const store = useWorkspace();
   const history = new PiHistoryStore(piHistoryHost);
+  const chatReader = new ChatHistoryReader(readWorkspaceHistory);
 
   const DETAILS_KEY = 'piui.shell.history.details';
   let detailsOpen = $state(readDetails());
@@ -37,6 +53,25 @@
   const known = $derived(workspace !== undefined);
   const agentKind = $derived(personal ? 'pi' : store.projectSummaries.find((project) => project.id === workspaceId)?.agentKind);
   const agentLabel = $derived(historyAgentLabel(agentKind));
+  const indexedKind = $derived(indexedKindOf(agentKind));
+  const chats = $derived(otherHarnessChats(store.sessionsFor(workspaceId), indexedKind, (id) => placements.get(id)?.adopted === true));
+  const indexSessions = $derived(history.catalog?.sessions ?? []);
+  const options = $derived(filterOptions(indexSessions, chats, indexedKind));
+  let harnessFilter = $state<HistoryFilter>(ALL_HARNESSES);
+  const activeFilter = $derived(effectiveFilter(harnessFilter, options));
+  const rows = $derived(mergeRows(indexSessions, chats, activeFilter, history.query, indexedKind));
+  // Cross-folder matches are index sessions: keep those of a project whose indexed harness passes the filter.
+  const otherResults = $derived(
+    history.otherResults.filter((result) =>
+      matchesFilter(activeFilter, indexedKindOf(store.projectSummaries.find((project) => project.id === result.projectId)?.agentKind)),
+    ),
+  );
+  const filterItems = $derived<PickerItem[]>([
+    { value: ALL_HARNESSES, label: $t('All harnesses') },
+    ...options.map((kind) => ({ value: kind, label: harnessMeta(kind).label })),
+  ]);
+  const filterLabel = $derived(activeFilter === ALL_HARNESSES ? $t('All harnesses') : harnessMeta(activeFilter).label);
+  const chat = $derived(chats.find((item) => item.id === chatReader.sessionId));
   const projectName = (id: string) => {
     const item = store.catalog.workspaces.find((candidate) => candidate.id === id);
     return item ? (item.personal ? $t('Personal chats') : item.name) : '';
@@ -46,6 +81,7 @@
   );
   const selected = $derived(history.selected);
   const reader = $derived(history.reader);
+  const hasSelection = $derived(selected !== undefined || chat !== undefined);
 
   // Route → store. Only primitive route values are dependencies, so catalog
   // reloads never reopen a scope and store writes never re-trigger this effect.
@@ -54,6 +90,25 @@
     const scope = scopeForWorkspace({ id: workspaceId, personal });
     const target = sessionId;
     untrack(() => void history.open(scope, target));
+  });
+
+  // A chat selection is local state: another folder or an opened Pi/Prime session replaces it.
+  // The prop reads the route, which every navigation replaces: only a new folder clears it.
+  let chatScope: string | undefined;
+  $effect(() => {
+    const id = workspaceId;
+    if (chatScope === id) return;
+    chatScope = id;
+    untrack(() => {
+      chatReader.clear();
+      harnessFilter = ALL_HARNESSES;
+    });
+  });
+  $effect(() => {
+    if (sessionId !== undefined) untrack(() => chatReader.clear());
+  });
+  $effect(() => {
+    if (chatReader.sessionId !== undefined && chat === undefined && !store.catalogLoading) untrack(() => chatReader.clear());
   });
 
   onMount(() => {
@@ -84,6 +139,11 @@
   function openSession(id: string): void {
     store.navigate({ name: 'history', workspaceId, sessionId: id });
   }
+  function openChatHistory(id: string): void {
+    history.clearSelection();
+    store.navigate({ name: 'history', workspaceId });
+    void chatReader.open(id);
+  }
   function openElsewhere(projectId: string, id: string): void {
     store.navigate({ name: 'history', workspaceId: projectId, sessionId: id });
   }
@@ -92,11 +152,12 @@
   }
   function backToList(): void {
     history.clearSelection();
+    chatReader.clear();
     store.navigate({ name: 'history', workspaceId });
   }
 
   function keydown(event: KeyboardEvent): void {
-    if (matchesShortcut(event, 'Mod+Alt+B') && selected) {
+    if (matchesShortcut(event, 'Mod+Alt+B') && selected && !chat) {
       event.preventDefault();
       toggleDetails();
     }
@@ -116,7 +177,7 @@
         </button>
       {/snippet}
     </Picker>
-    <h1 id="history-title" class="title"><ScrollText size={15} /> {$t('{0} session history', [agentLabel])}</h1>
+    <h1 id="history-title" class="title"><ScrollText size={15} /> {$t('Session history')}</h1>
     {#if history.refreshing}<span class="status" role="status"><Spinner size={12} /> {$t('Refreshing…')}</span>{/if}
     <div class="spacer"></div>
     <IconButton label={$t('Refresh sessions')} onclick={() => void history.refresh()} disabled={history.refreshing || !known}><RefreshCw /></IconButton>
@@ -127,7 +188,7 @@
   {:else if !known}
     <EmptyState title={$t('This folder is no longer in Nano Desktop')} description={$t('Choose another project above.')} />
   {:else}
-    <div class="body" class:body--details={detailsOpen && selected} class:body--selected={selected !== undefined}>
+    <div class="body" class:body--details={detailsOpen && selected && !chat} class:body--selected={hasSelection}>
       <aside class="list" aria-label={$t('Sessions')}>
         <div class="filter">
           <Input
@@ -139,6 +200,25 @@
           >
             {#snippet leading()}<Search />{/snippet}
           </Input>
+          {#if options.length > 1}
+            <Picker
+              items={filterItems}
+              value={activeFilter}
+              label={$t('Filter by harness')}
+              searchPlaceholder={$t('Search')}
+              emptyText={$t('Nothing found')}
+              width={220}
+              align="end"
+              onSelect={(value) => (harnessFilter = value as HistoryFilter)}
+            >
+              {#snippet trigger(props)}
+                <button type="button" class="harness-filter" aria-label={`${$t('Filter by harness')}: ${filterLabel}`} {...props}>
+                  <span>{filterLabel}</span>
+                  <ChevronDown size={12} />
+                </button>
+              {/snippet}
+            </Picker>
+          {/if}
         </div>
         {#if workspace?.missing}
           <p class="inline-note" role="status">{$t('The folder is unavailable. Showing the last indexed sessions.')}</p>
@@ -150,44 +230,76 @@
           </p>
         {/if}
         <div class="rows">
+          {#if history.catalogError && chats.length > 0 && !history.loadingCatalog}
+            <p class="inline-note inline-note--warn" role="status">
+              <TriangleAlert size={13} /> {$t(history.catalogError)}
+              <Button size="sm" variant="ghost" onclick={() => void history.refresh()}>{$t('Try again')}</Button>
+            </p>
+          {/if}
           {#if history.loadingCatalog}
             <div class="rows__loading"><Skeleton lines={5} height="14px" /></div>
-          {:else if history.catalogError}
+          {:else if history.catalogError && chats.length === 0}
             <EmptyState size="sm" title={$t('Could not read the session list')} description={$t(history.catalogError)}>
               {#snippet actions()}<Button size="sm" onclick={() => void history.refresh()}>{$t('Try again')}</Button>{/snippet}
             </EmptyState>
-          {:else if (history.catalog?.sessions.length ?? 0) === 0}
+          {:else if indexSessions.length + chats.length === 0}
             <EmptyState
               size="sm"
               icon={ScrollText}
-              title={$t('No {0} sessions here yet', [agentLabel])}
+              title={$t('No sessions here yet')}
               description={personal
                 ? $t('Chats you run with Pi outside a project folder appear here.')
                 : $t('Sessions you run with the {0} terminal app in this folder appear here.', [agentLabel])}
             />
-          {:else if history.sessions.length === 0}
+          {:else if rows.length === 0}
             <p class="rows__empty">{$t('No sessions match the filter.')}</p>
           {:else}
             <ul>
-              {#each history.sessions as session (session.id)}
-                {@const problem = parseStateLabel(session.parseState)}
-                <li>
-                  <button
-                    type="button"
-                    class="row"
-                    class:row--current={session.id === history.selectedId}
-                    aria-current={session.id === history.selectedId ? 'page' : undefined}
-                    onclick={() => openSession(session.id)}
-                  >
-                    <span class="row__title" title={session.title}>{session.title}</span>
-                    <span class="row__meta">
-                      <span>{relativeTime(session.updatedAt ?? session.createdAt, $language, now)}</span>
-                      <span>· {$t('{0} entries', [session.entryCount])}</span>
-                      {#if (session.branchCount ?? 1) > 1}<span>· {$t('{0} branches', [session.branchCount])}</span>{/if}
-                      {#if problem}<span class="row__problem">· {$t(problem)}</span>{/if}
-                    </span>
-                  </button>
-                </li>
+              {#each rows as row (`${row.kind}:${row.id}`)}
+                {#if row.kind === 'index'}
+                  {@const session = row.session}
+                  {@const problem = parseStateLabel(session.parseState)}
+                  <li>
+                    <button
+                      type="button"
+                      class="row"
+                      class:row--current={chat === undefined && session.id === history.selectedId}
+                      aria-current={chat === undefined && session.id === history.selectedId ? 'page' : undefined}
+                      onclick={() => openSession(session.id)}
+                    >
+                      <HarnessMark kind={row.harness} size={16} />
+                      <span class="row__text">
+                        <span class="row__title" title={session.title}>{session.title}</span>
+                        <span class="row__meta">
+                          {#if options.length > 1}<span>{harnessMeta(row.harness).label} ·</span>{/if}
+                          <span>{relativeTime(session.updatedAt ?? session.createdAt, $language, now)}</span>
+                          <span>· {$t('{0} entries', [session.entryCount])}</span>
+                          {#if (session.branchCount ?? 1) > 1}<span>· {$t('{0} branches', [session.branchCount])}</span>{/if}
+                          {#if problem}<span class="row__problem">· {$t(problem)}</span>{/if}
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                {:else}
+                  <li>
+                    <button
+                      type="button"
+                      class="row"
+                      class:row--current={row.id === chatReader.sessionId}
+                      aria-current={row.id === chatReader.sessionId ? 'page' : undefined}
+                      onclick={() => openChatHistory(row.id)}
+                    >
+                      <HarnessMark kind={row.harness} size={16} />
+                      <span class="row__text">
+                        <span class="row__title" title={row.chat.title}>{row.chat.title}</span>
+                        <span class="row__meta">
+                          <span>{harnessMeta(row.harness).label} ·</span>
+                          <span>{relativeTime(row.chat.updatedAt, $language, now)}</span>
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                {/if}
               {/each}
             </ul>
           {/if}
@@ -197,12 +309,12 @@
                 <p class="rows__empty" role="status"><Spinner size={12} /> {$t('Searching other folders…')}</p>
               {:else if history.searchError}
                 <p class="rows__empty">{$t(history.searchError)}</p>
-              {:else if history.otherResults.length}
+              {:else if otherResults.length}
                 <h2>{$t('In other folders')}</h2>
                 <ul>
-                  {#each history.otherResults as result (`${result.projectId}:${result.id}`)}
+                  {#each otherResults as result (`${result.projectId}:${result.id}`)}
                     <li>
-                      <button type="button" class="row" onclick={() => openElsewhere(result.projectId ?? workspaceId, result.id)}>
+                      <button type="button" class="row row--plain" onclick={() => openElsewhere(result.projectId ?? workspaceId, result.id)}>
                         <span class="row__title">{result.title}</span>
                         <span class="row__meta"><span>{projectName(result.projectId ?? '')}</span></span>
                       </button>
@@ -213,12 +325,36 @@
             </section>
           {/if}
         </div>
+        <p class="scope">{$t('Other agents list only chats started in Nano Desktop.')}</p>
       </aside>
 
       <section class="reader" aria-label={$t('Transcript')}>
-        {#if selected === undefined}
+        {#if chat}
+          <header class="reader__head">
+            <IconButton class="back" label={$t('Back to sessions')} size="sm" onclick={backToList}><ChevronLeft /></IconButton>
+            <h2 title={chat.title}>{chat.title}</h2>
+            <Badge>{$t('Read only')}</Badge>
+            <div class="spacer"></div>
+            <Button size="sm" onclick={() => void store.openSession(chat.id)}>{$t('Open chat')}</Button>
+          </header>
+          {#if chatReader.error && chatReader.blocks.length === 0}
+            <EmptyState title={$t('Could not open this session')} description={$t(chatReader.error)}>
+              {#snippet actions()}<Button size="sm" onclick={() => void chatReader.open(chat.id)}>{$t('Try again')}</Button>{/snippet}
+            </EmptyState>
+          {:else}
+            {#key chat.id}
+              <Transcript
+                blocks={chatReader.blocks}
+                loading={chatReader.loading}
+                sessionKey={`history-chat:${chat.id}`}
+                agentLabel={harnessMeta(chat.harness).label}
+                emptyText={$t('This session has no readable messages.')}
+              />
+            {/key}
+          {/if}
+        {:else if selected === undefined}
           {#if history.notice}<p class="inline-note" role="status">{$t(history.notice)}</p>{/if}
-          <EmptyState icon={ScrollText} title={$t('Choose a session')} description={$t('Read-only history from the {0} session files of this folder. Nano Desktop never changes them.', [agentLabel])} />
+          <EmptyState icon={ScrollText} title={$t('Choose a session')} description={$t('Read-only history. Nano Desktop never changes session files.')} />
         {:else}
           <header class="reader__head">
             <IconButton class="back" label={$t('Back to sessions')} size="sm" onclick={backToList}><ChevronLeft /></IconButton>
@@ -261,7 +397,7 @@
         {/if}
       </section>
 
-      {#if detailsOpen && selected}
+      {#if detailsOpen && selected && !chat}
         <HistoryDetails session={selected} {reader} {agentLabel} onClose={toggleDetails} />
       {/if}
     </div>
@@ -337,11 +473,50 @@
     border-right: 1px solid var(--piui-border-subtle);
   }
   .filter {
+    display: flex;
+    align-items: center;
+    gap: var(--piui-space-2);
     padding: var(--piui-space-3);
     flex: none;
   }
   .filter :global(.input) {
-    width: 100%;
+    flex: 1;
+    min-width: 0;
+  }
+  .harness-filter {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: none;
+    height: 28px;
+    max-width: 120px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--piui-radius-sm);
+    background: transparent;
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-sm);
+  }
+  .harness-filter span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .harness-filter:hover {
+    background: var(--piui-hover);
+    color: var(--piui-text);
+  }
+  .harness-filter:focus-visible {
+    outline: 2px solid var(--piui-focus);
+    outline-offset: -2px;
+  }
+  .scope {
+    flex: none;
+    margin: 0;
+    padding: var(--piui-space-2) var(--piui-space-3) var(--piui-space-3);
+    border-top: 1px solid var(--piui-border-subtle);
+    color: var(--piui-text-muted);
+    font-size: var(--piui-text-xs);
   }
   .rows {
     flex: 1;
@@ -369,7 +544,9 @@
   }
   .row {
     display: grid;
-    gap: 2px;
+    grid-template-columns: 16px minmax(0, 1fr);
+    align-items: start;
+    gap: 8px;
     width: 100%;
     padding: 7px 8px;
     border: 0;
@@ -377,6 +554,15 @@
     background: transparent;
     color: var(--piui-text);
     text-align: left;
+  }
+  .row--plain {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+  .row__text {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
   }
   .row:hover {
     background: var(--piui-hover);

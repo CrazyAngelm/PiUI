@@ -1,7 +1,12 @@
 /** Russian UI copy for Pi history, session tree and extensions. Keys are the English source strings. */
 export const classicRu: Readonly<Record<string, string>> = {
   // Read-only native session history
-  '{0} session history': 'История сессий {0}',
+  'Session history': 'История сессий',
+  'Filter by harness': 'Фильтр по агенту',
+  'All harnesses': 'Все агенты',
+  'Other agents list only chats started in Nano Desktop.': 'Для остальных агентов показаны только чаты, начатые в Nano Desktop.',
+  'Read-only history. Nano Desktop never changes session files.': 'История только для чтения. Nano Desktop не меняет файлы сессий.',
+  'No sessions here yet': 'Здесь пока нет сессий',
   'Open session history': 'Открыть историю сессий',
   'Refresh sessions': 'Обновить список сессий',
   'This folder is no longer in Nano Desktop': 'Этой папки больше нет в Nano Desktop',
@@ -20,7 +25,6 @@ export const classicRu: Readonly<Record<string, string>> = {
   'In other folders': 'В других папках',
   Transcript: 'Переписка',
   'Choose a session': 'Выберите сессию',
-  'Read-only history from the {0} session files of this folder. Nano Desktop never changes them.': 'История только для чтения из файлов сессий {0} этой папки. Nano Desktop их не изменяет.',
   'Back to sessions': 'К списку сессий',
   'Could not open this session': 'Не удалось открыть сессию',
   'Showing an older part of this session. Reopen it to return to the latest entries.': 'Показана более ранняя часть сессии. Откройте её заново, чтобы вернуться к последним записям.',

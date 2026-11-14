@@ -79,4 +79,19 @@ export const harnessesRu: Readonly<Record<string, string>> = {
   // Claude Code sign-in: run panel.
   'Claude Code is not signed in with your Claude subscription, so this step did not start. Run `claude` in a terminal and use /login, then run this step again.':
     'Claude Code не вошёл по вашей подписке Claude, поэтому шаг не запускался. Выполните `claude` в терминале, войдите через /login и запустите шаг снова.',
+
+  // Settings → Harnesses → Connect (ADR-054). "Connect" also wins over the older graph-editor entry.
+  'Connect': 'Подключить',
+  'Connect {0}': 'Подключить {0}',
+  '{0} signs in with its own tools. Nano Desktop never sees its credentials.':
+    '{0} выполняет вход своими средствами. Nano Desktop не видит его учётные данные.',
+  'Open terminal': 'Открыть терминал',
+  'Copy command': 'Скопировать команду',
+  'Then type {0} there.': 'Затем введите там {0}.',
+  'Finish signing in in the terminal, then check again.': 'Завершите вход в терминале и проверьте снова.',
+  'Sign in with {0}’s own tools in a terminal, then check again.': 'Войдите средствами {0} в терминале и проверьте снова.',
+  'Could not open a terminal. Run the command yourself.': 'Не удалось открыть терминал. Выполните команду вручную.',
+  'A terminal app was not found. Run the command yourself.': 'Терминал не найден. Выполните команду вручную.',
+  'Safe mode is on: Nano Desktop starts no agent program.': 'Включён безопасный режим: Nano Desktop не запускает программы агентов.',
+  'Open Nano account': 'Открыть аккаунт Nano',
 };

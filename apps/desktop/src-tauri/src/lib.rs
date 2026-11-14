@@ -23,6 +23,7 @@ mod contributions;
 mod dto;
 mod fusion;
 mod harness_configuration;
+mod harness_connect_api;
 mod harness_registry_api;
 mod nano;
 mod navigation_guard;
@@ -47,6 +48,7 @@ mod session_tools_test_support;
 mod state;
 mod subpipelines;
 mod teammates_api;
+mod terminal;
 mod workspace_api;
 
 use state::HostState;
@@ -959,6 +961,7 @@ pub fn run() -> Result<(), tauri::Error> {
             fusion::fusion_command_v1,
             teammates_api::teammates_command_v1,
             harness_registry_api::harness_registry_v1,
+            harness_connect_api::harness_connect_v1,
             app_update::app_update_status_v1,
             app_update::app_update_check_v1,
             app_update::app_update_install_v1,

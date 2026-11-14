@@ -5,6 +5,18 @@ The final Stage 8 four-review gate and targeted remediation checks are closed.
 The entries below retain earlier discoveries and failed attempts as a chronological
 record; the completion entry at the end supersedes their pending status.
 
+Release authorization, 2026-11-14: the requester subsequently authorized merging
+this implementation with current Desktop `main` and server `master`, and building
+both Windows and Linux installation packages. Other unfinished branches are
+explicitly excluded. This supersedes the original worktree-only restriction;
+it does not request a server production deployment. Integration keeps Desktop
+0.3.1 executor templates/favorites and Linux support. Its existing ADR-053 to
+ADR-055 keep their identifiers; the shared-interface decision becomes ADR-056.
+The requester also requires `master` as the sole primary source branch: Desktop
+`main` is renamed after preserving its complete history, and CI/contribution/
+release instructions follow `master`. The server already has a `master` source
+branch; this does not request changing its separate production branch.
+
 Implementation contract, authorized 2026-11-13. Work is isolated in the
 `codex/nano-unification` worktrees of PIUI and NanoAgentProject. This is not
 authorization to merge, deploy, replace the installed application or migrate
@@ -833,3 +845,55 @@ Browser API/SSE/media/voice/clipboard are synthetic; no physical microphone,
 OS print dialog, Linux installer, merge, deployment or installed-app replacement
 is claimed. Owned proof processes were stopped. The approved worktree scope is
 complete; release remains a separate operation.
+
+## Main/master integration review, 2026-11-14
+
+The release candidate combines the completed unification with Desktop main
+`6aa4a0b` and server master `c4975bbd`. Main's 0.3.1 templates, executor tabs,
+favorites, harness connection and Linux packaging remain. Shared-interface
+ADR-056 follows main's existing ADR-053 through ADR-055. The requester authorizes
+master as the primary Desktop branch and removal of main only after its complete
+history is included. Other unfinished branches and server production deployment
+are outside this release.
+
+Pasteur, Boole, Plato and Zeno independently reviewed the same frozen Desktop
+and server trees with GPT-6.1 Sol, max reasoning, read-only. All four final
+reports arrived before source thaw. Confirmed corrections and evidence:
+
+- The new reasoning ramp now follows Nano/Chaos and plugin ornament geometry,
+  including its hit target, Auto label, radius and overhang. Svelte and E2E types
+  pass, 14 focused units pass, and the actual Lab geometry flow passes across
+  Nano, Chaos, Paper/plain, Terminal/slanted and disabled-plugin fallback.
+- Four private graph payload tables explicitly deny the shared legacy SQL reader.
+  Additive migration 312, both fresh-baseline paths and the deploy regrant path
+  retain that restriction. Three real PostgreSQL tests execute the shipped SQL,
+  verify actual SELECT denial and preserve unrelated reader access. Existing
+  migrations 307/308 remain immutable.
+- The baseline ownership check recognizes real EF Table attributes. The pause
+  and cancellation fixtures await the persisted idle preparation before issuing
+  revision-bound commands and assert acceptance before reading their result.
+  The 54 affected server checks have successful latest outcomes with no skips:
+  53 passed in the first corrected batch and both affected CAS cases passed
+  after the final test-only synchronization fix. This is aggregated evidence,
+  not one uninterrupted 54-test rerun; runtime scheduling was not altered.
+- The tracked Blazor smoke now checks the accepted single footer timestamp.
+  Its exact assertion passed in the actual merged Blazor flow: 12 groups and
+  zero page errors. HTTP/SSE/media/print fixtures are synthetic as before.
+
+The earlier merged candidate also passed 84 Desktop units and 17 owner/pipeline/
+favorites Lab flows, shared graph and conversation browser checks, and locked
+kernel build/protocol proof. The broad server build and 423-test focused run
+are retained with their original failure rather than rewritten as an all-pass
+run; the affected case is closed by the explicit remediation evidence above.
+
+Review reports, resolutions and final package/launch evidence are preserved
+under `evidence/nano-unification-release-20261114/`. Installer binaries and their
+combined checksums belong in the primary repository's `artifacts/`, outside
+Cargo target. Windows collection precedes Linux collection, since the former
+replaces that directory. Old packages and the distinct installed executable are
+hash-verified in the release evidence rollback directory.
+
+Out-of-scope inherited findings: first-pipeline failure can restore the default
+executor on returning Home; prepared server image reuse does not yet include
+the vendored kernel input in its compatible-ancestor guards. No server image
+reuse or production deployment is performed or claimed by this Desktop release.

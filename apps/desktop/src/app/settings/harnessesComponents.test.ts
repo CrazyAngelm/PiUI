@@ -30,6 +30,8 @@ function agentOf(registry: HarnessRegistryV1, id: string): AcpAgentEntryV1 {
 }
 
 const noop = () => undefined;
+/** The visible text of a Connect button (Svelte may add empty comment markers around snippet text). */
+const CONNECT_LABEL = /Connect(?:<!---->)*<\/span>/;
 
 describe('Settings → Harnesses components', () => {
   beforeEach(() => {
@@ -39,13 +41,15 @@ describe('Settings → Harnesses components', () => {
     vi.useRealTimers();
   });
 
-  it('renders every harness with status, location, tested versions and sign-in guidance', async () => {
+  it('renders every harness as a calm row with its status, and location and tested versions under Details', async () => {
     const { body } = render(HarnessesSettings, { props: { store: storeWith(await registryOf('demo')) } });
     expect(body).toContain('aria-label="Built-in harnesses"');
     for (const name of ['Pi', 'Prime Agent', 'Codex', 'Hermes', 'Claude Code', 'Gemini CLI', 'OpenCode', 'Qwen Code', 'Lab Agent']) expect(body).toContain(`>${name}</strong>`);
     expect(body).toContain('0.147.0 and newer');
     expect(body).toContain('C:/Users/example/AppData/Roaming/npm/node_modules/@openai/codex/bin/codex.js');
-    expect(body).toContain('Claude Code runs only on your Claude subscription: run `claude` in a terminal and use /login.');
+    // Location and the tested range sit inside a native <details>; the sign-in guidance moved into the Connect dialog.
+    expect(body).toMatch(/<details[^>]*>(?:(?!<\/details>)[\s\S])*Location<\/dt>(?:(?!<\/details>)[\s\S])*codex\.js(?:(?!<\/details>)[\s\S])*Tested with Nano Desktop/);
+    expect(body).not.toContain('Claude Code runs only on your Claude subscription');
     // ACP agents: the exact command line, the identity, readiness and the next decision.
     expect(body).toContain('acp:gemini-cli');
     expect(body).toContain('"C:/Program Files/nodejs/node.exe" C:/Users/example/AppData/Roaming/npm/node_modules/@google/gemini-cli/dist/index.js --acp');
@@ -62,8 +66,83 @@ describe('Settings → Harnesses components', () => {
     expect(body).not.toContain('Confirm version…');
     expect(body).toContain('Add ACP agent…');
     // Per-agent buttons keep their visible name and are described by the agent title.
-    expect(body).toMatch(/<strong id="([^"]+)-title">Lab Agent<\/strong>[\s\S]*aria-describedby="\1-title"/);
+    expect(body).toMatch(/<strong id="([^"]+)-title"[^>]*>Lab Agent<\/strong>[\s\S]*aria-describedby="\1-title"/);
     expect(body).not.toContain('Safe mode:');
+    // No lead paragraphs and no bottom credential note: the sentence lives in the Connect dialog.
+    expect(body).not.toContain('Nano Desktop drives the agent tools');
+    expect(body).not.toContain('Agents that speak the Agent Client Protocol');
+    expect(body).not.toContain('Nano Desktop never reads harness credentials');
+    expect(body).toMatch(/<h2[^>]*>Harnesses<\/h2>/);
+  });
+
+  /** Start tags of the buttons whose accessible name is "Connect". */
+  function connectButtons(body: string): string[] {
+    return [...body.matchAll(/<button\b([^>]*)>(?:(?!<\/button>)[\s\S])*?Connect(?:<!---->)*<\/span>/g)].map((match) => match[1] ?? '');
+  }
+
+  it('offers Connect on every installed harness and agent that can sign in, and on nothing else', async () => {
+    const registry = await registryOf('demo');
+    // Six built-in harnesses and the two shipped agents; the missing and the untrusted agent have nothing to connect.
+    expect(connectButtons(render(HarnessesSettings, { props: { store: storeWith(registry) } }).body)).toHaveLength(8);
+    const missing: HarnessRegistryV1 = {
+      ...registry,
+      harnesses: registry.harnesses.map((harness) => (harness.harness === 'hermes' ? { ...harness, state: 'not-installed' as const } : harness)),
+    };
+    expect(connectButtons(render(HarnessesSettings, { props: { store: storeWith(missing) } }).body)).toHaveLength(7);
+  });
+
+  it('makes Connect the main action only for a harness that needs a sign-in', async () => {
+    const registry = await registryOf('demo');
+    const signedOut: HarnessRegistryV1 = {
+      ...registry,
+      harnesses: registry.harnesses.map((harness) => (harness.harness === 'claude-code' ? { ...harness, state: 'sign-in-required' as const } : harness)),
+    };
+    const buttons = connectButtons(render(HarnessesSettings, { props: { store: storeWith(signedOut) } }).body);
+    const primary = buttons.filter((attributes) => attributes.includes('btn--primary'));
+    expect(primary).toHaveLength(1);
+    expect(primary[0]).toMatch(/aria-describedby="[^"]*-claude-code"/);
+    expect(buttons.filter((attributes) => attributes.includes('btn--secondary'))).toHaveLength(7);
+  });
+
+  it('disables Connect in safe mode', async () => {
+    const { body } = render(HarnessesSettings, { props: { store: storeWith(await registryOf('safe')) } });
+    const buttons = connectButtons(body);
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const attributes of buttons) expect(attributes).toContain('disabled');
+  });
+
+  it('keeps an agent row to its status and next decision, with identity and removal under Details', async () => {
+    const { body } = render(HarnessesSettings, { props: { store: storeWith(await registryOf('demo')) } });
+    // Signing in moved into the Connect dialog: no row carries sign-in text.
+    expect(body).not.toContain('The agent offers:');
+    const lab = body.slice(body.indexOf('>Lab Agent</strong>'));
+    const labRow = lab.slice(0, lab.indexOf('</li>'));
+    expect(labRow).toContain('Review and trust…');
+    expect(labRow).not.toMatch(CONNECT_LABEL);
+    // An agent that is not trusted yet has no secret grants to review.
+    expect(labRow).not.toContain('Secret variables…');
+    expect(labRow).toMatch(/<details[^>]*>[\s\S]*Identity[\s\S]*acp:lab-agent[\s\S]*Remove…/);
+    const gemini = body.slice(body.indexOf('>Gemini CLI</strong>'));
+    const geminiRow = gemini.slice(0, gemini.indexOf('</li>'));
+    expect(geminiRow).toMatch(CONNECT_LABEL);
+    expect(geminiRow).not.toContain('Remove…');
+    expect(geminiRow).toContain('Check again');
+    // Secret variables are reviewed under Details, never on the row line.
+    expect(geminiRow).toMatch(/<details[^>]*>[\s\S]*Secret variables…/);
+    expect(geminiRow.slice(0, geminiRow.indexOf('<details'))).not.toContain('Secret variables…');
+  });
+
+  it('keeps Secret variables… under Details for a shipped agent that is not installed', async () => {
+    const registry = await registryOf('demo');
+    const removed: HarnessRegistryV1 = {
+      ...registry,
+      agents: registry.agents.map((agent) => (agent.descriptor.id === 'gemini-cli' ? { ...agent, state: 'not-installed' as const } : agent)),
+    };
+    const { body } = render(HarnessesSettings, { props: { store: storeWith(removed) } });
+    const gemini = body.slice(body.indexOf('>Gemini CLI</strong>'));
+    const geminiRow = gemini.slice(0, gemini.indexOf('</li>'));
+    expect(geminiRow).not.toMatch(CONNECT_LABEL);
+    expect(geminiRow).toMatch(/<details[^>]*>[\s\S]*Secret variables…/);
   });
 
   it('marks versions Nano Desktop has not tested next to the readiness, never instead of it', async () => {

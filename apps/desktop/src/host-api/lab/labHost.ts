@@ -10,6 +10,7 @@ import { composerHandlers } from './composerFake';
 import { composerInputsHandlers } from './composerInputsFake';
 import { demoExtensions, extensionHandlers } from './extensionsFake';
 import { codexSandboxFromSearch, createLabFusion, fusionHandlers, type LabFusion } from './fusionFake';
+import { harnessConnectHandlers } from './harnessConnectFake';
 import { LabEventBus } from './labBus';
 import { browserTimers, LabClock, type LabTimers } from './labClock';
 import { LabDecodeFailure, tauriArgumentError } from './labErrors';
@@ -175,6 +176,7 @@ export function createLabHost(options: LabHostOptions = {}): LabHost {
     ...extensionHandlers(scenario === 'empty' ? [] : demoExtensions()),
     ...backgroundHandlers(state),
     ...acpHandlers(runtime, bus),
+    ...harnessConnectHandlers(state),
     ...runDebuggingHandlers(runtime),
     ...appUpdateHandlers(
       options.updates ?? (typeof window === 'undefined' ? 'off' : updateScenarioFromSearch(window.location.search)),

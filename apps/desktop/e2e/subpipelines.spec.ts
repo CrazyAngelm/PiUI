@@ -30,7 +30,7 @@ test.describe('sub-pipelines', () => {
     // The Output block edits what this pipeline returns as a sub-pipeline.
     await canvas.getByRole('group', { name: 'Output', exact: true }).click();
     const output = page.getByRole('complementary', { name: 'Output', exact: true });
-    await expect(output).toContainText('No declared outputs');
+    await expect(output).toContainText('Without outputs, it returns the text of its last finished step.');
     await output.getByRole('button', { name: 'Close output settings' }).click();
 
     await editor.getByRole('button', { name: 'Run', exact: true }).click();

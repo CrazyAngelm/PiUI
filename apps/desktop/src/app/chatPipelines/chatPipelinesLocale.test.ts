@@ -36,6 +36,13 @@ const MESSAGES = [
   'This template could not be opened',
   'Pipelines take text only',
   'Remove the images, or talk to the harness directly.',
+  // A template chosen in the new-chat picker is saved on send (ADR-053).
+  'Sending saves this template as a pipeline in this project.',
+  'Saved “{0}” to this project’s pipelines',
+  'Could not save the pipeline',
+  'This template needs a model, but {0} has none available.',
+  'This template does not accept chat messages.',
+  'Preparing the template…',
   ...Object.values(PIPELINE_LIBRARY_ERROR_COPY),
 ];
 
