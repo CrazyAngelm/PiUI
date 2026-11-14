@@ -1871,3 +1871,35 @@ runs the resolved harness program with fixed arguments.
 is unchanged. The sign-in program runs outside any Nano Desktop containment, as
 it would if the user started it. Linux terminal launch is unverified on real
 distributions.
+
+## ADR-055 — Linux agent containment through the bridge's process group
+
+**Status:** Accepted 2026-11-14 (the owner asked for a Linux build that works).
+
+**Context:** native harness discovery reported every harness on Linux as
+unverified ("Native lifecycle containment is not yet verified on this
+platform"), so the Linux packages started but could run no agent. Every Unix
+spawner already starts the bridge as the leader of its own process group
+(`process_group(0)`) and retires it with `SIGKILL` to the group; what was
+missing was evidence and the case where the host itself dies.
+
+**Decision:**
+
+- Linux counts as a verified containment platform for harness discovery;
+  macOS stays unverified.
+- The host retires the bridge's group on every stop (dispose and emergency
+  termination), as before.
+- When the host is gone (stdin EOF), the bridge disposes its adapter, waits up
+  to 5 s for its own child processes to exit (a harness flushing its history),
+  then sends `SIGKILL` to its own group. It does so only when a group with its
+  pid exists, which POSIX ties to it being the leader; Windows is unchanged
+  (job object).
+- Evidence: `linux_session_stop_ends_tool_processes_left_in_the_bridge_group`
+  (a shell's background job survives only in the group and ends on dispose and
+  on termination) and the bridge test for the host-gone path; both run on Linux
+  in CI.
+
+**Consequences:** a descendant that starts its own session (`setsid`, a
+daemonizing tool) leaves the group and is not retired; Windows job objects do
+not have this gap. This is containment of the process tree, not a sandbox: it
+restricts no file, network or tool access.

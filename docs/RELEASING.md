@@ -7,8 +7,11 @@ are optional: they switch on only when the secrets and variables below exist.
 Without them the workflow publishes the same unsigned build as before, and the
 application never checks for updates.
 
-Windows is the primary, verified platform. Linux packages build in CI, but
-native agent lifecycle containment is only verified on Windows. macOS is
+Windows is the primary, verified platform. Linux packages (Ubuntu 22.04 and
+newer) contain native agents in the bridge's own process group: the host ends
+the group when a session stops, and the bridge ends it when the host is gone.
+A tool process that starts its own session (`setsid`) leaves that group;
+Windows job objects have no such gap. macOS is
 experimental (ad-hoc signed, not notarized). Releases stay pre-releases until
 the Windows build is code-signed.
 
@@ -147,6 +150,20 @@ pnpm build:portable     # on Windows: the portable executable only, no installer
 node scripts/release-build.mjs windows --dry-run   # show what is enabled, build nothing
 ```
 
+On a Windows machine with WSL and Docker Desktop, build the Linux packages of
+the current commit with:
+
+```bash
+wsl -d Ubuntu -- bash tools/linux-build/build.sh
+```
+
+It builds in an Ubuntu 22.04 container (`tools/linux-build/Dockerfile`, the
+release job's base and glibc floor) from a separate Linux checkout on the WSL
+disk (`~/build/piui-linux`, which keeps the Linux `node_modules` and `target/`
+cache). It builds `HEAD` plus uncommitted changes to tracked files; untracked
+files are left out. The `.deb`, the AppImage and an
+updated `SHA256SUMS.txt` land in `artifacts/` next to the Windows files.
+
 `pnpm build:portable` is the quick local update: it skips the installer and
 replaces `artifacts/` with the new executable and its checksum. A copy that is
 still running is moved aside (`*.old`) and keeps working until it is restarted.
@@ -232,5 +249,11 @@ in [AGENTS.md](../AGENTS.md).
   current user.
 - Linux `.deb` updates use the system package installer, which may ask for a
   password; AppImage updates replace the AppImage file in place.
-- macOS builds are not notarized; Linux and macOS agent lifecycle containment is
-  not yet verified.
+- macOS builds are not notarized, and macOS agent lifecycle containment is not
+  yet verified. Linux containment is a process group (see above).
+- On Linux, harnesses and Node.js are found from the `PATH` the application
+  starts with. A version manager that sets `PATH` only in an interactive shell
+  (nvm in `.bashrc`) is not seen from a desktop launcher: start Nano Desktop
+  from that shell, or set `PIUI_NODE` and `PIUI_PI_CLI`.
+- On Linux the Nano sign-in is kept in memory for the running app only (no OS
+  credential store is used yet), and Nano uses the separately installed Pi.

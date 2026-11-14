@@ -423,8 +423,9 @@ server-side limits.
   tokens and a non-exportable device key are a later hardening step.
 - Releases are unsigned previews until a signing certificate exists; signing
   becomes mandatory before the installer is offered on a website.
-- Only Windows has verified process containment and credential storage; no
-  claim is made for macOS or Linux.
+- Windows has verified process containment and OS credential storage. Linux
+  contains agents in a process group (a descendant that calls `setsid` leaves
+  it) and keeps the Nano sign-in in memory only; no claim is made for macOS.
 - Downloads in the cloud window are cancelled; a host save dialog is a later
   step.
 - Evidence so far is synthetic (the dev server and fixtures). Real-provider

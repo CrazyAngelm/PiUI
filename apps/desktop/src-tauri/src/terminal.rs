@@ -465,7 +465,16 @@ mod tests {
             piui_runtime::workspace_runtime::HarnessKind::ClaudeCode,
             [
                 ("Path", "p"),
-                ("ClaudeCode", "1"),
+                // Windows names match case-insensitively; on Unix only the
+                // exact `CLAUDECODE` is that variable.
+                (
+                    if cfg!(windows) {
+                        "ClaudeCode"
+                    } else {
+                        "CLAUDECODE"
+                    },
+                    "1",
+                ),
                 ("ANTHROPIC_API_KEY", "k"),
                 ("HOME", "h"),
             ]

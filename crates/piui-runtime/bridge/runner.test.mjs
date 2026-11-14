@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { runBridge, sidekickOperationHash, validateBoardOperation, validateSidekickOperation } from "./runner.mjs";
+import {
+  retireOwnProcessGroup,
+  retireOwnProcessGroupAfterChildren,
+  runBridge,
+  sidekickOperationHash,
+  validateBoardOperation,
+  validateSidekickOperation,
+} from "./runner.mjs";
 
 function harness(factory) {
   const input = new PassThrough();
@@ -793,5 +801,87 @@ test("an exception an adapter callback leaves unhandled stops the bridge with on
     assert.equal(frames[errorIndex].event.message, "The native bridge hit an internal error and stopped.");
     assert.ok(closedIndex > errorIndex, "the adapter is disposed after the host is told");
     assert.doesNotMatch(stdout, /PRIVATE_PAYLOAD/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("the own process group is retired only when this bridge leads one, never on Windows", () => {
+  const calls = [];
+  const kill = (target, signal) => { calls.push([target, signal]); };
+  assert.equal(retireOwnProcessGroup(kill, "win32", 42), false);
+  assert.deepEqual(calls, []);
+  const notLeader = (target, signal) => { calls.push([target, signal]); throw Object.assign(new Error("ESRCH"), { code: "ESRCH" }); };
+  assert.equal(retireOwnProcessGroup(notLeader, "linux", 42), false);
+  assert.deepEqual(calls, [[-42, 0]]);
+  calls.length = 0;
+  assert.equal(retireOwnProcessGroup(kill, "linux", 42), true);
+  assert.deepEqual(calls, [[-42, 0], [-42, "SIGKILL"]]);
+});
+
+test("after EOF the group is retired once the bridge's own children exit, or at the grace deadline", async () => {
+  let clock = 0;
+  let retired = 0;
+  const live = [["ProcessWrap", "PipeWrap"], ["ProcessWrap"], ["PipeWrap"]];
+  retireOwnProcessGroupAfterChildren({
+    platform: "linux", resources: () => live.shift() ?? [], retire: () => { retired += 1; }, pollMs: 1, now: () => clock,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(retired, 1, "retired as soon as no child process remains");
+
+  retired = 0;
+  retireOwnProcessGroupAfterChildren({
+    platform: "linux", resources: () => { clock += 10; return ["ProcessWrap"]; }, retire: () => { retired += 1; }, graceMs: 25, pollMs: 1, now: () => clock,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(retired, 1, "a child that never exits is retired at the deadline");
+
+  retired = 0;
+  retireOwnProcessGroupAfterChildren({ platform: "win32", resources: () => [], retire: () => { retired += 1; } });
+  assert.equal(retired, 0);
+});
+
+function linuxProcessAlive(pid) {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3) !== "Z";
+  } catch { return false; }
+}
+
+test("a bridge whose host is gone ends the tool processes its adapter left in its group", { skip: process.platform !== "linux" }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), "piui-runner-group-"));
+  try {
+    const runner = await readFile(new URL("./runner.mjs", import.meta.url), "utf8");
+    // The adapter starts a shell that leaves a background tool process behind
+    // and exits: a grandchild only the process group still holds.
+    const factory = [
+      "import { execFileSync } from 'node:child_process';",
+      "globalThis.__PIUI_BRIDGE_FACTORY__ = async (_config, emit) => {",
+      "  const pid = execFileSync('/bin/sh', ['-c', 'sleep 60 >/dev/null 2>&1 & echo $!'], { encoding: 'utf8' }).trim();",
+      "  emit({ type: 'status', status: 'idle', toolPid: Number(pid) });",
+      "  return { dispose() {} };",
+      "};",
+    ].join("\n");
+    const file = join(dir, "bridge.mjs");
+    await writeFile(file, `${factory}\n${runner}`);
+    // Like the host: the bridge leads its own process group.
+    const child = spawn(process.execPath, [file], { stdio: ["pipe", "pipe", "ignore"], detached: true });
+    let stdout = "";
+    let toolPid;
+    const started = new Promise((resolve) => child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+      const match = /"toolPid":(\d+)/.exec(stdout);
+      if (match) { toolPid = Number(match[1]); resolve(); }
+    }));
+    const closed = new Promise((resolve) => child.once("close", (code, signal) => resolve({ code, signal })));
+    const timeout = setTimeout(() => { try { process.kill(-child.pid, "SIGKILL"); } catch {} }, 10000);
+    child.stdin.write(`${JSON.stringify(config)}\n`);
+    await started;
+    assert.ok(linuxProcessAlive(toolPid), "the tool process runs before EOF");
+    child.stdin.end();
+    const result = await closed;
+    clearTimeout(timeout);
+    assert.equal(result.signal, "SIGKILL", "the bridge retires its own group, itself included");
+    const deadline = Date.now() + 5000;
+    while (linuxProcessAlive(toolPid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(linuxProcessAlive(toolPid), false, "the left-behind tool process ended with the bridge");
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

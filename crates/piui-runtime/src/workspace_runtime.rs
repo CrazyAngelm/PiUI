@@ -3802,6 +3802,10 @@ fn global_package_roots() -> Vec<PathBuf> {
         roots.push(home.join(".local/share/npm/lib/node_modules"));
         roots.push(home.join(".pnpm-global/lib/node_modules"));
     }
+    #[cfg(not(windows))]
+    roots.extend(crate::real_rpc::node_prefix_global_roots(std::env::var_os(
+        "PATH",
+    )));
     roots.push(PathBuf::from("/usr/local/lib/node_modules"));
     roots.push(PathBuf::from("/usr/lib/node_modules"));
     roots
@@ -4123,7 +4127,12 @@ fn discover_native_harness(kind: HarnessKind) -> NativeHarnessSummary {
         Ok(launch) => {
             let version_status = harness_version_range(kind)
                 .and_then(|range| range.check(launch.version.as_deref()).status());
-            let platform_verified = cfg!(windows);
+            // Windows: a job object. Linux: the bridge's own process group,
+            // retired by the host on stop and by the bridge when the host is
+            // gone (`linux_session_stop_ends_tool_processes_left_in_the_bridge_group`,
+            // bridge/runner.test.mjs). A descendant that starts its own
+            // session (`setsid`) leaves the group; macOS is unverified.
+            let platform_verified = cfg!(any(windows, target_os = "linux"));
             let (status, reason) =
                 if let Some(reason) = version_refusal_reason(kind, launch.version.as_deref()) {
                     (HarnessAvailability::Unverified, Some(reason.into()))
@@ -5268,6 +5277,51 @@ mod tests {
         let factory = r#"return {dispose(){}}"#;
         let (runtime, _events) = spawn_test_bridge(factory).await.expect("group handshake");
         runtime.dispose().await.expect("group dispose");
+    }
+
+    /// Linux containment: a tool process the harness left behind (a shell's
+    /// background job, now only in the bridge's process group) ends when the
+    /// host stops the session, both on emergency termination and on dispose.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn linux_session_stop_ends_tool_processes_left_in_the_bridge_group() {
+        fn alive(pid: u32) -> bool {
+            std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+                stat.rsplit_once(')')
+                    .is_some_and(|(_, rest)| !rest.trim_start().starts_with('Z'))
+            })
+        }
+        let directory =
+            std::env::temp_dir().join(format!("piui-linux-group-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("fixture directory");
+        for (round, emergency) in [true, false].into_iter().enumerate() {
+            let marker = directory.join(format!("tool-{round}.pid"));
+            let factory = format!(
+                r#"const {{execFileSync}}=await import('node:child_process');const {{writeFileSync}}=await import('node:fs');writeFileSync({path},execFileSync('/bin/sh',['-c','sleep 60 >/dev/null 2>&1 & echo $!'],{{encoding:'utf8'}}).trim());return {{dispose(){{}}}};"#,
+                path = serde_json::to_string(&marker.to_string_lossy()).expect("path literal"),
+            );
+            let (runtime, _events) = spawn_test_bridge(&factory).await.expect("bridge starts");
+            let pid: u32 = std::fs::read_to_string(&marker)
+                .expect("tool pid")
+                .trim()
+                .parse()
+                .expect("numeric pid");
+            assert!(alive(pid), "the tool process runs before the stop");
+            if emergency {
+                runtime.terminate().await.expect("terminate");
+            } else {
+                runtime.dispose().await.expect("dispose");
+            }
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while alive(pid) && std::time::Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert!(
+                !alive(pid),
+                "stopping (emergency: {emergency}) ends the tool process"
+            );
+        }
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]

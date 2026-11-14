@@ -1,0 +1,40 @@
+{
+  "timestamp": "2026-11-14T18:50:00+07:00",
+  "commit": "built from 7be2ba4 plus the working-tree Linux fixes, committed unchanged as the commit that adds this file",
+  "platform": "linux x86_64",
+  "builder": "tools/linux-build/build.sh: WSL Ubuntu 24.04 host, Docker image piui-linux-builder:22.04 (Ubuntu 22.04, glibc 2.35 floor, Rust 1.94.1, Node 22.23.5, pnpm 10.23.0), Linux checkout ~/build/piui-linux on the WSL disk (D:)",
+  "changes": [
+    "Pi discovery on Linux: resolve the npm `<prefix>/bin/pi` symlink to the package (`dist/bundle/cli.js` -> `dist/cli.js`), and search `<prefix>/lib/node_modules` beside the first `node` on PATH (nvm, fnm, official archives) for Pi, Codex, Prime and Claude Code; before, only /usr/local and /usr were searched",
+    "Linux counts as a verified containment platform for harness discovery (ADR-055); before, every harness was 'Unsupported version: Native lifecycle containment is not yet verified on this platform' and no agent could start",
+    "Bridge runner: after stdin EOF (host gone) and adapter dispose, it waits up to 5 s for its own child processes, then SIGKILLs its own process group (Unix only, only when it leads a group)",
+    "terminal.rs test: the Unix spelling of CLAUDECODE (the test failed on Linux)",
+    "tools/linux-build (Dockerfile, build.sh) and docs/RELEASING.md, docs/NANO_DESKTOP.md, ADR-055"
+  ],
+  "release": {
+    "appimage": {
+      "path": "artifacts/NanoDesktop_0.3.1_amd64.AppImage",
+      "bytes": 93284856,
+      "sha256": "63a8dfc5c163c39b394ff6324ce423d0dd2d46fb9b8715d7ecc4cc4a11a8f22c"
+    },
+    "deb": {
+      "path": "artifacts/NanoDesktop_0.3.1_amd64.deb",
+      "bytes": 16485510,
+      "sha256": "1238fb895250b77e76e08805797b2356234a6f29bd6d54660818398145502ecf"
+    },
+    "signing": "unsigned; updater not configured",
+    "windowsFilesUnchanged": "the 0.3.1 Windows installer and portable executable from e81db4b stay as recorded in local-release-20261113; the Linux fixes do not change Windows behaviour"
+  },
+  "verification": {
+    "launch": "fresh ubuntu:22.04 and ubuntu:24.04 containers, Xvfb, ordinary user: .deb installs with apt (deps resolved), /usr/bin/nano-desktop and the AppImage each alive after 30 s with a 'Nano Desktop' window and WebKit processes; the UI renders (linux-ubuntu-22.04-deb.png)",
+    "harnesses": "Ubuntu 22.04 + Node 22.23.5 at /opt/node + npm -g Pi 1.5.2 and Codex 0.169.0: before the fixes Pi was 'Not installed'; after the discovery fix Pi, Codex and Nano were found but blocked by the containment gate (linux-harnesses-before-gate.png); after the gate change a Pi session starts from the composer (linux-pi-session.png; the message is declined because the container has no provider credentials)",
+    "crashContainment": "kill -9 of the app during the Pi session: the bridge (leader of its own process group) and its children were gone 8 s later",
+    "linuxChecks": "in the builder image: cargo fmt --check, cargo clippy --workspace --all-targets -D warnings clean; cargo test --workspace --no-fail-fast all passed, including linux_session_stop_ends_tool_processes_left_in_the_bridge_group and pi_launch_resolves_an_npm_prefix_symlink_and_the_node_prefix_root; node --test bridge/*.test.mjs 273 passed, 0 failed, 5 skipped (the host-gone group test ran)",
+    "windowsChecks": "cargo fmt --check clean; cargo clippy -p piui-runtime -p piui-desktop --all-targets -D warnings clean; node --test bridge/runner.test.mjs 26 passed, 1 skipped (Linux-only)",
+    "artifactHashes": "artifacts/SHA256SUMS.txt covers the 4 files; sha256sum --check --strict OK"
+  },
+  "notVerified": "real-provider turns on Linux; a real desktop session (GNOME/KDE) and the Linux sign-in terminal; Wayland; distributions other than Ubuntu; descendants that call setsid leave the process group",
+  "freeBytes": {
+    "C": 20066918400,
+    "D": 83951439872
+  }
+}
