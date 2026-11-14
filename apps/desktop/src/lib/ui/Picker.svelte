@@ -13,10 +13,10 @@
 </script>
 
 <script lang="ts" generics="T extends string">
-  import { Command, Popover } from 'bits-ui';
-  import type { Snippet } from 'svelte';
-  import Check from '@lucide/svelte/icons/check';
-  import Search from '@lucide/svelte/icons/search';
+  import { Popover } from 'bits-ui';
+  import { untrack, type Snippet } from 'svelte';
+  import { LazyPanel } from './lazyPanel.svelte';
+  import LazyPanelStatus from './LazyPanelStatus.svelte';
 
   interface Props {
     items: readonly PickerItem<T>[];
@@ -58,6 +58,9 @@
     onSelect,
   }: Props = $props();
 
+  const panel = new LazyPanel(() => import('./PickerPanel.svelte'));
+  $effect(() => { if (open) untrack(() => { void panel.load(); }); });
+
   let searchField = $state<HTMLInputElement | null>(null);
   const focusSearch = (): void => searchField?.focus();
 
@@ -98,69 +101,24 @@
   <Popover.Portal>
     <Popover.Content
       class="piui-picker"
+      onOpenAutoFocus={(event) => { if (!panel.component) event.preventDefault(); }}
       {align}
       {side}
       sideOffset={6}
       collisionPadding={8}
       style="width: {width}px"
     >
-      <Command.Root label={label} loop>
-        <div class="piui-picker__search">
-          <Search size={14} />
-          <Command.Input
-            bind:ref={searchField}
-            bind:value={search}
-            class="piui-picker__input"
-            placeholder={searchPlaceholder}
-            aria-label={searchPlaceholder}
-            onkeydown={onSearchKeydown}
-          />
-        </div>
-        {#if header}
-          <!-- svelte-ignore a11y_no_static_element_interactions (Only keeps Enter on a header control from reaching the list; the controls are the keyboard targets.) -->
-          <div class="piui-picker__header" onkeydown={headerKeydown}>{@render header({ focusSearch })}</div>
-        {/if}
-        <Command.List class="piui-picker__list">
-          <Command.Viewport>
-            <Command.Empty class="piui-picker__empty">{emptyText}</Command.Empty>
-            {#each groups as [group, groupItems] (group)}
-              <Command.Group>
-                {#if group}<Command.GroupHeading class="piui-picker__heading">{group}</Command.GroupHeading>{/if}
-                <Command.GroupItems>
-                  {#each groupItems as item (item.value)}
-                    <Command.Item
-                      class="piui-picker__item"
-                      value={`${item.group ?? ''}\u0000${item.value}`}
-                      keywords={[item.label, item.value, ...(item.keywords ?? [])]}
-                      disabled={item.disabled}
-                      onSelect={() => choose(item)}
-                    >
-                      <span class="piui-picker__check">
-                        {#if item.value === value}<Check size={14} />{/if}
-                      </span>
-                      <span class="piui-picker__main">
-                        <span class="piui-picker__label">{item.label}</span>
-                        {#if item.disabled && item.disabledReason}
-                          <span class="piui-picker__desc">{item.disabledReason}</span>
-                        {:else if item.description}
-                          <span class="piui-picker__desc">{item.description}</span>
-                        {/if}
-                      </span>
-                      {#each item.badges ?? [] as badge (badge)}
-                        <span class="piui-picker__badge">{badge}</span>
-                      {/each}
-                    </Command.Item>
-                  {/each}
-                </Command.GroupItems>
-              </Command.Group>
-            {/each}
-          </Command.Viewport>
-        </Command.List>
-      </Command.Root>
-      {#if footer}<div class="piui-picker__footer">{@render footer()}</div>{/if}
+      {#if panel.component}
+        {@const Panel = panel.component}
+        <Panel {groups} {value} {label} {searchPlaceholder} {emptyText} {header} {footer}
+          bind:search bind:searchField {focusSearch} {headerKeydown} {onSearchKeydown} onChoose={choose} />
+      {:else}
+        <LazyPanelStatus failed={panel.failed} {label} retry={() => void panel.load()} />
+      {/if}
     </Popover.Content>
   </Popover.Portal>
 </Popover.Root>
+
 
 <style>
   :global(.piui-picker) {
@@ -178,7 +136,11 @@
     outline: none;
     animation: piui-pop-in var(--piui-duration-fast) var(--piui-ease-out);
   }
-  :global(.piui-picker [data-command-root]) {
+  /* Keep panel styles eager: Vite does not retry failed dynamic CSS links. */
+  :global {
+
+
+  .piui-picker [data-command-root] {
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -195,7 +157,7 @@
     display: flex;
     padding: var(--piui-space-2) var(--piui-space-3) 0;
   }
-  :global(.piui-picker__input) {
+  .piui-picker__input {
     flex: 1;
     height: 36px;
     border: 0;
@@ -205,23 +167,23 @@
   }
   /* The open popover always focuses its search: the global ring would be noise, and
      `overflow: hidden` clips its offset. */
-  :global(.piui-picker__input:focus-visible) {
+  .piui-picker__input:focus-visible {
     outline: none;
   }
-  :global(.piui-picker__input::placeholder) {
+  .piui-picker__input::placeholder {
     color: var(--piui-text-disabled);
   }
-  :global(.piui-picker__list) {
+  .piui-picker__list {
     min-height: 0;
     padding: 4px;
     overflow-y: auto;
   }
-  :global(.piui-picker__empty) {
+  .piui-picker__empty {
     padding: var(--piui-space-4);
     color: var(--piui-text-muted);
     text-align: center;
   }
-  :global(.piui-picker__heading) {
+  .piui-picker__heading {
     padding: 8px 8px 4px;
     color: var(--piui-text-muted);
     font-size: var(--piui-text-xs);
@@ -229,7 +191,7 @@
     letter-spacing: 0.02em;
     text-transform: uppercase;
   }
-  :global(.piui-picker__item) {
+  .piui-picker__item {
     display: flex;
     align-items: center;
     gap: var(--piui-space-2);
@@ -240,10 +202,10 @@
     outline: none;
     user-select: none;
   }
-  :global(.piui-picker__item[data-selected]) {
+  .piui-picker__item[data-selected] {
     background: var(--piui-hover);
   }
-  :global(.piui-picker__item[data-disabled]) {
+  .piui-picker__item[data-disabled] {
     opacity: 0.5;
   }
   .piui-picker__check {
@@ -280,5 +242,7 @@
   .piui-picker__footer {
     padding: var(--piui-space-2) var(--piui-space-3);
     border-top: 1px solid var(--piui-border-subtle);
+  }
+
   }
 </style>

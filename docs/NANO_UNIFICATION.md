@@ -897,3 +897,38 @@ Out-of-scope inherited findings: first-pipeline failure can restore the default
 executor on returning Home; prepared server image reuse does not yet include
 the vendored kernel input in its compatible-ancestor guards. No server image
 reuse or production deployment is performed or claimed by this Desktop release.
+
+## Hosted CI corrections before final packaging, 2026-11-14
+
+The merged branch passed 1392 frontend units, bridge and contract checks, and
+Rust formatting, clippy and workspace tests on Windows and Ubuntu. Full hosted
+checks then exposed an initial-asset budget failure and three editor scenarios.
+The closed model/executor pickers now defer their Command-list JavaScript while
+retaining their state, triggers, account timing and styles. The original budget
+is unchanged: final assets measure 549566 raw / 163353 gzip bytes against
+573440 / 163840. Real cold-open, close/reopen, focus, favorites and retry checks
+preserve the draft and keyboard behavior.
+
+Svelte Flow invokes its selection callback from a tracked effect. Reads of the
+editor's selection inside that callback could restore an old inspector after a
+new Script was selected or Output settings were closed. Untracking the complete
+callback removes that feedback while retaining native selection behavior. The
+original Script and repeated Output drag assertions pass without alteration.
+
+Four independent GPT-6.1 Sol/max read-only reviews examined the same frozen
+correction. All identified the production CSS retry problem: Vite remembers a
+failed dynamic stylesheet and skips it on retry. The accepted remediation keeps
+both picker and reasoning styles in the initial graph, with list code deferred.
+Three production-CSP checks verify the full stylesheet dependency closures and
+real failed JavaScript loads followed by keyboard Retry, computed styling,
+search focus and preserved drafts for both pickers. All three pass.
+
+Evidence includes Svelte 0 errors/0 warnings, E2E types, 21 focused units,
+17 editor/lazy-picker/output Lab cases, five favorites cases and two existing
+production-CSP cases. After the stylesheet remediation, shared graph 4/4 and
+conversation 13/13 browser cases pass. Both embedded bundles were regenerated;
+all 200 normalized source hashes and five imported artifacts match. Final source
+fingerprints are graph `bb22c717ae0635a85102514e7f65ace5ae8f9820500d7774bda10d7443af3667`
+and conversation `9f270c7bb3b089fd9fe13ad0da751d96d39ec81bd4fbd50350e031112912c437`.
+Platform packages must be rebuilt from this final source; prior c16 packages
+and installed-app checks remain explicitly identified baseline evidence.

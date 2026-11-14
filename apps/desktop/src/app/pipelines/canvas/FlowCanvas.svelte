@@ -2,6 +2,7 @@
   import '@xyflow/svelte/dist/style.css';
   import './nodeCard.css';
   import { Background, BackgroundVariant, MarkerType, MiniMap, Panel, SvelteFlow, type Connection } from '@xyflow/svelte';
+  import { untrack } from 'svelte';
   import Minus from '@lucide/svelte/icons/minus';
   import Plus from '@lucide/svelte/icons/plus';
   import Maximize from '@lucide/svelte/icons/maximize';
@@ -322,7 +323,10 @@
     onnodedragstop={({ nodes: moved }) =>
       editor.movedNodes(moved.filter((node) => !BLOCK_IDS.has(node.id)).map((node) => ({ id: node.id, x: node.position.x, y: node.position.y })))}
     onnodeclick={({ node }) => selectNode(node)}
-    onselectionchange={({ nodes: selectedNodes, edges: selectedEdges }) => {
+    onselectionchange={({ nodes: selectedNodes, edges: selectedEdges }) => untrack(() => {
+      // Svelte Flow invokes this callback from its selection effect. Reading the
+      // editor here must not subscribe that effect to programmatic selection:
+      // it could replay the old canvas selection before sync projects the new one.
       // A single keyboard-selected node opens the inspector. Rectangle/multi
       // selection stays owned by Svelte Flow for bulk delete and movement.
       if (selectedNodes.length === 1) selectNode(selectedNodes[0]);
@@ -330,7 +334,7 @@
         const edge = selectedEdges.find(item => !blockEdge(item.id));
         if (edge && editor.selectedEdge !== edge.id) { editor.selectedId = ''; editor.selectedEdge = edge.id; }
       }
-    }}
+    })}
     onedgeclick={({ edge }) => {
       if (blockEdge(edge.id)) return;
       editor.selectedEdge = edge.id;
